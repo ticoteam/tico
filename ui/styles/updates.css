@@ -14,7 +14,7 @@
 .upd-allread{font-size:var(--t-base)}
 .upd-feed{display:flex;flex-direction:column;gap:8px;contain:layout}   /* a story redrawn lays out only the feed; layout only, so nothing in it is clipped */
 /* A card's padding and avatar, which its thread's lines are measured from (below). The avatar is the height of the
-   name's line and starts it (UPD_AV, ui/app/updates.js), so the update under it runs the card's full width. */
+   name's line and starts it (UPD_AV, ui/app/updates.ts), so the update under it runs the card's full width. */
 :root{--upd-pad:16px;--upd-pad-y:14px;--upd-av:20px;
   --upd-cx:calc(1px + var(--upd-pad) + var(--upd-av) / 2);--upd-in:calc(var(--tree-r) + var(--s1))}
 .upd-card{display:grid;grid-template-columns:minmax(0,1fr);padding:var(--upd-pad-y) var(--upd-pad);background:var(--surface);border:1px solid var(--line);border-radius:14px;position:relative;outline:none;transition:border-color var(--dur-fast) var(--ease)}

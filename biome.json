@@ -15,7 +15,8 @@
       },
       "suspicious": {
         "preset": "recommended",
-        "noRedundantUseStrict": "off"
+        "noRedundantUseStrict": "off",
+        "noImplicitAnyLet": "off"
       }
     }
   }

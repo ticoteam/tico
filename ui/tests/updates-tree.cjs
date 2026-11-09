@@ -35,7 +35,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     }
     const seo = {key: 'b:seo', author: 'seo', name: 'AI SEO', direct: false, update: update('u-seo', 'seo', '- Published the checklist page', allSeen), children: []};
     const cmo = {key: 'b:cmo', author: 'cmo', name: 'AI CMO', direct: true,
-                 update: update('u-cmo', 'cmo', '- The team shipped the checklist', allSeen), children: [seo]};
+                 update: update('u-cmo', 'cmo', '- The team shipped the checklist\nBlocked: Chris has not answered the storage question\nSuggestion: Ask him once', allSeen), children: [seo]};
     if (eight) {      // eight reports: three with no update yet (one of them with a report of its own), and one with a report
       cmo.children.push(...EIGHT.slice(1).map(([bot, name], i) => ({key: 'b:' + bot, author: bot, name, direct: false, children: [],
         update: i >= 3 && i <= 5 ? null : update('u-' + bot, bot, `- ${name} finished its part of the checklist launch`, allSeen)})));
@@ -58,7 +58,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
       if (p === '/vendor/marked.min.js') return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p === '/api/employees') return json(bots);
       if (p === '/api/issues') return json([]);
@@ -90,6 +90,9 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     // Your card on top (no update yet: write one), your direct report's card under it, open and alerting.
     assert.match(await page.locator('#upd-feed .upd-node[data-depth="0"] > .upd-none').innerText(), /Ana[\s\S]*No update yet/);
     assert.equal(await cmo.locator('.upd-dot').count(), 1, 'a direct report alerts');
+    // Blocked: and Suggestion: lines with no bullet are each a bullet of their own, not a lazy line of the one above.
+    assert.deepEqual(await cmo.locator('.upd-body li').allInnerTexts(), ['The team shipped the checklist',
+      'Blocked: Chris has not answered the storage question', 'Suggestion: Ask him once']);
     assert.ok(asked.some(q => q === '?scope=direct'), 'the badge counts direct reports only');
     // The manager's card has an icon that opens its reports' cards; a report's report never alerts.
     assert.equal(await page.locator('#upd-feed [data-upd="u-seo"]').count(), 0, 'deeper cards start closed');

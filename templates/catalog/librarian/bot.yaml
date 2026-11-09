@@ -36,9 +36,9 @@ routines:
 
 # What this bot may touch. It reads the docs through `hub doc` and public links through `hub doc fetch`,
 # and needs no Credential of its own. A GitHub token stored in Credentials and granted to it lets it read private
-# repositories that are linked as docs; it is only ever sent to api.github.com. Web search is for the first
-# market map only (playbooks/market-setup.md): public facts in, public pages read, nothing written outside.
+# repositories that are linked as docs; it is only ever sent to api.github.com. Web search is for the market setup,
+# research and deep research tasks a person files: public facts in, public pages read, nothing written outside.
 tools:
   - service: web-search
     can: [use]
-    note: "finding competitors, channels and rules for the market setup; queries hold public facts only, never text from a doc"
+    note: "market setup, research and deep research tasks; queries hold public facts only, never text from a doc"

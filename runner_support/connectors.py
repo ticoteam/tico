@@ -49,7 +49,7 @@ def owner_handle(config=None):
     named = str((config or {}).get("owner_handle") or "").strip().lower()
     if named:
         return named
-    from connectors.mail import owner_handle as roster_owner  # noqa: PLC0415
+    from connectors.mail import owner_handle as roster_owner
 
     return roster_owner()
 
@@ -82,7 +82,7 @@ def mail_cli_env(config, key_path):
     """The local mail CLI's environment (this job and the supervisor's mint-token, runner_support/mail_key.py): the runner's
     without the hub token, the key at `key_path`, and the server and this computer's registration, which only the
     Connect Google refresh uses (connectors/mail/oauth.py broker): the client secret stays on the server."""
-    from connectors.mail.oauth import BROKER_AUTH_ENV, BROKER_URL_ENV  # noqa: PLC0415
+    from connectors.mail.oauth import BROKER_AUTH_ENV, BROKER_URL_ENV
 
     dropped = ("HUB_TOKEN", BROKER_URL_ENV, BROKER_AUTH_ENV)
     env = {key: value for key, value in os.environ.items() if key not in dropped}

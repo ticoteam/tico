@@ -42,7 +42,7 @@ def test_equal_answers_to_distinct_inputs_are_delivered_once(api, kind):
             "messages",
             {
                 "to": "ops",
-                "kind": "ask" if kind == "ask" else "say",
+                "kind": "say",
                 "text": "Check the second folder",
                 "conversation_id": first["conversation_id"],
             },

@@ -24,9 +24,11 @@ for name, value in {
 }.items():
     os.environ[name] = value
 
-import time_machine  # noqa: E402
+import time_machine
 
 START = dt.datetime(2026, 10, 20, 9, tzinfo=dt.timezone.utc)
+# A world's environment while it runs: no support tickets, no usage count, and an HQ address nothing answers on.
+OFFLINE = {"TICO_SUPPORT": "off", "TICO_TELEMETRY": "off", "TICO_HQ_URL": "http://127.0.0.1:9"}
 SECRET = "factory-sim"
 REPO = "acme/app"
 PRIMARY = (
@@ -75,6 +77,11 @@ class World:
 
     # ------------------------------------------------------------------ lifecycle
     def __enter__(self):
+        # Nothing leaves for Tico HQ: every run of a seed is the same install (its ids come from the seed), and its
+        # Health Monitor once filed a ticket to production HQ on every run. Put back on __exit__, so a test process that
+        # builds a world keeps its own settings afterwards.
+        self._environ = {name: os.environ.get(name) for name in OFFLINE}
+        os.environ.update(OFFLINE)
         self.travel = time_machine.travel(START, tick=False)
         self.clock = self.travel.start()
         # Ids break ties in the server's ordering (`ORDER BY created_at, id`): drawn from the run's own generator, the
@@ -198,6 +205,11 @@ class World:
             self.client.__exit__(*exc)
         self.travel.stop()
         uuid.uuid4 = self._uuid4
+        for name, value in self._environ.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
     def go_down(self):
         """The server stops: its API answers nothing until restart(). The database stays on disk, as a deploy or a crash
@@ -255,10 +267,11 @@ class World:
         if getattr(self, "github_reads", False):
             # With the GitHub App connected the app's loop also retries refused review moves and reads gate holds
             # afresh (backend/app.py); both read GitHub, so without the App there is nothing for them to do.
-            from backend import move_retry, task_blocked
+            from backend import move_retry, review_pages, task_blocked
 
             move_retry.tick(self.app.state.github_app, force=True)
             task_blocked.fresh(self.app.state.github_app, force=True)
+            review_pages.tick(self.app.state.github_app, pages=self.app.state.pages, blobs=self.app.state.blobs)
 
     def retry_moves(self):
         """The server's retry of refused review moves (backend/move_retry.py), which the app runs beside its GitHub
@@ -627,7 +640,22 @@ class World:
                 return answer(status, {"message": "Server Error" if status >= 500 else "Too Many Requests"})
             if found := re.fullmatch(rf"/repos/{REPO}/pulls/(\d+)", path):
                 pr = self.prs.get(int(found[1]))
-                return answer(200, {"head": {"sha": pr["head"]}, "merged": pr["merged"]}) if pr else answer(404, {})
+                if not pr:
+                    return answer(404, {})
+                if method == "PATCH":  # the review page line (backend/review_pages.py) writes the body
+                    pr["body"] = (kw.get("json") or {}).get("body", "")
+                    return answer(200, {"number": int(found[1])})
+                return answer(
+                    200,
+                    {
+                        "number": int(found[1]),
+                        "title": f"Change {found[1]}",
+                        "html_url": f"https://github.example/{REPO}/pull/{found[1]}",
+                        "body": pr.get("body", ""),
+                        "head": {"sha": pr["head"]},
+                        "merged": pr["merged"],
+                    },
+                )
             if found := re.fullmatch(rf"/repos/{REPO}/commits/(\w+)/(check-runs|statuses)", path):
                 if found[2] == "statuses":
                     return answer(200, [])

@@ -1,4 +1,4 @@
-/* ui/styles/feedback.css — 👍 / 👎 on a bot's work (ui/app/feedback.js). Nothing shows until the server is known to
+/* ui/styles/feedback.css — 👍 / 👎 on a bot's work (ui/app/feedback.ts). Nothing shows until the server is known to
    have feedback (body.fb-on). Icons are the icon font's, muted; a chosen thumb draws filled. */
 .fb-ctl,.fb-row{display:none}
 body.fb-on .fb-ctl{display:inline-flex;align-items:center;gap:2px}

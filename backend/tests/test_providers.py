@@ -146,7 +146,7 @@ def test_a_live_gateway_tier_for_the_held_id_does_not_expose_it(monkeypatch):
         "provider": "tico",
         "efforts": ("low",),
         "default_effort": "low",
-        "tier": {"department": "x", "level": "low", "fast": False, "version": 1, "auto": False},
+        "tier": {"level": "low", "fast": False, "version": 1, "auto": False},
     }
     monkeypatch.setattr(P.gateway_tiers, "row_for", lambda model: live if model == "gpt-6.1-terra" else None)
     assert P.MODEL_BY_ID["gpt-6.1-terra"]["provider"] == "openai"

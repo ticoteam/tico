@@ -260,8 +260,9 @@ threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_mes
   an actor string for system writes (`keeper`, a migration) which skip C1.
 - `thread_id`: the thread written to. With `parent_message_id`, the post goes to that message's sub-thread, created
   if it has none (§3.2), and `thread_id` must be the message's thread.
-- `kind`: `say|ask|answer|notice|steer`. `to_actor`: the explicit addressee (optional); otherwise the first
-  in-audience mention or ask target, otherwise NULL.
+- `kind`: `say|notice|steer`; `ask` and `answer` are refused (422 `kind`, with the replacement named), and their old rows are
+  history only (`H.OLD_MESSAGE_KINDS`). A question to a person is a question task, not a message. `to_actor`: the
+  explicit addressee (optional); otherwise the first in-audience mention, otherwise NULL.
 - `via`: who really acts (`assistant`, `botops`, `slack`), recorded in `refs.via`. `origin`:
   `{"origin_id", "revision", "actor"}` for replicated inbound (Slack); a repeat
   `(origin_id, revision)`, once the writer is authorized, returns the existing message (`duplicate: true`) and writes
@@ -383,9 +384,10 @@ post's transaction, plus outside destinations linked to the thread (`slack:<chan
   queued; when it is only the default for a reader off the task (`refs.send_people`), it binds the bots alone and people
   are notified as their level says. A deferred `to_actor` the list leaves out (a task's owner bot, on a task filed into
   a shared chat) is deferred all the same, with its deadline, and the bot a message is written to (a DM's, a Home's)
-  takes a Defer never as a Defer: only the other bots it addresses are queued. Until question tasks (step 6) an answer
-  to a person's question goes to the task's first bot (owner, requester, origin), a reviewer's verdict to the bot that
-  filed the review, and the Strategy Bot's relayed answer to the bot that asked. On a task's own thread the first bot given a turn is the message's `to_actor` (its job, ride-along and
+  takes a Defer never as a Defer: only the other bots it addresses are queued. A person's answer to a question task
+  reaches its bot once (on its parent task through `hubdb._subtask_wake`, else as the task's requester), a
+  reviewer's verdict goes to the bot that filed the review, and the Strategy Bot's relayed answer goes to the bot that
+  asked. On a task's own thread the first bot given a turn is the message's `to_actor` (its job, ride-along and
   `task_delegations` key off it); every other woken bot gets a carrier (§4.4).
 - `GET /api/v2/threads/{thread_id}/reach` (`threads.reaches`) answers the same list for a message not yet sent, given
   `text`, `delivery`, `defer_for` and `in_reply_to`, writing nothing.
@@ -397,7 +399,8 @@ Unread counts come from counters (§5), not one row per reader.
   notify live), `defer` (the bot's next run, as `bot_to_bot`/`wake_rules.hold` do today), `digest` (batched), `none`
   (recorded; nothing wakes).
 - `reason`: `dm`, `mention`, `ask`, `assign`, `addressed`, `home`, `sub_thread`, `reply`, `follower`, `digest`,
-  `member`, `outside`.
+  `member`, `outside`. `ask` is an old-row reason only: deliveries backfilled from a `kind='ask'` message keep it
+  (`threads.py` `_DELIVERIES_SQL`), and nothing new is written with it. Readers still match it for those rows.
 - `state`: `pending` → `delivered` (claimed / shown) → `read`; `capped` (loop guard, resumes); `held` (an org-rule
   hold on the message, local only); `failed` (an outside destination out of retries, one Needs-you item); `moot`
   (deleted before delivery, or the recipient lost access).
@@ -557,7 +560,7 @@ every 5 s (`changes_bot_status`), and a step held back is sent by the scheduler'
 
 ```python
 threads.mark_read(c, viewer, thread_id, seq) -> {"thread_id", "last_read_seq"}
-threads.mark_all_read(c, viewer, thread_id) -> {"threads": n}        # the whole subtree
+threads.mark_all_read(c, viewer, thread_id, ago_ms=None) -> {"threads": n}   # the whole subtree; ago_ms: only what was there that long ago
 threads.unread(c, viewer, thread_id) -> {"unread": n, "activity": bool}
 ```
 - Join: read up to now. Deletes and backfill (imports, migration, replays) are never unread. Losing access: the
@@ -565,10 +568,10 @@ threads.unread(c, viewer, thread_id) -> {"unread": n, "activity": bool}
   (`threads.task_opened`). Task news (a keeper message with `refs.task`, `hubdb.task_news`) is the task's own history:
   it is written to the task's conversation and no person gets a delivery for it, so the requester who did not make the
   task hears nothing in the thread (no unread, Inbox row, digest or push). Bots still get it as a delivery.
-  A bot's say, notice or ask in a task's own thread (`hubdb.task_post_sql`, the thread is some task's
+  A bot's say, notice or steer in a task's own thread (`hubdb.task_post_sql`, the thread is some task's
   `conversation_id`) is the same: the message is written and shown on the task, and a person gets a delivery for it only
   when its body @-mentions them (`threads.mentions`, reason `mention`). Without the mention no person is unread for it,
-  it is in no Inbox row, digest or push, and an ask still lists its task in Needs you (that reads messages, not
+  it is in no Inbox row, digest or push. A question task still lists its task in Needs you (that reads tasks, not
   deliveries). Old deliveries of such posts stop counting by the same rule (`hubdb.delivery_counts_sql`), with no
   migration.
 - Unread count for a viewer = messages in the thread with `seq > last_read_seq` that are human-authored or
@@ -716,6 +719,7 @@ Thread view (`threads.view(c, viewer, row)`):
  "me": {"member": true, "following": true, "follows": true, "notify": "live", "last_read_seq": 4400, "unread": 3,
         "activity": true, "can_post": true, "can_manage": true, "pinned": false},
  "pinned_for_everyone": false,                   // §10.1
+ "name": "Bea, Cy",                              // what it is called: the title, else its people (Naming, §10)
  "dm_with": [{"actor": "human:bea", "name": "Bea"}], "dm_with_count": 1,   // DM roots: the others, at most 4 named
  "new_at": {"thread_id": "t_sub", "message_id": "m_1"}}                    // list rows only; see below
 ```
@@ -736,7 +740,7 @@ person who only joined a chat or read it has a following row but is not reached,
 | `GET /api/v2/threads/{id}/bot-status` | `thread_bot_status.status(c, viewer, root)` → `{"bots": [...]}` (§4.10) |
 | `GET /api/v2/threads/{id}/timeline?cursor=&limit=&flat=` | `threads.timeline(c, viewer, thread_id, cursor=None, limit=50, max_bytes=..., flat=False)` → `{"thread", "breadcrumb", "messages": [...], "next_cursor", "bot_status", "read_marks"}` (`bot_status` on the first page; `flat` and its `read_marks`: §4.9; every message has `reply_to` and `routed`); `next_cursor` and `limit` count the thread's own messages; each is followed by its sub-thread's rows in tree order (§5). Each message carries `depth` (its thread's depth in the tree: 0 in a root, 1 in a sub-thread), and a parent carries `"sub_thread": {"id", "title", "count", "last_seq", "last_read_seq", "unread", "more"}` (`count` and `unread` only of messages the viewer reads; `more` is how many are collapsed) |
 | `POST /api/v2/threads/{id}/read {seq}` | `threads.mark_read` |
-| `POST /api/v2/threads/{id}/read-all` | `threads.mark_all_read` |
+| `POST /api/v2/threads/{id}/read-all {ago_ms}` (body optional) | `threads.mark_all_read(c, v, thread_id, ago_ms=None)`: `ago_ms` (0 to 600000, else 422) reads only what was written that long before; 0 or no body reads everything up to now |
 | `GET /api/v2/threads/search?q=` | T2 (FTS5), filtered by `threads.readable` per message |
 | `POST /api/v2/threads {title, audience, audience_group_id, members, parent_message_id, body}` | `threads.create` (+ `threads.post` when `body`) |
 | `POST /api/v2/threads/{id}/messages {text, kind, to, refs, parent_message_id, in_reply_to}` | `threads.post` (`in_reply_to`: §4.9) |
@@ -804,7 +808,7 @@ the oldest 500 native posts and edits). Candidates: company, team, members threa
 is in (a task's thread only with unread under the task rules, `H.delivery_counts_sql`), and the viewer's own Home;
 another's Home only through a mention, an ask or a hold. A root the viewer follows with notify `muted` is left out in SQL unless it
 mentions them; a migrated Home they read only for its history counts only by its attention items. Order: items that
-mention the viewer (an open mention or ask, or a new message delivered to them as a mention, ask or assignment) first,
+mention the viewer (an open mention, or a new message delivered to them as a mention or assignment; an old `ask` row counts too) first,
 then newest activity, then id (newest first). Roots are read and checked 100 at a time (batched read checks and
 subtree counts), at most 1,000 over all the pages: the cursor carries how many came before it, so the pages, `count`
 and `catch_up_ids` hold the same items. Counting stops at 99 and reads no message text. `new_count` is how many new
@@ -826,6 +830,15 @@ Naming. Only a DM with one teammate may be unnamed. `threads.create`, `threads.d
 422 `name_required`, "Group chats need a name.", and for a bot the same text plus how to pass a title (`title` in
 `hub_thread_create` and `hub_thread_dm_group`, `--title` on the commands). Opening a group DM that already exists needs
 no title, and existing unnamed group DMs stay readable: clients name them from `dm_with`.
+
+A thread with no title that is not a Home is named by `name` (`threads._thread_name`, the same for every reader): the
+people and bots in it and its groups, the viewer left out, sorted by name, the first three and `+N` for the rest;
+`You` when nobody else is in it; `Thread` when the viewer may not see anyone in it. A reader who is not a member is
+told only of the people they may see. Nothing is stored: a rename wins, an empty title brings the names back, and a
+change of members changes the name. A DM keeps its other person's name. Where a name is shown, it is `name` (the thread
+view, list and rail rows, the breadcrumb's `title` and a search hit's `title` for a thread with none, and the
+Catch up, Needs you, digest and attention items; `threads.shown_name` and `threads.shown_names` for the rest). A
+thread's stored `title` is still what the Name field and the title sort use.
 
 Events. `threads` topic, kind `pinned`, `{"thread_id", "root_id", "kind": "pinned", "actor", "pinned",
 "pinned_for_everyone"}` (`pinned` is the receiver's own state). A reader's own pin (`thread_pins`, `ref` = actor) goes

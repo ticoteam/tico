@@ -24,8 +24,9 @@ const wholeTask = task('t-whole', {person_ask: '', body: 'Review the attachments
 const extras = [
   {id: 'a-send', kind: 'approval', what: 'send', title: 'Send the launch email', requester_id: 'bot:writer',
     created_at: now, payload: {to: ['team@acme.example'], subject: 'Launch'}},
-  {id: 'q-loose', kind: 'ask', title: 'Which vendor?', requester_id: 'bot:writer', created_at: now,
-    ask: {id: 'q-loose', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Which vendor?'}},
+  {id: 'q-loose', kind: 'question', title: 'Which vendor?', requester_id: 'bot:writer', owner_id: 'human:ana', created_at: now,
+    ask: {id: 'q-loose', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Which vendor?', question_task: true,
+      refs: {questions: [{id: 'vendor', question: 'Which vendor?', options: [{label: 'Acme'}, {label: 'Globex'}]}]}}},
   {id: 'stale', kind: 'stale', title: 'Stale tickets', created_at: now, rows: []},
 ];
 const threadKinds = ['thread_ask', 'thread_mention', 'thread_dm', 'thread_held', 'thread_capped'];
@@ -35,7 +36,8 @@ const items = [...tasks, foldedWait, mergedWait, ...Array.from({length: 238}, (_
 const kinds = rows => rows.reduce((out, it) => { out[it.kind] = (out[it.kind] || 0) + 1; return out; }, {});
 const foldedIds = rows => [...new Set(rows.flatMap(it => [...(it.folded || []).map(f => f.id), ...(it.merged || [])]))].sort();
 const types = ['general', 'dev', 'roadmap'].map(id => ({id, name: id, steps: []}));
-const count = page => page.locator('#task-tab-foryou .cnt').innerText();
+// The You count: on the scope button while on You, else the count its menu shows.
+const count = page => page.evaluate(() => document.querySelector('#task-scope .cnt')?.textContent ?? String(tasksCounts(TASKS_ST).foryou));
 const badges = page => within(page.locator('[data-nav="tasks"] [data-needs-badge]')
   .evaluateAll(bs => bs.map(b => ({text: b.textContent, hidden: b.hidden}))), 'Tasks navigation badges to be read');
 
@@ -223,12 +225,15 @@ async function withNeedsReads(page, run) {
         }
       });
       assert.equal(await evaluate(page, () => needsAll()), true);
-      await page.locator('#task-tab-foryou').click();
-      assert.equal(await page.locator('#task-group .v').innerText(), 'Asked by');
+      await page.locator('#task-scope').click();
+      await page.locator('#task-filter-pop [data-scope="you"]').click();
+      await page.locator('#task-filter').click();
+      assert.equal(await page.locator('#task-filter-pop [data-pick-group][aria-checked=true]').innerText(), 'Asked by');
+      await page.keyboard.press('Escape');
       const asks = page.locator('#task-body [data-group="asks"]');
-      assert.equal(await asks.locator('.tl-gname').textContent(), 'Approvals and questions');
-      assert.equal(await asks.locator('.tl-gcount').innerText(), '2', 'only the loose question and stale check');
-      assert.equal(await asks.locator('.tl-row').count(), 2);
+      assert.equal(await asks.locator('.tl-gname').textContent(), 'Approvals and stale checks');
+      assert.equal(await asks.locator('.tl-gcount').innerText(), '1', 'only the stale check: a question to Ana is a task row');
+      assert.equal(await asks.locator('.tl-row').count(), 1);
       assert.equal(await page.locator('#task-body .tl-row').count(), 13, 'one row per plate item');
       assert.equal(await page.locator('#task-body [data-task-key="tt-0"]').count(), 1, 'duplicate task only once');
       const declined = page.locator('#task-body [data-task-key="tt-declined"]');
@@ -239,14 +244,14 @@ async function withNeedsReads(page, run) {
         'the escalation has no question, ownership or wait on the manager');
       assert.equal(await whole.count(), 1, 'Asked by includes the counted bot-owned escalation that opens the full task');
       assert.equal(await whole.getAttribute('data-need-card'), null);
-      await page.locator('#task-group').click();
+      await page.locator('#task-filter').click();
       await page.locator('[data-pick-group="need"]').click();
       assert.equal(await page.locator('#task-body .tl-row').count(), 13, 'What it takes shows the same counted items');
       assert.equal(await whole.count(), 1);
-      await page.locator('#task-group').click();
+      await page.locator('#task-filter').click();
       await page.locator('[data-pick-group="requester"]').click();
-      assert.equal(await page.locator('.tl-type-search').isHidden(), true);
-      assert.equal(await page.locator('.tl-filters').isHidden(), true);
+      assert.equal(await page.locator('.tl-search').isHidden(), true);
+      assert.equal(await page.locator('#task-bar').isHidden(), true);
       assert.equal(await evaluate(page, () => TASKS_ST.type), 'roadmap');
       assert.deepEqual(await badges(page), [{text: '13', hidden: false}, {text: '13', hidden: false}]);
       const catchUp = page.locator('#tasks-pane [data-go-through]:visible');
@@ -261,7 +266,7 @@ async function withNeedsReads(page, run) {
       // Non-card items use the same immediate answer/Undo count adjustment.
       await evaluate(page, () => { DEC_HANDLED.add('task:t-whole'); needsListsRedraw(); });
       assert.equal(await count(page), '12');
-      assert.equal(await asks.locator('.tl-gcount').innerText(), '2', 'a full-task change leaves the extras count alone');
+      assert.equal(await asks.locator('.tl-gcount').innerText(), '1', 'a full-task change leaves the extras count alone');
       assert.equal(await page.locator('#task-body .tl-row').count(), 12);
       assert.deepEqual(await badges(page), [{text: '12', hidden: false}, {text: '12', hidden: false}]);
       await evaluate(page, () => { DEC_HANDLED.delete('task:t-whole'); needsListsRedraw(); });
@@ -272,7 +277,7 @@ async function withNeedsReads(page, run) {
         assert.equal(await evaluate(page, () => document.documentElement.scrollWidth <= innerWidth), true, theme + ': no sideways page scroll');
         if (process.env.TICO_UI_SHOTS) {
           await waitFor(page, () => {
-            const count = document.querySelector('#task-tab-foryou .cnt');
+            const count = document.querySelector('#task-scope .cnt');
             return count && !count.classList.contains('m-ticking') && !count.getAnimations({subtree: true}).length;
           });
           await page.screenshot({path: require('node:path').join(process.env.TICO_UI_SHOTS,
@@ -346,7 +351,7 @@ async function withNeedsReads(page, run) {
       assert.deepEqual(await badges(page), [{text: '0', hidden: true}, {text: '0', hidden: true}]);
       await evaluate(page, () => { location.hash = '#/tasks?view=foryou'; });
       await waitFor(page, () => TASKS_ST?.view === 'foryou' && !TASKS_ST.loading
-        && document.querySelector('#task-tab-foryou .cnt')?.textContent === '0');
+        && document.querySelector('#task-scope .cnt')?.textContent === '0');
       assert.equal(await count(page), '0');
       assert.equal(await page.locator('#task-body .tl-row').count(), 0);
       assert.equal(await page.locator('#tasks-pane [data-go-through]:visible').count(), 0);

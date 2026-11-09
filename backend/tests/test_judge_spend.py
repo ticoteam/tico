@@ -7,6 +7,7 @@ import pytest
 
 from backend import hubdb as H
 from backend import judge as B
+from backend import providers
 from backend.config import Settings
 from backend.store import Store
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
@@ -69,11 +70,56 @@ def test_a_terra_call_at_272000_prompt_tokens_is_priced_at_the_long_tier_as_one_
     ) == round((200_000 * 2.5 + 72_000 * 0.125 + 1_000 * 9.375) / 1_000_000, 6)
 
 
-def test_a_haiku_judge_call_over_its_long_tier_keeps_the_standard_price(tmp_path):
+def test_a_haiku_judge_call_over_100k_prompt_tokens_is_priced_at_the_long_tier(tmp_path):
+    """Claude Haiku 5.5's long-prompt rate on judge calls (Chris Hawkins, 2026-11-06, decision 2c1be08a)."""
     settings = Settings(db_path=tmp_path / "hub.db")
-    # Claude Haiku 5.5's long-prompt tier (over 100,000 prompt tokens) stays off judge calls until its rate is approved.
-    assert B.cost_usd(settings, "claude-haiku-5-5", {"input_tokens": 100_001, "output_tokens": 1_000}) == round(
-        (100_001 * 0.10 + 1_000 * 0.50) / 1_000_000, 6
+    long = lambda inp, read, out: round((inp * 0.50 + read * 0.05 + out * 2.50) / 1_000_000, 6)
+    standard = lambda inp, read, out: round((inp * 0.10 + read * 0.01 + out * 0.50) / 1_000_000, 6)
+    # 100,001 prompt tokens: over; 100,000 exactly: at the standard rate.
+    assert B.cost_usd(settings, "claude-haiku-5-5", {"input_tokens": 100_001, "output_tokens": 1_000}) == long(
+        100_001, 0, 1_000
+    )
+    assert B.cost_usd(settings, "claude-haiku-5-5", {"input_tokens": 100_000, "output_tokens": 1_000}) == standard(
+        100_000, 0, 1_000
+    )
+    # Cache reads count toward the threshold and are billed at the cache-read rate.
+    usage = {"input_tokens": 1_000, "cache_read_input_tokens": 99_001, "output_tokens": 10}
+    assert B.cost_usd(settings, "claude-haiku-5-5", usage) == long(1_000, 99_001, 10)
+    assert B.cost_usd(settings, "claude-haiku-5-5", {**usage, "cache_read_input_tokens": 99_000}) == standard(
+        1_000, 99_000, 10
+    )
+    # Cache writes count toward it too, as input: 1,000 uncached plus 99,001 written is over; 50,000 written is not.
+    written = {"input_tokens": 1_000, "cache_creation_input_tokens": 99_001, "output_tokens": 10}
+    assert B.cost_usd(settings, "claude-haiku-5-5", written) == round((100_001 * 0.50 + 10 * 2.50) / 1_000_000, 6)
+    assert B.cost_usd(settings, "claude-haiku-5-5", {**written, "cache_creation_input_tokens": 50_000}) == round(
+        (51_000 * 0.10 + 10 * 0.50) / 1_000_000, 6
+    )
+    # Over only with cache tokens: 60,001 written plus 40,001 read is 100,002 prompt tokens, billed at the long rate.
+    both = {
+        "input_tokens": 1,
+        "cache_creation_input_tokens": 60_000,
+        "cache_read_input_tokens": 40_001,
+        "output_tokens": 0,
+    }
+    assert B.cost_usd(settings, "claude-haiku-5-5", both) == round((60_001 * 0.50 + 40_001 * 0.05) / 1_000_000, 6)
+
+
+def test_only_the_judge_path_takes_haiku_s_per_request_long_tier(tmp_path):
+    """The call-type selection: the judge path asks `per_request_long_tier`; every other Haiku call keeps its price."""
+    assert providers.per_request_long_tier("claude-haiku-5-5")
+    assert providers.per_request_long_tier("gpt-6.1-terra")
+    assert not providers.per_request_long_tier("claude-sonnet-5-5")
+    assert not providers.per_request_long_tier("claude-fable-5-1")
+    # Off the judge path, Haiku is priced from its totals as before: 100,001 prompt tokens at the standard rate, and
+    # with no per-request counts the estimate may be low.
+    assert providers.estimate("claude-haiku-5-5", 100_001, 0, 1_000) == (
+        pytest.approx((100_001 * 0.10 + 1_000 * 0.50) / 1_000_000),
+        True,
+    )
+    # A non-Haiku judge call over 100,000 is unchanged too.
+    settings = Settings(db_path=tmp_path / "hub.db")
+    assert B.cost_usd(settings, "claude-sonnet-5-5", {"input_tokens": 100_001, "output_tokens": 1_000}) == round(
+        (100_001 * 2.0 + 1_000 * 10.0) / 1_000_000, 6
     )
 
 
@@ -813,3 +859,66 @@ def test_the_month_total_is_a_running_sum_that_stays_exact_per_database_and_mont
     record(a, 0.4, "2026-11-02T09:00:00.000000Z")
     assert running(a, nov) == full(a, "2026-11") == 0.4
     assert running(b, oct_) == full(b, "2026-10") == 2.0  # the other database keeps its own
+
+
+# ----------------------------------------------------------------------------- what the cost is counted as
+def test_a_gateway_calls_cached_input_is_billed_at_the_cached_rate_not_the_input_rate(tmp_path):
+    # Tico Decide Medium is Claude Sonnet 5.5: $2.50 input, $0.25 cached input, $12.50 output per 1M tokens (the catalog).
+    settings = Settings(db_path=tmp_path / "hub.db")
+    medium = "tico-decide-medium-1.0"
+    cached = {"input_tokens": 0, "cache_read_input_tokens": 1_000_000, "output_tokens": 0}
+    assert B.cost_usd(settings, medium, cached) == 0.25
+    both = {"input_tokens": 1_000_000, "cache_read_input_tokens": 1_000_000, "output_tokens": 100_000}
+    assert B.cost_usd(settings, medium, both) == 4.0  # 2.50 + 0.25 + 1.25
+
+
+def test_a_rule_check_calls_spend_counts_under_its_set_in_the_readout(api):
+    # Org rule checks meter under their own budget (`rules.spend`, org_rule_check.BUDGET), not `judge.spend`. The
+    # readout's cost per set must include that spend, or a set that runs at Decide Medium reads $0.
+    with api.app.state.store.transaction() as c:
+        H.event(
+            c,
+            H.KEEPER,
+            "judge.call",
+            "rule-check@1",
+            {
+                "label": "rule-check@1",
+                "model": "tico-decide-medium-1.0",
+                "provider": "Tico AI Gateway",
+                "cost_usd": 0.00875,
+                "usage": {},
+                "answers": {},
+            },
+        )
+        H.event(
+            c,
+            H.KEEPER,
+            "rules.spend",
+            "rule-check@1",
+            {"label": "rule-check@1", "model": "tico-decide-medium-1.0", "cost_usd": 0.00875},
+        )
+    sets = {row["set"]: row for row in get(api, "decisions/readout")["sets"]}
+    assert sets["rule-check"]["cost_usd"] == 0.00875
+
+
+def test_the_rules_cap_is_saved_in_maintenance_then_the_environment_then_fifty_and_apart_from_decides(api):
+    from backend import org_rule_check as K
+
+    store = api.app.state.store
+    settings = store.settings
+    settings.rules_monthly_usd = 50.0
+    with store.read() as c:
+        assert B.budget_cap(c, settings, K.BUDGET) == 50.0
+    with store.transaction() as c:
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('maintenance', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (json.dumps({"rules_monthly_cap_usd": 80}),),
+        )
+    with store.read() as c:
+        assert B.budget_cap(c, settings, K.BUDGET) == 80.0
+        assert B.budget_cap(c, settings) == settings.decisions_monthly_usd  # Decide's own cap is not the rules one
+    settings.rules_monthly_usd = 20.0  # the environment holds only while nothing is saved
+    with store.transaction() as c:
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='maintenance'", (json.dumps({}),))
+    with store.read() as c:
+        assert B.budget_cap(c, settings, K.BUDGET) == 20.0

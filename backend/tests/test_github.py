@@ -1035,7 +1035,7 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
         'base',
         [],
         {
-            'ui/app/refresh.js': code,
+            'ui/app/refresh.ts': code,
             'CHANGELOG.md': '## [Unreleased]\n',
             'ui/app/pricing.js': 'price = 10\n',
             'app/flag.py': 'x=1\n',
@@ -1652,3 +1652,111 @@ def test_a_hand_off_waits_for_a_branch_check_when_a_push_left_no_webhook_and_no_
         c.execute("UPDATE tasks SET status='doing' WHERE id=?", (quiet['id'],))
         c.execute("UPDATE task_links SET detail=json_set(detail,'$.ahead',0) WHERE id=?", (local,))
     assert 'has commits with no pull request linked' in review(quiet)
+
+
+def _queue(api, task_id, action, reason=None, head='a' * 40, **over):
+    """A merge-queue webhook for the task's PR at `head`. GitHub's dequeue `reason` rides on the top-level payload."""
+    body = pr_event(action, head={'sha': head}, **over)
+    if reason is not None:
+        body['reason'] = reason
+    return hook(api, 'pull_request', body)
+
+
+def _sent(api):
+    with api.app.state.store.transaction() as c:
+        return G.flush_wakes(c)
+
+
+def _github_pr(api, monkeypatch, **pr):
+    """A fake GitHub for the maintenance pass's read of one pull request. `pr` sets what it says; `status` other than 200
+    fails the read, and the dict can be changed between passes. Returns the service, the reads asked, and the fake."""
+    seen = []
+    fake = {'status': 200, 'state': 'open', 'merged': False, 'head': 'a' * 40, **pr}
+
+    def fetch(method, path, headers=None, **kw):
+        seen.append((method, path))
+        body = {'state': fake['state'], 'merged': fake['merged'], 'head': {'sha': fake['head']}}
+        return SimpleNamespace(status_code=fake['status'], json=lambda: body)
+
+    service, _ = _reconciler(api, monkeypatch, fetch)
+    return service, seen, fake
+
+
+@pytest.mark.parametrize('reason', ['CHECKS_FAILED', 'SOME_REASON_GITHUB_ADDED_LATER'])
+def test_a_merge_queue_removal_wakes_the_owner_once_when_github_still_has_the_pr_open(api, monkeypatch, reason):
+    """The webhook sends nothing for a removal that is not a merge. The maintenance pass reads the pull request, and if it
+    is still open at the removed head the owner is woken once, with the reason and the head, and the head's merge wake is
+    due again. A failed read waits for the next pass; a redelivery says nothing new; a removal after a re-enqueue is news."""
+    from backend import verdict_moves as V
+
+    service, seen, fake = _github_pr(api, monkeypatch)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship the queued change', 'body': 'x', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
+    with api.app.state.store.transaction() as c:
+        assert V._merge_woken(c, H.task(c, task['id']), 'a' * 40, H.task_links(c, task['id'])[0]) is True
+    _queue(api, task['id'], 'enqueued')
+    with api.app.state.store.transaction() as c:
+        assert V._queued(H.task_links(c, task['id'])[0], 'a' * 40)
+    _queue(api, task['id'], 'dequeued', reason)
+    item = f"Removed from the merge queue ({reason}) at {'a' * 12}: fix and merge again"
+    assert _burst(api, task['id']) == [] and seen == []
+    fake['status'] = 500
+    G.refresh_queue_removals(service)
+    assert seen and _burst(api, task['id']) == []  # a failed read keeps the removal for the next pass
+    fake['status'] = 200
+    G.refresh_queue_removals(service)
+    assert _burst(api, task['id']) == [item] and _sent(api) == [task['id']]
+    with api.app.state.store.transaction() as c:
+        assert c.execute('SELECT body FROM messages ORDER BY rowid DESC LIMIT 1').fetchone()[0] == item
+        pr = H.task_links(c, task['id'])[0]
+        assert not V._queued(pr, 'a' * 40) and 'verify' not in H._json(pr['detail'], {})['merge_queue']
+        assert V._merge_woken(c, H.task(c, task['id']), 'a' * 40, pr) is True  # due again after the removal
+    reads = len(seen)
+    G.refresh_queue_removals(service)
+    assert len(seen) == reads  # nothing is marked: nothing is read
+    _queue(api, task['id'], 'dequeued', reason)  # a redelivery of the same removal
+    assert _burst(api, task['id']) == []
+    _queue(api, task['id'], 'enqueued')
+    _queue(api, task['id'], 'dequeued', reason)  # enqueued again, removed again
+    G.refresh_queue_removals(service)
+    assert _burst(api, task['id']) == [item]
+
+
+@pytest.mark.parametrize('reason', ['MERGE', 'ALREADY_MERGED', 'merged', 'Merged'])
+def test_a_queue_merge_removal_that_arrives_before_closed_does_not_wake_the_owner(api, monkeypatch, reason):
+    """GitHub may send a queue merge's removal before the pull request's own closed event, with merged false and a success
+    reason. That is not a removal: nothing is read and nothing is sent, and the closed event is what moves the ticket."""
+    service, seen, _ = _github_pr(api, monkeypatch)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship the queued change', 'body': 'x', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
+    _queue(api, task['id'], 'enqueued')
+    _queue(api, task['id'], 'dequeued', reason)
+    G.refresh_queue_removals(service)
+    assert seen == [] and _burst(api, task['id']) == []
+    with api.app.state.store.transaction() as c:
+        queue = H._json(H.task_links(c, task['id'])[0]['detail'], {})['merge_queue']
+    assert (queue['state'], queue['reason'], 'verify' in queue) == ('dequeued', reason, False)
+    # A removal that arrives on a merged pull request is not news either, whatever its reason.
+    _queue(api, task['id'], 'enqueued')
+    _queue(api, task['id'], 'dequeued', 'CHECKS_FAILED', merged=True)
+    G.refresh_queue_removals(service)
+    assert seen == [] and _burst(api, task['id']) == []
+
+
+def test_a_removal_for_a_pr_github_reads_as_merged_does_not_wake_the_owner(api, monkeypatch):
+    """A removal for a reason that is not a merge, on a pull request that the maintenance read finds merged: the merge is
+    news through its closed event, not through the removal. Nothing is sent, and the removal is settled with no second read."""
+    service, seen, _ = _github_pr(api, monkeypatch, state='closed', merged=True)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship the queued change', 'body': 'x', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
+    _queue(api, task['id'], 'enqueued')
+    _queue(api, task['id'], 'dequeued', 'CI_FAILURE')
+    assert _burst(api, task['id']) == []
+    G.refresh_queue_removals(service)
+    assert seen and _burst(api, task['id']) == []
+    with api.app.state.store.transaction() as c:
+        queue = H._json(H.task_links(c, task['id'])[0]['detail'], {})['merge_queue']
+    assert (queue['state'], queue['reason'], 'verify' in queue) == ('dequeued', 'CI_FAILURE', False)
+    reads = len(seen)
+    G.refresh_queue_removals(service)
+    assert len(seen) == reads

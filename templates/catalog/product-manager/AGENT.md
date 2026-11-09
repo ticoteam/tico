@@ -73,7 +73,7 @@ and a granted Tool to allow it. Otherwise it stays a draft for a person.
 Read with `hub task show`, `hub goal list`, `hub goal show <id>`, `hub meeting search "<feature>"`,
 `hub doc search "<area>"` and, where connected, `gh issue list`, `gh issue view`, `gh pr list` (read
 only). Ask a neighbour bot with `hub task create --owner <slug>`, or read its reports.
-One question for the requester per task: `hub task ask <id>`. Publish specs with `hub file publish`.
+One question for the requester per task: `hub task question "<question>" --on <person> --parent <id>`. Publish specs with `hub file publish`.
 
 ## Quality standards
 - **Problem first.** The spec opens with who has the problem and what it costs them, in their words, with

@@ -19,7 +19,7 @@ const tasks = (() => {
       return {
         open: !!m?.open,
         title: m?.querySelector('.tmodal-title')?.textContent.trim() || '',
-        status: m?.querySelector('.tstatus')?.textContent.trim() || '',
+        step: row('Step'),
         created_at: m?.querySelector('.tmodal-age')?.getAttribute('title') || '',
         owner_id: row('Owner'),
         asked: row('Asked by'),
@@ -38,9 +38,10 @@ const tasks = (() => {
     return detail(page);
   }
 
-  async function waitStatus(page, re) {
-    await page.waitForFunction(src => new RegExp(src, 'i').test(document.querySelector('#task-modal .tstatus')?.textContent || ''),
-      re.source, {timeout: t(15000)});
+  // A typed task's step is its Step property (the header carries no state).
+  async function waitStep(page, re) {
+    await page.waitForFunction(src => new RegExp(src, 'i').test([...document.querySelectorAll('#task-modal .prop')]
+      .find(r => r.querySelector('.prop-k')?.textContent.trim() === 'Step')?.innerText || ''), re.source, {timeout: t(15000)});
   }
 
   async function pick(page, text) {
@@ -74,7 +75,7 @@ const tasks = (() => {
     assert.match(d.owner_id, /engineering-lead/, `${where}: owner row names the bot`);
     assert.match(d.asked, /You/, `${where}: asked-by row names the requester`);
     assert.match(d.created_at, CREATED, `${where}: created time is drawn`);
-    assert.match(d.status, /Plan/, `${where}: a typed task shows its first step`);
+    assert.match(d.step, /Plan/, `${where}: a typed task shows its first step`);
     assert.ok(d.canClose, `${where}: the requester can close`);
     assert.ok(!d.canDone, `${where}: the requester cannot mark it done`);
     assertClean(page, `${where}: sheet`);
@@ -82,7 +83,7 @@ const tasks = (() => {
     // Moved to Build from the Step menu. The history shows the move.
     await page.locator('#task-modal [data-prop="step"]').click();
     await pick(page, 'Build');
-    await waitStatus(page, /Build/);
+    await waitStep(page, /Build/);
     await page.waitForFunction(() => document.querySelector('#task-modal .task-comments')?.innerText.includes('Build'),
       null, {timeout: t(15000)});
     d = await detail(page);
@@ -95,7 +96,7 @@ const tasks = (() => {
     await must(hub, 'engineering-lead', 'POST', `tasks/${id}`, {version, step: ship.id, status: 'done'}, 'the bot marks it done');
     await page.reload();
     d = await sheet(page, TITLE);
-    assert.match(d.status, /Ship/, `${where}: the sheet shows the step the bot moved it to`);
+    assert.match(d.step, /Ship/, `${where}: the sheet shows the step the bot moved it to`);
     await page.waitForFunction(() => document.querySelector('#task-modal .task-comments')?.innerText.includes('Ship'),
       null, {timeout: t(15000)});
     d = await detail(page);
@@ -131,14 +132,14 @@ const tasks = (() => {
 
 // ---- e2e-needs-you
 const needsYou = (() => {
-  const QUESTION = 'Ship the beta on Nov 3?';
-  const ANSWER = 'Yes, Nov 3.';
+  // A question with no options is filed with Yes and No (question_tasks), so its card is a pick card with those two.
+  const QUESTION = 'Should we ship the beta on Nov 3?';
   return async ({hub, browser, phone}) => {
     const where = phone ? 'phone' : 'desktop';
-    const asked = await must(hub, 'engineering-lead', 'POST', 'messages', {
-      to: 'dana', text: QUESTION, kind: 'ask', needs_action: true,
+    const asked = await must(hub, 'engineering-lead', 'POST', 'task-questions', {
+      on: 'dana', question: QUESTION,
     }, 'the bot asks a question');
-    const questionId = asked.id;
+    const questionId = asked.task.id;
     const approval = await must(hub, 'builder-claude', 'POST', 'approvals', {
       kind: 'spend_limit', payload: {bot: 'builder-claude', daily_usd: 40},
     }, 'the bot asks for an approval');
@@ -151,16 +152,15 @@ const needsYou = (() => {
     assertClean(page, `${where}: needs you drawn`);
 
     // The question: answer it on its card.
-    await page.locator(`[data-need-card="ask:${questionId}"]`).first().click();
+    await page.locator(`[data-need-card="task:${questionId}"]`).first().click();
     await page.locator('#need-card', {hasText: QUESTION}).first().waitFor({timeout: t(20000)});
-    await page.locator('#need-card .dc-note textarea[aria-label="Your answer"]').fill(ANSWER);
-    await page.locator('#need-card [data-dc="answer"]').first().click();
+    await page.locator('#need-card [data-dc="pick"]', {hasText: 'Yes'}).first().click();
     // The card sends the answer when its undo toast runs out, so the hub is read until the answer is there.
     const reply = await until(async () => {
-      const thread = await must(hub, 'dana', 'GET', `conversations/${asked.conversation_id}/messages`, undefined, 'read the thread');
-      return (thread.messages || []).find(m => m.kind === 'answer' && m.in_reply_to === questionId);
+      const got = await must(hub, 'dana', 'GET', `tasks/${questionId}/answers`, undefined, 'read the answers');
+      return (got.answers || [])[0];
     }, `${where}: the answer on the hub`);
-    assert.equal(reply.body, ANSWER, `${where}: the hub has the answer to the question`);
+    assert.ok(reply, `${where}: the hub has the answer to the question`);
     assertClean(page, `${where}: answered`);
 
     // The approval: approve it on its card.

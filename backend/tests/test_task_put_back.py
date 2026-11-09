@@ -121,7 +121,11 @@ def test_done_task_question_refusal_gives_owner_command_and_nonowner_route(api):
     attempt = take(api, machine)
     update(api, task, attempt['token'], 'done', 'Finished the requested change.')
     result = post(
-        api, 'tasks/' + task['id'] + '/ask', {'text': 'Which date should I use?'}, attempt['token'], expected=422
+        api,
+        'task-questions',
+        {'on': 'human:ana', 'question': 'Which date should I use?', 'parent': task['id']},
+        attempt['token'],
+        expected=422,
     )
     assert f"hub task update {task['id']} --status doing" in result['error']['detail']
     assert 'or file a new task' in result['error']['detail']

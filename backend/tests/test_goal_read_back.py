@@ -456,15 +456,17 @@ def test_what_stays_a_click_is_refused_at_read_back_with_one_reason_and_nothing_
         ({"kind": "colour", "goal_id": row["id"], "status": "red"}, "colour"),
         ({"kind": "done", "goal_id": row["id"]}, "done or dropped"),
         ({"kind": "dropped", "goal_id": row["id"]}, "done or dropped"),
-        ({"kind": "archive", "kpi_id": "k1"}, "Archiving"),
+        ({"kind": "archive", "kpi_id": "k1"}, "archiving"),
         ({"kind": "reading", "kpi_id": "k1", "value": 40}, "reading"),
         ({"kind": "vision", "vision": "Every company runs on Tico"}, "Vision"),
+        ({"kind": "recovery", "goal_id": row["id"]}, "recovery suggestion"),
     ):
         refused = read_back(
             api, attempt, {"kind": "goal_update", "goal_id": row["id"], "title": "Ship the docs"}, change, expected=403
         )["error"]
         assert refused["code"] == "stays_a_click" and word in refused["detail"], (change, refused)
         assert refused["detail"].count(".") == 1  # one sentence the Assistant can say
+        assert refused["detail"].startswith("Nothing was saved: ")
     assert len(room_messages(api)) == before
     assert get(api, "goals/" + row["id"])["goal"]["title"] == "Launch the docs"
     # What could not be saved by the owner's own click is refused before it is read back.
@@ -475,6 +477,16 @@ def test_what_stays_a_click_is_refused_at_read_back_with_one_reason_and_nothing_
     read_back(
         api, attempt, *[{"kind": "goal_create", "title": f"Goal {i}", "owner": "ops"} for i in range(21)], expected=422
     )
+
+
+def test_each_click_refusal_says_nothing_was_saved_and_where_the_change_is_made():
+    """A refused read-back saves nothing, so no refusal may say a change was left out."""
+    assert set(GR.CLICK) == {"colour", "status", "archive", "reading", "vision", "strategy", "recovery"}
+    for kind, sentence in GR.CLICK.items():
+        assert sentence.startswith("Nothing was saved: "), kind
+        assert "left it out" not in sentence, kind
+        assert sentence.count(".") == 1 and sentence.endswith("."), kind
+        assert any(place in sentence for place in ("Goals page", "KPI itself", "Strategy page", "its card")), kind
 
 
 def test_only_the_owners_strategy_bot_turn_saves_on_a_yes(api):

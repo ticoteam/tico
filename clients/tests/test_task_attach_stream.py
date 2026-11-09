@@ -111,7 +111,7 @@ def test_local_mcp_attach_refuses_unsafe_paths(monkeypatch, tmp_path, bad):
     client.post_multipart.assert_not_called()
 
 
-def test_cli_attach_combines_streaming_poster_note_and_choices(monkeypatch, tmp_path):
+def test_cli_attach_combines_streaming_poster_and_note(monkeypatch, tmp_path):
     path, poster = tmp_path / 'draft.md', tmp_path / 'poster.png'
     path.write_text('# Draft')
     poster.write_bytes(b'poster')
@@ -121,22 +121,11 @@ def test_cli_attach_combines_streaming_poster_note_and_choices(monkeypatch, tmp_
     client.features.return_value = {'task_files_multipart': True}
     monkeypatch.setattr(remotecli, 'Client', lambda *args, **kw: client)
     args = hubcli.parser().parse_args(
-        [
-            'task',
-            'attach',
-            'task',
-            str(path),
-            '--poster',
-            str(poster),
-            '--note',
-            'Revised',
-            '--choices',
-            'Approve,Request changes',
-        ]
+        ['task', 'attach', 'task', str(path), '--poster', str(poster), '--note', 'Revised']
     )
     remotecli.run(args)
     call = client.post_multipart.call_args
     assert call.args[:2] == ('tasks/task/files', {'file': path, 'poster': poster})
     body = call.args[-1]
     assert body['name'] == 'draft.md' and body['note'] == 'Revised'
-    assert body['ask']['questions'][0]['options'] == [{'label': 'Approve'}, {'label': 'Request changes'}]
+    assert 'ask' not in body  # asks are gone: an attachment carries no question

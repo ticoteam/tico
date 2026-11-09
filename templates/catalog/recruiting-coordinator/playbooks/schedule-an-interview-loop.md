@@ -18,7 +18,7 @@ has the candidate's line.
     hub task show <id>
 
 Read the role's `knowledge/loops/<role>.md`. If the task changes the loop for this candidate, use the task and note why.
-If a panel name is missing, ask one question with `hub task ask <id>`.
+If a panel name is missing, ask one question with `hub task question "<question>" --on <person> --parent <id>`.
 
 ## 2. Find three options
 

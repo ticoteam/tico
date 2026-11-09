@@ -9,7 +9,7 @@ The life of one:
   including no engine, the budget and a failed call. A person may `override` with a note. An override, like a passing
   check, holds for one exact fingerprint (text, version, disclosure revision and rules).
 - `request_approval` asks the audience's approver or the owner, by name, with the whole text in the payload. Deciding is
-  the person's own click: `require_own_click`, in the decide routes (backend/app.py, backend/batch.py) and refused earlier
+  the person's own click: `require_own_click`, in the decide routes (backend/approvals_routes.py, backend/batch.py) and refused earlier
   for the Assistant (backend/assistant.py).
 - `publish` spends the approval and marks the edition published in one transaction, and only if the payload still equals
   what publishing would send now. The route then calls `release_published`, after the commit: a rebuild inside a

@@ -143,6 +143,11 @@ CONTENT = {
     # Published briefing for this week, by the Librarian.
     "briefing": {
         "title": "Holiday projector market this week",
+        # The Market page's answer lines (docs/market-briefing.md); the questions with no line here show none.
+        "answers": {
+            "changed": "Glimmerco priced against our two-unit kit, and towns started buying through public bids.",
+            "players": "Glimmerco competes on price; Frostlamp adds a partner crew to storefront installs.",
+        },
         "items": [
             (
                 "change",
@@ -527,7 +532,8 @@ def _briefing(b):
     week = MB.this_week(b.now)
 
     def work(c):
-        MB.post(c, Identity(MK.CURATOR, "bot"), week, CONTENT["briefing"]["title"], CONTENT["briefing"]["body"], items)
+        brief = CONTENT["briefing"]
+        MB.post(c, Identity(MK.CURATOR, "bot"), week, brief["title"], brief["body"], items, answers=brief["answers"])
 
     b.write(work)
 

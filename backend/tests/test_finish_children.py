@@ -1,18 +1,28 @@
 """Closing or finishing a task closes open descendants, with the usual history and close permissions."""
 
 import json
+from pathlib import Path
 
 import pytest
 
 from backend import hubdb as H
+from backend import task_reads
 from backend import task_relations as TR
+from backend.config import Settings
+from backend.store import Store
 from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 ANA, BEN, CMO, SEO = "human:ana", "human:ben", "bot:cmo", "bot:seo"
 
 
 def hub(path):
+    # The full schema, so a subtask's reader is worked out as the hub does (bot access reads bot_config).
+    Store(Settings(db_path=path, registry_dir=FIXTURES / "registry")).initialize(seed_market=False)
     c = H.connect(path)
+    # Store.initialize adds tasks.version (cloud step 1); a bare connect has no store, and a blocked task's bump needs it.
+    H.add_column(c, "tasks", "version", "INTEGER NOT NULL DEFAULT 1")
     H.sync_registry(
         c,
         {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in ("cmo", "seo")},
@@ -33,6 +43,12 @@ def history(c, row):
             (row["id"],),
         )
     ]
+
+
+def shown(c, row, visible="1"):
+    """The subtask summaries in a task's history as one reader reads them: `visible` is the SQL rule for the tasks that
+    reader may open (task_reads.children_text). Titles show only where it admits them, else "a subtask"."""
+    return [e["new"] for e in task_reads.children_text(c, visible, history(c, row)) if e["kind"] == "children"]
 
 
 def finish(c, parent, operation):
@@ -130,7 +146,7 @@ def test_private_subtask_refuses_the_whole_finish_without_detaching_or_leaking_i
     )
     assert not H.task_private_readable(c, ANA, secret)
     before = [(H.task(c, kid["id"]), history(c, kid)) for kid in (parent, visible, secret)]
-    with pytest.raises(H.Refused, match="a private subtask") as exc:
+    with pytest.raises(H.Refused, match="The open subtask a subtask is not yours") as exc:
         if operation == "close":
             H.task_close(c, ANA, parent["id"])
         else:
@@ -172,9 +188,10 @@ def test_private_titles_never_enter_a_private_parents_records_or_notice(tmp_path
         "SELECT detail FROM events WHERE target=? AND action=? ORDER BY rowid DESC LIMIT 1",
         (parent["id"], "task.close" if operation == "close" else "task.update"),
     ).fetchone()[0]
-    for text in (records, notices, detail):
+    for text in (records, notices, detail, json.dumps(shown(c, parent, "0"))):
         assert secret["title"] not in text
-        assert "a private subtask" in text
+    assert shown(c, parent, "0") == ["Closed with it: a subtask"]
+    assert "a subtask" in notices
     c.close()
 
 
@@ -282,10 +299,7 @@ def test_bot_requested_steps_only_descendant_obeys_the_direct_close_check(tmp_pa
         assert all(H.task(c, t["id"])["status"] == "closed" for t in (own, deep))
         assert (H.task(c, child["id"]), history(c, child)) == before[2]
         assert c.execute("SELECT count(*) FROM refusals").fetchone()[0] == refusals
-        assert any(
-            e["kind"] == "children" and child["title"] in e["new"] and e["new"].startswith("Still open:")
-            for e in history(c, parent)
-        )
+        assert "Still open: " + child["title"] in shown(c, parent)
         notices = c.execute(
             "SELECT recipient_id FROM messages WHERE json_extract(refs,'$.task')=? "
             "AND json_extract(refs,'$.finish_left_open')=?",
@@ -327,8 +341,12 @@ def test_automatic_finishes_close_permitted_descendants_and_wake_left_open_reque
     assert [(H.task(c, t["id"]), history(c, t)) for t in (other, secret)] == skipped_before
     assert c.execute("SELECT count(*) FROM refusals").fetchone()[0] == refusals
     records = json.dumps(history(c, parent))
-    assert "Still open: " in records and other["title"] in records and "a private subtask" in records
-    assert secret["title"] not in records
+    reader_of_other = f"id='{other['id']}'"
+    assert any(
+        s.startswith("Still open:") and other["title"] in s and secret["title"] not in s
+        for s in shown(c, parent, reader_of_other)
+    )
+    assert secret["title"] not in records and secret["title"] not in json.dumps(shown(c, parent, "0"))
     for t in (other, secret):
         notices = c.execute(
             "SELECT id,recipient_id FROM messages WHERE json_extract(refs,'$.task')=? "
@@ -361,12 +379,14 @@ def test_idle_cascade_withdraws_questions_and_approvals_without_notifying_the_ch
     c = hub(tmp_path / "hub.db")
     parent = make(c, ANA, "Plan the launch", CMO)
     child = make(c, CMO, "Draft the launch copy", SEO, parent)
-    asked = H.task_comment(c, SEO, child["id"], "Which launch date?", wake=False, ask={"who": ANA})
+    from backend import question_tasks
+
+    asked = question_tasks.ask_plain(c, SEO, ANA, "Which launch date?", parent=H.task(c, child["id"]))
     approval = H.approval_request(c, SEO, "merge", {"repo": "acme/docs", "pr": 12}, task_id=child["id"])
     H.task_update(c, SEO, child["id"], status="review", note="Ready to review")
     before = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
     H.task_close(c, ANA, parent["id"])
-    assert H.message(c, asked["id"])["superseded_at"]
+    assert H.task(c, asked["id"])["status"] == "closed"
     assert H.approval(c, approval["id"])["decision"] == "withdrawn"
     assert not c.execute("SELECT 1 FROM messages WHERE rowid>? AND recipient_id=?", (before, SEO)).fetchone()
     c.close()
@@ -521,8 +541,8 @@ def test_a_runner_goal_finish_keeps_its_event_batch_and_final_result_with_unclos
         bot_notice = next(m for m in notices if m["recipient_id"] == "bot:cpo")
         assert c.execute("SELECT count(*) FROM jobs WHERE message_id=?", (bot_notice["id"],)).fetchone()[0] == 1
         records = json.dumps(history(c, parent))
-        assert "Still open:" in records and secret["title"] not in records
-        assert steps["title"] in records
+        assert "Still open" in records and secret["title"] not in records
+        assert any(steps["title"] in s for s in shown(c, parent, f"id='{steps['id']}'"))
 
 
 @pytest.mark.parametrize("operation", ["close", "done", "Cancelled"])
@@ -571,7 +591,7 @@ def test_direct_automatic_status_writes_apply_partial_descendant_completion(tmp_
     assert H.task(c, parent["id"])["status"] == status
     assert H.task(c, own["id"])["status"] == "closed"
     assert (H.task(c, other["id"]), history(c, other)) == before
-    assert any(e["kind"] == "children" and e["new"] == "Still open: " + other["title"] for e in history(c, parent))
+    assert "Still open: " + other["title"] in shown(c, parent)
     notices = c.execute(
         "SELECT recipient_id FROM messages WHERE json_extract(refs,'$.finish_left_open')=?", (parent["id"],)
     ).fetchall()
@@ -605,7 +625,7 @@ def test_roadmap_automatic_completion_closes_ordinary_descendants(api):
         assert all(H.task(c, t["id"])["status"] == "closed" for t in (child, deep))
         for t in (child, deep):
             assert any(e["kind"] == "closed_with" and e["new"] == parent["id"] for e in history(c, t))
-        assert any(e["kind"] == "children" and child["title"] in e["new"] for e in history(c, parent))
+        assert any(child["title"] in s for s in shown(c, parent))
 
 
 @pytest.mark.parametrize("blocked_by_sibling", [True, False])
@@ -721,7 +741,7 @@ def test_automatic_finish_rolls_back_a_failed_descendant_and_its_queued_triggers
         assert H.task(c, own["id"])["status"] == "closed"
         assert (H.task(c, child["id"]), history(c, child)) == before
         assert not c.execute("SELECT 1 FROM tasks WHERE title='Unexpected followup'").fetchone()
-        assert any(e["kind"] == "children" and e["new"] == "Still open: " + child["title"] for e in history(c, parent))
+        assert "Still open: " + child["title"] in shown(c, parent)
         notices = c.execute(
             "SELECT recipient_id FROM messages WHERE json_extract(refs,'$.finish_left_open')=?", (parent["id"],)
         ).fetchall()
@@ -792,3 +812,41 @@ def test_api_has_no_detach_option(api):
     assert get(api, "tasks/" + child["id"])["task"]["status"] == "closed"
     with api.app.state.store.read() as c:
         assert TR.parent_of(c, child["id"]) == parent["id"]
+
+
+def members_only_child(c, parent, title, owner):
+    """A subtask on a members-only pipeline: not private, but a reader who is not a member may not open it."""
+    typ = H.type_create(
+        c, ANA, "Members lab", [{"name": "Work", "status": "doing"}, {"name": "Done", "status": "done"}], mover=True
+    )
+    c.execute("UPDATE task_types SET pipeline_visibility='members' WHERE id=?", (typ["id"],))
+    return H.task_create(c, CMO, title, "", owner, type=typ["id"], parent_id=parent["id"], lint=False)
+
+
+def test_a_reopened_parent_names_a_members_only_subtask_only_to_a_reader_who_may_open_it(tmp_path):
+    c = hub(tmp_path / "hub.db")
+    parent = make(c, CMO, "Plan the launch", CMO)
+    child = members_only_child(c, parent, "Confidential pricing", SEO)
+    H.task_close(c, CMO, parent["id"])
+    assert H.task(c, child["id"])["status"] == "closed"
+    H.task_update(c, CMO, parent["id"], status="open")
+    kept = [e["new"] for e in history(c, parent) if (e["new"] or "").startswith("Still closed")]
+    assert kept and child["title"] not in json.dumps(kept)  # the stored record names no subtask
+    assert "Still closed from when it closed: a subtask" in shown(c, parent, "0")
+    assert f"Still closed from when it closed: {child['title']}" in shown(c, parent, f"id='{child['id']}'")
+    c.close()
+
+
+def test_a_parents_completion_notice_names_a_members_only_subtask_only_to_a_reader_who_may_open_it(tmp_path):
+    c = hub(tmp_path / "hub.db")
+    parent = make(c, CMO, "Plan the launch", BEN)
+    child = members_only_child(c, parent, "Confidential pricing", SEO)
+    before = c.execute("SELECT coalesce(max(rowid),0) FROM messages").fetchone()[0]
+    H.task_close(c, CMO, parent["id"])
+    # The requester (the actor) may open the subtask and hears its title; the owner, who may not, hears "a subtask".
+    to_owner = "\n".join(
+        r[0] for r in c.execute("SELECT body FROM messages WHERE rowid>? AND recipient_id=?", (before, BEN))
+    )
+    assert "Closed with it: a subtask" in to_owner
+    assert child["title"] not in to_owner
+    c.close()

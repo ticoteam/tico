@@ -55,7 +55,6 @@ class TaskFile(M.Contract):
     text: str | None = Field(default=None, min_length=1, max_length=2_000_000)
     content_base64: str | None = Field(default=None, min_length=1, max_length=14_000_000)
     note: str | None = Field(default=None, max_length=500)
-    ask: M.ReviewAsk | None = None
 
 
 def task_file_contract():
@@ -76,7 +75,7 @@ def task_file_contract():
         **schema,
         "required": ["file"],
         "properties": {
-            key: value for key, value in schema["properties"].items() if key not in ("text", "content_base64", "ask")
+            key: value for key, value in schema["properties"].items() if key not in ("text", "content_base64")
         },
     }
     multipart["properties"].update(
@@ -87,7 +86,6 @@ def task_file_contract():
                 "description": "At most TICO_UPLOAD_MAX_BYTES (2 GiB by default).",
             },
             "poster": {"type": "string", "format": "binary", "description": "Optional PNG or JPEG poster."},
-            "ask": {"type": "string", "description": "JSON-encoded structured ask, with questions and optional who."},
         }
     )
     return {
@@ -787,6 +785,13 @@ def install_media(
         if not person or not H.is_human(person) or not H.human(c, H.actor_id(person)):
             raise Problem("validation", f"{body.on} is not a person on the team", 422)
         parent = H.task(c, auth.task(c, who, auth.resolve_task(c, who, body.parent))["id"]) if body.parent else None
+        if parent and parent["status"] not in H.ACTIVE_STATUSES:
+            # A question under a finished task is refused with the next move the asker may make, as a run or a lint is.
+            raise Problem(
+                "validation",
+                f"task {parent['id']} is {parent['status']}; {H.task_reopen_hint(c, who.actor, parent)}",
+                422,
+            )
         # Checked before the fold too: an open question kept from before onboarding is not a way to ask again.
         from . import lifecycle
 
@@ -902,8 +907,16 @@ def install_media(
     def question_ingest(who, body):
         """Ask ingest's preflight of a task question (backend/ask_ingest.py), outside the write: the question as the
         person sees it, with the options it shows and the body the task is filed with."""
-        from . import ask_ingest
+        from . import ask_ingest, dream
 
+        if body.parent:
+            with store.read() as c:
+                try:
+                    row = auth.task(c, who, auth.resolve_task(c, who, body.parent))
+                except Problem:
+                    row = None
+                if row and dream.exempt(c, row):
+                    return None  # the person started the dream to be asked (backend/dream.py)
         question = body.question.strip()
         options = question_shown_options(who, body)
         asked = [
@@ -947,9 +960,9 @@ def install_media(
         `review_checked` is the digest of what the files under review showed when the check read them: changed since
         (a file renamed, a new current version), the question is refused as `changed`, never asked unchecked."""
         from . import ask_ingest, file_reviews, org_rule_check
+        from . import dream
         from . import question_tasks as QT
 
-        options = body.options or [M.QuestionChoice(label="Yes"), M.QuestionChoice(label="No")]
         question = body.question.strip()
         asked = {
             "question": question,
@@ -959,6 +972,9 @@ def install_media(
         }
         title = body.title or question
         person, parent = question_checked(c, who, body)
+        # A dream's questions to the person who started it are numbered and answered in words on the Learnings panel.
+        written = bool(parent) and dream.exempt(c, parent)
+        options = body.options or ([] if written else [M.QuestionChoice(label="Yes"), M.QuestionChoice(label="No")])
         private = question_private(c, who, body, parent)
         question_readable_by(c, who, person, private, parent)
         # Files under review (backend/file_reviews.py): versions the person can open, and the options they make. What
@@ -1032,7 +1048,7 @@ def install_media(
             }
         spend = file_reviews.check_spend(body.spend, [o.label for o in picks])
         # The asking rules (hubdb.lint_question) on the question as the bot wrote it: no options is a Yes / No.
-        H.require_plain_question(c, who.actor, person, [shown])
+        H.require_plain_question(c, who.actor, person, [shown], written=written)
         choices, pad = [], [None] * len(picks)
         for option, item, digest in zip(
             picks, (list(option_files) + pad)[: len(picks)], (list(stored) + pad)[: len(picks)]
@@ -1110,10 +1126,14 @@ def install_media(
         else:
             QT.store(c, tid, ask, topic)
             QT.file(c, who.actor, H.task(c, tid), parent)
-        # An old ask to them on the same topic (before question tasks) gives way to this one: Needs you counts it once.
-        QT.supersede_legacy(
-            c, who.actor, person, tid, parent=parent["id"] if parent else None, topic=topic, private=private
-        )
+            H.hook(
+                c,
+                "needs_you.created",
+                tid,
+                lambda: {"id": tid, "to": person, "from": who.actor, "task_id": parent["id"] if parent else None},
+                who.actor,
+                revision=0,
+            )
         card = H.task(c, tid)
         return {
             "task": {**card, **QT.fields(card)},
@@ -1197,6 +1217,35 @@ def install_media(
                 person, parent = question_checked(c, who, body)
                 # Checked here before anything is stored, and again in the write on the task as made.
                 question_readable_by(c, who, person, question_private(c, who, body, parent), parent)
+        # Two plain refusals before any check or write (backend/ask_refusals.py): a reversible, internal default is done,
+        # not asked; a question another open one to the same person already covers is waited on, not asked again.
+        from . import ask_refusals
+        from . import question_tasks as QT
+
+        with store.read() as c:
+            if not store.saved(c, who, request.url.path, request.headers.get("idempotency-key")):
+                person, parent = question_checked(c, who, body)
+                private = question_private(c, who, body, parent)
+                folds = QT.open_for(
+                    c,
+                    who.actor,
+                    person,
+                    parent=parent["id"] if parent else None,
+                    topic=H.question_topic(body.topic),
+                    private=private,
+                )
+                ask_refusals.check(
+                    c,
+                    who,
+                    person,
+                    title=title,
+                    question=question,
+                    parent=parent,
+                    default=body.if_no_answer.model_dump() if body.if_no_answer else None,
+                    folds=folds,
+                    topic=body.topic,
+                    private=bool(private),
+                )
         # The org rule check (backend/org_rule_check.py), outside the write as a new task's is: one output, to the
         # person asked. A held question skips ask ingest's call.
         review_text, review_seal = question_review_preflight(who, body) if rule_check else ("", None)
@@ -1313,8 +1362,6 @@ def install_media(
             try:
                 upload = uploads["file"]
                 fields.setdefault("name", upload["filename"])
-                if "ask" in fields:
-                    fields["ask"] = json.loads(fields["ask"])
                 body = TaskFile.model_validate(fields)
                 supplied_type = upload["mime"].lower().split(";", 1)[0].strip()
                 content_type = guessed_type(body.name) or (
@@ -1381,9 +1428,8 @@ def install_media(
                 except BF.Refused as exc:
                     raise Problem("file_refused", str(exc), 422) from exc
             payload = body.model_dump()
-            if not body.note and body.ask is None:
+            if not body.note:
                 payload.pop("note")
-                payload.pop("ask")
             replay = await asyncio.to_thread(replay_upload, store, request, payload)
             if replay is not None:
                 return replay
@@ -1398,8 +1444,8 @@ def install_media(
                 c, who, tid, item, digest, H.actor_id(bot_actor) if bot_actor else default_bot(c, store.settings)
             )
             c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, item["id"]))
-            if body.note is not None or body.ask is not None:
-                edit_version(c, auth, who, tid, fid, number, M.FileVersionEdit(note=body.note, ask=body.ask))
+            if body.note is not None:
+                edit_version(c, auth, who, tid, fid, number, M.FileVersionEdit(note=body.note))
             c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), tid))
             # The task's own activity says a file was added, as it says a link was.
             preview = register(c, who, **poster)["id"] if poster else None

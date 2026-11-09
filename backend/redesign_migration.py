@@ -1223,7 +1223,7 @@ def repair_inbox_prompts(c):
             why = f"Not moved to the short routing prompt, so it keeps the Inbox Manager's instructions: {exc}"
             c.execute("UPDATE redesign_migrated SET why=? WHERE kind='inbox' AND id=?", (why[:1000], mark["id"]))
             skipped.append(mark["automation"])
-        except Exception:  # noqa: BLE001 - startup goes on; the next start tries this inbox again
+        except Exception:  # startup goes on; the next start tries this inbox again
             c.execute("ROLLBACK TO inbox_prompt")
             c.execute("RELEASE inbox_prompt")
             log.exception(

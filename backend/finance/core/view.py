@@ -1,10 +1,11 @@
 """View access: what a teammate can see (spec §7.5). A view is the default from where they sit on the org chart, plus
 active grants, minus private lines. Every read and every action resolves one and asks it about each object.
 
-Default (company setting, seeded): the owner sees everything; managers the expenses of the teams they lead and the
-teams under them, and of everyone who reports to them, directly or not; everyone else their own expenses (lines tagged
-with them). Revenue, the balance sheet, payables, receivables and sources are owner-only unless granted. Unattributed
-lines show only in company-wide views.
+Default (company setting, seeded): the owner sees everything and nobody else sees anything until granted. The owner
+can open the defaults up: managers the expenses of the teams they lead and the teams under them, and of everyone who
+reports to them, directly or not, or their own expenses; everyone else their own expenses (lines tagged with them).
+Revenue, the balance sheet, payables, receivables and sources are owner-only unless granted. Unattributed lines show
+only in company-wide views.
 """
 
 from collections.abc import Callable, Iterable, Mapping
@@ -21,12 +22,12 @@ WHOSE = ("own", "team", "company")
 FLAGS = ("payables", "receivables", "sources")
 LINE_GRANTS = ("pnl_lines", "bs_lines")
 GRANT_STATES = ("active", "suspended", "expired", "revoked")
-MANAGER_DEFAULTS = ("team_expenses", "own_expenses")
+MANAGER_DEFAULTS = ("team_expenses", "own_expenses", "none")
 MEMBER_DEFAULTS = ("own_expenses", "none")
 PAYROLL_DEFAULTS = ("totals", "hidden")
 OTHERS_SEE = ("totals", "hidden")
 # What each role sees by default (`fin_view_defaults`, spec §7.5); the owner always sees everything.
-MANAGER_POLICIES = ("team_expenses", "own_expenses")
+MANAGER_POLICIES = ("team_expenses", "own_expenses", "none")
 MEMBER_POLICIES = ("own_expenses", "none")
 PAYROLL_POLICIES = ("totals", "hidden")
 PRIVATE_LABEL = "Payroll (private)"
@@ -37,8 +38,8 @@ MIN_PAID = 3  # a department's payroll cell shows only with at least this many p
 class Defaults:
     """The company's default views (`fin_view_defaults`)."""
 
-    manager: str = "team_expenses"
-    member: str = "own_expenses"
+    manager: str = "none"  # Finance is the owner's alone until they open it up or grant
+    member: str = "none"
     manager_payroll: str = "totals"  # "hidden": managers never see their department's payroll total
 
 
@@ -187,7 +188,8 @@ def default_slices(org: Org, viewer: str, defaults: Defaults) -> tuple[Slice, ..
             out.append(Slice(accounts="expense", whose="teams", teams=led))
         if mates:
             out.append(Slice(accounts="expense", whose="mates", mates=mates))
-    if led or mates or defaults.member == "own_expenses":
+    manages = bool(led or mates) and defaults.manager != "none"
+    if manages or defaults.member == "own_expenses":
         out.append(Slice(accounts="expense", whose="own"))
     return tuple(out)
 
@@ -373,6 +375,7 @@ class Cell:
     location: str = ""  # the location, class and project tag values of its lines ("" when none)
     class_id: str = ""
     project: str = ""
+    lines: int = 0  # the lines this total is made of (a rollup's line_count; 0 for a linked cell)
 
 
 @dataclass(frozen=True)

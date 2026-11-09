@@ -10,7 +10,9 @@ from decimal import Decimal
 from typing import Any
 
 from ... import hubdb as _hubdb
+from ..core import attribution as CA
 from ..core.ledger import Account, Book, Entry, Line, tagset
+from . import attribution as ATT
 
 # Tico's own modules are untyped: Finance reaches them through this file, typed at each call.
 _H: Any = _hubdb
@@ -215,8 +217,11 @@ def insert_entry(
     reverses_id: str,
     by: str,
     at: str,
+    claims: Mapping[int, ATT.Claim] | None = None,
+    team_of: Mapping[str, str] | None = None,
 ) -> list[str]:
-    """The entry, its lines, their tags and the rollups they move. The ids of the lines, in order."""
+    """The entry, its lines, their tags and the rollups they move. The ids of the lines, in order. `claims` gives an
+    attribution to lines by index (a rule's, or a reversal's carried over); each line's rollups follow its parts."""
     c.execute(
         "INSERT INTO fin_entries(id, book_id, entry_date, memo, source, source_id, status, reverses_id, "
         "period_id, action_id, basis, created_at, created_by) VALUES(?,?,?,?,?,?,'posted',?,?,?,?,?,?)",
@@ -267,7 +272,22 @@ def insert_entry(
                 "INSERT INTO fin_line_tags(line_id, kind, value, created_at, created_by) VALUES(?,?,?,?,?)",
                 (lid, kind, value, at, by),
             )
-        roll(c, e.book_id, e.entry_date, item.account_id, item.tags, item.contact_id, item.amount, 1)
+        claim = claims.get(n) if claims else None
+        splits: tuple[CA.Split, ...] = ()
+        if claim is not None and claim.splits:
+            ATT.write(
+                c,
+                book_id=e.book_id,
+                line_id=lid,
+                splits=claim.splits,
+                source=claim.source,
+                rule_id=claim.rule_id,
+                by=by,
+                at=at,
+            )
+            splits = claim.splits
+        for part in CA.parts(item.tags, item.amount, splits, team_of or {}):
+            roll(c, e.book_id, e.entry_date, item.account_id, part.tags, item.contact_id, part.amount, part.count)
     return ids
 
 
@@ -417,9 +437,16 @@ def _line(r: Any, tags: Mapping[str, str]) -> Line:
 
 
 def set_line_tags(
-    c: sqlite3.Connection, row: Any, old: Mapping[str, str], new: Mapping[str, str], by: str, at: str
+    c: sqlite3.Connection,
+    row: Any,
+    old: Mapping[str, str],
+    new: Mapping[str, str],
+    by: str,
+    at: str,
+    team_of: Mapping[str, str] | None = None,
 ) -> None:
-    """Replace a posted line's tags and move its amount between rollup rows. The line itself never changes."""
+    """Replace a posted line's tags and move its rollups to the new tags, keeping its attribution. The line itself
+    never changes."""
     if dict(old) == dict(new):
         return
     c.execute("DELETE FROM fin_line_tags WHERE line_id=?", (row["id"],))
@@ -428,13 +455,50 @@ def set_line_tags(
             "INSERT INTO fin_line_tags(line_id, kind, value, created_at, created_by) VALUES(?,?,?,?,?)",
             (row["id"], kind, value, at, by),
         )
+    splits = ATT.in_force_splits(c, str(row["id"]))
+    reroll(c, row, old, new, splits, splits, team_of)
+
+
+def reattribute(
+    c: sqlite3.Connection,
+    row: Any,
+    old_splits: Sequence[CA.Split],
+    new_splits: Sequence[CA.Split],
+    team_of: Mapping[str, str] | None = None,
+) -> None:
+    """A posted line's attribution changed (its tags did not): move its rollups from the old parts to the new."""
+    tags = _tags_of(c, str(row["id"]))
+    reroll(c, row, tags, tags, old_splits, new_splits, team_of)
+
+
+def _tags_of(c: sqlite3.Connection, line_id: str) -> dict[str, str]:
+    return dict(line_tags(c, [line_id]).get(line_id, {}))
+
+
+def reroll(
+    c: sqlite3.Connection,
+    row: Any,
+    old_tags: Mapping[str, str],
+    new_tags: Mapping[str, str],
+    old_splits: Sequence[CA.Split],
+    new_splits: Sequence[CA.Split],
+    team_of: Mapping[str, str] | None,
+) -> None:
+    """Take a line's old parts out of the rollups and put its new parts in (negative old, positive new), then delete the
+    rows that end empty."""
     amount = int(row["amount"])
-    roll(c, row["book_id"], row["entry_date"], row["account_id"], old, row["contact_id"], -amount, -1)
-    roll(c, row["book_id"], row["entry_date"], row["account_id"], new, row["contact_id"], amount, 1)
-    c.execute(
-        "DELETE FROM fin_rollups WHERE book_id=? AND day=? AND account_id=? AND tagset=? AND line_count=0 AND amount=0",
-        (row["book_id"], row["entry_date"], row["account_id"], tagset(old, row["contact_id"])),
-    )
+    book_id, day, account_id, vendor = row["book_id"], row["entry_date"], row["account_id"], row["contact_id"]
+    before = CA.parts(old_tags, amount, old_splits, team_of or {})
+    after = CA.parts(new_tags, amount, new_splits, team_of or {})
+    for part in before:
+        roll(c, book_id, day, account_id, part.tags, vendor, -part.amount, -part.count)
+    for part in after:
+        roll(c, book_id, day, account_id, part.tags, vendor, part.amount, part.count)
+    for part in before:
+        c.execute(
+            "DELETE FROM fin_rollups WHERE book_id=? AND day=? AND account_id=? AND tagset=? AND line_count=0 AND amount=0",
+            (book_id, day, account_id, tagset(part.tags, vendor)),
+        )
 
 
 def _chunks(values: Sequence[str], size: int = 400) -> Iterable[list[str]]:
@@ -512,6 +576,53 @@ def rollup_lines(
         f"AND account_id IN ({','.join('?' * len(account_ids))}) GROUP BY account_id, team, vendor",
         [book_id, start, end, teammate, *account_ids],
     ).fetchall()
+
+
+def vendor_slices(c: sqlite3.Connection, book_id: str, keys: Sequence[str]) -> list[tuple[str, str, str]]:
+    """The (account, team, teammate) slices a vendor's lines sit in, over all time: what a contact list asks of a vendor
+    with no period (visible.named_all_time). `keys` are the vendor's keys (store/ap.vendor_keys)."""
+    if not keys:
+        return []
+    marks = ",".join("?" * len(keys))
+    return [
+        (str(r[0]), str(r[1]), str(r[2]))
+        for r in c.execute(
+            f"SELECT DISTINCT account_id, team, teammate FROM fin_rollups WHERE book_id=? AND vendor IN ({marks})",
+            [book_id, *keys],
+        ).fetchall()
+    ]
+
+
+def unattributed_lines(
+    c: sqlite3.Connection,
+    book_id: str,
+    start: str,
+    end: str,
+    account_ids: Sequence[str],
+    after: tuple[str, str] | None,
+    most: int,
+) -> list[Any]:
+    """P&L lines in the window with no team or teammate tag and no attribution in force (the Unattributed queue), newest
+    first by (entry date, line id), `most` of them after `after` (an entry date and a line id). Reversed entries and the
+    reversals of them are left out: each pair nets to nothing. Each row carries its entry's memo and source."""
+    if not account_ids:
+        return []
+    sql = (
+        "SELECT l.id, l.entry_id, l.entry_date, l.account_id, l.amount, l.contact_id, l.description, e.memo, e.source "
+        "FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
+        "WHERE l.book_id=? AND l.entry_date>=? AND l.entry_date<=? "
+        f"AND l.account_id IN ({','.join('?' * len(account_ids))}) "
+        "AND e.status='posted' AND e.reverses_id IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM fin_line_tags t WHERE t.line_id=l.id AND t.kind IN ('team','teammate')) "
+        "AND NOT EXISTS (SELECT 1 FROM fin_attributions a WHERE a.line_id=l.id AND a.superseded_at IS NULL)"
+    )
+    args: list[object] = [book_id, start, end, *sorted(account_ids)]
+    if after is not None:
+        sql += " AND (l.entry_date < ? OR (l.entry_date = ? AND l.id < ?))"
+        args += [after[0], after[0], after[1]]
+    sql += " ORDER BY l.entry_date DESC, l.id DESC LIMIT ?"
+    args.append(most)
+    return c.execute(sql, args).fetchall()
 
 
 def entries_on(

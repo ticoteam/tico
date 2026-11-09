@@ -30,7 +30,7 @@ def run(c, ctx):
         return _result("skipped", "Suggest is off")
     try:
         skills = skill_suggestions.run(ctx["store"], H.parse_ts(ctx["now"]))
-    except Exception as exc:  # noqa: BLE001 - a fault here must not cost the Gateway part its day; it shows in details
+    except Exception as exc:  # a fault here must not cost the Gateway part its day; it shows in details
         LOG.exception("skill suggestions failed")
         skills = {"made": 0, "closed": 0, "error": type(exc).__name__}
     result = _gateway(c, ctx)

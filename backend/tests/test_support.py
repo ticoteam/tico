@@ -957,6 +957,22 @@ def test_with_the_team_rule_on_a_bots_report_is_sent_at_once_filed_as_the_defaul
     assert bad.status_code >= 400 and "doesn't match" in bad.text and len(hq.seen) == 1
 
 
+def test_a_copy_run_from_source_sends_no_bots_report_by_the_rule_until_it_names_an_hq(environment, hq, monkeypatch):  # noqa: F811
+    # A checkout, a test or the factory simulation runs as "dev": with the rule on, its bot's report waits for a person.
+    monkeypatch.setenv("TICO_VERSION", "dev")
+    api = environment()
+    bot = as_bot(api)
+    waiting = draft(api, bot)
+    assert waiting.status_code == 200, waiting.text
+    assert waiting.json()["kind"] == "support" and "sent" not in waiting.json() and hq.seen == []
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT decision FROM approvals").fetchone()[0] is None
+    # TICO_HQ_URL set on purpose sends as a release does.
+    monkeypatch.setenv("TICO_HQ_URL", "https://updates.tico.team")
+    sent = draft(api, bot, message="A second report, once an HQ is named.")
+    assert sent.status_code == 200 and sent.json()["sent"] is True and len(hq.tickets) == 1
+
+
 def test_with_the_team_rule_off_a_bots_report_waits_for_a_yes_and_only_the_owner_turns_the_rule_on(environment, hq):  # noqa: F811
     api = environment()
     bot = as_bot(api)

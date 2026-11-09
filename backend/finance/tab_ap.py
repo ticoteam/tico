@@ -6,7 +6,7 @@ Nested lists are capped, with a count and `more`. Re-exported by finance/reads, 
 
 import sqlite3
 import uuid
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import date
 from typing import Any, cast
 
@@ -18,6 +18,7 @@ from .core import ledger as L
 from .core import rights as R
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
+from . import visible as VB
 from .store import ap as SAP
 from .store import banking as SK
 from .store import ledger as SL
@@ -49,11 +50,16 @@ def sees_contact_kind(ctx: Ctx, view: VW.View, kind: str) -> bool:
     return sees_side(ctx, view, "bill") or sees_side(ctx, view, "invoice")
 
 
-def vendor_labels(ctx: Ctx, view: VW.View, keys: Iterable[str]) -> dict[str, str]:
+def vendor_labels(
+    ctx: Ctx, view: VW.View, keys: Iterable[str], shown: Mapping[str, bool] | None = None
+) -> dict[str, str]:
     """What each vendor key on a line shows as. A bill's or invoice's lines (and their payments, write-offs and
     settlements) carry the contact's id: its name, to a viewer who sees that kind of contact, else "". A bank or card
     row with no vendor contact is keyed by its folded name: the name of the contact that later took it
-    (fin_vendor_aliases), else the text it was last posted under (fin_vendor_labels), else the key itself. A key that is an id with no contact behind it shows "": never an id."""
+    (fin_vendor_aliases), else the text it was last posted under (fin_vendor_labels), else the key itself. A key that is an id with no contact behind it shows "": never an id.
+
+    `shown` (visible.py's rule, by key) replaces the kind check when given: a record's name shows when its reader sees one
+    of its lines, and a key not in `shown` shows "" (never its raw text)."""
     wanted = sorted({k for k in keys if k})
     named = {k: SAP.vendor_resolved(ctx.c, ctx.book.id, k) for k in wanted if not _is_id(k)}
     found = SAP.contacts(ctx.c, sorted(set(wanted) | set(named.values())))
@@ -61,7 +67,13 @@ def vendor_labels(ctx: Ctx, view: VW.View, keys: Iterable[str]) -> dict[str, str
     out: dict[str, str] = {}
     for k in wanted:
         row = found.get(named.get(k, k))
-        if row is not None:
+        if shown is not None:
+            allowed = bool(shown.get(k) or shown.get(named.get(k, k), False))
+            if row is not None:
+                out[k] = str(row["name"]) if allowed else ""
+            else:
+                out[k] = "" if _is_id(k) or not allowed else texts.get(named[k], named[k])
+        elif row is not None:
             out[k] = str(row["name"]) if sees_contact_kind(ctx, view, str(row["kind"])) else ""
         else:
             out[k] = "" if _is_id(k) else texts.get(named[k], named[k])
@@ -503,21 +515,28 @@ def contacts(
     view = ctx.view(viewer)
     if kind is not None and kind not in AP.CONTACT_KINDS:
         raise invalid(f"kind is {'|'.join(AP.CONTACT_KINDS)}")
-    kinds = [
-        k
-        for k in AP.CONTACT_KINDS
-        if sees_contact_kind(ctx, view, k) and (kind is None or k == kind or (kind != "both" and k == "both"))
-    ]
-    if not kinds:
-        raise denied("contacts are not in your view")
+    kinds = [k for k in AP.CONTACT_KINDS if kind is None or k == kind or (kind != "both" and k == "both")]
     vendors, customers = sees_side(ctx, view, "bill"), sees_side(ctx, view, "invoice")
     admin = view.everything  # the tax id's last 4 go to whoever sees everything, not to finance admins
     most = page_size(limit)
     marks = decode_cursor(cursor)
     after = (marks[0], marks[1]) if len(marks) == 2 else None
-    rows = SAP.contacts_page(
+    fetched = SAP.contacts_page(
         c, book_id=ctx.book.id, kinds=kinds, q=(q or "").strip()[:100], active=active, after=after, most=most + 1
     )
+    # A customer shows to the receivables view; a vendor (or both) shows to the payables view, or when its name may show
+    # under the one view rule (visible.py): a vendor the reader sees a line of, with no line of it private to them.
+    named = VB.named_all_time(ctx, view, [str(r["id"]) for r in fetched if str(r["kind"]) in ("vendor", "both")])
+    # Refused unless the reader sees a contact kind or can name a vendor under the rule (a reader with no finance view
+    # at all, or only a right to act, is refused as before).
+    if not any(sees_contact_kind(ctx, view, k) for k in AP.CONTACT_KINDS) and not any(named.values()):
+        raise denied("contacts are not in your view")
+    rows = [
+        r
+        for r in fetched
+        if sees_contact_kind(ctx, view, str(r["kind"]))
+        or (str(r["kind"]) != "customer" and named.get(str(r["id"]), False))
+    ]
     page = rows[:most]
     ids = [str(r["id"]) for r in page]
     cut = set(private_cut(ctx, view))
@@ -535,7 +554,7 @@ def contacts(
         )
         for r in page
     ]
-    nxt = encode_cursor([str(page[-1]["name"]), str(page[-1]["id"])]) if len(rows) > most else None
+    nxt = encode_cursor([str(page[-1]["name"]), str(page[-1]["id"])]) if len(fetched) > most and page else None
     return {"contacts": out, "next_cursor": nxt, "view_version": view.version}
 
 

@@ -202,8 +202,7 @@ def why_not(c, settings, bot, choice, runner_id, job_id=None, kept=""):
     if not row:
         return f"{choice['model']} is not a model Tico knows any more"
     saved = bool(row.get("held")) and choice["model"] == kept
-    # The Gateway's old lineup is not offered but still runs.
-    if row.get("deprecated") and row.get("lineup") != "old" and not saved:
+    if row.get("deprecated") and not saved:
         return f"{row.get('label') or choice['model']} is retired"
     try:
         providers.complete_choice(

@@ -179,7 +179,7 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
 - A thread can reach outside the company through a linked Slack channel. Unlinking it removes the outside readers at
   once ([Slack](slack.md)).
 - A message the org rules hold writes nothing. The author may withdraw it, and so may the person a bot reports to; only
-  the reviewer sends it anyway ([Rules](rules-plan.md)).
+  the reviewer sends it anyway. A held message nobody decides within 24 hours expires unsent ([Rules](rules-plan.md)).
 
 A page's maintainer bot and its managers may narrow **Who can see it**, archive and restore it. The audience applies
 to people and bots after inherited file visibility, including wider pins; the maintainer and managers always pass
@@ -224,7 +224,7 @@ The product favours getting going fast, and the owner tightens it later. Setting
 | **Members make personal tokens** | any human makes a personal API token, which sees what they see | the owner and the Admins do |
 | **Owners and admins may let Tico support in** (`support_access`) | an owner or admin may open a time-limited support session from their own request ([below](#tico-support)) | nobody can, and a live session ends |
 | **Bots send reports to the Tico team without asking** (`bot_reports_direct`, Settings > General > Team) | a bot's report to the Tico team is decided by this rule as the install's default person and sent at once, with the same checks and limits as a drafted one ([Support](support.md#a-bots-report)) | a bot's report is a `support` approval a person says yes to in Needs you first ([Support](support.md#a-bots-report)) |
-| **Bots go ahead on their recommendation** (`bots_go_ahead`, days in `go_ahead_days`, 3) | a bot's ask with a reversible, internal default goes ahead when nobody answers in that many days (or by the date the bot gave); sends, spending and deletes never go ahead: their question closes on its date and the bot decides without it ([Tasks](tasks.md#when-nobody-answers-a-bots-ask)) | no ask goes ahead on its own; one with a date still closes on it, and one without leaves **Needs you** after two business days |
+| **Bots go ahead on their recommendation** (`bots_go_ahead`, days in `go_ahead_days`, 3) | a bot's question to a person with a reversible, internal default goes ahead when nobody answers in that many days (or by the date the bot gave); sends, spending and deletes never go ahead: their question closes on its date and the bot decides without it ([Tasks](tasks.md#when-nobody-answers)) | no question goes ahead on its own; one with a date still closes on it, and one without leaves **Needs you** after two business days |
 
 Only the Owner changes them, directly in Settings or by asking BotOps to act with the Owner's rights.
 
@@ -235,7 +235,7 @@ on `/api/v2/groups` through `hub api`, or `hub group update`), with that person'
 refused. The Strategy Bot only suggests org changes; when the person in its chat asks for one, it makes it citing their message, with the
 same rights. Built-in bots stay outside groups.
 
-**The built-in bots** (the Assistant, BotOps, the Librarian and the Strategy Bot) act for the whole team, so only the owner changes their settings,
+**The built-in bots** (the Assistant, BotOps, the Librarian, the Strategy Bot, the Task Manager, the Bookkeeper, Counsel and the Brand Owner) act for the whole team, so only the owner changes their settings,
 routines, access or place, and only the owner may add them. A member cannot register a bot with the name `assistant`, `botops`,
 `librarian`, `goal-manager` or `coo`; an Admin can, and manages every other bot.
 The Strategy Bot's level, regular checks and name, and publishing a strategy version, are the owner's alone: an Admin cannot change them ([Your Strategy Bot](strategy-bot.md)).
@@ -369,7 +369,7 @@ is the same humans who always have full access to it. A bot owner can:
 
 - edit its configuration: instructions, model, routines, name and description, repository;
 - set its See, Read and Write access;
-- pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian or Strategy Bot);
+- pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian, Strategy Bot, Task Manager, Bookkeeper or Brand Owner);
 - add or remove owners (`POST /api/v2/bots/{bot}/co-owners`, Settings > Bots, **Owned by**);
 - give it a stored credential they hold themselves or stored themselves, and no one else's.
 

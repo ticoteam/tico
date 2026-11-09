@@ -241,3 +241,183 @@
     org-chart yes, the release merge), and the noise (the repeated test pings and done docs tasks). It offers one clear next
     step (clear the done and duplicate items, stop the test pings) or does it, saying what it did with undo. It does not
     approve anything, and it does not send messages. Plain lines, links where it has ids.
+
+- id: queue-answer-question-pick
+  group: queue
+  prompt: "Keep install keys staff-only. Answer Engineering's question."
+  hub:
+    - match: '^needs-you show'
+      out:
+        total: 2
+        by_kind: {task: 0, question: 2, approval: 0}
+        tasks:
+          - {id: 8e21d4c0-8200-4000-8000-000000000001, title: "Install keys: name-level access or staff-only?", status: waiting, owner: "human:dana", requester: "bot:head-of-engineering", note: "Engineering recommends staff-only.", created: "2026-11-04T10:00:00Z", updated: "2026-11-05T09:00:00Z"}
+          - {id: 6f1c9a02-8200-4000-8000-000000000002, title: "Still need the runner queue test ping, yes or no?", status: waiting, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-05T06:00:00Z", updated: "2026-11-05T06:00:00Z"}
+        approvals: []
+    - match: '^task show 8e21d4c0\S*'
+      out:
+        task:
+          id: 8e21d4c0-8200-4000-8000-000000000001
+          short_id: 8e21d4c0
+          title: "Install keys: name-level access or staff-only?"
+          status: waiting
+          owner: "human:dana"
+          requester: "bot:head-of-engineering"
+          note: "Engineering recommends staff-only."
+          created: "2026-11-04T10:00:00Z"
+          updated: "2026-11-05T09:00:00Z"
+          question:
+            question: "Should install keys get name-level access for every key, or stay staff-only until the terms check clears?"
+            options:
+              - {label: "Staff-only", description: "Keys stay with staff until the terms check clears.", recommended: true}
+              - {label: "Name-level access", description: "Every install key gets name-level access now."}
+            default: null
+    - match: '^task close 8e21d4c0\S*'
+      out: {ok: true, task: {id: 8e21d4c0-8200-4000-8000-000000000001, status: done}, answer: "Staff-only", note: "answered as the person, via Assistant"}
+  must:
+    - '^task close 8e21d4c0\S*.*Staff-only'
+  must_not:
+    - '^task (bulk )?close(?! 8e21d4c0\b)'
+    - '^task update\b.*6f1c9a02'
+    - '^message send(?! -h\b| --help)'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+  reply: |
+    Answers the install keys question as Dana with her pick, Staff-only, by closing its task (8e21d4c0) with that label. It
+    does not pick Name-level access and does not message Engineering or anyone else. The other question, the runner queue
+    test ping, stays open. It says in one line that Engineering hears the answer once and that an answer cannot be taken
+    back, with no undo line. Plain lines, with the task's link.
+
+- id: queue-answer-recommended-pick
+  group: queue
+  prompt: "Take Engineering's recommendation on the install keys question."
+  hub:
+    - match: '^needs-you show'
+      out:
+        total: 2
+        by_kind: {task: 0, question: 2, approval: 0}
+        tasks:
+          - {id: 8e21d4c0-8200-4000-8000-000000000001, title: "Install keys: name-level access or staff-only?", status: waiting, owner: "human:dana", requester: "bot:head-of-engineering", note: "Engineering recommends staff-only.", created: "2026-11-04T10:00:00Z", updated: "2026-11-05T09:00:00Z"}
+          - {id: 6f1c9a02-8200-4000-8000-000000000002, title: "Still need the runner queue test ping, yes or no?", status: waiting, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-05T06:00:00Z", updated: "2026-11-05T06:00:00Z"}
+        approvals: []
+    - match: '^task show 8e21d4c0\S*'
+      out:
+        task:
+          id: 8e21d4c0-8200-4000-8000-000000000001
+          short_id: 8e21d4c0
+          title: "Install keys: name-level access or staff-only?"
+          status: waiting
+          owner: "human:dana"
+          requester: "bot:head-of-engineering"
+          note: "Engineering recommends staff-only."
+          created: "2026-11-04T10:00:00Z"
+          updated: "2026-11-05T09:00:00Z"
+          question:
+            question: "Should install keys get name-level access for every key, or stay staff-only until the terms check clears?"
+            options:
+              - {label: "Staff-only", description: "Keys stay with staff until the terms check clears.", recommended: true}
+              - {label: "Name-level access", description: "Every install key gets name-level access now."}
+            default: null
+    - match: '^task close 8e21d4c0\S*'
+      out: {ok: true, task: {id: 8e21d4c0-8200-4000-8000-000000000001, status: done}, answer: "Staff-only", note: "answered as the person, via Assistant"}
+  must:
+    - '^task close 8e21d4c0\S*.*Staff-only'
+  must_not:
+    - '^task (bulk )?close(?! 8e21d4c0\b)'
+    - '^task update\b.*6f1c9a02'
+    - '^message send(?! -h\b| --help)'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+  reply: |
+    Takes the recommended pick on the install keys question: Staff-only, the option Engineering marked. It closes that task
+    with the pick's label and nothing else. It says which option it took, that Engineering marked it, and that the answer
+    cannot be taken back. It sends no message and leaves the runner queue question open. Two or three plain lines, with the
+    task's link.
+
+- id: queue-decline-question
+  group: queue
+  prompt: "No to the runner queue test ping question. Drop it."
+  hub:
+    - match: '^needs-you show'
+      out:
+        total: 2
+        by_kind: {task: 0, question: 2, approval: 0}
+        tasks:
+          - {id: 8e21d4c0-8200-4000-8000-000000000001, title: "Install keys: name-level access or staff-only?", status: waiting, owner: "human:dana", requester: "bot:head-of-engineering", note: "Engineering recommends staff-only.", created: "2026-11-04T10:00:00Z", updated: "2026-11-05T09:00:00Z"}
+          - {id: 6f1c9a02-8200-4000-8000-000000000002, title: "Still need the runner queue test ping, yes or no?", status: waiting, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-05T06:00:00Z", updated: "2026-11-05T06:00:00Z"}
+        approvals: []
+    - match: '^task show 6f1c9a02\S*'
+      out:
+        task:
+          id: 6f1c9a02-8200-4000-8000-000000000002
+          short_id: 6f1c9a02
+          title: "Still need the runner queue test ping, yes or no?"
+          status: waiting
+          owner: "human:dana"
+          requester: "bot:botops"
+          note: ""
+          created: "2026-11-05T06:00:00Z"
+          updated: "2026-11-05T06:00:00Z"
+          question:
+            question: "Still need the runner queue test ping, yes or no?"
+            options: []
+            default: null
+    - match: '^task update 6f1c9a02\S*'
+      out: {ok: true, task: {id: 6f1c9a02-8200-4000-8000-000000000002, status: declined}, note: "declined as the person, via Assistant"}
+    - match: '^task close 6f1c9a02\S*'
+      out: {ok: true, task: {id: 6f1c9a02-8200-4000-8000-000000000002, status: done}, answer: "No, drop this.", note: "answered as the person, via Assistant"}
+  must:
+    - '^(task update 6f1c9a02\S*.*--status declined|task close 6f1c9a02\S*)'
+  must_not:
+    - '^task (bulk )?close(?! 6f1c9a02\b)'
+    - '^task update\b(?!.*6f1c9a02)'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    Declines the BotOps runner queue test ping question for Dana, once, on its task (6f1c9a02). Either a decline or a "No,
+    drop this" answer is right, and either way BotOps hears it once. It touches nothing else: not the install keys question,
+    no approval, and no message to BotOps. It says in one line that a decline cannot be taken back, with no undo line. Two
+    or three plain lines, with the task's link.
+
+- id: queue-default-goes-ahead
+  group: queue
+  prompt: "If I don't answer the website question by Saturday, what happens to it?"
+  hub:
+    - match: '^needs-you show'
+      out:
+        total: 1
+        by_kind: {task: 0, question: 1, approval: 0}
+        tasks:
+          - {id: 3c9d1e75-8200-4000-8000-000000000003, title: "Website: publish the new pricing page Friday, or wait for the logo?", status: waiting, owner: "human:dana", requester: "bot:website", note: "Asked Nov 4. If you do not answer by Nov 7, 17:00 UTC, the page waits for the logo.", created: "2026-11-04T16:00:00Z", updated: "2026-11-04T16:00:00Z"}
+        approvals: []
+    - match: '^task show 3c9d1e75\S*'
+      out:
+        task:
+          id: 3c9d1e75-8200-4000-8000-000000000003
+          short_id: 3c9d1e75
+          title: "Website: publish the new pricing page Friday, or wait for the logo?"
+          status: waiting
+          owner: "human:dana"
+          requester: "bot:website"
+          note: "Asked Nov 4. If you do not answer by Nov 7, 17:00 UTC, the page waits for the logo."
+          created: "2026-11-04T16:00:00Z"
+          updated: "2026-11-04T16:00:00Z"
+          question:
+            question: "Publish the new pricing page on Friday, or wait for the logo?"
+            options:
+              - {label: "Publish Friday", description: "Publish the pricing page on Friday as planned."}
+              - {label: "Wait for the logo", description: "Hold the page until the logo is in."}
+            if_no_answer: "Wait for the logo"
+            default_kind: reversible
+            by: "2026-11-07T17:00:00Z"
+            default: null
+  must:
+    - '^(task show 3c9d1e75|needs-you show)\b'
+  must_not:
+    - '^task (bulk )?close\b'
+    - '^task update\b.*3c9d1e75'
+    - '^approval (approve|decline)(?! -h\b| --help)'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    Says nothing needs doing from her. If nobody answers by Saturday, Nov 7 at 17:00 UTC, the question goes ahead on its own
+    with its default, Wait for the logo, which is a reversible step, so it does not wait for a yes. It names the two choices
+    (publish Friday, or wait for the logo) and says that if Dana picks one now, her pick replaces the default. It does not
+    answer the question, change the task or send a message. Two or three plain lines, with the task's link.

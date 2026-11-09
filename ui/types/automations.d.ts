@@ -1,0 +1,154 @@
+// The page state of the Automations screen: AU, the `let` in ui/app/automations.js. It is set to a new object
+// when the page is entered (pageAutomations, literal plus auOverviewState() in automations-overview.js) and to null when
+// it is left (automationsStop). A few fields are added later by the file that first needs them; those are optional.
+// AU is reassigned, so a TypeScript reader calls automationsState() (ui/app/automations-state.ts) each time and narrows
+// the result; it never keeps the object across an await. Server data takes its api.d.ts type; a view with no type
+// there is Record<string, unknown>. No file here is a module, so every name is global.
+
+type AuRange = '5m' | '1h' | '24h' | '7d';
+type AuView = 'flow' | 'runs';
+
+/** A run list read a page at a time (runs, Maintenance runs, the Heartbeat's beats). */
+interface AuRunList<R> {
+  rows: R[];
+  next: string | null;
+  open: Set<string>;
+  loading: boolean;
+  error?: string;
+  id?: string;
+}
+
+/** The editor open in the side panel (automations-editors.js auEdOpen): its kind, and what that kind needs. */
+interface AuEditor {
+  kind: 'board' | 'run' | 'spend' | 'step' | 'trigger' | 'versions';
+  [field: string]: unknown;
+}
+
+/** The overview's filters (automations-overview.js): the trigger kinds picked, and the words. */
+interface AuFilters {
+  trig: Set<string>;
+  status: string;
+  team: string;
+  owner: string;
+  q: string;
+}
+
+/** The overview's stats for one range (automations-overview.js auStatsLoad). */
+interface AuStats {
+  range: AuRange;
+  at: number;
+  error: string;
+  n: number;
+  per: Map<string, import('./api').AutomationStats['automations'][number]>;
+}
+
+/** The overview's Runs tab: every run across the range, read a page at a time (automations-overview.js auAllLoad). */
+interface AuAll {
+  key: string;
+  rows: import('./api').AutomationOverviewRuns['runs'];
+  next: string | null;
+  loading: boolean;
+  error: string;
+  done?: boolean;
+}
+
+interface AutomationsState {
+  // The list and its teams. automations.js auLoadList sets list, groups and listError; a row is an automation, or one
+  // of the pseudo-rows the page adds (Maintenance, the Heartbeat, Sys jobs, Incoming webhooks), built to the same shape.
+  /** Every automation the viewer may see, pseudo-rows first. null until the first read. */
+  list: Array<import('./api').Automation> | null;
+  /** The message of a failed list read; '' when the list is good (automations.js auLoadList). */
+  listError?: string;
+  /** Teams from /v2/groups (automations.js auLoadList). */
+  groups: Array<import('./api').Group>;
+  /** Question sets for the decide step (automations-editors.js); [] until read. */
+  sets: import('./api').QuestionSets['sets'] | null;
+  /** Templates for Apply template (automations-new.js). */
+  templates?: import('./api').AutomationTemplates['templates'];
+
+  // The visit: the route's automation and view (automations.js pageAutomations, auRouteParts).
+  /** The open automation's id; '' on the list. */
+  id: string;
+  /** The open automation's tab: Flow or Runs (automations.js auRouteParts). */
+  view: AuView;
+  /** The open automation as the server sent it, with steps and trigger present (automations.js auNormal). null until read. */
+  cur: import('./api').Automation | null;
+  /** The editor open in the side panel (automations-editors.js auEdOpen). */
+  ed: AuEditor | null;
+  /** The ⋯ or + menu open over the page (automations.js auMenuOpen). */
+  menu: { kind: 'add' | 'more'; at: string } | null;
+  /** #au-root, set once in automations.js auShell. */
+  root: HTMLElement | null;
+  /** The open automation's run log (automations-runs.js auRunsLoad); null until the Runs tab is loaded. */
+  runs: AuRunList<import('./api').AutomationRun> | null;
+  /** The last run, for the flow's bars; set undefined on a new visit (automations.js), null or a run (automations-editors.js, runs). */
+  lastRun?: import('./api').AutomationRun | null;
+  /** A run to open once its list is read (automations-overview.js, automations-editors.js; read in automations-runs.js). */
+  openRun?: string | null;
+  /** The flow's branch resize watcher (automations-flow.js); automations.js disconnects it on the Runs tab. */
+  branchRO?: ResizeObserver;
+
+  // Maintenance (automations-maintenance.js), its own screen.
+  /** /v2/maintenance (automations.js auLoadList). */
+  maint: Record<string, unknown> | null;
+  /** The message of a failed maintenance read or save ('' when none). */
+  maintError: string;
+  /** Bumped on each save or read; a read that started before a save keeps the old values. */
+  mtGen: number;
+  /** Maintenance runs, read a page at a time (automations-maintenance.js). */
+  mtRuns: AuRunList<Record<string, unknown>> | null;
+  /** Maintenance run rows the viewer opened. */
+  mtOpen: Set<string>;
+  /** Maintenance is saving (automations-maintenance.js). */
+  mtBusy?: boolean;
+  /** Run now was sent and has not answered yet (automations-maintenance.js). */
+  mtStarting?: boolean;
+  /** The timer that follows a live Maintenance run (automations-maintenance.js). */
+  mtFollow?: number | null;
+  /** A run to open once the Maintenance runs load (automations-overview.js sets it from a mnt_ row). */
+  mtOpenRun?: string | null;
+  /** The view the Maintenance pane was last drawn for (automations-maintenance.js). */
+  mtPaneView?: AuView;
+
+  // The Heartbeat (automations-heartbeat.js), its own screen.
+  /** /v2/heartbeat?limit=1 (automations.js auLoadList). */
+  heart: import('./api').HeartbeatView | null;
+  /** The message of a failed Heartbeat read or save ('' when none). */
+  heartError: string;
+  /** Bumped on each save or read (automations-heartbeat.js). */
+  hbGen: number;
+  /** The beats log, read a page at a time (automations-heartbeat.js). */
+  hbLog: AuRunList<import('./api').HeartbeatBeat> | null;
+  /** The once-a-minute refresh's timer (automations-heartbeat.js); null when it is not running. */
+  hbPoll: number | null;
+  /** The Heartbeat is saving (automations-heartbeat.js). */
+  hbBusy?: boolean;
+  /** The view the Heartbeat pane was last drawn for (automations-heartbeat.js). */
+  hbPaneView?: AuView;
+
+  // The overview (automations-overview.js auOverviewState and the list's controls).
+  /** The time range, kept in localStorage (auRangeSaved). */
+  range: AuRange;
+  /** The overview's tab: the list or the Runs tab. */
+  tab: 'list' | 'runs';
+  /** The filters (AuFilters). */
+  f: AuFilters;
+  /** The grouping the table shows, e.g. 'trigger' (automations-overview.js). */
+  group: string;
+  /** The sort the table shows (automations-overview.js). */
+  sort: string;
+  /** The run-status filter on the Runs tab ('' for all). */
+  rstatus: string;
+  /** Groups the table has closed (automations-overview.js). */
+  closed: Set<string>;
+  /** Filter sections open on a phone (automations-overview.js auFacetsDraw). */
+  fopen: Set<string>;
+  /** The overview's stats for `range`; null until read (automations-overview.js auStatsLoad). */
+  stats: AuStats | null;
+  /** The Runs tab's rows for the current filter; null until read (automations-overview.js auAllLoad). */
+  all: AuAll | null;
+  /** The scroll position each tab was left at (automations-overview.js). */
+  scroll: { list: number; runs: number };
+  /** The timer that re-reads the Runs tab after a change (automations-overview.js). */
+  allSoon?: number;
+}

@@ -290,7 +290,7 @@ def test_a_bot_is_checked_like_a_person_and_may_answer_one_that_wrote_to_it(worl
     assert call(api, "get", "status?bot=counsel", tokens["analyst"]).status_code == 200
     # Counsel wrote to the stranger in the course of its work; the stranger may answer, and nothing more.
     counsel = post(api, "bots/counsel/agent-credential", {})["token"]
-    post(api, "messages", {"to": "stranger", "text": "Which contract?", "kind": "ask"}, token=counsel)
+    post(api, "messages", {"to": "stranger", "text": "Which contract?", "needs_action": True}, token=counsel)
     assert call(api, "post", "messages", tokens["stranger"], {"to": "counsel", "text": "The NDA."}).status_code == 200
     assert call(api, "get", "status?bot=counsel", tokens["stranger"]).status_code == 403
 

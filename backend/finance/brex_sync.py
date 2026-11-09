@@ -283,7 +283,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             if (kept := banking.reuse_money(ctx, cid, a, "brex")) is not None:
                 mapped.append(kept)
                 continue
-            line = banking.by_code(ctx, banking.CARDS)
+            line = banking.cards_gl(ctx)
             gl = (
                 line
                 if line is not None
