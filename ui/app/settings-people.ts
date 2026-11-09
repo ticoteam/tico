@@ -2,41 +2,90 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+// The roster row the page reads (backend/access.py view `people`).
+interface SettingsAccessPerson {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  owner?: boolean;
+  left?: boolean;
+  removable?: boolean;
+  can_sign_in?: boolean;
+  create_bots?: boolean;
+  add_people?: boolean;
+}
+// The Tico Recorder a person used last (backend/recorder_installs.py).
+interface SettingsRecorder {
+  version?: string | null;
+  last_seen_at?: string | null;
+  update_available?: boolean;
+}
+// GET /v2/access: who is on the roster, how they join and what the owner has set.
+interface SettingsAccessView {
+  revision: number;
+  home_domain?: string;
+  directory: string;
+  proxy: string;
+  join: string;
+  invite_email?: boolean;
+  account_password?: boolean;
+  people: SettingsAccessPerson[];
+  allowed: string[];
+  allowed_domains: string[];
+  invites?: Record<string, string>;
+  recorders?: Record<string, SettingsRecorder | null>;
+  member_bot_limit: number;
+  rules?: Record<string, unknown>;
+  owner: {revision: number};
+}
+// GET /v2/setup: the people the company file from setup names (backend/company_import.py).
+interface SettingsSetupPerson {
+  id: string;
+  name: string;
+  title?: string | null;
+  invited_at?: string | null;
+  person?: string | null;
+}
+interface SettingsSetupRecord {
+  company_import?: {people?: SettingsSetupPerson[]} | null;
+}
+
 // ----------------------------------------------------------------- people and access
 // How people get here (a directory sync, or added by hand), who is on the roster, what each may do and who
 // owns the environment (backend/access.py). Every control saves when it changes; nothing needs a restart.
 // Identity proxies keep their own list: Tico does not change a Cloudflare Access policy or a Cognito pool.
-const PEOPLE_PROXY = {cloudflare: 'Cloudflare Access', 'aws-alb': 'your Cognito user pool'};
-const PEOPLE_ROLE = {owner: 'Owner', admin: 'Admin', member: 'Member'};
-const PEOPLE_SOURCE = {google: 'Google Workspace', entra: 'Microsoft Entra ID', scim: 'SCIM'};
+const PEOPLE_PROXY: Record<string, string> = {cloudflare: 'Cloudflare Access', 'aws-alb': 'your Cognito user pool'};
+const PEOPLE_ROLE: Record<string, string> = {owner: 'Owner', admin: 'Admin', member: 'Member'};
+const PEOPLE_SOURCE: Record<string, string> = {google: 'Google Workspace', entra: 'Microsoft Entra ID', scim: 'SCIM'};
 // Team rules the owner turns off to tighten (backend/team_rules.py): all on by default.
-const PEOPLE_RULES = [['assistant_direct', 'Assistant acts without asking'], ['assistant_approvals', 'People may let their Assistant decide their approvals'], ['botops_direct', 'BotOps changes providers and limits without asking'],
+const PEOPLE_RULES: [string, string][] = [['assistant_direct', 'Assistant acts without asking'], ['assistant_approvals', 'People may let their Assistant decide their approvals'], ['botops_direct', 'BotOps changes providers and limits without asking'],
   ['botops_manages_bots', 'BotOps manages every bot'],
   ['managers_manage_reports', 'Managers change their direct reports (model, task model, name, description)'],
   ['admin_credentials', 'Admins store credentials'], ['members_store_credentials', 'Members store credentials for their bots'], ['admin_sql', 'Admins see SQL'], ['member_tokens', 'Members make personal tokens'],
   ['bots_go_ahead', 'Bots go ahead on their recommendation when nobody answers'], ['support_access', 'Owners and admins may let Tico support in']];
 let PEOPLE_MODE = '';        // 'manual' or 'sync' picked on this page; '' follows the saved directory source
 let PEOPLE_ADDED = '';       // who was just let in, for the one-line identity proxy reminder
-let PEOPLE_INVITE_FAILED = null;   // {id, message}: added, but the invite did not go; shown on their row once
-function peopleDialog(title, body) {
+let PEOPLE_INVITE_FAILED: {id: string; message: string} | null = null;   // {id, message}: added, but the invite did not go; shown on their row once
+function peopleDialog(title: string, body: string) {
   const d = $('#people-dialog');
   d.innerHTML = `<div class="tmodal-title">${esc(title)}</div><div class="tmodal-body">${body}</div>`;
   if (!d.open) d.showModal();
   return d;
 }
-function peopleSwitch(attrs, checked, disabled, label) {
+function peopleSwitch(attrs: string, checked: boolean | null | undefined, disabled: boolean | null | undefined, label: string): string {
   return `<input type="checkbox" role="switch" class="people-switch" ${attrs} aria-label="${esc(label)}"${checked ? ' checked' : ''}${disabled ? ' disabled' : ''}>`;
 }
 // Owners and admins set what a member may do; only the owner makes admins, transfers ownership or marks someone as left.
-function peopleMenu(p, view) {
-  const owner = S.me?.role === 'owner', items = [];
+function peopleMenu(p: SettingsAccessPerson, view: SettingsAccessView | null | undefined): string {
+  const owner = S.me?.role === 'owner', items: string[] = [];
   // An invite comes from Tico's own sign-in mail (backend/invites.py), never the company's mailbox.
   if (view?.invite_email && !p.owner && p.id !== S.me?.id && p.email && p.can_sign_in)
     items.push(`<button type="button" role="menuitem" data-person-act="invite">${view.invites?.[p.id] ? 'Send invite again' : 'Send invite'}</button>`);
   // Or the issuer makes them a Tico account with a generated password, shown here once (backend/invites.py).
   if (view?.account_password && !p.owner && p.id !== S.me?.id && p.email && p.can_sign_in)
     items.push('<button type="button" role="menuitem" data-person-act="password">Create password</button>');
-  const check = (act, label, on) => `<button type="button" role="menuitemcheckbox" aria-checked="${on}" data-person-act="${act}"><span class="people-check" aria-hidden="true">${on ? '✓' : ''}</span>${label}</button>`;
+  const check = (act: string, label: string, on: boolean) => `<button type="button" role="menuitemcheckbox" aria-checked="${on}" data-person-act="${act}"><span class="people-check" aria-hidden="true">${on ? '✓' : ''}</span>${label}</button>`;
   if (p.role === 'member') items.push(check('create_bots', 'Can add bots', !!p.create_bots), check('add_people', 'Can add people', !!p.add_people));
   if (owner && !p.owner && p.email && p.can_sign_in) items.push('<button type="button" role="menuitem" data-person-act="owner">Make owner</button>');
   if (owner && !p.owner && p.id !== S.me?.id) items.push('<button type="button" role="menuitem" class="danger-text" data-person-act="left">Remove</button>');
@@ -44,12 +93,12 @@ function peopleMenu(p, view) {
   return items.join('');
 }
 // The Tico Recorder this person used last (backend/recorder_installs.py): its version, or nothing.
-function peopleRecorderCell(r) {
+function peopleRecorderCell(r: SettingsRecorder | null | undefined): string {
   if (!r?.version) return '<div class="people-cell-recorder"></div>';
   const seen = r.last_seen_at ? `Last seen ${ago(r.last_seen_at)}` : '';
   return `<div class="people-cell-recorder${r.update_available ? ' is-old' : ''}" data-recorder-version title="${esc([seen, r.update_available ? 'Update available' : ''].filter(Boolean).join(' · '))}"><span class="people-recorder-label">Recorder </span><span class="tnum">${esc(r.version)}</span></div>`;
 }
-function peopleRow(p, view) {
+function peopleRow(p: SettingsAccessPerson, view: SettingsAccessView): string {
   const owner = S.me?.role === 'owner', menu = peopleMenu(p, view), local = !!S.config?.local;
   const invited = view?.invites?.[p.id];
   const face = personAvatar({...(S.people || []).find(x => x.id === p.id), ...p}, 32);
@@ -66,19 +115,19 @@ function peopleRow(p, view) {
     <div class="people-cell-more">${menu ? `<button class="people-more" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button><div class="people-menu" role="menu" hidden>${menu}</div>` : ''}</div>
   </li>`;
 }
-function peopleCloseMenus(except) {
-  document.querySelectorAll('.people-menu:not([hidden])').forEach(menu => {
+function peopleCloseMenus(except?: Element | null) {
+  document.querySelectorAll<HTMLElement>('.people-menu:not([hidden])').forEach(menu => {
     if (menu === except) return;
     menu.hidden = true; menu.previousElementSibling?.setAttribute('aria-expanded', 'false');
   });
 }
-document.addEventListener('click', event => { if (!event.target.closest?.('.people-cell-more')) peopleCloseMenus(); });
+document.addEventListener('click', event => { if (!(event.target instanceof Element) || !event.target.closest('.people-cell-more')) peopleCloseMenus(); });
 document.addEventListener('keydown', event => { if (event.key === 'Escape') peopleCloseMenus(); });
 async function renderSettingsPeople() {
-  const el = $('#set-people'); if (!el) return;
+  const el: HTMLElement | null = $('#set-people'); if (!el) return;
   try {
     // HQ's switch for Tico support on cloud machines comes with it (ui/app/cloud-machines.ts), null off Tico Cloud.
-    const [view, support] = await Promise.all([get('/v2/access'), cloudSupportRead()]);
+    const [view, support] = await Promise.all([get<SettingsAccessView>('/v2/access'), cloudSupportRead()]);
     if (!el.isConnected) return;   // Settings redrew while this loaded
     const owner = S.me?.role === 'owner', home = view.home_domain || '', added = PEOPLE_ADDED;
     // Only the owner changes it; anyone else on this page sees it read-only.
@@ -129,11 +178,11 @@ async function renderSettingsPeople() {
       </section>`;
     if (mode === 'sync' && owner) window.mountDirectorySync?.($('#directory-sync'), renderSettingsPeople);   // ui/directory-sync.ts
     if (owner) void peopleFromSetup($('#people-from-setup'));
-    const person = id => view.people.find(p => p.id === id);
-    const again = async message => { if (message) toast(message); await renderSettingsPeople(); };
+    const person = (id: string) => view.people.find(p => p.id === id);
+    const again = async (message?: string) => { if (message) toast(message); await renderSettingsPeople(); };
     // A refusal stays as a red line under the control that was changed, found again once the list redraws.
-    const change = async (work, message = 'Saved', control) => {
-      const person = control?.closest?.('[data-person]')?.dataset.person;
+    const change = async (work: () => unknown, message = 'Saved', control?: HTMLElement | null) => {
+      const person = control?.closest?.<HTMLElement>('[data-person]')?.dataset.person;
       const find = () => person ? $(`#set-people [data-person="${CSS.escape(person)}"]`)
         : control?.id ? $(`#${CSS.escape(control.id)}`)
         : control?.dataset?.rule ? $(`#set-people [data-rule="${CSS.escape(control.dataset.rule)}"]`)
@@ -141,27 +190,28 @@ async function renderSettingsPeople() {
         : control?.matches?.('.people-extras') ? $('#set-people .people-extras') : null;
       try { await work(); await again(message); }
       catch (error) {
+        const text = errorMessage(error, '');
         await renderSettingsPeople();
         const where = find();
-        if (where) settingsFieldError(where, error.message); else toast(error.message, true);
+        if (where) settingsFieldError(where, text); else toast(text, true);
       }
     };
-    const allow = (people, domains) => put('/v2/access/allow', {allowed: people, allowed_domains: domains, expected_revision: view.revision});
-    const confirmDialog = (title, text, label, work) => {
+    const allow = (people: string[], domains: string[]) => put('/v2/access/allow', {allowed: people, allowed_domains: domains, expected_revision: view.revision});
+    const confirmDialog = (title: string, text: string, label: string, work: () => unknown) => {
       const d = peopleDialog(title, `<form>${text ? `<p>${esc(text)}</p>` : ''}<div class="onb-actions"><button class="ghost" type="button" data-people-cancel>Cancel</button><span class="spacer"></span><span class="people-status muted"></span><button class="primary people-danger" type="submit">${esc(label)}</button></div></form>`);
       const form = d.querySelector('form');
       d.querySelector('[data-people-cancel]').onclick = () => d.close();
-      form.onsubmit = async event => {
+      form.onsubmit = async (event: Event) => {
         event.preventDefault();
-        form.querySelectorAll('button').forEach(b => b.disabled = true);
+        form.querySelectorAll('button').forEach((b: HTMLButtonElement) => b.disabled = true);
         try { await work(); d.close(); }
-        catch (error) { form.querySelector('.people-status').innerHTML = `<span class="err">${esc(error.message)}</span>`; form.querySelectorAll('button').forEach(b => b.disabled = false); }
+        catch (error) { form.querySelector('.people-status').innerHTML = `<span class="err">${esc(errorMessage(error, ''))}</span>`; form.querySelectorAll('button').forEach((b: HTMLButtonElement) => b.disabled = false); }
       };
     };
-    el.querySelectorAll('[data-people-mode]').forEach(button => button.onclick = () => {
+    el.querySelectorAll<HTMLButtonElement>('[data-people-mode]').forEach(button => button.onclick = () => {
       const want = button.dataset.peopleMode;
       if (want === mode) return;
-      if (want === 'sync' || !view.directory) { PEOPLE_MODE = want; void renderSettingsPeople(); return; }
+      if (want === 'sync' || !view.directory) { PEOPLE_MODE = want ?? ''; void renderSettingsPeople(); return; }
       // Leaving a saved sync turns it off; the people it added stay.
       confirmDialog(`Stop syncing from ${PEOPLE_SOURCE[view.directory] || view.directory}?`, 'Synced people stay.', 'Stop sync', async () => {
         const d = await get('/v2/directory');
@@ -171,13 +221,13 @@ async function renderSettingsPeople() {
       });
     });
     const add = $('#people-add');
-    if (add) add.onsubmit = async event => {
+    if (add) add.onsubmit = async (event: SubmitEvent) => {
       event.preventDefault();
       const email = add.email.value.trim(), name = add.name.value.trim();
       const invite = !!event.submitter?.matches('[data-people-add-invite]');
       settingsFieldClear(add);
       if (!email) { add.email.focus(); return; }
-      add.querySelectorAll('input,button').forEach(x => x.disabled = true);
+      add.querySelectorAll('input,button').forEach((x: HTMLInputElement | HTMLButtonElement) => x.disabled = true);
       try {
         // A domain (`partner.com`, `@partner.com`) lets anyone at it sign in instead of adding one person.
         if (!/^[^@\s]+@/.test(email)) {
@@ -192,14 +242,14 @@ async function renderSettingsPeople() {
           let sent = false;
           if (invite && added?.person) {
             try { await post(`/v2/access/humans/${encodeURIComponent(added.person)}/invite`, {}); sent = true; }
-            catch (error) { PEOPLE_INVITE_FAILED = {id: added.person, message: `Added, but the invite was not sent: ${error.message} Try Send invite in the … menu.`}; }
+            catch (error) { PEOPLE_INVITE_FAILED = {id: added.person, message: `Added, but the invite was not sent: ${errorMessage(error, '')} Try Send invite in the … menu.`}; }
           }
           await again(sent ? `Added ${name || email} and sent the invite` : `Added ${name || email}${S.config?.local ? '. Add a domain and sign-in so they can join. No email sent.' : invite ? '' : '. No email sent.'}`);
           $('#people-add [name=email]')?.focus();
         }
       } catch (error) {
-        add.querySelectorAll('input,button').forEach(x => x.disabled = false);
-        settingsFieldError(add, error.message);
+        add.querySelectorAll('input,button').forEach((x: HTMLInputElement | HTMLButtonElement) => x.disabled = false);
+        settingsFieldError(add, errorMessage(error, ''));
       }
     };
     if (PEOPLE_INVITE_FAILED) {
@@ -209,26 +259,26 @@ async function renderSettingsPeople() {
     }
     // Who can join: "Anyone with a <domain> Google login" puts the company domain on the allow list (backend/access.py
     // view `join`). Turning it off can lock people out, so it asks first; a declined change puts the radio back.
-    el.querySelectorAll('input[name=join]').forEach(radio => { radio.onchange = async () => {
+    el.querySelectorAll<HTMLInputElement>('input[name=join]').forEach(radio => { radio.onchange = async () => {
       const on = radio.value === 'domain';
       if (!on && !await settingsConfirm({title: `Stop sign-in for everyone at ${home}?`, ok: 'Turn off',
         text: `Only people added here keep signing in. Anyone else at ${home} can no longer sign in.`})) {
-        el.querySelectorAll('input[name=join]').forEach(r => { r.checked = r.value === view.join; }); return;
+        el.querySelectorAll<HTMLInputElement>('input[name=join]').forEach(r => { r.checked = r.value === view.join; }); return;
       }
       void change(async () => {
         await allow(view.allowed, on ? [...view.allowed_domains, home] : view.allowed_domains.filter(d => d !== home));
         PEOPLE_ADDED = on ? home : '';
       }, S.config?.local ? 'Saved. Only the owner can sign in locally.' : 'Saved', radio);
     }; });
-    el.querySelectorAll('[data-allow-remove]').forEach(button => button.onclick = async () => {
-      const x = button.dataset.allowRemove, domain = !x.includes('@');
+    el.querySelectorAll<HTMLButtonElement>('[data-allow-remove]').forEach(button => button.onclick = async () => {
+      const x = button.dataset.allowRemove ?? '', domain = !x.includes('@');
       if (!await settingsConfirm({title: `Remove ${x}?`, ok: 'Remove',
         text: domain ? `People at ${x} who are not added here can no longer sign in.` : `${x} can no longer sign in.`})) return;
-      void change(() => allow(view.allowed.filter(e => e !== x), view.allowed_domains.filter(d => d !== x)), `Removed ${x}`, button.closest('.people-extras'));
+      void change(() => allow(view.allowed.filter(e => e !== x), view.allowed_domains.filter(d => d !== x)), `Removed ${x}`, button.closest<HTMLElement>('.people-extras'));
     });
-    el.querySelectorAll('[data-rule]').forEach(box => box.onchange = () => change(() => put('/v2/access/rules', {[box.dataset.rule]: box.checked}), 'Saved', box));
+    el.querySelectorAll<HTMLInputElement>('[data-rule]').forEach(box => box.onchange = () => change(() => put('/v2/access/rules', {[box.dataset.rule ?? '']: box.checked}), 'Saved', box));
     // A lost answer may still have reached HQ: read its state again before showing the result.
-    const supportSwitch = $('#people-cloud-support');
+    const supportSwitch: HTMLInputElement | null = $('#people-cloud-support');
     if (supportSwitch && owner) supportSwitch.onchange = async () => {
       const on = supportSwitch.checked;
       settingsFieldClear(supportSwitch);
@@ -240,49 +290,53 @@ async function renderSettingsPeople() {
         supportSwitch.checked = answer?.on === true;
         toast('Saved');
       } catch (error) {
-        const stale = error.body?.error?.code === 'stale_revision' && typeof error.body.error.on === 'boolean';
+        const detail = errorBody(error);
+        const stale = detail.code === 'stale_revision' && typeof detail.on === 'boolean';
         let current = await cloudSupportRead({fresh: true});
         if (!current && stale) {
-          current = {available: true, on: error.body.error.on, machines: []};
+          current = {available: true, on: detail.on === true, machines: []};
           cloudSupportSet(current);
         }
-        if (error.signature) pendingWrites.delete(error.signature);
+        if (isErrorRecord(error) && typeof error.signature === 'string' && error.signature) pendingWrites.delete(error.signature);
         supportSwitch.checked = current?.on === true;
         supportSwitch.indeterminate = !current;
-        const message = stale ? 'A newer change already reached Tico HQ.' : error.message;
+        const message = stale ? 'A newer change already reached Tico HQ.' : errorMessage(error, '');
         settingsFieldError(supportSwitch, current ? message : `${message} Could not read the switch. Open Settings again to retry.`);
       } finally { supportSwitch.disabled = !CLOUD_SUPPORT.view; }
     };
-    el.querySelectorAll('[data-rule-days]').forEach(box => box.onchange = () => {
+    el.querySelectorAll<HTMLInputElement>('[data-rule-days]').forEach(box => box.onchange = () => {
       const days = Math.round(Number(box.value));
-      if (days >= 1 && days <= 14) change(() => put('/v2/access/rules', {[box.dataset.ruleDays]: days}), 'Saved', box);
+      if (days >= 1 && days <= 14) change(() => put('/v2/access/rules', {[box.dataset.ruleDays ?? '']: days}), 'Saved', box);
       else settingsFieldError(box, 'Choose a number of days from 1 to 14.');
     });
-    el.querySelectorAll('[data-rule-count]').forEach(box => box.onchange = () => {
+    el.querySelectorAll<HTMLInputElement>('[data-rule-count]').forEach(box => box.onchange = () => {
       const count = Math.round(Number(box.value));
-      if (count >= 0 && count <= 50) change(() => put('/v2/access/rules', {[box.dataset.ruleCount]: count}), 'Saved', box);
+      if (count >= 0 && count <= 50) change(() => put('/v2/access/rules', {[box.dataset.ruleCount ?? '']: count}), 'Saved', box);
       else settingsFieldError(box, 'Choose a number from 0 to 50.');
     });
-    el.querySelector('#member-bot-limit').onchange = event => change(() => put('/v2/access/limits', {member_bot_limit: Number(event.target.value)}), 'Saved', event.target);
-    el.querySelectorAll('.people-row').forEach(row => {
-      const p = person(row.dataset.person), path = `/v2/access/humans/${encodeURIComponent(p.id)}`;
-      const role = row.querySelector('[data-person-role]');
+    const limit = el.querySelector<HTMLInputElement>('#member-bot-limit');
+    if (limit) limit.onchange = () => change(() => put('/v2/access/limits', {member_bot_limit: Number(limit.value)}), 'Saved', limit);
+    el.querySelectorAll<HTMLElement>('.people-row').forEach(row => {
+      const p = person(row.dataset.person ?? '');
+      if (!p) return;
+      const path = `/v2/access/humans/${encodeURIComponent(p.id)}`;
+      const role = row.querySelector<HTMLSelectElement>('[data-person-role]');
       if (role) role.onchange = () => change(() => post(path, {role: role.value}), 'Saved', role);
-      const signIn = row.querySelector('[data-person-signin]');
+      const signIn = row.querySelector<HTMLInputElement>('[data-person-signin]');
       if (signIn) signIn.onchange = async () => {
         if (!signIn.checked && !await settingsConfirm({title: `Turn off sign-in for ${p.name}?`, ok: 'Turn off',
           text: `${p.name} can no longer sign in until it is turned back on. Their tasks, bots and history stay.`})) { signIn.checked = true; return; }
         void change(() => post(path, {sign_in: signIn.checked}), S.config?.local ? 'Saved. Only the owner can sign in locally.' : 'Saved', signIn);
       };
-      const more = row.querySelector('.people-more');
-      if (more) more.onclick = () => {
-        const menu = more.nextElementSibling, open = menu.hidden;
+      const more = row.querySelector<HTMLButtonElement>('.people-more'), menu = more?.nextElementSibling;
+      if (more && menu instanceof HTMLElement) more.onclick = () => {
+        const open = menu.hidden;
         peopleCloseMenus(menu);
         menu.hidden = !open; more.setAttribute('aria-expanded', String(open));
-        if (open) menu.querySelector('button')?.focus();
+        if (open) menu.querySelector<HTMLButtonElement>('button')?.focus();
       };
-      row.querySelectorAll('[data-person-act]').forEach(button => button.onclick = () => {
-        const act = button.dataset.personAct;
+      row.querySelectorAll<HTMLButtonElement>('[data-person-act]').forEach(button => button.onclick = () => {
+        const act = button.dataset.personAct ?? '';
         peopleCloseMenus();
         if (act === 'restore') void change(() => post(path, {left: false}), `${p.name} restored`, row);
         else if (act === 'create_bots') void change(() => post(path, {create_bots: !p.create_bots}), 'Saved', row);
@@ -294,14 +348,14 @@ async function renderSettingsPeople() {
           async () => { await writeRequest('DELETE', `/v2/humans/${encodeURIComponent(p.id)}`); await again(`${p.name} removed`); });
         else if (act === 'owner') peopleOwnerDialog(p, view);
         else if (act === 'invite') void change(() => post(`${path}/invite`, {}), `Invite sent to ${p.email}`, row);
-        else if (act === 'password') void post(`${path}/password`, {}).then(peoplePasswordDialog, error => settingsFieldError(row, error.message));
+        else if (act === 'password') void post(`${path}/password`, {}).then(peoplePasswordDialog, error => settingsFieldError(row, errorMessage(error, '')));
         else if (act === 'email') peopleOwnerEmailDialog(p, view);
       });
     });
-  } catch (error) { el.innerHTML = `<div class="err">${esc(error.message)}</div>`; }
+  } catch (error) { el.innerHTML = `<div class="err">${esc(errorMessage(error, ''))}</div>`; }
 }
 // A made account's password, shown once: Tico keeps no copy, so closing this is the last time anyone sees it.
-function peoplePasswordDialog(made) {
+function peoplePasswordDialog(made: {email: string; password: string}) {
   const d = peopleDialog('Account created', `<form>
     <label class="onb-field"><span class="k">Email</span><input name="email" readonly value="${esc(made.email)}"></label>
     <label class="onb-field"><span class="k">Password</span><input name="password" readonly autocomplete="off" spellcheck="false" value="${esc(made.password)}" data-made-password></label>
@@ -311,12 +365,12 @@ function peoplePasswordDialog(made) {
   d.querySelector('[data-made-copy]').onclick = async () => {
     try { await copyText(`${made.email}\n${made.password}`); toast('Copied'); } catch { form.password.focus(); form.password.select(); }
   };
-  form.onsubmit = event => { event.preventDefault(); d.close(); };
+  form.onsubmit = (event: Event) => { event.preventDefault(); d.close(); };
   d.addEventListener('close', () => { d.innerHTML = ''; void renderSettingsPeople(); }, {once: true});   // not left in the page
 }
 // The owner's own sign-in address, changed in place (backend/access.py change_owner_email): typed twice, and the
 // old address stops signing in at once, so the page sends a proxy session to sign in again.
-function peopleOwnerEmailDialog(p, view) {
+function peopleOwnerEmailDialog(p: SettingsAccessPerson, view: SettingsAccessView) {
   const d = peopleDialog('Change your sign-in email?', `<form>
     <p>You stay the same person: your tasks, approvals, bots and history stay yours. Once you change it you sign in as the new address, and ${esc(p.email)} stops working here.</p>
     <p>Set up the new address in your sign-in provider (Cloudflare Access) first, or you can't get back in. <a href="${GH}/blob/main/docs/people.md#change-the-owners-sign-in-email" target="_blank" rel="noopener noreferrer">How to</a></p>
@@ -329,10 +383,10 @@ function peopleOwnerEmailDialog(p, view) {
   go.disabled = true;
   d.querySelector('[data-people-cancel]').onclick = () => d.close();
   form.email.oninput = form.again.oninput = () => { go.disabled = !ready(); };
-  form.onsubmit = async event => {
+  form.onsubmit = async (event: Event) => {
     event.preventDefault();
     if (!ready()) return;
-    form.querySelectorAll('button,input').forEach(b => b.disabled = true);
+    form.querySelectorAll('button,input').forEach((b: HTMLButtonElement | HTMLInputElement) => b.disabled = true);
     try {
       await post('/v2/access/owner/email', {email: typed(), confirm_email: form.again.value.trim().toLowerCase(),
         expected_revision: view.owner.revision, confirm: true});
@@ -340,13 +394,13 @@ function peopleOwnerEmailDialog(p, view) {
       if (S.me?.proxy_session) location.href = '/api/v2/logout';
       else { location.hash = '#/'; location.reload(); }
     } catch (error) {
-      form.querySelector('.people-status').innerHTML = `<span class="err">${esc(error.message)}</span>`;
-      form.querySelectorAll('button,input').forEach(b => b.disabled = false);
+      form.querySelector('.people-status').innerHTML = `<span class="err">${esc(errorMessage(error, ''))}</span>`;
+      form.querySelectorAll('button,input').forEach((b: HTMLButtonElement | HTMLInputElement) => b.disabled = false);
       go.disabled = !ready();
     }
   };
 }
-function peopleOwnerDialog(p, view) {
+function peopleOwnerDialog(p: SettingsAccessPerson, view: SettingsAccessView) {
   const old = view.people.find(q => q.owner);
   const d = peopleDialog('Make ' + p.name + ' the owner?', `<form>
     <p>${esc(p.name)} becomes owner now. You lose the owner's controls.</p>
@@ -356,18 +410,18 @@ function peopleOwnerDialog(p, view) {
   const form = d.querySelector('form'), go = form.querySelector('[type=submit]');
   go.disabled = true;
   d.querySelector('[data-people-cancel]').onclick = () => d.close();
-  form.typed.oninput = event => { go.disabled = event.target.value.trim().toLowerCase() !== p.email.toLowerCase(); };
-  form.onsubmit = async event => {
+  form.typed.oninput = (event: Event) => { go.disabled = form.typed.value.trim().toLowerCase() !== p.email.toLowerCase(); };
+  form.onsubmit = async (event: Event) => {
     event.preventDefault();
-    form.querySelectorAll('button').forEach(b => b.disabled = true);
+    form.querySelectorAll('button').forEach((b: HTMLButtonElement) => b.disabled = true);
     try {
       await post('/v2/access/owner', {person: p.id, previous_owner_bot_admin: form.admin.checked,
         expected_revision: view.owner.revision, confirm: true});
       // This page's own rights just changed: start over rather than render an owner-only tab.
       location.hash = '#/'; location.reload();
     } catch (error) {
-      form.querySelector('.people-status').innerHTML = `<span class="err">${esc(error.message)}</span>`;
-      form.querySelectorAll('button').forEach(b => b.disabled = false);
+      form.querySelector('.people-status').innerHTML = `<span class="err">${esc(errorMessage(error, ''))}</span>`;
+      form.querySelectorAll('button').forEach((b: HTMLButtonElement) => b.disabled = false);
       go.disabled = form.typed.value.trim().toLowerCase() !== p.email.toLowerCase();
     }
   };
@@ -376,13 +430,13 @@ function peopleOwnerDialog(p, view) {
 // The people the company file from setup names (backend/company_import.py `add_invitee`): the owner types each one's
 // email and clicks Invite. They join the roster, the Recruiting seats that waited with the owner report to them, and
 // Tico's own sign-in mail invites them. A failure stays on the row, in words, with Invite to try again.
-async function peopleFromSetup(el) {
+async function peopleFromSetup(el: HTMLElement | null) {
   if (!el) return;
-  let record;
-  try { record = await get('/v2/setup'); } catch { return; }
+  let record: SettingsSetupRecord | null | undefined;
+  try { record = await get<SettingsSetupRecord>('/v2/setup'); } catch { return; }
   const people = record?.company_import?.people || [];
   if (!people.length || !el.isConnected) { el.innerHTML = ''; return; }
-  const row = p => `<li class="people-row setup-person" data-setup-person="${esc(p.id)}">
+  const row = (p: SettingsSetupPerson) => `<li class="people-row setup-person" data-setup-person="${esc(p.id)}">
       <div class="people-who">${personAvatar({id: p.id, name: p.name}, 32)}<div class="people-id"><div class="people-name">${esc(p.name)}</div><div class="people-email">${esc(p.title || '')}</div></div></div>
       ${p.invited_at ? `<div class="muted" data-setup-invited>Invited ${agoSpan(p.invited_at)}</div>`
         : `<form class="people-add setup-invite" novalidate><input name="email" type="text" inputmode="email" autocapitalize="off" spellcheck="false" placeholder="Email" aria-label="Email for ${esc(p.name)}"${p.person ? ' hidden' : ''}>
@@ -390,12 +444,14 @@ async function peopleFromSetup(el) {
   el.innerHTML = `<section class="card people-list-card" id="setup-people"><header><h2>From your setup</h2><span class="muted tnum">${people.length}</span></header>
     <p class="people-note">Invites come from Tico's sign-in email.</p>
     <ul class="people-list">${people.map(row).join('')}</ul></section>`;
-  el.querySelectorAll('.setup-invite').forEach(form => form.onsubmit = async event => {
+  el.querySelectorAll<HTMLFormElement>('.setup-invite').forEach(form => form.onsubmit = async (event: Event) => {
     event.preventDefault();
-    const key = form.closest('[data-setup-person]').dataset.setupPerson, email = form.email.value.trim();
-    const status = form.querySelector('.people-status');
+    const holder = form.closest<HTMLElement>('[data-setup-person]');
+    const status = form.querySelector<HTMLElement>('.people-status');
+    if (!holder || !status) return;
+    const key = holder.dataset.setupPerson ?? '', email = form.email.value.trim();
     if (!email && !form.email.hidden) { form.email.focus(); return; }
-    form.querySelectorAll('input,button').forEach(x => x.disabled = true);
+    form.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input,button').forEach(x => x.disabled = true);
     status.textContent = 'Sending…';
     try {
       await post(`/v2/setup/company/people/${encodeURIComponent(key)}/invite`, {email});
@@ -403,9 +459,9 @@ async function peopleFromSetup(el) {
       await renderSettingsPeople();
     } catch (error) {
       // Added but not sent still added them: the row keeps Invite to send again.
-      status.innerHTML = `<span class="err">${esc(error.message)}</span>`;
-      form.querySelectorAll('input,button').forEach(x => x.disabled = false);
-      if (String(error.body?.error?.code || '').startsWith('invite_')) form.email.hidden = true;
+      status.innerHTML = `<span class="err">${esc(errorMessage(error, ''))}</span>`;
+      form.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input,button').forEach(x => x.disabled = false);
+      if (errorCode(error).startsWith('invite_')) form.email.hidden = true;
     }
   });
 }
