@@ -223,7 +223,7 @@ function providersDefaultsHTML(view: SettingsProvidersView, owner: boolean): str
 }
 // One line: whether the Gateway is connected, this month's spend against its cap, and the switch. Below it what
 // GET /v2/gateway adds for owners and admins (settings-gateway.ts), the key and address behind Advanced (read-only for
-// anyone but the owner), and Webhooks: incoming webhooks' Gateway addresses, drawn when opened (settings-webhooks.js).
+// anyone but the owner), and Webhooks: incoming webhooks' Gateway addresses, drawn when opened (settings-webhooks.ts).
 function providersGatewayCardHTML(view: SettingsProvidersView, gateway: SettingsGatewayView | null, owner: boolean, overview: unknown): string {
   const [tone, line] = gateway ? gatewayStatusLine(gateway) : ['', ''];
   return `<div class="models-gw models-gw-head">
