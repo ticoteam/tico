@@ -42,6 +42,7 @@ ORDER = [
     "stall_checks",
     "approval_expiry",
     "stuck_cards",
+    "stuck_alarm",
     "repository_waits",
     "entity_links",
     "call_sweeps",

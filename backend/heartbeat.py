@@ -332,6 +332,7 @@ STEPS = [
     ),
     Step("approval_expiry", "Approval expiry", "due", HOUR, S.step_approval_expiry, failure="approval_expiry"),
     Step("stuck_cards", "Stuck cards", "recovery", TEN_MINUTES, S.step_stuck_cards, failure="stuck_cards"),
+    Step("stuck_alarm", "Stuck alarms", "recovery", TEN_MINUTES, S.step_stuck_alarm, failure="stuck_alarm"),
     Step(
         "repository_waits", "Repository and setup waits", "poll", None, repository_waits, capture="scheduler", loop=True
     ),

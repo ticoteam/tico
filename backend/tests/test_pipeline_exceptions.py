@@ -8,33 +8,15 @@ from backend import task_relations
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import get  # noqa: F401
-from backend.tests.helpers.dev_ticket_rules import dev_type
 from backend import bot_settings as BS
+from backend.tests.helpers.pipeline_exceptions import board, listed, run, settled, ticket
 from backend.tests.hold_rows import set_holds
 
 HEAD = "a" * 40
 
 
-def board(c, profile="manager"):
-    found = c.execute("SELECT id FROM task_types WHERE name='Dev tickets'").fetchone()
-    typ = H.type_get(c, found[0]) if found else dev_type(c)
-    c.execute("UPDATE task_types SET manager='coo' WHERE id=?", (typ["id"],))
-    BS.write(c, 'coo', {'name': 'coo', 'runtime': 'fake', 'status': 'active', 'profile': profile})
-    if not c.execute("SELECT 1 FROM runners WHERE id='r1'").fetchone():
-        c.execute(
-            "INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','box','ana','h',?)", (H.now(),)
-        )
-        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r1'", (H.now(),))
-    return H.type_get(c, typ["id"])
-
-
 def profile(c, slug, name):
     BS.update(c, slug, {'profile': name})
-
-
-def settled(c):
-    """Every wake so far has had its run: what is left queued is what a test adds."""
-    c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
 
 
 def doing(c, row):
@@ -44,53 +26,12 @@ def doing(c, row):
     return H.task(c, row["id"])
 
 
-def ticket(c, typ, title="Fix the connection", step="In Progress", minutes=0):
-    row = H.task_create(c, "bot:coo", title, "Build.", "bot:cpo", type=typ["id"], step=step, lint=False)
-    settled(c)
-    if minutes:
-        then = H.shift(H.now(), minutes=-minutes)
-        c.execute("UPDATE tasks SET created_at=?, updated_at=? WHERE id=?", (then, then, row["id"]))
-        c.execute(
-            "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (then, row["id"])
-        )
-    return H.task(c, row["id"])
-
-
-def run(c, row, state, minutes_ago, stop=None):
-    """One finished attempt of the owner's on the task's lane, `minutes_ago`."""
-    when = H.shift(H.now(), minutes=-minutes_ago)
-    msg = H._write_message(
-        c,
-        "human:ana",
-        row["owner_id"],
-        "go",
-        H.conversation(c, row["conversation_id"]),
-        "say",
-        {"task": row["id"]},
-        None,
-        None,
-    )
-    job = c.execute("SELECT id FROM jobs WHERE message_id=?", (msg["id"],)).fetchone()[0]
-    c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job,))
-    aid = H.new_id()
-    c.execute(
-        "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,started_at,"
-        "finished_at,lane,stop_requested_at) VALUES(?,?,?,'r1',1,?,?,?,?,?,?,?,?)",
-        (aid, job, H.actor_id(row["owner_id"]), aid, state, when, when, when, when, "task:" + row["id"], stop),
-    )
-    return when
-
-
 def check_of(c, row, title="Review 2: PR #1585", owner="bot:ops"):
     """A check filed below the ticket, as the gate leaves it once it let the request through (the gate has its own
     tests: backend/tests/test_review_gate.py)."""
     made = H.task_create(c, "bot:cpo", "Check the change", "Check it.", owner, parent_id=row["id"])
     c.execute("UPDATE tasks SET title=? WHERE id=?", (title, made["id"]))
     return H.task(c, made["id"])
-
-
-def listed(c, typ, kind=None):
-    return [e for e in PE.build(c, typ) if kind is None or e["kind"] == kind]
 
 
 def unheld_jobs(c, slug):
