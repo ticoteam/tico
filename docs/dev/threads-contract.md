@@ -560,7 +560,7 @@ every 5 s (`changes_bot_status`), and a step held back is sent by the scheduler'
 
 ```python
 threads.mark_read(c, viewer, thread_id, seq) -> {"thread_id", "last_read_seq"}
-threads.mark_all_read(c, viewer, thread_id) -> {"threads": n}        # the whole subtree
+threads.mark_all_read(c, viewer, thread_id, ago_ms=None) -> {"threads": n}   # the whole subtree; ago_ms: only what was there that long ago
 threads.unread(c, viewer, thread_id) -> {"unread": n, "activity": bool}
 ```
 - Join: read up to now. Deletes and backfill (imports, migration, replays) are never unread. Losing access: the
@@ -719,6 +719,7 @@ Thread view (`threads.view(c, viewer, row)`):
  "me": {"member": true, "following": true, "follows": true, "notify": "live", "last_read_seq": 4400, "unread": 3,
         "activity": true, "can_post": true, "can_manage": true, "pinned": false},
  "pinned_for_everyone": false,                   // §10.1
+ "name": "Bea, Cy",                              // what it is called: the title, else its people (Naming, §10)
  "dm_with": [{"actor": "human:bea", "name": "Bea"}], "dm_with_count": 1,   // DM roots: the others, at most 4 named
  "new_at": {"thread_id": "t_sub", "message_id": "m_1"}}                    // list rows only; see below
 ```
@@ -739,7 +740,7 @@ person who only joined a chat or read it has a following row but is not reached,
 | `GET /api/v2/threads/{id}/bot-status` | `thread_bot_status.status(c, viewer, root)` → `{"bots": [...]}` (§4.10) |
 | `GET /api/v2/threads/{id}/timeline?cursor=&limit=&flat=` | `threads.timeline(c, viewer, thread_id, cursor=None, limit=50, max_bytes=..., flat=False)` → `{"thread", "breadcrumb", "messages": [...], "next_cursor", "bot_status", "read_marks"}` (`bot_status` on the first page; `flat` and its `read_marks`: §4.9; every message has `reply_to` and `routed`); `next_cursor` and `limit` count the thread's own messages; each is followed by its sub-thread's rows in tree order (§5). Each message carries `depth` (its thread's depth in the tree: 0 in a root, 1 in a sub-thread), and a parent carries `"sub_thread": {"id", "title", "count", "last_seq", "last_read_seq", "unread", "more"}` (`count` and `unread` only of messages the viewer reads; `more` is how many are collapsed) |
 | `POST /api/v2/threads/{id}/read {seq}` | `threads.mark_read` |
-| `POST /api/v2/threads/{id}/read-all` | `threads.mark_all_read` |
+| `POST /api/v2/threads/{id}/read-all {ago_ms}` (body optional) | `threads.mark_all_read(c, v, thread_id, ago_ms=None)`: `ago_ms` (0 to 600000, else 422) reads only what was written that long before; 0 or no body reads everything up to now |
 | `GET /api/v2/threads/search?q=` | T2 (FTS5), filtered by `threads.readable` per message |
 | `POST /api/v2/threads {title, audience, audience_group_id, members, parent_message_id, body}` | `threads.create` (+ `threads.post` when `body`) |
 | `POST /api/v2/threads/{id}/messages {text, kind, to, refs, parent_message_id, in_reply_to}` | `threads.post` (`in_reply_to`: §4.9) |
@@ -829,6 +830,15 @@ Naming. Only a DM with one teammate may be unnamed. `threads.create`, `threads.d
 422 `name_required`, "Group chats need a name.", and for a bot the same text plus how to pass a title (`title` in
 `hub_thread_create` and `hub_thread_dm_group`, `--title` on the commands). Opening a group DM that already exists needs
 no title, and existing unnamed group DMs stay readable: clients name them from `dm_with`.
+
+A thread with no title that is not a Home is named by `name` (`threads._thread_name`, the same for every reader): the
+people and bots in it and its groups, the viewer left out, sorted by name, the first three and `+N` for the rest;
+`You` when nobody else is in it; `Thread` when the viewer may not see anyone in it. A reader who is not a member is
+told only of the people they may see. Nothing is stored: a rename wins, an empty title brings the names back, and a
+change of members changes the name. A DM keeps its other person's name. Where a name is shown, it is `name` (the thread
+view, list and rail rows, the breadcrumb's `title` and a search hit's `title` for a thread with none, and the
+Catch up, Needs you, digest and attention items; `threads.shown_name` and `threads.shown_names` for the rest). A
+thread's stored `title` is still what the Name field and the title sort use.
 
 Events. `threads` topic, kind `pinned`, `{"thread_id", "root_id", "kind": "pinned", "actor", "pinned",
 "pinned_for_everyone"}` (`pinned` is the receiver's own state). A reader's own pin (`thread_pins`, `ref` = actor) goes

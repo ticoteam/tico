@@ -90,8 +90,8 @@ def claim(c):
 
 
 def ensure(c):
-    """Create the two role types when they are missing. An existing type keeps the manager it has; one with
-    none gets the default."""
+    """Create the two role types when they are missing. An existing type keeps the manager it has, or none: a type
+    with no manager stays without one. The legacy manager names fill only a type this creates."""
     from . import hubdb as H
 
     for ident, name, manager, steps in (
@@ -134,7 +134,7 @@ def ensure(c):
             ).fetchone()
             existing = row[0] if row else None
         if existing:
-            c.execute('UPDATE task_types SET role=?,manager=coalesce(manager,?) WHERE id=?', (ident, manager, existing))
+            c.execute('UPDATE task_types SET role=? WHERE id=?', (ident, existing))
             continue
         c.execute(
             'INSERT INTO task_types(id,name,bots,manager,role,steps_only,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
@@ -151,6 +151,20 @@ def ensure(c):
 # goes from Building straight to Shipped.
 FLOW = ('Approved', 'Building', 'Ready to ship', 'Shipped')
 READY_STEP = 'Ready to ship'
+# The stage each FLOW step is after pipeline_setup: it keeps the ids and renames the stages, and retires Approved into
+# In development. A stage is found by its id first, then by either of its names, so a setup hub keeps its roadmap.
+FLOW_IDS = {
+    'product-roadmap-3': 'Approved',
+    'product-roadmap-4': 'Building',
+    'product-roadmap-5': 'Shipped',
+    'product-roadmap-ready': READY_STEP,
+}
+FLOW_NAMES = {
+    'Approved': ('Approved', 'Review'),
+    'Building': ('Building', 'In development'),
+    'Ready to ship': (READY_STEP,),
+    'Shipped': ('Shipped', 'Done'),
+}
 READY_FROM = 'pending release'  # a Dev tickets step: it and every step after it are "ready to ship"
 READY_MARKER = 'roadmap_ready_to_ship_step'
 
@@ -221,25 +235,43 @@ def wanted(stages):
     return 'Building' if any(s != 'waiting' for s in counted) else 'Approved'
 
 
+def _flow_of(step):
+    """The FLOW step a roadmap stage stands for, or None: by its id, else by its old or new name."""
+    if step['id'] in FLOW_IDS:
+        return FLOW_IDS[step['id']]
+    return next((flow for flow, names in FLOW_NAMES.items() if step['name'] in names), None)
+
+
 def sync(c, task_id):
     from . import hubdb as H
 
     row = H.task(c, task_id)
     if not row or row.get('type_id') != role_type(c, PRODUCT):
         return
+    from . import pipeline_engine
+
+    if pipeline_engine.has_requirements(c, row['type_id']):
+        return  # a pipeline with stage requirements moves its cards by their requirements, never by this sync
     typ = H.type_get(c, row['type_id'])
-    current = next((s['name'] for s in typ['steps'] if s['id'] == row['step_id']), None)
+    if not typ:
+        return
+    current = next((_flow_of(s) for s in typ['steps'] if s['id'] == row['step_id']), None)
     if current not in FLOW:
         return
     marks = {}
     goal = wanted([stage(c, t, marks) for t in tickets(c, task_id)])
-    names = {s['name'] for s in typ['steps']}
-    if goal == READY_STEP and goal not in names:
+    steps = {}
+    for s in typ['steps']:
+        if _flow_of(s):
+            steps.setdefault(_flow_of(s), s)
+    if goal == READY_STEP and goal not in steps:
         goal = 'Building'
-    step = next((s for s in typ['steps'] if s['name'] == goal), None)
+    step = steps.get(goal)
     if not step or current == goal:
         return
-    H._set_status(c, H.KEEPER, row, step=step['id'])
+    # The parent's own move is automatic: a refusal (its requirements) is logged on the card and leaves the child's change.
+    if not H.try_auto_move(c, H.KEEPER, row, step=step['id']):
+        return
     version = ',version=version+1' if 'version' in {r[1] for r in c.execute('PRAGMA table_info(tasks)')} else ''
     c.execute('UPDATE tasks SET done_at=?' + version + ' WHERE id=?', (H.now() if goal == 'Shipped' else None, task_id))
     H._recount(c, row['owner_id'])

@@ -9,7 +9,7 @@ lead: true
 icon: leaderboard
 suggest: default
 tags: [b2b, pipeline, forecast, team-lead, coaching, routing, saas, services]
-team_templates: [sdr-research, sales, account-manager, sales-ops, sales-engineer, partnerships, sales-enablement]
+team_templates: [sdr-research, sales, account-manager, sales-ops, sales-engineer, partnerships, sales-enablement, lead-generation]
 summary: "Runs the sales team's week: the pipeline review and forecast call, deal coaching notes, who takes each new lead or request, and which sales role to add next. It proposes; a human assigns and decides."
 when: "A team with two or more sales bots or sellers that wants one weekly picture and one place requests are routed from."
 pains:

@@ -1,0 +1,30 @@
+{
+    "files": {
+        "./backend/company_page/readers.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 14,
+                    "endColumn": 20,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 13,
+                    "endColumn": 19,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 101,
+                    "endColumn": 107,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

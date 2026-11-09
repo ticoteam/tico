@@ -17,7 +17,7 @@ def seed(api):
                 c, M.SEED_ACTOR, quote=f'{name} offers self-hosting.', our_read=f'{name} charges $20 monthly.'
             )
             M.create_entity(
-                c, M.SEED_ACTOR, type='company', name=name, summary='A competitor.', evidence_ids=[ev['id']]
+                c, M.SEED_ACTOR, type='organization', name=name, summary='A competitor.', evidence_ids=[ev['id']]
             )
 
 

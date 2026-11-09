@@ -1,11 +1,11 @@
-// Offline browser regression: the Connection card of Tools › Settings › Email (ui/google-connect.js) over the contract's
+// Offline browser regression: the Connection card of Tools › Settings › Email (ui/google-connect.ts) over the contract's
 // GET /v2/google, with a fake hub (ui/tests/support/google-fake.cjs). An admin sees the two ways (Whole company, Each
 // person signs in) as one toggle: neither picked while nothing is set up, the way set up picked otherwise, one way shown
 // at a time. Each way's setup is a prompt for the person's own agent by default (the Workspace one makes its setup code
 // only on Make prompt), or the steps by hand: the Whole company key in three steps, the check polling on a 20 s timer for
 // 10 minutes (Playwright's fake clock), disconnect and replace confirming in the page. A member sees Connect Google for
 // their own mailbox only (nothing when the company's key covers it), and a phone width has no sideways scroll.
-// Leaving Tools › Settings and coming back keeps the card's state (ui/app/inboxes-email.js keeps one host, MB_GOOGLE_HOST,
+// Leaving Tools › Settings and coming back keeps the card's state (ui/app/inboxes-email.ts keeps one host, MB_GOOGLE_HOST,
 // off the page while away). What Tico may do is ui/tests/inboxes.cjs.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -33,9 +33,9 @@ const SHELL = {
 // Opens Tools › Settings › Email on a fresh page. `clock` installs Playwright's fake timers before the page loads.
 const READY = '#set-google [data-google-mode], #set-google .google-card';
 const CARD = '#/tools/settings/email';
-// Whether the card is on the page and shown, as watchable() in ui/google-connect.js reads it before a timer checks.
+// Whether the card is on the page and shown, as watchable() in ui/google-connect.ts reads it before a timer checks.
 const cardShown = page => page.evaluate(() => !!MB_GOOGLE_HOST?.isConnected && !MB_GOOGLE_HOST.closest('[hidden]'));
-// A new page draws in a view transition (ui/app/router.js routeChanged), a frame or more after the address changes,
+// A new page draws in a view transition (ui/app/router.ts routeChanged), a frame or more after the address changes,
 // and the card stays on the page until then. Running the fake clock in that gap fires the card's timers as if it were
 // still shown, so each move waits until the card has really left or come back.
 const moved = async (page, shown, what) => {
@@ -74,10 +74,10 @@ async function open(browser, fake, {width = 1440, clock = false, ready = READY} 
     const request = route.request(), url = new URL(request.url()), p = url.pathname;
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.hostname === 'accounts.google.com') return route.fulfill({contentType: 'text/html', body: '<h1>Google sign-in</h1>'});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p.startsWith('/api/v2/google') || p.startsWith('/api/v2/mail/google')) {
       const raw = request.postData();
