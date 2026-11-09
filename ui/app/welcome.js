@@ -29,7 +29,7 @@ const ONB_BLANK = {
   answers: {building: '', what_we_do: '', customers: '', team_size: '', work_arrives: [], repetitive_work: '',
             software_product: '', departments: [], briefings: {}},
   selected: {}, completed: null, home: '', bots: [], machine: {runners: [], enrolled: false}, needed: true};
-let ONB = null;
+/** @type {any} wizard state; ui/setup-strategy.ts reads it, and the type is any until this file is typed */ let ONB = null;
 // A server that is a container is the usual install, and the computer that runs bots is a Linux one beside it.
 const onbDefaultKind = () => (S.config?.in_docker ? 'linux' : 'mac');
 // Their own name: the roster's when it is not just an address, else the sign-in's display name when the proxy sends one.

@@ -7,7 +7,7 @@ Tico Cloud machines also come with support access, on by default, which the owne
 ([below](#tico-support-on-cloud-machines)).
 The setup page on tico.team, which you use before installing, has its own section ([below](#the-setup-page-on-ticoteam)).
 Ask Tico, the chat on tico.team's pages, has its own section too ([below](#ask-tico-the-chat-on-ticoteam)).
-Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Bots you set to use Tico Cheap, Mid or Power send their model calls through Tico HQ to OpenRouter ([below](#tico-cheap-mid-and-power-through-tico-hq)). Tico's source is available, so you can read the code that
+Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Bots you set to use a Tico model send their model calls through Tico HQ to OpenRouter ([below](#tico-models-through-tico-hq)). Tico's source is available, so you can read the code that
 sends them (`backend/census.py`, `backend/releases.py`, `backend/suggestions.py`, `backend/recruit.py`, `backend/support.py`). The service that receives them,
 Tico HQ, is run by the Tico team from a separate, private repository; its code is not published. What it is sent and what it keeps is described in [docs/tico-hq.md](docs/tico-hq.md).
 
@@ -288,20 +288,20 @@ you set on the server, and never in rehearsal mode. Each provider keeps what it 
 | **Slack routing** (`backend/slack_gateway.py`, when the Slack gateway is on) | The message's text; the sender's name, roster id, team and the bots they are primary for; the channel's name and registry purpose; the last twelve exchanges in the thread and their previous routing; and the active roster (each bot's name, team, description and manager) | The same decision model as above |
 | **Topic changed** (`backend/topic_change.py`, when Settings > General > **Start fresh when the topic changes** is on) | Before a message in a person's direct chat with a bot is sent, and only when the chat is long or idle: the chat's last 3 turns since its last clear (what the person said and what the bot answered, each cut to about 1,500 characters) and the new message. Task lines, task chats, group chats and shared bots' rooms are never sent. The audit keeps the answer, never the text | The same decision model as above |
 | **Market ask** (`POST /api/v2/market/ask`) | The question, and up to about seventeen excerpts from the market graph that match it: entity names, aliases and summaries, evidence quotes and our reads, and the start of matching market pages | Google's Gemini API (generativelanguage.googleapis.com, `gemini-3.7-flash`) with the server's `GEMINI_API_KEY`, whatever Settings > Computers > Models says. Without a key nothing is sent and the pulled excerpts are the answer |
-| **Strategy research** (`POST /api/v2/strategy/draft-from`, the owner during setup) | The website address and the description the owner typed, and the text of up to four of that website's public pages (home, about, pricing, customers; 8,000 characters each). Fetching those pages is a plain request from the server to that website, with no credentials | Tico Mid 1.0 on the Tico AI Gateway (Tico HQ, then OpenRouter, [below](#tico-cheap-mid-and-power-through-tico-hq)) while the gateway is connected and chosen for the gateway models, else the team's own provider from Settings > Computers > Models whose key the server holds. With neither nothing is sent and setup is a plain form. The server keeps the job (address, description, page addresses and titles, and the model's answer) in its database, the last five jobs |
+| **Strategy research** (`POST /api/v2/strategy/draft-from`, the owner during setup) | The website address and the description the owner typed, and the text of up to four of that website's public pages (home, about, pricing, customers; 8,000 characters each). Fetching those pages is a plain request from the server to that website, with no credentials | Tico Medium on the Tico AI Gateway (Tico HQ, then OpenRouter, [below](#tico-models-through-tico-hq)) while the gateway is connected and chosen for the gateway models, else the team's own provider from Settings > Computers > Models whose key the server holds. With neither nothing is sent and setup is a plain form. The server keeps the job (address, description, page addresses and titles, and the model's answer) in its database, the last five jobs |
 
 What the server keeps of each call is an audit event, never the text that was sent: `judge.call` (the label, the number of
 questions, the value and confidence per answer, the model, token usage and latency; Slack routing adds the Slack event id)
 and `market.ask` (the model, the latency, how many excerpts and how long the question was). Each actor has a daily cap on
 these calls (`TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN`, `_BOT`; README.md).
 
-## Tico Cheap, Mid and Power through Tico HQ
+## Tico models through Tico HQ
 
 Only when your team has a Tico AI Gateway key (Settings > Computers > Models, or `TICO_GATEWAY_KEY`) and a bot is set to
-a Tico model (Tico Cheap, Mid or Power). That bot's computer then sends each of its model calls, with the gateway key, to Tico HQ
+a Tico model (a level from X-Low to X-High). That bot's computer then sends each of its model calls, with the gateway key, to Tico HQ
 (`https://updates.tico.team/v1/gateway/chat/completions`), and HQ sends it on to **OpenRouter** (openrouter.ai) with
-HQ's own OpenRouter key. OpenRouter passes it to a provider that serves the Claude model behind that Tico model (Haiku,
-Sonnet or Opus). Without a gateway key, or with the bot on another model, nothing goes this way.
+HQ's own OpenRouter key. OpenRouter passes it to a provider that serves the model behind that Tico model (Claude Haiku,
+Sonnet, Opus or Fable, DeepSeek, or Inception Mercury). Without a gateway key, or with the bot on another model, nothing goes this way.
 
 **What OpenRouter is sent:** the call's messages (the system, user, assistant and tool text the bot sends, which can be
 anything it has read: a task, a chat, a mail, a file's text) and its tools, with the tool calls, tool choice, output

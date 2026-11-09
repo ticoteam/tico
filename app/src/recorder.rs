@@ -22,6 +22,7 @@ use crate::orgs::{Org, Orgs};
 use crate::windows::{open_approval_window, show_window, Home};
 use crate::{App, AppState};
 
+#[cfg(target_os = "macos")]
 pub(crate) const RECORDER_ID: &str = "team.tico.recorder.native";
 /// The approval page, relative to an org's address.
 const APPROVAL_PATH: &str = "oauth/authorize";
@@ -38,9 +39,13 @@ pub(crate) fn installed() -> bool {
         let id = objc2_foundation::NSString::from_str(RECORDER_ID);
         // SAFETY: NSWorkspace's shared instance and its bundle-identifier lookup, which may be called from any thread.
         unsafe {
-            let workspace: Option<Retained<AnyObject>> = msg_send![class!(NSWorkspace), sharedWorkspace];
-            let Some(workspace) = workspace else { return false };
-            let app: Option<Retained<AnyObject>> = msg_send![&*workspace, URLForApplicationWithBundleIdentifier: &*id];
+            let workspace: Option<Retained<AnyObject>> =
+                msg_send![class!(NSWorkspace), sharedWorkspace];
+            let Some(workspace) = workspace else {
+                return false;
+            };
+            let app: Option<Retained<AnyObject>> =
+                msg_send![&*workspace, URLForApplicationWithBundleIdentifier: &*id];
             app.is_some()
         }
     }
@@ -51,6 +56,7 @@ pub(crate) fn installed() -> bool {
 }
 
 /// The link that opens the Recorder on an org: `tico-recorder://open?server=<org address>`. It starts nothing.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn recorder_link(hub: &Url) -> String {
     let mut link = Url::parse("tico-recorder://open").expect("a fixed link");
     link.query_pairs_mut().append_pair("server", hub.as_str());
@@ -62,7 +68,10 @@ pub(crate) fn open_recorder(hub: &Url) {
     #[cfg(target_os = "macos")]
     {
         let link = recorder_link(hub);
-        if let Err(e) = std::process::Command::new("/usr/bin/open").args(["-b", RECORDER_ID, &link]).spawn() {
+        if let Err(e) = std::process::Command::new("/usr/bin/open")
+            .args(["-b", RECORDER_ID, &link])
+            .spawn()
+        {
             log::warn!("could not open Tico Recorder: {e}");
         }
     }
@@ -76,7 +85,11 @@ pub(crate) fn approval(orgs: &Orgs, link: &Url) -> Option<(Org, Url)> {
     if link.scheme() != "tico" || link.host_str() != Some("open") {
         return None;
     }
-    let param = |name: &str| link.query_pairs().find(|(key, _)| key == name).map(|(_, value)| value.into_owned());
+    let param = |name: &str| {
+        link.query_pairs()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.into_owned())
+    };
     let named = Url::parse(&param("org")?).ok()?;
     let org = orgs.find_hub(&named)?.clone();
     let hub = org.hub()?;
@@ -86,18 +99,30 @@ pub(crate) fn approval(orgs: &Orgs, link: &Url) -> Option<(Org, Url)> {
     }
     let target = hub.join(&path).ok()?;
     let page = hub.join(APPROVAL_PATH).ok()?;
-    let fits = target.origin() == hub.origin() && target.path() == page.path() && target.username().is_empty()
-        && target.password().is_none() && target.fragment().is_none();
+    let fits = target.origin() == hub.origin()
+        && target.path() == page.path()
+        && target.username().is_empty()
+        && target.password().is_none()
+        && target.fragment().is_none();
     fits.then_some((org, target))
 }
 
 /// Where the approval page sends its answer, when that is a loopback address on this Mac, and the request's state.
 pub(crate) fn loopback(target: &Url) -> Option<(Url, String)> {
-    let param = |name: &str| target.query_pairs().find(|(key, _)| key == name).map(|(_, value)| value.into_owned());
+    let param = |name: &str| {
+        target
+            .query_pairs()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.into_owned())
+    };
     let redirect = Url::parse(&param("redirect_uri")?).ok()?;
     let state = param("state").filter(|state| !state.is_empty())?;
-    let fits = redirect.scheme() == "http" && redirect.host_str() == Some("127.0.0.1") && redirect.port().is_some()
-        && redirect.username().is_empty() && redirect.password().is_none() && redirect.query().is_none()
+    let fits = redirect.scheme() == "http"
+        && redirect.host_str() == Some("127.0.0.1")
+        && redirect.port().is_some()
+        && redirect.username().is_empty()
+        && redirect.password().is_none()
+        && redirect.query().is_none()
         && redirect.fragment().is_none();
     fits.then_some((redirect, state))
 }
@@ -116,9 +141,14 @@ static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
 /// told to answer to, from the window showing the approval page, in time.
 pub(crate) fn answers(pending: Option<&Pending>, window: &str, url: &Url) -> bool {
     pending.is_some_and(|pending| {
-        pending.window == window && pending.at.elapsed() < ANSWER_WAIT && url.scheme() == "http"
-            && url.host_str() == Some("127.0.0.1") && url.port() == pending.redirect.port()
-            && url.path() == pending.redirect.path() && url.username().is_empty() && url.fragment().is_none()
+        pending.window == window
+            && pending.at.elapsed() < ANSWER_WAIT
+            && url.scheme() == "http"
+            && url.host_str() == Some("127.0.0.1")
+            && url.port() == pending.redirect.port()
+            && url.path() == pending.redirect.path()
+            && url.username().is_empty()
+            && url.fragment().is_none()
     })
 }
 
@@ -127,7 +157,8 @@ pub(crate) fn answers(pending: Option<&Pending>, window: &str, url: &Url) -> boo
 /// they are. A newer link replaces a window still waiting. A link this app refuses only brings the window forward.
 pub(crate) fn open_link(app: &App, link: &Url) {
     let found = approval(&app.state::<AppState>().orgs.lock().unwrap(), link);
-    let Some((home, target)) = found.and_then(|(org, target)| Some((Home::of(&org)?, target))) else {
+    let Some((home, target)) = found.and_then(|(org, target)| Some((Home::of(&org)?, target)))
+    else {
         log::warn!("a Tico Recorder sign-in link named no org or page this app opens");
         show_window(app);
         return;
@@ -139,7 +170,11 @@ pub(crate) fn open_link(app: &App, link: &Url) {
         let answer = loopback(&target);
         let replaced = std::mem::replace(
             &mut *PENDING.lock().unwrap(),
-            answer.as_ref().map(|(redirect, _)| Pending { window: label.clone(), redirect: redirect.clone(), at: Instant::now() }),
+            answer.as_ref().map(|(redirect, _)| Pending {
+                window: label.clone(),
+                redirect: redirect.clone(),
+                at: Instant::now(),
+            }),
         );
         if let Some(window) = replaced.and_then(|old| app.get_webview_window(&old.window)) {
             let _ = window.close();
@@ -189,7 +224,12 @@ async fn loopback_get(url: &Url) -> Result<(), String> {
         .timeout(Duration::from_secs(5))
         .build()
         .map_err(|e| e.to_string())?;
-    client.get(url.as_str()).send().await.map(|_| ()).map_err(|e| e.to_string())
+    client
+        .get(url.as_str())
+        .send()
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -212,7 +252,10 @@ mod tests {
             Document {
                 version: 1,
                 active: Some("o_aaaaaaaa".into()),
-                orgs: vec![org("o_aaaaaaaa", "https://acme.example.com/"), org("o_bbbbbbbb", "https://team.example.com/tico/")],
+                orgs: vec![
+                    org("o_aaaaaaaa", "https://acme.example.com/"),
+                    org("o_bbbbbbbb", "https://team.example.com/tico/"),
+                ],
             },
             None,
         )
@@ -221,33 +264,70 @@ mod tests {
 
     fn link(org: &str, path: &str) -> Url {
         let mut link = Url::parse("tico://open").unwrap();
-        link.query_pairs_mut().append_pair("org", org).append_pair("path", path);
+        link.query_pairs_mut()
+            .append_pair("org", org)
+            .append_pair("path", path);
         link
     }
 
     #[test]
     fn only_an_orgs_own_approval_page_opens_from_a_link() {
         let orgs = orgs();
-        let (org, target) = approval(&orgs, &link("https://acme.example.com", &format!("oauth/authorize?{QUERY}"))).unwrap();
+        let (org, target) = approval(
+            &orgs,
+            &link(
+                "https://acme.example.com",
+                &format!("oauth/authorize?{QUERY}"),
+            ),
+        )
+        .unwrap();
         assert_eq!(org.id, "o_aaaaaaaa");
-        assert_eq!(target.as_str(), format!("https://acme.example.com/oauth/authorize?{QUERY}"));
+        assert_eq!(
+            target.as_str(),
+            format!("https://acme.example.com/oauth/authorize?{QUERY}")
+        );
         // An org on a path keeps it.
-        let (org, target) = approval(&orgs, &link("https://team.example.com/tico", "oauth/authorize?state=x")).unwrap();
-        assert_eq!((org.id.as_str(), target.as_str()), ("o_bbbbbbbb", "https://team.example.com/tico/oauth/authorize?state=x"));
+        let (org, target) = approval(
+            &orgs,
+            &link("https://team.example.com/tico", "oauth/authorize?state=x"),
+        )
+        .unwrap();
+        assert_eq!(
+            (org.id.as_str(), target.as_str()),
+            (
+                "o_bbbbbbbb",
+                "https://team.example.com/tico/oauth/authorize?state=x"
+            )
+        );
         for (org, path) in [
             // An org this app does not have.
             ("https://evil.example.com", "oauth/authorize?state=x"),
-            ("https://acme.example.com.evil.test", "oauth/authorize?state=x"),
+            (
+                "https://acme.example.com.evil.test",
+                "oauth/authorize?state=x",
+            ),
             ("http://acme.example.com", "oauth/authorize?state=x"),
             ("not an address", "oauth/authorize"),
             // Any other page, or another site, of an org this app has.
             ("https://acme.example.com", "api/v2/logout"),
             ("https://acme.example.com", ""),
-            ("https://acme.example.com", "oauth/authorize/../../api/v2/logout"),
+            (
+                "https://acme.example.com",
+                "oauth/authorize/../../api/v2/logout",
+            ),
             ("https://acme.example.com", "/oauth/authorize"),
-            ("https://acme.example.com", "//evil.example.com/oauth/authorize"),
-            ("https://acme.example.com", "\\\\evil.example.com/oauth/authorize"),
-            ("https://acme.example.com", "https://evil.example.com/oauth/authorize"),
+            (
+                "https://acme.example.com",
+                "//evil.example.com/oauth/authorize",
+            ),
+            (
+                "https://acme.example.com",
+                "\\\\evil.example.com/oauth/authorize",
+            ),
+            (
+                "https://acme.example.com",
+                "https://evil.example.com/oauth/authorize",
+            ),
             ("https://acme.example.com", "oauth/authorize#x"),
             ("https://acme.example.com", "OAUTH/authorize"),
             ("https://team.example.com/tico", "../oauth/authorize"),
@@ -255,37 +335,81 @@ mod tests {
             assert!(approval(&orgs, &link(org, path)).is_none(), "{org} {path}");
         }
         assert!(approval(&orgs, &Url::parse("tico://meetings/abc").unwrap()).is_none());
-        assert!(approval(&orgs, &Url::parse(&link("https://acme.example.com", "oauth/authorize").as_str().replace("tico://", "other://")).unwrap()).is_none());
+        assert!(approval(
+            &orgs,
+            &Url::parse(
+                &link("https://acme.example.com", "oauth/authorize")
+                    .as_str()
+                    .replace("tico://", "other://")
+            )
+            .unwrap()
+        )
+        .is_none());
         let mut no_path = Url::parse("tico://open").unwrap();
-        no_path.query_pairs_mut().append_pair("org", "https://acme.example.com");
+        no_path
+            .query_pairs_mut()
+            .append_pair("org", "https://acme.example.com");
         assert!(approval(&orgs, &no_path).is_none());
     }
 
     #[test]
     fn only_a_loopback_answer_is_handed_over() {
-        let target = Url::parse(&format!("https://acme.example.com/oauth/authorize?{QUERY}")).unwrap();
+        let target =
+            Url::parse(&format!("https://acme.example.com/oauth/authorize?{QUERY}")).unwrap();
         let (redirect, state) = loopback(&target).unwrap();
-        assert_eq!((redirect.as_str(), state.as_str()), ("http://127.0.0.1:5123/callback", "s1"));
-        for redirect in ["https://agent.example.com/callback", "http://localhost:5123/callback", "http://127.0.0.1/callback",
-                         "http://user@127.0.0.1:5123/callback", "http://127.0.0.1:5123/callback?x=1", "nonsense"] {
+        assert_eq!(
+            (redirect.as_str(), state.as_str()),
+            ("http://127.0.0.1:5123/callback", "s1")
+        );
+        for redirect in [
+            "https://agent.example.com/callback",
+            "http://localhost:5123/callback",
+            "http://127.0.0.1/callback",
+            "http://user@127.0.0.1:5123/callback",
+            "http://127.0.0.1:5123/callback?x=1",
+            "nonsense",
+        ] {
             let mut target = Url::parse("https://acme.example.com/oauth/authorize").unwrap();
-            target.query_pairs_mut().append_pair("redirect_uri", redirect).append_pair("state", "s1");
+            target
+                .query_pairs_mut()
+                .append_pair("redirect_uri", redirect)
+                .append_pair("state", "s1");
             assert!(loopback(&target).is_none(), "{redirect}");
         }
         let mut stateless = Url::parse("https://acme.example.com/oauth/authorize").unwrap();
-        stateless.query_pairs_mut().append_pair("redirect_uri", "http://127.0.0.1:5123/callback");
+        stateless
+            .query_pairs_mut()
+            .append_pair("redirect_uri", "http://127.0.0.1:5123/callback");
         assert!(loopback(&stateless).is_none());
 
-        let pending = Pending { window: "approval-1".into(), redirect, at: Instant::now() };
+        let pending = Pending {
+            window: "approval-1".into(),
+            redirect,
+            at: Instant::now(),
+        };
         let answer = Url::parse("http://127.0.0.1:5123/callback?code=c&state=s1").unwrap();
         assert!(answers(Some(&pending), "approval-1", &answer));
-        assert!(!answers(Some(&pending), "approval-2", &answer), "an older approval window");
-        assert!(!answers(Some(&pending), "o_aaaaaaaa", &answer), "the org's own page");
+        assert!(
+            !answers(Some(&pending), "approval-2", &answer),
+            "an older approval window"
+        );
+        assert!(
+            !answers(Some(&pending), "o_aaaaaaaa", &answer),
+            "the org's own page"
+        );
         assert!(!answers(Some(&pending), "main", &answer));
         assert!(!answers(None, "approval-1", &answer), "no approval waiting");
-        for other in ["http://127.0.0.1:5124/callback?code=c", "http://127.0.0.1:5123/other?code=c", "https://127.0.0.1:5123/callback",
-                      "http://localhost:5123/callback", "http://evil.example.com:5123/callback"] {
-            assert!(!answers(Some(&pending), "approval-1", &Url::parse(other).unwrap()), "{other}");
+        for other in [
+            "http://127.0.0.1:5124/callback?code=c",
+            "http://127.0.0.1:5123/other?code=c",
+            "https://127.0.0.1:5123/callback",
+            "http://localhost:5123/callback",
+            "http://evil.example.com:5123/callback",
+        ] {
+            assert!(
+                !answers(Some(&pending), "approval-1", &Url::parse(other).unwrap()),
+                "{other}"
+            );
         }
         // A machine up for less than the wait has no instant that long ago.
         if let Some(at) = Instant::now().checked_sub(ANSWER_WAIT + Duration::from_secs(1)) {
@@ -298,8 +422,17 @@ mod tests {
     fn record_opens_the_recorder_on_the_pages_own_org() {
         let hub = Url::parse("https://acme.example.com/").unwrap();
         let link = Url::parse(&recorder_link(&hub)).unwrap();
-        assert_eq!((link.scheme(), link.host_str()), ("tico-recorder", Some("open")));
+        assert_eq!(
+            (link.scheme(), link.host_str()),
+            ("tico-recorder", Some("open"))
+        );
         let query: Vec<(String, String)> = link.query_pairs().into_owned().collect();
-        assert_eq!(query, [("server".to_string(), "https://acme.example.com/".to_string())]);
+        assert_eq!(
+            query,
+            [(
+                "server".to_string(),
+                "https://acme.example.com/".to_string()
+            )]
+        );
     }
 }

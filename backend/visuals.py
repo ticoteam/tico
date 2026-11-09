@@ -5,6 +5,7 @@ A visual is a normal versioned file on its task or conversation. A message store
 with and a title (backend/app.py attach_visuals). Readers get a fresh `src` on /visuals/<token>: the token names the
 reader, the file, the version and an expiry, and every request on it (each range request too) checks again that the
 reader can still open the file. Nothing on that route reads or sets the app's cookies."""
+
 import base64
 import errno
 import hashlib
@@ -24,21 +25,36 @@ from urllib.parse import urlencode, urlsplit
 from .live_blocks import LIVE_ATTRS, fill as fill_live, has_live
 
 # What may show inline, by stored type; anything else, or bigger, is a normal file chip.
-KINDS = {"image/png": "image", "image/jpeg": "image", "image/gif": "image", "image/webp": "image",
-         "image/svg+xml": "svg", "text/html": "page",
-         "video/mp4": "video", "video/webm": "video", "video/quicktime": "video", "video/x-m4v": "video",
-         "audio/mpeg": "audio", "audio/mp4": "audio", "audio/x-m4a": "audio", "audio/wav": "audio",
-         "audio/x-wav": "audio", "audio/wave": "audio", "audio/vnd.wave": "audio", "audio/ogg": "audio",
-         "audio/aac": "audio"}
+KINDS = {
+    "image/png": "image",
+    "image/jpeg": "image",
+    "image/gif": "image",
+    "image/webp": "image",
+    "image/svg+xml": "svg",
+    "text/html": "page",
+    "video/mp4": "video",
+    "video/webm": "video",
+    "video/quicktime": "video",
+    "video/x-m4v": "video",
+    "audio/mpeg": "audio",
+    "audio/mp4": "audio",
+    "audio/x-m4a": "audio",
+    "audio/wav": "audio",
+    "audio/x-wav": "audio",
+    "audio/wave": "audio",
+    "audio/vnd.wave": "audio",
+    "audio/ogg": "audio",
+    "audio/aac": "audio",
+}
 # Python 3.15's mimetypes names .wav audio/vnd.wave; browsers know audio/wav. A type the server picks is stored as the
 # common name, and versions already stored under the other still show inline (KINDS above).
 ALIASES = {"audio/vnd.wave": "audio/wav"}
 MB = 1024 * 1024
-# A page or SVG is read whole by the viewer (ui/app/viewer.js caps it at 10 MB); video and audio stream by range.
+# A page or SVG is read whole by the viewer (ui/app/viewer.ts caps it at 10 MB); video and audio stream by range.
 LIMITS = {"image": 25 * MB, "svg": 10 * MB, "page": 10 * MB, "video": 2048 * MB, "audio": 2048 * MB}
 MAGIC = {"image/png": (b"\x89PNG\r\n\x1a\n",), "image/jpeg": (b"\xff\xd8\xff",), "image/gif": (b"GIF87a", b"GIF89a")}
 TITLE_MAX = 200
-LIFE = 2 * 3600          # lead, Oct 19: two hours, every request re-checked
+LIFE = 2 * 3600  # lead, Oct 19: two hours, every request re-checked
 
 
 def stored_type(mime):
@@ -63,8 +79,24 @@ def kind_of(mime, size, head=b""):
 # ---------------------------------------------------------------------------------------------- page clean-up
 # Attributes that make a browser fetch something. A value that is not a data: URI (or an in-page #fragment) is
 # removed and reported. Links (<a href>) are clicks, not loads: they stay and open in a new tab.
-LOADS = {"src", "srcset", "poster", "background", "data", "action", "formaction", "codebase", "cite", "longdesc",
-         "manifest", "ping", "lowsrc", "dynsrc", "archive", "imagesrcset"}
+LOADS = {
+    "src",
+    "srcset",
+    "poster",
+    "background",
+    "data",
+    "action",
+    "formaction",
+    "codebase",
+    "cite",
+    "longdesc",
+    "manifest",
+    "ping",
+    "lowsrc",
+    "dynsrc",
+    "archive",
+    "imagesrcset",
+}
 DROPPED_TAGS = {"script", "iframe", "frame", "frameset", "object", "embed", "applet", "base", "noscript"}
 # Of those, the ones whose whole subtree goes too. embed, frame and base are void: they have no end tag, so dropping
 # one drops only that tag and the page after it stays.
@@ -86,7 +118,7 @@ class _Cleaner(HTMLParser):
         self.out, self.unembedded, self.skip, self.style = [], [], [], 0
         self.base_target = base_target
         self.based = False
-        self.case = {}                                      # SVG is XML: end tags keep their start tag's case
+        self.case = {}  # SVG is XML: end tags keep their start tag's case
 
     def note(self, value):
         value = html.unescape(value).strip()
@@ -97,11 +129,13 @@ class _Cleaner(HTMLParser):
         def imported(match):
             self.note(match.group(2))
             return ""
+
         def url(match):
             if loads_nothing(match.group(2)):
                 return match.group(0)
             self.note(match.group(2))
             return "url()"
+
         return CSS_URL.sub(url, CSS_IMPORT.sub(imported, text))
 
     def srcset(self, value):
@@ -134,7 +168,7 @@ class _Cleaner(HTMLParser):
         lowered = name.lower()
         if lowered in DROPPED_TAGS:
             if lowered == "base":
-                for _, key, _, value in ATTR.findall(raw[len(name) + 1:]):
+                for _, key, _, value in ATTR.findall(raw[len(name) + 1 :]):
                     if key.lower() == "href" and value and not loads_nothing(value.strip("\"'")):
                         self.note(value.strip("\"'"))
             elif not closing and lowered in SKIPPED_SUBTREES:
@@ -144,15 +178,18 @@ class _Cleaner(HTMLParser):
             return
         if lowered in LIVE_ATTRS:
             # A live block keeps only its own attributes; the server fills it in for each viewer when it is shown.
-            body = raw[len(name) + 1:].rstrip()
+            body = raw[len(name) + 1 :].rstrip()
             end = "/>" if body.endswith("/>") else ">"
-            kept = "".join(f"{space}{key}{eq}{value}" for space, key, eq, value in ATTR.findall(body[:-len(end)])
-                           if key.lower() in LIVE_ATTRS[lowered])
+            kept = "".join(
+                f"{space}{key}{eq}{value}"
+                for space, key, eq, value in ATTR.findall(body[: -len(end)])
+                if key.lower() in LIVE_ATTRS[lowered]
+            )
             self.out.append("<" + name + kept + end)
             return
-        body = raw[len(name) + 1:].rstrip()
+        body = raw[len(name) + 1 :].rstrip()
         end = "/>" if body.endswith("/>") else ">"
-        body = body[:-len(end)]
+        body = body[: -len(end)]
         attrs, rel_link = [], lowered == "link"
         rel = ""
         for space, key, eq, value in ATTR.findall(body):
@@ -162,9 +199,9 @@ class _Cleaner(HTMLParser):
             k, bare = key.lower(), html.unescape(value[1:-1] if value[:1] in "\"'" and len(value) > 1 else value)
             local = k.rsplit(":", 1)[-1]
             if k.startswith("on"):
-                continue                                    # event handlers never run here
+                continue  # event handlers never run here
             if lowered == "a" and local in ("target", "rel"):
-                continue                                    # set below
+                continue  # set below
             if local == "href" and lowered != "a":
                 if not loads_nothing(bare):
                     self.note(bare)
@@ -218,8 +255,8 @@ class _Cleaner(HTMLParser):
 
     def handle_endtag(self, tag):
         if tag in DROPPED_TAGS:
-            if tag in self.skip:                            # closes it and anything left open inside it
-                del self.skip[len(self.skip) - 1 - self.skip[::-1].index(tag):]
+            if tag in self.skip:  # closes it and anything left open inside it
+                del self.skip[len(self.skip) - 1 - self.skip[::-1].index(tag) :]
             return
         if self.skip:
             return
@@ -240,7 +277,7 @@ class _Cleaner(HTMLParser):
             self.out.append(f"&#{name};")
 
     def handle_comment(self, data):
-        pass                                                # conditional comments can carry loads
+        pass  # conditional comments can carry loads
 
     def handle_decl(self, decl):
         self.out.append(f"<!{decl}>")
@@ -298,12 +335,17 @@ def with_reporter(data):
 def policy(kind, ancestors):
     frames = "frame-ancestors " + (" ".join(ancestors) or "'none'")
     if kind == "page":
-        return ("default-src 'none'; script-src '" + REPORTER_HASH + "'; img-src data:; font-src data:; "
-                "media-src data:; style-src 'unsafe-inline' data:; connect-src 'none'; form-action 'none'; "
-                "base-uri 'none'; " + frames + "; sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox")
+        return (
+            "default-src 'none'; script-src '" + REPORTER_HASH + "'; img-src data:; font-src data:; "
+            "media-src data:; style-src 'unsafe-inline' data:; connect-src 'none'; form-action 'none'; "
+            "base-uri 'none'; " + frames + "; sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox"
+        )
     if kind == "svg":
-        return ("default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline' data:; "
-                + frames + "; sandbox")
+        return (
+            "default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline' data:; "
+            + frames
+            + "; sandbox"
+        )
     return "default-src 'none'; " + frames + "; sandbox"
 
 
@@ -426,10 +468,13 @@ def check_origin(settings):
         visual = origin_of(value)
     except ValueError:
         logging.getLogger("tico.visuals").warning(
-            "TICO_VISUAL_ORIGIN is not a valid URL; visuals show pictures, video and audio only until it is fixed")
+            "TICO_VISUAL_ORIGIN is not a valid URL; visuals show pictures, video and audio only until it is fixed"
+        )
         return ""
     if visual and hostname(visual) == hostname(settings.public_url):
-        raise ValueError("TICO_VISUAL_ORIGIN must differ from the app's own hostname (TICO_PUBLIC_URL), whatever the scheme or port")
+        raise ValueError(
+            "TICO_VISUAL_ORIGIN must differ from the app's own hostname (TICO_PUBLIC_URL), whatever the scheme or port"
+        )
     return visual
 
 
@@ -449,6 +494,7 @@ def shown(settings, c):
     if mode(settings) == "full":
         return "full"
     from .tico_storage import visual_address
+
     return "hosted" if visual_address(c)[1] else "media"
 
 
@@ -457,7 +503,9 @@ def src_for(app, settings, c, who, fid, version):
     address rules), or None: a type that doesn't show inline, a file `who` may not read, or a page or SVG this install
     can't show inline (an Open card). A page held in Tico file hosting gets a `src` on the app's own route, which
     checks the reader on every load and sends them on to a short link on the company's files address (`serve`)."""
-    v = c.execute("SELECT mime, size FROM bot_file_versions WHERE file_id=? AND version=?", (fid, int(version))).fetchone()
+    v = c.execute(
+        "SELECT mime, size FROM bot_file_versions WHERE file_id=? AND version=?", (fid, int(version))
+    ).fetchone()
     kind = kind_of(v["mime"], v["size"]) if v else "file"
     if kind not in INLINE:
         return None
@@ -480,7 +528,7 @@ def parse(item):
 def _head(blobs, digest):
     try:
         return b"".join(blobs.open_range(digest, 0, 15))
-    except Exception:          # a copy still on its way to storage: judged by its type alone
+    except Exception:  # a copy still on its way to storage: judged by its type alone
         return b""
 
 
@@ -494,6 +542,7 @@ def attach(c, who, files, blobs, items, *, task_id=None, conversation_id=None):
     from .counsel import no_attachments
     from .store import H, Problem
     from .task_review import comment_file
+
     no_attachments(who, items)
     out, report = [], []
     for item in items:
@@ -502,11 +551,16 @@ def attach(c, who, files, blobs, items, *, task_id=None, conversation_id=None):
             fid, version = comment_file(c, files.auth, files, who, task_id, fid, number)
         else:
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
-            if not row or not file_in_room(c, row["scope"], conversation_id) or row["archived"] \
-                    or not files.visible(c, who, row, {}):
+            if (
+                not row
+                or not file_in_room(c, row["scope"], conversation_id)
+                or row["archived"]
+                or not files.visible(c, who, row, {})
+            ):
                 raise Problem("not_found", "File version not found in this conversation", 404)
-            version = c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?",
-                                (fid, number)).fetchone()
+            version = c.execute(
+                "SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)
+            ).fetchone()
             if not version:
                 raise Problem("not_found", "File version not found in this conversation", 404)
             version = dict(version)
@@ -514,34 +568,57 @@ def attach(c, who, files, blobs, items, *, task_id=None, conversation_id=None):
         mime = (version.get("mime") or "").split(";", 1)[0].strip().lower()
         kind = kind_of(mime, version.get("size"), _head(blobs, digest) if digest else b"")
         if not c.execute("SELECT 1 FROM bot_files WHERE id=?", (fid,)).fetchone():
-            kind = "file"           # a legacy task attachment (task_assets) is not a versioned file: it stays a chip
+            kind = "file"  # a legacy task attachment (task_assets) is not a versioned file: it stays a chip
         unembedded = []
         if kind in ("page", "svg"):
             data = blobs.get(digest)
-            cleaned, unembedded = clean(data, kind, base=False)     # <base> is added where it is shown
+            cleaned, unembedded = clean(data, kind, base=False)  # <base> is added where it is shown
             if cleaned != data:
                 version = _clean_version(c, who, files, blobs, fid, version, cleaned, mime)
                 kind = kind_of(mime, version["size"]) if len(cleaned) <= LIMITS[kind] else "file"
         number = int(version["version"])
-        out.append({"id": fid, "file_id": fid, "version": number, "ref": f"{fid}@{number}",
-                    "title": title or version["name"], "kind": kind, "name": version["name"],
-                    "size": version["size"], "content_type": version.get("mime") or mime,
-                    "url": f"/api/v2/files/{fid}?v={number}", **({"unembedded": unembedded} if unembedded else {})})
+        out.append(
+            {
+                "id": fid,
+                "file_id": fid,
+                "version": number,
+                "ref": f"{fid}@{number}",
+                "title": title or version["name"],
+                "kind": kind,
+                "name": version["name"],
+                "size": version["size"],
+                "content_type": version.get("mime") or mime,
+                "url": f"/api/v2/files/{fid}?v={number}",
+                **({"unembedded": unembedded} if unembedded else {}),
+            }
+        )
         report.append({"ref": f"{fid}@{number}", "kind": kind, "unembedded": unembedded})
-        H.event(c, who.actor, "message.visual", task_id or conversation_id, {"file": fid, "version": number, "kind": kind})
+        H.event(
+            c, who.actor, "message.visual", task_id or conversation_id, {"file": fid, "version": number, "kind": kind}
+        )
     return out, report
 
 
 def _clean_version(c, who, files, blobs, fid, version, cleaned, mime):
     from .store import H
     from .blobs import register
+
     digest = blobs.put(cleaned, mime)
     item = register(c, who, digest, len(cleaned), version["name"], mime)
     number = c.execute("SELECT current_version FROM bot_files WHERE id=?", (fid,)).fetchone()[0] + 1
-    files.insert_task_version(c, fid, number, item["id"], digest, len(cleaned), version["name"], mime, who.actor, H.now())
+    files.insert_task_version(
+        c, fid, number, item["id"], digest, len(cleaned), version["name"], mime, who.actor, H.now()
+    )
     c.execute("UPDATE bot_files SET current_version=?,last_activity_at=? WHERE id=?", (number, H.now(), fid))
-    files.activity(c, fid, who.actor, "modified", version=number, digest=digest,
-                   detail={"reason": "visual: references that would load from elsewhere removed"})
+    files.activity(
+        c,
+        fid,
+        who.actor,
+        "modified",
+        version=number,
+        digest=digest,
+        detail={"reason": "visual: references that would load from elsewhere removed"},
+    )
     return dict(c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)).fetchone())
 
 
@@ -565,9 +642,11 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
     # Counsel sees each file a message carries as its plain ref, never an address or what the file is: what it reads is
     # the one version its run was asked to read (backend/counsel.py run_read), through its own tool.
     from .counsel import is_counsel
+
     plain = is_counsel(who)
     for message in messages:
         from .files import readable_page_refs
+
         if message:
             shown = readable_page_refs(c, files.auth, who, message)
             if shown != message:
@@ -590,34 +669,52 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
             row = rows[fid]
             hidden = bool(row) and not row["archived"] and not files.visible(c, who, row, cache)
             if a.get("kind") not in INLINE and not hidden:
-                fresh.append(a)                  # a file kind with no address here: shown as stored, when it may be seen
+                fresh.append(a)  # a file kind with no address here: shown as stored, when it may be seen
                 continue
             removed = not row or bool(row["archived"]) or hidden
-            v = None if removed else c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?",
-                                               (fid, number)).fetchone()
+            v = (
+                None
+                if removed
+                else c.execute(
+                    "SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)
+                ).fetchone()
+            )
             # A file this reader may not open says nothing of itself: not its name, title, type or size, whatever its
             # kind. A message can show a file from elsewhere (a review question's, backend/file_reviews.py) to a reader
             # of its task.
             shown = {k: a[k] for k in ("id", "file_id", "version", "ref", "kind") if k in a} if hidden else a
-            view = {**shown, "removed": removed or v is None,
-                    "current_version": None if removed else row["current_version"]}
+            view = {
+                **shown,
+                "removed": removed or v is None,
+                "current_version": None if removed else row["current_version"],
+            }
             if v is not None:
                 actor = who.actor
                 here = base if route is who or (route and files.visible(c, route, row, served)) else None
                 page = c.execute("SELECT audience FROM pages WHERE file_id=?", (fid,)).fetchone()
                 restricted = bool(page and page["audience"] is not None)
-                inline = full or a["kind"] in MEDIA or bool(not restricted and hosted and here is not None and hosted(v))
+                inline = (
+                    full or a["kind"] in MEDIA or bool(not restricted and hosted and here is not None and hosted(v))
+                )
                 delegated = getattr(who, "task_actor", "")
-                view["src"] = here + "/visuals/" + mint(key, actor, fid, number, task_actor=delegated) if inline and here is not None else None
+                view["src"] = (
+                    here + "/visuals/" + mint(key, actor, fid, number, task_actor=delegated)
+                    if inline and here is not None
+                    else None
+                )
                 if not inline:
                     view["open"] = True
                     if v["thumb_blob_id"] and here is not None:
-                        view["preview_url"] = here + "/visuals/" + mint(key, actor, fid, number, "preview", task_actor=delegated)
+                        view["preview_url"] = (
+                            here + "/visuals/" + mint(key, actor, fid, number, "preview", task_actor=delegated)
+                        )
                 for field in ("width", "height", "duration_ms"):
                     if v[field] is not None:
                         view[field] = v[field]
                 if a["kind"] == "video" and v["poster_blob_id"] and here is not None:
-                    view["poster_url"] = here + "/visuals/" + mint(key, actor, fid, number, "poster", task_actor=delegated)
+                    view["poster_url"] = (
+                        here + "/visuals/" + mint(key, actor, fid, number, "poster", task_actor=delegated)
+                    )
             fresh.append(view)
         message["refs"] = {**message["refs"], "attachments": fresh}
     return messages
@@ -626,7 +723,7 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
 def elsewhere(base, message, task=None):
     """The one line a message with visuals carries where it leaves Tico (Slack today; an email or push outlet later),
     as {"count", "label", "url"}, or None when it has none. Nothing visual is rendered there (Visual replies, choice 4).
-    The link is a query, not a #fragment, because some clients drop fragments (ui/app/state.js turns it into the
+    The link is a query, not a #fragment, because some clients drop fragments (ui/app/state.ts turns it into the
     route): a message on a task (`task`, as hubdb.message_task_id finds it) opens the task, a plain chat reply that
     bot's chat in the room the reply is in, each at the message. It names ids only; whether the reader may open them
     is checked when they do."""
@@ -654,12 +751,15 @@ def for_reader(app, settings, c, who, messages):
     """decorate() for any path that hands messages to a reader: the conversation page and snapshot, a single message,
     task comments, the task page, the assistant room and the live event stream all go through here."""
     from .tico_storage import visual_ready
+
     full, blobs, frames = mode(settings) == "full", app.state.blobs, ancestors(settings)
 
     def hosted(v):
         return visual_ready(blobs, v["digest"], v["size"], (v["mime"] or "").split(";", 1)[0].strip().lower(), frames)
-    return decorate(c, who, app.state.files, key_for(app, settings), settings.visual_origin if full else "", messages,
-                    full, hosted)
+
+    return decorate(
+        c, who, app.state.files, key_for(app, settings), settings.visual_origin if full else "", messages, full, hosted
+    )
 
 
 # ---------------------------------------------------------------------------------------------- serve
@@ -669,7 +769,7 @@ def on_host(request, origin):
         want, got = urlsplit(origin or ""), urlsplit("//" + request.headers.get("host", ""))
         default = 443 if want.scheme == "https" else 80
         return bool(want.hostname) and (got.hostname, got.port or default) == (want.hostname, want.port or default)
-    except ValueError:                      # a malformed Host or origin is never the visual address
+    except ValueError:  # a malformed Host or origin is never the visual address
         return False
 
 
@@ -678,8 +778,9 @@ def token_reader(c, auth, actor):
     run (a token outlives the turn it was minted in), or None when neither exists."""
     from .auth import Identity
     from .store import H, Problem
+
     if not isinstance(actor, str) or actor == H.bot_actor(H.COUNSEL):
-        return None             # Counsel reads no visual: its grant is its run's, which a token does not carry
+        return None  # Counsel reads no visual: its grant is its run's, which a token does not carry
     try:
         if actor.startswith("human:"):
             return auth.identity_for_actor(c, actor)
@@ -699,6 +800,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
     (tico_storage.visual_link)."""
     from fastapi.responses import Response
     from .file_delivery import serve as deliver
+
     gone = Response(status_code=404, headers=_headers("default-src 'none'; sandbox", "attachment"))
     found = read(key, token, principals=True)
     if not found:
@@ -708,6 +810,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
         who = token_reader(c, auth, actor)
         if task_actor:
             from dataclasses import replace
+
             if not token_reader(c, auth, task_actor):
                 return gone
             who = replace(who, task_actor=task_actor) if who else None
@@ -739,11 +842,14 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
             blob = {"digest": v["digest"], "size": v["size"], "name": v["name"], "content_type": mime}
     if kind in ("page", "svg") and not part:
         from .tico_storage import visual_link
+
         # A page with live blocks never has a hosted copy (tico_storage.make_visual), so it is filled in below.
         link = None if restricted else visual_link(blobs, blob["digest"], blob["size"], mime, ancestors)
         if link:
-            return Response(status_code=302, headers={"Location": link, "Cache-Control": "private, no-store",
-                                                      "Referrer-Policy": "no-referrer"})
+            return Response(
+                status_code=302,
+                headers={"Location": link, "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer"},
+            )
         if not (full and on_host(request, visual_origin)):
             return gone
     rule = policy(kind, ancestors)
@@ -756,8 +862,11 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
         data, _ = clean(data, kind)
         if kind == "page":
             data = with_reporter(data)
-        response = Response(data if request.method != "HEAD" else b"", media_type=mime,
-                            headers={**_headers(rule), "Content-Length": str(len(data))})
+        response = Response(
+            data if request.method != "HEAD" else b"",
+            media_type=mime,
+            headers={**_headers(rule), "Content-Length": str(len(data))},
+        )
         return response
     response = deliver(request, blobs, blob, True)
     response.headers.update(_headers(rule, disposition(mime)))
@@ -770,6 +879,11 @@ def disposition(mime):
 
 
 def _headers(rule, how="inline"):
-    return {"Content-Security-Policy": rule, "Cross-Origin-Resource-Policy": "cross-origin",
-            "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff",
-            "Cache-Control": "private, no-cache", "Content-Disposition": how}
+    return {
+        "Content-Security-Policy": rule,
+        "Cross-Origin-Resource-Policy": "cross-origin",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, no-cache",
+        "Content-Disposition": how,
+    }

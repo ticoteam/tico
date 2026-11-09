@@ -5,6 +5,7 @@ a proxy token where the key would be (the credential's own variable). The token'
 variable holding it is found by reading them; they are not secret, and only the server can check the signature. The
 token goes as Bearer, which the proxy accepts for every auth scheme and replaces with the real key.
 """
+
 import base64
 import json
 import os
@@ -16,6 +17,9 @@ import urllib.request
 TOKEN_PREFIX = "tpx1."
 MAX_ANSWER = 1_000_000
 TIMEOUT = 130
+# Cloudflare in front of Tico refuses Python's default User-Agent (error 1010, "browser signature banned") before the
+# proxy sees the call, as clients/hermes_agent.py notes. Seen live on Tico Team: hub_tool_call to Sentry got that 403.
+USER_AGENT = "tico-tool-call/1"
 
 
 class CallError(Exception):
@@ -36,7 +40,7 @@ def url_env(tool):
 
 def _tool_of(token):
     try:
-        body = token[len(TOKEN_PREFIX):].split(".", 1)[0]
+        body = token[len(TOKEN_PREFIX) :].split(".", 1)[0]
         return json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))).get("t")
     except (ValueError, AttributeError):
         return None
@@ -48,8 +52,10 @@ def find(tool, environ=None):
     address = environ.get(url_env(tool), "")
     if not address:
         have = sorted(k for k in environ if k.startswith("TICO_TOOL_") and k.endswith("_URL"))
-        raise CallError(f"{tool} is not a proxied tool in this run" +
-                        (f" (this run has {', '.join(have)})" if have else " (this run has none)"))
+        raise CallError(
+            f"{tool} is not a proxied tool in this run"
+            + (f" (this run has {', '.join(have)})" if have else " (this run has none)")
+        )
     wanted = address.rstrip("/").rsplit("/", 1)[-1]
     for value in environ.values():
         if value.startswith(TOKEN_PREFIX) and _tool_of(value) == urllib.parse.unquote(wanted):
@@ -69,7 +75,7 @@ def call(tool, method, path, data=None, query=(), environ=None):
         pairs.append((key, value))
     if pairs:
         url += ("&" if "?" in url else "?") + urllib.parse.urlencode(pairs)
-    headers = {"Authorization": "Bearer " + token, "Accept": "application/json, */*"}
+    headers = {"Authorization": "Bearer " + token, "Accept": "application/json, */*", "User-Agent": USER_AGENT}
     body = None
     if data is not None:
         body = (data if isinstance(data, str) else json.dumps(data)).encode()
@@ -79,7 +85,8 @@ def call(tool, method, path, data=None, query=(), environ=None):
         with urllib.request.build_opener(_NoRedirect).open(request, timeout=TIMEOUT) as answer:
             status, kind, raw = answer.status, answer.headers.get("content-type", ""), answer.read(MAX_ANSWER + 1)
     except urllib.error.HTTPError as answer:
-        status, kind, raw = answer.code, answer.headers.get("content-type", ""), answer.read(MAX_ANSWER + 1)
+        with answer:
+            status, kind, raw = answer.code, answer.headers.get("content-type", ""), answer.read(MAX_ANSWER + 1)
     except (urllib.error.URLError, OSError) as exc:
         raise CallError(f"The Tico tool proxy did not answer: {exc}") from None
     cut = len(raw) > MAX_ANSWER

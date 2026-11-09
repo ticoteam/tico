@@ -7,6 +7,7 @@ update. Anything else keeper wrote is a plain system line.
 
 This module changes what people see only. Who wakes a bot, what is delivered and the stored actor stay as they are.
 """
+
 import functools
 import json
 import re
@@ -15,7 +16,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 
 KEEPER = "keeper"
-ASSISTANT_FOR = "assistant-for"          # refs.source of a keeper message the Assistant wrote for a person
+ASSISTANT_FOR = "assistant-for"  # refs.source of a keeper message the Assistant wrote for a person
 TASK_UPDATE = "Task update"
 ASSISTANT_DEFAULT = "Assistant"
 
@@ -63,12 +64,15 @@ def scope():
 
 def scoped(key):
     """A decorator: every keeper write the function makes says `key` (see writing_as)."""
+
     def wrap(fn):
         @functools.wraps(fn)
         def inner(*args, **kwargs):
             with writing_as(key):
                 return fn(*args, **kwargs)
+
         return inner
+
     return wrap
 
 
@@ -144,8 +148,13 @@ def message_source(names, message, assistant=None):
     """The `source` of a message row (sender_id, refs). `names` maps actor ids (`human:`, `bot:`), `automation:<id>`
     and a person's id (`refs.for`) to display names; a name left out reads as blank, which is how a person the reader
     may not see is hidden."""
-    return _source(names, message.get("sender_id"), message.get("refs"),
-                   assistant_name() if assistant is None else assistant, message=True)
+    return _source(
+        names,
+        message.get("sender_id"),
+        message.get("refs"),
+        assistant_name() if assistant is None else assistant,
+        message=True,
+    )
 
 
 def actor_source(names, actor, data=None, assistant=None):
@@ -184,15 +193,17 @@ AUTOMATION_KEY = re.compile(r"^automation:(.+)$")
 def lookup(c, ids):
     """{actor id or automation key: display name} for these ids. A name the store does not know is left out."""
     from .names import lookup as actor_names
+
     ids = set(ids)
     out = actor_names(c, {i for i in ids if i.startswith(("human:", "bot:"))}) if ids else {}
     found = sorted({m.group(1) for m in (AUTOMATION_KEY.match(i) for i in ids) if m})
     for start in range(0, len(found), 500):
-        part = found[start:start + 500]
+        part = found[start : start + 500]
         try:
-            rows = c.execute("SELECT id, name FROM automations WHERE id IN (%s)" % ",".join("?" * len(part)),
-                             part).fetchall()
-        except sqlite3.Error:     # an install without the automations table labels them plainly
+            rows = c.execute(
+                "SELECT id, name FROM automations WHERE id IN (%s)" % ",".join("?" * len(part)), part
+            ).fetchall()
+        except sqlite3.Error:  # an install without the automations table labels them plainly
             rows = []
         for row in rows:
             out[automation_key(row[0])] = (row[1] or "").strip()

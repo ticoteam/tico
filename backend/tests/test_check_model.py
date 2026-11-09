@@ -16,7 +16,12 @@ def test_the_owners_order_wins_and_the_authors_provider_is_skipped():
     assert record["check_models"] == ["grok", "codex:gpt-6.1-sol"]
     assert P.normalize_check_models("grok, grok", COMPANY) == ["grok"]
     # The rest of the enabled providers follow the owner's order; a model named twice counts once.
-    assert [row["model"] for row in P.check_order(record)] == ["grok-4.6", "gpt-6.1-sol", "claude-opus-5-5", "gpt-6-luna"]
+    assert [row["model"] for row in P.check_order(record)] == [
+        "grok-4.6",
+        "gpt-6.1-sol",
+        "claude-opus-5-5",
+        "gpt-6-luna",
+    ]
     assert P.check_choice(record, "anthropic")["model"] == "grok-4.6"
     assert P.check_choice(record, "grok-4.6") == {"runtime": "codex", "model": "gpt-6.1-sol", "provider": "openai"}
     # Grok is not signed in on any computer: the next in order.
@@ -42,16 +47,22 @@ def test_stale_entries_are_skipped_and_never_fail_a_save():
     # A company default retired since it was saved is no check model; its provider's current one stands in.
     retired = P._record({**COMPANY, "model": "claude-opus-5"})
     assert [row["model"] for row in P.check_order(retired)][0] == "claude-opus-5-5"
-    assert [row["model"] for row in P.check_order(P._record({**retired, "check_models": ["claude", "grok"]}))][:2] == \
-        ["claude-opus-5-5", "grok-4.6"]
+    assert [row["model"] for row in P.check_order(P._record({**retired, "check_models": ["claude", "grok"]}))][:2] == [
+        "claude-opus-5-5",
+        "grok-4.6",
+    ]
     assert P.normalize_check_models(["claude"], retired) == ["claude"]
     # A current company default leads its provider's place in the order, not the recommended model.
     assert P.check_order(P._record({**COMPANY, "model": "claude-sonnet-5-5"}))[0]["model"] == "claude-sonnet-5-5"
     off = {"enabled": ["anthropic", "openai"], "runtime": "claude", "model": "claude-opus-5-5"}
-    assert P.normalize_check_models(["grok", "codex:gpt-6-sol"], off, saved=record["check_models"]) == \
-        ["grok", "codex:gpt-6-sol"]
+    assert P.normalize_check_models(["grok", "codex:gpt-6-sol"], off, saved=record["check_models"]) == [
+        "grok",
+        "codex:gpt-6-sol",
+    ]
     assert "grok-4.6" not in [row["model"] for row in P.check_order(P._record({**off, "check_models": ["grok"]}))]
-    alone = P._record({"enabled": ["anthropic"], "runtime": "claude", "model": "claude-opus-5-5", "check_models": ["grok"]})
+    alone = P._record(
+        {"enabled": ["anthropic"], "runtime": "claude", "model": "claude-opus-5-5", "check_models": ["grok"]}
+    )
     # Another provider is preferred, not required: with only the author's own on, it checks the work.
     assert P.check_choice(alone, "claude")["provider"] == "anthropic"
     with pytest.raises(P.ProviderError) as refused:
@@ -68,9 +79,11 @@ def test_a_new_choice_the_company_cannot_run_is_refused(choice):
 
 def save(api, enabled=COMPANY["enabled"], **extra):
     view = get(api, "providers")
-    return api.put("/api/v2/providers", json={"enabled": enabled, "model": COMPANY["model"],
-                                               "expected_revision": view["revision"], **extra},
-                   headers={"Authorization": "Bearer ana-test", "Idempotency-Key": H.new_id()})
+    return api.put(
+        "/api/v2/providers",
+        json={"enabled": enabled, "model": COMPANY["model"], "expected_revision": view["revision"], **extra},
+        headers={"Authorization": "Bearer ana-test", "Idempotency-Key": H.new_id()},
+    )
 
 
 def test_the_owner_saves_the_order_and_turning_a_listed_provider_off_still_saves(api):
@@ -86,5 +99,7 @@ def test_the_owner_saves_the_order_and_turning_a_listed_provider_off_still_saves
     assert refused.status_code == 422
     assert refused.json()["error"]["detail"] == "Check model 'gemini': its provider (google) is not enabled"
     with api.app.state.store.read() as c:
-        event = c.execute("SELECT detail FROM events WHERE action='providers.updated' ORDER BY created_at DESC LIMIT 1").fetchone()
+        event = c.execute(
+            "SELECT detail FROM events WHERE action='providers.updated' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
     assert '"check_models"' in event[0]

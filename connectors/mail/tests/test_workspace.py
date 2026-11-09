@@ -5,6 +5,7 @@ no key file and the runner gave this process its way to the server, the Google W
 server refuses a mailbox it does not cover with a 403 whose kind mint-token prints as error_kind. A refusal never falls
 back to another credential.
 """
+
 import contextlib
 import http.server
 import io
@@ -27,21 +28,25 @@ from connectors.mail import calendar as cal
 from runner_support import credential_socket
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import fake                                                  # noqa: E402
+import fake  # noqa: E402
 
 # Imported before any test runs: unittest's patch.dict(sys.modules) drops modules first imported during a test, and
 # importing cryptography's native module a second time in one process breaks its key serialization.
 try:
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
-except ImportError:             # the mail suite runs without it: the key file then holds a placeholder, read by path only
+except ImportError:  # the mail suite runs without it: the key file then holds a placeholder, read by path only
     serialization = rsa = None
 
 GMAIL = auth.SERVICE_SCOPES["gmail"]
 CALENDAR = auth.SERVICE_SCOPES["calendar"]
 GRANTED = oauth.SERVICE_SCOPES["gmail"] + oauth.SERVICE_SCOPES["calendar"]
-REFUSED = {"eve@acme.example": "not_this_mailbox", "ben@acme.example": "personal_grant",
-           "cal@acme.example": "workspace_owned", "dan@acme.example": "not_connected"}
+REFUSED = {
+    "eve@acme.example": "not_this_mailbox",
+    "ben@acme.example": "personal_grant",
+    "cal@acme.example": "workspace_owned",
+    "dan@acme.example": "not_connected",
+}
 
 
 class RefreshError(Exception):
@@ -54,10 +59,19 @@ class TransportError(Exception):
 
 class FakeCredentials:
     """google.oauth2.credentials.Credentials: refresh() answers as the test says."""
+
     refresh_error = None
 
-    def __init__(self, token=None, refresh_token=None, token_uri=None, client_id=None, client_secret=None,
-                 scopes=None, expiry=None):
+    def __init__(
+        self,
+        token=None,
+        refresh_token=None,
+        token_uri=None,
+        client_id=None,
+        client_secret=None,
+        scopes=None,
+        expiry=None,
+    ):
         self.token, self.refresh_token, self.scopes, self.expiry = token, refresh_token, scopes, expiry
         self.client_id = client_id
 
@@ -69,6 +83,7 @@ class FakeCredentials:
 
 class ServiceAccount:
     """google.oauth2.service_account.Credentials: the key file's credential, acting as one mailbox at a time."""
+
     loaded = []
 
     @classmethod
@@ -81,10 +96,19 @@ class ServiceAccount:
 
 
 def google_modules():
-    modules = {name: types.ModuleType(name) for name in (
-        "google", "google.auth", "google.auth.exceptions", "google.auth.transport",
-        "google.auth.transport.requests", "google.oauth2", "google.oauth2.credentials",
-        "google.oauth2.service_account")}
+    modules = {
+        name: types.ModuleType(name)
+        for name in (
+            "google",
+            "google.auth",
+            "google.auth.exceptions",
+            "google.auth.transport",
+            "google.auth.transport.requests",
+            "google.oauth2",
+            "google.oauth2.credentials",
+            "google.oauth2.service_account",
+        )
+    }
     modules["google.auth.exceptions"].RefreshError = RefreshError
     modules["google.auth.exceptions"].TransportError = TransportError
     modules["google.auth.transport.requests"].Request = lambda: None
@@ -142,19 +166,44 @@ class Base(unittest.TestCase):
         """A key file in the shape Google gives, with a throwaway generated RSA key; it is read by path, never sent anywhere."""
         pem = "-----BEGIN PRIVATE KEY-----\ntest-only placeholder\n-----END PRIVATE KEY-----\n"
         if rsa is not None:
-            pem = rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
-                serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode()
-        self.key.write_text(json.dumps({
-            "type": "service_account", "project_id": "acme-hub", "private_key_id": "k1",
-            "private_key": pem, "client_email": "tico-mail@acme-hub.example.iam.gserviceaccount.com",
-            "client_id": "100000000000000000001", "token_uri": oauth.TOKEN_URI}))
+            pem = (
+                rsa.generate_private_key(public_exponent=65537, key_size=2048)
+                .private_bytes(
+                    serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+                )
+                .decode()
+            )
+        self.key.write_text(
+            json.dumps(
+                {
+                    "type": "service_account",
+                    "project_id": "acme-hub",
+                    "private_key_id": "k1",
+                    "private_key": pem,
+                    "client_email": "tico-mail@acme-hub.example.iam.gserviceaccount.com",
+                    "client_id": "100000000000000000001",
+                    "token_uri": oauth.TOKEN_URI,
+                }
+            )
+        )
         self.key.chmod(0o600)
 
     def write_grant(self, mailbox="ana@acme.example"):
         """A person's own connected account, as oauth.save keeps it."""
-        oauth.save({"grants": {mailbox: {
-            "refresh_token": "1//refresh-secret", "client_id": "123.apps.googleusercontent.com",
-            "client_secret": "client-secret-value", "token_uri": oauth.TOKEN_URI, "scopes": GRANTED}}}, self.grants)
+        oauth.save(
+            {
+                "grants": {
+                    mailbox: {
+                        "refresh_token": "1//refresh-secret",
+                        "client_id": "123.apps.googleusercontent.com",
+                        "client_secret": "client-secret-value",
+                        "token_uri": oauth.TOKEN_URI,
+                        "scopes": GRANTED,
+                    }
+                }
+            },
+            self.grants,
+        )
 
 
 class CredentialOrder(Base):
@@ -167,7 +216,7 @@ class CredentialOrder(Base):
         self.write_key()
         creds = self.credentials()
         self.assertEqual(creds.token, "ya29.refreshed")
-        self.assertEqual(creds._tico_granted, oauth.SERVICE_SCOPES["gmail"])   # the Gmail scopes only, not calendar
+        self.assertEqual(creds._tico_granted, oauth.SERVICE_SCOPES["gmail"])  # the Gmail scopes only, not calendar
         self.assertEqual(self.server.calls, [])
         self.assertEqual(ServiceAccount.loaded, [])
 
@@ -193,8 +242,10 @@ class CredentialOrder(Base):
         self.with_registration()
         creds = self.credentials()
         self.assertEqual(creds.token, "ya29.workspace")
-        self.assertEqual(self.server.calls, [("connectors/mail/workspace/token",
-                                              {"mailbox": "ana@acme.example", "service": "gmail"})])
+        self.assertEqual(
+            self.server.calls,
+            [("connectors/mail/workspace/token", {"mailbox": "ana@acme.example", "service": "gmail"})],
+        )
         self.assertEqual(creds._tico_granted, GMAIL)
         self.assertEqual(ServiceAccount.loaded, [])
         self.assertFalse(self.key.exists())
@@ -281,8 +332,14 @@ class TokenRoute(http.server.BaseHTTPRequestHandler):
         kind = REFUSED.get(body.get("mailbox"))
         if kind:
             return self.reply(403, {"error": {"code": kind, "detail": f"refused {body['mailbox']}"}})
-        return self.reply(200, {"access_token": "ya29.workspace-" + body["mailbox"].split("@")[0],
-                                "expiry": "2026-10-16T01:00:00Z", "scopes": list(auth.SERVICE_SCOPES[body["service"]])})
+        return self.reply(
+            200,
+            {
+                "access_token": "ya29.workspace-" + body["mailbox"].split("@")[0],
+                "expiry": "2026-10-16T01:00:00Z",
+                "scopes": list(auth.SERVICE_SCOPES[body["service"]]),
+            },
+        )
 
     def reply(self, status, payload):
         data = json.dumps(payload).encode()
@@ -308,10 +365,15 @@ class MintTokenOverTheServer(Base):
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         self.httpd = httpd
         # The local stub must be reached directly, never through a proxy the runner or CI sets.
-        env = patch.dict(os.environ, {
-            oauth.BROKER_URL_ENV: f"http://127.0.0.1:{httpd.server_address[1]}",
-            oauth.BROKER_AUTH_ENV: "runner-token", "NO_PROXY": "127.0.0.1,localhost",
-            "no_proxy": "127.0.0.1,localhost"})
+        env = patch.dict(
+            os.environ,
+            {
+                oauth.BROKER_URL_ENV: f"http://127.0.0.1:{httpd.server_address[1]}",
+                oauth.BROKER_AUTH_ENV: "runner-token",
+                "NO_PROXY": "127.0.0.1,localhost",
+                "no_proxy": "127.0.0.1,localhost",
+            },
+        )
         env.start()
         self.addCleanup(env.stop)
 
@@ -325,10 +387,17 @@ class MintTokenOverTheServer(Base):
         code, out, err = self.mint("ana@acme.example")
         self.assertEqual(code, 0, err)
         printed = json.loads(out)
-        self.assertEqual(printed, {"token": "ya29.workspace-ana", "expiry": "2026-10-16T01:00:00",
-                                   "scopes": GMAIL})
-        self.assertEqual(self.httpd.seen, [("/api/v2/connectors/mail/workspace/token", "Bearer runner-token",
-                                            {"mailbox": "ana@acme.example", "service": "gmail"})])
+        self.assertEqual(printed, {"token": "ya29.workspace-ana", "expiry": "2026-10-16T01:00:00", "scopes": GMAIL})
+        self.assertEqual(
+            self.httpd.seen,
+            [
+                (
+                    "/api/v2/connectors/mail/workspace/token",
+                    "Bearer runner-token",
+                    {"mailbox": "ana@acme.example", "service": "gmail"},
+                )
+            ],
+        )
         self.assertNotIn("runner-token", out + err)
         self.assertFalse(self.key.exists())
 
@@ -355,9 +424,12 @@ class WorkspaceCalendarWrites(Base):
         def build(api, version, credentials=None, **_options):
             self.built.append((api, version, credentials))
             return self.google
+
         discovery.build = build
-        modules = patch.dict(sys.modules, {"googleapiclient": types.ModuleType("googleapiclient"),
-                                           "googleapiclient.discovery": discovery})
+        modules = patch.dict(
+            sys.modules,
+            {"googleapiclient": types.ModuleType("googleapiclient"), "googleapiclient.discovery": discovery},
+        )
         modules.start()
         self.addCleanup(modules.stop)
 
@@ -373,8 +445,10 @@ class WorkspaceCalendarWrites(Base):
 
     def test_a_workspace_token_for_calendar_adds_and_deletes_events_directly(self):
         service = auth.calendar_service("ana@acme.example")
-        self.assertEqual(self.server.calls[-1], ("connectors/mail/workspace/token",
-                                                 {"mailbox": "ana@acme.example", "service": "calendar"}))
+        self.assertEqual(
+            self.server.calls[-1],
+            ("connectors/mail/workspace/token", {"mailbox": "ana@acme.example", "service": "calendar"}),
+        )
         self.assertEqual(service._tico_granted, CALENDAR)
         self.assertEqual(self.built[0][2].token, "ya29.workspace")
         self.add_then_delete(service)
@@ -386,7 +460,9 @@ class WorkspaceCalendarWrites(Base):
         with patch.object(credential_socket, "request_mail", return_value=reply) as request:
             service = auth.calendar_service("ana@acme.example")
         self.assertEqual(request.call_args.args[2:], ("calendar", "ana@acme.example"))
-        self.assertEqual(self.server.calls, [], "the turn takes the supervisor's token, not its own request to the server")
+        self.assertEqual(
+            self.server.calls, [], "the turn takes the supervisor's token, not its own request to the server"
+        )
         self.assertEqual(service._tico_granted, CALENDAR)
         self.assertEqual(self.built[0][2].token, "ya29.workspace")
         self.add_then_delete(service)
@@ -395,13 +471,17 @@ class WorkspaceCalendarWrites(Base):
         os.environ[auth.SOCKET_ENV] = "/run/tico/credential.sock"
         os.environ["HUB_TOKEN"] = "synthetic-token"
         read_only = [oauth.G + "calendar.events.readonly", oauth.G + "calendar.freebusy"]
-        with patch.object(credential_socket, "request_mail",
-                          return_value={"token": "ya29.read", "expiry": "", "scopes": read_only}):
+        with patch.object(
+            credential_socket, "request_mail", return_value={"token": "ya29.read", "expiry": "", "scopes": read_only}
+        ):
             service = auth.calendar_service("ana@acme.example")
         calendar = cal.Calendar(service, "ana@acme.example")
         with self.assertRaises(Refused) as caught:
-            calendar.create_event(datetime(2026, 11, 4, 10, 0, tzinfo=timezone.utc),
-                                  datetime(2026, 11, 4, 10, 30, tzinfo=timezone.utc), "Intro call")
+            calendar.create_event(
+                datetime(2026, 11, 4, 10, 0, tzinfo=timezone.utc),
+                datetime(2026, 11, 4, 10, 30, tzinfo=timezone.utc),
+                "Intro call",
+            )
         self.assertIn("read-only at Google", caught.exception.msg)
         self.assertEqual(self.google.created_events, {})
 

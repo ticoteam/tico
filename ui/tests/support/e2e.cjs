@@ -127,7 +127,8 @@ async function drawn(page, selector, ready, what) {
   }, what);
 }
 
-// Journey runner: `pass({hub, browser, phone, tag})` on a phone, then on a desktop, each on a fresh hub.
-const journey = (name, pass, seeds = SEEDS) => run(name, seeds, pass);
+// Journey runner: `pass({hub, browser, phone, tag})` on a phone, then on a desktop, each on a fresh hub (`{only: 'phone'}`
+// or `{only: 'desktop'}` as the last argument runs one viewport; see support/redesign-e2e.cjs).
+const journey = (name, pass, seeds = SEEDS, options) => run(name, seeds, pass, options);
 
 module.exports = {journey, open, watch, expectFailure, expectError, assertClean, call, must, go, shot, sideways, t, until, drawn, SEEDS};

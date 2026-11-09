@@ -1,0 +1,14 @@
+﻿2026-11-08T12:47:24.1363393Z Current runner version: '2.338.2'
+2026-11-08T12:47:24.1389773Z ##[group]Runner Image Provisioner
+2026-11-08T12:53:25.8998229Z       page.waitForFunction: Timeout 30000ms exceeded.
+2026-11-08T12:53:25.8998964Z           at recheckSaves (/home/runner/work/tico/tico/ui/tests/tasks-page.cjs:1445:14)
+2026-11-08T12:53:25.8999653Z           at async /home/runner/work/tico/tico/ui/tests/tasks-page.cjs:1684:41 {
+2026-11-08T12:53:25.9000397Z         log: [],
+2026-11-08T12:53:25.9000851Z         name: 'TimeoutError'
+2026-11-08T12:53:25.9001292Z       }
+2026-11-08T12:53:25.9001493Z 
+2026-11-08T12:53:44.5963147Z ok    visual-cards.cjs (66.0s)
+2026-11-08T12:53:44.5963708Z 
+2026-11-08T12:53:44.5964566Z 1 of 32 UI scripts failed: tasks-page.cjs (all 32 took 180s)
+2026-11-08T12:53:44.6125804Z ##[error]Process completed with exit code 1.
+2026-11-08T12:53:44.6211169Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

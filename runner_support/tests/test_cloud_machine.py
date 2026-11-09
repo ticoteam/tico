@@ -1,5 +1,6 @@
 """The base image step and the enroll-at-boot step of a cloud machine, a bot's own or the shared one
 (runner_support/cloud_machine.py)."""
+
 import json
 import os
 import shutil
@@ -62,8 +63,17 @@ def machine(tmp_path):
 
     def make(**kw):
         fake = Fake(home, **kw)
-        m = cm.Machine(user="user", home=home, uid=os.getuid(), gid=os.getgid(), root=root, run=fake,
-                       say=said.append, sleep=lambda s: None, etc=etc)
+        m = cm.Machine(
+            user="user",
+            home=home,
+            uid=os.getuid(),
+            gid=os.getgid(),
+            root=root,
+            run=fake,
+            say=said.append,
+            sleep=lambda s: None,
+            etc=etc,
+        )
         return m, fake
 
     make.home, make.etc, make.said = home, etc, said
@@ -73,7 +83,8 @@ def machine(tmp_path):
 def boat_bashrc(home):
     (home / ".bashrc").write_text(
         "alias ll='ls -l'\n# >>> boat managed env >>>\n"
-        f"export TICO_ENROLL_TOKEN='{CODE}'\nexport TICO_HUB_URL={HUB}\nexport BOAT_ID=sb_1\n# <<< boat managed env <<<\n")
+        f"export TICO_ENROLL_TOKEN='{CODE}'\nexport TICO_HUB_URL={HUB}\nexport BOAT_ID=sb_1\n# <<< boat managed env <<<\n"
+    )
     (home / ".bashrc").chmod(0o640)
 
 
@@ -120,7 +131,7 @@ def test_a_lost_answer_is_retried_with_the_same_code_and_a_dead_server_leaves_it
     assert cm.boot(m2, {}) == 1
     assert len(fake2.named("enroll")) == cm.ATTEMPTS
     assert all(not f.exists() for f in fake2.code_files)
-    assert CODE in (machine.home / ".bashrc").read_text()   # kept: systemd runs the next try with it
+    assert CODE in (machine.home / ".bashrc").read_text()  # kept: systemd runs the next try with it
     assert not any(CODE in line for line in machine.said)
 
 
@@ -219,8 +230,12 @@ def test_the_sources_are_written_only_once_their_keys_are_on_disk(machine, tmp_p
             seen.append(("key", sorted(p.name for p in sources.glob("*.sources")) if sources.exists() else []))
             Path(command[command.index("-o") + 1]).write_text("key")
         elif "install" in command and "nodejs" in command:
-            listed = [line.split("Signed-By: ")[1] for f in sources.glob("*.sources")
-                      for line in f.read_text().splitlines() if line.startswith("Signed-By: ")]
+            listed = [
+                line.split("Signed-By: ")[1]
+                for f in sources.glob("*.sources")
+                for line in f.read_text().splitlines()
+                if line.startswith("Signed-By: ")
+            ]
             assert listed and all(Path(key).exists() for key in listed)
         return fake(command, **kw)
 
@@ -229,9 +244,13 @@ def test_the_sources_are_written_only_once_their_keys_are_on_disk(machine, tmp_p
     both = ["google-chrome.sources", "nodesource.sources"]
     assert seen == [("update", []), ("key", []), ("key", []), ("update", both)]
     steps = [what for what, _ in cm.tool_commands("x86_64", apt)]
-    assert steps.index("curl and ca-certificates") < steps.index("the apt keyring directory") \
-        < steps.index("NodeSource's signing key") < steps.index("the apt sources of NodeSource and Google") \
+    assert (
+        steps.index("curl and ca-certificates")
+        < steps.index("the apt keyring directory")
+        < steps.index("NodeSource's signing key")
+        < steps.index("the apt sources of NodeSource and Google")
         < steps.index("the package lists with the new repositories")
+    )
 
 
 def test_base_installs_the_tools_as_root_before_the_marker(machine, tmp_path):
@@ -255,8 +274,14 @@ def test_a_failed_tool_step_refuses_the_base_and_writes_no_marker(machine, tmp_p
 
     m.run = run
     with pytest.raises(cm.Refused, match="installing the package lists|xvfb|installing"):
-        cm.base(m, release="0.5.7", sudoers=tmp_path / "sudoers", unit_dir=tmp_path / "units",
-                apt=tmp_path / "apt", arch="x86_64")
+        cm.base(
+            m,
+            release="0.5.7",
+            sudoers=tmp_path / "sudoers",
+            unit_dir=tmp_path / "units",
+            apt=tmp_path / "apt",
+            arch="x86_64",
+        )
     assert not cm.marker_path(machine.etc).exists() and not fake.named("loginctl")
 
 
@@ -264,8 +289,14 @@ def test_base_gives_sudo_and_the_boot_service_only_on_the_machine_it_prepares(ma
     m, fake = machine()
     with pytest.raises(cm.Refused):
         cm.base(m, release="", sudoers=tmp_path / "sudoers", unit_dir=tmp_path / "units")
-    cm.base(m, release="0.5.7", sudoers=tmp_path / "sudoers", unit_dir=tmp_path / "units", apt=tmp_path / "apt",
-            arch="x86_64")
+    cm.base(
+        m,
+        release="0.5.7",
+        sudoers=tmp_path / "sudoers",
+        unit_dir=tmp_path / "units",
+        apt=tmp_path / "apt",
+        arch="x86_64",
+    )
     sudoers = tmp_path / "sudoers"
     assert "user ALL=(ALL) NOPASSWD:ALL" in sudoers.read_text() and oct(sudoers.stat().st_mode & 0o777) == "0o440"
     assert ["loginctl", "enable-linger", "user"] in fake.calls
@@ -287,8 +318,11 @@ def test_base_gives_sudo_and_the_boot_service_only_on_the_machine_it_prepares(ma
 def test_the_boot_units_command_runs_through_the_runner_forwarder():
     # What the saved unit starts, `python -m runner.cloud_machine boot`, reaches runner_support's boot (--help: no root).
     root = Path(__file__).resolve().parents[2]
-    old, new = (subprocess.run([sys.executable, "-m", module, "boot", "--help"], cwd=root,
-                               capture_output=True, text=True, timeout=60)
-                for module in ("runner.cloud_machine", "runner_support.cloud_machine"))
+    old, new = (
+        subprocess.run(
+            [sys.executable, "-m", module, "boot", "--help"], cwd=root, capture_output=True, text=True, timeout=60
+        )
+        for module in ("runner.cloud_machine", "runner_support.cloud_machine")
+    )
     assert old.returncode == new.returncode == 0, old.stderr
     assert old.stdout == new.stdout and "boot" in old.stdout

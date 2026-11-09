@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/postal_mail.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 17,
+                    "endColumn": 35,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

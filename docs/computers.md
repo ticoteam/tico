@@ -14,7 +14,7 @@ reports an app-salted hash of the OS device identity; the raw identity stays on 
 **Settings → Models** holds the company's model settings:
 
 - **Subscriptions**: the company's Claude and ChatGPT plans and API keys, each given to the computers that use it.
-- **Tico Gateway**: one switch, **Use when a computer has no subscription, or a plan runs out**. The
+- **Tico Gateway**: one switch, **Use as fallback** (used when a computer has no subscription, or a plan runs out). The
   [Tico AI Gateway](ai-gateway.md) key, address and spend are under **Advanced**.
 - **Defaults**: **Default model**, **Decisions**, **Meeting model**, **Fall back when a plan runs out** and **Check model**.
 - **Limits**: the [company turn levels](#change-the-company-turn-levels).
@@ -76,6 +76,14 @@ a lane or login releases only the start reservation; continuing requires a fresh
 take the last start reservation together. Codex's shared ChatGPT login does not normally queue turns
 ([sharing a sign-in](#bots-sharing-one-chatgpt-sign-in-run-side-by-side)).
 
+### Builds at once
+
+A turn on a task that has a worktree on its computer is a build: its checkout and setup use a lot of disk. A computer
+runs at most one build per 15 GB of disk it reports, at least two and never more than its turn limit (51 GB gives 3,
+157 GB gives 10; 4 when it has not reported its disk). A build past that waits as **waiting: builds at once**, and
+starts by itself when one of the computer's builds ends. Turns with no repo work are not held by this, and nothing is
+set in the app. Worktrees are described in [Task worktrees](worktrees.md).
+
 A starting turn reserves a place for up to **3 minutes (180 seconds)**, including active Git and runtime preparation.
 Keeping that preparation active does not extend the deadline. If the turn has not started, its place is released and
 its work returns to the queue without changing the task. After 10 missed starts for one job within the last 24 hours,
@@ -119,7 +127,7 @@ for its turns. Upgraded runners opt in after a successful heartbeat and keep the
 
 ### The turn fixer
 
-A built-in system routine, **Turn fixer**, checks every computer every 10 seconds. It is plain code: no AI and no
+A [Heartbeat](heartbeat.md) step, **Turn fixer**, checks every computer on every beat (every 10 seconds by default). It is plain code: no AI and no
 cost. It frees only turns that are proven dead: a start a person stopped, or a turn whose lease is lost and whose
 computer no longer runs its bot (the computer was removed, or its latest claim does not list the bot). A slow reply or
 a healthy wait keeps its place. The task and its history stay, and the task gets a note: **Tico freed a dead start,

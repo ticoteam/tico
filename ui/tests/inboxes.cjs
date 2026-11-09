@@ -1,4 +1,4 @@
-// Offline browser regression: the inbox kinds under Tools (ui/app/inboxes.js and its kind files) over fakes of every
+// Offline browser regression: the inbox kinds under Tools (ui/app/inboxes.ts and its kind files) over fakes of every
 // kind's routes (ui/tests/support/mailboxes-fake.cjs). The old Settings > Inboxes, Mailboxes, Email & Phone, Mail and
 // Google addresses open their Tools pages. Tools › Settings has a section a channel with every setting, and Coming soon
 // where another change fills it; What Tico may do never loses a pending save to an older read. Add tool > Email (Google)
@@ -205,7 +205,7 @@ const scenarios = {
     const fake = mailboxesFake();
     const {page, seen} = await open(browser, fake, googleFake(), {ready: '#tools-root [data-tl-add]'});
     await page.locator('[data-tl-add] > summary').click();
-    assert.deepEqual(await page.locator('[data-tl-add-item]').allTextContents(), ['API', 'Email (Google)', 'Tico address', 'Phone number', 'Mailing address']);
+    assert.deepEqual(await page.locator('[data-tl-add-item]').allTextContents(), ['API', 'Email (Google)', 'Tico address', 'Phone number', 'Mailing address', 'Outgoing webhook']);
     await page.locator('[data-tl-add-item="kind:mailbox"]').click();
     const dialog = page.locator('dialog.mb-dialog');
     await dialog.locator('[name=address]').fill('ana@acme.example');

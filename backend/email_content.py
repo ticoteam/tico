@@ -13,10 +13,12 @@ from .store import Problem
 
 MAX_RAW = 24 * 1024 * 1024
 MAX_PREVIEW = 256 * 1024
-TEXT_MARKUP = frozenset("a abbr address article aside b big blockquote body br caption center cite code col colgroup "
-                        "dd del div dl dt em figcaption figure footer h1 h2 h3 h4 h5 h6 head header hr html i ins kbd "
-                        "li main mark nav ol p pre q rp rt ruby s samp section small span strong sub summary sup "
-                        "table tbody td tfoot th thead title tr tt u ul var wbr".split())
+TEXT_MARKUP = frozenset(
+    "a abbr address article aside b big blockquote body br caption center cite code col colgroup "
+    "dd del div dl dt em figcaption figure footer h1 h2 h3 h4 h5 h6 head header hr html i ins kbd "
+    "li main mark nav ol p pre q rp rt ruby s samp section small span strong sub summary sup "
+    "table tbody td tfoot th thead title tr tt u ul var wbr".split()
+)
 TEXT_ATTRIBUTES = frozenset(("alt", "title", "href", "src", "value", "label", "placeholder", "aria-label"))
 
 
@@ -39,7 +41,12 @@ class VisibleHTML(HTMLParser):
             self.ignored += 1
         if not self.ignored:
             self.text.append("\n")
-            self.text.extend(value for name, value in attrs if name in ("alt", "title", "href", "src", "style", "value", "label", "placeholder", "aria-label") and value)
+            self.text.extend(
+                value
+                for name, value in attrs
+                if name in ("alt", "title", "href", "src", "style", "value", "label", "placeholder", "aria-label")
+                and value
+            )
 
     def handle_endtag(self, tag):
         if tag == "script" and self.ignored:
@@ -121,18 +128,28 @@ def snapshot(raw, mailbox):
         for key in ("from", "sender", "reply-to", "to", "cc", "bcc", "subject", "in-reply-to", "references"):
             if len(msg.get_all(key, [])) > 1:
                 raise ValueError("Ambiguous repeated header")
-        to = sorted({a.lower() for _, a in getaddresses(msg.get_all("to", []) + msg.get_all("cc", [])
-                                                      + msg.get_all("bcc", [])) if a})
+        to = sorted(
+            {
+                a.lower()
+                for _, a in getaddresses(msg.get_all("to", []) + msg.get_all("cc", []) + msg.get_all("bcc", []))
+                if a
+            }
+        )
         sender = [a.lower() for _, a in getaddresses(msg.get_all("from", []))]
         from .mail_settings import ADDRESS
+
         if not to or len(to) > 100 or sender != [mailbox] or any(not ADDRESS.fullmatch(a) for a in to):
             raise ValueError("Invalid envelope")
         bodies, files, texts, visible = body_parts(msg), [], [], []
         complete = all(not body.is_multipart() for body in bodies)
         leaves = file_parts(msg)
         attachments = attachment_parts(msg)
-        attached_children = {id(child) for parent in leaves if parent.is_multipart() and id(parent) in attachments
-                             for child in list(parent.walk())[1:]}
+        attached_children = {
+            id(child)
+            for parent in leaves
+            if parent.is_multipart() and id(parent) in attachments
+            for child in list(parent.walk())[1:]
+        }
         for index, part in enumerate(leaves):
             for key in ("content-type", "content-disposition", "content-transfer-encoding", "content-id"):
                 if len(part.get_all(key, [])) > 1:
@@ -146,9 +163,19 @@ def snapshot(raw, mailbox):
             if unsupported_body:
                 complete = False
             if is_file:
-                name = str(part.get_filename() or f"part-{index + 1}" + (mimetypes.guess_extension(part.get_content_type()) or ".bin"))[:255]
-                files.append({"name": name, "sha256": digest(payload), "size": len(payload),
-                              "type": part.get_content_type(), "part": index})
+                name = str(
+                    part.get_filename()
+                    or f"part-{index + 1}" + (mimetypes.guess_extension(part.get_content_type()) or ".bin")
+                )[:255]
+                files.append(
+                    {
+                        "name": name,
+                        "sha256": digest(payload),
+                        "size": len(payload),
+                        "type": part.get_content_type(),
+                        "part": index,
+                    }
+                )
             if part.is_multipart():
                 if is_body:
                     visible.append({"type": part.get_content_type(), "text": base64.b64encode(payload).decode()})
@@ -176,25 +203,61 @@ def snapshot(raw, mailbox):
                 visible.append({"type": "text/html", "text": "".join(html.text) if html.complete else text})
             else:
                 visible.append({"type": part.get_content_type(), "text": text})
-        if len(str(msg.get("subject", ""))) > 1000 or len(files) > 50 or sum(len(p["text"]) for p in visible) > MAX_PREVIEW:
+        if (
+            len(str(msg.get("subject", ""))) > 1000
+            or len(files) > 50
+            or sum(len(p["text"]) for p in visible) > MAX_PREVIEW
+        ):
             raise ValueError("The email cannot be previewed in full")
     except (ValueError, TypeError, LookupError) as exc:
-        raise Problem("email", "Invalid email: From must match the inbox, with 1–100 valid recipients, at most 50 files "
-                      "and at most 256 KiB of visible text", 422) from exc
+        raise Problem(
+            "email",
+            "Invalid email: From must match the inbox, with 1–100 valid recipients, at most 50 files "
+            "and at most 256 KiB of visible text",
+            422,
+        ) from exc
     body = "\n".join(texts) if texts else "\n".join(p["text"] for p in visible)
-    parts = [{"type": p.get_content_type(), "parameters": sorted((k, str(v)) for k, v in p.get_params()[1:] if k != "boundary") if p.get_params() else [],
-              "name": p.get_filename(), "content_id": p.get("Content-ID"), "content_location": p.get("Content-Location"),
-              "disposition": p.get_content_disposition(),
-              "children": len(list(p.iter_parts())) if p.is_multipart() else 0,
-              "sha256": digest(part_bytes(p)) if not p.is_multipart() or id(p) in attachments or p.get_content_type() == "message/rfc822" else None}
-             for p in leaves]
-    material_headers = {key: str(msg.get(key) or "") for key in ("from", "sender", "reply-to", "in-reply-to", "references")}
+    parts = [
+        {
+            "type": p.get_content_type(),
+            "parameters": sorted((k, str(v)) for k, v in p.get_params()[1:] if k != "boundary")
+            if p.get_params()
+            else [],
+            "name": p.get_filename(),
+            "content_id": p.get("Content-ID"),
+            "content_location": p.get("Content-Location"),
+            "disposition": p.get_content_disposition(),
+            "children": len(list(p.iter_parts())) if p.is_multipart() else 0,
+            "sha256": digest(part_bytes(p))
+            if not p.is_multipart() or id(p) in attachments or p.get_content_type() == "message/rfc822"
+            else None,
+        }
+        for p in leaves
+    ]
+    material_headers = {
+        key: str(msg.get(key) or "") for key in ("from", "sender", "reply-to", "in-reply-to", "references")
+    }
     groups = {key: sorted(a.lower() for _, a in getaddresses(msg.get_all(key, [])) if a) for key in ("to", "cc", "bcc")}
-    proof = {"subject": str(msg.get("subject", "")), "headers": material_headers, "recipient_headers": groups, "parts": parts}
-    return {"recipients": to, "attachments": files, "subject": str(msg.get("subject", ""))[:1000],
-            "body_sha256": digest(body), "body": body, "content_sha256": digest(json.dumps(proof, sort_keys=True, separators=(",", ":"))),
-            "in_reply_to": str(msg.get("in-reply-to", "")), "references": str(msg.get("references", "")),
-            "visible_bodies": visible, "classification_complete": complete, "recipient_headers": groups, "raw": raw}
+    proof = {
+        "subject": str(msg.get("subject", "")),
+        "headers": material_headers,
+        "recipient_headers": groups,
+        "parts": parts,
+    }
+    return {
+        "recipients": to,
+        "attachments": files,
+        "subject": str(msg.get("subject", ""))[:1000],
+        "body_sha256": digest(body),
+        "body": body,
+        "content_sha256": digest(json.dumps(proof, sort_keys=True, separators=(",", ":"))),
+        "in_reply_to": str(msg.get("in-reply-to", "")),
+        "references": str(msg.get("references", "")),
+        "visible_bodies": visible,
+        "classification_complete": complete,
+        "recipient_headers": groups,
+        "raw": raw,
+    }
 
 
 def attachment(raw, index):

@@ -85,7 +85,10 @@ pub trait Wire: Send + Sync + 'static {
 /// Python's `int(value or 0)` for a usage count; anything else is 0.
 pub fn int_of(v: &Value) -> i64 {
     match v {
-        Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)).unwrap_or(0),
+        Value::Number(n) => n
+            .as_i64()
+            .or_else(|| n.as_f64().map(|f| f as i64))
+            .unwrap_or(0),
         Value::String(s) => s.trim().parse().unwrap_or(0),
         Value::Bool(b) => *b as i64,
         _ => 0,
@@ -94,7 +97,11 @@ pub fn int_of(v: &Value) -> i64 {
 
 /// The bot's environment, or the runner's own outside a turn, with HOME filled in.
 pub fn base_env(settings: &Settings) -> Env {
-    let mut env = if settings.env.is_empty() { crate::env::process_environment() } else { settings.env.clone() };
+    let mut env = if settings.env.is_empty() {
+        crate::env::process_environment()
+    } else {
+        settings.env.clone()
+    };
     if env.get("HOME").is_none_or(|h| h.is_empty()) {
         if let Ok(home) = std::env::var("HOME") {
             env.insert("HOME".into(), home);
@@ -111,8 +118,6 @@ struct Inner {
     stopper: Option<super::Stopper>,
     interrupted: HashSet<String>,
     done_turns: HashSet<String>,
-    compacted: HashSet<String>,
-    context: HashMap<String, i64>,
     reader: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -135,7 +140,14 @@ impl<W: Wire> Clone for OneShot<W> {
 
 impl<W: Wire> OneShot<W> {
     pub fn new(bot: &str, cmd: Vec<String>, tx: Events) -> Self {
-        OneShot(Arc::new(Shared { allocation: super::Allocation::default(), bot: bot.into(), cmd, tx, inner: Mutex::new(Inner::default()), _wire: Default::default() }))
+        OneShot(Arc::new(Shared {
+            allocation: super::Allocation::default(),
+            bot: bot.into(),
+            cmd,
+            tx,
+            inner: Mutex::new(Inner::default()),
+            _wire: Default::default(),
+        }))
     }
 
     pub fn cmd(&self) -> &[String] {
@@ -183,28 +195,35 @@ impl<W: Wire> OneShot<W> {
         self.inner().up
     }
 
-    /// Whether the harness compacted `thread_id`'s session in a turn since this was last asked.
-    pub fn compacted(&self, thread_id: &str) -> bool {
-        self.inner().compacted.remove(thread_id)
-    }
-
-    /// The session's size after `thread_id`'s last turn, once (Host::context_tokens).
-    pub fn context_tokens(&self, thread_id: &str) -> Option<i64> {
-        self.inner().context.remove(thread_id)
-    }
-
     pub fn record(&self, thread_id: &str, settings: &Settings, started: bool) -> String {
-        let t = Thread { bot: settings.slug.clone(), settings: settings.clone(), started };
+        let t = Thread {
+            bot: settings.slug.clone(),
+            settings: settings.clone(),
+            started,
+        };
         self.inner().threads.insert(thread_id.into(), t);
         thread_id.into()
     }
 
-    pub(crate) fn launch(&self, argv: &[String], settings: &Settings) -> std::io::Result<(Child, crate::run_diagnostics::Stderr)> {
+    pub(crate) fn launch(
+        &self,
+        argv: &[String],
+        settings: &Settings,
+    ) -> std::io::Result<(Child, crate::run_diagnostics::Stderr)> {
         let env = W::env(settings);
-        if settings.identity.is_some() && crate::hosts::pi::is_gateway(settings.model.as_deref()) && !env.contains_key("PI_CODING_AGENT_DIR") {
-            return Err(std::io::Error::other("cannot prepare the private Gateway configuration"));
+        if settings.identity.is_some()
+            && crate::hosts::pi::is_gateway(settings.model.as_deref())
+            && !env.contains_key("PI_CODING_AGENT_DIR")
+        {
+            return Err(std::io::Error::other(
+                "cannot prepare the private Gateway configuration",
+            ));
         }
-        let mut command = if W::ISOLATED { crate::isolation::command_as(settings.identity, &argv[0]) } else { tokio::process::Command::new(&argv[0]) };
+        let mut command = if W::ISOLATED {
+            crate::isolation::command_as(settings.identity, &argv[0])
+        } else {
+            tokio::process::Command::new(&argv[0])
+        };
         command
             .args(&argv[1..])
             .stdin(Stdio::piped())
@@ -220,7 +239,12 @@ impl<W: Wire> OneShot<W> {
         Ok((child, stderr))
     }
 
-    pub fn start_turn(&self, thread_id: &str, text: &str, effort: Option<&str>) -> Result<String, HostError> {
+    pub fn start_turn(
+        &self,
+        thread_id: &str,
+        text: &str,
+        effort: Option<&str>,
+    ) -> Result<String, HostError> {
         let turn = uuid::Uuid::new_v4().to_string();
         let (argv, settings, launched) = {
             let mut inner = self.inner();
@@ -228,9 +252,16 @@ impl<W: Wire> OneShot<W> {
                 return Err(failed(format!("{} host is not running", W::NAME)));
             }
             if inner.turn.is_some() {
-                return Err(failed(format!("{} host already has a turn running", W::NAME)));
+                return Err(failed(format!(
+                    "{} host already has a turn running",
+                    W::NAME
+                )));
             }
-            let mut t = inner.threads.get(thread_id).cloned().ok_or_else(|| failed(format!("unknown {} thread {thread_id}", W::NAME)))?;
+            let mut t = inner
+                .threads
+                .get(thread_id)
+                .cloned()
+                .ok_or_else(|| failed(format!("unknown {} thread {thread_id}", W::NAME)))?;
             if t.bot.is_empty() {
                 t.bot = self.0.bot.clone();
             }
@@ -238,14 +269,26 @@ impl<W: Wire> OneShot<W> {
             // A gated wire starts its process once it holds the gate, in the turn's own task.
             let launched = match W::gate(&self.0.cmd) {
                 Some(_) => None,
-                None => Some(self.launch(&argv, &t.settings).map_err(|e| failed(format!("could not start {}: {e}", W::PROGRAM)))?),
+                None => Some(
+                    self.launch(&argv, &t.settings)
+                        .map_err(|e| failed(format!("could not start {}: {e}", W::PROGRAM)))?,
+                ),
             };
             inner.turn = Some((thread_id.into(), turn.clone()));
             (argv, t.settings, launched)
         };
-        self.emit(event("status", Some(thread_id), None, json!({"state": "active"})));
+        self.emit(event(
+            "status",
+            Some(thread_id),
+            None,
+            json!({"state": "active"}),
+        ));
         let host = self.clone();
-        let (tid, t2, text) = (thread_id.to_string(), turn.clone(), W::stdin(&self.0.cmd, text));
+        let (tid, t2, text) = (
+            thread_id.to_string(),
+            turn.clone(),
+            W::stdin(&self.0.cmd, text),
+        );
         let reader = tokio::spawn(async move {
             let (child, stderr, _held) = match launched {
                 Some((child, stderr)) => (child, stderr, None),
@@ -257,14 +300,22 @@ impl<W: Wire> OneShot<W> {
                     match host.launch(&argv, &settings) {
                         Ok((child, stderr)) => (child, stderr, Some(held)),
                         Err(e) => {
-                            let state = Turn { error: format!("could not start {}: {e}", W::PROGRAM), ..host.turn_state() };
+                            let state = Turn {
+                                error: format!("could not start {}: {e}", W::PROGRAM),
+                                ..host.turn_state()
+                            };
                             host.finish(&tid, &t2, -1, "", state);
                             return;
                         }
                     }
                 }
             };
-            log(&format!("{}[{}]: turn started pid {}", W::NAME, host.0.bot, child.id().map_or("?".into(), |p| p.to_string())));
+            log(&format!(
+                "{}[{}]: turn started pid {}",
+                W::NAME,
+                host.0.bot,
+                child.id().map_or("?".into(), |p| p.to_string())
+            ));
             host.read_loop(child, stderr, tid, t2, text).await
         });
         self.inner().reader = Some(reader);
@@ -272,7 +323,11 @@ impl<W: Wire> OneShot<W> {
     }
 
     fn turn_state(&self) -> Turn {
-        Turn { bot: self.0.bot.clone(), cmd: self.0.cmd.clone(), ..Default::default() }
+        Turn {
+            bot: self.0.bot.clone(),
+            cmd: self.0.cmd.clone(),
+            ..Default::default()
+        }
     }
 
     /// The wire's gate, or None once the turn is interrupted or the host stopped while it waited.
@@ -288,13 +343,22 @@ impl<W: Wire> OneShot<W> {
                     return None;
                 }
             }
-            if let Ok(held) = tokio::time::timeout(Duration::from_millis(250), gate.clone().lock_owned()).await {
+            if let Ok(held) =
+                tokio::time::timeout(Duration::from_millis(250), gate.clone().lock_owned()).await
+            {
                 return Some(held);
             }
         }
     }
 
-    async fn read_loop(&self, mut child: Child, mut stderr: crate::run_diagnostics::Stderr, tid: String, turn: String, text: String) {
+    async fn read_loop(
+        &self,
+        mut child: Child,
+        mut stderr: crate::run_diagnostics::Stderr,
+        tid: String,
+        turn: String,
+        text: String,
+    ) {
         let stdout = child.stdout.take();
         if let Some(mut stdin) = child.stdin.take() {
             tokio::spawn(async move {
@@ -329,14 +393,21 @@ impl<W: Wire> OneShot<W> {
                     None => lines.next_line().await,
                 };
                 let Ok(Some(line)) = next else { break };
-                let Ok(msg) = serde_json::from_str::<Value>(line.trim()) else { continue };
+                let Ok(msg) = serde_json::from_str::<Value>(line.trim()) else {
+                    continue;
+                };
                 W::on_event(&msg, &mut state);
                 if std::mem::take(&mut state.session) {
                     if let Some(t) = self.inner().threads.get_mut(&tid) {
                         t.started = true;
                     }
                     // A new thread is saved, and the one it replaces let go, only now (execute.rs Fresh).
-                    self.emit(event("thread_confirmed", Some(&tid), Some(&turn), json!({})));
+                    self.emit(event(
+                        "thread_confirmed",
+                        Some(&tid),
+                        Some(&turn),
+                        json!({}),
+                    ));
                 }
                 for (kind, fields) in state.out.drain(..) {
                     self.emit(event(kind, Some(&tid), Some(&turn), fields));
@@ -382,26 +453,47 @@ impl<W: Wire> OneShot<W> {
             if !inner.done_turns.insert(turn.into()) {
                 return;
             }
-            if state.compacted {
-                inner.compacted.insert(tid.into());
-            }
-            if let Some(context) = state.context.filter(|c| *c > 0) {
-                inner.context.insert(tid.into(), context);
-            }
             inner.interrupted.contains(turn)
         };
         W::finished(rc, &state, interrupted);
         if interrupted {
-            self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "interrupted"})));
+            self.emit(event(
+                "turn_completed",
+                Some(tid),
+                Some(turn),
+                json!({"status": "interrupted"}),
+            ));
         } else if W::succeeded(rc, &state) {
             if !state.reply.is_empty() {
-                self.emit(event("message", Some(tid), Some(turn), json!({"text": state.reply, "final": true})));
+                self.emit(event(
+                    "message",
+                    Some(tid),
+                    Some(turn),
+                    json!({"text": state.reply, "final": true}),
+                ));
             }
-            self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "completed"})));
+            self.emit(event(
+                "turn_completed",
+                Some(tid),
+                Some(turn),
+                json!({"status": "completed"}),
+            ));
         } else {
-            let error = if !state.error.is_empty() { state.error.clone() } else { crate::run_diagnostics::process_reason(rc, stderr) };
-            let mut failure = event("turn_failed", Some(tid), Some(turn), json!({"error": error, "limit": is_limit(&error)}));
-            if rc < 0 || state.error.is_empty() && rc != 0 { failure["exit_code"] = json!(rc); failure["process_exit"] = json!(true); }
+            let error = if !state.error.is_empty() {
+                state.error.clone()
+            } else {
+                crate::run_diagnostics::process_reason(rc, stderr)
+            };
+            let mut failure = event(
+                "turn_failed",
+                Some(tid),
+                Some(turn),
+                json!({"error": error, "limit": is_limit(&error)}),
+            );
+            if rc < 0 || state.error.is_empty() && rc != 0 {
+                failure["exit_code"] = json!(rc);
+                failure["process_exit"] = json!(true);
+            }
             self.emit(failure);
         }
         self.emit(event("status", Some(tid), None, json!({"state": "idle"})));
@@ -420,11 +512,17 @@ impl<W: Wire> OneShot<W> {
     }
 
     pub fn active_turn(&self, thread_id: &str) -> Option<String> {
-        self.inner().turn.as_ref().filter(|(t, _)| t == thread_id).map(|(_, turn)| turn.clone())
+        self.inner()
+            .turn
+            .as_ref()
+            .filter(|(t, _)| t == thread_id)
+            .map(|(_, turn)| turn.clone())
     }
 }
 
-fn stderr_tail(file: &mut crate::run_diagnostics::Stderr) -> String { file.tail() }
+fn stderr_tail(file: &mut crate::run_diagnostics::Stderr) -> String {
+    file.tail()
+}
 
 #[cfg(test)]
 pub mod testing {
@@ -449,9 +547,12 @@ pub mod testing {
     /// One turn's events, without their thread and turn ids, up to the closing `status idle`.
     pub async fn turn_events(rx: &mut mpsc::UnboundedReceiver<Value>) -> Vec<Value> {
         let mut got = vec![];
-        while let Ok(Some(mut ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+        while let Ok(Some(mut ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await
+        {
             let idle = ev["kind"] == "status" && ev["state"] == "idle";
-            ev.as_object_mut().unwrap().retain(|k, _| k != "thread_id" && k != "turn_id");
+            ev.as_object_mut()
+                .unwrap()
+                .retain(|k, _| k != "thread_id" && k != "turn_id");
             got.push(ev);
             if idle {
                 break;

@@ -2,6 +2,7 @@
 server runs (harness.Org) and makes one piece of state a browser test starts from, through the API a teammate calls.
 Seeds run in the order given. A seed returns False when it skipped itself because the route it needs is not built yet;
 otherwise it returns None."""
+
 import json
 
 SEEDS = {}
@@ -11,6 +12,7 @@ def seed(name):
     def register(fn):
         SEEDS[name] = fn
         return fn
+
     return register
 
 
@@ -43,8 +45,12 @@ class SteadyJudge:
             if q["type"] == "choice":
                 first = "reply" if "reply" in q["criteria"] else next(iter(q["criteria"]))
                 rest = [k for k in q["criteria"] if k != first]
-                answers[qid] = {"type": "choice", "choice": first, "confidence": 0.82,
-                                "probabilities": {first: 0.82, **{k: round(0.18 / len(rest), 2) for k in rest}}}
+                answers[qid] = {
+                    "type": "choice",
+                    "choice": first,
+                    "confidence": 0.82,
+                    "probabilities": {first: 0.82, **{k: round(0.18 / len(rest), 2) for k in rest}},
+                }
             elif q["type"] == "score":
                 answers[qid] = {"type": "score", "score": (len(q["criteria"]) - 1) // 2, "confidence": 0.8}
             else:
@@ -52,8 +58,13 @@ class SteadyJudge:
         return {"model": "steady", "usage": {"input_tokens": 0, "output_tokens": 0}, "ms": 0, "answers": answers}
 
 
-BUCKET = {"bucket": {"type": "choice", "instructions": "Reply, or archive as noise?",
-                     "criteria": {"reply": "needs an answer", "archive": "noise"}}}
+BUCKET = {
+    "bucket": {
+        "type": "choice",
+        "instructions": "Reply, or archive as noise?",
+        "criteria": {"reply": "needs an answer", "archive": "noise"},
+    }
+}
 
 
 def _node(sid, kind, **fields):
@@ -72,28 +83,91 @@ def automations(world):
     - Weekly digest (Dana, a schedule): no steps yet, the journeys build it.
     - Standup notes (Priya's own, a schedule), made by Priya."""
     from .harness import DANA, DANA_REF, PRIYA, PRIYA_REF, automation
+
     world.app.state.judge = SteadyJudge()
     inbox = {"type": "message", "inbox": "dana@acme.example"}
-    _ok(automation(world, "Inbox triage", DANA_REF, trigger=inbox, steps=[
-        _node("sort", "filter", rules=[{"when": [_cond("message.from", "contains", "promo")], "match": "all",
-                                        "then": [{"do": "archive", "args": {}}], "stop": True}]),
-        _node("rank", "decide", questions=BUCKET, level="low", out="d1"),
-        _node("tell", "action", do="note", args={"text": "Triaged"})]), "Inbox triage")
-    _ok(automation(world, "Route mail", DANA_REF, trigger=inbox, steps=[
-        _node("rank", "decide", questions=BUCKET, level="low", out="d1"),
-        _node("fork", "paths", paths=[
-            {"name": "Reply", "when": [_cond("d1.bucket", "is", "reply", min=0.7)],
-             "steps": [_node("r", "action", do="note", args={"text": "Reply"})]},
-            {"name": "Archive", "when": [_cond("d1.bucket", "is", "archive", min=0.7)],
-             "steps": [_node("a", "action", do="note", args={"text": "Archive"})]}],
-            otherwise={"steps": [_node("o", "action", do="note", args={"text": "Unsure"})]})]), "Route mail")
+    _ok(
+        automation(
+            world,
+            "Inbox triage",
+            DANA_REF,
+            trigger=inbox,
+            steps=[
+                _node(
+                    "sort",
+                    "filter",
+                    rules=[
+                        {
+                            "when": [_cond("message.from", "contains", "promo")],
+                            "match": "all",
+                            "then": [{"do": "archive", "args": {}}],
+                            "stop": True,
+                        }
+                    ],
+                ),
+                _node("rank", "decide", questions=BUCKET, level="low", out="d1"),
+                _node("tell", "action", do="note", args={"text": "Triaged"}),
+            ],
+        ),
+        "Inbox triage",
+    )
+    _ok(
+        automation(
+            world,
+            "Route mail",
+            DANA_REF,
+            trigger=inbox,
+            steps=[
+                _node("rank", "decide", questions=BUCKET, level="low", out="d1"),
+                _node(
+                    "fork",
+                    "paths",
+                    paths=[
+                        {
+                            "name": "Reply",
+                            "when": [_cond("d1.bucket", "is", "reply", min=0.7)],
+                            "steps": [_node("r", "action", do="note", args={"text": "Reply"})],
+                        },
+                        {
+                            "name": "Archive",
+                            "when": [_cond("d1.bucket", "is", "archive", min=0.7)],
+                            "steps": [_node("a", "action", do="note", args={"text": "Archive"})],
+                        },
+                    ],
+                    otherwise={"steps": [_node("o", "action", do="note", args={"text": "Unsure"})]},
+                ),
+            ],
+        ),
+        "Route mail",
+    )
     # Not through automation(): it puts an empty Filter in a flow given no steps, and this one starts empty.
-    _ok(world.api("post", "/api/v2/automations", {
-        "name": "Weekly digest", "owner": DANA_REF, "enabled": True, "builtin": False,
-        "trigger": {"type": "schedule", "cron": "0 8 * * 1", "tz": "UTC"}, "steps": []}, who=DANA), "Weekly digest")
-    _ok(automation(world, "Standup notes", PRIYA_REF, who=PRIYA,
-                   trigger={"type": "schedule", "cron": "0 9 * * 1-5", "tz": "UTC"},
-                   steps=[_node("tell", "action", do="note", args={"text": "Standup"})]), "Standup notes")
+    _ok(
+        world.api(
+            "post",
+            "/api/v2/automations",
+            {
+                "name": "Weekly digest",
+                "owner": DANA_REF,
+                "enabled": True,
+                "builtin": False,
+                "trigger": {"type": "schedule", "cron": "0 8 * * 1", "tz": "UTC"},
+                "steps": [],
+            },
+            who=DANA,
+        ),
+        "Weekly digest",
+    )
+    _ok(
+        automation(
+            world,
+            "Standup notes",
+            PRIYA_REF,
+            who=PRIYA,
+            trigger={"type": "schedule", "cron": "0 9 * * 1-5", "tz": "UTC"},
+            steps=[_node("tell", "action", do="note", args={"text": "Standup"})],
+        ),
+        "Standup notes",
+    )
 
 
 @seed("bot_proposal")
@@ -102,6 +176,7 @@ def bot_proposal(world):
     as BotOps writes it when Builder Claude asks (Builder Claude's rights, which do not reach Dana's automation, so the
     PATCH is a proposal). No model runs."""
     from .harness import CLAUDE, DANA, rows
+
     listed = _ok(world.api("get", "/api/v2/automations?limit=500", who=DANA), "list")
     auto = next(a for a in rows(listed) if a.get("name") == "Inbox triage")
     full = _ok(world.api("get", f"/api/v2/automations/{auto['id']}", who=DANA), "read")
@@ -109,11 +184,22 @@ def bot_proposal(world):
     for step in steps:
         if step["type"] == "decide" and step.get("set"):
             step.pop("questions", None)
-    receipts = {"when": [_cond("message.subject", "contains", "receipt")], "match": "all",
-                "then": [{"do": "archive", "args": {}}], "stop": True}
+    receipts = {
+        "when": [_cond("message.subject", "contains", "receipt")],
+        "match": "all",
+        "then": [{"do": "archive", "args": {}}],
+        "stop": True,
+    }
     steps[0] = {**steps[0], "rules": [receipts, *steps[0]["rules"]]}
-    _ok(world.api("patch", f"/api/v2/automations/{auto['id']}", {"steps": steps, "summary": "Archive receipts first"},
-                  who=CLAUDE), "proposal")
+    _ok(
+        world.api(
+            "patch",
+            f"/api/v2/automations/{auto['id']}",
+            {"steps": steps, "summary": "Archive receipts first"},
+            who=CLAUDE,
+        ),
+        "proposal",
+    )
 
 
 @seed("groups")
@@ -121,9 +207,20 @@ def groups(world):
     """Two groups on the org chart, as Dana makes them: Engineering (Omar leads it: the Engineering Lead bot, the two
     builders and Omar) and Release. Omar moves teammates inside Engineering; a move to Release is Dana's to approve."""
     from .harness import DANA, OMAR_ID, OMAR_REF, make_group
-    _ok(world.api("post", "/api/v2/groups", {
-        "name": "Engineering", "lead": OMAR_REF,
-        "add": {"bots": ["engineering-lead", "builder-claude", "builder-openai"], "people": [OMAR_ID]}}, who=DANA), "Engineering")
+
+    _ok(
+        world.api(
+            "post",
+            "/api/v2/groups",
+            {
+                "name": "Engineering",
+                "lead": OMAR_REF,
+                "add": {"bots": ["engineering-lead", "builder-claude", "builder-openai"], "people": [OMAR_ID]},
+            },
+            who=DANA,
+        ),
+        "Engineering",
+    )
     make_group(world, "Release", bots=["release-manager"])
 
 
@@ -131,14 +228,34 @@ def groups(world):
 def connection(world):
     """A tool the Engineering Lead's computer reports (the runner's heartbeat): Acme Billing, read and refund, so
     Tools lists it in use, with writes."""
-    row = {"ready": True, "runtime": "claude", "model": "claude-opus-5-5", "repository_present": True,
-           "configuration_valid": True, "problems": []}
-    bots = {slug: {**row, **({"tools": [{"service": "acme-billing", "identity": "Acme billing account",
-                                         "can": ["read", "refund"]}]} if slug == "engineering-lead" else {})}
-            for slug in world.bot_slugs}
-    _ok(world.api("post", "/api/v2/runners/heartbeat", {"version": "test", "platform": "test",
-                                                        "readiness": {"schema_version": 1, "bots": bots}},
-                  who=world.runner["token"]), "heartbeat")
+    row = {
+        "ready": True,
+        "runtime": "claude",
+        "model": "claude-opus-5-5",
+        "repository_present": True,
+        "configuration_valid": True,
+        "problems": [],
+    }
+    bots = {
+        slug: {
+            **row,
+            **(
+                {"tools": [{"service": "acme-billing", "identity": "Acme billing account", "can": ["read", "refund"]}]}
+                if slug == "engineering-lead"
+                else {}
+            ),
+        }
+        for slug in world.bot_slugs
+    }
+    _ok(
+        world.api(
+            "post",
+            "/api/v2/runners/heartbeat",
+            {"version": "test", "platform": "test", "readiness": {"schema_version": 1, "bots": bots}},
+            who=world.runner["token"],
+        ),
+        "heartbeat",
+    )
 
 
 @seed("toured")
@@ -146,6 +263,7 @@ def toured(world):
     """Dana, Omar and Priya have seen the first-visit tour and Dana dismissed the usage-count notice, so a journey's
     page opens on the app, with nothing over it."""
     from .harness import DANA, OMAR, PRIYA
+
     for who in (DANA, OMAR, PRIYA):
         _ok(world.api("post", "/api/v2/setup/getting-started/state", {"tour": True}, who=who), "tour seen")
     _ok(world.api("post", "/api/v2/system/usage-count/notice", {"state": "dismissed"}, who=DANA), "usage notice")
@@ -158,10 +276,12 @@ def judge(world):
     world.app.state.judge = SteadyJudge()
 
 
-PAGE_HTML = ('<!doctype html><html><head><title>{title}</title></head><body style="margin:0;font:15px system-ui">'
-             '<h1 style="margin:16px">{title}</h1><p style="margin:16px">{text}</p>'
-             '<svg viewBox="0 0 300 80" width="300" height="80"><rect x="16" y="10" width="{bar}" height="40" fill="#4a7"/>'
-             '</svg><script>steal()</script></body></html>')
+PAGE_HTML = (
+    '<!doctype html><html><head><title>{title}</title></head><body style="margin:0;font:15px system-ui">'
+    '<h1 style="margin:16px">{title}</h1><p style="margin:16px">{text}</p>'
+    '<svg viewBox="0 0 300 80" width="300" height="80"><rect x="16" y="10" width="{bar}" height="40" fill="#4a7"/>'
+    '</svg><script>steal()</script></body></html>'
+)
 
 
 @seed("pages")
@@ -173,33 +293,65 @@ def pages(world):
     so the status lines name it, not its slug."""
     from backend import bot_settings
     from .harness import DANA
+
     # Written as the harness writes the bots' other fields: the definition route refuses the reports_to it set by hand.
     with world.store.transaction() as c:
         c.execute("UPDATE bots SET display_name='Engineering Lead' WHERE slug='engineering-lead'")
         bot_settings.update(c, "engineering-lead", {"display_name": "Engineering Lead"})
-    made = _ok(world.api("post", "/api/v2/tasks", {"title": "Q3 launch", "body": "Plan the Q3 launch.",
-                                                    "owner": "engineering-lead"}, who=DANA), "task")
+    made = _ok(
+        world.api(
+            "post",
+            "/api/v2/tasks",
+            {"title": "Q3 launch", "body": "Plan the Q3 launch.", "owner": "engineering-lead"},
+            who=DANA,
+        ),
+        "task",
+    )
     task = (made.get("task") or made)["id"]
 
     def act(token, attempt):
         def page(name, title, text, bar, **fields):
             body = {"name": name, "title": title, "text": PAGE_HTML.format(title=title, text=text, bar=bar), **fields}
             return _ok(world.api("post", "/api/v2/pages", body, who=token), name)["page"]["file_id"]
-        old = page("weekly-old.html", "Engineering weekly (old)", "Last month's numbers.", 90, task=task,
-                   cadence="weekly")
-        page("weekly.html", "Engineering weekly", "Shipped 14 changes; review time fell to 6 hours.", 240,
-             scope="bot", cadence="weekly", as_of="2026-10-27", replaces=old)
+
+        old = page(
+            "weekly-old.html", "Engineering weekly (old)", "Last month's numbers.", 90, task=task, cadence="weekly"
+        )
+        page(
+            "weekly.html",
+            "Engineering weekly",
+            "Shipped 14 changes; review time fell to 6 hours.",
+            240,
+            scope="bot",
+            cadence="weekly",
+            as_of="2026-10-27",
+            replaces=old,
+        )
         page("launch.html", "Launch plan", "Beta on Nov 3, general release on Nov 17.", 160, task=task)
-        _ok(world.api("post", "/api/v2/files/uploads", {
-            "name": "funnel.csv", "title": "Signup funnel", "scope": "bot",
-            "text": "stage,visitors\nlanding,1200\nsignup,310\nactivated,140\n"}, who=token), "funnel.csv")
+        _ok(
+            world.api(
+                "post",
+                "/api/v2/files/uploads",
+                {
+                    "name": "funnel.csv",
+                    "title": "Signup funnel",
+                    "scope": "bot",
+                    "text": "stage,visitors\nlanding,1200\nsignup,310\nactivated,140\n",
+                },
+                who=token,
+            ),
+            "funnel.csv",
+        )
+
     if world.turn("engineering-lead", act=act) is None:
         raise RuntimeError("the Engineering Lead's turn did not run")
 
 
 COUNSEL = "counsel-test"
-VENDOR_TERMS = ("Northwind Messaging Terms\n\n4. Messaging\n\nCustomer messages must include an opt-out line in every "
-                "send. Keep a record of each consent for five years.\n\n5. Data\n\nDelete raw logs after 30 days.\n")
+VENDOR_TERMS = (
+    "Northwind Messaging Terms\n\n4. Messaging\n\nCustomer messages must include an opt-out line in every "
+    "send. Keep a record of each consent for five years.\n\n5. Data\n\nDelete raw logs after 30 days.\n"
+)
 
 
 @seed("counsel")
@@ -212,26 +364,62 @@ def counsel(world):
     from backend.blobs import register
     from backend.store import H
     from .harness import DANA, DANA_ID
+
     with world.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES(?, ?, 'Counsel', 'active')", (H.COUNSEL, H.COUNSEL))
-        c.execute("INSERT OR REPLACE INTO bot_config(bot, team, owner_id) VALUES(?, '', ?)",
-                  (H.COUNSEL, DANA_ID))
-        c.execute("INSERT OR REPLACE INTO agents(bot, harness, token_hash, created_at, created_by) VALUES(?,?,?,?,?)",
-                  (H.COUNSEL, "test", "x-counsel", H.now(), "human:" + DANA_ID))
+        c.execute(
+            "INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES(?, ?, 'Counsel', 'active')",
+            (H.COUNSEL, H.COUNSEL),
+        )
+        c.execute("INSERT OR REPLACE INTO bot_config(bot, team, owner_id) VALUES(?, '', ?)", (H.COUNSEL, DANA_ID))
+        c.execute(
+            "INSERT OR REPLACE INTO agents(bot, harness, token_hash, created_at, created_by) VALUES(?,?,?,?,?)",
+            (H.COUNSEL, "test", "x-counsel", H.now(), "human:" + DANA_ID),
+        )
         data = VENDOR_TERMS.encode("utf-8")
         digest = world.app.state.blobs.put(data, "text/plain")
-        item = register(c, Identity("human:" + DANA_ID, "owner"), digest, len(data), "northwind-terms.txt", "text/plain")
+        item = register(
+            c, Identity("human:" + DANA_ID, "owner"), digest, len(data), "northwind-terms.txt", "text/plain"
+        )
         world.app.state.files.add_version(
-            c, bot="engineering-lead", actor="human:" + DANA_ID, scope="bot", task=None, conversation=None, attempt="",
-            identity="upload:northwind-terms", title="Northwind Messaging Terms", name="northwind-terms.txt",
-            mime="text/plain", blob_id=item["id"], digest=digest, size=len(data))
+            c,
+            bot="engineering-lead",
+            actor="human:" + DANA_ID,
+            scope="bot",
+            task=None,
+            conversation=None,
+            attempt="",
+            identity="upload:northwind-terms",
+            title="Northwind Messaging Terms",
+            name="northwind-terms.txt",
+            mime="text/plain",
+            blob_id=item["id"],
+            digest=digest,
+            size=len(data),
+        )
     world.app.state.auth.settings.test_identities[COUNSEL] = Identity("bot:" + H.COUNSEL, "bot", agent="test")
     # Counsel on the world's computer, ready, so a read task's run can be claimed and started.
-    _ok(world.api("post", f"/api/v2/bots/{H.COUNSEL}/assignment",
-                  {"runner_id": world.runner["runner_id"], "expected_generation": 0}, who=DANA), "Counsel assignment")
-    _ok(world.api("post", "/api/v2/runners/heartbeat", {
-        "version": "test", "platform": "test",
-        "readiness": {slug: True for slug in [*world.bot_slugs, H.COUNSEL]}}, who=world.runner["token"]), "heartbeat")
+    _ok(
+        world.api(
+            "post",
+            f"/api/v2/bots/{H.COUNSEL}/assignment",
+            {"runner_id": world.runner["runner_id"], "expected_generation": 0},
+            who=DANA,
+        ),
+        "Counsel assignment",
+    )
+    _ok(
+        world.api(
+            "post",
+            "/api/v2/runners/heartbeat",
+            {
+                "version": "test",
+                "platform": "test",
+                "readiness": {slug: True for slug in [*world.bot_slugs, H.COUNSEL]},
+            },
+            who=world.runner["token"],
+        ),
+        "heartbeat",
+    )
 
 
 @seed("roster")
@@ -243,8 +431,11 @@ def roster(world):
     from backend.auth import Identity
     from backend.store import H, encode
     from .harness import DANA_ID
+
     gina = {"id": "gina", "name": "Gina", "email": "gina@acme.example", "reports_to": DANA_ID, "primary_for": []}
-    world.app.state.auth.settings.test_identities["gina-test"] = Identity("human:gina", "human", email="gina@acme.example")
+    world.app.state.auth.settings.test_identities["gina-test"] = Identity(
+        "human:gina", "human", email="gina@acme.example"
+    )
     with world.store.transaction() as c:
         people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])["people"]
         people = [*people, gina]
@@ -260,9 +451,28 @@ def finance(world):
     """Finance set up on the install, as every install has it. The app sets it up at start (backend/app.py), but only
     once an owner exists, and the scenario's people are written after start, so it is set up here once they are."""
     from backend.finance import jobs as finance_jobs
+
     with world.store.transaction() as c:
         if not finance_jobs.ensure_setup(c, "dana@acme.example"):
             raise RuntimeError("finance setup found no owner on the scenario org")
+
+
+@seed("directory")
+def directory(world):
+    """The Directory's people, organizations and places, as the demo has them (backend/demo_sections/directory.py): Dana
+    makes them through the Directory's API, and the shared places tree writes the places they refer to."""
+    from backend.demo_sections.directory import fill
+
+    from .harness import DANA
+
+    def call(method, path, body=None):
+        return _ok(world.api(method.lower(), "/api/v2/" + path, body, who=DANA), f"{method} {path}")
+
+    def write(work):
+        with world.store.transaction() as c:
+            return work(c)
+
+    fill(call, write)
 
 
 @seed("priya-leads")
@@ -275,9 +485,9 @@ def priya_leads(world):
 
 
 # ---------------------------------------------------------------------------------------------- Tools
-VENDOR_HOST = "api.close.example"       # Close CRM at a made-up address: the vendor below answers it, nothing else can
-VENDOR_IP = "93.184.215.14"              # a public address for the name, so the proxy's egress check passes; never dialed
-TOOL_KEYS = {"close-read-test-0001": "read", "close-full-test-0002": "read_write"}   # made-up; ui/tests/e2e-tools.cjs
+VENDOR_HOST = "api.close.example"  # Close CRM at a made-up address: the vendor below answers it, nothing else can
+VENDOR_IP = "93.184.215.14"  # a public address for the name, so the proxy's egress check passes; never dialed
+TOOL_KEYS = {"close-read-test-0001": "read", "close-full-test-0002": "read_write"}  # made-up; ui/tests/e2e-tools.cjs
 
 
 def _vendor(request):
@@ -285,6 +495,7 @@ def _vendor(request):
     /api/v1/lead/ to list (GET) or make (POST, refused for a read key). Anything else is a 401 or a 404."""
     import base64
     import httpx
+
     kind, _, value = request.headers.get("authorization", "").partition(" ")
     try:
         key = base64.b64decode(value).decode().rstrip(":") if kind.lower() == "basic" else ""
@@ -297,8 +508,9 @@ def _vendor(request):
         return httpx.Response(200, json={"id": "user_test", "email": "dana@acme.example"})
     if request.url.path == "/api/v1/lead/":
         if request.method == "GET":
-            return httpx.Response(200, json={"data": [{"id": "lead_1", "display_name": "Northwind Traders"}],
-                                             "has_more": False})
+            return httpx.Response(
+                200, json={"data": [{"id": "lead_1", "display_name": "Northwind Traders"}], "has_more": False}
+            )
         return httpx.Response(403 if level == "read" else 201, json={"id": "lead_2"} if level != "read" else {})
     return httpx.Response(404, json={"error": "Not found"})
 
@@ -321,27 +533,51 @@ def tools(world):
     from backend import api_tools, egress
     from .harness import DANA, LEAD_ID, OMAR_ID, CLAUDE_ID
 
-    world.patch(egress, "resolve", lambda real: lambda host: [ipaddress.ip_address(VENDOR_IP)] if host == VENDOR_HOST
-                else real(host))
+    world.patch(
+        egress,
+        "resolve",
+        lambda real: lambda host: [ipaddress.ip_address(VENDOR_IP)] if host == VENDOR_HOST else real(host),
+    )
 
     def check(url, headers, params):
-        egress.check(url)                                       # what the real send refuses, this one refuses too
+        egress.check(url)  # what the real send refuses, this one refuses too
         return _vendor(httpx.Request("GET", url, headers=headers, params=params)).status_code
+
     world.patch(api_tools, "send_check", lambda _real: check)
     world.app.state.tool_proxy_transport = httpx.MockTransport(_vendor)
 
     read, full = TOOL_KEYS
-    tid = _ok(world.api("post", "/api/v2/api-tools", {"name": "Close CRM", "service": "close-crm",
-                                                       "base_url": "https://" + VENDOR_HOST, "check_path": "/api/v1/me/"},
-                        who=DANA), "Close CRM")["id"]
+    tid = _ok(
+        world.api(
+            "post",
+            "/api/v2/api-tools",
+            {
+                "name": "Close CRM",
+                "service": "close-crm",
+                "base_url": "https://" + VENDOR_HOST,
+                "check_path": "/api/v1/me/",
+            },
+            who=DANA,
+        ),
+        "Close CRM",
+    )["id"]
     base = f"/api/v2/api-tools/{tid}"
-    _ok(world.api("post", base + "/keys", {"name": "Full key", "value": full, "access_level": "read_write"}, who=DANA),
-        "full key")
+    _ok(
+        world.api("post", base + "/keys", {"name": "Full key", "value": full, "access_level": "read_write"}, who=DANA),
+        "full key",
+    )
     for subject, level in ((f"bot:{LEAD_ID}", "read"), (f"human:{OMAR_ID}", "read_write")):
         _ok(world.api("put", f"{base}/access/{subject}", {"level": level}, who=DANA), subject)
 
-    _ok(world.api("post", "/api/v2/tasks", {"title": "Pull this week's leads", "body": "From Close CRM.",
-                                             "owner": LEAD_ID}, who=DANA), "task")
+    _ok(
+        world.api(
+            "post",
+            "/api/v2/tasks",
+            {"title": "Pull this week's leads", "body": "From Close CRM.", "owner": LEAD_ID},
+            who=DANA,
+        ),
+        "task",
+    )
     answers = {}
 
     def act(token, attempt):
@@ -351,18 +587,52 @@ def tools(world):
         auth = {"Authorization": "Basic " + base64.b64encode((item["value"] + ":").encode()).decode()}
         answers["get"] = world.client.get(proxy + "/api/v1/lead/?query=open&_limit=25", headers=auth).status_code
         answers["post"] = world.client.post(proxy + "/api/v1/lead/", headers=auth, json={"name": "Contoso"}).status_code
+
     if world.turn(LEAD_ID, act=act) is None:
         raise RuntimeError("the Engineering Lead's turn did not run")
     if answers != {"get": 200, "post": 403}:
         raise RuntimeError(f"the proxied calls answered {answers}")
 
-    _ok(world.api("post", base + "/keys", {"name": "Read key", "value": read, "access_level": "read",
-                                           "expires_on": "2027-06-30"}, who=DANA), "read key")
+    _ok(
+        world.api(
+            "post",
+            base + "/keys",
+            {"name": "Read key", "value": read, "access_level": "read", "expires_on": "2027-06-30"},
+            who=DANA,
+        ),
+        "read key",
+    )
     _ok(world.api("put", f"{base}/access/bot:{LEAD_ID}", {"level": "read"}, who=DANA), "the Lead's Read")
     _ok(world.api("post", base + "/check", who=DANA), "Check now")
 
     ledger = _ok(world.api("post", "/api/v2/api-tools", {"name": "Ledger export"}, who=DANA), "Ledger export")["id"]
-    _ok(world.api("post", f"/api/v2/api-tools/{ledger}/keys", {"name": "Key", "value": "ledger-test-0003",
-                                                               "access_level": "read_write"}, who=DANA), "ledger key")
-    _ok(world.api("put", f"/api/v2/api-tools/{ledger}/access/bot:{CLAUDE_ID}", {"level": "read_write"}, who=DANA),
-        "builder-claude on Ledger export")
+    _ok(
+        world.api(
+            "post",
+            f"/api/v2/api-tools/{ledger}/keys",
+            {"name": "Key", "value": "ledger-test-0003", "access_level": "read_write"},
+            who=DANA,
+        ),
+        "ledger key",
+    )
+    _ok(
+        world.api("put", f"/api/v2/api-tools/{ledger}/access/bot:{CLAUDE_ID}", {"level": "read_write"}, who=DANA),
+        "builder-claude on Ledger export",
+    )
+
+
+@seed("assistant")
+def assistant(world):
+    """The Assistant (bot coo) on the install, as onboarding makes it, and the template routines it has never had: its
+    daily sweep (backend/onboarding.py ensure_builtin_routines, the same call as the startup path). Dana owns it, so her
+    Automations list shows the sweep; the routine is an automation at once (redesign_migration.adopt)."""
+    from backend import bot_settings as BS
+    from .harness import DANA_ID
+
+    with world.store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('coo', 'coo', 'Coo', 'active')")
+        c.execute("INSERT OR REPLACE INTO bot_config(bot, team, owner_id) VALUES('coo', '', ?)", (DANA_ID,))
+        BS.write(c, "coo", {"name": "Coo", "status": "active", "template": "assistant"})
+        made = world.app.state.onboarding.ensure_builtin_routines(c)
+    if made != [("coo", "daily-sweep")]:
+        raise RuntimeError(f"the Assistant's daily sweep was not made: {made}")

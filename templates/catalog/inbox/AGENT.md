@@ -86,7 +86,7 @@ Work arrives as tasks. Mail goes through one tool, `$HUB_DIR/scripts/mail.sh`, n
 `mail.sh inbox --untriaged --format brief --decisions`, where each line says `archive`, `needs-owner`,
 `route`, `reply` or `read` from `questions/mail-triage.json` (in this repository; also in `$HUB_DIR/questions/`). Open one thread only when you are about to
 draft: `mail.sh thread <id> --format md`. Something another bot or human owns is
-`hub task create --owner <slug> --parent <id>`. Ask the requester one question with `hub task ask <id>`.
+`hub task create --owner <slug> --parent <id>`. Ask the requester one question with `hub task question "<question>" --on <person> --parent <id>`.
 
 ## Quality standards
 - **Answer first.** The brief opens with a count and the one thing the human must do today. Then the

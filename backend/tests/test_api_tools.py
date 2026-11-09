@@ -27,22 +27,42 @@ def test_the_migration_makes_a_computer_tool_per_service_key_and_keeps_every_gra
     conn = sqlite3.connect(path)
     conn.executescript(FIXTURE.read_text())
     now = "2026-10-01T00:00:00Z"
-    rows = (("c-close", "Close API key", "api_key", "CLOSE_API_KEY", ""),
-            ("c-own", "Acme internal", "token", "ACME_TOKEN", ""),
-            ("c-model", "OpenAI", "api_key", "OPENAI_API_KEY", ""),
-            ("c-computer", "Claude on the Mac", "api_key", "ANTHROPIC_API_KEY", "computers:r1"),
-            ("c-bank", "Bank login", "password", "", "finance"),
-            ("c-empty", "Stripe", "api_key", "STRIPE_API_KEY", ""))
+    rows = (
+        ("c-close", "Close API key", "api_key", "CLOSE_API_KEY", ""),
+        ("c-own", "Acme internal", "token", "ACME_TOKEN", ""),
+        ("c-model", "OpenAI", "api_key", "OPENAI_API_KEY", ""),
+        ("c-computer", "Claude on the Mac", "api_key", "ANTHROPIC_API_KEY", "computers:r1"),
+        ("c-bank", "Bank login", "password", "", "finance"),
+        ("c-empty", "Stripe", "api_key", "STRIPE_API_KEY", ""),
+    )
     for cid, name, kind, env, source in rows:
-        conn.execute("INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created,updated,"
-                     "updated_by,created_by) VALUES(?,?,?,?,'',?,?,?,?,?,'human:ana','human:ana')",
-                     (cid, name, kind, env, None if cid == "c-empty" else b"x", None if cid == "c-empty" else b"n",
-                      source, now, now))
-    grants = (("g1", "c-close", "bot:ops", None), ("g2", "c-close", "human:cara", "2026-10-02T00:00:00Z"),
-              ("g3", "c-own", "bot:coo", None), ("g4", "c-model", "computers", None))
+        conn.execute(
+            "INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created,updated,"
+            "updated_by,created_by) VALUES(?,?,?,?,'',?,?,?,?,?,'human:ana','human:ana')",
+            (
+                cid,
+                name,
+                kind,
+                env,
+                None if cid == "c-empty" else b"x",
+                None if cid == "c-empty" else b"n",
+                source,
+                now,
+                now,
+            ),
+        )
+    grants = (
+        ("g1", "c-close", "bot:ops", None),
+        ("g2", "c-close", "human:cara", "2026-10-02T00:00:00Z"),
+        ("g3", "c-own", "bot:coo", None),
+        ("g4", "c-model", "computers", None),
+    )
     for gid, cid, subject, revoked in grants:
-        conn.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created,revoked) "
-                     "VALUES(?,?,?,'human:ana',?,?)", (gid, cid, subject, now, revoked))
+        conn.execute(
+            "INSERT INTO credential_grants(id,credential_id,subject,granted_by,created,revoked) "
+            "VALUES(?,?,?,'human:ana',?,?)",
+            (gid, cid, subject, now, revoked),
+        )
     conn.commit()
     conn.close()
     Store(Settings(db_path=path)).initialize()
@@ -54,8 +74,12 @@ def test_the_migration_makes_a_computer_tool_per_service_key_and_keeps_every_gra
     conn.close()
     assert set(tools) == {"close-crm", "acme-internal"}
     close = tools["close-crm"]
-    assert (close["delivery"], close["base_url"], close["auth_scheme"], close["check_path"]) == \
-        ("computer", "https://api.close.com", "basic_user", "/api/v1/me/")
+    assert (close["delivery"], close["base_url"], close["auth_scheme"], close["check_path"]) == (
+        "computer",
+        "https://api.close.com",
+        "basic_user",
+        "/api/v1/me/",
+    )
     assert tools["acme-internal"]["delivery"] == "computer" and tools["acme-internal"]["base_url"] == ""
     assert keys["c-close"] == {"id": "c-close", "tool_id": "close-crm", "access_level": "read_write"}
     assert all(keys[k]["tool_id"] is None for k in ("c-model", "c-computer", "c-bank", "c-empty"))
@@ -70,8 +94,13 @@ def tool(api, name="Close CRM", **body):
 
 
 def key(api, tid, value, level="read_write", token="ana-test", expected=200):
-    return post(api, f"api-tools/{tid}/keys", {"name": f"Close {level}", "value": value, "access_level": level},
-                token, expected=expected)
+    return post(
+        api,
+        f"api-tools/{tid}/keys",
+        {"name": f"Close {level}", "value": value, "access_level": level},
+        token,
+        expected=expected,
+    )
 
 
 def level(api, tid, subject, lv, token="ana-test", expected=200):
@@ -94,15 +123,19 @@ def test_a_level_picks_its_key_and_setting_one_takes_the_others_away(api):
     level(api, tid, "bot:ops", "read")
     assert choose(api, tid, "bot:ops") == (full, "read", "read")
     read = key(api, tid, SECRET_R, "read")["id"]
-    key(api, tid, SECRET_R + "x", "read", expected=409)       # one key per level
+    key(api, tid, SECRET_R + "x", "read", expected=409)  # one key per level
     level(api, tid, "bot:ops", "read")
     assert choose(api, tid, "bot:ops") == (read, "read", "read")
     level(api, tid, "bot:ops", "read_write")
     assert choose(api, tid, "bot:ops") == (full, "read_write", "read_write")
     with api.app.state.store.read() as c:
-        held = {r[0] for r in c.execute("SELECT credential_id FROM credential_grants WHERE subject='bot:ops' "
-                                        "AND revoked_at IS NULL")}
-    assert held == {full}                                     # never two values for one variable
+        held = {
+            r[0]
+            for r in c.execute(
+                "SELECT credential_id FROM credential_grants WHERE subject='bot:ops' AND revoked_at IS NULL"
+            )
+        }
+    assert held == {full}  # never two values for one variable
     level(api, tid, "bot:ops", "none")
     with api.app.state.store.read() as c:
         assert api_tools.subject_level(c, tid, "bot:ops") is None
@@ -123,7 +156,7 @@ def test_a_member_sees_only_the_tools_they_hold_and_cannot_manage_them(api):
     get(api, f"api-tools/{tid}", "cara-test", expected=404)
     level(api, tid, "human:cara", "read")
     row = rows("cara-test")["api:" + tid]
-    assert [w["id"] for w in row["who"]] == ["cara"]          # her own row only, not the bots Ana gave it to
+    assert [w["id"] for w in row["who"]] == ["cara"]  # her own row only, not the bots Ana gave it to
     page = get(api, f"api-tools/{tid}", "cara-test")
     assert page["can_manage"] is False and [a["subject"] for a in page["access"]] == ["human:cara"]
     post(api, f"api-tools/{tid}/keys", {"name": "x", "value": "y" * 20}, "cara-test", expected=403)
@@ -142,6 +175,7 @@ def test_a_check_marks_a_401_key_rejected_and_a_2xx_working(api, monkeypatch):
     def answer(url, hdrs, params):
         sent.append((url, hdrs, params))
         return answer.code
+
     monkeypatch.setattr(api_tools, "send_check", answer)
     answer.code = 401
     got = post(api, f"api-tools/{tid}/check", {})
@@ -172,8 +206,11 @@ def test_no_answer_carries_a_key_value_but_the_vaults_reveal(api, monkeypatch):
     seen.append(json.dumps(key(api, tid, SECRET_RW)))
     rid = key(api, tid, SECRET_R, "read")["id"]
     seen.append(json.dumps(level(api, tid, "human:cara", "read")))
-    r = api.patch(f"/api/v2/api-tools/{tid}/keys/{rid}", json={"value": SECRET_R + "-new", "expires_on": "2030-01-01"},
-                  headers=headers())
+    r = api.patch(
+        f"/api/v2/api-tools/{tid}/keys/{rid}",
+        json={"value": SECRET_R + "-new", "expires_on": "2030-01-01"},
+        headers=headers(),
+    )
     assert r.status_code == 200
     seen.append(r.text)
     seen.append(json.dumps(post(api, f"api-tools/{tid}/check", {})))
@@ -186,8 +223,10 @@ def test_no_answer_carries_a_key_value_but_the_vaults_reveal(api, monkeypatch):
     assert SECRET_RW not in text and SECRET_R not in text
     assert post(api, f"credentials/{rid}/reveal", {}, "cara-test")["value"] == SECRET_R + "-new"
     with api.app.state.store.read() as c:
-        logged = json.dumps([dict(r) for r in c.execute("SELECT * FROM events")] +
-                            [dict(r) for r in c.execute("SELECT * FROM tool_checks")])
+        logged = json.dumps(
+            [dict(r) for r in c.execute("SELECT * FROM events")]
+            + [dict(r) for r in c.execute("SELECT * FROM tool_checks")]
+        )
     assert SECRET_RW not in logged and SECRET_R not in logged
     assert api.delete(f"/api/v2/api-tools/{tid}", headers=headers()).json()["deleted"]
     with api.app.state.store.read() as c:
@@ -198,7 +237,7 @@ def test_a_key_stored_outside_tools_gets_a_tool_on_the_proxy_only_for_a_known_se
     """Settings' vault (and a chat card, and a computer's migration) store through the vault: each tool key lands on a
     tool in the same write. A known service's key fills that service's tool while it has no Read and write key."""
     setup(api)
-    tid = tool(api)["id"]                                     # Close CRM, no key yet
+    tid = tool(api)["id"]  # Close CRM, no key yet
     close = post(api, "credentials", {"name": "Close API key", "env": "CLOSE_API_KEY", "secret": SECRET_RW})["id"]
     own = post(api, "credentials", {"name": "Acme internal", "env": "ACME_TOKEN", "secret": SECRET_R})["id"]
     post(api, "credentials", {"name": "Bank", "kind": "password", "secret": "synthetic-password"})
@@ -207,21 +246,28 @@ def test_a_key_stored_outside_tools_gets_a_tool_on_the_proxy_only_for_a_known_se
     # so they are never a tool's and never go through the proxy.
     for env in ("OPENROUTER_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY"):
         post(api, "credentials", {"name": env, "env": env, "secret": SECRET_R + "-" + env.lower()})
-    second = post(api, "credentials", {"name": "Close backup", "env": "CLOSE_API_KEY", "secret": SECRET_RW + "-2"})["id"]
+    second = post(api, "credentials", {"name": "Close backup", "env": "CLOSE_API_KEY", "secret": SECRET_RW + "-2"})[
+        "id"
+    ]
     with api.app.state.store.read() as c:
         keys = {r["id"]: r["tool_id"] for r in c.execute("SELECT id, tool_id FROM credentials")}
         tools = {r["id"]: dict(r) for r in c.execute("SELECT id, delivery, service FROM tools")}
     assert keys[close] == tid and tools[tid]["delivery"] == "proxy"
-    assert keys[second] not in (None, tid) and tools[keys[second]]["delivery"] == "proxy"   # Close already had its key
+    assert keys[second] not in (None, tid) and tools[keys[second]]["delivery"] == "proxy"  # Close already had its key
     assert tools[keys[own]]["delivery"] == "computer" and tools[keys[own]]["service"] == ""
-    assert len(tools) == 3                                    # the password and the model keys are no tool's
+    assert len(tools) == 3  # the password and the model keys are no tool's
     rows = {r["id"]: r for r in get(api, "tool-index")["rows"]}
     assert {"api:" + tid, "api:" + keys[own], "api:" + keys[second]} <= set(rows)
     assert rows["api:" + keys[own]]["status"]["text"] == "Key on computers"
     # A key a bot already uses from its computer's files (the file migration) stays on computers, known service or not.
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,"
-                  "updated_by) VALUES('c-file','STRIPE_API_KEY (ops)','api_key','STRIPE_API_KEY','',x'01',x'01',"
-                  "'Computer migration','2026-11-05T00:00:00Z','2026-11-05T00:00:00Z','runner:r1')")
+        c.execute(
+            "INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,"
+            "updated_by) VALUES('c-file','STRIPE_API_KEY (ops)','api_key','STRIPE_API_KEY','',x'01',x'01',"
+            "'Computer migration','2026-11-05T00:00:00Z','2026-11-05T00:00:00Z','runner:r1')"
+        )
         filed = api_tools.ensure_tool(c, SimpleNamespace(actor="runner:r1"), "c-file", from_computer=True)
-        assert tuple(c.execute("SELECT service, delivery FROM tools WHERE id=?", (filed,)).fetchone()) == ("stripe", "computer")
+        assert tuple(c.execute("SELECT service, delivery FROM tools WHERE id=?", (filed,)).fetchone()) == (
+            "stripe",
+            "computer",
+        )

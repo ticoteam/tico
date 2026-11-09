@@ -1,5 +1,5 @@
-// The viewer's own Granola account on the Meetings page (ui/app/meetings-granola.js), shown only in Sources
-// (ui/app/meetings-sources.js): Connect opens a dialog with a short code and an Open Granola link, polls the connect
+// The viewer's own Granola account on the Meetings page (ui/app/meetings-granola.ts), shown only in Sources
+// (ui/app/meetings-sources.ts): Connect opens a dialog with a short code and an Open Granola link, polls the connect
 // status every `interval` seconds until connected, expired or denied; a connected account syncs once when the page
 // opens and the list refreshes; Sync now and Remove (confirmed) sit on its row; a signed-out account offers
 // "Sign in again" and a dot on Sources; the API-key importer is a dialog link.
@@ -38,7 +38,7 @@ async function open(browser, viewport, w, scheme = 'dark') {
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: w.role, name: 'Ana', email: 'ana@acme.example', cloud: true});

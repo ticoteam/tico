@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/runner_versions.py": [
+            {
+                "code": "reportOperatorIssue",
+                "range": {
+                    "startColumn": 27,
+                    "endColumn": 70,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

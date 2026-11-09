@@ -10,11 +10,16 @@ use serde_json::{json, Value};
 
 pub const DEFAULT_LIMIT_S: u64 = 5 * 60;
 pub const WAITING: &str = "Handed back before starting because the computer is updating or restarting; queued to continue";
-pub const CAPPED: &str = "Paused at the computer's drain time limit; work and session saved, queued to continue";
+pub const CAPPED: &str =
+    "Paused at the computer's drain time limit; work and session saved, queued to continue";
 pub const HELD: &str = "Stopped at the computer's drain time limit; this turn cannot be resumed (its harness cannot resume an interrupted turn, or it ran on a fallback whose thread is not kept), so the run is held for review instead of queued to continue";
 
 #[derive(Clone, Copy, PartialEq)]
-enum Turn { Waiting, Running, Returning(&'static str) }
+enum Turn {
+    Waiting,
+    Running,
+    Returning(&'static str),
+}
 
 #[derive(Default)]
 struct Inner {
@@ -29,13 +34,25 @@ pub struct Drain {
 }
 
 impl Drain {
-    pub fn new(limit: Duration) -> Self { Self { inner: Mutex::new(Inner::default()), limit } }
-
-    pub fn register(&self, aid: &str) {
-        self.inner.lock().unwrap().turns.entry(aid.into()).or_insert(Turn::Waiting);
+    pub fn new(limit: Duration) -> Self {
+        Self {
+            inner: Mutex::new(Inner::default()),
+            limit,
+        }
     }
 
-    pub fn begin(&self, now: Instant) { self.inner.lock().unwrap().since.get_or_insert(now); }
+    pub fn register(&self, aid: &str) {
+        self.inner
+            .lock()
+            .unwrap()
+            .turns
+            .entry(aid.into())
+            .or_insert(Turn::Waiting);
+    }
+
+    pub fn begin(&self, now: Instant) {
+        self.inner.lock().unwrap().since.get_or_insert(now);
+    }
 
     /// Serialize the start boundary with draining: once a drain begins, a waiting claim cannot start.
     pub fn start(&self, aid: &str) -> bool {
@@ -61,19 +78,30 @@ impl Drain {
         s.handed_back = 0;
     }
 
-    pub fn finish(&self, aid: &str) { self.inner.lock().unwrap().turns.remove(aid); }
+    pub fn finish(&self, aid: &str) {
+        self.inner.lock().unwrap().turns.remove(aid);
+    }
 
-    pub fn returning(&self, aid: &str) -> bool { matches!(self.inner.lock().unwrap().turns.get(aid), Some(Turn::Returning(_))) }
+    pub fn returning(&self, aid: &str) -> bool {
+        matches!(
+            self.inner.lock().unwrap().turns.get(aid),
+            Some(Turn::Returning(_))
+        )
+    }
 
     /// Returned at the active-turn cap rather than before starting: the turn ran and may have acted.
-    pub fn capped(&self, aid: &str) -> bool { self.inner.lock().unwrap().turns.get(aid) == Some(&Turn::Returning(CAPPED)) }
+    pub fn capped(&self, aid: &str) -> bool {
+        self.inner.lock().unwrap().turns.get(aid) == Some(&Turn::Returning(CAPPED))
+    }
 
     /// A claim being returned stays due, so every later wait (a retried git lock, the start acknowledgement) cancels
     /// too; it is counted once.
     pub(crate) fn due(&self, aid: &str, now: Instant) -> Option<&'static str> {
         let mut s = self.inner.lock().unwrap();
         let turn = *s.turns.get(aid)?;
-        if let Turn::Returning(line) = turn { return Some(line); }
+        if let Turn::Returning(line) = turn {
+            return Some(line);
+        }
         let since = s.since?;
         let line = match turn {
             Turn::Waiting => WAITING,
@@ -89,7 +117,9 @@ impl Drain {
     /// host, saves the result in the durable outbox and flushes it before releasing the claim.
     pub async fn wait(&self, aid: &str) -> &'static str {
         loop {
-            if let Some(line) = self.due(aid, Instant::now()) { return line; }
+            if let Some(line) = self.due(aid, Instant::now()) {
+                return line;
+            }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
@@ -114,11 +144,23 @@ mod tests {
         drain.begin(now);
         drain.begin(now + Duration::from_secs(299)); // another heartbeat cannot restart the clock
         assert!(!drain.start("waiting")); // the login became free at the same time as the drain
-        assert_eq!(drain.progress(), Some(json!({"running": 1, "handed_back": 1})));
+        assert_eq!(
+            drain.progress(),
+            Some(json!({"running": 1, "handed_back": 1}))
+        );
         assert_eq!(drain.due("running", now + Duration::from_secs(299)), None);
-        assert_eq!(drain.due("running", now + Duration::from_secs(300)), Some(CAPPED));
-        assert_eq!(drain.due("running", now + Duration::from_secs(301)), Some(CAPPED)); // still due, counted once
-        assert_eq!(drain.progress(), Some(json!({"running": 0, "handed_back": 2})));
+        assert_eq!(
+            drain.due("running", now + Duration::from_secs(300)),
+            Some(CAPPED)
+        );
+        assert_eq!(
+            drain.due("running", now + Duration::from_secs(301)),
+            Some(CAPPED)
+        ); // still due, counted once
+        assert_eq!(
+            drain.progress(),
+            Some(json!({"running": 0, "handed_back": 2}))
+        );
         drain.finish("running");
         drain.finish("waiting");
         drain.end(); // a failed update resumes work instead of returning every new claim forever

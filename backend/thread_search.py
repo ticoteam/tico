@@ -18,12 +18,12 @@ that key, so no write scans the index.
 
 import re
 
-HITS_MAX = 50             # hits in one page
-SCAN_BATCH = 200          # candidates read at a time
-SCAN_MAX = 2000           # candidates one page decides; a full scan with hits still offers the next page
-MATCH_WORDS = 16          # words a query may use; the rest are dropped
-TEXT_MAX = 20_000         # characters of a body that are indexed (written into migration 0047's triggers)
-EXCERPT_WORDS = 16        # words of text each hit shows
+HITS_MAX = 50  # hits in one page
+SCAN_BATCH = 200  # candidates read at a time
+SCAN_MAX = 2000  # candidates one page decides; a full scan with hits still offers the next page
+MATCH_WORDS = 16  # words a query may use; the rest are dropped
+TEXT_MAX = 20_000  # characters of a body that are indexed (written into migration 0047's triggers)
+EXCERPT_WORDS = 16  # words of text each hit shows
 WORD = re.compile(r"\w+")
 
 
@@ -48,12 +48,14 @@ def search(c, query, *, thread_sql, message_sql, readable, args=(), limit=20, be
     if not match:
         return {"hits": [], "next_cursor": None}
     limit = max(1, min(int(limit or 20), HITS_MAX))
-    sql = ("SELECT m.*, k.id AS search_key, cv.subject AS search_title, "
-           f"snippet(message_search, 0, '', '', '…', {EXCERPT_WORDS}) AS excerpt "
-           "FROM message_search JOIN message_search_keys k ON k.id=message_search.rowid "
-           "JOIN messages m ON m.id=k.message_id JOIN conversations cv ON cv.id=m.conversation_id "
-           f"WHERE message_search MATCH ? AND ({thread_sql}) AND ({message_sql}) AND k.id<? "
-           "ORDER BY k.id DESC LIMIT ?")
+    sql = (
+        "SELECT m.*, k.id AS search_key, cv.subject AS search_title, "
+        f"snippet(message_search, 0, '', '', '…', {EXCERPT_WORDS}) AS excerpt "
+        "FROM message_search JOIN message_search_keys k ON k.id=message_search.rowid "
+        "JOIN messages m ON m.id=k.message_id JOIN conversations cv ON cv.id=m.conversation_id "
+        f"WHERE message_search MATCH ? AND ({thread_sql}) AND ({message_sql}) AND k.id<? "
+        "ORDER BY k.id DESC LIMIT ?"
+    )
     below = int(before) if before else 1 << 62
     page, scanned, more, last_key = [], 0, False, None
     while scanned < SCAN_MAX and not more:
@@ -68,11 +70,18 @@ def search(c, query, *, thread_sql, message_sql, readable, args=(), limit=20, be
                 more = True
                 break
             last_key = row["search_key"]
-            page.append({"message_id": message["id"], "thread_id": message["conversation_id"],
-                         "title": message["search_title"], "sender_id": message["sender_id"],
-                         "created_at": message["created_at"], "excerpt": message["excerpt"]})
+            page.append(
+                {
+                    "message_id": message["id"],
+                    "thread_id": message["conversation_id"],
+                    "title": message["search_title"],
+                    "sender_id": message["sender_id"],
+                    "created_at": message["created_at"],
+                    "excerpt": message["excerpt"],
+                }
+            )
         if len(rows) < SCAN_BATCH:
             break
     else:
-        more = more or scanned >= SCAN_MAX      # the budget ran out with candidates left: the page after goes on
+        more = more or scanned >= SCAN_MAX  # the budget ran out with candidates left: the page after goes on
     return {"hits": page, "next_cursor": str(last_key) if more and page else None}

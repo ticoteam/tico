@@ -18,6 +18,11 @@ changes. It is for the pages where a change is news: pricing, changelog, careers
 - Lines that are only numbers, dates or a copyright notice are ignored, so a changing year files nothing.
 - Pages are read on the server through the same guard as `hub doc fetch`: public addresses only, every redirect checked,
   5 MB and 20 seconds. A page that cannot be read is marked `error` or `blocked` on its watch; the others still run.
+- With the [Tico AI Gateway](ai-gateway.md) connected, Tico's Signals read the pages instead: each watch is registered there
+  once, the page is read daily there, and each check files the changes it found, the same way. A stopped watch is ended
+  there. A watch Signals does not hold yet is read on the server as above.
+- A `release` watch follows a product's releases: its address is `github:owner/repo` or a release feed. It needs the
+  Gateway (Signals reads it every six hours), and each new release files like a page change.
 
 Watches are never deleted. Stopping one ends it, and the same page can be watched again.
 
@@ -30,14 +35,14 @@ watches for each core competitor while it sets up the first map ([playbook](../t
 |---|---|
 | Watched pages at once | 200 |
 | Pages read a day | 50, the longest unchecked first |
-| Page kinds | pricing, careers, changelog, docs, home, other |
+| Page kinds | pricing, careers, changelog, docs, home, other, release |
 | Smallest change filed | 40 characters |
 
 ## Commands
 
 | Command | Does |
 |---|---|
-| `hub market watch add <entity id> <url> [--kind pricing]` | Watch a page of a market entity |
+| `hub market watch add <entity id> <url> [--kind pricing]` | Watch a page of a market entity (`--kind release` with `github:owner/repo`) |
 | `hub market watch list [--entity <id>]` | The watched pages, with when each was checked and changed |
 | `hub market watch stop <id>` | Stop watching a page |
 | `hub market watch check` | Read the watched pages now, in the background |

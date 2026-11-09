@@ -1,4 +1,5 @@
 """Fills the inputs block of the cloud-init files in infra/cloud-init/ (the same files people can paste by hand)."""
+
 from __future__ import annotations
 
 import re
@@ -27,22 +28,40 @@ def _template(name: str, template_dir: Path | None) -> str:
     return ((template_dir or TEMPLATE_DIR) / name).read_text()
 
 
-def server_user_data(env: dict[str, str], *, version: str, server_ip: str = "", allow_ssh: bool = False,
-                     template_dir: Path | None = None) -> str:
+def server_user_data(
+    env: dict[str, str], *, version: str, server_ip: str = "", allow_ssh: bool = False, template_dir: Path | None = None
+) -> str:
     """`env` is Settings.to_env(): the .env the server will get. Cloud-only inputs are prefixed TICO_CLOUD_."""
     if not VERSION_RE.match(version):
         raise ValueError(f"version must be a release such as v1.2.3, not {version!r}")
-    values = {"TICO_CLOUD_VERSION": version, "TICO_CLOUD_SERVER_IP": server_ip,
-              "TICO_CLOUD_ALLOW_SSH": "1" if allow_ssh else "0", **env}
+    values = {
+        "TICO_CLOUD_VERSION": version,
+        "TICO_CLOUD_SERVER_IP": server_ip,
+        "TICO_CLOUD_ALLOW_SSH": "1" if allow_ssh else "0",
+        **env,
+    }
     values.pop("TICO_TAG", None)  # the script pins it to the version
     return _fill(_template("tico-server.yaml", template_dir), values)
 
 
-def runner_user_data(*, url: str, code: str, label: str, version: str, allow_ssh: bool = False, screen: bool = True,
-                     template_dir: Path | None = None) -> str:
+def runner_user_data(
+    *,
+    url: str,
+    code: str,
+    label: str,
+    version: str,
+    allow_ssh: bool = False,
+    screen: bool = True,
+    template_dir: Path | None = None,
+) -> str:
     if not VERSION_RE.match(version):
         raise ValueError(f"version must be a release such as v1.2.3, not {version!r}")
-    values = {"TICO_CLOUD_VERSION": version, "TICO_CLOUD_ALLOW_SSH": "1" if allow_ssh else "0",
-              "TICO_URL": url, "TICO_CODE": code, "TICO_RUNNER_LABEL": label,
-              "TICO_SCREEN": "1" if screen else "0"}
+    values = {
+        "TICO_CLOUD_VERSION": version,
+        "TICO_CLOUD_ALLOW_SSH": "1" if allow_ssh else "0",
+        "TICO_URL": url,
+        "TICO_CODE": code,
+        "TICO_RUNNER_LABEL": label,
+        "TICO_SCREEN": "1" if screen else "0",
+    }
     return _fill(_template("tico-runner.yaml", template_dir), values)
