@@ -63,7 +63,6 @@
 #meet-live-now{display:inline-flex;align-items:center;gap:6px}
 #meet-live-now .pill{line-height:16px}   /* the Beta pill sits inside without growing the button */
 .notes-head input[type=search]{width:100%;min-width:0;max-width:440px;justify-self:end}
-.round-add.primary{flex:0 0 36px;width:36px;height:36px;min-width:36px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;font-size:24px;font-weight:400;line-height:var(--lh-none)}
 .notes{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
 .notes-list{min-width:0}
 .notes-filters{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:7px 14px;border-bottom:1px solid var(--line)}
@@ -71,7 +70,7 @@
 .notes-filters select{flex:none;width:auto;max-width:220px;height:var(--ctl);font:inherit;font-size:var(--t-base);color:var(--ink);padding:0 26px 0 8px}
 .notes-filters .notes-count{margin-left:auto;padding-left:8px;font-size:var(--t-sm);font-variant-numeric:tabular-nums;white-space:nowrap}
 .notes-rows{overflow:auto}
-/* The viewer's own Granola account on Tools > Granola (ui/app/meetings-granola.js mountGranolaTool). */
+/* The viewer's own Granola account on Tools > Granola (ui/app/meetings-granola.ts mountGranolaTool). */
 .mg-row{display:flex;align-items:center;gap:10px;padding:6px 8px 6px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
 .mg-row.mg-flat{border:0;padding:0;background:none}
 .mg-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
@@ -100,7 +99,7 @@
 @media (max-width:760px){
   .mg-actions button.primary,.mg-actions button.ghost,.mg-code-row .ghost{min-height:32px;padding:4px 10px}
 }
-/* Sources (ui/app/meetings-sources.js): connected rows first, then the ones to connect. */
+/* Sources (ui/app/meetings-sources.ts): connected rows first, then the ones to connect. */
 .msrc-dialog{width:min(500px,calc(100vw - 32px));padding:16px 18px 10px}
 .msrc-list{list-style:none;margin:0;padding:0}
 .msrc-list+.msrc-list{margin-top:4px;border-top:1px solid var(--line)}
@@ -264,6 +263,7 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .meet-sources{position:relative;margin:0}
 .meet-review-bar .linkish{display:inline-flex;align-items:center;gap:6px;color:var(--muted);text-decoration:none;font-size:var(--t-base);white-space:nowrap}
 .meet-review-bar .linkish:hover,.meet-review-bar .linkish[aria-expanded=true]{color:var(--ink)}
+.meet-review-bar [hidden]{display:none}
 .meet-src-btn .dot{width:7px;height:7px;background:var(--fail)}
 .meet-review-bulk input,.meet-row input[type=checkbox]{width:16px;height:16px;flex:none;accent-color:var(--ink)}
 .meet-row.review-pending{grid-template-columns:16px auto minmax(0,1fr) auto}
@@ -280,7 +280,7 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 @media(max-width:760px){
   .meet-review-tabs button{padding:6px 8px;font-size:var(--t-base);min-height:40px}
   .meet-review-bar{gap:10px}
-  #meet-recorder{display:none}
+  #meet-recorder,#meet-recorder-update{display:none}
   .mg-line .mg-count{display:none}
   #main:has(.meet-review-bar){padding-bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 16px)}
   .meet-row.review-pending .meet-main{grid-column:3 / -1}
@@ -339,7 +339,7 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .live-join{margin:12px 0}.live-finalized{margin:14px 0 0;padding-top:10px;border-top:1px solid var(--line);font-size:var(--t-base)}
 .live-status{min-height:1.5em;margin-top:8px;color:var(--muted);font-size:var(--t-sm)}
 @media(max-width:760px){
-  .notes-head-actions{grid-column:2;grid-row:1}.notes-head-actions button:not(.docs-ask){padding:9px;font-size:var(--t-sm)}
+  .notes-head-actions{grid-column:2;grid-row:1}.notes-head-actions button:not(.docs-ask){padding:9px;font-size:var(--t-sm)}.notes-head-actions .docs-ask{width:40px;height:40px}
   .live-layout{grid-template-columns:1fr}.live-list{max-height:220px}
   .live-connect{align-items:stretch;flex-direction:column}.live-connect input{max-width:none}
   .live-card{padding:12px}.live-card-head{flex-direction:column}.live-controls{justify-content:flex-start}

@@ -10,7 +10,7 @@ this installation calls itself and this bot.
 Pure: no HTTP, no database, no launchd. The runner materializes the two bootstrap bots before
 their first turn (runner_support/catalog_job.py); BotOps materializes every other chosen bot inside a turn
 with `hub bot create` (clients/hubcli.py), and an operator can do it by hand with
-`scripts/tico -e <env> bot create <slug> --template <template>`. `TICO_CATALOG_DIR` overrides
+`scripts/tico-computer -e <env> bot create <slug> --template <template>`. `TICO_CATALOG_DIR` overrides
 where the cards are read from, so a test or a second checkout can hold its own.
 """
 
@@ -38,19 +38,21 @@ CARD = "card.yaml"
 STAMP = ".tico-template.json"
 PRODUCT_OWNED = ("AGENT.md", "playbooks", "skills")
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-SLUG_MAX = 40                   # short enough for `bot-<slug>` on GitHub and readable in a path
+SLUG_MAX = 40  # short enough for `bot-<slug>` on GitHub and readable in a path
 # What a template's text is filled with before the first commit.
 PLACEHOLDERS = ("company_name", "app_name", "assistant_name", "bot_name")
-MAX_FILL = 1_000_000            # a file worth filling; anything larger is copied as it is
+MAX_FILL = 1_000_000  # a file worth filling; anything larger is copied as it is
 # Inbox bots: the UI appends `Mailbox: <email>` so BotOps (and materialize) can fill {{mailbox}}.
 MAILBOX_RE = re.compile(r"^Mailbox:\s*(\S+@\S+)\s*$", re.M)
 # The onboarding answers, in the order `knowledge/company.md` says them. A missing answer is a
 # line the page does not have rather than an empty one.
-ANSWERS = (("what_we_do", "What the Team does"),
-           ("customers", "Who its customers are"),
-           ("team_size", "How big the team is"),
-           ("work_arrives", "Where work arrives"),
-           ("repetitive_work", "What repeats often enough to hand to a bot"))
+ANSWERS = (
+    ("what_we_do", "What the Team does"),
+    ("customers", "Who its customers are"),
+    ("team_size", "How big the team is"),
+    ("work_arrives", "Where work arrives"),
+    ("repetitive_work", "What repeats often enough to hand to a bot"),
+)
 
 
 # ----------------------------------------------------------------------------- reading the cards
@@ -79,11 +81,11 @@ def free_slug(name, taken, fallback="bot"):
     slug, n = base, 2
     while taken(slug):
         suffix = f"-{n}"
-        slug, n = base[:SLUG_MAX - len(suffix)].rstrip("-") + suffix, n + 1
+        slug, n = base[: SLUG_MAX - len(suffix)].rstrip("-") + suffix, n + 1
     return slug
 
 
-_CARDS = {}       # catalog folder -> (each card's path, mtime and size; the parsed cards)
+_CARDS = {}  # catalog folder -> (each card's path, mtime and size; the parsed cards)
 
 
 def cards(directory=None):
@@ -103,7 +105,7 @@ def cards(directory=None):
         try:
             card = yaml.safe_load(path.read_text()) or {}
         except (OSError, yaml.YAMLError):
-            continue                # a card nobody can read is a card the catalog does not offer
+            continue  # a card nobody can read is a card the catalog does not offer
         if isinstance(card, dict):
             # The folder is the template's name: that is what `--template` takes.
             found.append({**card, "template": path.parent.name})
@@ -164,8 +166,9 @@ def identify(text, slug, display_name):
     else:
         text = "name: " + slug + "\n" + text
     if display_name:
-        text = re.sub(r"^display_name:.*$", 'display_name: "' + display_name.replace('"', "'") + '"',
-                      text, count=1, flags=re.M)
+        text = re.sub(
+            r"^display_name:.*$", 'display_name: "' + display_name.replace('"', "'") + '"', text, count=1, flags=re.M
+        )
     return text.replace("owner:CHANGE-ME", "owner:" + slug)
 
 
@@ -188,14 +191,19 @@ def company_page(names, answers, today=None):
     said = 0
     for key, label in ANSWERS:
         value = answers.get(key)
-        value = (", ".join(str(item).strip() for item in value if str(item).strip())
-                 if isinstance(value, (list, tuple)) else str(value or "").strip())
+        value = (
+            ", ".join(str(item).strip() for item in value if str(item).strip())
+            if isinstance(value, (list, tuple))
+            else str(value or "").strip()
+        )
         if value:
             lines.append(f"{label}: {value}")
             said += 1
     if not said:
-        lines.append("Nobody has answered the onboarding questions yet; ask a person before you "
-                     "assume anything about the company here.")
+        lines.append(
+            "Nobody has answered the onboarding questions yet; ask a person before you "
+            "assume anything about the company here."
+        )
     lines += ["", "## Sources", f"onboarding answers, {today or date.today().isoformat()}", ""]
     return "\n".join(lines)
 
@@ -206,14 +214,24 @@ def set_sections(text, sections):
         block = f"## {heading}\n{str(body).strip()}\n"
         found = re.search(rf"^## {re.escape(heading)}[ \t]*\n.*?(?=^## |\Z)", text, re.M | re.S)
         if found:
-            text = text[:found.start()] + block + ("\n" if found.end() < len(text) else "") + text[found.end():]
+            text = text[: found.start()] + block + ("\n" if found.end() < len(text) else "") + text[found.end() :]
         else:
             text = text.rstrip("\n") + "\n\n" + block
     return text
 
 
-def materialize(template, slug, workspace, names, answers, display_name=None, instructions=None,
-                directory=None, state=None, folder=None):
+def materialize(
+    template,
+    slug,
+    workspace,
+    names,
+    answers,
+    display_name=None,
+    instructions=None,
+    directory=None,
+    state=None,
+    folder=None,
+):
     """Copy one catalog template into `<workspace>/bot-<slug>` and commit it. Returns the path. `folder` is the folder
     the server recorded for the bot when it registered it (a new bot whose `bot-<slug>` another bot already works in
     gets `bot-<slug>-<part of its id>`), and wins over the slug's folder.
@@ -242,8 +260,9 @@ def materialize(template, slug, workspace, names, answers, display_name=None, in
     values = {key: str(names.get(key) or "") for key in PLACEHOLDERS[:-1]}
     # A card names the assistant as `{{assistant_name}}`, so what this bot is called is filled
     # from the same names before it fills anything else.
-    values["bot_name"] = fill(str(display_name or (card(template, directory) or {}).get("name") or slug),
-                              values) or slug
+    values["bot_name"] = (
+        fill(str(display_name or (card(template, directory) or {}).get("name") or slug), values) or slug
+    )
     target.parent.mkdir(parents=True, exist_ok=True)
     # The card describes the template to a person choosing; it is not part of the bot's repository.
     shutil.copytree(source, target, ignore=shutil.ignore_patterns(CARD, ".git"))
@@ -253,7 +272,7 @@ def materialize(template, slug, workspace, names, answers, display_name=None, in
         try:
             text = path.read_text()
         except (UnicodeError, OSError):
-            continue                # a binary or unreadable file is copied as it is
+            continue  # a binary or unreadable file is copied as it is
         filled = fill(text, values)
         if filled != text:
             _write(target, path, filled)
@@ -269,7 +288,9 @@ def materialize(template, slug, workspace, names, answers, display_name=None, in
         _write(target, page, set_sections(page.read_text() if page.is_file() else "# State\n", state))
     apply_mailbox(target, instructions)
     if (card(template, directory) or {}).get("bootstrap"):
-        _stamp(target, template, {rel: _digest(text) for rel, text in _product_files(source, template, values, directory)})
+        _stamp(
+            target, template, {rel: _digest(text) for rel, text in _product_files(source, template, values, directory)}
+        )
     commit(target, f"Set up {slug} from the {template} template")
     return target
 
@@ -284,7 +305,7 @@ def _product_files(source, template, values, directory=None):
     owned = (card(template, directory) or {}).get("product_owned") or PRODUCT_OWNED
     for name in owned:
         base = source / name
-        for path in ([base] if base.is_file() else sorted(base.rglob("*")) if base.is_dir() else []):
+        for path in [base] if base.is_file() else sorted(base.rglob("*")) if base.is_dir() else []:
             if not path.is_file() or path.stat().st_size > MAX_FILL:
                 continue
             try:
@@ -314,7 +335,11 @@ def _write(target, path, text):
 
 
 def _stamp(target, template, files):
-    _write(target, Path(target) / STAMP, json.dumps({"template": template, "files": files}, indent=1, sort_keys=True) + "\n")
+    _write(
+        target,
+        Path(target) / STAMP,
+        json.dumps({"template": template, "files": files}, indent=1, sort_keys=True) + "\n",
+    )
 
 
 def refresh(template, target, names, display_name=None, directory=None):
@@ -354,7 +379,11 @@ def refresh(template, target, names, display_name=None, directory=None):
         files[rel] = digest
     if files != recorded:
         _stamp(target, template, files)
-        commit_paths(target, [*changed, STAMP], f"Refresh {len(changed)} product file{'s' if len(changed) != 1 else ''} from the {template} template")
+        commit_paths(
+            target,
+            [*changed, STAMP],
+            f"Refresh {len(changed)} product file{'s' if len(changed) != 1 else ''} from the {template} template",
+        )
     return changed
 
 
@@ -362,8 +391,9 @@ def refresh(template, target, names, display_name=None, directory=None):
 def git(path, *argv, timeout=30):
     """One git command in a repository, or None when git could not be run at all."""
     try:
-        return subprocess.run(["git", "-C", str(path), *argv], capture_output=True, text=True,
-                              stdin=subprocess.DEVNULL, timeout=timeout)
+        return subprocess.run(
+            ["git", "-C", str(path), *argv], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=timeout
+        )
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -410,9 +440,14 @@ class Collector:
         if level == "FAIL":
             self.problems.append(text)
 
-    def ok(self, text): self.line("PASS", text)
-    def warn(self, text): self.line("WARN", text)
-    def fail(self, text): self.line("FAIL", text)
+    def ok(self, text):
+        self.line("PASS", text)
+
+    def warn(self, text):
+        self.line("WARN", text)
+
+    def fail(self, text):
+        self.line("FAIL", text)
 
 
 def check(path, slug):
@@ -423,7 +458,8 @@ def check(path, slug):
     itself — its manifest, its instructions, its routines and stale references — so BotOps can
     tell whether what it just wrote is worth handing over, before the bot is on the roster.
     """
-    from clients import preflight            # imported here: the rest of this module is standalone
+    from clients import preflight  # imported here: the rest of this module is standalone
+
     path = Path(path)
     if not path.is_dir():
         return [f"repo: {path} does not exist"]

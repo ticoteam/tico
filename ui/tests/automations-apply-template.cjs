@@ -1,4 +1,4 @@
-// Apply template (ui/app/automations-new.js) against the fake hub in support/automations-fake.cjs: offered in the ⋯ menu
+// Apply template (ui/app/automations-new.ts) against the fake hub in support/automations-fake.cjs: offered in the ⋯ menu
 // of an October inbox only (one llm step, no choose), it shows the filled template's destinations, then PATCHes the
 // template's rules, questions and destinations with the old step as the LLM (its prompt as the instructions, its id,
 // out and model kept, Sort + draft as the owner) and the automation renders as the board. A group's inbox gets Sort

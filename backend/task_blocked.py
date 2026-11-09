@@ -6,6 +6,7 @@ task_holds (migration 0075; a task row reads it as blocked_since, blocked_reason
 blocked_from_status, blocked_gate through hubdb.TASKS): when it began and where clearing it returns the ticket, so
 clearing a hold never skips a review gate.
 """
+
 import threading
 import time
 from datetime import datetime
@@ -13,6 +14,7 @@ from datetime import datetime
 
 def ensure(c):
     from . import hubdb as H
+
     # The build clock. The hold itself is a task_holds row (migration 0075).
     H.add_column(c, 'tasks', 'building_started_at', 'TEXT')
     H.add_column(c, 'tasks', 'building_seconds', 'REAL NOT NULL DEFAULT 0')
@@ -24,13 +26,18 @@ def stamp_builds(c):
         # Upgrade active builds without restarting their age at server startup. This runs inside a deferred
         # transaction that has already read, so a write statement, even one matching nothing, fails at once with
         # "database is locked" if another connection committed meanwhile: write only when a build needs it.
-        unstamped = ("FROM tasks WHERE type_id=? AND status='doing' AND building_started_at IS NULL "
-                     "AND building_seconds=0 AND created_at LIKE '____-__-__T%'")
+        unstamped = (
+            "FROM tasks WHERE type_id=? AND status='doing' AND building_started_at IS NULL "
+            "AND building_seconds=0 AND created_at LIKE '____-__-__T%'"
+        )
         if c.execute("SELECT 1 " + unstamped + " LIMIT 1", (typ[0],)).fetchone():
-            c.execute("UPDATE tasks SET building_started_at=coalesce((SELECT max(created_at) FROM history_events e WHERE "
-                      "e.subject_type='task' AND e.subject_id=tasks.id AND e.kind='step' AND e.new=tasks.step_id),"
-                      "created_at) "
-                      "WHERE id IN (SELECT id " + unstamped + ")", (typ[0],))
+            c.execute(
+                "UPDATE tasks SET building_started_at=coalesce((SELECT max(created_at) FROM history_events e WHERE "
+                "e.subject_type='task' AND e.subject_id=tasks.id AND e.kind='step' AND e.new=tasks.step_id),"
+                "created_at) "
+                "WHERE id IN (SELECT id " + unstamped + ")",
+                (typ[0],),
+            )
 
 
 def backfill(c):
@@ -41,12 +48,20 @@ def backfill(c):
     from . import hubdb as H
     from .roadmap_flow import PRODUCT
     from . import task_holds as TH
-    for row in H._rows(c.execute(
+
+    for row in H._rows(
+        c.execute(
             f"SELECT t.* FROM {H.TASKS} t JOIN task_types ty ON ty.id=t.type_id LEFT JOIN task_steps s ON s.id=t.step_id "
             "WHERE t.status='waiting' AND t.blocked_since IS NULL AND coalesce(ty.role,'')<>? "
-            "AND (ty.role='engineering' OR s.status='waiting')", (PRODUCT,))):
-        step = H._one(c, 'SELECT s.name,s.status,ty.role FROM task_steps s JOIN task_types ty ON ty.id=s.type_id '
-                         'WHERE s.id=?', (row.get('step_id'),))
+            "AND (ty.role='engineering' OR s.status='waiting')",
+            (PRODUCT,),
+        )
+    ):
+        step = H._one(
+            c,
+            'SELECT s.name,s.status,ty.role FROM task_steps s JOIN task_types ty ON ty.id=s.type_id WHERE s.id=?',
+            (row.get('step_id'),),
+        )
         H._set_status(c, H.KEEPER, row, 'waiting', note=row.get('note') or 'Waiting on a hold')
         previous = step['status'] if step and step['status'] != 'waiting' else 'open'
         TH.change(c, row['id'], 'blocked', from_status=previous)
@@ -60,15 +75,21 @@ def forget_retired_resumes(c):
     tells: retiring wrote it, and a hold moves nothing. A ticket held in Blocked by an older version has that hold's
     move after it, so its step and the move before it tell. Writes only when a ticket needs it, as stamp_builds does."""
     from . import hubdb as H, task_holds as TH
+
     for task_id, saved, step in c.execute(
-            "SELECT t.id,h.from_step_id,t.step_id FROM tasks t JOIN task_types ty ON ty.id=t.type_id "
-            "JOIN task_holds h ON h.task_id=t.id AND h.kind='blocked' AND h.released_at IS NULL "
-            "WHERE ty.role='engineering' AND h.from_step_id IS NOT NULL").fetchall():
-        moves = c.execute("SELECT new,note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' "
-                          "ORDER BY created_at DESC,rowid DESC LIMIT 2", (task_id,)).fetchall()
+        "SELECT t.id,h.from_step_id,t.step_id FROM tasks t JOIN task_types ty ON ty.id=t.type_id "
+        "JOIN task_holds h ON h.task_id=t.id AND h.kind='blocked' AND h.released_at IS NULL "
+        "WHERE ty.role='engineering' AND h.from_step_id IS NOT NULL"
+    ).fetchall():
+        moves = c.execute(
+            "SELECT new,note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' "
+            "ORDER BY created_at DESC,rowid DESC LIMIT 2",
+            (task_id,),
+        ).fetchall()
         retired_here = bool(moves) and moves[0][0] == saved and moves[0][1] == H.RETIRED_WAITING
-        held_in_blocked = (len(moves) == 2 and moves[0][0] == step and moves[1][0] == saved
-                           and moves[1][1] == H.RETIRED_WAITING)
+        held_in_blocked = (
+            len(moves) == 2 and moves[0][0] == step and moves[1][0] == saved and moves[1][1] == H.RETIRED_WAITING
+        )
         if retired_here or held_in_blocked:
             TH.change(c, task_id, 'blocked', from_step_id=None, from_status='open')
 
@@ -80,45 +101,67 @@ def leave_retired_blocked(c):
     person's manual hold stays put. The Blocked step is left empty for the team to delete.
     Writes only when a ticket is in that step, as stamp_builds does."""
     from . import hubdb as H
+
     rows = c.execute(
         "SELECT t.id,t.type_id,h.from_step_id,t.step_id FROM tasks t "
         "JOIN task_types ty ON ty.id=t.type_id JOIN task_steps s ON s.id=t.step_id "
         "JOIN task_holds h ON h.task_id=t.id AND h.kind='blocked' AND h.released_at IS NULL "
         "WHERE ty.role='engineering' AND t.status='waiting' "
-        "AND coalesce(h.cause,'')<>'manual' AND s.name='Blocked' AND s.status='waiting'").fetchall()
+        "AND coalesce(h.cause,'')<>'manual' AND s.name='Blocked' AND s.status='waiting'"
+    ).fetchall()
     for task_id, type_id, saved, step_id in rows:
-        steps = {s[0]: (s[1], s[2]) for s in c.execute(
-            "SELECT id,name,status FROM task_steps WHERE type_id=?", (type_id,)).fetchall()}
-        came_from = c.execute("SELECT old FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' AND new=? "
-                              "ORDER BY created_at DESC,rowid DESC LIMIT 1", (task_id, step_id)).fetchone()
-        target = next((sid for sid in (saved, came_from and came_from[0])
-                       if sid in steps and steps[sid][1] in H.ACTIVE_STATUSES and steps[sid][1] != 'waiting'), None)
+        steps = {
+            s[0]: (s[1], s[2])
+            for s in c.execute("SELECT id,name,status FROM task_steps WHERE type_id=?", (type_id,)).fetchall()
+        }
+        came_from = c.execute(
+            "SELECT old FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' AND new=? "
+            "ORDER BY created_at DESC,rowid DESC LIMIT 1",
+            (task_id, step_id),
+        ).fetchone()
+        target = next(
+            (
+                sid
+                for sid in (saved, came_from and came_from[0])
+                if sid in steps and steps[sid][1] in H.ACTIVE_STATUSES and steps[sid][1] != 'waiting'
+            ),
+            None,
+        )
         if not target:
-            target = next((sid for sid, (name, status) in steps.items()
-                           if name == 'On Deck' and status == 'open'), None)
+            target = next(
+                (sid for sid, (name, status) in steps.items() if name == 'On Deck' and status == 'open'), None
+            )
         if not target:
             continue
-        c.execute("UPDATE tasks SET step_id=?,step_rank=? WHERE id=?",
-                  (target, H._step_end(c, target, task_id), task_id))
+        c.execute(
+            "UPDATE tasks SET step_id=?,step_rank=? WHERE id=?", (target, H._step_end(c, target, task_id), task_id)
+        )
         H._task_event(c, task_id, H.KEEPER, 'step', step_id, target, 'Its hold left the retired Blocked step')
 
 
 def seconds(start, at):
     if not start:
         return 0
-    return max(0, (datetime.fromisoformat(at.replace('Z', '+00:00')) -
-                   datetime.fromisoformat(start.replace('Z', '+00:00'))).total_seconds())
+    return max(
+        0,
+        (
+            datetime.fromisoformat(at.replace('Z', '+00:00')) - datetime.fromisoformat(start.replace('Z', '+00:00'))
+        ).total_seconds(),
+    )
 
 
 def clocks(row, at):
     """The Building clock excludes every hold; blocked age starts at the first hold."""
-    return {'building_seconds': (row.get('building_seconds') or 0) + seconds(row.get('building_started_at'), at),
-            'blocked_seconds': seconds(row.get('blocked_since'), at)}
+    return {
+        'building_seconds': (row.get('building_seconds') or 0) + seconds(row.get('building_started_at'), at),
+        'blocked_seconds': seconds(row.get('blocked_since'), at),
+    }
 
 
 def transition(c, row, effective, step_id, note, at, manual=False, stepped=False):
     """Called in the same transaction as every status/step move."""
     from . import hubdb as H, task_holds as TH
+
     if 'building_seconds' not in row or not H._has_table(c, 'task_holds'):
         return  # old, deliberately minimal hubdb fixtures
     row = TH.with_holds(c, row)
@@ -126,8 +169,10 @@ def transition(c, row, effective, step_id, note, at, manual=False, stepped=False
         return  # roadmap steps derive from linked delivery tickets, not task holds
     building = effective == 'doing'
     elapsed = clocks(row, at)['building_seconds']
-    c.execute('UPDATE tasks SET building_seconds=?,building_started_at=? WHERE id=?',
-              (elapsed, at if building else None, row['id']))
+    c.execute(
+        'UPDATE tasks SET building_seconds=?,building_started_at=? WHERE id=?',
+        (elapsed, at if building else None, row['id']),
+    )
     if effective == 'waiting':
         if not row.get('blocked_since'):
             if manual:
@@ -136,10 +181,19 @@ def transition(c, row, effective, step_id, note, at, manual=False, stepped=False
             else:
                 # Named from what holds it, never from the note: a note can't say it waits on someone it doesn't.
                 from . import task_holds
+
                 reason, kind = task_holds.reason(c, row)
             reason = reason[:1000]
-            TH.put(c, row['id'], 'blocked', at, reason=reason, cause=kind, from_step_id=row.get('step_id'),
-                   from_status=row.get('status') or 'open')
+            TH.put(
+                c,
+                row['id'],
+                'blocked',
+                at,
+                reason=reason,
+                cause=kind,
+                from_step_id=row.get('step_id'),
+                from_status=row.get('status') or 'open',
+            )
             H._task_event(c, row['id'], H.KEEPER, 'blocked_since', None, at, reason)
         elif manual and (str(note or '').strip() or row.get('blocked_kind') != 'manual'):
             # A person's move into a waiting step declares the hold even over one Tico found: the old reason, written
@@ -165,6 +219,7 @@ def bump(c, row):
 
 def wait(c, row, include_manual=True):
     from . import hubdb as H
+
     if not include_manual and row.get('blocked_kind') == 'manual':
         row = {**row, 'blocked_kind': None}
     detail = H.wait_detail(c, row)
@@ -174,21 +229,31 @@ def wait(c, row, include_manual=True):
 
 def hold(c, task_id, reason, kind='dependency'):
     from . import hubdb as H, review_gate, task_holds as TH
+
     reason = str(reason)[:1000]
     row = H.task(c, task_id)
     # A refused move into Engineering still holds a task on its original board.
     # Ordinary dependency holds stay scoped to Engineering's recovery rules.
-    if (not row or row['status'] not in (*H.ACTIVE_STATUSES, 'review')
-            or kind != 'gate' and not review_gate.engineering(c, row)):
+    if (
+        not row
+        or row['status'] not in (*H.ACTIVE_STATUSES, 'review')
+        or kind != 'gate'
+        and not review_gate.engineering(c, row)
+    ):
         return
     from . import step_flow
+
     if step_flow._ready(c) and not step_flow.can_hold(c, row.get('step_id')):
-        return        # a step no ticket is held from (its flow's can_hold): a merged change is reverted or fixed forward
+        return  # a step no ticket is held from (its flow's can_hold): a merged change is reverted or fixed forward
     if row.get('blocked_since'):
         # Retain the first hold time and resume step when another gate also holds it.
-        if (kind == 'gate' and row.get('blocked_kind') != 'manual'
-                or kind == 'check' and row.get('blocked_kind') in ('dependency', 'stranded', 'check')
-                and (row.get('blocked_kind'), row.get('blocked_reason')) != (kind, reason)):
+        if (
+            kind == 'gate'
+            and row.get('blocked_kind') != 'manual'
+            or kind == 'check'
+            and row.get('blocked_kind') in ('dependency', 'stranded', 'check')
+            and (row.get('blocked_kind'), row.get('blocked_reason')) != (kind, reason)
+        ):
             TH.change(c, task_id, 'blocked', cause=kind, reason=reason)
             c.execute('UPDATE tasks SET updated_at=? WHERE id=?', (H.now(), task_id))
             bump(c, row)
@@ -203,6 +268,7 @@ def reconciliation(c, row, snapshots=None):
     the linked PRs (review_gate.snapshot): only from one do all-green hosted checks at the current head clear a gate
     hold without a receipt (fresh())."""
     from . import hubdb as H, review_gate
+
     if not row or not row.get('blocked_since') or row.get('blocked_kind') in ('manual', 'stranded'):
         return None
     # A board move can retain a worktree hold; its pushes must still be linked before it resumes.
@@ -211,6 +277,7 @@ def reconciliation(c, row, snapshots=None):
     waiting = wait(c, row)
     if row.get('blocked_kind') == 'gate':
         from . import move_retry
+
         # A refused move Tico still retries (backend/move_retry.py) is made when the gate clears; resuming the earlier
         # step here would undo it and drop the retry.
         if move_retry.remembered(c, row):
@@ -220,6 +287,7 @@ def reconciliation(c, row, snapshots=None):
         # Only a subsequent GitHub observation may clear that uncertainty.
         for pr in review_gate.links(c, row):
             from . import pr_identity as PR
+
             if not PR.same(gate.get('pr'), pr):
                 continue
             if snapshots is not None:
@@ -228,8 +296,7 @@ def reconciliation(c, row, snapshots=None):
             else:
                 detail = H._json(pr.get('detail'), {}) or {}
                 seen = pr.get('updated_at') or ''
-            if ((gate.get('kind') == 'ci' or detail.get('head_sha') != gate.get('head'))
-                    and seen <= gate.get('at', '')):
+            if (gate.get('kind') == 'ci' or detail.get('head_sha') != gate.get('head')) and seen <= gate.get('at', ''):
                 return None
         if review_gate.problem(c, row, row['owner_id'], snapshots=snapshots, require_pr=True):
             return None
@@ -242,33 +309,47 @@ def reconciliation(c, row, snapshots=None):
 
 def reconcile(c, task_id, snapshots=None):
     from . import hubdb as H
+
     row = H.task(c, task_id)
     action = reconciliation(c, row, snapshots)
     if action == 'dependency':
         from . import task_holds
-        task_holds.change(c, task_id, 'blocked', cause='dependency',
-                          reason=task_holds.words(c, task_holds.holds(c, row))[:1000])
+
+        task_holds.change(
+            c, task_id, 'blocked', cause='dependency', reason=task_holds.words(c, task_holds.holds(c, row))[:1000]
+        )
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task_id))
         bump(c, row)
     if action != 'resume':
         return
-    previous = H._one(c, 'SELECT * FROM task_steps WHERE id=? AND type_id=?', (row.get('blocked_from_step'), row.get('type_id')))
+    previous = H._one(
+        c, 'SELECT * FROM task_steps WHERE id=? AND type_id=?', (row.get('blocked_from_step'), row.get('type_id'))
+    )
     # Restoring the pre-hold step is not retrying the refused destination.
-    H._set_status(c, H.KEEPER, row, row.get('blocked_from_status') or 'open',
-                  step=previous['id'] if previous else None, note='Hold cleared')
+    H._set_status(
+        c,
+        H.KEEPER,
+        row,
+        row.get('blocked_from_status') or 'open',
+        step=previous['id'] if previous else None,
+        note='Hold cleared',
+    )
     bump(c, row)
     # Back at a check step: a verdict given there during the hold moves the ticket now.
     from . import verdict_moves
+
     verdict_moves.resumed(c, task_id)
     from . import review_gate
+
     if row.get('blocked_kind') == 'worktree' and not review_gate.engineering(c, row):
         # General tasks have no Engineering step rule to wake their owner when the hold clears.
         resumed = H.task(c, task_id)
-        H._wake(c, resumed, resumed['owner_id'], f"Worktree hold cleared: {resumed['title']}",
-                refs={'news': 'assignment'})
+        H._wake(
+            c, resumed, resumed['owner_id'], f"Worktree hold cleared: {resumed['title']}", refs={'news': 'assignment'}
+        )
 
 
-FRESH_EVERY_S = 60                  # how often fresh() looks
+FRESH_EVERY_S = 60  # how often fresh() looks
 FRESH_PER_PASS = 20
 _fresh_lock = threading.Lock()
 _fresh = {"at": 0.0, "seen": {}, "tried": {}}
@@ -276,11 +357,12 @@ _fresh = {"at": 0.0, "seen": {}, "tried": {}}
 
 def fresh(service, store=None, force=False):
     """Gate holds the cached read keeps, read once afresh from GitHub per change in what the gate reads: the webhook
-    cache counts skipped checks as passing, so all-green hosted checks at the current head clear a hold only from a
+    cache counts neutral checks as passing, so all-green hosted checks at the current head clear a hold only from a
     fresh read (review_gate.problem). A hold with a move Tico still retries is left to that retry, which reads GitHub
     itself (backend/move_retry.py). The holds tried longest ago go first, so reads that keep failing on some
     holds never keep the rest from their turn. Returns the ids of tasks whose hold cleared."""
     from . import hubdb as H, move_retry, review_gate
+
     store = store or service.store
     with _fresh_lock:
         if not force and time.monotonic() < _fresh["at"]:
@@ -288,8 +370,9 @@ def fresh(service, store=None, force=False):
         _fresh["at"] = time.monotonic() + FRESH_EVERY_S
     due, held = [], set()
     with store.read() as c:
-        for row in H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE id IN ({H.HELD_IDS % 'blocked'}) "
-                                     "AND blocked_kind='gate'")):
+        for row in H._rows(
+            c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE id IN ({H.HELD_IDS % 'blocked'}) AND blocked_kind='gate'")
+        ):
             held.add(row['id'])
             prs = review_gate.links(c, row)
             if not prs or reconciliation(c, row) is not None or move_retry.remembered(c, row):
@@ -308,13 +391,16 @@ def fresh(service, store=None, force=False):
         snapshots = review_gate.snapshot(service, prs)
         if not snapshots:
             _fresh["seen"][row['id']] = seen
-            continue                    # no GitHub App configured: the cached read is all there is
+            continue  # no GitHub App configured: the cached read is all there is
         with store.transaction() as c:
             now_row = H.task(c, row['id'])
             # Anything the gate reads that changed while GitHub was read (an edit, or a webhook's newer check result
             # at the same head, which leaves the task version alone) supersedes this read; the next pass reads again.
-            if (not now_row or now_row.get('version') != row.get('version')
-                    or move_retry.fingerprint(c, now_row) != seen):
+            if (
+                not now_row
+                or now_row.get('version') != row.get('version')
+                or move_retry.fingerprint(c, now_row) != seen
+            ):
                 continue
             # A failed read is tried again next pass; a complete one waits for the next change in what the gate reads.
             if not any(s.get('error') for s in snapshots.values()):
@@ -327,9 +413,11 @@ def fresh(service, store=None, force=False):
 
 def alert_target(c, row, at):
     from . import hubdb as H
+
     if not row.get('blocked_since') or seconds(row['blocked_since'], at) < 4 * 3600:
         return None
     from . import review_gate
+
     # Age alerts stay scoped to Engineering and refused moves into it; a retained worktree hold on another
     # board still clears through reconciliation, without an Engineering age alert.
     if row.get('blocked_kind') != 'gate' and not review_gate.engineering(c, row):
@@ -340,7 +428,10 @@ def alert_target(c, row, at):
         return None
     if H.is_bot(target) and (H.bot(c, H.actor_id(target)) or {}).get('state') != 'active':
         return None
-    if c.execute("SELECT 1 FROM events WHERE action='task.blocked_age' AND target=? AND json_extract(detail,'$.since')=?", (row['id'], row['blocked_since'])).fetchone():
+    if c.execute(
+        "SELECT 1 FROM events WHERE action='task.blocked_age' AND target=? AND json_extract(detail,'$.since')=?",
+        (row['id'], row['blocked_since']),
+    ).fetchone():
         return None
     return target
 
@@ -348,42 +439,63 @@ def alert_target(c, row, at):
 def candidates(c, at):
     """Discover only actual hold changes or due alerts in a read snapshot."""
     from . import hubdb as H
-    rows = H._rows(c.execute(f"SELECT t.* FROM {H.TASKS} t JOIN task_types ty ON ty.id=t.type_id "
-                             "WHERE ty.role='engineering' AND t.status IN ('open','doing','review','ready') "
-                             f"UNION SELECT * FROM {H.TASKS} tasks WHERE id IN ({H.HELD_IDS % 'blocked'})"))
-    return [row['id'] for row in rows if (
-        (not row.get('blocked_since') and wait(c, row))
-        or reconciliation(c, row) or alert_target(c, row, at))]
+
+    rows = H._rows(
+        c.execute(
+            f"SELECT t.* FROM {H.TASKS} t JOIN task_types ty ON ty.id=t.type_id "
+            "WHERE ty.role='engineering' AND t.status IN ('open','doing','review','ready') "
+            f"UNION SELECT * FROM {H.TASKS} tasks WHERE id IN ({H.HELD_IDS % 'blocked'})"
+        )
+    )
+    return [
+        row['id']
+        for row in rows
+        if ((not row.get('blocked_since') and wait(c, row)) or reconciliation(c, row) or alert_target(c, row, at))
+    ]
 
 
 def sweep(c, at, task_ids=None):
     """Runs each minute from the stall checks job (scheduler). One private-safe age alert per blocked episode, for Engineering tasks and gate holds blocked over four hours."""
     from . import hubdb as H
+
     scope, args = '', ()
     if task_ids is not None:
         args = tuple(task_ids)
         scope = ' AND t.id IN (' + ','.join('?' for _ in args) + ')' if args else ' AND 0'
     # Reuse the existing wait predicates for asks, approvals and legacy holds too.
     # Their creation paths need no separate state/query implementation.
-    for row in H._rows(c.execute(f"SELECT t.* FROM {H.TASKS} t JOIN task_types ty ON ty.id=t.type_id "
-                                 "WHERE ty.role='engineering' AND t.status IN ('open','doing','review','ready')" + scope,
-                                 args)):
+    for row in H._rows(
+        c.execute(
+            f"SELECT t.* FROM {H.TASKS} t JOIN task_types ty ON ty.id=t.type_id "
+            "WHERE ty.role='engineering' AND t.status IN ('open','doing','review','ready')" + scope,
+            args,
+        )
+    ):
         if detail := wait(c, row):
             if detail.get('check'):
                 from . import check_blocked
+
                 check_blocked.apply(c, row['id'])
             else:
                 from . import task_holds
+
                 found = task_holds.holds(c, row)
                 hold(c, row['id'], task_holds.words(c, found) if found else 'Waiting on ' + detail['why'])
-    for row in H._rows(c.execute(f"SELECT t.* FROM {H.TASKS} t WHERE t.id IN ({H.HELD_IDS % 'blocked'})" + scope,
-                                 args)):
+    for row in H._rows(
+        c.execute(f"SELECT t.* FROM {H.TASKS} t WHERE t.id IN ({H.HELD_IDS % 'blocked'})" + scope, args)
+    ):
         reconcile(c, row['id'])
         row = H.task(c, row['id'])
         target = alert_target(c, row, at)
         if not target:
             continue
         key = row['blocked_since']
-        H._wake(c, row, target, f"Blocked over 4 hours: {row['title']}\n{row['blocked_reason']}\nSince {key}",
-                refs={'news': 'task_blocked_age'}, quiet_bots=False)
+        H._wake(
+            c,
+            row,
+            target,
+            f"Blocked over 4 hours: {row['title']}\n{row['blocked_reason']}\nSince {key}",
+            refs={'news': 'task_blocked_age'},
+            quiet_bots=False,
+        )
         H.event(c, H.KEEPER, 'task.blocked_age', row['id'], {'since': key})

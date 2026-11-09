@@ -11,6 +11,7 @@ feeds sleep_idle.routine_times so a sleeping server wakes for an edition.
 A rule or cadence this can't read stops that audience's schedule and is listed by `problems`. It never falls back to a
 default: an edition drafted on the wrong day, for the wrong period, is worse than one that's visibly not scheduled.
 """
+
 import json
 import logging
 import threading
@@ -22,10 +23,10 @@ from ..store import H
 
 LOG = logging.getLogger("tico.company_page.schedule")
 MOST = {"business_day": 23, "days_after": 365}
-SPANS = {"monthly": 1, "quarterly": 3}      # months in one period
+SPANS = {"monthly": 1, "quarterly": 3}  # months in one period
 # audiences.get says {"kind": "business_day" | "days_after_period_end", "n": 5}; its row holds {"business_day": 5}.
 VIEW_KINDS = {"business_day": "business_day", "days_after_period_end": "days_after"}
-REFRESH_KEY = "company-page-refresh"        # registry_metadata: the company-zone day the stats last refreshed
+REFRESH_KEY = "company-page-refresh"  # registry_metadata: the company-zone day the stats last refreshed
 _RUNNING = threading.Lock()
 
 
@@ -33,6 +34,7 @@ def company_zone():
     """The company's zone: updates.ZONE, the one automation_due.zone_of and the update ladder read. Tico has no per-company
     setting for it."""
     from ..updates import ZONE
+
     return ZONE
 
 
@@ -84,9 +86,11 @@ def problem(audience):
 
 def problems(c):
     """The enabled audiences whose schedule is stopped, and why: for the owners' page."""
-    return [{"audience_id": a["id"], "name": a["name"], "problem": problem(a)}
-            for a in (dict(r) for r in c.execute("SELECT * FROM audiences WHERE enabled=1 ORDER BY created_at, id"))
-            if problem(a)]
+    return [
+        {"audience_id": a["id"], "name": a["name"], "problem": problem(a)}
+        for a in (dict(r) for r in c.execute("SELECT * FROM audiences WHERE enabled=1 ORDER BY created_at, id"))
+        if problem(a)
+    ]
 
 
 def _nth_business_day(year, month, n):
@@ -103,8 +107,10 @@ def _period(index, span):
     """The period `index` periods after year 0: (first day, last day)."""
     first_year, first_month = divmod(index * span, 12)
     last_year, last_month = divmod(index * span + span - 1, 12)
-    return (date(first_year, first_month + 1, 1),
-            date(last_year, last_month + 1, monthrange(last_year, last_month + 1)[1]))
+    return (
+        date(first_year, first_month + 1, 1),
+        date(last_year, last_month + 1, monthrange(last_year, last_month + 1)[1]),
+    )
 
 
 def _due_day(plan, index):
@@ -161,8 +167,10 @@ def _audiences(c, shown):
 
 
 def _sources(c, audience_id):
-    return [r["author"] for r in c.execute("SELECT author FROM audience_sources WHERE audience_id=? ORDER BY author",
-                                           (audience_id,))]
+    return [
+        r["author"]
+        for r in c.execute("SELECT author FROM audience_sources WHERE audience_id=? ORDER BY author", (audience_id,))
+    ]
 
 
 def due_now(c, at):
@@ -170,6 +178,7 @@ def due_now(c, at):
     looked at. A row in any state counts as opened, a retraction included; a source with nothing written in the period
     has nothing to draft."""
     from . import editions as E
+
     shown = transparency(c)
     if shown == "closed":
         return []
@@ -181,8 +190,11 @@ def due_now(c, at):
             continue
         _, start, end = found
         for author in _sources(c, audience["id"]):
-            row = c.execute("SELECT status, updated_at FROM editions WHERE audience_id=? AND author=? AND period_start=? "
-                            "AND period_end=? ORDER BY version LIMIT 1", (audience["id"], author, start, end)).fetchone()
+            row = c.execute(
+                "SELECT status, updated_at FROM editions WHERE audience_id=? AND author=? AND period_start=? "
+                "AND period_end=? ORDER BY version LIMIT 1",
+                (audience["id"], author, start, end),
+            ).fetchone()
             if row and not (row["status"] == "drafting" and row["updated_at"] < stale):
                 continue
             if E.has_material(c, author, start, end):
@@ -207,6 +219,7 @@ def _refresh_stats(store, at):
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (REFRESH_KEY, json.dumps(_day_of(at))))
     try:
         from . import release
+
         release.refresh(store, _aware(at))
     except Exception as exc:  # noqa: BLE001 - nothing is being taken away, and the drafts don't depend on it
         LOG.warning("Company page refresh failed: %s", type(exc).__name__)
@@ -216,6 +229,7 @@ def tick(store, at=None, primary=None):
     """Refresh the stats if today's refresh hasn't run, and open every edition that's due; returns those drafted. One
     failing never stops the others."""
     from . import editions as E
+
     at = _aware(at or datetime.now(timezone.utc))
     with store.read() as c:
         if transparency(c) == "closed":
@@ -245,6 +259,7 @@ def start(store, at):
             tick(store, at)
         finally:
             _RUNNING.release()
+
     try:
         threading.Thread(target=run, name="company-page-editions", daemon=True).start()
     except RuntimeError:

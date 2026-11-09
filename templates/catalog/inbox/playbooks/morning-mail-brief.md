@@ -2,8 +2,8 @@
 
 Schedule: weekdays at 07:30 team time (routine `morning-mail-brief`), after setup. Also run by hand on request. Budget 20 minutes. The outcome is a short brief on the task:
 what needs the human, what is drafted, what you would file. Nothing is sent while `Sending` is Off in
-`playbooks/inbox-preferences.md`; when it is On, send only what its rules say, to the three kinds of recipient it lists
-(team domain, the sender you are answering, the `forward_to:` addresses). Nothing is filed while
+`playbooks/inbox-preferences.md`; when it is On, send only what its rules say, to the recipients they name; Tico
+decides each send. Nothing is filed while
 `Filing` is Off.
 
 Done when: the brief is on the task with the counts, every mailbox read that failed is named with its refusal, and the task is closed, so no open scheduled task is left to absorb the next pass.

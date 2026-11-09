@@ -127,7 +127,7 @@
     suggested: '', recording: null, meeting: null, sending: null,
     // Speech through the signed-in Tico; `none` before sign-in without keys of your own.
     speech: { source: 'tico', stream: true, transcribe: true, tico: 'Tico Team' },
-    update: { state: 'none', version: '', notes: '', blocked: '', error: '', progress: null, current: '0.5.143', location: '', movable: false },
+    update: { state: 'none', version: '', notes: '', blocked: '', error: '', progress: null, current: '0.5.143', location: '', movable: false, prompt: false, held: false },
   };
   const state = {
     status, library: { rows: libraryRows, events, calendar_stale: false, connected: true }, desktop_orgs: [],
@@ -303,8 +303,15 @@
     // An update waiting for the recording to end (update.js draws the banner).
     update: () => {
       scenes.recording();
-      state.status.update = { state: 'ready', version: '0.6.0', notes: 'Live text through your Tico.', blocked: 'After this recording' };
+      Object.assign(state.status.update, { state: 'ready', version: '0.6.0', notes: 'Live text through your Tico.', blocked: 'After this recording', held: true });
     },
+    // Ready while idle: one line of notes and Restart (?built: the build placeholder, which never shows).
+    'update-ready': () => {
+      const notes = params.has('built') ? 'Built from 2d1fcb1' : 'Clearer task linking, @me, copy transcript and Check for updates.';
+      Object.assign(state.status.update, { state: 'ready', version: '0.5.178', notes });
+    },
+    // First launch from a disk image: the prompt to move, before the first recording.
+    'update-first': () => { Object.assign(state.status.update, { location: "Can't update from here", movable: true, prompt: true }); },
     'update-error': () => { Object.assign(state.status.update, { state: 'error', version: '0.6.0', error: "Couldn't check for updates" }); },
     // Opened from Downloads: macOS runs a read-only copy, so the app offers Move to Applications.
     'update-move': () => { Object.assign(state.status.update, { location: "Can't update from here", movable: true }); },

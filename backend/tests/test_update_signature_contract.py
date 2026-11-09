@@ -21,8 +21,8 @@ PINNED = ROOT / "app" / "src" / "testdata" / "presigned-artifact-url.txt"
 def desktop_check():
     """The query parameters has_s3_signature reads and the algorithm it accepts, from its source."""
     source = (ROOT / "app" / "src" / "hub.rs").read_text()
-    body = source[source.index("fn has_s3_signature"):]
-    body = body[:body.index("\n}\n")]
+    body = source[source.index("fn has_s3_signature") :]
+    body = body[: body.index("\n}\n")]
     algorithm = re.search(r'"X-Amz-Algorithm" => algorithm = value == "([^"]+)"', body)
     return set(re.findall(r'"(X-Amz-[A-Za-z]+)" =>', body)), algorithm and algorithm.group(1)
 
@@ -31,8 +31,13 @@ def shape(url):
     """What a signer decides: scheme, parameter names, algorithm, signed headers and credential scope."""
     parts = urlsplit(url)
     query = dict(parse_qsl(parts.query))
-    return (parts.scheme, sorted(query), query.get("X-Amz-Algorithm"), query.get("X-Amz-SignedHeaders"),
-            query.get("X-Amz-Credential", "").split("/")[2:])
+    return (
+        parts.scheme,
+        sorted(query),
+        query.get("X-Amz-Algorithm"),
+        query.get("X-Amz-SignedHeaders"),
+        query.get("X-Amz-Credential", "").split("/")[2:],
+    )
 
 
 @pytest.fixture
@@ -40,6 +45,7 @@ def server_url(monkeypatch, tmp_path):
     """The redirect URL the server makes for a company artifact: real botocore, signing offline."""
     import boto3
     from botocore.stub import Stubber
+
     for name in list(os.environ):
         if name.startswith(("AWS_", "LITESTREAM_", "TICO_BLOB_", "TICO_BACKUP_")):
             monkeypatch.delenv(name)
@@ -53,6 +59,7 @@ def server_url(monkeypatch, tmp_path):
         stub.add_response("head_object", {})
         stub.activate()
         return s3
+
     monkeypatch.setattr(boto3, "client", make)
     downloads = Downloads(Settings(db_path=tmp_path / "hub.db", blob_bucket="acme-files", blob_region="us-west-2"))
     return downloads.file_url("0.3.49", "Acme Tico.app.tar.gz")

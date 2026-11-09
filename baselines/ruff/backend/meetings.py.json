@@ -1,0 +1,5 @@
+{
+  "backend/meetings.py": {
+    "F401": 1
+  }
+}

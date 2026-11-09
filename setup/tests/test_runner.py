@@ -28,7 +28,7 @@ def test_join_script_is_idempotent_and_removes_the_code_file():
     assert text.rstrip().endswith("rm -f /x/join.env")
     rejoin = "\n".join(rs.join_lines("v1", "/x/join.env", rejoin=True))
     assert "docker rm -f" in rejoin and "rm -f /opt/tico-runner/.env" in rejoin  # a new code needs a new .env
-    assert "screen" not in text                                  # the installer offers the screen by default
+    assert "screen" not in text  # the installer offers the screen by default
     assert '"$TICO_JOIN_LABEL" --no-screen' in "\n".join(rs.join_lines("v1", "/x/join.env", screen=False))
 
 
@@ -46,8 +46,22 @@ def test_ssh_target_mints_code_late_and_passes_it_by_stdin(monkeypatch):
     d = fakes.deps()
     d.ssh_shell = lambda *a: shell
     monkeypatch.setattr(verify, "check_computer_online", lambda *a: None)
-    code, out = go(["runner", "--non-interactive", "--yes", "--server-url", "https://tico.example.com", "--target", "ssh",
-                    "--ssh", "root@10.0.0.5", "--label", "build-1"], deps=d)
+    code, out = go(
+        [
+            "runner",
+            "--non-interactive",
+            "--yes",
+            "--server-url",
+            "https://tico.example.com",
+            "--target",
+            "ssh",
+            "--ssh",
+            "root@10.0.0.5",
+            "--label",
+            "build-1",
+        ],
+        deps=d,
+    )
     assert code == 0, out
     assert CODE not in out and "owner-token-xyz" not in out
     assert any(CODE.encode() in (i or b"") for _, i in shell.calls) and not any(CODE in c for c in shell.cmds())
@@ -76,7 +90,6 @@ def test_mint_code_uses_bearer_and_maps_errors():
     assert seen["key"]  # the server refuses a write without an Idempotency-Key
 
 
-
 def _stub_path(tmp_path, curl_body):
     """Fake curl, docker and systemctl first on PATH: synthetic, no network and no Docker."""
     b = tmp_path / "bin"
@@ -90,8 +103,10 @@ def _stub_path(tmp_path, curl_body):
 
 FAILING_CURL = 'echo "curl: (6) Could not resolve host" >&2; exit 6'
 # Writes an "installer" that records its arguments and exits with $INSTALLER_EXIT.
-GOOD_CURL = ('while [ "$#" -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done; '
-             'printf \'echo "ran $*" >> "$HOME/ran"; exit "${INSTALLER_EXIT:-0}"\\n\' > "$out"')
+GOOD_CURL = (
+    'while [ "$#" -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done; '
+    'printf \'echo "ran $*" >> "$HOME/ran"; exit "${INSTALLER_EXIT:-0}"\\n\' > "$out"'
+)
 
 
 def _join_script(tmp_path):
@@ -117,7 +132,8 @@ def test_a_downloaded_installer_runs_with_the_join_arguments_and_its_exit_code_c
     p = subprocess.run(["sh", "-c", script], env=env, capture_output=True, text=True)
     assert p.returncode == 0, p.stdout + p.stderr
     assert (tmp_path / "ran").read_text() == (
-        f"ran --runner --dir /opt/tico-runner --url https://tico.example.com --code {CODE} --label build 1\n")
+        f"ran --runner --dir /opt/tico-runner --url https://tico.example.com --code {CODE} --label build 1\n"
+    )
     script, _ = _join_script(tmp_path)
     p = subprocess.run(["sh", "-c", script], env={**env, "INSTALLER_EXIT": "3"}, capture_output=True, text=True)
     assert p.returncode == 3
@@ -176,18 +192,39 @@ def test_aws_runner_reuses_its_exact_name_boundary_and_private_join(monkeypatch,
 
     def invocation(**kw):
         failed = recovery == 'command_failed' and 'cloud-init status --wait' in ssm.commands[-1]
-        return {'Status': 'Failed' if failed else 'Success', 'ResponseCode': int(failed),
-                'StandardOutputContent': 'Up 3 seconds\n', 'StandardErrorContent': ''}
+        return {
+            'Status': 'Failed' if failed else 'Success',
+            'ResponseCode': int(failed),
+            'StandardOutputContent': 'Up 3 seconds\n',
+            'StandardErrorContent': '',
+        }
 
     ssm.describe_instance_information = information
     ssm.send_command, ssm.get_command_invocation = send, invocation
     d = fakes.deps()
     d.aws_clients = clients
     d.sleep = lambda seconds: clock.__setitem__(0, clock[0] + seconds)
-    argv = ['runner','--cloud','aws','--aws-region','us-east-2','--aws-instance-type','m8i-flex.xlarge',
-            '--name','pv-bot','--aws-permissions-boundary','arn:aws:iam::123456789012:policy/boundary',
-            '--server-url','https://acme.tico.dev','--label','pv-bot','--runner-tag','v0.3.71',
-            '--non-interactive','--yes']
+    argv = [
+        'runner',
+        '--cloud',
+        'aws',
+        '--aws-region',
+        'us-east-2',
+        '--aws-instance-type',
+        'm8i-flex.xlarge',
+        '--name',
+        'pv-bot',
+        '--aws-permissions-boundary',
+        'arn:aws:iam::123456789012:policy/boundary',
+        '--server-url',
+        'https://acme.tico.dev',
+        '--label',
+        'pv-bot',
+        '--runner-tag',
+        'v0.3.71',
+        '--non-interactive',
+        '--yes',
+    ]
     for phase[0] in ['launch', 'recovery']:
         code, out = go(argv, d)
         assert code == (0 if phase[0] == 'launch' or recovery == 'delayed' else 1), out

@@ -1,4 +1,5 @@
 """Connection labels never change login keys, assignments, or historical attribution."""
+
 from backend import hubdb as H
 from backend.subscription_identity import connection_id
 from backend.tests.test_api import api, assign, get, post, put, runner  # noqa: F401
@@ -6,9 +7,19 @@ from backend.enqueue import enqueue_stored
 
 
 def report(api, computer, profiles=None):
-    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {},
-        'profiles': profiles if profiles is not None else [
-            {'name': 'engineering', 'runtimes': {'codex': {'signed_in': True}}}]}, token=computer['token'])
+    post(
+        api,
+        'runners/heartbeat',
+        {
+            'version': 'test',
+            'platform': 'test',
+            'readiness': {},
+            'profiles': profiles
+            if profiles is not None
+            else [{'name': 'engineering', 'runtimes': {'codex': {'signed_in': True}}}],
+        },
+        token=computer['token'],
+    )
 
 
 def profiles(api):
@@ -33,20 +44,37 @@ def test_rename_checks_computer_operator_and_known_profile(api):
 
 def usage_turn(c, tid, computer=None, bot='ops'):
     now = H.now()
-    c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,trigger) VALUES(?,?,?,?,'message')", (tid, bot, now, now))
-    part = {'input_tokens': 100, 'cached_tokens': 0, 'output_tokens': 10, 'model': 'gpt-6.1-sol',
-            'provider': 'openai', 'est_cost_usd': 0.01, 'billing': 'subscription',
-            'runtime': 'codex', 'harness': 'codex', 'effort': 'high', 'profile': 'engineering'}
+    c.execute(
+        "INSERT INTO attempts(id,bot_id,created_at,settled_at,trigger) VALUES(?,?,?,?,'message')", (tid, bot, now, now)
+    )
+    part = {
+        'input_tokens': 100,
+        'cached_tokens': 0,
+        'output_tokens': 10,
+        'model': 'gpt-6.1-sol',
+        'provider': 'openai',
+        'est_cost_usd': 0.01,
+        'billing': 'subscription',
+        'runtime': 'codex',
+        'harness': 'codex',
+        'effort': 'high',
+        'profile': 'engineering',
+    }
     H.turn_finish(c, H.KEEPER, tid, usage={**part, 'segments': [part]})
     if computer:
-        c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES(?,'keeper',?,'notice','Fixture',?)",
-                  ('message-' + tid, 'bot:' + bot, now))
+        c.execute(
+            "INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES(?,'keeper',?,'notice','Fixture',?)",
+            ('message-' + tid, 'bot:' + bot, now),
+        )
         enqueue_stored(c, 'message-' + tid)
         job = c.execute('SELECT id FROM jobs WHERE message_id=?', ('message-' + tid,)).fetchone()[0]
         c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job,))
         # The run is one attempts row: its lease goes on the row usage_turn made above.
-        c.execute("UPDATE attempts SET job_id=?, runner_id=?, generation=1, token_hash=?, state='completed', "
-                  "lease_until=? WHERE id=?", (job, computer['runner_id'], tid, now, tid))
+        c.execute(
+            "UPDATE attempts SET job_id=?, runner_id=?, generation=1, token_hash=?, state='completed', "
+            "lease_until=? WHERE id=?",
+            (job, computer['runner_id'], tid, now, tid),
+        )
 
 
 def test_usage_groups_immutable_connections_and_rename_preserves_filter(api):
@@ -61,7 +89,9 @@ def test_usage_groups_immutable_connections_and_rename_preserves_filter(api):
     aid, bid = connection_id(a['runner_id'], 'engineering'), connection_id(b['runner_id'], 'engineering')
     assert {r['value'] for r in first['rows']} == {aid, bid, 'legacy-profile:engineering'}
     assert first['totals']['runs'] == 3
-    put(api, 'subscriptions/name', {'runner_id': a['runner_id'], 'profile': 'engineering', 'display_name': 'North plan'})
+    put(
+        api, 'subscriptions/name', {'runner_id': a['runner_id'], 'profile': 'engineering', 'display_name': 'North plan'}
+    )
     # Moving the bot now cannot relabel past turns as the new computer's subscription.
     assign(api, b, 'ops')
     second = get(api, 'usage?group=subscription')

@@ -1,6 +1,7 @@
 """Spreadsheet history as raw totals (spec §4.1): each month posts balanced against Opening balance equity and the
 reads show it, the same file posts nothing twice, an unmapped line is refused and named, a closed month waits for the
 owner, a bot's import waits for the owner's approval, and reversed months post the file again once all are reversed."""
+
 import sqlite3
 from pathlib import Path
 
@@ -16,9 +17,22 @@ from backend.finance.raw_totals import OUTSIDE
 from backend.finance.store import schema as SCH
 
 import importlib
+
 MIGRATION = importlib.import_module("backend.migrations.0037_finance_combined")
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
+    AT,
+    MERCURY,
+    OWNER,
+    FakeMercury,
+    account,
+    act,
+    books,
+    connect,
+    finance_template,
+    spend,
+    store,
+    sync_once,
+)
 
 CSV = (Path(__file__).parent / "fixtures" / "finance" / "raw_totals.csv").read_text()
 MAPPING = {"Software subscriptions": "6100", "Office rent": "6900", "Sales revenue": "4000", "Cash at bank": "1000"}
@@ -37,8 +51,10 @@ def test_each_month_balances_and_the_reads_show_the_totals(books):
         r = act(c, OWNER, "import_raw_totals", _body())
         assert r.status == "committed", r.reason
         assert [m["month"] for m in r.result["months"]] == ["2026-01", "2026-02", "2026-03"]
-        sums = c.execute("SELECT e.id, sum(l.amount) FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id "
-                         "WHERE e.source='import' GROUP BY e.id").fetchall()
+        sums = c.execute(
+            "SELECT e.id, sum(l.amount) FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id "
+            "WHERE e.source='import' GROUP BY e.id"
+        ).fetchall()
         assert len(sums) == 3 and all(total == 0 for _, total in sums)
         assert tuple(c.execute("SELECT basis, periods, row_count FROM fin_raw_imports").fetchone()) == ("cash", 3, 12)
         pnl = FR.pnl(c, OWNER, "2026-01-01", "2026-03-31", at=AT)
@@ -52,8 +68,12 @@ def test_the_same_file_posts_nothing_again(books):
     with books.transaction() as c:
         first = act(c, OWNER, "import_raw_totals", _body())
         before = _count(c, "fin_entries")
-        by_id = {"Software subscriptions": account(c, "6100"), "Office rent": account(c, "6900"),
-                 "Sales revenue": account(c, "4000"), "Cash at bank": account(c, "1000")}
+        by_id = {
+            "Software subscriptions": account(c, "6100"),
+            "Office rent": account(c, "6900"),
+            "Sales revenue": account(c, "4000"),
+            "Cash at bank": account(c, "1000"),
+        }
         again = act(c, OWNER, "import_raw_totals", _body(by_id, source_name="A copy"))
         assert again.status == "committed" and again.result["already_imported"]
         assert again.result["batch_id"] == first.result["batch_id"]
@@ -109,8 +129,10 @@ def test_reversed_months_post_the_file_again_once_all_are_reversed(books):
         again = act(c, OWNER, "import_raw_totals", _body())
         assert again.status == "committed" and again.result["batch_id"] != first.result["batch_id"]
         imports = FR.raw_imports(c, OWNER, at=AT)["imports"]
-        assert {i["batch_id"]: i["live"] for i in imports} == {first.result["batch_id"]: False,
-                                                               again.result["batch_id"]: True}
+        assert {i["batch_id"]: i["live"] for i in imports} == {
+            first.result["batch_id"]: False,
+            again.result["batch_id"]: True,
+        }
 
 
 def test_a_month_with_transactions_takes_no_raw_totals(books):
@@ -169,11 +191,13 @@ def test_a_sheet_past_the_64_bit_range_is_refused_by_the_dry_run(books):
 
 
 def test_a_bad_sheet_is_refused_and_the_same_rows_hash_the_same():
-    bad = {"an unknown column": "month,line,amount,note\n2026-01,Rent,100,x\n",
-           "a bad month": "month,line,amount\n2026-1,Rent,100\n",
-           "a fraction": "month,line,amount\n2026-01,Rent,100.50\n",
-           "a repeated line": "month,line,amount\n2026-01,Rent,100\n2026-01,rent,50\n",
-           "only zeros": "month,line,amount\n2026-01,Rent,0\n"}
+    bad = {
+        "an unknown column": "month,line,amount,note\n2026-01,Rent,100,x\n",
+        "a bad month": "month,line,amount\n2026-1,Rent,100\n",
+        "a fraction": "month,line,amount\n2026-01,Rent,100.50\n",
+        "a repeated line": "month,line,amount\n2026-01,Rent,100\n2026-01,rent,50\n",
+        "only zeros": "month,line,amount\n2026-01,Rent,0\n",
+    }
     for text in bad.values():
         with pytest.raises(FinanceError):
             RT.parse(text, "cash")
@@ -216,8 +240,13 @@ def test_a_scoped_replay_is_denied_the_same_as_a_fresh_import(books):
         first = act(c, OWNER, "import_raw_totals", _body())
         assert act(c, OWNER, "right_grant", {"teammate": "bot:coder", "right": "finance.book"}).status == "committed"
         replay = act(c, "bot:coder", "import_raw_totals", _body(), "scoped-replay")
-        fresh = act(c, "bot:coder", "import_raw_totals", {**_body(), "csv": "month,line,amount\n2026-05,Office rent,100\n"},
-                    "scoped-fresh")
+        fresh = act(
+            c,
+            "bot:coder",
+            "import_raw_totals",
+            {**_body(), "csv": "month,line,amount\n2026-05,Office rent,100\n"},
+            "scoped-fresh",
+        )
         assert replay.code == fresh.code == DENIED and replay.reason == fresh.reason
         dry = act(c, "bot:coder", "import_raw_totals", _body(), dry_run=True)
         assert dry.code == DENIED
@@ -230,12 +259,20 @@ def test_a_scoped_caller_hitting_an_occupied_month_sees_no_entry(books):
         first = act(c, OWNER, "import_raw_totals", _body())
         jan_entry = str(first.result["months"][0]["entry_id"])
         assert act(c, OWNER, "right_grant", {"teammate": "bot:coder", "right": "finance.book"}).status == "committed"
-        assert act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "expenses", "whose": "team",
-                                            "whose_team": "web"}).status == "committed"
+        assert (
+            act(
+                c,
+                OWNER,
+                "view_grant",
+                {"subject": "bot:coder", "what": "expenses", "whose": "team", "whose_team": "web"},
+            ).status
+            == "committed"
+        )
         # Web's software lines net to zero, so the month needs no untagged offset line: the view covers the whole file
         # and the refusal can only come from January being occupied.
-        web_only = ("month,line,amount,team\n2026-{m},Software subscriptions,9000,web\n"
-                    "2026-{m},Software refunds,-9000,web\n")
+        web_only = (
+            "month,line,amount,team\n2026-{m},Software subscriptions,9000,web\n2026-{m},Software refunds,-9000,web\n"
+        )
         mapping = {"Software subscriptions": "6100", "Software refunds": "6100"}
         april = {"csv": web_only.format(m="04"), "basis": "cash", "mapping": mapping}
         january = {"csv": web_only.format(m="01"), "basis": "cash", "mapping": mapping}
@@ -267,8 +304,12 @@ def test_a_grantee_without_payroll_detail_learns_nothing_from_an_import(books):
     payroll = "month,line,amount\n2026-{m},Payroll salaries,{a}\n"
     mapping = {"Payroll salaries": "6200"}
     with books.transaction() as c:
-        made = act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
-                                                "parent_id": account(c, "6000")})
+        made = act(
+            c,
+            OWNER,
+            "account_create",
+            {"code": "6200", "name": "Payroll", "type": "expense", "parent_id": account(c, "6000")},
+        )
         pay = str(made.result["account_id"])
         assert act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals"}).status == "committed"
         jan = {"csv": payroll.format(m="01", a=500_000), "basis": "cash", "mapping": mapping, "source_name": "Payroll"}
@@ -282,16 +323,24 @@ def test_a_grantee_without_payroll_detail_learns_nothing_from_an_import(books):
         assert fresh.code == DENIED and fresh.reason == OUTSIDE
         replay = act(c, "human:dan", "import_raw_totals", jan, "dan-replay")
         assert replay.code == DENIED and replay.reason == OUTSIDE and batch not in str(replay.as_dict())
-        guessed = act(c, "human:dan", "import_raw_totals", {**jan, "csv": payroll.format(m="01", a=500_001)},
-                      "dan-guess")
+        guessed = act(
+            c, "human:dan", "import_raw_totals", {**jan, "csv": payroll.format(m="01", a=500_001)}, "dan-guess"
+        )
         assert guessed.code == DENIED and guessed.reason == OUTSIDE and jan_entry not in str(guessed.as_dict())
         # Positive control: a line she can see, in an open month, passes the view check and asks for approval.
-        software = {"csv": "month,line,amount\n2026-04,Software subscriptions,9000\n", "basis": "cash",
-                    "mapping": {"Software subscriptions": "6100"}}
+        software = {
+            "csv": "month,line,amount\n2026-04,Software subscriptions,9000\n",
+            "basis": "cash",
+            "mapping": {"Software subscriptions": "6100"},
+        }
         assert act(c, "human:dan", "import_raw_totals", software, "dan-april").status == "needs_approval"
         # Full detail for her turns the same replay into already_imported, which names the batch.
-        assert act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals",
-                                                   "full_detail": ["human:dan"]}).status == "committed"
+        assert (
+            act(
+                c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals", "full_detail": ["human:dan"]}
+            ).status
+            == "committed"
+        )
         again = act(c, "human:dan", "import_raw_totals", jan, "dan-replay-detail")
         assert again.result["already_imported"] is True and again.result["batch_id"] == batch
 
@@ -304,12 +353,33 @@ def test_a_posting_dated_in_a_raw_totals_month_is_refused_until_its_raw_entry_is
         assert r.status == "committed", r.reason
         feb = next(m["entry_id"] for m in r.result["months"] if m["month"] == "2026-02")
         vendor = str(act(c, OWNER, "contact_create", {"name": "Acme Supplies", "kind": "vendor"}).result["contact_id"])
-        bill = str(act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-02-10", "lines": [
-            {"account_id": account(c, "6100"), "amount": 5_000}]}).result["bill_id"])
+        bill = str(
+            act(
+                c,
+                OWNER,
+                "bill_create",
+                {
+                    "vendor_id": vendor,
+                    "bill_date": "2026-02-10",
+                    "lines": [{"account_id": account(c, "6100"), "amount": 5_000}],
+                },
+            ).result["bill_id"]
+        )
         before = _count(c, "fin_entries")
         approved = act(c, OWNER, "bill_approve", {"bill_id": bill})
-        stray = act(c, OWNER, "journal", {"date": "2026-02-20", "memo": "stray", "lines": [
-            {"account_id": account(c, "6900"), "amount": 10_000}, {"account_id": account(c, "1000"), "amount": -10_000}]})
+        stray = act(
+            c,
+            OWNER,
+            "journal",
+            {
+                "date": "2026-02-20",
+                "memo": "stray",
+                "lines": [
+                    {"account_id": account(c, "6900"), "amount": 10_000},
+                    {"account_id": account(c, "1000"), "amount": -10_000},
+                ],
+            },
+        )
         for refused in (approved, stray):
             assert refused.status == "failed" and refused.code == CONFLICT and "raw totals" in refused.reason
         assert _count(c, "fin_entries") == before
@@ -322,8 +392,19 @@ def test_a_month_with_a_journal_takes_no_raw_totals(books):
     month holding one refuses its raw totals, as a month holding a bank row does; once the journal is reversed it takes them."""
     sheet = "month,line,amount,team\n2026-09,Software subscriptions,10000,\n2026-09,Cash at bank,-10000,\n"
     with books.transaction() as c:
-        journal = act(c, OWNER, "journal", {"date": "2026-09-05", "memo": "hand entry", "lines": [
-            {"account_id": account(c, "6100"), "amount": 10_000}, {"account_id": account(c, "1000"), "amount": -10_000}]})
+        journal = act(
+            c,
+            OWNER,
+            "journal",
+            {
+                "date": "2026-09-05",
+                "memo": "hand entry",
+                "lines": [
+                    {"account_id": account(c, "6100"), "amount": 10_000},
+                    {"account_id": account(c, "1000"), "amount": -10_000},
+                ],
+            },
+        )
         assert journal.status == "committed", journal.reason
         entry = c.execute("SELECT id FROM fin_entries WHERE source='manual'").fetchone()[0]
         before = _count(c, "fin_entries")
@@ -337,8 +418,13 @@ def test_a_month_with_a_journal_takes_no_raw_totals(books):
 
 
 def _feed(raw_id: str, amount: int, day: str) -> dict[str, object]:
-    return {**MERCURY["txn_bank_fee"], "id": raw_id, "amount": amount, "createdAt": f"{day}T10:00:00Z",
-            "postedAt": f"{day}T10:00:00Z"}
+    return {
+        **MERCURY["txn_bank_fee"],
+        "id": raw_id,
+        "amount": amount,
+        "createdAt": f"{day}T10:00:00Z",
+        "postedAt": f"{day}T10:00:00Z",
+    }
 
 
 def _feed_state(c):
@@ -360,8 +446,12 @@ def test_a_feed_row_in_a_raw_totals_month_is_covered_history_and_posts_nowhere(b
         fid, money = c.execute("SELECT id, money_account_id FROM fin_feed_txns WHERE provider_id='txn-feb'").fetchone()
         refused = act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6900")})
         assert refused.status == "failed" and refused.code == CONFLICT and "covered" in refused.reason, refused
-        made = act(c, OWNER, "reconcile", {"money_account_id": money, "statement_end": "2026-02-28",
-                                           "statement_balance": -1_500})
+        made = act(
+            c,
+            OWNER,
+            "reconcile",
+            {"money_account_id": money, "statement_end": "2026-02-28", "statement_balance": -1_500},
+        )
         assert made.result["cleared"] == 1 and made.result["outstanding"] == 0, made.result
 
 
@@ -387,8 +477,10 @@ def test_reversing_the_months_a_covered_row_sits_behind_lets_it_post_once(books)
 
 # The same history as a sheet with no cash line: its months post against Opening balance equity alone.
 PL_MAPPING = {"Software subscriptions": "6100", "Sales revenue": "4000"}
-PL_CSV = ("month,line,amount,team\n2026-01,Sales revenue,250000,sales\n2026-03,Software subscriptions,30000,web\n"
-          "2026-03,Sales revenue,40000,sales\n")
+PL_CSV = (
+    "month,line,amount,team\n2026-01,Sales revenue,250000,sales\n2026-03,Software subscriptions,30000,web\n"
+    "2026-03,Sales revenue,40000,sales\n"
+)
 SHEETS = {"cash": (MAPPING, CSV), "pl": (PL_MAPPING, PL_CSV)}
 
 
@@ -474,8 +566,12 @@ def test_the_first_reconcile_to_the_latest_raw_month_end_is_done_with_no_differe
         line, held = _bank_gl(c)
         bank = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
         # The bank's balance on 31 March: today's less the 5 April row (-400.00, 40,000 in cents).
-        done = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-03-31",
-                                           "statement_balance": held + 40_000})
+        done = act(
+            c,
+            OWNER,
+            "reconcile",
+            {"money_account_id": bank, "statement_end": "2026-03-31", "statement_balance": held + 40_000},
+        )
         assert (done.result["status"], done.result["difference"], done.result["book_difference"]) == ("done", 0, 0)
         assert line == held, (line, held)
 
@@ -497,12 +593,21 @@ def test_a_reconcile_to_a_month_end_counts_no_raw_totals_from_after_it(books):
         assert line == held, (line, held)
         bank = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
         # The bank's balance on 31 August: today's, plus the September sheet line (-200.00, so 20,000 in cents).
-        aug = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-08-31",
-                                          "statement_balance": held + 20_000})
-        assert (aug.result["status"], aug.result["difference"], aug.result["book_difference"]) == ("done", 0, 0), aug.result
-        sep = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-09-30",
-                                          "statement_balance": held})
-        assert (sep.result["status"], sep.result["difference"], sep.result["book_difference"]) == ("done", 0, 0), sep.result
+        aug = act(
+            c,
+            OWNER,
+            "reconcile",
+            {"money_account_id": bank, "statement_end": "2026-08-31", "statement_balance": held + 20_000},
+        )
+        assert (aug.result["status"], aug.result["difference"], aug.result["book_difference"]) == ("done", 0, 0), (
+            aug.result
+        )
+        sep = act(
+            c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-09-30", "statement_balance": held}
+        )
+        assert (sep.result["status"], sep.result["difference"], sep.result["book_difference"]) == ("done", 0, 0), (
+            sep.result
+        )
 
 
 def test_migration_0037_widens_the_feed_status_keeps_its_rows_and_runs_twice(books):
@@ -515,11 +620,15 @@ def test_migration_0037_widens_the_feed_status_keeps_its_rows_and_runs_twice(boo
         money = c.execute("SELECT id FROM fin_money_accounts ORDER BY id LIMIT 1").fetchone()[0]
 
         def triggers() -> list[str]:
-            return sorted(r[0] for r in c.execute(
-                "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='fin_feed_txns'"))
+            return sorted(
+                r[0]
+                for r in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='fin_feed_txns'")
+            )
 
         def sql() -> str:
-            return str(c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='fin_feed_txns'").fetchone()[0])
+            return str(
+                c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='fin_feed_txns'").fetchone()[0]
+            )
 
         def state() -> list[tuple]:
             return c.execute("SELECT id, status, amount, entry_line_id FROM fin_feed_txns ORDER BY id").fetchall()
@@ -531,10 +640,14 @@ def test_migration_0037_widens_the_feed_status_keeps_its_rows_and_runs_twice(boo
         c.execute("DROP TABLE fin_feed_txns")
         c.execute(current.replace("'ignored','covered'", "'ignored'").replace(", refund_of TEXT", ""))
         assert "'covered'" not in sql() and "entry_line_id" in sql() and "refund_of" not in sql()
-        c.executemany("INSERT INTO fin_feed_txns(id, money_account_id, provider_id, txn_date, amount, currency, status, "
-                      "created_at, created_by, entry_line_id) VALUES(?,?,?,?,?,?,?,'2026-02-10T00:00:00Z','bot',?)",
-                      [("f1", money, "p1", "2026-02-10", -1_500, "USD", "posted", "L1"),
-                       ("f2", money, "p2", "2026-02-11", 900, "USD", "new", None)])
+        c.executemany(
+            "INSERT INTO fin_feed_txns(id, money_account_id, provider_id, txn_date, amount, currency, status, "
+            "created_at, created_by, entry_line_id) VALUES(?,?,?,?,?,?,?,'2026-02-10T00:00:00Z','bot',?)",
+            [
+                ("f1", money, "p1", "2026-02-10", -1_500, "USD", "posted", "L1"),
+                ("f2", money, "p2", "2026-02-11", 900, "USD", "new", None),
+            ],
+        )
         rows = state()
 
         MIGRATION.up(c)
@@ -554,9 +667,11 @@ def test_migration_0037_widens_the_feed_status_keeps_its_rows_and_runs_twice(boo
 
 def _opening_entry(c) -> tuple[str, str, int]:
     """The live opening balance entry on the checking line: (entry id, day, amount on that line)."""
-    row = c.execute("SELECT e.id, e.entry_date, l.amount FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id "
-                    "JOIN fin_accounts a ON a.id=l.account_id WHERE e.source='sync' AND e.source_id LIKE 'opening:%' "
-                    "AND e.status='posted' AND e.reverses_id IS NULL AND a.code='1000'").fetchone()
+    row = c.execute(
+        "SELECT e.id, e.entry_date, l.amount FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id "
+        "JOIN fin_accounts a ON a.id=l.account_id WHERE e.source='sync' AND e.source_id LIKE 'opening:%' "
+        "AND e.status='posted' AND e.reverses_id IS NULL AND a.code='1000'"
+    ).fetchone()
     return str(row[0]), str(row[1]), int(row[2])
 
 
@@ -576,17 +691,21 @@ def test_a_row_the_feed_never_sees_is_a_difference_the_opening_does_not_absorb(b
         opening = _opening_entry(c)
         assert opening[1:] == ("2026-02-09", 100_000), opening
         assert _bank_gl(c) == (-50_000, -50_000)
-    fake.balances["acct-chk"] = -800                    # 300.00 the bank holds that the feed never sends
+    fake.balances["acct-chk"] = -800  # 300.00 the bank holds that the feed never sends
     for at in PASSES:
         sync_once(books, fake, at)
     with books.transaction() as c:
         assert _opening_entry(c) == opening
         assert _bank_gl(c) == (-50_000, -80_000)
         bank = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
-        made = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-10-14",
-                                           "statement_balance": -80_000})
+        made = act(
+            c,
+            OWNER,
+            "reconcile",
+            {"money_account_id": bank, "statement_end": "2026-10-14", "statement_balance": -80_000},
+        )
         assert made.status == "committed", made.reason
-        assert made.result["book_difference"] == -30_000, made.result     # 300.00 short of the statement
+        assert made.result["book_difference"] == -30_000, made.result  # 300.00 short of the statement
         assert made.result["status"] == "open"
 
 

@@ -1,0 +1,222 @@
+{
+    "files": {
+        "./backend/task_blocked.py": [
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 26,
+                    "endColumn": 29,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 44,
+                    "endColumn": 47,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 19,
+                    "endColumn": 22,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 16,
+                    "endColumn": 19,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 33,
+                    "endColumn": 36,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 32,
+                    "endColumn": 35,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 29,
+                    "endColumn": 32,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 56,
+                    "endColumn": 59,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 25,
+                    "endColumn": 28,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 27,
+                    "endColumn": 30,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 79,
+                    "endColumn": 82,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 29,
+                    "endColumn": 32,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 13,
+                    "endColumn": 16,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 22,
+                    "endColumn": 25,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 25,
+                    "endColumn": 28,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 63,
+                    "endColumn": 66,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 69,
+                    "endColumn": 72,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 99,
+                    "endColumn": 102,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 12,
+                    "endColumn": 15,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 11,
+                    "endColumn": 14,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 24,
+                    "endColumn": 31,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 71,
+                    "endColumn": 78,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 40,
+                    "endColumn": 43,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 14,
+                    "endColumn": 17,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 37,
+                    "endColumn": 40,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 53,
+                    "endColumn": 56,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 49,
+                    "endColumn": 52,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

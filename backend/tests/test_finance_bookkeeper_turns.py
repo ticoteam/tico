@@ -8,9 +8,8 @@ marker is removed.
 
 Accounts: no hub tool lists the chart, so the ids of Revenue, Software and the like come from the books (`chart`), and
 the gap is a test of its own (`test_gap_the_bot_can_list_accounts`)."""
-from pathlib import Path
 
-import pytest
+from pathlib import Path
 
 from backend import bot_settings as BS
 from backend import bookkeeper as BK
@@ -21,9 +20,13 @@ from backend.tests.test_finance_fixtures import MERCURY, OWNER, FakeMercury, acc
 from backend.tests.test_mcp import call, rpc
 
 CONFIG = {"template": "bookkeeper", "name": "bookkeeper", "runtime": "fake", "status": "active"}
-PAYEE = {"name": "Northwind Hosting", "method": "ach", "account_number": "000099998888", "routing_number": "000000000",
-         "address": {"address1": "1 Hosting Way", "city": "Austin", "region": "TX", "postalCode": "78701",
-                     "country": "US"}}
+PAYEE = {
+    "name": "Northwind Hosting",
+    "method": "ach",
+    "account_number": "000099998888",
+    "routing_number": "000000000",
+    "address": {"address1": "1 Hosting Way", "city": "Austin", "region": "TX", "postalCode": "78701", "country": "US"},
+}
 
 
 def hire(api):
@@ -33,13 +36,15 @@ def hire(api):
     store = api.app.state.store
     with store.transaction() as c:
         assert FA.ensure_setup(c, store.settings.owner_email)
-        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('bookkeeper','bookkeeper','Bookkeeper','active')")
+        c.execute(
+            "INSERT INTO bots(id,slug,display_name,state) VALUES('bookkeeper','bookkeeper','Bookkeeper','active')"
+        )
         c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('bookkeeper','ana')")
         BS.write(c, "bookkeeper", CONFIG)
         assert BK.grant_defaults(c)
         granted = act(c, OWNER, "view_grant", {"subject": BK.ACTOR, "what": "everything"})
         assert granted.status == "committed", granted
-    machine = runner(api)                 # enrolling a computer can place the bot already: take its generation
+    machine = runner(api)  # enrolling a computer can place the bot already: take its generation
     with store.read() as c:
         placed = c.execute("SELECT runner_id, generation FROM assignments WHERE bot=?", (BK.SLUG,)).fetchone()
     if not placed or placed["runner_id"] != machine["runner_id"]:
@@ -75,10 +80,20 @@ def vendor_bill(api, token, number="NW-1042", amount=45_000):
     """A vendor and its bill, entered and approved the way the Bookkeeper enters one (AGENT.md, Each Books check, 2)."""
     err, vendor = ask(api, token, "contact_create", {"name": "Northwind Hosting", "kind": "vendor"}, "vendor:northwind")
     assert not err and vendor["status"] == "committed", vendor
-    err, made = ask(api, token, "bill_create", {
-        "vendor_id": vendor["result"]["contact_id"], "number": number, "bill_date": "2026-10-20", "terms_days": 30,
-        "origin": "email", "lines": [{"account_id": chart(api, "6100"), "amount": amount,
-                                      "description": "Hosting, October"}]}, f"bill-create:{number}")
+    err, made = ask(
+        api,
+        token,
+        "bill_create",
+        {
+            "vendor_id": vendor["result"]["contact_id"],
+            "number": number,
+            "bill_date": "2026-10-20",
+            "terms_days": 30,
+            "origin": "email",
+            "lines": [{"account_id": chart(api, "6100"), "amount": amount, "description": "Hosting, October"}],
+        },
+        f"bill-create:{number}",
+    )
     assert not err and made["status"] == "committed", made
     bill_id = made["result"]["bill_id"]
     err, approved = ask(api, token, "bill_approve", {"bill_id": bill_id}, f"bill-approve:{bill_id}")
@@ -95,28 +110,51 @@ def test_categorize_turn(api):
     err, found = call(api, "hub_finance_search", {"kind": "feed", "q": "Mercury"}, token=token)
     fee = next(r for r in found["results"] if r["provider_kind"] == "wireFee")
     # A posted row: tag its line (the lines form of categorize: no account id needed).
-    err, tagged = ask(api, token, "categorize", {"lines": [{"line_id": fee["lines"][0]["line_id"],
-                                                          "tags": {"team": "web"}}]}, f"categorize:{fee['id']}")
+    err, tagged = ask(
+        api,
+        token,
+        "categorize",
+        {"lines": [{"line_id": fee["lines"][0]["line_id"], "tags": {"team": "web"}}]},
+        f"categorize:{fee['id']}",
+    )
     assert not err and tagged["status"] == "committed", tagged
     # The new customer deposit: categorize the row into Revenue (the account id from the books, see the module note).
     deposit = next(r for r in queue["items"] if r["label"].startswith("Acme Customer"))
-    err, posted = ask(api, token, "categorize", {"feed_id": deposit["feed_id"], "account_id": chart(api, "4000")},
-                      f"categorize:{deposit['feed_id']}")
+    err, posted = ask(
+        api,
+        token,
+        "categorize",
+        {"feed_id": deposit["feed_id"], "account_id": chart(api, "4000")},
+        f"categorize:{deposit['feed_id']}",
+    )
     assert not err and posted["status"] == "committed", posted
-    err, again = ask(api, token, "categorize", {"feed_id": deposit["feed_id"], "account_id": chart(api, "4000")},
-                     f"categorize:{deposit['feed_id']}")
-    assert not err and again["action_id"] == posted["action_id"], again          # a retry acts once
+    err, again = ask(
+        api,
+        token,
+        "categorize",
+        {"feed_id": deposit["feed_id"], "account_id": chart(api, "4000")},
+        f"categorize:{deposit['feed_id']}",
+    )
+    assert not err and again["action_id"] == posted["action_id"], again  # a retry acts once
     err, left = call(api, "hub_finance_inbox", {"kind": "uncategorized"}, token=token)
     assert not err and deposit["feed_id"] not in {r["feed_id"] for r in left["items"]}, left
 
 
-def test_categorize_proposes_a_posting_rule(api):   # AGENT.md step 4: a pattern repeats, so propose a rule
+def test_categorize_proposes_a_posting_rule(api):  # AGENT.md step 4: a pattern repeats, so propose a rule
     token = hire(api)
-    err, out = ask(api, token, "rule_create", {
-        "kind": "posting", "name": "Mercury fees", "when": {"counterparty": "Mercury"},
-        "outcome": {"outcome": "post", "account_id": chart(api, "6900")},
-        "examples": [{"input": {"counterparty": "Mercury"}, "expect": "post", "account_id": chart(api, "6900")}]},
-        "rule:mercury-fees")
+    err, out = ask(
+        api,
+        token,
+        "rule_create",
+        {
+            "kind": "posting",
+            "name": "Mercury fees",
+            "when": {"counterparty": "Mercury"},
+            "outcome": {"outcome": "post", "account_id": chart(api, "6900")},
+            "examples": [{"input": {"counterparty": "Mercury"}, "expect": "post", "account_id": chart(api, "6900")}],
+        },
+        "rule:mercury-fees",
+    )
     assert not err and out["status"] == "needs_approval", out
 
 
@@ -124,7 +162,9 @@ def test_categorize_proposes_a_posting_rule(api):   # AGENT.md step 4: a pattern
 def test_bills_turn(api):
     token = hire(api)
     bill_id = vendor_bill(api, token)
-    err, edited = ask(api, token, "bill_update", {"bill_id": bill_id, "memo": "October hosting"}, f"bill-update:{bill_id}")
+    err, edited = ask(
+        api, token, "bill_update", {"bill_id": bill_id, "memo": "October hosting"}, f"bill-update:{bill_id}"
+    )
     assert not err and edited["status"] == "committed", edited
     err, found = call(api, "hub_finance_search", {"kind": "bill", "q": "NW-1042"}, token=token)
     assert not err and [r["id"] for r in found["results"]] == [bill_id], found
@@ -142,21 +182,27 @@ def test_pay_turn(api):
     # The payee is the bill's vendor: a payment to any other recipient is refused ("that recipient is not this bill's vendor").
     err, vendor = call(api, "hub_finance_search", {"kind": "contact", "q": "Northwind"}, token=token)
     assert not err and vendor["results"], vendor
-    err, payee = ask(api, token, "recipient_add", {**PAYEE, "contact_id": vendor["results"][0]["id"]},
-                     "recipient:northwind")
+    err, payee = ask(
+        api, token, "recipient_add", {**PAYEE, "contact_id": vendor["results"][0]["id"]}, "recipient:northwind"
+    )
     assert not err and payee["status"] == "committed", payee
     recipient_id = payee["result"]["recipient_id"]
     sync_once(api.app.state.store, fake)
     with api.app.state.store.read() as c:
         money = c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0]
-    body = {"recipient_id": recipient_id, "amount": 45_000, "money_account_id": money,
-            "account_id": chart(api, "2000"), "obligation": f"bill:{bill_id}"}
+    body = {
+        "recipient_id": recipient_id,
+        "amount": 45_000,
+        "money_account_id": money,
+        "account_id": chart(api, "2000"),
+        "obligation": f"bill:{bill_id}",
+    }
     err, preview = ask(api, token, "payment_create", body, f"bill-due:{bill_id}:due_soon", dry_run=True)
     assert not err and preview["status"] == "needs_approval", preview
     err, asked = ask(api, token, "payment_create", body, f"bill-due:{bill_id}:due_soon")
     assert not err and asked["status"] == "needs_approval" and asked["kind"] == "payment_create", asked
-    assert asked["approver"] == OWNER, asked                      # money out waits for one person: the owner here
-    assert fake.sent("request_send_money") == []                  # nothing was sent to the bank
+    assert asked["approver"] == OWNER, asked  # money out waits for one person: the owner here
+    assert fake.sent("request_send_money") == []  # nothing was sent to the bank
     assert get(api, f"approvals/{asked['approval_id']}")["kind"] == "spend"
 
 
@@ -166,10 +212,19 @@ def test_invoices_turn(api):
     fake = mercury(api)
     err, customer = ask(api, token, "contact_create", {"name": "Acme Customer", "kind": "customer"}, "customer:acme")
     assert not err and customer["status"] == "committed", customer
-    err, made = ask(api, token, "invoice_create", {
-        "customer_id": customer["result"]["contact_id"], "number": "INV-1042", "invoice_date": "2026-10-01",
-        "terms_days": 30, "lines": [{"account_id": chart(api, "4000"), "amount": 50_000,
-                                     "description": "October support"}]}, "invoice:INV-1042")
+    err, made = ask(
+        api,
+        token,
+        "invoice_create",
+        {
+            "customer_id": customer["result"]["contact_id"],
+            "number": "INV-1042",
+            "invoice_date": "2026-10-01",
+            "terms_days": 30,
+            "lines": [{"account_id": chart(api, "4000"), "amount": 50_000, "description": "October support"}],
+        },
+        "invoice:INV-1042",
+    )
     assert not err and made["status"] == "committed", made
     invoice_id = made["result"]["invoice_id"]
     err, sent = ask(api, token, "invoice_send", {"invoice_id": invoice_id}, f"invoice-send:{invoice_id}")
@@ -185,8 +240,13 @@ def test_invoices_turn(api):
     # The payment is in the feed: record it against the invoice (invoice-overdue.md, step 2).
     err, feed = call(api, "hub_finance_search", {"kind": "feed", "q": "Acme Customer"}, token=token)
     deposit = next(r for r in feed["results"] if r["amount"] == 50_000)
-    err, paid = ask(api, token, "invoice_record_payment", {"invoice_id": invoice_id, "amount": 50_000,
-                                                           "feed_id": deposit["id"]}, f"invoice-paid:{invoice_id}")
+    err, paid = ask(
+        api,
+        token,
+        "invoice_record_payment",
+        {"invoice_id": invoice_id, "amount": 50_000, "feed_id": deposit["id"]},
+        f"invoice-paid:{invoice_id}",
+    )
     assert not err and paid["status"] == "committed", paid
     assert fake.sent("request_send_money") == []
 
@@ -216,7 +276,7 @@ def test_receipts_are_found_by_the_hourly_check(api):
     connect(store, fake)
     fake.txns["txn-dep"] = dict(MERCURY["txn_deposit"])
     fake.txns["txn-fee"] = dict(MERCURY["txn_bank_fee"])
-    fake.txns["txn-card-1"] = dict(MERCURY["txn_card_posted"])      # a card charge, posted, with no receipt
+    fake.txns["txn-card-1"] = dict(MERCURY["txn_card_posted"])  # a card charge, posted, with no receipt
     sync_once(store, fake)
     with store.transaction() as c:
         first = BK.check(c, api.app.state.auth, H.now())
@@ -229,18 +289,45 @@ def test_receipts_are_found_by_the_hourly_check(api):
     assert quiet["task"] is None and quiet["items"] == 0, quiet
 
 
-@pytest.mark.xfail(strict=True, reason="GAP: attach takes any Library file id without checking that the file exists or "
-                   "that the asker may read it: file_ids ['fil_missing'] commits and inserts a fin_attachments row "
-                   "(backend/finance/documents.py attach; backend/finance/store/ap.py attach). bill_create's attachments "
-                   "have the same gap (documents.py _attach_files).")
-def test_gap_attach_refuses_a_file_not_in_the_library(api):
+def _library_file(api, fid, bot):
+    """A Library file of `bot` (bot-wide scope, no versions): enough for the file check, which reads the row."""
+    now = H.now()
+    with api.app.state.store.transaction() as c:
+        if c.execute("SELECT 1 FROM bots WHERE id=?", (bot,)).fetchone() is None:
+            c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES(?,?,?,'active')", (bot, bot, bot.title()))
+        c.execute(
+            "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,locator,first_activity_at,last_activity_at) "
+            "VALUES(?,?,'bot',?,'receipt.pdf','file','',?,?)",
+            (fid, bot, fid, now, now),
+        )
+
+
+def test_attach_files_only_a_library_file_the_bot_may_read(api):
+    """attach checks each file before filing it: a missing id, another bot's own file and a deleted file are refused
+    (nothing is attached); the Bookkeeper's own file is filed."""
     token = hire(api)
     mercury(api)
     err, feed = call(api, "hub_finance_search", {"kind": "feed", "q": "Mercury"}, token=token)
     fee = feed["results"][0]
-    err, refused = ask(api, token, "attach", {"subject_kind": "feed", "subject_id": fee["id"],
-                                              "file_ids": ["fil_missing"]}, f"attach:{fee['id']}")
-    assert err or refused["status"] in ("failed", "denied"), refused
+    _library_file(api, "file-mine", "bookkeeper")
+    _library_file(api, "file-theirs", "writer")
+    _library_file(api, "file-gone", "bookkeeper")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_files SET state='deleted' WHERE id='file-gone'")
+
+    def attach(fid):
+        body = {"subject_kind": "feed", "subject_id": fee["id"], "file_ids": [fid]}
+        return ask(api, token, "attach", body, f"attach:{fee['id']}:{fid}")
+
+    for fid in ("fil_missing", "file-theirs", "file-gone"):
+        err, refused = attach(fid)
+        assert err and fid in str(refused), (fid, refused)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_attachments").fetchone()[0] == 0
+    err, filed = attach("file-mine")
+    assert not err and filed["status"] == "committed", filed
+    with api.app.state.store.read() as c:
+        assert [r[0] for r in c.execute("SELECT file_id FROM fin_attachments")] == ["file-mine"]
 
 
 def test_the_bot_reads_a_file_with_hub_file_read(api):
@@ -260,16 +347,29 @@ def test_reconcile_turn(api):
     deposit = feed["results"][0]
     money = deposit["money_account"]["id"]
     # Reconciling covers posted rows: post the deposit first, as the categorize turn does.
-    err, posted = ask(api, token, "categorize", {"feed_id": deposit["id"], "account_id": chart(api, "4000")},
-                      f"categorize:{deposit['id']}")
+    err, posted = ask(
+        api,
+        token,
+        "categorize",
+        {"feed_id": deposit["id"], "account_id": chart(api, "4000")},
+        f"categorize:{deposit['id']}",
+    )
     assert not err and posted["status"] == "committed", posted
     err, fee = call(api, "hub_finance_search", {"kind": "feed", "q": "Mercury"}, token=token)
     # The statement balance is Mercury's balance after both rows: the opening entry (124,765.50) plus 500.00 less 15.00,
     # which is the fixture's currentBalance 125,250.50. Amounts are minor units.
-    err, done = ask(api, token, "reconcile", {"money_account_id": money, "statement_end": "2026-10-14",
-                                              "statement_balance": 12_525_050,
-                                              "cleared": [deposit["id"], fee["results"][0]["id"]]},
-                    f"reconcile:{money}:2026-10-14")
+    err, done = ask(
+        api,
+        token,
+        "reconcile",
+        {
+            "money_account_id": money,
+            "statement_end": "2026-10-14",
+            "statement_balance": 12_525_050,
+            "cleared": [deposit["id"], fee["results"][0]["id"]],
+        },
+        f"reconcile:{money}:2026-10-14",
+    )
     assert not err and done["status"] == "committed" and done["result"]["difference"] == 0, done
     assert done["result"]["status"] == "done", done
     err, metric = call(api, "hub_finance_metric", {"name": "unreconciled_days"}, token=token)
@@ -282,8 +382,9 @@ def test_close_turn(api):
     mercury(api)
     err, checklist = call(api, "hub_finance_report", {"kind": "close", "month": "2026-10"}, token=token)
     assert not err, checklist
-    err, variance = call(api, "hub_finance_report", {"kind": "budget_vs_actual", "start": "2026-10-01",
-                                                     "end": "2026-10-31"}, token=token)
+    err, variance = call(
+        api, "hub_finance_report", {"kind": "budget_vs_actual", "start": "2026-10-01", "end": "2026-10-31"}, token=token
+    )
     assert not err, variance
     # The checklist is not ready: a money account is not reconciled and a settled row waits for a category (spec 11), so
     # the close is refused with what is left, and nothing is asked. The approval path is in the next test.
@@ -301,8 +402,9 @@ def test_close_period_takes_the_month_and_nothing_else(api):
     assert not err and asked["status"] == "needs_approval" and asked["rule"] == "default:close", asked
     assert asked["approver"] == OWNER, asked
     assert get(api, f"approvals/{asked['approval_id']}")["kind"] == "finance"
-    err, noted = ask(api, token, "close_period", {"month": "2026-10", "note": "Software over plan by 12%"},
-                     "close:2026-10:note")
+    err, noted = ask(
+        api, token, "close_period", {"month": "2026-10", "note": "Software over plan by 12%"}, "close:2026-10:note"
+    )
     assert err or noted["status"] != "needs_approval", noted
 
 
@@ -310,12 +412,18 @@ def test_close_period_takes_the_month_and_nothing_else(api):
 def test_monthly_report_turn(api):
     token = hire(api)
     mercury(api)
-    err, pnl = call(api, "hub_finance_report", {"kind": "pnl", "start": "2026-10-01", "end": "2026-10-31",
-                                                "compare": "prior"}, token=token)
+    err, pnl = call(
+        api,
+        "hub_finance_report",
+        {"kind": "pnl", "start": "2026-10-01", "end": "2026-10-31", "compare": "prior"},
+        token=token,
+    )
     assert not err and "rows" in pnl, pnl
-    for args in ({"kind": "balance_sheet", "end": "2026-10-31"},
-                 {"kind": "cash_flow", "start": "2026-10-01", "end": "2026-10-31"},
-                 {"kind": "budget_vs_actual", "start": "2026-10-01", "end": "2026-10-31"}):
+    for args in (
+        {"kind": "balance_sheet", "end": "2026-10-31"},
+        {"kind": "cash_flow", "start": "2026-10-01", "end": "2026-10-31"},
+        {"kind": "budget_vs_actual", "start": "2026-10-01", "end": "2026-10-31"},
+    ):
         err, report = call(api, "hub_finance_report", args, token=token)
         assert not err, (args, report)
     err, runway = call(api, "hub_finance_metric", {"name": "runway_months"}, token=token)
@@ -356,13 +464,27 @@ def test_sales_tax_turn(api):
     token = hire(api)
     err, authority = ask(api, token, "contact_create", {"name": "California CDTFA", "kind": "vendor"}, "vendor:cdtfa")
     assert not err and authority["status"] == "committed", authority
-    err, jurisdiction = ask(api, token, "tax_jurisdiction_add", {"code": "US-CA", "name": "California sales tax",
-                                                                 "authority_id": authority["result"]["contact_id"],
-                                                                 "due_day": 28}, "tax-jurisdiction:US-CA")
+    err, jurisdiction = ask(
+        api,
+        token,
+        "tax_jurisdiction_add",
+        {
+            "code": "US-CA",
+            "name": "California sales tax",
+            "authority_id": authority["result"]["contact_id"],
+            "due_day": 28,
+        },
+        "tax-jurisdiction:US-CA",
+    )
     assert not err and jurisdiction["status"] == "committed", jurisdiction
     # The amount is typed: without it tax_remit reads the workpaper, which this test has no sales feed for.
-    err, remit = ask(api, token, "tax_remit", {"jurisdiction": "US-CA", "period": "2026-Q3", "amount": 12_000},
-                     "tax-remit:US-CA:2026-Q3")
+    err, remit = ask(
+        api,
+        token,
+        "tax_remit",
+        {"jurisdiction": "US-CA", "period": "2026-Q3", "amount": 12_000},
+        "tax-remit:US-CA:2026-Q3",
+    )
     assert not err and remit["status"] in ("committed", "needs_approval"), remit
 
 
@@ -372,9 +494,18 @@ def test_gap_sales_tax_is_readable_before_approval(api):
     token = hire(api)
     err, authority = ask(api, token, "contact_create", {"name": "California CDTFA", "kind": "vendor"}, "vendor:cdtfa")
     assert not err and authority["status"] == "committed", authority
-    err, jurisdiction = ask(api, token, "tax_jurisdiction_add", {"code": "US-CA", "name": "California sales tax",
-                                                                 "authority_id": authority["result"]["contact_id"],
-                                                                 "due_day": 28}, "tax-jurisdiction:US-CA")
+    err, jurisdiction = ask(
+        api,
+        token,
+        "tax_jurisdiction_add",
+        {
+            "code": "US-CA",
+            "name": "California sales tax",
+            "authority_id": authority["result"]["contact_id"],
+            "due_day": 28,
+        },
+        "tax-jurisdiction:US-CA",
+    )
     assert not err and jurisdiction["status"] == "committed", jurisdiction
     err, report = call(api, "hub_finance_report", {"kind": "sales_tax", "year": 2026}, token=token)
     assert not err and report["year"] == 2026 and "rows" in report, report
@@ -385,8 +516,13 @@ def test_gap_sales_tax_is_readable_before_approval(api):
 def test_gap_year_end_1099_list_is_readable(api):
     """AGENT.md asks the owner to review the 1099-NEC flagged vendors before the due date: the workpaper lists them."""
     token = hire(api)
-    err, vendor = ask(api, token, "contact_create", {"name": "Northwind Hosting", "kind": "vendor", "is_1099": True},
-                      "vendor:northwind-1099")
+    err, vendor = ask(
+        api,
+        token,
+        "contact_create",
+        {"name": "Northwind Hosting", "kind": "vendor", "is_1099": True},
+        "vendor:northwind-1099",
+    )
     assert not err and vendor["status"] == "committed", vendor
     err, flagged = call(api, "hub_finance_report", {"kind": "1099", "year": 2026}, token=token)
     assert not err and flagged["year"] == 2026 and "threshold" in flagged and "rows" in flagged, flagged
@@ -397,10 +533,12 @@ def test_gap_year_end_1099_list_is_readable(api):
 def test_bookkeeper_is_refused_what_it_may_never_do(api):
     token = hire(api)
     before = get(api, "finance/access")
-    for kind, payload in (("right_grant", {"teammate": BK.ACTOR, "right": "finance.rules"}),
-                          ("payment_settings", {"direct_send": True}),
-                          ("view_grant", {"subject": BK.ACTOR, "what": "everything"}),
-                          ("connection_create", {"provider": "mercury", "credential_id": "cred-mercury"})):
+    for kind, payload in (
+        ("right_grant", {"teammate": BK.ACTOR, "right": "finance.rules"}),
+        ("payment_settings", {"direct_send": True}),
+        ("view_grant", {"subject": BK.ACTOR, "what": "everything"}),
+        ("connection_create", {"provider": "mercury", "credential_id": "cred-mercury"}),
+    ):
         err, out = ask(api, token, kind, payload, f"never:{kind}")
         assert err or out["status"] != "committed", (kind, out)
     assert get(api, "finance/access") == before
@@ -414,21 +552,26 @@ def test_gap_books_check_kinds_can_be_paged(api):
     token = hire(api)
     fake = FakeMercury()
     connect(store, fake)
-    fake.txns["txn-old"] = dict(MERCURY["txn_deposit"], id="txn-old", createdAt="2026-08-01T12:00:00Z",
-                                postedAt="2026-08-01T12:00:00Z")
-    sync_once(store, fake)                  # the first settled row is in August: the account has never been reconciled
+    fake.txns["txn-old"] = dict(
+        MERCURY["txn_deposit"], id="txn-old", createdAt="2026-08-01T12:00:00Z", postedAt="2026-08-01T12:00:00Z"
+    )
+    sync_once(store, fake)  # the first settled row is in August: the account has never been reconciled
     with store.transaction() as c:
         for n, received in ((1, "2026-10-14T09:00:00Z"), (2, "2026-10-15T09:00:00Z")):
-            c.execute("INSERT INTO bills_inbound(id,delivery,received_at,sender,subject,name,mime,sha256,state,code,"
-                      "updated_at) VALUES(?,'dlv_1',?,'Acme Supplies','Invoice 88','invoice.pdf','application/pdf',?,"
-                      "'needs_entry','',?)", (f"bin_{n}", received, "a" * 64, received))
+            c.execute(
+                "INSERT INTO bills_inbound(id,delivery,received_at,sender,subject,name,mime,sha256,state,code,"
+                "updated_at) VALUES(?,'dlv_1',?,'Acme Supplies','Invoice 88','invoice.pdf','application/pdf',?,"
+                "'needs_entry','',?)",
+                (f"bin_{n}", received, "a" * 64, received),
+            )
     err, late = call(api, "hub_finance_inbox", {"kind": "unreconciled"}, token=token)
     assert not err and [(i["kind"], i["id"]) for i in late["items"]] == [("unreconciled", "books")], late
-    assert late["items"][0]["label"] == "Books not reconciled yet", late          # never reconciled: no day count
+    assert late["items"][0]["label"] == "Books not reconciled yet", late  # never reconciled: no day count
     err, first = call(api, "hub_finance_inbox", {"kind": "bill_email", "limit": 1}, token=token)
     assert not err and [i["id"] for i in first["items"]] == ["bin_1"] and first["next_cursor"], first
-    err, second = call(api, "hub_finance_inbox", {"kind": "bill_email", "limit": 1, "cursor": first["next_cursor"]},
-                       token=token)
+    err, second = call(
+        api, "hub_finance_inbox", {"kind": "bill_email", "limit": 1, "cursor": first["next_cursor"]}, token=token
+    )
     assert not err and [i["id"] for i in second["items"]] == ["bin_2"] and second["next_cursor"] is None, second
 
 
@@ -440,8 +583,9 @@ def test_gap_the_bot_can_list_accounts(api):
     assert not err and any(r.get("code") == "6100" and r["id"] for r in out["results"]), out
     err, page = call(api, "hub_finance_search", {"kind": "account", "limit": 2}, token=token)
     assert not err and len(page["results"]) == 2 and page["next_cursor"], page
-    err, rest = call(api, "hub_finance_search", {"kind": "account", "limit": 2, "cursor": page["next_cursor"]},
-                     token=token)
+    err, rest = call(
+        api, "hub_finance_search", {"kind": "account", "limit": 2, "cursor": page["next_cursor"]}, token=token
+    )
     assert not err and not {r["id"] for r in rest["results"]} & {r["id"] for r in page["results"]}, rest
     err, every = call(api, "hub_finance_search", {"q": "Software"}, token=token)
     assert not err and not any(r.get("kind") == "account" for r in every["results"]), every
