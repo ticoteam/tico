@@ -40,11 +40,9 @@ interface Activity {
 }
 
 // Page-side global the app defines (the screenshots set the theme through it).
-declare global {
-  interface Window {
-    ticoTheme: {set(theme: string): void};
-  }
-}
+declare const window: Window & typeof globalThis & {
+  ticoTheme: {set(theme: string): void};
+};
 
 // The seed's made-up key values (evals/redesign/seeds.py TOOL_KEYS): no answer may carry one.
 const KEYS = ['close-read-test-0001', 'close-full-test-0002', 'ledger-test-0003'];

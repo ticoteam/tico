@@ -31,14 +31,12 @@ declare function needsMeCount(bot: string): number;
 declare function loadBotTasksV2(bot: string): Promise<void>;
 declare function renderTree(): void;
 declare function v2Refresh(): Promise<void>;
-declare global {
-  interface Window {
-    needCountsSeen: string[];
-    needCountObserver: MutationObserver;
-    fourTabs: () => unknown;
-    botTaskTabs: () => unknown;
-  }
-}
+declare const window: Window & typeof globalThis & {
+  needCountsSeen: string[];
+  needCountObserver: MutationObserver;
+  fourTabs: () => unknown;
+  botTaskTabs: () => unknown;
+};
 
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
 const bots = ['lead', 'qa', 'senior'].map(name => ({name, display_name: {lead: 'Head of Engineering', qa: 'QA Engineer',

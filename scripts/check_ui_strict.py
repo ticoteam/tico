@@ -24,7 +24,9 @@ Mirrors scripts/check_pyright_ratchet.py. The rules:
 7. ui/tsconfig.strict.json keeps every strict flag on, and its include and exclude lists stay as they are.
 8. ui/index.html has a blank line between two <script src> tags.
 9. The UI test scripts (ui/tests/*.cts, TypeScript run by Node's type stripping) type-check under ui/tests/tsconfig.json
-   with no baseline: every diagnostic fails. Skipped while no .cts script exists.
+   with no baseline: every diagnostic fails. Skipped while no .cts script exists. The config keeps moduleDetection
+   "force" (each script is its own scope), and a script never uses `declare global`: every script shares one program,
+   so a global one script declares changes the types every other script sees. Page globals are file-local declarations.
 
 Runs in a few seconds: one tsc pass over the UI. The pinned TypeScript is fetched with npx, as ui_baseline.py does.
 """
@@ -82,6 +84,7 @@ TESTS_CONFIG = "ui/tests/tsconfig.json"
 TESTS_TSC = ["npx", "--yes", "-p", "typescript@5.9.3", "tsc", "-p", TESTS_CONFIG, "--pretty", "false"]
 TESTS_REQUIRED = ("strict", "erasableSyntaxOnly", "verbatimModuleSyntax")
 TESTS_INCLUDE = "./**/*.cts"
+DECLARE_GLOBAL = re.compile(r"^\s*declare\s+global\b", re.M)
 
 
 class Finding:
@@ -530,6 +533,14 @@ def check_tests_gate():
             problems.append(f"{TESTS_CONFIG}: {flag} must be true (the test scripts' strict rule)")
     if TESTS_INCLUDE not in config.get("include", []):
         problems.append(f'{TESTS_CONFIG}: include must list "{TESTS_INCLUDE}" (every .cts script is checked)')
+    if options.get("moduleDetection") != "force":
+        problems.append(f'{TESTS_CONFIG}: moduleDetection must be "force" (each script is its own scope)')
+    for path in sorted((ROOT / "ui/tests").rglob("*.cts")):
+        if not path.name.endswith(".d.cts") and DECLARE_GLOBAL.search(path.read_text(encoding="utf-8")):
+            problems.append(
+                f"{path.relative_to(ROOT)}: `declare global` is not allowed in a test script; declare page globals"
+                " file-locally (declare var / declare const window: Window & typeof globalThis & {...})"
+            )
     if problems:
         return problems
     code, output = run_tests_tsc()

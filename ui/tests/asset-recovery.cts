@@ -48,6 +48,29 @@ async function check(engine: import('playwright').BrowserType) {
       assert.equal(await page.locator('#cloud-lock').isVisible(), false);
       await page.close();
     }
+    // A third-party script that fails (Cloudflare's beacon, blocked by script-src 'self') is not Tico failing.
+    const page = await browser.newPage({viewport: {width: 390, height: 844}, serviceWorkers: 'block'});
+    const beacon = '<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v1"></script>';
+    await page.route('**/*', async route => {
+      const url = new URL(route.request().url()), p = url.pathname;
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      if (url.hostname !== 'tico-ui.test') return route.abort();
+      if (p === '/') return route.fulfill({contentType: 'text/html', body: html.replace('</body>', beacon + '</body>')});
+      if (p.startsWith('/tico/ui/')) {
+        const name = p.slice('/tico/ui/'.length), file = uiFile(name);
+        if (fs.existsSync(file)) return route.fulfill({path: file, contentType: name.endsWith('.css') ? 'text/css'
+          : /\.(?:js|ts)$/.test(name) ? 'application/javascript' : 'application/octet-stream'});
+      }
+      if (p === '/api/me') return json({id: 'ana', email: 'ana@acme.example', role: 'owner', cloud: true, config: {company_name: 'Acme'}});
+      if (p === '/api/humans') return json({people: [], groups: []});
+      if (p === '/api/employees') return json([]);
+      if (p === '/api/status') return json({cloud: true, cloud_access: null, active: [], queued: []});
+      return json(unrouted(p));
+    });
+    await page.goto('https://tico-ui.test/#/tasks');
+    await page.waitForLoadState('load');
+    await page.locator('#asset-recovery').waitFor({state: 'hidden'});
+    await page.close();
     console.log(`${engine.name()} asset recovery: ok`);
   } finally { await browser.close(); }
 }

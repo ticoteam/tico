@@ -20,7 +20,7 @@ async function flow(page, tag) {
     ['person', 'organization', 'place', 'document']);
   assert.match(await jane.innerText(), /Bright Homes Retail/);
   assert.match(await jane.locator('[data-dir-rel]').innerText(), /Customer/);
-  assert.match(await page.locator('[data-dir-count]').innerText(), /^4 people$/);
+  assert.match(await page.locator('[data-dir-count]').innerText(), /^8 people$/);
   // Prefix search narrows the rows; the relationship menu narrows by a link to us, through the person's organization.
   await page.locator('[data-dir-search-toggle]').click();
   await page.locator('[data-dir-q]').fill('Ra');
@@ -28,7 +28,9 @@ async function flow(page, tag) {
   assert.equal(await page.locator('[data-dir-row]').getAttribute('data-dir-row'), 'person/raj-patel');
   assert.match(page.url(), /q=Ra/);
   await page.goto(page.url().split('#')[0] + '#/library/directory?link=customer_of');
-  await page.waitForFunction(() => [...document.querySelectorAll('[data-dir-row]')].map(r => r.dataset.dirRow).join() === 'person/jane-ortiz,person/sam-brooks', null, {timeout: t(10000)});
+  // Customers' people (Bright Homes, Cedar Venues, Maple Street: backend/demo_sections/directory.py), in any order.
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-dir-row]')].map(r => r.dataset.dirRow).sort().join()
+    === 'person/dev-shah,person/jane-ortiz,person/priya-nair,person/sam-brooks', null, {timeout: t(10000)});
   await page.goto(page.url().split('#')[0] + '#/library/directory');
   await jane.waitFor({timeout: t(10000)});
   await shot(page, `list-${tag}`);
@@ -91,9 +93,17 @@ async function flow(page, tag) {
           // Settings › Directory: the types with their counts, and the shared places.
           await page.goto(page.url().split('#')[0] + '#/settings/directory');
           await page.locator('[data-dirs-type="person"]').waitFor({timeout: t(20000)});
-          assert.match(await page.locator('[data-dirs-type="person"]').innerText(), /4/);
+          assert.match(await page.locator('[data-dirs-type="person"]').innerText(), /8/);
           await page.locator('[data-dirs-field="title"]').count();
           await page.locator('[data-dirs-places-on]').waitFor({timeout: t(10000)});
+          // Where we operate: the owner removes Texas, then finds it by name and adds it back (the phone pass needs it).
+          const texas = page.locator('[data-dirs-place="place:us-tx"]');
+          await texas.waitFor({timeout: t(10000)});
+          await texas.locator('[data-dirs-unplace]').click();
+          await texas.waitFor({state: 'detached', timeout: t(10000)});
+          await page.locator('[data-dirs-place-q]').fill('Tex');
+          await page.locator('[data-dirs-pick="place:us-tx"]').click();
+          await texas.waitFor({timeout: t(10000)});
           await shot(page, 'settings-desktop');
           // Light theme too: the page uses theme tokens only.
           await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
@@ -104,6 +114,16 @@ async function flow(page, tag) {
       } finally {
         await page.context().close();
       }
+    }
+    // A member sees where we operate without the controls (the hub refuses their writes too).
+    const member = await pageAs(browser, hub, 'omar');
+    try {
+      await member.waitForFunction(() => document.querySelector('#main')?.children.length > 0, null, {timeout: t(20000)});
+      await member.goto(member.url().split('#')[0] + '#/settings/directory');
+      await member.locator('[data-dirs-place="place:us-tx"]').waitFor({timeout: t(20000)});
+      assert.equal(await member.locator('[data-dirs-unplace], [data-dirs-place-q]').count(), 0);
+    } finally {
+      await member.context().close();
     }
     console.log('directory: ok');
   } finally {
