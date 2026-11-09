@@ -122,7 +122,7 @@ def test_approval_commits_once(books):
         done = FA.approval_decided(c, asked.approval_id, AT)
         again = FA.approval_decided(c, asked.approval_id, AT)
         assert done.status == again.status == "committed" and done.result["budget_id"] and again.result == {}
-        assert _count(c, "fin_budgets") == 5
+        assert _count(c, "fin_budgets") == 6
         assert H.approval(c, asked.approval_id)["consumed_at"]
         assert act(c, "bot:coder", "x", {}, "coder-1").code == "conflict"
         assert _coder_asks(c, parent).action_id == asked.action_id
@@ -136,7 +136,7 @@ def test_a_changed_payload_voids_the_approval_and_asks_again(books):
         c.execute("UPDATE approvals SET payload_hash='tampered' WHERE id=?", (asked.approval_id,))
         redo = FA.approval_decided(c, asked.approval_id, AT)
         assert redo.status == "needs_approval" and redo.approval_id != asked.approval_id
-        assert _count(c, "fin_budgets") == 4
+        assert _count(c, "fin_budgets") == 5
         assert FA.approval_decided(c, asked.approval_id, AT) is None
         H.approval_decide(c, "human:cara", redo.approval_id, "approved")
         assert FA.approval_decided(c, redo.approval_id, AT).status == "committed"
@@ -158,7 +158,7 @@ def test_decline_someone_else_and_a_lost_right_never_commit(books):
         H.approval_decide(c, "human:cara", late.approval_id, "approved")
         c.execute("UPDATE fin_budgets SET active=0 WHERE id=?", (parent,))
         assert FA.approval_decided(c, late.approval_id, AT).status == "failed"
-        assert _count(c, "fin_budgets") == 4
+        assert _count(c, "fin_budgets") == 5
 
 
 def test_withdrawn_and_expired_approvals_end_the_action(books):
@@ -300,7 +300,7 @@ def test_a_changed_approver_voids_the_decision_and_asks_the_new_one(books):
         H.approval_decide(c, "human:cara", asked.approval_id, "approved")
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='coder'")
         redo = FA.approval_decided(c, asked.approval_id, AT)
-        assert (redo.status, redo.approver) == ("needs_approval", "human:ben") and _count(c, "fin_budgets") == 4
+        assert (redo.status, redo.approver) == ("needs_approval", "human:ben") and _count(c, "fin_budgets") == 5
 
 
 def test_defaults_are_fixed_when_asked_not_when_approved(books):

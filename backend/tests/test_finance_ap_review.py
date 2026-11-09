@@ -280,7 +280,7 @@ def test_a_tico_card_charge_paying_an_entered_bill_clears_ap_instead_of_a_second
     sync_once(books, fake, HOURS[2])
     with books.read() as c:
         assert FR.bill(c, OWNER, bid)["status"] == "paid"
-        assert (_balance(c, "6100"), _balance(c, "2000"), _balance(c, "2100")) == (4_500, 0, -4_500)  # Codex 4
+        assert (_balance(c, "6100"), _balance(c, "2000"), _balance(c, "2101")) == (4_500, 0, -4_500)  # Codex 4
         assert _card_use(c, card_id, "2026-10") == 4_500 and _card_holds(c) == [(4_250, "settled")]
 
 

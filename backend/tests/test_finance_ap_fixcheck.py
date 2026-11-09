@@ -274,10 +274,10 @@ def test_a_card_charge_past_the_bill_search_waits_then_settles_its_hold_when_lin
     with books.transaction() as c:
         row = c.execute("SELECT id, status, entry_id FROM fin_feed_txns WHERE card_id IS NOT NULL").fetchone()
         assert (row["status"], row["entry_id"]) == ("new", None)  # Grok 1, card side
-        assert (_balance(c, "2100"), _balance(c, "6100")) == (0, 4_500)
+        assert (_balance(c, "2101"), _balance(c, "6100")) == (0, 4_500)
         done = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "feed_id": str(row["id"])})
         assert done.status == "committed", done
-        assert (_balance(c, "6100"), _balance(c, "2000"), _balance(c, "2100")) == (4_500, 0, -4_500)
+        assert (_balance(c, "6100"), _balance(c, "2000"), _balance(c, "2101")) == (4_500, 0, -4_500)
         assert _card_use(c, card_id, "2026-10") == 4_500 and _card_holds(c) == [(4_250, "settled")]
 
 

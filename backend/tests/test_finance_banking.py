@@ -202,7 +202,7 @@ def test_connecting_maps_bank_assets_and_io_liability_and_payments_need_another_
                 "SELECT m.kind, a.code, a.type FROM fin_money_accounts m JOIN fin_accounts a ON a.id=m.account_id"
             )
         }
-        assert kinds == {("bank", "1000", "asset"), ("bank", "1001", "asset"), ("card_program", "2100", "liability")}
+        assert kinds == {("bank", "1000", "asset"), ("bank", "1001", "asset"), ("card_program", "2101", "liability")}
         assert c.execute("SELECT count(*) FROM fin_money_accounts WHERE last4='2222'").fetchone()[0] == 1
     with books.transaction() as c:
         again = act(
@@ -263,9 +263,9 @@ def test_an_authorization_holds_settles_in_place_posts_once_and_the_io_bill_clea
                 (rows[0][3],),
             )
         }
-        assert lines == {"6100": 4_500, "2100": -4_500}
+        assert lines == {"6100": 4_500, "2101": -4_500}
         sheet = FR.balance_sheet(c, OWNER, at=LATER)
-        assert next(r for r in sheet["liabilities"] if r["code"] == "2100")["balance"] == 4_500
+        assert next(r for r in sheet["liabilities"] if r["code"] == "2101")["balance"] == 4_500
     # The same version again, from the Events API catch-up, changes nothing.
     fake.events_list.append(dict(MERCURY["event_txn_updated"]))
     sync_once(books, fake, NEXT_DAY)
@@ -278,7 +278,7 @@ def test_an_authorization_holds_settles_in_place_posts_once_and_the_io_bill_clea
     with books.read() as c:
         assert _entries(c, "card") == 1
         sheet = FR.balance_sheet(c, OWNER, at="2026-10-17T12:30:00.000000Z")
-        assert next(r for r in sheet["liabilities"] if r["code"] == "2100")["balance"] == 0
+        assert next(r for r in sheet["liabilities"] if r["code"] == "2101")["balance"] == 0
         bill = c.execute(
             "SELECT count(DISTINCT entry_id), min(status) FROM fin_feed_txns WHERE provider_id LIKE 'txn-bill-%'"
         ).fetchone()
@@ -1108,7 +1108,7 @@ def test_card_use_follows_each_entrys_posted_card_line_after_the_card_account_is
                 "ON a.id=l.account_id WHERE e.source='card' AND l.role='money'"
             )
         )
-        assert money == [("2100", -10_000), ("2100", 10_000), ("2110", -12_000)]
+        assert money == [("2101", -10_000), ("2101", 10_000), ("2110", -12_000)]
 
 
 def test_a_re_categorized_row_nets_out_its_teammate_tag_in_the_expenses_rollup(books):

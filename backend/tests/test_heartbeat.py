@@ -31,6 +31,7 @@ ORDER = [
     "snooze_ends",
     "queue_check",
     "milestone_waits",
+    "ci_sweep",
     "due_reminders",
     "updates",
     "company_page",

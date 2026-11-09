@@ -1,31 +1,41 @@
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
 // Paused badge acceptance: both entry points use the existing lifecycle state and navigate to the bot.
 // Synthetic offline fixtures only; no live bot is paused or resumed.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+
+// Settings-page globals the app's scripts define; the fixture reads and calls them in the page.
+declare const S: {emps?: unknown[]; route: string};
+declare function settingsShow(tab: string): void;
+declare function renderTree(): void;
+declare function namedRoster(list: unknown): unknown[];
+declare function get(path: string): Promise<unknown>;
+
 (async () => {
   const browser = await chromium.launch({headless: true});
   try {
     const page = await browser.newPage({viewport: {width: 1440, height: 1000}, serviceWorkers: 'block', reducedMotion: 'reduce'});
-    const errors = [];
-    page.on('pageerror', e => errors.push(e.message));
+    const errors: string[] = [];
+    page.on('pageerror', (e: Error) => errors.push(e.message));
     
-    const opus = 'claude-opus-5-5', sonnet = 'claude-sonnet-5-5', haiku = 'claude-haiku-5-5';
-    const model = id => ({id, label: id === opus ? 'Opus 5.5' : id === sonnet ? 'Sonnet 5.5' : 'Haiku 5.5', runtime: 'claude', provider: 'anthropic',
+    const opus = 'claude-opus-5-5', sonnet = 'claude-sonnet-5-5';
+    const model = (id: string) => ({id, label: id === opus ? 'Opus 5.5' : id === sonnet ? 'Sonnet 5.5' : 'Haiku 5.5', runtime: 'claude', provider: 'anthropic',
       efforts: ['low', 'high'], default_effort: 'high', harnesses: ['claude']});
-    const choice = id => ({model: id, harness: 'claude', reasoning_effort: 'high'});
-    const bot = (name, own, task) => ({name, display_name: name[0].toUpperCase() + name.slice(1), role: 'planner', team: 'research', description: 'Drafts forecasts',
+    const choice = (id: string) => ({model: id, harness: 'claude', reasoning_effort: 'high'});
+    const bot = (name: string, own: string, task: string | null) => ({name, display_name: name[0]!.toUpperCase() + name.slice(1), role: 'planner', team: 'research', description: 'Drafts forecasts',
       status: 'active', owner_id: 'ana', can_manage: true, users: [], bot_owners: [], revision: 4, ...choice(own), task_model: task ? choice(task) : null,
       machine: {runner_id: 'r1', label: 'Box', owner_id: 'ana', generation: 7}});
     const bots = ['paused', 'active', 'planned', 'quarantined', 'archived'].map(status => ({...bot(status, opus, null), status, org_parent: 'p:ana', my_access: {see: true, read: true, write: true}}));
     await page.route('**/*', route => {
       const p = new URL(route.request().url()).pathname;
-      const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', cloud: true, registered: true});
@@ -79,7 +89,7 @@ const {unrouted} = require('./support/routes.cjs');
     await page.waitForURL('**/#/bot/paused');
     await page.locator('.bot-ident').waitFor();
     // A roster refresh removes both marks and restores full node opacity on unpause.
-    bots[0].status = 'active';
+    bots[0]!.status = 'active';
     await page.evaluate(async () => { S.emps = namedRoster(await get('/employees')); renderTree(); });
     assert.equal(await node.locator('.bot-paused-badge').count(), 0);
     assert.equal(await node.evaluate(e => getComputedStyle(e).opacity), '1');

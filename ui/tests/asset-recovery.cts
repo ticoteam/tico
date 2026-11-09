@@ -1,12 +1,14 @@
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
 // A failed asset load must not look like a payment lock. The recovery card uses only the page's own markup/styles.
-const {chromium, webkit} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile, bundled} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {chromium, webkit}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const {html, uiFile, bundled} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
 
-async function check(engine) {
+async function check(engine: import('playwright').BrowserType) {
   const browser = await engine.launch({headless: true});
   try {
     for (const blocked of ['all', 'css', 'part']) {
@@ -14,7 +16,7 @@ async function check(engine) {
       let failing = true;
       await page.route('**/*', async route => {
         const p = new URL(route.request().url()).pathname;
-        const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+        const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         if (p.startsWith('/tico/ui/')) {
           if (failing && (blocked === 'all' || blocked === 'css' && p.endsWith('.css')

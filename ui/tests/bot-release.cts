@@ -1,29 +1,37 @@
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
 // A bot Tico stopped (backend/bot_stops.py: five fast failed runs, or over its run budget). Guards: the server's words
 // show to everyone, Release only to those who manage the bot; one click posts the release and the button goes once the
 // status says the bot runs again; Health's stuck row for the stop carries the same Release. The run budget fields in the
 // bot's settings are held until Save bot, then save with the bot's revision; Follow team clears both. Fixtures only.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+
+// Requests the page sent to the fixture, in order.
+interface Post {
+  path: string;
+  body: unknown;
+}
 
 const WORDS = 'Tico stopped Ops: 340 runs in the last hour. This looks like a runaway loop, not normal work. Check its last runs, then release it or raise its budget.';
 
-async function open(browser, role, hash) {
+async function open(browser: import('playwright').Browser, role: string, hash: string) {
   const page = await browser.newPage({viewport: {width: 1280, height: 900}, serviceWorkers: 'block'});
-  const errors = [], posts = [];
+  const errors: string[] = [], posts: Post[] = [];
   const manage = role === 'owner';
-  const state = {held: true, own: {turns_per_hour: null, turns_per_day: null}, revision: 7};
-  page.on('pageerror', e => errors.push(e.message));
+  const state: {held: boolean; own: Record<string, unknown>; revision: number} = {held: true, own: {turns_per_hour: null, turns_per_day: null}, revision: 7};
+  page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.route('**/*', route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1])))
-      return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!)))
+      return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.1.0', app_name: 'Tico'};
@@ -60,7 +68,7 @@ async function open(browser, role, hash) {
 }
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
   try {
     {
       // Someone who cannot manage the bot reads why it stopped, with no Release.
@@ -110,8 +118,8 @@ async function open(browser, role, hash) {
       assert.equal(await page.locator('[data-budget-key="turns_per_hour"]').inputValue(), '50');
       await page.locator('[data-budget-team]').click();
       await page.locator('#bot-editor button[type=submit]').click();
-      await page.waitForFunction(() => document.querySelector('[data-budget-key="turns_per_hour"]')?.value === '' && !document.querySelector('[data-budget-team]'));
-      assert.deepEqual(budgetPosts()[1].body, {turns_per_hour: null, turns_per_day: null, expected_revision: 10});
+      await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-budget-key="turns_per_hour"]')?.value === '' && !document.querySelector('[data-budget-team]'));
+      assert.deepEqual(budgetPosts()[1]!.body, {turns_per_hour: null, turns_per_day: null, expected_revision: 10});
       assert.deepEqual(errors, []);
       await page.close();
     }

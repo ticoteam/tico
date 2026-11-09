@@ -10,7 +10,7 @@ def _bank(c, at=AT):
     bank fee new)."""
     book = str(c.execute("SELECT id FROM fin_books").fetchone()[0])
     cards_gl = str(
-        act(c, OWNER, "account_create", {"code": "2100", "name": "Credit cards", "type": "liability"}).result[
+        act(c, OWNER, "account_create", {"code": "2101", "name": "Credit cards", "type": "liability"}).result[
             "account_id"
         ]
     )

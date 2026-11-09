@@ -1,28 +1,54 @@
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
+import type {Browser, Page, ViewportSize} from 'playwright';
 // Cloud agents on Recruit (ui/app/cloud-agents.ts, backend/cloud_agents.py): the agents grid is four across and two
 // across on a phone, a request files a seat and opens its Connecting page, the team builder's Request link opens the same
 // dialog for the team it names, the seat sits on the chart with a Connecting pill and its address opens its page in Recruit,
 // Add hires a supported agent as a bot in the seat or under the line it names, and the Connecting pulse moves opacity only
 // and stops under reduced motion. The grid and the seat page are reached through the real Team menu and route. The agents
 // are the backend's own catalog. Fixtures only, no network.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const {execFileSync} = require('node:child_process');
-const fs = require('node:fs');
-const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const {execFileSync}: typeof import('node:child_process') = require('node:child_process');
+const fs: typeof import('node:fs') = require('node:fs');
+const path: typeof import('node:path') = require('node:path');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+
+declare global {
+  interface Window {
+    // Defined by ui/app/cloud-agents.ts.
+    cloudAgentRequest(agent: Agent, options: {team?: string; reports_to?: string}): void;
+    cloudAgentsOpen(team: string): void;
+    cloudAgentsTab(host: HTMLElement, seatId: string): void;
+  }
+}
+// Defined by ui/app/team-build.ts, which the page loads below.
+declare function teamBuildOpen(team: string): void;
+
+interface Agent {
+  id: string; name: string; maker: string; site: string; line: string; supported?: boolean; connect_id?: string | null;
+  source?: string; template?: string; icon?: string; department?: string; tags?: string[]; owns?: string[];
+  prerequisites?: string[]; match?: string;
+}
+interface Seat {
+  id: string; kind: string; stage: string; title: string; description: string; team: string; reports_to: string;
+  created_at: string; org_parent: string; agent: string; agent_name: string; request_state: string; can_edit?: boolean;
+}
+interface Call { method: string; path: string; body: unknown }
+interface OpenOptions { reducedMotion?: 'reduce' | 'no-preference'; seats?: Seat[]; recruit?: Record<string, unknown> }
 
 // The agents the backend lists (listing() in backend/cloud_agents.py), so the grid shows the lines people see.
 const AGENTS = JSON.parse(execFileSync(process.env.TICO_PYTHON || 'python3',
   ['-c', 'import json; from backend.cloud_agents import listing; print(json.dumps(listing()))'],
-  {cwd: path.join(__dirname, '../..')}).toString());
+  {cwd: path.join(__dirname, '../..')}).toString()) as Agent[];
 // A bot that is not a built-in helper, so it is the team's head that a seat reports to.
 const bots = [{name: 'rust-engineer', display_name: 'Rust Engineer', org_parent: 'p:ana', reports_to: 'ana', team: 'eng', host: 'keeper',
   status: 'active', can_chat: true, users: [{id: 'ana', name: 'Ana'}], schedules: []}];
-const requested = {id: 's-devin', kind: 'seat', stage: 'recruiting', title: 'Devin', description: '', team: 'eng',
+const requested: Seat = {id: 's-devin', kind: 'seat', stage: 'recruiting', title: 'Devin', description: '', team: 'eng',
   reports_to: 'human:ana', created_at: '2026-10-31T00:00:00Z', org_parent: 'p:ana', agent: 'devin', agent_name: 'Devin',
   request_state: 'requested'};
-const detailOf = seat => {
+const detailOf = (seat: Seat) => {
   const known = AGENTS.find(a => a.id === seat.agent) || {id: seat.agent, name: seat.agent_name, maker: '', site: '', line: ''};
   return {seat, agent: known, steps: ['requested', 'building', 'ready'], tasks: [{id: 't-1', title: 'Fix the flaky retry test', status: 'open'}]};
 };
@@ -33,19 +59,19 @@ const devinPick = {id: 'devin', name: 'Devin', maker: 'Cognition', site: 'devin.
 const briefing = {team: 'eng', department: 'engineering', roles: [{role: 'Second pair of hands', pick: devinPick, alternatives: [],
   on_team: false, checked: false}]};
 
-async function open(browser, viewport, {reducedMotion = 'no-preference', seats = [requested], recruit = {}} = {}) {
+async function open(browser: Browser, viewport: ViewportSize, {reducedMotion = 'no-preference', seats = [requested], recruit = {}}: OpenOptions = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-  const errors = [], calls = [], state = {seats, recruit, failRequest: false, failAdd: false};
+  const errors: string[] = [], calls: Call[] = [], state = {seats, recruit, failRequest: false, failAdd: false};
   page.on('pageerror', error => errors.push(error.message));
   await page.emulateMedia({reducedMotion});
   await page.addInitScript(() => localStorage.setItem('hub.collapsed.v3.ana', '[]'));
   await page.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-    if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
     if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana', org_parent: ''}], seats: state.seats, org_groups: [{id: 'eng', name: 'Engineering'}]});
@@ -78,8 +104,8 @@ async function open(browser, viewport, {reducedMotion = 'no-preference', seats =
       const body = request.postDataJSON();
       calls.push({method, path: p, body});
       if (state.failRequest) return json({error: {code: 'requested', detail: 'A cloud agent is already requested for this seat', retryable: false}}, 409);
-      const seat = {...requested, id: 's-new', title: asked[1] === 'other' ? body.name : requested.title,
-        agent: asked[1], agent_name: body.name || 'Devin'};
+      const seat: Seat = {...requested, id: 's-new', title: asked[1] === 'other' ? body.name : requested.title,
+        agent: asked[1]!, agent_name: body.name || 'Devin'};
       state.seats = [...state.seats.filter(s => s.id !== seat.id), seat];
       return json(seat);
     }
@@ -102,18 +128,19 @@ async function open(browser, viewport, {reducedMotion = 'no-preference', seats =
   return {page, errors, calls, state};
 }
 
-// The Connecting pulse keyframes change opacity and nothing else.
-const pulseIsOpacityOnly = page => page.evaluate(() => {
-  for (const sheet of document.styleSheets) for (const rule of sheet.cssRules) {
-    if (rule.type === CSSRule.KEYFRAMES_RULE && rule.name === 'cloud-wait') {
-      return [...rule.cssRules].every(frame => [...frame.style].every(property => property === 'opacity'));
+// The Connecting pulse keyframes change opacity and nothing else. The DOM collections are not iterable in this lib
+// setting, so they are read as arrays (what the browser gives back).
+const pulseIsOpacityOnly = (page: Page) => page.evaluate(() => {
+  for (const sheet of document.styleSheets as unknown as CSSStyleSheet[]) for (const rule of sheet.cssRules as unknown as CSSRule[]) {
+    if (rule.type === CSSRule.KEYFRAMES_RULE && (rule as CSSKeyframesRule).name === 'cloud-wait') {
+      return [...((rule as CSSKeyframesRule).cssRules as unknown as CSSRule[])].every(frame => [...((frame as CSSKeyframeRule).style as unknown as string[])].every(property => property === 'opacity'));
     }
   }
   return null;
 });
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
   try {
     // Desktop: the chart, the Connecting page, the grid, a request, Add, another agent, the team builder's link, and the cancel.
     {
@@ -205,7 +232,7 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       // A supported agent under the same team-only call is an add: the server opens a seat in the team for it, and the
       // head it was given is the team's own.
       const count = calls.length;
-      await page.evaluate(p => window.cloudAgentRequest(p, {team: 'eng'}), {...AGENTS.find(a => a.id === 'claude'), source: 'cloud'});
+      await page.evaluate(p => window.cloudAgentRequest(p, {team: 'eng'}), {...AGENTS.find(a => a.id === 'claude')!, source: 'cloud'});
       await add.waitFor();
       await add.locator('button[type="submit"]').click();
       await add.waitFor({state: 'detached'});
@@ -218,7 +245,7 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
 
     // A seat's Cloud agents tab: Add hires the agent into that seat, so the seat is filled and leaves the chart.
     {
-      const lead = {id: 's-lead', kind: 'seat', stage: 'recruiting', title: 'Support lead', description: '', team: 'eng',
+      const lead: Seat = {id: 's-lead', kind: 'seat', stage: 'recruiting', title: 'Support lead', description: '', team: 'eng',
         reports_to: 'human:ana', created_at: '2026-10-31T00:00:00Z', org_parent: 'p:ana', agent: '', agent_name: '', request_state: ''};
       const {page, errors, calls, state} = await open(browser, {width: 1300, height: 900}, {seats: [lead]});
       await page.goto('https://tico-ui.test/#/tasks');
@@ -226,7 +253,7 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       await page.evaluate(() => {
         const host = document.createElement('div');
         host.id = 'seat-tab';
-        document.querySelector('#main').append(host);
+        document.querySelector('#main')!.append(host);
         return window.cloudAgentsTab(host, 's-lead');
       });
       await page.locator('#seat-tab [data-cloud-add="claude"]').click();
@@ -243,7 +270,7 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
 
     // A seat's Applicants page offers Cloud agents as a tab, and the grid there attaches its agent to that seat.
     {
-      const lead = {id: 's-lead', kind: 'seat', stage: 'recruiting', title: 'Support lead', description: '', team: 'eng',
+      const lead: Seat = {id: 's-lead', kind: 'seat', stage: 'recruiting', title: 'Support lead', description: '', team: 'eng',
         reports_to: 'human:ana', created_at: '2026-10-31T00:00:00Z', org_parent: 'p:ana', agent: '', agent_name: '', request_state: ''};
       const {page, errors, calls, state} = await open(browser, {width: 1300, height: 900}, {seats: [lead]});
       await page.goto('https://tico-ui.test/#/seat/s-lead');
@@ -263,7 +290,7 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
     // A coding job's applicants have the cloud agents Tico connects among them: first when no template is the job, Hire
     // adds the agent in the seat, and the Templates tab leaves them out.
     {
-      const rust = {id: 's-rust', kind: 'seat', stage: 'recruiting', title: 'Rust engineer', description: '', team: 'eng',
+      const rust: Seat & {can_edit: boolean} = {id: 's-rust', kind: 'seat', stage: 'recruiting', title: 'Rust engineer', description: '', team: 'eng',
         reports_to: 'human:ana', created_at: '2026-10-31T00:00:00Z', org_parent: 'p:ana', agent: '', agent_name: '', request_state: '', can_edit: true};
       const template = {template: 'pr-reviewer', name: 'Senior Software Engineer', icon: '', department: 'Engineering',
         department_id: 'engineering', line: 'Reviews every open pull request.', tags: [], owns: [], prerequisites: [], match: 'good',
@@ -274,7 +301,7 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       await page.goto('https://tico-ui.test/#/seat/s-rust');
       const rows = page.locator('#main .rc-list .rc-row');
       await rows.nth(2).waitFor();
-      assert.deepEqual(await rows.evaluateAll(els => els.map(el => el.querySelector('.rc-name').textContent.trim())),
+      assert.deepEqual(await rows.evaluateAll(els => els.map(el => el.querySelector('.rc-name')!.textContent!.trim())),
         ['Claude CodeCloud agent · Anthropic', 'CodexCloud agent · OpenAI', 'Senior Software EngineerTemplate']);
       assert.equal(await page.locator('#rc-tab-all .rc-n').textContent(), '3');
       assert.equal(await page.locator('#rc-tab-templates .rc-n').textContent(), '1');
@@ -309,7 +336,7 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       await page.keyboard.press('Escape');
       await page.locator('dialog.cloud-request').waitFor({state: 'detached'});
       state.failAdd = true;
-      await page.evaluate(p => window.cloudAgentRequest(p, {team: 'eng', reports_to: 'rust-engineer'}), {...AGENTS.find(a => a.id === 'claude'), source: 'cloud'});
+      await page.evaluate(p => window.cloudAgentRequest(p, {team: 'eng', reports_to: 'rust-engineer'}), {...AGENTS.find(a => a.id === 'claude')!, source: 'cloud'});
       await page.locator('dialog.cloud-add button[type="submit"]').click();
       await page.locator('dialog.cloud-add [data-cloud-error]').waitFor({state: 'visible'});
       assert.equal(await page.locator('dialog.cloud-add button[type="submit"]').isDisabled(), false);
@@ -339,7 +366,7 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       await page.locator('dialog.cloud-open .cloud-card').nth(7).waitFor();
       assert.equal(await page.locator('dialog.cloud-open .cloud-grid').evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length), 2);
       await page.locator('dialog.cloud-open [data-cloud-request="devin"]').click();
-      const box = await page.locator('dialog.cloud-request').boundingBox();
+      const box = (await page.locator('dialog.cloud-request').boundingBox())!;
       assert.ok(box.x >= 0 && box.x + box.width <= 390, 'the request dialog fits the phone');
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no sideways scroll');
       assert.deepEqual(errors, []);

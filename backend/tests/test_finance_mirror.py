@@ -320,7 +320,7 @@ def test_a_switch_binds_tico_accounts_to_their_matching_accounts_and_creates_no_
         assert act(c, OWNER, "mirror_start", {"connection_id": cid}).status == "committed"
     assert _drain(books, fake, cid) == []
     with books.read() as c:
-        assert c.execute("SELECT COUNT(*) FROM fin_accounts").fetchone()[0] == 13  # the default chart, no twins
+        assert c.execute("SELECT COUNT(*) FROM fin_accounts").fetchone()[0] == 15  # the default chart, no twins
         assert _local(c, "Account:13", "fin_accounts") == account(c, "2000")  # payable by subtype
         assert _local(c, "Account:12", "fin_accounts") == account(c, "1200")  # receivable by subtype
         assert _local(c, "Account:2", "fin_accounts") == account(c, "6100")  # software by name and type

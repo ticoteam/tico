@@ -1,33 +1,51 @@
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
 // A computer's internet shared with bots: in its pop-up the owner turns sharing on, picks bots and sets the daily cap,
 // each change POSTing the whole setting; a refused save puts the switch back; today's sites load when opened. An
 // admin who isn't the owner can only turn it off. A bot's "Browse through" offers only computers that share with it.
 // Every request is intercepted.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+
+// The fixture's computers, bots and internet-sharing settings, as the Settings page keeps them in SETTINGS_DATA and S.
+interface BrowserExit {
+  sharing: boolean; bots: string[]; daily_cap_bytes: number; may_change: boolean; may_turn_off: boolean; used_today_bytes: number;
+}
+interface Machine {
+  id: string; label: string; owner_id: string; bots: string[]; platform: string; last_seen_at: string;
+  readiness: object; screen: string; screen_available: boolean; browser_exit: BrowserExit;
+}
+interface Employee {
+  name: string; display_name: string; status: string; owner_id: string; revision: number; browser_exit?: unknown;
+}
+declare const SETTINGS_DATA: {machines: Machine[]};
+declare const S: {emps: Employee[]};
+declare function settingsBrowserExitRow(emp: Employee): string;
+
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
-    const errors = [];
-    page.on('pageerror', e => errors.push(e.message));
-    const exit = (more) => ({sharing: false, bots: [], daily_cap_bytes: 5e9, may_change: true, may_turn_off: true, used_today_bytes: 0, ...more});
-    const computer = (id, label, operator, more) => ({id, label, owner_id: operator, bots: [], platform: 'darwin', last_seen_at: new Date().toISOString(),
+    const errors: string[] = [];
+    page.on('pageerror', (e: Error) => errors.push(e.message));
+    const exit = (more?: Partial<BrowserExit>): BrowserExit => ({sharing: false, bots: [], daily_cap_bytes: 5e9, may_change: true, may_turn_off: true, used_today_bytes: 0, ...more});
+    const computer = (id: string, label: string, operator: string, more: {browser_exit: BrowserExit}): Machine => ({id, label, owner_id: operator, bots: [], platform: 'darwin', last_seen_at: new Date().toISOString(),
       readiness: {}, screen: 'off', screen_available: false, ...more});
     const machines = [computer('c1', 'Ana MacBook', 'ana', {browser_exit: exit()}),
       computer('c2', 'Ben laptop', 'ben', {browser_exit: exit({sharing: true, bots: ['ops'], may_change: false})})];
-    const emps = [{name: 'ops', display_name: 'Ops', status: 'active', owner_id: 'ana', revision: 1},
+    const emps: Employee[] = [{name: 'ops', display_name: 'Ops', status: 'active', owner_id: 'ana', revision: 1},
       {name: 'web', display_name: 'Web', status: 'active', owner_id: 'ana', revision: 1}];
-    const writes = [], botWrites = [], usage = [];
+    const writes: [string, unknown][] = [], botWrites: [string, unknown][] = [], usage: (string | null)[] = [];
     let refuse = false;
     await page.route('**/*', route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+      if (ui && fs.existsSync(uiFile(ui[1]!)))
+        return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const config = {version: '0.1.0', app_name: 'Tico'};
@@ -43,8 +61,8 @@ const {unrouted} = require('./support/routes.cjs');
       const set = p.match(/^\/api\/v2\/computers\/(c\d)\/browser-exit$/);
       if (set && req.method() === 'POST') {
         if (refuse) return json({error: {code: 'forbidden', detail: 'Only the computer\'s owner can change this'}}, 403);
-        const body = req.postDataJSON(); writes.push([set[1], body]);
-        const m = machines.find(row => row.id === set[1]);
+        const body = req.postDataJSON(); writes.push([set[1]!, body]);
+        const m = machines.find(row => row.id === set[1])!;
         m.browser_exit = {...m.browser_exit, ...body};
         return json(m.browser_exit);
       }
@@ -55,8 +73,8 @@ const {unrouted} = require('./support/routes.cjs');
       }
       const bot = p.match(/^\/api\/v2\/bots\/(\w+)\/browser-exit$/);
       if (bot && req.method() === 'POST') {
-        const body = req.postDataJSON(); botWrites.push([bot[1], body]);
-        emps.find(e => e.name === bot[1]).browser_exit = body.runner_id;
+        const body = req.postDataJSON(); botWrites.push([bot[1]!, body]);
+        emps.find(e => e.name === bot[1])!.browser_exit = body.runner_id;
         return json({browser_exit: body.runner_id && {runner_id: body.runner_id}});
       }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -73,11 +91,11 @@ const {unrouted} = require('./support/routes.cjs');
     await section.locator('[data-browser-exit-bots=c1] input[value=ops]').waitFor();
     assert.deepEqual(writes.at(-1), ['c1', {sharing: true}]);
     await section.locator('[data-browser-exit-bots=c1] input[value=ops]').check();
-    await page.waitForFunction(() => SETTINGS_DATA.machines[0].browser_exit.bots.includes('ops'));
+    await page.waitForFunction(() => SETTINGS_DATA.machines[0]!.browser_exit.bots.includes('ops'));
     assert.deepEqual(writes.at(-1), ['c1', {sharing: true, bots: ['ops'], daily_cap_bytes: 5e9}]);
     await section.locator('[data-browser-exit-cap=c1]').fill('2.5');
     await section.locator('[data-browser-exit-cap=c1]').press('Tab');
-    await page.waitForFunction(() => SETTINGS_DATA.machines[0].browser_exit.daily_cap_bytes === 2.5e9);
+    await page.waitForFunction(() => SETTINGS_DATA.machines[0]!.browser_exit.daily_cap_bytes === 2.5e9);
     // Today's sites, loaded on opening.
     await section.locator('[data-browser-exit-usage=c1] summary').click();
     await section.locator('.computer-exit-table td', {hasText: 'www.acme.example'}).waitFor();
@@ -86,7 +104,7 @@ const {unrouted} = require('./support/routes.cjs');
     refuse = true;
     // A click, not uncheck(): the refusal can put the switch back before uncheck() looks, which it reads as a failed click.
     await page.locator('[data-browser-exit=c1]').click();
-    await page.waitForFunction(() => document.querySelector('[data-browser-exit=c1]')?.checked && !document.querySelector('[data-browser-exit=c1]').disabled);
+    await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-browser-exit=c1]')?.checked && !document.querySelector<HTMLInputElement>('[data-browser-exit=c1]')!.disabled);
     refuse = false;
     await page.keyboard.press('Escape');
     // Ben's laptop: Ana may turn it off but not pick its bots or cap.
@@ -94,13 +112,13 @@ const {unrouted} = require('./support/routes.cjs');
     await section.waitFor();
     assert.equal(await section.locator('[data-browser-exit-bots], [data-browser-exit-cap]').count(), 0);
     await page.locator('[data-browser-exit=c2]').uncheck();
-    await page.waitForFunction(() => !SETTINGS_DATA.machines[1].browser_exit.sharing);
+    await page.waitForFunction(() => !SETTINGS_DATA.machines[1]!.browser_exit.sharing);
     assert.deepEqual(writes.at(-1), ['c2', {sharing: false}]);
     await page.keyboard.press('Escape');
     // Ops may browse through Ana's MacBook (it shares with ops); Web is offered nothing.
-    const offered = await page.evaluate(() => [settingsBrowserExitRow(S.emps[0]), settingsBrowserExitRow(S.emps[1])]);
-    assert.match(offered[0], /value="c1"/);
-    assert.doesNotMatch(offered[0], /value="c2"/);
+    const offered = await page.evaluate(() => [settingsBrowserExitRow(S.emps[0]!), settingsBrowserExitRow(S.emps[1]!)]);
+    assert.match(offered[0]!, /value="c1"/);
+    assert.doesNotMatch(offered[0]!, /value="c2"/);
     assert.equal(offered[1], '');
     assert.deepEqual(errors, []);
     console.log('PASS: sharing switch, bots and cap saved; refused save reverts; usage loads; admin only turns off; Browse through choices');

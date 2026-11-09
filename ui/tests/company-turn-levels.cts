@@ -1,28 +1,36 @@
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
 // Synthetic Settings > Models > Limits click-through. Server permissions are covered by test_org_turns.py;
 // spec 15 still requires installed/live acceptance after publication.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+
+// Settings-page globals the app's scripts define; the fixture reads and calls them in the page.
+declare const S: {me: {role: string; bot_admin: boolean}};
+declare function loadSettings(): Promise<void>;
+declare function renderSettingsTurnLevels(): void;
+declare function pageSettings(): void;
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
   try {
     for (const width of [1280, 390]) {
       const page = await browser.newPage({viewport: {width, height: 900}, serviceWorkers: 'block'});
-      const errors = [], writes = [];
-      page.on('pageerror', error => errors.push(error.message));
+      const errors: string[] = [], writes: unknown[] = [];
+      page.on('pageerror', (error: Error) => errors.push(error.message));
       const config = {environment_id: 'fixture', company_name: 'Fixture company', app_name: 'Tico',
         assistant_name: 'Helper', assistant_bot: 'coo', local: false, onboarding_needed: false, providers_configured: true};
       let levels = {warning_per_person: 40, stop_per_person: 100, people: 4, warning: 160, stop: 400, in_use: 12};
       await page.route('**/*', route => {
         const request = route.request(), p = new URL(request.url()).pathname;
-        const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+        const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-        if (module && fs.existsSync(uiFile(module[1]))) return route.fulfill({
-          contentType: module[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(module[1]), 'utf8')});
+        if (module && fs.existsSync(uiFile(module[1]!))) return route.fulfill({
+          contentType: module[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(module[1]!), 'utf8')});
         if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/api/me') return json({id: 'ana', role: 'owner', cloud: true, email: 'ana@acme.example', config});
         if (p === '/api/v2/config') return json(config);

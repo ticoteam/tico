@@ -1,31 +1,50 @@
+import type * as PageSupport from './support/page.cjs';
+import type * as Routes from './support/routes.cjs';
 // Offline browser regression: Settings > General (backend/company_storage.py) is the owner's alone; the form sends the
 // bucket and keys once, shows the server's refusal where it was typed, clears the secret after a save and goes back to
 // the server's storage on confirm. Health's "Set up S3" opens it. Every request is intercepted.
-const {chromium} = require('playwright');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs');
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const fs: typeof import('node:fs') = require('node:fs');
+const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
+const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+
+// The fixture's storage, Tico hosting and move states, as the Settings > General page renders them.
+interface TicoState {state: string; label: string; address?: string; location?: string; error?: string; keep_until?: string}
+interface StorageActive {bucket: string; prefix: string; region: string; location: string; access_key_id: string; created_at: string; created_by: string}
+interface StorageState {
+  active: StorageActive | null;
+  earlier: (Partial<StorageActive> & {retired?: string})[];
+  server: {mode: string; location: string};
+  copy: {done: number; total: number; failed: number; running: boolean};
+  doc: string;
+  tico: TicoState;
+}
+interface StorageMove {
+  id: string; target: string; state: string; estimate_files: number; estimate_bytes: number;
+  moved_files: number; moved_bytes: number; failed: number; error: string; matches: boolean;
+}
+
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
   try {
-    const visit = async ({role = 'owner', hash = '#/settings/storage', tico = {state: 'off', label: 'Tico file hosting'}} = {}) => {
+    const visit = async ({role = 'owner', hash = '#/settings/storage', tico = {state: 'off', label: 'Tico file hosting'}}: {role?: string; hash?: string; tico?: TicoState} = {}) => {
       const ctx = await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
       const page = await ctx.newPage();
-      const errors = [], calls = [];
-      let storage = {active: null, earlier: [], server: {mode: 'local', location: ''}, copy: {done: 0, total: 0, failed: 0, running: false},
+      const errors: string[] = [], calls: string[] = [];
+      let storage: StorageState = {active: null, earlier: [], server: {mode: 'local', location: ''}, copy: {done: 0, total: 0, failed: 0, running: false},
         doc: 'https://example.test/docs/files.md', tico};
-      let move = null;
+      let move: StorageMove | null = null;
       const estimate = () => move ? {to: 'tico-files-us/c/acme', files: 0, bytes: 0, gb: 0}
         : {to: 'tico-files-us/c/acme', files: 3, bytes: 2500000000, gb: 2.5};
-      page.on('pageerror', e => errors.push(e.message));
+      page.on('pageerror', (e: Error) => errors.push(e.message));
       page.on('dialog', d => d.accept());
       await page.route('**/*', route => {
         const req = route.request(), p = new URL(req.url()).pathname;
-        const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+        const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
         const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-        if (ui && fs.existsSync(uiFile(ui[1])))
-          return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+        if (ui && fs.existsSync(uiFile(ui[1]!)))
+          return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
         if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const config = {version: '0.3.0', update: null, app_name: 'Tico'};
@@ -34,7 +53,7 @@ const {unrouted} = require('./support/routes.cjs');
         if (p === '/api/v2/system/storage') {
           calls.push(req.method() + ' ' + (req.postData() || ''));
           if (req.method() === 'PUT') {
-            const sent = JSON.parse(req.postData());
+            const sent = JSON.parse(req.postData()!);
             if (sent.access_key_id === 'AKIAEXAMPLEDENY0001')
               return json({error: {code: 'storage_check', detail: "S3 storage can't write: AccessDenied on acme-files/tico (s3:PutObject)"}}, 422);
             storage = {...storage, active: {bucket: sent.bucket, prefix: sent.prefix, region: sent.region, location: sent.bucket + '/' + sent.prefix,
@@ -67,22 +86,22 @@ const {unrouted} = require('./support/routes.cjs');
     const form = v.page.locator('[data-storage-form]');
     await form.waitFor();
     assert.match(await v.page.locator('#set-storage').innerText(), /New files go to this server's disk/);
-    const fill = async key => {
+    const fill = async (key: string) => {
       await form.locator('[name=bucket]').fill('acme-files'); await form.locator('[name=region]').fill('us-west-2');
       await form.locator('[name=prefix]').fill('tico'); await form.locator('[name=access_key_id]').fill(key);
       await form.locator('[name=secret_access_key]').fill('example-secret');
       await form.locator('button[type=submit]').click();
     };
     await fill('AKIAEXAMPLEDENY0001');
-    await v.page.waitForFunction(() => /AccessDenied/.test(document.querySelector('[data-storage-status]')?.textContent));
+    await v.page.waitForFunction(() => /AccessDenied/.test(document.querySelector('[data-storage-status]')?.textContent as string));
     assert.equal(await form.locator('[name=secret_access_key]').inputValue(), 'example-secret', 'a refusal keeps what was typed');
     await fill('AKIAEXAMPLEGOOD0001');
-    await v.page.waitForFunction(() => /s3:\/\/acme-files\/tico/.test(document.querySelector('#set-storage')?.textContent));
-    assert.deepEqual(JSON.parse(v.calls.filter(c => c.startsWith('PUT'))[1].slice(4)),
+    await v.page.waitForFunction(() => /s3:\/\/acme-files\/tico/.test(document.querySelector('#set-storage')?.textContent as string));
+    assert.deepEqual(JSON.parse(v.calls.filter(c => c.startsWith('PUT'))[1]!.slice(4)),
       {bucket: 'acme-files', region: 'us-west-2', prefix: 'tico', access_key_id: 'AKIAEXAMPLEGOOD0001', secret_access_key: 'example-secret'});
     assert.equal(await v.page.locator('[data-storage-form] [name=secret_access_key]').inputValue(), '', 'the secret is not kept on screen');
     await v.page.locator('[data-storage-off]').click();
-    await v.page.waitForFunction(() => /Still read from \(1\)/.test(document.querySelector('#set-storage')?.textContent));
+    await v.page.waitForFunction(() => /Still read from \(1\)/.test(document.querySelector('#set-storage')?.textContent as string));
     assert.ok(v.calls.some(c => c.startsWith('DELETE')));
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
@@ -93,12 +112,12 @@ const {unrouted} = require('./support/routes.cjs');
     await hosting.waitFor();
     assert.match(await v.page.locator('#set-storage').innerText(), /New files go to Tico file hosting; the company's own storage is this server's disk/);
     assert.match(await hosting.innerText(), /Pictures, video and audio stored there open from acme-files\.ticofiles\.com/);
-    await v.page.waitForFunction(() => /3 files \(2\.50 GB\) are not in Tico file hosting yet\./.test(document.querySelector('[data-move-line]')?.textContent));
+    await v.page.waitForFunction(() => /3 files \(2\.50 GB\) are not in Tico file hosting yet\./.test(document.querySelector('[data-move-line]')?.textContent as string));
     assert.equal(await hosting.locator('[data-move]').innerText(), 'Move existing files');
     assert.equal(await hosting.locator('[data-export]').getAttribute('href'), '/api/v2/system/storage/export');
     await hosting.locator('[data-move]').click();
-    await v.page.waitForFunction(() => /Moved 3 files, 2\.50 GB, as estimated/.test(document.querySelector('[data-move-line]')?.textContent));
-    assert.deepEqual(JSON.parse(v.calls.find(c => c.startsWith('POST move')).slice(10)), {expect_bytes: 2500000000});
+    await v.page.waitForFunction(() => /Moved 3 files, 2\.50 GB, as estimated/.test(document.querySelector('[data-move-line]')?.textContent as string));
+    assert.deepEqual(JSON.parse(v.calls.find(c => c.startsWith('POST move'))!.slice(10)), {expect_bytes: 2500000000});
     assert.equal(await hosting.locator('[data-move]').isHidden(), true, 'nothing left to move');
     await hosting.locator('[data-tico-check]').click();
     await v.page.waitForFunction(() => document.querySelector('[data-storage-tico]'));
