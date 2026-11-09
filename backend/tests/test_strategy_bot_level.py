@@ -12,19 +12,10 @@ from backend.tests.helpers.api import get, post  # noqa: F401
 from backend.tests.helpers.company import bot, propose_why, with_strategy_bot
 from backend.tests.helpers.goal_asks import asks, goal_manager, raise_level, sync
 from backend.tests.helpers.kpis import goal_with_kpi, log
-from backend.tests.helpers.strategy_bot_level import level
+from backend.tests.helpers.strategy_bot_level import level, via_assistant
 
 OWNER = "human:ana"
 REVIEW = "goal-manager:goals-review"
-
-
-def via_assistant(api, confirmed=False, via="assistant"):
-    """The owner as the Assistant (or BotOps) acting for them; `confirmed`: their own tap on a Confirm card it made."""
-    token = f"ana-via-{via}" + ("-tap" if confirmed else "")
-    api.app.state.store.settings.test_identities[token] = Identity(
-        OWNER, "owner", "ana@acme.example", via=via, confirmed=confirmed
-    )
-    return token
 
 
 def review_routine(api):
