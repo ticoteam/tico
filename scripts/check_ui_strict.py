@@ -476,7 +476,8 @@ def shift_left_hits(text):
             if operand:
                 nonnulls[f"{operand}!"].append(line)
         elif t.kind == "word" and t.v == "any" and i > 0 and toks[i - 1].v in ANY_AFTER:
-            if not (i + 1 < len(toks) and toks[i + 1].v == "."):
+            # `o.any` is a member and `{a: 1, any: 2}` a key; the type `any` is never followed by `.` or `:`.
+            if not (i + 1 < len(toks) and toks[i + 1].v in (".", ":")):
                 hits.append((line, "uses `any`: type it (unknown, a named type or a generic) instead"))
     for label, table in (("cast", casts), ("non-null assertion", nonnulls)):
         for key, lines in table.items():
