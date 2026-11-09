@@ -3,21 +3,57 @@
 // CI's Python shards need none. A channel differing by no more than TOLERANCE counts as the same pixel, so
 // anti-aliasing noise does not read as a change. scripts/release_shots.py calls it once per release:
 //
-//   node scripts/screenshots/compare.js pairs.json results.json
+//   node scripts/screenshots/compare.cts pairs.json results.json
 //
 // pairs.json: [{"key": "...", "before": "/abs/before.png", "after": "/abs/after.png"}]
 // results.json: [{"key", "width", "height", "sizeMismatch", "changed", "total", "pct"}], pct is 0-100.
 // Decodes 8-bit, non-interlaced PNGs of RGBA (6), RGB (2, opaque), gray (0) and gray+alpha (4), with all five scanline
 // filters. Any other PNG (palette, 16-bit, interlaced, transparency chunks) is refused with an error naming the file.
-const fs = require('node:fs');
-const zlib = require('node:zlib');
+const fs: typeof import('node:fs') = require('node:fs');
+const zlib: typeof import('node:zlib') = require('node:zlib');
+
+// One pair of screenshots to compare, as listed in pairs.json.
+interface Pair {
+  key: string;
+  before: string;
+  after: string;
+}
+
+// The decoded image: its size and its pixels as RGBA bytes.
+interface Decoded {
+  width: number;
+  height: number;
+  rgba: Uint8Array;
+}
+
+// The IHDR chunk's fields, as read from the file.
+interface Header {
+  width: number;
+  height: number;
+  bitDepth: number;
+  colorType: number;
+  compression: number;
+  filter: number;
+  interlace: number;
+}
+
+// One line of results.json.
+interface Result {
+  key: string;
+  width: number;
+  height: number;
+  sizeMismatch: boolean;
+  changed: number;
+  total: number;
+  pct: number;
+}
 
 const TOLERANCE = 2;
 const SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 // Samples per pixel by color type.
-const CHANNELS = {0: 1, 2: 3, 4: 2, 6: 4};
+const CHANNELS: Record<number, number> = {0: 1, 2: 3, 4: 2, 6: 4};
 
-function paeth(a, b, c) {
+function paeth(a: number, b: number, c: number): number {
   const p = a + b - c;
   const pa = Math.abs(p - a);
   const pb = Math.abs(p - b);
@@ -28,7 +64,7 @@ function paeth(a, b, c) {
 
 // Reverses the scanline filters. Each row starts with its filter type byte; a is the same row's previous sample, b the
 // row above at the same column and c the row above one sample back, all already reconstructed.
-function unfilter(raw, width, height, channels, file) {
+function unfilter(raw: Buffer, width: number, height: number, channels: number, file: string): Buffer {
   const stride = width * channels;
   const out = Buffer.alloc(stride * height);
   for (let y = 0; y < height; y++) {
@@ -42,7 +78,7 @@ function unfilter(raw, width, height, channels, file) {
       const a = i >= channels ? out[row + i - channels] : 0;
       const b = y > 0 ? out[up + i] : 0;
       const c = y > 0 && i >= channels ? out[up + i - channels] : 0;
-      let value;
+      let value: number;
       switch (type) {
         case 0: value = x; break;
         case 1: value = x + a; break;
@@ -57,7 +93,7 @@ function unfilter(raw, width, height, channels, file) {
 }
 
 // Gray is copied into all three color channels; a missing alpha is opaque.
-function toRgba(samples, pixels, colorType) {
+function toRgba(samples: Buffer, pixels: number, colorType: number): Uint8Array {
   const channels = CHANNELS[colorType];
   const gray = colorType === 0 || colorType === 4;
   const hasAlpha = colorType === 4 || colorType === 6;
@@ -74,14 +110,14 @@ function toRgba(samples, pixels, colorType) {
 }
 
 // Decodes one PNG to RGBA bytes, or throws an error that names the file when the PNG is one this does not handle.
-function decodePng(file) {
+function decodePng(file: string): Decoded {
   const data = fs.readFileSync(file);
-  const refuse = reason => {
+  const refuse: (reason: string) => never = (reason) => {
     throw new Error(`${file}: ${reason}`);
   };
   if (data.length < 8 || !data.subarray(0, 8).equals(SIGNATURE)) refuse('not a PNG file');
-  let header = null;
-  const idat = [];
+  let header: Header | null = null;
+  const idat: Buffer[] = [];
   for (let offset = 8; ;) {
     if (offset + 12 > data.length) refuse('truncated PNG: no IEND chunk');
     const length = data.readUInt32BE(offset);
@@ -119,11 +155,11 @@ function decodePng(file) {
   if (compression !== 0 || filter !== 0) refuse('unknown compression or filter method');
   if (!width || !height) refuse('the image has no pixels');
   if (!idat.length) refuse('no image data (IDAT)');
-  let raw;
+  let raw: Buffer;
   try {
     raw = zlib.inflateSync(Buffer.concat(idat));
   } catch (error) {
-    refuse(`corrupt image data: ${error.message}`);
+    refuse(`corrupt image data: ${(error as Error).message}`);
   }
   const stride = width * CHANNELS[colorType];
   if (raw.length !== height * (stride + 1)) {
@@ -134,7 +170,7 @@ function decodePng(file) {
 }
 
 // A pixel is changed when any of its four channels differs by more than TOLERANCE.
-function compareFiles(beforeFile, afterFile) {
+function compareFiles(beforeFile: string, afterFile: string): Omit<Result, 'key'> {
   const a = decodePng(beforeFile);
   const b = decodePng(afterFile);
   const {width, height} = a;
@@ -154,11 +190,11 @@ function compareFiles(beforeFile, afterFile) {
   return {width, height, sizeMismatch: false, changed, total, pct: total ? (100 * changed) / total : 0};
 }
 
-function main() {
+function main(): void {
   const [pairsFile, resultsFile] = process.argv.slice(2);
   if (!pairsFile || !resultsFile) throw new Error('usage: compare.js pairs.json results.json');
-  const pairs = JSON.parse(fs.readFileSync(pairsFile, 'utf8'));
-  const results = pairs.map(pair => ({key: pair.key, ...compareFiles(pair.before, pair.after)}));
+  const pairs: Pair[] = JSON.parse(fs.readFileSync(pairsFile, 'utf8'));
+  const results: Result[] = pairs.map(pair => ({key: pair.key, ...compareFiles(pair.before, pair.after)}));
   fs.writeFileSync(resultsFile, JSON.stringify(results, null, 2) + '\n');
 }
 

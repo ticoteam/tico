@@ -1,24 +1,66 @@
 // Renders the preview scenes with Playwright (WebKit, as on macOS) into ui/screenshots/ and
 // checks a few behaviours. Usage, from recorder/:
-//   PLAYWRIGHT=<dir>/node_modules/playwright node ui/preview/shoot.mjs [scene ...|checks]
+//   PLAYWRIGHT=<dir>/node_modules/playwright node ui/preview/shoot.mts [scene ...|checks]
 import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import type { Browser, BrowserContext, BrowserType, Page } from 'playwright';
+
+// The preview's mock controller (preview/mock.js) as the scenes and checks read it.
+interface PreviewItem {
+  id: string;
+  pending?: boolean;
+  due?: string;
+  body?: string;
+}
+
+interface PreviewMeeting {
+  live?: boolean;
+  people: { candidates: unknown[]; rows: { name: string }[] };
+  actions: {
+    saved?: boolean;
+    shared_url?: string;
+    shared?: { can_send: boolean; presence: { actors: unknown[] }; sections: { task: unknown[] } };
+    items: PreviewItem[];
+  };
+}
+
+interface PreviewState {
+  meetings: Record<string, PreviewMeeting>;
+  library: { rows: { id: string; title: string; audience: string; sent: boolean }[] };
+  status: { recording: boolean; speech: { source: string } };
+  desktop_orgs: { name: string; connected: boolean }[];
+}
+
+declare global {
+  interface Window {
+    __PREVIEW__: { state: PreviewState };
+  }
+}
+
+// One step of a scene or a check: it drives the page once the scene has loaded.
+type Step = (page: Page) => Promise<void>;
 
 const require = createRequire(import.meta.url);
-const { webkit, chromium } = require(process.env.PLAYWRIGHT || 'playwright');
+const { webkit, chromium }: typeof import('playwright') = require(process.env.PLAYWRIGHT || 'playwright');
 // WebKit is the macOS engine; TICO_PREVIEW_BROWSER=chromium runs the same scenes where WebKit's libraries are missing.
-const engine = process.env.TICO_PREVIEW_BROWSER === 'chromium' ? chromium : webkit;
+const engine: BrowserType = process.env.TICO_PREVIEW_BROWSER === 'chromium' ? chromium : webkit;
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const out = path.join(root, 'screenshots');
 fs.mkdirSync(out, { recursive: true });
 
-const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png' };
+// The message of a thrown value, for a failure line.
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+const types: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png' };
 const server = http.createServer((req, res) => {
-  const file = path.join(root, decodeURIComponent(new URL(req.url, 'http://x').pathname));
+  const file = path.join(root, decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname));
   if (!file.startsWith(root) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
     res.writeHead(404).end();
     return;
@@ -26,18 +68,19 @@ const server = http.createServer((req, res) => {
   res.writeHead(200, { 'content-type': types[path.extname(file)] || 'application/octet-stream' });
   fs.createReadStream(file).pipe(res);
 });
-await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-const base = `http://127.0.0.1:${server.address().port}/preview/index.html`;
+await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/preview/index.html`;
 
-const open = (id) => async (page) => {
+const open = (id: string): Step => async (page) => {
   await page.click(`.row[data-id="${id}"]`);
   await page.waitForSelector('.title-input');
 };
-const settingsPage = async (page) => page.click('[data-act="settings"]');
-const share = async (page) => { await page.click('[data-act="share-open"]'); await page.waitForSelector('#sheet.share'); };
-const finish = async (page) => { await page.click('.topbar [data-act="finish-open"]'); await page.waitForSelector('#sheet.finish'); };
-const more = async (page) => page.click('[data-pop="more"]');
-const scenes = {
+const settingsPage: Step = async (page) => page.click('[data-act="settings"]');
+const share: Step = async (page) => { await page.click('[data-act="share-open"]'); await page.waitForSelector('#sheet.share'); };
+const finish: Step = async (page) => { await page.click('.topbar [data-act="finish-open"]'); await page.waitForSelector('#sheet.finish'); };
+const more: Step = async (page) => page.click('[data-pop="more"]');
+// A scene lists the scene it starts from (a string) and then the steps to take.
+const scenes: Record<string, (string | Step)[]> = {
   library: [],
   signin: [],
   'signin-address': [],
@@ -80,7 +123,7 @@ const scenes = {
   'more-discard': ['live', open('m2'), more, async (page) => page.click('[data-confirm="discard"]')],
   discarding: [open('m2')],
   ask: [open('m1')],
-  'ask-live': ['live', open('m2'), async (page) => page.evaluate(() => document.querySelector('#tbody .asked').scrollIntoView({ block: 'center' }))],
+  'ask-live': ['live', open('m2'), async (page) => page.evaluate(() => (document.querySelector('#tbody .asked') as HTMLElement).scrollIntoView({ block: 'center' }))],
   'paused-task': [open('m2'), async (page) => page.click('.item:has-text("Confirm the transcript link") [data-act="create-item"]')],
   'screen-sheet': ['live', open('m2'), more, async (page) => page.click('[data-act="share-screen"]')],
   'screen-sharing': ['live', open('m2'), more, async (page) => { await page.click('[data-act="share-screen"]'); await page.click('[data-act="screen-go"]'); await page.waitForSelector('.screen-stop'); }],
@@ -115,18 +158,18 @@ const scenes = {
   'long-library': ['long'],
   sources: [async (page) => page.click('.record-pill .caret')],
 };
-const sizes = [[1040, 690], [760, 490]];
-const themes = ['light', 'dark'];
+const sizes: [number, number][] = [[1040, 690], [760, 490]];
+const themes: ('light' | 'dark')[] = ['light', 'dark'];
 const only = process.argv.slice(2);
-const browser = await engine.launch();
-const shots = [];
-const errors = [];
+const browser: Browser = await engine.launch();
+const shots: string[] = [];
+const errors: string[] = [];
 for (const [name, steps] of Object.entries(scenes)) {
   if (only.length && !only.includes(name)) continue;
   const scene = typeof steps[0] === 'string' ? steps[0] : name;
   for (const theme of themes) {
     for (const [width, height] of sizes) {
-      const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 2, colorScheme: theme });
+      const context: BrowserContext = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 2, colorScheme: theme });
       const page = await context.newPage();
       page.on('pageerror', (error) => errors.push(`${name}: ${error.message}`));
       page.on('console', (msg) => msg.type() === 'error' && errors.push(`${name}: ${msg.text()}`));
@@ -143,7 +186,7 @@ for (const [name, steps] of Object.entries(scenes)) {
         await page.screenshot({ path: file });
         shots.push(file);
       } catch (error) {
-        errors.push(`${name} ${width}x${height} ${theme}: ${error.message.split('\n')[0]}`);
+        errors.push(`${name} ${width}x${height} ${theme}: ${messageOf(error).split('\n')[0]}`);
       }
       await context.close();
     }
@@ -152,14 +195,14 @@ for (const [name, steps] of Object.entries(scenes)) {
 
 // Behaviour checks on the mock controller only.
 if (!only.length || only.includes('checks')) {
-  const check = async (label, run) => {
+  const check = async (label: string, run: Step): Promise<void> => {
     const context = await browser.newContext({ viewport: { width: 1040, height: 690 } });
     const page = await context.newPage();
     page.on('pageerror', (error) => errors.push(`${label}: ${error.message}`));
-    try { await run(page); } catch (error) { errors.push(`${label}: ${error.message.split('\n')[0]}`); }
+    try { await run(page); } catch (error) { errors.push(`${label}: ${messageOf(error).split('\n')[0]}`); }
     await context.close();
   };
-  const go = async (page, scene) => { await page.goto(`${base}?scene=${scene}`); await page.waitForSelector('#r-page > *'); };
+  const go = async (page: Page, scene: string): Promise<void> => { await page.goto(`${base}?scene=${scene}`); await page.waitForSelector('#r-page > *'); };
   await check('task links and drafts', async (page) => {
     await go(page, 'meeting'); await open('m1')(page);
     await page.click('[data-act="task-picker-open"]');
@@ -167,17 +210,17 @@ if (!only.length || only.includes('checks')) {
     await page.click('[data-id="t42"]'); await page.click('[data-id="t43"]');
     await page.click('[data-act="task-picker-link"]');
     await page.waitForSelector('.item.task:has-text("Review pricing")');
-    await page.evaluate(() => { window.__PREVIEW__.state.meetings.m1.actions.items.find((it) => it.id === 't42').pending = true; });
+    await page.evaluate(() => { const it = window.__PREVIEW__.state.meetings.m1.actions.items.find((x) => x.id === 't42'); if (!it) throw Error('no t42'); it.pending = true; });
     await page.waitForSelector('.item.task:has-text("Review pricing") .sub:has-text("Linking")');
     if (await page.locator('.item.task:has-text("Review pricing") .check.done').count()) throw Error('pending link shown as committed');
-    await page.evaluate(() => { window.__PREVIEW__.state.meetings.m1.actions.items.find((it) => it.id === 't42').pending = false; });
+    await page.evaluate(() => { const it = window.__PREVIEW__.state.meetings.m1.actions.items.find((x) => x.id === 't42'); if (!it) throw Error('no t42'); it.pending = false; });
     await page.waitForSelector('.item.task:has-text("Review pricing") .check.done');
     await page.click('.item.task:has-text("Review pricing") [data-act="unlink-item"]');
     await page.waitForSelector('.item.task:has-text("Review pricing")', { state: 'detached' });
     if (!(await page.locator('.item.task:has-text("Test recovery")').count())) throw Error('second link lost');
     if (await page.locator('.item.proposal :text-is("Details")').count()) throw Error('draft still has a Details control');
     // An older draft with a due date and details shows no editor for them.
-    await page.evaluate(() => Object.assign(window.__PREVIEW__.state.meetings.m1.actions.items.find((i) => i.id === 'i1'), { due: '2026-12-01T22:00:00.000Z', body: 'Synthetic details' }));
+    await page.evaluate(() => { const i1 = window.__PREVIEW__.state.meetings.m1.actions.items.find((i) => i.id === 'i1'); if (!i1) throw Error('no i1'); Object.assign(i1, { due: '2026-12-01T22:00:00.000Z', body: 'Synthetic details' }); });
     if (await page.locator('.item.proposal :is(input, textarea, select)').count()) throw Error('draft shows a field editor');
     await page.click('[data-act="create-item"][data-id="i1"]');
     await page.waitForSelector('.item.task:has-text("Confirm the transcript link")');
@@ -270,7 +313,7 @@ if (!only.length || only.includes('checks')) {
     await page.fill('[data-model="finish.title"]', 'Weekly product sync (final)');
     await page.click('[data-act="finish-save"]');
     await page.waitForSelector('.topbar .badge:has-text("In Tico")', { timeout: 5000 });
-    const row = await page.evaluate(() => window.__PREVIEW__.state.library.rows.find((r) => r.id === 'm2'));
+    const row = await page.evaluate(() => { const r = window.__PREVIEW__.state.library.rows.find((x) => x.id === 'm2'); if (!r) throw Error('no m2'); return r; });
     if (row.title !== 'Weekly product sync (final)') errors.push('finish: title not saved');
     if (row.audience !== 'participants') errors.push(`finish: saved for ${row.audience}, not participants`);
   });
@@ -294,7 +337,7 @@ if (!only.length || only.includes('checks')) {
     if (await page.locator('[data-act="finish-audience"]').count()) errors.push('finish: audience shown for This Mac');
     await page.click('[data-act="finish-save"]');
     await page.waitForTimeout(300);
-    if (await page.evaluate(() => window.__PREVIEW__.state.library.rows.find((r) => r.id === 'm1').sent)) errors.push('finish: This Mac sent it');
+    if (await page.evaluate(() => { const r = window.__PREVIEW__.state.library.rows.find((x) => x.id === 'm1'); if (!r) throw Error('no m1'); return r.sent; })) errors.push('finish: This Mac sent it');
   });
 
   // Sign in with the desktop app's orgs lands in the library.
@@ -310,7 +353,7 @@ if (!only.length || only.includes('checks')) {
   await check('add-org', async (page) => {
     await go(page, 'settings-add');
     await settingsPage(page);
-    const rows = await page.locator('.settings-group [data-act="signin-desktop"]').evaluateAll((b) => b.map((x) => x.dataset.url));
+    const rows = await page.locator('.settings-group [data-act="signin-desktop"]').evaluateAll((b) => b.map((x) => (x as HTMLElement).dataset.url));
     if (rows.join() !== 'https://tidy.tico.page') errors.push(`add-org: Settings offers ${rows.join() || 'nothing'}, not TIDY`);
     if (!(await page.locator('.other-address [data-model="signin"]').count())) errors.push('add-org: no Other address');
     if (await page.locator('.settings-group .btn.primary[data-act="signin"]').count()) errors.push('add-org: typed address is primary');
@@ -334,7 +377,7 @@ if (!only.length || only.includes('checks')) {
     await page.click('textarea.notes');
     await page.keyboard.press('Meta+ArrowDown');
     await page.keyboard.type(' @ma');
-    const names = await page.locator('#mention [data-opt]').evaluateAll((rows) => rows.map((row) => row.dataset.name));
+    const names = await page.locator('#mention [data-opt]').evaluateAll((rows) => rows.map((row) => (row as HTMLElement).dataset.name));
     if (names.join('|') !== 'Marketing Lead|Mara Novak|Martin Diaz') errors.push(`mention: listed ${names.join('|')}`);
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Enter');
@@ -352,13 +395,13 @@ if (!only.length || only.includes('checks')) {
     await open('m1')(page);
     await page.waitForSelector('#tbody > *');
     const before = await page.locator('#tbody > *').count();
-    const height = await page.evaluate(() => document.getElementById('tbody').scrollHeight);
+    const height = await page.evaluate(() => (document.getElementById('tbody') as HTMLElement).scrollHeight);
     await page.keyboard.press('Meta+f');
     await page.waitForSelector('.side-search input');
     for (const key of 'task') {
       await page.keyboard.type(key);
       const rows = await page.locator('#tbody > *').count();
-      const now = await page.evaluate(() => document.getElementById('tbody').scrollHeight);
+      const now = await page.evaluate(() => (document.getElementById('tbody') as HTMLElement).scrollHeight);
       if (rows !== before || now !== height) errors.push(`search: layout moved at "${key}" (${rows} rows, ${now}px)`);
     }
     if (!/^1\/\d+$/.test(await page.locator('#thits').innerText())) errors.push('search: no counter');
