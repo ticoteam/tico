@@ -30,13 +30,17 @@ ENGINEERING, PRODUCT = "engineering", "product"
 
 
 def engineering_bot(c):
-    """The active Head of Engineering, or None."""
-    row = c.execute(
-        f"SELECT bc.bot FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
-        f"WHERE s.template='engineering-lead' AND b.state='active' "
-        "ORDER BY bc.bot LIMIT 1"
-    ).fetchone()
-    return row[0] if row else None
+    """The active Head of Engineering, or None: an engineering-lead bot first, then a new org's engineering team
+    manager."""
+    for template in ("engineering-lead", "engineering-team-manager"):
+        row = c.execute(
+            f"SELECT bc.bot FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
+            "WHERE s.template=? AND b.state='active' ORDER BY bc.bot LIMIT 1",
+            (template,),
+        ).fetchone()
+        if row:
+            return row[0]
+    return None
 
 
 def open_items(c, product_type):

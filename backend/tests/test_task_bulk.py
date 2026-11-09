@@ -516,6 +516,14 @@ def test_the_cli_and_the_mcp_tool_leave_out_my_tasks_with_not_owner(api):
     assert get(api, "tasks/" + mine["id"])["task"]["status"] == "open"
     assert get(api, "tasks/" + theirs["id"])["task"]["status"] == "closed"
 
+    # Two owners to leave out name one filter: the pair is refused, not an explicit exclude_owner overwritten by the alias.
+    from clients import hubtools
+
+    with pytest.raises(ValueError, match="same filter"):
+        hubtools.task_bulk(
+            None, {"filter": {"exclude_owner": "human:ana", "not_owner": "human:priya"}, "action": "close"}
+        )
+
 
 def test_a_bulk_close_never_takes_a_subtask_the_change_leaves_out(api):
     """Closing a parent closes its open subtasks as well, so a bulk close must not take one the filter leaves out: the
@@ -594,6 +602,57 @@ def test_a_bulk_finish_leaves_the_callers_own_subtask_open(api, action, change):
     assert [(t["id"], t["code"]) for t in out["tasks"]["skipped"]] == [(solo["id"], "subtasks_left_out")]
     assert get(api, "tasks/" + solo["id"])["task"]["status"] == "open"
     assert get(api, "tasks/" + mine["id"])["task"]["status"] == "open"
+
+
+def test_a_selected_subtask_the_change_holds_keeps_its_parent_open(api):
+    """A subtask the filter selects but the loop does not finish (here a waiting approval on its stage refuses its done)
+    stays open. Its parent is skipped with subtasks_left_out: closing the parent would end the held subtask through the
+    cascade."""
+    typ = post(
+        api,
+        "task-types",
+        {"name": "Build", "steps": [{"name": "Draft", "status": "open"}, {"name": "Done", "status": "closed"}]},
+        token="ana-test",
+    )["type"]
+    draft = next(s["id"] for s in typ["steps"] if s["name"] == "Draft")
+    parent = task(api, "Plan the spring webinar", labels=["pair"])
+    kid = task(
+        api,
+        "Ship the campaign",
+        type=typ["id"],
+        step=draft,
+        labels=["pair"],
+        relations=[{"task": parent["id"], "kind": "parent"}],
+    )
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO stage_requirements (id, pipeline_id, pipeline_stage_id, name, kind, needs, reviewed_by, reviewer_id, "
+            "version, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "req-campaign-signoff",
+                typ["id"],
+                draft,
+                "Ana signs off",
+                "approval",
+                "{}",
+                "person",
+                "human:ana",
+                1,
+                "human:ana",
+                "2026-11-07T12:00:00.000000Z",
+                "2026-11-07T12:00:00.000000Z",
+            ),
+        )
+        c.execute(
+            "INSERT INTO stage_requirement_versions (stage_requirement_id, version, definition, changed_by, created_at) "
+            "VALUES (?,?,?,?,?)",
+            ("req-campaign-signoff", 1, "{}", "human:ana", "2026-11-07T12:00:00.000000Z"),
+        )
+    out = bulk(api, {"label": "pair"}, "status", status="done")
+    assert (out["changed"], out["skipped"]) == (0, 2)
+    assert {t["id"] for t in out["tasks"]["skipped"] if t["code"] == "subtasks_left_out"} == {parent["id"]}
+    assert get(api, "tasks/" + parent["id"])["task"]["status"] == "open"
+    assert get(api, "tasks/" + kid["id"])["task"]["status"] == "open"
 
 
 def test_a_bulk_move_between_two_done_steps_is_no_finish(api):
