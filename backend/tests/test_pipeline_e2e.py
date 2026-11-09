@@ -27,6 +27,7 @@ from backend import (
     pipeline_review,
     pipeline_rights,
     pipeline_setup,
+    roadmap_flow,
     task_allocator,
     task_relations as TR,
 )
@@ -298,6 +299,11 @@ def hub(tmp_path):
             ]
         },
     )
+    # This hub is a booted install, and a finished install's boot gives the two roadmap types their legacy managers
+    # (roadmap_flow.ensure does so only once onboarding is complete, and this hub is not onboarded).
+    for role, manager in roadmap_flow.LEGACY_MANAGERS.items():
+        c.execute("UPDATE task_types SET manager=? WHERE role=?", (manager, role))
+    c.commit()
     yield store, c
     c.close()
 

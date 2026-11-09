@@ -1,13 +1,17 @@
 """The Tico Team pipeline setup (Track A): it makes the factories, pipelines, stages, links and goals, adopts what exists,
 changes nothing on a second run, sets managers only where a matching bot exists, and wipes cards only with replace."""
 
+import hashlib
 import json
+from types import SimpleNamespace
 
 import pytest
 
 from backend import hubdb as H
+from backend import lifecycle as LC
 from backend import pipeline_engine as E
 from backend import pipeline_links as L
+from backend import pipeline_overview as PO
 from backend import pipeline_requirements as R
 from backend import pipeline_setup as S
 from backend import public_roadmaps
@@ -676,3 +680,337 @@ def test_a_card_held_back_from_done_is_named_only_where_the_caller_can_read_it(t
     assert "Public export" in text
     assert any("1 card you can't see is still in Ready to ship" in u for u in out["unresolved"]), out["unresolved"]
     assert rows(c, "SELECT status FROM tasks WHERE id=?", child) == [{"status": "open"}]
+
+
+# ----------------------------------------------------------------------------- company_default (the new-company org)
+
+NO_QA_BOARD = [
+    ("On Deck", "open"),
+    ("In Progress", "doing"),
+    ("Review 1", "review"),
+    ("Review 1 Fixes", "doing"),
+    ("Review 2", "review"),
+    ("Review 2 Fixes", "doing"),
+    ("Pending Release", "review"),
+    ("Done", "done"),
+    ("Closed", "closed"),
+]
+# The sha256 of PRESETS["tico_default"] (json.dumps, sort_keys) before company_default was added: re-running setup on an
+# existing team keeps what it had.
+TICO_DEFAULT_SHA256 = "da779296952efbb2ff491092bd97a090a976695f7b3a4fed461929b4139226d7"
+
+
+def pipeline_id(c, name):
+    return rows(c, "SELECT id FROM task_types WHERE name=?", name)[0]["id"]
+
+
+def stages_of(c, name):
+    return [
+        (r["name"], r["status"])
+        for r in rows(
+            c,
+            "SELECT s.name, s.status FROM task_steps s JOIN task_types t ON t.id = s.type_id "
+            "WHERE t.name=? ORDER BY s.position",
+            name,
+        )
+    ]
+
+
+def step_ids(c, name):
+    return {
+        r["name"]: r["id"]
+        for r in rows(
+            c,
+            "SELECT s.id, s.name FROM task_steps s JOIN task_types t ON t.id = s.type_id WHERE t.name=?",
+            name,
+        )
+    }
+
+
+def add_bot(c, bot_id, slug, state="active"):
+    c.execute("INSERT INTO bots (id, slug, display_name, state) VALUES (?, ?, ?, ?)", (bot_id, slug, slug, state))
+
+
+def add_seat(c, seat_id):
+    c.execute(
+        "INSERT INTO seats (id, title, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?)",
+        (seat_id, seat_id, "2026-11-08T00:00:00.000000Z", ANA, "2026-11-08T00:00:00.000000Z", ANA),
+    )
+
+
+def manager_row(c, name):
+    return dict(rows(c, "SELECT manager, manager_seat FROM task_types WHERE name=?", name)[0])
+
+
+def test_company_default_is_the_nine_pipelines_in_three_factories_with_their_prefixes(tmp_path):
+    c = fresh(tmp_path)
+    out = S.apply_factory_setup(c, ANA, preset="company_default")
+    assert set(out["pipelines"]) == {
+        "Product",
+        "Engineering",
+        "Growth Experiments",
+        "Lead",
+        "Opportunity",
+        "Customer",
+        "Success Experiments",
+        "Legal",
+        "Finance",
+    }
+    by_name = {
+        r["name"]: r
+        for r in rows(c, "SELECT t.*, f.name AS factory FROM task_types t LEFT JOIN factories f ON f.id = t.factory_id")
+    }
+    assert {n: by_name[n]["prefix"] for n in out["pipelines"]} == {
+        "Product": "P",
+        "Engineering": "D",
+        "Growth Experiments": "GX",
+        "Lead": "L",
+        "Opportunity": "O",
+        "Customer": "C",
+        "Success Experiments": "SX",
+        "Legal": "LG",
+        "Finance": "F",
+    }
+    assert {n: by_name[n]["factory"] for n in out["pipelines"]} == {
+        "Product": "Product",
+        "Engineering": "Product",
+        "Growth Experiments": "Growth",
+        "Lead": "Growth",
+        "Opportunity": "Growth",
+        "Customer": "Success",
+        "Success Experiments": "Success",
+        "Legal": None,
+        "Finance": None,
+    }
+    assert {n for n in out["pipelines"] if by_name[n]["pipeline_visibility"] == "members"} == {"Legal", "Finance"}
+    assert sorted(r["name"] for r in rows(c, "SELECT name FROM factories")) == ["Growth", "Product", "Success"]
+
+
+def test_company_default_restages_the_boot_engineering_board_to_the_no_qa_names_and_keeps_its_ids(tmp_path):
+    """Boot makes Engineering as Todo / Doing / In review / Ready to ship / Done (Done closed). On a fresh company the
+    board takes #2963's no-QA names; stages that keep a boot stage's job keep its id."""
+    c = fresh(tmp_path)
+    boot = step_ids(c, "Engineering")
+    assert set(boot) == {"Todo", "Doing", "In review", "Ready to ship", "Done"}
+    S.apply_factory_setup(c, ANA, preset="company_default")
+    assert stages_of(c, "Engineering") == NO_QA_BOARD
+    now = step_ids(c, "Engineering")
+    assert (now["On Deck"], now["In Progress"], now["Review 1"], now["Pending Release"], now["Done"]) == (
+        boot["Todo"],
+        boot["Doing"],
+        boot["In review"],
+        boot["Ready to ship"],
+        boot["Done"],
+    )
+
+
+def test_company_default_adopts_the_product_board_and_keeps_its_requirements(tmp_path):
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA, preset="company_default")
+    assert stages_of(c, "Product") == [
+        ("On ice", "open"),
+        ("Ideas", "open"),
+        ("Specifying", "doing"),
+        ("Review", "review"),
+        ("In development", "doing"),
+        ("Validate", "review"),
+        ("Done", "done"),
+        ("Declined", "closed"),
+    ]
+    assert sorted(
+        r["name"]
+        for r in rows(
+            c,
+            "SELECT r.name FROM stage_requirements r JOIN task_steps s ON s.id = r.pipeline_stage_id "
+            "WHERE s.type_id = ? AND r.retired_at IS NULL",
+            pipeline_id(c, "Product"),
+        )
+    ) == ["Engineering shipped", "Spec approved", "Spec page", "Validated"]
+
+
+def test_a_board_that_already_holds_a_card_is_not_restaged_by_company_default(tmp_path):
+    c = fresh(tmp_path)
+    before = step_ids(c, "Engineering")
+    card = H.task_create(
+        c, ANA, "Build the export", "", ANA, type=pipeline_id(c, "Engineering"), step="Doing", lint=False
+    )["id"]
+    S.apply_factory_setup(c, ANA, preset="company_default")
+    assert rows(c, "SELECT step_id FROM tasks WHERE id=?", card)[0]["step_id"] == before["Doing"]
+    assert ("Done", "closed") in stages_of(c, "Engineering")  # the live board keeps its boot statuses
+
+
+def test_tico_default_is_unchanged(tmp_path):
+    digest = hashlib.sha256(json.dumps(S.PRESETS["tico_default"], sort_keys=True).encode()).hexdigest()
+    assert digest == TICO_DEFAULT_SHA256
+
+
+def test_bindings_name_a_bot_by_slug_or_a_seat_and_a_bad_one_falls_back_to_the_name_match(tmp_path):
+    c = fresh(tmp_path)
+    add_bot(c, "bot_pm1", "product-pipeline-manager")
+    add_bot(c, "bot_fin", "bookkeeper")
+    add_seat(c, "lead-pipeline-manager")
+    out = S.apply_factory_setup(
+        c,
+        ANA,
+        preset="company_default",
+        bindings={
+            "Product": {"bot": "product-pipeline-manager"},
+            "Finance": {"bot": "bot_fin"},
+            "Lead": {"seat": "lead-pipeline-manager"},
+            "Legal": {"bot": "nobody"},
+            "Opportunity": {"seat": "no-such-seat"},
+        },
+    )
+    assert manager_row(c, "Product") == {"manager": "bot_pm1", "manager_seat": None}
+    assert manager_row(c, "Finance") == {"manager": "bot_fin", "manager_seat": None}
+    assert manager_row(c, "Lead") == {"manager": None, "manager_seat": "lead-pipeline-manager"}
+    assert manager_row(c, "Legal") == {"manager": None, "manager_seat": None}
+    assert manager_row(c, "Opportunity") == {"manager": None, "manager_seat": None}
+    assert any(u.startswith("Legal has no active manager") for u in out["unresolved"])
+    assert any(u.startswith("Opportunity has no active manager") for u in out["unresolved"])
+
+
+def test_a_binding_never_replaces_an_active_manager(tmp_path):
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA, preset="company_default")
+    add_bot(c, "old-pm", "old-pm")
+    add_bot(c, "bot_pm1", "product-pipeline-manager")
+    add_seat(c, "lead-pipeline-manager")
+    c.execute("UPDATE task_types SET manager='old-pm' WHERE name IN ('Product', 'Lead')")
+    S.apply_factory_setup(
+        c,
+        ANA,
+        preset="company_default",
+        bindings={"Product": {"bot": "product-pipeline-manager"}, "Lead": {"seat": "lead-pipeline-manager"}},
+    )
+    assert manager_row(c, "Product") == {"manager": "old-pm", "manager_seat": None}
+    assert manager_row(c, "Lead") == {"manager": "old-pm", "manager_seat": None}
+
+
+def test_filling_a_seat_makes_its_bot_the_pipeline_manager_and_logs_it(tmp_path):
+    c = fresh(tmp_path)
+    add_seat(c, "lead-pipeline-manager")
+    add_bot(c, "bot_lead", "lead-bot")
+    S.apply_factory_setup(c, ANA, preset="company_default", bindings={"Lead": {"seat": "lead-pipeline-manager"}})
+    LC.fill_seat(c, SimpleNamespace(actor=ANA), "lead-pipeline-manager", "bot_lead")
+    assert manager_row(c, "Lead") == {"manager": "bot_lead", "manager_seat": "lead-pipeline-manager"}
+    assert rows(c, "SELECT action, target FROM events WHERE action='pipeline.manager_seated'") == [
+        {"action": "pipeline.manager_seated", "target": pipeline_id(c, "Lead")}
+    ]
+
+
+def test_a_seat_fill_never_replaces_an_active_manager(tmp_path):
+    c = fresh(tmp_path)
+    add_seat(c, "lead-pipeline-manager")
+    add_bot(c, "bot_lead", "lead-bot")
+    add_bot(c, "bot_sales", "sales-bot")
+    S.apply_factory_setup(c, ANA, preset="company_default", bindings={"Lead": {"seat": "lead-pipeline-manager"}})
+    c.execute("UPDATE task_types SET manager='bot_sales' WHERE name='Lead'")
+    LC.fill_seat(c, SimpleNamespace(actor=ANA), "lead-pipeline-manager", "bot_lead")
+    assert manager_row(c, "Lead")["manager"] == "bot_sales"
+
+
+def test_a_seat_filled_before_setup_binds_its_filler_as_the_manager(tmp_path):
+    c = fresh(tmp_path)
+    add_seat(c, "lead-pipeline-manager")
+    add_bot(c, "bot_lead", "lead-bot")
+    LC.fill_seat(c, SimpleNamespace(actor=ANA), "lead-pipeline-manager", "bot_lead")
+    S.apply_factory_setup(c, ANA, preset="company_default", bindings={"Lead": {"seat": "lead-pipeline-manager"}})
+    assert manager_row(c, "Lead") == {"manager": "bot_lead", "manager_seat": "lead-pipeline-manager"}
+
+
+def test_a_seat_filled_before_setup_by_a_bot_that_is_gone_binds_no_one(tmp_path):
+    c = fresh(tmp_path)
+    add_seat(c, "lead-pipeline-manager")
+    add_bot(c, "bot_lead", "lead-bot", state="archived")
+    LC.fill_seat(c, SimpleNamespace(actor=ANA), "lead-pipeline-manager", "bot_lead")
+    out = S.apply_factory_setup(c, ANA, preset="company_default", bindings={"Lead": {"seat": "lead-pipeline-manager"}})
+    assert manager_row(c, "Lead")["manager"] is None
+    assert any(u.startswith("Lead has no active manager") for u in out["unresolved"])
+
+
+def test_a_lead_moved_to_qualified_is_done_and_files_one_opportunity_and_closing_files_none(tmp_path):
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA, preset="company_default")
+    lead = pipeline_id(c, "Lead")
+    link = rows(c, "SELECT id FROM pipeline_links WHERE from_pipeline_id=? AND retired_at IS NULL", lead)[0]["id"]
+    card = H.task_create(c, ANA, "Acme lead", "", ANA, type=lead, step="Replies", lint=False)["id"]
+    assert E.advance(c, ANA, card)["moved"]
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", card) == [{"status": "done"}]
+    assert len(L.handoffs(c, link)) == 1
+    closing = H.task_create(c, ANA, "Dropped lead", "", ANA, type=lead, step="Replies", lint=False)["id"]
+    H.task_update(c, ANA, closing, step=step_ids(c, "Lead")["Closed"])
+    assert [h["source_task_id"] for h in L.handoffs(c, link)] == [card]
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", closing) == [{"status": "closed"}]
+
+
+def test_a_qualified_lead_closed_afterwards_takes_its_open_opportunity_with_it(tmp_path):
+    """Only a finish as done leaves the spawned Opportunity open; closing (cancelling) the card still closes it."""
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA, preset="company_default")
+    lead = pipeline_id(c, "Lead")
+    link = rows(c, "SELECT id FROM pipeline_links WHERE from_pipeline_id=? AND retired_at IS NULL", lead)[0]["id"]
+    card = H.task_create(c, ANA, "Acme lead", "", ANA, type=lead, step="Replies", lint=False)["id"]
+    assert E.advance(c, ANA, card)["moved"]
+    opportunity = L.handoffs(c, link)[0]["target_task_id"]
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", opportunity)[0]["status"] != "closed"
+    H.task_close(c, ANA, card, note="wrong company")
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", opportunity) == [{"status": "closed"}]
+
+
+def test_a_lead_entering_qualified_files_one_opportunity_and_re_entering_files_none(tmp_path):
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA, preset="company_default")
+    lead = pipeline_id(c, "Lead")
+    link = rows(c, "SELECT id FROM pipeline_links WHERE from_pipeline_id=? AND retired_at IS NULL", lead)
+    assert len(link) == 1
+    stage = rows(c, "SELECT from_pipeline_stage_id AS s FROM pipeline_links WHERE id=?", link[0]["id"])[0]["s"]
+    assert rows(c, "SELECT name FROM task_steps WHERE id=?", stage)[0]["name"] == "Qualified"
+    card = H.task_create(c, ANA, "Acme lead", "", ANA, type=lead, step="Replies", lint=False)["id"]
+    E.advance(c, ANA, card)
+    filed = L.handoffs(c, link[0]["id"])
+    assert [h["source_task_id"] for h in filed] == [card]
+    target = filed[0]["target_task_id"]
+    assert rows(
+        c,
+        "SELECT k.type_id AS type_id, s.name AS stage FROM tasks k JOIN task_steps s ON s.id = k.step_id WHERE k.id=?",
+        target,
+    ) == [{"type_id": pipeline_id(c, "Opportunity"), "stage": "Lead"}]
+    c.execute("UPDATE tasks SET step_id=? WHERE id=?", (step_ids(c, "Lead")["Replies"], card))
+    E.advance(c, ANA, card)
+    assert [h["target_task_id"] for h in L.handoffs(c, link[0]["id"])] == [target]
+
+
+def test_the_product_to_engineering_link_still_files_on_leave_and_the_lead_link_on_enter(tmp_path):
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA, preset="company_default")
+    links = rows(
+        c,
+        "SELECT f.name AS source, t.name AS target, l.fires AS fires FROM pipeline_links l "
+        "JOIN task_types f ON f.id = l.from_pipeline_id JOIN task_types t ON t.id = l.to_pipeline_id "
+        "WHERE l.retired_at IS NULL",
+    )
+    assert {(r["source"], r["target"], r["fires"]) for r in links} == {
+        ("Product", "Engineering", "leave"),
+        ("Lead", "Opportunity", "enter"),
+    }
+
+
+def test_the_pipeline_read_model_shows_the_manager_seat_read_only(tmp_path):
+    c = fresh(tmp_path)
+    add_seat(c, "lead-pipeline-manager")
+    S.apply_factory_setup(c, ANA, preset="company_default", bindings={"Lead": {"seat": "lead-pipeline-manager"}})
+    lead = next(p for p in PO.read(c, ANA)["pipelines"] if p["name"] == "Lead")
+    assert lead["manager_seat"] == "lead-pipeline-manager" and lead["manager_id"] is None
+
+
+def test_company_default_product_takes_the_default_caps(tmp_path):
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA, preset="company_default")
+    caps = {
+        r["name"]: r["card_cap"]
+        for r in c.execute(
+            "SELECT s.name, s.card_cap FROM task_steps s JOIN task_types t ON t.id = s.type_id WHERE t.name = 'Product'"
+        )
+    }
+    assert (caps["On ice"], caps["Specifying"], caps["In development"]) == (0, 3, 3)

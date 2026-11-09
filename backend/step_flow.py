@@ -574,15 +574,15 @@ def dev_flows(c, type_id):
 
 
 def seed(c):
-    """Give each Dev tickets type the Dev board's flow once, on the steps it has; a step that already has a flow
-    keeps it."""
+    """Give each Dev board (a Dev tickets type, or an engineering type laid out as one: roadmap_flow.dev_board) the
+    Dev board's flow once, on the steps it has; a step that already has a flow keeps it."""
     if not _ready(c):
         return
     from . import roadmap_flow
 
     for ident, type_name in c.execute("SELECT id,name FROM task_types").fetchall():
         if (
-            not roadmap_flow._dev((ident, type_name))
+            not roadmap_flow.dev_board(c, ident, type_name)
             or c.execute("SELECT 1 FROM events WHERE action=? AND target=? LIMIT 1", (SEEDED, ident)).fetchone()
         ):
             continue

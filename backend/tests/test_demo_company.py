@@ -378,6 +378,8 @@ def test_every_department_has_its_lead_and_answers_to_a_person(ana):
         assert (kind + ":" + names.get(key, key)) == lead, f"{gid} is led by {lead}"
         assert set(members) <= set(groups[gid]["bot_slugs"]), f"{gid} holds {members}"
     for group in groups.values():
+        if group["id"] == "built-in":  # Tico's own upkeep, not a department: it has no lead and is not checked here
+            continue
         for slug in group["bot_slugs"]:
             seen, at = set(), slug  # a bot's reports_to is a bot's slug or "human:<id>"
             while at in by_slug and at not in seen:

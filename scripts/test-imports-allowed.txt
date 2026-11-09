@@ -20,3 +20,4 @@ backend/tests/test_pipeline_stage_caps.py -> backend.tests.test_task_holds
 backend/tests/test_visual_specs.py -> backend.tests.test_files
 backend/tests/test_visual_specs.py -> backend.tests.test_roadmaps
 backend/tests/test_visual_specs.py -> backend.tests.test_tasks_board
+backend/tests/test_thread_archive_closed.py -> backend.tests.test_thread_rail

@@ -1,10 +1,20 @@
 """A bulk change by filter (POST /api/v2/task-bulk): it selects with the task list's own filters, changes each task as
 its single update would (permissions, refusals and events alike), is capped, and a dry run writes nothing."""
 
-import pytest
+import sqlite3
+from contextlib import closing
+from pathlib import Path
 
+import pytest
+from fastapi.testclient import TestClient
+
+from backend import bot_settings as BS
 from backend import hubdb as H
 from backend import pipeline_review
+from backend.app import create_app
+from backend.auth import Identity
+from backend.config import Settings
+from backend.store import encode
 from backend.tests.helpers.tasks_board import api, bot_token, get, pipeline, post  # noqa: F401
 
 

@@ -637,6 +637,45 @@ def test_dev_types_get_the_proposed_pools_once_with_the_bots_the_company_has(api
         )["pools"]["In QA"] == ["qa-muse"]
 
 
+def test_an_engineering_board_found_by_role_takes_each_pr_reviewer_once_as_it_is_hired(api):
+    """company_default's Engineering is no Dev tickets type: its review steps take the company's pr-reviewer bots, found
+    by template. With none yet its steps keep no pool; a reviewer hired into a seat joins, a person's removal stands, and
+    a Dev tickets type keeps its proposed pools only."""
+    from backend import pipeline_setup
+
+    def hire(c, slug):
+        H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", "status": "active"}}, {"people": []})
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?) ON CONFLICT(bot) DO NOTHING", (slug, "", ""))
+        BS.write(c, slug, {"name": slug, "template": "pr-reviewer"})
+        pipeline_setup.seat_filled(c, "human:ana", "seat-" + slug, slug)
+
+    def pools(c, type_id):
+        return {s["name"]: s["check_pool"] for s in H.type_get(c, type_id)["steps"]}
+
+    with api.app.state.store.transaction() as c:
+        made = pipeline_setup.apply_factory_setup(c, "human:ana", "company_default")
+        engineering = made["pipelines"]["Engineering"]
+        assert c.execute("SELECT role FROM task_types WHERE id=?", (engineering,)).fetchone()[0] == "engineering"
+        assert all(p == [] for p in pools(c, engineering).values())  # no reviewer yet: no pool, as with no reviewer
+        hire(c, "rev-one")
+        assert pools(c, engineering)["Review 1"] == ["rev-one"] == pools(c, engineering)["Review 2"]
+        assert pools(c, engineering)["In Progress"] == [] and pools(c, engineering)["Pending Release"] == []
+        hire(c, "rev-two")
+        assert pools(c, engineering)["Review 2"] == ["rev-one", "rev-two"]
+        # A person takes rev-one out of Review 1: a later seed or hire does not put it back.
+        review_1 = next(s for s in H.type_get(c, engineering)["steps"] if s["name"] == "Review 1")
+        c.execute("UPDATE task_steps SET check_pool=? WHERE id=?", (json.dumps(["rev-two"]), review_1["id"]))
+        check_pools.seed(c)
+        hire(c, "rev-three")
+        assert pools(c, engineering)["Review 1"] == ["rev-two", "rev-three"]
+        # A Dev tickets type is seeded with the proposed slugs only, never by template.
+        dev = H.type_create(
+            c, H.KEEPER, "Dev tickets", [{"name": "Review 1", "status": "review"}, {"name": "Done", "status": "done"}]
+        )
+        check_pools.seed(c)
+        assert pools(c, dev["id"])["Review 1"] == []
+
+
 def test_a_reviewer_whose_last_run_fell_back_to_the_builders_company_is_passed_over(api):
     team(api)
     task = ticket(api, RECEIPT)

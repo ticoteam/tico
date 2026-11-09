@@ -28,7 +28,7 @@ Done when: the change is made as the requester and read back, or the refusal is 
 
 - `hub run list <slug> --since 24h`: a bot's recent runs and failed attempts, each with its attempt id and end reason. `--since`
   takes a window like `24h` or `7d`, or an ISO time.
-- `hub automation list --owner bot:<slug>`: the bot's routines (automations), each with its id, schedule, enabled state and last run.
+- `hub automation list`: the bot's routines (automations), each with its id, schedule, enabled state and last run.
 - `hub automation show <id>`: one routine, with its trigger, time zone and enabled state.
 - `hub automation runs <id>` (`--limit N`): that routine's runs, newest first, each with its status, failing step and error.
 - `hub automation recent-runs --range 24h` (`--status failed`, `--owner bot:<slug>`): runs across every routine you may see,
@@ -122,6 +122,6 @@ The parser refuses each of these after `hub`. The part after the arrow is the co
 - `bot status <slug>` -> `hub bot status history <slug>` or `hub api GET bots/<slug>`
 - `bot recent <slug>` -> `hub bot recent` takes no name; for one bot, `hub bot status history <slug>`
 - `task list --limit N` -> `hub task list` with `--brief`, `--owner` or `--requester`
-- `automation list --all` -> `hub automation list --owner bot:<slug>` or `hub automation recent-runs --range 24h`
+- `automation list --all` -> `hub automation list` or `hub automation recent-runs --range 24h`
 - `credential list --for-bot <slug>` -> `hub credential list`, then read its bots column
 - `--version` -> there is no such flag; `hub --help` lists the groups
