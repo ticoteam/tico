@@ -244,9 +244,13 @@ runner hears of it on its event stream and claims it, does one run (prompt = `AG
 your message and attachments), and streams the reply back. The thread shows *Saved — queued*,
 *Starting*, *Working*, then the reply. Closing the browser changes nothing.
 
-**While all bots are paused, no new turn starts.** A task with work waiting shows this label:
+**While all bots are paused, no new turn starts.** A message with work waiting shows this label:
 
 *Saved — waiting: all bots are paused by <name>. Resume to start.*
+
+The task page shows the same reason:
+
+*Waiting: all bots are paused by <name>. Resume to start.*
 
 Tico also adds one comment to that task, once for each pause. The comment wakes no bot:
 
