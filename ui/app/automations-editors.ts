@@ -63,8 +63,8 @@ type AuSet = Omit<import('../types/api').QuestionSets['sets'][number], 'question
 interface AuJudge {
   probabilities?: Record<string, number>; score?: number | null; max?: number; noul?: unknown; confidence?: number; choice?: string;
 }
-/** A row of GET /v2/models as task-modal.ts keeps it in TASK_RUN_ROWS (the task picker's catalog). */
-interface TaskRunRow { id: string; label?: string; harnesses?: string[]; efforts?: string[]; deprecated?: boolean; meeting?: boolean }
+/** A row of GET /v2/models as task-modal.ts keeps it in TASK_RUN_ROWS (the task picker's catalog): its ModalModelRow. */
+type TaskRunRow = ModalModelRow;
 
 // The editor open in the side panel (AU.ed), by kind.
 /** A step's editor; a new step (automations-flow.ts auInsert) has insert, where it joins the flow on Save. */
@@ -120,7 +120,6 @@ function auEdOpen(ed: AuEd) {
   if (ed.kind === 'versions') void auVersionsLoad(ed);
   if (ed.kind === 'step' && ed.step.type === 'decide') void auLastRun(ed);
   if (ed.kind === 'step' && ed.step.type === 'decide' && AU.sets === null) void auSetsLoad(ed);
-  // @ts-expect-error TS7005: task-modal.ts declares TASK_RUN_ROWS untyped (`let TASK_RUN_ROWS = null`); its rows are TaskRunRow
   if (ed.kind === 'step' && ed.step.type === 'bot_turn' && !TASK_RUN_ROWS) void auModelsLoad(ed);
   // A phone would open its keyboard over the sheet; a computer starts in the first field.
   if (!auPhone()) AU.root.querySelector<HTMLElement>('.au-ed .au-edb :is(input,textarea,select):not([disabled])')?.focus({preventScroll: true});
@@ -309,7 +308,6 @@ function auBotFields(s: AuStep) {
 // Runs on: the model the turn's task runs on, stamped on the task its run opens (backend/task_run_models.py). Blank is the
 // bot's task model; the harness and effort follow the model picked, and a blank one is left out of the step.
 function auBotRunsFields(s: AuStep) {
-  // @ts-expect-error TS7005: task-modal.ts declares TASK_RUN_ROWS untyped (`let TASK_RUN_ROWS = null`); its rows are TaskRunRow
   const rows: TaskRunRow[] = TASK_RUN_ROWS || [], model = s.model || '', row = rows.find(m => m.id === model);
   const models = auWithCur([['', "The bot's task model"], ...rows.map(m => [m.id, m.label || m.id])], model, model);
   const rowHarnesses = row?.harnesses || [];
