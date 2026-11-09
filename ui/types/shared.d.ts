@@ -31,7 +31,7 @@ interface ToastOptions {
   /** Show an error even while signed out (the signed-out banner is the usual place). */
   keepWhenSignedOut?: boolean;
   /** An open modal dialog the toast sits in, so its button can be pressed. */
-  host?: Element | null;
+  host?: Element | null | undefined;
 }
 
 // ---------------------------------------------------------------- the signed-in person (S.me, GET /api/me)
@@ -74,7 +74,31 @@ interface ConfigUpdate {
   available?: boolean;
   latest?: string;
   current?: string;
+  /** The release Tico support set for this hosted server (backend/hosted_updates.py), until it is on it. */
+  scheduled?: string;
+  /** Tico runs this server's updates (a cloud company, backend/releases.py). */
+  managed?: boolean;
+  /** The release's changelog link. */
+  url?: string;
+  /** Notices from Tico for this install (backend/hosted_updates.py). */
+  messages?: UpdateMessage[];
+  /** The message Tico HQ has for this version (backend/releases.py). */
+  message?: UpdateMessage | null;
   [key: string]: unknown;
+}
+
+/** One notice Tico sent: its tone (`kind`), its text (`body`) and an optional https link (`url`). */
+interface UpdateMessage {
+  id?: string | number | null;
+  body?: string;
+  kind?: string;
+  url?: string;
+}
+
+/** The "How is Tico working for you?" question the server asks at a set moment (backend/support_asks.py). */
+interface FeedbackAsk {
+  moment: string;
+  question: string;
 }
 
 /** The environment's names and switches: state.ts's CONFIG_DEFAULTS, with whatever the server sends over them. */
@@ -109,7 +133,7 @@ interface AppConfig {
   providers_configured?: boolean;
   default_runtime?: string;
   in_docker?: boolean;
-  feedback_question?: string;
+  feedback_question?: FeedbackAsk | null;
   usage_count_notice?: unknown;
   changelog?: unknown;
   [key: string]: unknown;
@@ -146,6 +170,17 @@ interface BotMachine {
   [key: string]: unknown;
 }
 
+/** A computer's readiness report (SettingsMachine.readiness): what each runtime and harness can do, as the computer last reported it. */
+interface MachineReadiness {
+  runtimes?: Record<string, { authenticated?: string; goals?: boolean | null } | undefined>;
+  harnesses?: Record<string, MachineHarness | undefined>;
+}
+/** One harness in a computer's readiness report: the runtime it runs on, and whether goals work there. */
+interface MachineHarness {
+  runtime?: string;
+  goals?: boolean | null;
+}
+
 /** An external agent's sync state (`agent`, a Grok Bot or Dots, backend/agents.py). */
 interface BotAgent {
   label?: string;
@@ -162,6 +197,9 @@ interface Employee {
   slug?: string;
   display_name?: string;
   status?: string;
+  /** The state a bot row may carry besides status (overview.ts reads it). */
+  state?: string;
+  icon?: string;
   template?: string;
   harness?: string;
   team?: string;
@@ -173,11 +211,13 @@ interface Employee {
   /** The bot's access policy (settings-access.ts reads it): see, read and write; null or absent when it is not set. */
   access_policy?: {see: import('./api').AccessAudience; read: import('./api').AccessAudience; write: import('./api').AccessAudience} | null;
   machine?: BotMachine | null;
+  /** The computer a bot is placed on (`assignments` row), when the server sends it. */
+  assignment?: { runner_id?: string } | null;
   agent?: BotAgent | null;
   /** Whether the bot's computer or agent is up, and whether its setup is done (the status tooltip, ui/app/tooltip.ts, reads them). */
   online?: boolean;
   ready?: boolean;
-  readiness?: { gateway?: string | null } | null;
+  readiness?: { gateway?: string | null; goals?: boolean | null | undefined } | null;
   users?: BriefPerson[];
   bot_owners?: BriefPerson[];
   /** Read by overview.js; no server path sends it on a bot row today, so it is optional and not relied on. */
@@ -364,4 +404,68 @@ interface GrowthState {
   sub: string;
   month: string;
   data: unknown;
+}
+
+// ---------------------------------------------------------------- the health answer (HL, ui/health.ts) and live task drafts (task-live.ts)
+
+/** A bot the health answer lists as stuck (`HL.stuck`). */
+interface HealthStuckRow {
+  bot: string;
+  why: string;
+  [key: string]: unknown;
+}
+
+/** A bot on a fallback model since a time (`HL.on_fallback`). */
+interface HealthFallbackRow {
+  changed_at?: string | null;
+  [key: string]: unknown;
+}
+
+/** The health answer the app polls (`HL`, ui/health.ts): the parts the other pages read. */
+interface HealthSnapshot {
+  checks?: unknown[];
+  audience?: string;
+  stuck?: HealthStuckRow[];
+  on_fallback?: HealthFallbackRow[];
+  limited?: unknown[];
+  [key: string]: unknown;
+}
+
+/** A chat or input box the page keeps (pill.ts PILLS): its mode, its bot's slug and its element. */
+interface PillState {
+  mode?: string;
+  slug?: string;
+  el: HTMLElement;
+  files: unknown[];
+  [key: string]: unknown;
+}
+
+/** One field of a task's live draft: the copy the edit was made on (`version`) and its value (task-live.ts). */
+interface TaskFieldBase {
+  value: unknown;
+  version?: number;
+}
+
+/** A task's live draft (task-live.ts sharedDraft): the unsaved edits and the copies they were made on. */
+interface TaskLiveDraft {
+  patch: Record<string, unknown>;
+  dirty: Record<string, unknown>;
+  bases: Record<string, TaskFieldBase>;
+  error: string;
+  [key: string]: unknown;
+}
+
+/** A task open in its dialog, live (`dialog.taskLive`, task-live.ts). */
+interface TaskLiveState {
+  id: string;
+  identity: string;
+  owner: string;
+  draft: TaskLiveDraft;
+  nodes: Record<string, unknown>;
+  fields: Record<string, TaskFieldBase>;
+  revoked?: boolean;
+}
+
+interface HTMLDialogElement {
+  taskLive?: TaskLiveState | null;
 }

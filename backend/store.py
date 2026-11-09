@@ -2797,14 +2797,17 @@ class Store:
             raise refusal
         return result
 
-    def write(self, identity, fn):
+    def write(self, identity, fn, *, validate=True):
         """`mutate` without an idempotency record, for a route whose request is its own: the same
-        identity check under the write lock, and the same all-or-nothing refusal."""
+        identity check under the write lock, and the same all-or-nothing refusal. `validate=False` is for a write the
+        server makes for itself on a bot's behalf (backend/files.py, a review page): it has no credential to check, and
+        `fn` checks the records it writes."""
         refusal = logged = None
         with self.transaction() as c:
-            from .auth import validate_identity
+            if validate:
+                from .auth import validate_identity
 
-            validate_identity(c, identity)
+                validate_identity(c, identity)
             # Who made the changes this write logs (backend/events.py).
             from . import events as changes
 
