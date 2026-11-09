@@ -293,6 +293,7 @@ class _Facts:
         self.task_files: dict[
             str, Row
         ] = {}  # ticket id -> its newest file (task_assets), shown when nothing is attached
+        self.spec_pages: dict[str, Row] = {}  # ticket id -> its newest Spec page attachment, shown as the spec
         self.visits: dict[str, Row] = {}
         self.labels: dict[str, set[str]] = {}  # ticket id -> its label keys (a requirement may apply to one label)
         self.asked: set[Key] = set()  # (visit id, requirement id) the manager asked the backup about
@@ -319,6 +320,15 @@ class _Facts:
             reqs,
         ):
             facts.attachments.setdefault((attachment["task_id"], attachment["stage_requirement_id"]), attachment)
+        for page in _read(
+            c,
+            "SELECT * FROM requirement_attachments WHERE removed_at IS NULL "
+            "AND task_id IN (SELECT value FROM json_each(?)) "
+            "AND stage_requirement_id IN (SELECT id FROM stage_requirements WHERE name = 'Spec page' AND retired_at IS NULL) "
+            "ORDER BY created_at DESC, rowid DESC",
+            tasks,
+        ):
+            facts.spec_pages.setdefault(page["task_id"], page)
         for asset in _read(
             c,
             "SELECT a.task_id AS task_id, b.id AS id, b.name AS name, b.content_type AS content_type "
@@ -465,6 +475,15 @@ def _attachment_of(attachment: Row | None, ticket_file: Row | None) -> Row | Non
     return None
 
 
+def _spec_of(spec_page: Row | None, ticket_file: Row | None) -> dict[str, Any] | None:
+    """The spec a review item shows, for display only: the card's Spec page attachment, else the ticket's newest file, with
+    `from` saying which. Approve never reads it; its evidence stays the requirement's own attachment."""
+    shown = _attachment_of(spec_page, ticket_file)
+    if shown is None:
+        return None
+    return {**shown, "from": "spec_page" if spec_page is not None else "ticket"}
+
+
 def _is_text(asset: Row) -> bool:
     """Whether a ticket file reads as text: a text content type, or a markdown or plain-text name."""
     name = str(asset.get("name") or "").lower()
@@ -544,6 +563,8 @@ class _Queue:
         key = (task["id"], requirement["id"])
         attachment = self.facts.attachments.get(key)
         ticket_file = None if attachment else self.facts.task_files.get(task["id"])
+        spec_page = self.facts.spec_pages.get(task["id"])
+        spec = _spec_of(spec_page, None if spec_page else self.facts.task_files.get(task["id"]))
         claim_row = self.claims.get(key)
         since = self.since(task)
         stage = self.stages.get(requirement["pipeline_stage_id"]) or {}
@@ -565,6 +586,7 @@ class _Queue:
             "kind": requirement["kind"],
             "work_version": _revision(task),
             "attachment": _attachment_of(attachment, ticket_file),
+            "spec": spec,
             "attachment_digest": attachment["digest"] if attachment else None,
             "why": why,
             "since": since,
@@ -652,26 +674,24 @@ def _queue_fields(
 def _attachment_views(c: "sqlite3.Connection", items: list[Row], facts: "_Facts") -> None:
     """Adds each shown attachment's format, name and href (its immutable content address), one media lookup for all. A
     ticket file that reads as text is format text, so the review shows it as text rather than a bare file."""
-    shown = [item for item in items if item["attachment"]]
-    rows = [
-        (
-            {
-                "source": "blob",
-                "blob_id": item["attachment"]["blob_id"],
-                "file_id": None,
-                "file_version": None,
-                "url": None,
-            }
-            if item["attachment"]["source"] == TICKET_SOURCE
-            else facts.attachments[(item["task_id"], item["requirement_id"])]
-        )
-        for item in shown
-    ]
-    for item, view in zip(shown, requirement_attachments.views(c, rows), strict=True):
-        fmt = view["format"]
-        if item["attachment"]["source"] == TICKET_SOURCE and _is_text(facts.task_files[item["task_id"]]):
-            fmt = "text"
-        item["attachment"].update(format=fmt, name=view["name"], href=view["href"])
+    for key in ("attachment", "spec"):
+        shown = [item for item in items if item.get(key)]
+        rows = [_shown_row(item, key, facts) for item in shown]
+        for item, view in zip(shown, requirement_attachments.views(c, rows), strict=True):
+            fmt = view["format"]
+            if item[key]["source"] == TICKET_SOURCE and _is_text(facts.task_files[item["task_id"]]):
+                fmt = "text"
+            item[key].update(format=fmt, name=view["name"], href=view["href"])
+
+
+def _shown_row(item: Row, key: str, facts: "_Facts") -> Row:
+    """The stored row a shown attachment reads its format and address from: a ticket file as a blob, a Spec page as its
+    own attachment, and the requirement's attachment as itself."""
+    if item[key]["source"] == TICKET_SOURCE:
+        return {"source": "blob", "blob_id": item[key]["blob_id"], "file_id": None, "file_version": None, "url": None}
+    if key == "spec":
+        return facts.spec_pages[item["task_id"]]
+    return facts.attachments[(item["task_id"], item["requirement_id"])]
 
 
 @contextmanager
@@ -695,30 +715,38 @@ def _redact_attachments(c: "sqlite3.Connection", items: list[Row], who: "Identit
     notice in place of its name. The denied attachment is built fresh, so nothing of the page's row survives: no id, blob
     id, digest, version, title or address, and the item's own attachment digest goes too. The item stays in the queue, so
     the counts do not move."""
-    shown = [item for item in items if item["attachment"]]
-    if not shown:
-        return
     from . import files as file_module
 
     readable_refs = cast(Callable[..., list[Row]], file_module.readable_page_refs)
-    with _read_snapshot(c):
-        views = readable_refs(c, auth, who, [item["attachment"] for item in shown])
-    for item, view in zip(shown, views, strict=True):
-        if view.get("removed") is True:
-            item["attachment"] = {
-                "id": None,
-                "source": item["attachment"]["source"],
-                "format": "file",
-                "name": view["label"],
-                "url": None,
-                "href": None,
-                "file_id": None,
-                "file_version": None,
-                "blob_id": None,
-                "commit_sha": None,
-                "removed": True,
-            }
-            item["attachment_digest"] = None
+    for key in (
+        "attachment",
+        "spec",
+    ):  # the spec is display only, but a page the reader cannot open is not shown either
+        shown = [item for item in items if item.get(key)]
+        if not shown:
+            continue
+        with _read_snapshot(c):
+            views = readable_refs(c, auth, who, [item[key] for item in shown])
+        for item, view in zip(shown, views, strict=True):
+            if view.get("removed") is True:
+                denied = {
+                    "id": None,
+                    "source": item[key]["source"],
+                    "format": "file",
+                    "name": view["label"],
+                    "url": None,
+                    "href": None,
+                    "file_id": None,
+                    "file_version": None,
+                    "blob_id": None,
+                    "commit_sha": None,
+                    "removed": True,
+                }
+                if "from" in item[key]:
+                    denied["from"] = item[key]["from"]
+                item[key] = denied
+                if key == "attachment":
+                    item["attachment_digest"] = None
 
 
 UNOPENABLE_APPROVE = "You can't open this page, so you can't approve it. Send it back or ask its owner to share it."

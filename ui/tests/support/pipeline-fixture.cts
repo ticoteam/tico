@@ -23,6 +23,10 @@ export interface PipelineInstallOptions {
   plain?: boolean;
   twoCards?: boolean;
   unopenable?: boolean;
+  // `spec`: D52's card has its Spec page attached (the spec the review shows first); `product`: the cards are the Product
+  // pipeline's Review stage, so the Why line names Product.
+  spec?: boolean;
+  product?: boolean;
 }
 
 interface Step extends Json {
@@ -88,6 +92,8 @@ export interface PipelineState {
   plain: boolean;
   twoCards: boolean;
   unopenable: boolean;
+  spec: boolean;
+  product: boolean;
   stage: Record<string, string>;
   // The decision an approval made, with the stage its ticket came from (what an undo puts back).
   moved: Record<string, {task: string; from: string | null}>;
@@ -177,6 +183,10 @@ const CARDS: Record<string, {body: string; acceptance: string[]; checkpoint: str
 // The markdown file on D61 when `state.text` is set (a ticket file, not the requirement's): the preview shows it as text.
 const SPEC_MARKDOWN = '# Pipeline manager spec\n\nThe manager asks for a spec before a card moves on.\n\n- Every stage names its reviewer\n- Markdown shows as written\n';
 // A stand-in picture for the example.test links (the screenshot's shot.png), drawn as SVG so the card looks like a screen.
+// D52's Spec page (`spec` option): a Tico page the card's Specifying stage holds, shown first in Review as the spec.
+const ASSISTANT_SPEC_MARKDOWN = '# Assistant can approve a spec\n\nA reviewer approves a spec in one tap, once every check passes.\n\n- Approved in one tap\n- Works on a phone\n';
+const SPEC_PAGE_52 = {id: 'spec-page-52', source: 'file', format: 'text', name: 'Assistant spec v2.md', href: '/api/v2/files/spec-page-52', file_id: null, file_version: null, from: 'spec_page'};
+// A stand-in picture for the example.test links (the screenshot's shot.png), drawn as SVG so the card looks like a screen.
 const PLACEHOLDER_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400"><rect width="640" height="400" fill="#334155"/>'
   + '<rect x="60" y="60" width="520" height="280" rx="16" fill="#1e293b"/><circle cx="200" cy="170" r="48" fill="#38bdf8"/>'
   + '<rect x="290" y="140" width="250" height="18" rx="9" fill="#94a3b8"/><rect x="290" y="176" width="200" height="18" rx="9" fill="#64748b"/>'
@@ -212,11 +222,14 @@ function queue(state: PipelineState): {items: Json[]} {
   const row = (task_id: string, title: string, stage: string, requirement_id: string, requirement: string, why: string, attachment: Json | null): Json => {
     const card = CARDS[task_id] || {body: '', acceptance: [], checkpoint: ''};
     const shown = state.bare && task_id === 'D52' ? null : state.unopenable && task_id === 'D52' ? UNOPENABLE : attachment;
-    return {form: 'review', task_id, title, pipeline_id: 'dev-tickets', pipeline: 'Dev tickets', stage_id: stage.toLowerCase(), stage, requirement_id, requirement,
+    const pipeline = state.product ? 'Product' : 'Dev tickets';
+    const stageName = state.product ? 'Review' : stage;
+    return {form: 'review', task_id, title, pipeline_id: 'dev-tickets', pipeline, stage_id: stageName.toLowerCase(), stage: stageName, requirement_id, requirement,
       requirement_version: 1, kind: shown ? shown.format : 'approval', work_version: 3, attachment: shown,
       attachment_digest: shown && shown.source !== 'ticket' && !shown.removed ? 'sha256:aa' : null, why, since: stamp, late: false, claimed_by: null, claimed_by_me: false,
       assignee: {id: 'bot:product-owner', name: 'Product Manager'}, manager: {id: 'bot:product-manager', name: 'Product Pipeline Manager'},
       body: card.body, acceptance_criteria: card.acceptance, checkpoint: card.checkpoint,
+      spec: state.spec && task_id === 'D52' ? SPEC_PAGE_52 : null,
       bot_note: task_id === 'D52' ? 'Shot 2 is cropped' : '', moves_to: task_id === 'D61' ? {stage_id: 'build', name: 'Build'} : null,
       reviewer_id: ME, can_mark_met: true, can_not_validate: stage === 'Validate', stage_visit_id: stage === 'Validate' ? 'v-validate' : null};
   };
@@ -253,9 +266,9 @@ function queue(state: PipelineState): {items: Json[]} {
 // the server's answer, and the owner check reads pipeline_owner_id). `claimedBy`: another reviewer holds every item.
 async function install(page: Page, {refuseApprove = false, manager = false, refuseMove = false, late = [{task_id: 'D17', title: 'Sim stuck checks', stage: 'Build', hours: 52, limit_hours: 48, since: stamp}],
   ownerOnly = false, member = false, claimedBy = null, noRequirements = false, validate = false, bare = false, text = false, held = false,
-  plain = false, twoCards = false, unopenable = false}: PipelineInstallOptions = {}): Promise<PipelineState> {
+  plain = false, twoCards = false, unopenable = false, spec = false, product = false}: PipelineInstallOptions = {}): Promise<PipelineState> {
   const state: PipelineState = {posts: [], queueReads: 0, refuseApprove, refuseMove, moves: [], prefs: {}, attachments: [], managerReads: 0, claims: [], claimedBy,
-    removed: new Set(), lastDone: null, affectedReads: [], requirementReads: {}, attachmentReads: 0, validate, bare, text, held, plain, twoCards, unopenable,
+    removed: new Set(), lastDone: null, affectedReads: [], requirementReads: {}, attachmentReads: 0, validate, bare, text, held, plain, twoCards, unopenable, spec, product,
     // The stage each ticket was moved to by an approval, and the stage an undo puts it back in (keyed by the decision).
     stage: {}, moved: {}};
   let shown: Json = manager ? {...type, manager: 'product-manager'} : type;
@@ -276,6 +289,7 @@ async function install(page: Page, {refuseApprove = false, manager = false, refu
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}]});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/files/blob-spec') return route.fulfill({contentType: 'text/markdown; charset=utf-8', body: SPEC_MARKDOWN});
+    if (p === '/api/v2/files/spec-page-52') return route.fulfill({contentType: 'text/markdown; charset=utf-8', body: ASSISTANT_SPEC_MARKDOWN});
     if (p === '/api/v2/task-types') return json({types: [shown]});
     const affected = p.match(/^\/api\/v2\/pipeline-stages\/([^/]+)\/affected$/);
     if (affected && req.method() === 'GET') {

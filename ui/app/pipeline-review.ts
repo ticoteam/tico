@@ -214,8 +214,11 @@ function pipelineReviewRender(): void {
     return;
   }
   if (item.form !== 'review') { pipelineHeldRender(host, state, item, total, notice, undo); return; }
+  // The spec leads, for display only, unless it is the evidence already on show; Approve still acts on the attachments.
   const attachments = item.attachments;
-  const tab = attachments[state.tab] ?? attachments[0];
+  const spec = item.spec && !attachments.some(a => a.id === item.spec?.id) ? [item.spec] : [];
+  const views = [...spec, ...attachments];
+  const tab = views[state.tab] ?? views[0];
   const preview = !tab ? ''
     : tab.kind === 'image' && tab.url ? `<img class="pipe-review-img" src="${esc(tab.url)}" alt="${esc(tab.label)}">`
     : tab.kind === 'text' && tab.url ? `<div class="pipe-review-file" data-review-text="${esc(tab.url)}"><p class="muted">Loading…</p></div><a class="pipe-review-open" href="${esc(tab.url)}" target="_blank" rel="noopener">Open</a>`
@@ -235,8 +238,8 @@ function pipelineReviewRender(): void {
     <div class="pipe-review-body">
       <section class="pipe-review-main">
         ${item.task_title ? `<h2 class="pipe-review-card-title">${esc(item.task_title)}</h2>` : ''}
-        ${attachments.length
-          ? `<nav class="pipe-review-tabs" aria-label="Attachments">${attachments.map((a, i) =>
+        ${views.length
+          ? `<nav class="pipe-review-tabs" aria-label="Attachments">${views.map((a, i) =>
               `<button type="button" class="pipe-review-tab${i === state.tab ? ' on' : ''}" data-review-tab="${i}">${esc(a.label)}</button>`).join('')}</nav>
             <div class="pipe-review-view${tab?.kind === 'text' ? ' pipe-review-view-text' : ''}">${preview}</div>`
           : `<div class="pipe-review-view pipe-review-view-text">${pipelineReviewSpec(item)}</div>`}

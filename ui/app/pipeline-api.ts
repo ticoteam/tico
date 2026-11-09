@@ -105,6 +105,8 @@ interface PipelineReviewItem {
   attachment_removed?: boolean;
   stage_visit_id?: string | null;
   attachments: PipelineAttachment[];
+  /** The spec to show first, for display only: the Spec page (`from` 'spec_page') or the ticket's file. Null when neither. */
+  spec?: (PipelineAttachment & { from: 'spec_page' | 'ticket' }) | null;
   /** Another reviewer holding the item, or null. `label` is the server's words for it ("Ana is reviewing"). */
   claim: { by: string; label: string } | null;
   /** Where Approve moves the ticket on the stage's last requirement, or null. */
@@ -209,6 +211,10 @@ interface ServerQueueItem {
   attachment: { id: string; source: 'file' | 'blob' | 'link' | 'ticket'; url: string | null; file_id?: string | null;
     file_version?: number | null; format: PipelineReqAttachment['format'] | 'text'; name: string; href: string | null; removed?: boolean } | null;
   attachment_digest: string | null;
+  /** The spec, shown for display only: the card's Spec page, else the ticket's newest file (`from` says which). Approve
+      never reads it. Null when neither exists. */
+  spec: { id: string; source: 'file' | 'blob' | 'link' | 'ticket'; url: string | null; format: PipelineReqAttachment['format'] | 'text';
+    name: string; href: string | null; removed?: boolean; from: 'spec_page' | 'ticket' } | null;
   why: string;
   since: string;
   late: boolean;
@@ -332,6 +338,10 @@ function reviewItemFromRow(row: ServerQueueItem): PipelineReviewItem {
     attachments: a
       ? [{ id: a.id, label: a.name || 'Attachment', kind: a.format, ...(a.href ? { url: a.href } : {}) }]
       : [],
+    spec: row.spec
+      ? { id: row.spec.id, label: row.spec.from === 'spec_page' ? 'Spec page' : row.spec.name || 'Ticket file', kind: row.spec.format,
+        from: row.spec.from, ...(row.spec.href ? { url: row.spec.href } : {}) }
+      : null,
     claim: row.claimed_by && !row.claimed_by_me ? { by: row.claimed_by, label: `${actorLabel(row.claimed_by)} is reviewing` } : null,
     moves_to: row.moves_to?.name ?? null,
     late: row.late,

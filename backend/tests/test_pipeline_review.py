@@ -752,6 +752,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                     "name": "https://example.test/mockup",
                     "href": "https://example.test/mockup",
                 },
+                "spec": None,
                 "attachment_digest": "logo",
                 "why": "reviewer",
                 "since": "2026-11-01T09:00:00.000000Z",
@@ -783,6 +784,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "kind": "approval",
                 "work_version": 0,
                 "attachment": None,
+                "spec": None,
                 "attachment_digest": None,
                 "why": "reviewer",
                 "since": "2026-11-01T09:00:00.000000Z",
@@ -825,6 +827,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                     "name": "https://example.test/mockup",
                     "href": "https://example.test/mockup",
                 },
+                "spec": None,
                 "attachment_digest": "sent",
                 "why": "reviewer",
                 "since": "2026-11-02T10:00:00.000000Z",
@@ -856,6 +859,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "kind": "approval",
                 "work_version": 0,
                 "attachment": None,
+                "spec": None,
                 "attachment_digest": None,
                 "why": "reviewer",
                 "since": "2026-11-02T10:00:00.000000Z",
@@ -887,6 +891,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "kind": "approval",
                 "work_version": 0,
                 "attachment": None,
+                "spec": None,
                 "attachment_digest": None,
                 "why": "reviewer",
                 "since": "2026-11-05T09:00:00.000000Z",
@@ -929,6 +934,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                     "name": "https://example.test/mockup",
                     "href": "https://example.test/mockup",
                 },
+                "spec": None,
                 "attachment_digest": "badge",
                 "why": "reviewer",
                 "since": "2026-11-03T08:00:00.000000Z",
@@ -971,6 +977,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                     "name": "https://example.test/mockup",
                     "href": "https://example.test/mockup",
                 },
+                "spec": None,
                 "attachment_digest": "poster",
                 "why": "reviewer",
                 "since": "2999-01-01T00:00:00.000000Z",
@@ -1002,6 +1009,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "kind": "approval",
                 "work_version": 0,
                 "attachment": None,
+                "spec": None,
                 "attachment_digest": None,
                 "why": "reviewer",
                 "since": "2999-01-01T00:00:00.000000Z",
@@ -1044,6 +1052,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                     "name": "https://example.test/mockup",
                     "href": "https://example.test/mockup",
                 },
+                "spec": None,
                 "attachment_digest": "backup",
                 "why": "reviewer",
                 "since": "2999-01-03T00:00:00.000000Z",
@@ -1075,6 +1084,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "kind": "approval",
                 "work_version": 0,
                 "attachment": None,
+                "spec": None,
                 "attachment_digest": None,
                 "why": "reviewer",
                 "since": "2999-01-03T00:00:00.000000Z",
@@ -1106,6 +1116,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                 "kind": "approval",
                 "work_version": 0,
                 "attachment": None,
+                "spec": None,
                 "attachment_digest": None,
                 "why": "reviewer",
                 "since": "2999-02-01T00:00:00.000000Z",
@@ -1150,6 +1161,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                     "name": "https://example.test/mockup",
                     "href": "https://example.test/mockup",
                 },
+                "spec": None,
                 "attachment_digest": "sent",
                 "why": "sent_back",
                 "since": "2026-11-02T10:00:00.000000Z",
@@ -1192,6 +1204,7 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
                     "name": "https://example.test/mockup",
                     "href": "https://example.test/mockup",
                 },
+                "spec": None,
                 "attachment_digest": "backup",
                 "why": "backup",
                 "since": "2999-01-03T00:00:00.000000Z",
@@ -1545,6 +1558,29 @@ def test_the_requirement_attachment_wins_over_a_file_on_the_ticket(world):
     assert item["attachment"]["source"] == "link"
     assert item["attachment"]["url"] == "https://example.test/mockup"
     assert item["attachment_digest"] == "d1"
+
+
+def test_the_spec_page_is_shown_first_and_approve_still_takes_the_requirement_attachment(world):
+    """The spec a review shows is the card's Spec page; Approve's evidence stays the requirement's own attachment with its
+    digest. The spec is for display only."""
+    w = world
+    spec = w.requirement("Spec page", "attachment", "person", stage=w.making)
+    w.attach(requirement=spec, digest="spec-d", attachment_id="a-spec")
+    _ticket_file(w, "notes.md", "text/markdown")
+    (item,) = [i for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task and i["requirement_id"] == w.mockup]
+    assert (item["spec"]["id"], item["spec"]["from"]) == ("a-spec", "spec_page")
+    assert (item["attachment"]["source"], item["attachment"]["url"]) == ("link", "https://example.test/mockup")
+    assert item["attachment_digest"] == "d1"
+
+
+def test_the_spec_falls_back_to_the_ticket_file_and_is_none_without_either(world):
+    w = world
+    (item,) = [i for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task and i["requirement_id"] == w.signoff]
+    assert item["spec"] is None
+    blob = _ticket_file(w, "spec.md", "text/markdown")
+    (item,) = [i for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task and i["requirement_id"] == w.signoff]
+    assert (item["spec"]["id"], item["spec"]["from"], item["spec"]["format"]) == (blob, "ticket", "text")
+    assert item["attachment_digest"] is None
 
 
 def test_a_requirement_for_one_label_is_not_asked_of_a_ticket_without_that_label(world):

@@ -94,6 +94,35 @@ async function checkCard(page: Page, label: string, {title, why, buttons = BUTTO
         await context.close();
       }
 
+      // A Product card in Review with its Spec page: the spec leads as its own tab, the card's evidence follows it.
+      {
+        const label = `${theme} product spec`;
+        const {context, page, errors} = await openReview(browser, theme, {spec: true, product: true});
+        await checkCard(page, label, {title: 'Assistant can approve a spec', why: 'Screenshots · Product'});
+        assert.equal((await page.locator('.pipe-review-tab').allInnerTexts()).map(s => s.trim()).join('|'), 'Spec page|shot.png',
+          label + ': the spec leads, then the evidence');
+        assert.equal((await page.locator('.pipe-review-tab.on').innerText()).trim(), 'Spec page', label + ': the spec is on show');
+        await page.waitForSelector('pre.pipe-review-file-text', {timeout: t(5000)});
+        assert.match(await page.locator('pre.pipe-review-file-text').innerText(), /^# Assistant can approve a spec/, label + ': the spec text');
+        assert.equal(await page.locator('.pipe-review-spec').count(), 0, label + ': no card body beside the spec');
+        assert.equal(await page.locator('.pipe-review-nospec').count(), 0, label + ': no "No spec attached"');
+        await shot(page, `product-spec-${theme}.png`);
+        assert.deepEqual(errors, [], label + ': no page errors');
+        await context.close();
+      }
+
+      // A Product card in Review with no spec and nothing attached: the card's words, under "No spec attached".
+      {
+        const label = `${theme} product bare`;
+        const {context, page, errors} = await openReview(browser, theme, {bare: true, product: true});
+        await checkCard(page, label, {title: 'Assistant can approve a spec', why: 'Screenshots · Product'});
+        assert.equal((await page.locator('.pipe-review-nospec').innerText()).trim(), 'No spec attached', label + ': says so');
+        assert.ok((await page.locator('.pipe-review-spec').innerText()).includes('Approved in one tap'), label + ': the card shows its criteria');
+        await shot(page, `product-nospec-${theme}.png`);
+        assert.deepEqual(errors, [], label + ': no page errors');
+        await context.close();
+      }
+
       // A markdown file on the ticket: shown as its text, as written, not rendered; Open still opens the file.
       {
         const label = `${theme} text`;
