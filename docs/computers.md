@@ -413,7 +413,7 @@ isolation, as on a Mac or a cloud machine, bots on one computer share one OS use
 can use another's proxy.
 
 API: `GET/POST /api/v2/computers/{id}/browser-exit`, `GET /api/v2/computers/{id}/browser-exit/usage`,
-`GET/POST /api/v2/bots/{bot}/browser-exit` ([OpenAPI](openapi/v2.json)). Hub: `hub computer browser-exit` and
+`GET/POST /api/v2/bots/{bot}/browser-exit` ([OpenAPI](api.md#the-contract)). Hub: `hub computer browser-exit` and
 `hub bot browser-exit`.
 
 ## Add a connection

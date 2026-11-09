@@ -2,9 +2,9 @@
 # RunsOn minutes. RunsOn runs only release validation (ci.yml) and remote-run.yml.
 # Two tiers. Each push to a pull request runs the cheap checks (plan, static). A ready pull request from this repository
 # also runs a light plan's tests (scripts/pr_checks.py NARROW, `plan --light`): the Python tests its change reaches
-# directly, the smoke set when that drops any, capped at four VMs; the browser scripts, the factory simulation and the
+# directly, the smoke set when that drops any, capped at ten VMs; the browser scripts, the factory simulation and the
 # Caddy job only when it touches their own inputs. Its `checks` passes only when they pass. The merge queue group is the
-# gate: its plan goes one level further (two, at most eight Python VMs) and keeps every other job's condition. A fork's
+# gate: its plan goes one level further (two, at most nineteen Python VMs) and keeps every other job's condition. A fork's
 # pull request keeps the cheap checks only, and a draft runs nothing.
 # A ready pull request from this repository also runs every other job a queue group runs, under the same conditions, so
 # a failure shows before the change is enqueued: the Rust lint, desktop, macOS recorder and Linux Caddy jobs when the
@@ -130,6 +130,14 @@ jobs:
       # (a migration timestamp, a route one removes and the other calls, a lint rule one turns on). The group runs every
       # static check on it here (scripts/ci/merge_commit_checks.sh), beside the test selection (which uses one core),
       # rather than on a static checks VM. The step after the selection reports the result.
+      # shellcheck and actionlint come from GitHub release downloads, which return 504 now and then; a cached copy (keyed on
+      # the pinned versions and hashes in scripts/pinned_tool.sh) skips the download.
+      - name: Cache pinned tools
+        if: github.event_name == 'merge_group'
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/tico/tools
+          key: pinned-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pinned_tool.sh') }}
       - name: Start the merge commit checks
         if: github.event_name == 'merge_group'
         env:
@@ -141,7 +149,7 @@ jobs:
       - name: Select affected tests and size measured Python and browser groups
         id: plan
         # Both tiers plan light (scripts/pr_checks.py NARROW): a pull request the tests its change reaches directly, at
-        # most four VMs; a queue group two levels, at most eight; each with the smoke set when it drops any. Release
+        # most ten VMs; a queue group two levels, at most nineteen; each with the smoke set when it drops any. Release
         # validation's incremental and daily full runs cover what a group leaves out.
         env:
           EVENT: ${{ github.event_name }}
@@ -173,7 +181,7 @@ jobs:
       actions: write # the last step cancels the run when a suite fails
     name: ${{ matrix.suite }}
     runs-on: ubuntu-24.04
-    # A queue group's VMs are sized up to 12 minutes of tests (pr_checks.QUEUE_MAX_JOB_SECONDS), plus setup.
+    # A queue group's VMs are sized to the 330-second job target (pr_checks.QUEUE_MAX_JOB_SECONDS), setup included.
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -372,8 +380,10 @@ jobs:
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_types.sh
       - name: UI types
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/check_ui_types.sh --base "$BASE_SHA"
-      - name: OpenAPI document (docs/openapi/v2.json is what the generator writes)
+      - name: OpenAPI spec (generated, never committed, generates the same bytes twice)
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" python3 -m backend.openapi_v2 --check
+      - name: API guide tags (docs/api.md follows the spec's tags)
+        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" python3 scripts/build_api_docs.py --check
       - name: UI lint setup
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: UI lint
@@ -386,6 +396,13 @@ jobs:
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_ui_source_suffixes.py'
       - name: Runner wire contract
         run: '"$RUNNER_TEMP/venv/bin/python" scripts/check_wire_contract.py'
+      # shellcheck and actionlint come from GitHub release downloads, which return 504 now and then; a cached copy (keyed on
+      # the pinned versions and hashes in scripts/pinned_tool.sh) skips the download.
+      - name: Cache pinned tools
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/tico/tools
+          key: pinned-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pinned_tool.sh') }}
       - name: Shell scripts (shellcheck, pinned)
         run: bash scripts/shell_lint.sh
       - name: Workflows (actionlint, pinned)
