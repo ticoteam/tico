@@ -3,7 +3,6 @@
 // card with its title, its still preview when it has one, and Open, which shows it in the file viewer (test 2); a
 // page or SVG never loads in a frame or picture from the app's own address. Settings shows one read-only line, no
 // switch, for either setup (test 7). Fixtures only.
-import type {ThreadsMessage} from './support/threads-fake.cts';
 const {chromium, webkit}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
@@ -43,7 +42,7 @@ const A = (id: string, kind: Kind, over: Record<string, unknown> = {}) => ({id, 
     const errors: string[] = [], visualReqs: string[] = [];
     let config: {company_name: string; visuals: string; visual_origin: string} = {company_name: 'Acme', visuals: 'media', visual_origin: ''};
     page.on('pageerror', e => errors.push(e.message));
-    const threads = threadsFake({bot: 'designer', messages: () => MESSAGES as unknown as ThreadsMessage[]});
+    const threads = threadsFake({bot: 'designer', messages: () => MESSAGES});
     await context.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
       const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
