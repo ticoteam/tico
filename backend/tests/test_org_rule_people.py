@@ -215,7 +215,7 @@ def test_a_persons_message_goes_through_unchecked_when_the_check_fails(ruled, mo
     api, judge = ruled
     block_everyone(api)
     if how == "timeout":
-        monkeypatch.setitem(K.DEADLINES, "medium", 0.2)
+        monkeypatch.setitem(K.DEADLINES, "low", 0.2)
         judge.hold = threading.Event()
     elif how == "budget":
         api.app.state.store.settings.rules_monthly_usd = 1.0

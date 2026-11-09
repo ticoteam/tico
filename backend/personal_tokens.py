@@ -71,21 +71,27 @@ def listing_all(c, auth, who):
     return [dict(row) for row in rows]
 
 
+def mint(c, human, label, days, created_by):
+    """Insert a token for the person with id `human` and return its plaintext, the one time it exists. The routes below
+    and the setup handoff (backend/setup_handoff.py) make theirs here, so every personal token is the same row."""
+    token = PREFIX + secrets.token_urlsafe(30)  # 30 bytes: 40 url-safe characters
+    now = H.now()
+    expires_at = H.shift(now, days=days)
+    token_id = H.new_id()
+    c.execute(
+        "INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by,expires_at) VALUES(?,?,?,?,?,?,?)",
+        (token_id, human, label, digest(token), now, created_by, expires_at),
+    )
+    H.event(c, created_by, "token.create", token_id, {"label": label, "expires_at": expires_at})
+    return {"id": token_id, "token": token, "label": label, "expires_at": expires_at}
+
+
 def create(c, auth, who, body):
     """Mint a token for the caller and return its plaintext, the one time it is shown."""
     _person(who)
     if not can_create(c, auth, who):
         raise Problem("forbidden", "Personal tokens are for the owner and admins", 403)
-    token = PREFIX + secrets.token_urlsafe(30)  # 30 bytes: 40 url-safe characters
-    now = H.now()
-    expires_at = H.shift(now, days=body.expires_in_days)
-    token_id = H.new_id()
-    c.execute(
-        "INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by,expires_at) VALUES(?,?,?,?,?,?,?)",
-        (token_id, H.actor_id(who.actor), body.label, digest(token), now, who.actor, expires_at),
-    )
-    H.event(c, who.actor, "token.create", token_id, {"label": body.label, "expires_at": expires_at})
-    return {"id": token_id, "token": token, "label": body.label, "expires_at": expires_at}
+    return mint(c, H.actor_id(who.actor), body.label, body.expires_in_days, who.actor)
 
 
 def revoke(c, auth, who, token_id):

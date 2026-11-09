@@ -141,3 +141,15 @@ def test_a_rule_takes_toward_scope_and_a_condition_through_the_api(api):
         {"kind": "internal", "text": ACME, "who": {"bots": ["ops"]}, "applies_when": "self customer_of x"},
         expected=422,
     )
+
+
+def test_the_third_structured_block_in_a_day_escalates_with_one_review_task(blocked):
+    api, _judge, rule_id = blocked
+    outcomes = [say(api, f"Quote {n} for the Acme Lights job")["held"]["outcome"] for n in range(4)]
+    assert outcomes == ["blocked", "blocked", "escalated", "escalated"]
+    holds = sql(api, "SELECT rule_ids, verdict, task_id FROM org_rule_holds ORDER BY created_at")
+    assert [json.loads(h["verdict"])["outcome"] for h in holds] == ["block", "block", "escalate", "escalate"]
+    assert all(json.loads(h["rule_ids"]) == [rule_id] for h in holds)
+    assert [e["actor"] for e in events(api, "rules.escalated")] == ["bot:ops"] * 2
+    assert len(events(api, "rules.blocked")) == 2
+    assert len(sql(api, "SELECT id FROM tasks WHERE title = 'Rule review'")) == 1

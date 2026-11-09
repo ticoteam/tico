@@ -2994,6 +2994,7 @@ class MaintenanceUpdate(Contract):
     schedule: Literal["hourly", "2h", "3h", "6h", "12h", "daily"] | None = None
     paused: bool | None = None
     monthly_cap_usd: float | None = Field(default=None, ge=0, le=100000)
+    rules_monthly_cap_usd: float | None = Field(default=None, ge=0, le=100000)
     steps: list[MaintenanceStepChange] | None = Field(default=None, max_length=8)
 
 
@@ -3354,6 +3355,13 @@ class PersonalTokenCreate(Contract):
 
     label: str = Field(min_length=1, max_length=80)
     expires_in_days: int = Field(default=90, ge=1, le=365)
+
+
+class SetupHandoff(Contract):
+    """The one-time secret of the setup handoff (backend/setup_handoff.py). It is checked against the pattern a secret
+    has in the handler, so a wrong one is refused like a spent one, and no validation message repeats it."""
+
+    secret: str = Field(default="", max_length=512, repr=False)
 
 
 class ServiceKeyCreate(Contract):
