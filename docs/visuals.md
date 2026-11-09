@@ -179,7 +179,7 @@ whose bytes don't match its type (a `.png` that isn't a PNG).
 
 Exactly the people who can read that thread or task, as for [files](files.md#visibility). Every request for
 a visual checks again that the reader still has access, so someone taken off a private task loses it at once.
-Visuals from a private task never show to guests or on the public roadmap.
+Visuals from a private task show only to those who can read that task ([Who can see a private task](tasks.md#who-can-see-a-private-task)), and never on the public roadmap.
 
 A visual is shown from a signed address made for one reader. It works only for that reader and expires after at
 most 2 hours. Each read of the message returns a current one, which stays the same for up to an hour.

@@ -667,7 +667,7 @@ rollback step: it runs on the candidate's updater.
 
 **Before and after screenshots.** `.github/workflows/release-shots.yml` runs `scripts/release_shots.py` on the seeded
 demo for the base tag and the candidate, and shoots each page that a changed `ui/` file draws (its `ui` globs in
-`scripts/screenshots/index.js`): desktop 1440 px and phone 390 px, light, plus dark when a dark-theme file changed. A
+`scripts/screenshots/index.cts`): desktop 1440 px and phone 390 px, light, plus dark when a dark-theme file changed. A
 shared file shoots every page, and a `ui/` file that no table names fails the test suite until one names it. The
 changed pictures go to the `release-evidence` branch under the version's folder, and the markdown section "What it
 looks like" links them. Both sides run this checkout's harness against their own demo, on a frozen clock
@@ -849,7 +849,7 @@ directly and sends no ID.
 
 The updater contract is `POST {TICO_UPDATER_URL}/update` with `{"version": "X.Y.Z"}` and
 `GET {TICO_UPDATER_URL}/status`, which answers `{state, from, to, message}` where `state` is one of
-`idle`, `pulling`, `restarting`, `healthy`, `rolled_back` or `failed`. Both carry
+`idle`, `pulling`, `snapshotting`, `restarting`, `uncertain`, `healthy`, `rolled_back` or `failed`. Both carry
 `Authorization: Bearer <TICO_UPDATER_TOKEN>`. Without an updater, "Update now" shows the command to
 run on the server: `docker compose pull && docker compose up -d`.
 

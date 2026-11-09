@@ -1,0 +1,11 @@
+Description,,Summary Amt.
+Beginning balance as of 10/01/2026,,"9,100.00"
+Total credits,,"2,450.00"
+Total debits,,"-1,096.36"
+Ending balance as of 10/31/2026,,"10,453.64"
+
+Date,Description,Amount,Running Bal.
+10/22/2026,AMZN MKTP US*2K4R8,-84.37,"10,453.64"
+10/16/2026,TRANSFER TO SAVINGS 7731,"-1,000.00","10,538.01"
+10/08/2026,SPOTIFY USA,-11.99,"11,538.01"
+10/05/2026,PAYCHECK DEPOSIT ACME,"2,450.00","11,550.00"

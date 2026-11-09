@@ -6,25 +6,23 @@
 // presses play. Classic script, loaded right after visual-cards.js.
 'use strict';
 type VMKind = 'video' | 'audio';
-// The attachment fields the card body reads; the rest is visualSrc's.
-interface VMFile { kind?: string; content_type?: string; width?: number | string | null; height?: number | string | null }
 const VM_TYPE: Record<string, string> = {'video/mp4': 'MP4', 'video/webm': 'WebM', 'video/quicktime': 'MOV', 'video/x-m4v': 'M4V',
   'audio/mpeg': 'MP3', 'audio/mp4': 'M4A', 'audio/x-m4a': 'M4A', 'audio/wav': 'WAV', 'audio/x-wav': 'WAV',
   'audio/wave': 'WAV', 'audio/vnd.wave': 'WAV', 'audio/ogg': 'OGG', 'audio/aac': 'AAC'};
 const vmWord = (kind: VMKind) => kind === 'video' ? 'video' : 'audio';
 // Whether this device says it can't play the type at all ('' from canPlayType); 'maybe' and 'probably' get a try.
-function vmUnplayable(kind: VMKind, type: string | undefined): boolean {
+function vmUnplayable(kind: VMKind, type: string | null | undefined): boolean {
   if (!type) return false;
   return document.createElement(kind === 'video' ? 'video' : 'audio').canPlayType(type) === '';
 }
-function vmReason(kind: VMKind, type: string | undefined, code: number | null | undefined): string {
+function vmReason(kind: VMKind, type: string | null | undefined, code: number | null | undefined): string {
   const word = VM_TYPE[type ?? ''] || '';
   if (code === 2) return `Couldn't load this ${vmWord(kind)}. Check the connection, or download it.`;
   return `This device can't play ${word ? word + ' ' : 'this '}${vmWord(kind)}.`;
 }
 // The card body. A video sits in a box of its own shape no taller than the card's cap (a portrait clip is narrower,
 // never cropped); the frame's held space gives way to it (visual-cards.css, .vcard[data-kind=video]).
-function vmBodyHTML(f: VMFile): string {
+function vmBodyHTML(f: VisualFile): string {
   const kind = f.kind === 'audio' ? 'audio' : 'video', src = visualSrc(f);
   if (vmUnplayable(kind, f.content_type)) return `<div class="vm-cant" data-vm-reason="${esc(vmReason(kind, f.content_type, 4))}"></div>`;
   const at = ` data-vm-src="${esc(src)}" data-vm-type="${esc(f.content_type || '')}"`;

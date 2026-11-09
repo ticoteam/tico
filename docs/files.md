@@ -334,7 +334,7 @@ Keys are passed directly to S3 clients, never exported into the server's environ
 
 A self-hosted company with Gateway credits can keep its files in storage Tico runs, served from its own
 `ticofiles.com` address. It covers task files, thread attachments, visuals, reports and recordings.
-The owner turns it on in **Settings** through the Gateway page. Tico HQ supplies the storage access and files
+The owner turns it on in **Settings → Models → Tico Gateway**. Tico HQ supplies the storage access and files
 address; you do not enter AWS keys. For example, Acme at `acme.example` can use `acme-files.ticofiles.com` for its files.
 
 New files go to Tico storage from then on, without a restart. Existing files stay readable where they are
@@ -356,7 +356,7 @@ to a four-minute link to it. A page stored before file hosting was turned on sta
 existing files** copies it. While credits are out or hosting is stopped, a page that already has its copy still
 shows inline; a new one is an **Open** card.
 
-When the owner stops file hosting on the Gateway page, new files go back to the company's own storage: its bucket,
+When the owner stops file hosting in **Settings → Models → Tico Gateway**, new files go back to the company's own storage: its bucket,
 or the server's storage if it has no bucket. **Download all files** offers a ZIP export of every file and version
 the owner may open. Files private to someone else are left out, with a count in the export's manifest.
 Tico HQ keeps the hosted files for 30 days, emails the owner before deleting them, then deletes them.
@@ -384,7 +384,7 @@ storage for when file hosting stops or Gateway credits run out.
 
 Files already stored keep opening: Tico tries the bucket taking new files, earlier buckets (newest first), then
 the server's storage. When the company's own bucket takes new files, Tico also copies files from the server's disk
-into it in the background (**Settings › Health** shows progress). Files in another bucket stay where they are.
+into it in the background (**Settings › General › Health › Details** shows progress). Files in another bucket stay where they are.
 **Use the server's storage** selects the server's storage instead of the company's own bucket; it does not stop
 Tico file hosting. The bucket stays on the list of places files are read from. Backups (docs/install.md) read each
 file from wherever it is stored, so they use the company's keys for its bucket.
