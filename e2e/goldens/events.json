@@ -1011,6 +1011,7 @@
           "stale_asked_at": null,
           "status": "closed",
           "step": {
+            "card_cap": null,
             "id": "general-closed",
             "limit_minutes": null,
             "name": "Closed",
@@ -1318,6 +1319,7 @@
           "stale_asked_at": null,
           "status": "open",
           "step": {
+            "card_cap": null,
             "id": "general-open",
             "limit_minutes": null,
             "name": "Open",
