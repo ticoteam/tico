@@ -177,7 +177,7 @@ fn freeze(options: &HashMap<String, String>, path: &PathBuf) -> Result<()> {
         writer_task: None,
     }
     .save(path)?;
-    println!("Frozen. Run publish to validate and tag this commit; release notes are written after publication.");
+    println!("Frozen. Run publish to validate and tag this commit; its release notes are on the release-approval issue.");
     Ok(())
 }
 fn publish(options: &HashMap<String, String>, path: &PathBuf) -> Result<()> {
@@ -376,9 +376,9 @@ fn file_writer_task(
         .unwrap_or("docs-writer");
     let range = format!("{}..{}", state.previous, state.version);
     let body = format!(
-        "{version} is published. Write its section in CHANGELOG.md from the pull requests merged in {range} \
-         (https://github.com/{repo}/compare/{range}), moving their lines out of ## [Unreleased]. Land it as a \
-         CHANGELOG-only pull request whose commits carry the trailer `Changelog-Release: {version}`.",
+        "{version} is published. Its release notes are on its release-approval issue (label release-approval), built \
+         from the pull requests merged in {range} (https://github.com/{repo}/compare/{range}). There is no notes file \
+         to update.",
         version = state.version,
         repo = state.repo,
     );

@@ -498,7 +498,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub update mark-read [ids...] [--all] [--unread]
     hub update reply <id> "<text>"
     hub update settings <bot> [--daily on|off] [--weekly on|off]
-    hub changelog list [--unread] [--since-version V] [--q TEXT] [--kind product|activity|all]
+    hub changelog list [--unread] [--q TEXT] [--kind product|activity|all]
     hub changelog mark-read <entry-id> [entry-id ...]   acknowledge changes shown to you
     hub brief [--since ISO]                alerts, who needs the person, what bots said since --since
     hub mcp stats [--days N] [--via LABEL] per-tool timing and answer size of assistants' calls
@@ -4281,7 +4281,6 @@ def parser():
     s = changelog.add_parser("list", help="what changed; --unread catches up since your last look")
     s.add_argument("--kind", choices=["product", "activity", "all"], default="product")
     s.add_argument("--unread", action="store_true")
-    s.add_argument("--since-version", dest="since_version")
     s.add_argument("--q", help="search change titles and bullets")
     s.add_argument("--offset", type=int)
     s.add_argument("--limit", type=int)
