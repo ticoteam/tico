@@ -11,10 +11,6 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
-type MaintStep = {key: string; consent?: boolean};
-type MaintRun = {id: string; occurrence_key?: string; trigger?: string; step: string | null; started_at: string;
-  finished_at: string | null; heartbeat_at: string; ok: boolean | null; result: string; cost_usd: number; steps: unknown[]};
-type MaintDb = {live: MaintRun | null; runs: MaintRun[]; steps: MaintStep[]};
 type MaintWriteBody = {steps?: {max_bots?: number}[]};
 type MaintPageWin = {ticoTheme: {set: (v: string) => void}};
 // Page global from ui/app/automations-maintenance.ts, which the page loads.
@@ -29,7 +25,7 @@ const until = async (fn: () => boolean | Promise<boolean>, what: string, ms = 60
 };
 const idle = (page: Page) => page.waitForFunction(() => AU && !AU.mtBusy);
 const steps = (page: Page) => page.locator('.mt-step').evaluateAll(r => (r as HTMLElement[]).map(x => x.dataset.mtStep));
-const finish = (mt: MaintDb) => {
+const finish = (mt: AutomationsFakeSupport.Maint) => {
   const at = new Date().toISOString();
   Object.assign(mt.live!, {finished_at: at, heartbeat_at: at, ok: true, result: mt.live!.steps.length ? '1 ran' : 'Nothing ran'});
   mt.live = null;
@@ -84,7 +80,7 @@ async function themed(page: Page, name: string) {
       assert.equal(await page.locator('.mt-step [data-mt-on]').count(), 7);
       assert.match(await step('learn').locator('.pill.beta').innerText(), /Beta/);
       assert.equal(await step('learn').locator('[data-mt-on]').isChecked(), false, 'Learn is off by default');
-      const suggest = (db.maint as unknown as MaintDb).steps.find(x => x.key === 'suggest')!;
+      const suggest = db.maint!.steps.find(x => x.key === 'suggest')!;
       assert.equal(await step('suggest').locator('[data-mt-consent]').getAttribute('href'), '#/settings/general/settings-privacy');
       suggest.consent = true;
       await page.evaluate(() => auMaintLoad(AU));
@@ -207,7 +203,7 @@ async function themed(page: Page, name: string) {
       assert.deepEqual(writes.at(-1), {method: 'POST', path: '/api/v2/maintenance/run', body: {}});
       await page.waitForSelector('[data-mt-now][disabled]');
       assert.match(await page.locator('[data-mt-now]').innerText(), /Running/);
-      finish(db.maint as unknown as MaintDb);
+      finish(db.maint!);
       await page.waitForSelector('[data-mt-now]:not([disabled])', {timeout: 8000});
       assert.equal(await page.locator('[data-mt-now]').innerText(), 'Run now');
 
@@ -246,9 +242,9 @@ async function themed(page: Page, name: string) {
       const {page, errors, writes, db} = await openAutomations(browser, {viewport: DESKTOP, maintenance: true});
       await page.waitForSelector('tr.au-row[data-row="maintenance"]');
       const at = new Date().toISOString();
-      (db.maint as unknown as MaintDb).live = {id: 'mrun_live', occurrence_key: 'schedule:' + at, trigger: 'schedule', step: null,
+      db.maint!.live = {id: 'mrun_live', occurrence_key: 'schedule:' + at, trigger: 'schedule', step: null,
         started_at: at, finished_at: null, heartbeat_at: at, ok: null, result: '', cost_usd: 0, steps: []};
-      (db.maint as unknown as MaintDb).runs.unshift((db.maint as unknown as MaintDb).live!);
+      db.maint!.runs.unshift(db.maint!.live!);
       await page.locator('tr.au-row[data-row="maintenance"] a').click();
       await page.waitForSelector('[data-mt-now][disabled]');
       assert.match(await page.locator('[data-mt-meta]').innerText(), /Running/);
@@ -258,7 +254,7 @@ async function themed(page: Page, name: string) {
       await page.locator('[data-mt-more]').click();
       await until(async () => await page.locator('tr.au-rr').count() === 31, 'older runs');
       await page.locator('.au-pane').evaluate(p => { p.scrollTop = 80; });
-      finish(db.maint as unknown as MaintDb);
+      finish(db.maint!);
       await page.waitForSelector('[data-mt-now]:not([disabled])', {timeout: 8000});
       await page.waitForSelector('tr.au-rr[data-mt-run="mrun_live"] .au-dot.ok');
       assert.equal(await page.locator('tr.au-rr').count(), 31);
@@ -292,7 +288,7 @@ async function themed(page: Page, name: string) {
       assert.equal(await bots.evaluate(el => el === document.activeElement), true, 'the field keeps focus');
       await bots.press('Tab');
       await until(() => writes.some(w => (w.body as MaintWriteBody).steps?.[0]?.max_bots === 7), 'the bots save');
-      finish(db.maint as unknown as MaintDb);
+      finish(db.maint!);
       await page.waitForSelector('[data-mt-now]:not([disabled])', {timeout: 8000});
       await page.getByRole('tab', {name: 'Runs'}).click();
       await page.waitForSelector('tr.au-rr[data-mt-run="mrun_now"]');

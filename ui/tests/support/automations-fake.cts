@@ -75,20 +75,61 @@ interface Run extends Json {
   steps?: Json[];
 }
 
-interface Maint extends Json {
+// Maintenance and the Heartbeat as backend/maintenance.py and backend/heartbeat.py list them. Specs read and change
+// these rows (db.maint, db.heart); the fake's PATCH handlers write fields by name, hence the Json index signature.
+export interface MaintStep extends Json {
+  key: string;
+  name: string;
+  enabled: boolean;
+  frequency: string;
+  custom_every: number | null;
+  custom_unit: string | null;
+  max_bots: number | null;
+  consent?: boolean;
+}
+export interface MaintRun extends Json {
+  id: string;
+  occurrence_key: string | null;
+  trigger: string;
+  step: string | null;
+  started_at: string;
+  finished_at: string | null;
+  heartbeat_at: string;
+  ok: boolean | null;
+  result: string | null;
+  cost_usd: number;
+  steps: Json[];
+}
+export interface Maint extends Json {
   settings: Json;
   cap_env: number;
-  steps: Json[];
-  runs: Run[];
-  live: Run | null;
+  steps: MaintStep[];
+  runs: MaintRun[];
+  live: MaintRun | null;
 }
-
-interface Heart extends Json {
-  interval_s: unknown;
+export interface HeartStep extends Json {
+  key: string;
+  name: string;
+  every: string;
+  switch: boolean;
+  on: boolean;
+}
+export interface HeartBeat extends Json {
+  id: string;
+  started_at: string;
+  total_ms: number;
+  did: number;
+  failed: number;
+  steps: {key: string; name: string; text: string | null; ms: number; error: string | null}[];
+  repeats?: number;
+  last_repeated_at?: string | null;
+}
+export interface Heart extends Json {
+  interval_s: number;
   last_beat_at: string;
   beats_24h: number;
-  steps: Json[];
-  beats: Run[];
+  steps: HeartStep[];
+  beats: HeartBeat[];
 }
 
 // The AutomationsDb a spec reads: what the fake hub serves and the rows a write changes.
@@ -240,17 +281,17 @@ const MAINT_ORDER = ['collect', 'clean_up', 'check_health', 'find_stuck', 'learn
 const MAINT_NAMES: Record<string, string> = {collect: 'Collect', clean_up: 'Clean up', check_health: 'Check health', find_stuck: 'Find stuck', learn: 'Learn',
   suggest: 'Suggest', update: 'Update', dream: 'Dream'};
 const MAINT_EVERY_RUN = ['collect', 'clean_up', 'check_health'], MAINT_BOTS = ['find_stuck', 'dream'];
-function maintSteps(): Json[] {
-  const d: Record<string, Json> = {find_stuck: {frequency: 'custom', custom_every: 6, custom_unit: 'hours', max_bots: 10}, learn: {enabled: false, frequency: 'day'},
+function maintSteps(): MaintStep[] {
+  const d: Record<string, Partial<MaintStep>> = {find_stuck: {frequency: 'custom', custom_every: 6, custom_unit: 'hours', max_bots: 10}, learn: {enabled: false, frequency: 'day'},
     suggest: {frequency: 'day'}, update: {frequency: 'day'}, dream: {frequency: 'day', max_bots: 3}};
-  return MAINT_ORDER.map(key => ({key, name: MAINT_NAMES[key], enabled: true, frequency: 'run', custom_every: null, custom_unit: null,
+  return MAINT_ORDER.map(key => ({key, name: MAINT_NAMES[key]!, enabled: true, frequency: 'run', custom_every: null, custom_unit: null,
     max_bots: null, ...d[key], fixed: MAINT_EVERY_RUN.includes(key),
     last_started_at: null, last_ran_at: key === 'learn' ? null : new Date(Date.now() - 3600000).toISOString(), cursor_at: null,
     ...(key === 'suggest' ? {consent: false} : {}),
     ...(key === 'learn' ? {stats: {days: 7, runs: 6, items_read: 42, items_sent: {support: 3, 'eng-lead': 2}, saved: 4, dropped: 1,
       unreported: 0, not_sent: 0, expired: 0, cost_usd: 0.18}} : {})}));
 }
-function maintRuns(now = Date.now()): Run[] {
+function maintRuns(now = Date.now()): MaintRun[] {
   return Array.from({length: 30}, (_, i) => {
     const at = now - (i + 1) * 3600000, failed = i === 2, one = i === 4;
     const line = (step: string, status: string, extra: Json = {}): Json => ({step, status, reason: '', checked: null, found: null, woke: null, cost_usd: 0,
@@ -273,7 +314,7 @@ function maintRuns(now = Date.now()): Run[] {
 const HEART_STEPS: [string, string, string, string][] = [['due_reminders', 'Due reminders', 'due', 'Every beat'], ['ask_deadlines', 'Ask go-ahead', 'due', 'Hourly'],
   ['stall_checks', 'Stall checks', 'recovery', 'Every minute'], ['queue_check', 'Queue check', 'recovery', 'Every beat'],
   ['github_sync', 'GitHub sync', 'poll', 'Every 10 s']];
-function heartSteps(now = Date.now()): Json[] {
+function heartSteps(now = Date.now()): HeartStep[] {
   const kindNames: Record<string, string> = {due: 'Due times', recovery: 'Recovery', poll: 'Outside polls'};
   const errors: Record<string, string> = {queue_check: 'Failed: unexpected error (RuntimeError)', github_sync: 'Failed: GitHub did not answer'};
   const errorAt: Record<string, string> = {queue_check: new Date(now - 4000).toISOString(), github_sync: new Date(now - 600000).toISOString()};
@@ -283,10 +324,10 @@ function heartSteps(now = Date.now()): Json[] {
     last_did: key === 'due_reminders' ? '1 reminder sent' : null, last_error: errors[key] || null, last_error_at: errorAt[key] || null,
     failing: key === 'queue_check', runs_24h: 8640, did_24h: key === 'due_reminders' ? 24 : 0, failed_24h: key === 'queue_check' ? 6 : 0}));
 }
-function heartBeats(now = Date.now()): Run[] {
+function heartBeats(now = Date.now()): HeartBeat[] {
   return Array.from({length: 30}, (_, i) => {
     const failed = i % 5 === 1, folded = i === 6;
-    const steps: Json[] = folded ? [] : [{key: 'due_reminders', name: 'Due reminders', text: '1 reminder sent', ms: 3, error: null}];
+    const steps: HeartBeat['steps'] = folded ? [] : [{key: 'due_reminders', name: 'Due reminders', text: '1 reminder sent', ms: 3, error: null}];
     if (failed) steps.push({key: 'queue_check', name: 'Queue check', text: null, ms: 2, error: 'Failed: unexpected error (RuntimeError)'});
     return {id: 'hbt_' + String(100 - i).padStart(3, '0'), started_at: new Date(now - (i * 2 + 1) * 60000).toISOString(), total_ms: 7,
       did: folded ? 0 : 1, failed: failed ? 1 : 0, steps, repeats: folded ? 3 : 1,
@@ -428,7 +469,7 @@ async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/au
         if (hold) { await hold.wait; if (hold.fail) return refuse(500, 'boom', 'The hub stalled'); }
         const interval = Number(b.interval_s);
         if (!(interval >= 5 && interval <= 60)) return refuse(422, 'invalid', 'interval_s is 5 to 60');
-        db.heart!.interval_s = b.interval_s;
+        db.heart!.interval_s = b.interval_s as number;
         return json(heartListing());
       }
     }
@@ -476,7 +517,7 @@ async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/au
         const at = new Date().toISOString();
         mt.live = {id: 'mrun_now', occurrence_key: null, trigger: 'run_now', step: b.step || null, started_at: at, finished_at: null,
           heartbeat_at: at, ok: null, result: null, cost_usd: 0, steps: [{step: 'collect', status: 'ran', reason: '', checked: 3, found: 1, woke: null,
-            cost_usd: 0, started_at: at, finished_at: at}]} as Run;
+            cost_usd: 0, started_at: at, finished_at: at}]} as MaintRun;
         mt.runs.unshift(mt.live);
         return json({run: clone(mt.live), started: true});
       }

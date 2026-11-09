@@ -13,9 +13,6 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const {openAutomations, PHONE, DESKTOP, sideways} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
-type HeartBeat = {id: string; started_at: string; total_ms: number; did: number; failed: number;
-  steps: {key: string; name: string; text: string; ms: number; error: string | null}[]};
-type HeartDb = {interval_s: number; beats: HeartBeat[]; beats_24h: number};
 type HeartPageWin = {ticoTheme: {set: (v: string) => void}};
 // Page globals from ui/app/automations-heartbeat.ts, which the page loads.
 declare const AU: {hbBusy: boolean; hbPoll: unknown};
@@ -134,7 +131,7 @@ async function themed(page: Page, name: string) {
       assert.ok(writes.every(w => w.method === 'PUT'), 'paging writes nothing');
 
       // The safety poll: a new beat lands on top, the open one stays open and the older page stays.
-      (db.heart as unknown as HeartDb).beats.unshift({id: 'hbt_101', started_at: new Date().toISOString(), total_ms: 5, did: 1, failed: 0,
+      db.heart!.beats.unshift({id: 'hbt_101', started_at: new Date().toISOString(), total_ms: 5, did: 1, failed: 0,
         steps: [{key: 'due_reminders', name: 'Due reminders', text: '2 reminders sent', ms: 4, error: null}]});
       await page.evaluate(() => auHeartLoad(AU));
       assert.equal(await page.locator('tr.au-rr').first().getAttribute('data-hb-beat'), 'hbt_101');
@@ -143,7 +140,7 @@ async function themed(page: Page, name: string) {
       assert.equal(await page.evaluate(() => !!AU.hbPoll), true, 'polls while open');
 
       // A hidden page skips the minute's read; coming back reads once.
-      const addBeat = (id: string) => (db.heart as unknown as HeartDb).beats.unshift({id, started_at: new Date().toISOString(), total_ms: 5, did: 1, failed: 0,
+      const addBeat = (id: string) => db.heart!.beats.unshift({id, started_at: new Date().toISOString(), total_ms: 5, did: 1, failed: 0,
         steps: [{key: 'due_reminders', name: 'Due reminders', text: '3 reminders sent', ms: 4, error: null}]});
       addBeat('hbt_102');
       await page.evaluate(async () => {
@@ -165,7 +162,7 @@ async function themed(page: Page, name: string) {
       // A poll while the interval select is focused leaves it alone and moves only the meta line.
       await page.getByRole('tab', {name: 'Steps'}).click();
       await page.waitForSelector('.mt-step[data-hb-step]');
-      (db.heart as unknown as HeartDb).beats_24h = 9000;
+      db.heart!.beats_24h = 9000;
       const kept = await page.evaluate(async () => {
         const sel = document.querySelector<HTMLElement>('[data-hb-interval]')!;
         sel.dataset.mark = '1';
