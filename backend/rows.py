@@ -1217,6 +1217,7 @@ class PipelineLinkRow(TypedDict):
     created_by: str | None
     created_at: str
     retired_at: str | None
+    fires: str
 
 
 class PipelineManagerActionRow(TypedDict):
