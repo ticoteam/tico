@@ -32,7 +32,7 @@ run's per-file and per-script timings (collected counts until timings exist) so 
 (`TICO_CI_JOB_SECONDS`, 330), and an interrupted Spot job is rerun automatically. Browser and system-package caches avoid apt
 downloads on warm queue runs; each Install attempt is limited to five minutes, with one retry. The PR job timings check
 on a queue run links the per-job timing receipt. Runner/harness changes also run conformance, including slow tests; unclassified UI changes run all browser scripts. The manually dispatched Release validation workflow runs the full release gate across isolated
-RunsOn Linux VMs for an explicit immutable candidate SHA. It never runs on a schedule; the release windows dispatch it (docs/releasing.md#release-windows). The default Python suite runs in parallel in about a minute and the whole
+RunsOn Linux VMs for an explicit immutable candidate SHA. It never runs on a schedule; the release train dispatches it (docs/releasing.md#the-release-train). The default Python suite runs in parallel in about a minute and the whole
 default run (pytest plus core UI) in about 2 minutes; `python scripts/release_checks.py` runs both and records time and
 load. On a computer several bots share, start a full suite, the browser scripts or a cargo build through
 `scripts/heavy.sh` (`scripts/full-suite.sh` for the Python suite; `release_checks.py`, `ui-tests.cjs` and pytest in a
@@ -70,9 +70,11 @@ the pipeline manager (backend/merge_arm.py, docs/releasing.md#tico-merges).
 After a queue failure, fix it and get green PR checks before enqueuing again.
 Don't rebase or merge main to be current; rebase only when GitHub reports a conflict. If the queue removes the PR,
 read why before you push again. Never use `--admin` or the REST merge endpoint: both skip the queue.
-PR checks on each push run lint, and a ready PR's selected tests. A red release candidate caused by your merge is your top priority. Releases ship from
-release windows (weekdays 07:30, 11:00, 14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00;
-docs/releasing.md#release-windows); never tag. Hotfixes (`hotfix.yml`) are for
+PR checks on each push run lint, and a ready PR's selected tests. A red release candidate caused by your merge is your top priority. Releases ship on their
+own, at any hour, whenever main has merged work past the newest release (docs/releasing.md#the-release-train); never
+tag. Stable takes a release automatically when its notes list no High risk item; one with a High risk item, or every
+one while the repository variable `RELEASE_NEEDS_PERSON` is `on`, waits for a person's `approved` label or `/approve`
+(docs/releasing.md#approval). Hotfixes (`hotfix.yml`) are for
 major production issues only. No bot tags or rolls out Tico releases; the Engineering pipeline's manager owns getting
 reviewed work merged.
 

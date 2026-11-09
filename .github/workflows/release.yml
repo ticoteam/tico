@@ -33,7 +33,7 @@ on:
         type: string
         default: ''
       latest:
-        description: Make it the latest release and move the images' latest tags (release windows pass false and do it once the canary is healthy)
+        description: Make it the latest release and move the images' latest tags (the release train passes false and do it once the canary is healthy)
         type: boolean
         default: true
 
@@ -233,7 +233,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # Before the release exists, so an installer never runs against a tag whose images are missing. A prerelease
-      # (v1.2.0-rc1) never moves latest, nor does latest=false (a release window moves it after the canary); a dry run
+      # (v1.2.0-rc1) never moves latest, nor does latest=false (the release train moves it after the canary); a dry run
       # only prints the manifests it would push.
       - name: Point the version tags at the validated images
         run: |

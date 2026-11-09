@@ -3,12 +3,69 @@
    decides every role; this only shows them and sends the picks back. */
 'use strict';
 
+// One candidate a role can take: a template, or a cloud agent (its template is "").
+interface TeamBuildItem {
+  template: string;
+  name: string;
+  icon?: string | null;
+  match?: string | null;
+  source?: string | null;
+  id?: string;
+  supported?: boolean;
+}
+// The bot that already fills a role on the team.
+interface TeamBuildBot {
+  id: string;
+  slug: string;
+  name: string;
+  icon?: string | null;
+}
+// A role as the suggest answer lists it: the server's pick, its alternatives and whether the team already has it.
+interface TeamBuildRole {
+  role: string;
+  pick: TeamBuildItem;
+  alternatives: TeamBuildItem[];
+  on_team: boolean;
+  bot?: TeamBuildBot | null;
+  checked: boolean;
+}
+interface TeamBuildSuggestion {
+  roles?: TeamBuildRole[];
+}
+// A role card as the dialog keeps it. `offers` is what the role can take instead; `alternatives` is what it shows.
+interface TeamBuildRow {
+  role: string;
+  pick: TeamBuildItem;
+  cloud: boolean;
+  on_team: boolean;
+  bot: TeamBuildBot | null;
+  offers: TeamBuildItem[];
+  alternatives: TeamBuildItem[];
+  checked: boolean;
+  open: boolean;
+}
+interface TeamBuildState {
+  dialog: HTMLDialogElement;
+  team: string;
+  teamName: string;
+  rows: TeamBuildRow[];
+  seq: number;
+  busy: boolean;
+  timer: number;
+  hold: number;
+  dot: HTMLElement | null;
+  opener: HTMLElement | null;
+}
+interface TeamBuildHired {
+  bots?: unknown[];
+}
+
 const TB_DEBOUNCE = 350;       // ms after the last keystroke before the briefing goes to the server
 const TB_HOLD = 1600;          // ms the header dot stays done before it settles back to idle
-let TEAM_BUILD = null;         // the open dialog: {dialog, team, teamName, rows, seq, busy, timer, hold, dot, opener}
+let TEAM_BUILD: TeamBuildState | null = null;         // the open dialog: {dialog, team, teamName, rows, seq, busy, timer, hold, dot, opener}
 
 // With no team (Team > + > Build a team) the dialog asks which team first, then suggests for it.
-function teamBuildOpen(group) {
+function teamBuildOpen(group?: string | null) {
   const team = String(group || '');
   if (!S.me?.id || !settingsCanCreateBots()) return;
   if (TEAM_BUILD) TEAM_BUILD.dialog.close('next');
@@ -33,10 +90,10 @@ function teamBuildOpen(group) {
     </div>
     <div class="tb-foot"><span class="tb-count muted" aria-live="polite">0 picked</span>
       <button class="primary tb-hire" type="button" disabled>Hire 0</button></div>`;
-  const opener = document.activeElement;
+  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   document.body.append(dialog);
-  const state = TEAM_BUILD = {dialog, team, teamName, rows: [], seq: 0, busy: false, timer: 0, hold: 0,
-    dot: dialog.querySelector('.tb-dot'), opener};
+  const state: TeamBuildState = TEAM_BUILD = {dialog, team, teamName, rows: [], seq: 0, busy: false, timer: 0, hold: 0,
+    dot: dialog.querySelector<HTMLElement>('.tb-dot'), opener};
   const leave = () => dialog.close('next');
   window.addEventListener('hashchange', leave);
   dialog.addEventListener('close', () => {
@@ -47,26 +104,37 @@ function teamBuildOpen(group) {
     if (state.opener?.isConnected) state.opener.focus();
   });
   dialog.addEventListener('click', event => {
-    const t = event.target;
+    const t = eventElement(event);
+    if (!t) return;
     if (t.closest('[data-tb-close]')) return dialog.close();
-    const change = t.closest('[data-tb-change]');
+    const change = t.closest<HTMLElement>('[data-tb-change]');
     if (change) return tbToggle(state, Number(change.dataset.tbChange), change);
-    const alt = t.closest('[data-tb-alt]');
-    if (alt) { const [i, j] = alt.dataset.tbAlt.split(':').map(Number); return tbPick(state, i, j); }
-    const request = t.closest('[data-tb-request]');
-    if (request) return tbRequest(state, state.rows[Number(request.dataset.tbRequest)].pick);
+    const alt = t.closest<HTMLElement>('[data-tb-alt]');
+    if (alt) {
+      const [i, j] = String(alt.dataset.tbAlt).split(':').map(Number);
+      if (i === undefined || j === undefined) return;
+      return tbPick(state, i, j);
+    }
+    const request = t.closest<HTMLElement>('[data-tb-request]');
+    if (request) {
+      const row = state.rows[Number(request.dataset.tbRequest)];
+      if (row) tbRequest(state, row.pick);
+      return;
+    }
     if (t.closest('.tb-hire')) void tbHire(state);
   });
   dialog.addEventListener('change', event => {
-    const choice = event.target.closest?.('[data-tb-team]');
+    const choice = eventElement(event)?.closest<HTMLSelectElement>('[data-tb-team]');
     if (choice) return tbChooseTeam(state, choice.value);
-    const box = event.target.closest?.('[data-tb-check]');
+    const box = eventElement(event)?.closest<HTMLInputElement>('[data-tb-check]');
     if (!box) return;
-    state.rows[Number(box.dataset.tbCheck)].checked = box.checked;
+    const row = state.rows[Number(box.dataset.tbCheck)];
+    if (!row) return;
+    row.checked = box.checked;
     tbFoot(state);
   });
   dialog.addEventListener('input', event => {
-    if (!event.target.matches('.tb-brief input')) return;
+    if (!eventElement(event)?.matches('.tb-brief input')) return;
     clearTimeout(state.timer);
     state.timer = setTimeout(() => void tbSuggest(state), TB_DEBOUNCE);
   });
@@ -76,43 +144,43 @@ function teamBuildOpen(group) {
   // Desktop: the brief is where you start, or the team picker when there is no team yet. Phone: the dialog takes focus,
   // so the keyboard stays down until a tap.
   if (matchMedia('(max-width: 600px)').matches) dialog.focus();
-  else (team ? dialog.querySelector('.tb-brief input') : dialog.querySelector('[data-tb-team]')).focus();
+  else (team ? dialog.querySelector<HTMLInputElement>('.tb-brief input') : dialog.querySelector<HTMLSelectElement>('[data-tb-team]'))?.focus();
   if (team) void tbSuggest(state);
 }
 
 // The newest request wins: an answer that comes back after a newer one was sent, or after the dialog closed, is dropped.
-async function tbSuggest(state) {
+async function tbSuggest(state: TeamBuildState) {
   if (!state.team) return;
   const seq = ++state.seq;
-  const briefing = state.dialog.querySelector('.tb-brief input').value.trim();
+  const briefing = state.dialog.querySelector<HTMLInputElement>('.tb-brief input')?.value.trim();
   clearTimeout(state.hold);
   ldotSet(state.dot, 'thinking');
-  let found;
+  let found: TeamBuildSuggestion;
   try { found = await post('/v2/team-build/suggest', {team: state.team, briefing}); }
   catch (error) {
     if (TEAM_BUILD !== state || seq !== state.seq) return;
     ldotSet(state.dot, 'idle');
-    state.dialog.querySelector('[data-tb-grid]').setAttribute('aria-busy', 'false');
-    toast(error.message, true, null, {host: state.dialog});
+    state.dialog.querySelector<HTMLElement>('[data-tb-grid]')?.setAttribute('aria-busy', 'false');
+    toast(errorMessage(error, ''), true, null, {host: state.dialog});
     return;
   }
   if (TEAM_BUILD !== state || seq !== state.seq) return;
   state.rows = tbRows(found.roles || [], state.rows);
   tbGrid(state);
   ldotSet(state.dot, 'done');
-  state.hold = setTimeout(() => { if (state.dot.dataset.state === 'done') ldotSet(state.dot, 'idle'); }, TB_HOLD);
+  state.hold = setTimeout(() => { if (state.dot?.dataset.state === 'done') ldotSet(state.dot, 'idle'); }, TB_HOLD);
 }
 
 // What a candidate is, across roles: a template, or a cloud agent's id (its template is "", so two agents never match each
 // other or a template).
-const tbKey = item => item.source === 'cloud' ? `cloud:${item.id}` : item.template;
+const tbKey = (item: TeamBuildItem): string => item.source === 'cloud' ? `cloud:${item.id}` : item.template;
 
 // A new briefing keeps what the person chose for a role: its checkbox, and its pick when that candidate still stands for
 // the role (the pick and the offers swap back). A role no longer suggested is dropped. `offers` is what the role can take
 // instead; `alternatives` is what it shows, from tbLayout.
-function tbRows(roles, prev) {
+function tbRows(roles: TeamBuildRole[], prev: TeamBuildRow[]): TeamBuildRow[] {
   const before = new Map(prev.map(row => [row.role, row]));
-  return tbUnique(roles.map(role => {
+  return tbUnique(roles.map((role): TeamBuildRow => {
     const old = before.get(role.role), cloud = role.pick.source === 'cloud';
     const pool = [role.pick, ...role.alternatives];
     const kept = old && tbKey(old.pick) && pool.find(item => tbKey(item) === tbKey(old.pick));
@@ -126,7 +194,7 @@ function tbRows(roles, prev) {
 }
 
 // A role's alternatives are its offers less what the other roles pick: one template is never two roles' picks.
-function tbLayout(state) {
+function tbLayout(state: TeamBuildState) {
   state.rows.forEach((row, i) => {
     const taken = new Set(state.rows.filter((_, k) => k !== i).map(other => tbKey(other.pick)));
     row.alternatives = row.on_team ? [] : row.offers.filter(item => !taken.has(tbKey(item)));
@@ -135,8 +203,8 @@ function tbLayout(state) {
 
 // A new briefing can suggest a template a role before it already holds: that role takes its first free offer, or waits
 // unchecked when it has none, so the hire never sends one template twice.
-function tbUnique(rows) {
-  const held = new Set();
+function tbUnique(rows: TeamBuildRow[]): TeamBuildRow[] {
+  const held = new Set<string>();
   for (const row of rows) {
     if (!row.cloud && held.has(row.pick.template)) {
       const free = row.offers.find(item => !held.has(item.template));
@@ -149,20 +217,22 @@ function tbUnique(rows) {
 }
 
 // Every card is drawn from the state, so a role's alternatives always leave out the templates the other roles pick.
-function tbGrid(state, still = false) {
+function tbGrid(state: TeamBuildState, still = false) {
   tbLayout(state);
-  const grid = state.dialog.querySelector('[data-tb-grid]');
+  const grid = state.dialog.querySelector<HTMLElement>('[data-tb-grid]');
+  if (!grid) return;
   grid.innerHTML = state.rows.map((row, i) => tbCard(row, i, still)).join('');
   grid.setAttribute('aria-busy', 'false');
-  state.dialog.querySelector('.tb-none').hidden = state.rows.length > 0;
+  const none = state.dialog.querySelector<HTMLElement>('.tb-none');
+  if (none) none.hidden = state.rows.length > 0;
   tbFoot(state);
 }
 
-const tbMatch = item => item.match === 'strong' ? '<span class="tb-match">Strong</span>'
+const tbMatch = (item: TeamBuildItem): string => item.match === 'strong' ? '<span class="tb-match">Strong</span>'
   : item.match === 'good' ? '<span class="tb-match">Good</span>' : '';
 
 // A role card. `still` marks a card that replaces one already on screen, so it does not fade in again.
-function tbCard(row, i, still) {
+function tbCard(row: TeamBuildRow, i: number, still: boolean): string {
   const {pick, role, cloud, bot} = row, team = row.on_team;
   // On the team, the card names the bot that fills the role, with that bot's avatar.
   const onBot = team && bot;
@@ -182,68 +252,73 @@ function tbCard(row, i, still) {
     <div class="tb-card-foot">${action}</div>${alts}</article>`;
 }
 
-function tbFoot(state) {
+function tbFoot(state: TeamBuildState) {
   const n = state.rows.filter(row => row.checked && !row.on_team && !row.cloud).length;
-  state.dialog.querySelector('.tb-count').textContent = `${n} picked`;
-  const hire = state.dialog.querySelector('.tb-hire');
+  const count = state.dialog.querySelector<HTMLElement>('.tb-count');
+  if (count) count.textContent = `${n} picked`;
+  const hire = state.dialog.querySelector<HTMLButtonElement>('.tb-hire');
+  if (!hire) return;
   hire.textContent = `Hire ${n}`;
   hire.disabled = !n || state.busy;
 }
 
-function tbToggle(state, i, button) {
+function tbToggle(state: TeamBuildState, i: number, button: HTMLElement) {
   const row = state.rows[i];
+  if (!row) return;
   row.open = !row.open;
   button.setAttribute('aria-expanded', String(row.open));
-  const list = state.dialog.querySelector(`#tb-alts-${i}`);
+  const list = state.dialog.querySelector<HTMLElement>(`#tb-alts-${i}`);
   if (list) list.hidden = !row.open;
 }
 
 // Swaps a role's pick for one of its alternatives: the old pick takes that alternative's place and the role is picked
 // (a cloud agent is never hired here, so it stays unchecked). Every card is drawn again, still, so the other roles stop
 // offering the template that is now picked.
-function tbPick(state, i, j) {
-  const row = state.rows[i], alt = row.alternatives[j];
+function tbPick(state: TeamBuildState, i: number, j: number) {
+  const row = state.rows[i];
+  if (!row) return;
+  const alt = row.alternatives[j];
   if (!alt) return;
   row.offers = row.offers.map(item => item === alt ? row.pick : item);
   row.pick = alt; row.checked = !row.cloud; row.open = false;
   tbGrid(state, true);
-  state.dialog.querySelector(`[data-card="${i}"] [data-tb-change]`)?.focus();
+  state.dialog.querySelector<HTMLElement>(`[data-card="${i}"] [data-tb-change]`)?.focus();
 }
 
 // The team picked in the dialog that opened without one: the suggestions are for that team, from its first answer.
-function tbChooseTeam(state, team) {
+function tbChooseTeam(state: TeamBuildState, team: string) {
   if (!team) return;
   state.team = team;
   state.teamName = (S.orgGroups || []).find(g => g.id === team)?.name || team;
   state.rows = [];
-  const head = state.dialog.querySelector('.tb-team');
-  head.textContent = state.teamName;
-  head.hidden = false;
-  state.dialog.querySelector('[data-tb-grid]').innerHTML = '';
+  const head = state.dialog.querySelector<HTMLElement>('.tb-team');
+  if (head) { head.textContent = state.teamName; head.hidden = false; }
+  const grid = state.dialog.querySelector<HTMLElement>('[data-tb-grid]');
+  if (grid) grid.innerHTML = '';
   void tbSuggest(state);
 }
 
 // A cloud agent is added or requested from the Cloud agents page, into this team: the bot or seat lands here, not at the
 // top of the chart. Until that page is there, the toast says where to go.
-function tbRequest(state, pick) {
+function tbRequest(state: TeamBuildState, pick: TeamBuildItem) {
   if (typeof window.cloudAgentRequest === 'function') return window.cloudAgentRequest(pick, {team: state.team});
   toast(`${pick.supported ? 'Add' : 'Request'} ${pick.name} from Cloud agents.`, false, null, {host: TEAM_BUILD?.dialog});
 }
 
-async function tbHire(state) {
+async function tbHire(state: TeamBuildState) {
   if (state.busy) return;
   const picks = state.rows.filter(row => row.checked && !row.on_team && !row.cloud)
     .map(row => ({role: row.role, template: row.pick.template}));
   if (!picks.length) return;
   state.busy = true; tbFoot(state); ldotSet(state.dot, 'thinking');
   try {
-    const hired = await post('/v2/team-build/hire', {team: state.team, reports_to: '', picks});
+    const hired: TeamBuildHired = await post('/v2/team-build/hire', {team: state.team, reports_to: '', picks});
     toast(`${hired.bots?.length ?? picks.length} joined ${state.teamName}.`, false);
     void refresh(true);
     state.dialog.close('next');
   } catch (error) {
     if (TEAM_BUILD !== state) return;
     state.busy = false; tbFoot(state); ldotSet(state.dot, 'idle');
-    toast(error.message, true, null, {host: state.dialog});
+    toast(errorMessage(error, ''), true, null, {host: state.dialog});
   }
 }

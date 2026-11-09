@@ -1,47 +1,56 @@
 /* The campus receives only visible identities, readable assignments and read-permitted status. */
 'use strict';
-/** The Overview page's state. The bot-hours card (overview-hours.ts) keeps its answer and loading marks on it too. */
-interface OverviewPage {
-  frame: HTMLIFrameElement;
-  abort: AbortController;
-  ready: boolean;
-  sent?: string;
-  model?: unknown;
-  computers: {id?: string; label?: string; revoked_at?: string | null}[];
-  loadingComputers?: boolean;
-  hours?: BotHours | null | undefined;
-  hoursLoading?: boolean;
-  hoursAt?: number;
+
+interface OverviewFace { glyph: string | undefined; initials: string; color: string; svg: string; }
+interface OverviewMember { id: string; name: string; type: 'human' | 'bot'; state: string; detail: string; href?: string; face?: OverviewFace; }
+interface OverviewGroup { id: string; name: string; kind: 'computer' | 'commons'; members: OverviewMember[]; }
+/** A computer as the campus keeps it (GET /v2/computers, trimmed). */
+interface OverviewComputer { id: string; label?: string | undefined; revoked_at?: string | null | undefined; }
+interface OverviewModel { company: string; groups: OverviewGroup[]; fresh: boolean; }
+/** The campus page while it is open (OVERVIEW_PAGE). */
+interface OverviewPageState { frame: HTMLIFrameElement; abort: AbortController; ready: boolean; computers: OverviewComputer[]; loadingComputers: boolean; sent?: string; model?: OverviewModel; hours?: BotHours | null | undefined; hoursLoading?: boolean; hoursAt?: number; }
+/** A campus frame parked for a few minutes (OVERVIEW_KEPT). */
+interface OverviewKept { frame: HTMLIFrameElement; computers?: OverviewComputer[]; timer?: ReturnType<typeof setTimeout>; }
+interface OverviewComputersAnswer { computers?: OverviewComputer[]; }
+/** One row of the replay answer (GET /v2/replay), as far as the campus reads it. */
+interface OverviewReplayRow {
+  at: string; kind: string; who?: string; to?: string; owner_id?: string; bot?: string; state?: string; exit?: string;
+  new?: string; task?: { title?: string }; goal?: { title?: string }; text?: string;
 }
-/** ui/app/refresh.ts reads it on every live change. */
-let OVERVIEW_PAGE: OverviewPage | null = null;
-function overviewModel() {
-  const groups = [], machines = new Map(), humans = new Map(), placed = new Set();
+interface OverviewReplayAnswer {
+  from: string; to: string; truncated?: boolean; next?: string | null; items?: OverviewReplayRow[]; names?: Record<string, string>;
+  start?: { bots?: Record<string, { state?: string }> };
+}
+
+// Read by ui/app/refresh.ts on every live change.
+let OVERVIEW_PAGE: OverviewPageState | null = null;
+function overviewModel(): OverviewModel {
+  const groups: OverviewGroup[] = [], machines = new Map<string, OverviewGroup>(), humans = new Map<string, OverviewMember>(), placed = new Set<string>();
   const fresh = S.overviewRosterFresh !== false && S.status !== null && S.v2.on;
-  const actor = value => String(typeof value === 'object' ? value?.id || '' : value || '').replace(/^human:/, '');
+  const actor = (value: BriefPerson | string | null | undefined) => String(typeof value === 'object' ? value?.id || '' : value || '').replace(/^human:/, '');
   for (const p of S.people || []) {
     if (p.hidden || !p.id) continue;
     humans.set(p.id, {id: 'human:' + p.id, name: p.name || p.id, type: 'human', state: 'human',
       detail: 'Human teammate. Presence is not tracked.', href: '#/person/' + encodeURIComponent(p.id)});
   }
-  const computer = (id, label) => {
+  const computer = (id: string, label?: string): OverviewGroup => {
     if (!machines.has(id)) {
-      const group = {id: 'computer:' + id, name: label || 'Computer', kind: 'computer', members: []};
+      const group: OverviewGroup = {id: 'computer:' + id, name: label || 'Computer', kind: 'computer', members: []};
       machines.set(id, group); groups.push(group);
     }
-    return machines.get(id);
+    return machines.get(id)!; // set just above when it was missing
   };
   for (const c of OVERVIEW_PAGE?.computers || []) {
     if (c.id && !c.revoked_at) computer(String(c.id), c.label);
   }
-  const commons = {id: '@commons', name: 'Shared pavilion', kind: 'commons', members: []};
-  const visible = (S.emps || []).filter(e => e.id && !['archived', 'retired'].includes(e.status || e.state)
+  const commons: OverviewGroup = {id: '@commons', name: 'Shared pavilion', kind: 'commons', members: []};
+  const visible = (S.emps || []).filter(e => e.id && !['archived', 'retired'].includes(String(e.status || e.state))
     && e.my_access?.see !== false && orgBranchVisible(e));
-  const byBot = new Map(visible.map(e => [e.id, e]));
+  const byBot = new Map(visible.map((e): [string, Employee] => [e.id, e]));
   for (const e of visible) {
     const readable = e.my_access?.read !== false;
     const live = readable && fresh ? S.v2.status[e.id] : null;
-    const state = !readable ? 'restricted' : !fresh ? 'unknown' : ['paused', 'planned'].includes(e.status) ? e.status : live?.state || 'unknown';
+    const state = !readable ? 'restricted' : !fresh ? 'unknown' : typeof e.status === 'string' && ['paused', 'planned'].includes(e.status) ? e.status : live?.state || 'unknown';
     const stuck = readable ? overviewStuck().find(row => row.bot === e.id) : null;
     const word = state === 'restricted' ? 'Activity requires Read access.' : stuck ? 'Stuck: ' + stuck.why
       : state === 'unknown' ? 'No current status available.' : V2_WORD[state] || statusWord(state);
@@ -65,12 +74,12 @@ function overviewModel() {
   }
   for (const [id, person] of humans) if (!placed.has(id)) commons.members.push(person);
   if (commons.members.length) groups.push(commons);
-  groups.sort((a, b) => (a.kind === 'commons') - (b.kind === 'commons') || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
-  for (const group of groups) group.members.sort((a, b) => (a.type === 'bot') - (b.type === 'bot') || a.id.localeCompare(b.id));
+  groups.sort((a, b) => Number(a.kind === 'commons') - Number(b.kind === 'commons') || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  for (const group of groups) group.members.sort((a, b) => Number(a.type === 'bot') - Number(b.type === 'bot') || a.id.localeCompare(b.id));
   return {company: companyName(), groups, fresh: !!fresh};
 }
 // A robot's screen face is the same symbol as its avatar (avatars.js botAvatar), glowing in its colour.
-function overviewFace(e) {
+function overviewFace(e: Employee): OverviewFace {
   const meta = BOT_AVATARS[e.id], glyph = !meta?.tico && TEMPLATE_ICON.test(e.icon || '') ? e.icon : '';
   return {glyph, initials: avInitials(e.slug || e.id), color: meta?.tico ? '#3fd6a8' : meta?.color || `hsl(${avHue(e.id)} 60% 55%)`,
     svg: meta?.tico ? '/assets/tico/tico-glyph.svg' : !glyph && meta?.icon ? '/assets/bot-symbols/' + meta.icon + '.svg' : ''};
@@ -80,7 +89,7 @@ async function overviewLoadComputers() {
   if (!state || state.loadingComputers) return;
   state.loadingComputers = true;
   try {
-    const result = await get('/v2/computers');
+    const result = await get<OverviewComputersAnswer>('/v2/computers');
     if (OVERVIEW_PAGE === state && Array.isArray(result.computers)) state.computers = result.computers.map(c => ({id: c.id, label: c.label, revoked_at: c.revoked_at}));
   } catch {} // Readable bot assignments still provide their buildings when inventory is unavailable.
   finally { state.loadingComputers = false; }
@@ -105,7 +114,7 @@ function pageOverview() {
     page.insertAdjacentHTML('beforeend', '<iframe id="overview-frame" class="overview-frame" title="Interactive campus of your computers, bots and human teammates" src="/tico/ui/overview/index.html" allow="fullscreen"></iframe>');
     frame = page.lastElementChild;
   }
-  const state = OVERVIEW_PAGE = {frame, abort: new AbortController(), ready: !!kept && frame === kept.frame, computers: kept?.computers || [], loadingComputers: false};
+  const state: OverviewPageState = OVERVIEW_PAGE = {frame, abort: new AbortController(), ready: !!kept && frame === kept.frame, computers: kept?.computers || [], loadingComputers: false};
   window.addEventListener('message', ev => {
     if (OVERVIEW_PAGE !== state || ev.source !== frame.contentWindow || ev.origin !== location.origin) return;
     if (ev.data?.type === 'tico-overview-ready') { state.ready = true; state.sent = ''; overviewRefresh(); }
@@ -115,8 +124,8 @@ function pageOverview() {
     }
     if (ev.data?.type === 'tico-overview-replay-load') void overviewReplayLoad(state);
   }, {signal: state.abort.signal});
-  const hours = $('#overview-hours');
-  hours.addEventListener('click', ev => { if (!ev.target.closest('a')) overviewHoursOpen(); }, {signal: state.abort.signal});
+  const hours: HTMLElement = $('#overview-hours');
+  hours.addEventListener('click', ev => { if (!(ev.target instanceof Element && ev.target.closest('a'))) overviewHoursOpen(); }, {signal: state.abort.signal});
   hours.addEventListener('keydown', ev => {
     if ((ev.key === 'Enter' || ev.key === ' ') && ev.target === hours) { ev.preventDefault(); overviewHoursOpen(); }
   }, {signal: state.abort.signal});
@@ -129,17 +138,17 @@ function pageOverview() {
 // The campus replay reads the same history as the Replay page (GET /api/v2/replay), with the viewer's own rights,
 // and hands the frame only what the campus shows: who, to whom, task titles, states and a short line of each
 // message. Bot focus text and run summaries stay on this side, as they do for the live campus.
-async function overviewReplayLoad(state) {
+async function overviewReplayLoad(state: OverviewPageState) {
   const to = new Date(), from = new Date(to.getTime() - 864e5);
-  const post = message => { if (OVERVIEW_PAGE === state) state.frame.contentWindow?.postMessage(message, location.origin); };
-  let data;
-  try { data = await get('/v2/replay?' + new URLSearchParams({from: from.toISOString(), to: to.toISOString()})); }
+  const post = (message: Record<string, unknown>) => { if (OVERVIEW_PAGE === state) state.frame.contentWindow?.postMessage(message, location.origin); };
+  let data: OverviewReplayAnswer;
+  try { data = await get<OverviewReplayAnswer>('/v2/replay?' + new URLSearchParams({from: from.toISOString(), to: to.toISOString()})); }
   catch { post({type: 'tico-overview-replay-error'}); return; }
-  const nameOf = replayName(data), names = {};
+  const nameOf = replayName(data), names: Record<string, string> = {};
   const actors = (data.items || []).flatMap(it => [it.who, it.to, it.owner_id, it.kind === 'task.owner' ? it.new : null, it.bot ? 'bot:' + it.bot : null])
     .concat(Object.keys(data.start?.bots || {}).map(slug => 'bot:' + slug));
   for (const a of actors) if (a && !(a in names)) names[a] = nameOf(a);
-  const slim = it => ({at: it.at, kind: it.kind, who: it.who, to: it.to, owner: it.owner_id, bot: it.bot, state: it.state, exit: it.exit,
+  const slim = (it: OverviewReplayRow) => ({at: it.at, kind: it.kind, who: it.who, to: it.to, owner: it.owner_id, bot: it.bot, state: it.state, exit: it.exit,
     new: it.new, task: it.task ? {title: it.task.title} : undefined, goal: it.goal ? {title: it.goal.title} : undefined,
     text: it.kind === 'chat.message' || it.kind === 'task.comment' ? String(it.text || '').slice(0, 160) : undefined});
   const start = {bots: Object.fromEntries(Object.entries(data.start?.bots || {}).map(([slug, b]) => [slug, {state: b.state}]))};
@@ -161,12 +170,13 @@ function overviewRefresh() {
 // so coming back shows the scene at once instead of loading and building it again. Element.moveBefore keeps the
 // frame's document through both moves; a browser without it would reload a moved frame, so there it is let go.
 const OVERVIEW_KEEP_MS = 5 * 60e3;
-let OVERVIEW_KEPT = null;          // {frame, computers, timer}
+let OVERVIEW_KEPT: OverviewKept | null = null;
 function overviewStop() {
   const state = OVERVIEW_PAGE; if (!state) return;
   state.abort.abort(); OVERVIEW_PAGE = null;
   const frame = state.frame;
-  if (state.ready && frame.isConnected && Element.prototype.moveBefore) {
+  // shared.d.ts declares moveBefore as lib.dom does; older engines lack it, so read the prototype as maybe missing.
+  if (state.ready && frame.isConnected && (Element.prototype as Partial<ParentNode>).moveBefore) {
     let hold = $('#overview-hold');
     if (!hold) {
       hold = document.createElement('div'); hold.id = 'overview-hold'; hold.setAttribute('aria-hidden', 'true'); hold.inert = true;
@@ -184,7 +194,7 @@ function overviewStop() {
   }
   overviewDrop({frame});
 }
-function overviewDrop(kept) {
+function overviewDrop(kept: OverviewKept | null) {
   if (!kept) return;
   if (OVERVIEW_KEPT === kept) { clearTimeout(kept.timer); OVERVIEW_KEPT = null; }
   kept.frame.contentWindow?.postMessage({type: 'tico-overview-dispose'}, location.origin);
@@ -192,9 +202,9 @@ function overviewDrop(kept) {
 }
 // Bots with queued work that is not starting, or left in setup for a day, from the Health answer the app already
 // polls (ui/health.ts).
-const overviewStuck = () => (typeof HL !== 'undefined' && HL?.stuck) || [];
+const overviewStuck = (): HlStuck[] => (typeof HL !== 'undefined' && HL?.stuck) || [];
 // "3 bots running on fallback since 10:04, 2 limited": bots whose plan ran out, from the same answer.
-function overviewFallbackLine() {
+function overviewFallbackLine(): string {
   const on = (typeof HL !== 'undefined' && HL?.on_fallback) || [], limited = (typeof HL !== 'undefined' && HL?.limited) || [];
   if (!on.length && !limited.length) return '';
   const first = on.map(row => row.changed_at).filter(Boolean).sort()[0];
