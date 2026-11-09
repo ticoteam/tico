@@ -4354,7 +4354,7 @@ def _type_steps(conn, actor, type_id, steps):
         key=lambda r: (r["position"], r["id"]),
     )
     working = {r["id"] for r in kept if r["status"] in ("open", "doing", "review", "ready")}
-    deck = next((r["id"] for r in kept if r["name"] == "Build" and r["status"] == "open"), None) or next(
+    deck = next((r["id"] for r in kept if r["name"] in QUEUE_STEPS and r["status"] == "open"), None) or next(
         (r["id"] for r in kept if r["status"] == "open"), None
     )
     moving = []
@@ -4508,6 +4508,10 @@ def task_reopen_hint(conn, actor, row):
     return "ask the owner to reopen it with " + f"`hub task update {row['id']} --status doing`, or file a new task"
 
 
+# The queued step of a Dev board: Build (the stage map's), or On Deck on a board the map has not reached yet.
+QUEUE_STEPS = ("Build", "On Deck")
+
+
 def _working_step(step):
     """Whether `step` is a Build step, the working step automatic starts take a ticket to (auto_tasks.startable): its cards
     are queued (open) or started (doing) alike, so a status write on it keeps its status rather than the step's."""
@@ -4570,7 +4574,7 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
             from .review_gate import engineering
 
             if engineering(conn, {**row, 'type_id': typ['id']}):
-                chosen = next((s for s in typ['steps'] if s['name'] == 'Build' and s['status'] == 'open'), chosen)
+                chosen = next((s for s in typ['steps'] if s['name'] in QUEUE_STEPS and s['status'] == 'open'), chosen)
         if not chosen and effective == "waiting":
             # Waiting is not a column: the task stays in the working step it is in, or starts at the first.
             chosen = (
@@ -8144,7 +8148,7 @@ def task_update(
         if returned.get('blocked_since'):
             # Keep the live hold, but clearing it returns to the queue the owner selected.
             steps = type_get(conn, returned['type_id'])['steps']
-            deck = next((s for s in steps if s['name'] == 'Build' and s['status'] == 'open'), None)
+            deck = next((s for s in steps if s['name'] in QUEUE_STEPS and s['status'] == 'open'), None)
             deck = deck or next((s for s in steps if s['status'] == 'open'), None)
             from . import task_holds
 

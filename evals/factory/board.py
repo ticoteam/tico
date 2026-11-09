@@ -124,7 +124,7 @@ def dev_board(qa=False, review_timeout=1.0):
         Step("Merge queue", "review"),
         Step("Release", "review", can_hold=False, merged=True, release=True),
         Step("Watch 24h", "review", can_hold=False, merged=True, release=True),
-        Step("Closed", "closed", can_hold=False),
+        Step("Closed", "closed", can_hold=False, merged=True),
     ]
     return Board("Dev tickets", steps, on_merge="Release")
 
@@ -154,7 +154,6 @@ def _qa_board(review_timeout=1.0):
                 different_checker_from=("Review 1",),
                 timeout_hours=review_timeout,
                 gate=True,
-                skip_tag="skip-qa",
                 kind="review",
             ),
         ),

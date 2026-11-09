@@ -133,7 +133,7 @@ def startable(c, row, steps=None):
         name = step[0] if step else None
     else:
         name = steps.get(row.get('step_id'))
-    return row.get('type_id') == H.GENERAL_TYPE or name == 'Build'
+    return row.get('type_id') == H.GENERAL_TYPE or name in ('Build', 'On Deck')
 
 
 def step_names(c, rows):
@@ -680,7 +680,9 @@ def started(c, row, *, message=None):
             else 'reopened from waiting',
         )
     steps = H.type_get(c, row['type_id'])['steps']
-    step = next((s['id'] for s in steps if s['name'] == 'Build'), None)
+    step = next((s['id'] for s in steps if s['name'] == 'Build'), None) or next(
+        (s['id'] for s in steps if s['name'] == 'In Progress' and s['status'] == 'doing'), None
+    )
     # A start stays in the card's step (Build holds queued and started cards alike), so no leave check runs for it: the
     # requirements of the step it waits in hold the start, as they would a move out of it.
     from . import pipeline_engine

@@ -479,7 +479,14 @@ class Builder(Bot):
             self.push(task, pr)
             pushed = "pushed fixes"
         # A fixes step that waits for green CI (after_green) keeps that path; the shared Build step goes back to its review.
-        nxt = None if step.after_green else self.fix_next(task, check_step)
+        # Build, the stage map's shared fixes step, goes back to the review that sent it; a legacy fixes step goes on to
+        # its own next step, as it always did.
+        if step.after_green:
+            nxt = None
+        elif step.name == "Build":
+            nxt = self.fix_next(task, check_step)
+        else:
+            nxt = step.next
         if nxt:
             if self.chance("forget_move"):
                 return pushed or "forgot to hand it on"
