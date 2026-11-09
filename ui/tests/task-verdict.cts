@@ -1,18 +1,20 @@
+import type * as Tasks from './tasks-page.cjs';
+import type {Page} from 'playwright';
 // A review or QA subtask's verdict (ui/app/task-code.ts taskVerdictHTML) and refusals said where they were tried.
 // Guards: the chip shows on the row, in the parent's Subtasks and in the subtask's own properties, with the judged head
 // as 7 characters, good and bad in different colours, and nothing for a subtask with no verdict; a refused subtask
 // ("already open") reads under the field it was typed in, the title kept; a refused status change reads on its row,
 // also in a narrow list where row notes hide; a person's QA waiver reads "QA waived", never as a pass. Fixtures only.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
-const at = mins => new Date(Date.now() - mins * 60000).toISOString();
-const t = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'bot:reviewer', requester_id: 'bot:lead', status: 'doing',
+const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const at = (mins: number) => new Date(Date.now() - mins * 60000).toISOString();
+const t = (id: string, title: string, over: Record<string, unknown> = {}) => ({id, title, body: 'Details.', owner_id: 'bot:reviewer', requester_id: 'bot:lead', status: 'doing',
   lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3,
   created_at: at(600), updated_at: at(30), verdict: null, verdict_head: null, ...over});
 const ALREADY = 'Review 1 is already open on this ticket for this head: task t-r1, with reviewer. Wait for its verdict.';
 const REVIEWING = 'You are reviewing this ticket, so you don\'t move it. Finish your review task t-r1 with your verdict.';
-const baseTasks = () => [
+const baseTasks = (): Tasks.Task[] => [
   t('t-dev', 'Dev 99: fix the checkout total', {owner_id: 'bot:builder', children_summary: {total: 3, done: 0, direct_total: 3, direct_done: 0}, parts: {total: 3, done: 0}}),
   t('t-r1', 'Review 1: PR #12', {_parent: 't-dev', status: 'review', verdict: 'changes', verdict_head: 'a1b2c3d4e5f6a7b8', updated_at: at(20)}),
   t('t-qa', 'QA: PR #12', {_parent: 't-dev', status: 'review', verdict: 'pass', verdict_head: '0f9e8d7c6b5a4938', updated_at: at(22)}),
@@ -20,7 +22,7 @@ const baseTasks = () => [
 ];
 // Grouped by owner, so each row carries its status chip (a status grouping says it in the heading instead).
 const local = {'hub.tasks.layout': JSON.stringify({group: {list: 'owner', foryou: 'requester'}})};
-const refuse = (page, path, method, status, detail, code) => page.route('**' + path, route => route.request().method() === method
+const refuse = (page: Page, path: string, method: string, status: number, detail: string, code: string | undefined) => page.route('**' + path, route => route.request().method() === method
   ? route.fulfill({status, contentType: 'application/json', body: JSON.stringify({error: {detail, code}})}) : route.fallback());
 
 (async () => {
@@ -28,13 +30,13 @@ const refuse = (page, path, method, status, detail, code) => page.route('**' + p
   try {
     {
       const {page, errors} = await open(browser, {hash: '#/tasks?view=list', baseTasks: baseTasks(), local});
-      const chip = key => page.locator(`#task-body [data-task-key="${key}"] [data-verdict]`);
+      const chip = (key: string) => page.locator(`#task-body [data-task-key="${key}"] [data-verdict]`);
       await chip('tt-r1').waitFor();
       assert.equal(await chip('tt-r1').locator('[data-verdict-head]').innerText(), 'a1b2c3d');
       assert.equal(await chip('tt-qa').getAttribute('data-verdict'), 'pass');
       assert.equal(await chip('tt-r2').count(), 0, 'no verdict, no chip');
       assert.equal(await chip('tt-dev').count(), 0);
-      const bg = key => chip(key).evaluate(el => getComputedStyle(el).backgroundColor);
+      const bg = (key: string) => chip(key).evaluate(el => getComputedStyle(el).backgroundColor);
       assert.notEqual(await bg('tt-r1'), await bg('tt-qa'), 'changes and pass read differently');
       // The parent's Subtasks: the same chip on each judged child.
       const peek = page.locator('#task-peek');
@@ -70,7 +72,7 @@ const refuse = (page, path, method, status, detail, code) => page.route('**' + p
       await page.locator('.prop-pop .tl-mi', {hasText: 'Done'}).first().click();
       const said = page.locator('#task-body [data-task-key="tt-r2"] [data-task-refused] .tl-note-text');
       await said.waitFor();
-      assert.ok((await said.boundingBox())?.width > 40, 'the words are drawn');
+      assert.ok((await said.boundingBox())!?.width > 40, 'the words are drawn');
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -81,7 +83,7 @@ const refuse = (page, path, method, status, detail, code) => page.route('**' + p
       const waiver = {head: HEAD, step: 'In QA', pr: 'https://github.com/acme/shop/pull/12', actor: 'human:ana',
         reason: 'Urgent checkout fix; the QA bot is down and both reviews approved this head.', at: at(10), current: true};
       const tasks = baseTasks();
-      tasks[0] = {...tasks[0], qa_waivers: [waiver]};
+      tasks[0] = {...tasks[0]!, qa_waivers: [waiver]};
       const {page, errors} = await open(browser, {hash: '#/tasks?view=list', baseTasks: tasks, local});
       await page.route('**/api/v2/tasks/t-dev', route => route.request().method() === 'GET'
         ? route.fulfill({contentType: 'application/json', body: JSON.stringify({task: tasks[0], children: [], comments: [], messages: [],
@@ -111,7 +113,7 @@ const refuse = (page, path, method, status, detail, code) => page.route('**' + p
         .evaluate(el => getComputedStyle(el).backgroundColor);
       assert.notEqual(amber, passBg, 'a waiver never looks like a pass');
       // After a push the waiver no longer covers the pull request's head.
-      tasks[0].qa_waivers = [{...waiver, current: false}];
+      tasks[0]!.qa_waivers = [{...waiver, current: false}];
       await page.evaluate(() => taskModalShow(TASKS_ST.tasks.find(t => t.id === 't-dev')));
       await page.locator('#task-modal [data-prop-row="qa-waiver"] [data-current="no"]').waitFor();
       assert.match(await page.locator('#task-modal [data-prop-row="qa-waiver"]').innerText(), /old head/);

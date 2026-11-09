@@ -50,7 +50,8 @@ async function check(engine: import('playwright').BrowserType) {
       await page.setContent('<!doctype html><html><head></head><body></body></html>');
       await page.addStyleTag({content: css});
       await page.evaluate(() => {
-        window.S = {config: {hosted: false}};
+        // The shared S type (tasks-page.d.cts) also requires me, v2 and route. The sign-in dialog reads only config.
+        window.S = {config: {hosted: false}, me: {id: 'fixture'}, v2: {needs: []}, route: '/'};
         window.writes = [];
         window.row = {id: 'fixture', state: 'starting', created_at: new Date().toISOString(), lines: []};
         window.post = async (url: string, body?: unknown) => {

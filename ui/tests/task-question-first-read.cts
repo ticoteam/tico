@@ -1,11 +1,12 @@
+import type * as Tasks from './tasks-page.cjs';
 // A task with a question to you, opened before the first Needs you list is held (boot sends that read after the roster
 // and the opening page): the plain ask shows, and its question box takes its place once a list lands, without
 // reopening the task. A first read that fails keeps the wait for the next one that answers (ui/app/task-modal.ts
 // taskQcardWait, ui/app/hub-v2.js NEEDS_FIRST).
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
-const NOW = Date.now(), at = hours => new Date(NOW - hours * 3600e3).toISOString();
+const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const NOW = Date.now(), at = (hours: number) => new Date(NOW - hours * 3600e3).toISOString();
 const late = {id: 't-late', kind: 'question', title: 'Which launch date?', body: '', owner_id: 'bot:writer', requester_id: 'bot:writer',
   status: 'waiting', waiting_on: 'human:ana', version: 1, created_at: at(5), updated_at: at(5), open_asks: 1, labels: [], tags: [],
   links: [], lane: 'company', rank: null, parts: {total: 0, done: 0}, tier: 1,
@@ -16,8 +17,8 @@ const late = {id: 't-late', kind: 'question', title: 'Which launch date?', body:
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    let release, reads = 0;
-    const held = new Promise(done => { release = done; });
+    let release!: (value?: unknown) => void, reads = 0;
+    const held = new Promise<unknown>(done => { release = done; });
     const {page, errors} = await open(browser, {hash: '#/tasks?view=list', waitForNeeds: false, extraTasks: [{...late}], beforeGoto: async p => {
       await p.route('**/api/v2/needs-you*', async route => {
         // the first read waits, then fails; the next one answers

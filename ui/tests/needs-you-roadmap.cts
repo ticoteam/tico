@@ -1,11 +1,12 @@
+import type * as Tasks from './tasks-page.cjs';
 // The Needs you card on a Product roadmap item: it finishes or comes back only by a step move, so the card offers no
 // Done, as the task window does not; it opens the task instead, and its D key sends nothing. A yes or no on the
 // person's own roadmap item goes as a comment; on a plain task it still finishes or declines it.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
-const at = minutes => new Date(Date.now() - minutes * 60000).toISOString();
-const card = (id, title, extra = {}) => ({id, kind: 'task', title, body: '', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',
+const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const at = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
+const card = (id: string, title: string, extra: Record<string, unknown> = {}) => ({id, kind: 'task', title, body: '', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',
   version: 1, labels: [], tags: [], links: [], lane: 'company', rank: null, parts: {total: 0, done: 0}, created_at: at(60), updated_at: at(60),
   conversation_id: 'c-' + id, ask: null, open_asks: 0, ...extra});
 const roadmap = {type_id: 'product-roadmap', type: {id: 'product-roadmap', name: 'Product roadmap'}, steps_only: true};

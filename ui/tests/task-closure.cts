@@ -1,7 +1,8 @@
+import type * as Tasks from './tasks-page.cjs';
 // Explicit acceptance works from Done without reopening or waking the task.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cjs') as typeof Tasks;
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
@@ -16,7 +17,7 @@ const {open} = require('./tasks-page.cjs');
     await modal.locator('[data-task-more]').click();
     await modal.getByRole('menuitem', {name: 'Close', exact: true}).click();
     await page.waitForFunction(() => document.querySelector('#task-modal [data-prop="status"]')?.textContent.includes('Closed'));
-    assert.equal(tasks.find(t => t.id === 't-receipt').status, 'closed');
+    assert.equal(tasks.find(t => t.id === 't-receipt')!.status, 'closed');
     assert.deepEqual(posts.filter(p => p.p === '/api/v2/tasks/t-receipt').map(p => p.body), [{version: 3, close: true}]);
     await modal.locator('[data-task-more]').click();
     assert.equal(await modal.getByRole('menuitem', {name: 'Close', exact: true}).count(), 0);
@@ -40,17 +41,17 @@ const {open} = require('./tasks-page.cjs');
     for (const viewport of [{width: 1440, height: 900}, {width: 390, height: 844}, {width: 375, height: 667}]) {
       const v = await open(browser, {viewport, hash: '#/tasks'});
       const head = v.page.locator('#task-modal .tmodal-head');
-      const show = async id => { await v.page.evaluate(id => taskModalShow(TASKS_ST.tasks.find(t => t.id === id)), id); await head.waitFor(); };
-      const finish = async (id, kind) => {
+      const show = async (id: string) => { await v.page.evaluate(id => taskModalShow(TASKS_ST.tasks.find(t => t.id === id)), id); await head.waitFor(); };
+      const finish = async (id: string, kind: string) => {
         await show(id);
         // Nothing in the header is cut off or pushed past the screen, and the header does not scroll sideways.
         const fits = await head.evaluate(h => h.scrollWidth <= h.clientWidth + 1
           && [...h.children].every(c => { const r = c.getBoundingClientRect(); return r.width === 0 || (r.left >= 0 && r.right <= innerWidth + 0.5); }));
         assert.ok(fits, `the header fits ${viewport.width}px`);
         await head.locator(`[data-task-finish="${kind}"]`).click();
-        await v.page.waitForFunction(() => !document.querySelector('#task-modal').open);
+        await v.page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#task-modal')!.open);
         assert.equal(await v.page.locator('dialog.task-outcome').count(), 0, 'no reason is asked');
-        return v.posts.filter(p => p.p === `/api/v2/tasks/${id}`).at(-1).body;
+        return v.posts.filter(p => p.p === `/api/v2/tasks/${id}`).at(-1)!.body;
       };
       await show('t-news');                       // a bot owns it, Ana asked: Close, no Done
       assert.equal(await head.locator('[data-task-finish="done"]').count(), 0, 'Done is the owner\'s');
@@ -70,7 +71,7 @@ const {open} = require('./tasks-page.cjs');
       await s.page.evaluate(id => taskModalShow({...TASKS_ST.tasks.find(t => t.id === id),
         children_summary: {total: 2, open: 2, done: 0, direct_total: 2, direct_done: 0}}), id);
       await head.locator(`[data-task-finish="${kind}"]`).click();
-      await s.page.waitForFunction(() => !document.querySelector('#task-modal').open);
+      await s.page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#task-modal')!.open);
       assert.equal(await s.page.locator('dialog.task-children-choice').count(), 0);
       assert.deepEqual(s.posts.filter(p => p.p === `/api/v2/tasks/${id}`).map(p => p.body), [expected]);
     }

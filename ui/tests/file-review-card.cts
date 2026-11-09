@@ -1,32 +1,33 @@
+import type * as Tasks from './tasks-page.cjs';
 // A file review on the question card (ui/app/question-card.ts, backend/file_reviews.py): the versions under review show
 // inline, four at most and the rest as chips; Request changes waits for the note that says what to change; in a pick
 // each option sits under its own picture, and the spend a pick approves is said under them.
 // REVIEW_SHOTS=<dir> also saves the Decide card at desktop and phone width.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const zlib = require('node:zlib');
-const {open} = require('./tasks-page.cjs');
+const {open} = require('./tasks-page.cjs') as typeof Tasks;
 const SHOTS = process.env.REVIEW_SHOTS || '';
-const NOW = Date.now(), at = hours => new Date(NOW - hours * 3600e3).toISOString();
+const NOW = Date.now(), at = (hours: number) => new Date(NOW - hours * 3600e3).toISOString();
 
 // A plain 16:9 picture in one colour, so each card is told apart in the screenshots.
-function png(r, g, b, w = 320, h = 180) {
-  const crc = buf => { let c = ~0; for (const x of buf) { c ^= x; for (let k = 0; k < 8; k++) c = c >>> 1 ^ (0xedb88320 & -(c & 1)); } return ~c >>> 0; };
-  const chunk = (type, data) => { const len = Buffer.alloc(4), sum = Buffer.alloc(4), body = Buffer.concat([Buffer.from(type), data]);
+function png(r: number, g: number, b: number, w = 320, h = 180) {
+  const crc = (buf: Buffer) => { let c = ~0; for (const x of buf) { c ^= x; for (let k = 0; k < 8; k++) c = c >>> 1 ^ (0xedb88320 & -(c & 1)); } return ~c >>> 0; };
+  const chunk = (type: string, data: Buffer) => { const len = Buffer.alloc(4), sum = Buffer.alloc(4), body = Buffer.concat([Buffer.from(type), data]);
     len.writeUInt32BE(data.length); sum.writeUInt32BE(crc(body)); return Buffer.concat([len, body, sum]); };
   const head = Buffer.alloc(13); head.writeUInt32BE(w, 0); head.writeUInt32BE(h, 4); head[8] = 8; head[9] = 2;
   const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(w * 3).fill(Buffer.from([r, g, b]))]);
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', head),
     chunk('IDAT', zlib.deflateSync(Buffer.concat(Array(h).fill(row)))), chunk('IEND', Buffer.alloc(0))]);
 }
-const COLOURS = [[214, 120, 64], [72, 132, 201], [96, 170, 110], [180, 90, 160], [200, 180, 70]];
-const file = (n, title) => ({id: `file-${n}`, file_id: `file-${n}`, version: 2, ref: `file-${n}@2`, title, kind: 'image',
+const COLOURS: [number, number, number][] = [[214, 120, 64], [72, 132, 201], [96, 170, 110], [180, 90, 160], [200, 180, 70]];
+const file = (n: number, title: string) => ({id: `file-${n}`, file_id: `file-${n}`, version: 2, ref: `file-${n}@2`, title, kind: 'image',
   name: `${title.toLowerCase().replace(/ /g, '-')}.png`, size: 4000, content_type: 'image/png', width: 1280, height: 720,
   url: `/api/v2/files/file-${n}?v=2`, src: `/visuals/tok${n}`});
 
-function reviewItem(id, files, {pick = false, spend = null} = {}) {
+function reviewItem(id: string, files: {title: string; file_id: string; version: number}[], {pick = false, spend = null}: {pick?: boolean; spend?: Record<string, unknown> | null} = {}) {
   const options = pick
     ? [...files.map(f => ({label: f.title, then: 'This one is approved'})), {label: 'Request changes', then: 'Your note on what to change goes back'}]
     : [{label: 'Approve', then: 'This version is approved'}, {label: 'Request changes', then: 'Your note on what to change goes back'}];
@@ -50,22 +51,22 @@ const thumbs = reviewItem('t-thumbs', [file(0, 'Bright kitchen'), file(1, 'Blue 
   try {
     let items = [cut];
     const {page, errors} = await open(browser, {viewport: {width: 1440, height: 1000}, hash: '#/tasks', extraTasks: [cut, thumbs].map(x => ({...x}))});
-    const answers = [];
+    const answers: Record<string, unknown>[] = [];
     await page.route('**/visuals/**', route => {
       const n = Number(new URL(route.request().url()).pathname.replace(/\D/g, '')) % COLOURS.length;
-      return route.fulfill({contentType: 'image/png', body: png(...COLOURS[n])});
+      return route.fulfill({contentType: 'image/png', body: png(...COLOURS[n]!)});
     });
     await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items})}));
     await page.route('**/api/v2/tasks/*/comments', route => route.fulfill({contentType: 'application/json', body: '{"comments":[]}'}));
     await page.route('**/api/v2/tasks/*/files', route => route.fulfill({contentType: 'application/json', body: '{"files":[]}'}));
     await page.route('**/api/v2/tasks/*/answers', route => {
-      answers.push({task: decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-2)), ...route.request().postDataJSON()});
+      answers.push({task: decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-2)!), ...route.request().postDataJSON()});
       return route.fulfill({contentType: 'application/json', body: '{}'});
     });
-    const shoot = async name => {
+    const shoot = async (name: string) => {
       if (!SHOTS) return;
       fs.mkdirSync(SHOTS, {recursive: true});
-      for (const [width, height, size] of [[1440, 1000, 'desktop'], [390, 900, 'phone']]) {
+      for (const [width, height, size] of [[1440, 1000, 'desktop'], [390, 900, 'phone']] as [number, number, string][]) {
         await page.setViewportSize({width, height});
         await page.waitForTimeout(150);
         await page.screenshot({path: path.join(SHOTS, `${name}-${size}.png`)});
@@ -77,9 +78,9 @@ const thumbs = reviewItem('t-thumbs', [file(0, 'Bright kitchen'), file(1, 'Blue 
     // Four of the five versions show as pictures, the fifth as a chip.
     await page.evaluate(async () => { await v2Refresh(); decideOpen('task:t-cut'); });
     await page.locator('.decide .dc-card[data-key="task:t-cut"]').waitFor();
-    await page.waitForFunction(() => [...document.querySelectorAll('.decide .qc-review .vcard img')].filter(i => i.complete && i.naturalWidth).length === 4);
+    await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>('.decide .qc-review .vcard img')].filter(i => i.complete && i.naturalWidth).length === 4);
     const shown = await page.evaluate(() => ({
-      cards: [...document.querySelectorAll('.decide .qc-review .vcard')].map(c => c.querySelector('.vcard-title').textContent),
+      cards: [...document.querySelectorAll('.decide .qc-review .vcard')].map(c => c.querySelector('.vcard-title')!.textContent),
       chips: [...document.querySelectorAll('.decide .qc-review .qc-rchips .dc-file .dc-fname')].map(x => x.textContent),
       buttons: [...document.querySelectorAll('.decide .dc-actions button')].map(b => b.querySelector('.qc-bl')?.textContent.replace(/[A-Z0-9]$/, '').trim())}));
     assert.deepEqual(shown, {cards: ['Opening', 'Kitchen', 'Bathroom', 'Patio'], chips: ['Credits'],
@@ -90,13 +91,13 @@ const thumbs = reviewItem('t-thumbs', [file(0, 'Bright kitchen'), file(1, 'Blue 
     await ready();
     await page.locator('.decide .dc-actions [data-dc="pick"][data-i="1"]').click();
     const asked = await page.evaluate(() => ({focused: document.activeElement === document.querySelector('.decide .dc-note textarea'),
-      placeholder: document.querySelector('.decide .dc-note textarea').placeholder}));
+      placeholder: document.querySelector<HTMLTextAreaElement>('.decide .dc-note textarea')!.placeholder}));
     assert.deepEqual(asked, {focused: true, placeholder: 'What should change?'});
     assert.equal(answers.length, 0);
     await page.keyboard.type('Trim the patio shot.');
     await ready();
     await page.locator('.decide .dc-actions [data-dc="pick"][data-i="1"]').click();
-    await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
+    await page.waitForFunction(() => !DEC!.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
     assert.deepEqual(answers.shift(), {task: 't-cut', target: {comment: 'q-t-cut'}, answers: {decision: ['Request changes']},
       other: 'Trim the patio shot.'});
 
@@ -104,9 +105,9 @@ const thumbs = reviewItem('t-thumbs', [file(0, 'Bright kitchen'), file(1, 'Blue 
     items = [thumbs];
     await page.evaluate(async () => { decideStop(); await v2Refresh(); decideOpen('task:t-thumbs'); });
     await page.locator('.decide .dc-card[data-key="task:t-thumbs"]').waitFor();
-    await page.waitForFunction(() => [...document.querySelectorAll('.decide .qc-rpick .vcard img')].filter(i => i.complete && i.naturalWidth).length === 2);
+    await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>('.decide .qc-rpick .vcard img')].filter(i => i.complete && i.naturalWidth).length === 2);
     const picks = await page.evaluate(() => ({
-      picks: [...document.querySelectorAll('.decide .qc-rpick')].map(p => [p.querySelector('.vcard-title').textContent, p.querySelector('.qc-bl').textContent.trim()]),
+      picks: [...document.querySelectorAll('.decide .qc-rpick')].map(p => [p.querySelector('.vcard-title')!.textContent, p.querySelector('.qc-bl')!.textContent!.trim()]),
       changes: document.querySelector('.decide .qc-changes')?.textContent.trim(),
       spend: document.querySelector('.decide .qc-spend')?.textContent}));
     // Each option is its own button: the action row keeps only Skip.
@@ -116,7 +117,7 @@ const thumbs = reviewItem('t-thumbs', [file(0, 'Bright kitchen'), file(1, 'Blue 
     await shoot('review-pick');
     await ready();
     await page.locator('.decide .qc-rpick [data-dc="pick"][data-i="0"]').click();
-    await page.waitForFunction(() => !DEC.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
+    await page.waitForFunction(() => !DEC!.pending && !DEC_OUTBOX.size, null, {timeout: 8000});
     assert.deepEqual(answers.shift(), {task: 't-thumbs', target: {comment: 'q-t-thumbs'}, answers: {decision: ['Bright kitchen']}});
 
     // The task page's Needs you box shows the same files.

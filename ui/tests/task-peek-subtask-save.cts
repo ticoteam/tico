@@ -1,10 +1,11 @@
+import type * as Tasks from './tasks-page.cjs';
 // A subtask opened from its parent in the peek stays open after a save takes it out of the filtered list: the peek
 // never moves on to its neighbour (a declined sibling), so the next edit lands on the task that was saved (Dev 283).
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
-const at = mins => new Date(Date.now() - mins * 60000).toISOString();
-const t = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'bot:reviewer', requester_id: 'bot:lead', status: 'doing',
+const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const at = (mins: number) => new Date(Date.now() - mins * 60000).toISOString();
+const t = (id: string, title: string, over: Record<string, unknown> = {}) => ({id, title, body: 'Details.', owner_id: 'bot:reviewer', requester_id: 'bot:lead', status: 'doing',
   lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3,
   created_at: at(600), updated_at: at(30), ...over});
 (async () => {
@@ -18,7 +19,7 @@ const t = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'bo
     ];
     const {page, errors, posts} = await open(browser, {hash: '#/tasks?owner=bot:reviewer&view=list', baseTasks});
     const peek = page.locator('#task-peek');
-    const title = name => page.waitForFunction(name => document.querySelector('#task-peek .tmodal-title')?.textContent === name, name);
+    const title = (name: string) => page.waitForFunction(name => document.querySelector('#task-peek .tmodal-title')?.textContent === name, name);
     const writes = () => posts.filter(x => /^\/api\/v2\/tasks\/t-/.test(x.p)).map(x => [x.p, x.body]);
     assert.equal(await page.locator('[data-task-key="tt-other"]').count(), 0, 'the list is filtered');
     assert.equal(await page.locator('[data-task-key="tt-dup"]').count(), 1, 'the declined sibling is a row of the list');
@@ -33,7 +34,7 @@ const t = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'bo
     await peek.locator('.prop-pop [data-prop-pick="done"]').click();
     await page.waitForFunction(() => !document.querySelector('[data-task-key="tt-r1"]') && !TASKS_ST.pendingFinish);
     await page.waitForTimeout(300);
-    assert.equal(await page.evaluate(() => document.querySelector('#task-peek').dataset.task), 't-r1', 'the peek keeps the saved task');
+    assert.equal(await page.evaluate(() => (document.querySelector('#task-peek') as HTMLElement).dataset.task), 't-r1', 'the peek keeps the saved task');
     assert.equal(await page.evaluate(() => TASKS_ST.peek), 'tt-r1');
     await title('Review 1: PR #12');
     // The next edit goes to the same task, never to the declined sibling.

@@ -1,11 +1,12 @@
+import type * as Tasks from './tasks-page.cjs';
 // The Needs you card: a bot's question that says what it will do if nobody answers shows it on the card, in plain words, with the
 // day it goes ahead (backend/ask_deadlines.py), as a small line at the card's foot, never as the recommendation. A send
 // waits for the answer, and the card says so.
-const {chromium} = require('playwright');
+const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs');
-const NOW = Date.now(), at = minutes => new Date(NOW - minutes * 60000).toISOString();
-const question = (id, title, ifNoAnswer, goesAheadAt) => ({id, kind: 'question', title, body: '', owner_id: 'bot:writer',
+const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const NOW = Date.now(), at = (minutes: number) => new Date(NOW - minutes * 60000).toISOString();
+const question = (id: string, title: string, ifNoAnswer: Record<string, unknown>, goesAheadAt: string | null) => ({id, kind: 'question', title, body: '', owner_id: 'bot:writer',
   requester_id: 'bot:writer', status: 'waiting', waiting_on: 'human:ana', version: 2, created_at: at(400), updated_at: at(360), open_asks: 1,
   ask: {id: 'q-' + id, sender_id: 'bot:writer', recipient_id: 'human:ana', body: title, created_at: at(300), goes_ahead_at: goesAheadAt,
     refs: {task: id, questions: [{id: 'decision', header: '', question: title, multi: false, other: true,
@@ -22,7 +23,7 @@ const items = [
     await page.route('**/api/v2/tasks/*/comments', route => route.fulfill({contentType: 'application/json', body: '{"comments":[]}'}));
     await page.route('**/api/v2/tasks/*/files', route => route.fulfill({contentType: 'application/json', body: '{"files":[]}'}));
     await page.evaluate(async () => { await v2Refresh(); decideOpen('task:t-archive'); });
-    const line = async id => {
+    const line = async (id: string) => {
       await page.locator(`.decide .dc-card[data-key="task:${id}"]`).waitFor();
       return page.locator('.decide .dc-card .qc-fallback').textContent();
     };
@@ -30,9 +31,9 @@ const items = [
     assert.equal(await line('t-archive'), `If you don't answer by ${day}: Yes`);
     // At the bottom of the card's words, small, and no button: Do what you recommend is not offered on a question card.
     const foot = await page.evaluate(() => {
-      const line = document.querySelector('.decide .qc-fallback'), body = line.parentElement;
+      const line = document.querySelector<HTMLElement>('.decide .qc-fallback')!, body = line.parentElement!;
       const after = [...body.children].slice([...body.children].indexOf(line) + 1).filter(x => !x.matches('.dc-details'));
-      return {after: after.length, small: parseFloat(getComputedStyle(line).fontSize) < parseFloat(getComputedStyle(document.querySelector('.decide .dc-q')).fontSize),
+      return {after: after.length, small: parseFloat(getComputedStyle(line).fontSize) < parseFloat(getComputedStyle(document.querySelector('.decide .dc-q')!).fontSize),
         rec: !!document.querySelector('.decide .dc-rec'), button: line.closest('button') !== null};
     });
     assert.deepEqual(foot, {after: 0, small: true, rec: false, button: false});
