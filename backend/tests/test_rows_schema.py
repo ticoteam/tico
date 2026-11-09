@@ -104,6 +104,7 @@ TABLES = {
     rows.EntityAttributeRow: "entity_attributes",
     rows.EntityConnectionRow: "entity_connections",
     rows.EntityExternalRefRow: "entity_external_refs",
+    rows.EntityLookupRow: "entity_lookups",
     rows.EntityMentionRow: "entity_mentions",
     rows.EntityMergeRow: "entity_merges",
     rows.EntityNoteRow: "entity_notes",
@@ -114,6 +115,7 @@ TABLES = {
     rows.EntityValueRow: "entity_values",
     rows.EntityViewRow: "entity_views",
     rows.LinkTypeRow: "link_types",
+    rows.SetupHandoffRow: "setup_handoffs",
 }
 
 
@@ -336,6 +338,7 @@ UNTYPED = frozenset(
         "fin_settings",
         "fin_settlements",
         "fin_statements",
+        "fin_subscriptions",
         "fin_tax_jurisdictions",
         "fin_tax_seeds",
         "fin_transfers",
@@ -488,7 +491,6 @@ UNTYPED = frozenset(
         "rule_due_status",
         "rule_events_seen",
         "rule_reads",
-        "rule_sources",
         "rule_suggestions",
         "rule_task_runs",
         "rule_task_state",

@@ -204,6 +204,17 @@ def repository_waits(ctx: Context) -> tuple[str, bool]:
     return "Done", True
 
 
+def entity_links(ctx: Context) -> tuple[str | None, bool]:
+    # The Directory's linker (backend/entities/linker.py) reads the texts written since its cursors and writes their
+    # mentions in one short transaction of its own, so no text's write waits for it.
+    from .entities import linker
+
+    done = linker.run_pass(ctx.store, lambda: ctx.locked("entity_links"))
+    if not done["texts"]:
+        return None, True
+    return f"Linked {done['texts']} texts", False
+
+
 def call_sweeps(ctx: Context) -> tuple[str, bool]:
     # Live-meeting windows a lost routing thread (a restart) had not routed (backend/live_meetings.py), and
     # calls kept to their threads: people and bots whose access ended, and a LiveKit that restarted.
@@ -303,6 +314,15 @@ STEPS = [
     Step("approval_expiry", "Approval expiry", "due", HOUR, S.step_approval_expiry, failure="approval_expiry"),
     Step(
         "repository_waits", "Repository and setup waits", "poll", None, repository_waits, capture="scheduler", loop=True
+    ),
+    Step(
+        "entity_links",
+        "Directory links",
+        "recovery",
+        None,
+        entity_links,
+        failure="entity_links",
+        capture="entity_links",
     ),
     # It asks LiveKit, so it is timed as the polls are: never more often than every 10 s.
     Step("call_sweeps", "Calls and live meetings", "recovery", POLL_FLOOR, call_sweeps, loop=True),

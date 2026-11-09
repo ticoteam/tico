@@ -1,0 +1,7 @@
+{
+  "backend/github_app.py": {
+    "B904": 1,
+    "BLE001": 4,
+    "F401": 1
+  }
+}
