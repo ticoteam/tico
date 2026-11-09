@@ -1345,6 +1345,7 @@ class StageDecisionRow(TypedDict):
     undone_at: str | None
     undone_by: str | None
     created_at: str
+    work_digest: str | None
 
 
 class StageRequirementVersionRow(TypedDict):

@@ -13,6 +13,7 @@ from backend.finance import actions as FA
 from backend.finance import sync
 from backend.finance import reads as FR
 from backend.finance.core import feeds as F
+from backend.finance.store import ap as SAP
 from backend.finance.store import ledger as SL
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     ACME_ADDRESS,
@@ -1037,10 +1038,7 @@ def test_phase_two_keys_a_budget_vendor_name_and_never_takes_a_contact_id(books)
         assert (took.status, took.code) == ("failed", "invalid")
         book = str(c.execute("SELECT id FROM fin_books").fetchone()[0])
         other = _vendor(c, "Globex")
-        c.execute(
-            "INSERT INTO fin_vendor_aliases(book_id, name_key, contact_id, created_at) VALUES(?,?,?,?)",
-            (book, vendor, other, AT),
-        )  # as if it got in
+        SAP.alias_add(c, book, vendor, other, AT)  # as if it got in
         assert SB.budgets(c, book)[held].vendor == vendor
 
 
