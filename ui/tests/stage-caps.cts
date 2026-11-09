@@ -61,8 +61,8 @@ async function open(browser: Browser, opts: {live?: boolean; snoozed?: string[]}
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => { try { localStorage.setItem('tico.theme', 'dark'); } catch {} });
   const me = {id: 'ana', role: 'owner', name: 'Ana Ruiz', email: 'ana@example.com', cloud: true, registered: true, owner_id: 'ana', mover: true, config: {company_name: 'Acme Bikes'}};
-  const settings = {id: 'dev', name: 'Dev tickets', prefix: 'D', goal: null, judge_model: null, visibility: 'company', factory_id: null,
-    owner_id: 'human:ana', manager_id: null, members: [], judge_models: ['haiku-5.5'], default_judge_model: 'haiku-5.5'};
+  const settings = {id: 'dev', name: 'Dev tickets', prefix: 'D', goal: null, visibility: 'company', factory_id: null,
+    owner_id: 'human:ana', manager_id: null, members: []};
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});

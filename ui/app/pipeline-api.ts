@@ -598,18 +598,12 @@ interface PipelineSettings {
   name: string;
   prefix: string | null;
   goal: string | null;
-  /** A key of judge_models, or null for the default judge. */
-  judge_model: string | null;
   visibility: 'company' | 'members';
   factory_id: string | null;
   owner_id: string | null;
   manager_id: string | null;
   /** Actor references, human:<id> or bot:<slug>. Only a members-only pipeline keeps a list. */
   members: string[];
-  /** The judge models a pipeline may be given, in the order the server lists them. */
-  judge_models: string[];
-  /** The judge a pipeline has when its judge_model is null. */
-  default_judge_model: string;
   /** The stuck rule: null is the default in stuck_rule_defaults. */
   stuck_after_hours: number | null;
   ask_person_after_hours: number | null;
@@ -635,7 +629,7 @@ async function pipelineSettings(pipelineId: string): Promise<PipelineSettings> {
 }
 
 /**
- * Save some of a pipeline's settings: a field left out stays as it is. An empty goal or a null judge_model clears it;
+ * Save some of a pipeline's settings: a field left out stays as it is. An empty goal clears it;
  * visibility "members" takes the pipeline out of its factory, which the server clears.
  */
 async function pipelinePatchSettings(pipelineId: string, fields: Record<string, unknown>): Promise<void> {
