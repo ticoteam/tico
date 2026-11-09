@@ -3,6 +3,7 @@ and the three default budgets, none with an amount until a person sets one (the 
 backend/usage_limits.py). Safe to run again: it fills in what is missing and changes nothing a person set."""
 
 import sqlite3
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from .context import APPROVER_KEY, OWNER_KEY, now
@@ -24,6 +25,7 @@ CHART = (
     ("1100", "Gateway credit", "asset", "prepaid", ""),
     ("1200", "Accounts receivable", "asset", "receivable", ""),
     ("2000", "Accounts payable", "liability", "payable", ""),
+    ("2100", "Accrued expenses", "liability", "accrued", ""),
     ("3000", "Owner's equity", "equity", "", ""),
     ("3900", "Opening balance equity", "equity", "opening", ""),
     ("4000", "Revenue", "income", "", ""),
@@ -32,11 +34,30 @@ CHART = (
     ("5200", "Video production", "expense", "video", "5000"),
     ("6000", "Operating expenses", "expense", "", ""),
     ("6100", "Software", "expense", "software", "6000"),
+    ("6150", "CI", "expense", "ci", "6000"),
     ("6900", "Other expenses", "expense", "other", "6000"),
 )
 AI, VIDEO = "5100", "5200"
-# (name, account code or "" for the catch-all, at-limit action)
-BUDGETS = (("AI services", AI, "decline"), ("Video production", VIDEO, "decline"), ("Other expenses", "", "ask"))
+# Build time on remote test runs and CI (backend/ci_runs.py) posts here against Accrued expenses (2100).
+CI, ACCRUED = "6150", "2100"
+ADDED_SUBTYPES = ("accrued", "ci")  # the accounts CI adds to every book (the rows above)
+
+
+def _free_code(base: str, taken: Collection[str]) -> str:
+    code = int(base)
+    while str(code) in taken:
+        code += 1
+    return str(code)
+
+
+# (name, account code or "" for the catch-all, at-limit action). CI warns and never refuses: its daily share is set by
+# the amount a person gives it, and the permit (ci_runs.permit) is what refuses a builder's run, not this budget.
+BUDGETS = (
+    ("AI services", AI, "decline"),
+    ("Video production", VIDEO, "decline"),
+    ("Other expenses", "", "ask"),
+    ("CI", CI, "warn"),
+)
 
 
 @dataclass(frozen=True)
@@ -77,6 +98,10 @@ def setup(
         SL.set_setting(c, APPROVER_KEY, _actor(finance_approver), by, at)
     accounts = {a.code: a for a in SL.accounts(c, book.id).values()}
     for code, name, kind, subtype, parent in CHART:
+        if subtype in ADDED_SUBTYPES:  # the first free code from the chart's, on a book whose code is another account
+            if any(a.subtype == subtype for a in accounts.values()):
+                continue
+            code = _free_code(code, accounts)
         if code not in accounts:
             made = Account(
                 id=SL.new_id(),
@@ -104,7 +129,9 @@ def setup(
     named = {(b.account_id, b.catch_all): b.id for b in existing.values() if not b.parent_id}
     ids: dict[str, str] = {}
     for name, code, at_limit in BUDGETS:
-        account_id = accounts[code].id if code else ""
+        # CI's account is the one of subtype ci: its code may be another account's on an older book.
+        account = next((a for a in accounts.values() if a.subtype == "ci"), None) if code == CI else accounts.get(code)
+        account_id = account.id if code and account else ""
         key = (account_id, not code)
         if key in named:
             ids[name] = named[key]

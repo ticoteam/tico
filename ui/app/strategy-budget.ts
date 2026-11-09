@@ -37,7 +37,7 @@ interface BudgetCap { sender: string; receiver: string; per_day?: number | null;
 interface BudgetGroup { id: string; name?: string; lead?: string; order?: number }
 type BudgetCapsReply = { caps?: BudgetCap[] };
 type BudgetGroupsReply = BudgetGroup[] | { groups?: BudgetGroup[] };
-type BudgetUsage = import('../types/api').Usage;
+type BudgetUsage = Omit<import('../types/api').Usage, 'rows'> & { rows?: UseRow[] };   // the rows are usage.ts's UseRow
 interface BudgetPerson { id?: string; name?: string; role?: string; team?: string; hidden?: boolean }
 // One entry of the org tree (sidebar.ts orgTreeWithHelpers): a group, a person or a bot (recruiting seats left off). A
 // bot's name is its slug (GET /api/employees always sends it). The tree reads person and order off every kind (a group

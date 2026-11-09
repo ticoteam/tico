@@ -51,7 +51,7 @@ do. `check.sh` prints one line per check with its time; a check whose inputs did
 
 `check.sh` runs the checks CI's static job runs, on what you changed: the Python lint baseline and ruff format, shellcheck,
 actionlint, the migration order, the UI API types, UI strict (every script TypeScript), the UI source suffix check, the
-OpenAPI document, Biome,
+OpenAPI spec (generated, never committed), Biome,
 the UI's API paths, the runner wire contract, and basedpyright on the backend against its baseline. It also runs cargo fmt on the Rust crates. `scripts/check.sh --all` runs every check on every tracked
 file, which is what CI's static job runs on each pull request.
 
@@ -70,14 +70,7 @@ Where the local gate differs from CI:
 - Tests, clippy, the desktop app, the recorder and the Caddy checks are not in `check.sh`. The merge queue runs the tests a change reaches; run the ones you touched with `scripts/remote.py`.
 - Diff-aware skips: a check is skipped only when no file it reads changed. A skip that should have run is a bug in its trigger.
 
-A clone that rebases also registers the merge driver for `docs/openapi/v2.json` once. It is separate from the hook:
-
-```bash
-git config merge.tico-json.driver 'python3 scripts/json_merge.py %O %A %B'
-```
-
-That makes a rebase merge two edits to `docs/openapi/v2.json` by key (`scripts/json_merge.py`), so they stop
-conflicting; without it git merges that file as text. The lint and type baselines need no driver: each source file's
+The lint and type baselines need no merge driver: each source file's
 findings are one file under `baselines/ruff/` and `baselines/pyright/`, so two branches that fix different files change
 different files and merge as text. (GitHub's "Update branch" button and the merge queue merge as text too; the merge
 queue runs no drivers at all, which is why the baselines are split.) `ruff-baseline.toml` and `.basedpyright/baseline.json`
@@ -87,8 +80,8 @@ ruff against `ruff-baseline.toml`, which extends `ruff.toml`; `ruff.toml` never 
 and `uvx ruff@0.15.9 format` needs no generated file. A branch from before the split tracks the old single files: rebase
 it, then run
 `python3 scripts/lint_baseline.py --migrate` and `python3 scripts/pyright_baseline.py --migrate` on its own counts and
-entries, and commit. The generated `ui/types/api.d.ts` is not committed: `scripts/check_ui_types.sh` writes it.
-
+entries, and commit. The generated `ui/types/api.d.ts` and the API spec are not committed: `scripts/check_ui_types.sh`
+writes the first, and `python3 -m backend.openapi_v2` prints the second.
 shellcheck and actionlint are pinned versions downloaded on first use and checked against their SHA-256 (see
 `scripts/pinned_tool.sh`); they are cached under `~/.cache/tico/tools`.
 
@@ -195,13 +188,13 @@ company already owns, so their commits need no sign-off, and their pull requests
 
 ## Releases
 
-Don't edit CHANGELOG.md in a PR. The Technical Writer writes each release's notes after it is published.
+Release notes are on each release's approval issue (label release-approval).
 
-A release is a version tag, and contributors do not tag. Tico releases from release windows (weekdays 07:30, 11:00,
-14:00 and 20:30 Los Angeles time, weekends 07:30 and 15:00):
-GitHub Actions validates main's head and ships the first green candidate to Tico Team's install (the canary). Stable
-(TIDY) takes a canary release only after a person with write access approves its release notes, on that release's
-`release-approval` issue (the `approved` label, or a `/approve` comment). A hotfix is for major production issues only.
-The Release Manager bot no longer tags or rolls out Tico releases; it only monitors them. The details are in
-[docs/releasing.md](docs/releasing.md#release-windows), and the approval steps are in
+A release is a version tag, and contributors do not tag. Tico releases on its own, at any hour: whenever main has
+merged work past the newest release and no candidate is in flight, GitHub Actions validates main's head and ships the
+first green candidate to Tico Team's install (the canary). Stable (TIDY) takes it once it is approved: automatically
+when its notes list no High risk item and `RELEASE_NEEDS_PERSON` is off (the default), otherwise by a person with write
+access on that release's `release-approval` issue (the `approved` label, or a `/approve` comment). A hotfix is for major
+production issues only. The Release Manager bot no longer tags or rolls out Tico releases; it only monitors them. The
+details are in [docs/releasing.md](docs/releasing.md#the-release-train), and the approval steps are in
 [docs/releasing.md](docs/releasing.md#approval).

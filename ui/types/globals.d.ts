@@ -23,7 +23,7 @@ interface Window {
 /** Vendored marked.min.js, loaded by a plain <script> in index.html. */
 declare var marked: { parse(src: string, options?: object): string };
 /** Vendored livekit-client.umd.min.js. */
-declare var LivekitClient: any;
+declare var LivekitClient: LivekitNamespace;
 
 declare var TicoModelLogin: any;
 declare var cloudAgentHire: any;
@@ -67,6 +67,6 @@ declare var ticoAssistantName: any;
 declare var ticoBootSnap: any;
 declare var ticoBootTiming: BootTimingReport | undefined;
 declare var ticoIsCloud: any;
-declare var ticoPageHidden: any;
+declare var ticoPageHidden: (() => { inCall: boolean }) | undefined;
 declare var ticoSearch: any;
 declare var ticoTheme: any;

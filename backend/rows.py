@@ -1113,6 +1113,34 @@ class SkillDeviceCodeRow(TypedDict):
     client_hash: str | None
 
 
+class CiRunRow(TypedDict):
+    id: int
+    kind: str
+    status: str
+    remote_id: str
+    github_run_id: str
+    task_id: str
+    bot: str
+    cpus: int
+    requested_minutes: int
+    minutes: int
+    reserve_cents: int
+    cost_cents: int
+    hold_id: str
+    entry_id: str
+    reason: str
+    created_at: str
+    seen_at: str
+
+
+class CiRunExtensionRow(TypedDict):
+    id: int
+    task_id: str
+    minutes: int
+    granted_by: str
+    created_at: str
+
+
 class FactoryRow(TypedDict):
     """One `factories` row (SELECT *)."""
 
@@ -1217,6 +1245,7 @@ class PipelineLinkRow(TypedDict):
     created_by: str | None
     created_at: str
     retired_at: str | None
+    fires: str
 
 
 class PipelineManagerActionRow(TypedDict):

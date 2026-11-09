@@ -3,7 +3,7 @@
 import type {Browser, Page} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {open} = require('./tasks-page.cts') as {open: (browser: Browser, opts?: {hash?: string; local?: Record<string, string>}) => Promise<{page: Page; errors: string[]}>};
+const {open} = require('./tasks-page.cjs') as {open: (browser: Browser, opts?: {hash?: string; local?: Record<string, string>}) => Promise<{page: Page; errors: string[]}>};
 const {t} = require('./support/load.cjs') as typeof import('./support/load.cjs');
 const KEY = 'tico.decide.outbox';
 const saved = JSON.stringify([{me: 'ana', key: 'task:t-q1', writes: [

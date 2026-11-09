@@ -26,7 +26,7 @@ declare function taskChatLive(chat: unknown): void;
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const path = require('node:path') as typeof import('node:path');
-const {open} = require('./task-code.cts') as {open: (browser: Browser, opts?: Record<string, unknown>) => Promise<Visit>};
+const {open} = require('./task-code.cjs') as {open: (browser: Browser, opts?: Record<string, unknown>) => Promise<Visit>};
 const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 const gate = () => { let resolve!: (value?: unknown) => void; const promise = new Promise<unknown>(r => resolve = r); return {promise, resolve}; };
 const shots = process.env.TICO_DETAIL_SHOTS;

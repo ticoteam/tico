@@ -70,85 +70,31 @@ RUST_INPUTS = {
         "contracts/runner/",
     ),
 }
-CHANGELOG_REFUSAL = (
-    "No PR edits CHANGELOG.md; the Technical Writer writes notes at the release cut. Remove your CHANGELOG.md changes."
-)
-RELEASE_TRAILER = re.compile(r"^Changelog-Release:[ \t]*v?(\d+\.\d+\.\d+)[ \t]*$", re.M)
 # Each check VM has 4 vCPUs (the largest size these checks use) and runs 4 test workers. Groups are sized so a VM
-# finishes in about TICO_CI_JOB_SECONDS, setup included. Short Spot jobs are rarely interrupted and lose little when one is.
-# The cap only guards against a runaway plan. At 16 it held the suite to 16 VMs once the measured default suite grew
-# past 16 x 540 s (Oct 23: 3,300 one-worker seconds; Nov 5: 39,900), so every full run's shards took 11-14 minutes.
+# finishes in about TICO_CI_JOB_SECONDS (330 s), setup included: under 7 minutes with room for estimate error. Measured
+# on Nov 9 (queue run 42558912296): a Python VM's setup is 2.2-2.5 minutes (SETUP_SECONDS), and its tests ran about 1.3x
+# the recorded seconds the plan packs by. Short Spot jobs are rarely interrupted and lose little when one is.
+# GitHub Enterprise allows 500 concurrent hosted jobs for the organisation (it was about 60), so a run spreads its tests
+# over more, shorter VMs rather than packing them into a few long ones. MAX_JOBS is a runaway guard, not a capacity limit.
 WORKERS = 4
-JOB_SECONDS = float(os.environ.get("TICO_CI_JOB_SECONDS", 300))
-SETUP_SECONDS = {"python": 45, "browser": 70}  # measured boot, checkout and warm install
-MAX_JOBS = int(os.environ.get("TICO_CI_MAX_JOBS", 64))
-# A VM carries at least MIN_JOB_SECONDS of tests per worker, setup excluded: below that, setup is most of its time, so a
-# small remainder folds into the VMs before it (a selection under 2 x 5 minutes of 4-worker time is one VM). A plan
-# raises the target toward its cap to keep its test jobs (the matrix plus the factory legs) within CEILING, which is
-# about; the cap is the longest VM a plan asks for. Every queue group and pull request shares the organisation's ~60
-# concurrent hosted jobs, so a queue group packs into fewer, longer VMs (QUEUE_MAX_JOB_SECONDS): each VM spends about
-# two minutes booting and installing, and fewer VMs is fewer job-minutes for the same tests.
-MIN_JOB_SECONDS = 300
-MAX_JOB_SECONDS = 480
-QUEUE_MAX_JOB_SECONDS = 720
+JOB_SECONDS = float(os.environ.get("TICO_CI_JOB_SECONDS", 330))
+SETUP_SECONDS = {"python": 150, "browser": 120}  # measured boot, checkout, free disk and warm install
+MAX_JOBS = int(os.environ.get("TICO_CI_MAX_JOBS", 40))
+# The planner never stretches a plan past its target: MAX_JOB_SECONDS equals JOB_SECONDS, so every VM is planned at the
+# target and CEILING only reports the job count. A full queue group needs about 36 Python VMs at this target (the
+# recorded suite is about 25,800 one-worker seconds); CEILING and MAX_JOBS leave room for that.
+MAX_JOB_SECONDS = JOB_SECONDS
+QUEUE_MAX_JOB_SECONDS = JOB_SECONDS
 TARGET_STEP_SECONDS = 30
-CEILING = {"pull_request": 8, "merge_group": 6}
-# The factory sim's legs keep their own four-minute minimum: its measured legs run 6-7 minutes each on a hosted VM, and
-# one leg would run about 13.
-FACTORY_LEG_SECONDS = 240
+CEILING = {"pull_request": 30, "merge_group": 30}
+# The factory sim's legs: about FACTORY_LEG_SECONDS of scenario time per worker, so a leg is about 130 s of tests on each
+# of its 4 vCPUs. Measured legs ran 1.6-2.2x their planned seconds, so four legs take about 5 minutes with setup.
+FACTORY_LEG_SECONDS = 130
 # Python jobs pass the release gate's own flags: restore a worker-local schema snapshot instead of migrating a fresh
 # database for every API test (about half of each file's time), and hand out at most two tests at a time so expensive
 # tests spread across the workers.
 PYTEST_FLAGS = ("--api-database-snapshots", "--maxschedchunk=2")
 UNTIMED_SCRIPT_SECONDS = 20  # a browser script with no measured time yet
-
-
-def guard_changelog(base, head="HEAD", root=None):
-    """Refuse PR notes before test selection; allow the documented notes-only release cut.
-
-    Compare the PR diff, not the last commit or the working tree. A trailer on an
-    earlier commit cannot exempt a later ordinary notes edit. Direct release cuts
-    on main never enter this PR-only gate; shipped-section guards still run.
-    """
-
-    def git(*args):
-        return subprocess.check_output(["git", *args], cwd=root or ROOT, text=True)
-
-    if not base:
-        raise RuntimeError("Cannot check CHANGELOG.md without the PR base commit")
-    ancestor = git("merge-base", base, head).strip()
-    changed = git("diff", "--name-only", "--no-renames", "-z", ancestor, head).rstrip("\0").split("\0")
-    if "CHANGELOG.md" not in changed:
-        return
-    # Release notes are a separate CHANGELOG-only cut. Do not exempt product PRs
-    # that happen to contain a release trailer or a commit from an older cut.
-    commits = git("log", "--no-merges", "--format=%H", f"{base}..{head}", "--", "CHANGELOG.md").splitlines()
-    # A merge that writes notes of its own (a line added or removed against every parent) needs its own trailer;
-    # bringing main's notes in, a clean union of the parents, stays allowed.
-    commits += [
-        merge
-        for merge in git("log", "--merges", "--format=%H", f"{base}..{head}").splitlines()
-        if merge_writes(git("show", "--cc", "--format=", merge, "--", "CHANGELOG.md"))
-    ]
-    if (
-        changed == ["CHANGELOG.md"]
-        and commits
-        and all(RELEASE_TRAILER.search(git("show", "-s", "--format=%B", commit)) for commit in commits)
-    ):
-        return
-    raise RuntimeError(CHANGELOG_REFUSAL)
-
-
-def merge_writes(combined):
-    """Whether a merge's combined diff (`git show --cc`) has a line that is new against every parent: in a hunk
-    headed by n+1 @s, the first n columns all + or all -. A line from one parent marks only its own column."""
-    parents = 0
-    for line in combined.splitlines():
-        if line.startswith("@@@"):
-            parents = len(line) - len(line.lstrip("@")) - 1
-        elif parents and line[:parents] in ("+" * parents, "-" * parents):
-            return True
-    return False
 
 
 def is_test(name):
@@ -904,17 +850,15 @@ def owned_reason(owned):
 
 
 def unread(name):
-    """No test or script reads screenshots, retired designs or the top-level pages other than CHANGELOG.md."""
-    return name.startswith(("docs/images/", "docs/history/")) or (
-        "/" not in name and name.endswith(".md") and name != "CHANGELOG.md"
-    )
+    """No test or script reads screenshots, retired designs or the top-level pages."""
+    return name.startswith(("docs/images/", "docs/history/")) or ("/" not in name and name.endswith(".md"))
 
 
 def read_only(name):
-    """Data that code reads but no test imports: docs pages (the manual, the OpenAPI copy, the API guide), CHANGELOG.md
-    (the changelog API, release-notes guards) and GitHub files (release tests parse the workflows). A change runs the
-    tests that read it (DependencyMap.read_by_tests), not everything that imports a reader."""
-    return name == "CHANGELOG.md" or name.startswith(("docs/", ".github/"))
+    """Data that code reads but no test imports: docs pages (the manual, the OpenAPI copy, the API guide) and GitHub
+    files (release tests parse the workflows). A change runs the tests that read it (DependencyMap.read_by_tests), not
+    everything that imports a reader."""
+    return name.startswith(("docs/", ".github/"))
 
 
 def pinned(name):
@@ -1010,7 +954,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
 
     0. A file under an OWNED_DATA folder runs the tests listed for that folder, and no other test.
     1. A file gone from the tree (a deletion, or the old side of a rename) runs the tests and browser scripts that name,
-       import or read it directly. Data that code reads (docs, CHANGELOG.md, GitHub files) runs the tests that read it.
+       import or read it directly. Data that code reads (docs, GitHub files) runs the tests that read it.
        A gone file that code other than a check names or reads adds the smoke set.
     2. A pin (FULL_SUITE, requirements*.txt) runs the tests and browser scripts that read it directly, and the smoke set.
        A conftest that changed or was deleted runs the tests below it while there are at most CONFTEST_BELOW_LIMIT (and the
@@ -1301,12 +1245,22 @@ def weights(counts, timings, fallback=1.0):
 
 
 def job_count(seconds, kind, target=JOB_SECONDS):
-    """VMs for `seconds` of one-worker test time: each near `target` seconds, setup included, and each with at least
-    MIN_JOB_SECONDS of tests unless the whole selection is smaller (a remainder folds into the VMs before it)."""
+    """VMs for `seconds` of one-worker test time: each holds WORKERS x (target - setup) of it, so no VM is planned past
+    `target`, setup included. A selection that fits one VM takes one VM. Never more than MAX_JOBS."""
     per_job = WORKERS * max(target - SETUP_SECONDS[kind], 30)
-    by_target = math.ceil(seconds / per_job)
-    by_minimum = math.floor(seconds / (WORKERS * MIN_JOB_SECONDS))
-    return max(1, min(MAX_JOBS, by_target, by_minimum))
+    return max(1, min(MAX_JOBS, math.ceil(seconds / per_job)))
+
+
+def overrun_warnings(loads, setup, target, kind):
+    """Annotation lines for a plan whose busiest VM runs past `target` (setup included): one file longer than a VM, or
+    the MAX_JOBS cap holding the VMs. `loads` are one-worker seconds per VM; each VM runs WORKERS test workers."""
+    worst = max(loads, default=0) / WORKERS + setup
+    if worst <= target:
+        return []
+    return [
+        f"::warning::A {kind} VM is planned for {worst:.0f}s against the {target:.0f}s target ({len(loads)} VMs, "
+        f"cap {MAX_JOBS}): raise TICO_CI_MAX_JOBS or split the file"
+    ]
 
 
 def groups(counts, timings, total=None, kind="python", fallback=1.0, target=JOB_SECONDS):
@@ -1351,7 +1305,7 @@ def size_groups(counts, timings, browser=None, fixed=0, shards=0, ceiling=CEILIN
 def merge_parent(base, head="HEAD", root=None):
     """The base a pull request is checked against. GitHub checks out the PR merged into the current base branch, while
     the event's base sha is the branch tip when the PR was last updated; diffing from that older sha would count
-    everything main gained since as the PR's own change, CHANGELOG.md included."""
+    everything main gained since as the PR's own change."""
 
     def git(*args):
         return subprocess.run(["git", *args], cwd=root or ROOT, capture_output=True, text=True)
@@ -1421,8 +1375,8 @@ def factory_shards():
     timings = factory.timings()
     pairs = [(name, 1) for name in timings]
     total = sum(timings[name] for name, _ in pairs)
-    # The sim's work is fixed by its scenarios, so its legs fold to a four-minute minimum (FACTORY_LEG_SECONDS).
-    count = max(1, min(factory.groups_for(pairs, timings), int(total // (factory.REMOTE_CPUS * FACTORY_LEG_SECONDS))))
+    # The sim's work is fixed by its scenarios: enough legs that each takes about FACTORY_LEG_SECONDS per worker.
+    count = max(1, min(len(pairs), math.ceil(total / (factory.REMOTE_CPUS * FACTORY_LEG_SECONDS))))
     return [f"{index}/{count}" for index in range(1, count + 1)]
 
 
@@ -1452,10 +1406,11 @@ def factory_plan(event, changed, own_inputs=False):
     return {"run": reason is not None, "reason": reason or "no change reaches the sim", "shards": shards}
 
 
-# Light runs (`plan --light`). GitHub gives the organisation about 60 concurrent hosted jobs, and pull request runs spent
-# about 70% of the CI job-minutes (Nov 8: 418 pull request and 168 queue job-minutes per merged pull request; superseded
-# pull request runs were 57% of theirs); throughput (20+ merged pull requests an hour) needs both tiers smaller. A pull
-# request run is an early signal (depth 1, four VMs); a merge queue group goes one level further (depth 2, eight VMs).
+# Light runs (`plan --light`). Pull request runs spent about 70% of the CI job-minutes (Nov 8: 418 pull request and 168
+# queue job-minutes per merged pull request; superseded pull request runs were 57% of theirs); throughput (20+ merged
+# pull requests an hour) needs both tiers smaller. A pull request run is an early signal (depth 1, ten VMs); a merge
+# queue group goes one level further (depth 2, nineteen VMs). The VM counts keep each run's one-worker test seconds about
+# what the four- and eight-VM caps of 480 s VMs held before the 330 s target (each VM now carries less work).
 # For an event in NARROW, the plan keeps the Python tests of the selection above (unchanged, so release validation's
 # incremental runs, scripts/release_increment.py, still select with it) that a change reaches within `depth` levels:
 #   level 0: a changed test file;
@@ -1465,8 +1420,8 @@ def factory_plan(event, changed, own_inputs=False):
 #   level 2: a file that runs a level-1 file (a test helper or a shared test module included), unless that file is a
 #            hub (more than HUB_TEST_USERS tests run it directly: backend/app.py, backend/store.py), whose closure is
 #            what made every change select hundreds of tests.
-# When it drops anything, by depth or by the cap below, it adds the smoke set (scripts/queue-smoke.json). Then it caps the Python tests to `shards` VMs
-# of about NARROW_SHARD_SECONDS, by measured seconds (the run's timings over scripts/test-timings.json), keeping changed
+# When it drops anything, by depth or by the cap below, it adds the smoke set (scripts/queue-smoke.json). Then it caps the
+# Python tests to `shards` VMs of about NARROW_SHARD_SECONDS, by measured seconds (the run's timings over scripts/test-timings.json), keeping changed
 # test files first, then the smoke set, then the nearer level, then the shorter file. What it leaves out is listed in the
 # job summary and in the plan (narrow.left_transitive, narrow.left_over_budget). A light pull request also runs the browser
 # scripts, the Caddy job and the factory sim only when the change touches their own inputs directly; a queue group keeps
@@ -1474,8 +1429,8 @@ def factory_plan(event, changed, own_inputs=False):
 # What a queue group leaves out still runs before a release: release validation's incremental runs select with the full
 # rules above (the whole transitive closure) over every change since the last full validation, which runs once every 24
 # hours (scripts/release_increment.py), and a red one holds the release until a fix selects its failure.
-NARROW = {"pull_request": {"depth": 1, "shards": 4}, "merge_group": {"depth": 2, "shards": 8}}
-NARROW_SHARD_SECONDS = 480
+NARROW = {"pull_request": {"depth": 1, "shards": 10}, "merge_group": {"depth": 2, "shards": 19}}
+NARROW_SHARD_SECONDS = JOB_SECONDS
 HUB_TEST_USERS = 40
 TIMINGS_FILE = "scripts/test-timings.json"
 
@@ -1496,6 +1451,10 @@ def reach_levels(names, depth, added=None, root=ROOT, graph=None):
         first |= set(graph.run_by.get(name, ())) | graph.readers(name, added) | graph.fixture_users(name, True)
         if owned := owned_data(name):
             first |= set(owned[1])
+        if name == "backend/openapi_v2.py" or (name.startswith("backend/") and name.endswith("_routes.py")):
+            # The contract test reads every route through the app's imports (a hub, not followed within a depth) and
+            # no longer reads a committed spec file, so a route or generator change names it directly.
+            first.add("backend/tests/test_openapi_v2.py")
         if Path(name).name == "conftest.py":  # rule 2: the tests below it while they are few, and its fixtures' users
             below = graph.below(name)
             fixtures = set(graph.fixtures.get(name, {}))
@@ -1631,11 +1590,10 @@ def narrow_summary(record):
 
 def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
     """`head` is the commit under test: the checkout for a pull request, the queue group's merge commit for a
-    merge_group. A group's base is its own base sha, so it needs no merge_parent or changelog guard. `light` narrows the
+    merge_group. A group's base is its own base sha, so it needs no merge_parent. `light` narrows the
     plan for an event in NARROW; any other event ignores it."""
     if event == "pull_request":
         base = merge_parent(base)
-        guard_changelog(base)
     changed = changed_files(base, head) if base else []
     added = changed_files(base, head, only="A") if base else None
     if base:
@@ -1697,21 +1655,28 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
     split, loads, target = sized["split"], sized["loads"], sized["target"]
     if record is not None and sum(1 for group in split if group) > record["shards"]:
         split, loads = groups(counts, timings, total=record["shards"])  # a light plan's VM cap (NARROW)
-    if loads and max(loads) / WORKERS + SETUP_SECONDS["python"] > 1.5 * target:
-        # Visible in the plan job's annotations: the cap (TICO_CI_MAX_JOBS) or one huge file holds a VM past the target.
-        print(
-            f"::warning::A Python VM is planned for {max(loads) / WORKERS + SETUP_SECONDS['python']:.0f}s against the "
-            f"{target:.0f}s target ({len(split)} VMs, cap {MAX_JOBS}): raise TICO_CI_MAX_JOBS or split the file"
-        )
+    # Visible in the plan job's annotations: the cap (TICO_CI_MAX_JOBS) or one huge file holds a VM past the target.
+    for line in overrun_warnings(loads, SETUP_SECONDS["python"], target, "Python"):
+        print(line)
     jobs = [{"suite": f"python-{i + 1}", "files": files} for i, files in enumerate(split) if files]
     if browser:
         browser_split = sized["browser"]
+        for line in overrun_warnings(sized["browser_loads"], SETUP_SECONDS["browser"], target, "browser"):
+            print(line)
         jobs += [{"suite": f"browser-{i + 1}", "files": names} for i, names in enumerate(browser_split) if names]
         loads += sized["browser_loads"]
     if picked["conformance"]:
         jobs.append({"suite": "conformance", "files": [CONFORMANCE], "crates": picked["rust"]})
     if picked["contracts"]:
-        jobs.append({"suite": "contracts", "files": list(CONTRACT_TESTS)})
+        # The three release contracts run their slow tests (-m slow); packed by measured seconds like the python VMs.
+        contract_split, contract_loads = groups(Counter(dict.fromkeys(CONTRACT_TESTS, 1)), timings, target=target)
+        for line in overrun_warnings(contract_loads, SETUP_SECONDS["python"], target, "contracts"):
+            print(line)
+        packed = [files for files in contract_split if files]
+        if len(packed) == 1:
+            jobs.append({"suite": "contracts", "files": list(CONTRACT_TESTS)})
+        else:
+            jobs += [{"suite": f"contracts-{i}", "files": files} for i, files in enumerate(packed, 1)]
     # Actions rejects an empty matrix. Keep an explicit successful selection job
     # for documented no-test changes, without invoking bare pytest.
     if not jobs:
@@ -1800,7 +1765,7 @@ def run(plan_path, suite, root=None, quarantine=False):
             "junit_family=xunit1",
             f"--junitxml=ci-results/{suite}.xml",
         ]
-        if suite in ("conformance", "contracts"):
+        if suite == "conformance" or suite.split("-")[0] == "contracts":
             command += ["-m", "slow"]
         if quarantine:
             command.append("--quarantine")

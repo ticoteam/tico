@@ -1,0 +1,66 @@
+name: support-owner                     # the slug: it matches the repository bot-support-owner and the label owner:support-owner
+display_name: "Support Owner"
+labels: [owner:support-owner]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 60
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: daily-support-queue
+    title: Daily support queue
+    cron: "0 9 * * 1-5"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/daily-support-queue.md
+    labels: [priority:p2]
+    enabled: false
+
+# Programs Tico runs on this bot's computer, with no model (docs/watchers.md). A run costs nothing: the program looks,
+# and only when there is something new does it open a task, which wakes the bot. Each does nothing until it has its
+# settings, so a team that does not use it loses nothing. HQ tickets are looked at every minute (one request when
+# nothing is new), so a request, a setup one included, reaches the bot within a few minutes.
+#   hq-tickets: Tico HQ support tickets, when HQ_STAFF_KEY and HQ_URL are in this bot's credentials (docs/support.md)
+#   gh-support: GitHub issues and Discussions, when config/github.yaml names the repositories (playbooks/tico-github.md)
+watchers:
+  - name: hq-tickets
+    run: software/hq-tickets watch
+    every: 1m
+  - name: gh-support
+    run: software/gh-support watch
+    every: 5m
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
+# arrives in, never the value; declaring access here does not create it. The intake is tasks in the
+# Tico until an owner connects a source: changing access is an owner decision, so the bot files a task
+# for the owner rather than editing this file. Uncomment what setup says is connected.
+# A support mailbox is read with the Google Workspace key. On a computer shared with other bots that
+# key is closed to them (docs/mail.md, "Who can read the key"), so route support mail to this bot as
+# tasks from the owner's message bot instead.
+# The project team's own support bot also declares these two (docs/support.md), then sets the variables in its credentials:
+#   - service: tico-hq
+#     identity: "Tico HQ support tickets"
+#     can: [read]
+#     env: HQ_STAFF_KEY           # with HQ_URL also stored and granted; a reply goes out only when a person has turned mail sending on in Tico
+#     note: "lists and reads tickets; posts a reply when a person has turned mail sending on in Tico, using the requested payload"
+#   - service: github
+#     identity: "the public repositories named in config/github.yaml"
+#     can: [read]
+#     env: GITHUB_TOKEN           # optional for issues, required for Discussions; read access only
+#     note: "reads issues and Discussions; never comments, labels or closes"
+# tools:
+#   - service: gmail
+#     identity: "support@example.com"
+#     can: [read, draft]          # never send: drafts only
+#     env: GOOGLE_SA_KEY
+#     note: "reads and drafts on the support mailbox; never files, archives or sends"
+#   - service: slack
+#     identity: the team workspace
+#     can: [read]
+#     channels: [support]
+#     dms: false
+#     env: SLACK_BOT_TOKEN
+#     note: "reads one support channel; never posts"
+tools: []

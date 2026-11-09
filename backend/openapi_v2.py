@@ -4,8 +4,9 @@ FastAPI would describe every route, runner and bot endpoint included. A frontend
 resources a person's app is built from, so this module keeps only those (STABLE below), names
 each operation, groups them by resource and describes the answers a person gets. Handlers return
 plain dictionaries rather than response models, so the answer shapes are declared here; a test
-(backend/tests/test_openapi_v2.py) checks them against live responses, and that the committed copy
-`docs/openapi/v2.json` matches. Regenerate it with `python -m backend.openapi_v2`.
+(backend/tests/test_openapi_v2.py) checks them against live responses. The document is generated, not committed:
+`python3 -m backend.openapi_v2 > openapi-v2.json` writes it, `--check` confirms it generates the same bytes twice, and
+the server serves it at `GET /api/v2/openapi.json`.
 
 Anything not listed is internal and may change in any release. See docs/api.md.
 """
@@ -19,7 +20,6 @@ from . import needs_shape
 from .sources import KINDS as SOURCE_KINDS
 
 VERSION = "2.0.0"
-COPY = Path(__file__).resolve().parents[1] / "docs" / "openapi" / "v2.json"
 
 TAGS = {
     "Session": "Who is calling, and how a frontend signs in (docs/custom-frontend.md).",
@@ -33,7 +33,7 @@ TAGS = {
     "Conversations": "Chats with bots: send, list, and stream replies.",
     "Tasks": "Work assigned to people and bots.",
     "Updates": "Daily and weekly updates bots post to people.",
-    "Changelog": "Shipped Tico releases, product announcements and the signed-in person's read state (docs/updates.md).",
+    "Changelog": "Product announcements and the signed-in person's read state (docs/updates.md).",
     "Needs you": "What is waiting on the signed-in person: questions, tasks, approvals.",
     "Meetings": "Recorded meetings.",
     "Calls": "Tico Meet calls (docs/meet.md): audio and screen share in a thread, a live transcript posted to it when it "
@@ -932,8 +932,8 @@ STABLE = [
         "get",
         "Changelog",
         "listChangelog",
-        "Shipped changes with your read state; kind=product|activity|all (default all), unread=true, q search, "
-        "since_version for releases newer than a version, and limit/offset paging. Only installed releases or earlier appear. "
+        "Product updates and agent activity, with your read state; kind=product|activity|all (default all), "
+        "unread=true, q search, and limit/offset paging. "
         "unread_count counts all unread product entries, independently of filters; reading does not acknowledge them.",
         "ChangelogList",
     ),
@@ -2461,6 +2461,21 @@ SCHEMAS = {
             "limit_minutes": {
                 "type": ["integer", "null"],
                 "description": "The stage's Warn after time in minutes (the flow's late_hours x 60), or null",
+            },
+            "card_cap": {
+                "type": ["integer", "null"],
+                "description": "The most cards the stage holds at once (0 is On ice: it takes no card from a bot and "
+                "its cards wake no one), or null for no cap",
+            },
+            "held": {
+                "type": "integer",
+                "description": "The open cards the stage holds now that the caller may read, snoozed and hidden ones "
+                "included. For the pipeline's rule editor, every open card: the count its card cap is enforced against",
+            },
+            "unseen": {
+                "type": "integer",
+                "description": "For the pipeline's rule editor, how many of the held cards it may not read (private ones, "
+                "or ones a bot it may not read works on); 0 for anyone else",
             },
             "flow": {
                 "type": "object",
@@ -7232,6 +7247,10 @@ SCHEMAS['TaskType']['properties'].update(
             "the pipeline's owner or an Admin (backend/pipeline_rights.py)",
         },
         'manager': {'type': ['string', 'null']},
+        'manager_seat': {
+            'type': ['string', 'null'],
+            'description': 'The open seat whose hire makes this pipeline\'s manager (read-only; set by the setup binding)',
+        },
         'role': {
             'type': ['string', 'null'],
             'enum': ['product-roadmap', 'engineering', None],
@@ -9379,6 +9398,7 @@ SCHEMAS.update(
         "ThreadReadAll": obj({"threads": "i"}, required=["threads"]),
         "ThreadFollow": obj({"thread_id": "s", "following": "b", "notify": "s"}, required=["thread_id", "following"]),
         "ThreadMessageDeleted": obj({"id": "s", "deleted": "b", "revision": "i"}, required=["id", "deleted"]),
+        "ThreadDeleted": obj({"deleted": "s"}, required=["deleted"]),
     }
 )
 SCHEMAS["ThreadMessage"]["properties"]["source"] = ref("MessageSource")
@@ -9422,6 +9442,15 @@ STABLE.extend(
             "browseThreads",
             "Company and team threads the viewer may read and is not in, newest activity first; `q` matches the title. "
             "Following one puts it in the rail",
+            "ThreadBrowse",
+        ),
+        (
+            "/api/v2/threads/archived",
+            "get",
+            "Threads",
+            "listArchivedThreads",
+            "The threads the viewer archived and may still manage, newest first: Browse threads' Archived view. Unarchive is "
+            "PATCH with `archived` false. A deleted thread is not listed",
             "ThreadBrowse",
         ),
         (
@@ -9493,6 +9522,15 @@ STABLE.extend(
             "getThread",
             "A thread as the viewer sees it: its unread count, read mark, what they may do and its first page of members",
             "ThreadView",
+        ),
+        (
+            "/api/v2/threads/{thread_id}",
+            "delete",
+            "Threads",
+            "deleteThread",
+            "Delete a thread the viewer manages, when every message in it is deleted and no one else is in it; it leaves every "
+            "list and reads as not found. Otherwise 409 `not_deletable` with the reason, and nothing is removed",
+            "ThreadDeleted",
         ),
         (
             "/api/v2/threads/{thread_id}",
@@ -11861,7 +11899,7 @@ STABLE.extend(
 
 
 def generate():
-    """The document for a default installation: what docs/openapi/v2.json holds."""
+    """The document for a default installation: what GET /api/v2/openapi.json serves to a signed-in caller."""
     import tempfile
     from .app import create_app
     from .config import Settings
@@ -11874,14 +11912,15 @@ def render(document):
     return json.dumps(document, indent=2, sort_keys=False) + "\n"
 
 
+def determinism_problem():
+    """None when two generations give the same bytes, else the reason they do not (the static PR job runs this)."""
+    first = render(generate())
+    if render(generate()) != first:
+        return "the API spec differs between two generations of the same code: something in it is not deterministic"
+    return None
+
+
 if __name__ == "__main__":
-    text = render(generate())
     if "--check" in sys.argv:
-        sys.exit(
-            0
-            if COPY.exists() and COPY.read_text() == text
-            else "docs/openapi/v2.json is stale: python -m backend.openapi_v2"
-        )
-    COPY.parent.mkdir(parents=True, exist_ok=True)
-    COPY.write_text(text)
-    print("wrote", COPY)
+        sys.exit(determinism_problem() or 0)  # a message exits non-zero; None exits 0
+    sys.stdout.write(render(generate()))

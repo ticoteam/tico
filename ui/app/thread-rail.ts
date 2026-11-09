@@ -53,6 +53,7 @@ function threadsShell() {
   rail.onclick = (ev: MouseEvent) => {
     const b = eventElement(ev)?.closest<HTMLButtonElement>('button'); if (!b) return;
     if (b.matches('[data-tr-new]')) threadNewOpen();
+    else if (b.matches('[data-tr-arch]')) { b.disabled = true; threadsArchive(b.dataset.trArch ?? '').catch(e => { b.disabled = false; toast(errorMessage(e, ''), true); }); }
     else if (b.matches('[data-tr-catch]')) void catchUpOpen();
     else if (b.matches('[data-tr-browse]')) void threadBrowseOpen();
     else if (b.matches('[data-tr-more]')) { b.disabled = true; threadsMore().catch(e => toast(e.message, true)).finally(() => { b.disabled = false; }); }
@@ -125,8 +126,9 @@ function pageThread(id: string) {
 const railCurrent = () => S.route.startsWith(THREAD_ROUTE) ? decodeURIComponent(S.route.slice(THREAD_ROUTE.length).split(/[/?]/)[0] ?? '') : '';
 function railRowHTML(t: ThreadRow, cur: string) {
   const n = threadUnread(t), bold = n > 0 || !!t.me?.activity, here = t.id === cur;
-  return `<li><a class="tr-row${bold ? ' unread' : ''}${here ? ' cur' : ''}" href="${esc(threadHref(t))}" data-thread="${esc(t.id)}"${here ? ' aria-current="page"' : ''}>
-    ${threadHashHTML(t)}<span class="tr-title">${esc(threadTitle(t))}</span>${n ? `<span class="tr-count" aria-label="${n} unread">${esc(threadsCountText(n))}</span>` : ''}</a></li>`;
+  const arch = t.me?.can_manage ? `<button type="button" class="tr-arch" data-tr-arch="${esc(t.id)}" aria-label="Archive" title="Archive"><span class="nav-icon" aria-hidden="true">archive</span></button>` : '';
+  return `<li class="tr-item"><a class="tr-row${bold ? ' unread' : ''}${here ? ' cur' : ''}" href="${esc(threadHref(t))}" data-thread="${esc(t.id)}"${here ? ' aria-current="page"' : ''}>
+    ${threadHashHTML(t)}<span class="tr-title">${esc(threadTitle(t))}</span>${n ? `<span class="tr-count" aria-label="${n} unread">${esc(threadsCountText(n))}</span>` : ''}</a>${arch}</li>`;
 }
 function railRender() {
   const rail = $('#thread-rail'); if (!rail?.isConnected) return;
@@ -150,43 +152,73 @@ function railRender() {
 
 // ----------------------------------------------------------------- browse
 // Company and team threads the viewer reads but is not in (GET /v2/threads/browse); Join follows one.
-function threadBrowseOpen() {
+function threadBrowseOpen(): void {
+  type BrowseRow = ThreadRow & {member_count?: number};
+  type BrowsePage = {threads?: BrowseRow[]; items?: BrowseRow[]; next_cursor?: string | null};
   const dlg = threadDialog('thread-browse', 'Browse threads');
   dlg.className = 'tmodal tmodal-shell dash-dialog thd-dialog tr-browse-dlg';
   dlg.innerHTML = `<form>${threadDialogHead('Browse threads')}<div class="dash-form">
+      <div class="tr-browse-tabs" role="group" aria-label="Which threads"><button type="button" class="ghost small on" data-tab="threads" aria-pressed="true">Threads</button><button type="button" class="ghost small" data-tab="archived" aria-pressed="false">Archived</button></div>
       <input type="search" class="tr-browse-q" placeholder="Find a thread" aria-label="Find a thread" autocomplete="off">
       <ul class="tr-browse-list" aria-live="polite"><li class="muted">Loading…</li></ul>
       <button type="button" class="ghost small tr-browse-more" hidden>More</button></div></form>`;
   threadDialogWire(dlg);
-  const form = dlg.querySelector('form');
-  const q = form?.querySelector<HTMLInputElement>('.tr-browse-q'), list = form?.querySelector<HTMLUListElement>('.tr-browse-list'), more = form?.querySelector<HTMLButtonElement>('.tr-browse-more');
-  if (!form || !q || !list || !more) return;
+  const form = dlg.querySelector<HTMLFormElement>('form')!;
+  const q = form.querySelector<HTMLInputElement>('.tr-browse-q')!;
+  const list = form.querySelector<HTMLUListElement>('.tr-browse-list')!;
+  const more = form.querySelector<HTMLButtonElement>('.tr-browse-more')!;
   form.onsubmit = ev => ev.preventDefault();
   let next: string | null = null, seq = 0;
-  const rowHTML = (t: ThreadRow) => {
+  let mode: 'threads' | 'archived' = 'threads';
+  const rowHTML = (t: BrowseRow): string => {
+    if (mode === 'archived') return `<li data-thread="${esc(t.id)}"><a class="tr-browse-name" href="${esc(threadHref(t))}" data-close>${threadHashHTML(t)}<span>${esc(threadTitle(t))}</span></a><button type="button" class="ghost small" data-unarchive>Unarchive</button></li>`;
     const n = Number(t.member_count) || 0;
     return `<li data-thread="${esc(t.id)}"><a class="tr-browse-name" href="${esc(threadHref(t))}" data-close>${threadHashHTML(t)}<span>${esc(threadTitle(t))}</span></a>
       ${n ? `<span class="muted tr-browse-n">${n}</span>` : ''}<button type="button" class="ghost small" data-join>Join</button></li>`;
   };
-  const load = async (add = false) => {
+  const load = async (add = false): Promise<void> => {
     const mine = ++seq, words = q.value.trim();
     try {
-      const r = await get('/v2/threads/browse?limit=50&q=' + encodeURIComponent(words) + (add && next ? '&cursor=' + encodeURIComponent(next) : ''), {fresh: true});
+      const cur = add && next ? '&cursor=' + encodeURIComponent(next) : '';
+      const path = mode === 'archived' ? '/v2/threads/archived?limit=50' + cur : '/v2/threads/browse?limit=50&q=' + encodeURIComponent(words) + cur;
+      const r = await get<BrowsePage>(path, {fresh: true});
       if (mine !== seq) return;
-      const rows = (r?.threads || r?.items || []).map(rowHTML).join('');
+      const rows = (r.threads || r.items || []).map(rowHTML).join('');
       if (add) list.insertAdjacentHTML('beforeend', rows);
-      else list.innerHTML = rows || '<li class="muted">No threads</li>';
-      next = r?.next_cursor || null; more.hidden = !next;
+      else list.innerHTML = rows || (mode === 'archived' ? '<li class="muted">No archived threads</li>' : '<li class="muted">No threads</li>');
+      next = r.next_cursor || null; more.hidden = !next;
     } catch (e) { if (mine === seq) list.innerHTML = `<li class="err">${esc(errorMessage(e, ''))}</li>`; }
   };
-  let timer = 0;
-  q.oninput = () => { clearTimeout(timer); timer = setTimeout(() => load(), 200); };
+  let timer: number | undefined;
+  q.oninput = () => { clearTimeout(timer); timer = window.setTimeout(() => load(), 200); };
   more.onclick = () => load(true);
-  list.onclick = async (ev: MouseEvent) => {
-    if (eventElement(ev)?.closest('[data-close]')) { dlg.close(); return; }
-    const b = eventElement(ev)?.closest<HTMLButtonElement>('[data-join]'); if (!b) return;
-    const row = b.closest<HTMLElement>('[data-thread]'); if (!row) return;
-    const id = row.dataset.thread;
+  form.addEventListener('click', (ev: MouseEvent) => {
+    const tab = eventElement(ev)?.closest<HTMLElement>('[data-tab]');
+    if (!tab) return;
+    mode = tab.dataset.tab === 'archived' ? 'archived' : 'threads';
+    form.querySelectorAll<HTMLElement>('[data-tab]').forEach(b => { const on = b === tab; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+    q.hidden = mode === 'archived'; more.hidden = true; next = null;
+    void load();
+  });
+  list.onclick = async (ev: MouseEvent): Promise<void> => {
+    const target = eventElement(ev);
+    if (target?.closest('[data-close]')) { dlg.close(); return; }
+    const u = target?.closest<HTMLButtonElement>('[data-unarchive]');
+    if (u) {
+      const row = u.closest<HTMLElement>('[data-thread]');
+      if (!row) return;
+      u.disabled = true;
+      try {
+        threadsUnarchived(await patch(thvPath(row.dataset.thread), {archived: false}));
+        row.remove();
+        if (!list.querySelector('[data-thread]')) list.innerHTML = '<li class="muted">No archived threads</li>';
+      } catch (e) { u.disabled = false; toast(errorMessage(e, ''), true); }
+      return;
+    }
+    const b = target?.closest<HTMLButtonElement>('[data-join]');
+    if (!b) return;
+    const id = b.closest<HTMLElement>('[data-thread]')?.dataset.thread;
+    if (!id) return;
     b.disabled = true;
     try {
       const r = await put(thvPath(id) + '/follow', {notify: 'live'});

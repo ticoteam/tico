@@ -94,6 +94,7 @@ def test_setup_is_idempotent_and_leaves_ai_services_without_an_amount(store):
         assert first.created and not again.created and first.accounts == again.accounts
         assert first.budgets == again.budgets and set(first.budgets) == {
             "AI services",
+            "CI",
             "Video production",
             "Other expenses",
         }
