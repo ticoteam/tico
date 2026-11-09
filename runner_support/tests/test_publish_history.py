@@ -1,5 +1,6 @@
 """A bot built on a computer gets its history onto its empty GitHub repository from its own turn
 (`git_credentials.publish_history`), with that bot's scoped token and never a force push."""
+
 import subprocess
 
 from runner_support import git_credentials as G
@@ -10,9 +11,16 @@ URL = f"https://github.com/{REPO}.git"
 
 def make_env(tmp_path, remote):
     """The turn's environment with the fake token helper, and github.com's URL for this bot rewritten to a local bare repo."""
-    env = {"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "HOME": str(tmp_path), "GIT_CONFIG_NOSYSTEM": "1",
-           "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
-           "GIT_COMMITTER_EMAIL": "t@example.com", **G.environment("ghs_fake")}
+    env = {
+        "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+        "HOME": str(tmp_path),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.com",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.com",
+        **G.environment("ghs_fake"),
+    }
     env.update(GIT_CONFIG_COUNT="3", GIT_CONFIG_KEY_2=f"url.{remote}.insteadOf", GIT_CONFIG_VALUE_2=URL)
     return env
 
@@ -47,7 +55,7 @@ def test_the_first_turn_publishes_history_to_an_empty_repository(tmp_path):
     assert git(path, "config", "--get", "remote.origin.url") == URL
     assert git(path, "rev-parse", "--abbrev-ref", "@{u}") == "origin/main"
     assert git(remote, "rev-parse", "main") == git(path, "rev-parse", "HEAD")
-    assert G.publish_history(path, REPO, env) == ("current", "")      # once it has an upstream, nothing to do
+    assert G.publish_history(path, REPO, env) == ("current", "")  # once it has an upstream, nothing to do
 
 
 def test_an_origin_that_points_elsewhere_is_not_touched(tmp_path):
@@ -74,7 +82,6 @@ def test_a_remote_with_different_history_is_left_alone_and_reported(tmp_path):
     assert git(remote, "rev-parse", "main") == before, "never force-pushed"
 
 
-
 def test_a_returning_bots_clean_clone_catches_up_and_a_changed_one_is_kept(tmp_path):
     remote = bare(tmp_path)
     path, env = checkout(tmp_path)
@@ -85,7 +92,7 @@ def test_a_returning_bots_clean_clone_catches_up_and_a_changed_one_is_kept(tmp_p
     git(newer, "add", "-A", env=env)
     git(newer, "commit", "-q", "-m", "elsewhere", env=env)
     git(newer, "push", "-q", "origin", "main", env=env)
-    (path / "f0.txt").write_text("edited here")              # a local change: kept exactly as it is
+    (path / "f0.txt").write_text("edited here")  # a local change: kept exactly as it is
     assert G.fast_forward(path, env)[0] == "kept"
     assert (path / "f0.txt").read_text() == "edited here" and not (path / "memory.md").exists()
     git(path, "checkout", "--", "f0.txt", env=env)

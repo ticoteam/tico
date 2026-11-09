@@ -1,6 +1,7 @@
 """§6.4 defaults 4 and 6 are visible. Rule 6 (closing or reopening a period asks the owner) is a seeded gate row that the
 code also enforces, and nobody can change or turn it off. Rule 4 (a budget at its limit with decline denies holds and
 freezes its cards) is listed read-only beside the rules; the cutoff code paths enforce it. Synthetic fixtures (Acme)."""
+
 from datetime import date
 
 from backend.finance import tab_money
@@ -20,8 +21,10 @@ def test_rule_six_is_a_fixed_gate_row_and_rule_four_is_listed_read_only(books): 
     with books.transaction() as c:
         row = SK.get(c, "fin_rules", "rule:close-reopen-owner")
         assert row is not None and bool(row["active"]) and str(row["kind"]) == "gate"
-        for kind, payload in (("rule_disable", {"rule_id": "rule:close-reopen-owner"}),
-                              ("rule_update", {"rule_id": "rule:close-reopen-owner", "name": "Owner never asked"})):
+        for kind, payload in (
+            ("rule_disable", {"rule_id": "rule:close-reopen-owner"}),
+            ("rule_update", {"rule_id": "rule:close-reopen-owner", "name": "Owner never asked"}),
+        ):
             refused = act(c, OWNER, kind, payload)
             assert refused.code == "denied", (kind, refused)
         assert bool(SK.get(c, "fin_rules", "rule:close-reopen-owner")["active"])

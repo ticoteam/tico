@@ -7,16 +7,27 @@ deltas, one model completion's usage and a completed terminal with the final tex
 and fails at once when it cannot. Every call is appended to
 $FAKE_LOG as one JSON line (argv, the prompt, the granted variables). A prompt containing HANG streams one delta
 and then waits, once per $FAKE_LOG, until its parent goes away."""
+
 import json
 import os
 import sys
 import time
 
-GRANTED = ("ACME_API_KEY", "HUB_TOKEN", "HUB_API_URL", "HUB_BOT", "TICO_CRED_SOCKET", "MUSE_NO_AUTO_UPDATE", "XDG_DATA_HOME")
+GRANTED = (
+    "ACME_API_KEY",
+    "HUB_TOKEN",
+    "HUB_API_URL",
+    "HUB_BOT",
+    "TICO_CRED_SOCKET",
+    "MUSE_NO_AUTO_UPDATE",
+    "XDG_DATA_HOME",
+)
 
 
 def send(kind, payload):
-    sys.stdout.write(json.dumps({"schema_version": 1, "payload_type": kind, "payload_schema_version": 1, "payload": payload}) + "\n")
+    sys.stdout.write(
+        json.dumps({"schema_version": 1, "payload_type": kind, "payload_schema_version": 1, "payload": payload}) + "\n"
+    )
     sys.stdout.flush()
 
 
@@ -34,8 +45,12 @@ def main():
     with open(flag(args, "--prompt-file"), encoding="utf-8") as prompt:
         text = prompt.read()
     with open(os.environ["FAKE_LOG"], "a") as log:
-        log.write(json.dumps({"harness": "musecode", "argv": args, "prompt": text,
-                              "env": {k: os.environ.get(k) for k in GRANTED}}) + "\n")
+        log.write(
+            json.dumps(
+                {"harness": "musecode", "argv": args, "prompt": text, "env": {k: os.environ.get(k) for k in GRANTED}}
+            )
+            + "\n"
+        )
     session = flag(args, "--session-id")
     if session:
         data = os.environ.get("XDG_DATA_HOME") or os.path.join(os.environ["HOME"], ".local", "share")
@@ -43,7 +58,9 @@ def main():
         try:
             os.makedirs(lock, exist_ok=True)
         except OSError as e:
-            sys.stderr.write(f"--session-id requires session logging: failed to create session lock directory {lock}: {e}\n")
+            sys.stderr.write(
+                f"--session-id requires session logging: failed to create session lock directory {lock}: {e}\n"
+            )
             sys.exit(1)
     parent = os.getppid()
     send("run.lifecycle.started", {"kind": "run_started", "prompt": text})
@@ -54,7 +71,7 @@ def main():
         while os.getppid() == parent:
             time.sleep(0.1)
         return
-    if "PUBLISH" in text:                    # a deliverable the runner publishes as a Tico file
+    if "PUBLISH" in text:  # a deliverable the runner publishes as a Tico file
         os.makedirs("reports", exist_ok=True)
         with open(os.path.join("reports", "acme.md"), "w") as report:
             report.write("# Acme report\n")

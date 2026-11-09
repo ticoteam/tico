@@ -1,6 +1,6 @@
 """Write clients/renames.json: the renames that have shipped, read by `hub bot check-names` (clients/bot_names.py).
 
-Sources: the applied waves' column renames in scripts/cleanup/renames.yaml and renames_data.py, the schema from before the
+Sources: the applied waves' table and column renames in scripts/cleanup/renames.yaml and renames_data.py, the schema from before the
 renames (to know which tables keep an old name), the API fields the server renamed and the ones it kept, the Task fields
 it stopped sending, and the hub CLI's RENAMED table in clients/hubcli.py. Run it after a wave is applied or a command is
 renamed:
@@ -9,6 +9,7 @@ renamed:
 
 clients/tests/test_bot_names.py fails when the file no longer matches the applied rename data and the CLI table.
 """
+
 import ast
 import json
 import runpy
@@ -24,9 +25,15 @@ RENAMES_DATA = ROOT / "backend" / "migrations" / "renames_data.py"
 
 # Task fields the API no longer sends: a bot reads `holds` instead (backend/task_holds.py public).
 API_FIELDS_REMOVED = {
-    "snoozed_until": "holds", "snoozed_by": "holds", "snoozed_note": "holds",
-    "blocked_since": "holds", "blocked_reason": "holds", "blocked_kind": "holds",
-    "blocked_from_step": "holds", "blocked_from_status": "holds", "blocked_gate": "holds",
+    "snoozed_until": "holds",
+    "snoozed_by": "holds",
+    "snoozed_note": "holds",
+    "blocked_since": "holds",
+    "blocked_reason": "holds",
+    "blocked_kind": "holds",
+    "blocked_from_step": "holds",
+    "blocked_from_status": "holds",
+    "blocked_gate": "holds",
 }
 # A command the CLI no longer has at all, and its replacement (the flags differ: `hub automation create --file`).
 COMMANDS_REMOVED = [{"old": ["routine"], "new": ["automation"]}]
@@ -48,6 +55,12 @@ def applied_rows(data):
     return out
 
 
+def applied_tables(data):
+    """{old: new} for the applied waves' table renames. A table keeps its new name: there is no chain to follow."""
+    applied = {str(w) for w in data["applied_waves"]}
+    return {old: new for old, new, wave in runpy.run_path(str(RENAMES_DATA))["TABLES"] if str(wave) in applied}
+
+
 def applied_columns(data, rows):
     """The names renamed on every table that has them, which check-names can match anywhere in a `hub sql` body."""
     waves = {str(k): v for k, v in data["waves"].items()}
@@ -56,7 +69,7 @@ def applied_columns(data, rows):
         finals.setdefault(old, set()).add(new)
     columns = {}
     for w in data["applied_waves"]:
-        for old, new in (waves[str(w)].get("global") or {}).items():
+        for old, new in (waves.get(str(w), {}).get("global") or {}).items():  # the directory wave has tables only
             if new:
                 if len(finals[old]) != 1:
                     raise SystemExit(f"{old} is global in wave {w} but ends up as {sorted(finals[old])}")
@@ -104,12 +117,14 @@ def renamed_commands():
 
 def build():
     import yaml
+
     data = yaml.safe_load((HERE / "renames.yaml").read_text())
     rows = applied_rows(data)
     return {
         "source": "scripts/cleanup/renames.yaml",
         "applied_waves": [str(w) for w in data["applied_waves"]],
         "columns": applied_columns(data, rows),
+        "table_renames": dict(sorted(applied_tables(data).items())),
         "table_columns": table_columns(rows, schema_columns()),
         "api_fields": dict(sorted((data.get("api_fields") or {}).items())),
         "api_kept": sorted(data.get("api_kept") or []),

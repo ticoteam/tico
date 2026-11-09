@@ -1,5 +1,6 @@
 """Paths in the executor (backend/automation_engine.py): in order, first match wins, else Otherwise, nested forks, and
 no rejoin; each path keeps the outputs of the steps before the fork."""
+
 from backend import automation_engine as E
 from backend.tests.automation_fakes import Services
 
@@ -24,23 +25,40 @@ def fork(sid, paths, otherwise=None):
 
 def run_of(steps, payload=None, services=None):
     services = services or Services()
-    run = E.execute({"name": "t", "owner": "person:ana", "trigger": {"type": "event", "name": "x"}, "steps": steps},
-                    payload or {}, services)
+    run = E.execute(
+        {"name": "t", "owner": "person:ana", "trigger": {"type": "event", "name": "x"}, "steps": steps},
+        payload or {},
+        services,
+    )
     return run, [args["text"] for do, args in services.acted]
 
 
 def test_first_matching_path_wins_in_order():
-    run, done = run_of([DECIDE, fork("route", [
-        ("archive", when("d1.bucket", "is", "archive"), [note("a")]),
-        ("reply", when("d1.bucket", "is", "reply"), [note("r")]),
-        ("any", [], [note("any")])], otherwise=[note("o")])])
+    run, done = run_of(
+        [
+            DECIDE,
+            fork(
+                "route",
+                [
+                    ("archive", when("d1.bucket", "is", "archive"), [note("a")]),
+                    ("reply", when("d1.bucket", "is", "reply"), [note("r")]),
+                    ("any", [], [note("any")]),
+                ],
+                otherwise=[note("o")],
+            ),
+        ]
+    )
     assert done == ["r"]
     assert run["steps"][1]["outputs"] == {"path": "reply"}
 
 
 def test_min_moves_an_unsure_answer_to_otherwise():
-    run, done = run_of([DECIDE, fork("route", [
-        ("reply", when("d1.bucket", "is", "reply", min=0.9), [note("r")])], otherwise=[note("o")])])
+    run, done = run_of(
+        [
+            DECIDE,
+            fork("route", [("reply", when("d1.bucket", "is", "reply", min=0.9), [note("r")])], otherwise=[note("o")]),
+        ]
+    )
     assert done == ["o"] and run["steps"][1]["outputs"] == {"path": "otherwise"}
 
 
@@ -70,21 +88,39 @@ def test_the_otherwise_of_a_nested_fork():
 
 def test_a_path_reads_outputs_from_before_the_fork():
     services = Services()
-    run_of([DECIDE, note("before"), fork("route", [("r", when("d1.is_ask", "is", "yes", min=0.8),
-                                                         [{"id": "x", "type": "action", "do": "note",
-                                                           "args": {"text": "{{before.detail}}"}}])])],
-           services=services)
+    run_of(
+        [
+            DECIDE,
+            note("before"),
+            fork(
+                "route",
+                [
+                    (
+                        "r",
+                        when("d1.is_ask", "is", "yes", min=0.8),
+                        [{"id": "x", "type": "action", "do": "note", "args": {"text": "{{before.detail}}"}}],
+                    )
+                ],
+            ),
+        ],
+        services=services,
+    )
     assert services.acted[-1] == ("note", {"text": "note done"})
 
 
 def test_paths_after_find_route_each_item_on_its_own():
     services = Services(items=[{"kind": "bug"}, {"kind": "idea"}, {"kind": "bug"}])
-    steps = [{"id": "f", "type": "find", "source": "tasks"},
-             fork("route", [("bug", when("item.kind", "is", "bug"), [note("bug")])], otherwise=[note("other")])]
+    steps = [
+        {"id": "f", "type": "find", "source": "tasks"},
+        fork("route", [("bug", when("item.kind", "is", "bug"), [note("bug")])], otherwise=[note("other")]),
+    ]
     run, done = run_of(steps, services=services)
     assert done == ["bug", "other", "bug"]
-    assert [(r["id"], r.get("item")) for r in run["steps"] if r["id"] == "route"] == [("route", 0), ("route", 1),
-                                                                                       ("route", 2)]
+    assert [(r["id"], r.get("item")) for r in run["steps"] if r["id"] == "route"] == [
+        ("route", 0),
+        ("route", 1),
+        ("route", 2),
+    ]
 
 
 def test_a_fork_turned_off_ends_the_thread():
@@ -94,9 +130,26 @@ def test_a_fork_turned_off_ends_the_thread():
 
 def test_an_llm_wait_inside_a_path_resumes_on_that_path():
     services = Services()
-    flow = {"name": "t", "owner": "person:ana", "trigger": {"type": "event", "name": "x"}, "steps": [
-        fork("route", [("p", [], [{"id": "w", "type": "llm", "as": "bot:coo", "prompt": "p", "out": "o"},
-                                  {"id": "s", "type": "action", "do": "note", "args": {"text": "{{o.text}}"}}])])]}
+    flow = {
+        "name": "t",
+        "owner": "person:ana",
+        "trigger": {"type": "event", "name": "x"},
+        "steps": [
+            fork(
+                "route",
+                [
+                    (
+                        "p",
+                        [],
+                        [
+                            {"id": "w", "type": "llm", "as": "bot:coo", "prompt": "p", "out": "o"},
+                            {"id": "s", "type": "action", "do": "note", "args": {"text": "{{o.text}}"}},
+                        ],
+                    )
+                ],
+            )
+        ],
+    }
     run = E.execute(flow, {}, services)
     assert run["status"] == "waiting"
     E.answer(run, "msg_1", "answered")

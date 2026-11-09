@@ -26,9 +26,14 @@ def install_documents(app, store, auth, mutate):
             raise Problem("collection", "Company docs moved to /api/v2/docs; this lists the market notes only", 422)
         with store.read() as c:
             pages = market.list_pages(c)
-            return {"collection": collection, "collection_counts": {"market": len(pages)},
-                    "documents": [{k: v for k, v in page.items() if k != "content"} for page in pages],
-                    "proposals": [], "errors": [], "sync": {"running": False, "state": None, "error": None}}
+            return {
+                "collection": collection,
+                "collection_counts": {"market": len(pages)},
+                "documents": [{k: v for k, v in page.items() if k != "content"} for page in pages],
+                "proposals": [],
+                "errors": [],
+                "sync": {"running": False, "state": None, "error": None},
+            }
 
     @app.get("/api/company-docs/{doc_id:path}")
     def detail(request: Request, doc_id: str):

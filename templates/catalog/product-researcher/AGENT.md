@@ -69,7 +69,7 @@ Find what users said: `hub meeting search "<topic>" --since YYYY-MM-DD`, `hub me
 `hub doc search "<topic>"`. Competitor facts: `hub market show <name>` to read and
 `hub market report` to report what you found, in prose with the source. Customer feedback themes come from
 the Customer Insights Analyst (`feedback-analyst`'s latest report), and you use them, not redo them. A question for
-the requester is `hub task ask <id>`, one open question per task. Finish every task, quiet week or not.
+the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. Finish every task, quiet week or not.
 
 ## Quality standards
 - **Answer first.** A brief opens with the decision it serves and the finding in one sentence.

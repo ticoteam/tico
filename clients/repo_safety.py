@@ -1,4 +1,5 @@
 """Bot files never belong in the Tico checkout running this code."""
+
 from pathlib import Path
 import os
 import stat
@@ -49,10 +50,28 @@ def _git_identity(path):
             return ()
         env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
         env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
-        done = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false",
-                               "-c", "safe.directory=" + str(root), "-C", str(root),
-                               "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
-                              env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10, check=False)
+        done = subprocess.run(
+            [
+                "git",
+                "--no-optional-locks",
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "safe.directory=" + str(root),
+                "-C",
+                str(root),
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-dir",
+                "--git-common-dir",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
     except (OSError, UnicodeError, subprocess.SubprocessError) as exc:
         raise ValueError(f"Cannot check repository identity: {path}") from exc
     if done.returncode:

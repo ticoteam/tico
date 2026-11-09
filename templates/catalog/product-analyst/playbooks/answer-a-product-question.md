@@ -15,7 +15,7 @@ Done when: the answer is published with its query saved in `queries/`, its defin
     hub task show <id>
 
 Rewrite it as a measurable question: which users, which action, which period, compared with what. If two
-readings are possible, pick the likelier, say so, and ask once with `hub task ask <id>` only if the
+readings are possible, pick the likelier, say so, and ask once with `hub task question "<question>" --on <person> --parent <id>` only if the
 answer would differ a lot.
 
 ## 2. Check the definitions and the data

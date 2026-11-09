@@ -18,10 +18,10 @@ const {unrouted} = require('./support/routes.cjs');
     await page.route('**/*', route => {
       const req = route.request(), url = new URL(req.url()), path = url.pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-      const file = path.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const file = path.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (file && fs.existsSync(uiFile(file[1]))) return route.fulfill({contentType: file[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(file[1]), 'utf8')});
       if (path.startsWith('/vendor/') && fs.existsSync(uiFile(path.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(path.slice(1)))});
-      if (path.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(path)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (path === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (path.startsWith('/api/v2/alerts/')) {
         if (req.method() === 'GET') return json(state);
@@ -51,12 +51,15 @@ const {unrouted} = require('./support/routes.cjs');
       return json(unrouted(path));
     });
     await page.goto('https://tico-ui.test/#/settings/company-inbox');
-    await page.waitForFunction(() => typeof inboxesAlerts === 'function' && S.me?.id);
+    // #/settings/company-inbox is an old address: route() sends it on to Tools (location.replace) and the new page draws
+    // in a view transition (ui/app/router.ts routeChanged), a frame or more later, replacing #main. Draw the card after
+    // that page is on the screen, or it overwrites the card and [data-alert-send-code] never appears.
+    await page.waitForFunction(() => typeof inboxesAlerts === 'function' && S.me?.id && location.hash.startsWith('#/tools') && document.querySelector('#main #tools-root'));
     const draw = admin => page.evaluate(async admin => {
       let host = document.querySelector('#alerts-test-host');
       if (!host) { document.querySelector('#main').innerHTML = '<div id="alerts-test-host"></div>'; host = document.querySelector('#alerts-test-host'); }
       window.ALERT_CTX = {admin, me: S.me, live: () => true};
-      await INBOX_SETTINGS.find(s => s.key === 'texts-alerts').render(host, window.ALERT_CTX);
+      await inboxesAlerts(host, window.ALERT_CTX);
     }, admin);
     await draw(true);
     const card = page.locator('#inboxes-alerts');

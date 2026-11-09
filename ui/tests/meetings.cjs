@@ -1,6 +1,6 @@
-// The Meetings page (ui/app/meetings.js pageNotes, ui/meeting-importers.js): a header with search and one
+// The Meetings page (ui/app/meetings.ts pageNotes, ui/meeting-importers.ts): a header with search and one
 // "Add notes" button, an empty state of source tiles (Granola, Zoom, Google Meet, Close) alone, then a Sources
-// link (ui/app/meetings-sources.js) whose dialog lists every source with its status and error, Remove and Connect;
+// link (ui/app/meetings-sources.ts) whose dialog lists every source with its status and error, Remove and Connect;
 // filters and rows only once there is a meeting, setup in a dialog, and a transcript upload inside Add notes.
 // Fixtures only, no network.
 const {chromium} = require('playwright');
@@ -43,13 +43,13 @@ async function open(browser, viewport, world, options = {}) {
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: world.role || 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', email: 'ana@acme.example'}, {id: 'ben', name: 'Ben'}]});
-    if (p === '/api/employees') return json([]);
+    if (p === '/api/employees') return json(world.employees || []);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
@@ -68,12 +68,32 @@ async function open(browser, viewport, world, options = {}) {
     }
     if (p === '/api/v2/meetings/import' && method === 'POST') { const body = JSON.parse(route.request().postData()); world.imported.push(body); return json({id: 'm9', existing: false}); }
     if (/^\/api\/meetings\/m\d$/.test(p)) return json({...world.meetings.find(m => p.endsWith(m.id)), turns: [], transcript_readable: '', outbox: {doc: [], task: [], feature: []}});
+    if (/^\/api\/meetings\/[^/]+\/items$/.test(p)) return json(world.items || {id: '', can_push: true, sections: {doc: [], task: [], feature: []}, counts: {proposed: 0}});
+    if (/^\/api\/meetings\/[^/]+\/items\/[^/]+\/push$/.test(p)) {
+      const body = JSON.parse(route.request().postData() || '{}');
+      world.pushes.push({path: p, body});
+      const item = Object.values(world.items?.sections || {}).flat().find(row => row.id === p.split('/').at(-2));
+      if (!item.detail.owner) {
+        const docBot = (world.employees || []).find(employee => employee.slug === 'doc-updater');
+        if (!docBot) return route.fulfill({status: 422, contentType: 'application/json', body: JSON.stringify({error: {code: 'owner', detail: 'Pick who this doc update is for, then push again.'}})});
+        item.detail.owner = 'bot:' + docBot.id;
+      }
+      item.status = 'pushed'; item.version += 1;
+      return json({pushed: true, item});
+    }
+    if (/^\/api\/meetings\/[^/]+\/items\/[^/]+$/.test(p) && method === 'POST') {
+      const body = JSON.parse(route.request().postData() || '{}');
+      const item = Object.values(world.items?.sections || {}).flat().find(row => row.id === p.split('/').at(-1));
+      Object.assign(item, body, {detail: {...item.detail, ...(body.detail || {})}, version: item.version + 1, updated_by: 'human:ana'});
+      world.itemEdits.push(body);
+      return json({item});
+    }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
   return {page, errors, context};
 }
-const world = (extra = {}) => ({role: 'owner', sources: NONE, meetings: [], importers: structuredClone(IMPORTERS), saved: [], imported: [], ...extra});
+const world = (extra = {}) => ({role: 'owner', sources: NONE, meetings: [], importers: structuredClone(IMPORTERS), saved: [], imported: [], pushes: [], itemEdits: [], ...extra});
 async function shot(page, name) {
   if (!process.env.TICO_MEETINGS_SCREENSHOTS) return;
   fs.mkdirSync(process.env.TICO_MEETINGS_SCREENSHOTS, {recursive: true});
@@ -136,7 +156,7 @@ async function shot(page, name) {
 
       // Close goes to its integration page.
       await page.locator('#meet-sources .meet-src-btn').click();
-      assert.equal(await page.locator('#meet-src-dialog [data-src=close] a').getAttribute('href'), '#/integrations/close-crm');
+      assert.equal(await page.locator('#meet-src-dialog [data-src=close] a').getAttribute('href'), '#/tools/close-crm');
       await page.keyboard.press('Escape');
       await page.locator('#meet-src-dialog').waitFor({state: 'detached'});
 
@@ -283,7 +303,7 @@ async function shot(page, name) {
     }
     // The native window's shared-meeting entry point belongs to this hosted meeting flow too.
     await recorderLiveSharing(browser);
-    console.log('meetings ok: 6 browser scenarios, including Sources, permissions, historical data and mixed-version setup');
+    console.log('meetings ok: 6 browser scenarios, including Sources, owner choice, permissions, and mixed-version setup');
   } finally {
     await browser.close();
   }

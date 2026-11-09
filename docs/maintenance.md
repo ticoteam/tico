@@ -16,12 +16,14 @@ In order:
 | --- | --- | --- |
 | Collect | Records which bots did work in the window: a settled turn that wrote something. Messages and memory commits do not count. Always on. | Every run |
 | Clean up | Prunes old rows: events, mail, retry keys, recorder data, finished webhook and automation runs, and Maintenance's own runs older than 30 days. Deadline work stays in the server's hourly check. | Every run |
+| Find stuck | The task round-up: one grouped list per bot, least recently sent first, then oldest line, up to ten bots by default. Only lines the list would show set its age. The standalone timer and System routines control are retired; the legacy Run now endpoint runs this step. | Custom: every 6 hours |
 | Check health | Plain-code health checks: urgent findings file at once, noisy ones on their second run. Setup problems become BotOps tasks; Tico bugs follow the support report path. | Every run |
-| Find stuck | The task round-up: one grouped list per bot, oldest items first, up to ten bots by default. The standalone timer and System routines control are retired; the legacy Run now endpoint runs this step. | Custom: every 6 hours |
 | Learn (beta) | Scores activity with Tico Decide and keeps up to 15 items per bot for its next Update turn. Off by default. The nightly timer and System routines control are retired; both legacy Run now endpoints run this step. | Once a day |
-| Suggest | Needs Privacy consent. Fetches suggestions from Tico Gateway with count-only stats, at most once every 24 hours, and keeps them for each bot's next Update. | Once a day |
+| Suggest | Makes company skills' Remove and Ask to submit suggestions from this install's own data for the Skills page ([Skills](skills.md#suggestions)). With Privacy consent, also fetches suggestions from Tico Gateway with count-only stats, at most once every 24 hours, and keeps them for each bot's next Update. | Once a day |
 | Update | Builds the day's update queue from 05:00, skipping bots with no work unless learnings or suggestions are waiting. The server keeps sending requests and drafting people's updates after the run ends. | Once a day |
 | Dream | The auto dream: starts a dream for up to "Most bots per run" bots (three by default, 1 to 20). | Once a day |
+
+A held queued job does not hide a due follow-up from Find stuck's task list.
 
 ## How often
 
@@ -29,6 +31,9 @@ In order:
 - Day: once per company day, after 05:00.
 - Week: seven days after the step's last attempt.
 - Custom: every N hours or days, counted from the step's last attempt. A failed attempt counts, so a broken step does not retry on every run.
+- Week and Custom count as due up to five minutes early. A step's clock is its run's start, which lands a few seconds
+  into a schedule bucket; without the slack a run a few seconds earlier in its bucket than the last one finds the step
+  not due and puts it off a whole bucket (on Nov 8 a 6-hour Find stuck ran 7 hours apart).
 
 Suggest waits at least 24 hours between successful fetches, measured from the request time. A skip inside that window keeps its daily attempt for a later run that day.
 
@@ -51,7 +56,7 @@ Update skips before 05:00 company time without using up its cadence, so it can b
 
 ## Spend cap
 
-The monthly judge spend cap is saved here as `monthly_cap_usd`. When it is saved, the judge enforces it. When it is not, the environment setting `TICO_DECISIONS_MONTHLY_USD` applies (default 50).
+The monthly judge spend cap is saved here as `monthly_cap_usd`. When it is saved, the judge enforces it. When it is not, the environment setting `TICO_DECISIONS_MONTHLY_USD` applies (default 50). The rules' monthly cap (org rule checks, which ask Jev only) is saved here too, as `rules_monthly_cap_usd`; when it is not saved, `TICO_RULES_MONTHLY_USD` applies (default 50).
 
 ## Who can do what
 
@@ -59,6 +64,9 @@ Anyone signed in can read the settings, the steps and the runs. Only an owner or
 
 Maintenance wakes share one limiter: one wake per bot per run, three per task a day, and fifty across the fleet an hour. A wake that names several tasks counts once toward the fleet and once against
 each of its tasks.
+
+Find stuck runs before Check health so BotOps can get its task list. If that list uses BotOps's wake for the run,
+Check health still files its findings and keeps its wake for the next allowed run. With the default schedule, it tries again one hour later.
 
 ## Switches moved from the old jobs
 

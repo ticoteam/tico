@@ -32,12 +32,21 @@ const AT_MOST: Duration = Duration::from_secs(30);
 
 impl Trace {
     fn new(org: &str, serial: u64, prefetched: bool) -> Trace {
-        Trace { org: org.to_string(), serial, start: Instant::now(), marks: Vec::new(), prefetched, clicked: !prefetched, ready: false }
+        Trace {
+            org: org.to_string(),
+            serial,
+            start: Instant::now(),
+            marks: Vec::new(),
+            prefetched,
+            clicked: !prefetched,
+            ready: false,
+        }
     }
 
     fn mark(&mut self, what: &str) {
         if self.marks.len() < MARKS {
-            self.marks.push((what.to_string(), self.start.elapsed().as_millis()));
+            self.marks
+                .push((what.to_string(), self.start.elapsed().as_millis()));
         }
     }
 
@@ -48,9 +57,19 @@ impl Trace {
 
 /// The log line for a switch's marks.
 pub(crate) fn line(org: &str, prefetched: bool, marks: &[(String, u128)]) -> String {
-    let phases: Vec<String> = marks.iter().map(|(what, ms)| format!("{what} {ms}")).collect();
-    let (prefetched, since) = if prefetched { ("yes", "hover") } else { ("no", "click") };
-    format!("org switch {org}, prefetched: {prefetched} (ms since {since}): {}", phases.join(", "))
+    let phases: Vec<String> = marks
+        .iter()
+        .map(|(what, ms)| format!("{what} {ms}"))
+        .collect();
+    let (prefetched, since) = if prefetched {
+        ("yes", "hover")
+    } else {
+        ("no", "click")
+    };
+    format!(
+        "org switch {org}, prefetched: {prefetched} (ms since {since}): {}",
+        phases.join(", ")
+    )
 }
 
 fn next_serial() -> u64 {
@@ -96,18 +115,25 @@ pub(crate) fn hover(app: &App, org: &str) {
 
 /// The prefetched page of `org` closed unused: its trace goes without a line.
 pub(crate) fn drop_prefetch(app: &App, org: &str) {
-    with(app, |traces| traces.retain(|trace| trace.org != org || trace.clicked));
+    with(app, |traces| {
+        traces.retain(|trace| trace.org != org || trace.clicked)
+    });
 }
 
 /// The click on `org` reached the app (or another switch began). A prefetch's trace goes on from its hover.
 pub(crate) fn click(app: &App, org: &str, what: &str) {
-    let continued = with(app, |traces| match traces.iter_mut().find(|trace| trace.org == org && !trace.clicked) {
-        Some(trace) => {
-            trace.clicked = true;
-            trace.mark(what);
-            true
+    let continued = with(app, |traces| {
+        match traces
+            .iter_mut()
+            .find(|trace| trace.org == org && !trace.clicked)
+        {
+            Some(trace) => {
+                trace.clicked = true;
+                trace.mark(what);
+                true
+            }
+            None => false,
         }
-        None => false,
     });
     if !continued {
         start(app, org, false, what);
@@ -142,7 +168,9 @@ pub(crate) fn finish(app: &App, org: &str, what: &str) {
 /// The page is on screen. A prefetched page whose app is already up has nothing left to time.
 pub(crate) fn shown(app: &App, org: &str) {
     with(app, |traces| {
-        let Some(index) = traces.iter().position(|trace| trace.org == org) else { return };
+        let Some(index) = traces.iter().position(|trace| trace.org == org) else {
+            return;
+        };
         if traces[index].ready {
             write(traces.remove(index), "shown");
         } else {
@@ -167,7 +195,12 @@ pub(crate) fn loaded(app: &App, org: &str, what: &str) {
 /// The page called the bridge for the first time: the app on it is up.
 pub(crate) fn ready(app: &App, org: &str, name: &str) {
     with(app, |traces| {
-        let Some(index) = traces.iter().position(|trace| trace.org == org && !trace.ready) else { return };
+        let Some(index) = traces
+            .iter()
+            .position(|trace| trace.org == org && !trace.ready)
+        else {
+            return;
+        };
         traces[index].ready = true;
         let what = format!("app ready ({name})");
         if traces[index].clicked {
@@ -198,7 +231,11 @@ mod tests {
 
     #[test]
     fn a_switch_line_lists_each_phase_in_order_and_says_whether_it_was_prefetched() {
-        let marks = vec![("click".to_string(), 0), ("lock".to_string(), 1), ("nav team.example.com".to_string(), 40)];
+        let marks = vec![
+            ("click".to_string(), 0),
+            ("lock".to_string(), 1),
+            ("nav team.example.com".to_string(), 40),
+        ];
         assert_eq!(line("o_aaaaaaaa", false, &marks),
                    "org switch o_aaaaaaaa, prefetched: no (ms since click): click 0, lock 1, nav team.example.com 40");
         assert!(line("o_aaaaaaaa", true, &marks).contains("prefetched: yes (ms since hover)"));
@@ -207,8 +244,13 @@ mod tests {
     #[test]
     fn a_trace_keeps_at_most_its_cap_of_marks() {
         let mut trace = Trace::new("o", 1, false);
-        for _ in 0..100 { trace.mark("nav"); }
+        for _ in 0..100 {
+            trace.mark("nav");
+        }
         assert_eq!(trace.marks.len(), MARKS);
-        assert!(trace.clicked && !Trace::new("o", 2, true).clicked, "a hover is not a click");
+        assert!(
+            trace.clicked && !Trace::new("o", 2, true).clicked,
+            "a hover is not a click"
+        );
     }
 }

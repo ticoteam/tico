@@ -16,6 +16,7 @@ network. Finance records on accrual underneath and derives the cash view from se
 - A write-off posts Dr the write-off line / Cr AR with basis `accrual`: the cash view never had that income.
 - Stage events: finance.bill.received once per bill, finance.bill.due_soon and finance.invoice.overdue once per
   document per stage (the hourly `watch`)."""
+
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import timedelta
@@ -23,8 +24,10 @@ from typing import Any, cast
 
 from ..records import reads as RR
 from . import budgeting, delivery, posting, shared
+from . import receipts as RCP
 from .context import Ctx
 from .core import ap as AP
+from .core import attribution as CA
 from .core import budgets as B
 from .core import dates
 from .core import feeds as F
@@ -39,6 +42,7 @@ from .core.org import SYSTEM
 from .handlers import Plan, Result, may_write
 from .store import actions as SX
 from .store import ap as SAP
+from .store import attribution as ATT
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
@@ -50,7 +54,7 @@ RECEIVED, DUE_SOON, OVERDUE = "finance.bill.received", "finance.bill.due_soon", 
 RENEWAL_DUE = "finance.vendor.renewal_due"
 CONTROL = {"bill": ("2000", "payable", "accounts payable"), "invoice": ("1200", "receivable", "accounts receivable")}
 CONTACT_OF = {"bill": "vendor", "invoice": "customer"}
-SIGN = {"bill": 1, "invoice": -1}       # a bill's lines are debits, an invoice's credits
+SIGN = {"bill": 1, "invoice": -1}  # a bill's lines are debits, an invoice's credits
 OPEN = {"bill": AP.OPEN_BILL, "invoice": AP.OPEN_INVOICE}
 LINE_TYPES = {"bill": ("expense", "asset"), "invoice": ("income",)}
 # A bill's lines are expenses (or other assets a bill may spend): money, payables and receivables, prepaid balances
@@ -82,12 +86,15 @@ def _bill_line_refusal(ctx: Ctx, account: L.Account) -> str:
     if account.id in parents:
         return f"{account.name} groups other accounts: post the bill line to one of them"
     return f"a bill line cannot post to {account.name}: it is a money account's line"
-NAME_MIN = 4                            # a counterparty matches a contact's name on at least this many characters
+
+
+NAME_MIN = 4  # a counterparty matches a contact's name on at least this many characters
 CLEARING = ("1050", "Payments clearing", "asset", "clearing")
 
 
 def _event(ctx: Ctx, name: str, subject: str, payload: Mapping[str, object], key: str = "") -> None:
     from .banking import event
+
     event(ctx, name, subject, payload, key)
 
 
@@ -142,8 +149,17 @@ def _money(amount: int) -> str:
 
 
 # ------------------------------------------------------------------------------------------------ contacts
-CONTACT_FIELDS = ("name", "kind", "emails", "default_account_id", "is_1099", "recipient_id", "active", "seats",
-                  "renewal_on")
+CONTACT_FIELDS = (
+    "name",
+    "kind",
+    "emails",
+    "default_account_id",
+    "is_1099",
+    "recipient_id",
+    "active",
+    "seats",
+    "renewal_on",
+)
 TAX_FIELDS = ("tax_id_ref", "tax_id_fp", "tax_id_last4")
 
 
@@ -208,7 +224,7 @@ def _vendor_alias(ctx: Ctx, name: str, kind: str, contact_id: str) -> str:
     if kind not in ("vendor", "both"):
         return ""
     nk = L.name_key(name)
-    if SAP.is_contact(ctx.c, nk):                       # a name that is a contact's id would take that contact's keys
+    if SAP.is_contact(ctx.c, nk):  # a name that is a contact's id would take that contact's keys
         raise invalid("a vendor's name can't be a contact's id")
     owner = SAP.alias_of(ctx.c, ctx.book.id, nk)
     if owner == contact_id and owner:
@@ -220,8 +236,9 @@ def _vendor_alias(ctx: Ctx, name: str, kind: str, contact_id: str) -> str:
     both = B.clash({**budgets, **moved}, ctx.accounts, ctx.org) if moved else None
     if both is not None and (both[0].id in moved or both[1].id in moved):
         one, other = sorted((both[0].name, both[1].name))
-        raise FinanceError(CONFLICT, f"budgets {one} and {other} would both count {name}'s spend; end or change one "
-                                     "first")
+        raise FinanceError(
+            CONFLICT, f"budgets {one} and {other} would both count {name}'s spend; end or change one first"
+        )
     return nk
 
 
@@ -237,14 +254,22 @@ def contact_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     alias = _vendor_alias(ctx, str(f["name"]), str(f["kind"]), "")
 
     def apply(aid: str) -> Result:
-        cid = SAP.insert(ctx.c, "fin_contacts", {"book_id": ctx.book.id, "created_at": ctx.at, "created_by": who,
-                                                 "updated_at": ctx.at, **f})
+        cid = SAP.insert(
+            ctx.c,
+            "fin_contacts",
+            {"book_id": ctx.book.id, "created_at": ctx.at, "created_by": who, "updated_at": ctx.at, **f},
+        )
         if alias:
             SAP.alias_add(ctx.c, ctx.book.id, alias, cid, ctx.at)
-            ctx.changed()                       # budgets on the name go by the contact now
+            ctx.changed()  # budgets on the name go by the contact now
         return {"contact_id": cid}
-    return Plan(K.default_gate(ctx.org, who, "contact_create"), f"Add {f['kind']} {f['name']}", apply,
-                facts={"contact.kind": str(f["kind"]), "counterparty": str(f["name"])})
+
+    return Plan(
+        K.default_gate(ctx.org, who, "contact_create"),
+        f"Add {f['kind']} {f['name']}",
+        apply,
+        facts={"contact.kind": str(f["kind"]), "counterparty": str(f["name"])},
+    )
 
 
 def contact_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -263,14 +288,19 @@ def contact_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         if "tax_id_last4" in f and old["tax_id_ref"]:
-            tico.drop_credential(ctx.c, str(old["tax_id_ref"]))     # the old number goes with its replacement
+            tico.drop_credential(ctx.c, str(old["tax_id_ref"]))  # the old number goes with its replacement
         SAP.update(ctx.c, "fin_contacts", str(old["id"]), {**f, "updated_at": ctx.at})
         if alias:
             SAP.alias_add(ctx.c, ctx.book.id, alias, str(old["id"]), ctx.at)
             ctx.changed()
         return {"contact_id": str(old["id"])}
-    return Plan(K.default_gate(ctx.org, who, "contact_update"), f"Change contact {old['name']}", apply,
-                facts={"contact.kind": str(f.get("kind") or old["kind"]), "counterparty": str(old["name"])})
+
+    return Plan(
+        K.default_gate(ctx.org, who, "contact_update"),
+        f"Change contact {old['name']}",
+        apply,
+        facts={"contact.kind": str(f.get("kind") or old["kind"]), "counterparty": str(old["name"])},
+    )
 
 
 # ------------------------------------------------------------------------------------------------ document lines
@@ -283,13 +313,15 @@ def _item_account(ctx: Ctx, kind: str, x: AP.DocLine) -> str | None:
     return str(item["expense_account_id" if kind == "bill" else "income_account_id"] or "") or None
 
 
-def resolve_lines(ctx: Ctx, who: str, kind: str, contact: Any,
-                  lines: Sequence[AP.DocLine]) -> tuple[list[AP.DocLine], int]:
+def resolve_lines(
+    ctx: Ctx, who: str, kind: str, contact: Any, lines: Sequence[AP.DocLine]
+) -> tuple[list[AP.DocLine], int]:
     """Each line's account: its item's account when it names an item (an account it names that differs is refused),
     else the one given; for a bill line without one, the first posting rule that matches, else the vendor's default
     line, else Other expenses (counted as asked, for a person to fix before entering it). Every line is checked against
     the asker's view."""
     from .posting_rules import first_for
+
     out: list[AP.DocLine] = []
     asked = 0
     for raw in lines:
@@ -302,17 +334,29 @@ def resolve_lines(ctx: Ctx, who: str, kind: str, contact: Any,
             continue
         if kind != "bill":
             raise invalid("an invoice line names its income account")
-        rule = first_for(ctx, {"kind": "bill", "amount": x.amount, "counterparty": str(contact["name"]),
-                               "description": x.description, "contact.id": str(contact["id"]), "direction": "out"})
+        rule = first_for(
+            ctx,
+            {
+                "kind": "bill",
+                "amount": x.amount,
+                "counterparty": str(contact["name"]),
+                "description": x.description,
+                "contact.id": str(contact["id"]),
+                "direction": "out",
+            },
+        )
         if rule is not None and rule.then.outcome == "post":
-            out += [replace(x, account_id=account, amount=amount, tags={**x.tags, **tags})
-                    for account, amount, tags in AP.split_amounts(x.amount, rule.then)]
+            out += [
+                replace(x, account_id=account, amount=amount, tags={**x.tags, **tags})
+                for account, amount, tags in AP.split_amounts(x.amount, rule.then)
+            ]
             continue
         default = str(contact["default_account_id"] or "")
         if rule is None and default in ctx.accounts and ctx.accounts[default].active:
             out.append(replace(x, account_id=default))
             continue
         from .banking import OTHER, by_code
+
         other = by_code(ctx, OTHER)
         if other is None:
             raise invalid("say which account each line posts to")
@@ -341,19 +385,38 @@ def resolve_lines(ctx: Ctx, who: str, kind: str, contact: Any,
 
 def _line_rows(lines: Sequence[AP.DocLine], who: str, at: str) -> list[dict[str, object]]:
     """The rows a document's lines are stored as. Only an invoice line says whether it is taxable."""
-    return [{"account_id": x.account_id, "amount": x.amount, "description": x.description,
-             "tags": SK.dump(dict(x.tags)), "created_at": at, "created_by": who, "item_id": x.item_id or None,
-             **({"po_line_id": x.po_line_id} if x.po_line_id else {}),
-             **({"prepaid_start": x.prepaid[0], "prepaid_months": x.prepaid[1]} if x.prepaid else {}),
-             **({"taxable": int(x.taxable)} if x.taxable is not None else {})} for x in lines]
+    return [
+        {
+            "account_id": x.account_id,
+            "amount": x.amount,
+            "description": x.description,
+            "tags": SK.dump(dict(x.tags)),
+            "created_at": at,
+            "created_by": who,
+            "item_id": x.item_id or None,
+            **({"po_line_id": x.po_line_id} if x.po_line_id else {}),
+            **({"prepaid_start": x.prepaid[0], "prepaid_months": x.prepaid[1]} if x.prepaid else {}),
+            **({"taxable": int(x.taxable)} if x.taxable is not None else {}),
+        }
+        for x in lines
+    ]
 
 
 def doc_lines_of(ctx: Ctx, kind: str, doc_id: str) -> list[AP.DocLine]:
-    return [AP.DocLine(str(r["account_id"]), int(r["amount"]), str(r["description"]),
-                       cast(dict[str, str], SK.loads(r["tags"])), None, str(r["item_id"] or ""),
-                       prepaid=(str(r["prepaid_start"]), int(r["prepaid_months"]))
-                       if kind == "bill" and r["prepaid_start"] else None)
-            for r in SAP.lines(ctx.c, kind, [doc_id]).get(doc_id, [])]
+    return [
+        AP.DocLine(
+            str(r["account_id"]),
+            int(r["amount"]),
+            str(r["description"]),
+            cast(dict[str, str], SK.loads(r["tags"])),
+            None,
+            str(r["item_id"] or ""),
+            prepaid=(str(r["prepaid_start"]), int(r["prepaid_months"]))
+            if kind == "bill" and r["prepaid_start"]
+            else None,
+        )
+        for r in SAP.lines(ctx.c, kind, [doc_id]).get(doc_id, [])
+    ]
 
 
 def _hold(ctx: Ctx, bill_id: str, vendor_id: str, lines: Sequence[AP.DocLine], who: str) -> list[str]:
@@ -364,16 +427,24 @@ def _hold(ctx: Ctx, bill_id: str, vendor_id: str, lines: Sequence[AP.DocLine], w
     refused: list[str] = []
     for n, x in enumerate(lines):
         account = ctx.accounts[x.account_id]
-        if account.type != "expense" or x.prepaid:     # a prepaid line is expensed as its months come due (prepaids.py)
+        if account.type != "expense" or x.prepaid:  # a prepaid line is expensed as its months come due (prepaids.py)
             continue
         moved = None
         if x.po_line_id:
             row = SP.po_line(ctx.c, x.po_line_id)
             moved = ("purchase_order", f"{row['po_id']}:{int(row['line_no'])}") if row is not None else None
-        d = budgeting.place(ctx, budget_scope={"account_id": account.id, **scope_tags(x.tags), "vendor": vendor_id},
-                            amount=x.amount, currency=ctx.book.base_currency, source="bill",
-                            source_id=f"{bill_id}:{n}", expires_at=None, by=who, moved_from=moved)
-        if d.hold_id:                                  # the hold is part of the bill's commitment (spec §4.2)
+        d = budgeting.place(
+            ctx,
+            budget_scope={"account_id": account.id, **scope_tags(x.tags), "vendor": vendor_id},
+            amount=x.amount,
+            currency=ctx.book.base_currency,
+            source="bill",
+            source_id=f"{bill_id}:{n}",
+            expires_at=None,
+            by=who,
+            moved_from=moved,
+        )
+        if d.hold_id:  # the hold is part of the bill's commitment (spec §4.2)
             SB.set_commitment(ctx.c, d.hold_id, bill_id)
         if not d.allowed:
             refused.append(d.reason)
@@ -427,8 +498,14 @@ def doc_facts(kind: str, contact: Any, lines: Sequence[AP.DocLine], ctx: Ctx, **
                 values.append(v)
     # Every line's value of a tag counts: a rule on a tag matches a document with any line carrying that value.
     tags: dict[str, object] = {k: vs[0] if len(vs) == 1 else sorted(vs) for k, vs in seen.items()}
-    return {"amount": sum(x.amount for x in lines), "counterparty": str(contact["name"]),
-            f"{CONTACT_OF[kind]}.id": str(contact["id"]), "accounts": codes, **tags, **more}
+    return {
+        "amount": sum(x.amount for x in lines),
+        "counterparty": str(contact["name"]),
+        f"{CONTACT_OF[kind]}.id": str(contact["id"]),
+        "accounts": codes,
+        **tags,
+        **more,
+    }
 
 
 # ------------------------------------------------------------------------------------------------ bills
@@ -443,6 +520,7 @@ def bill_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     terms = V.integer(p, "terms_days", 0, AP.MAX_TERMS) if p.get("terms_days") is not None else None
     due = AP.due_date(day, V.opt_day(p, "due_date"), terms)
     from . import purchasing as PU
+
     linked, orders = PU.link_bill_lines(ctx, who, str(vendor["id"]), AP.doc_lines(p.get("lines")))
     lines, asked = resolve_lines(ctx, who, "bill", vendor, linked)
     files = _attach_files(p)
@@ -451,11 +529,28 @@ def bill_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     bid = SL.new_id()
 
     def apply(aid: str) -> Result:
-        SAP.insert(ctx.c, "fin_bills", {
-            "id": bid, "book_id": ctx.book.id, "vendor_id": str(vendor["id"]), "number": number, "bill_date": day,
-            "due_date": due, "terms_days": terms, "memo": V.opt_text(p, "memo", 500) or "", "status": "draft",
-            "currency": ctx.book.base_currency, "total": total, "commitment_id": bid, "origin": origin,
-            "created_at": ctx.at, "created_by": who, "updated_at": ctx.at})
+        SAP.insert(
+            ctx.c,
+            "fin_bills",
+            {
+                "id": bid,
+                "book_id": ctx.book.id,
+                "vendor_id": str(vendor["id"]),
+                "number": number,
+                "bill_date": day,
+                "due_date": due,
+                "terms_days": terms,
+                "memo": V.opt_text(p, "memo", 500) or "",
+                "status": "draft",
+                "currency": ctx.book.base_currency,
+                "total": total,
+                "commitment_id": bid,
+                "origin": origin,
+                "created_at": ctx.at,
+                "created_by": who,
+                "updated_at": ctx.at,
+            },
+        )
         SAP.replace_lines(ctx.c, "bill", bid, _line_rows(lines, who, ctx.at))
         SAP.attach(ctx.c, ctx.book.id, "bill", bid, files, who, ctx.at)
         SAP.drop_unmatched(ctx.c, ctx.book.id, files)
@@ -469,9 +564,13 @@ def bill_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         if refused:
             out["not_held"] = refused
         return out
-    return Plan(K.default_gate(ctx.org, who, "bill_create"),
-                f"Record a {_money(total)} {ctx.book.base_currency} bill from {vendor['name']}", apply,
-                facts=doc_facts("bill", vendor, lines, ctx, origin=origin))
+
+    return Plan(
+        K.default_gate(ctx.org, who, "bill_create"),
+        f"Record a {_money(total)} {ctx.book.base_currency} bill from {vendor['name']}",
+        apply,
+        facts=doc_facts("bill", vendor, lines, ctx, origin=origin),
+    )
 
 
 def _need_status(kind: str, doc: Any, allowed: Sequence[str], what: str) -> None:
@@ -482,20 +581,27 @@ def _need_status(kind: str, doc: Any, allowed: Sequence[str], what: str) -> None
 def bill_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Change a bill. Its vendor, date and lines change only while it is a draft (an entered bill is reversed by
     voiding it); its number, due date, memo and attachments change until it is paid or void."""
-    V.only(p, ("bill_id", "vendor_id", "number", "bill_date", "due_date", "terms_days", "memo", "lines",
-               "attachments"))
+    V.only(p, ("bill_id", "vendor_id", "number", "bill_date", "due_date", "terms_days", "memo", "lines", "attachments"))
     bill = _doc(ctx, "bill", V.text(p, "bill_id", 80))
     draft = str(bill["status"]) == "draft"
     _need_status("bill", bill, ("draft", "open", "scheduled"), "it no longer changes")
     from . import purchasing as PU
+
     if ("vendor_id" in p or "lines" in p) and PU.bill_orders(ctx, str(bill["id"])):
-        raise FinanceError(CONFLICT, "a bill that bills an order keeps its vendor and lines; void it and enter it again")
+        raise FinanceError(
+            CONFLICT, "a bill that bills an order keeps its vendor and lines; void it and enter it again"
+        )
     if not draft and any(k in p for k in ("vendor_id", "bill_date", "lines")):
         raise FinanceError(CONFLICT, "an entered bill keeps its vendor, date and lines; void it and record it again")
-    vendor = contact_for(ctx, V.text(p, "vendor_id", 80), "bill") if "vendor_id" in p else \
-        contact_for(ctx, str(bill["vendor_id"]), "bill")
+    vendor = (
+        contact_for(ctx, V.text(p, "vendor_id", 80), "bill")
+        if "vendor_id" in p
+        else contact_for(ctx, str(bill["vendor_id"]), "bill")
+    )
     old_lines = doc_lines_of(ctx, "bill", str(bill["id"]))
-    linked, orders = PU.link_bill_lines(ctx, who, str(vendor["id"]), AP.doc_lines(p.get("lines")) if "lines" in p else [])
+    linked, orders = PU.link_bill_lines(
+        ctx, who, str(vendor["id"]), AP.doc_lines(p.get("lines")) if "lines" in p else []
+    )
     lines, asked = resolve_lines(ctx, who, "bill", vendor, linked) if "lines" in p else (old_lines, 0)
     f: dict[str, object] = {}
     if "vendor_id" in p:
@@ -509,8 +615,11 @@ def bill_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if "bill_date" in p:
         f["bill_date"] = day
     if "terms_days" in p or "due_date" in p or "bill_date" in p:
-        terms = V.integer(p, "terms_days", 0, AP.MAX_TERMS) if p.get("terms_days") is not None else \
-            (None if "terms_days" in p else bill["terms_days"])
+        terms = (
+            V.integer(p, "terms_days", 0, AP.MAX_TERMS)
+            if p.get("terms_days") is not None
+            else (None if "terms_days" in p else bill["terms_days"])
+        )
         due = V.opt_day(p, "due_date") if "due_date" in p else (None if "terms_days" in p else bill["due_date"])
         f["terms_days"], f["due_date"] = terms, AP.due_date(day, due, terms)
     if "memo" in p:
@@ -539,32 +648,50 @@ def bill_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         if asked:
             out["uncategorized_lines"] = asked
         return out
-    return Plan(K.default_gate(ctx.org, who, "bill_update"), f"Change bill {bill['number'] or bill['id']}", apply,
-                facts=doc_facts("bill", vendor, lines, ctx))
+
+    return Plan(
+        K.default_gate(ctx.org, who, "bill_update"),
+        f"Change bill {bill['number'] or bill['id']}",
+        apply,
+        facts=doc_facts("bill", vendor, lines, ctx),
+    )
 
 
-def _post_doc(ctx: Ctx, kind: str, doc: Any, lines: Sequence[AP.DocLine], day: str, who: str,
-              holds: Sequence[str] = ()) -> str:
+def _post_doc(
+    ctx: Ctx, kind: str, doc: Any, lines: Sequence[AP.DocLine], day: str, who: str, holds: Sequence[str] = ()
+) -> str:
     """A document's own entry: Dr expense / Cr AP for a bill, Dr AR / Cr income for an invoice. A prepaid bill line
     debits the prepaid expenses asset instead, untagged; its expense comes out month by month (prepaids.py)."""
     from .banking import open_day
     from . import prepaids
+
     s = SIGN[kind]
     contact = str(doc[f"{CONTACT_OF[kind]}_id"])
     prepaid = prepaids.account(ctx, who).id if kind == "bill" and any(x.prepaid for x in lines) else ""
     rows: list[dict[str, object]] = [
-        {"account_id": prepaid if x.prepaid else x.account_id, "amount": s * x.amount,
-         "tags": {} if x.prepaid else dict(x.tags), "contact_id": contact, "description": x.description[:200]}
-        for x in lines]
-    rows.append({"account_id": control(ctx, kind).id, "amount": -s * sum(x.amount for x in lines),
-                 "contact_id": contact})
+        {
+            "account_id": prepaid if x.prepaid else x.account_id,
+            "amount": s * x.amount,
+            "tags": {} if x.prepaid else dict(x.tags),
+            "contact_id": contact,
+            "description": x.description[:200],
+        }
+        for x in lines
+    ]
+    rows.append(
+        {"account_id": control(ctx, kind).id, "amount": -s * sum(x.amount for x in lines), "contact_id": contact}
+    )
     label = f"{'Bill' if kind == 'bill' else 'Invoice'} {doc['number'] or doc['id']} · {doc['contact_name'] or ''}"
     posted_on = open_day(ctx, day)
-    dated = "" if posted_on == day else f" (dated {day})"     # a late document names its own date (spec §4.1)
+    dated = "" if posted_on == day else f" (dated {day})"  # a late document names its own date (spec §4.1)
     text = label.strip(" ·")[:160]
-    done = posting.post_entry(ctx.c, {"date": posted_on, "source": kind, "source_id": str(doc["id"]),
-                                      "memo": f"{text}{dated}", "lines": rows},
-                              by=who, hold_ids=holds, at=ctx.at)
+    done = posting.post_entry(
+        ctx.c,
+        {"date": posted_on, "source": kind, "source_id": str(doc["id"]), "memo": f"{text}{dated}", "lines": rows},
+        by=who,
+        hold_ids=holds,
+        at=ctx.at,
+    )
     if not done.get("posted"):
         raise FinanceError(CONFLICT, f"that {kind} was already posted")
     return str(done["entry_id"])
@@ -586,14 +713,25 @@ def bill_approve(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     def apply(aid: str) -> Result:
         holds = _holds(ctx, str(bill["id"]), len(lines))
         entry = _post_doc(ctx, "bill", bill, lines, str(bill["bill_date"]), who, holds)
-        if SAP.update(ctx.c, "fin_bills", str(bill["id"]), {"status": "open", "entry_id": entry, "approved_by": who,
-                                                            "approved_at": ctx.at, "updated_at": ctx.at},
-                      "status='draft'") != 1:
+        if (
+            SAP.update(
+                ctx.c,
+                "fin_bills",
+                str(bill["id"]),
+                {"status": "open", "entry_id": entry, "approved_by": who, "approved_at": ctx.at, "updated_at": ctx.at},
+                "status='draft'",
+            )
+            != 1
+        ):
             raise FinanceError(CONFLICT, "that bill moved on")
         return {"bill_id": str(bill["id"]), "status": "open", "entry_id": entry}
-    return Plan(K.default_gate(ctx.org, who, "bill_approve"),
-                f"Enter the {_money(int(bill['total']))} bill from {vendor['name']}", apply,
-                facts=doc_facts("bill", vendor, lines, ctx))
+
+    return Plan(
+        K.default_gate(ctx.org, who, "bill_approve"),
+        f"Enter the {_money(int(bill['total']))} bill from {vendor['name']}",
+        apply,
+        facts=doc_facts("bill", vendor, lines, ctx),
+    )
 
 
 def bill_schedule(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -621,21 +759,35 @@ def bill_schedule(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     pay_on = V.day(p, "pay_on")
     old = SK.loads(bill["schedule"])
     n = int(cast(int, old.get("n") or 0)) + 1
-    sched = {"n": n, "pay_on": pay_on, "money_account_id": str(money["id"]), "recipient_id": str(rec["id"]),
-             "memo": V.opt_text(p, "memo", 140) or "", "by": who}
+    sched = {
+        "n": n,
+        "pay_on": pay_on,
+        "money_account_id": str(money["id"]),
+        "recipient_id": str(rec["id"]),
+        "memo": V.opt_text(p, "memo", 140) or "",
+        "by": who,
+    }
 
     def apply(aid: str) -> Result:
         from .actions import withdraw_bill_asks
-        SAP.update(ctx.c, "fin_bills", str(bill["id"]), {"status": "scheduled", "pay_on": pay_on,
-                                                         "schedule": SK.dump(sched), "updated_at": ctx.at})
+
+        SAP.update(
+            ctx.c,
+            "fin_bills",
+            str(bill["id"]),
+            {"status": "scheduled", "pay_on": pay_on, "schedule": SK.dump(sched), "updated_at": ctx.at},
+        )
         # A rescheduled bill pays only on its new day: an earlier ask to pay it (waiting on approval) is withdrawn,
         # after the new schedule is written so its end does not reopen the bill.
         withdraw_bill_asks(ctx, str(bill["id"]), aid, "the bill was rescheduled")
         return {"bill_id": str(bill["id"]), "status": "scheduled", "pay_on": pay_on}
-    return Plan(K.default_gate(ctx.org, who, "bill_schedule"),
-                f"Pay the {_money(_left('bill', bill))} bill from {vendor['name']} on {pay_on}", apply,
-                facts={"amount": _left("bill", bill), "counterparty": str(vendor["name"]),
-                       "recipient.id": str(rec["id"])})
+
+    return Plan(
+        K.default_gate(ctx.org, who, "bill_schedule"),
+        f"Pay the {_money(_left('bill', bill))} bill from {vendor['name']} on {pay_on}",
+        apply,
+        facts={"amount": _left("bill", bill), "counterparty": str(vendor["name"]), "recipient.id": str(rec["id"])},
+    )
 
 
 def bill_void(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -652,6 +804,7 @@ def bill_void(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         from .banking import open_day
         from . import prepaids
         from . import purchasing as PU
+
         bill_id = str(bill["id"])
         prepaids.unpost(ctx, bill_id, who, aid, f"Void bill {bill['number'] or bill['id']}: {reason}"[:200])
         posted = False
@@ -659,19 +812,30 @@ def bill_void(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             entry = SL.entry_row(ctx.c, str(bill["entry_id"]))
             if entry is not None and str(entry["status"]) == "posted":
                 # The bill's own date: open_day moves it to the open period only when that date is closed (§4.1).
-                posting.reverse(ctx, str(bill["entry_id"]), day=open_day(ctx, str(bill["bill_date"])),
-                                memo=f"Void bill {bill['number'] or bill['id']}: {reason}"[:200], by=who,
-                                action_id=aid)
+                posting.reverse(
+                    ctx,
+                    str(bill["entry_id"]),
+                    day=open_day(ctx, str(bill["bill_date"])),
+                    memo=f"Void bill {bill['number'] or bill['id']}: {reason}"[:200],
+                    by=who,
+                    action_id=aid,
+                )
                 posted = True
         # The orders the bill billed take back their room first, so the holds the bill still has move back to them.
         PU.give_back(ctx, who, bill_id, posted=posted)
         _unhold(ctx, bill_id, len(doc_lines_of(ctx, "bill", bill_id)))
-        SAP.update(ctx.c, "fin_bills", bill_id, {"status": "void", "pay_on": None, "voided_at": ctx.at,
-                                                 "updated_at": ctx.at})
+        SAP.update(
+            ctx.c, "fin_bills", bill_id, {"status": "void", "pay_on": None, "voided_at": ctx.at, "updated_at": ctx.at}
+        )
         PU.sync_orders(ctx, who, PU.bill_orders(ctx, bill_id))
         return {"bill_id": str(bill["id"]), "status": "void"}
-    return Plan(K.default_gate(ctx.org, who, "bill_void"), f"Void bill {bill['number'] or bill['id']}", apply,
-                facts={"amount": int(bill["total"]), "counterparty": str(bill["contact_name"] or "")})
+
+    return Plan(
+        K.default_gate(ctx.org, who, "bill_void"),
+        f"Void bill {bill['number'] or bill['id']}",
+        apply,
+        facts={"amount": int(bill["total"]), "counterparty": str(bill["contact_name"] or "")},
+    )
 
 
 # ------------------------------------------------------------------------------------------------ invoices
@@ -694,8 +858,10 @@ def invoice_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     due = AP.due_date(day, V.opt_day(p, "due_date"), terms)
     lines, _ = resolve_lines(ctx, who, "invoice", customer, AP.doc_lines(p.get("lines"), invoice=True))
     carries_tax = any(ctx.accounts[x.account_id].subtype == SALES_TAX for x in lines)
-    lines = [replace(x, taxable=taxable_default(x.taxable, ctx.accounts[x.account_id].type == "income", carries_tax))
-             for x in lines]
+    lines = [
+        replace(x, taxable=taxable_default(x.taxable, ctx.accounts[x.account_id].type == "income", carries_tax))
+        for x in lines
+    ]
     link = V.opt_text(p, "payment_link", 500) or None
     if link and not link.startswith("https://"):
         raise invalid("a payment link is an https:// address")
@@ -703,28 +869,55 @@ def invoice_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     iid = SL.new_id()
 
     def apply(aid: str) -> Result:
-        SAP.insert(ctx.c, "fin_invoices", {
-            "id": iid, "book_id": ctx.book.id, "customer_id": str(customer["id"]), "number": number,
-            "invoice_date": day, "due_date": due, "terms_days": terms, "memo": V.opt_text(p, "memo", 500) or "",
-            "status": "draft", "currency": ctx.book.base_currency, "total": total, "payment_link": link,
-            "created_at": ctx.at, "created_by": who, "updated_at": ctx.at})
+        SAP.insert(
+            ctx.c,
+            "fin_invoices",
+            {
+                "id": iid,
+                "book_id": ctx.book.id,
+                "customer_id": str(customer["id"]),
+                "number": number,
+                "invoice_date": day,
+                "due_date": due,
+                "terms_days": terms,
+                "memo": V.opt_text(p, "memo", 500) or "",
+                "status": "draft",
+                "currency": ctx.book.base_currency,
+                "total": total,
+                "payment_link": link,
+                "created_at": ctx.at,
+                "created_by": who,
+                "updated_at": ctx.at,
+            },
+        )
         SAP.replace_lines(ctx.c, "invoice", iid, _line_rows(lines, who, ctx.at))
         return {"invoice_id": iid, "number": number, "status": "draft", "total": total}
-    return Plan(K.default_gate(ctx.org, who, "invoice_create"),
-                f"Draft invoice {number} for {_money(total)} {ctx.book.base_currency} to {customer['name']}", apply,
-                facts=doc_facts("invoice", customer, lines, ctx))
+
+    return Plan(
+        K.default_gate(ctx.org, who, "invoice_create"),
+        f"Draft invoice {number} for {_money(total)} {ctx.book.base_currency} to {customer['name']}",
+        apply,
+        facts=doc_facts("invoice", customer, lines, ctx),
+    )
 
 
 def document(ctx: Ctx, kind: str, doc: Any) -> Result:
     """What a sent invoice says, for whoever delivers it (Finance has no outbound mail of its own)."""
     customer = SAP.get(ctx.c, "fin_contacts", str(doc[f"{CONTACT_OF[kind]}_id"]))
     lines = SAP.lines(ctx.c, kind, [str(doc["id"])]).get(str(doc["id"]), [])
-    return {"number": str(doc["number"]), "date": str(doc[f"{kind}_date"]), "due_date": doc["due_date"],
-            "currency": str(doc["currency"]), "total": int(doc["total"]), "memo": str(doc["memo"]),
-            "payment_link": doc["payment_link"] if kind == "invoice" else None,
-            "to": {"id": str(customer["id"]), "name": str(customer["name"]),
-                   "emails": SK.loads_list(customer["emails"])} if customer is not None else None,
-            "lines": [{"description": str(r["description"]), "amount": int(r["amount"])} for r in lines]}
+    return {
+        "number": str(doc["number"]),
+        "date": str(doc[f"{kind}_date"]),
+        "due_date": doc["due_date"],
+        "currency": str(doc["currency"]),
+        "total": int(doc["total"]),
+        "memo": str(doc["memo"]),
+        "payment_link": doc["payment_link"] if kind == "invoice" else None,
+        "to": {"id": str(customer["id"]), "name": str(customer["name"]), "emails": SK.loads_list(customer["emails"])}
+        if customer is not None
+        else None,
+        "lines": [{"description": str(r["description"]), "amount": int(r["amount"])} for r in lines],
+    }
 
 
 def _decider(ctx: Ctx, who: str) -> str:
@@ -739,7 +932,10 @@ def _invoice_email(ctx: Ctx, inv: Any) -> str:
     cur = ctx.book.base_currency
     due = f", due {inv['due_date']}" if inv["due_date"] else ""
     out = [f"Invoice {inv['number']} for {_money(int(inv['total']))} {cur}, dated {inv['invoice_date']}{due}."]
-    out += [f"- {r['description']}: {_money(int(r['amount']))} {cur}" for r in SAP.lines(ctx.c, "invoice", [sid]).get(sid, [])]
+    out += [
+        f"- {r['description']}: {_money(int(r['amount']))} {cur}"
+        for r in SAP.lines(ctx.c, "invoice", [sid]).get(sid, [])
+    ]
     if inv["payment_link"]:
         out.append(f"Pay here: {inv['payment_link']}")
     return "\n".join(out)
@@ -773,8 +969,10 @@ def _late_enough(inv: Any, today: str, stage: int) -> None:
         raise FinanceError(CONFLICT, f"invoice {number} is due {due}, so it is not late yet")
     if late < stage:
         waits = dates.day(due) + timedelta(days=stage)
-        raise FinanceError(CONFLICT, f"invoice {number} is {late} days past due; its {stage}-day reminder waits until "
-                                     f"{waits.isoformat()}")
+        raise FinanceError(
+            CONFLICT,
+            f"invoice {number} is {late} days past due; its {stage}-day reminder waits until {waits.isoformat()}",
+        )
 
 
 def invoice_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -802,26 +1000,64 @@ def invoice_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     def apply(aid: str) -> Result:
         entry = _post_doc(ctx, "invoice", inv, lines, str(inv["invoice_date"]), who)
         sid = str(inv["id"])
-        if SAP.update(ctx.c, "fin_invoices", sid, {"status": "sent", "entry_id": entry, "sent_at": ctx.at,
-                                                    "updated_at": ctx.at}, "status='draft'") != 1:
+        if (
+            SAP.update(
+                ctx.c,
+                "fin_invoices",
+                sid,
+                {"status": "sent", "entry_id": entry, "sent_at": ctx.at, "updated_at": ctx.at},
+                "status='draft'",
+            )
+            != 1
+        ):
             raise FinanceError(CONFLICT, "that invoice moved on")
-        out: Result = {"invoice_id": sid, "status": "sent", "entry_id": entry, "delivery": "caller",
-                       "document": document(ctx, "invoice", inv)}
+        out: Result = {
+            "invoice_id": sid,
+            "status": "sent",
+            "entry_id": entry,
+            "delivery": "caller",
+            "document": document(ctx, "invoice", inv),
+        }
         if box:
-            approval = delivery.issue(ctx.c, _decider(ctx, who), who, to=emails, subject=subject, text=text, box=box,
-                                      document=cast(Mapping[str, Any], out["document"]), ref=f"invoice:{sid}")
-            SAP.update(ctx.c, "fin_invoices", sid, {"send_approval_id": approval, "send_to": SK.dump(emails),
-                                                    "send_text": text})
-            out.update({"delivery": "send_approval", "send_approval_id": approval, "text": text, "subject": subject,
-                        "to": delivery.recipients(emails), "mailbox": box})
+            approval = delivery.issue(
+                ctx.c,
+                _decider(ctx, who),
+                who,
+                to=emails,
+                subject=subject,
+                text=text,
+                box=box,
+                document=cast(Mapping[str, Any], out["document"]),
+                ref=f"invoice:{sid}",
+            )
+            SAP.update(
+                ctx.c,
+                "fin_invoices",
+                sid,
+                {"send_approval_id": approval, "send_to": SK.dump(emails), "send_text": text},
+            )
+            out.update(
+                {
+                    "delivery": "send_approval",
+                    "send_approval_id": approval,
+                    "text": text,
+                    "subject": subject,
+                    "to": delivery.recipients(emails),
+                    "mailbox": box,
+                }
+            )
         return out
-    return Plan(K.default_gate(ctx.org, who, "invoice_send"),
-                f"Send invoice {inv['number']} for {_money(int(inv['total']))} to {customer['name']}"
-                f"{_mail_words(mail)}", apply, facts=doc_facts("invoice", customer, lines, ctx),
-                resolved={delivery.MAIL: mail})
+
+    return Plan(
+        K.default_gate(ctx.org, who, "invoice_send"),
+        f"Send invoice {inv['number']} for {_money(int(inv['total']))} to {customer['name']}{_mail_words(mail)}",
+        apply,
+        facts=doc_facts("invoice", customer, lines, ctx),
+        resolved={delivery.MAIL: mail},
+    )
 
 
-REMIND_STAGES = (1, 7, 30, 60, 90)      # days late, as Finance raises finance.invoice.overdue
+REMIND_STAGES = (1, 7, 30, 60, 90)  # days late, as Finance raises finance.invoice.overdue
 
 
 def invoice_remind(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -853,27 +1089,64 @@ def invoice_remind(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if not box:
         raise FinanceError(NOT_AVAILABLE, "the Bookkeeper has no mailbox that can send, so a reminder cannot be sent")
     link = f" Pay here: {inv['payment_link']}" if inv["payment_link"] else ""
-    text = (f"Invoice {inv['number']} for {_money(left)} {ctx.book.base_currency} was due {inv['due_date']} and is "
-            f"still unpaid.{link}")
+    text = (
+        f"Invoice {inv['number']} for {_money(left)} {ctx.book.base_currency} was due {inv['due_date']} and is "
+        f"still unpaid.{link}"
+    )
     subject = delivery.subject_of(stage, str(inv["number"]))
     mail = _mail(ctx, inv, emails, box, subject, text)
 
     def apply(aid: str) -> Result:
-        if _reminded(ctx, sid, stage):                  # again when an approved reminder commits
+        if _reminded(ctx, sid, stage):  # again when an approved reminder commits
             raise FinanceError(CONFLICT, f"the {stage}-day reminder for invoice {inv['number']} was already made")
         now = document(ctx, "invoice", inv)
-        approval = delivery.issue(ctx.c, _decider(ctx, who), who, to=emails, subject=subject, text=text, box=box,
-                                  document=cast(Mapping[str, Any], now), ref=f"invoice:{sid}:{stage}")
-        SAP.insert(ctx.c, "fin_invoice_reminders", {
-            "id": SL.new_id(), "invoice_id": sid, "stage": stage, "text": text, "sent_to": SK.dump(emails),
-            "action_id": aid, "created_at": ctx.at, "created_by": who, "send_approval_id": approval})
-        return {"invoice_id": sid, "stage": stage, "status": "reminded", "delivery": "send_approval",
-                "send_approval_id": approval, "text": text, "subject": subject, "to": delivery.recipients(emails),
-                "mailbox": box, "document": now}
+        approval = delivery.issue(
+            ctx.c,
+            _decider(ctx, who),
+            who,
+            to=emails,
+            subject=subject,
+            text=text,
+            box=box,
+            document=cast(Mapping[str, Any], now),
+            ref=f"invoice:{sid}:{stage}",
+        )
+        SAP.insert(
+            ctx.c,
+            "fin_invoice_reminders",
+            {
+                "id": SL.new_id(),
+                "invoice_id": sid,
+                "stage": stage,
+                "text": text,
+                "sent_to": SK.dump(emails),
+                "action_id": aid,
+                "created_at": ctx.at,
+                "created_by": who,
+                "send_approval_id": approval,
+            },
+        )
+        return {
+            "invoice_id": sid,
+            "stage": stage,
+            "status": "reminded",
+            "delivery": "send_approval",
+            "send_approval_id": approval,
+            "text": text,
+            "subject": subject,
+            "to": delivery.recipients(emails),
+            "mailbox": box,
+            "document": now,
+        }
+
     lines = doc_lines_of(ctx, "invoice", sid)
-    return Plan(K.default_gate(ctx.org, who, "invoice_remind"),
-                f"Remind {customer['name']} that invoice {inv['number']} is {stage} days late{_mail_words(mail)}",
-                apply, facts=doc_facts("invoice", customer, lines, ctx), resolved={delivery.MAIL: mail})
+    return Plan(
+        K.default_gate(ctx.org, who, "invoice_remind"),
+        f"Remind {customer['name']} that invoice {inv['number']} is {stage} days late{_mail_words(mail)}",
+        apply,
+        facts=doc_facts("invoice", customer, lines, ctx),
+        resolved={delivery.MAIL: mail},
+    )
 
 
 def invoice_delivery(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -894,6 +1167,7 @@ def invoice_delivery(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if delivered and reason:
         raise invalid("a delivered email has no reason")
     from .payments import admin_person
+
     sid = str(inv["id"])
     person = admin_person(ctx)
     which = f" ({stage}-day reminder)" if stage is not None else ""
@@ -901,26 +1175,33 @@ def invoice_delivery(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     def apply(aid: str) -> Result:
         delivery.report(ctx.c, ctx.at, sid, stage, delivered, reason, person)
         return {"invoice_id": sid, "stage": stage, "delivered": delivered}
+
     outcome = "delivered" if delivered else f"not sent: {reason[:200]}"
-    return Plan(K.default_gate(ctx.org, who, "invoice_delivery"),
-                f"Invoice {inv['number']}{which} email {outcome}", apply)
+    return Plan(
+        K.default_gate(ctx.org, who, "invoice_delivery"), f"Invoice {inv['number']}{which} email {outcome}", apply
+    )
 
 
 def _reminded(ctx: Ctx, invoice_id: str, stage: int) -> bool:
-    return ctx.c.execute("SELECT 1 FROM fin_invoice_reminders WHERE invoice_id=? AND stage=?",
-                         (invoice_id, stage)).fetchone() is not None
+    return (
+        ctx.c.execute(
+            "SELECT 1 FROM fin_invoice_reminders WHERE invoice_id=? AND stage=?", (invoice_id, stage)
+        ).fetchone()
+        is not None
+    )
 
 
 def invoice_write_off(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Write off what a customer will not pay: Dr the write-off line (default Other expenses) / Cr AR, accrual basis
     only (the cash view never had that income). The invoice is paid once nothing is left."""
     from .banking import OTHER, by_code, open_day
+
     V.only(p, ("invoice_id", "amount", "account_id", "date", "memo"))
     inv = _doc(ctx, "invoice", V.text(p, "invoice_id", 80))
     _need_status("invoice", inv, OPEN["invoice"], "only a sent invoice is written off")
     left = _left("invoice", inv)
     given = V.opt_amount(p)
-    amount = left if given is None else given     # 0 is refused below, never read as the balance left
+    amount = left if given is None else given  # 0 is refused below, never read as the balance left
     if not 0 < amount <= left:
         raise invalid(f"a write-off is more than 0 and at most what is left ({left})")
     account = ctx.accounts.get(V.opt_text(p, "account_id", 80) or "") if "account_id" in p else by_code(ctx, OTHER)
@@ -932,21 +1213,44 @@ def invoice_write_off(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     memo = V.opt_text(p, "memo", 200) or f"Write off invoice {inv['number']}"
 
     def apply(aid: str) -> Result:
-        done = posting.post_entry(ctx.c, {
-            "date": open_day(ctx, day), "source": "invoice", "source_id": f"{inv['id']}:writeoff:{aid}",
-            "memo": memo[:200], "basis": "accrual",
-            "lines": [{"account_id": account.id, "amount": amount, "contact_id": str(inv["customer_id"])},
-                      {"account_id": control(ctx, "invoice").id, "amount": -amount,
-                       "contact_id": str(inv["customer_id"])}]}, by=who, at=ctx.at)
+        done = posting.post_entry(
+            ctx.c,
+            {
+                "date": open_day(ctx, day),
+                "source": "invoice",
+                "source_id": f"{inv['id']}:writeoff:{aid}",
+                "memo": memo[:200],
+                "basis": "accrual",
+                "lines": [
+                    {"account_id": account.id, "amount": amount, "contact_id": str(inv["customer_id"])},
+                    {
+                        "account_id": control(ctx, "invoice").id,
+                        "amount": -amount,
+                        "contact_id": str(inv["customer_id"]),
+                    },
+                ],
+            },
+            by=who,
+            at=ctx.at,
+        )
         written = int(inv["written_off"]) + amount
         status = "paid" if int(inv["amount_paid"]) + written >= int(inv["total"]) else str(inv["status"])
-        SAP.update(ctx.c, "fin_invoices", str(inv["id"]), {"written_off": written, "status": status,
-                                                           "updated_at": ctx.at})
-        return {"invoice_id": str(inv["id"]), "status": status, "written_off": written,
-                "entry_id": str(done["entry_id"])}
-    return Plan(K.default_gate(ctx.org, who, "invoice_write_off"),
-                f"Write off {_money(amount)} of invoice {inv['number']}", apply,
-                facts={"amount": amount, "counterparty": str(inv["contact_name"] or ""), "accounts": [account.code]})
+        SAP.update(
+            ctx.c, "fin_invoices", str(inv["id"]), {"written_off": written, "status": status, "updated_at": ctx.at}
+        )
+        return {
+            "invoice_id": str(inv["id"]),
+            "status": status,
+            "written_off": written,
+            "entry_id": str(done["entry_id"]),
+        }
+
+    return Plan(
+        K.default_gate(ctx.org, who, "invoice_write_off"),
+        f"Write off {_money(amount)} of invoice {inv['number']}",
+        apply,
+        facts={"amount": amount, "counterparty": str(inv["contact_name"] or ""), "accounts": [account.code]},
+    )
 
 
 def invoice_void(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -960,37 +1264,78 @@ def invoice_void(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         from .banking import open_day
+
         if inv["entry_id"]:
             entry = SL.entry_row(ctx.c, str(inv["entry_id"]))
             if entry is not None and str(entry["status"]) == "posted":
-                posting.reverse(ctx, str(inv["entry_id"]), day=open_day(ctx, str(inv["invoice_date"])),
-                                memo=f"Void invoice {inv['number']}: {reason}"[:200], by=who, action_id=aid)
-        SAP.update(ctx.c, "fin_invoices", str(inv["id"]), {"status": "void", "voided_at": ctx.at,
-                                                           "updated_at": ctx.at})
+                posting.reverse(
+                    ctx,
+                    str(inv["entry_id"]),
+                    day=open_day(ctx, str(inv["invoice_date"])),
+                    memo=f"Void invoice {inv['number']}: {reason}"[:200],
+                    by=who,
+                    action_id=aid,
+                )
+        SAP.update(ctx.c, "fin_invoices", str(inv["id"]), {"status": "void", "voided_at": ctx.at, "updated_at": ctx.at})
         return {"invoice_id": str(inv["id"]), "status": "void"}
-    return Plan(K.default_gate(ctx.org, who, "invoice_void"), f"Void invoice {inv['number']}", apply,
-                facts={"amount": int(inv["total"]), "counterparty": str(inv["contact_name"] or "")})
+
+    return Plan(
+        K.default_gate(ctx.org, who, "invoice_void"),
+        f"Void invoice {inv['number']}",
+        apply,
+        facts={"amount": int(inv["total"]), "counterparty": str(inv["contact_name"] or "")},
+    )
 
 
 # ------------------------------------------------------------------------------------------------ settlements
-def settle(ctx: Ctx, kind: str, doc_id: str, *, amount: int, day: str, from_kind: str, from_id: str, entry_id: str,
-           action_id: str = "", by: str = SYSTEM, cash: bool = True) -> str:
+def settle(
+    ctx: Ctx,
+    kind: str,
+    doc_id: str,
+    *,
+    amount: int,
+    day: str,
+    from_kind: str,
+    from_id: str,
+    entry_id: str,
+    action_id: str = "",
+    by: str = SYSTEM,
+    cash: bool = True,
+) -> str:
     """Link money to a document: its paid amount and status move, and the cash view takes the lines' share of it on
     `day` (or the first open day, when that month is closed, as its entry posts). An invoice is paid once received
     plus written off covers it. `cash=False` moves the document without moving the cash view (a credit note applied to
     it: no money changed hands)."""
     from .banking import open_day
+
     doc = _doc(ctx, kind, doc_id)
     before = int(doc["amount_paid"])
     after = before + amount
-    if cash and from_kind != "credit":          # a credit applied moves no cash, whoever applies it
+    if cash and from_kind != "credit":  # a credit applied moves no cash, whoever applies it
         _cash(ctx, kind, doc, before, after, open_day(ctx, day))
-    sid = SAP.insert(ctx.c, "fin_settlements", {
-        "book_id": ctx.book.id, "from_kind": from_kind, "from_id": from_id, "to_kind": kind, "to_id": doc_id,
-        "amount": amount, "settled_on": day, "entry_id": entry_id or None, "action_id": action_id or None,
-        "created_at": ctx.at, "created_by": by})
-    SAP.update(ctx.c, SAP.DOCS[kind][0], doc_id, {"amount_paid": after, "status": _status(kind, doc, after),
-                                                  "updated_at": ctx.at})
+    sid = SAP.insert(
+        ctx.c,
+        "fin_settlements",
+        {
+            "book_id": ctx.book.id,
+            "from_kind": from_kind,
+            "from_id": from_id,
+            "to_kind": kind,
+            "to_id": doc_id,
+            "amount": amount,
+            "settled_on": day,
+            "entry_id": entry_id or None,
+            "action_id": action_id or None,
+            "created_at": ctx.at,
+            "created_by": by,
+        },
+    )
+    SAP.update(
+        ctx.c,
+        SAP.DOCS[kind][0],
+        doc_id,
+        {"amount_paid": after, "status": _status(kind, doc, after), "updated_at": ctx.at},
+    )
     return sid
 
 
@@ -1009,14 +1354,51 @@ def status_of(kind: str, doc: Any, paid: int) -> str:
     return _status(kind, doc, paid)
 
 
+def _posted_splits(ctx: Ctx, doc: Any, idx: int, account_id: str) -> tuple[CA.Split, ...]:
+    """The attribution in force on the posted line a document line became (the entry's line at the same index), when
+    it is on the same account; none otherwise."""
+    entry_id = str(doc["entry_id"] or "")
+    if not entry_id:
+        return ()
+    rows = SL.entry_lines(ctx.c, entry_id)
+    if idx >= len(rows):
+        return ()
+    row, line = rows[idx]
+    if line.account_id != account_id:
+        return ()
+    return ATT.in_force_splits(ctx.c, str(row["id"]))
+
+
+def _cash_to(
+    ctx: Ctx,
+    account_id: str,
+    tags: Mapping[str, str],
+    contact: str,
+    amount: int,
+    day: str,
+    splits: Sequence[CA.Split],
+) -> None:
+    """Move `amount` of the cash view onto a line's parts: each part takes its share (CA.spread)."""
+    for part_tags, part_amount in CA.spread(tags, amount, splits, ctx.org.team_of):
+        SAP.cash_roll(ctx.c, ctx.book.id, day, account_id, part_tags, contact, part_amount)
+
+
 def _cash(ctx: Ctx, kind: str, doc: Any, before: int, after: int, day: str) -> None:
     lines = doc_lines_of(ctx, kind, str(doc["id"]))
     contact = str(doc[f"{CONTACT_OF[kind]}_id"])
-    for x, share in zip(lines, AP.shares([x.amount for x in lines], before, after), strict=True):
+    for idx, (x, share) in enumerate(zip(lines, AP.shares([x.amount for x in lines], before, after), strict=True)):
         account = ctx.accounts.get(x.account_id)
         if share and account is not None and account.type in L.PNL_TYPES:
-            SAP.cash_roll(ctx.c, ctx.book.id, day, x.account_id, posting.with_team(ctx, x.tags), contact,
-                          SIGN[kind] * share)
+            splits = _posted_splits(ctx, doc, idx, x.account_id)
+            _cash_to(
+                ctx,
+                x.account_id,
+                posting.with_team(ctx, x.tags),
+                contact,
+                SIGN[kind] * share,
+                day,
+                splits,
+            )
 
 
 def unsettle(ctx: Ctx, s: Any, by: str = SYSTEM, *, cash: bool = True) -> None:
@@ -1024,22 +1406,34 @@ def unsettle(ctx: Ctx, s: Any, by: str = SYSTEM, *, cash: bool = True) -> None:
     gives the share back on the day it took it (or today, when that month is closed). `cash=False` undoes a settlement
     that never moved the cash view (see settle)."""
     from .banking import open_day
+
     kind = str(s["to_kind"])
     doc = _doc(ctx, kind, str(s["to_id"]))
     before = int(doc["amount_paid"])
     after = before - int(s["amount"])
-    if SAP.update(ctx.c, "fin_settlements", str(s["id"]), {"voided_at": ctx.at, "voided_by": by},
-                  "voided_at IS NULL") != 1:
+    if (
+        SAP.update(ctx.c, "fin_settlements", str(s["id"]), {"voided_at": ctx.at, "voided_by": by}, "voided_at IS NULL")
+        != 1
+    ):
         return
     if cash and str(s["from_kind"]) != "credit":
         _cash(ctx, kind, doc, before, after, open_day(ctx, str(s["settled_on"])))
     status = _status(kind, doc, after)
     if kind == "bill" and status == "scheduled" and SK.live_payment(ctx.c, f"bill:{doc['id']}") is None:
         status = "open"
-    SAP.update(ctx.c, SAP.DOCS[kind][0], str(doc["id"]), {"amount_paid": after, "status": status,
-                                                          "pay_on": doc["pay_on"] if status == "scheduled" else None,
-                                                          "updated_at": ctx.at}
-               if kind == "bill" else {"amount_paid": after, "status": status, "updated_at": ctx.at})
+    SAP.update(
+        ctx.c,
+        SAP.DOCS[kind][0],
+        str(doc["id"]),
+        {
+            "amount_paid": after,
+            "status": status,
+            "pay_on": doc["pay_on"] if status == "scheduled" else None,
+            "updated_at": ctx.at,
+        }
+        if kind == "bill"
+        else {"amount_paid": after, "status": status, "updated_at": ctx.at},
+    )
 
 
 def feed_gone(ctx: Ctx, feed_id: str, entry_ids: Sequence[str] = ()) -> None:
@@ -1059,17 +1453,43 @@ def retagged(ctx: Ctx, row: Any, old: Mapping[str, str], new: Mapping[str, str])
     rollups; for one it leaves out (a bill's or invoice's, or accrual-only), the line's correction moves to the new
     tags too, and for a document's own entry so do the document line's tags and what its settlements recognized (on
     the day each did, or the first open day when that month is closed), so cash attribution follows the tags."""
+    if dict(old) == dict(new):
+        return
+    splits = ATT.in_force_splits(ctx.c, str(row["id"]))
+    _moved(ctx, row, old, new, splits, splits, retag_doc=True)
+
+
+def reattributed(ctx: Ctx, row: Any, old_splits: Sequence[CA.Split], new_splits: Sequence[CA.Split]) -> None:
+    """A posted line's attribution changed (its tags did not): the cash view moves from its old parts to its new ones,
+    the correction and each settlement's share alike (see retagged)."""
+    if tuple(old_splits) == tuple(new_splits):
+        return
+    tags = dict(SL.line_tags(ctx.c, [str(row["id"])]).get(str(row["id"]), {}))
+    _moved(ctx, row, tags, tags, old_splits, new_splits, retag_doc=False)
+
+
+def _moved(
+    ctx: Ctx,
+    row: Any,
+    old: Mapping[str, str],
+    new: Mapping[str, str],
+    old_splits: Sequence[CA.Split],
+    new_splits: Sequence[CA.Split],
+    *,
+    retag_doc: bool,
+) -> None:
     from .banking import open_day
+
     entry = SL.entry_row(ctx.c, str(row["entry_id"]))
     account = ctx.accounts.get(str(row["account_id"]))
-    if entry is None or account is None or account.type not in L.PNL_TYPES or dict(old) == dict(new):
+    if entry is None or account is None or account.type not in L.PNL_TYPES:
         return
     source, source_id = str(entry["source"]), str(entry["source_id"])
     if str(entry["basis"] or "both") == "both" and source not in L.DOC_SOURCES:
         return
     amount, day, contact = int(row["amount"]), str(row["entry_date"]), str(row["contact_id"] or "")
-    SAP.cash_roll(ctx.c, ctx.book.id, day, account.id, old, contact, amount)
-    SAP.cash_roll(ctx.c, ctx.book.id, day, account.id, new, contact, -amount)
+    _cash_to(ctx, account.id, old, contact, amount, day, old_splits)
+    _cash_to(ctx, account.id, new, contact, -amount, day, new_splits)
     if source not in L.DOC_SOURCES or ":" in source_id:
         return
     doc = SAP.get(ctx.c, SAP.DOCS[source][0], source_id)
@@ -1079,7 +1499,8 @@ def retagged(ctx: Ctx, row: Any, old: Mapping[str, str], new: Mapping[str, str])
     idx = int(row["line_no"])
     if idx >= len(docs) or str(docs[idx]["account_id"] or "") != account.id:
         return
-    SAP.set_line_tags(ctx.c, source, str(docs[idx]["id"]), new)
+    if retag_doc and dict(old) != dict(new):
+        SAP.set_line_tags(ctx.c, source, str(docs[idx]["id"]), new)
     amounts = [int(r["amount"]) for r in docs]
     before = 0
     for st in SAP.settlements_to(ctx.c, source, source_id):
@@ -1088,8 +1509,8 @@ def retagged(ctx: Ctx, row: Any, old: Mapping[str, str], new: Mapping[str, str])
         before = after
         if share:
             on = open_day(ctx, str(st["settled_on"]))
-            SAP.cash_roll(ctx.c, ctx.book.id, on, account.id, old, contact, -SIGN[source] * share)
-            SAP.cash_roll(ctx.c, ctx.book.id, on, account.id, new, contact, SIGN[source] * share)
+            _cash_to(ctx, account.id, old, contact, -SIGN[source] * share, on, old_splits)
+            _cash_to(ctx, account.id, new, contact, SIGN[source] * share, on, new_splits)
 
 
 def entry_reversed(ctx: Ctx, entry_id: str, by: str = SYSTEM) -> None:
@@ -1110,11 +1531,20 @@ def payment_settled(ctx: Ctx, pay: Any, feed_id: str) -> None:
         return
     rec = SK.get(ctx.c, "fin_recipients", str(pay["recipient_id"]))
     if str(pay["account_id"]) != control(ctx, "bill").id or rec is None or not _pays_vendor(ctx, bill, rec):
-        return                      # not a payment of this bill after all (checked at create too): it settles nothing
-    amount = min(abs(int(row["amount"])), _left("bill", bill))     # what the bank moved (a revised row moves less)
+        return  # not a payment of this bill after all (checked at create too): it settles nothing
+    amount = min(abs(int(row["amount"])), _left("bill", bill))  # what the bank moved (a revised row moves less)
     if amount > 0:
-        settle(ctx, "bill", str(bill["id"]), amount=amount, day=str(row["txn_date"]), from_kind="payment",
-               from_id=str(pay["id"]), entry_id=str(row["entry_id"] or ""), action_id=str(pay["action_id"] or ""))
+        settle(
+            ctx,
+            "bill",
+            str(bill["id"]),
+            amount=amount,
+            day=str(row["txn_date"]),
+            from_kind="payment",
+            from_id=str(pay["id"]),
+            entry_id=str(row["entry_id"] or ""),
+            action_id=str(pay["action_id"] or ""),
+        )
     SAP.update(ctx.c, "fin_bills", str(bill["id"]), {"pay_on": None})
 
 
@@ -1156,6 +1586,7 @@ def payment_waits(ctx: Ctx, bill: Any) -> str:
 def _sees_doc(ctx: Ctx, who: str, kind: str, doc: Any) -> bool:
     from .tab import private_cut
     from .tab_ap import keep_docs, sees_side
+
     view = ctx.view(who)
     return sees_side(ctx, view, kind) and bool(keep_docs(ctx.c, kind, [doc], set(private_cut(ctx, view)))[0])
 
@@ -1192,7 +1623,11 @@ def _bill_pasts(ctx: Ctx, bill: Any) -> list[str]:
                 continue
             st = budgeting.state(ctx, bid, at, target, chain)
             # A bill's payment is a new request, so the room that refuses it is `remaining`, reserves included (§4.4).
-            if st.remaining is not None and st.remaining < 0 and ctx.budgets()[bid].at_limit != "warn":
+            if (
+                st.remaining is not None
+                and st.remaining < 0
+                and budgeting.warn_only(ctx, ctx.budgets()[bid]).at_limit != "warn"
+            ):  # an ad budget only warns
                 out.append(bid)
     return out
 
@@ -1257,11 +1692,22 @@ def payment_ask_ended(ctx: Ctx, action_id: str, body: Mapping[str, object], stat
 def _unschedule(ctx: Ctx, bill: Any, sched: Mapping[str, object], status: str, reason: str, amount: int) -> None:
     """Open the bill with no schedule. What the bill row shows of the ask stays (`ended`); its count stays, so the
     next schedule's payment gets a fresh key."""
-    SAP.update(ctx.c, "fin_bills", str(bill["id"]), {"status": "open", "pay_on": None, "updated_at": ctx.at,
-                                                     "schedule": SK.dump({
-                                                         "n": sched.get("n") or 1,
-                                                         "ended": {"status": status, "reason": reason[:300],
-                                                                   "on": ctx.today, "amount": amount}})})
+    SAP.update(
+        ctx.c,
+        "fin_bills",
+        str(bill["id"]),
+        {
+            "status": "open",
+            "pay_on": None,
+            "updated_at": ctx.at,
+            "schedule": SK.dump(
+                {
+                    "n": sched.get("n") or 1,
+                    "ended": {"status": status, "reason": reason[:300], "on": ctx.today, "amount": amount},
+                }
+            ),
+        },
+    )
 
 
 # ------------------------------------------------------------------------------------------------ paying
@@ -1276,10 +1722,10 @@ def named(counterparty: str, docs: Sequence[Any]) -> list[Any]:
     return [d for d in docs if same_name(counterparty, str(d["contact_name"] or ""))]
 
 
-OWING_MOST = 50             # open documents owing a row's exact amount looked at; with more, the row is unclear
+OWING_MOST = 50  # open documents owing a row's exact amount looked at; with more, the row is unclear
 
 
-MANY = "many"               # match_feed: several open documents could be the one the row pays; nothing posts, a person picks
+MANY = "many"  # match_feed: several open documents could be the one the row pays; nothing posts, a person picks
 
 
 def _owed_by(ctx: Ctx, t: F.FeedTxn) -> tuple[str, list[Any], bool]:
@@ -1314,9 +1760,18 @@ def review_candidates(ctx: Ctx, who: str, row: Any) -> list[dict[str, object]]:
     kind, found, cut = _owed_by(ctx, t)
     if cut:
         return []
-    return [{"kind": kind, "id": str(d["id"]), "number": str(d["number"] or ""),
-             "contact": str(d["contact_name"] or ""), "owed": abs(t.amount), "due_date": str(d["due_date"] or "")}
-            for d in found if _sees_doc(ctx, who, kind, d)]
+    return [
+        {
+            "kind": kind,
+            "id": str(d["id"]),
+            "number": str(d["number"] or ""),
+            "contact": str(d["contact_name"] or ""),
+            "owed": abs(t.amount),
+            "due_date": str(d["due_date"] or ""),
+        }
+        for d in found
+        if _sees_doc(ctx, who, kind, d)
+    ]
 
 
 def match_candidates(ctx: Ctx, t: F.FeedTxn) -> list[str]:
@@ -1331,6 +1786,7 @@ def several_match(ctx: Ctx, row: Any) -> bool:
 
 def match_window(day: str) -> tuple[str, str]:
     from .banking import MATCH_DAYS
+
     d = dates.day(day)
     return (d - timedelta(days=MATCH_DAYS)).isoformat(), (d + timedelta(days=MATCH_DAYS)).isoformat()
 
@@ -1340,11 +1796,18 @@ def _named(counterparty: str, name: str) -> bool:
     return not counterparty.strip() or same_name(counterparty, name)
 
 
-ASK = "ask"                 # expected_match: the row may pay a marked payment, but which is unclear; a person picks
+ASK = "ask"  # expected_match: the row may pay a marked payment, but which is unclear; a person picks
 
 
-def expected_match(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, *, posted: F.FeedTxn | None = None,
-                   fees: Sequence[dict[str, object]] = ()) -> str:
+def expected_match(
+    ctx: Ctx,
+    row: Any,
+    money: Any,
+    t: F.FeedTxn,
+    *,
+    posted: F.FeedTxn | None = None,
+    fees: Sequence[dict[str, object]] = (),
+) -> str:
     """Link a new settled row to a payment marked paid from its money account that waits for it (same direction and
     amount, marked within MATCH_DAYS of the row): the row takes that entry, nothing new posts, and the settlement now
     comes from the row (so a bank change or cancellation makes the document owe it again). None of that amount: a set
@@ -1358,14 +1821,14 @@ def expected_match(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, *, posted: F.Fe
     start, end = match_window(t.txn_date)
     exact, cut = _waiting(ctx, kind, money, abs(t.amount), start, end)
     if cut:
-        return ASK              # more waiting than were looked at: which one is unclear
+        return ASK  # more waiting than were looked at: which one is unclear
     single = [[s] for s in exact]
     group = _pick(single, t.counterparty) if single else None
     if not single:
         waiting, cut = _waiting(ctx, kind, money, 0, start, end)
         sets, partial = _combined(waiting, abs(t.amount))
         if cut or partial:
-            return ASK          # the search could not look at every candidate: a person picks (feed_match)
+            return ASK  # the search could not look at every candidate: a person picks (feed_match)
         if not sets:
             return ""
         group = _pick(sets, t.counterparty)
@@ -1382,9 +1845,10 @@ def may_wait(ctx: Ctx, row: Any, money: Any) -> bool:
     to it), or the search could not look at every candidate.
     A booked row, or a transfer between accounts, is never held back."""
     from .banking import provider_fee
+
     gross = abs(int(row["amount"])) + provider_fee(row, money)
     if row["entry_id"] or not gross or str(row["kind"] or "") in F.TRANSFER_KINDS:
-        return False                # a transfer is never matched to payments at ingest either
+        return False  # a transfer is never matched to payments at ingest either
     kind = "bill" if int(row["amount"]) < 0 else "invoice"
     start, end = match_window(str(row["txn_date"]))
     exact, cut = _waiting(ctx, kind, money, gross, start, end)
@@ -1395,14 +1859,16 @@ def may_wait(ctx: Ctx, row: Any, money: Any) -> bool:
     return bool(sets) or cut or partial
 
 
-def _link(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any],
-          fees: Sequence[dict[str, object]] = ()) -> str:
+def _link(
+    ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any], fees: Sequence[dict[str, object]] = ()
+) -> str:
     """The row is the bank side of these waiting payments: one takes its entry as it is; several, or one with fees
     beyond the payment, are replaced by one entry for the row (the bank moves once). Each settlement now comes from the
     row. The row's entry id."""
     from .banking import mark_posted
+
     fid = str(row["id"])
-    if t.amount < 0:                                   # a money-out row pays the bills it is linked to
+    if t.amount < 0:  # a money-out row pays the bills it is linked to
         _commit_row(ctx, fid, [str(s["to_id"]) for s in group])
     if len(group) == 1 and not fees:
         mark_posted(ctx, [fid], str(group[0]["entry_id"]))
@@ -1419,8 +1885,9 @@ def _pick(sets: Sequence[list[Any]], counterparty: str) -> list[Any] | None:
     return named[0] if len(named) == 1 else None
 
 
-def _waiting(ctx: Ctx, kind: str, money: Any, amount: int, start: str, end: str, ids: Sequence[str] = ()
-             ) -> tuple[list[Any], bool]:
+def _waiting(
+    ctx: Ctx, kind: str, money: Any, amount: int, start: str, end: str, ids: Sequence[str] = ()
+) -> tuple[list[Any], bool]:
     """Payments marked paid from this money account still waiting for their row (of `amount`, 0: any; only `ids` when
     given), whose entry is posted and no row's yet; True when there were more than WAITING_MOST to look at."""
     found: list[Any] = []
@@ -1432,10 +1899,10 @@ def _waiting(ctx: Ctx, kind: str, money: Any, amount: int, start: str, end: str,
     return found, len(raw) > WAITING_MOST
 
 
-WAITING_MOST = 200          # waiting payments looked at for one row; with more, the row is unclear (a person picks)
-COMBINED_MOST = 12          # waiting payments to one contact searched for a combined row, up to (2^12 subsets)
-COMBINED_SETS = 4           # sets found before the search stops (more than one is a tie for the name to break)
-MATCH_MOST = 100            # waiting payments one feed_match links
+WAITING_MOST = 200  # waiting payments looked at for one row; with more, the row is unclear (a person picks)
+COMBINED_MOST = 12  # waiting payments to one contact searched for a combined row, up to (2^12 subsets)
+COMBINED_SETS = 4  # sets found before the search stops (more than one is a tie for the name to break)
+MATCH_MOST = 100  # waiting payments one feed_match links
 
 
 def _combined(waiting: Sequence[Any], amount: int) -> tuple[list[list[Any]], bool]:
@@ -1454,16 +1921,18 @@ def _combined(waiting: Sequence[Any], amount: int) -> tuple[list[list[Any]], boo
             if mask & (mask - 1) and sum(int(s["amount"]) for i, s in enumerate(group) if mask >> i & 1) == amount:
                 found.append([s for i, s in enumerate(group) if mask >> i & 1])
                 if len(found) >= COMBINED_SETS:
-                    return found, True      # stopped early: other sets were never looked at
+                    return found, True  # stopped early: other sets were never looked at
     return found, False
 
 
-def _post_combined(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any],
-                   fees: Sequence[dict[str, object]] = ()) -> str:
+def _post_combined(
+    ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any], fees: Sequence[dict[str, object]] = ()
+) -> str:
     """One row paying the documents marked paid from its account (several, or one with the fees it carries): their
     entries are reversed and the row posts one entry for them all, with `fees`, and the bank moves once. Each settlement
     now comes from the row."""
     from .banking import mark_posted, open_day, post_row
+
     gl = ctx.accounts.get(str(money["account_id"] or ""))
     if gl is None:
         raise invalid("that row's money account has no account in the books")
@@ -1476,8 +1945,15 @@ def _post_combined(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence
     day = max([open_day(ctx, t.txn_date), *(open_day(ctx, str(e["entry_date"])) for e in entries)])
     for entry in entries:
         posting.reverse(ctx, str(entry["id"]), day=day, memo="its bank row came", by=SYSTEM)
-    lines: list[dict[str, object]] = [{"account_id": ctl.id, "amount": SIGN[kind] * int(s["amount"]), "tags": {},
-                                       "contact_id": str(s["contact_id"] or "")} for s in group]
+    lines: list[dict[str, object]] = [
+        {
+            "account_id": ctl.id,
+            "amount": SIGN[kind] * int(s["amount"]),
+            "tags": {},
+            "contact_id": str(s["contact_id"] or ""),
+        }
+        for s in group
+    ]
     entry_id = post_row(ctx, fid, t, [*lines, *fees], gl.id, [], day=day)
     mark_posted(ctx, [fid], entry_id)
     for s in group:
@@ -1485,7 +1961,7 @@ def _post_combined(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence
     return entry_id
 
 
-EXPECTED_MOST = 20          # waiting payments listed for one row
+EXPECTED_MOST = 20  # waiting payments listed for one row
 
 
 def expected_for(ctx: Ctx, who: str, row: Any) -> tuple[list[Any], bool]:
@@ -1505,12 +1981,14 @@ def _candidates(ctx: Ctx, who: str, row: Any, money: Any, ids: Sequence[str] = (
     """`expected_for` uncapped (only `ids` when given), and whether more waited than were looked at. A provider's fee
     comes out of what the row carries, so the payments may add up to its gross."""
     from .banking import provider_fee
+
     kind = "bill" if int(row["amount"]) < 0 else "invoice"
     start, end = match_window(str(row["txn_date"]))
     gross = abs(int(row["amount"])) + provider_fee(row, money)
     waiting, cut = _waiting(ctx, kind, money, 0, start, end, ids)
-    return [s for s in waiting if int(s["amount"]) <= gross
-            and _sees_doc(ctx, who, kind, _doc(ctx, kind, str(s["to_id"])))], cut
+    return [
+        s for s in waiting if int(s["amount"]) <= gross and _sees_doc(ctx, who, kind, _doc(ctx, kind, str(s["to_id"])))
+    ], cut
 
 
 def feed_match(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -1518,6 +1996,7 @@ def feed_match(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     not tell apart): exactly as that match does, so the bank moves once and nothing new is expensed. The payments'
     amounts add up to the row's gross (its amount and any provider fee); the documents are ones the asker sees and may record payments on."""
     from .banking import provider_fee, provider_fee_line, seen
+
     V.only(p, ("feed_id", "settlement_ids"))
     row = SK.get(ctx.c, "fin_feed_txns", V.text(p, "feed_id", 80))
     if row is None or not seen(ctx, who, row):
@@ -1552,10 +2031,14 @@ def feed_match(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         fee = provider_fee_line(ctx, fresh, money)
         entry = _link(ctx, fresh, money, _row_txn(fresh), group, [] if fee is None else [fee])
         return {"feed_id": str(row["id"]), "entry_id": entry, "settlement_ids": ids, f"{kind}_ids": docs}
+
     names = ", ".join(f"{kind} {SAP.get(ctx.c, SAP.DOCS[kind][0], d)['number'] or d}" for d in docs)
-    return Plan(K.default_gate(ctx.org, who, "feed_match"),
-                f"Link the {_money(abs(int(row['amount'])))} bank row to the payment(s) marked on {names}"[:300], apply,
-                facts={"amount": abs(int(row["amount"])), "counterparty": str(row["counterparty"])})
+    return Plan(
+        K.default_gate(ctx.org, who, "feed_match"),
+        f"Link the {_money(abs(int(row['amount'])))} bank row to the payment(s) marked on {names}"[:300],
+        apply,
+        facts={"amount": abs(int(row["amount"])), "counterparty": str(row["counterparty"])},
+    )
 
 
 def _arrived(ctx: Ctx, kind: str, doc: Any, money: Any, amount: int, day: str) -> Any:
@@ -1565,12 +2048,17 @@ def _arrived(ctx: Ctx, kind: str, doc: Any, money: Any, amount: int, day: str) -
     side of is left to a person (feed_match); this payment then waits like any other from the account."""
     start, end = match_window(day)
     signed = -amount if kind == "bill" else amount
-    found = [r for r in SK.transfer_candidates(ctx.c, [str(money["id"])], signed, start, end)
-             if not r["request_id"] and not r["card_id"] and str(r["kind"] or "") not in F.TRANSFER_KINDS
-             and _named(str(r["counterparty"]), str(doc["contact_name"] or ""))
-             and not SAP.settled_from(ctx.c, "feed", str(r["id"]))
-             and not (r["entry_id"] and len(SK.rows_of_entry(ctx.c, str(r["entry_id"]))) > 1)
-             and not may_wait(ctx, r, money)]
+    found = [
+        r
+        for r in SK.transfer_candidates(ctx.c, [str(money["id"])], signed, start, end)
+        if not r["request_id"]
+        and not r["card_id"]
+        and str(r["kind"] or "") not in F.TRANSFER_KINDS
+        and _named(str(r["counterparty"]), str(doc["contact_name"] or ""))
+        and not SAP.settled_from(ctx.c, "feed", str(r["id"]))
+        and not (r["entry_id"] and len(SK.rows_of_entry(ctx.c, str(r["entry_id"]))) > 1)
+        and not may_wait(ctx, r, money)
+    ]
     return found[0] if len(found) == 1 else None
 
 
@@ -1580,6 +2068,7 @@ def clearing(ctx: Ctx, who: str) -> L.Account:
     if found:
         return min(found, key=lambda a: a.code)
     from .banking import new_account
+
     code, name, type_, subtype = CLEARING
     return new_account(ctx, code, name, type_, subtype, who)
 
@@ -1592,8 +2081,16 @@ def feed_paid(ctx: Ctx, row: Any, kind: str, doc: Any, entry_id: str) -> None:
         raise invalid("a Stripe sale settles through its own posting, on its gross")
     if kind == "bill":
         _commit_row(ctx, str(row["id"]), [str(doc["id"])])
-    settle(ctx, kind, str(doc["id"]), amount=abs(int(row["amount"])), day=str(row["txn_date"]), from_kind="feed",
-           from_id=str(row["id"]), entry_id=entry_id)
+    settle(
+        ctx,
+        kind,
+        str(doc["id"]),
+        amount=abs(int(row["amount"])),
+        day=str(row["txn_date"]),
+        from_kind="feed",
+        from_id=str(row["id"]),
+        entry_id=entry_id,
+    )
 
 
 def _commit_row(ctx: Ctx, feed_id: str, bill_ids: Sequence[str]) -> None:
@@ -1633,25 +2130,39 @@ def _spent(ctx: Ctx, row: Any, ctl: str, sign: int) -> list[L.Line]:
 
 def _row_entries(ctx: Ctx, row: Any) -> list[str]:
     """A posted row's entry and its live reclassifications."""
-    return [str(row["entry_id"])] + [str(e["id"]) for e in SL.posted_by_source_prefix(
-        ctx.c, ctx.book.id, "bank", f"{row['id']}:{F.RECLASS}") if str(e["status"]) == "posted" and not e["reverses_id"]]
+    return [str(row["entry_id"])] + [
+        str(e["id"])
+        for e in SL.posted_by_source_prefix(ctx.c, ctx.book.id, "bank", f"{row['id']}:{F.RECLASS}")
+        if str(e["status"]) == "posted" and not e["reverses_id"]
+    ]
 
 
 def _row_txn(row: Any) -> F.FeedTxn:
     """A stored settled feed row as the feed transaction it was."""
-    return F.FeedTxn(provider_id=str(row["provider_id"]), account_id="", amount=int(row["amount"]),
-                     txn_date=str(row["txn_date"]), status=F.POSTED, kind=str(row["kind"]),
-                     counterparty=str(row["counterparty"]), description=str(row["description"]),
-                     card_id=str(row["card_id"] or ""))
+    return F.FeedTxn(
+        provider_id=str(row["provider_id"]),
+        account_id="",
+        amount=int(row["amount"]),
+        txn_date=str(row["txn_date"]),
+        status=F.POSTED,
+        kind=str(row["kind"]),
+        counterparty=str(row["counterparty"]),
+        description=str(row["description"]),
+        card_id=str(row["card_id"] or ""),
+    )
 
 
 def _auto_default(ctx: Ctx, row: Any) -> set[str]:
     """The automatic default line a posted row sits on, if it does: Other expenses, when ingest posted it there and
     asked for a category (needs_category) and no categorize action posted its entry since. Empty otherwise."""
     from .banking import CATEGORY_EVENT, OTHER, by_code
+
     other = by_code(ctx, OTHER)
-    if other is None or not SAP.raised(ctx.c, CATEGORY_EVENT, str(row["id"])) or \
-            SAP.categorized_into(ctx.c, str(row["entry_id"])):
+    if (
+        other is None
+        or not SAP.raised(ctx.c, CATEGORY_EVENT, str(row["id"]))
+        or SAP.categorized_into(ctx.c, str(row["entry_id"]))
+    ):
         return set()
     return {other.id}
 
@@ -1679,6 +2190,7 @@ def _from_feed(ctx: Ctx, kind: str, doc: Any, row: Any, amount: int) -> str:
     the contact first, then moves the rest from the lines it hit to AP or AR (and whatever it left on the automatic
     default, unapplied there), in an entry beside its own (the bank line is never touched, so a reconciled row works too)."""
     from .banking import feed_line, fresh_source, mark_posted, open_day, post_row, provider_fee, provider_fee_line
+
     ctl = control(ctx, kind)
     contact = str(doc[f"{CONTACT_OF[kind]}_id"])
     fid = str(row["id"])
@@ -1700,13 +2212,14 @@ def _from_feed(ctx: Ctx, kind: str, doc: Any, row: Any, amount: int) -> str:
         mark_posted(ctx, [fid], entry)
         if holds:
             from .banking import card_used
+
             card_used(ctx, row, -t.amount, entry)
         return entry
     s = SIGN[kind]
     have = min(amount, _unapplied(ctx, row, ctl.id, s, contact))
     left = amount - have
     if not left:
-        return str(row["entry_id"])     # the row already put this much in AP or AR for this contact
+        return str(row["entry_id"])  # the row already put this much in AP or AR for this contact
     # This document takes `left` from the lines the row hit (what sits on the automatic default first). Whatever else
     # sits on that default (Other expenses, posted at ingest and asked about) moves too and stays in AP or AR for the
     # contact, unapplied (§5); a line a person or a posting rule chose keeps its categorization.
@@ -1718,18 +2231,26 @@ def _from_feed(ctx: Ctx, kind: str, doc: Any, row: Any, amount: int) -> str:
         take = abs(x.amount) if x.account_id in auto else min(max(left - moved, 0), abs(x.amount))
         if take <= 0:
             continue
-        lines.append({"account_id": x.account_id, "amount": -s * take, "tags": dict(x.tags),
-                      "contact_id": x.contact_id})
+        lines.append(
+            {"account_id": x.account_id, "amount": -s * take, "tags": dict(x.tags), "contact_id": x.contact_id}
+        )
         moved += take
     if left > moved:
         raise invalid("that row has less left to apply than the amount")
     lines.append({"account_id": ctl.id, "amount": s * moved, "contact_id": contact})
     entry = SL.entry_row(ctx.c, str(row["entry_id"]))
     day = str(entry["entry_date"]) if entry is not None else ctx.today
-    done = posting.post_entry(ctx.c, {"date": open_day(ctx, day), "source": "bank",
-                                      "source_id": fresh_source(ctx, "bank", f"{fid}:{F.RECLASS}"),
-                                      "memo": f"Pays {kind} {doc['number'] or doc['id']}"[:200], "lines": lines},
-                              at=ctx.at)
+    done = posting.post_entry(
+        ctx.c,
+        {
+            "date": open_day(ctx, day),
+            "source": "bank",
+            "source_id": fresh_source(ctx, "bank", f"{fid}:{F.RECLASS}"),
+            "memo": f"Pays {kind} {doc['number'] or doc['id']}"[:200],
+            "lines": lines,
+        },
+        at=ctx.at,
+    )
     return str(done["entry_id"])
 
 
@@ -1742,6 +2263,7 @@ def _pay(kind: str) -> Any:
         cash posts once), from another money line, or with none (a clearing account the feed never touches). More
         than is left is refused."""
         from .banking import seen
+
         V.only(p, (f"{kind}_id", "amount", "date", "feed_id", "money_account_id", "account_id"))
         doc = _doc(ctx, kind, V.text(p, f"{kind}_id", 80))
         _need_status(kind, doc, OPEN[kind], "only an open one is paid")
@@ -1751,11 +2273,12 @@ def _pay(kind: str) -> Any:
         if kind == "bill" and SK.live_payment(ctx.c, f"bill:{doc['id']}") is not None:
             raise FinanceError(CONFLICT, "a payment for this bill is live; it settles the bill when it clears")
         if kind == "bill" and not ctx.deciding and bill_ask_waiting(ctx, str(doc["id"])):
-            raise FinanceError(CONFLICT, "a payment for this bill is waiting for approval; it settles the bill when "
-                                         "approved")
+            raise FinanceError(
+                CONFLICT, "a payment for this bill is waiting for approval; it settles the bill when approved"
+            )
         left = _left(kind, doc)
         given = V.opt_amount(p)
-        amount = left if given is None else given     # 0 is refused below, never read as the balance left
+        amount = left if given is None else given  # 0 is refused below, never read as the balance left
         if not 0 < amount <= left:
             raise invalid(f"the amount is more than 0 and at most what is left ({left})")
         if sum(k in p for k in ("feed_id", "money_account_id", "account_id")) > 1:
@@ -1772,12 +2295,22 @@ def _pay(kind: str) -> Any:
                 raise invalid("that money account has no account in the books")
         elif "account_id" in p:
             account = ctx.accounts.get(V.text(p, "account_id", 80))
-            if account is None or not account.active or account.type not in ("asset", "liability") or \
-                    account.id == control(ctx, kind).id:
+            if (
+                account is None
+                or not account.active
+                or account.type not in ("asset", "liability")
+                or account.id == control(ctx, kind).id
+            ):
                 raise FinanceError(NOT_FOUND, "no such money account line")
             # A connected money account's own line is that account: its bank row will come.
-            money = next((m for m in SK.money_accounts(ctx.c, ctx.book.id)
-                          if str(m["account_id"] or "") == account.id and m["connection_id"]), None)
+            money = next(
+                (
+                    m
+                    for m in SK.money_accounts(ctx.c, ctx.book.id)
+                    if str(m["account_id"] or "") == account.id and m["connection_id"]
+                ),
+                None,
+            )
         if money is not None and str(money["kind"]) == "card_program":
             raise invalid("a Tico card's charge pays a document through its feed row (feed_id)")
         if money is not None and (str(money["status"]) == "disconnected" or not money["connection_id"]):
@@ -1804,20 +2337,25 @@ def _pay(kind: str) -> Any:
             if row["entry_id"] and len(SK.rows_of_entry(ctx.c, str(row["entry_id"]))) > 1:
                 raise FinanceError(CONFLICT, "that row is a transfer between your own accounts")
             from .banking import provider_fee
+
             row_money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
             gross = abs(int(row["amount"])) + (provider_fee(row, row_money) if row_money is not None else 0)
             free = gross - SAP.settled_from(ctx.c, "feed", str(row["id"]))
             if amount > free:
                 raise invalid(f"that row has {free} left to apply")
             if row_money is not None and may_wait(ctx, row, row_money):
-                raise FinanceError(CONFLICT, "that row may be a payment already marked paid that waits for its bank "
-                                             "row; link it with feed_match")
+                raise FinanceError(
+                    CONFLICT,
+                    "that row may be a payment already marked paid that waits for its bank "
+                    "row; link it with feed_match",
+                )
             day = V.opt_day(p, "date") or str(row["txn_date"])
         elif row is not None:
             day = V.opt_day(p, "date") or str(row["txn_date"])
 
         def apply(aid: str) -> Result:
             from .banking import open_day
+
             if row is not None:
                 entry = _from_feed(ctx, kind, doc, SK.get(ctx.c, "fin_feed_txns", str(row["id"])), amount)
                 src, src_id = "feed", str(row["id"])
@@ -1825,24 +2363,55 @@ def _pay(kind: str) -> Any:
                 line = account or clearing(ctx, who)
                 s = SIGN[kind]
                 contact = str(doc[f"{CONTACT_OF[kind]}_id"])
-                done = posting.post_entry(ctx.c, {
-                    "date": open_day(ctx, day), "source": kind, "source_id": f"{doc['id']}:paid:{aid}",
-                    "memo": f"Pays {kind} {doc['number'] or doc['id']}"[:200],
-                    "lines": [{"account_id": control(ctx, kind).id, "amount": s * amount, "contact_id": contact},
-                              {"account_id": line.id, "amount": -s * amount}]}, by=who, at=ctx.at)
+                done = posting.post_entry(
+                    ctx.c,
+                    {
+                        "date": open_day(ctx, day),
+                        "source": kind,
+                        "source_id": f"{doc['id']}:paid:{aid}",
+                        "memo": f"Pays {kind} {doc['number'] or doc['id']}"[:200],
+                        "lines": [
+                            {"account_id": control(ctx, kind).id, "amount": s * amount, "contact_id": contact},
+                            {"account_id": line.id, "amount": -s * amount},
+                        ],
+                    },
+                    by=who,
+                    at=ctx.at,
+                )
                 entry = str(done["entry_id"])
                 src, src_id = ("expected", waits) if waits else ("account", line.id)
-            sid = settle(ctx, kind, str(doc["id"]), amount=amount, day=day, from_kind=src, from_id=src_id,
-                         entry_id=entry, action_id=aid, by=who)
+            sid = settle(
+                ctx,
+                kind,
+                str(doc["id"]),
+                amount=amount,
+                day=day,
+                from_kind=src,
+                from_id=src_id,
+                entry_id=entry,
+                action_id=aid,
+                by=who,
+            )
             fresh = _doc(ctx, kind, str(doc["id"]))
-            return {f"{kind}_id": str(doc["id"]), "settlement_id": sid, "entry_id": entry, "from": src,
-                    "feed_id": str(row["id"]) if row is not None else None,
-                    "status": str(fresh["status"]), "remaining": _left(kind, fresh)}
+            return {
+                f"{kind}_id": str(doc["id"]),
+                "settlement_id": sid,
+                "entry_id": entry,
+                "from": src,
+                "feed_id": str(row["id"]) if row is not None else None,
+                "status": str(fresh["status"]),
+                "remaining": _left(kind, fresh),
+            }
+
         gate = bill_paid_gate(ctx, who, doc, words) if kind == "bill" else K.default_gate(ctx.org, who, words)
-        return Plan(gate,
-                    f"Record {_money(amount)} {'paid on' if kind == 'bill' else 'received on'} {kind} "
-                    f"{doc['number'] or doc['id']}", apply,
-                    facts={"amount": amount, "counterparty": str(doc["contact_name"] or "")})
+        return Plan(
+            gate,
+            f"Record {_money(amount)} {'paid on' if kind == 'bill' else 'received on'} {kind} "
+            f"{doc['number'] or doc['id']}",
+            apply,
+            facts={"amount": amount, "counterparty": str(doc["contact_name"] or "")},
+        )
+
     return planner
 
 
@@ -1857,8 +2426,11 @@ ATTACH_RIGHT = {"entry": R.BOOK, "feed": R.BOOK, "unmatched": R.BOOK, "bill": R.
 
 def attach(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """File receipts and documents (Library file ids) on an entry, a feed row, a bill or an invoice the asker sees, or
-    as unmatched receipts waiting for one. Filing a file to a subject takes it out of the unmatched receipts."""
+    as unmatched receipts waiting for one. Filing a file to a subject takes it out of the unmatched receipts. That each
+    file exists and the asker may read it is checked where the asker's identity is, before the action runs
+    (finance_routes.readable_files, for every request through the API and the hub tools)."""
     from .banking import seen
+
     V.only(p, ("subject_kind", "subject_id", "file_ids"))
     kind = V.choice(p, "subject_kind", ATTACH_SUBJECTS)
     if not R.has(ctx.org, who, ATTACH_RIGHT[kind], ctx.rights(who)):
@@ -1871,8 +2443,11 @@ def attach(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if kind == "entry":
         entry = SL.entry_row(ctx.c, subject)
         lines = [x for _, x in SL.entry_lines(ctx.c, subject)] if entry is not None else []
-        if entry is None or str(entry["book_id"]) != ctx.book.id or not all(
-                x.account_id in ctx.accounts and view.sees(ctx.accounts[x.account_id], x.tags) for x in lines):
+        if (
+            entry is None
+            or str(entry["book_id"]) != ctx.book.id
+            or not all(x.account_id in ctx.accounts and view.sees(ctx.accounts[x.account_id], x.tags) for x in lines)
+        ):
             raise FinanceError(NOT_FOUND, "no such entry in your view")
     elif kind == "feed":
         row = SK.get(ctx.c, "fin_feed_txns", subject)
@@ -1880,7 +2455,7 @@ def attach(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         if row is None or money is None or str(money["book_id"]) != ctx.book.id or not seen(ctx, who, row):
             raise FinanceError(NOT_FOUND, "no such feed row in your view")
     elif kind in ("bill", "invoice"):
-        if not _sees_doc(ctx, who, kind, _doc(ctx, kind, subject)):     # the document, not only the side (keep_docs)
+        if not _sees_doc(ctx, who, kind, _doc(ctx, kind, subject)):  # the document, not only the side (keep_docs)
             raise FinanceError(NOT_FOUND, f"no such {kind}")
     else:
         subject = ""
@@ -1889,9 +2464,15 @@ def attach(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         made = SAP.attach(ctx.c, ctx.book.id, kind, subject, files, who, ctx.at)
         if kind != "unmatched":
             SAP.drop_unmatched(ctx.c, ctx.book.id, files)
+        RCP.filed(ctx, who, kind, subject, files)  # receipts: an unmatched upload is read, a filed one is attached
         return {"subject_kind": kind, "subject_id": subject, "attachment_ids": made}
-    return Plan(K.default_gate(ctx.org, who, "attach"), f"Attach {len(files)} file(s) to a {kind}", apply,
-                facts={"subject_kind": kind})
+
+    return Plan(
+        K.default_gate(ctx.org, who, "attach"),
+        f"Attach {len(files)} file(s) to a {kind}",
+        apply,
+        facts={"subject_kind": kind},
+    )
 
 
 # ------------------------------------------------------------------------------------------------ hourly
@@ -1901,6 +2482,7 @@ def pay_due(ctx: Ctx) -> int:
     from . import actions
     from .core.org import Principal
     from .payments import admin_person
+
     n = 0
     for bill in SAP.scheduled_due(ctx.c, ctx.book.id, ctx.today):
         sched = SK.loads(bill["schedule"])
@@ -1910,28 +2492,47 @@ def pay_due(ctx: Ctx) -> int:
             continue
         who = str(sched.get("by") or "")
         left = _left("bill", bill)
-        if left <= 0:               # a bank row paid it before its day (match_feed takes scheduled bills too)
+        if left <= 0:  # a bank row paid it before its day (match_feed takes scheduled bills too)
             SAP.update(ctx.c, "fin_bills", str(bill["id"]), {"pay_on": None})
             continue
-        res = actions.act(ctx.c, Principal(actor=SYSTEM, for_actor=who), "payment_create", {
-            "recipient_id": str(sched.get("recipient_id") or ""), "amount": left,
-            "money_account_id": str(sched.get("money_account_id") or ""), "obligation": obligation,
-            "account_id": control(ctx, "bill").id,
-            "memo": str(sched.get("memo") or f"Bill {bill['number']}".strip())[:140]},
-            f"bill-pay-{bill['id']}-{sched.get('n') or 1}", at=ctx.at)
+        res = actions.act(
+            ctx.c,
+            Principal(actor=SYSTEM, for_actor=who),
+            "payment_create",
+            {
+                "recipient_id": str(sched.get("recipient_id") or ""),
+                "amount": left,
+                "money_account_id": str(sched.get("money_account_id") or ""),
+                "obligation": obligation,
+                "account_id": control(ctx, "bill").id,
+                "memo": str(sched.get("memo") or f"Bill {bill['number']}".strip())[:140],
+            },
+            f"bill-pay-{bill['id']}-{sched.get('n') or 1}",
+            at=ctx.at,
+        )
         done = res.status in ("committed", "needs_approval")
         # Asked for: the day stays on the bill (it shows when it pays) and the action id keeps it from being asked
         # again; refused, the bill is open again with no schedule.
         if done:
-            SAP.update(ctx.c, "fin_bills", str(bill["id"]), {
-                "updated_at": ctx.at, "schedule": SK.dump({**sched, "action_id": res.action_id,
-                                                                "result": res.status})})
+            SAP.update(
+                ctx.c,
+                "fin_bills",
+                str(bill["id"]),
+                {
+                    "updated_at": ctx.at,
+                    "schedule": SK.dump({**sched, "action_id": res.action_id, "result": res.status}),
+                },
+            )
         else:
             _unschedule(ctx, bill, sched, res.status, res.reason, left)
             person = who if who in ctx.org.humans else admin_person(ctx)
-            tico.needs_you(ctx.c, person, f"Bill {bill['number'] or bill['id']} was not paid",
-                           f"The payment scheduled for bill {bill['id']} was refused: {res.reason[:300]}. Fix it and "
-                           "schedule it again.")
+            tico.needs_you(
+                ctx.c,
+                person,
+                f"Bill {bill['number'] or bill['id']} was not paid",
+                f"The payment scheduled for bill {bill['id']} was refused: {res.reason[:300]}. Fix it and "
+                "schedule it again.",
+            )
         n += 1
     return n
 
@@ -1943,21 +2544,35 @@ def watch(ctx: Ctx) -> int:
     for bill in SAP.open_docs(ctx.c, "bill", ctx.book.id):
         stage = AP.bill_stage(bill["due_date"], today)
         if stage:
-            _event(ctx, DUE_SOON, str(bill["id"]), {"bill_id": str(bill["id"]), "stage": stage,
-                                                    "due_date": bill["due_date"]}, stage)
+            _event(
+                ctx,
+                DUE_SOON,
+                str(bill["id"]),
+                {"bill_id": str(bill["id"]), "stage": stage, "due_date": bill["due_date"]},
+                stage,
+            )
             n += 1
     for inv in SAP.open_docs(ctx.c, "invoice", ctx.book.id):
         stage = AP.invoice_stage(inv["due_date"], today)
         if stage:
-            _event(ctx, OVERDUE, str(inv["id"]), {"invoice_id": str(inv["id"]), "stage": stage,
-                                                  "due_date": inv["due_date"]}, stage)
+            _event(
+                ctx,
+                OVERDUE,
+                str(inv["id"]),
+                {"invoice_id": str(inv["id"]), "stage": stage, "due_date": inv["due_date"]},
+                stage,
+            )
             n += 1
     for vendor in SAP.renewals_due(ctx.c, ctx.book.id):
         stage = AP.renewal_stage(vendor["renewal_on"], today)
         if stage:
-            _event(ctx, RENEWAL_DUE, str(vendor["id"]), {"contact_id": str(vendor["id"]), "stage": stage,
-                                                         "renewal_on": vendor["renewal_on"]},
-                   f"{vendor['renewal_on']}:{stage}")
+            _event(
+                ctx,
+                RENEWAL_DUE,
+                str(vendor["id"]),
+                {"contact_id": str(vendor["id"]), "stage": stage, "renewal_on": vendor["renewal_on"]},
+                f"{vendor['renewal_on']}:{stage}",
+            )
             n += 1
     return n
 
@@ -1969,14 +2584,47 @@ sees_doc = _sees_doc
 next_number, money_of = _next_number, _money
 
 
-PLANNERS = {"contact_create": contact_create, "contact_update": contact_update, "bill_create": bill_create,
-            "bill_update": bill_update, "bill_approve": bill_approve, "bill_schedule": bill_schedule,
-            "bill_mark_paid": bill_mark_paid, "bill_void": bill_void, "invoice_create": invoice_create,
-            "invoice_send": invoice_send, "invoice_remind": invoice_remind, "invoice_delivery": invoice_delivery,
-            "invoice_record_payment": invoice_record_payment,
-            "invoice_write_off": invoice_write_off, "invoice_void": invoice_void, "attach": attach,
-            "feed_match": feed_match}
+PLANNERS = {
+    "contact_create": contact_create,
+    "contact_update": contact_update,
+    "bill_create": bill_create,
+    "bill_update": bill_update,
+    "bill_approve": bill_approve,
+    "bill_schedule": bill_schedule,
+    "bill_mark_paid": bill_mark_paid,
+    "bill_void": bill_void,
+    "invoice_create": invoice_create,
+    "invoice_send": invoice_send,
+    "invoice_remind": invoice_remind,
+    "invoice_delivery": invoice_delivery,
+    "invoice_record_payment": invoice_record_payment,
+    "invoice_write_off": invoice_write_off,
+    "invoice_void": invoice_void,
+    "attach": attach,
+    "feed_match": feed_match,
+}
 
-__all__ = ["PLANNERS", "settle", "unsettle", "feed_gone", "payment_settled", "payment_ended", "match_feed",
-           "feed_paid", "pay_due", "watch", "control", "document", "expected_match", "ASK", "bill_payment",
-           "retagged", "expected_for", "bill_budget", "MANY", "match_candidates", "review_candidates"]
+__all__ = [
+    "PLANNERS",
+    "settle",
+    "unsettle",
+    "feed_gone",
+    "payment_settled",
+    "payment_ended",
+    "match_feed",
+    "feed_paid",
+    "pay_due",
+    "watch",
+    "control",
+    "document",
+    "expected_match",
+    "ASK",
+    "bill_payment",
+    "retagged",
+    "reattributed",
+    "expected_for",
+    "bill_budget",
+    "MANY",
+    "match_candidates",
+    "review_candidates",
+]

@@ -102,19 +102,6 @@ pub fn synthetic_input() -> bool {
     std::env::var_os("TICO_RECORDER_SYNTHETIC_INPUT").is_some()
         && std::env::var_os("TICO_RECORDER_DATA_DIR").is_some()
 }
-pub fn clock(ms: u64) -> String {
-    let seconds = ms / 1000;
-    if seconds >= 3600 {
-        format!(
-            "{}:{:02}:{:02}",
-            seconds / 3600,
-            seconds / 60 % 60,
-            seconds % 60
-        )
-    } else {
-        format!("{:02}:{:02}", seconds / 60, seconds % 60)
-    }
-}
 /// Consecutive lines from one speaker are one block; each line is a paragraph, and a long line
 /// breaks into paragraphs at sentence ends.
 pub fn transcript_blocks(record: &Recording) -> Vec<Block> {
@@ -150,7 +137,11 @@ type Signature = (String, String, usize, usize, usize);
 fn signature(record: &Recording) -> Signature {
     (
         record.id.clone(),
-        record.speakers.clone(),
+        format!(
+            "{}:{}",
+            record.speakers,
+            network::hash(&json!(record.meeting_speakers))
+        ),
         record.chunks.len(),
         record.chunks.iter().map(|chunk| chunk.text.len()).sum(),
         record
@@ -166,11 +157,13 @@ pub fn sent_to(deliveries: &[store::Delivery], destination: &str) -> bool {
         .any(|row| row.destination_id == destination && row.status == "sent")
 }
 /// The Tico address in a `tico-recorder://connect?server=…` link.
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub fn connect_address(link: &str) -> Option<String> {
     link_address(link, "connect")
 }
 /// The Tico address in a `tico-recorder://<action>?server=…` link: `connect` (Tico's Connect recorder button) or
 /// `open` (Record in the Tico desktop app, which opens the Recorder on that org and starts nothing).
+#[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub fn link_address(link: &str, action: &str) -> Option<String> {
     let url = reqwest::Url::parse(link).ok()?;
     if url.scheme() != "tico-recorder" || url.host_str() != Some(action) {
@@ -369,6 +362,7 @@ pub struct Recorder {
     pub calendar: Value,
     pub live: Value,
     pub roster: Vec<(String, String)>,
+    draft_people: (String, Vec<assist::Person>),
     chat_private: bool,
     asking: String,
     asking_for: Option<String>,
@@ -503,6 +497,7 @@ impl Recorder {
             calendar,
             live: json!({}),
             roster: vec![],
+            draft_people: Default::default(),
             chat_private: false,
             asking: String::new(),
             asking_for: None,
@@ -1109,6 +1104,34 @@ impl Recorder {
         }
         let (config, store) = (self.config.clone(), self.store.clone());
         let destination = self.draft_destination(&id);
+        let people = (self.draft_people.0 == destination).then(|| self.draft_people.1.clone());
+        let me = config
+            .destinations
+            .iter()
+            .find(|d| d.id == destination)
+            .map(|d| d.actor.clone())
+            .unwrap_or_default();
+        let mut participants = vec![];
+        if self.meeting.as_deref() == Some(id.as_str()) {
+            for field in ["humans", "access"] {
+                participants.extend(
+                    self.live[field]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|p| p["actor"].as_str())
+                        .map(str::to_owned),
+                );
+            }
+            participants.extend(
+                self.live["bots"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| p["bot"].as_str())
+                    .map(|slug| format!("bot:{slug}")),
+            );
+        }
         self.job_for("autodraft", Some(id.clone()), move || {
             let mut config = config;
             if speech::source(&config) == speech::TICO
@@ -1116,11 +1139,15 @@ impl Recorder {
             {
                 config.destinations.swap(0, at);
             }
-            let tasks = Tico::saved(&config, &destination)
-                .and_then(|tico| tico.draft_tasks(&store, &id))
-                .unwrap_or_default();
+            let tico = Tico::saved(&config, &destination).ok();
+            let tasks = tico.as_ref().and_then(|tico| tico.draft_tasks(&store, &id).ok()).unwrap_or_default();
+            let roster = assist::Roster {
+                people: people.or_else(|| tico.as_ref().and_then(|tico| tico.draft_people().ok())).unwrap_or_default(),
+                me,
+                participants,
+            };
             let (config, key) = speech::assist(&config)?;
-            Ok(json!({"added":assist::draft_with_tasks(&store, &config, &key, &id, &tasks)?}))
+            Ok(json!({"added":assist::draft_with_roster(&store, &config, &key, &id, &tasks, &roster)?}))
         });
     }
     /// Background work: finished jobs, the recording's end, refreshes, live sync, calendar and
@@ -1366,10 +1393,10 @@ impl Recorder {
                         "live" => {
                             // Polled every few seconds; the window hears about it only on change.
                             if self.live != value["view"] {
-                                if value["view"]["state"] != "live" {
-                                    if let Some(id) = &self.meeting {
-                                        self.screen.stop_meeting(id);
-                                    }
+                                if value["view"]["state"] != "live"
+                                    && let Some(id) = &self.meeting
+                                {
+                                    self.screen.stop_meeting(id);
                                 }
                                 self.live = value["view"].clone();
                                 self.bump();
@@ -1380,10 +1407,9 @@ impl Recorder {
                             let sent = &value["sent"];
                             if sent.is_object()
                                 && let Some(chat) = self.live["chat"].as_array_mut()
+                                && !chat.iter().any(|row| row["id"] == sent["id"])
                             {
-                                if !chat.iter().any(|row| row["id"] == sent["id"]) {
-                                    chat.push(sent.clone());
-                                }
+                                chat.push(sent.clone());
                             }
                             self.last_sync = Instant::now() - Duration::from_secs(5);
                         }
@@ -1392,7 +1418,16 @@ impl Recorder {
                             self.last_sync = Instant::now() - Duration::from_secs(5);
                         }
                         "roster" => {
-                            self.roster = serde_json::from_value(value).unwrap_or_default();
+                            let people: Vec<assist::Person> =
+                                serde_json::from_value(value["people"].clone()).unwrap_or_default();
+                            self.roster = people
+                                .iter()
+                                .map(|p| (p.actor.clone(), p.name.clone()))
+                                .collect();
+                            self.draft_people = (
+                                value["destination"].as_str().unwrap_or_default().into(),
+                                people,
+                            );
                         }
                         "send" => self.say("Saved to Tico"),
                         "import" => {
@@ -1572,7 +1607,8 @@ impl Recorder {
     pub fn recording(&self) -> bool {
         self.active.is_some()
     }
-    /// Why an app update waits right now: a recording runs, or a live meeting is connected.
+    /// Why an app update waits right now: a recording runs, a live meeting is connected (live or paused), or a
+    /// send is under way.
     pub fn update_hold(&self) -> Option<&'static str> {
         if self.deleting.is_some() {
             Some("After deletion finishes")
@@ -1583,7 +1619,7 @@ impl Recorder {
         } else if self
             .records
             .iter()
-            .any(|record| record.live_state == "live")
+            .any(|record| matches!(record.live_state.as_str(), "live" | "paused"))
         {
             Some("After the live meeting ends")
         } else if self.sending.is_some()
@@ -1709,10 +1745,10 @@ impl Recorder {
         self.reload();
     }
     pub fn control_live(&mut self, action: &str) {
-        if action != "resume" {
-            if let Some(id) = &self.meeting {
-                self.screen.stop_meeting(id);
-            }
+        if action != "resume"
+            && let Some(id) = &self.meeting
+        {
+            self.screen.stop_meeting(id);
         }
         let Ok(record) = self.open_record() else {
             return;
@@ -1953,7 +1989,9 @@ impl Recorder {
     pub fn load_roster(&mut self) {
         if !self.router_name().is_empty() {
             self.roster_for = self.router();
-            self.network_job("roster", |tico, _, _| Ok(json!(tico.roster()?)));
+            self.network_job("roster", |tico, _, _| {
+                Ok(json!({"destination":tico.destination.id,"people":tico.draft_people()?}))
+            });
         }
     }
 
@@ -2272,6 +2310,7 @@ impl Recorder {
     }
     /// Send does every step in one go: it stops this recording, waits for its last words,
     /// finishes a live meeting in Tico, then files it. Only what no step can fix stops it here.
+    #[cfg(test)]
     pub fn send_meeting(&mut self, id: &str, destination: &str) {
         self.send_meeting_confirmed(id, destination, false);
     }
@@ -2758,6 +2797,7 @@ impl Recorder {
     /// A link macOS delivered to the app: `connect` asks to sign in to that Tico; `open` (Record in the Tico desktop
     /// app) chooses that Tico for what comes next when the Recorder is signed in to it, and asks to sign in when not.
     /// Neither starts a recording.
+    #[cfg(any(target_os = "macos", target_os = "ios", test))]
     pub fn link(&mut self, link: &str) {
         if let Some(address) = link_address(link, "open") {
             let connected = self
@@ -2906,6 +2946,9 @@ impl Recorder {
             "sending": self.send_step().map(|(id, label)| json!({"id": id, "label": label})),
             "profile": synthetic_input(),
             "notice": self.input_notice().filter(|notice| *notice != self.notice_dismissed),
+            "speaker_permission": self.active.is_some()
+                && tico_recorder_native::speaker_names::permission_pending(),
+            "speaker_access": tico_recorder_native::speaker_names::access(),
             "speech": speech::view(&self.config, self.key_saved("transcription"),
                 self.streaming() && self.key_saved(stream::KEY_NAME)),
         })
@@ -3146,7 +3189,7 @@ impl Recorder {
                 && (!ended || has_text),
             "place": if live { format!("Shared live · {org}") } else { "Private · on this Mac".into() },
             "sync_error": if sync_error.is_empty() { String::new() } else {
-                format!("Tico sync needs attention: {sync_error}. Audio and transcript remain saved on this Mac.")
+                sync_error
             },
             "setup": self.setup_notices(),
             "audio": audio_view(&record),
@@ -3241,12 +3284,12 @@ impl Recorder {
             .map(|item| {
                 let linked = self.linked_task(&item.task_id);
                 let proposal = (item.task_destination.is_empty() || item.task_destination == self.router()).then(|| self.linked_task(&item.proposed_task_id)).flatten();
-                let chosen = if item.owner.is_empty() {
+                let chosen = if item.owner.is_empty() && !item.id.starts_with("draft-") {
                     self.last_owner.clone()
                 } else {
                     item.owner.clone()
                 };
-                let owner_name = owners
+                let owner_name = self.roster
                     .iter()
                     .find(|row| row.0 == chosen)
                     .map(|row| row.1.clone())
@@ -3542,7 +3585,7 @@ fn audio_view(record: &Recording) -> Value {
     let failures: Vec<_> = record
         .chunks
         .iter()
-        .filter(|chunk| chunk.status == "failed" || !chunk.error.is_empty())
+        .filter(|chunk| !tico_recorder_native::retry::chunk_notice(chunk).is_empty())
         .collect();
     // Error and drop counts are bookkeeping, not news; the live notice says when audio is
     // really being lost. A stalled input is kept.
@@ -3560,7 +3603,7 @@ fn audio_view(record: &Recording) -> Value {
         "failed": failed,
         "finding_speakers": pending == 0 && record.speakers == "running",
         "inputs": inputs,
-        "failures": failures.iter().take(12).map(|chunk| format!("{} {} · {}", clock(chunk.start_ms), chunk.speaker, chunk.error)).collect::<Vec<_>>(),
+        "failures": failures.iter().map(|chunk| tico_recorder_native::retry::chunk_notice(chunk)).collect::<std::collections::BTreeSet<_>>().into_iter().take(12).collect::<Vec<_>>(),
         "more": failures.len().saturating_sub(12),
     })
 }
@@ -3647,6 +3690,39 @@ fn wait_stopped(store: &Store, id: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod saved_panel_tests {
     use super::*;
+    #[test]
+    fn suggested_owners_show_by_name_and_unclear_drafts_do_not_reuse_the_last_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let record = store.create("Planning").unwrap();
+        let mut app = Recorder::new(store, None, true).unwrap();
+        app.open(&record.id).unwrap();
+        app.choosing_org = false;
+        app.last_owner = "human:ana".into();
+        app.roster = vec![("bot:concierge".into(), "Guest Relations".into())];
+        app.context.live_id = "live-planning".into();
+        app.live = json!({"visibility":"private", "owner_actor":"human:ana"});
+        app.context.items = vec![
+            Item {
+                id: "draft-assigned".into(),
+                title: "Negotiate quotes".into(),
+                owner: "bot:concierge".into(),
+                ..Default::default()
+            },
+            Item {
+                id: "draft-unclear".into(),
+                title: "Send prices".into(),
+                ..Default::default()
+            },
+        ];
+        let view = app.actions_view("Acme");
+        assert_eq!(view["items"][0]["owner"], "bot:concierge");
+        assert_eq!(view["items"][0]["owner_name"], "Guest Relations");
+        assert_eq!(view["items"][1]["owner"], "");
+        assert_eq!(view["items"][1]["owner_name"], "");
+        assert_eq!(view["items"][1]["can_send"], false);
+    }
+
     #[test]
     fn private_action_recipients_include_bots_added_by_participants() {
         let dir = tempfile::tempdir().unwrap();

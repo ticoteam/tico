@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/listening.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 63,
+                    "endColumn": 77,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

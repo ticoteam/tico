@@ -1,4 +1,5 @@
 """Preflight (clients/preflight.py) over a repo built in a temp folder: no git remote, no model, no mail."""
+
 import contextlib
 import io
 import tempfile

@@ -1,5 +1,6 @@
 """`hub automation ...` and the hub_automation_* tools against the real API (clients/remotecli.py, clients/hubtools.py):
 the CLI and MCP run the same tool, so the same rights and the same payloads as the UI."""
+
 import json
 from urllib.parse import urlencode
 
@@ -44,8 +45,16 @@ def cli(api, token, *argv):
 @pytest.fixture
 def flow_file(tmp_path):
     path = tmp_path / "flow.json"
-    path.write_text(json.dumps({"name": "Morning check", "owner": "person:ana", "steps": [NOTE_STEP],
-                                "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}}))
+    path.write_text(
+        json.dumps(
+            {
+                "name": "Morning check",
+                "owner": "person:ana",
+                "steps": [NOTE_STEP],
+                "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"},
+            }
+        )
+    )
     return path
 
 
@@ -66,7 +75,8 @@ def test_the_cli_creates_runs_edits_and_restores_as_the_ui_does(api, flow_file):
 def test_a_bot_without_rights_proposes_through_the_tool(api, flow_file):
     aid = cli(api, "ana-test", "create", "--file", str(flow_file))["id"]
     proposed = hubtools.BY_NAME["hub_automation_update"]["fn"](
-        Client(api, as_bot(api, "finance")), {"id": aid, "steps": [], "summary": "Drop the wake"})
+        Client(api, as_bot(api, "finance")), {"id": aid, "steps": [], "summary": "Drop the wake"}
+    )
     assert proposed["pending"] == 2
     assert [v["n"] for v in cli(api, "ana-test", "versions", aid, "--pending")["versions"]] == [2]
     assert cli(api, "ana-test", "show", aid)["version"] == 1
@@ -98,10 +108,11 @@ def test_botops_acts_with_the_askers_rights(api, botops):
 def test_the_cli_discards_a_proposal_and_lists_the_question_sets_and_the_guide(api, flow_file):
     aid = cli(api, "ana-test", "create", "--file", str(flow_file))["id"]
     hubtools.BY_NAME["hub_automation_update"]["fn"](
-        Client(api, as_bot(api, "finance")), {"id": aid, "steps": [], "summary": "Drop the wake"})
+        Client(api, as_bot(api, "finance")), {"id": aid, "steps": [], "summary": "Drop the wake"}
+    )
     assert [v["n"] for v in cli(api, "ana-test", "versions", aid, "--pending")["versions"]] == [2]
     with pytest.raises(remotecli.APIError):
-        cli(api, "ana-test", "discard", aid, "1")            # the current version is not a proposal
+        cli(api, "ana-test", "discard", aid, "1")  # the current version is not a proposal
     cli(api, "ana-test", "discard", aid, "2")
     assert cli(api, "ana-test", "versions", aid, "--pending")["versions"] == []
     assert cli(api, "ana-test", "show", aid)["version"] == 1
@@ -126,6 +137,7 @@ def test_botops_sets_an_email_inboxs_send_switch_for_its_owner_only(api, botops)
 
 def test_the_cli_releases_a_hold_and_a_peer_bot_cannot(api, flow_file):
     from backend import automations
+
     aid = cli(api, "ana-test", "create", "--file", str(flow_file))["id"]
     with api.app.state.store.transaction() as c:
         row = dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone())

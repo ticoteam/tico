@@ -1,0 +1,7 @@
+{
+  "connectors/mail/scheduling.py": {
+    "B904": 1,
+    "BLE001": 3,
+    "F401": 1
+  }
+}

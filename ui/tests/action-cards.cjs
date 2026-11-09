@@ -1,4 +1,4 @@
-// BotOps' Confirm cards in the Assistant's chat (ui/assistant.js; BotOps has no DM of its own now), fixtures only.
+// BotOps' Confirm cards in the Assistant's chat (ui/assistant.ts; BotOps has no DM of its own now), fixtures only.
 //  - plain words: the card's title is the server's sentence, never the method and path; a card stored with no readable
 //    description gets a plain sentence too. The method, path and fields sit behind a closed Details.
 //  - no jump on Confirm: in a chat scrolled partway down with several cards, a click changes only that card. The thread
@@ -6,6 +6,9 @@
 //    Every other card is the same element after the rebuild, so a "Show more" opened on one stays open and where it
 //    was, and focus stays put: on a card being read, and on the card whose Confirm was pressed from the keyboard.
 //    A Confirm that fails leaves the card waiting with its buttons usable.
+//  - while a Confirm / Cancel is on its way (the server runs every step before it answers), the pressed button spins
+//    and says so ("Confirming…", aria-busy), the other is off, a rebuild meanwhile draws the same, then the card says
+//    how it went; one that fails gets its buttons back as they were. TICO_SCREENSHOT_DIR keeps a shot of it.
 //  - a repository card stored before the plain wording ("access to chosen") reads as the server now sends it: a plain
 //    title, and the old line only under Details (backend/assistant.py action_view).
 const {chromium} = require('playwright');
@@ -15,6 +18,7 @@ const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 const {assistantView} = require('./support/assistant-chat.cjs');
+const shots = process.env.TICO_SCREENSHOT_DIR;
 
 const at = n => new Date(Date.UTC(2026, 9, 17, 9, n)).toISOString();
 const say = (id, from, body, n, refs = {}) => ({id, sender_id: from, body, refs, created_at: at(n), kind: 'say'});
@@ -24,8 +28,8 @@ function fixture() {
     diff: [], body: {}, ...extra});
   const actions = {
     act1: card('act1', {method: 'PUT', path: '/api/v2/bots/security-engineer-2/repositories',
-      summary: 'Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder.',
-      description: 'Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder.',
+      summary: 'Security Engineer: read-only on tico (was write). Loses access to tico-site and tico-recorder.',
+      description: 'Security Engineer: read-only on tico (was write). Loses access to tico-site and tico-recorder.',
       body: {mode: 'chosen', chosen: [{full_name: 'ticoteam/tico', access: 'read'}]},
       diff: [{field: 'mode', new: 'chosen'}, {field: 'chosen', new: [{full_name: 'ticoteam/tico', access: 'read'}]}]}),
     // A card stored before its route had a sentence: the description was the method and path.
@@ -34,7 +38,7 @@ function fixture() {
     // Chris's card from before the plain wording, as action_view sends it now: the title read from the stored body,
     // the old line moved under Details.
     act0: card('act0', {method: 'PUT', path: '/api/v2/bots/security-engineer-2/repositories', summary: '',
-      original_summary: "Set Security Engineer's repository access to chosen. This stops: ticoteam/tico (write), ticoteam/tico-marketing-site (write)",
+      original_summary: "Set Security Engineer's repository access to chosen. This stops: ticoteam/tico (write), ticoteam/tico-site (write)",
       description: 'Security Engineer: read-only on tico, besides its own repository.',
       body: {mode: 'chosen', chosen: [{full_name: 'ticoteam/tico', access: 'read'}]},
       diff: [{field: 'mode', new: 'chosen'}, {field: 'chosen', new: [{full_name: 'ticoteam/tico', access: 'read'}]}]}),
@@ -75,7 +79,7 @@ async function open(browser, state) {
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(path.join(__dirname, '../vendor/marked.min.js'), 'utf8')});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
@@ -94,6 +98,7 @@ async function open(browser, state) {
       return route.fulfill({contentType: 'application/json', body: `{"action":${then}}`});
     }
     const act = p.match(/^\/api\/v2\/assistant\/actions\/([^/]+)\/(confirm|cancel)$/);
+    if (act && state.hold) await state.hold;       // held by the test, to see the card while it waits
     if (act && state.refuse) return route.fulfill({status: 500, contentType: 'application/json', body: JSON.stringify({detail: 'It could not be reached'})});
     if (act) {
       if (state.slowPost) await new Promise(done => setTimeout(done, state.slowPost));
@@ -120,7 +125,7 @@ async function open(browser, state) {
     // Plain words first; the raw request only behind Details, closed.
     const repo = page.locator('.asst-card[data-action="act1"]');
     assert.equal(await repo.locator('[data-what]').innerText(),
-      'Security Engineer: read-only on tico (was write). Loses access to tico-marketing-site and tico-recorder.', 'repo: the sentence is the title');
+      'Security Engineer: read-only on tico (was write). Loses access to tico-site and tico-recorder.', 'repo: the sentence is the title');
     const details = repo.locator('details.asst-raw');
     assert.equal(await details.count(), 1, 'repo: one Details');
     assert.equal(await details.evaluate(d => d.open), false, 'repo: Details starts closed');
@@ -230,12 +235,47 @@ async function open(browser, state) {
     await page.locator('.asst-card[data-action="act1"][data-status="done"]').waitFor();
     Object.assign(state, {slowGet: 0, slowPost: 0});
 
+    // While it is on its way: the pressed button spins and says so, the other is off, and a rebuild draws the same.
+    const buttons = id => page.locator(`.asst-card[data-action="${id}"] button`)
+      .evaluateAll(bs => bs.map(b => [b.innerText.trim(), b.disabled, b.getAttribute('aria-busy')]));
+    const busyOn = id => page.waitForFunction(id => document.querySelector(`.asst-card[data-action="${id}"] [aria-busy="true"]`), id);
+    const hold = () => { let go; state.hold = new Promise(done => { go = done; }); return () => { state.hold = null; go(); }; };
+    let release = hold();
+    await page.locator('.asst-card[data-action="act4"] [data-confirm]').click();
+    await busyOn('act4');
+    assert.deepEqual(await buttons('act4'), [['Confirming…', true, 'true'], ['Cancel', true, null]], 'confirm: the pressed button says it is working');
+    assert.equal(await page.locator('.asst-card[data-action="act4"] [aria-busy="true"]').evaluate(b => getComputedStyle(b, '::before').animationName), 'p-spin', 'confirm: it spins');
+    await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('mid', 'bot:botops', 'Meanwhile.', state.n++));
+    await page.locator('[data-message="mid"]').waitFor({state: 'attached'});
+    assert.deepEqual(await buttons('act4'), [['Confirming…', true, 'true'], ['Cancel', true, null]], 'confirm: a rebuild keeps it working');
+    if (shots) {
+      fs.mkdirSync(shots, {recursive: true});
+      await page.locator('.asst-card[data-action="act4"]').screenshot({path: path.join(shots, 'confirm-pending.png'), animations: 'disabled'});
+    }
+    release();
+    await page.locator('.asst-card[data-action="act4"][data-status="done"]').waitFor();
+    assert.equal(await page.locator('.asst-card[data-action="act4"] > .asst-state').innerText(), 'Done.', 'confirm: then it says how it went');
+    assert.equal(await page.locator('.asst-card[data-action="act4"] button').count(), 0, 'confirm: no buttons once done');
+    // Cancel says so the same way.
+    release = hold();
+    await page.locator('.asst-card[data-action="act0"] [data-cancel]').click();
+    await busyOn('act0');
+    assert.deepEqual(await buttons('act0'), [['Confirm', true, null], ['Canceling…', true, 'true']], 'cancel: the pressed button says it is working');
+    release();
+    await page.locator('.asst-card[data-action="act0"][data-status="canceled"]').waitFor();
+    assert.equal(await page.locator('.asst-card[data-action="act0"] > .asst-state').innerText(), 'Canceled.');
+
     // A Confirm that does not go through leaves the card waiting, its buttons usable again.
     state.refuse = true;
+    release = hold();
     await page.locator('.asst-card[data-action="act3"] [data-confirm]').click();
+    await busyOn('act3');
+    assert.deepEqual(await buttons('act3'), [['Confirming…', true, 'true'], ['Cancel', true, null]], 'refused: working while it waits');
+    release();
     await page.locator('.toast.err').first().waitFor();
     await page.waitForFunction(() => document.querySelector('.asst-card[data-action="act3"] [data-confirm]')?.disabled === false);
     assert.equal(await page.locator('.asst-card[data-action="act3"]').getAttribute('data-status'), 'pending', 'a failed Confirm leaves it pending');
+    assert.deepEqual(await buttons('act3'), [['Confirm', false, null], ['Cancel', false, null]], 'refused: the buttons are back as they were');
     assert.deepEqual(errors, [], 'no page errors');
     console.log('action cards: plain titles, Details, no jump on Confirm: ok');
     await page.close();

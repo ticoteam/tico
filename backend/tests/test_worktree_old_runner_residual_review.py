@@ -1,4 +1,5 @@
 """Old-runner heartbeat and human-requested restore compatibility during rollout."""
+
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -9,12 +10,22 @@ from backend.tests.test_worktrees import api, gh, prepared, post, auth  # noqa: 
 
 
 def heartbeat(api, link, state=None):
-    report = [] if state is None else [{"link_id": link["link_id"], "state": state,
-                                        "branch": link["branch"], "repo": "Acme/product"}]
-    response = post(api, "runners/heartbeat", {
-        "version": "0.2.35", "platform": "darwin",
-        "readiness": {"schema_version": 1, "worktrees": True}, "worktrees": report,
-    }, "runner-test")
+    report = (
+        []
+        if state is None
+        else [{"link_id": link["link_id"], "state": state, "branch": link["branch"], "repo": "Acme/product"}]
+    )
+    response = post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "0.2.35",
+            "platform": "darwin",
+            "readiness": {"schema_version": 1, "worktrees": True},
+            "worktrees": report,
+        },
+        "runner-test",
+    )
     assert response.status_code == 200, response.text
     return response.json()["worktree_actions"]
 
@@ -25,8 +36,10 @@ def test_old_heartbeat_retains_legacy_missing_and_unknown_semantics(prepared, sa
     link = post(api, f"tasks/{tid}/worktrees", {"repo": "Acme/product"}).json()
     old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE task_links SET state=?,detail=? WHERE id=?", (
-            saved_state, json.dumps({"owner": "bot:cmo", "missing_since": old}), link["link_id"]))
+        c.execute(
+            "UPDATE task_links SET state=?,detail=? WHERE id=?",
+            (saved_state, json.dumps({"owner": "bot:cmo", "missing_since": old}), link["link_id"]),
+        )
     for _ in range(3):
         assert heartbeat(api, link, report_state) == []
         with api.app_state.store.read() as c:
@@ -42,19 +55,28 @@ def test_old_heartbeat_retains_legacy_missing_and_unknown_semantics(prepared, sa
             assert detail["missing_since"] == old
 
 
-@pytest.mark.parametrize(("saved_state", "report_state"), [
-    ("present", "missing"), ("unknown", "present"), ("missing", "missing"),
-])
-def test_pre_marker_human_restore_receipt_keeps_no_state_semantics(
-        prepared, saved_state, report_state):
+@pytest.mark.parametrize(
+    ("saved_state", "report_state"),
+    [
+        ("present", "missing"),
+        ("unknown", "present"),
+        ("missing", "missing"),
+    ],
+)
+def test_pre_marker_human_restore_receipt_keeps_no_state_semantics(prepared, saved_state, report_state):
     api, tid, _ = prepared
     # Older main persisted setup_pending for human restores before the explicit receipt marker.
     link = post(api, f"tasks/{tid}/worktrees", {"repo": "Acme/product"}, "owner-test").json()
     old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE task_links SET state=?,detail=? WHERE id=?", (
-            saved_state, json.dumps({"owner": "bot:cmo", "setup_pending": True,
-                                    "missing_since": old}), link["link_id"]))
+        c.execute(
+            "UPDATE task_links SET state=?,detail=? WHERE id=?",
+            (
+                saved_state,
+                json.dumps({"owner": "bot:cmo", "setup_pending": True, "missing_since": old}),
+                link["link_id"],
+            ),
+        )
     for _ in range(3):
         assert heartbeat(api, link, report_state) == []
         with api.app_state.store.read() as c:
@@ -77,13 +99,17 @@ def test_old_human_restore_and_new_request_accept_setup_report_without_repeating
     link = post(api, f"tasks/{tid}/worktrees", {"repo": "Acme/product"}).json()
     if not new_request:
         with api.app_state.store.transaction() as c:
-            c.execute("UPDATE task_links SET state='pending',detail=? WHERE id=?",
-                      (json.dumps({"owner": "bot:cmo"}), link["link_id"]))
+            c.execute(
+                "UPDATE task_links SET state='pending',detail=? WHERE id=?",
+                (json.dumps({"owner": "bot:cmo"}), link["link_id"]),
+            )
     actions = heartbeat(api, link)
     assert len(actions) == 1 and actions[0]["action"] == "restore"
-    response = api.patch(f'/api/v2/tasks/{tid}/links/{link["link_id"]}',
-                         json={"state": "present", "setup_pending": True},
-                         headers={**auth("runner-test"), "Idempotency-Key": uuid.uuid4().hex})
+    response = api.patch(
+        f'/api/v2/tasks/{tid}/links/{link["link_id"]}',
+        json={"state": "present", "setup_pending": True},
+        headers={**auth("runner-test"), "Idempotency-Key": uuid.uuid4().hex},
+    )
     assert response.status_code == 200, response.text
     for _ in range(3):
         assert heartbeat(api, link, "present") == []

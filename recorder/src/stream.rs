@@ -343,6 +343,7 @@ impl Worker {
     fn run(mut self) {
         crate::qos::utility();
         let mut wait = self.plan.retry;
+        let mut failures = 0;
         loop {
             if self.settings_version.is_some() {
                 let version = settings::version();
@@ -418,14 +419,19 @@ impl Worker {
                 End::Lost(error) => {
                     if opened.elapsed() > Duration::from_secs(30) {
                         wait = self.plan.retry;
+                        failures = 0;
                     }
+                    failures += 1;
                     self.reconnects += 1;
                     let error = if self.plan.tico.is_some() {
                         tico_words(&error)
                     } else {
                         error
                     };
-                    self.set("retrying", &short(&error));
+                    self.set(
+                        "retrying",
+                        &crate::retry::notice(&error, failures, "Transcription is retrying"),
+                    );
                     if !self.idle(wait) {
                         break;
                     }
@@ -606,7 +612,7 @@ impl Worker {
         }
     }
     /// Handles one service event. True when the service finished the transcript.
-    fn event(&self, text: &str, anchors: &[(u64, f64)]) -> Result<bool> {
+    fn event(&mut self, text: &str, anchors: &[(u64, f64)]) -> Result<bool> {
         let event: Value =
             serde_json::from_str(text).context("The streaming service sent invalid JSON")?;
         match event["type"].as_str().unwrap_or("") {
@@ -629,12 +635,18 @@ impl Worker {
                             speaker: if self.channel == "me" {
                                 String::new()
                             } else {
-                                speaker(&word["speaker"])
+                                let raw = speaker(&word["speaker"]);
+                                if raw.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("stream:{raw}")
+                                }
                             },
                             turn: String::new(),
                         })
                     })
                     .collect();
+                self.store.register_stream_speakers(&self.id, &words)?;
                 let start_s = event["start"].as_f64().unwrap_or(0.);
                 let end_s = start_s + event["duration"].as_f64().unwrap_or(0.);
                 let text = event["text"].as_str().unwrap_or("").trim().to_owned();
@@ -733,7 +745,7 @@ fn describe(error: &tungstenite::Error) -> String {
         tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed => {
             "The streaming service closed the session".into()
         }
-        other => short(&format!("Live text: {other}")),
+        _ => "Transcription is retrying".into(),
     }
 }
 

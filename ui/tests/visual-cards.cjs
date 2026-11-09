@@ -13,7 +13,7 @@ const fs = require('node:fs');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 // The server's own page treatment: cleaned, the height reporter added, and its content policy.
-const server = JSON.parse(execFileSync('python3', ['-I', '-c', `
+const server = JSON.parse(execFileSync(process.env.TICO_PYTHON || 'python3', ['-I', '-c', `
 import json, sys
 sys.path.insert(0, ${JSON.stringify(ROOT)})
 from backend import visuals
@@ -116,14 +116,14 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
         return route.fulfill({contentType: 'image/png', headers, body: PNG});
       }
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
       if (p.startsWith('/api/v2/files/')) fileReqs.push(p + url.search);
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
       if (p === '/api/employees') return json([{name: 'designer', display_name: 'Designer', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      if (p === '/api/v2/events') { held.push(route); return; }      // live events (ui/app/live.js), held open
+      if (p === '/api/v2/events') { held.push(route); return; }      // live events (ui/app/live.ts), held open
       if (p === '/api/v2/pages/' + refreshId) return json({page: {file_id: refreshId, title: 'Refreshed page',
         version: 1, updated_at: now, bot_id: 'designer', src: ++pageReads === 1 ? legacySrc : freshSrc}, pinned: []});
       if (p === '/api/v2/files/' + refreshId + '/versions') return json({versions: []});
@@ -487,7 +487,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     assert.deepEqual(await page.evaluate(() => [$('#task-modal').tfOpen?.id, $('#task-modal').tfOpen?.n]), ['f-chart', 1]);
     await noSideways('task');
 
-    // ---- pinned pages are widgets (ui/app/pages.js pageCard): the page's top at the size's fixed height with nothing
+    // ---- pinned pages are widgets (ui/app/pages.ts pageCard): the page at its own height up to the size, with nothing
     // scrolling inside, its frame told it is in a card at that size (the reporter sets data-tico-view from the
     // fragment), a fade only when the page runs on, and an expand icon that opens the full view
     await page.evaluate(() => $('#task-modal')?.close());
@@ -508,7 +508,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       return [Math.round(b.getBoundingClientRect().height), Math.round(c.querySelector('iframe').getBoundingClientRect().height), b.classList.contains('pg-cut'),
         getComputedStyle(b, '::after').content !== 'none'];
     }));
-    assert.deepEqual(drawn, [[180, 180, true, true], [180, 180, false, false]], `${label}: a fixed-height card fades only when the page is cut`);
+    assert.deepEqual(drawn, [[180, 180, true, true], [120, 120, false, false]], `${label}: a card is as tall as its page up to its size, faded only when cut`);
     const expand = page.locator('#widgets .pg-card').nth(2).locator('a.pg-expand');
     assert.equal(await expand.getAttribute('aria-label'), 'Open full screen');
     assert.equal(await page.locator('#widgets .pg-card').nth(2).locator('a.pg-tap').count(), 1, `${label}: the whole card stays a tap target`);

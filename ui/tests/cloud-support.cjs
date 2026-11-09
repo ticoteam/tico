@@ -1,4 +1,4 @@
-// Tico support on cloud machines (ui/app/cloud-machines.js, GET/PUT /api/v2/cloud-machines/support), fixtures only:
+// Tico support on cloud machines (ui/app/cloud-machines.ts, GET/PUT /api/v2/cloud-machines/support), fixtures only:
 //  - Settings > People: on Tico Cloud the owner's team rules carry the switch, as HQ reads it; a change PUTs it, and a
 //    failed or uncertain change re-reads HQ with the reason under the switch;
 //  - an admin sees the switch read-only; off Tico Cloud (`available` false) there is no switch;
@@ -31,7 +31,7 @@ const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hu
       const request = route.request(), p = new URL(request.url()).pathname, method = request.method();
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const module = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (module && fs.existsSync(uiFile(module[1])))
         return route.fulfill({contentType: module[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(module[1]), 'utf8')});
       if (p === '/api/v2/cloud-machines/support' && method === 'GET') {

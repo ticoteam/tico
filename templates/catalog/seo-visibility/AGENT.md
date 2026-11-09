@@ -86,7 +86,7 @@ A channel you do not own is changed by its owner: ask in a task.
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the record with `hub task show <id>`. Competitor facts you find go to
 `hub market report`, in prose with the source, never into a second list here. Ask the requester one
-question with `hub task ask <id>`. A drafted change is attached to the task for the person who edits the site.
+question with `hub task question "<question>" --on <person> --parent <id>`. A drafted change is attached to the task for the person who edits the site.
 
 ## Method
 - **Ranked, cited and named are three results.** A page that loads is not a page that ranks. A ranking is

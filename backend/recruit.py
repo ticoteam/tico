@@ -16,6 +16,7 @@ The strategy draft's bets (backend/strategy.py) shape the local answer: their wo
 answer names the bet the department clearly serves (`bet`), which setup stores on the group it makes (`bet_for`,
 `Onboarding.complete`). Bets never go to Tico HQ. With no bets both work as before.
 """
+
 import logging
 import re
 import sqlite3
@@ -32,7 +33,7 @@ from .store import Problem
 log = logging.getLogger("tico.recruit")
 
 HQ_TIMEOUT = 6.0
-BET_WORDS = 2               # words a bet shares with a department before it is said to serve it
+BET_WORDS = 2  # words a bet shares with a department before it is said to serve it
 BUNDLED_DEPARTMENTS = Path(__file__).resolve().parents[1] / "templates" / "groups.yaml"
 # Tests swap in an httpx.MockTransport; a real install always uses the network.
 TRANSPORT = None
@@ -79,15 +80,20 @@ def template_groups(settings):
     """{template: {id, name}} from the org builder's catalog: the group a bot built from a template goes in."""
     value = catalog(settings)
     names = {row["id"]: row["name"] for row in value["departments"]}
-    return {card["template"]: {"id": card["department"], "name": names[card["department"]]}
-            for card in value["cards"] if card["department"] in names}
+    return {
+        card["template"]: {"id": card["department"], "name": names[card["department"]]}
+        for card in value["cards"]
+        if card["department"] in names
+    }
 
 
 def _about(answers):
     what = answers.get("what_we_do") or answers.get("building") or ""
-    return {"what": re.sub(r"\s+", " ", str(what)).strip()[:R.BRIEFING_LIMIT],
-            "sells_to": str(answers.get("customers") or ""),
-            "software": str(answers.get("software_product") or "") == "yes"}
+    return {
+        "what": re.sub(r"\s+", " ", str(what)).strip()[: R.BRIEFING_LIMIT],
+        "sells_to": str(answers.get("customers") or ""),
+        "software": str(answers.get("software_product") or "") == "yes",
+    }
 
 
 def strategy_bets(c, who=None):
@@ -96,6 +102,7 @@ def strategy_bets(c, who=None):
     draft is the owner's until they publish it."""
     from . import goal_routes
     from . import strategy as S
+
     try:
         if who is not None and not goal_routes.company_editor(who):
             return [b for b in (S.current(c) or {}).get("bets") or [] if b.get("status") != "retired"]
@@ -130,13 +137,13 @@ def _from_hq(answer, cards):
     if not isinstance(answer, dict) or not isinstance(answer.get("bots"), list):
         return None
     bots, seen = [], set()
-    for row in answer["bots"][:R.MAX_BOTS]:
+    for row in answer["bots"][: R.MAX_BOTS]:
         if not isinstance(row, dict):
             continue
         template = str(row.get("template_id") or "")
         if template in cards and template not in seen:
             seen.add(template)
-            why = re.sub(r"\s+", " ", str(row.get("why") or "")).strip()[:R.WHY_LIMIT]
+            why = re.sub(r"\s+", " ", str(row.get("why") or "")).strip()[: R.WHY_LIMIT]
             bots.append({"template_id": template, "why": why})
     if not bots:
         return None
@@ -149,7 +156,10 @@ def _plain_reasons(answer, value, department, briefing, about):
     becomes the one this install's own recommender gives that bot (backend/recruit_rank.py), or none."""
     if not any(row["why"].startswith("Matches “") for row in answer["bots"]):
         return
-    ours = {row["template_id"]: row["why"] for row in R.rank(value, department, briefing, about, limit=len(value["cards"]))["bots"]}
+    ours = {
+        row["template_id"]: row["why"]
+        for row in R.rank(value, department, briefing, about, limit=len(value["cards"]))["bots"]
+    }
     for row in answer["bots"]:
         if row["why"].startswith("Matches “"):
             row["why"] = ours.get(row["template_id"], "")
@@ -190,8 +200,12 @@ class Recruiter:
         local["bet"] = {"id": served["id"], "statement": served["statement"]} if served else None
         if not body.share or off:
             return {**local, "source": "local", "shared": False, "off_by": off}
-        payload = {"department": body.department, "briefing": body.briefing, "about": about,
-                   "catalog_version": value["version"]}
+        payload = {
+            "department": body.department,
+            "briefing": body.briefing,
+            "about": about,
+            "catalog_version": value["version"],
+        }
         if install_id:
             payload["install_id"] = install_id
         try:

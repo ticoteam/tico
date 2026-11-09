@@ -81,8 +81,12 @@ hub automation stats [--range 24h]
 ```
 
 These are `hub_automation_recent_runs` and `hub_automation_stats` over MCP, and `GET /api/v2/automations/runs` and
-`GET /api/v2/automations/stats` in the API. A system job counts once per recorded run; quiet repeats with the same result
-fold into one row (`count`).
+`GET /api/v2/automations/stats` in the API. A system job counts once per recorded run; quiet repeats with the same result,
+and failures with the same reason, fold into one row (`count`). The System job rows follow what this server runs: a job
+Tico adds gets its row on the next automations tick, a retired job's row goes, a task rule's row takes its name and
+switch, the Health Monitor's row comes back when its bot is restored, and a job that cannot run here (Directory sync with no directory
+connected, say) is left out of the list, runs and counts until its feature is set up. Maintenance runs are listed and counted too, under `automation_id` `maintenance` (trigger
+`system`, owner `tico`, run ids `mnt_<id>`); anyone signed in sees them.
 
   A Bot turn step can also name the model its run's task runs on, with `"model"`, and optionally `"effort"` and
   `"harness"` (`"model": "<model id>", "effort": "high"`). The task the run opens is stamped with that choice
@@ -133,7 +137,7 @@ see [Meetings](meetings.md)), `release.published`, `market.insight.urgent`, `str
 
 ## Webhooks
 
-An incoming webhook (Settings → Webhooks → Incoming) gives an address anything can POST to. An automation with a
+An incoming webhook (Automations → Incoming webhooks) gives an address anything can POST to. An automation with a
 Webhook trigger runs on each call; add `filters` to the trigger (for example `webhook.type` is `invoice.paid`) to act on
 some calls only. Signatures, presets, the hourly limit, kept calls and **Run again** are on [Webhooks](webhooks.md).
 Recipes: [GitHub](webhooks-github.md), [Stripe](webhooks-stripe.md), [Zapier, Make and n8n](webhooks-zapier-make-n8n.md).

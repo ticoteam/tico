@@ -36,18 +36,18 @@ from .store import H
 
 log = logging.getLogger(__name__)
 
-KEY = "usage_limits"                       # the default's count_subscription switch, in registry_metadata
+KEY = "usage_limits"  # the default's count_subscription switch, in registry_metadata
 WARN = 80
 MAX_USD = 10_000_000
 PERIODS = (("per_30m", "30m"), ("hourly", "hour"), ("daily", "day"), ("weekly", "week"), ("monthly", "month"))
 KEYS = tuple(name + "_usd" for name, _ in PERIODS)
-COMPANY = "company"                        # the pool every bot is in
+COMPANY = "company"  # the pool every bot is in
 # How a period reads in a sentence (the key is what the data calls it).
 WORDS = {"per_30m": "30-minute", "hourly": "hourly", "daily": "daily", "weekly": "weekly", "monthly": "monthly"}
 
 NANO = 10**9
 NODES_SQL = "SELECT * FROM budget_nodes"
-DEFAULT = ("default",)                     # the company default, applied to each bot
+DEFAULT = ("default",)  # the company default, applied to each bot
 
 
 def _key(row):
@@ -79,6 +79,7 @@ def nodes(c):
         for row in c.execute(NODES_SQL):
             found.setdefault(_key(row), {})[row["period"] + "_usd"] = round(row["amount_nano"] / NANO, 6)
         return found
+
     return value(c, ("budget_nodes",), build, shared=True)
 
 
@@ -114,7 +115,7 @@ def save_caps(c, key, caps, actor):
     """Set the caps of one scope: a period with an amount gets that node, one with none loses its node. A pool with no
     amount above zero goes whole, as its row did."""
     scope, team, bot, per_bot = _target(key)
-    where = ("scope=? AND coalesce(team_id, bot_id, '')=? AND per_bot=? AND period=?")
+    where = "scope=? AND coalesce(team_id, bot_id, '')=? AND per_bot=? AND period=?"
     at = H.now()
     kept = {name: _kept(key, caps.get(name + "_usd")) for name, _ in PERIODS}
     if key[0] == "pool" and not any(kept.values()):
@@ -125,11 +126,15 @@ def save_caps(c, key, caps, actor):
         if amount is None:
             c.execute(f"DELETE FROM budget_nodes WHERE {where}", args)
             continue
-        if not c.execute(f"UPDATE budget_nodes SET amount_nano=?, updated_at=?, updated_by_id=? WHERE {where}",
-                         (nano(amount), at, actor, *args)).rowcount:
-            c.execute("INSERT INTO budget_nodes(id, scope, team_id, bot_id, per_bot, period, amount_nano, created_at, "
-                      "updated_at, updated_by_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                      (H.new_id(), scope, team, bot, per_bot, name, nano(amount), at, at, actor))
+        if not c.execute(
+            f"UPDATE budget_nodes SET amount_nano=?, updated_at=?, updated_by_id=? WHERE {where}",
+            (nano(amount), at, actor, *args),
+        ).rowcount:
+            c.execute(
+                "INSERT INTO budget_nodes(id, scope, team_id, bot_id, per_bot, period, amount_nano, created_at, "
+                "updated_at, updated_by_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (H.new_id(), scope, team, bot, per_bot, name, nano(amount), at, at, actor),
+            )
 
 
 def half(value):
@@ -162,21 +167,24 @@ def company(c):
     """The default for bots with no limit of their own: {hourly_usd, daily_usd, weekly_usd, monthly_usd, count_subscription}.
     Subscription runs count unless the team turned that off."""
     from .read_cache import metadata
+
     row = metadata(c, KEY)
     try:
         stored = json.loads(row[0]) if row else {}
     except ValueError:
         stored = {}
     stored = stored if isinstance(stored, dict) else {}
-    caps = {key: (amount or None) for key, amount in _stored(c, DEFAULT).items()}      # the default has no 0
+    caps = {key: (amount or None) for key, amount in _stored(c, DEFAULT).items()}  # the default has no 0
     return Default({**caps, "count_subscription": stored.get("count_subscription") is not False})
 
 
 def save_default(c, caps, count_subscription, actor):
     """The company default's caps and whether subscription runs count against every limit."""
     save_caps(c, DEFAULT, caps, actor)
-    c.execute("INSERT INTO registry_metadata(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-              (KEY, json.dumps({"count_subscription": bool(count_subscription)})))
+    c.execute(
+        "INSERT INTO registry_metadata(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (KEY, json.dumps({"count_subscription": bool(count_subscription)})),
+    )
 
 
 def _amount(value):
@@ -231,7 +239,7 @@ def only_lowers(c, bot, body):
         now = company(c)
         new = {key: body.get(key) for key in KEYS}
         if now["count_subscription"] and not body.get("count_subscription"):
-            return False               # counting less spend is a higher limit
+            return False  # counting less spend is a higher limit
     for key in KEYS:
         value = _amount(new[key]) if new[key] is not None else None
         if new[key] is not None and value is None:
@@ -278,9 +286,12 @@ def groups(c, default=None):
     if "groups" not in memo:
         from . import people as P
         from . import views
+
         roster = views.roster(c)
-        chains = {row["bot"]: P.group_chain(row["team"], roster) if row["team"] else []
-                  for row in c.execute("SELECT bot, team FROM bot_config")}
+        chains = {
+            row["bot"]: P.group_chain(row["team"], roster) if row["team"] else []
+            for row in c.execute("SELECT bot, team FROM bot_config")
+        }
         memo["groups"] = ((roster or {}).get("org_groups") or {}, chains)
     return memo["groups"]
 
@@ -301,7 +312,9 @@ def members(c, scope, default=None):
     if key not in memo:
         _, chains = groups(c, default)
         gid = scope.split(":", 1)[1] if scope != COMPANY else None
-        memo[key] = frozenset(chains) if gid is None else frozenset(bot for bot, chain in chains.items() if gid in chain)
+        memo[key] = (
+            frozenset(chains) if gid is None else frozenset(bot for bot, chain in chains.items() if gid in chain)
+        )
     return memo[key]
 
 
@@ -330,14 +343,25 @@ def bounds(at=None):
     year, week, _ = at.isocalendar()
     first = at.replace(day=1)
     following = first.replace(year=first.year + (first.month == 12), month=first.month % 12 + 1)
-    return {"per_30m": (half_hour.strftime("%Y-%m-%dT%H:%M"), half_hour.strftime("%Y-%m-%dT%H:%M:00"),
-                        (half_hour + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:00")),
-            "hourly": (hour.strftime("%Y-%m-%dT%H"), hour.strftime("%Y-%m-%dT%H:00:00"),
-                       (hour + timedelta(hours=1)).strftime("%Y-%m-%dT%H:00:00")),
-            "daily": (day, day + "T00:00:00", (at + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00")),
-            "weekly": (f"{year}-W{week:02d}", monday.strftime("%Y-%m-%dT00:00:00"),
-                       (monday + timedelta(days=7)).strftime("%Y-%m-%dT00:00:00")),
-            "monthly": (at.strftime("%Y-%m"), first.strftime("%Y-%m-%dT00:00:00"), following.strftime("%Y-%m-%dT00:00:00"))}
+    return {
+        "per_30m": (
+            half_hour.strftime("%Y-%m-%dT%H:%M"),
+            half_hour.strftime("%Y-%m-%dT%H:%M:00"),
+            (half_hour + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:00"),
+        ),
+        "hourly": (
+            hour.strftime("%Y-%m-%dT%H"),
+            hour.strftime("%Y-%m-%dT%H:00:00"),
+            (hour + timedelta(hours=1)).strftime("%Y-%m-%dT%H:00:00"),
+        ),
+        "daily": (day, day + "T00:00:00", (at + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00")),
+        "weekly": (
+            f"{year}-W{week:02d}",
+            monday.strftime("%Y-%m-%dT00:00:00"),
+            (monday + timedelta(days=7)).strftime("%Y-%m-%dT00:00:00"),
+        ),
+        "monthly": (at.strftime("%Y-%m"), first.strftime("%Y-%m-%dT00:00:00"), following.strftime("%Y-%m-%dT00:00:00")),
+    }
 
 
 def by_bot(c, start, end, subscription, default=None):
@@ -347,9 +371,15 @@ def by_bot(c, start, end, subscription, default=None):
     key = ("spent", start, end, bool(subscription))
     if key not in memo:
         from .usage_records import RUNS
-        memo[key] = {row[0]: float(row[1] or 0) for row in c.execute(
-            f"SELECT bot, coalesce(sum(est_cost_usd), 0) FROM {RUNS} WHERE started_at >= ? AND started_at < ? "
-            "AND (? OR coalesce(billing, 'api') != 'subscription') GROUP BY bot", (start, end, 1 if subscription else 0))}
+
+        memo[key] = {
+            row[0]: float(row[1] or 0)
+            for row in c.execute(
+                f"SELECT bot, coalesce(sum(est_cost_usd), 0) FROM {RUNS} WHERE started_at >= ? AND started_at < ? "
+                "AND (? OR coalesce(billing, 'api') != 'subscription') GROUP BY bot",
+                (start, end, 1 if subscription else 0),
+            )
+        }
     return memo[key]
 
 
@@ -405,8 +435,11 @@ def spent_now(c, bot=None, scope=None, at=None, default=None):
     out = {}
     for name, label_ in periods(c):
         _, start, end = when[name]
-        amount = pool_spent(c, scope, start, end, subscription, default) if scope else \
-            spent(c, bot, start, end, subscription, default)
+        amount = (
+            pool_spent(c, scope, start, end, subscription, default)
+            if scope
+            else spent(c, bot, start, end, subscription, default)
+        )
         out[label_] = round(amount, 6)
     return out
 
@@ -417,8 +450,14 @@ def state(c, bot, at=None, default=None, mine=None):
     default = default if default is not None else company(c)
     limits, source = effective(c, bot, default, mine)
     when = bounds(at)
-    result = {**limits, "source": source, **{label_ + "_spent": None for _, label_ in PERIODS},
-              "percent": 0, "blocked": None, "blocked_by": None}
+    result = {
+        **limits,
+        "source": source,
+        **{label_ + "_spent": None for _, label_ in PERIODS},
+        "percent": 0,
+        "blocked": None,
+        "blocked_by": None,
+    }
     for name, label_ in PERIODS:
         cap = limits[name + "_usd"]
         if not cap:
@@ -437,8 +476,13 @@ def state(c, bot, at=None, default=None, mine=None):
                 period = found["blocked"]
                 label_ = dict(PERIODS)[period]
                 result["blocked"] = period
-                result["blocked_by"] = {"scope": scope, "name": label(c, scope, default), "period": period,
-                                        "spent": found[label_ + "_spent"], "limit": found[period + "_usd"]}
+                result["blocked_by"] = {
+                    "scope": scope,
+                    "name": label(c, scope, default),
+                    "period": period,
+                    "spent": found[label_ + "_spent"],
+                    "limit": found[period + "_usd"],
+                }
                 break
     if not result["blocked"]:
         cut = budget_cutoff(c, bot, at, default)
@@ -457,6 +501,7 @@ def budget_cutoff(c, bot, at=None, default=None):
             cuts = memo["finance_cutoffs"]
         else:
             from .finance import reads as finance_reads
+
             cuts = finance_reads.cutoffs(c, at.strftime("%Y-%m-%dT%H:%M:%S.%fZ") if at else None)
             if memo is not None:
                 memo["finance_cutoffs"] = cuts
@@ -490,12 +535,23 @@ def blocked(c, bot, at=None, default=None, mine=None):
             going = c.execute("SELECT count(*) FROM attempts WHERE state IN ('leased','running')").fetchone()[0]
             if budget:
                 # Cutoffs carry no amounts; do not present missing figures as zero spend against a zero cap.
-                log.warning("usage limit holds %s (%s) until %s: %d runs going across the team",
-                            scope, met["period"], window or "raised", going)
+                log.warning(
+                    "usage limit holds %s (%s) until %s: %d runs going across the team",
+                    scope,
+                    met["period"],
+                    window or "raised",
+                    going,
+                )
             else:
                 # Runs still going are priced when they end, so the period's final total can pass the cap by them.
-                log.warning("usage limit holds %s for %s: $%.2f finished against $%.2f, %d runs going across the team",
-                            scope, window, met["spent"], met["limit"], going)
+                log.warning(
+                    "usage limit holds %s for %s: $%.2f finished against $%.2f, %d runs going across the team",
+                    scope,
+                    window,
+                    met["spent"],
+                    met["limit"],
+                    going,
+                )
     return found["blocked"]
 
 
@@ -549,13 +605,19 @@ def warning(c, actor, at=None):
         return f"{name} is waiting: the {met['name']} budget is used up; it starts again when a person raises it."
     reset = resets(met["period"], datetime.fromisoformat(met["until"][:-1]))
     if met["scope"] == "budget":
-        return (f"{name} is waiting: the {met['name']} budget is used up for this period; it starts again on "
-                f"{reset} or when a person raises the budget.")
+        return (
+            f"{name} is waiting: the {met['name']} budget is used up for this period; it starts again on "
+            f"{reset} or when a person raises the budget."
+        )
     if met["scope"] == "bot":
-        return (f"{name} is over its {WORDS.get(met['period'], met['period'])} limit (${met['spent']:,.2f} of ${met['limit']:,.2f}); "
-                f"it starts again at {reset} or when a person raises the limit.")
-    return (f"{name} is waiting: {met['name']} is over its {WORDS.get(met['period'], met['period'])} limit; "
-            f"it starts again at {reset} or when a person raises the limit.")
+        return (
+            f"{name} is over its {WORDS.get(met['period'], met['period'])} limit (${met['spent']:,.2f} of ${met['limit']:,.2f}); "
+            f"it starts again at {reset} or when a person raises the limit."
+        )
+    return (
+        f"{name} is waiting: {met['name']} is over its {WORDS.get(met['period'], met['period'])} limit; "
+        f"it starts again at {reset} or when a person raises the limit."
+    )
 
 
 def overlay(c, row, default=None):
@@ -577,7 +639,13 @@ def after_run(c, bot, owner_email="", at=None):
     limits, _ = effective(c, bot, default)
     checks = [(bot, limits, lambda amount_of: amount_of(bot))]
     for scope in scopes_of(c, bot, default):
-        checks.append(("@" + scope, shown(c, pools(c, default)[scope]), lambda amount_of, s=scope: sum(amount_of(b) for b in members(c, s, default))))
+        checks.append(
+            (
+                "@" + scope,
+                shown(c, pools(c, default)[scope]),
+                lambda amount_of, s=scope: sum(amount_of(b) for b in members(c, s, default)),
+            )
+        )
     when = bounds(at)
     for who, caps, total in checks:
         for name, _ in PERIODS:
@@ -591,12 +659,16 @@ def after_run(c, bot, owner_email="", at=None):
             if not level:
                 continue
             period = f"{key}:{cap:g}"
-            if c.execute("SELECT 1 FROM usage_alerts WHERE bot=? AND period=? AND level>=?", (who, period, level)).fetchone():
+            if c.execute(
+                "SELECT 1 FROM usage_alerts WHERE bot=? AND period=? AND level>=?", (who, period, level)
+            ).fetchone():
                 continue
             for reached in (WARN, 100):
                 if reached <= level:
-                    c.execute("INSERT OR IGNORE INTO usage_alerts(bot, period, level, sent) VALUES(?,?,?,?)",
-                              (who, period, reached, H.now()))
+                    c.execute(
+                        "INSERT OR IGNORE INTO usage_alerts(bot, period, level, sent) VALUES(?,?,?,?)",
+                        (who, period, reached, H.now()),
+                    )
             if who == bot:
                 notify(c, bot, level, name, amount, cap, owner_email)
             else:
@@ -619,11 +691,20 @@ def notify(c, bot, level, label_, amount, cap, owner_email=""):
     name = found.get("display_name") or found.get("slug") or bot
     money = f"${amount:,.2f} of ${cap:,.2f}"
     word = WORDS.get(label_, label_)
-    text = (f"{name} is at {level}% of its {word} limit ({money}, estimated)." if level < 100 else
-            f"{name} reached its {word} limit ({money}, estimated) and takes no new work until it resets or the limit is raised.")
+    text = (
+        f"{name} is at {level}% of its {word} limit ({money}, estimated)."
+        if level < 100
+        else f"{name} reached its {word} limit ({money}, estimated) and takes no new work until it resets or the limit is raised."
+    )
     if person:
         H.say(c, H.KEEPER, H.human_actor(person["id"]), text, kind="notice")
-    H.event(c, H.KEEPER, "usage.limit", H.bot_actor(bot), {"level": level, "period": label_, "spent": round(amount, 4), "limit": cap})
+    H.event(
+        c,
+        H.KEEPER,
+        "usage.limit",
+        H.bot_actor(bot),
+        {"level": level, "period": label_, "spent": round(amount, 4), "limit": cap},
+    )
 
 
 def notify_pool(c, scope, level, label_, amount, cap, owner_email="", default=None):
@@ -632,9 +713,14 @@ def notify_pool(c, scope, level, label_, amount, cap, owner_email="", default=No
     name = label(c, scope, default)
     money = f"${amount:,.2f} of ${cap:,.2f}"
     word = WORDS.get(label_, label_)
-    text = (f"{name[0].upper() + name[1:]} is at {level}% of its {word} limit ({money}, estimated)." if level < 100 else
-            f"{name[0].upper() + name[1:]} reached its {word} limit ({money}, estimated); its bots take no new work "
-            "until it resets or the limit is raised.")
+    text = (
+        f"{name[0].upper() + name[1:]} is at {level}% of its {word} limit ({money}, estimated)."
+        if level < 100
+        else f"{name[0].upper() + name[1:]} reached its {word} limit ({money}, estimated); its bots take no new work "
+        "until it resets or the limit is raised."
+    )
     if person:
         H.say(c, H.KEEPER, H.human_actor(person["id"]), text, kind="notice")
-    H.event(c, H.KEEPER, "usage.limit", scope, {"level": level, "period": label_, "spent": round(amount, 4), "limit": cap})
+    H.event(
+        c, H.KEEPER, "usage.limit", scope, {"level": level, "period": label_, "spent": round(amount, 4), "limit": cap}
+    )

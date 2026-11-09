@@ -24,12 +24,16 @@ CONTENT = {
     "near_bots": ("content", "botops", "pricing", "release-notes", "community"),
     "near": 0.86,
     # The longest window with this much spend in it holds a near limit (else the day): for a group, for a bot.
-    "floors": {"group": (("monthly", "month", 40.0), ("weekly", "week", 12.0)),
-               "bot": (("monthly", "month", 15.0), ("weekly", "week", 5.0))},
+    "floors": {
+        "group": (("monthly", "month", 40.0), ("weekly", "week", 12.0)),
+        "bot": (("monthly", "month", 15.0), ("weekly", "week", 5.0)),
+    },
     # Runs a bot may start (backend/turn_budgets.py): the team default and two bots' own.
     "runs_team": {"turns_per_hour": 60, "turns_per_day": 500},
-    "runs_bots": {"support": {"turns_per_hour": 120, "turns_per_day": 1200},
-                  "sdr": {"turns_per_hour": 20, "turns_per_day": 150}},
+    "runs_bots": {
+        "support": {"turns_per_hour": 120, "turns_per_day": 1200},
+        "sdr": {"turns_per_hour": 20, "turns_per_day": 150},
+    },
     # What bots may put on a person (backend/ask_ingest.py): the team default, and Ana's own with the checks On.
     "tasks_team": {"mode": "on", "budget": 12},
     "tasks_ana": {"mode": "on", "budget": 8},
@@ -64,12 +68,20 @@ def seed(b):
 
     def read(c):
         default = U.company(c)
-        month = U.by_bot(c, since.strftime("%Y-%m-%dT%H:%M:%S"), b.now.strftime("%Y-%m-%dT%H:%M:%S.999999"),
-                         default["count_subscription"])
-        return {"month": month, "company": U.spent_now(c, scope=U.COMPANY, at=b.now),
-                "groups": {g: U.spent_now(c, scope="group:" + g, at=b.now) for g in groups},
-                "members": {g: U.members(c, "group:" + g) for g in groups},
-                "bots": {bot: U.spent_now(c, bot=bot, at=b.now) for bot in month}}
+        month = U.by_bot(
+            c,
+            since.strftime("%Y-%m-%dT%H:%M:%S"),
+            b.now.strftime("%Y-%m-%dT%H:%M:%S.999999"),
+            default["count_subscription"],
+        )
+        return {
+            "month": month,
+            "company": U.spent_now(c, scope=U.COMPANY, at=b.now),
+            "groups": {g: U.spent_now(c, scope="group:" + g, at=b.now) for g in groups},
+            "members": {g: U.members(c, "group:" + g) for g in groups},
+            "bots": {bot: U.spent_now(c, bot=bot, at=b.now) for bot in month},
+        }
+
     spent = b.write(read)
 
     def room(now, last30, caps):
@@ -87,7 +99,11 @@ def seed(b):
         if group in groups:
             used = sum(spent["month"].get(bot, 0.0) for bot in spent["members"][group])
             b.call("PUT", f"usage/pools/groups/{group}", room(spent["groups"][group], used, caps))
-    near = _near(spent["groups"][CONTENT["near_group"]], CONTENT["floors"]["group"]) if CONTENT["near_group"] in groups else None
+    near = (
+        _near(spent["groups"][CONTENT["near_group"]], CONTENT["floors"]["group"])
+        if CONTENT["near_group"] in groups
+        else None
+    )
     if near:
         b.call("PUT", f"usage/pools/groups/{CONTENT['near_group']}", near)
     for bot, caps in CONTENT["bots"].items():

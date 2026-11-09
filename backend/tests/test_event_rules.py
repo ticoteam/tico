@@ -1,5 +1,6 @@
 """Rules on events without a task (`rules.judge_event`), the wake_bot and send_webhook actions, and the catalog's
 listing. Rows are written as an older install has them: rules made today live in automations."""
+
 import json
 import sys
 import types
@@ -11,16 +12,32 @@ from backend import rules as R
 from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_wake_rules import jobs, setup
 
-CALL = {"trigger": "shop", "trigger_name": "Acme shop", "type": "order.created", "delivery": "d1",
-        "payload": {"order": 42, "customer": {"name": "Buyer"}}, "via": "direct"}
+CALL = {
+    "trigger": "shop",
+    "trigger_name": "Acme shop",
+    "type": "order.created",
+    "delivery": "d1",
+    "payload": {"order": 42, "customer": {"name": "Buyer"}},
+    "via": "direct",
+}
 
 
-def rule(api, by="human:ben", scope_kind="team", scope_id="", event="webhook.received", then="wake", when=None,
-         params=None):
+def rule(
+    api, by="human:ben", scope_kind="team", scope_id="", event="webhook.received", then="wake", when=None, params=None
+):
     """A row in the rules table, as the engine reads it."""
-    row = {"id": "rule_" + H.new_id()[:8], "scope_kind": scope_kind, "scope_id": scope_id, "event": event,
-           "condition": json.dumps(when or {}), "then_outcome": then, "params": json.dumps(params or {}),
-           "created_by": by, "created_at": H.now(), "updated_at": H.now()}
+    row = {
+        "id": "rule_" + H.new_id()[:8],
+        "scope_kind": scope_kind,
+        "scope_id": scope_id,
+        "event": event,
+        "condition": json.dumps(when or {}),
+        "then_outcome": then,
+        "params": json.dumps(params or {}),
+        "created_by": by,
+        "created_at": H.now(),
+        "updated_at": H.now(),
+    }
     with api.app.state.store.transaction() as c:
         c.execute(f"INSERT INTO rules({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
     return {"rule": {**row, "params": params or {}}}
@@ -36,7 +53,9 @@ def judge(api, ctx=None, **more):
 
 
 def last_message(c, bot):
-    return c.execute("SELECT * FROM messages WHERE recipient_id=? ORDER BY rowid DESC LIMIT 1", (H.bot_actor(bot),)).fetchone()
+    return c.execute(
+        "SELECT * FROM messages WHERE recipient_id=? ORDER BY rowid DESC LIMIT 1", (H.bot_actor(bot),)
+    ).fetchone()
 
 
 def test_a_team_wake_rule_queues_a_job_with_the_rendered_text_and_the_call_in_its_refs(api):
@@ -46,19 +65,24 @@ def test_a_team_wake_rule_queues_a_job_with_the_rendered_text_and_the_call_in_it
         c.execute("DELETE FROM jobs")
         done = R.judge_event(c, "webhook.received", CALL)
         assert [(d["rule_id"], d["outcome"], d["target"], d["ok"]) for d in done] == [
-            (made["id"], "wake_bot", "cpo", True)]
+            (made["id"], "wake_bot", "cpo", True)
+        ]
         assert jobs(c, "cpo") == 1
         message = last_message(c, "cpo")
         refs = json.loads(message["refs"])
         assert "New order.created: order 42 from Buyer" in message["body"]
         assert {k: refs[k] for k in ("trigger", "delivery", "type", "rule_id", "wake")} == {
-            "trigger": "shop", "delivery": "d1", "type": "order.created", "rule_id": made["id"],
-            "wake": "webhook.received"}
+            "trigger": "shop",
+            "delivery": "d1",
+            "type": "order.created",
+            "rule_id": made["id"],
+            "wake": "webhook.received",
+        }
 
 
 def test_nothing_matches_nothing_happens_and_the_same_delivery_wakes_once(api):
     setup(api)
-    assert judge(api) == []                                                       # no rows at all
+    assert judge(api) == []  # no rows at all
     wake_rule(api, when={"trigger": "shop", "type": "order.*"})
     assert judge(api, trigger="other") == [] and judge(api, type="refund.created", delivery="d0") == []
     with api.app.state.store.transaction() as c:
@@ -101,13 +125,14 @@ def test_an_error_does_nothing_and_leaves_a_rule_event_error(api, monkeypatch):
 
     def broken(*args, **kwargs):
         raise RuntimeError("boom")
+
     monkeypatch.setattr(R, "_tell_bot", broken)
     assert judge(api) == []
     with api.app.state.store.transaction() as c:
         assert jobs(c, "cpo") == 0
         err = c.execute("SELECT detail FROM events WHERE action='rule.event_error'").fetchone()
         assert json.loads(err[0])["delivery"] == "d1"
-        assert not c.execute("SELECT 1 FROM rule_events_seen").fetchone()          # a retry may try again
+        assert not c.execute("SELECT 1 FROM rule_events_seen").fetchone()  # a retry may try again
     monkeypatch.undo()
     assert len(judge(api)) == 1
 
@@ -139,6 +164,7 @@ def hooks(monkeypatch):
             raise Refused()
         module.calls.append((kind, subject, data, by, only, revision))
         return 1
+
     module.publish, module.Refused = publish, Refused
     module.check_usable = lambda *args: None
     monkeypatch.setitem(sys.modules, "backend.webhooks", module)
@@ -147,19 +173,33 @@ def hooks(monkeypatch):
 
 
 def send_rule(api, hook="crm", **more):
-    return rule(api, then="action", params={"action": "send_webhook", "webhook": hook, "type": "custom.order-seen",
-                                            "data": {"order": "{{data.order}}", "who": ["{{data.customer.name}}"]}},
-                **more)["rule"]
+    return rule(
+        api,
+        then="action",
+        params={
+            "action": "send_webhook",
+            "webhook": hook,
+            "type": "custom.order-seen",
+            "data": {"order": "{{data.order}}", "who": ["{{data.customer.name}}"]},
+        },
+        **more,
+    )["rule"]
 
 
 def test_send_webhook_publishes_the_rendered_data_as_the_rules_maker(api, hooks):
     made = send_rule(api)
     done = judge(api)
-    assert done == [{"rule_id": made["id"], "outcome": "send_webhook", "target": "crm", "ok": True,
-                     "detail": "1 queued"}]
+    assert done == [
+        {"rule_id": made["id"], "outcome": "send_webhook", "target": "crm", "ok": True, "detail": "1 queued"}
+    ]
     kind, subject, data, by, only, revision = hooks.calls[0]
-    assert (kind, subject, data, only, revision) == ("custom.order-seen", "d1", {"order": "42", "who": ["Buyer"]},
-                                                     "crm", f"{made['id']}:webhook.received:shop")     # rule, event, trigger
+    assert (kind, subject, data, only, revision) == (
+        "custom.order-seen",
+        "d1",
+        {"order": "42", "who": ["Buyer"]},
+        "crm",
+        f"{made['id']}:webhook.received:shop",
+    )  # rule, event, trigger
     assert by.startswith("human:")
 
 
@@ -176,13 +216,19 @@ def test_a_woken_bot_is_told_where_to_read_the_rest_only_when_the_body_was_cut()
     values = {"type": "order.created"}
     call = {"trigger": "shop", "delivery": "d1", "content": "{...}"}
     assert "--part 2" not in R._wake_text({"text": "New {{type}}"}, values, call, "x")
-    assert "hub trigger delivery shop d1 --part 2" in R._wake_text({"text": "New {{type}}"}, values, {**call, "cut": True}, "x")
+    assert "hub trigger delivery shop d1 --part 2" in R._wake_text(
+        {"text": "New {{type}}"}, values, {**call, "cut": True}, "x"
+    )
 
 
 def test_wake_bot_also_runs_as_the_action_of_a_message_event_rule(api):
     setup(api)
-    made = rule(api, event="status_or_relation", then="action",
-                params={"action": "wake_bot", "bot": "ops", "text": "{{task.title}} moved: {{event}}"})["rule"]
+    made = rule(
+        api,
+        event="status_or_relation",
+        then="action",
+        params={"action": "wake_bot", "bot": "ops", "text": "{{task.title}} moved: {{event}}"},
+    )["rule"]
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "bot:ops", "Plain work", "Do it", "bot:cpo")
         c.execute("DELETE FROM jobs")
@@ -206,4 +252,7 @@ def test_the_listing_endpoint_names_the_catalog(api):
     out = get(api, "event-types")["items"]
     assert {"webhook.received", "task.done", "release.published"} <= {e["name"] for e in out}
     assert [e["name"] for e in get(api, "event-types?group=approval")["items"]] == [
-        "approval.requested", "approval.decided", "approval.withdrawn"]
+        "approval.requested",
+        "approval.decided",
+        "approval.withdrawn",
+    ]
