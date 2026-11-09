@@ -293,8 +293,8 @@ def test_the_switch_the_schedule_run_now_and_the_status_work_through_the_api(env
 
 
 def test_a_quiet_task_on_a_seat_only_pipeline_is_reported_like_one_with_no_manager(environment):
-    """Task Manager reads tasks by owner and state, never by pipeline, so a pipeline whose only manager is a seat (manager
-    NULL, manager_seat set) is covered as a managerless one is. Nothing is skipped; this pins it."""
+    """A pipeline whose only manager is a seat (manager NULL, manager_seat set) has no active manager, so the Task Manager
+    covers its quiet tasks as it does a managerless pipeline's."""
     api = built(environment)
     quiet = quiet_task(api)
     with api.app.state.store.transaction() as c:
@@ -302,6 +302,51 @@ def test_a_quiet_task_on_a_seat_only_pipeline_is_reported_like_one_with_no_manag
         c.execute("UPDATE task_types SET manager_seat='lead-pipeline-manager' WHERE id=?", (lead["id"],))
         step = c.execute("SELECT id FROM task_steps WHERE type_id=?", (lead["id"],)).fetchone()[0]
         c.execute("UPDATE tasks SET type_id=?, step_id=? WHERE id=?", (lead["id"], step, quiet))
+    assert report(api)["items"] == 1
+    (check,) = checks(api)
+    assert quiet in check["body"]
+
+
+def quiet_lead(api, manager, *, bot_state=None):
+    """A quiet task in a Lead pipeline whose manager is `manager` (a bare id; a bot with `bot_state` is made first)."""
+    quiet = quiet_task(api)
+    with api.app.state.store.transaction() as c:
+        if bot_state:
+            c.execute(
+                "INSERT INTO bots (id, slug, display_name, state) VALUES (?, ?, ?, ?)",
+                ("bot_pm_" + bot_state, "pm-" + bot_state, "pm-" + bot_state, bot_state),
+            )
+            manager = "bot_pm_" + bot_state
+        lead = H.type_create(c, "bot:coo", "Lead", [{"name": "Targets", "status": "open"}], mover=True)
+        c.execute("UPDATE task_types SET manager=? WHERE id=?", (manager, lead["id"]))
+        step = c.execute("SELECT id FROM task_steps WHERE type_id=?", (lead["id"],)).fetchone()[0]
+        c.execute("UPDATE tasks SET type_id=?, step_id=? WHERE id=?", (lead["id"], step, quiet))
+    return quiet
+
+
+def test_a_quiet_task_in_a_pipeline_with_an_active_manager_is_left_to_that_manager(environment):
+    api = built(environment)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO bots (id, slug, display_name, state) VALUES ('bot_pm_live', 'pm-live', 'pm-live', 'active')"
+        )
+    quiet_lead(api, "bot_pm_live")
+    assert report(api)["items"] == 0
+    assert checks(api) == []
+
+
+@pytest.mark.parametrize("bot_state", ["paused", "archived"])
+def test_a_quiet_task_in_a_pipeline_whose_manager_is_paused_or_archived_is_covered(environment, bot_state):
+    api = built(environment)
+    quiet = quiet_lead(api, None, bot_state=bot_state)
+    assert report(api)["items"] == 1
+    (check,) = checks(api)
+    assert quiet in check["body"]
+
+
+def test_a_quiet_task_in_a_pipeline_whose_manager_is_missing_is_covered(environment):
+    api = built(environment)
+    quiet = quiet_lead(api, "bot_gone")
     assert report(api)["items"] == 1
     (check,) = checks(api)
     assert quiet in check["body"]

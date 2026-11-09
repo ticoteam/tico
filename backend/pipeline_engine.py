@@ -829,6 +829,20 @@ def _move_visit(
         H._task_event(conn, task_id, actor, "stage_move_back", old_step, step_id, "")  # pyright: ignore[reportPrivateUsage]
 
 
+def handed_on_open(conn: sqlite3.Connection, card_id: str) -> set[str]:
+    """The subtasks an `enter` spawn filed from this card that are still live (not returned). Finishing the card does not
+    close them (hubdb._handed_on): the Opportunity a Qualified Lead files is its own work from then on."""
+    try:
+        found = conn.execute(
+            "SELECT h.target_task_id FROM pipeline_handoffs h JOIN pipeline_links l ON l.id = h.pipeline_link_id "
+            "WHERE h.source_task_id = ? AND l.fires = 'enter' AND h.returned_at IS NULL",
+            (card_id,),
+        ).fetchall()
+    except sqlite3.OperationalError:  # a hub without the pipeline tables has no handoffs
+        return set()
+    return {str(row[0]) for row in found if row[0]}
+
+
 def _enter_spawn_stage(
     conn: sqlite3.Connection, row: Row, type_id: str | None, step_id: str | None, closing: bool
 ) -> None:

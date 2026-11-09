@@ -868,6 +868,40 @@ def test_a_seat_fill_never_replaces_an_active_manager(tmp_path):
     assert manager_row(c, "Lead")["manager"] == "bot_sales"
 
 
+def test_a_seat_filled_before_setup_binds_its_filler_as_the_manager(tmp_path):
+    c = fresh(tmp_path)
+    add_seat(c, "lead-pipeline-manager")
+    add_bot(c, "bot_lead", "lead-bot")
+    LC.fill_seat(c, SimpleNamespace(actor=ANA), "lead-pipeline-manager", "bot_lead")
+    S.apply_factory_setup(c, ANA, preset="company_default", bindings={"Lead": {"seat": "lead-pipeline-manager"}})
+    assert manager_row(c, "Lead") == {"manager": "bot_lead", "manager_seat": "lead-pipeline-manager"}
+
+
+def test_a_seat_filled_before_setup_by_a_bot_that_is_gone_binds_no_one(tmp_path):
+    c = fresh(tmp_path)
+    add_seat(c, "lead-pipeline-manager")
+    add_bot(c, "bot_lead", "lead-bot", state="archived")
+    LC.fill_seat(c, SimpleNamespace(actor=ANA), "lead-pipeline-manager", "bot_lead")
+    out = S.apply_factory_setup(c, ANA, preset="company_default", bindings={"Lead": {"seat": "lead-pipeline-manager"}})
+    assert manager_row(c, "Lead")["manager"] is None
+    assert any(u.startswith("Lead has no active manager") for u in out["unresolved"])
+
+
+def test_a_lead_moved_to_qualified_is_done_and_files_one_opportunity_and_closing_files_none(tmp_path):
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA, preset="company_default")
+    lead = pipeline_id(c, "Lead")
+    link = rows(c, "SELECT id FROM pipeline_links WHERE from_pipeline_id=? AND retired_at IS NULL", lead)[0]["id"]
+    card = H.task_create(c, ANA, "Acme lead", "", ANA, type=lead, step="Replies", lint=False)["id"]
+    assert E.advance(c, ANA, card)["moved"]
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", card) == [{"status": "done"}]
+    assert len(L.handoffs(c, link)) == 1
+    closing = H.task_create(c, ANA, "Dropped lead", "", ANA, type=lead, step="Replies", lint=False)["id"]
+    H.task_update(c, ANA, closing, step=step_ids(c, "Lead")["Closed"])
+    assert [h["source_task_id"] for h in L.handoffs(c, link)] == [card]
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", closing) == [{"status": "closed"}]
+
+
 def test_a_lead_entering_qualified_files_one_opportunity_and_re_entering_files_none(tmp_path):
     c = fresh(tmp_path)
     S.apply_factory_setup(c, ANA, preset="company_default")

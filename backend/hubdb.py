@@ -8728,11 +8728,24 @@ def _closed_with_note(parent):
     return f"Closed with #{parent['number']}" if parent.get("number") is not None else "Closed with its parent task"
 
 
+def _handed_on(conn, parent_id):
+    """The live subtasks an `enter` pipeline spawn filed from this card, and their own subtasks. A finish leaves them
+    alone (pipeline_engine.handed_on_open): a Qualified Lead's Opportunity is not closed with the Lead."""
+    from . import pipeline_engine
+
+    kept = set()
+    for tid in pipeline_engine.handed_on_open(conn, parent_id):
+        kept.add(tid)
+        kept.update(kid["id"] for kid in descendants(conn, tid))
+    return kept
+
+
 def _check_finish_children(conn, actor, parent, mover, *, strict=True):
     """Check the whole tree before closing anything, including children below finished subtasks."""
     left_open = set()
+    kept = _handed_on(conn, parent["id"])
     for kid in descendants(conn, parent["id"]):
-        if kid["status"] not in ACTIVE_STATUSES:
+        if kid["status"] not in ACTIVE_STATUSES or kid["id"] in kept:
             continue
         try:
             _check_task_close(conn, actor, kid, _closed_with_note(parent), mover, check_only=not strict)
@@ -8769,12 +8782,13 @@ def _finish_children(conn, actor, parent, mover=None, quiet=False, *, left_open=
     # The summary keeps ids only: each reader's text names what that reader may open (_children_said, task_reads).
     changed = {"closed": [], "open": []}
     kids = descendants(conn, parent["id"])
+    kept = _handed_on(conn, parent["id"])
     # A dependent inside this cascade needs no new run just before it closes. Keep removing its blocker links.
     closing_tasks = {parent["id"]} | {
-        kid["id"] for kid in kids if kid["status"] in ACTIVE_STATUSES and kid["id"] not in left_open
+        kid["id"] for kid in kids if kid["status"] in ACTIVE_STATUSES and kid["id"] not in left_open | kept
     }
     for kid in kids:
-        if (task(conn, kid["id"]) or {}).get("status") not in ACTIVE_STATUSES:
+        if kid["id"] in kept or (task(conn, kid["id"]) or {}).get("status") not in ACTIVE_STATUSES:
             continue
         closed = False
         if kid["id"] not in left_open:
