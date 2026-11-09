@@ -5,6 +5,7 @@ Every surface that names a bot is driven through the API the way its client driv
 runner's claim, the MCP tool table and the `hub` CLI (clients/hubtools.py, clients/remotecli.py). Stored references
 must hold the id; reads give both the id and the slug.
 """
+
 import json
 import re
 import uuid
@@ -19,8 +20,13 @@ from backend import bot_settings as BS
 
 
 def create_bot(api, slug, token="ana-test", **fields):
-    body = {"slug": slug, "display_name": slug.replace("-", " ").title(), "description": "Answers sales questions",
-            "status": "active", **fields}
+    body = {
+        "slug": slug,
+        "display_name": slug.replace("-", " ").title(),
+        "description": "Answers sales questions",
+        "status": "active",
+        **fields,
+    }
     r = api.post("/api/v2/bots", json=body, headers=headers(token))
     assert r.status_code == 200, r.text
     with api.app.state.store.transaction() as c:
@@ -35,9 +41,12 @@ def create_bot(api, slug, token="ana-test", **fields):
 def bot_token(api, bot_id):
     """A test token that acts as the bot (an external agent's identity), as bot:<id>."""
     from backend.auth import Identity
+
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
-                  (bot_id, "test", "x-" + bot_id, H.now(), "human:ana"))
+        c.execute(
+            "INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
+            (bot_id, "test", "x-" + bot_id, H.now(), "human:ana"),
+        )
     token = "bot-" + bot_id + "-test"
     api.app.state.auth.settings.test_identities[token] = Identity(H.bot_actor(bot_id), "bot", agent="test")
     return token
@@ -49,21 +58,30 @@ def tool(api, token, name, args):
 
 def rename(api, bot, slug, token="ana-test", expected=200):
     revision = get(api, f"bots/{bot}")["revision"]
-    r = api.post(f"/api/v2/bots/{bot}/definition", json={"slug": slug, "expected_revision": revision},
-                 headers=headers(token))
+    r = api.post(
+        f"/api/v2/bots/{bot}/definition", json={"slug": slug, "expected_revision": revision}, headers=headers(token)
+    )
     assert r.status_code == expected, r.text
     return r.json()
 
 
 def ready(api, machine, bot_ids):
-    return post(api, "runners/heartbeat", {"version": "test", "platform": "test",
-                "readiness": {bot: True for bot in bot_ids}}, token=machine["token"])
+    return post(
+        api,
+        "runners/heartbeat",
+        {"version": "test", "platform": "test", "readiness": {bot: True for bot in bot_ids}},
+        token=machine["token"],
+    )
 
 
 def finish(api, machine, attempt):
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, token=machine["token"])
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Done", "last_seq": 0},
-         token=machine["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "text": "Done", "last_seq": 0},
+        token=machine["token"],
+    )
 
 
 def column(api, sql, *args):
@@ -80,7 +98,7 @@ def sales(api):
 
 
 # ----------------------------------------------------------------------------- reads
-def test_every_read_names_a_new_bot_by_its_id_and_its_slug(api, sales):
+def test_every_read_and_bot_route_names_a_new_bot_by_its_id_and_its_slug(api, sales):
     for ref in (sales, "sales-helper", "bot:" + sales):
         row = get(api, "bots/" + ref)
         assert (row["id"], row["slug"]) == (sales, "sales-helper"), ref
@@ -90,18 +108,17 @@ def test_every_read_names_a_new_bot_by_its_id_and_its_slug(api, sales):
     assert (employee["slug"], employee["name"]) == ("sales-helper", "sales-helper")
     org = next(b for b in get(api, "org")["bots"] if b["id"] == sales)
     assert (org["slug"], org["name"]) == ("sales-helper", "sales-helper")
-
-
-def test_every_bot_route_answers_the_same_by_slug_and_by_id(api, sales):
-    """A read route that names a bot in its path finds it by either (a route that forgot resolve_bot answers 404
-    for the slug of a bot whose id is not its slug)."""
+    # A read route that names a bot in its path finds it by either (a route that forgot resolve_bot answers 404
+    # for the slug of a bot whose id is not its slug).
     differ, checked = [], 0
     for route in api.app.routes:
         path = getattr(route, "path", "")
         if "{bot}" not in path or "GET" not in (getattr(route, "methods", None) or ()):
             continue
-        codes = [api.get(re.sub(r"\{[^}]+\}", "x", path.replace("{bot}", ref)), headers=headers()).status_code
-                 for ref in ("sales-helper", sales)]
+        codes = [
+            api.get(re.sub(r"\{[^}]+\}", "x", path.replace("{bot}", ref)), headers=headers()).status_code
+            for ref in ("sales-helper", sales)
+        ]
         checked += 1
         if codes[0] != codes[1]:
             differ.append((path, codes))
@@ -125,8 +142,16 @@ def test_chat_by_slug_or_id_reaches_the_bot_and_its_runner_claims_it_by_either(a
     assert attempt["bot"] == sales
     finish(api, machine, attempt)
     # the jobs the runner claimed are the bot's, by id
-    assert set(column(api, "SELECT bot_id FROM jobs")) <= {sales, "coo", "ops", "cpo", "product-design", "finance",
-                                                       "inbox", "doc-updater"}
+    assert set(column(api, "SELECT bot_id FROM jobs")) <= {
+        sales,
+        "coo",
+        "ops",
+        "cpo",
+        "product-design",
+        "finance",
+        "inbox",
+        "doc-updater",
+    }
 
 
 def test_mcp_and_cli_chat_name_the_bot_by_slug(api, sales):
@@ -166,8 +191,9 @@ def test_tasks_are_assigned_taken_and_closed_by_slug_or_id(api, sales):
 def test_the_hub_cli_files_a_task_for_a_bot_by_slug(api, sales, monkeypatch):
     monkeypatch.setenv("HUB_API_URL", "http://test")
     monkeypatch.setattr(remotecli, "Client", lambda *a, **k: Client(api, "ana-test"))
-    args = hubcli.parser().parse_args(["task", "create", "--owner", "sales-helper", "--title", "Price the add-on",
-                                       "--body", "For Acme."])
+    args = hubcli.parser().parse_args(
+        ["task", "create", "--owner", "sales-helper", "--title", "Price the add-on", "--body", "For Acme."]
+    )
     made = remotecli.run(args)
     owner = column(api, "SELECT owner_id FROM tasks WHERE title='Price the add-on'")
     assert owner == ["bot:" + sales], made
@@ -175,9 +201,13 @@ def test_the_hub_cli_files_a_task_for_a_bot_by_slug(api, sales, monkeypatch):
 
 # ----------------------------------------------------------------------------- automations, goals, chart
 def test_automations_and_routines_owned_by_the_bot_store_its_id(api, sales):
-    flow = {"name": "Morning sales check", "owner": "bot:sales-helper", "enabled": True,
-            "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"},
-            "steps": [{"id": "s1", "type": "bot_turn", "bot": "sales-helper", "prompt": "Check the pipeline"}]}
+    flow = {
+        "name": "Morning sales check",
+        "owner": "bot:sales-helper",
+        "enabled": True,
+        "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"},
+        "steps": [{"id": "s1", "type": "bot_turn", "bot": "sales-helper", "prompt": "Check the pipeline"}],
+    }
     made = tool(api, "ana-test", "hub_automation_create", flow)
     aid = made["id"]
     shown = tool(api, "ana-test", "hub_automation_get", {"id": aid})
@@ -185,8 +215,12 @@ def test_automations_and_routines_owned_by_the_bot_store_its_id(api, sales):
     stored = json.dumps(shown.get("steps") or [])
     assert "sales-helper" not in stored and sales in stored
     # an update through the flow save path resolves the slug too
-    updated = tool(api, "ana-test", "hub_automation_update", {
-        "id": aid, "steps": [{"id": "s1", "type": "bot_turn", "bot": "bot:sales-helper", "prompt": "Check again"}]})
+    updated = tool(
+        api,
+        "ana-test",
+        "hub_automation_update",
+        {"id": aid, "steps": [{"id": "s1", "type": "bot_turn", "bot": "bot:sales-helper", "prompt": "Check again"}]},
+    )
     stored = json.dumps(tool(api, "ana-test", "hub_automation_get", {"id": aid}).get("steps") or [])
     assert "sales-helper" not in stored and sales in stored, updated
 
@@ -203,7 +237,9 @@ def test_goals_chart_groups_and_caps_name_the_bot_by_slug_and_store_its_id(api, 
     gid = group.get("id") or group.get("group", {}).get("id")
     listed = next(g for g in get(api, "groups") if g["id"] == gid)
     assert listed["bots"] == [sales] and listed["bot_slugs"] == ["sales-helper"]
-    tool(api, "ana-test", "hub_task_cap_set", {"sender": "bot:sales-helper", "receiver": "bot:sales-lead", "per_day": 5})
+    tool(
+        api, "ana-test", "hub_task_cap_set", {"sender": "bot:sales-helper", "receiver": "bot:sales-lead", "per_day": 5}
+    )
     caps = json.dumps(tool(api, "ana-test", "hub_task_caps", {}))
     assert "bot:" + sales in caps and "bot:sales-helper" not in caps
 
@@ -229,7 +265,7 @@ def test_after_a_rename_everything_follows_the_id_and_the_old_slug_is_free(api, 
     assert (renamed["id"], renamed["slug"]) == (sales, "revenue-helper")
     assert get(api, "bots/revenue-helper")["id"] == sales
     assert get(api, "bots/" + sales)["slug"] == "revenue-helper"
-    get(api, "bots/sales-helper", expected=404)                   # the old slug names nobody now
+    get(api, "bots/sales-helper", expected=404)  # the old slug names nobody now
     # history and references keep the id
     assert column(api, "SELECT owner_id FROM tasks WHERE id=?", task["id"]) == ["bot:" + sales]
     assert column(api, "SELECT recipient_id FROM messages WHERE body='Before the rename'") == ["bot:" + sales]
@@ -237,9 +273,11 @@ def test_after_a_rename_everything_follows_the_id_and_the_old_slug_is_free(api, 
     # chat, claim, tasks and tools work by the new slug and by the id
     post(api, "chat/revenue-helper", {"text": "After the rename"})
     assert claim(api, machine, "revenue-helper")["bot"] == sales
-    assert post(api, "tasks", {"owner": "revenue-helper", "title": "New sheet", "body": "x"})["owner_id"] == "bot:" + sales
+    assert (
+        post(api, "tasks", {"owner": "revenue-helper", "title": "New sheet", "body": "x"})["owner_id"] == "bot:" + sales
+    )
     lost = api.post("/api/v2/tasks", json={"owner": "sales-helper", "title": "Lost", "body": "x"}, headers=headers())
-    assert lost.status_code in (404, 422), lost.text                # the old slug takes no task
+    assert lost.status_code in (404, 422), lost.text  # the old slug takes no task
     tool(api, "ana-test", "hub_task_create", {"owner": sales, "title": "By id", "body": "x"})
     tool(api, "ana-test", "hub_task_create", {"owner": "revenue-helper", "title": "By new slug", "body": "x"})
     assert column(api, "SELECT DISTINCT owner_id FROM tasks WHERE title IN ('By id','By new slug')") == ["bot:" + sales]
@@ -252,12 +290,13 @@ def test_after_a_rename_everything_follows_the_id_and_the_old_slug_is_free(api, 
 
 
 def test_no_bot_takes_a_slug_that_is_another_bots_id(api, sales):
-    r = api.post("/api/v2/bots", json={"slug": sales, "display_name": "Imposter", "status": "planned"},
-                 headers=headers())
+    r = api.post(
+        "/api/v2/bots", json={"slug": sales, "display_name": "Imposter", "status": "planned"}, headers=headers()
+    )
     assert r.status_code == 409, r.text
     other = create_bot(api, "sales-lead")
     rename(api, other, sales, expected=409)
-    rename(api, other, "sales-helper", expected=409)             # nor another bot's slug
+    rename(api, other, "sales-helper", expected=409)  # nor another bot's slug
 
 
 def test_a_built_in_bot_keeps_its_slug(api):
@@ -273,7 +312,7 @@ def test_mcp_and_the_hub_cli_rename_a_bot_by_id_or_slug(api, sales, monkeypatch)
     remotecli.run(hubcli.parser().parse_args(["bot", "update", "revenue-helper", "--new-slug", "pipeline-helper"]))
     assert get(api, "bots/" + sales)["slug"] == "pipeline-helper"
     config = json.loads(column(api, f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot=?", sales)[0])
-    assert config["folder"] == "bot-sales-helper"                  # its folder keeps the name it was made with
+    assert config["folder"] == "bot-sales-helper"  # its folder keeps the name it was made with
 
 
 def config_of(api, bot_id):
@@ -289,7 +328,7 @@ def test_a_new_bot_given_a_renamed_bots_old_slug_gets_a_folder_and_repository_of
     assert first["folder"] == "bot-sales-helper"
     assert second["folder"] != first["folder"] and second["folder"].startswith("bot-sales-helper-")
     assert second["folder"].removeprefix("bot-sales-helper-") in newcomer.replace("-", "")
-    assert get(api, "bots/sales-helper")["folder"] == second["folder"]      # clients read the folder, not the slug
+    assert get(api, "bots/sales-helper")["folder"] == second["folder"]  # clients read the folder, not the slug
     assert get(api, "bots/revenue-helper")["folder"] == "bot-sales-helper"
     # its repository is named alike, so GitHub never hands it the renamed bot's history
     repos = column(api, "SELECT repo FROM bot_config WHERE bot IN (?,?)", sales, newcomer)
@@ -297,7 +336,7 @@ def test_a_new_bot_given_a_renamed_bots_old_slug_gets_a_folder_and_repository_of
     with api.app.state.store.read() as c:
         assert H.bot_repository_name(c, "sales-helper") == second["folder"]
         assert H.bot_repository_name(c, "revenue-helper") == "bot-sales-helper"
-        assert H.bot_repository_name(c, "coo") == "bot-coo"             # an older bot keeps bot-<slug>
+        assert H.bot_repository_name(c, "coo") == "bot-coo"  # an older bot keeps bot-<slug>
     # a third one, and a folder an older bot (id = slug) has, are taken too
     third = create_bot(api, "sales-helper-2")
     assert config_of(api, third)["folder"] == "bot-sales-helper-2"
@@ -314,12 +353,15 @@ def test_two_bots_with_one_folder_are_never_placed_on_one_computer(api, sales):
     newcomer = create_bot(api, "sales-helper", status="planned")
     with api.app.state.store.transaction() as c:
         BS.update(c, newcomer, {'folder': 'bot-sales-helper'})
-    r = api.post(f"/api/v2/bots/{newcomer}/assignment", json={"runner_id": machine["runner_id"], "expected_generation": 0},
-                 headers=headers())
+    r = api.post(
+        f"/api/v2/bots/{newcomer}/assignment",
+        json={"runner_id": machine["runner_id"], "expected_generation": 0},
+        headers=headers(),
+    )
     assert r.status_code == 409 and r.json()["error"]["code"] == "folder_taken", r.text
     assert column(api, "SELECT count(*) FROM assignments WHERE bot=?", newcomer) == [0]
     other = runner(api, label="Other Mac")
-    assign(api, other, newcomer)                                        # another computer has its own folder
+    assign(api, other, newcomer)  # another computer has its own folder
 
 
 # ----------------------------------------------------------------------------- held bots
@@ -346,12 +388,16 @@ def test_me_names_an_attempt_run_id_and_never_attempt_id(api):
 def test_onboarding_names_a_managers_slug_for_a_bot_whose_id_is_not_its_slug_and_follows_a_rename(api, sales):
     manager = create_bot(api, "sales-lead")
     revision = column(api, "SELECT revision FROM bot_config WHERE bot=?", sales)[0]
-    r = api.post(f"/api/v2/bots/{sales}/definition", json={"reports_to": manager, "expected_revision": revision},
-                 headers=headers())
+    r = api.post(
+        f"/api/v2/bots/{sales}/definition",
+        json={"reports_to": manager, "expected_revision": revision},
+        headers=headers(),
+    )
     assert r.status_code == 200, r.text
 
     def line():
         return next(b for b in get(api, "onboarding")["bots"] if b["id"] == sales)
+
     assert (line()["reports_to"], line()["reports_to_slug"]) == (manager, "sales-lead")
     rename(api, manager, "sales-director")
     assert line()["reports_to_slug"] == "sales-director"

@@ -1,4 +1,5 @@
 """Public Actions artifacts contain authenticated ciphertext, never branded files."""
+
 import shutil
 from pathlib import Path
 
@@ -15,9 +16,11 @@ def archives(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_RUN_ID", "123")
     company = "a" * 64
     expected = {}
-    for target, name in (("universal-apple-darwin", "Acme Tico.app.tar.gz"),
-                         ("x86_64-pc-windows-msvc", "Acme Tico-setup.exe"),
-                         ("x86_64-unknown-linux-gnu", "Acme Tico.AppImage")):
+    for target, name in (
+        ("universal-apple-darwin", "Acme Tico.app.tar.gz"),
+        ("x86_64-pc-windows-msvc", "Acme Tico-setup.exe"),
+        ("x86_64-unknown-linux-gnu", "Acme Tico.AppImage"),
+    ):
         bundle = Path(f"app/target/{target}/release/bundle")
         bundle.mkdir(parents=True)
         content = b"Acme Tico https://tico.example.com team.tico.env.12345678 acme-files"
@@ -29,7 +32,13 @@ def archives(tmp_path, monkeypatch):
         encrypted.mkdir(parents=True)
         shutil.move("out/bundles.enc", encrypted / "bundles.enc")
         cipher = (encrypted / "bundles.enc").read_bytes()
-        for private in (name.encode(), b"Acme Tico", b"https://tico.example.com", b"team.tico.env.12345678", b"acme-files"):
+        for private in (
+            name.encode(),
+            b"Acme Tico",
+            b"https://tico.example.com",
+            b"team.tico.env.12345678",
+            b"acme-files",
+        ):
             assert private not in cipher
     return company, expected
 
@@ -46,7 +55,9 @@ def test_artifacts_reject_wrong_context_and_tampering_before_publish(archives, m
     if failure == "company":
         company = "b" * 64
     elif failure in ("tag", "run", "key"):
-        monkeypatch.setenv({"tag": "GITHUB_REF_NAME", "run": "GITHUB_RUN_ID", "key": "TAURI_SIGNING_PRIVATE_KEY"}[failure], "other")
+        monkeypatch.setenv(
+            {"tag": "GITHUB_REF_NAME", "run": "GITHUB_RUN_ID", "key": "TAURI_SIGNING_PRIVATE_KEY"}[failure], "other"
+        )
     else:
         source = next(Path("encrypted").glob("*/bundles.enc"))
         content = bytearray(source.read_bytes())
@@ -63,6 +74,7 @@ def test_missing_archive_and_path_traversal_are_rejected(archives):
     import tarfile
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     from scripts.company_app_artifacts import MAGIC, context
+
     company, _ = archives
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:

@@ -14,6 +14,7 @@ A posting also takes in the run holds the meter now covers: settled run holds wh
 by the snapshot's time, even when the meter did not move. A month stays on the fetch list until a snapshot taken at least FINAL_DAYS after
 its end is posted, so a server that was down over the turn of the month still reads it; that final posting takes in
 (or, where the meter billed nothing on the line, releases) every settled run hold of the month still left."""
+
 import json
 import sqlite3
 from collections.abc import Mapping, Sequence
@@ -37,16 +38,16 @@ from .store import usage as SU
 
 NANO = 10**9
 NANO_PER_CENT = 10**7
-CREDIT = "1100"                         # Gateway credit: the prepaid asset usage draws down
+CREDIT = "1100"  # Gateway credit: the prepaid asset usage draws down
 LINES = (("ai", AI), ("video", VIDEO))
 VIDEO_CATEGORIES = frozenset({"image"})
-RECONCILE_KEY = "gateway_usage"         # the last reconcile per month: meter total against what is on the books
+RECONCILE_KEY = "gateway_usage"  # the last reconcile per month: meter total against what is on the books
 KEEP_MONTHS = 3
-BACKLOG_KEY = "gateway_usage_months"    # months that still need a final read of the meter
-FINAL_DAYS = 3                          # charges the meter records late: a month's final read is this long after it
+BACKLOG_KEY = "gateway_usage_months"  # months that still need a final read of the meter
+FINAL_DAYS = 3  # charges the meter records late: a month's final read is this long after it
 MOST_BACKLOG = 12
-FINAL_KEY = "gateway_usage_final"       # {month: when its final read came back}, kept until that month is closed
-MAX_BOTS = MAX_LINES - 2                # bot lines in one entry; the rest goes Unattributed
+FINAL_KEY = "gateway_usage_final"  # {month: when its final read came back}, kept until that month is closed
+MAX_BOTS = MAX_LINES - 2  # bot lines in one entry; the rest goes Unattributed
 
 
 def nano(value: object) -> int:
@@ -83,8 +84,7 @@ def line_of(category: object) -> str:
 
 
 # ------------------------------------------------------------------------------------------------ snapshots
-def snapshot(c: sqlite3.Connection, payload: Mapping[str, object], *, fetched_at: str,
-             by: str = SYSTEM) -> str | None:
+def snapshot(c: sqlite3.Connection, payload: Mapping[str, object], *, fetched_at: str, by: str = SYSTEM) -> str | None:
     """Keep one fetch of the meter (the worker parses it with decimals). The snapshot id, or None when the meter has
     not moved since the last one kept."""
     month = dates.month(payload.get("month")).isoformat()[:7]
@@ -100,15 +100,22 @@ def snapshot(c: sqlite3.Connection, payload: Mapping[str, object], *, fetched_at
         line = line_of(r.get("category"))
         totals[line] += price
         calls = r.get("calls")
-        kept.append({"model": str(r.get("model") or "")[:120], "category": str(r.get("category") or "")[:40],
-                     "calls": calls if isinstance(calls, int) and not isinstance(calls, bool) else 0,
-                     "price_nano": price, "line": line})
+        kept.append(
+            {
+                "model": str(r.get("model") or "")[:120],
+                "category": str(r.get("category") or "")[:40],
+                "calls": calls if isinstance(calls, int) and not isinstance(calls, bool) else 0,
+                "price_nano": price,
+                "line": line,
+            }
+        )
     as_of = stamp(payload.get("as_of"), fetched_at)
     remember(c, month, by, fetched_at)
     if fetched_at >= _final_after(month):
-        _final_read(c, month, by, fetched_at)   # an unchanged final read still closes the month
-    sid = SU.add_snapshot(c, month=month, as_of=as_of, ai_nano=totals["ai"], video_nano=totals["video"], rows=kept,
-                          by=by, at=fetched_at)
+        _final_read(c, month, by, fetched_at)  # an unchanged final read still closes the month
+    sid = SU.add_snapshot(
+        c, month=month, as_of=as_of, ai_nano=totals["ai"], video_nano=totals["video"], rows=kept, by=by, at=fetched_at
+    )
     if sid:
         # The usage facts take a read only when its snapshot was kept, by the same rule (backend/usage_facts.py).
         charged: dict[str, int] = {}
@@ -126,8 +133,9 @@ def video_models(snap: Mapping[str, object]) -> list[str]:
 
 
 # ------------------------------------------------------------------------------------------------ attribution
-def weights(c: sqlite3.Connection, after: str, through: str, line: str = "ai",
-            models: Sequence[str] = ()) -> dict[str, int]:
+def weights(
+    c: sqlite3.Connection, after: str, through: str, line: str = "ai", models: Sequence[str] = ()
+) -> dict[str, int]:
     """{bot teammate: nanodollars} of Gateway-billed usage the install recorded on `line` in (after, through]: runs (an
     image model's on `video`, the rest on `ai`) and, on `ai`, bots' decision calls."""
     out: dict[str, int] = {}
@@ -146,7 +154,7 @@ def _largest_remainder(total: int, exact: Sequence[tuple[str, Decimal]]) -> dict
     floors = {k: int(x) for k, x in exact}
     left = total - sum(floors.values())
     order = sorted(range(len(exact)), key=lambda i: (-(exact[i][1] - int(exact[i][1])), i))
-    for i in order[:max(0, left)]:
+    for i in order[: max(0, left)]:
         floors[exact[i][0]] += 1
     return floors
 
@@ -182,8 +190,9 @@ def _through(month: str, as_of: str) -> str:
     return min(as_of, dates.add_months(dates.month(month), 1).isoformat() + "T00:00:00")
 
 
-def unassigned(c: sqlite3.Connection, book_id: str, account_id: str, month: str, through: str, line: str,
-               models: Sequence[str]) -> dict[str, int]:
+def unassigned(
+    c: sqlite3.Connection, book_id: str, account_id: str, month: str, through: str, line: str, models: Sequence[str]
+) -> dict[str, int]:
     """{bot teammate: nanodollars} the install recorded on `line` this month up to `through` that no usage posting has
     put on the bot yet. Progress lives in the books, not in snapshot rows, so a replaced snapshot assigns nothing twice."""
     start = dates.month(month).isoformat() + "T00:00:00"
@@ -276,15 +285,23 @@ def _post_one(ctx: Ctx, snap: Mapping[str, object], by: str) -> list[dict[str, o
         if delta:
             lines: list[dict[str, object]] = []
             for mate, part in split(delta, unassigned(c, ctx.book.id, account, month, through, line, models)):
-                item: dict[str, object] = {"account_id": account, "amount": part,
-                                           "description": f"Tico AI Gateway, {month}"}
+                item: dict[str, object] = {
+                    "account_id": account,
+                    "amount": part,
+                    "description": f"Tico AI Gateway, {month}",
+                }
                 if mate:
                     item["tags"] = {"teammate": mate}
                 lines.append(item)
                 touched.append((account, mate))
             lines.append({"account_id": ids[CREDIT], "amount": -delta, "description": f"Tico AI Gateway, {month}"})
-            entry = {"date": _entry_day(ctx, month, as_of), "memo": f"Tico AI Gateway usage, {month}",
-                     "source": "usage", "source_id": prefix + sid, "lines": lines}
+            entry = {
+                "date": _entry_day(ctx, month, as_of),
+                "memo": f"Tico AI Gateway usage, {month}",
+                "source": "usage",
+                "source_id": prefix + sid,
+                "lines": lines,
+            }
             made = post_entry(c, entry, by=by, hold_ids=holds[line], at=ctx.at, touch=False)
             done.append({"month": month, "line": line, "entry_id": made["entry_id"], "amount": delta})
         else:

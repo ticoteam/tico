@@ -1,4 +1,5 @@
 """A page audience narrows every file surface for humans and bots, including wider pins and byte routes."""
+
 import json
 
 import pytest
@@ -53,7 +54,6 @@ def test_null_preserves_visibility_and_only_managers_see_the_audience(api):
     assert 'audience' not in summary and summary['restricted']
 
 
-
 def test_restriction_hides_lists_search_cards_pins_and_bytes_and_clearing_restores(api, monkeypatch):
     fid, attempt = promoted(api)
     api.app.state.store.settings.visual_origin = 'https://visuals.acme.example'
@@ -64,8 +64,7 @@ def test_restriction_hides_lists_search_cards_pins_and_bytes_and_clearing_restor
     edit(api, fid, {'people': ['ben']})
     for path in ('pages/' + fid, 'files/' + fid, 'files/' + fid + '/versions', 'files/' + fid + '/meta'):
         assert api.get('/api/v2/' + path, headers=headers('cara-test')).status_code == 404, path
-    for path in ('pages', 'pages?ids=' + fid, 'files', 'files/search?q=deals', 'bots/ops/files',
-                 'places/dashboard'):
+    for path in ('pages', 'pages?ids=' + fid, 'files', 'files/search?q=deals', 'bots/ops/files', 'places/dashboard'):
         r = api.get('/api/v2/' + path, headers=headers('cara-test'))
         assert r.status_code == 200, r.text
         assert fid not in r.text, path
@@ -75,10 +74,12 @@ def test_restriction_hides_lists_search_cards_pins_and_bytes_and_clearing_restor
         bid = c.execute('SELECT blob_id FROM bot_file_versions WHERE file_id=?', (fid,)).fetchone()[0]
         from backend.media import blob_for
         from backend.store import Problem
+
         with pytest.raises(Problem):
             blob_for(c, api.app.state.auth, Identity('human:cara', 'human'), bid)
     # Even a ready shared hosted copy must never be used for a restricted page.
     from backend import tico_storage
+
     monkeypatch.setattr(tico_storage, 'visual_link', lambda *a: pytest.fail('restricted page used shared hosting'))
     manager_src = read(api, fid, 'ben-test').json()['page']['src']
     assert api.get(manager_src).status_code == 200
@@ -92,7 +93,9 @@ def test_restriction_hides_lists_search_cards_pins_and_bytes_and_clearing_restor
 
 def test_task_pages_live_blocks_and_bot_context_do_not_bypass_audience(api):
     _, attempt = turn(api)
-    tid = post(api, 'tasks', {'owner': 'ops', 'title': 'Shared work', 'body': 'Plan', 'private': False}, token='ben-test')['id']
+    tid = post(
+        api, 'tasks', {'owner': 'ops', 'title': 'Shared work', 'body': 'Plan', 'private': False}, token='ben-test'
+    )['id']
     fid = page(api, attempt, task=tid, title='Audience secret').json()['page']['file_id']
     outside = finance_token(api)
     assert read(api, fid, outside).status_code == 200
@@ -109,15 +112,19 @@ def test_task_pages_live_blocks_and_bot_context_do_not_bypass_audience(api):
     with api.app.state.store.read() as c:
         from backend.task_review import comment_file
         from backend.store import Problem
+
         with pytest.raises(Problem):
             comment_file(c, api.app.state.auth, api.app.state.files, Identity('bot:finance', 'bot'), tid, fid, 1)
 
     with api.app.state.store.read() as c:
         for viewer in (Identity('human:cara', 'human'), Identity('bot:finance', 'bot')):
-            filled = live_blocks.fill(f'<tico-files task="{tid}"></tico-files>', c, viewer,
-                                      api.app.state.auth, api.app.state.files)
+            filled = live_blocks.fill(
+                f'<tico-files task="{tid}"></tico-files>', c, viewer, api.app.state.auth, api.app.state.files
+            )
             assert fid not in filled and 'Audience secret' not in filled
-        messages = [{'refs': {'attachments': [{'file_id': fid, 'version': 1, 'kind': 'page', 'title': 'Audience secret'}]}}]
+        messages = [
+            {'refs': {'attachments': [{'file_id': fid, 'version': 1, 'kind': 'page', 'title': 'Audience secret'}]}}
+        ]
         shown = visuals.for_reader(api.app, api.app.state.store.settings, c, Identity('bot:finance', 'bot'), messages)
         assert 'Audience secret' not in str(shown) and shown[0]['refs']['attachments'][0]['removed']
     edit(api, fid, {'bots': ['finance']})
@@ -149,12 +156,18 @@ def test_new_versions_keep_audience_and_publish_can_replace_or_clear_it(api):
     assert changed.status_code == 200, changed.text
     assert changed.json()['page']['audience'] == selected
     assert read(api, fid, 'cara-test').status_code == 404
-    r = api.post('/api/v2/pages', json={'name': 'weekly.html', 'task': tid, 'text': HTML.decode(), 'audience': {'people': ['cara']}},
-                 headers=headers(attempt['token']))
+    r = api.post(
+        '/api/v2/pages',
+        json={'name': 'weekly.html', 'task': tid, 'text': HTML.decode(), 'audience': {'people': ['cara']}},
+        headers=headers(attempt['token']),
+    )
     assert r.status_code == 200, r.text
     assert r.json()['page']['audience']['people'] == ['cara']
-    r = api.post('/api/v2/pages', json={'name': 'weekly.html', 'task': tid, 'text': HTML.decode(), 'audience': None},
-                 headers=headers(attempt['token']))
+    r = api.post(
+        '/api/v2/pages',
+        json={'name': 'weekly.html', 'task': tid, 'text': HTML.decode(), 'audience': None},
+        headers=headers(attempt['token']),
+    )
     assert r.status_code == 200, r.text
     assert r.json()['page']['audience'] is None
     assert read(api, fid, 'cara-test').status_code == 200
@@ -166,23 +179,51 @@ def test_access_changes_record_old_and_new_but_readers_never_get_the_names(api):
         before = c.execute('SELECT coalesce(max(seq),0) FROM changes').fetchone()[0]
     edit(api, fid, {'people': ['cara']})
     with api.app.state.store.read() as c:
-        activity = c.execute("SELECT detail FROM bot_file_activity WHERE file_id=? AND action='page.access_changed'", (fid,)).fetchone()
-        event = dict(c.execute("SELECT * FROM events WHERE target=? AND action='page.access_changed'", (fid,)).fetchone())
+        activity = c.execute(
+            "SELECT detail FROM bot_file_activity WHERE file_id=? AND action='page.access_changed'", (fid,)
+        ).fetchone()
+        event = dict(
+            c.execute("SELECT * FROM events WHERE target=? AND action='page.access_changed'", (fid,)).fetchone()
+        )
         assert json.loads(activity[0]) == json.loads(event['detail'])
         assert json.loads(event['detail'])['before'] is None
         assert json.loads(event['detail'])['after']['people'] == ['cara']
         assert not task_privacy.event_readable(c, 'human:cara', event)
     with api.app.state.store.read() as c:
-        sent, cursor, reset, more = events.read(c, api.app.state.auth, Identity('human:cara', 'human'), before, topics=('bots',))
+        sent, cursor, reset, more = events.read(
+            c, api.app.state.auth, Identity('human:cara', 'human'), before, topics=('bots',)
+        )
         assert reset and not sent
-    assert sql(api, f"SELECT detail FROM events WHERE target='{fid}' AND action='page.access_changed'", 'cara-test') == []
-    assert len(sql(api, f"SELECT detail FROM events WHERE target='{fid}' AND action='page.access_changed'", 'ben-test')) == 1
-    assert sql(api, f"SELECT detail FROM bot_file_activity WHERE file_id='{fid}' AND action='page.access_changed'", 'cara-test') == []
-    assert len(sql(api, f"SELECT detail FROM bot_file_activity WHERE file_id='{fid}' AND action='page.access_changed'", 'ben-test')) == 1
+    assert (
+        sql(api, f"SELECT detail FROM events WHERE target='{fid}' AND action='page.access_changed'", 'cara-test') == []
+    )
+    assert (
+        len(sql(api, f"SELECT detail FROM events WHERE target='{fid}' AND action='page.access_changed'", 'ben-test'))
+        == 1
+    )
+    assert (
+        sql(
+            api,
+            f"SELECT detail FROM bot_file_activity WHERE file_id='{fid}' AND action='page.access_changed'",
+            'cara-test',
+        )
+        == []
+    )
+    assert (
+        len(
+            sql(
+                api,
+                f"SELECT detail FROM bot_file_activity WHERE file_id='{fid}' AND action='page.access_changed'",
+                'ben-test',
+            )
+        )
+        == 1
+    )
     removed = api.delete('/api/v2/files/' + fid, headers=headers('ana-test'))
     assert removed.status_code == 200, removed.text
-    assert sql(api, f"SELECT detail FROM events WHERE target='{fid}' AND action='page.access_changed'", 'cara-test') == []
-
+    assert (
+        sql(api, f"SELECT detail FROM events WHERE target='{fid}' AND action='page.access_changed'", 'cara-test') == []
+    )
 
 
 def test_audience_does_not_grant_inherited_access_or_constrain_managers(api):
@@ -193,7 +234,10 @@ def test_audience_does_not_grant_inherited_access_or_constrain_managers(api):
     assert read(api, fid, 'ben-test').status_code == 200
     assert read(api, fid, attempt['token']).status_code == 200
     assert sql(api, f"SELECT id FROM bot_files WHERE id='{fid}'", 'ben-test') == [[fid]]
-    assert len(sql(api, f"SELECT detail FROM events WHERE target='{fid}' AND action='page.access_changed'", 'ben-test')) == 1
+    assert (
+        len(sql(api, f"SELECT detail FROM events WHERE target='{fid}' AND action='page.access_changed'", 'ben-test'))
+        == 1
+    )
     edit(api, fid, {'everyone': False})
     assert read(api, fid, 'ben-test').status_code == 200
     assert read(api, fid, attempt['token']).status_code == 200
@@ -213,18 +257,25 @@ def test_a_person_above_the_maintainer_can_see_and_change_the_audience(api):
 def test_counsel_cannot_copy_a_restricted_page_into_its_task_context(api, monkeypatch):
     from backend import counsel
     from backend.store import Problem
+
     fid, _ = promoted(api)
     edit(api, fid, {'people': ['ben']})
     monkeypatch.setattr(counsel, 'available', lambda c: True)
     with pytest.raises(Problem) as refused:
-        counsel.prepare(api.app.state.store, api.app.state.auth, Identity('human:ben', 'human', 'ben@acme.example'),
-                        api.app.state.blobs, counsel.RuleRead(file_id=fid, source_id='acme'))
+        counsel.prepare(
+            api.app.state.store,
+            api.app.state.auth,
+            Identity('human:ben', 'human', 'ben@acme.example'),
+            api.app.state.blobs,
+            counsel.RuleRead(file_id=fid, source_id='acme'),
+        )
     assert refused.value.status == 403
 
 
 def test_page_audience_migration_keeps_existing_pages_unrestricted():
     import importlib
     import sqlite3
+
     migration = importlib.import_module('backend.migrations.20261105010233_page_audience')
     with sqlite3.connect(':memory:') as c:
         c.execute('CREATE TABLE pages(file_id TEXT PRIMARY KEY, cadence TEXT)')
@@ -253,14 +304,20 @@ def test_linking_a_restricted_page_to_a_readable_task_never_widens_it(api):
 def test_counsel_read_grant_cannot_validate_a_quote_outside_the_page_audience(api, monkeypatch):
     from backend import counsel
     from backend.store import H, Problem
+
     fid, _ = promoted(api)
     edit(api, fid, {'people': ['ben']})
     monkeypatch.setattr(counsel, 'run_read', lambda c, who: {'file_id': fid, 'version': 1})
     monkeypatch.setattr(counsel, 'version_text', lambda *a: pytest.fail('read a page outside the audience'))
     with api.app.state.store.read() as c:
         with pytest.raises(Problem) as refused:
-            counsel.check_cite(c, api.app.state.auth, Identity('bot:' + H.COUNSEL, 'bot', attempt_id='read-turn'),
-                               api.app.state.blobs, {'file_id': fid, 'version': 1, 'quote': 'Pipeline grew'})
+            counsel.check_cite(
+                c,
+                api.app.state.auth,
+                Identity('bot:' + H.COUNSEL, 'bot', attempt_id='read-turn'),
+                api.app.state.blobs,
+                {'file_id': fid, 'version': 1, 'quote': 'Pipeline grew'},
+            )
     assert refused.value.status == 404
 
 
@@ -271,5 +328,7 @@ def test_bot_co_ownership_does_not_disclose_page_audience_history(api):
         c.execute("UPDATE bot_config SET bot_owners=? WHERE bot='ops'", (json.dumps(['cara']),))
     assert read(api, fid, 'cara-test').status_code == 404
     with api.app.state.store.read() as c:
-        event = dict(c.execute("SELECT * FROM events WHERE target=? AND action='page.access_changed'", (fid,)).fetchone())
+        event = dict(
+            c.execute("SELECT * FROM events WHERE target=? AND action='page.access_changed'", (fid,)).fetchone()
+        )
         assert not task_privacy.event_readable(c, 'human:cara', event)

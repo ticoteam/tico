@@ -1,4 +1,4 @@
-// Growth and Brand on a real hub. The Growth page is a grid of cards (place `growth`, ui/app/dashboard.js): with
+// Growth and Brand on a real hub. The Growth page is a grid of cards (place `growth`, ui/app/dashboard.ts): with
 // nothing set up, each default card says it has nothing yet and Settings links to Sources; with one month of only new
 // customers, the New customers and Channels cards show it; then Dana, Acme's owner, has a North Star, stage KPIs and a
 // guardrail with readings, eight channels and Unknown, months with gaps and marketing tasks, all seeded through the
@@ -6,7 +6,7 @@
 // channel's open task is a chip on its row and a card on the board; the month picker reads the cards again and the
 // address keeps it; Settings, + Channel, Edit, Retire and a month's correction save; a Number is added for one channel;
 // old addresses land where they moved. Then Sources flags a clash, Strategy has How we sell, Brand's Edit publishes,
-// and Goals switches its KPIs between Tree, Loops and Journey. Phone, then desktop.
+// and Goals switches its KPIs between Tree, Loops and Journey. Phone only.
 const assert = require('node:assert/strict');
 const {run, open, go, ok, shot, t} = require('./support/redesign-e2e.cjs');
 
@@ -382,4 +382,4 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
 
   assert.deepEqual(removed, [], `${tag}: nothing calls a removed route`);
   noErrors('every page');
-});
+}, {only: 'phone'});   // the sideways-scroll checks (flat) are the phone's (fix 14c16db52, growth.css's phone rules); growth-cards.cjs covers the desktop

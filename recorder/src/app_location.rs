@@ -62,6 +62,15 @@ pub fn check(bundle: &Path, writable: impl Fn(&Path) -> bool) -> Location {
     }
 }
 
+/// Whether the bundle sits in /Applications or ~/Applications, where the launch prompt to move never shows
+/// (even when that folder is locked; Settings still offers the move).
+pub fn in_applications(bundle: &Path, home: &Path) -> bool {
+    bundle.parent().is_some_and(|folder| {
+        folder == Path::new("/Applications")
+            || (!home.as_os_str().is_empty() && folder == home.join("Applications"))
+    })
+}
+
 /// Whether this user can create files in `folder`: tries one and removes it.
 pub fn writable(folder: &Path) -> bool {
     let probe = folder.join(format!(".tico-recorder-write-{}", std::process::id()));
@@ -238,6 +247,34 @@ mod tests {
         let path = Path::new("/Applications").join(APP);
         assert_eq!(check(&path, |_| false), Location::ReadOnly);
         assert_eq!(Location::ReadOnly.line(), "Can't update in this folder");
+    }
+
+    #[test]
+    fn only_the_applications_folders_count_as_installed() {
+        let home = Path::new("/Users/dana");
+        assert!(in_applications(&Path::new("/Applications").join(APP), home));
+        assert!(in_applications(
+            &Path::new("/Users/dana/Applications").join(APP),
+            home
+        ));
+        for elsewhere in [
+            "/Users/dana/Downloads/Tico Recorder.app",
+            "/Volumes/Tico Recorder/Tico Recorder.app",
+            "/private/var/folders/x1/T/AppTranslocation/1F2E/d/Tico Recorder.app",
+            "/Applications/Tools/Tico Recorder.app",
+            "/Users/sam/Applications/Tico Recorder.app",
+        ] {
+            assert!(!in_applications(Path::new(elsewhere), home), "{elsewhere}");
+        }
+        // No HOME: only /Applications counts.
+        assert!(in_applications(
+            &Path::new("/Applications").join(APP),
+            Path::new("")
+        ));
+        assert!(!in_applications(
+            Path::new("Applications/Tico Recorder.app"),
+            Path::new("")
+        ));
     }
 
     #[test]

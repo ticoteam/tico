@@ -1,4 +1,4 @@
-// Offline browser regression: the Tico team chat (ui/support.js). The ? beside Search (in the phone's More drawer, beside
+// Offline browser regression: the Tico team chat (ui/support.ts). The ? beside Search (in the phone's More drawer, beside
 // the Search row) opens one ongoing conversation with the Tico team: every ticket's messages merged in time order as
 // bubbles (theirs with the writer's name when it changes, a date line where the day changes), one box and a paperclip
 // for diagnostics. No list, no form, no statuses. Sending writes to the open ticket, or starts a new one with the
@@ -26,7 +26,7 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       // ago' on yesterday. A fixed-offset zone where it is about noon keeps every day line where the test expects it.
       const noon = `Etc/GMT${(h => (h > 0 ? '+' : '-') + Math.abs(h))(new Date().getUTCHours() - 12)}`.replace('-0', '+0');
       const ctx = await browser.newContext({viewport, serviceWorkers: 'block', userAgent, timezoneId: noon});
-      await ctx.addInitScript(v => localStorage.setItem('tico.theme', v), theme);   // ui/theme.js
+      await ctx.addInitScript(v => localStorage.setItem('tico.theme', v), theme);   // ui/theme.ts
       // A phone keyboard, as iOS Safari reports it: the layout viewport keeps its size while window.visualViewport
       // shrinks to what is left above the keyboard and pans (offsetTop); pinch zoom divides its height by the scale.
       // __keys(height, top, scale) sets it.
@@ -62,10 +62,10 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       await page.route('**/*', async route => {
         const req = route.request(), p = new URL(req.url()).pathname;
         const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-        const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+        const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
         if (ui && fs.existsSync(uiFile(ui[1])))
           return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-        if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+        if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const config = {version: '0.2.17', update: null, app_name: 'Tico', usage_count_notice: false, beta, feedback_question: feedback, changelog: {unread_count: 2}};
         if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
@@ -138,7 +138,7 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       return {page, ctx, errors, calls, hq};
     };
     // A link to #/support, as an Assistant reply carries ("Talk to the Tico team"), opens the chat over the page (the
-    // app's click handler for any such link, ui/app/ask-panel.js); it is ready once the box (or the "turned off" line)
+    // app's click handler for any such link, ui/app/ask-panel.ts); it is ready once the box (or the "turned off" line)
     // shows. Focus goes back to the link on closing.
     const supportLink = page => page.evaluate(() => {
       if (document.getElementById('t-support')) return;

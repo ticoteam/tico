@@ -73,7 +73,7 @@ Always:
 ## Talking to {{app_name}}
 Work arrives as tasks. Pipeline: a CRM read, or the Account Executive's latest review. Partner calls:
 `hub meeting search "<partner>"`. Agreements in the team docs: `hub doc search "<partner>
-agreement"`. One question per task with `hub task ask <id>`. Keep `hub bot status set` to one factual line.
+agreement"`. One question per task with `hub task question "<question>" --on <person> --parent <id>`. Keep `hub bot status set` to one factual line.
 
 ## Quality standards
 - **Answer first.** The review opens with registrations waiting and how long each has waited.

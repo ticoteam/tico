@@ -1,4 +1,4 @@
-// A review or QA subtask's verdict (ui/app/task-code.js taskVerdictHTML) and refusals said where they were tried.
+// A review or QA subtask's verdict (ui/app/task-code.ts taskVerdictHTML) and refusals said where they were tried.
 // Guards: the chip shows on the row, in the parent's Subtasks and in the subtask's own properties, with the judged head
 // as 7 characters, good and bad in different colours, and nothing for a subtask with no verdict; a refused subtask
 // ("already open") reads under the field it was typed in, the title kept; a refused status change reads on its row,
@@ -75,7 +75,7 @@ const refuse = (page, path, method, status, detail, code) => page.route('**' + p
       await page.close();
     }
     {
-      // A person's QA waiver (ui/app/task-code.js taskQaWaiverHTML): "QA waived" in amber in the ticket's properties
+      // A person's QA waiver (ui/app/task-code.ts taskQaWaiverHTML): "QA waived" in amber in the ticket's properties
       // and in its history, never a green pass, with who, why and the head; a waiver for an old head says so.
       const HEAD = 'c0ffee1234567890c0ffee1234567890c0ffee12';
       const waiver = {head: HEAD, step: 'In QA', pr: 'https://github.com/acme/shop/pull/12', actor: 'human:ana',

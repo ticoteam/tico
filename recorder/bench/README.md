@@ -176,18 +176,75 @@ microphone and system audio are separate channels, so "Me" versus "Them" needs n
 model. The far end is diarized on-device after the meeting with a pyannote 3.1 pipeline, and words
 take the overlapping speaker. When the transcription model labels speakers within each chunk
 (Scribe), those turns are joined across the meeting by WeSpeaker voiceprints, the usual way to
-combine an STT provider's per-request speaker labels into one meeting. Echo is removed in the
-transcript, not with acoustic echo cancellation. Speech defaults to English (Settings › Language;
+combine an STT provider's per-request speaker labels into one meeting. Saved mic WAVs and chunk transcription use raw audio. On the built-in Mac microphone/speaker route,
+a separate macOS voice-processing stream aids live text (minimum ducking, AGC off); headphones,
+unsupported routes and processing restart failures use plain capture. Route notifications rebuild
+the native engines with a fixed 16 kHz client format. The shared transcript filter removes only
+matching runs of at least three words, with punctuation, hyphen, number and small spelling tolerance.
+Unmatched words, isolated acknowledgements and names stay. Live mic text waits for the reference
+for at most eight seconds; terminal failure, mic-only capture and Stop also release it. Both
+sharing channels wait at one frontier, including behind unfinished chunks after Stop. Completion,
+terminal failure or 90 s past the chunk's end (chunks are 30-55 s) releases those chunks. Late shared turns use the last
+shared start time when needed; local word timestamps stay intact. Finished batch references replace
+streamed references in covered ranges, and stream-to-batch voice aliases keep one displayed label.
+Finished service turns are also linked during capture by the existing WeSpeaker path, with an
+in-memory bounded print cache; full diarization after Stop still refines the final labels. Speech defaults to English (Settings › Language;
 empty guesses per chunk, which turned short "mm-hmm"s into Japanese and Chinese).
 
-## Suggested task owners
+
+## Speaker bleed regression
+
+The paid audio scenario `--scenarios bleed` uses a 20 ms delayed, -10 dB meeting signal with
+low-pass coloration and reflections at 43, 79 and 131 ms mixed into the microphone. It reports
+`bleed_words_before` and `bleed_words_after` from the same STT result before/after the transcript
+filter, alongside WER and cpWER. Those counts use the far-end AMI reference within one second;
+they are duplicate word counts, not a claim that all same-time acknowledgements are echo.
+
+For a deterministic, free regression on the actual Rust filter (including misspellings, number
+words and short leftover fragments):
+
+```sh
+python3 recorder/bench/meeting_bench.py --bleed-check --cli recorder/target/debug/tico-recorder-cli
+```
+
+This replays four synthetic remote-only utterances with a 20 ms microphone offset, followed by
+four independent local replies. `before` reproduces the former exact per-word filter; `after`
+uses the production matching-run filter. It reports words left in known remote-only spans.
+The expected five remaining tokens are unmatched recognition fragments ("Uh", "an", "uh", "a", "uh");
+keeping them protects genuine adjacent replies. All 20 independent local words must survive.
+The Rust regressions also cover eight echoed words immediately followed by "I disagree", and
+isolated shared "yes", "okay" and names. This replay measures transcript rules, not recognition
+quality or acoustic cancellation. Run it on RunsOn after building the CLI.
+
+VoiceProcessingIO requires a real audio device and realtime hardware rendering; it does not run
+on Linux or in AVAudioEngine's offline rendering mode. Physical attenuation, dual-engine capture,
+route transitions and ducking still need a Mac with real devices. The Rust-facing native bridge
+regression simulates configuration notifications, successful restart, processing restart failure
+and subsequent recovery, without opening a device; saved raw and processed aid samples are distinct.
+Linux tests verify that WAV writing always uses the raw queue, including after plain fallback.
+macOS PR CI compiles/links the bridge and runs its hardware-free lifecycle test.
+
+## Suggested tasks: work, titles and owners
 
 `assist_cases.json` covers commitments, named requests, concierge bot/team work, multiple recipients,
-and unknown speakers or absent teammates. Names and actors are fictional. Each case supplies a roster,
-signed-in identity, transcript speaker labels, and expected owner. A miss includes a missing or extra
-item, so the eval cannot pass by returning no suggestions. The opt-in Rust eval calls the production
-draft request, validates the model's owner against the offered PEOPLE, and checks the stored Item.
-It repeats each case at least three times and prints per-case and overall exact owner accuracy.
+and unknown speakers or absent teammates. It also covers bare pings, messages and reminders, pings
+with stated work, vague syncs, immediate meeting steps, EXISTING restatements, and five small real
+commitments in one stretch. Names and actors are fictional. The original twelve owner scenarios
+retain the same transcript and owner expectations.
+
+Each case supplies transcript speaker labels and an `expected` array (empty means no new items).
+Each expected item has an exact `owner` and `title_keywords`: every group must have at least one
+case-insensitive substring in the title. `banned_title_starts` rejects communication-only leading
+verbs at a word boundary. Optional `existing` titles seed the meeting's draft list. The shared
+roster and signed-in identity apply to each case, with `omit` removing absent teammates.
+
+The opt-in Rust eval calls the production draft request, validates owners against PEOPLE, and
+checks stored Items. It repeats each case at least three times and prints per-case and overall
+selection/title accuracy, owner accuracy, and combined accuracy. Items match without relying on
+output order; combined matching checks the title and owner on the same item. Missing or extra
+items and request errors fail all scores, so returning no suggestions cannot pass a positive case.
+Title checks use no judge model. Owners alone are compared as a multiset; use the combined score
+to detect ownership swapped between several deliverables.
 
 Run on RunsOn with `scripts/remote.py --setup rust --minutes 4 -- ...` and a secure credential source
 on the VM, using:
@@ -201,3 +258,7 @@ TICO_RECORDER_ASSIST_KEY=<model key> cargo test --manifest-path recorder/Cargo.t
 Tico recorder relay; defaults match Settings. `TICO_RECORDER_ASSIST_REPEATS` defaults to 3 and must be
 at least 3. This is a paid, manual eval, excluded from ordinary test runs. Never put a provider key
 in a workflow command or its logs.
+
+Drafting reserves up to 2,400 completion tokens for model reasoning plus the JSON reply; private
+answers retain 1,200. The five-item review limit is unchanged. The repeated eval exposed truncated
+replies at the earlier 1,200-token draft budget.

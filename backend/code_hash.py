@@ -4,11 +4,13 @@ The image build stores it in release-manifest.json (`code`); the flight recorder
 again at start and records the image as `modified` when they differ. Standard library only: the build runs it before the
 dependencies are installed (`python -m backend.code_hash`).
 """
+
 import hashlib
 import sys
 from pathlib import Path
 
-DIRS = ("backend", "clients", "runner", "runner_support", "runner-rs/harnesses", "ui")
+# build/ui: the JavaScript the image serves for ui/'s TypeScript (backend/ui_build.py), its maps and manifest.
+DIRS = ("backend", "build/ui", "clients", "runner", "runner_support", "runner-rs/harnesses", "ui")
 SKIP = {"__pycache__", "node_modules", "tests"}
 
 

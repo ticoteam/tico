@@ -1,5 +1,6 @@
 """Org changes by request (backend/assistant.py `instructed_org`): the Strategy Bot suggests them in words and makes one
 only when the person in its chat asks, citing their message, with exactly their rights. On its own it changes nothing."""
+
 from backend.tests.test_api import api, get, headers  # noqa: F401  (the api fixture)
 from backend.tests.test_assistant import assistant_turn
 from backend.tests.test_strategy_bot_chat import strategy_bot, turn

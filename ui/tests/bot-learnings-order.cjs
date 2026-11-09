@@ -1,4 +1,4 @@
-// No browser: the Learnings panel's memory files (ui/app/bot-learnings.js learnNewestFirst) open on the working
+// No browser: the Learnings panel's memory files (ui/app/bot-learnings.ts learnNewestFirst) open on the working
 // rules, then the newest entry. Bots append at the bottom, so file order opened on the oldest (Dev 301).
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 
 const context = vm.createContext({});
-vm.runInContext(fs.readFileSync(path.join(__dirname, '../app/bot-learnings.js'), 'utf8'), context);
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../../build/ui/app/bot-learnings.js'), 'utf8'), context);
 const order = text => context.learnNewestFirst(text);
 const headings = text => order(text).split('\n').filter(l => /^#|^- /.test(l));
 

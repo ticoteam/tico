@@ -22,7 +22,7 @@ published, and the task note carries the suggestion.
 
 Restate the need in one line: the job, for whom, how many seats or units, by when. Check `knowledge/vendors.md` for a tool
 the team already owns that does the job. If one exists, compare it too. Ask the requester one question with
-`hub task ask <id>` only if the need is unclear.
+`hub task question "<question>" --on <person> --parent <id>` only if the need is unclear.
 
 ## 2. Shortlist three to five
 

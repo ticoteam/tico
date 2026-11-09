@@ -3,6 +3,7 @@ refused for lacking one (backend/settings_admin.py create_bot).
 
 Ana owns the company (the base fixture). Nothing is saved in Settings > Computers until a test saves it.
 """
+
 import json
 
 from backend import gateway_tiers
@@ -12,8 +13,15 @@ from backend import bot_settings as BS
 
 
 def create(api, slug, model=None, expected=200):
-    body = {"slug": slug, "display_name": slug.title(), "description": "x", "status": "planned", "effort": "",
-            "harness": None, "runner_id": None}
+    body = {
+        "slug": slug,
+        "display_name": slug.title(),
+        "description": "x",
+        "status": "planned",
+        "effort": "",
+        "harness": None,
+        "runner_id": None,
+    }
     if model is not None:
         body["model"] = model
     r = api.post("/api/v2/bots", json=body, headers=headers("ana-test"))
@@ -24,7 +32,9 @@ def create(api, slug, model=None, expected=200):
 def model_of(api, slug):
     with api.app.state.store.read() as c:
         # bot_config is keyed by the bot's id (its slug is only a label).
-        row = c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot=?", (H.resolve_bot(c, slug)["id"],)).fetchone()
+        row = c.execute(
+            f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot=?", (H.resolve_bot(c, slug)["id"],)
+        ).fetchone()
     return json.loads(row[0])["model"]
 
 
@@ -34,8 +44,11 @@ def test_with_no_team_default_a_bot_without_a_model_takes_the_gateway_default(ap
 
 
 def test_with_a_team_default_a_bot_without_a_model_takes_the_team_default(api):
-    r = api.put("/api/v2/providers", json={"enabled": ["openai"], "model": "gpt-6.1-sol", "expected_revision": 0},
-                headers=headers("ana-test"))
+    r = api.put(
+        "/api/v2/providers",
+        json={"enabled": ["openai"], "model": "gpt-6.1-sol", "expected_revision": 0},
+        headers=headers("ana-test"),
+    )
     assert r.status_code == 200, r.text
     create(api, "team-model")
     assert model_of(api, "team-model") == "gpt-6.1-sol"

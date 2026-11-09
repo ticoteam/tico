@@ -1,4 +1,5 @@
 """Task context is bounded metadata, filtered by the caller's ordinary source permissions."""
+
 import json
 
 from backend import blobs, meetings, threads
@@ -22,8 +23,10 @@ def attach(api, mid):
     live = post(api, 'live-meetings', {'title': 'Project meeting', 'visibility': 'private'})['id']
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE live_meetings SET imported_meeting_id=? WHERE id=?', (mid, live))
-        c.execute("INSERT INTO live_meeting_bots(meeting_id,bot,joined_by,joined_at) VALUES(?,'ops','human:ana',?)",
-                  (live, H.now()))
+        c.execute(
+            "INSERT INTO live_meeting_bots(meeting_id,bot,joined_by,joined_at) VALUES(?,'ops','human:ana',?)",
+            (live, H.now()),
+        )
     return live
 
 
@@ -32,11 +35,23 @@ def test_context_is_bounded_metadata_newest_first_and_claims_include_it(api):
     with api.app.state.store.transaction() as c:
         for i in range(12):
             mid = f'meeting-{i:02}'
-            meetings.snapshot({'id': mid, 'kind': 'meeting', 'private': False, 'title': 'M' * 400,
-                               'started': f'2026-10-{i+1:02}', 'owner': 'ana@acme.example'},
-                              transcript='Never include this transcript', notes='Never include these notes', conn=c)
-            c.execute("INSERT INTO meeting_task_links VALUES(?,?,?,'linked','human:ana',?)",
-                      (H.new_id(), mid, t['id'], H.now()))
+            meetings.snapshot(
+                {
+                    'id': mid,
+                    'kind': 'meeting',
+                    'private': False,
+                    'title': 'M' * 400,
+                    'started': f'2026-10-{i + 1:02}',
+                    'owner': 'ana@acme.example',
+                },
+                transcript='Never include this transcript',
+                notes='Never include these notes',
+                conn=c,
+            )
+            c.execute(
+                "INSERT INTO meeting_task_links VALUES(?,?,?,'linked','human:ana',?)",
+                (H.new_id(), mid, t['id'], H.now()),
+            )
     page_ids = []
     for i in range(12):
         fid = seed_page(api, 'ops', title='P' * 400, task=t['id'])
@@ -45,9 +60,11 @@ def test_context_is_bounded_metadata_newest_first_and_claims_include_it(api):
         digest = api.app.state.blobs.put(content, 'text/html')
         with api.app.state.store.transaction() as c:
             asset = blobs.register(c, Identity('bot:ops', 'bot'), digest, len(content), 'context.html', 'text/html')
-            c.execute("INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) "
-                      "VALUES(?,1,?,?,?,'context.html','text/html','bot:ops',?)",
-                      (fid, asset['id'], digest, len(content), f'2026-10-{i+1:02}T12:00:00Z'))
+            c.execute(
+                "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) "
+                "VALUES(?,1,?,?,?,'context.html','text/html','bot:ops',?)",
+                (fid, asset['id'], digest, len(content), f'2026-10-{i + 1:02}T12:00:00Z'),
+            )
             c.execute('UPDATE bot_files SET current_version=1 WHERE id=?', (fid,))
     result = get(api, 'tasks/' + t['id'] + '/context')
     assert len(result['pages']) == len(result['meetings']) == 10
@@ -83,8 +100,10 @@ def test_bot_uses_own_page_rights_during_task_work_without_task_reader_intersect
     shared_home = seed_page(api, 'ops')
     with api.app.state.store.transaction() as c:
         home = threads.home(c, 'bot:ops')
-        c.execute('UPDATE bot_files SET scope=?,conversation_id=? WHERE id=?',
-                  ('conversation:' + home['id'], home['id'], shared_home))
+        c.execute(
+            'UPDATE bot_files SET scope=?,conversation_id=? WHERE id=?',
+            ('conversation:' + home['id'], home['id'], shared_home),
+        )
     pin(api, t['id'], shared_home)
     linked = seed_page(api, 'ops')
     response = api.patch('/api/v2/files/' + linked, json={'task': t['id']}, headers=headers())

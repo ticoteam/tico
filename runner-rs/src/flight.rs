@@ -30,8 +30,19 @@ pub const HEARTBEAT_SLOW_MS: u64 = 1000;
 pub const GIT_SLOW_MS: u64 = 2000;
 /// The order a turn passes its marks in (`util::mark` names plus the flight-only ones).
 const PHASES: [&str; 13] = [
-    "claimed", "placed", "harness_started", "harness_spawned", "first_output", "first_delta_posted", "model_done", "scrubbed", "finished", "saved",
-    "flushed", "complete_posted", "done",
+    "claimed",
+    "placed",
+    "harness_started",
+    "harness_spawned",
+    "first_output",
+    "first_delta_posted",
+    "model_done",
+    "scrubbed",
+    "finished",
+    "saved",
+    "flushed",
+    "complete_posted",
+    "done",
 ];
 
 static SENDER: OnceLock<SyncSender<Map<String, Value>>> = OnceLock::new();
@@ -46,25 +57,28 @@ static TURNS: Mutex<Option<HashMap<String, Turn>>> = Mutex::new(None);
 
 /// Start the writer for `state_dir` (the `run` command only). Off when `TICO_FLIGHT_RECORDER=0`, as on the server.
 pub fn init(state_dir: &Path) {
-    if std::env::var("TICO_FLIGHT_RECORDER").ok().as_deref() == Some("0") || SENDER.get().is_some() {
+    if std::env::var("TICO_FLIGHT_RECORDER").ok().as_deref() == Some("0") || SENDER.get().is_some()
+    {
         return;
     }
     let (tx, rx) = sync_channel::<Map<String, Value>>(QUEUE);
     let mut writer = Writer::new(state_dir, MAX_BYTES);
-    let spawned = std::thread::Builder::new().name("flight".into()).spawn(move || {
-        let mut next_sample = Instant::now() + SAMPLE_EVERY;
-        loop {
-            match rx.recv_timeout(next_sample.saturating_duration_since(Instant::now())) {
-                Ok(record) => writer.write(&record),
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => return,
+    let spawned = std::thread::Builder::new()
+        .name("flight".into())
+        .spawn(move || {
+            let mut next_sample = Instant::now() + SAMPLE_EVERY;
+            loop {
+                match rx.recv_timeout(next_sample.saturating_duration_since(Instant::now())) {
+                    Ok(record) => writer.write(&record),
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => return,
+                }
+                if Instant::now() >= next_sample {
+                    next_sample = Instant::now() + SAMPLE_EVERY;
+                    writer.write(&envelope("runner.process", process_sample()));
+                }
             }
-            if Instant::now() >= next_sample {
-                next_sample = Instant::now() + SAMPLE_EVERY;
-                writer.write(&envelope("runner.process", process_sample()));
-            }
-        }
-    });
+        });
     if spawned.is_ok() {
         let _ = SENDER.set(tx);
         let mut start = Map::new();
@@ -94,7 +108,9 @@ fn envelope(kind: &str, fields: Map<String, Value>) -> Map<String, Value> {
 
 /// Now as Unix seconds to the millisecond.
 fn now_ts() -> f64 {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     now.as_millis() as f64 / 1000.0
 }
 
@@ -118,15 +134,25 @@ pub fn phase(name: &str, attempt: &str) {
     if name == "claimed" {
         if turns.len() >= 512 {
             // A worker that died before `turn_end` leaves its entry: the oldest go.
-            let oldest = turns.iter().min_by_key(|(_, t)| t.at).map(|(k, _)| k.clone());
+            let oldest = turns
+                .iter()
+                .min_by_key(|(_, t)| t.at)
+                .map(|(k, _)| k.clone());
             if let Some(k) = oldest {
                 turns.remove(&k);
             }
         }
-        turns.insert(attempt.to_string(), Turn { at: Instant::now(), phases: vec![("claimed".into(), 0)] });
+        turns.insert(
+            attempt.to_string(),
+            Turn {
+                at: Instant::now(),
+                phases: vec![("claimed".into(), 0)],
+            },
+        );
     } else if let Some(turn) = turns.get_mut(attempt) {
         if !turn.phases.iter().any(|(n, _)| n == name) {
-            turn.phases.push((name.to_string(), turn.at.elapsed().as_millis() as u64));
+            turn.phases
+                .push((name.to_string(), turn.at.elapsed().as_millis() as u64));
         }
     }
 }
@@ -134,16 +160,27 @@ pub fn phase(name: &str, attempt: &str) {
 /// The turn's end: one `runner.turn` record with every phase's milliseconds since it was claimed.
 pub fn turn_end(attempt: &str, bot: &str, runtime: &str, outcome: &str, settled: bool) {
     phase("done", attempt);
-    let turn = TURNS.lock().unwrap_or_else(|p| p.into_inner()).as_mut().and_then(|t| t.remove(attempt));
+    let turn = TURNS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_mut()
+        .and_then(|t| t.remove(attempt));
     let Some(turn) = turn else { return };
-    let phases: Map<String, Value> = turn.phases.iter().map(|(n, ms)| (n.clone(), json!(ms))).collect();
+    let phases: Map<String, Value> = turn
+        .phases
+        .iter()
+        .map(|(n, ms)| (n.clone(), json!(ms)))
+        .collect();
     let mut f = Map::new();
     f.insert("attempt".into(), json!(attempt));
     f.insert("bot".into(), json!(bot));
     f.insert("runtime".into(), json!(runtime));
     f.insert("outcome".into(), json!(outcome));
     f.insert("settled".into(), json!(settled));
-    f.insert("total_ms".into(), json!(turn.at.elapsed().as_millis() as u64));
+    f.insert(
+        "total_ms".into(),
+        json!(turn.at.elapsed().as_millis() as u64),
+    );
     f.insert("phases".into(), Value::Object(phases));
     emit("runner.turn", f);
 }
@@ -192,7 +229,10 @@ fn git_verb(argv: &[String]) -> (String, Option<String>) {
         let a = &argv[i];
         if a == "-c" || a == "-C" {
             if a == "-C" {
-                repo = argv.get(i + 1).and_then(|p| Path::new(p).file_name()).map(|n| n.to_string_lossy().into_owned());
+                repo = argv
+                    .get(i + 1)
+                    .and_then(|p| Path::new(p).file_name())
+                    .map(|n| n.to_string_lossy().into_owned());
             }
             i += 2;
         } else if a.starts_with('-') {
@@ -224,7 +264,14 @@ fn process_sample() -> Map<String, Value> {
     if let Some(rss) = resident_bytes() {
         f.insert("rss_bytes".into(), json!(rss));
     }
-    f.insert("turns".into(), json!(TURNS.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map_or(0, |t| t.len())));
+    f.insert(
+        "turns".into(),
+        json!(TURNS
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map_or(0, |t| t.len())),
+    );
     f.insert("dropped".into(), json!(DROPPED.swap(0, Ordering::Relaxed)));
     f
 }
@@ -234,7 +281,15 @@ fn resident_bytes() -> Option<u64> {
     // SAFETY: proc_pidinfo writes at most `size` bytes into the struct.
     let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
-    let got = unsafe { libc::proc_pidinfo(std::process::id() as libc::c_int, libc::PROC_PIDTASKINFO, 0, &mut info as *mut _ as *mut libc::c_void, size) };
+    let got = unsafe {
+        libc::proc_pidinfo(
+            std::process::id() as libc::c_int,
+            libc::PROC_PIDTASKINFO,
+            0,
+            &mut info as *mut _ as *mut libc::c_void,
+            size,
+        )
+    };
     (got == size).then_some(info.pti_resident_size)
 }
 
@@ -258,7 +313,12 @@ struct Writer {
 
 impl Writer {
     fn new(dir: &Path, max_bytes: u64) -> Self {
-        Writer { dir: dir.to_path_buf(), max_bytes, file: None, size: 0 }
+        Writer {
+            dir: dir.to_path_buf(),
+            max_bytes,
+            file: None,
+            size: 0,
+        }
     }
 
     fn write(&mut self, record: &Map<String, Value>) {
@@ -269,7 +329,10 @@ impl Writer {
         }
         if self.file.is_none() {
             self.open();
-            if self.file.is_some() && self.size > 0 && self.size + line.len() as u64 > self.max_bytes {
+            if self.file.is_some()
+                && self.size > 0
+                && self.size + line.len() as u64 > self.max_bytes
+            {
                 // Left over from an earlier process: rotate and reopen once. If the rename failed and the file is
                 // still too big, drop this record rather than grow it or try again.
                 self.rotate();
@@ -292,7 +355,12 @@ impl Writer {
 
     fn open(&mut self) {
         use std::os::unix::fs::OpenOptionsExt;
-        if let Ok(f) = OpenOptions::new().create(true).append(true).mode(0o600).open(self.dir.join(FILE)) {
+        if let Ok(f) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(self.dir.join(FILE))
+        {
             self.size = f.metadata().map(|m| m.len()).unwrap_or(0);
             self.file = Some(f);
         }
@@ -300,7 +368,13 @@ impl Writer {
 
     fn rotate(&mut self) {
         self.file = None;
-        let name = |n: usize| if n == 0 { self.dir.join(FILE) } else { self.dir.join(format!("{FILE}.{n}")) };
+        let name = |n: usize| {
+            if n == 0 {
+                self.dir.join(FILE)
+            } else {
+                self.dir.join(format!("{FILE}.{n}"))
+            }
+        };
         let _ = std::fs::remove_file(name(KEEP - 1));
         for n in (0..KEEP - 1).rev() {
             let _ = std::fs::rename(name(n), name(n + 1));
@@ -311,13 +385,26 @@ impl Writer {
 
 /// The flight files in `dir`, oldest first.
 fn files(dir: &Path) -> Vec<PathBuf> {
-    (0..KEEP).rev().map(|n| if n == 0 { dir.join(FILE) } else { dir.join(format!("{FILE}.{n}")) }).filter(|p| p.exists()).collect()
+    (0..KEEP)
+        .rev()
+        .map(|n| {
+            if n == 0 {
+                dir.join(FILE)
+            } else {
+                dir.join(format!("{FILE}.{n}"))
+            }
+        })
+        .filter(|p| p.exists())
+        .collect()
 }
 
 /// `90s`, `30m`, `1h`, `2d` (a bare number is seconds) to seconds.
 pub fn parse_since(text: &str) -> Option<f64> {
     let t = text.trim();
-    let (num, unit) = t.split_at(t.find(|c: char| !c.is_ascii_digit() && c != '.').unwrap_or(t.len()));
+    let (num, unit) = t.split_at(
+        t.find(|c: char| !c.is_ascii_digit() && c != '.')
+            .unwrap_or(t.len()),
+    );
     let n: f64 = num.parse().ok()?;
     let scale = match unit {
         "" | "s" => 1.0,
@@ -342,7 +429,9 @@ pub fn summary(dir: &Path, since_s: f64, now: f64) -> String {
     for path in &found {
         let Ok(f) = File::open(path) else { continue };
         for line in BufReader::new(f).lines().map_while(Result::ok) {
-            let Ok(record) = serde_json::from_str::<Value>(&line) else { continue };
+            let Ok(record) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
             if record_ts(&record) < cutoff {
                 continue;
             }
@@ -362,21 +451,43 @@ pub fn summary(dir: &Path, since_s: f64, now: f64) -> String {
         out.push('\n');
     };
     if found.is_empty() {
-        return format!("No flight file in {} (the Rust runner writes {FILE} there while it runs)\n", dir.display());
+        return format!(
+            "No flight file in {} (the Rust runner writes {FILE} there while it runs)\n",
+            dir.display()
+        );
     }
-    say(&mut out, format!("Flight file {} since {}", dir.join(FILE).display(), crate::util::text_of(&crate::util::iso(&json!(cutoff)))));
+    say(
+        &mut out,
+        format!(
+            "Flight file {} since {}",
+            dir.join(FILE).display(),
+            crate::util::text_of(&crate::util::iso(&json!(cutoff)))
+        ),
+    );
     if starts > 0 {
         say(&mut out, format!("Runner starts: {starts}"));
     }
     let secs = |ms: u64| format!("{:.1}s", ms as f64 / 1000.0);
     let n = |v: &Value| v.as_u64().unwrap_or(0);
-    let clock = |v: &Value| crate::util::text_of(&crate::util::iso(&json!(record_ts(v)))).get(11..19).unwrap_or("").to_string();
+    let clock = |v: &Value| {
+        crate::util::text_of(&crate::util::iso(&json!(record_ts(v))))
+            .get(11..19)
+            .unwrap_or("")
+            .to_string()
+    };
 
     say(&mut out, format!("\nTurns: {}", turns.len()));
     // Each step is the gap from the previous mark the turn reached, in the order turns pass them.
     let mut steps: BTreeMap<String, Vec<u64>> = BTreeMap::new();
     for t in turns.iter().rev().take(20) {
-        let mut line = format!("  {} {} {} {} {}", clock(t), t["bot"].as_str().unwrap_or(""), t["runtime"].as_str().unwrap_or(""), t["outcome"].as_str().unwrap_or(""), secs(n(&t["total_ms"])));
+        let mut line = format!(
+            "  {} {} {} {} {}",
+            clock(t),
+            t["bot"].as_str().unwrap_or(""),
+            t["runtime"].as_str().unwrap_or(""),
+            t["outcome"].as_str().unwrap_or(""),
+            secs(n(&t["total_ms"]))
+        );
         for (name, ms) in reached(t) {
             if name != "claimed" {
                 line.push_str(&format!(" {name}+{}", secs(ms)));
@@ -387,7 +498,10 @@ pub fn summary(dir: &Path, since_s: f64, now: f64) -> String {
     for t in &turns {
         let marks = reached(t);
         for pair in marks.windows(2) {
-            steps.entry(format!("{} -> {}", pair[0].0, pair[1].0)).or_default().push(pair[1].1.saturating_sub(pair[0].1));
+            steps
+                .entry(format!("{} -> {}", pair[0].0, pair[1].0))
+                .or_default()
+                .push(pair[1].1.saturating_sub(pair[0].1));
         }
     }
     if !steps.is_empty() {
@@ -401,29 +515,90 @@ pub fn summary(dir: &Path, since_s: f64, now: f64) -> String {
             .collect();
         rows.sort_by(|a, b| b.1.cmp(&a.1));
         for (step, max, median, count) in rows.iter().take(8) {
-            say(&mut out, format!("  {step}: {} max, {} median, {count}", secs(*max), secs(*median)));
+            say(
+                &mut out,
+                format!(
+                    "  {step}: {} max, {} median, {count}",
+                    secs(*max),
+                    secs(*median)
+                ),
+            );
         }
     }
 
     let failed = heartbeats.iter().filter(|h| h["ok"] == false).count();
-    say(&mut out, format!("\nSlow or failed heartbeats: {} ({failed} failed; slow is {}+)", heartbeats.len(), secs(HEARTBEAT_SLOW_MS)));
+    say(
+        &mut out,
+        format!(
+            "\nSlow or failed heartbeats: {} ({failed} failed; slow is {}+)",
+            heartbeats.len(),
+            secs(HEARTBEAT_SLOW_MS)
+        ),
+    );
     heartbeats.sort_by_key(|h| std::cmp::Reverse(n(&h["ms"])));
     for h in heartbeats.iter().take(5) {
-        let how = if h["ok"] == true { String::new() } else { format!(" failed ({} {})", h["status"], h["code"].as_str().unwrap_or("")) };
-        say(&mut out, format!("  {} {} tries {}{how}", clock(h), secs(n(&h["ms"])), n(&h["tries"])));
+        let how = if h["ok"] == true {
+            String::new()
+        } else {
+            format!(
+                " failed ({} {})",
+                h["status"],
+                h["code"].as_str().unwrap_or("")
+            )
+        };
+        say(
+            &mut out,
+            format!(
+                "  {} {} tries {}{how}",
+                clock(h),
+                secs(n(&h["ms"])),
+                n(&h["tries"])
+            ),
+        );
     }
 
-    say(&mut out, format!("\nSlow git commands: {} (slow is {}+)", gits.len(), secs(GIT_SLOW_MS)));
+    say(
+        &mut out,
+        format!(
+            "\nSlow git commands: {} (slow is {}+)",
+            gits.len(),
+            secs(GIT_SLOW_MS)
+        ),
+    );
     gits.sort_by_key(|g| std::cmp::Reverse(n(&g["ms"])));
     for g in gits.iter().take(10) {
-        let fault = g["fault"].as_str().map(|f| format!(" {f}")).unwrap_or_default();
-        say(&mut out, format!("  {} git {} {} {}{fault}", clock(g), g["verb"].as_str().unwrap_or(""), g["repo"].as_str().unwrap_or(""), secs(n(&g["ms"]))));
+        let fault = g["fault"]
+            .as_str()
+            .map(|f| format!(" {f}"))
+            .unwrap_or_default();
+        say(
+            &mut out,
+            format!(
+                "  {} git {} {} {}{fault}",
+                clock(g),
+                g["verb"].as_str().unwrap_or(""),
+                g["repo"].as_str().unwrap_or(""),
+                secs(n(&g["ms"]))
+            ),
+        );
     }
 
     let dropped: u64 = samples.iter().map(|s| n(&s["dropped"])).sum();
     if let Some(last) = samples.last() {
-        let peak = samples.iter().map(|s| n(&s["rss_bytes"])).max().unwrap_or(0);
-        say(&mut out, format!("\nProcess: {} MB resident now, {} MB peak; {} turns open", n(&last["rss_bytes"]) >> 20, peak >> 20, n(&last["turns"])));
+        let peak = samples
+            .iter()
+            .map(|s| n(&s["rss_bytes"]))
+            .max()
+            .unwrap_or(0);
+        say(
+            &mut out,
+            format!(
+                "\nProcess: {} MB resident now, {} MB peak; {} turns open",
+                n(&last["rss_bytes"]) >> 20,
+                peak >> 20,
+                n(&last["turns"])
+            ),
+        );
     }
     say(&mut out, format!("Dropped records: {dropped}"));
     out
@@ -431,7 +606,10 @@ pub fn summary(dir: &Path, since_s: f64, now: f64) -> String {
 
 /// A turn record's marks in turn order, with their milliseconds since claimed.
 fn reached(turn: &Value) -> Vec<(String, u64)> {
-    let mut marks: Vec<(String, u64)> = PHASES.iter().filter_map(|p| turn["phases"][*p].as_u64().map(|ms| (p.to_string(), ms))).collect();
+    let mut marks: Vec<(String, u64)> = PHASES
+        .iter()
+        .filter_map(|p| turn["phases"][*p].as_u64().map(|ms| (p.to_string(), ms)))
+        .collect();
     marks.sort_by_key(|(name, ms)| (*ms, PHASES.iter().position(|p| p == name)));
     marks
 }
@@ -441,7 +619,8 @@ mod tests {
     use super::*;
 
     fn temp() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("tico-flight-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("tico-flight-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -464,15 +643,23 @@ mod tests {
         let dir = temp();
         let mut w = Writer::new(&dir, 200);
         for i in 0..40 {
-            w.write(&envelope("runner.git", Map::from_iter([("ms".to_string(), json!(i))])));
+            w.write(&envelope(
+                "runner.git",
+                Map::from_iter([("ms".to_string(), json!(i))]),
+            ));
         }
         let kept = files(&dir);
         assert_eq!(kept.len(), KEEP);
-        assert!(kept.iter().all(|p| std::fs::metadata(p).unwrap().len() <= 200));
+        assert!(kept
+            .iter()
+            .all(|p| std::fs::metadata(p).unwrap().len() <= 200));
         let newest = std::fs::read_to_string(dir.join(FILE)).unwrap();
         assert!(newest.contains("\"ms\":39"), "{newest}");
         let first: Value = serde_json::from_str(newest.lines().next().unwrap()).unwrap();
-        assert!(first["v"] == 1 && first["ts"].is_f64() && first["kind"] == "runner.git", "{first}");
+        assert!(
+            first["v"] == 1 && first["ts"].is_f64() && first["kind"] == "runner.git",
+            "{first}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -493,11 +680,22 @@ mod tests {
         let now = crate::util::parse_iso("2026-10-14T12:00:00Z");
         let text = summary(&dir, parse_since("1h").unwrap(), now);
         assert!(text.contains("Turns: 2"), "{text}");
-        assert!(text.contains("acme-seo claude completed 84.0s placed+1.2s"), "{text}");
-        assert!(text.contains("first_output -> finished: 74.0s max"), "{text}");
+        assert!(
+            text.contains("acme-seo claude completed 84.0s placed+1.2s"),
+            "{text}"
+        );
+        assert!(
+            text.contains("first_output -> finished: 74.0s max"),
+            "{text}"
+        );
         // The hand-in's own steps name a slow scrub; marks in the same millisecond keep the order turns pass them.
         assert!(text.contains("model_done -> scrubbed: 45.0s max"), "{text}");
-        assert!(text.contains("model_done+30.0s scrubbed+75.0s finished+75.1s saved+75.1s flushed+75.2s"), "{text}");
+        assert!(
+            text.contains(
+                "model_done+30.0s scrubbed+75.0s finished+75.1s saved+75.1s flushed+75.2s"
+            ),
+            "{text}"
+        );
         assert!(text.contains("4.2s tries 1"), "{text}");
         assert!(text.contains("git fetch acme-seo 9.0s"), "{text}");
         assert!(text.contains("Dropped records: 3"), "{text}");
@@ -508,8 +706,13 @@ mod tests {
     #[test]
     fn a_scrub_git_call_records_its_verb_and_folder_never_its_arguments() {
         let mut argv = vec!["git".to_string()];
-        argv.extend(crate::safegit::args(Path::new("/home/acme/projects/acme-seo")));
+        argv.extend(crate::safegit::args(Path::new(
+            "/home/acme/projects/acme-seo",
+        )));
         argv.extend(["log", "-p", "--since=acme-private-arg"].map(String::from));
-        assert_eq!(git_verb(&argv), ("log".to_string(), Some("acme-seo".to_string())));
+        assert_eq!(
+            git_verb(&argv),
+            ("log".to_string(), Some("acme-seo".to_string()))
+        );
     }
 }
