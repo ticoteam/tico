@@ -10,10 +10,8 @@ const {unrouted} = require('./support/routes.cjs') as typeof import('./support/r
 // Browser-side globals the test reads or calls inside page.evaluate / waitForFunction.
 declare const S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
 
-declare global {
-  var TASK_RUN_ROWS: unknown[] | null;
-  var taskModalShow: (task: {id: string; title: string}) => unknown;
-}
+declare var TASK_RUN_ROWS: unknown[] | null;
+declare var taskModalShow: (task: {id: string; title: string}) => unknown;
 const SHOTS = process.env.TICO_UI_SHOTS || '';
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
 

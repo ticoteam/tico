@@ -9,9 +9,7 @@ const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 // Browser-side function the test calls inside page.evaluate.
-declare global {
-  function v2MessagesHTML(messages: unknown[], goalLine?: unknown, slug?: string): string;
-}
+declare function v2MessagesHTML(messages: unknown[], goalLine?: unknown, slug?: string): string;
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
 const SHOTS = process.env.TICO_UI_SHOTS || '';
 

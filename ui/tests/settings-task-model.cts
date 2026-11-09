@@ -25,14 +25,12 @@ type Body = {expected_revision?: number; task_model?: {harness?: string; model?:
   display_name?: string; description?: string; keep_tasks_going?: number | null; turns_at_once?: number | null};
 declare const S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
 
-declare global {
-  var SETTINGS: string;
-  var SETTINGS_DATA: {models: unknown[]};
-  function settingsShow(tab: string): void;
-  function settingsEditBot(slug?: string, inline?: boolean): void;
-  var renderSettingsBots: () => void;
-  var loadSettings: () => void;
-}
+declare var SETTINGS: string;
+declare var SETTINGS_DATA: {models: unknown[]};
+declare function settingsShow(tab: string): void;
+declare function settingsEditBot(slug?: string, inline?: boolean): void;
+declare var renderSettingsBots: () => void;
+declare var loadSettings: () => void;
 (async () => {
   const browser = await chromium.launch({headless: true});
   try {

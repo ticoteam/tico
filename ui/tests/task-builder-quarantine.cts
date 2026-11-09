@@ -9,11 +9,9 @@ const {unrouted} = require('./support/routes.cjs') as typeof import('./support/r
 // Browser-side globals the test reads or calls inside page.evaluate / waitForFunction.
 declare const S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
 
-declare global {
-  function liveEmit(topic: string, data: unknown): void;
-  function taskBuilderActors(task: unknown): unknown[];
-  function refresh(force?: boolean): unknown;
-}
+declare function liveEmit(topic: string, data: unknown): void;
+declare function taskBuilderActors(task: unknown): unknown[];
+declare function refresh(force?: boolean): unknown;
 type Status = {bot: string; state: string; bot_state: string;
   quarantine?: {auto: boolean; resumes_at: string | null; builder_notice: string; why: string}};
 type Held = Status & {quarantine: NonNullable<Status['quarantine']>};

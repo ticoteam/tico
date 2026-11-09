@@ -12,20 +12,22 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+// Page globals this spec reads (file-local; see ui/tests/tsconfig.json moduleDetection).
+declare const window: Window & typeof globalThis & {
+  copied: string | undefined;
+};
 
 type Page = import('playwright').Page;
 type Rect = {x: number; y: number; width: number; height: number};
 type ThvView = {id: string; messages: {id: string}[]; opts: {dm?: boolean}; gone?: boolean};
 // Browser-side globals the page defines (ui/app), and `copied`, which the clipboard stub in this file sets.
-declare global {
-  var THV_VIEWS: ThvView[];
-  var THV_TICK: number;
-  var thvReplyStart: (view: ThvView, message: {id: string}) => unknown;
-  var thvNewDm: (view: ThvView | undefined) => unknown;
-  var threadViewsLive: (kind: string, event: unknown) => unknown;
-  var catchUpOpen: () => unknown;
-  var copied: string | undefined;
-}
+declare var THV_VIEWS: ThvView[];
+declare var THV_TICK: number;
+declare var thvReplyStart: (view: ThvView, message: {id: string}) => unknown;
+declare var thvNewDm: (view: ThvView | undefined) => unknown;
+declare var threadViewsLive: (kind: string, event: unknown) => unknown;
+declare var catchUpOpen: () => unknown;
+declare var copied: string | undefined;
 
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const now = Date.now(), at = (min: number) => new Date(now - min * 60000).toISOString();

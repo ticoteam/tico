@@ -7,16 +7,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+// Page globals this spec reads (file-local; see ui/tests/tsconfig.json moduleDetection).
+declare const window: Window & typeof globalThis & {
+  __cloudRequest: {name: string; supported: boolean; team: string} | undefined;
+};
 
 const SHOTS = process.env.TB_SHOTS || '';
 type Browser = import('playwright').Browser;
 type Route = import('playwright').Route;
 // The request bodies the fake server reads (what the page sent).
 type Body = {[key: string]: unknown; briefing?: string; team?: string; reports_to?: string; picks?: unknown[]};
-declare global {
-  function teamBuildOpen(group: string | null): void;
-  var __cloudRequest: {name: string; supported: boolean; team: string} | undefined;
-}
+declare function teamBuildOpen(group: string | null): void;
+declare var __cloudRequest: {name: string; supported: boolean; team: string} | undefined;
 const group = {id: 'engineering', name: 'Engineering', parent: '', org_parent: '', order: 0};
 const item = (template: string, name: string, match = '') => ({template, name, icon: '', department: 'engineering', line: 'Works on the team.',
   tags: [], owns: [], prerequisites: [], match, source: 'template'});

@@ -16,9 +16,7 @@ type SetupPerson = {id: string; name: string; title: string; seats: string[]; in
 type SetupRecord = {names: {company_name: string}; completed: string | null; needed: boolean; bots: unknown[];
   company_import_failed: {at: string; reason: string} | null; company_import: {seats?: number; deferred?: unknown[]; people: SetupPerson[]} | null};
 // Browser-side function the test calls inside page.evaluate.
-declare global {
-  function agoTick(): void;
-}
+declare function agoTick(): void;
 
 const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail couldn't deliver the invite to dana@acme.example. Check the address, then try again."}};
 

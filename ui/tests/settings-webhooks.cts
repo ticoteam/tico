@@ -43,9 +43,7 @@ type State = {triggers: Trigger[]; deliveries: Record<string, Delivery[]>; hooks
   wakeFail: {status: number; code: string; detail: string} | null; puts: {path: string; body: unknown}[]; posts: {path: string; body: Body}[]};
 
 // Browser-side global the page defines (ui/app).
-declare global {
-  var whMount: (name: string) => unknown;
-}
+declare var whMount: (name: string) => unknown;
 
 const shots = process.env.TICO_SHOTS || '';
 const CATALOG = JSON.parse(execFileSync(process.env.TICO_PYTHON || 'python3', ['-c', 'import json; from backend.event_catalog import listing; print(json.dumps(listing()))'],

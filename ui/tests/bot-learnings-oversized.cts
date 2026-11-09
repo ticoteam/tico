@@ -15,19 +15,17 @@ interface LearnData {
 declare const esc: (value: unknown) => string;
 declare function learnOpen(bot: string, data: LearnData): void;
 declare function botLearningsLoad(bot: string): Promise<void>;
-declare global {
-  interface Window {
-    $: (selector: string, root?: ParentNode) => Element | null;
-    esc: (value: unknown) => string;
-    md: (text: string) => string;
-    BOT: {slug: string};
-    post: (url: string, body?: unknown) => Promise<unknown>;
-    toast: (message: string) => void;
-    reads: string[];
-    ago: () => string;
-    get: (url: string) => Promise<unknown>;
-  }
-}
+declare const window: Window & typeof globalThis & {
+  $: (selector: string, root?: ParentNode) => Element | null;
+  esc: (value: unknown) => string;
+  md: (text: string) => string;
+  BOT: {slug: string};
+  post: (url: string, body?: unknown) => Promise<unknown>;
+  toast: (message: string) => void;
+  reads: string[];
+  ago: () => string;
+  get: (url: string) => Promise<unknown>;
+};
 
 (async () => {
   const browser = await chromium.launch({headless: true});

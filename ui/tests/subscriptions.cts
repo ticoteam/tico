@@ -44,11 +44,9 @@ type Data = {machines: Machine[]; subs: Sub[]; assignments: {runner_id: string; 
   gateway: Record<string, unknown>; models: Record<string, unknown>[]; levels: Record<string, unknown>;
   connect?: string[]; connectRefused?: string; connectHeld?: Promise<unknown> | null; connectNotYours?: boolean;
   keys?: (string | undefined)[]; login?: Login};
-declare global {
-  var SETTINGS_TAB: string;
-  function settingsShow(tab: string): void;
-  function settingsEditBot(slug?: string, inline?: boolean): void;
-}
+declare var SETTINGS_TAB: string;
+declare function settingsShow(tab: string): void;
+declare function settingsEditBot(slug?: string, inline?: boolean): void;
 
 const KINDS: Kind[] = [
   {kind: 'claude_token', label: 'Claude plan', runtime: 'claude', secret_label: 'Token from claude setup-token', help: 'Run claude setup-token on a computer signed in to the plan, then paste the token.', connect: true, owned: true},

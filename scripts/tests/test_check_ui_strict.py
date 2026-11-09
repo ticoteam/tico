@@ -191,7 +191,12 @@ def _tests_root(tmp_path, config):
 
 
 GOOD_TESTS_CONFIG = {
-    "compilerOptions": {"strict": True, "erasableSyntaxOnly": True, "verbatimModuleSyntax": True},
+    "compilerOptions": {
+        "strict": True,
+        "erasableSyntaxOnly": True,
+        "verbatimModuleSyntax": True,
+        "moduleDetection": "force",
+    },
     "include": ["./**/*.cts"],
 }
 
@@ -213,3 +218,20 @@ def test_a_weakened_test_config_fails_without_running_tsc(tmp_path, monkeypatch)
     problems = strict.check_tests_gate()
     assert any("strict must be true" in p for p in problems)
     assert any("erasableSyntaxOnly must be true" in p for p in problems)
+
+
+def test_a_declare_global_in_a_test_script_fails_without_running_tsc(tmp_path, monkeypatch):
+    root = _tests_root(tmp_path, GOOD_TESTS_CONFIG)
+    (root / "ui/tests/y.cts").write_text("declare global {\n  var post: () => void;\n}\nexport {};\n")
+    (root / "ui/tests/z.d.cts").write_text("declare global {\n  var helper: number;\n}\nexport {};\n")
+    monkeypatch.setattr(strict, "ROOT", root)
+    monkeypatch.setattr(strict, "run_tests_tsc", lambda: pytest.fail("tsc must not run with a declare global"))
+    problems = strict.check_tests_gate()
+    assert len(problems) == 1 and problems[0].startswith("ui/tests/y.cts: `declare global` is not allowed")
+
+
+def test_the_test_config_must_keep_module_detection_force(tmp_path, monkeypatch):
+    loose = {**GOOD_TESTS_CONFIG, "compilerOptions": {**GOOD_TESTS_CONFIG["compilerOptions"], "moduleDetection": "auto"}}
+    monkeypatch.setattr(strict, "ROOT", _tests_root(tmp_path, loose))
+    monkeypatch.setattr(strict, "run_tests_tsc", lambda: pytest.fail("tsc must not run on a weakened config"))
+    assert strict.check_tests_gate() == ['ui/tests/tsconfig.json: moduleDetection must be "force" (each script is its own scope)']

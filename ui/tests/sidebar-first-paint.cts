@@ -23,11 +23,9 @@ type Kept = {who: string; finance?: boolean; welcome?: boolean};
 type Gate = (value?: unknown) => void;
 declare const S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
 
-declare global {
-  var FIN_PROBE: unknown;
-  var THREADS: {on: unknown};
-  var renderTree: () => void;
-}
+declare var FIN_PROBE: unknown;
+declare var THREADS: {on: unknown};
+declare var renderTree: () => void;
 
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 const ORIGIN = 'http://tico-ui.test';

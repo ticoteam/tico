@@ -21,37 +21,40 @@ type Sse = {queue: unknown[]; seq: number; latest: import('playwright').Request 
 type Seen = {errors: string[]; posts: {text: string}[]; reads: string[]; readSeqs: string[]; homes: string[]; steps: string[]; tasks: unknown[]; calls: string[];
   catchUps: unknown[]; follows: unknown[]; earlier: string[]; withdrawn: unknown[]; patches: unknown[]; readAll: string[]; pins: string[]; created: unknown[];
   browsed: (string | null)[]; rails: number; threadGets: string[]; callSeats: Set<string>};
-declare global {
-  var THV_VIEWS: ThvView[];
-  var thvDraw: (view: ThvLive) => void;
-  var thvRefresh: (view: ThvLive) => void;
-  var threadViewsLive: (kind: string, event: unknown) => unknown;
-  var callAction: (view: ThvLive, kind: string) => Promise<void>;
-  var callJoin: (threadId: string, call: {id: string}, title: string) => Promise<void>;
-  var threadsSideRender: () => void;
-  var THREADS: {on: unknown};
-  var CU: {undo: {timer?: ReturnType<typeof setTimeout>} | null};
-  var CALL: {id: string} | null;
-  var CALL_JOINS: number;
-  var CALL_JOINING: Map<string, number>;
-  var CALL_LEAVING: Map<string, Promise<unknown>>;
-  var CALL_THREADS: Map<string, Record<string, unknown>>;
-  var pendingWrites: Map<string, string>;
-  var LIVE: unknown;
-  var LIVE_TOPICS: string[];
-  var LivekitClient: unknown;
-  var ticoPageHidden: () => {inCall: boolean};
-  var __rooms: {mic: boolean; gone: boolean; token?: string; mic_track: {stopped: boolean}}[];
-  var __connectGate: Gate[] | null;
-  var __joining: Promise<unknown> | undefined;
-  var __rejoining: Promise<unknown> | undefined;
-  var __starting: Promise<unknown> | undefined;
-}
-declare global {
-  interface Window {
-    __callLeaveTimeoutMs?: number;
-  }
-}
+declare var THV_VIEWS: ThvView[];
+declare var thvDraw: (view: ThvLive) => void;
+declare var thvRefresh: (view: ThvLive) => void;
+declare var threadViewsLive: (kind: string, event: unknown) => unknown;
+declare var callAction: (view: ThvLive, kind: string) => Promise<void>;
+declare var callJoin: (threadId: string, call: {id: string}, title: string) => Promise<void>;
+declare var threadsSideRender: () => void;
+declare var THREADS: {on: unknown};
+declare var CU: {undo: {timer?: ReturnType<typeof setTimeout>} | null};
+declare var CALL: {id: string} | null;
+declare var CALL_JOINS: number;
+declare var CALL_JOINING: Map<string, number>;
+declare var CALL_LEAVING: Map<string, Promise<unknown>>;
+declare var CALL_THREADS: Map<string, Record<string, unknown>>;
+declare var pendingWrites: Map<string, string>;
+declare var LIVE: unknown;
+declare var LIVE_TOPICS: string[];
+declare var LivekitClient: unknown;
+declare var ticoPageHidden: () => {inCall: boolean};
+declare var __rooms: {mic: boolean; gone: boolean; token?: string; mic_track: {stopped: boolean}}[];
+declare var __connectGate: Gate[] | null;
+declare var __joining: Promise<unknown> | undefined;
+declare var __rejoining: Promise<unknown> | undefined;
+declare var __starting: Promise<unknown> | undefined;
+declare const window: Window & typeof globalThis & {
+  LivekitClient: unknown;
+  __connectGate: Gate[] | null;
+  __joining: Promise<unknown> | undefined;
+  __rejoining: Promise<unknown> | undefined;
+  __rooms: {mic: boolean; gone: boolean; token?: string; mic_track: {stopped: boolean}}[];
+  __starting: Promise<unknown> | undefined;
+  ticoPageHidden: () => {inCall: boolean};
+  __callLeaveTimeoutMs?: number;
+};
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const now = Date.now(), at = (min: number) => new Date(now - min * 60000).toISOString();
 const me = (unread = 0, extra: Record<string, unknown> = {}) => ({member: true, following: true, notify: 'live', last_read_seq: 0, unread, activity: false, can_post: true, can_manage: false, ...extra});

@@ -32,20 +32,20 @@ type Hold = {started: (value?: unknown) => void; release: Promise<unknown>};
 // Browser-side globals the test reads or calls inside page.evaluate / waitForFunction.
 declare const S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
 
-declare global {
-  function get(path: string): Promise<unknown>;
-  function teamBuildOpen(group?: string | null): unknown;
-  function cloudAgentsOpen(group?: string): unknown;
-  function refresh(force?: boolean): unknown;
-  function orgGroupDelete(id: string): Promise<void>;
-  function orgTreeByParent(): {[key: string]: {kind: string; id: string}[]};
-  function orgHistoryStore(items: string[], at: number): void;
-  function orgFanBots(): {slug: string}[];
-  function orgFanChatBots(name: string): {slug: string}[];
-  function askToggle(open?: boolean, focus?: boolean): void;
-  function teamAddRefresh(): void;
-  interface Window {olderRoster?: unknown; chartRefresh?: unknown}
-}
+declare function get(path: string): Promise<unknown>;
+declare function teamBuildOpen(group?: string | null): unknown;
+declare function cloudAgentsOpen(group?: string): unknown;
+declare function refresh(force?: boolean): unknown;
+declare function orgGroupDelete(id: string): Promise<void>;
+declare function orgTreeByParent(): {[key: string]: {kind: string; id: string}[]};
+declare function orgHistoryStore(items: string[], at: number): void;
+declare function orgFanBots(): {slug: string}[];
+declare function orgFanChatBots(name: string): {slug: string}[];
+declare function askToggle(open?: boolean, focus?: boolean): void;
+declare function teamAddRefresh(): void;
+declare const window: Window & typeof globalThis & {
+  olderRoster?: unknown; chartRefresh?: unknown
+};
 
 const FULL = {see: true, read: true, write: true};
 async function shot(page: Page, name: string) {

@@ -35,9 +35,7 @@ type Draft = {id: string; n: number | null; status: string; guide: string; summa
   sections: {[key: string]: unknown; extra: {[key: string]: unknown}}; bets?: Bet[]; note: string; revision: number;
   updated_at?: string; updated_by?: string; published_at?: string | null; published_by?: string | null};
 type State = {draft: Draft; current: Draft | null; bets: Bet[]};
-declare global {
-  var $: (selector: string) => HTMLElement;
-}
+declare var $: (selector: string) => HTMLElement;
 
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const shot = async (page: Page, name: string, themes: string[] = ['dark', 'light']) => {

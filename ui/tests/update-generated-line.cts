@@ -8,6 +8,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+// Page globals this spec reads (file-local; see ui/tests/tsconfig.json moduleDetection).
+type ThvView = {id: string; messages: {id: string}[]; opts: {dm?: boolean}; gone?: boolean};
+type ThvLive = ThvView & {thread: {me: {can_post: boolean}; [key: string]: unknown}};
+declare var THV_VIEWS: ThvView[];
+declare var thvDraw: (view: ThvLive) => void;
 
 const now = Date.now(), at = (min: number) => new Date(now - min * 60000).toISOString();
 const me = {member: true, following: true, notify: 'live', last_read_seq: 7, unread: 0, activity: false, can_post: true, can_manage: false};

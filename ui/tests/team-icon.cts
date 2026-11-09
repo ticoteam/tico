@@ -6,12 +6,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
-declare global {
-  var ticoTheme: {set(theme: string): unknown};
-  var loadSettings: () => void;
-  var route: () => void;
-  var setDrawer: (open: boolean) => void;
-}
+// Page globals this spec reads (file-local; see ui/tests/tsconfig.json moduleDetection).
+declare const window: Window & typeof globalThis & {
+  ticoTheme: {set(theme: string): void};
+};
+declare var ticoTheme: {set(theme: string): unknown};
+declare var loadSettings: () => void;
+declare var route: () => void;
+declare var setDrawer: (open: boolean) => void;
 const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6XcAAAAASUVORK5CYII=', 'base64');
 (async () => {
   const browser = await chromium.launch({headless:true, channel:process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);

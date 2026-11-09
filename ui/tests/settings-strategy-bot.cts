@@ -9,12 +9,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile, harnesses} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+// Page globals this spec reads (file-local; see ui/tests/tsconfig.json moduleDetection).
+declare const window: Window & typeof globalThis & {
+  ticoTheme: {set(theme: string): void};
+};
 
 // Browser-side globals the page defines (ui/app).
-declare global {
-  var renderStrategyBotLog: (host: HTMLElement) => unknown;
-  var ticoTheme: {set(theme: string): unknown};
-}
+declare var renderStrategyBotLog: (host: HTMLElement) => unknown;
+declare var ticoTheme: {set(theme: string): unknown};
 
 const LEVELS = [
   {level: 1, name: 'Passive', sentence: 'It keeps the regular checks running and otherwise acts only when asked through your Assistant.', ready: true},

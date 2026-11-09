@@ -10,15 +10,17 @@ const {html, uiFile} = require('./support/page.cjs') as typeof import('./support
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const fs = require('node:fs');
+// Page globals this spec reads (file-local; see ui/tests/tsconfig.json moduleDetection).
+declare const window: Window & typeof globalThis & {
+  ticoTheme: {set(theme: string): void};
+};
 const now = Date.now(), iso = (ms: number) => new Date(now + ms).toISOString(), hour = 3600e3;
 type Page = import('playwright').Page;
 type Upd = {id: string; bot: string; kind: string; day: string; headline: string; body: string; read: boolean; created_at: string;
   updated_at: string; replies: number; slides: unknown};
 type Entry = {key: string; author: string; name: string; direct: boolean; update: Upd | null; children: Entry[]};
 type PostBody = {kind?: string; body?: string; ids?: string[]; all?: boolean; slides?: unknown; replace_draft?: boolean};
-declare global {
-  var ticoTheme: {set(theme: string): unknown};
-}
+declare var ticoTheme: {set(theme: string): unknown};
 const today = new Date(now).toLocaleDateString('en-CA', {timeZone: 'America/Los_Angeles'});
 // A manager with eight reports (Chris, Oct 19: "a comment icon, unread icon, archive icon, and a '8 dropdown'").
 const EIGHT: [string, string][] = [['seo', 'AI SEO'], ['ads', 'Ads Bot'], ['copy', 'Copywriter'], ['social', 'Social Bot'], ['pr', 'PR Bot'],

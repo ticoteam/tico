@@ -14,13 +14,11 @@ type Server = {name?: string; home?: boolean; hidden?: boolean; analyst?: boolea
 // Browser-side globals the test reads inside page.evaluate / waitForFunction.
 declare const S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
 
-declare global {
-  var SETTINGS_DATA: {models: unknown[]};
-  var $: (selector: string) => HTMLElement;
-  function strategyBotName(): string;
-  function settingsShow(tab: string): void;
-  function settingsEditBot(slug?: string, inline?: boolean): void;
-}
+declare var SETTINGS_DATA: {models: unknown[]};
+declare var $: (selector: string) => HTMLElement;
+declare function strategyBotName(): string;
+declare function settingsShow(tab: string): void;
+declare function settingsEditBot(slug?: string, inline?: boolean): void;
 
 const bot = (name: string, display_name: string, org_parent: string, over?: Record<string, unknown>) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
 // What the server sends: the Heads, and the Head's department (Marketing), hang under the Strategy Bot. For a person who

@@ -15,14 +15,12 @@ type Viewport = {width: number; height: number};
 // S is the page's app state. It is declared here, not as a global: other tests declare S with other shapes.
 declare const S: {emps?: unknown[]};
 // Browser-side globals the page defines (ui/app).
-declare global {
-  var TASK_CHAT: {sending: boolean; reading: boolean};
-  var taskChatRead: (chat: {sending: boolean; reading: boolean}) => unknown;
-  var taskModalShow: (task: {id: string; title: string}) => unknown;
-  var SEND_WAY_TIMER: number | null;
-  var liveThrottle: (key: string, fn: () => unknown, ms: number) => unknown;
-  var sendWayPick: (way: string) => unknown;
-}
+declare var TASK_CHAT: {sending: boolean; reading: boolean};
+declare var taskChatRead: (chat: {sending: boolean; reading: boolean}) => unknown;
+declare var taskModalShow: (task: {id: string; title: string}) => unknown;
+declare var SEND_WAY_TIMER: number | null;
+declare var liveThrottle: (key: string, fn: () => unknown, ms: number) => unknown;
+declare var sendWayPick: (way: string) => unknown;
 
 const SHOTS = process.env.TICO_UI_SHOTS || '';
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);

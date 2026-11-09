@@ -11,21 +11,25 @@ type Route = import('playwright').Route;
 type Locator = import('playwright').Locator;
 // The live view the thread renderer draws (its own type is not exported).
 type SysLive = Parameters<typeof thvDraw>[0];
-declare global {
-  var thvApplyMessage: (view: SysLive, event: unknown) => void;
-  var thvUpdateReveal: (view: SysLive, id: string) => void;
-  var rowSource: (m: {[key: string]: unknown; sender_id: string}, by?: unknown) => {kind: string; name: string};
-  var isSourceLine: (m: unknown) => boolean;
-  var actorLabel: (id: string) => string;
-  var taskBody: (task: {[key: string]: unknown}) => string;
-  var sourceRunsHTML: <T>(items: T[], opts: {isUpdate: (x: T) => boolean; line: (x: T) => string; draw: () => string}) => string;
-  var commentLineHTML: (x: unknown, i: number, all: unknown[]) => string;
-}
+declare var thvApplyMessage: (view: SysLive, event: unknown) => void;
+declare var thvUpdateReveal: (view: SysLive, id: string) => void;
+declare var rowSource: (m: {[key: string]: unknown; sender_id: string}, by?: unknown) => {kind: string; name: string};
+declare var isSourceLine: (m: unknown) => boolean;
+declare var actorLabel: (id: string) => string;
+declare var taskBody: (task: {[key: string]: unknown}) => string;
+declare var sourceRunsHTML: <T>(items: T[], opts: {isUpdate: (x: T) => boolean; line: (x: T) => string; draw: () => string}) => string;
+declare var commentLineHTML: (x: unknown, i: number, all: unknown[]) => string;
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+// Page globals this spec reads (file-local; see ui/tests/tsconfig.json moduleDetection).
+type ThvView = {id: string; messages: {id: string}[]; opts: {dm?: boolean}; gone?: boolean};
+type ThvLive = ThvView & {thread: {me: {can_post: boolean}; [key: string]: unknown}};
+declare var THV_VIEWS: ThvView[];
+declare var thvDraw: (view: ThvLive) => void;
+declare function v2MessagesHTML(messages: unknown[], goalLine?: unknown, slug?: string): string;
 
 const now = Date.now(), at = (min: number) => new Date(now - min * 60000).toISOString();
 const me = {member: true, following: true, notify: 'live', last_read_seq: 20, unread: 0, activity: false, can_post: true, can_manage: false};

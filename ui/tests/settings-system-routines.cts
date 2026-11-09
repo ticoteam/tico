@@ -9,6 +9,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile, harnesses} = require('./support/page.cjs') as typeof import('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+// Page globals this spec reads (file-local; see ui/tests/tsconfig.json moduleDetection).
+declare const window: Window & typeof globalThis & {
+  ticoTheme: {set(theme: string): void};
+};
 
 type Page = import('playwright').Page;
 type Job = {key: string; name: string; what: string; schedule: string; ai: boolean; controllable: boolean; needed: boolean; records: boolean;
@@ -19,10 +23,8 @@ type Job = {key: string; name: string; what: string; schedule: string; ai: boole
 // One recorded write to the system-routines API: the request method, the job key and the body the page sent.
 type Write = {method: string; key: string; body: unknown};
 
-declare global {
-  var ticoTheme: {set(theme: string): unknown};
-  var SYSTEM_ROUTINE_BUSY: Set<string>;
-}
+declare var ticoTheme: {set(theme: string): unknown};
+declare var SYSTEM_ROUTINE_BUSY: Set<string>;
 
 const soon = new Date(Date.now() + 40 * 60000).toISOString(), before = new Date(Date.now() - 20 * 60000).toISOString();
 const ALL: {key: string; label: string}[] = [{key: '15m', label: 'Every 15 minutes'}, {key: 'hourly', label: 'Hourly'}, {key: '4h', label: 'Every 4 hours'}, {key: 'daily', label: 'Daily at a time'}];
