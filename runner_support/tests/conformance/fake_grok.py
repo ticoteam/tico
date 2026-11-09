@@ -6,14 +6,24 @@ and `session/prompt`, which first asks the client's permission for a tool (as Gr
 --always-approve), then streams two message chunks and answers with its stopReason. Every session call and turn is
 appended to $FAKE_LOG as one JSON line (argv, the prompt, the granted variables, the permission chosen). A prompt
 containing HANG streams one chunk and then waits, once per $FAKE_LOG, until its parent goes away."""
+
 import json
 import os
 import sys
 import time
 import uuid
 
-GRANTED = ("XAI_API_KEY", "ACME_API_KEY", "HUB_TOKEN", "HUB_API_URL", "HUB_BOT", "TICO_CRED_SOCKET", "GROK_CLAUDE_MCPS_ENABLED",
-           "GROK_CURSOR_MCPS_ENABLED", "GROK_MANAGED_MCPS_ENABLED")
+GRANTED = (
+    "XAI_API_KEY",
+    "ACME_API_KEY",
+    "HUB_TOKEN",
+    "HUB_API_URL",
+    "HUB_BOT",
+    "TICO_CRED_SOCKET",
+    "GROK_CLAUDE_MCPS_ENABLED",
+    "GROK_CURSOR_MCPS_ENABLED",
+    "GROK_MANAGED_MCPS_ENABLED",
+)
 
 
 def send(message):
@@ -27,9 +37,16 @@ def record(entry):
 
 
 def chunk(session, text):
-    send({"jsonrpc": "2.0", "method": "session/update",
-          "params": {"sessionId": session, "update": {"sessionUpdate": "agent_message_chunk",
-                                                      "content": {"type": "text", "text": text}}}})
+    send(
+        {
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": session,
+                "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}},
+            },
+        }
+    )
 
 
 def main():
@@ -46,7 +63,13 @@ def main():
         msg = json.loads(line)
         method, rid, p = msg.get("method"), msg.get("id"), msg.get("params") or {}
         if method == "initialize":
-            send({"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": True}}})
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": rid,
+                    "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": True}},
+                }
+            )
         elif method == "session/new":
             session = str(uuid.uuid4())
             with open(known, "a") as out:
@@ -65,19 +88,37 @@ def main():
         elif method == "session/prompt":
             session = p["sessionId"]
             text = "".join(block.get("text", "") for block in p.get("prompt") or [])
-            send({"jsonrpc": "2.0", "id": "perm-1", "method": "session/request_permission",
-                  "params": {"sessionId": session, "toolCall": {"toolCallId": "call-1", "kind": "execute"},
-                             "options": [{"optionId": "once", "kind": "allow_once", "name": "Allow"},
-                                         {"optionId": "always", "kind": "allow_always", "name": "Always allow"},
-                                         {"optionId": "no", "kind": "reject_once", "name": "Reject"}]}})
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "perm-1",
+                    "method": "session/request_permission",
+                    "params": {
+                        "sessionId": session,
+                        "toolCall": {"toolCallId": "call-1", "kind": "execute"},
+                        "options": [
+                            {"optionId": "once", "kind": "allow_once", "name": "Allow"},
+                            {"optionId": "always", "kind": "allow_always", "name": "Always allow"},
+                            {"optionId": "no", "kind": "reject_once", "name": "Reject"},
+                        ],
+                    },
+                }
+            )
             answer = {}
             for reply in sys.stdin:
                 answer = json.loads(reply)
                 if answer.get("id") == "perm-1" and "method" not in answer:
                     break
-            record({"method": method, "session": session, "prompt": text, "cwd": cwd.get(session),
+            record(
+                {
+                    "method": method,
+                    "session": session,
+                    "prompt": text,
+                    "cwd": cwd.get(session),
                     "permission": (answer.get("result") or {}).get("outcome"),
-                    "env": {k: os.environ.get(k) for k in GRANTED}})
+                    "env": {k: os.environ.get(k) for k in GRANTED},
+                }
+            )
             marker = os.environ["FAKE_LOG"] + ".hung"
             if "HANG" in text and not os.path.exists(marker):
                 open(marker, "w").close()
@@ -85,7 +126,7 @@ def main():
                 while os.getppid() == parent:
                     time.sleep(0.1)
                 return
-            if "PUBLISH" in text and cwd.get(session):      # a deliverable the runner publishes as a Tico file
+            if "PUBLISH" in text and cwd.get(session):  # a deliverable the runner publishes as a Tico file
                 os.makedirs(os.path.join(cwd[session], "reports"), exist_ok=True)
                 with open(os.path.join(cwd[session], "reports", "acme.md"), "w") as report:
                     report.write("# Acme report\n")

@@ -1,6 +1,7 @@
 """Shared records as Finance's lines use them: a line's location, project and class tags must name an active record, and
 an item a line names must be live (backend/records). Checked where lines are written, so a stale id never reaches the
 books. A tag never widens who sees a line: view checks stay with the caller."""
+
 from collections.abc import Mapping
 from typing import Any
 

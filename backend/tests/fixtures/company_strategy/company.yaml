@@ -14,13 +14,6 @@ people:
     role: "Founder"
     owner: true
 employees:
-  - id: marketer
-    template: brand
-    title: "Marketing Lead"
-    department: marketing
-    reports_to: you
-    start: now
-    reason: "Fixture"
   - id: seller
     template: account-manager
     title: "Account Manager"

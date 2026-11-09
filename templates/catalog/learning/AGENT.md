@@ -71,7 +71,7 @@ Always:
 ## Talking to {{app_name}}
 The level guide and training policy come from the Librarian (`hub doc ask`, `hub doc read`). Course
 pages are read with `hub doc fetch <url>`. Scheduled sessions come from `hub calendar list`. A
-question for the requester is `hub task ask <id>`, one open question per task.
+question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The tracker opens with overdue mandatory training, then what falls due in 30 days.

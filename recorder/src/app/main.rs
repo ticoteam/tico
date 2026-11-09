@@ -113,7 +113,6 @@ commands! {
     link_selected_tasks(ids: Vec<String>) => |app| app.link_selected_tasks(ids);
     accept_link_item(id: String) => |app| app.accept_link_item(&id);
     unlink_item(id: String) => |app| app.unlink_item(&id);
-    edit_task_detail(id: String, due: String, body: String) => |app| app.edit_task_detail(&id, &due, &body);
     stop_screen() => |app| app.screen.stop("");
     record(event: Option<Value>) => |app| app.record(event);
     open_meeting(id: String) => |app| { let opened = app.open(&id); app.report(opened) };
@@ -159,6 +158,8 @@ commands! {
     dismiss_error() => |app| app.dismiss_error();
     open_url(url: String) => |app| app.open_url(&url);
     dismiss_notice() => |app| app.dismiss_notice();
+    allow_speaker_names() => |app| tico_recorder_native::speaker_names::open_settings(app.store.root());
+    dismiss_speaker_names() => |app| tico_recorder_native::speaker_names::dismiss_permission(app.store.root());
     set_visible(visible: bool) => |app| app.set_visible(visible);
 }
 
@@ -402,6 +403,7 @@ fn main() {
     let root = settings::root();
     let library_lock = AppLock::acquire(&root).expect("Recorder library is in use");
     let store = Store::open(&root).expect("Open recorder library");
+    tico_recorder_native::diag::init(&root);
     store.recover().expect("Recover saved audio");
     if demo && store.list().unwrap_or_default().is_empty() {
         recorder::seed_demo(&store).expect("Create demo library");
@@ -446,7 +448,6 @@ fn main() {
             link_selected_tasks,
             accept_link_item,
             unlink_item,
-            edit_task_detail,
             view,
             meeting_link,
             share_screen,
@@ -497,6 +498,8 @@ fn main() {
             dismiss_error,
             open_url,
             dismiss_notice,
+            allow_speaker_names,
+            dismiss_speaker_names,
             set_visible,
             update::update_check,
             update::update_install,

@@ -14,6 +14,7 @@ them, as them; it never approves on a walk (`_apply_decide`). It is the whole li
 me" starts the bot that most needs the person, and commit says who is next: the bots come to the
 person one at a time, most important first.
 """
+
 import json
 import re
 
@@ -26,14 +27,14 @@ KINDS = ("decide", "needs_info", "instruct", "rule", "skip", "later")
 DECISIONS = ("approve", "decline", "done", "close", "answer")
 VERDICTS = ("decide", "skip", "later")
 LATER_DAYS = 1
-REPORT_DAYS = 14              # how far back a bot's reply to a batch still comes back on its items
+REPORT_DAYS = 14  # how far back a bot's reply to a batch still comes back on its items
 MARKER = re.compile(r"^\s*\[item (\d+)\]", re.M)
-NEXT = "next"                 # the scope that means "whichever bot most needs the person"
+NEXT = "next"  # the scope that means "whichever bot most needs the person"
 
 
 def _clip(text, n):
     text = " ".join(str(text or "").split())
-    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
+    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
 
 
 def _snoozed(c, actor):
@@ -41,8 +42,11 @@ def _snoozed(c, actor):
     now = H.now()
     out = set()
     # The person's own rows (events_task_origin), not every person's in ts order (events_action_ts).
-    for row in c.execute("SELECT target, detail FROM events INDEXED BY events_task_origin WHERE actor=? "
-                         "AND action='batch.later' ORDER BY created_at", (actor,)):
+    for row in c.execute(
+        "SELECT target, detail FROM events INDEXED BY events_task_origin WHERE actor=? "
+        "AND action='batch.later' ORDER BY created_at",
+        (actor,),
+    ):
         until = (H._json(row["detail"], {}) or {}).get("until") or ""
         if until > now:
             out.add(row["target"])
@@ -52,16 +56,26 @@ def _snoozed(c, actor):
 
 
 def _children(c, task_id, owner):
-    return H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE id IN (SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?) AND owner_id=? AND status IN ('open','doing','waiting','review','ready') "
-                             "ORDER BY created_at", (task_id, owner)))
+    return H._rows(
+        c.execute(
+            f"SELECT * FROM {H.TASKS} tasks WHERE id IN (SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?) AND owner_id=? AND status IN ('open','doing','waiting','review','ready') "
+            "ORDER BY created_at",
+            (task_id, owner),
+        )
+    )
 
 
 def _row(it, actor):
     """One item as a front end presents it: the whole question, never a clipped title."""
     key = ("approval:" if it["kind"] == "approval" else "task:") + str(it["id"])
     row = {"key": key, "kind": it["kind"], "title": _clip(it.get("title") or it.get("first_line"), 160)}
-    frm = (it.get("requester_id") if it["kind"] == "approval" else it.get("owner_id") if it["kind"] == "waiting"
-           else (it.get("ask") or {}).get("sender_id") or it.get("origin_actor") or it.get("requester_id"))
+    frm = (
+        it.get("requester_id")
+        if it["kind"] == "approval"
+        else it.get("owner_id")
+        if it["kind"] == "waiting"
+        else (it.get("ask") or {}).get("sender_id") or it.get("origin_actor") or it.get("requester_id")
+    )
     if frm:
         row["from"] = frm
     if it.get("status"):
@@ -80,7 +94,7 @@ def _row(it, actor):
     if isinstance(it.get("payload"), dict) and it["payload"]:
         row["payload"] = _clip(json.dumps(it["payload"], sort_keys=True, default=str), 800)
     if it["kind"] == "approval" and it.get("ready_since"):
-        row["ready"] = H.approval_wait_line(it)            # "Ready 2 h 10 min, waiting on Chris"
+        row["ready"] = H.approval_wait_line(it)  # "Ready 2 h 10 min, waiting on Chris"
         row["ready_since"] = it["ready_since"]
     if it.get("note"):
         row["note"] = _clip(it["note"], 300)
@@ -97,9 +111,18 @@ def _row(it, actor):
         row.update(provenance)
     if it.get("folded"):
         # Other bots' tasks waiting on the person for the same thing: said with the card so none is lost.
-        row["folded"] = [{k: v for k, v in (("title", _clip(f.get("title"), 160)), ("from", f.get("owner_id")),
-                                            ("ask", _clip(f.get("person_ask") or f.get("note"), 300))) if v}
-                         for f in it["folded"]]
+        row["folded"] = [
+            {
+                k: v
+                for k, v in (
+                    ("title", _clip(f.get("title"), 160)),
+                    ("from", f.get("owner_id")),
+                    ("ask", _clip(f.get("person_ask") or f.get("note"), 300)),
+                )
+                if v
+            }
+            for f in it["folded"]
+        ]
     return row
 
 
@@ -126,16 +149,21 @@ def relevant(c, actor, items):
     covered = {it.get("task_id") for it in items if it["kind"] == "approval" and it.get("task_id")}
     out, seen = [], set()
     for it in items:
-        # Standalone questions, stale checks and memory proposals have their own decision protocols;
+        # Standalone questions and stale checks have their own decision protocols;
         # a batch applies task and approval responses only.
-        if it["kind"] in ("ask", "stale", "memory_tidy"):
+        if it["kind"] in ("ask", "stale"):
             continue
         # A person's own parked work belongs on their task board, not in a spoken decision pass.
         # It has no other requester waiting for an answer and "waiting" explicitly means there is
         # nothing for the owner to do now. A later bot ask on that task changes its kind to a
         # question and brings it back into the pass.
-        if (it["kind"] == "task" and it.get("owner_id") == actor and it.get("requester_id") == actor
-                and it.get("status") == "waiting" and not it.get("ask")):
+        if (
+            it["kind"] == "task"
+            and it.get("owner_id") == actor
+            and it.get("requester_id") == actor
+            and it.get("status") == "waiting"
+            and not it.get("ask")
+        ):
             continue
         if it["kind"] != "approval":
             if it["id"] in covered:
@@ -146,20 +174,27 @@ def relevant(c, actor, items):
                     # Its person, as needs-you has it: its own requester when a person (the viewer's own to-do counts
                     # for nobody), else the parent's, which needs-you worked out under the reader's rule.
                     own = kid["requester_id"] if H.is_human(kid["requester_id"]) else None
-                    kid = {**kid, "kind": "task", "ask": H.unanswered_ask(c, kid, actor=actor), "origin_actor": H.task_origin(c, kid),
-                           "first_line": (kid.get("body") or "").split("\n")[0],
-                           "from_person": None if own == actor else own or it.get("from_person")}
+                    kid = {
+                        **kid,
+                        "kind": "task",
+                        "ask": H.unanswered_ask(c, kid, actor=actor),
+                        "origin_actor": H.task_origin(c, kid),
+                        "first_line": (kid.get("body") or "").split("\n")[0],
+                        "from_person": None if own == actor else own or it.get("from_person"),
+                    }
                     if kid["ask"]:
                         kid["kind"] = "question"
                     kid["pressing"] = pressing(kid)
                     row = _row(kid, actor)
                     if row["key"] not in seen and row["key"] not in snoozed:
-                        seen.add(row["key"]); out.append(row)
+                        seen.add(row["key"])
+                        out.append(row)
                 continue
         row = _row(it, actor)
         if row["key"] in seen or row["key"] in snoozed:
             continue
-        seen.add(row["key"]); out.append(row)
+        seen.add(row["key"])
+        out.append(row)
     # views.needs_order: what traces back to a person or presses first, then decisive kinds (an approval,
     # a question), then the person's queue in its rank order.
     out.sort(key=_rank)
@@ -178,8 +213,15 @@ def _name(c, actor):
 
 
 def _rank(row):
-    return needs_order(row["kind"], row.get("created_at") or row.get("created"), row.get("rank") if row["kind"] == "task" else None,
-                       row.get("from_person"), row.get("pressing"), bool(row.get("ask_missing")), row.get("due_at"))
+    return needs_order(
+        row["kind"],
+        row.get("created_at") or row.get("created"),
+        row.get("rank") if row["kind"] == "task" else None,
+        row.get("from_person"),
+        row.get("pressing"),
+        bool(row.get("ask_missing")),
+        row.get("due_at"),
+    )
 
 
 def lineup(c, person, rows):
@@ -200,17 +242,22 @@ def lineup(c, person, rows):
             g["best"], g["top"] = rank, row["title"]
     # A group that is only waiting on its bot's reply goes last: there is nothing new to say.
     ordered = sorted(groups.values(), key=lambda g: (g["best"] is None, g["best"] or (), -g["items"]))
-    return [{"who": g["who"], "name": _name(c, g["who"]), "items": g["items"],
-             "awaiting": g["awaiting"], "top": g["top"]} for g in ordered]
+    return [
+        {"who": g["who"], "name": _name(c, g["who"]), "items": g["items"], "awaiting": g["awaiting"], "top": g["top"]}
+        for g in ordered
+    ]
 
 
 def _sent(c, person, since):
     """The batch messages this person sent since `since`, each with the item keys it carried."""
-    rows = c.execute("SELECT m.id, m.recipient_id, m.refs, b.id AS batch, b.items, b.report, "
-                     "b.message_id AS first "
-                     "FROM message_refs m JOIN batches b ON b.id=json_extract(m.refs,'$.live.batch') "
-                     "WHERE m.sender_id=? AND m.ref_live_kind='batch' "
-                     "AND m.created_at>=? ORDER BY m.created_at DESC", (person, since)).fetchall()
+    rows = c.execute(
+        "SELECT m.id, m.recipient_id, m.refs, b.id AS batch, b.items, b.report, "
+        "b.message_id AS first "
+        "FROM message_refs m JOIN batches b ON b.id=json_extract(m.refs,'$.live.batch') "
+        "WHERE m.sender_id=? AND m.ref_live_kind='batch' "
+        "AND m.created_at>=? ORDER BY m.created_at DESC",
+        (person, since),
+    ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -235,8 +282,10 @@ def _pending(c, person):
         if _consumed(sent["report"], sent["id"], sent["first"]):
             continue
         keys = ((H._json(sent["refs"], {}) or {}).get("live") or {}).get("items") or []
-        reply = c.execute("SELECT * FROM messages WHERE in_reply_to=? AND sender_id=? "
-                          "ORDER BY created_at DESC LIMIT 1", (sent["id"], sent["recipient_id"])).fetchone()
+        reply = c.execute(
+            "SELECT * FROM messages WHERE in_reply_to=? AND sender_id=? ORDER BY created_at DESC LIMIT 1",
+            (sent["id"], sent["recipient_id"]),
+        ).fetchone()
         if not reply:
             for key in keys:
                 awaiting.setdefault(key, sent["recipient_id"])
@@ -252,8 +301,16 @@ def _pending(c, person):
                 answers[items[idx]["key"]] = body.strip()
             else:
                 loose += ("\n" if loose else "") + body.strip()
-        reports.append({"message": sent["id"], "reply": reply["id"], "batch": sent["batch"],
-                        "to": sent["recipient_id"], "answers": answers, "loose": loose})
+        reports.append(
+            {
+                "message": sent["id"],
+                "reply": reply["id"],
+                "batch": sent["batch"],
+                "to": sent["recipient_id"],
+                "answers": answers,
+                "loose": loose,
+            }
+        )
     return reports, awaiting
 
 
@@ -279,8 +336,9 @@ def _scope(c, person, line, asked):
 
 
 def current(c, actor):
-    row = c.execute("SELECT * FROM batches WHERE person=? AND state='open' ORDER BY created_at DESC LIMIT 1",
-                    (actor,)).fetchone()
+    row = c.execute(
+        "SELECT * FROM batches WHERE person=? AND state='open' ORDER BY created_at DESC LIMIT 1", (actor,)
+    ).fetchone()
     return dict(row) if row else None
 
 
@@ -291,7 +349,7 @@ def candidates(c, actor, items):
     rows = [r for r in relevant(c, actor, items) if group_of(r, actor)]
     reports, awaiting = _pending(c, actor)
     shown = {}
-    for report in reports:                     # newest first: the latest answer to an item wins
+    for report in reports:  # newest first: the latest answer to an item wins
         for key, text in report["answers"].items():
             shown.setdefault(key, (text, report))
     for row in rows:
@@ -300,9 +358,18 @@ def candidates(c, actor, items):
             row["_report"] = shown[row["key"]][1]["message"]
         elif row["key"] in awaiting:
             row["awaiting"] = awaiting[row["key"]]
-    notes = [{"key": f"report:{r['message']}", "kind": "report", "title": "Notes from your last batch",
-              "from": r["to"], "body": _clip(r["loose"], 4000), "_report": r["message"]}
-             for r in reports if r["loose"]]
+    notes = [
+        {
+            "key": f"report:{r['message']}",
+            "kind": "report",
+            "title": "Notes from your last batch",
+            "from": r["to"],
+            "body": _clip(r["loose"], 4000),
+            "_report": r["message"],
+        }
+        for r in reports
+        if r["loose"]
+    ]
     return rows, notes, reports
 
 
@@ -314,7 +381,7 @@ def start(c, actor, items, snapshot, scope=None, reader=None):
     line = lineup(c, actor, notes + rows)
     open_ = current(c, actor)
     if open_:
-        return _presented(c, actor, {**view(c, open_, resumed=True), "lineup": line}, reader)
+        return {**view(c, open_, resumed=True), "lineup": line}
     group = _scope(c, actor, line, scope)
     if group:
         rows = [r for r in rows if group_of(r, actor) == group]
@@ -328,31 +395,45 @@ def start(c, actor, items, snapshot, scope=None, reader=None):
             _consume(c, report)
     for row in rows:
         row.pop("_report", None)
-    batch = {"id": H.new_id(), "person": actor, "state": "open", "created_at": H.now(), "committed_at": None,
-             "items": json.dumps(rows), "cursor": 0, "responses": "{}",
-             "alerts": json.dumps(alerts(snapshot)), "message_id": None, "report": None,
-             "scope": group}
-    c.execute("INSERT INTO batches(id,person,state,created_at,committed_at,items,cursor,responses,"
-              "alerts,message_id,report,scope) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-              tuple(batch[k] for k in ("id", "person", "state", "created_at", "committed_at", "items", "cursor",
-                                       "responses", "alerts", "message_id", "report", "scope")))
-    H.event(c, actor, "batch.started", batch["id"], {"items": len(rows), "alerts": len(alerts(snapshot)),
-                                                     "scope": group})
-    return _presented(c, actor, {**view(c, batch), "lineup": line}, reader)
-
-
-def _presented(c, actor, out, reader=None):
-    """The item the person now hears in full is opened: its task's questions to them that they may read are read
-    (delivered and read set, as opening it in Needs you does; backend/task_holds.py says so when one is withdrawn).
-    A question they may not read stays unread, as on the task page."""
-    key = str((out.get("item") or {}).get("key") or "")
-    if key.startswith("task:"):
-        row = H.task(c, key[5:])
-        if row:
-            mine = [a["id"] for a in H.open_task_asks(c, row, actor=reader or actor)
-                    if a["recipient_id"] == actor]
-            H.asks_seen(c, actor, mine, read=True)
-    return out
+    batch = {
+        "id": H.new_id(),
+        "person": actor,
+        "state": "open",
+        "created_at": H.now(),
+        "committed_at": None,
+        "items": json.dumps(rows),
+        "cursor": 0,
+        "responses": "{}",
+        "alerts": json.dumps(alerts(snapshot)),
+        "message_id": None,
+        "report": None,
+        "scope": group,
+    }
+    c.execute(
+        "INSERT INTO batches(id,person,state,created_at,committed_at,items,cursor,responses,"
+        "alerts,message_id,report,scope) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        tuple(
+            batch[k]
+            for k in (
+                "id",
+                "person",
+                "state",
+                "created_at",
+                "committed_at",
+                "items",
+                "cursor",
+                "responses",
+                "alerts",
+                "message_id",
+                "report",
+                "scope",
+            )
+        ),
+    )
+    H.event(
+        c, actor, "batch.started", batch["id"], {"items": len(rows), "alerts": len(alerts(snapshot)), "scope": group}
+    )
+    return {**view(c, batch), "lineup": line}
 
 
 def _items(batch):
@@ -366,9 +447,15 @@ def _responses(batch):
 def view(c, batch, resumed=False):
     items, responses = _items(batch), _responses(batch)
     cursor = int(batch["cursor"] or 0)
-    out = {"id": batch["id"], "state": batch["state"], "total": len(items), "responded": len(responses),
-           "alerts": json.loads(batch["alerts"] or "[]"), "resumed": resumed,
-           "scope": batch.get("scope")}
+    out = {
+        "id": batch["id"],
+        "state": batch["state"],
+        "total": len(items),
+        "responded": len(responses),
+        "alerts": json.loads(batch["alerts"] or "[]"),
+        "resumed": resumed,
+        "scope": batch.get("scope"),
+    }
     if batch["state"] != "open":
         return out
     if cursor < len(items):
@@ -377,10 +464,16 @@ def view(c, batch, resumed=False):
             item["response"] = responses[item["key"]]
         out.update({"position": f"{cursor + 1} of {len(items)}", "item": item})
     else:
-        out.update({"end": True, "summary": summary(batch),
-                    "note": "The list is done. Say the summary and ask whether to commit."})
+        out.update(
+            {
+                "end": True,
+                "summary": summary(batch),
+                "note": "The list is done. Say the summary and ask whether to commit.",
+            }
+        )
     from .files import readable_page_refs
     from .teammate_access import _viewer_for
+
     return readable_page_refs(c, None, _viewer_for(c, batch["person"]), out)
 
 
@@ -399,7 +492,7 @@ def next_item(c, actor, batch_id, reader=None):
     cursor = min(int(batch["cursor"] or 0) + 1, len(items))
     c.execute("UPDATE batches SET cursor=? WHERE id=?", (cursor, batch["id"]))
     batch["cursor"] = cursor
-    return _presented(c, actor, view(c, batch), reader)
+    return view(c, batch)
 
 
 def respond(c, actor, batch_id, kind, text="", n=None, decision=None, heard="", until=None):
@@ -432,16 +525,24 @@ def respond(c, actor, batch_id, kind, text="", n=None, decision=None, heard="", 
         # Done is one tap: a note is optional. A yes, a no or a close still says why to the bot that asked.
         if item["key"].startswith("task:") and decision in ("approve", "decline", "close") and not text:
             task = H.task(c, item["key"].split(":", 1)[1])
-            if (task and H.is_human(task.get("owner_id")) and H.is_bot(task.get("requester_id"))
-                    and task["status"] not in ("done", "declined")):
+            if (
+                task
+                and H.is_human(task.get("owner_id"))
+                and H.is_bot(task.get("requester_id"))
+                and task["status"] not in ("done", "declined")
+            ):
                 raise Problem("decision", "Tell the requesting bot what you decided or completed", 422)
         settles = decision in ("approve", "decline", "done", "close")
         # A person's close takes any task off its board; the other verdicts need a step move there.
         if settles and decision != "close" and item["key"].startswith("task:") and item["kind"] != "waiting":
             task = H.task(c, item["key"].split(":", 1)[1])
             if task and H.steps_only(c, task):
-                raise Problem("decision", f"{item['title']} is finished only by moving it to a step on its board; "
-                              "instruct its bot or move it in Tico", 422)
+                raise Problem(
+                    "decision",
+                    f"{item['title']} is finished only by moving it to a step on its board; "
+                    "instruct its bot or move it in Tico",
+                    422,
+                )
         response["decision"] = decision
     elif kind in ("needs_info", "instruct", "rule") and not text:
         raise Problem("text", f"A {kind.replace('_', ' ')} response needs the text", 422)
@@ -450,12 +551,17 @@ def respond(c, actor, batch_id, kind, text="", n=None, decision=None, heard="", 
     responses = _responses(batch)
     # One verdict per item (a decision, a skip or a later replaces the last); questions,
     # instructions and rules accumulate: "approve it, and always archive these" is two responses.
-    kept = [r for r in responses.get(item["key"], [])
-            if not (kind in VERDICTS and r["kind"] in VERDICTS)]
+    kept = [r for r in responses.get(item["key"], []) if not (kind in VERDICTS and r["kind"] in VERDICTS)]
     responses[item["key"]] = kept + [response]
     c.execute("UPDATE batches SET responses=? WHERE id=?", (json.dumps(responses), batch["id"]))
-    return {"recorded": True, "n": idx + 1, "key": item["key"], "response": response,
-            "responded": len(responses), "total": len(items)}
+    return {
+        "recorded": True,
+        "n": idx + 1,
+        "key": item["key"],
+        "response": response,
+        "responded": len(responses),
+        "total": len(items),
+    }
 
 
 def summary(batch):
@@ -473,8 +579,14 @@ def summary(batch):
                 approving.append(items[key]["title"])
             if r["kind"] == "decide" and r.get("decision") == "decline":
                 declining.append(items[key]["title"])
-    return {"responses": total, "items": len(responses), "unanswered": len(items) - len(responses),
-            "counts": counts, "approving": approving, "declining": declining}
+    return {
+        "responses": total,
+        "items": len(responses),
+        "unanswered": len(items) - len(responses),
+        "counts": counts,
+        "approving": approving,
+        "declining": declining,
+    }
 
 
 def _apply_decide(c, auth, who, item, r, boards):
@@ -485,18 +597,24 @@ def _apply_decide(c, auth, who, item, r, boards):
         if decision == "approve" and getattr(who, "via", "") == "assistant":
             # The person's Assistant walks the batch for them, but an approve is never its to make on a walk: it stays
             # the person's own click, or the Assistant's read-back and their yes (backend/assistant.py approval_words).
-            raise Problem("approve_not_asked", "Approving is the person's own decision: the Assistant can decline here, "
-                          "but the person approves it in Tico or with their yes to the Assistant's read-back", 403)
+            raise Problem(
+                "approve_not_asked",
+                "Approving is the person's own decision: the Assistant can decline here, "
+                "but the person approves it in Tico or with their yes to the Assistant's read-back",
+                403,
+            )
         row = auth.approval(c, who, ident, decide=True)
         if row["kind"] == "support" and decision == "approve":
             # As on the approve route: sending off the install is a person's own tap in Tico, not their token. A decline
             # sends nothing, so it is anyone's who may decide it.
             from .support import require_person
+
             try:
                 require_person(who)
             except Problem:
                 raise Problem("forbidden", "Say yes to a support report in Tico itself", 403) from None
         from .company_page import editions
+
         own_click = editions.own_click_approval(row.get("payload"))
         if own_click:
             editions.require_own_click(who)
@@ -505,10 +623,11 @@ def _apply_decide(c, auth, who, item, r, boards):
         if own_click:
             board = editions.approval_decided(c, decided)
             if board:
-                boards.append(board)                             # the caller puts a Public board on the page after commit
+                boards.append(board)  # the caller puts a Public board on the page after commit
         if row["kind"] in ("finance", "spend"):
             from .finance import actions as finance
-            finance.approval_decided(c, ident)                   # Finance acts on it in the same transaction
+
+            finance.approval_decided(c, ident)  # Finance acts on it in the same transaction
         return f"{verdict.capitalize()}: {item['title']}"
     row = auth.task(c, who, ident)
     if item["kind"] == "waiting" and decision in ("done", "answer"):
@@ -518,6 +637,21 @@ def _apply_decide(c, auth, who, item, r, boards):
         H.task_comment(c, who.actor, ident, said)
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (ident,))
         return f"Told {H.actor_name(c, row['owner_id'])}: {_clip(said, 120)}"
+    from . import question_tasks
+
+    asked = H.task(c, ident)
+    if (
+        decision in ("approve", "done", "answer")
+        and question_tasks.is_open(asked)
+        and question_tasks.may_answer(c, auth, who, asked)
+    ):
+        # A question task: the answer is its close. A Yes, or a note naming an option, is that pick, with its spend
+        # approval and file verdicts (question_tasks.close_by_label); any other note is the answer as said (closed).
+        picked = question_tasks.close_by_label(c, auth, who, asked, text)
+        if not picked:
+            H.task_update(c, who.actor, ident, status="done", note=text or None)
+        c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (ident,))
+        return f"Answered {H.actor_name(c, row['requester_id'])}: {_clip(text or ('Yes.' if picked else 'Done.'), 120)}"
     if decision in ("approve", "decline"):
         status = "done" if decision == "approve" else "declined"
         note = text or ("Approved." if decision == "approve" else "Declined.")
@@ -533,8 +667,11 @@ def _apply_decide(c, auth, who, item, r, boards):
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (ident,))
         return f"Closed: {item['title']}"
     ask = H.unanswered_ask(c, row, actor=privacy.actor(who))
-    if ask and ask.get("recipient_id") == who.actor:
-        H.answer(c, who.actor, ask["id"], text)
+    card = H.task(c, ask["id"]) if ask and ask.get("recipient_id") == who.actor else None
+    if card and question_tasks.is_open(card) and question_tasks.may_answer(c, auth, who, card):
+        # The task's open question task for them (a subtask or blocker): answered as above.
+        if not question_tasks.close_by_label(c, auth, who, card, text):
+            H.task_update(c, who.actor, card["id"], status="done", note=text or None)
         return f"Answered {H.actor_name(c, ask['sender_id'])}: {_clip(text, 120)}"
     to = H.task_origin(c, row) or row.get("requester_id")
     if not to or to == who.actor:
@@ -550,10 +687,12 @@ def signature(c, who):
     return f"{name} (via {who.token_label})" if getattr(who, "token_label", "") else name
 
 
-ACT = ("For each item below: a question gets a short, verifiable answer; an instruction gets done, "
-       "with one line saying what you did; a standing rule is how to handle this kind of item from now "
-       "on, so keep it where you will find it next time. Reply per item, starting each with its marker "
-       "exactly as written, [item N], so the answer reaches {person} the next time you come up.")
+ACT = (
+    "For each item below: a question gets a short, verifiable answer; an instruction gets done, "
+    "with one line saying what you did; a standing rule is how to handle this kind of item from now "
+    "on, so keep it where you will find it next time. Reply per item, starting each with its marker "
+    "exactly as written, [item N], so the answer reaches {person} the next time you come up."
+)
 
 
 def _brief(person, done, act):
@@ -601,8 +740,9 @@ def _deliver(c, who, batch_id, outbox, record, send):
                 kind, ident = key.split(":", 1)
                 task = H.task(c, ident) if kind == "task" else None
                 source = H.approval(c, ident) if kind == "approval" else None
-                private = bool(task and H.task_private(c, task)) or bool(source and not privacy.public_message(
-                    c, H.message(c, source["message_id"])))
+                private = bool(task and H.task_private(c, task)) or bool(
+                    source and not privacy.public_message(c, H.message(c, source["message_id"]))
+                )
                 if private:
                     # Each private record stays on its task, never copied to a bot room.
                     if task:
@@ -618,8 +758,14 @@ def _deliver(c, who, batch_id, outbox, record, send):
             continue
         keys = [key for key, _ in lines + done]
         text = _brief(person, [line for _, line in done], [line for _, line in lines])
-        refs = {"live": {"kind": "batch", "batch": batch_id, "items": keys,
-                         **({"via": who.token_label} if getattr(who, "token_label", "") else {})}}
+        refs = {
+            "live": {
+                "kind": "batch",
+                "batch": batch_id,
+                "items": keys,
+                **({"via": who.token_label} if getattr(who, "token_label", "") else {}),
+            }
+        }
         if not lines:
             refs["quiet"] = True
         try:
@@ -634,8 +780,11 @@ def _deliver(c, who, batch_id, outbox, record, send):
             sent[to] = len(lines)
         if done:
             recorded[to] = len(done)
-        applied.append(f"Sent {len(lines)} to {H.actor_name(c, to)}" if lines
-                       else f"Recorded {len(done)} for {H.actor_name(c, to)}")
+        applied.append(
+            f"Sent {len(lines)} to {H.actor_name(c, to)}"
+            if lines
+            else f"Recorded {len(done)} for {H.actor_name(c, to)}"
+        )
     return applied, errors, sent, recorded, first
 
 
@@ -668,11 +817,21 @@ def commit(c, auth, who, batch_id, send, boards):
                 if r["kind"] == "decide":
                     line = _apply_decide(c, auth, who, item, r, boards)
                 elif r["kind"] == "rule":
-                    H.event(c, who.actor, "batch.rule", key, {"text": r["text"], "bot": to, "batch": batch["id"], "item": key})
+                    H.event(
+                        c,
+                        who.actor,
+                        "batch.rule",
+                        key,
+                        {"text": r["text"], "bot": to, "batch": batch["id"], "item": key},
+                    )
                     applied.append(f"Rule for {H.actor_name(c, to)}: {_clip(r['text'], 120)}")
                     outbox.setdefault(to, []).append(
-                        (key, f"[item {n}] {item['title']} ({item['kind']}, {key})\n"
-                              f"{who.actor} sets a standing rule: {r['text']}"))
+                        (
+                            key,
+                            f"[item {n}] {item['title']} ({item['kind']}, {key})\n"
+                            f"{who.actor} sets a standing rule: {r['text']}",
+                        )
+                    )
                 elif r["kind"] == "later":
                     H.event(c, who.actor, "batch.later", key, {"until": r["until"], "batch": batch["id"], "item": key})
                     line = f"Later ({r['until'][:10]}): {item['title']}"
@@ -681,7 +840,8 @@ def commit(c, auth, who, batch_id, send, boards):
                 else:
                     what = "asks" if r["kind"] == "needs_info" else "says"
                     outbox.setdefault(to, []).append(
-                        (key, f"[item {n}] {item['title']} ({item['kind']}, {key})\n{who.actor} {what}: {r['text']}"))
+                        (key, f"[item {n}] {item['title']} ({item['kind']}, {key})\n{who.actor} {what}: {r['text']}")
+                    )
                 if line:
                     applied.append(line)
                     record.setdefault(to, []).append((key, _record_line(item, r, line)))
@@ -692,15 +852,34 @@ def commit(c, auth, who, batch_id, send, boards):
     delivered, failed, sent, recorded, message_id = _deliver(c, who, batch["id"], outbox, record, send)
     applied += delivered
     errors += failed
-    c.execute("UPDATE batches SET state='committed', committed_at=?, message_id=? WHERE id=?",
-              (H.now(), message_id, batch["id"]))
-    H.event(c, who.actor, "batch.committed", batch["id"],
-            {"responses": len(responses), "applied": applied, "errors": errors, "sent": sent, "items": order,
-             "scope": batch.get("scope")})
-    return {"committed": True, "id": batch["id"], "scope": batch.get("scope"), "applied": applied,
-            "errors": errors, "sent": {H.actor_id(k): v for k, v in sent.items()},
-            "recorded": {H.actor_id(k): v for k, v in recorded.items()},
-            "unanswered": len(items) - len(responses)}
+    c.execute(
+        "UPDATE batches SET state='committed', committed_at=?, message_id=? WHERE id=?",
+        (H.now(), message_id, batch["id"]),
+    )
+    H.event(
+        c,
+        who.actor,
+        "batch.committed",
+        batch["id"],
+        {
+            "responses": len(responses),
+            "applied": applied,
+            "errors": errors,
+            "sent": sent,
+            "items": order,
+            "scope": batch.get("scope"),
+        },
+    )
+    return {
+        "committed": True,
+        "id": batch["id"],
+        "scope": batch.get("scope"),
+        "applied": applied,
+        "errors": errors,
+        "sent": {H.actor_id(k): v for k, v in sent.items()},
+        "recorded": {H.actor_id(k): v for k, v in recorded.items()},
+        "unanswered": len(items) - len(responses),
+    }
 
 
 def up_next(line, scope):

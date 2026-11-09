@@ -1,0 +1,5 @@
+{
+  "runner_support/isolation.py": {
+    "PLW1510": 1
+  }
+}

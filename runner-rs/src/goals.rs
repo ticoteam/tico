@@ -46,7 +46,8 @@ fn frontmatter_cache() -> &'static Mutex<HashMap<(PathBuf, i128, u64), Fields>> 
 
 /// Test-only: how many frontmatter files were read (a cache miss).
 #[cfg(test)]
-pub static FRONTMATTER_READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub static FRONTMATTER_READS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 /// The leading `---` block's plain `key: value` fields; folded and literal values become one line. Kept per (path, mtime,
 /// size) because each heartbeat pass reads every bot's skill and command files (readiness::document): a plain read of
@@ -54,15 +55,23 @@ pub static FRONTMATTER_READS: std::sync::atomic::AtomicUsize = std::sync::atomic
 pub fn frontmatter(path: &Path) -> Fields {
     use std::io::Read;
     use std::os::unix::fs::MetadataExt;
-    let Ok(meta) = std::fs::metadata(path) else { return Fields::new() };
-    let key = (path.to_path_buf(), meta.mtime() as i128 * 1_000_000_000 + meta.mtime_nsec() as i128, meta.size());
+    let Ok(meta) = std::fs::metadata(path) else {
+        return Fields::new();
+    };
+    let key = (
+        path.to_path_buf(),
+        meta.mtime() as i128 * 1_000_000_000 + meta.mtime_nsec() as i128,
+        meta.size(),
+    );
     if let Some(f) = frontmatter_cache().lock().unwrap().get(&key) {
         return f.clone();
     }
     #[cfg(test)]
     FRONTMATTER_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut head = vec![0u8; 8192];
-    let Ok(n) = std::fs::File::open(path).and_then(|mut f| f.read(&mut head)) else { return Fields::new() };
+    let Ok(n) = std::fs::File::open(path).and_then(|mut f| f.read(&mut head)) else {
+        return Fields::new();
+    };
     let head = String::from_utf8_lossy(&head[..n]).into_owned();
     let mut fields = Fields::new();
     let lines: Vec<&str> = head.lines().collect();
@@ -76,7 +85,11 @@ pub fn frontmatter(path: &Path) -> Fields {
             }
             if let Some(c) = kv.captures(line) {
                 let (k, v) = (c[1].to_lowercase(), c[2].trim().to_string());
-                let v = if [">", "|", ">-", "|-"].contains(&v.as_str()) { String::new() } else { v.trim_matches(|c| c == '\'' || c == '"').to_string() };
+                let v = if [">", "|", ">-", "|-"].contains(&v.as_str()) {
+                    String::new()
+                } else {
+                    v.trim_matches(|c| c == '\'' || c == '"').to_string()
+                };
                 fields.insert(k.clone(), v);
                 name = Some(k);
             } else if let Some(k) = name.as_ref().filter(|_| line.starts_with([' ', '\t'])) {
@@ -97,15 +110,27 @@ pub fn frontmatter(path: &Path) -> Fields {
 pub fn repo_commands(root: &Path) -> Vec<Value> {
     let mut found: Vec<(String, Fields)> = vec![];
     let sorted = |dir: &Path| -> Vec<PathBuf> {
-        let mut v: Vec<PathBuf> = std::fs::read_dir(dir).map(|r| r.filter_map(|e| e.ok().map(|e| e.path())).collect()).unwrap_or_default();
+        let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map(|r| r.filter_map(|e| e.ok().map(|e| e.path())).collect())
+            .unwrap_or_default();
         v.sort();
         v
     };
     let skills = root.join(".claude").join("skills");
-    for folder in sorted(&skills).into_iter().filter(|p| p.is_dir()).take(MAX_COMMANDS * 2) {
+    for folder in sorted(&skills)
+        .into_iter()
+        .filter(|p| p.is_dir())
+        .take(MAX_COMMANDS * 2)
+    {
         let fields = frontmatter(&folder.join("SKILL.md"));
-        if !fields.is_empty() && fields.get("user-invocable").map(|v| v.to_lowercase()) != Some("false".into()) {
-            let name = fields.get("name").filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| folder.file_name().unwrap().to_string_lossy().into());
+        if !fields.is_empty()
+            && fields.get("user-invocable").map(|v| v.to_lowercase()) != Some("false".into())
+        {
+            let name = fields
+                .get("name")
+                .filter(|n| !n.is_empty())
+                .cloned()
+                .unwrap_or_else(|| folder.file_name().unwrap().to_string_lossy().into());
             found.push((name, fields));
         }
     }
@@ -113,7 +138,12 @@ pub fn repo_commands(root: &Path) -> Vec<Value> {
     if commands.is_dir() {
         let md = |p: &PathBuf| p.extension().is_some_and(|e| e == "md");
         let mut files: Vec<PathBuf> = sorted(&commands).into_iter().filter(md).collect();
-        let mut nested: Vec<PathBuf> = sorted(&commands).into_iter().filter(|p| p.is_dir()).flat_map(|d| sorted(&d)).filter(md).collect();
+        let mut nested: Vec<PathBuf> = sorted(&commands)
+            .into_iter()
+            .filter(|p| p.is_dir())
+            .flat_map(|d| sorted(&d))
+            .filter(md)
+            .collect();
         nested.sort();
         files.extend(nested);
         for path in files.into_iter().take(MAX_COMMANDS * 2) {
@@ -129,9 +159,22 @@ pub fn repo_commands(root: &Path) -> Vec<Value> {
         if !repo_command_name().is_match(&name) {
             continue;
         }
-        let help = fields.get("description").map(|d| d.split_whitespace().collect::<Vec<_>>().join(" ")).unwrap_or_default();
-        let help = if help.chars().count() <= 80 { help } else { format!("{}…", help.chars().take(79).collect::<String>().trim_end()) };
-        let args: String = fields.get("argument-hint").cloned().unwrap_or_default().chars().take(100).collect();
+        let help = fields
+            .get("description")
+            .map(|d| d.split_whitespace().collect::<Vec<_>>().join(" "))
+            .unwrap_or_default();
+        let help = if help.chars().count() <= 80 {
+            help
+        } else {
+            format!("{}…", help.chars().take(79).collect::<String>().trim_end())
+        };
+        let args: String = fields
+            .get("argument-hint")
+            .cloned()
+            .unwrap_or_default()
+            .chars()
+            .take(100)
+            .collect();
         result.push(command(&name, &help, &args));
     }
     result
@@ -139,9 +182,15 @@ pub fn repo_commands(root: &Path) -> Vec<Value> {
 
 /// The harness's own commands first, then the repository's, without repeating a name.
 pub fn with_repo_commands(builtins: &[Value], root: &Path) -> Vec<Value> {
-    let mut merged = builtins.to_vec();
-    let mut seen: std::collections::HashSet<String> = builtins.iter().map(|b| text_of(&b["name"])).collect();
-    for item in repo_commands(root) {
+    merge_commands(builtins, repo_commands(root))
+}
+
+/// `base`, then each of `more` whose name it does not have yet, up to MAX_COMMANDS.
+pub fn merge_commands(base: &[Value], more: Vec<Value>) -> Vec<Value> {
+    let mut merged = base.to_vec();
+    let mut seen: std::collections::HashSet<String> =
+        base.iter().map(|b| text_of(&b["name"])).collect();
+    for item in more {
         let name = text_of(&item["name"]);
         if !seen.contains(&name) && merged.len() < MAX_COMMANDS {
             seen.insert(name);
@@ -154,7 +203,11 @@ pub fn with_repo_commands(builtins: &[Value], root: &Path) -> Vec<Value> {
 /// {goals, commands} for one installed harness (goals.capabilities): Claude Code by version, Codex by the
 /// protocol its app-server describes. The readiness probe reuses the last answer while the version stays the same
 /// (readiness::runtime_readiness_from), so this is read again only when the installed version changes.
-pub async fn capabilities(runtime: &str, executable: Option<&Path>, version: &str) -> Map<String, Value> {
+pub async fn capabilities(
+    runtime: &str,
+    executable: Option<&Path>,
+    version: &str,
+) -> Map<String, Value> {
     let Some(exe) = executable else {
         let mut m = Map::new();
         m.insert("goals".into(), json!(false));
@@ -171,7 +224,11 @@ pub async fn capabilities(runtime: &str, executable: Option<&Path>, version: &st
 /// What the harness is given: the person's objective and the waiting clause, when both fit.
 pub fn native_objective(objective: &str) -> String {
     let full = format!("{} {WAITING_CLAUSE}", objective.trim_end());
-    if full.chars().count() <= NATIVE_GOAL_LIMIT { full } else { objective.to_string() }
+    if full.chars().count() <= NATIVE_GOAL_LIMIT {
+        full
+    } else {
+        objective.to_string()
+    }
 }
 
 fn revision_of(goal: &Value) -> String {
@@ -182,10 +239,17 @@ fn revision_of(goal: &Value) -> String {
 /// been given at this revision.
 pub fn task_goal_pending(attempt: &Value, state: &State, thread: &str) -> bool {
     let goal = &attempt["chat_goal"];
-    if goal["status"] != "active" || text_of(&goal["id"]).is_empty() || attempt["task"]["goal"]["goal_id"] != goal["id"] {
+    if goal["status"] != "active"
+        || text_of(&goal["id"]).is_empty()
+        || attempt["task"]["goal"]["goal_id"] != goal["id"]
+    {
         return false;
     }
-    state.repo_rules(&format!("goal:{thread}"), None).ok().flatten() != Some(revision_of(goal))
+    state
+        .repo_rules(&format!("goal:{thread}"), None)
+        .ok()
+        .flatten()
+        != Some(revision_of(goal))
 }
 
 /// Record that `thread` holds this goal revision, so later turns on the task continue it.
@@ -211,9 +275,15 @@ pub fn waiting_on(texts: &[&str]) -> String {
         for c in waiting_line().captures_iter(text) {
             let mut what = c[2].replace("\\\"", "\"");
             if c.get(1).is_some() && what.contains('"') {
-                what = what.rsplit_once('"').map(|(a, _)| a.to_string()).unwrap_or(what);
+                what = what
+                    .rsplit_once('"')
+                    .map(|(a, _)| a.to_string())
+                    .unwrap_or(what);
             }
-            let what = what.trim().trim_end_matches('\\').trim_matches(|c| c == ' ' || c == '*' || c == '_' || c == '\'');
+            let what = what
+                .trim()
+                .trim_end_matches('\\')
+                .trim_matches(|c| c == ' ' || c == '*' || c == '_' || c == '\'');
             if !what.is_empty() && !what.starts_with('<') {
                 return format!("Waiting on: {}", what.chars().take(300).collect::<String>());
             }
@@ -234,12 +304,24 @@ pub fn codex_status(goal: &Value) -> String {
 
 /// A Claude stream or transcript line's goal status as a goal event's fields, or None.
 pub fn claude_status(message: &Value) -> Option<Map<String, Value>> {
-    let attachment = if message["attachment"].is_object() { &message["attachment"] } else { message };
+    let attachment = if message["attachment"].is_object() {
+        &message["attachment"]
+    } else {
+        message
+    };
     if attachment["type"] != "goal_status" {
         return None;
     }
     let t = |k: &str| crate::util::truthy(attachment.get(k));
-    let mut status = if t("failed") { "stopped" } else if t("met") { "met" } else if t("sentinel") { "cleared" } else { "active" };
+    let mut status = if t("failed") {
+        "stopped"
+    } else if t("met") {
+        "met"
+    } else if t("sentinel") {
+        "cleared"
+    } else {
+        "active"
+    };
     // A false sentinel marks goal creation; a true sentinel marks an explicit clear.
     if t("sentinel") {
         status = if t("met") { "cleared" } else { "active" };
@@ -247,11 +329,17 @@ pub fn claude_status(message: &Value) -> Option<Map<String, Value>> {
     let mut event = Map::new();
     event.insert("status".into(), json!(status));
     event.insert("note".into(), json!(text_of(&attachment["reason"])));
-    event.insert("objective".into(), attachment.get("condition").cloned().unwrap_or(Value::Null));
+    event.insert(
+        "objective".into(),
+        attachment.get("condition").cloned().unwrap_or(Value::Null),
+    );
     if status == "active" && attachment.get("sentinel").is_none() {
         // The judge sent the bot back to work: one try. The record's id tells a re-read line from a new one.
         event.insert("tried".into(), json!(true));
-        event.insert("record".into(), message.get("uuid").cloned().unwrap_or(Value::Null));
+        event.insert(
+            "record".into(),
+            message.get("uuid").cloned().unwrap_or(Value::Null),
+        );
     }
     Some(event)
 }
@@ -283,8 +371,14 @@ mod tests {
 
     #[test]
     fn waiting_lines_and_objectives_read_as_python_does() {
-        assert_eq!(waiting_on(&["done.\n\nWaiting on: **Ana's review**", ""]), "Waiting on: Ana's review");
-        assert_eq!(waiting_on(&["", r#"the bot said \"Waiting on: the deploy\" so"#]), "Waiting on: the deploy");
+        assert_eq!(
+            waiting_on(&["done.\n\nWaiting on: **Ana's review**", ""]),
+            "Waiting on: Ana's review"
+        );
+        assert_eq!(
+            waiting_on(&["", r#"the bot said \"Waiting on: the deploy\" so"#]),
+            "Waiting on: the deploy"
+        );
         assert_eq!(waiting_on(&["Waiting on: <what>"]), "");
         let native = native_objective("Ship it");
         assert!(native.ends_with(WAITING_CLAUSE));
@@ -297,26 +391,55 @@ mod tests {
     #[test]
     fn claude_goal_records_become_goal_events() {
         let tried = claude_status(&json!({"uuid": "u1", "attachment": {"type": "goal_status", "condition": "c", "reason": "not yet"}})).unwrap();
-        assert_eq!(Value::Object(tried), json!({"status": "active", "note": "not yet", "objective": "c", "tried": true, "record": "u1"}));
-        let set = claude_status(&json!({"type": "goal_status", "sentinel": false, "condition": "c"})).unwrap();
+        assert_eq!(
+            Value::Object(tried),
+            json!({"status": "active", "note": "not yet", "objective": "c", "tried": true, "record": "u1"})
+        );
+        let set =
+            claude_status(&json!({"type": "goal_status", "sentinel": false, "condition": "c"}))
+                .unwrap();
         assert_eq!(set["status"], "active");
         assert!(!set.contains_key("tried"));
-        assert_eq!(claude_status(&json!({"type": "goal_status", "sentinel": true, "met": true})).unwrap()["status"], "cleared");
-        assert_eq!(claude_status(&json!({"type": "goal_status", "met": true})).unwrap()["status"], "met");
+        assert_eq!(
+            claude_status(&json!({"type": "goal_status", "sentinel": true, "met": true})).unwrap()
+                ["status"],
+            "cleared"
+        );
+        assert_eq!(
+            claude_status(&json!({"type": "goal_status", "met": true})).unwrap()["status"],
+            "met"
+        );
         assert!(claude_status(&json!({"type": "assistant"})).is_none());
     }
 
     #[test]
     fn repository_skills_and_commands_follow_the_builtins() {
-        let root = std::env::temp_dir().join(format!("tico-goals-{}", uuid::Uuid::new_v4().simple()));
+        let root =
+            std::env::temp_dir().join(format!("tico-goals-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(root.join(".claude/skills/deploy")).unwrap();
         std::fs::create_dir_all(root.join(".claude/skills/hidden")).unwrap();
         std::fs::create_dir_all(root.join(".claude/commands/ops")).unwrap();
-        std::fs::write(root.join(".claude/skills/deploy/SKILL.md"), "---\nname: deploy\ndescription: >\n  Ship the\n  site\nargument-hint: [env]\n---\n").unwrap();
-        std::fs::write(root.join(".claude/skills/hidden/SKILL.md"), "---\nuser-invocable: false\n---\n").unwrap();
+        std::fs::write(
+            root.join(".claude/skills/deploy/SKILL.md"),
+            "---\nname: deploy\ndescription: >\n  Ship the\n  site\nargument-hint: [env]\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".claude/skills/hidden/SKILL.md"),
+            "---\nuser-invocable: false\n---\n",
+        )
+        .unwrap();
         std::fs::write(root.join(".claude/commands/compact.md"), "x").unwrap();
-        std::fs::write(root.join(".claude/commands/ops/Restart.md"), "---\ndescription: Restart it\n---\n").unwrap();
-        let builtins = vec![command("compact", "Compact this conversation", "[instructions]")];
+        std::fs::write(
+            root.join(".claude/commands/ops/Restart.md"),
+            "---\ndescription: Restart it\n---\n",
+        )
+        .unwrap();
+        let builtins = vec![command(
+            "compact",
+            "Compact this conversation",
+            "[instructions]",
+        )];
         let merged = with_repo_commands(&builtins, &root);
         let names: Vec<String> = merged.iter().map(|c| text_of(&c["name"])).collect();
         assert_eq!(names, ["compact", "deploy", "restart"]);
@@ -337,7 +460,8 @@ mod frontmatter_bench {
     fn skill_frontmatter_reads_bench() {
         let (mut walls, mut reads) = (Vec::new(), Vec::new());
         for _ in 0..50 {
-            let root = std::env::temp_dir().join(format!("tico-fm-bench-{}", uuid::Uuid::new_v4().simple()));
+            let root = std::env::temp_dir()
+                .join(format!("tico-fm-bench-{}", uuid::Uuid::new_v4().simple()));
             for i in 0..30 {
                 let dir = root.join(".claude/skills").join(format!("skill-{i:02}"));
                 std::fs::create_dir_all(&dir).unwrap();
@@ -354,6 +478,9 @@ mod frontmatter_bench {
         }
         reads.sort();
         walls.sort();
-        eprintln!("BENCH frontmatter_passes=40 skills=30 runs=50 reads_median={} wall_us_median={}", reads[25], walls[25]);
+        eprintln!(
+            "BENCH frontmatter_passes=40 skills=30 runs=50 reads_median={} wall_us_median={}",
+            reads[25], walls[25]
+        );
     }
 }

@@ -9,6 +9,7 @@ readers, a held message by owners and admins), so these functions only describe 
 `message.created` goes to outgoing webhooks alone. Routines and rules are not run for every message, because agents
 post a lot of them (docs/threads.md, "Volume").
 """
+
 import logging
 
 from . import webhooks
@@ -18,23 +19,35 @@ log = logging.getLogger(__name__)
 
 def thread_facts(thread):
     """The thin payload of a thread: its id, title, audience and where it sits in its tree."""
-    return {"id": thread["id"], "title": thread.get("subject") or thread.get("title") or "",
-            "audience": thread.get("audience"), "owner_id": thread.get("owner_id"),
-            "root_id": thread.get("root_id") or thread["id"], "parent_id": thread.get("parent_id"),
-            "parent_message_id": thread.get("parent_message_id")}
+    return {
+        "id": thread["id"],
+        "title": thread.get("subject") or thread.get("title") or "",
+        "audience": thread.get("audience"),
+        "owner_id": thread.get("owner_id"),
+        "root_id": thread.get("root_id") or thread["id"],
+        "parent_id": thread.get("parent_id"),
+        "parent_message_id": thread.get("parent_message_id"),
+    }
 
 
 def message_facts(message, thread):
     """The thin payload of a message: where it was posted and who sent it, never its body."""
-    return {"id": message["id"], "thread_id": message.get("conversation_id") or thread["id"],
-            "root_id": thread.get("root_id") or thread["id"], "parent_message_id": thread.get("parent_message_id"),
-            "seq": message.get("seq"), "sender_id": message.get("sender_id"), "recipient_id": message.get("recipient_id"),
-            "kind": message.get("kind") or "say"}
+    return {
+        "id": message["id"],
+        "thread_id": message.get("conversation_id") or thread["id"],
+        "root_id": thread.get("root_id") or thread["id"],
+        "parent_message_id": thread.get("parent_message_id"),
+        "seq": message.get("seq"),
+        "sender_id": message.get("sender_id"),
+        "recipient_id": message.get("recipient_id"),
+        "kind": message.get("kind") or "say",
+    }
 
 
 def _silenced():
     """A write under `H.NO_TRIGGERS` promises no webhook or automation hears of it (a Company page reader's message)."""
     from . import hubdb as H
+
     return H.NO_TRIGGERS.get()
 
 
@@ -65,8 +78,15 @@ def thread_created(c, thread, actor):
     _publish(c, "thread.created", thread["id"], facts, actor)
     try:
         from . import automations
-        automations.on_event(c, "thread.created", thread["id"], facts, actor,
-                             access=lambda row: _owner_reads(c, row["owner_id"], thread["id"], facts))
+
+        automations.on_event(
+            c,
+            "thread.created",
+            thread["id"],
+            facts,
+            actor,
+            access=lambda row: _owner_reads(c, row["owner_id"], thread["id"], facts),
+        )
     except Exception:  # noqa: BLE001 - an automation problem must never fail the write that caused it
         log.warning("automations did not hear thread.created", exc_info=True)
 

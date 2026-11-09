@@ -1,4 +1,5 @@
 """One open Review 1, Review 2 or QA subtask per ticket and pull request head."""
+
 import json
 
 import pytest
@@ -9,9 +10,16 @@ from backend.tests.test_review_gate import HEAD, OLD, ticket
 
 
 def child(api, task, title, owner="cmo", expected=200):
-    r = api.post("/api/v2/tasks", headers=headers(), json={
-        "owner": owner, "title": title, "body": f"Check PR #412 head {HEAD}",
-        "relations": [{"task": task["id"], "kind": "parent"}]})
+    r = api.post(
+        "/api/v2/tasks",
+        headers=headers(),
+        json={
+            "owner": owner,
+            "title": title,
+            "body": f"Check PR #412 head {HEAD}",
+            "relations": [{"task": task["id"], "kind": "parent"}],
+        },
+    )
     assert r.status_code == expected, r.text
     return r.json()
 
@@ -35,8 +43,10 @@ def test_a_new_head_or_a_finished_check_allows_the_next_request(api):
     qa = child(api, task, "QA: PR #412")["task"]
     child(api, task, "QA: again", expected=422)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_links SET detail=json_set(detail,'$.head_sha',?) WHERE task_id=? AND kind='pr'",
-                  (OLD, task["id"]))
+        c.execute(
+            "UPDATE task_links SET detail=json_set(detail,'$.head_sha',?) WHERE task_id=? AND kind='pr'",
+            (OLD, task["id"]),
+        )
     second = child(api, task, "QA: the new head", owner="cpo")["task"]
     assert second["id"] != qa["id"]
     with api.app.state.store.transaction() as c:

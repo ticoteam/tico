@@ -3,6 +3,7 @@ pub mod assist;
 pub mod audio;
 pub mod capture;
 pub mod desktop;
+pub mod diag;
 #[cfg(feature = "diarize")]
 pub mod diarize;
 pub mod engine;
@@ -11,8 +12,10 @@ pub mod live;
 pub mod network;
 pub mod notices;
 pub mod qos;
+pub mod retry;
 pub mod settings;
 pub mod signin;
+pub mod speaker_names;
 pub mod speech;
 pub mod store;
 pub mod stream;

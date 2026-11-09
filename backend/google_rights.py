@@ -32,6 +32,7 @@ def boxes(c):
     person or bot access to its contents."""
     from . import mailbox_access, routines
     from .views import roster
+
     off = mailbox_access.stopped(c)
     found = {box["address"]: box for box in routines.message_bot_mailboxes(c, roster(c))}
     for box in workspace.workspace_mailboxes(c):
@@ -72,8 +73,9 @@ def check(c, runner_id, named, mailbox, owned=None):
     kind = refusal(c, runner_id, named, mailbox, owned)
     if kind:
         box = str(mailbox or "").strip().lower()
-        raise Problem(kind, FORBIDDEN if kind == "forbidden" else MESSAGES[kind].format(box=box), 403,
-                      extra={"kind": kind})
+        raise Problem(
+            kind, FORBIDDEN if kind == "forbidden" else MESSAGES[kind].format(box=box), 403, extra={"kind": kind}
+        )
 
 
 def visible(c, runner_id, named, found=None, owned=None):
@@ -91,9 +93,13 @@ def reportable(c, runner_id, named, owned=None):
 def inbox_hosts(c):
     """Each person whose message bot is placed on a computer: {person_id: {bot, runner, online}}. `runner` is None when
     the bot has no live computer; `online` says that computer answered within ONLINE_SECONDS."""
-    placed = {row["bot"]: row for row in c.execute(
-        "SELECT a.bot, a.runner_id, r.last_seen_at, r.revoked_at FROM assignments a "
-        "JOIN runners_with_state r ON r.id=a.runner_id")}
+    placed = {
+        row["bot"]: row
+        for row in c.execute(
+            "SELECT a.bot, a.runner_id, r.last_seen_at, r.revoked_at FROM assignments a "
+            "JOIN runners_with_state r ON r.id=a.runner_id"
+        )
+    }
     since = H.shift(H.now(), seconds=-ONLINE_SECONDS)
     out = {}
     for box in boxes(c):
@@ -101,8 +107,11 @@ def inbox_hosts(c):
             continue
         row = placed.get(box["bot"])
         live = row is not None and not row["revoked_at"]
-        out[box["person_id"]] = {"bot": box["bot"], "runner": row["runner_id"] if live else None,
-                                 "online": bool(live and row["last_seen_at"] and row["last_seen_at"] > since)}
+        out[box["person_id"]] = {
+            "bot": box["bot"],
+            "runner": row["runner_id"] if live else None,
+            "online": bool(live and row["last_seen_at"] and row["last_seen_at"] > since),
+        }
     return out
 
 
@@ -112,8 +121,10 @@ def turn_principals(c, runner_id, auth=None):
     out = ["bot:" + bot for (bot,) in c.execute("SELECT bot FROM assignments WHERE runner_id=?", (runner_id,))]
     assistant = getattr(getattr(auth, "settings", None), "assistant_bot", None)
     if assistant:
-        for attempt in c.execute("SELECT * FROM attempts WHERE runner_id=? AND bot_id=? AND state IN ('leased','running')",
-                                 (runner_id, assistant)).fetchall():
+        for attempt in c.execute(
+            "SELECT * FROM attempts WHERE runner_id=? AND bot_id=? AND state IN ('leased','running')",
+            (runner_id, assistant),
+        ).fetchall():
             person = auth.assistant_principal(c, attempt)
             if person:
                 out.append(person)
@@ -124,6 +135,7 @@ def bot_mailboxes(c, runner_id, auth=None):
     """The mailboxes this computer's turns may read (backend/mailbox_access.py): its placed bots' and its live Assistant
     turns' people's."""
     from . import mailbox_access
+
     out = set()
     for who in turn_principals(c, runner_id, auth):
         out.update(mailbox_access.levels_for(c, who))
@@ -133,6 +145,7 @@ def bot_mailboxes(c, runner_id, auth=None):
 def turn_level(c, runner_id, mailbox, auth=None):
     """The most any turn on this computer holds on `mailbox`: "none", "read" or "read_write"."""
     from . import mailbox_access
+
     return mailbox_access.best_level(c, turn_principals(c, runner_id, auth), mailbox)
 
 
@@ -172,24 +185,33 @@ def report(c, service, runner_id, now, *, failing=None, ok=(), reportable_set=No
     dropped (the new owner reports them). Then service_health is derived again."""
     failing = dict(failing or {})
     ok = [account for account in dict.fromkeys(ok) if account not in failing]
-    c.execute("INSERT INTO connector_reports(service,runner_id,account,error,failing,ok_accounts,reported_at) "
-              "VALUES(?,?,'','','[]',?,?) ON CONFLICT(service,runner_id,account) DO UPDATE SET "
-              "ok_accounts=excluded.ok_accounts,reported_at=excluded.reported_at",
-              (service, runner_id, encode(ok), now))
+    c.execute(
+        "INSERT INTO connector_reports(service,runner_id,account,error,failing,ok_accounts,reported_at) "
+        "VALUES(?,?,'','','[]',?,?) ON CONFLICT(service,runner_id,account) DO UPDATE SET "
+        "ok_accounts=excluded.ok_accounts,reported_at=excluded.reported_at",
+        (service, runner_id, encode(ok), now),
+    )
     for account, (message, reason) in failing.items():
-        c.execute("INSERT INTO connector_reports(service,runner_id,account,error,failing,ok_accounts,reported_at) "
-                  "VALUES(?,?,?,?,?,'[]',?) ON CONFLICT(service,runner_id,account) DO UPDATE SET error=excluded.error,"
-                  "failing=excluded.failing,reported_at=excluded.reported_at",
-                  (service, runner_id, account, str(message)[:1000], encode({"reason": reason}), now))
+        c.execute(
+            "INSERT INTO connector_reports(service,runner_id,account,error,failing,ok_accounts,reported_at) "
+            "VALUES(?,?,?,?,?,'[]',?) ON CONFLICT(service,runner_id,account) DO UPDATE SET error=excluded.error,"
+            "failing=excluded.failing,reported_at=excluded.reported_at",
+            (service, runner_id, account, str(message)[:1000], encode({"reason": reason}), now),
+        )
     for account in ok:
-        c.execute("DELETE FROM connector_reports WHERE service=? AND runner_id=? AND account=?",
-                  (service, runner_id, account))
+        c.execute(
+            "DELETE FROM connector_reports WHERE service=? AND runner_id=? AND account=?", (service, runner_id, account)
+        )
     if reportable_set is not None:
-        for (account,) in c.execute("SELECT account FROM connector_reports WHERE service=? AND runner_id=? AND account<>''",
-                                    (service, runner_id)).fetchall():
+        for (account,) in c.execute(
+            "SELECT account FROM connector_reports WHERE service=? AND runner_id=? AND account<>''",
+            (service, runner_id),
+        ).fetchall():
             if account not in reportable_set and account not in failing:
-                c.execute("DELETE FROM connector_reports WHERE service=? AND runner_id=? AND account=?",
-                          (service, runner_id, account))
+                c.execute(
+                    "DELETE FROM connector_reports WHERE service=? AND runner_id=? AND account=?",
+                    (service, runner_id, account),
+                )
     derive(c, service, now)
 
 
@@ -201,12 +223,19 @@ def counted(c, service, now):
     still counts for the covered accounts it owns, because its last failure is unknown, not over. Its rows for accounts
     it no longer owns, and rows of a revoked computer, count nowhere."""
     stamp = H.shift(now, seconds=-FRESH_SECONDS)
-    beats = {row["runner_id"]: row["reported_at"] for row in c.execute(
-        "SELECT runner_id, reported_at FROM connector_reports WHERE service=? AND account=''", (service,))}
+    beats = {
+        row["runner_id"]: row["reported_at"]
+        for row in c.execute(
+            "SELECT runner_id, reported_at FROM connector_reports WHERE service=? AND account=''", (service,)
+        )
+    }
     revoked = {row["id"] for row in c.execute("SELECT id FROM runners_with_state WHERE revoked_at IS NOT NULL")}
     owned, out = {}, []
-    for row in c.execute("SELECT runner_id, account, error, failing FROM connector_reports WHERE service=? "
-                         "AND account<>'' AND error<>'' ORDER BY account", (service,)).fetchall():
+    for row in c.execute(
+        "SELECT runner_id, account, error, failing FROM connector_reports WHERE service=? "
+        "AND account<>'' AND error<>'' ORDER BY account",
+        (service,),
+    ).fetchall():
         if row["runner_id"] in revoked:
             continue
         beat = beats.get(row["runner_id"])
@@ -233,9 +262,11 @@ def derive(c, service, now):
     failing: a fresh computer's own message, or, for a computer gone quiet, that it has not reported since its last
     heartbeat. It is stamped with the newest heartbeat. Its readers (views, health) are unchanged."""
     name = "connector:" + service
-    beats = c.execute("SELECT runner_id, reported_at FROM connector_reports WHERE service=? AND account='' "
-                      "AND runner_id NOT IN (SELECT id FROM runners_with_state WHERE revoked_at IS NOT NULL)",
-                      (service,)).fetchall()
+    beats = c.execute(
+        "SELECT runner_id, reported_at FROM connector_reports WHERE service=? AND account='' "
+        "AND runner_id NOT IN (SELECT id FROM runners_with_state WHERE revoked_at IS NOT NULL)",
+        (service,),
+    ).fetchall()
     if not beats:
         c.execute("DELETE FROM service_health WHERE service=?", (name,))
         return
@@ -257,7 +288,9 @@ def derive(c, service, now):
         error = "; ".join(dict.fromkeys(messages))[:1000]
     else:
         detail, error = {"runner_id": newest["runner_id"]}, None
-    c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,?,?) "
-              "ON CONFLICT(service) DO UPDATE SET last_succeeded_at=excluded.last_succeeded_at,"
-              "last_error=excluded.last_error,detail=excluded.detail",
-              (name, newest["reported_at"], error, encode(detail)))
+    c.execute(
+        "INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,?,?) "
+        "ON CONFLICT(service) DO UPDATE SET last_succeeded_at=excluded.last_succeeded_at,"
+        "last_error=excluded.last_error,detail=excluded.detail",
+        (name, newest["reported_at"], error, encode(detail)),
+    )

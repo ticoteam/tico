@@ -1,4 +1,5 @@
 """One public team logo, normalized to PNG for desktop builds."""
+
 import asyncio
 import hashlib
 import io
@@ -43,9 +44,41 @@ def png(data):
                     if out.tell() <= LIMIT:
                         return out.getvalue()
                     image.thumbnail((max(1, image.width // 2), max(1, image.height // 2)))
-    except (ValueError, OSError, UnidentifiedImageError, Image.DecompressionBombError,
-            Image.DecompressionBombWarning) as exc:
+    except (
+        ValueError,
+        OSError,
+        UnidentifiedImageError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ) as exc:
         raise Problem("icon_type", "Use a valid PNG, JPEG or WebP image", 422) from exc
+
+
+TOUCH = 180  # an apple-touch icon's side, in pixels
+TOUCH_FILL = 0.8  # the logo fills this share of the side, leaving about a tenth of it as padding on each side
+
+
+def touch_png(data):
+    """The team logo as a home-screen icon: TOUCH by TOUCH, the logo fitted inside with its padding, flattened onto white.
+    Transparency would show as black on some devices, so the icon is opaque."""
+    with Image.open(io.BytesIO(data)) as image:
+        logo = image.convert("RGBA")
+    inside = round(TOUCH * TOUCH_FILL)
+    scale = inside / max(logo.width, logo.height)
+    size = (max(1, round(logo.width * scale)), max(1, round(logo.height * scale)))
+    # Premultiplied while it is resized, so the transparent edges do not darken the logo's own.
+    logo = logo.convert("RGBa").resize(size, Image.Resampling.LANCZOS).convert("RGBA")
+    canvas = Image.new("RGB", (TOUCH, TOUCH), "#ffffff")
+    canvas.paste(logo, ((TOUCH - logo.width) // 2, (TOUCH - logo.height) // 2), logo)
+    out = io.BytesIO()
+    canvas.save(out, format="PNG")
+    return out.getvalue()
+
+
+def current_digest(c):
+    """The digest of the team icon now set, or None when none is."""
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    return json.loads(row[0])["digest"] if row else None
 
 
 def install_team_icon(app, store):
@@ -72,6 +105,7 @@ def install_team_icon(app, store):
             raise Problem("forbidden", "Only the owner changes the team icon", 403)
         data = await asyncio.to_thread(png, await request.body())
         digest = hashlib.sha256(data).hexdigest()
+
         def cleanup(c, icon):
             old = icon.get("retired_digest")
             if not old or c.execute("SELECT 1 FROM blobs WHERE digest=?", (old,)).fetchone():
@@ -81,7 +115,12 @@ def install_team_icon(app, store):
                     storage.s3.delete_object(Bucket=storage.bucket, Key=storage.s3_key(old))
                 (storage.directory / storage.key(old)).unlink(missing_ok=True)
             except Exception as exc:
-                raise Problem("blob_storage", "Previous team icon cleanup failed; check storage permissions and disk space, then retry", 503, True) from exc
+                raise Problem(
+                    "blob_storage",
+                    "Previous team icon cleanup failed; check storage permissions and disk space, then retry",
+                    503,
+                    True,
+                ) from exc
             c.execute("DELETE FROM blob_locations WHERE digest=?", (old,))
 
         def save(c):
@@ -93,19 +132,25 @@ def install_team_icon(app, store):
                 cleanup(c, icon)
             storage.put(data, "image/png")
             if icon:
-                c.execute("UPDATE blobs SET digest=?,size=?,created_at=? WHERE id=?",
-                          (digest, len(data), H.now(), icon["id"]))
+                c.execute(
+                    "UPDATE blobs SET digest=?,size=?,created_at=? WHERE id=?", (digest, len(data), H.now(), icon["id"])
+                )
             else:
                 icon = blobs.register(c, who, digest, len(data), "team-icon.png", "image/png")
             value = {"id": icon["id"], "digest": digest}
             if previous and icon["digest"] != digest:
                 value["retired_digest"] = icon["digest"]
-            c.execute("INSERT INTO registry_metadata(key,value) VALUES(?,?) "
-                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (KEY, encode(value)))
+            c.execute(
+                "INSERT INTO registry_metadata(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (KEY, encode(value)),
+            )
             return {"url": "/api/v2/team/icon", "content_type": "image/png"}
 
         def write():
-            result = store.mutate(who, request.url.path, request.headers.get("idempotency-key"), {"digest": digest}, save)
+            result = store.mutate(
+                who, request.url.path, request.headers.get("idempotency-key"), {"digest": digest}, save
+            )
             # Cleanup follows the committed replacement. Retries also finish a pending cleanup
             # when the idempotency response is replayed, without storing another logo.
             with store.transaction() as c:

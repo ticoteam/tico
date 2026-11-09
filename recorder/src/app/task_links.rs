@@ -285,18 +285,6 @@ impl Recorder {
             Ok(json!({"scope":scope,"generation":generation,"linked":tico.linked_tasks(&remote, Some(&cursor))?}))
         });
     }
-    pub fn edit_task_detail(&mut self, item_id: &str, due: &str, body: &str) {
-        if let Some(item) = self
-            .context
-            .items
-            .iter_mut()
-            .find(|i| i.id == item_id && i.task_id.is_empty())
-        {
-            item.due = due.chars().take(100).collect();
-            item.body = body.chars().take(4000).collect();
-            self.save_context();
-        }
-    }
 }
 
 #[cfg(test)]

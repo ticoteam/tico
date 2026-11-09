@@ -66,7 +66,7 @@ Without a decision model (no gateway key, no TypeSafe key of your own and no AI 
 ten minutes. A refused call, or one still failing after that, ends the message as `failed` with the
 reason on it, and Tico tells the human in the thread; nothing retries a failed message. Each try asks the providers in
 order, one short HTTP attempt each with no client-side retries on top of the gateway's own: the Tico AI Gateway
-(`tico-decide-1.0`), then your own TypeSafe key if you set one, then the team's own AI provider. Any failure moves on to
+(`tico-decide-low`), then your own TypeSafe key if you set one, then the team's own AI provider. Any failure moves on to
 the next, so an outage costs at most eleven attempts per provider per question batch for a message.
 
 Routing a message is a decision call on the server's key, so it counts against the sender's daily decision cap
@@ -112,9 +112,9 @@ except that a person's message, a new thread or a reply in one, to a paused or q
 bot is back (the gateway tells the person in the thread that it waits and when the bot is back); the cap on bot-to-bot traffic, the unsolicited cap, the lint, the escape rule (a message that
 names a `secrets/` path is refused and recorded as such).
 
-A follow-up in a thread is linked to the bot's last line (`in_reply_to`); when that line is an
-unanswered `ask`, the follow-up is written as its `answer`, which is what `hub question ask --wait`
-polls for, so the ask closes.
+A follow-up in a thread is linked to the bot's last line (`in_reply_to`); when that bot has one open
+question task to that person, the follow-up answers it (`question_tasks.answer_from_reply`), so the
+question task closes.
 
 The bot's run gets the text, and in the message's `refs.slack` the channel or DM name, the
 thread permalink, the sender's email, the last twelve exchanges of the thread and a note that
@@ -323,7 +323,7 @@ reply should still go out. Parameterize values; never interpolate Slack text.
 `backend/tests/test_slack_gateway.py`, with a fake Slack and a fake decision model: start-up verification,
 every deny path, dedupe, the Legal reply case (Legal's open ask in the thread, the answer
 reaches Legal in the same conversation), an explicit address, a message for two bots, a
-four-way tie capped at three, the low-confidence fallback, a no-ask message that wakes nobody,
+four-way tie capped at three, the low-confidence fallback, a message with no question that wakes nobody,
 a refused recipient, at-most-once posting with the `uncertain`, `rate_limited` and `failed`
 states, restart recovery, the customize fallback, a DM, and the kill switch. For the channels:
 a stored message reaching every reader once and the cursors moving with it, the fast lane and

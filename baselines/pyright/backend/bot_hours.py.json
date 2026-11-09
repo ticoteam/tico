@@ -1,0 +1,54 @@
+{
+    "files": {
+        "./backend/bot_hours.py": [
+            {
+                "code": "reportOptionalOperand",
+                "range": {
+                    "startColumn": 27,
+                    "endColumn": 30,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 54,
+                    "endColumn": 57,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOperatorIssue",
+                "range": {
+                    "startColumn": 30,
+                    "endColumn": 39,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalOperand",
+                "range": {
+                    "startColumn": 37,
+                    "endColumn": 40,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalOperand",
+                "range": {
+                    "startColumn": 40,
+                    "endColumn": 57,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalOperand",
+                "range": {
+                    "startColumn": 61,
+                    "endColumn": 64,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

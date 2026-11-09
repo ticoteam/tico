@@ -1,4 +1,5 @@
 """Private asset proof observes existing identity/key/material without initializing."""
+
 import hashlib
 import importlib
 import os
@@ -18,24 +19,42 @@ KEY = b"existing-fictional-visual-secret-32-bytes"
 
 
 def request(enabled=True):
-    return {"operation_id": "operation_a", "revision": 1, "account_id": ID, "company_id": ID,
-            "workspace_id": ID, "preview_id": "preview_1", "attempt_id": "attempt_1",
-            "address": "pv-abcdefgh.preview.acme.example", "public_hostname": "acme.tico.dev", "enabled": enabled,
-            "lease_id": ID, "hostname": "acme.ticofiles.com", "receipt": "a" * 32,
-            "instance_id": "i-123456789abcdef01", "install_id": ID, "challenge": "b" * 64}
+    return {
+        "operation_id": "operation_a",
+        "revision": 1,
+        "account_id": ID,
+        "company_id": ID,
+        "workspace_id": ID,
+        "preview_id": "preview_1",
+        "attempt_id": "attempt_1",
+        "address": "pv-abcdefgh.preview.acme.example",
+        "public_hostname": "acme.tico.dev",
+        "enabled": enabled,
+        "lease_id": ID,
+        "hostname": "acme.ticofiles.com",
+        "receipt": "a" * 32,
+        "instance_id": "i-123456789abcdef01",
+        "install_id": ID,
+        "challenge": "b" * 64,
+    }
 
 
 def material(now=None, task_actor=""):
-    return {"install_id": ID, "token": visuals.mint(KEY, "human:fictional", "file1", 1, now=now, task_actor=task_actor),
-            "sha256": hashlib.sha256(b"artifact response").hexdigest()}
+    return {
+        "install_id": ID,
+        "token": visuals.mint(KEY, "human:fictional", "file1", 1, now=now, task_actor=task_actor),
+        "sha256": hashlib.sha256(b"artifact response").hexdigest(),
+    }
 
 
 @pytest.mark.parametrize("task_actor", ["", "bot:assistant"])
 def test_on_actual_probe_contract_refusals_and_inert_credentials(task_actor):
     calls, proof = [], material(task_actor=task_actor)
+
     def exchange(host, path, method="GET", headers=None, **kwargs):
         calls.append((host, path, method, headers))
         return (200, proof["sha256"]) if path == "/visuals/" + proof["token"] else (404, "")
+
     assert runtime.probe(request(), proof, {"TICO_VISUAL_SECRET": KEY.decode()}, exchange=exchange)
     assert len(calls) == 6
     assert all(x[0] == "acme.ticofiles.com" for x in calls)
@@ -49,35 +68,56 @@ def test_on_actual_probe_contract_refusals_and_inert_credentials(task_actor):
 
 def test_off_requires_current_valid_token_and_live_app_not_expired_false_positive():
     calls = []
+
     def refused(host, path, **kwargs):
         calls.append((host, path))
         return (200, "") if host == "acme.tico.dev" else (404, "")
+
     assert runtime.probe(request(False), material(), {"TICO_VISUAL_SECRET": KEY.decode()}, exchange=refused)
     assert calls[0] == ("acme.tico.dev", "/healthz")
     calls.clear()
-    for wrong in (material(now=time.time() - 20000), material() | {"install_id": "foreign"},
-                  material() | {"token": material()["token"] + "x"}):
+    for wrong in (
+        material(now=time.time() - 20000),
+        material() | {"install_id": "foreign"},
+        material() | {"token": material()["token"] + "x"},
+    ):
         with pytest.raises(wire.Pending):
             runtime.probe(request(False), wrong, {"TICO_VISUAL_SECRET": KEY.decode()}, exchange=refused)
     assert not calls
     with pytest.raises(wire.Pending, match="retirement_probe_pending"):
-        runtime.probe(request(False), material(), {"TICO_VISUAL_SECRET": KEY.decode()}, exchange=lambda *args, **kw: (200, ""))
+        runtime.probe(
+            request(False), material(), {"TICO_VISUAL_SECRET": KEY.decode()}, exchange=lambda *args, **kw: (200, "")
+        )
 
 
 def test_cookie_response_and_wrong_content_are_never_success():
     class Response:
         status = 200
+
         def getheader(self, name):
             return "session=secret" if name == "Set-Cookie" else None
+
     class Connection:
-        def __init__(self, *args): pass
-        def request(self, *args, **kwargs): pass
-        def getresponse(self): return Response()
-        def close(self): pass
+        def __init__(self, *args):
+            pass
+
+        def request(self, *args, **kwargs):
+            pass
+
+        def getresponse(self):
+            return Response()
+
+        def close(self):
+            pass
+
     with pytest.raises(wire.Pending, match="probe_response_invalid"):
-        runtime.exchange("acme.ticofiles.com", "/visuals/fictional", deadline=time.monotonic()+5, connection=Connection)
+        runtime.exchange(
+            "acme.ticofiles.com", "/visuals/fictional", deadline=time.monotonic() + 5, connection=Connection
+        )
     with pytest.raises(wire.Pending, match="signed_probe_pending"):
-        runtime.probe(request(), material(), {"TICO_VISUAL_SECRET": KEY.decode()}, exchange=lambda *args, **kw: (200, "wrong"))
+        runtime.probe(
+            request(), material(), {"TICO_VISUAL_SECRET": KEY.decode()}, exchange=lambda *args, **kw: (200, "wrong")
+        )
 
 
 def test_existing_key_only_no_mint_and_no_new_census_or_database(tmp_path, monkeypatch):
@@ -87,7 +127,9 @@ def test_existing_key_only_no_mint_and_no_new_census_or_database(tmp_path, monke
     assert not database.exists()
     with sqlite3.connect(database) as conn:
         conn.execute("CREATE TABLE registry_metadata(key TEXT,value TEXT)")
-        conn.execute("INSERT INTO registry_metadata VALUES('usage-count',?)", (wire.encoded({"install_id": ID}).decode(),))
+        conn.execute(
+            "INSERT INTO registry_metadata VALUES('usage-count',?)", (wire.encoded({"install_id": ID}).decode(),)
+        )
     before = database.read_bytes()
     assert runtime.census(database) == ID
     assert database.read_bytes() == before
@@ -131,8 +173,11 @@ def test_a_generated_reader_site_is_observed_the_way_it_was_written(tmp_path, mo
     generated.mkdir()
     (root / "docker/caddy-supervisor.sh").write_bytes(b"approved supervisor")
     (generated / "supervisor.sh").write_bytes(b"approved supervisor")
-    env = {"TICO_DOMAIN": "acme.tico.dev", "TICO_READER_ORIGIN": "https://reader.acme.example",
-           **wire.configuration(request())}
+    env = {
+        "TICO_DOMAIN": "acme.tico.dev",
+        "TICO_READER_ORIGIN": "https://reader.acme.example",
+        **wire.configuration(request()),
+    }
     caddy_assets.prepare(env | {"TICO_CADDY_DIR": str(generated)})
     assert b"reader.acme.example" in (generated / "caddy.json").read_bytes()
     monkeypatch.setattr(runtime, "capabilities", lambda root: {"revision": "a" * 40, "runtime_files": {}})
@@ -143,6 +188,7 @@ def test_a_generated_reader_site_is_observed_the_way_it_was_written(tmp_path, mo
 
 def test_discovery_verifies_actual_code_without_backend_initialization_or_census(tmp_path, monkeypatch):
     from backend.code_hash import digest
+
     for name in wire.RUNTIME_FILES:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)

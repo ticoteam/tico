@@ -1,4 +1,5 @@
 """Public .dev workspace and scoped Route53 origin: fake AWS, DNS and shell only."""
+
 import pytest
 
 from setup import dns, state, verify
@@ -24,8 +25,10 @@ def create():
 
 def alias_world(**kwargs):
     d, ec2, iam, ssm, r53 = world(**kwargs)
-    resolver = fakes.FakeResolver({(DOMAIN, dns.A): ["203.0.113.9"], (PUBLIC, dns.A): ["203.0.113.9"]},
-                                  {ZONE: fakes.R53_NS, "tico.dev": ["a.ns.cloudflare.com"]})
+    resolver = fakes.FakeResolver(
+        {(DOMAIN, dns.A): ["203.0.113.9"], (PUBLIC, dns.A): ["203.0.113.9"]},
+        {ZONE: fakes.R53_NS, "tico.dev": ["a.ns.cloudflare.com"]},
+    )
     d.resolver, d.public_resolvers = resolver, lambda: [("G", resolver)]
     d.cloudflare = lambda *a: pytest.fail("the installer must not write the Cloudflare root")
     return d, ec2, iam, ssm, r53
@@ -54,16 +57,25 @@ def test_public_domain_tls_callback_and_owner_link_stay_public_while_only_origin
 
 def test_aws_final_dns_check_uses_the_allocated_ip_for_the_public_hostname(monkeypatch):
     d, ec2, iam, ssm, r53 = alias_world()
-    monkeypatch.setattr(verify, "run_all", lambda **kw: [verify.check_dns(kw["domain"], kw["records"], kw["resolvers"])])
+    monkeypatch.setattr(
+        verify, "run_all", lambda **kw: [verify.check_dns(kw["domain"], kw["records"], kw["resolvers"])]
+    )
     code, out = go(create(), d)
     assert code == 0, out
     assert f"[ok] DNS: {PUBLIC} resolves correctly" in out
     assert state.load(PUBLIC)[0]["server_ip"] == "203.0.113.9"
 
 
-@pytest.mark.parametrize("flag,value", [("--dns-name", "*.preview.example"), ("--dns-name", "https://pv-x.preview.example"),
-                                       ("--dns-name", "pv-x.other.example"), ("--dns-zone", "preview.example/path"),
-                                       ("--dns-name", "pv-x.preview.example\n")])
+@pytest.mark.parametrize(
+    "flag,value",
+    [
+        ("--dns-name", "*.preview.example"),
+        ("--dns-name", "https://pv-x.preview.example"),
+        ("--dns-name", "pv-x.other.example"),
+        ("--dns-zone", "preview.example/path"),
+        ("--dns-name", "pv-x.preview.example\n"),
+    ],
+)
 def test_bad_alias_input_is_refused_before_any_aws_write(flag, value):
     d, ec2, iam, ssm, r53 = alias_world()
     argv = create()
@@ -95,8 +107,9 @@ def test_destroy_uses_persisted_or_explicit_operational_dns_and_deletes_it_first
     r53 = fakes.FakeRoute53(ZONE, [record("A", "203.0.113.9")])
     d, ec2, iam, ssm, r53 = alias_world(ec2=server(), r53=r53)
     if saved:
-        state.save(PUBLIC, {"domain": PUBLIC, "target": "aws", "aws_name": NAME, "dns_name": DOMAIN,
-                            "dns_zone": ZONE}, "")
+        state.save(
+            PUBLIC, {"domain": PUBLIC, "target": "aws", "aws_name": NAME, "dns_name": DOMAIN, "dns_zone": ZONE}, ""
+        )
     argv = ["destroy", "--domain", PUBLIC, "--name", NAME, "--dns", "--yes"]
     if not saved:
         argv += ["--dns-name", DOMAIN, "--dns-zone", ZONE]
@@ -111,8 +124,22 @@ def test_destroy_uses_persisted_or_explicit_operational_dns_and_deletes_it_first
 
 def test_destroy_refuses_mismatched_dns_authority_without_releasing_resources():
     d, ec2, iam, ssm, r53 = alias_world(ec2=server())
-    code, out = go(["destroy", "--domain", PUBLIC, "--name", NAME, "--dns", "--yes",
-                    "--dns-name", "pv-abcdefgh.child." + ZONE, "--dns-zone", "child." + ZONE], d)
+    code, out = go(
+        [
+            "destroy",
+            "--domain",
+            PUBLIC,
+            "--name",
+            NAME,
+            "--dns",
+            "--yes",
+            "--dns-name",
+            "pv-abcdefgh.child." + ZONE,
+            "--dns-zone",
+            "child." + ZONE,
+        ],
+        d,
+    )
     assert code == 1 and "nothing was deleted" in out
     assert not ec2.called("terminate_instances") and not r53.calls
 

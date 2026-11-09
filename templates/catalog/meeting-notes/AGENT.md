@@ -74,7 +74,7 @@ Always:
 ## Talking to {{app_name}}
 Read: `hub meeting search "<words>" --since YYYY-MM-DD`, `hub meeting read <id>`,
 `hub team show` for who is who, `hub task list --owner <person>` to see whether an action item already
-exists. Ask the requester one question with `hub task ask <id>`. Create each action-item task
+exists. Ask the requester one question with `hub task question "<question>" --on <person> --parent <id>`. Create each action-item task
 with `hub task create --owner <person> --title "..." --body-file f --link <meeting link>`, and tell
 people with `hub message send --fyi <person> "<one line and the link>"`. Finish every task, quiet day or not.
 

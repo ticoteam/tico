@@ -3,16 +3,28 @@
 It answers just what one mailbox sync and one calendar lookup ask, and appends each request path to
 the file named by argv[2] so the smoke test can see the connectors job really reached it.
 """
+
 import json
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 MESSAGE = {
-    "id": "m1", "threadId": "t1", "labelIds": ["INBOX", "UNREAD"], "snippet": "hello",
-    "internalDate": "1790000000000", "historyId": "5",
-    "payload": {"mimeType": "text/plain", "body": {"size": 5, "data": "aGVsbG8"}, "headers": [
-        {"name": "From", "value": "Pat <pat@customer.example>"}, {"name": "To", "value": "owner@example.com"},
-        {"name": "Subject", "value": "Hello"}, {"name": "Date", "value": "Mon, 28 Sep 2026 10:00:00 +0000"}]},
+    "id": "m1",
+    "threadId": "t1",
+    "labelIds": ["INBOX", "UNREAD"],
+    "snippet": "hello",
+    "internalDate": "1790000000000",
+    "historyId": "5",
+    "payload": {
+        "mimeType": "text/plain",
+        "body": {"size": 5, "data": "aGVsbG8"},
+        "headers": [
+            {"name": "From", "value": "Pat <pat@customer.example>"},
+            {"name": "To", "value": "owner@example.com"},
+            {"name": "Subject", "value": "Hello"},
+            {"name": "Date", "value": "Mon, 28 Sep 2026 10:00:00 +0000"},
+        ],
+    },
 }
 
 

@@ -1,4 +1,5 @@
 """Meeting invitations grant the same access regardless of who invited a teammate."""
+
 import pytest
 
 from backend.tests.test_api import api, get, headers, post, restrict  # noqa: F401
@@ -16,8 +17,7 @@ def test_added_person_can_add_people_and_bots_without_joining_private_meeting(li
     assert get(live, f"live-meetings/{mid}", token="cara-test")["id"] == mid
     assert get(live, f"live-meetings/{mid}", token="finance-live", expected=404)
     for body in ({"visibility": "team"}, {"remove": ["cara"]}, {"add": ["nobody"]}):
-        post(live, f"live-meetings/{mid}/access", body, token="ben-test",
-             expected=404 if "add" in body else 403)
+        post(live, f"live-meetings/{mid}/access", body, token="ben-test", expected=404 if "add" in body else 403)
     denied = live.request("DELETE", f"/api/v2/live-meetings/{mid}/bots/ops", json={}, headers=headers("cara-test"))
     assert denied.status_code == 403
     # Leaving revokes the person's grant, but the teammates they let in keep theirs.
@@ -76,12 +76,20 @@ def test_nonowner_bot_and_added_people_read_participants_only_filed_meeting(live
     saved = get(live, f"meetings/{rid}")
     assert {p["email"] for p in saved["participants"]} >= {"ben@acme.example", "cara@acme.example"}
     post(live, f"meetings/{rid}/edit", {"version": saved["version"], "note": "Shared planning notes"})
-    upload = live.post(f"/api/meetings/{rid}/attachments", headers=headers(),
-                       files={"files": ("notes.txt", b"Shared planning download", "text/plain")})
+    upload = live.post(
+        f"/api/meetings/{rid}/attachments",
+        headers=headers(),
+        files={"files": ("notes.txt", b"Shared planning download", "text/plain")},
+    )
     assert upload.status_code == 200, upload.text
     bid = upload.json()["attachments"][0]["id"]
-    reads = (f"/api/v2/meetings/{rid}", f"/api/meetings/{rid}", f"/api/meetings/{rid}/versions",
-             f"/api/v2/meetings/transcript?id={rid}", f"/api/v2/files/{bid}")
+    reads = (
+        f"/api/v2/meetings/{rid}",
+        f"/api/meetings/{rid}",
+        f"/api/meetings/{rid}/versions",
+        f"/api/v2/meetings/transcript?id={rid}",
+        f"/api/v2/files/{bid}",
+    )
     for path in reads:
         assert live.get(path, headers=headers("ops-live")).status_code == (403 if "/files/" in path else 404)
     post(live, f"meetings/{rid}/review", {"action": "approve", "audience": "participants"})
@@ -101,8 +109,13 @@ def test_nonowner_bot_and_added_people_read_participants_only_filed_meeting(live
     assert not err and "shared transcript" in transcript["text"]
     err, _ = call(live, "hub_meeting_read", {"id": rid}, token="finance-live")
     assert err
-    post(live, f"meetings/{rid}/edit", {"version": detail["version"], "note": "Cannot edit"},
-         token="ops-live", expected=403)
+    post(
+        live,
+        f"meetings/{rid}/edit",
+        {"version": detail["version"], "note": "Cannot edit"},
+        token="ops-live",
+        expected=403,
+    )
     post(live, f"meetings/{rid}/delete", {})
     for path in reads:
         assert live.get(path, headers=headers("ops-live")).status_code in (403, 404), path

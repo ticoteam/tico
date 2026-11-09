@@ -14,9 +14,17 @@ def claim(api, r, next_run=True):
 
 
 def later(api, **more):
-    return post(api, "tasks", {"owner": "ops", "title": "Watch the new refund requests",
-                               "body": "Released today; check the counts on your next run.",
-                               "next_run": True, **more})
+    return post(
+        api,
+        "tasks",
+        {
+            "owner": "ops",
+            "title": "Watch the new refund requests",
+            "body": "Released today; check the counts on your next run.",
+            "next_run": True,
+            **more,
+        },
+    )
 
 
 def setup(api):
@@ -69,17 +77,19 @@ def test_a_run_that_fails_gives_it_back(api):
     post(api, "chat/ops", {"text": "First"})
     first = claim(api, r)
     post(api, f"attempts/{first['id']}/started", {"thread_id": "t1"}, token=r["token"])
-    post(api, f"attempts/{first['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0},
-         token=r["token"])
+    post(
+        api, f"attempts/{first['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"]
+    )
     assert get(api, "tasks/" + task["id"])["task"]["next_run_waiting"] is True
-    with api.app.state.store.transaction() as c:   # clear the review hold the failure left
+    with api.app.state.store.transaction() as c:  # clear the review hold the failure left
         c.execute("UPDATE jobs SET state='canceled' WHERE state='uncertain'")
-        c.execute("UPDATE run_backoff SET wait_until=NULL")        # the fast failure's wait is over
+        c.execute("UPDATE run_backoff SET wait_until=NULL")  # the fast failure's wait is over
     post(api, "chat/ops", {"text": "Second"})
     assert [t["id"] for t in claim(api, r)["next_run"]] == [task["id"]]
 
 
 # ---- running one now (Ben, 2026-09-24: "it should just be able to just run it")
+
 
 def test_run_now_starts_it_as_the_task_not_as_a_chat(api):
     r = setup(api)
