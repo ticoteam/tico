@@ -304,9 +304,30 @@ interface LastRead {
 
 // ---------------------------------------------------------------- S, the page's shared state (ui/app/state.ts)
 
+/** A roster person as S.people holds them: the Person row plus the profile, Slack and notice fields the human page reads. */
+type RosterPerson = import('./api').Person & {
+  hidden?: boolean;
+  about?: string | null;
+  goals?: string;
+  notes?: string | null;
+  github?: string | null;
+  phone?: string | null;
+  slack?: string | null;
+  /** The bot a "Notes go to" line names (a slug). */
+  bot?: string | null;
+  bots?: string[];
+  my_access?: AccessLevel;
+  slack_muted_bots?: string[] | null;
+  notify_slack_task_done?: boolean;
+  notify_slack_bot_messages?: boolean;
+  notify_browser?: boolean;
+  email_digest?: boolean;
+  update_draft?: boolean;
+};
+
 interface AppState {
   emps: Employee[];
-  people: (import('./api').Person & { hidden?: boolean })[];
+  people: RosterPerson[];
   orgGroups: OrgGroup[];
   status: ServerStatus | null;
   statusPending: boolean;
