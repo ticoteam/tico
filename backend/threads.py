@@ -3797,9 +3797,10 @@ def delete(c, principal, thread_id):
 
 def _clear_tree_words(c, row, actor):
     """A deleted thread keeps no words, attachment references or files. For every message in its tree (the root and its
-    sub-threads), the older revisions' bodies are blanked (the message's own and the copies of its origin), its
-    attachment references go and only its origin stays, and its files go by the file delete path
-    (file_library.release_message_files). The tombstones and sequence numbers stay, as retention keeps them."""
+    sub-threads), every revision body of that message and of its origin's copies (each row that shares the origin, in any
+    thread) is blanked, as the contract's "every copy of the words follows" and "its origin's copies" say. Its attachment
+    references go and only its origin stays, and its files go by the file delete path (file_library.release_message_files).
+    The tombstones and sequence numbers stay, as retention keeps them."""
     from . import file_library  # lazy: the file library reads thread rows too
 
     ids = [
@@ -3812,11 +3813,8 @@ def _clear_tree_words(c, row, actor):
     for message_id in ids:
         message = H.message(c, message_id, include_deleted=True) or {}
         origin = (message.get("refs") or {}).get("origin")
-        # The message's own older words; and a copy that shares its origin only where that copy is already empty (a
-        # carrier or note whose text the origin's delete cleared). A copy whose words still stand keeps its history.
         c.execute(
-            "UPDATE message_revisions SET body=NULL WHERE body IS NOT NULL AND (message_id=? OR (origin_id=? AND "
-            "message_id IN (SELECT id FROM messages WHERE deleted_at IS NOT NULL OR body='')))",
+            "UPDATE message_revisions SET body=NULL WHERE (message_id=? OR origin_id=?) AND body IS NOT NULL",
             (message_id, message.get("origin_id") or message_id),
         )
         c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump({"origin": origin} if origin else {}), message_id))

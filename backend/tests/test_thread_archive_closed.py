@@ -4,6 +4,9 @@ leaves both at once, comes back when unarchived, and only a manager archives. Fi
 and cara (humans)."""
 
 import json
+import uuid
+
+import pytest
 
 from backend import threads
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
@@ -303,6 +306,48 @@ def test_a_thread_delete_removes_its_words_attachment_references_and_files(api):
         assert c.execute("SELECT COUNT(*) FROM blobs WHERE id=?", (blob_id,)).fetchone()[0] == 0
         assert c.execute("SELECT COUNT(*) FROM bot_file_versions WHERE blob_id=?", (blob_id,)).fetchone()[0] == 0
         assert c.execute("SELECT COUNT(*) FROM blob_purges WHERE digest=?", (digest,)).fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("copy_is_live", [True, False], ids=["copy with words", "empty copy"])
+def test_a_thread_delete_blanks_the_older_words_of_its_origins_copies_in_other_threads(api, copy_is_live):
+    # The contract: a delete clears every copy of the words, and its origin's copies. A copy in another thread keeps
+    # its own current text (live), or is already empty (deleted); either way its older revision words go with the
+    # origin's delete. The schema gives inserted rows their own origin, so the shared origin here is set directly.
+    thread = new_thread(api, title="Plan (to delete)", members=())
+    original = say(api, thread["id"], "Plan v1")
+    edited = api.patch(f"/api/v2/messages/{original['id']}", json={"text": "Plan v2"}, headers=headers("ana-test"))
+    assert edited.status_code == 200, edited.text
+    other = new_thread(api, title="Elsewhere", members=("human:ben",))
+    copy = say(api, other["id"], "Live copy")
+    with api.app.state.store.read() as c:
+        origin = c.execute("SELECT origin_id FROM messages WHERE id=?", (original["id"],)).fetchone()[0]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET origin_id=? WHERE id=?", (origin, copy["id"]))
+        if not copy_is_live:
+            c.execute("UPDATE messages SET body='', deleted_at=? WHERE id=?", ("2026-11-08T00:00:00Z", copy["id"]))
+        c.execute(
+            "INSERT INTO message_revisions(id,message_id,origin_id,revision,body,deleted,actor,created_at) "
+            "VALUES(?,?,?,?,?,0,'human:ana','2026-11-08T00:00:00Z')",
+            (str(uuid.uuid4()), copy["id"], origin, 7, "Copy words before"),
+        )
+    with api.app.state.store.read() as c:
+        before = c.execute(
+            "SELECT COUNT(*) FROM message_revisions WHERE message_id=? AND origin_id=? AND body IS NOT NULL",
+            (copy["id"], origin),
+        ).fetchone()[0]
+    assert before == 1  # the shared older words are stored before the delete, so the check below means something
+    assert api.delete(f"/api/v2/messages/{original['id']}", headers=headers("ana-test")).status_code == 200
+    assert delete_thread(api, thread["id"]).status_code == 200
+    with api.app.state.store.read() as c:
+        # The rows that share the deleted message's origin lose their words; the copy's own first revision (its own
+        # origin) is its history and stays. Its current text stands.
+        shared = c.execute(
+            "SELECT COUNT(*) FROM message_revisions WHERE message_id=? AND origin_id=? AND body IS NOT NULL",
+            (copy["id"], origin),
+        ).fetchone()[0]
+        text = c.execute("SELECT body FROM messages WHERE id=?", (copy["id"],)).fetchone()[0]
+    assert shared == 0
+    assert text == ("Live copy" if copy_is_live else "")
 
 
 def test_a_home_is_never_deleted(api):
