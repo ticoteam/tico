@@ -194,6 +194,22 @@ interface OrgGroup {
   root?: string;
 }
 
+/** A person on the chart: the roster row plus the fields the server sends that the generated type leaves out. */
+type OrgPerson = AppState['people'][number] & {role?: string; inbox_bot?: string; report_position?: number};
+// A node of the team chart, as the sidebar builds it (orgTreeByParent, orgTreeWithHelpers in ui/app/sidebar.ts) and
+// other pages draw it (Company > Graph, Budget, goals). A bot node is its roster row; a seat node is its seat row (its
+// own `kind` is the node's). `kind` tells them apart, so a check on it narrows the node.
+type OrgGroupNode = { kind: 'group'; helpers?: boolean; id: string; name?: string | undefined; order: number };
+type OrgPersonNode = { kind: 'person'; id: string; person: OrgPerson };
+type OrgBotNode = Employee & {kind: 'bot'};
+type OrgSeatRow = Omit<import('./api').Seat, 'kind'>;
+type OrgSeatNode = OrgSeatRow & {kind: 'seat'; seat: OrgSeatRow};
+type OrgNode = OrgGroupNode | OrgPersonNode | OrgBotNode | OrgSeatNode;
+/** A teammate on the chart (a group, a person or a bot): a node without the recruiting seats. */
+type OrgChartRow = Exclude<OrgNode, OrgSeatNode>;
+/** The chart's nodes by their parent's key ('' for the top, `g:`/`p:`/`b:` + id). */
+type OrgByParent = Record<string, OrgNode[]>;
+
 // ---------------------------------------------------------------- the server's status (S.status, GET /api/status)
 
 /** What a bot is doing right now (`S.status.active`). */
