@@ -11316,6 +11316,7 @@ def tasks(
     ids=None,
     snoozed=None,
     q=None,
+    exclude_owner=None,
 ):
     """Tasks, newest work first. `visible` is a WHERE fragment over the task's own columns (from
     `Auth.task_sql`), so a caller's page and its `offset` are cut in the query. `order="step"` is
@@ -11323,7 +11324,7 @@ def tasks(
     `tickets=False` leaves out the tasks on a numbered type. `member` keeps the tasks that actor is on
     in some role (task_roles), or in `role` when given. `ids` limits it to those tasks (a delta
     read's changed ones). `snoozed` is "hide" (leave out snoozed tasks), "only", or None for both.
-    `limit=None` reads every match."""
+    `exclude_owner` leaves out one owner's tasks. `limit=None` reads every match."""
     sql, args, where = "SELECT * FROM tasks", [], []
     if q and q.strip():
         query = q.strip()[:1000]
@@ -11342,6 +11343,9 @@ def tasks(
     if owner:
         where.append("owner_id=?")
         args.append(owner)
+    if exclude_owner:
+        where.append("owner_id IS NOT ?")  # NULL-safe: a task with no owner is not that owner's either
+        args.append(exclude_owner)
     if requester:
         where.append("requester_id=?")
         args.append(requester)

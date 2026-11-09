@@ -34,7 +34,7 @@ needs their click), or a background run. Never a NEVER item. One card, several s
 One Confirm runs them all as them; any that fail are listed and the rest still run.
 
 For a big set of tasks you identified by id, `hub task bulk close --where-id <id> --where-id <id> --dry-run` counts first (up to
-200 ids per run). Never close by a status filter: it would close live work.
+100 ids per call). A close by filter is job 12a in `jobs.md`: count, then close on their yes.
 
 ## Cards, for what only their click may run
 Propose these with a card and stop; only their click runs them:
