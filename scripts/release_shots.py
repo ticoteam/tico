@@ -38,6 +38,8 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS = Path('scripts/screenshots/index.cts')
+# The harness before it became TypeScript: a base commit from before the rename still has it here.
+LEGACY_HARNESS = Path('scripts/screenshots/index.js')
 COMPARE = Path('scripts/screenshots/compare.cts')
 REMOTE = 'origin'
 EVIDENCE_BRANCH = 'release-evidence'
@@ -200,11 +202,13 @@ def select_pages(base_sha: str, head_sha: str, repo: Path = ROOT) -> Selection:
 
 def page_names(sha: str) -> set[str]:
     """The PAGES names at sha. A page the base does not have is new in the head and has no before."""
-    try:
-        text = git(['show', f'{sha}:{HARNESS}'], ROOT)
-    except RuntimeError:
-        return set()
-    return {match.group(1) for match in PAGE_NAME.finditer(text)}
+    for harness in (HARNESS, LEGACY_HARNESS):
+        try:
+            text = git(['show', f'{sha}:{harness}'], ROOT)
+        except RuntimeError:
+            continue
+        return {match.group(1) for match in PAGE_NAME.finditer(text)}
+    return set()
 
 
 def free_port() -> int:

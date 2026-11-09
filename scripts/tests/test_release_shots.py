@@ -266,6 +266,19 @@ def test_picture_names_add_the_theme_only_for_dark() -> None:
     assert shots.shot_file('updates', 'desktop-1440', 'dark', 'after') == 'updates-desktop-1440-dark-after.png'
 
 
+def test_a_base_from_before_the_rename_reads_the_old_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    legacy = tmp_path / 'legacy'
+    (legacy / 'scripts' / 'screenshots').mkdir(parents=True)
+    (legacy / 'scripts' / 'screenshots' / 'index.js').write_text(
+        "const PAGES = [\n  {name: 'updates', route: '#/updates'},\n];\n"
+    )
+    git(legacy, 'init', '-q')
+    git(legacy, 'add', '.')
+    git(legacy, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'old harness')
+    monkeypatch.setattr(shots, 'ROOT', legacy)
+    assert shots.page_names(git(legacy, 'rev-parse', 'HEAD')) == {'updates'}
+
+
 def test_only_changed_pictures_and_new_pages_are_uploaded() -> None:
     names = set(shots.evidence_names(sample_manifest().shots))
     assert names == {

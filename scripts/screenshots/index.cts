@@ -298,11 +298,12 @@ async function verify(page: BrowserPage, problems: string[], label: string): Pro
   await page.evaluate(() => document.fonts.ready);
   const found = await page.evaluate(() => {
     const seen = (el: HTMLElement): boolean => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length) && getComputedStyle(el).visibility !== 'hidden';
+    const textOf = (el: HTMLElement): string => (el.textContent as string).trim();
     const banners = [...document.querySelectorAll<HTMLElement>('.err, [role="alert"], .toast, .banner-error')]
-      .filter(seen).map(el => (el.textContent as string).trim()).filter(Boolean);
+      .filter(seen).map(textOf).filter(Boolean);
     // An icon whose font has not loaded is its ligature name ("dynamic_feed") in body type: far wider than an icon.
     const icons = [...document.querySelectorAll<HTMLElement>('.nav-icon, .mobile-nav-icon')].filter(seen)
-      .filter(el => el.getBoundingClientRect().width > 48).map(el => (el.textContent as string).trim());
+      .filter(el => el.getBoundingClientRect().width > 48).map(textOf);
     return {banners, icons, font: document.fonts.check('24px "Material Symbols Outlined"'), text: document.fonts.check('13px Inter'),
             loading: [...document.querySelectorAll<HTMLElement>('.loading, .skeleton, .market-loading')].filter(seen).length};
   });

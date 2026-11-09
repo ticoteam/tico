@@ -210,17 +210,17 @@ if (!only.length || only.includes('checks')) {
     await page.click('[data-id="t42"]'); await page.click('[data-id="t43"]');
     await page.click('[data-act="task-picker-link"]');
     await page.waitForSelector('.item.task:has-text("Review pricing")');
-    await page.evaluate(() => { window.__PREVIEW__.state.meetings.m1.actions.items.find((it) => it.id === 't42')!.pending = true; });
+    await page.evaluate(() => { const it = window.__PREVIEW__.state.meetings.m1.actions.items.find((x) => x.id === 't42'); if (!it) throw Error('no t42'); it.pending = true; });
     await page.waitForSelector('.item.task:has-text("Review pricing") .sub:has-text("Linking")');
     if (await page.locator('.item.task:has-text("Review pricing") .check.done').count()) throw Error('pending link shown as committed');
-    await page.evaluate(() => { window.__PREVIEW__.state.meetings.m1.actions.items.find((it) => it.id === 't42')!.pending = false; });
+    await page.evaluate(() => { const it = window.__PREVIEW__.state.meetings.m1.actions.items.find((x) => x.id === 't42'); if (!it) throw Error('no t42'); it.pending = false; });
     await page.waitForSelector('.item.task:has-text("Review pricing") .check.done');
     await page.click('.item.task:has-text("Review pricing") [data-act="unlink-item"]');
     await page.waitForSelector('.item.task:has-text("Review pricing")', { state: 'detached' });
     if (!(await page.locator('.item.task:has-text("Test recovery")').count())) throw Error('second link lost');
     if (await page.locator('.item.proposal :text-is("Details")').count()) throw Error('draft still has a Details control');
     // An older draft with a due date and details shows no editor for them.
-    await page.evaluate(() => Object.assign(window.__PREVIEW__.state.meetings.m1.actions.items.find((i) => i.id === 'i1')!, { due: '2026-12-01T22:00:00.000Z', body: 'Synthetic details' }));
+    await page.evaluate(() => { const i1 = window.__PREVIEW__.state.meetings.m1.actions.items.find((i) => i.id === 'i1'); if (!i1) throw Error('no i1'); Object.assign(i1, { due: '2026-12-01T22:00:00.000Z', body: 'Synthetic details' }); });
     if (await page.locator('.item.proposal :is(input, textarea, select)').count()) throw Error('draft shows a field editor');
     await page.click('[data-act="create-item"][data-id="i1"]');
     await page.waitForSelector('.item.task:has-text("Confirm the transcript link")');
@@ -313,7 +313,7 @@ if (!only.length || only.includes('checks')) {
     await page.fill('[data-model="finish.title"]', 'Weekly product sync (final)');
     await page.click('[data-act="finish-save"]');
     await page.waitForSelector('.topbar .badge:has-text("In Tico")', { timeout: 5000 });
-    const row = await page.evaluate(() => window.__PREVIEW__.state.library.rows.find((r) => r.id === 'm2')!);
+    const row = await page.evaluate(() => { const r = window.__PREVIEW__.state.library.rows.find((x) => x.id === 'm2'); if (!r) throw Error('no m2'); return r; });
     if (row.title !== 'Weekly product sync (final)') errors.push('finish: title not saved');
     if (row.audience !== 'participants') errors.push(`finish: saved for ${row.audience}, not participants`);
   });
@@ -337,7 +337,7 @@ if (!only.length || only.includes('checks')) {
     if (await page.locator('[data-act="finish-audience"]').count()) errors.push('finish: audience shown for This Mac');
     await page.click('[data-act="finish-save"]');
     await page.waitForTimeout(300);
-    if (await page.evaluate(() => window.__PREVIEW__.state.library.rows.find((r) => r.id === 'm1')!.sent)) errors.push('finish: This Mac sent it');
+    if (await page.evaluate(() => { const r = window.__PREVIEW__.state.library.rows.find((x) => x.id === 'm1'); if (!r) throw Error('no m1'); return r.sent; })) errors.push('finish: This Mac sent it');
   });
 
   // Sign in with the desktop app's orgs lands in the library.
