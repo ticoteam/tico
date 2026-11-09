@@ -460,7 +460,7 @@ starts (`banking.py`); a send that gets no answer goes to `unknown` (`payments.p
 
 Enforcement: CHECK (the retired `cancelled` is mapped during the table copy). NOT NULL, default `queued`.
 
-The OpenAPI v2 enum (`docs/openapi/v2.json`) uses the same list, so the public payment status changes from `cancelled` to `canceled`.
+The OpenAPI v2 enum (`GET /api/v2/openapi.json`) uses the same list, so the public payment status changes from `cancelled` to `canceled`.
 
 ### fin_transfers.status (check)
 
@@ -555,6 +555,6 @@ These are open for the integration owner.
 4. **`bot_files.state`.** No code moves a file from `not_synced` back to `ready`. Confirm whether that is intended before a sync feature relies on it.
 5. **`complete` outside the stable set.** The live-meeting tables use `complete` where other lists say `completed`. Unify in a follow-up, with a migration.
 6. **`approvals.declined` and `goal_proposals.rejected`.** Kept apart on purpose (different records). Unify only if the product wants one word for "refused".
-7. **Public API.** `docs/openapi/v2.json` changes the `cancelled` enum values for webhook sends, payments, transfers and finance cards to `canceled`. Any client that matches the old spelling breaks.
+7. **Public API.** The v2 spec (`GET /api/v2/openapi.json`) changes the `cancelled` enum values for webhook sends, payments, transfers and finance cards to `canceled`. Any client that matches the old spelling breaks.
 8. **`needs_onboarding` readers.** `backend/statuses.py` still accepts it for one release. Remove that acceptance in a later release, after this migration has run everywhere.
 9. **Removing a list value later.** Needs a migration that maps or refuses stored rows first (see "How the lists are enforced").

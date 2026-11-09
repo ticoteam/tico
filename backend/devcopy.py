@@ -165,6 +165,7 @@ EMPTY = (
     "service_keys",
     "service_key_tasks",
     "owner_links",
+    "setup_handoffs",
     # credentials
     "credentials",
     "credential_keys",
@@ -208,6 +209,9 @@ EMPTY = (
     "connector_reports",
     "github_app",
     "github_app_states",
+    # The owner's GitHub user token (sealed, for a personal account) and its single-use states: a copy holds neither.
+    "github_user_token",
+    "github_user_states",
     "granola_connections",
     "meeting_importers",
     "live_meeting_bots",

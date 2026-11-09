@@ -91,14 +91,17 @@ def per_owner(rule):
 def warnings(c):
     """The steps over their backlog now: one dict each with step, owner (an actor, or None for the whole step), count, over,
     every_hours, key (the step and the owner), text (the warning in words), first (the oldest ticket waiting there, which
-    the line hangs on) and targets (the actors it names: bots and people; the roundup lists bots only)."""
+    the line hangs on) and targets (the actors it names: bots and people; the roundup lists bots only). On ice (a stage
+    capped at 0, D69) parks its cards on purpose: it is never over its backlog."""
     from . import step_flow, updates
 
     if not step_flow._ready(c):
         return []
     hidden = {H.bot_actor(slug) for slug in updates.restricted_bots(c)}
     out = []
-    for step in H._rows(c.execute("SELECT * FROM task_steps WHERE flow LIKE '%\"backlog\"%'")):
+    for step in H._rows(
+        c.execute("SELECT * FROM task_steps WHERE flow LIKE '%\"backlog\"%' AND coalesce(card_cap, -1) != 0")
+    ):
         rule = step_flow.of(step).get("backlog")
         if not rule:
             continue

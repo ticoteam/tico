@@ -232,8 +232,11 @@ def _label(conn: sqlite3.Connection, task_id: str) -> str:
 
 def _owner_for(conn: sqlite3.Connection, pipeline_id: str, filer: str) -> str:
     """Who owns a spawned ticket, as a new ticket filed at the target's first stage would be owned: the least busy bot of
-    that stage's assign pool with a free slot (the allocator's rule, Fix V-11); else the target pipeline's manager when it is
-    on the roster; else the filer, since a ticket always has an owner."""
+    that stage's assign pool with a free slot (the allocator's rule, Fix V-11); else the least busy available pool bot
+    over its slots. The pool is the pipeline's role holder (spec A5). A first stage with no assign rule has no pool, and the
+    role holder would resolve only through task_types.role, which holds a role key, not a bot: no stored record links a
+    bot to a role. So when no role holder resolves, the filer owns the ticket. The pipeline's manager is never chosen
+    (spec A5: a manager change does not move a Dev ticket), on a stage with a pool or without one."""
     from . import pipeline_engine, step_flow
 
     first = pipeline_engine.first_stage(conn, pipeline_id)
@@ -241,20 +244,16 @@ def _owner_for(conn: sqlite3.Connection, pipeline_id: str, filer: str) -> str:
         step = _one(conn, "SELECT id, type_id, position, flow FROM task_steps WHERE id = ?", (first["id"],))
         flow: dict[str, Any] = step_flow.of(step)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         rule: Any = flow.get("assign") if step else None
-        picked = _pool_bot(conn, step, rule) if step and rule else None
-        if picked:
-            return f"bot:{picked}"
-    found = _rows(conn, "SELECT manager FROM task_types WHERE id = ?", (pipeline_id,))
-    slug = str(found[0]["manager"] or "") if found else ""
-    if not slug:
-        return filer
-    candidate = slug if slug.startswith(("bot:", "human:")) else f"bot:{slug}"
-    return candidate if H.resolve_actor(conn, candidate) else filer
+        if step and rule:
+            picked = _pool_bot(conn, step, rule) or _pool_bot(conn, step, rule, within_slots=False)
+            return f"bot:{picked}" if picked else filer
+    return filer
 
 
-def _pool_bot(conn: sqlite3.Connection, step: Row, rule: Row) -> str | None:
+def _pool_bot(conn: sqlite3.Connection, step: Row, rule: Row, *, within_slots: bool = True) -> str | None:
     """The bot the allocator would give a new ticket at this step: the pool bot with the fewest tickets in hand (ties: the
-    fewest open tickets, then the slug) among those that are active, onboarded and have a free slot. None when none does."""
+    fewest open tickets, then the slug) among those that are active, onboarded and, unless `within_slots` is False, have a
+    free slot. None when none does."""
     from . import task_allocator
 
     allocator: Any = task_allocator
@@ -263,7 +262,7 @@ def _pool_bot(conn: sqlite3.Connection, step: Row, rule: Row) -> str | None:
         if not allocator._available(conn, slug):  # pyright: ignore[reportPrivateUsage]
             continue
         in_hand = int(allocator.in_hand(conn, slug, step["type_id"], step))
-        if in_hand >= int(rule["slots"]):
+        if within_slots and in_hand >= int(rule["slots"]):
             continue
         free.append((in_hand, int(allocator._open(conn, slug)), slug))  # pyright: ignore[reportPrivateUsage]
     return min(free)[2] if free else None
@@ -603,8 +602,9 @@ def spawn(
     and is recorded as its own handoff; `note` leads its body as "Follow-up: <note>".
 
     A ticket the rules refuse to file raises Problem 409 `spawn_refused` with the reason, so the move that made the spawn
-    rolls back with it: a card never advances past a stage whose linked work was not filed. Returns the new ticket's id,
-    or None when nothing was to be filed (a move back, a link of another mode, a spawn already filed)."""
+    rolls back with it: a card never advances past a stage whose linked work was not filed. A first stage with no room
+    (D68) raises the stage_full refusal instead, so the card waits at its stage. Returns the new ticket's id, or None when
+    nothing was to be filed (a move back, a link of another mode, a spawn already filed)."""
     from .store import Problem
 
     if link["mode"] != "spawn":
@@ -621,8 +621,24 @@ def spawn(
     target = str(link["to_pipeline_id"])
     first = pipeline_engine.first_stage(conn, target)
     source = H.task(conn, source_id)
-    if first is None or source is None:
+    if source is None:
         return None
+    # Every working stage of the target is On ice (D69): it takes no linked ticket, so the card waits at its stage, as for
+    # a full first stage, until a person opens a stage there. Nothing is dropped, nor filed straight into Done.
+    frozen = pipeline_engine.frozen_refusal(conn, target, source_id, "the linked ticket")
+    if frozen is not None:
+        raise frozen
+    if first is None:
+        return None
+    full = pipeline_engine.full_stage(conn, str(first["id"]), source_id)
+    if full is not None:
+        # The linked ticket waits for room (D68): the move that would have filed it is refused, so the card stays where it is.
+        raise pipeline_engine.room_refusal(
+            "stage_full",
+            f"{pipeline_engine.full_detail(full)}, so the linked ticket waits",
+            source_id,
+            str(first["id"]),
+        )
     filer = str(source["owner_id"])
     owner = _owner_for(conn, target, filer)
     lead = f"Follow-up: {note}. " if note else ""

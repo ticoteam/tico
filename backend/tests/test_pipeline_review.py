@@ -5,6 +5,7 @@ file: the database decides, not a Python lock."""
 import json
 import threading
 import time
+from contextlib import contextmanager
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from backend import pipeline_links as L
 from backend import pipeline_overview
 from backend import pipeline_engine as E
 from backend import pipeline_review as R
+from backend import question_tasks as QT
 from backend import requirement_attachments as A
 from backend.app import create_app
 from backend.auth import Identity
@@ -204,7 +206,7 @@ def test_only_the_reviewer_the_route_and_the_asked_backup_see_an_item(world):
     assert R.queue_for(w.c, CHRIS) == []
 
 
-def test_the_queue_lists_late_first_then_oldest_and_narrows_to_a_stage(world):
+def test_the_queue_lists_oldest_first_within_a_stage_and_narrows_to_a_stage(world):
     w = world
     w.c.execute("UPDATE task_steps SET limit_minutes=60 WHERE id=?", (w.review,))
     now = H.now()
@@ -240,8 +242,8 @@ def test_late_counts_only_the_time_off_hold_and_a_held_card_is_not_late(world):
     task_holds.put(w.c, held, "blocked", H.shift(now, minutes=-120))
     task_holds.release(w.c, held, "blocked", H.shift(now, minutes=-10))
     items = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup and i["task_id"] != w.task]
-    assert [i["task_id"] for i in items] == [late, held]
-    assert [i["late"] for i in items] == [True, False]
+    assert [i["task_id"] for i in items] == [held, late]
+    assert [i["late"] for i in items] == [False, True]
     # Still on hold: never late, however long the hold has run.
     task_holds.put(w.c, late, "blocked", H.shift(now, minutes=-80))
     items = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup and i["task_id"] != w.task]
@@ -709,6 +711,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Logo",
                 "title": "Logo",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -747,6 +753,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Logo",
                 "title": "Logo",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -774,6 +784,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Sent",
                 "title": "Sent",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -812,6 +826,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Sent",
                 "title": "Sent",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -839,6 +857,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Done",
                 "title": "Done",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -866,6 +888,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Badge",
                 "title": "Badge",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -904,6 +930,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Poster",
                 "title": "Poster",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -942,6 +972,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Poster",
                 "title": "Poster",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -969,6 +1003,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Backup",
                 "title": "Backup",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -1007,6 +1045,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Backup",
                 "title": "Backup",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -1034,6 +1076,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Blank",
                 "title": "Blank",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -1063,6 +1109,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Sent",
                 "title": "Sent",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -1101,6 +1151,10 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             {
                 "task_id": "Backup",
                 "title": "Backup",
+                "body": "",
+                "acceptance_criteria": [],
+                "checkpoint": "",
+                "manager": None,
                 "number": None,
                 "pipeline_id": "Design",
                 "pipeline": "Design",
@@ -1138,7 +1192,16 @@ def test_a_mixed_queue_gives_the_rows_the_one_row_at_a_time_queue_gave(tmp_path,
             },
         ],
     }
-    assert {who: shaped_rows(w, titles, R.queue_for(w.c, who)) for who in (ANA, BEN)} == expected
+    actual = {who: shaped_rows(w, titles, R.queue_for(w.c, who)) for who in (ANA, BEN)}
+    # The rows are the same as before, with their form; the order is now each pipeline's stages left to right, then age.
+    order = {"Making": 0, "Review": 1, "Shipped": 2}
+    by_value = lambda rows: sorted(rows, key=lambda row: json.dumps(row, sort_keys=True))  # noqa: E731
+    assert {who: by_value(rows) for who, rows in actual.items()} == {
+        who: by_value([{"form": "review", **row} for row in rows]) for who, rows in expected.items()
+    }
+    for rows in actual.values():
+        keys = [(order[row["stage_id"]], row["since"]) for row in rows]
+        assert keys == sorted(keys)
     w.c.close()
 
 
@@ -1376,6 +1439,97 @@ def test_an_llm_judges_reason_shows_on_the_queue_row(world):
     w.decide(w.mockup, "unsure", judge="llm", reason="The logo is blurry")
     (item,) = [i for i in R.queue_for(w.c, ANA) if i["requirement_id"] == w.mockup]
     assert item["bot_note"] == "The logo is blurry"
+
+
+def test_a_queue_item_carries_the_card_and_the_names_its_buttons_reach(world):
+    """With nothing attached the review screen shows the card: its body, acceptance criteria and checkpoint. The item names
+    who the two Message buttons reach, the owner bot and the pipeline's manager bot, by display name."""
+    w = world
+    people = {"people": [{"id": p, "email": f"{p}@acme.example"} for p in ("ana", "ben", "chris")]}
+    H.sync_registry(
+        w.c,
+        {
+            "cmo": {"name": "cmo", "display_name": "Pipeline Manager", "runtime": "fake", "status": "active"},
+            "builder": {"name": "builder", "display_name": "Product Manager", "runtime": "fake", "status": "active"},
+        },
+        people,
+    )
+    w.c.execute("UPDATE task_types SET manager='cmo' WHERE id=?", (w.pipeline,))
+    w.c.execute(
+        "UPDATE tasks SET owner_id='bot:builder', body=?, acceptance=?, checkpoint=? WHERE id=?",
+        (
+            "Let the assistant approve a spec.",
+            json.dumps(["Approved in one tap", "Works on a phone"]),
+            "Shot 2 is cropped.",
+            w.task,
+        ),
+    )
+    w.c.execute("UPDATE requirement_attachments SET removed_at=? WHERE task_id=?", (H.now(), w.task))
+
+    def signoff():
+        (item,) = [i for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task and i["requirement_id"] == w.signoff]
+        return item
+
+    item = signoff()
+    assert item["title"] == "Logo" and item["attachment"] is None
+    assert item["body"] == "Let the assistant approve a spec."
+    assert item["acceptance_criteria"] == ["Approved in one tap", "Works on a phone"]
+    assert item["checkpoint"] == "Shot 2 is cropped."
+    assert (item["requirement"], item["pipeline"]) == ("Sign-off", "Design")
+    assert item["assignee"] == {"id": "bot:builder", "name": "Product Manager"}
+    assert item["manager"] == {"id": "bot:cmo", "name": "Pipeline Manager"}
+
+    w.c.execute("UPDATE task_types SET manager=NULL WHERE id=?", (w.pipeline,))
+    assert signoff()["manager"] is None
+
+
+def _ticket_file(w, name, content_type):
+    blob = f"blob-{name}"
+    w.c.execute(
+        "INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
+        (blob, "bot:cmo", "sha256:file", 42, name, content_type, H.now()),
+    )
+    w.c.execute("INSERT INTO task_assets (task_id, blob_id) VALUES (?,?)", (w.task, blob))
+    return blob
+
+
+@pytest.mark.parametrize(
+    ("name", "content_type", "expected"),
+    [
+        ("Pipeline manager spec v1.md", "text/markdown", "text"),
+        ("notes.txt", "", "text"),
+        ("shot.png", "image/png", "image"),
+    ],
+)
+def test_a_file_on_the_ticket_is_the_items_attachment_when_the_requirement_has_none(
+    world, name, content_type, expected
+):
+    """A ticket's own file is what the reviewer reads when nothing is attached to the requirement. It is shown (markdown and
+    plain text as text, an image as an image) but it is not the requirement's evidence: the item has no digest, and an
+    Approve of what was seen still goes through."""
+    w = world
+    blob = _ticket_file(w, name, content_type)
+    (item,) = [i for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task and i["requirement_id"] == w.signoff]
+    shown = item["attachment"]
+    assert (shown["id"], shown["source"], shown["format"], shown["name"], shown["href"]) == (
+        blob,
+        "ticket",
+        expected,
+        name,
+        f"/api/v2/files/{blob}",
+    )
+    assert item["attachment_digest"] is None
+    w.approve(w.signoff)
+    assert w.signoff not in {i["requirement_id"] for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task}
+
+
+def test_the_requirement_attachment_wins_over_a_file_on_the_ticket(world):
+    w = world
+    _ticket_file(w, "spec.md", "text/markdown")
+    (item,) = [i for i in R.queue_for(w.c, ANA) if i["task_id"] == w.task and i["requirement_id"] == w.mockup]
+    assert item["attachment"]["source"] == "link"
+    assert item["attachment"]["url"] == "https://example.test/mockup"
+    assert item["attachment_digest"] == "d1"
 
 
 def test_a_requirement_for_one_label_is_not_asked_of_a_ticket_without_that_label(world):
@@ -1797,3 +1951,281 @@ def test_named_not_validated_still_refuses_when_no_link_files_into_the_named_pip
         requirement_version=1,
     )
     assert w.c.execute("SELECT count(*) FROM stage_decisions WHERE task_id=?", (w.task,)).fetchone()[0] == 0
+
+
+def _question(w, text, on, options=("Yes", "No"), sources=None):
+    """A question for `on` that holds the ticket: a subtask of it that carries the question (question_tasks.store).
+    `sources` maps an option label to the page file it names (an option's `source`)."""
+    qid = H.task_create(w.c, ANA, text, "", on, parent_id=w.task, lint=False)["id"]
+    sources = sources or {}
+    QT.store(
+        w.c,
+        qid,
+        {
+            "questions": [
+                {
+                    "id": "decision",
+                    "header": "",
+                    "question": text,
+                    "why": "",
+                    "options": [
+                        {
+                            "label": o,
+                            "description": "",
+                            "then": "",
+                            "recommended": False,
+                            **({"source": {"file": sources[o]}} if o in sources else {}),
+                        }
+                        for o in options
+                    ],
+                    "multi": False,
+                }
+            ]
+        },
+    )
+    return qid
+
+
+def _subtask(w, text, owner, card=None):
+    return H.task_create(w.c, ANA, text, "", owner, parent_id=card or w.task, lint=False)["id"]
+
+
+def test_a_question_and_a_subtask_of_mine_on_an_open_card_are_in_my_queue_and_nobody_elses(world):
+    w = world
+    question = _question(w, "Does close all include bot tasks?", CHRIS)
+    subtask = _subtask(w, "Check the bulk close", CHRIS)
+    _question(w, "Anas question", ANA)  # asked of Ana, not Chris
+    ben_subtask = _subtask(w, "Bens subtask", BEN)
+    mine = [i for i in R.queue_for(w.c, CHRIS) if i["form"] != "review"]
+    assert {(i["form"], i["subject_id"]) for i in mine} == {("question", question), ("subtask", subtask)}
+    for item in mine:
+        assert (item["task_id"], item["pipeline_id"], item["stage_id"]) == (w.task, w.pipeline, w.review)
+    held = next(i for i in mine if i["form"] == "question")
+    assert held["ask"]["recipient_id"] == CHRIS and held["ask"]["refs"]["questions"][0]["options"]
+    assert held["holds_up"] == {"id": w.task, "title": "Logo"}
+    assert {i["subject_id"] for i in R.queue_for(w.c, BEN) if i["form"] != "review"} == {ben_subtask}
+    # The count on the Overview's ▶ is the same queue: a held question and an owned subtask are both one each.
+    assert pipeline_overview._for_you(w.c, CHRIS, [w.pipeline], "1=1") == {w.pipeline: 2}
+    # Answered or done, they leave the queue and the count drops.
+    w.c.execute("UPDATE tasks SET answer='{}' WHERE id=?", (question,))
+    w.c.execute("UPDATE tasks SET status='done' WHERE id=?", (subtask,))
+    assert pipeline_overview._for_you(w.c, CHRIS, [w.pipeline], "1=1") == {}
+
+
+def test_the_queue_puts_a_stage_before_a_later_one_then_the_oldest_first(world):
+    w = world
+    early = w.ticket("Early", step="Making")
+    later_question = _question(w, "Review-stage question", CHRIS)  # asked first, so it is the older one
+    early_subtask = _subtask(w, "Making-stage subtask", CHRIS, card=early)
+    rows = [i for i in R.queue_for(w.c, CHRIS) if i["form"] != "review"]
+    assert [i["subject_id"] for i in rows] == [early_subtask, later_question]
+    assert [i["stage_id"] for i in rows] == [w.making, w.review]
+    assert [i["subject_id"] for i in R.queue_for(w.c, CHRIS, w.pipeline, w.making) if i["form"] != "review"] == [
+        early_subtask
+    ]
+    assert [i["subject_id"] for i in R.queue_for(w.c, CHRIS, w.pipeline, w.review) if i["form"] != "review"] == [
+        later_question
+    ]
+
+
+def _restricted_page(c, title, people):
+    """A page only `people` may open: any other reader sees it as a page they can't open (page_audience)."""
+    fid = "file-" + format(5, "024x")
+    stamp = H.now()
+    c.execute(
+        "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,current_version,first_activity_at,last_activity_at) "
+        "VALUES(?,'cmo','bot',?,?,'page','text/html','tico_blob',1,?,?)",
+        (fid, fid, title, stamp, stamp),
+    )
+    c.execute(
+        "INSERT INTO pages(file_id,audience,created_at,updated_at) VALUES(?,?,?,?)",
+        (fid, json.dumps({"people": people}), stamp, stamp),
+    )
+    return fid
+
+
+def test_a_held_question_redacts_a_source_page_the_reader_cannot_open_as_the_question_view_does(tmp_path):
+    ids = {
+        "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
+        "chris-test": Identity("human:chris", "human", "chris@acme.example"),
+    }
+    app = create_app(Settings(db_path=tmp_path / "hub.db", company_name="Acme", test_identities=ids))
+    with TestClient(app) as client:
+        with app.state.store.transaction() as c:
+            w = World(tmp_path / "hub.db", conn=c)
+            w.attach()
+            fid = _restricted_page(c, "Pipeline spec v1.md", ["ben"])
+            question = _question(
+                w,
+                "Which spec wins?",
+                CHRIS,
+                options=("Pipeline spec v1.md", "Neither"),
+                sources={"Pipeline spec v1.md": fid},
+            )
+        chris = {"Authorization": "Bearer chris-test", "Idempotency-Key": "k-chris"}
+        queue = client.get("/api/v2/pipelines/review/queue", headers=chris)
+        assert queue.status_code == 200, queue.text
+        (held,) = [i for i in queue.json()["items"] if i["form"] == "question"]
+        shown = json.dumps(held)
+        assert held["subject_id"] == question
+        assert "Pipeline spec v1.md" not in shown and fid not in shown, shown
+        assert "A page you can't open" in shown
+        # The question view redacts the same refs the same way (task_view runs readable_page_refs over the task).
+        task = client.get(f"/api/v2/tasks/{question}", headers=chris).json()["task"]
+        assert held["ask"]["refs"] == task["ask"]["refs"]
+        assert held["ask"]["refs"]["questions"][0]["options"][0] == {"removed": True, "label": "A page you can't open"}
+
+
+def test_a_held_subtask_carries_its_body_criteria_and_files_and_a_question_none_of_them(world):
+    w = world
+    subtask = _subtask(w, "Check the bulk close", CHRIS)
+    question = _question(w, "Does close all include bot tasks?", CHRIS)
+    w.c.execute(
+        "UPDATE tasks SET body=?, acceptance=? WHERE id=?",
+        ("Crop the second shot to the frame.", json.dumps(["Shot 2 is cropped", " "]), subtask),
+    )
+    w.c.execute(
+        "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
+        ("blob-crop-notes", CHRIS, "e" * 64, 120, "crop-notes.txt", "text/plain", H.now()),
+    )
+    w.c.execute("INSERT INTO task_assets VALUES(?,?)", (subtask, "blob-crop-notes"))
+    by_subject = {i["subject_id"]: i for i in R.queue_for(w.c, CHRIS) if i["form"] != "review"}
+    assert by_subject[subtask]["body"] == "Crop the second shot to the frame."
+    assert by_subject[subtask]["acceptance_criteria"] == ["Shot 2 is cropped"]
+    assert by_subject[subtask]["task_files"] == [
+        {
+            "id": "blob-crop-notes",
+            "name": "crop-notes.txt",
+            "size": 120,
+            "content_type": "text/plain",
+            "url": "/api/v2/files/blob-crop-notes",
+        }
+    ]
+    assert by_subject[question]["body"] == "" and by_subject[question]["acceptance_criteria"] == []
+    assert by_subject[question]["task_files"] == []
+
+
+PAGE_DIGEST = "9" * 64  # a page version's content digest, which its file attachment carries too
+CHRIS_HEADERS = {"Authorization": "Bearer chris-test"}
+
+
+def _page_version(c, fid, name):
+    """A page's first version, named as the library names it: its name is what a review item's attachment shows."""
+    blob = "blob-" + fid
+    c.execute(
+        "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
+        (blob, CHRIS, PAGE_DIGEST, 10, name, "text/html", H.now()),
+    )
+    c.execute(
+        "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?)",
+        (fid, 1, blob, PAGE_DIGEST, 10, name, "text/html", ANA, H.now()),
+    )
+
+
+def _file_attachment(w, fid):
+    """The Mockup's attachment is a company page, at its first version, as a person attaches a file."""
+    w.c.execute(
+        "INSERT INTO requirement_attachments(id, task_id, stage_requirement_id, source, file_id, file_version, digest, "
+        "work_version, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        ("a-page", w.task, w.mockup, "file", fid, 1, PAGE_DIGEST, w.revision(), H.now()),
+    )
+
+
+@contextmanager
+def _page_review(tmp_path, people, ticket=False):
+    """Chris reviews the Mockup, whose attachment is a page open only to `people`; he reads his queue as a plain human
+    (an owner may manage every page, so the page rule only shows for a human). `ticket` attaches the page to the
+    ticket instead of the requirement, which is shown when the requirement has no attachment of its own. Yields the
+    client, the page's id and the one review item that shows the page, as Chris sees it."""
+    ids = {"chris-test": Identity(CHRIS, "human", "chris@acme.example")}
+    app = create_app(Settings(db_path=tmp_path / "hub.db", company_name="Acme", test_identities=ids))
+    with TestClient(app) as client:
+        with app.state.store.transaction() as c:
+            w = World(tmp_path / "hub.db", conn=c)
+            # A ticket's file is shown on a requirement with no attachment of its own: the Sign-off approval.
+            reviewed = w.signoff if ticket else w.mockup
+            c.execute("UPDATE stage_requirements SET reviewer_id=? WHERE id=?", (CHRIS, reviewed))
+            fid = _restricted_page(c, "Pipeline spec v1.md", people)
+            _page_version(c, fid, "Pipeline spec v1.md")
+            if ticket:
+                c.execute("INSERT INTO task_assets(task_id, blob_id) VALUES(?,?)", (w.task, "blob-" + fid))
+            else:
+                _file_attachment(w, fid)
+        queue = client.get("/api/v2/pipelines/review/queue", headers=CHRIS_HEADERS)
+        assert queue.status_code == 200, queue.text
+        (item,) = [i for i in queue.json()["items"] if i["form"] == "review" and i["attachment"]]
+        yield client, fid, item
+
+
+@pytest.mark.parametrize("ticket", [False, True], ids=["attachment", "ticket_file"])
+def test_a_review_item_attachment_redacts_a_page_the_reader_cannot_open_as_the_task_view_does(tmp_path, ticket):
+    with _page_review(tmp_path, ["ben"], ticket=ticket) as (_client, fid, item):  # an audience names people by id
+        shown = json.dumps(item)
+        for secret in ("Pipeline spec v1.md", fid, "blob-" + fid, PAGE_DIGEST, "a-page"):
+            assert secret not in shown, (secret, shown)
+        assert item["attachment_digest"] is None, item
+        assert item["attachment"] == {
+            "id": None,
+            "source": "ticket" if ticket else "file",
+            "format": "file",
+            "name": "A page you can't open",
+            "url": None,
+            "href": None,
+            "file_id": None,
+            "file_version": None,
+            "blob_id": None,
+            "commit_sha": None,
+            "removed": True,
+        }, item["attachment"]
+
+
+@pytest.mark.parametrize("ticket", [False, True], ids=["attachment", "ticket_file"])
+def test_approve_is_refused_for_an_attachment_the_reader_cannot_open(tmp_path, ticket):
+    with _page_review(tmp_path, ["ben"], ticket=ticket) as (client, _fid, item):
+        path = f"/api/v2/pipelines/tasks/{item['task_id']}/requirements/{item['requirement_id']}/approve"
+        body = {
+            "work_version": item["work_version"],
+            "attachment_digest": item["attachment_digest"],
+            "requirement_version": item["requirement_version"],
+        }
+        refused = client.post(path, json=body, headers={**CHRIS_HEADERS, "Idempotency-Key": "k-approve"})
+        assert refused.status_code == 403, refused.text
+        error = refused.json()["error"]
+        assert error["code"] == "forbidden", refused.text
+        detail = "You can't open this page, so you can't approve it. Send it back or ask its owner to share it."
+        assert error["detail"] == detail, refused.text
+        queue = client.get("/api/v2/pipelines/review/queue", headers=CHRIS_HEADERS).json()["items"]
+        assert item["requirement_id"] in [i["requirement_id"] for i in queue], "the item still waits, undecided"
+
+
+@pytest.mark.parametrize("ticket", [False, True], ids=["attachment", "ticket_file"])
+def test_approve_goes_ahead_for_an_attachment_the_reader_may_open(tmp_path, ticket):
+    with _page_review(tmp_path, ["chris"], ticket=ticket) as (client, _fid, item):
+        path = f"/api/v2/pipelines/tasks/{item['task_id']}/requirements/{item['requirement_id']}/approve"
+        body = {
+            "work_version": item["work_version"],
+            "attachment_digest": item["attachment_digest"],
+            "requirement_version": item["requirement_version"],
+        }
+        done = client.post(path, json=body, headers={**CHRIS_HEADERS, "Idempotency-Key": "k-approve"})
+        assert done.status_code == 200, done.text
+
+
+@pytest.mark.parametrize("ticket", [False, True], ids=["attachment", "ticket_file"])
+def test_a_review_item_attachment_shows_a_page_the_reader_may_open(tmp_path, ticket):
+    with _page_review(tmp_path, ["chris"], ticket=ticket) as (_client, fid, item):
+        assert item["attachment"]["name"] == "Pipeline spec v1.md", item["attachment"]
+        if not ticket:
+            assert item["attachment"]["href"] == f"/api/v2/files/{fid}/versions/1", item["attachment"]
+            assert item["attachment_digest"] == PAGE_DIGEST, item
+
+
+def test_a_bot_cannot_create_a_ticket_at_review_past_the_making_requirements(world):
+    """Codex GB2 round 3: a bot creating a ticket straight at a later stage is held to the earlier stages' exit
+    requirements, as a bot entering one by move is. Making's Mockup is not attached, so the create is refused."""
+    w = world
+    w.requirement("Brief", "attachment", "person", stage=w.making)
+    with pytest.raises(H.Refused) as refused_create:
+        H.task_create(w.c, "bot:cmo", "Made by a bot", "", "bot:cmo", type=w.pipeline, step="Review", lint=False)
+    assert refused_create.value.rule == "requirement"

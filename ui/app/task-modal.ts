@@ -185,6 +185,7 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   else void taskChatLoad(task.id, d, detail);
   void tfLoad(d, task.id);
   void taskRunsLoad(d, task.id);
+  void githubNudgeTask(d, full);
 }
 // A task's own thread: the full modal showing only its header and its conversation, so what is typed there is plainly
 // said in the task (POST /v2/tasks/{id}/comments), never in the bot's main chat. Back returns to the chat.
@@ -472,6 +473,7 @@ async function taskSave(d, id, body, then, field) {
     const data = body.snooze ? await post(path + '/snooze', {until: body.snooze})
       : body.unsnooze ? await post(path + '/unsnooze', {})
       : await post(path, {version: cur.version, ...body});
+    taskOverCapWarn(cur, body, data);
     if (note) taskOutcomeTaken(cur);
     errs.delete(field);
     if (data.task && String(d.liveTask?.id) === id) d.liveTask = data.task;
@@ -507,7 +509,10 @@ async function taskSave(d, id, body, then, field) {
 // open to the steps behind them), what changed is a one-line marker between them, and while the owner's run works a
 // "Working" line shows its newest step, with Stop for whoever may stop it. The box says it in the task (a comment),
 // which wakes its bot. `taskChatStop` and `taskChatLoad` keep their names: the router and the chat cards call them.
-/** @type {any} bridged: ui/app/refresh.ts reads it on every live change; typed when this file converts */ let TASK_CHAT = null;
+/** The open task's conversation: ui/app/refresh.ts reads it on every live change. */
+// The fields read in other files (data, rendered, cid, stopped...) are not typed here yet: unknown until those files convert.
+interface TaskChatState { dialog: HTMLDialogElement & {taskLive?: unknown; [key: string]: unknown}; host: Element | null; path: string; id: unknown; poll: number; sending: boolean; reading: boolean; liveOff?: () => void; [key: string]: unknown; }
+let TASK_CHAT: TaskChatState | null = null;
 let TASK_JUMP = ENTRY_JUMP?.task ? {task: ENTRY_JUMP.task, id: ENTRY_JUMP.id} : null;   // {task, id}: a link's message, once that task's conversation shows
 const TASK_DRAFTS = new Map();         // an unsent comment, per task, kept across redraws until it is sent or cleared
 function taskChatStop() {
@@ -1073,6 +1078,7 @@ function hubModalHTML(t, it, opts = {}) {
     ${t.goal_id ? `<div class="muted tmeta"><a href="#/goals/${encodeURIComponent(t.goal_id)}" class="task-goal" data-goal-title="${esc(t.goal_id)}">serves a goal</a></div>` : ''}
     <div class="tmodal-body task-layout">
       <div class="tmodal-main">
+      ${githubNudgeTaskHostHTML(t)}
       <section class="task-pages" data-task-pages aria-label="Pages" hidden></section>
       <section class="rule-holds" data-rule-holds aria-label="Held by a rule" hidden></section>
       ${askToYou && qcardItem(t) ? qcardBoxHTML(t) : waitLabel && waitText ? (askToYou ? `<div class="task-ask"${taskQcardWait(t)}><div class="lbl">${esc(waitLabel)}</div><div class="task-ask-body">${esc(waitText)}</div></div>`

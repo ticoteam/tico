@@ -147,7 +147,8 @@ def prepare(c, auth, who, thread_id, scope):
     viewer = threads.viewer(auth, who)
     thread = dict(threads.require(c, viewer, thread_id))
     got = transcript(c, viewer, thread, scope, who.actor)
-    return {"thread": thread, "scope": scope, **got, "lines": [m["line"] for m in got["messages"]]}
+    name = threads.shown_name(c, viewer, thread)
+    return {"thread": thread, "name": name, "scope": scope, **got, "lines": [m["line"] for m in got["messages"]]}
 
 
 def post(c, auth, who, settings, plan, summary):
@@ -165,8 +166,7 @@ def post(c, auth, who, settings, plan, summary):
         raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
     room = assistant.chat_room(c, settings, who)
     count = len(plan["messages"])
-    title = plan["thread"]["subject"] or "Thread"
-    body = f"Catch-up: {title}, {count} new\n\n{summary}"
+    body = f"Catch-up: {plan['name']}, {count} new\n\n{summary}"
     if plan["left_out"]:
         body += f"\n\n{plan['left_out']} older not included."
     sources = [m["id"] for m in plan["messages"]]
@@ -237,5 +237,5 @@ def install(app, store, auth, mutate):
                 "posted": None,
                 "words": words,
             }
-        summary = summarize(writer, plan["thread"]["subject"] or "Thread", plan["lines"])
+        summary = summarize(writer, plan["name"], plan["lines"])
         return mutate(request, body, lambda c: post(c, auth, who, settings, plan, summary))

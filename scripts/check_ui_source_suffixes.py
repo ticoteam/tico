@@ -49,7 +49,7 @@ KNOWN = (
     "scripts/cleanup/rename.py",
     "scripts/build-icon-font.py",
     "scripts/check_ui_routes.py",
-    "scripts/screenshots/select.js",
+    "scripts/screenshots/select.cts",
 )
 
 # Each snippet and whether it selects .js UI source. Checked on every run, so the patterns cannot drift unnoticed.

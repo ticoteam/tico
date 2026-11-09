@@ -109,9 +109,21 @@ ALL = (
     # ad campaigns: the teammate or team a campaign's spend counts for (backend/finance/campaigns.py)
     "campaign_owner_set",
     "campaign_owner_undo",
+    # subscriptions: confirm a suggested recurring charge, or put back what it was (backend/finance/subscriptions.py)
+    "subscription_confirm",
+    "subscription_undo",
     # vendor identity: one vendor per merchant (backend/finance/vendors.py)
     "vendor_merge",
     "vendor_unmerge",
+    # statement uploads: a CSV or OFX statement for a bank or card account (backend/finance/statement_upload.py)
+    "statement_post",
+    "statement_undo",
+    # a bank or card Tico cannot connect, for statement uploads (backend/finance/banking.py money_account_add)
+    "money_account_add",
+    # receipts: a Library file read and matched to a bank or card row (backend/finance/receipts.py)
+    "receipt_read",
+    "receipt_match",
+    "receipt_match_undo",
 )
 # The kinds not yet carried out: listed (act help says so) and refused with not_available. Every kind is live today.
 NOT_LIVE: frozenset[str] = frozenset()
@@ -195,8 +207,12 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
     "attribution_map": R.ATTRIBUTION,
     "campaign_owner_set": R.ATTRIBUTION,
     "campaign_owner_undo": R.ATTRIBUTION,
+    "subscription_confirm": R.BOOK,
+    "subscription_undo": R.BOOK,
     "vendor_merge": R.BOOK,
     "vendor_unmerge": R.BOOK,
+    "statement_post": R.BOOK,
+    "statement_undo": R.BOOK,
 }
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = (
@@ -208,6 +224,7 @@ ADMIN_ONLY = (
     "connection_disconnect",
     "connection_map",
     "connection_settings",
+    "money_account_add",
     "books_disconnect",
     "bills_address_set",
 )
@@ -654,6 +671,26 @@ SHAPES: dict[str, tuple[Field, ...]] = {
         ("teammate?", "str", "or the teammate (a bot or a person); neither: back to the account's bot"),
     ),
     "campaign_owner_undo": (("campaign_id", "str", "the owner before the latest change is put back"),),
+    "receipt_read": (
+        ("receipt_id", "str", "a receipt the asker may see"),
+        ("amount", "minor", "the total on the receipt"),
+        ("date", "day", "the date on the receipt"),
+        ("vendor?", "str", "the vendor as the receipt names it"),
+    ),
+    "receipt_match": (
+        ("receipt_id", "str", "the receipt to decide"),
+        ("decision", "accept | reject", "accept attaches the file to the suggested row; reject refuses the suggestion"),
+        ("feed_id?", "str", "or another bank or card row to attach it to (accept)"),
+    ),
+    "receipt_match_undo": (("receipt_id", "str", "the receipt whose latest accept is put back"),),
+    "subscription_confirm": (
+        ("subscription_id", "str", "a subscription the daily look suggested, or one already confirmed"),
+        ("status", "active|ignored|cancelled", "active: it is one; ignored: it is not; cancelled: it has ended"),
+        ("amount?", "minor", "the expected amount each charge is judged against (a price rise shows as a finding)"),
+        ("cadence?", "monthly|annual", "how often it is charged"),
+        ("seats?", "int", "how many seats it covers (null: none)"),
+    ),
+    "subscription_undo": (("subscription_id", "str", "the fields before the latest confirmation are put back"),),
     "vendor_merge": (
         ("into", "str", "the vendor contact the others become"),
         ("merge", "list[str]", "vendor names (as a bank row reads them) or vendor contact ids to fold into it"),
@@ -827,6 +864,22 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "estimate_accept": (("estimate_id", "str", "a sent estimate is accepted"),),
     "estimate_decline": (("estimate_id", "str", "a sent estimate is declined"),),
     "estimate_convert": (("estimate_id", "str", "an accepted estimate becomes one invoice draft, once"),),
+    "statement_post": (
+        ("money_account_id", "str", ""),
+        ("file", "str", "the statement file, base64: CSV, OFX or QFX, 1 MB at most"),
+        ("file_name?", "str", "what the file was called, for the record"),
+        ("preview_token?", "str", "from the preview of this file: post only what it showed"),
+        ("skip?", "list[str]", "row ids (the preview's row id) to leave out of the post"),
+        ("signs?", "auto|as_shown|flipped", "how the amounts read; the same as the preview (default auto)"),
+    ),
+    "statement_undo": (("upload_id", "str", "a statement upload with no reconciled row"),),
+    "money_account_add": (
+        ("kind", "bank|card_program", ""),
+        ("name", "str", "e.g. Chase Checking"),
+        ("last4?", "str", "the account number's last 4 digits"),
+        ("subtype?", "checking|savings|credit|debit", "checking for a bank, credit for a card by default"),
+        ("account_id?", "str", "an existing line to map it to; default a new line"),
+    ),
 }
 WORDS: dict[str, str] = {
     "journal": "Post a balanced entry, or reverse one.",
@@ -893,6 +946,11 @@ WORDS: dict[str, str] = {
     "attribution_map": "Map classes, departments or projects to teams or teammates, one rule each.",
     "campaign_owner_set": "Give an ad campaign's spend to a teammate or team (neither: the account's bot).",
     "campaign_owner_undo": "Put back the owner an ad campaign had before its latest change.",
+    "receipt_read": "Set a receipt's amount, date and vendor as read from its file.",
+    "receipt_match": "Accept a receipt's suggested bank or card row (attaches the file), or refuse the suggestion.",
+    "receipt_match_undo": "Put back a receipt's match: detach the file and restore the suggestion it had.",
+    "subscription_confirm": "Confirm a recurring charge as a subscription, ignore it, or mark it cancelled.",
+    "subscription_undo": "Put back a subscription's fields from before its latest confirmation.",
     "vendor_merge": "Fold names and vendor contacts into one vendor: their rows, bills and budgets count as it.",
     "vendor_unmerge": "Undo a vendor merge: each name goes back where it was, and archived contacts come back.",
     "invoice_create": "Draft an invoice.",
@@ -923,6 +981,9 @@ WORDS: dict[str, str] = {
     "estimate_accept": "Record that the customer accepted an estimate.",
     "estimate_decline": "Record that the customer declined an estimate.",
     "estimate_convert": "Make an accepted estimate one invoice draft (once).",
+    "statement_post": "Post a bank or card statement file: its new rows enter the feed and post by the usual rules.",
+    "statement_undo": "Undo a statement upload: its rows leave the feed, unless a reconciliation has cleared one.",
+    "money_account_add": "Add a bank account or card Tico cannot connect, for statement uploads.",
 }
 
 

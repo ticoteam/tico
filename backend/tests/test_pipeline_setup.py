@@ -3,9 +3,14 @@ changes nothing on a second run, sets managers only where a matching bot exists,
 
 import json
 
+import pytest
+
 from backend import hubdb as H
+from backend import pipeline_engine as E
 from backend import pipeline_links as L
+from backend import pipeline_requirements as R
 from backend import pipeline_setup as S
+from backend import public_roadmaps
 from backend.tests.test_pipeline_foundation import ANA, boot, hub, rows, step_id
 
 
@@ -20,10 +25,37 @@ def snapshot(c):
             c,
             "SELECT id, name, prefix, goal, factory_id, manager, pipeline_visibility, numbered FROM task_types ORDER BY id",
         ),
-        "steps": rows(c, "SELECT id, type_id, name, status, position FROM task_steps ORDER BY id"),
+        "steps": rows(
+            c, "SELECT id, type_id, name, status, position, card_cap, public_name FROM task_steps ORDER BY id"
+        ),
+        "requirements": rows(
+            c,
+            "SELECT id, pipeline_stage_id, name, kind, needs, reviewed_by, rubric, version, retired_at "
+            "FROM stage_requirements ORDER BY id",
+        ),
         "factories": rows(c, "SELECT id, name, goal FROM factories ORDER BY id"),
         "links": rows(c, "SELECT id, from_pipeline_stage_id, to_pipeline_id, mode FROM pipeline_links ORDER BY id"),
     }
+
+
+def bot(c, slug, name, state="active"):
+    c.execute("INSERT INTO bots (id, slug, display_name, state) VALUES (?, ?, ?, ?)", (slug, slug, name, state))
+
+
+def set_manager(c, pipeline, slug):
+    c.execute("UPDATE task_types SET manager=? WHERE name=?", (slug, pipeline))
+
+
+def manager_of(c, pipeline):
+    return rows(c, "SELECT manager FROM task_types WHERE name=?", pipeline)[0]["manager"]
+
+
+UNMANAGED = [
+    "Marketing has no active manager: name a bot Marketing Pipeline Manager",
+    "Sales has no active manager: name a bot Sales Pipeline Manager",
+    "Success has no active manager: name a bot Success Pipeline Manager",
+    "Legal has no active manager: name a bot Legal Pipeline Manager",
+]
 
 
 def test_setup_makes_the_factories_pipelines_links_and_goals(tmp_path):
@@ -77,9 +109,21 @@ def test_existing_dev_and_product_types_are_renamed_not_duplicated(tmp_path):
     }
     assert before["engineering"]["role"] == "engineering"
     after = {r["id"] for r in rows(c, "SELECT id FROM task_steps WHERE type_id IN ('engineering','product-roadmap')")}
-    # Stages are renamed in place, never recreated; only the retired Approved stage goes.
-    assert {i for i, name in steps.items() if name != "Approved"} <= after
+    # Stages are renamed in place, never recreated; only the retired Approved and Ready to ship stages go.
+    assert {i for i, name in steps.items() if name not in ("Approved", "Ready to ship")} <= after
     assert len(rows(c, "SELECT id FROM task_types WHERE name='Engineering'")) == 1
+
+
+def test_a_dev_tickets_type_tagged_engineering_at_boot_is_renamed_and_a_rerun_changes_nothing(tmp_path):
+    """A company's engineering type starts life as "Dev tickets": boot tags it with the role and keeps its name, so the
+    phone shows "Dev tickets" until setup runs. Setup renames it, and a second run changes nothing."""
+    c = fresh(tmp_path)
+    c.execute("UPDATE task_types SET name = 'Dev tickets' WHERE id = 'engineering'")
+    out = S.apply_factory_setup(c, ANA)
+    assert "renamed Dev tickets to Engineering" in out["changes"]
+    assert _type(c, "Engineering") == "engineering"
+    assert rows(c, "SELECT id FROM task_types WHERE name='Dev tickets'") == []
+    assert S.apply_factory_setup(c, ANA)["changes"] == []
 
 
 def test_a_manager_bot_with_a_matching_name_is_set_and_no_other(tmp_path):
@@ -116,16 +160,20 @@ def test_replace_moves_an_open_card_on_a_removed_stage_to_the_first_stage_and_ke
 
 def test_replace_on_a_booted_hub_makes_every_declared_link_and_a_second_run_changes_nothing(tmp_path):
     c = fresh(tmp_path)
-    assert S.apply_factory_setup(c, ANA)["unresolved"] == []
+    # A booted hub's Product and Engineering name managers that do not exist yet; their setup-named bots resolve them.
+    bot(c, "product-pipeline-manager", "Product Pipeline Manager")
+    bot(c, "engineering-pipeline-manager", "Engineering Pipeline Manager")
+    # Only Product and Engineering have a bot; the other four preset pipelines have no manager to name.
+    assert S.apply_factory_setup(c, ANA)["unresolved"] == UNMANAGED
     out = S.apply_factory_setup(c, ANA, replace=True)
-    assert out["unresolved"] == []
+    assert out["unresolved"] == UNMANAGED
     ids = {r["name"]: r["id"] for r in rows(c, "SELECT id, name FROM task_types")}
     for link in S.PRESETS["tico_default"]["links"]:
         stage = step_id(c, ids[link["from"]], link["stage"])
         assert L.link_for_stage(c, stage)["to_pipeline_id"] == ids[link["to"]]
     before = snapshot(c)
     again = S.apply_factory_setup(c, ANA, replace=True)
-    assert again["changes"] == [] and again["unresolved"] == []
+    assert again["changes"] == [] and again["unresolved"] == UNMANAGED
     assert snapshot(c) == before
 
 
@@ -237,12 +285,14 @@ def test_two_replace_runs_in_a_row_change_nothing_the_second_time(tmp_path):
     """Replace is idempotent: the stages a pipeline is created with are the ones a replace makes, so the replace that
     follows the one that made the pipelines keeps every stage id, moves no card and writes no event."""
     c = fresh(tmp_path)
+    bot(c, "product-pipeline-manager", "Product Pipeline Manager")
+    bot(c, "engineering-pipeline-manager", "Engineering Pipeline Manager")
     S.apply_factory_setup(c, ANA, "tico_default", replace=True)
     before = snapshot(c)
     events = rows(c, "SELECT COUNT(*) AS n FROM history_events")[0]["n"]
     cards = rows(c, "SELECT id, step_id, status FROM tasks ORDER BY id")
     again = S.apply_factory_setup(c, ANA, "tico_default", replace=True)
-    assert again["changes"] == [] and again["unresolved"] == []
+    assert again["changes"] == [] and again["unresolved"] == UNMANAGED
     assert snapshot(c) == before
     assert rows(c, "SELECT COUNT(*) AS n FROM history_events")[0]["n"] == events
     assert rows(c, "SELECT id, step_id, status FROM tasks ORDER BY id") == cards
@@ -393,3 +443,236 @@ def test_a_rerun_names_the_pipeline_on_a_legacy_engineering_shipped_row_and_the_
     assert again["changes"] == [f"requirement Engineering shipped on In development now names its pipeline"]
     assert _engineering_shipped(c)[1]["pipeline"] == out["pipelines"]["Engineering"]
     assert S.apply_factory_setup(c, ANA)["changes"] == []
+
+
+def test_product_starts_on_ice_with_the_default_caps_and_a_second_run_changes_nothing(tmp_path):
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA)
+    product = _type(c, "Product")
+    steps = rows(c, "SELECT name, card_cap FROM task_steps WHERE type_id=? ORDER BY position, id", product)
+    assert [s["name"] for s in steps][:3] == ["On ice", "Ideas", "Specifying"]
+    caps = {s["name"]: s["card_cap"] for s in steps}
+    assert caps["On ice"] == 0 and caps["Specifying"] == 3 and caps["In development"] == 3
+    assert caps["Ideas"] is None and caps["Review"] is None
+    before = snapshot(c)
+    S.apply_factory_setup(c, ANA)
+    assert snapshot(c) == before
+
+
+def test_adopting_a_product_adds_on_ice_and_keeps_the_caps_a_person_set(tmp_path):
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA)
+    product = _type(c, "Product")
+    R.set_stage(c, ANA, step_id(c, product, "Specifying"), {"card_cap": 5})
+    R.set_stage(c, ANA, step_id(c, product, "In development"), {"card_cap": None})  # a person's No cap
+    kept = rows(
+        c, "SELECT id, name, status FROM task_steps WHERE type_id=? AND name<>'On ice' ORDER BY position", product
+    )
+    H.type_update(c, ANA, product, steps=kept, mover=True)  # a Product from before On ice existed
+    S.apply_factory_setup(c, ANA)
+    caps = {s["name"]: s["card_cap"] for s in rows(c, "SELECT name, card_cap FROM task_steps WHERE type_id=?", product)}
+    assert caps["On ice"] == 0
+    assert caps["Specifying"] == 5 and caps["In development"] is None
+
+
+def test_new_work_enters_product_at_ideas_and_visitor_suggestions_do_too(tmp_path):
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA)
+    product = _type(c, "Product")
+    assert E.first_stage(c, product)["name"] == "Ideas"
+    assert public_roadmaps._ideas_step(c) == "Ideas"
+
+
+def test_the_pipeline_manager_name_is_matched_first_and_the_older_names_still_match(tmp_path):
+    c = fresh(tmp_path)
+    bot(c, "sales-manager", "Sales Manager")
+    bot(c, "sales-pipeline-manager", "Sales Pipeline Manager")
+    bot(c, "engineering-manager", "Engineering Manager")
+    bot(c, "marketing-pipeline-manager", "Marketing Pipeline Manager")
+    bot(c, "success-factory-manager", "Success Factory Manager")
+    S.apply_factory_setup(c, ANA)
+    assert manager_of(c, "Sales") == "sales-pipeline-manager"
+    assert manager_of(c, "Engineering") == "engineering-manager"
+    assert manager_of(c, "Marketing") == "marketing-pipeline-manager"
+    assert manager_of(c, "Success") == "success-factory-manager"
+
+
+def test_an_archived_manager_is_replaced_by_the_matching_bot(tmp_path):
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA)
+    bot(c, "sales-manager", "Sales Manager", state="archived")
+    set_manager(c, "Sales", "sales-manager")
+    bot(c, "sales-pipeline-manager", "Sales Pipeline Manager")
+    S.apply_factory_setup(c, ANA)
+    assert manager_of(c, "Sales") == "sales-pipeline-manager"
+
+
+def test_a_paused_or_missing_manager_counts_as_none(tmp_path):
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA)
+    bot(c, "success-manager", "Success Manager", state="paused")
+    set_manager(c, "Success", "success-manager")
+    bot(c, "success-factory-manager", "Success Factory Manager")
+    set_manager(c, "Legal", "legal-manager")  # no bot of that slug exists
+    bot(c, "legal-pipeline-manager", "Legal Pipeline Manager")
+    S.apply_factory_setup(c, ANA)
+    assert manager_of(c, "Success") == "success-factory-manager"
+    assert manager_of(c, "Legal") == "legal-pipeline-manager"
+
+
+def test_an_active_manager_is_never_replaced(tmp_path):
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA)
+    bot(c, "sales-lead", "Sales Lead")
+    set_manager(c, "Sales", "sales-lead")
+    bot(c, "sales-pipeline-manager", "Sales Pipeline Manager")
+    S.apply_factory_setup(c, ANA)
+    assert manager_of(c, "Sales") == "sales-lead"
+
+
+def test_a_manager_with_no_active_match_is_reported_as_unresolved_and_setup_still_runs(tmp_path):
+    c = fresh(tmp_path)
+    S.apply_factory_setup(c, ANA)
+    bot(c, "marketing-manager", "Marketing Manager", state="archived")
+    set_manager(c, "Marketing", "marketing-manager")
+    out = S.apply_factory_setup(c, ANA)
+    assert manager_of(c, "Marketing") == "marketing-manager"
+    assert [u for u in out["unresolved"] if "Marketing" in u], out["unresolved"]
+    again = S.apply_factory_setup(c, ANA, replace=True)  # a manager report never refuses a replace
+    assert again["unresolved"] == out["unresolved"]
+
+
+def test_ready_to_ship_is_retired_into_done_and_its_cards_move_there(tmp_path):
+    c = fresh(tmp_path)
+    product = _type(c, "Product roadmap")
+    card = H.task_create(c, ANA, "Export the roadmap", "", ANA, type=product, step="Ready to ship", lint=False)["id"]
+    S.apply_factory_setup(c, ANA)
+    assert rows(c, "SELECT id FROM task_steps WHERE type_id=? AND name='Ready to ship'", product) == []
+    assert rows(
+        c, "SELECT s.name AS step, k.status FROM tasks k JOIN task_steps s ON s.id=k.step_id WHERE k.id=?", card
+    ) == [{"step": "Done", "status": "done"}]
+
+
+def test_every_stage_public_name_follows_its_stage_name_after_setup(tmp_path):
+    c = fresh(tmp_path)
+    # The live Product stages still carry their old public names (Exploring, Planned in production).
+    c.execute("UPDATE task_steps SET public_name = 'Old ' || name WHERE type_id = 'product-roadmap'")
+    S.apply_factory_setup(c, ANA)
+    stale = rows(
+        c,
+        "SELECT t.name AS type, s.name, s.public_name FROM task_steps s JOIN task_types t ON t.id = s.type_id "
+        "WHERE t.name IN ('Product', 'Engineering', 'Marketing', 'Sales', 'Success', 'Legal') AND s.public_name <> s.name",
+    )
+    assert stale == []
+    assert rows(c, "SELECT public_name FROM task_steps WHERE type_id=? AND name='Specifying'", _type(c, "Product")) == [
+        {"public_name": "Specifying"}
+    ]
+
+
+def test_a_card_cannot_leave_specifying_without_a_spec_page(tmp_path):
+    c = fresh(tmp_path)
+    product = S.apply_factory_setup(c, ANA)["pipelines"]["Product"]
+    req = rows(
+        c,
+        "SELECT r.kind, r.needs, r.reviewed_by, r.rubric FROM stage_requirements r "
+        "JOIN task_steps s ON s.id = r.pipeline_stage_id WHERE s.type_id = ? AND s.name = 'Specifying' "
+        "AND r.name = 'Spec page' AND r.retired_at IS NULL",
+        product,
+    )
+    assert [(r["kind"], r["reviewed_by"]) for r in req] == [("attachment", "bot_then_person")]
+    assert json.loads(req[0]["needs"])["formats"] == ["page"]
+    assert req[0]["rubric"]
+    card = H.task_create(c, ANA, "Export spec", "", ANA, type=product, step="Specifying", lint=False)["id"]
+    with pytest.raises(H.Refused) as refused:
+        H.task_update(c, ANA, card, step="Review", mover=True)
+    assert refused.value.rule == "requirement"
+    assert rows(c, "SELECT s.name FROM tasks k JOIN task_steps s ON s.id = k.step_id WHERE k.id = ?", card) == [
+        {"name": "Specifying"}
+    ]
+
+
+def test_a_run_after_the_name_fixes_changes_nothing(tmp_path):
+    c = fresh(tmp_path)
+    c.execute("UPDATE task_steps SET public_name = 'Old ' || name WHERE type_id = 'product-roadmap'")
+    H.task_create(
+        c, ANA, "Export the roadmap", "", ANA, type=_type(c, "Product roadmap"), step="Ready to ship", lint=False
+    )
+    S.apply_factory_setup(c, ANA)
+    bot(c, "sales-manager", "Sales Manager", state="archived")
+    set_manager(c, "Sales", "sales-manager")
+    bot(c, "sales-pipeline-manager", "Sales Pipeline Manager")
+    first = S.apply_factory_setup(c, ANA)
+    before = snapshot(c)
+    again = S.apply_factory_setup(c, ANA)
+    assert again["changes"] == [] and again["unresolved"] == first["unresolved"]
+    assert snapshot(c) == before
+
+
+def test_retiring_ready_to_ship_leaves_an_open_subtask_open(tmp_path):
+    """Codex GB2 finding 1: retiring Ready to ship moves its cards into Done, and a Done move closes open descendants. A card
+    with an unfinished subtask stays on Ready to ship, and the subtask stays open."""
+    c = fresh(tmp_path)
+    product = _type(c, "Product roadmap")
+    card = H.task_create(c, ANA, "Export the roadmap", "", ANA, type=product, step="Ready to ship", lint=False)["id"]
+    child = H.task_create(c, ANA, "Write the export", "", ANA, parent_id=card, lint=False)["id"]
+    out = S.apply_factory_setup(c, ANA)
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", child) == [{"status": "open"}]
+    assert any("Export the roadmap" in u for u in out["unresolved"]), out["unresolved"]
+    assert rows(c, "SELECT s.name AS step FROM tasks k JOIN task_steps s ON s.id=k.step_id WHERE k.id=?", card) == [
+        {"step": "Ready to ship"}
+    ]
+    assert rows(c, "SELECT id FROM task_steps WHERE type_id=? AND name='Ready to ship'", product) != []
+
+
+def test_with_no_matching_bots_every_unmanaged_pipeline_is_listed_as_unresolved(tmp_path):
+    """Codex GB2 finding 3: a pipeline with no manager (NULL) is reported too, not only one whose manager was set and
+    stopped working. With no bots at all, all six preset pipelines are listed."""
+    c = fresh(tmp_path)
+    out = S.apply_factory_setup(c, ANA)
+    for name in ("Product", "Engineering", "Marketing", "Sales", "Success", "Legal"):
+        assert any(u.startswith(f"{name} has no active manager") for u in out["unresolved"]), (name, out["unresolved"])
+    assert manager_of(c, "Marketing") is None
+    again = S.apply_factory_setup(c, ANA)
+    assert again["unresolved"] == out["unresolved"]
+
+
+def test_retiring_approved_moves_a_card_with_an_open_subtask_into_in_development(tmp_path):
+    """Codex GB2 finding 3: only a retirement into a done or closed stage closes descendants. Approved moves into In
+    development, so its card moves and its open subtask stays open."""
+    c = fresh(tmp_path)
+    product = _type(c, "Product roadmap")
+    card = H.task_create(c, ANA, "Approved export", "", ANA, type=product, step="Approved", lint=False)["id"]
+    child = H.task_create(c, ANA, "Write the export", "", ANA, parent_id=card, lint=False)["id"]
+    S.apply_factory_setup(c, ANA)
+    assert rows(c, "SELECT s.name AS step FROM tasks k JOIN task_steps s ON s.id=k.step_id WHERE k.id=?", card) == [
+        {"step": "In development"}
+    ]
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", child) == [{"status": "open"}]
+
+
+def test_a_card_held_back_from_done_is_named_only_where_the_caller_can_read_it(tmp_path):
+    """Codex GB2 finding 2: setup's report names a held card only to a caller who can read it. A private card the setup
+    actor cannot read is reported generically, with no title."""
+    c = fresh(tmp_path)
+    product = _type(c, "Product roadmap")
+    public = H.task_create(c, ANA, "Public export", "", ANA, type=product, step="Ready to ship", lint=False)["id"]
+    H.task_create(c, ANA, "Finish the export", "", ANA, parent_id=public, lint=False)
+    secret = H.task_create(
+        c,
+        "human:ben",
+        "Confidential acquisition plan",
+        "",
+        "human:ben",
+        type=product,
+        step="Ready to ship",
+        lint=False,
+        private=True,
+    )["id"]
+    child = H.task_create(c, "human:ben", "Draft the plan", "", "human:ben", parent_id=secret, lint=False)["id"]
+    assert rows(c, "SELECT private FROM tasks WHERE id=?", secret) == [{"private": 1}]
+    out = S.apply_factory_setup(c, ANA)
+    text = " | ".join(out["unresolved"])
+    assert "Confidential" not in text and "Draft the plan" not in text, text
+    assert "Public export" in text
+    assert any("1 card you can't see is still in Ready to ship" in u for u in out["unresolved"]), out["unresolved"]
+    assert rows(c, "SELECT status FROM tasks WHERE id=?", child) == [{"status": "open"}]

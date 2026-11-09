@@ -20,7 +20,6 @@ from pydantic import (
     model_validator,
 )
 
-from .company_file import draft as company_draft
 
 Text = Annotated[str, Field(min_length=1, max_length=200_000)]
 ID = Annotated[str, Field(min_length=1, max_length=200)]
@@ -353,6 +352,9 @@ class TaskFilter(Contract):
     """The tasks a bulk change applies to: the filters `GET /api/v2/tasks` takes, with the same meanings."""
 
     owner: ID | None = None
+    # Everything not this one's: the tasks whose owner is anyone else (a bot or a person), the caller's own included
+    # only when named here. Refused when it names nobody (task_bulk_routes.bulk_select).
+    exclude_owner: ID | None = None
     requester: ID | None = None
     status: str | None = Field(default=None, max_length=200)  # comma-separated, as the list takes it
     lane: Lane | None = None
@@ -2606,6 +2608,8 @@ class OnboardingNames(Contract):
 def _places_rule(places):
     """Where the company serves, held to the company file's rule (draft.regions), so a place reads the same in a file,
     on the setup page and here."""
+    from .company_file import draft as company_draft  # local: keeps company_file out of the selector's fan-in
+
     return company_draft.regions(places, "regions")
 
 
@@ -3354,6 +3358,13 @@ class PersonalTokenCreate(Contract):
 
     label: str = Field(min_length=1, max_length=80)
     expires_in_days: int = Field(default=90, ge=1, le=365)
+
+
+class SetupHandoff(Contract):
+    """The one-time secret of the setup handoff (backend/setup_handoff.py). It is checked against the pattern a secret
+    has in the handler, so a wrong one is refused like a spent one, and no validation message repeats it."""
+
+    secret: str = Field(default="", max_length=512, repr=False)
 
 
 class ServiceKeyCreate(Contract):

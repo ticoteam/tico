@@ -214,6 +214,18 @@ jobs:
           shellcheck -s sh dist/install/install.sh
           grep -q "TICO_VERSION_BAKED='$VERSION'" dist/install/install.sh
           grep -q "Baked = '$VERSION'" dist/install/install-wsl.ps1
+      # The public API spec, generated from this tag: the docs link to releases/latest/download/openapi-v2.json. It is the
+      # document GET /api/v2/openapi.json serves, built with the runtime requirements the image installs (Dockerfile).
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.15'
+      - name: Generate the API spec from the tag
+        run: |
+          python3 -m venv "$RUNNER_TEMP/spec-venv"
+          "$RUNNER_TEMP/spec-venv/bin/python" -m pip install --disable-pip-version-check --retries 1 --timeout 30 -r backend/requirements.txt
+          "$RUNNER_TEMP/spec-venv/bin/python" -m backend.openapi_v2 > dist/openapi-v2.json
+          python3 -c 'import json, sys; json.load(open(sys.argv[1]))' dist/openapi-v2.json
+          echo "API spec: $(wc -c < dist/openapi-v2.json) bytes"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -256,7 +268,8 @@ jobs:
         run: |
           files=(dist/install/install.sh dist/install/install-wsl.ps1 "dist/install/tico-bundle-$VERSION.tar.gz" dist/install/SHA256SUMS
                  dist/runner/tico-runner-*.gz dist/runner/tico-runner-SHA256SUMS
-                 dist/runner/tico-screen-relay-*.gz dist/runner/tico-screen-relay-SHA256SUMS)
+                 dist/runner/tico-screen-relay-*.gz dist/runner/tico-screen-relay-SHA256SUMS
+                 dist/openapi-v2.json)
           if [ "$DRY_RUN" = true ]; then
             ls -l "${files[@]}"
             echo "Dry run: $VERSION would be published with the files above."

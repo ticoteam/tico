@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import hubdb
 from . import pipeline_engine as E
+from . import pipeline_exceptions
 from . import pipeline_rights
 from . import step_age
 
@@ -181,6 +182,7 @@ def _visits(c: "sqlite3.Connection", pipeline_id: str) -> list[dict[str, Any]]:
         c.execute(
             "SELECT v.id AS visit_id, v.task_id, v.pipeline_stage_id, v.entered_at FROM stage_visits v "
             f"JOIN tasks t ON t.id = v.task_id WHERE v.pipeline_id=? AND v.left_at IS NULL AND t.status IN ({marks}) "
+            "AND v.pipeline_stage_id NOT IN (SELECT id FROM task_steps WHERE card_cap = 0) "  # On ice (D69): no manager pass
             "ORDER BY v.entered_at, v.id",
             (pipeline_id, *H.ACTIVE_STATUSES),
         )
@@ -214,7 +216,9 @@ def late_tickets(c: "sqlite3.Connection", rows: list[dict[str, Any]], at: Any) -
     now = when_of(at)
     limits: dict[str, int] = {
         str(r["id"]): r["limit_minutes"]
-        for r in H._rows(c.execute("SELECT id, limit_minutes FROM task_steps WHERE limit_minutes IS NOT NULL"))
+        for r in H._rows(
+            c.execute("SELECT id, limit_minutes FROM task_steps WHERE limit_minutes IS NOT NULL AND card_cap IS NOT 0")
+        )  # a stage On ice (cap 0, D69) is never late
     }
     live = [
         r
@@ -545,6 +549,12 @@ def _pass(c: "sqlite3.Connection", pipeline: dict[str, Any], at: datetime) -> di
     over = over_limit(c, pid, at)
     over_ids = {item["task_id"] for item in over}
     exceptions: list[str] = [f"over:{item['task_id']}" for item in over]
+    # A card a link or a bot could not move into a full stage waits for room (pipeline_exceptions._waiting_for_room).
+    exceptions += [
+        f"room:{task_id}"
+        for task_id, waiting in pipeline_exceptions.waiting_room(c).items()
+        if waiting["type_id"] == pid
+    ]
     actions = 0
     visits = _visits(c, pid)
     tasks = _task_rows(c, list({str(v["task_id"]) for v in visits}))
@@ -700,7 +710,7 @@ def watchdog(store: Any, at: Any) -> None:
                 "Pipeline manager stopped" if members_only else f"Pipeline manager stopped: {row['name']}",
                 f"The manager of {name} has missed {missed} passes; its last pass started {last_pass or 'never'}. "
                 + (f"Pipeline id {pid}. " if members_only else "")
-                + "Check the manager bot and the pipeline's log.",
+                + "Check the Pipeline Manager and the pipeline's log.",
                 BOTOPS,
                 deduplicate=False,
                 lint=False,

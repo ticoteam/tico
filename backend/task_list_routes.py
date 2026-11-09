@@ -113,9 +113,10 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                                 row.pop(field, None)
                         if isinstance(row.get("step"), dict):
                             row["step"].pop("public_name", None)
-                            # A stage's Warn after is the stage's, sent once with the pipeline's steps (task types), not on
-                            # each of a board's cards (pipeline-rail.ts pipelineStepLimit).
+                            # A stage's Warn after and card cap are the stage's, sent once with the pipeline's steps (task
+                            # types), not on each of a board's cards (pipeline-rail.ts pipelineStepLimit).
                             row["step"].pop("limit_minutes", None)
+                            row["step"].pop("card_cap", None)
                         # A snooze's note (up to 500 characters) is text too; the task's own read keeps it whole.
                         for hold in row.get("holds") or ():
                             if hold["kind"] == "snoozed":

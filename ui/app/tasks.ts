@@ -34,6 +34,10 @@ interface BoardColumn {
   scope?: {type: string; step: string} | null;
   play?: string;
   limit?: number | null | undefined;
+  /** The stage's cap (D68): its count shows against it ("3/3"); null or absent is no cap. */
+  cap?: number | null;
+  /** The stage's held count (D68): its unfinished cards in the task list, snoozed ones included (task-pipelines.ts). */
+  held?: number;
 }
 // A refused move, kept on the row or card it was tried on until that task changes (taskRefusedSet).
 interface TaskRefusal { message: string; version: number; }
@@ -86,7 +90,7 @@ const isRecurringTask = (t: TaskRow) => !!t.routine_id || /from schedule/.test(S
 const hasFiles = (i: TaskRow) => /s3:\/\//.test(i.body || '');
 const canMove = () => !!S.me?.mover;
 type PartialTaskRow = Partial<TaskRow> & {owner?: string};   // a person's page passes only the owner to needsWho
-const taskFinished = (t: PartialTaskRow | null | undefined) => ['done', 'closed'].includes(String(t?.status || ''));
+const taskFinished = (t: Partial<Pick<TaskRow, 'status'>> | null | undefined) => ['done', 'closed'].includes(String(t?.status || ''));
 function taskAskToPerson(t: PartialTaskRow | null | undefined) {
   return !!(t?.ask?.body && actorPerson(t.ask.recipient_id));
 }
@@ -336,13 +340,13 @@ function parseServerTime(value: string | null | undefined) {
 function shortDay(at: Date) {
   return at.toLocaleDateString(undefined, {month: 'short', day: 'numeric', ...(at.getFullYear() === new Date().getFullYear() ? {} : {year: 'numeric'})});
 }
-function occurrenceDay(t: TaskRow | null | undefined): Date | null {
+function occurrenceDay(t: {occurrence?: string | null; due_at?: string | null} | null | undefined): Date | null {
   const m = /:(\d{4}-\d{2}-\d{2})$/.exec(t?.occurrence || ''), due = String(t?.due_at || '');
   if (!m || !due.startsWith(m[1] + 'T23:59:59')) return null;
   const [y, mo, d] = m[1]!.split('-').map(Number);
   return new Date(y!, mo! - 1, d!);
 }
-function taskDueInfo(t: TaskRow | null | undefined) {
+function taskDueInfo(t: (Partial<Pick<TaskRow, 'due_at' | 'occurrence' | 'status'>> & {owner_id?: string | null}) | null | undefined) {
   if (!t?.due_at || taskFinished(t)) return null;
   const at = parseServerTime(t.due_at); if (!at) return null;
   const shown = occurrenceDay(t) || new Date(at);
@@ -385,7 +389,7 @@ function taskChipsHTML(t: TaskRow | null | undefined, opts: {tags?: boolean; max
   return (opts.tags === false ? '' : rowTagChips(t, opts.maxTags)) + prStateBadge(taskPRState(t)) + taskVerdictHTML(t) + subProgressChip(t) + dueChip(t) + snoozeChip(t);
 }
 // A face for an actor: a bot's avatar, a person's photo or initials.
-function actorFace(actor: string, size = 18) {
+function actorFace(actor: string | null | undefined, size = 18) {
   const slug = actorSlug(actor), pid = actorPerson(actor);
   if (slug) return avatar(slug, size, stateOf(slug));
   if (pid) {
@@ -565,6 +569,13 @@ function taskStatusGroups(items: TaskItem[], {always = []}: {always?: string[]} 
 // a card dropped on the column moves to; a board with any is one cards are dragged on.
 // The Dev tickets step a release ships from; its header gets Release now (settings-release.ts fills it).
 const RELEASE_COLUMN = /^pending release$/i;
+// A column's count: its cards, against its cap when it has one (D68).
+// A capped stage counts what its cap is enforced against (D68): its held cards, which include the ones not on show and
+// follow every live change (held is recounted from the task list, task-pipelines.ts).
+function boardCountText(column: {items: unknown[]; cap?: number | null; held?: number}): string {
+  if (column.cap == null) return String(column.items.length);
+  return `${column.held ?? column.items.length}/${column.cap}`;
+}
 function boardColumnsHTML(columns: BoardColumn[], {head = '', cls = ''}: {head?: string; cls?: string} = {}) {
   const anyWork = columns.some(c => c.items.length);
   const narrow = (c: BoardColumn) => c.fold || anyWork && !c.items.length;
@@ -572,7 +583,7 @@ function boardColumnsHTML(columns: BoardColumn[], {head = '', cls = ''}: {head?:
   const drag = columns.some(c => c.drop);
   return `${head}<div class="board work${cls ? ' ' + cls : ''}"${drag ? ' data-board-drag' : ''} style="--board-cols:${esc(sizes)}">${columns.map(column => {
     const empty = !column.fold && anyWork && !column.items.length;
-    const count = column.fold ? column.count ?? '' : column.items.length;
+    const count = column.fold ? column.count ?? '' : boardCountText(column);
     const drop = column.drop ? ` data-drop-step="${esc(column.drop)}"` : '';
     if (column.fold) return `<section class="bcol is-empty bfold" data-col="${esc(column.id)}"${drop} aria-label="${esc(column.name)}">
       <button type="button" class="bfold-open" data-board-unfold="${esc(column.fold)}" title="${esc(column.hint || 'Show')}" aria-label="${esc(`Show ${column.name}`)}"><h2>${esc(column.name)}</h2><span class="cnt tnum">${esc(String(count))}</span></button>

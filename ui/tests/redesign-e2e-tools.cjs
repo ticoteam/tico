@@ -1,7 +1,7 @@
 // Journey 8 on a real hub (redesign TESTING.md §L3): Tools › Keys lists the tool a computer reported (the
 // Engineering Lead's Acme Billing, read and refund, from the runner's heartbeat) under In use, with how many have it, and
 // its row opens the tool: who has it (the Engineering Lead, free to change things there), then its page. The old
-// Tools address (#/integrations) leads to Tools. Phone, then desktop.
+// Tools address (#/integrations) leads to Tools. Desktop only: nothing here differs on a phone, and e2e-tools.cjs runs Tools on a phone.
 const assert = require('node:assert/strict');
 const {run, open, ok, sideways, shot, t} = require('./support/redesign-e2e.cjs');
 
@@ -38,4 +38,4 @@ run('redesign-e2e-tools', ['org', 'toured', 'connection'], async ({hub, browser,
   await shot(page, `${tag}-02-tool`);
   assert.deepEqual(page.errors, [], `${tag}: no page errors`);
   await page.context().close();
-});
+}, {only: 'desktop'});

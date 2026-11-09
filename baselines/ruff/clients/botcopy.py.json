@@ -1,0 +1,6 @@
+{
+  "clients/botcopy.py": {
+    "F401": 1,
+    "PLW1510": 2
+  }
+}

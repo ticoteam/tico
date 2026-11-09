@@ -107,8 +107,9 @@ function auMaintSettingsHTML(m) {
   const s = m.settings, off = !m.can_change || AU.mtBusy, open = AU.mtOpen || new Set();
   const opts = (pairs, cur) => pairs.map(([v, l]) => `<option value="${esc(v)}"${String(v) === String(cur) ? ' selected' : ''}>${esc(l)}</option>`).join('');
   const cap = s.monthly_cap_usd ?? s.monthly_cap_usd_in_effect ?? 0;
-  const caps = [...new Set([...AU_MAINT_CAPS, Number(cap) || 0])].sort((x, y) => x - y)
+  const capPairs = (list: number[], cur: unknown) => [...new Set([...list, Number(cur) || 0])].sort((x, y) => x - y)
     .map(v => [v, v ? '$' + (Number.isInteger(v) ? v : v.toFixed(2)) + ' a month' : 'No cap']);
+  const caps = capPairs(AU_MAINT_CAPS, cap);
   const rows = m.steps.map((st, i) => {
     const on = st.enabled, isOpen = open.has(st.key), always = st.key === 'collect';
     const pills = (AU_MAINT_BETA.has(st.key) ? '<span class="pill beta">Beta</span>' : '')
@@ -132,7 +133,7 @@ function auMaintSettingsHTML(m) {
     <ol class="mt-steps">${rows}</ol>
     <div class="mt-set"><label class="mt-lb" for="mt-cap">Monthly cap</label>
       <select id="mt-cap" data-mt-cap${off ? ' disabled' : ''}>${opts(caps, Number(cap) || 0)}</select>
-      <span class="mt-hint muted">Learn and people’s update drafts</span></div>
+      <span class="mt-hint muted">Decision models</span></div>
   </div>`;
 }
 

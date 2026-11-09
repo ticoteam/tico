@@ -4,7 +4,7 @@ This release gives each thing one name. Times end in `_at`, JSON fields and colu
 called a run (it was an attempt), and a bot has an id that never changes next to a slug that can. Clients written
 against the old names need the changes below. There are no aliases: the old names stop working in this release.
 
-Use this page with the spec (`docs/openapi/v2.json`), the [SQL guide](hub-sql.md) and the
+Use this page with the spec (`GET /api/v2/openapi.json`), the [SQL guide](hub-sql.md) and the
 [status and state columns](status-and-state.md). If a name here and the spec disagree, the spec is right.
 
 ## Before you upgrade

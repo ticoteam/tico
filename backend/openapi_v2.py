@@ -4,8 +4,9 @@ FastAPI would describe every route, runner and bot endpoint included. A frontend
 resources a person's app is built from, so this module keeps only those (STABLE below), names
 each operation, groups them by resource and describes the answers a person gets. Handlers return
 plain dictionaries rather than response models, so the answer shapes are declared here; a test
-(backend/tests/test_openapi_v2.py) checks them against live responses, and that the committed copy
-`docs/openapi/v2.json` matches. Regenerate it with `python -m backend.openapi_v2`.
+(backend/tests/test_openapi_v2.py) checks them against live responses. The document is generated, not committed:
+`python3 -m backend.openapi_v2 > openapi-v2.json` writes it, `--check` confirms it generates the same bytes twice, and
+the server serves it at `GET /api/v2/openapi.json`.
 
 Anything not listed is internal and may change in any release. See docs/api.md.
 """
@@ -19,7 +20,6 @@ from . import needs_shape
 from .sources import KINDS as SOURCE_KINDS
 
 VERSION = "2.0.0"
-COPY = Path(__file__).resolve().parents[1] / "docs" / "openapi" / "v2.json"
 
 TAGS = {
     "Session": "Who is calling, and how a frontend signs in (docs/custom-frontend.md).",
@@ -33,7 +33,7 @@ TAGS = {
     "Conversations": "Chats with bots: send, list, and stream replies.",
     "Tasks": "Work assigned to people and bots.",
     "Updates": "Daily and weekly updates bots post to people.",
-    "Changelog": "Shipped Tico releases, product announcements and the signed-in person's read state (docs/updates.md).",
+    "Changelog": "Product announcements and the signed-in person's read state (docs/updates.md).",
     "Needs you": "What is waiting on the signed-in person: questions, tasks, approvals.",
     "Meetings": "Recorded meetings.",
     "Calls": "Tico Meet calls (docs/meet.md): audio and screen share in a thread, a live transcript posted to it when it "
@@ -771,7 +771,7 @@ STABLE = [
         "post",
         "Tasks",
         "bulkChangeTasks",
-        "One change to every task a filter selects (filter takes the listTasks filters, and ids); action is step, status, "
+        "One change to every task a filter selects (filter takes the listTasks filters, ids, and exclude_owner: everything not that owner's); action is step, status, "
         "owner, tags (add, remove) or close. Each task changes as updateTask would change it: a task the caller may not "
         "change is skipped with its reason, the rest still change. At most 200 tasks: a filter matching more is refused "
         "(422 too_many). dry_run makes every change and undoes it, so its counts are the real ones",
@@ -932,8 +932,8 @@ STABLE = [
         "get",
         "Changelog",
         "listChangelog",
-        "Shipped changes with your read state; kind=product|activity|all (default all), unread=true, q search, "
-        "since_version for releases newer than a version, and limit/offset paging. Only installed releases or earlier appear. "
+        "Product updates and agent activity, with your read state; kind=product|activity|all (default all), "
+        "unread=true, q search, and limit/offset paging. "
         "unread_count counts all unread product entries, independently of filters; reading does not acknowledge them.",
         "ChangelogList",
     ),
@@ -2461,6 +2461,21 @@ SCHEMAS = {
             "limit_minutes": {
                 "type": ["integer", "null"],
                 "description": "The stage's Warn after time in minutes (the flow's late_hours x 60), or null",
+            },
+            "card_cap": {
+                "type": ["integer", "null"],
+                "description": "The most cards the stage holds at once (0 is On ice: it takes no card from a bot and "
+                "its cards wake no one), or null for no cap",
+            },
+            "held": {
+                "type": "integer",
+                "description": "The open cards the stage holds now that the caller may read, snoozed and hidden ones "
+                "included. For the pipeline's rule editor, every open card: the count its card cap is enforced against",
+            },
+            "unseen": {
+                "type": "integer",
+                "description": "For the pipeline's rule editor, how many of the held cards it may not read (private ones, "
+                "or ones a bot it may not read works on); 0 for anyone else",
             },
             "flow": {
                 "type": "object",
@@ -4909,6 +4924,15 @@ STABLE.extend(
             "FinanceStatements",
         ),
         (
+            "/api/v2/finance/statements/preview",
+            "post",
+            "Finance",
+            "previewFinanceStatement",
+            "Review a bank or card statement file before it posts: each row New or Already in Tico, its vendor and "
+            "attribution, and the tie-out. Writes only a short-lived preview token",
+            "FinanceStatementReview",
+        ),
+        (
             "/api/v2/finance/rules",
             "get",
             "Finance",
@@ -5165,6 +5189,16 @@ STABLE.extend(
             "FinanceConnectionResult",
         ),
         (
+            "/api/v2/finance/subscriptions",
+            "get",
+            "Finance",
+            "listFinanceSubscriptions",
+            "The subscriptions the caller sees: recurring charges the daily look suggests and the Bookkeeper confirms, each "
+            "with its cadence, expected amount and monthly cost in cents, next charge, card, seats and attribution, and the "
+            "monthly total of the active ones. status narrows them",
+            "FinanceSubscriptions",
+        ),
+        (
             "/api/v2/finance/campaigns",
             "get",
             "Finance",
@@ -5172,6 +5206,15 @@ STABLE.extend(
             "The ad campaigns the caller sees for a month (YYYY-MM): each with its owner (a team or teammate, inherited when "
             "it is the account's bot), its spend, clicks, conversions and cost per conversion in cents, by spend, with totals",
             "FinanceCampaigns",
+        ),
+        (
+            "/api/v2/finance/receipts",
+            "get",
+            "Finance",
+            "listFinanceReceipts",
+            "The receipts the caller sees, newest first: each Library file with what it reads as (amount, date, vendor) and "
+            "its suggested or filed bank or card row; ?status= narrows them, and a cursor pages them",
+            "FinanceReceipts",
         ),
         (
             "/api/v2/finance/ad-accounts",
@@ -5541,6 +5584,46 @@ SCHEMAS.update(
         ),
         "FinanceAction": obj(
             {"status": "s", "kind": "s", "action_id": "n", "code": "s", "reason": "s"}, required=["status", "kind"]
+        ),
+        "FinanceStatementReview": obj(
+            {
+                "token": "s",
+                "expires_at": "s",
+                "money_account_id": "s",
+                "file_name": "s",
+                "file_format": "s",
+                "start": "s",
+                "end": "s",
+                "card": "b",
+                "last4": "n",
+                "signs": obj({"flipped": "b", "by": "s"}),
+                "new": "i",
+                "duplicate": "i",
+                "tie": obj(
+                    {
+                        "opening": "i",
+                        "added": "i",
+                        "removed": "i",
+                        "ends": "i",
+                        "statement_says": {"type": ["integer", "null"]},
+                        "off_by": "i",
+                    }
+                ),
+                "rows": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "date": "s",
+                            "description": "s",
+                            "amount": "i",
+                            "vendor": obj({"id": "s", "name": "s"}),
+                            "attribution": {"type": ["object", "null"]},
+                            "status": "s",
+                        }
+                    )
+                ),
+            },
+            required=["token", "expires_at", "tie", "rows"],
         ),
         "FinancePayments": obj(
             {
@@ -6322,6 +6405,40 @@ SCHEMAS.update(
             },
             required=["lines", "start", "end", "as_of", "view_version"],
         ),
+        "FinanceSubscriptionRow": obj(
+            {
+                "id": "s",
+                "vendor": obj({"id": "s", "name": "s"}),
+                "status": "s",
+                "cadence": "s",
+                "amount": "i",
+                "monthly": "i",
+                "seats": {"type": ["integer", "null"]},
+                "next_charge_on": "n",
+                "card": {
+                    "type": ["object", "null"],
+                    "properties": {"id": {"type": "string"}, "name": {"type": "string"}},
+                },
+                "attribution": items(obj({"to": "s", "share": "f"})),
+                "source": "s",
+                "as_of": "s",
+            },
+            required=[
+                "id",
+                "vendor",
+                "status",
+                "cadence",
+                "amount",
+                "monthly",
+                "next_charge_on",
+                "card",
+                "attribution",
+            ],
+        ),
+        "FinanceSubscriptions": obj(
+            {"rows": items(ref("FinanceSubscriptionRow")), "monthly_total": "i", "as_of": "s"},
+            required=["rows", "monthly_total", "as_of"],
+        ),
         "FinanceCampaigns": obj(
             {
                 "month": "s",
@@ -6356,6 +6473,39 @@ SCHEMAS.update(
                 "as_of": "s",
             },
             required=["month", "campaigns", "totals", "as_of"],
+        ),
+        "FinanceReceipts": obj(
+            {
+                "rows": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "file": obj({"id": "s", "name": "s"}),
+                            "read": obj(
+                                {
+                                    "amount": {"type": ["integer", "null"]},
+                                    "date": {"type": ["string", "null"]},
+                                    "vendor": {**obj({"id": "s", "name": "s"}), "type": ["object", "null"]},
+                                }
+                            ),
+                            "match": {
+                                **obj(
+                                    {
+                                        "feed": obj({"id": "s", "date": "s", "amount": "i", "description": "s"}),
+                                        "confidence": {"type": ["number", "null"]},
+                                    }
+                                ),
+                                "type": ["object", "null"],
+                            },
+                            "status": "s",
+                            "as_of": "s",
+                        }
+                    )
+                ),
+                "next": {"type": ["string", "null"]},
+                "as_of": "s",
+            },
+            required=["rows", "next", "as_of"],
         ),
         "FinanceMetric": obj(
             {
@@ -6895,6 +7045,7 @@ SCHEMAS.update(
                 "repositories": items(ref("Repository")),
                 "new_bot_default": {"enum": ["own", "all"]},
                 "github_connected": "b",
+                "github_installed": "b",
             }
         ),
         # The workflow options are present only when on; a request's access defaults to write.
@@ -8544,7 +8695,7 @@ STABLE.extend(
             'get',
             'Rules',
             'getRuleCheckStats',
-            'Rule checks today: checks, unchecked, blocked, dollars left in the rules budget, and whether checks are on',
+            'Rule checks today: checks, unchecked, blocked, dollars left under the decisions monthly cap, and whether checks are on',
             None,
         ),
         (
@@ -11725,7 +11876,7 @@ STABLE.extend(
 
 
 def generate():
-    """The document for a default installation: what docs/openapi/v2.json holds."""
+    """The document for a default installation: what GET /api/v2/openapi.json serves to a signed-in caller."""
     import tempfile
     from .app import create_app
     from .config import Settings
@@ -11738,14 +11889,15 @@ def render(document):
     return json.dumps(document, indent=2, sort_keys=False) + "\n"
 
 
+def determinism_problem():
+    """None when two generations give the same bytes, else the reason they do not (the static PR job runs this)."""
+    first = render(generate())
+    if render(generate()) != first:
+        return "the API spec differs between two generations of the same code: something in it is not deterministic"
+    return None
+
+
 if __name__ == "__main__":
-    text = render(generate())
     if "--check" in sys.argv:
-        sys.exit(
-            0
-            if COPY.exists() and COPY.read_text() == text
-            else "docs/openapi/v2.json is stale: python -m backend.openapi_v2"
-        )
-    COPY.parent.mkdir(parents=True, exist_ok=True)
-    COPY.write_text(text)
-    print("wrote", COPY)
+        sys.exit(determinism_problem() or 0)  # a message exits non-zero; None exits 0
+    sys.stdout.write(render(generate()))
