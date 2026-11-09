@@ -170,6 +170,8 @@ interface Employee {
   is_branch?: boolean;
   can_chat?: boolean;
   my_access?: AccessLevel;
+  /** The bot's access policy (settings-access.ts reads it): see, read and write; null or absent when it is not set. */
+  access_policy?: {see: import('./api').AccessAudience; read: import('./api').AccessAudience; write: import('./api').AccessAudience} | null;
   machine?: BotMachine | null;
   agent?: BotAgent | null;
   /** Whether the bot's computer or agent is up, and whether its setup is done (the status tooltip, ui/app/tooltip.ts, reads them). */
