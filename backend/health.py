@@ -7,6 +7,7 @@ which the page turns into one-click links. People who are not administrators see
 counts plus which computers are up and the day's failed runs, so it can check the team's health itself.
 """
 
+import hashlib
 import json
 import os
 import shlex
@@ -404,15 +405,66 @@ def _reported(c, prefix, limit=200):
     return sorted(set(out))
 
 
-def harness_denies(c, settings):
-    """(bot, command, repositories) for each GitHub write a bot's access allows on a repository other than its own
-    but its Claude Code settings deny. Its own repository is left out, so a bot that only reads keeps its denies."""
+DENIES_LIMIT = 2000  # the whole deny list: a fingerprint of a cut-off list would miss a deny past the cut
+HARNESS_ACCEPTS = "harness_accepts"  # registry_metadata: {bot: the owner's decision and its fingerprint}
+# The Keep-as-is answers on task f2b42565 (Chris Hawkins, Nov 6, 2026), seeded by migration 78.
+HARNESS_SEEDS = ("devops-engineer", "support", "technical-writer")
+SEED_DECISION = {
+    "decision": "f2b42565-d7e4-47d4-9336-2e0171563b85",
+    "decided_by": "human:chris",
+    "decided_at": "2026-11-06T23:20:30.828657Z",
+}
+
+
+def _denies_by_bot(c):
+    """{bot: the command prefixes its Claude Code settings deny}, read from every computer that hosts the bot."""
+    out = {}
+    for bot, rest in _reported(c, DENIES_WARNING, limit=DENIES_LIMIT):
+        out.setdefault(bot, set()).update(p.strip() for p in rest.split(",") if p.strip())
+    return out
+
+
+def _write_grants(granted):
+    """Sorted (repository, verb) pairs: the GitHub write verbs a bot's granted tools allow, on each repository."""
+    return sorted(
+        {
+            (repo, verb)
+            for t in granted
+            for repo in [str((t.get("scope") or {}).get("repo") or t.get("identity") or "")]
+            for verb in WRITE_VERBS & set(t.get("can") or [])
+            if repo
+        }
+    )
+
+
+def _fingerprint(prefixes, grants):
+    """What an owner accepted for a bot: its whole deny list and its GitHub write grants. Any change to either changes it."""
+    body = json.dumps({"denies": sorted(prefixes), "writes": grants}, sort_keys=True)
+    return hashlib.sha256(body.encode()).hexdigest()
+
+
+def harness_accepts(c):
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (HARNESS_ACCEPTS,)).fetchone()
+    try:
+        value = json.loads(row[0]) if row else None
+    except ValueError:
+        value = None
+    return value if isinstance(value, dict) else {}
+
+
+def _store_accepts(c, accepts):
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (HARNESS_ACCEPTS, json.dumps(accepts, sort_keys=True)),
+    )
+
+
+def _harness_state(c, settings, bots):
+    """{bot: its granted GitHub tools on repositories other than its own}, or None where its listing cannot be read."""
     from .bot_tools import listing, prime_state
     from .github_app import repo_of
     from .repositories import Reads
 
-    reported = _reported(c, DENIES_WARNING, limit=500)
-    bots = sorted({bot for bot, _ in reported})
     # Every bot's configuration, computer, pending requests and tool access, read once for all of them. A failure
     # here falls back to the per-bot path, where each bot's own failure is skipped as it was before.
     try:
@@ -429,12 +481,12 @@ def harness_denies(c, settings):
                 part,
             )
         )
-    out = []
-    for bot, rest in reported:
-        prefixes = [p.strip() for p in rest.split(",") if p.strip()]
+    out = {}
+    for bot in bots:
         try:
             tools = listing(c, settings, bot, reads=reads)["tools"]
         except Exception:
+            out[bot] = None
             continue
         row = configs.get(bot)
         own = (
@@ -455,7 +507,26 @@ def harness_denies(c, settings):
         reads_only = not any(WRITE_VERBS & set(t.get("can") or []) for t in declared)
         # Write on every repository ('all', write by default) says nothing about this bot; a repository a person
         # chose for it with write does. A bot.yaml declaring no GitHub write means its denies are intended.
-        granted = [t for t in github if t in declared or mode == "chosen" or not reads_only]
+        out[bot] = [t for t in github if t in declared or mode == "chosen" or not reads_only]
+    return out
+
+
+def harness_denies(c, settings):
+    """(bot, command, repositories) for each GitHub write a bot's access allows on a repository other than its own
+    but its Claude Code settings deny. Its own repository is left out, so a bot that only reads keeps its denies.
+    A bot whose denies and write grants still match what its owner accepted (harness_accepts) is left out."""
+    denies = _denies_by_bot(c)
+    accepted = harness_accepts(c)
+    state = _harness_state(c, settings, sorted(denies))
+    out = []
+    for bot in sorted(denies):
+        granted = state.get(bot)
+        if granted is None:
+            continue
+        prefixes = denies[bot]
+        record = accepted.get(bot)
+        if record and record.get("fingerprint") == _fingerprint(prefixes, _write_grants(granted)):
+            continue
         for command, verbs in GITHUB_WRITES:
             if not any(command == p or command.startswith(p + " ") for p in prefixes):
                 continue
@@ -470,6 +541,26 @@ def harness_denies(c, settings):
             if repos:
                 out.append((bot, command, repos))
     return out
+
+
+def accept_seed(c, settings, now):
+    """Records the Keep-as-is decision for each seeded bot that exists, with the fingerprint of its state when this runs
+    (migration 78). A bot whose listing cannot be read gets no record, so it stays listed as before."""
+    accepted = harness_accepts(c)
+    bots = [
+        b for b in HARNESS_SEEDS if b not in accepted and c.execute("SELECT 1 FROM bots WHERE id=?", (b,)).fetchone()
+    ]
+    if not bots:
+        return
+    denies = _denies_by_bot(c)
+    state = _harness_state(c, settings, bots)
+    for bot in bots:
+        granted = state.get(bot)
+        if granted is None:
+            continue
+        fingerprint = _fingerprint(denies.get(bot, set()), _write_grants(granted))
+        accepted[bot] = {**SEED_DECISION, "bot": bot, "fingerprint": fingerprint}
+    _store_accepts(c, accepted)
 
 
 def _harness_denies_check(c, settings):
@@ -4114,6 +4205,35 @@ def install(app, store, auth, settings):
 
         result = store.mutate(who, request.url.path, request.headers.get("idempotency-key"), body.model_dump(), work)
         return result
+
+    @app.post("/api/v2/health/harness-accept")
+    def accept_harness_denies(request: Request, body: M.HarnessAccept):
+        """The owner keeps a bot's Claude Code denies and GitHub write grants as they are (harness_denies)."""
+        who = request.state.identity
+
+        def work(c):
+            if who.role != "owner":
+                raise Problem("forbidden", "Only the owner keeps a bot's permissions as they are", 403)
+            if not c.execute("SELECT 1 FROM bots WHERE id=?", (body.bot,)).fetchone():
+                raise Problem("not_found", "No bot has that id", 404)
+            denies = _denies_by_bot(c).get(body.bot)
+            if not denies:
+                raise Problem("not_listed", "This bot's Claude Code settings deny nothing to accept", 409)
+            granted = _harness_state(c, settings, [body.bot]).get(body.bot)
+            if granted is None:
+                raise Problem("unreadable", "This bot's access cannot be read right now; try again", 409)
+            accepts = harness_accepts(c)
+            accepts[body.bot] = {
+                "bot": body.bot,
+                "decision": body.decision,
+                "decided_by": who.actor,
+                "decided_at": H.now(),
+                "fingerprint": _fingerprint(denies, _write_grants(granted)),
+            }
+            _store_accepts(c, accepts)
+            return {"accepted": True, "bot": body.bot, "fingerprint": accepts[body.bot]["fingerprint"]}
+
+        return store.mutate(who, request.url.path, request.headers.get("idempotency-key"), body.model_dump(), work)
 
     @app.get("/api/v2/health")
     def read(request: Request):

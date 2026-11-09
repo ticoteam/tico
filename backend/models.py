@@ -2968,6 +2968,13 @@ class Empty(Contract):
     pass
 
 
+class HarnessAccept(Contract):
+    """The owner keeps a bot's Claude Code denies and GitHub write grants as they are (backend/health.py)."""
+
+    bot: Annotated[str, Field(min_length=1, max_length=200)]
+    decision: Annotated[str, Field(max_length=200)] = ""
+
+
 class SystemRoutineUpdate(Contract):
     """One system routine's switch, schedule preset or daily time (backend/system_routines.py); only what is sent
     changes."""

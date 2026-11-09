@@ -2075,6 +2075,13 @@ class Store:
 
                     _finance_schema.purchasing(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(77,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=78").fetchone():
+                    # The Keep-as-is decision on task f2b42565 for the DevOps Engineer, Support Agent and Technical Writer
+                    # bots: each gets a record with the fingerprint of its denies and write grants now (backend/health.py).
+                    from . import health as _health
+
+                    _health.accept_seed(c, self.settings, H.now())
+                    c.execute("INSERT INTO cloud_migrations VALUES(78,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
 
                 migrate_public_roadmaps(c)

@@ -1987,3 +1987,131 @@ def test_github_is_a_note_until_a_bot_someone_made_is_backed_up_nowhere_then_cle
         )
         c.execute("UPDATE github_app SET installation_id=77")
     assert health_of(api)[1]["github"]["status"] == "ok"
+
+
+HARNESS_DENY = "Claude Code settings deny: gh issue, gh pr create, git push"
+HARNESS_WRITE = {
+    "service": "github",
+    "identity": "acme/app",
+    "can": ["read", "write", "pull_requests"],
+    "scope": {"repo": "acme/app"},
+}
+KEEP_AS_IS = "f2b42565-d7e4-47d4-9336-2e0171563b85"
+
+
+def _bots_hosted(api, runner, reports):
+    """Every bot in `reports` ({bot: readiness report}) hosted on `runner`, in one readiness document."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET label='Team box' WHERE id=?", (runner,))
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
+            (H.now(), json.dumps({"schema_version": 1, "runtimes": SIGNED_IN, "bots": reports}), runner),
+        )
+        for bot in reports:
+            c.execute(
+                "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t') "
+                "ON CONFLICT(bot) DO NOTHING",
+                (bot, runner, H.now()),
+            )
+
+
+def _harness_report(**changes):
+    return {"ready": True, "runtime": "claude", "warnings": [HARNESS_DENY], "tools": [HARNESS_WRITE], **changes}
+
+
+def test_an_owners_keep_as_is_holds_a_bot_until_its_denies_or_write_grants_change(environment, monkeypatch):
+    """Keep as is is recorded for the bot as it is; any change to its denies or its GitHub write grants lists it again,
+    and the same state as the decision clears it again. Nothing is changed in the bot's own settings."""
+    api = environment()
+    monkeypatch.setattr(api.app.state.store.settings, "github_owner", "acme")
+    runner = enrolled(api)
+    add_bot(api, "support")
+    _hosted(api, runner, "support", _harness_report())
+    assert "harness_denies" in health_of(api)[1]
+    accepted = api.post(
+        "/api/v2/health/harness-accept", json={"bot": "support", "decision": KEEP_AS_IS}, headers=signed_in()
+    )
+    assert accepted.status_code == 200 and accepted.json()["accepted"] is True
+    assert "harness_denies" not in health_of(api)[1]
+    _hosted(api, runner, "support", _harness_report(warnings=[HARNESS_DENY + ", gh release create"]))
+    assert "harness_denies" in health_of(api)[1]  # a deny the check does not name is a change: it is listed again
+    _hosted(api, runner, "support", _harness_report())
+    assert "harness_denies" not in health_of(api)[1]
+    wider = [HARNESS_WRITE, dict(HARNESS_WRITE, identity="acme/web", scope={"repo": "acme/web"})]
+    _hosted(api, runner, "support", _harness_report(tools=wider))
+    assert "harness_denies" in health_of(api)[1]  # a new write grant on another repository
+    _hosted(api, runner, "support", _harness_report())
+    assert "harness_denies" not in health_of(api)[1]
+    _hosted(api, runner, "support", _harness_report(warnings=["Claude Code settings deny: gh issue, gh pr create"]))
+    assert "harness_denies" in health_of(api)[1]  # a lost deny
+    _hosted(api, runner, "support", _harness_report())
+    assert "harness_denies" not in health_of(api)[1]  # back at the decided state
+
+
+def test_the_seeded_keep_as_is_clears_the_three_bots_and_leaves_an_unseeded_bot_listed(environment, monkeypatch):
+    from backend.health import _harness_denies_check, accept_seed, harness_denies
+
+    api = environment()
+    settings = api.app.state.store.settings
+    monkeypatch.setattr(settings, "github_owner", "acme")
+    runner = enrolled(api)
+    seeded = ("devops-engineer", "support", "technical-writer")
+    for slug in seeded:
+        add_bot(api, slug)
+    add_bot(api, "qa")
+    _bots_hosted(api, runner, {slug: _harness_report() for slug in (*seeded, "qa")})
+    with api.app.state.store.read() as c:
+        assert {bot for bot, _, _ in harness_denies(c, settings)} == {*seeded, "qa"}
+    with api.app.state.store.transaction() as c:
+        accept_seed(c, settings, H.now())
+    with api.app.state.store.read() as c:
+        assert {bot for bot, _, _ in harness_denies(c, settings)} == {"qa"}
+    _bots_hosted(api, runner, {slug: _harness_report() for slug in seeded})
+    with api.app.state.store.read() as c:
+        assert harness_denies(c, settings) == []
+        assert _harness_denies_check(c, settings) is None
+    with api.app.state.store.read() as c:
+        from backend.health import harness_accepts
+
+        record = harness_accepts(c)["support"]
+        assert set(record) == {"bot", "decision", "decided_by", "decided_at", "fingerprint"}
+        assert record["decision"] == KEEP_AS_IS and record["decided_by"] == "human:chris"
+
+
+def test_only_the_owner_keeps_a_bot_as_it_is_and_a_repeated_write_is_a_no_op(environment, monkeypatch):
+    from backend.health import harness_accepts
+
+    api = environment()
+    monkeypatch.setattr(api.app.state.store.settings, "github_owner", "acme")
+    runner = enrolled(api)
+    add_bot(api, "support")
+    add_bot(api, "qa")
+    _hosted(api, runner, "support", _harness_report())
+    identities = api.app.state.store.settings.test_identities
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO humans(id,name,email) VALUES('sam','Sam','sam@example.com')")
+        c.execute(
+            "INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('support','test','x-support',?,'human:ana')",
+            (H.now(),),
+        )
+    identities["bot-support-test"] = Identity(H.bot_actor("support"), "bot", agent="test")
+    body = {"bot": "support", "decision": KEEP_AS_IS}
+
+    def post(headers, payload=body):
+        return api.post("/api/v2/health/harness-accept", json=payload, headers=headers)
+
+    owner = {**signed_in(), "Idempotency-Key": "keep-1"}
+    assert post({**as_person(api, "sam"), "Idempotency-Key": "keep-2"}).status_code == 403
+    assert post({**signed_in("bot-support-test"), "Idempotency-Key": "keep-3"}).status_code == 403
+    with api.app.state.store.read() as c:
+        assert harness_accepts(c) == {}
+    assert post({**owner, "Idempotency-Key": "keep-4"}, {"bot": "qa", "decision": KEEP_AS_IS}).status_code == 409
+    first = post(owner)
+    assert first.status_code == 200
+    with api.app.state.store.read() as c:
+        before = harness_accepts(c)
+    again = post(owner)  # the same key and content: the first answer, nothing written again
+    assert again.status_code == 200 and again.json() == first.json()
+    with api.app.state.store.read() as c:
+        assert harness_accepts(c) == before
+    assert "harness_denies" not in health_of(api)[1]
