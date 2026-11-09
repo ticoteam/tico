@@ -296,7 +296,7 @@ interface LastRead {
 
 interface AppState {
   emps: Employee[];
-  people: (import('./api').Person & { hidden?: boolean })[];
+  people: (import('./api').Person & { hidden?: boolean; left?: boolean })[];
   orgGroups: OrgGroup[];
   status: ServerStatus | null;
   statusPending: boolean;
