@@ -132,7 +132,7 @@ sub-thread under it.
 
 ## Browse threads
 
-**Unreleased:** **Browse threads** has an **Archived** tab, where you can unarchive threads you archived.
+**Unreleased:** **Browse threads** has an **Archived** tab, where you can unarchive any archived thread you can manage.
 
 **Browse threads** opens from the Threads page's rail. The dialog has two tabs under **Which threads**:
 
