@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/company_page/render.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 25,
+                    "endColumn": 44,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

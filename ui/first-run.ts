@@ -207,8 +207,10 @@ async function frSendSetup(slug) {
   const bots = await v2Get('/v2/bots?include_archived=1');
   const bot = (bots || []).find(row => row.id === slug);
   if (bot && bot.state === 'planned') await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {status: 'active', expected_revision: bot.revision});
-  await post(`/v2/chat/${encodeURIComponent(slug)}`, {text: "Let's set you up."});   // it lands in the DM with the bot
-  threadsReloadDM('bot:' + slug);
+  // Onboarding is team work: it lands in the bot's Home, where its manager and the team see it, not a private DM.
+  const home = await get('/v2/threads/home/' + encodeURIComponent('bot:' + slug), {fresh: true});
+  await post(`/v2/threads/${encodeURIComponent(home.id)}/messages`, {text: "Let's set you up."});
+  threadsReloadHome('bot:' + slug);
   await refresh(true);
 }
 function frWireNext(state) {
@@ -265,7 +267,7 @@ function frBotWire(slug) {
   const button = $('#bot-start-setup');
   if (button) button.onclick = async () => {
     button.disabled = true; button.textContent = 'Starting…';
-    try { await frSendSetup(slug); button.textContent = 'Onboarding started'; showBotTab('dm'); }
+    try { await frSendSetup(slug); button.textContent = 'Onboarding started'; showBotTab('home'); }
     catch (error) { toast(error.message, true); button.disabled = false; button.textContent = 'Start onboarding'; }
   };
   const finish = $('#bot-finish-setup');

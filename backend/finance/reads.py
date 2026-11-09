@@ -14,6 +14,8 @@ from typing import Any, cast
 from .. import hubdb as H
 from ..records import reads as RR
 from . import budgeting, limits, tab, tab_ap, tab_hooks, tab_money, usage
+from . import campaigns as CP
+from . import subscriptions as SUB
 from . import visible as VB
 from .tab_purchasing import estimate as estimate, estimates as estimates, order as order, orders as orders
 from . import closing as CL
@@ -1535,6 +1537,9 @@ METRICS = (
     "duplicate_charges",
     "price_increases",
     "unattributed",
+    "ad_spend",
+    "per_conversion",
+    "subscriptions_monthly",
 )
 STALE_HOURS = 24  # bank data older than this marks a cash metric stale
 WATCH_LABELS = 10  # the Watch findings a metric names (its count is the whole)
@@ -1644,7 +1649,9 @@ def metric(
     `days` (default 7, overdue included); ar_overdue: invoices at least `days` (default 1) late;
     uncategorized_count: settled rows waiting for a category (last 90 days); unreconciled_days: days since the
     oldest reconciliation of the money accounts the viewer sees; duplicate_charges, price_increases: how many Watch
-    findings of that kind the posted debits show now, with their first labels."""
+    findings of that kind the posted debits show now, with their first labels; ad_spend: the viewer's campaigns' spend
+    over the window (this month by default); per_conversion: that spend over the conversions (amount null with none);
+    subscriptions_monthly: the monthly cost of the active subscriptions the viewer sees, with their count."""
     if name not in METRICS:
         raise invalid(f"a metric is {'|'.join(METRICS)}")
     s = _open(c, viewer, at)
@@ -1660,6 +1667,30 @@ def metric(
             "amount": amount,
             "lines": count,
             "excl": lost,
+            "start": a.isoformat(),
+            "end": z.isoformat(),
+            "unit": "minor",
+            "currency": currency,
+        }
+    if name in ("ad_spend", "per_conversion"):
+        a, z = _window(start, end, s.ctx)
+        if name == "ad_spend":
+            got = CP.ad_spend(s.ctx, viewer, a.isoformat(), z.isoformat())
+            return {
+                **base,
+                "value": got["amount"],
+                "amount": got["amount"],
+                "start": a.isoformat(),
+                "end": z.isoformat(),
+                "unit": "minor",
+                "currency": currency,
+            }
+        got = CP.ad_per_conversion(s.ctx, viewer, a.isoformat(), z.isoformat())
+        return {
+            **base,
+            "value": got["amount"],
+            "amount": got["amount"],
+            "conversions": got["conversions"],
             "start": a.isoformat(),
             "end": z.isoformat(),
             "unit": "minor",
@@ -1740,12 +1771,24 @@ def metric(
             "data_as_of": data_as_of,
             "stale": stale,
         }
+    if name == "subscriptions_monthly":
+        got = SUB.summary(s.ctx, viewer)
+        return {
+            **base,
+            "value": got["amount"],
+            "amount": got["amount"],
+            "count": got["count"],
+            "unit": "minor",
+            "currency": currency,
+        }
     if name in ("duplicate_charges", "price_increases"):
         # The same Watch checks the daily Watch runs (watch_findings), read as a count with the first few labels; plain
         # code over the viewer's posted debits, no model call.
-        found = (W.duplicate_charges if name == "duplicate_charges" else W.price_increases)(
-            _charges(c, viewer, s.ctx.at)
-        )
+        charges = _charges(c, viewer, s.ctx.at)
+        if name == "duplicate_charges":
+            found = W.duplicate_charges(charges)
+        else:
+            found = SUB.price_findings(charges, SUB.watch_rows(c))
         money_ids, _ = tab.feed_scope(s.ctx, s.view)
         data_as_of, stale = _data_as_of(s, money_ids)
         return {
@@ -1806,7 +1849,18 @@ def _uncategorized(s: _Seen, a: date, z: date, most: int, skip: int = 0) -> tupl
 
 
 # ------------------------------------------------------------------------------------------------ reports
-REPORTS = ("pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by")
+REPORTS = (
+    "pnl",
+    "pnl_by",
+    "balance_sheet",
+    "cash_flow",
+    "budget_vs_actual",
+    "ap_aging",
+    "ar_aging",
+    "spend_by",
+    "campaigns",
+    "subscriptions",
+)
 
 
 def _prior(a: date, z: date) -> tuple[date, date]:
@@ -1897,6 +1951,18 @@ def _cash_flow(c: sqlite3.Connection, viewer: str, a: date, z: date, period: str
     }
 
 
+def _campaigns_report(ctx: Ctx, viewer: str, a: date, z: date, top: int) -> Row:
+    """The campaigns the viewer sees over [a, z], by spend: the first `top` rows, with totals over all of them."""
+    found = CP.rows(ctx, viewer, a.isoformat(), z.isoformat())
+    return {
+        "rows": found[:top],
+        "count": len(found),
+        "totals": CP.totals(found),
+        "start": a.isoformat(),
+        "end": z.isoformat(),
+    }
+
+
 def report(
     c: sqlite3.Connection,
     viewer: str,
@@ -1912,7 +1978,9 @@ def report(
     at: str | None = None,
 ) -> Row:
     """One report (§7.1): pnl (accrual or cash), balance_sheet (as of `end`), cash_flow, budget_vs_actual, ap_aging,
-    ar_aging, spend_by (`by` department|team|teammate|bot|person|vendor|account|location|class|project or a pair) or
+    ar_aging, spend_by (`by` department|team|teammate|bot|person|vendor|account|location|class|project or a pair),
+    campaigns (the ad campaigns by spend, with totals), subscriptions (the subscriptions with their monthly total and the
+    renewals in the next 30 days; the window does not apply) or
     pnl_by
     (`by` location|class|project or a pair). `compare=prior` adds the window before it. Payloads are capped: `top_n`
     rows
@@ -1924,6 +1992,8 @@ def report(
     top = max(1, min(int(top_n), MAX_TOP))
     if kind == "balance_sheet":
         return {"kind": kind, **tab.balance_sheet(c, viewer, as_of=end, at=at)}
+    if kind == "subscriptions":
+        return {"kind": kind, **SUB.report(_open(c, viewer, at).ctx, viewer, top)}
     if kind in ("ap_aging", "ar_aging"):
         return {"kind": kind, **_aging_report(c, viewer, "bill" if kind == "ap_aging" else "invoice", top, at)}
     ctx = load(c, at)
@@ -1938,6 +2008,8 @@ def report(
             return _cash_flow(c, viewer, p, q, period, at)
         if kind == "budget_vs_actual":
             return budget_vs_actual(c, viewer, p.isoformat(), q.isoformat(), period, limit=top, at=at)
+        if kind == "campaigns":
+            return _campaigns_report(ctx, viewer, p, q, top)
         return spend_by(c, viewer, by or "vendor", p.isoformat(), q.isoformat(), top_n=top, at=at)
 
     out: Row = {"kind": kind, **one(a, z)}
@@ -1965,6 +2037,8 @@ SEARCH_KINDS = (
 NAMED_ONLY_KINDS = (
     "account",
     "vendor",
+    "campaign",
+    "subscription",
 )  # searched when named (the chart a bot codes lines to, vendors), not in the first few of each
 RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects"}
 SEARCH_EACH = 10  # results per kind when no kind is named
@@ -2008,6 +2082,14 @@ def _search_rules(
         }
         for r in page
     ], (str(page[-1]["id"]) if len(rows) > most else None)
+
+
+def _search_campaigns(ctx: Ctx, viewer: str, q: str, f: Mapping[str, object], most: int) -> list[Row]:
+    """The campaigns the viewer sees whose name matches, in the month `month` names (this month by default), by spend."""
+    month = _filter(f, "month") or dates.day(ctx.today).strftime("%Y-%m")
+    first, last = CP.month_window(month)
+    needle = q.lower()
+    return [r for r in CP.rows(ctx, viewer, first, last) if needle in str(r["name"]).lower()][:most]
 
 
 def _search_accounts(ctx: Ctx, viewer: str, q: str, most: int, cursor: str | None) -> tuple[list[Row], str | None]:
@@ -2288,7 +2370,8 @@ def search(
     start, end; bill/invoice: status, contact_id, start, end, aging; contact: kind, active; rule: kind (gate|posting);
     card: status, vendor (the cards saved on that vendor, so `vendor` answers "which of my cards works at X");
     po/estimate: status, contact_id, and a search over number, memo and contact name;
-    item/location/project: active (1 keeps only active records); account (named only): a search over code and name,
+    item/location/project: active (1 keeps only active records); campaign (named only): a search over name, in the month
+    `month` names (default this month), with each campaign's month as the viewer sees it; account (named only): a search over code and name,
     the active accounts the forms list, in code order; vendor (named only): a search over name, each with this month's
     spend as the viewer sees it (visible.py), listing only the vendors whose name may show."""
     if kind is not None and kind not in (*SEARCH_KINDS, *NAMED_ONLY_KINDS):
@@ -2417,6 +2500,10 @@ def search(
             elif k == "vendor":
                 listed_vendors, nxt = _search_vendors(_open(c, viewer, at), text, most, cursor)
                 results += listed_vendors
+            elif k == "campaign":
+                results += _search_campaigns(ctx, viewer, text, f, most)
+            elif k == "subscription":
+                results += SUB.search(ctx, viewer, text, most)
             elif k in RECORD_KINDS:
                 _in_view_or_refuse(view)
                 parts = tab.decode_cursor(cursor)
@@ -2910,12 +2997,12 @@ def _month_windows(today: date, n: int = 4) -> list[tuple[str, str, str]]:
     return out
 
 
-def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
+def _charges(c: sqlite3.Connection, viewer: str, at: str, days: int = WATCH_HISTORY_DAYS) -> list[W.Charge]:
     """Posted debits of the last WATCH_HISTORY_DAYS as the viewer's view shows them: the feed rows (not pending), and for
     each money account with no feed rows in the window, its posted expense entries. Only a mirrored book (QuickBooks or
     Xero) reads entries: in a Tico-kept book a bill's entry and its feed payment would count the same charge twice."""
     today = date.fromisoformat(at[:10])
-    start = (today - timedelta(days=WATCH_HISTORY_DAYS)).isoformat()
+    start = (today - timedelta(days=days)).isoformat()
     out: list[W.Charge] = []
     cursor: str | None = None
     for _ in range(WATCH_PAGES):
@@ -2941,6 +3028,7 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
                     day=date.fromisoformat(str(row["date"])[:10]),
                     shown=str(vendor.get("name") or row.get("counterparty") or "").strip(),
                     card=str(row.get("card_id") or ""),
+                    money=str(cast(Row, row.get("money_account") or {}).get("id") or ""),
                 )
             )
         cursor = cast(str | None, page.get("next"))
@@ -2951,6 +3039,11 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
         return out  # a Tico-kept book pays its bills from the feed, and that feed row is the charge
     fed = _fed_money_accounts(c, start, today.isoformat())
     return out + _entry_charges(c, viewer, start, today.isoformat(), fed)
+
+
+def watch_charges(c: sqlite3.Connection, viewer: str, at: str, days: int = WATCH_HISTORY_DAYS) -> list[W.Charge]:
+    """The posted debits of the last `days` (_charges): what the daily look that suggests subscriptions reads."""
+    return _charges(c, viewer, at, days)
 
 
 def _fed_money_accounts(c: sqlite3.Connection, start: str, end: str) -> set[str]:
@@ -2984,7 +3077,8 @@ def _entry_charges(c: sqlite3.Connection, viewer: str, start: str, end: str, fed
                 continue
             entry = str(row["entry_id"])
             if entry not in grouped:
-                if SATT.money_account_of(c, entry) in fed:
+                money = SATT.money_account_of(c, entry)
+                if money in fed:
                     grouped[entry] = {"skip": True}
                     continue
                 payee = SAP.vendor_resolved(c, book.id, str(row.get("vendor") or ""))
@@ -2994,6 +3088,7 @@ def _entry_charges(c: sqlite3.Connection, viewer: str, start: str, end: str, fed
                     "shown": str(row.get("vendor_name") or payee),
                     "day": str(row["date"]),
                     "amount": 0,
+                    "money": money,
                 }
             if not grouped[entry]["skip"]:
                 grouped[entry]["amount"] += int(cast(int, row.get("amount") or 0))
@@ -3011,6 +3106,7 @@ def _entry_charges(c: sqlite3.Connection, viewer: str, start: str, end: str, fed
                 amount=int(g["amount"]),
                 day=date.fromisoformat(str(g["day"])[:10]),
                 shown=str(g["shown"]).strip(),
+                money=str(g["money"]),
             )
         )
     return out
@@ -3019,7 +3115,8 @@ def _entry_charges(c: sqlite3.Connection, viewer: str, start: str, end: str, fed
 def watch_findings(c: sqlite3.Connection, viewer: str, at: str) -> list[dict[str, Any]]:
     """Every Watch check's findings now: runway, unusual spend per payee over the last four months, and the posted
     debits read for duplicate charges, price increases and unused subscriptions (the cards an archived or idle bot holds
-    come from the hub's bot facts). Every read goes through the viewer's view."""
+    come from the hub's bot facts; confirmed subscriptions set the expected amount and the active ones, subscriptions.py).
+    Every read goes through the viewer's view."""
     today = date.fromisoformat(at[:10])
     found: list[dict[str, Any]] = []
     figures: Row = {}
@@ -3044,8 +3141,9 @@ def watch_findings(c: sqlite3.Connection, viewer: str, at: str) -> list[dict[str
             series.setdefault(payee, [0] * len(months))[index] += int(cast(int, row.get("amount") or 0))
     found += W.unusual_spend(series, months[-1][0])
     charges = _charges(c, viewer, at)
-    found += W.duplicate_charges(charges) + W.price_increases(charges)
-    found += W.unused_subscriptions(charges, ST.idle_bot_cards(c, at, W.UNUSED_IDLE_DAYS), today)
+    subs = SUB.watch_rows(c)
+    found += W.duplicate_charges(charges) + SUB.price_findings(charges, subs)
+    found += SUB.unused_findings(charges, subs, ST.idle_bot_cards(c, at, W.UNUSED_IDLE_DAYS), today)
     return found
 
 

@@ -662,6 +662,7 @@ function tasksScopePaint(state) {
   const b = $('#task-scope');
   if (!b) return false;
   const label = tasksScopeLabel(state), n = state.view === 'foryou' ? tasksCounts(state).foryou : null;
+  pipelineEditSync(state.view === 'foryou' ? null : state.type);
   b.setAttribute('aria-label', n != null ? `${label}, ${n}` : label);
   $('#task-body')?.setAttribute('aria-label', label);
   return tasksPaint(b, `<span class="tl-scope-l">${esc(label)}</span>${n != null ? `<span class="cnt tnum${n && tasksNeedsQueue(state) ? ' hot' : ''}" aria-hidden="true">${n}</span>` : ''}${TL_ICON.caret}`);
@@ -1233,6 +1234,7 @@ function taskPeekOpen(state, key, opts = {}) {
   if (opts.quick && d.open) {
     d.dataset.task = task.id;
     d.innerHTML = hubModalHTML(task, taskItem(task), {peek: true});
+    void taskRequirementsLoad(d);
     taskModalBind(d, task);
     state.peekTimer = setTimeout(() => { if (state.peek === key && d.open) void taskModalShow(task, d); }, 160);
   } else void taskModalShow(task, d);

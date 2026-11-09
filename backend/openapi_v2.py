@@ -2458,6 +2458,10 @@ SCHEMAS = {
             "status": "s",
             "check_pool": "a",
             "check_limit": "i",
+            "limit_minutes": {
+                "type": ["integer", "null"],
+                "description": "The stage's Warn after time in minutes (the flow's late_hours x 60), or null",
+            },
             "flow": {
                 "type": "object",
                 "description": "What the step does with a ticket (docs/tasks.md, Step "
@@ -2562,6 +2566,12 @@ SCHEMAS = {
             "type": "string",
             "description": "A Dev ticket at a working step (In Progress, a Fixes "
             "step): when it entered that step or came back to work; absent otherwise",
+        },
+        requirements={
+            "type": "array",
+            "description": "Where each stage requirement of the ticket's current step stands "
+            "(backend/pipeline_engine.py); absent when the step has none",
+            "items": {"type": "object"},
         },
         relations={
             "type": "object",
@@ -3154,6 +3164,10 @@ SCHEMAS = {
             "task": ref("Task"),
             "events": "a",
             "children": "a",
+            # The parent ticket (null: none, or the reader may not read it), with its label and stage
+            "parent": {
+                "oneOf": [obj({"id": "s", "title": "s", "label": "n", "step": "n"}), {"type": "null"}],
+            },
             "comments": items(ref("Message")),
             "messages": items(ref("Message")),
             "has_more": "b",
@@ -4740,6 +4754,15 @@ STABLE.extend(
             "FinanceBudgets",
         ),
         (
+            "/api/v2/finance/brief",
+            "get",
+            "Finance",
+            "getFinanceBrief",
+            "What changed in Finance for the caller: a few short lines about the money they may see, with as_of (when "
+            "those numbers last moved) and changed_since. Empty lines when there is nothing to say. The owner may pass view_as",
+            "FinanceBrief",
+        ),
+        (
             "/api/v2/finance/pnl",
             "get",
             "Finance",
@@ -5007,7 +5030,7 @@ STABLE.extend(
             "get",
             "Finance",
             "getFinanceReport",
-            "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the "
+            "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by or campaigns, cut to the "
             "caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the "
             "group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
             "FinanceReportOf",
@@ -5104,7 +5127,7 @@ STABLE.extend(
             "getFinanceMetric",
             "One number with when it was worked out (and for bank-backed numbers how fresh the data is): cash, burn, "
             "runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, "
-            "unreconciled_days",
+            "unreconciled_days, unattributed, ad_spend, per_conversion",
             "FinanceMetric",
         ),
         (
@@ -5140,6 +5163,25 @@ STABLE.extend(
             "Connect Mercury with a stored token credential (finance admins): the token is tested, its accounts listed and "
             "mapped into the books. The Idempotency-Key is the action's key",
             "FinanceConnectionResult",
+        ),
+        (
+            "/api/v2/finance/subscriptions",
+            "get",
+            "Finance",
+            "listFinanceSubscriptions",
+            "The subscriptions the caller sees: recurring charges the daily look suggests and the Bookkeeper confirms, each "
+            "with its cadence, expected amount and monthly cost in cents, next charge, card, seats and attribution, and the "
+            "monthly total of the active ones. status narrows them",
+            "FinanceSubscriptions",
+        ),
+        (
+            "/api/v2/finance/campaigns",
+            "get",
+            "Finance",
+            "listFinanceCampaigns",
+            "The ad campaigns the caller sees for a month (YYYY-MM): each with its owner (a team or teammate, inherited when "
+            "it is the account's bot), its spend, clicks, conversions and cost per conversion in cents, by spend, with totals",
+            "FinanceCampaigns",
         ),
         (
             "/api/v2/finance/ad-accounts",
@@ -5255,6 +5297,15 @@ SCHEMAS.update(
                 "on": "s",
                 "view_version": "i",
             }
+        ),
+        "FinanceBrief": obj(
+            {
+                "lines": items("s"),
+                "as_of": "s",
+                "changed_since": "n",
+                "version": "i",
+            },
+            required=["lines", "as_of", "version"],
         ),
         "FinanceReport": obj({"view_version": "i"}),
         "FinancePnl": obj(
@@ -6142,6 +6193,7 @@ SCHEMAS.update(
                         "ap_aging",
                         "ar_aging",
                         "spend_by",
+                        "campaigns",
                     ],
                 },
                 "prior": {"type": "object", "additionalProperties": True},
@@ -6279,6 +6331,75 @@ SCHEMAS.update(
                 "view_version": "i",
             },
             required=["lines", "start", "end", "as_of", "view_version"],
+        ),
+        "FinanceSubscriptionRow": obj(
+            {
+                "id": "s",
+                "vendor": obj({"id": "s", "name": "s"}),
+                "status": "s",
+                "cadence": "s",
+                "amount": "i",
+                "monthly": "i",
+                "seats": {"type": ["integer", "null"]},
+                "next_charge_on": "n",
+                "card": {
+                    "type": ["object", "null"],
+                    "properties": {"id": {"type": "string"}, "name": {"type": "string"}},
+                },
+                "attribution": items(obj({"to": "s", "share": "f"})),
+                "source": "s",
+                "as_of": "s",
+            },
+            required=[
+                "id",
+                "vendor",
+                "status",
+                "cadence",
+                "amount",
+                "monthly",
+                "next_charge_on",
+                "card",
+                "attribution",
+            ],
+        ),
+        "FinanceSubscriptions": obj(
+            {"rows": items(ref("FinanceSubscriptionRow")), "monthly_total": "i", "as_of": "s"},
+            required=["rows", "monthly_total", "as_of"],
+        ),
+        "FinanceCampaigns": obj(
+            {
+                "month": "s",
+                "campaigns": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "name": "s",
+                            "platform": "s",
+                            "ad_account": obj({"id": "s", "name": "s"}),
+                            "owner": obj({"team": "s", "teammate": "s", "inherited": "b"}),
+                            "month": obj(
+                                {
+                                    "spend": "i",
+                                    "clicks": "i",
+                                    "conversions": "f",
+                                    "per_conversion": {"type": ["integer", "null"]},
+                                }
+                            ),
+                            "as_of": "s",
+                        }
+                    )
+                ),
+                "totals": obj(
+                    {
+                        "spend": "i",
+                        "clicks": "i",
+                        "conversions": "f",
+                        "per_conversion": {"type": ["integer", "null"]},
+                    }
+                ),
+                "as_of": "s",
+            },
+            required=["month", "campaigns", "totals", "as_of"],
         ),
         "FinanceMetric": obj(
             {
@@ -6818,6 +6939,7 @@ SCHEMAS.update(
                 "repositories": items(ref("Repository")),
                 "new_bot_default": {"enum": ["own", "all"]},
                 "github_connected": "b",
+                "github_installed": "b",
             }
         ),
         # The workflow options are present only when on; a request's access defaults to write.
@@ -7007,6 +7129,17 @@ SCHEMAS['Task']['properties'].update(
 SCHEMAS['TaskType']['properties'].update(
     {
         'default_visibility': {'enum': ['public', 'private']},
+        'has_requirements': {
+            'type': 'boolean',
+            'description': "On the list (GET /api/v2/task-types): whether the pipeline has any live stage requirement. A "
+            "pipeline without one keeps today's phone layout; the one-stage phone view is for pipelines with requirements "
+            "(backend/pipeline_engine.py)",
+        },
+        'can_edit_rules': {
+            'type': 'boolean',
+            'description': "On the list (GET /api/v2/task-types): whether the caller may change this pipeline's rules, "
+            "the pipeline's owner or an Admin (backend/pipeline_rights.py)",
+        },
         'manager': {'type': ['string', 'null']},
         'role': {
             'type': ['string', 'null'],

@@ -80,7 +80,7 @@ function finShareChips(parts: FinShare[]): string {
 }
 
 // ----------------------------------------------------------------- the share rows (a dialog's part)
-function finShareOpts(selected: string): string {
+function finShareOpts(selected: string, blank = 'Teammate or team'): string {
   const acc = (FIN?.acc || FIN_ACCESS) as FinAccessLite | null;
   const mates: FinPick[] = (acc?.teammates || []).filter(t => t.teammate).map(t => ({id: 'teammate:' + t.teammate, name: finWho(t.teammate)}));
   const teams: FinPick[] = (acc?.teams || []).map(t => ({id: 'team:' + t.id, name: t.name}));
@@ -88,7 +88,7 @@ function finShareOpts(selected: string): string {
   // A part that is no longer on the list (a teammate who left) still shows, so it can be changed.
   if (selected && !all.some(o => o.id === selected)) all.unshift({id: selected, name: finWho(selected.replace(/^(teammate|team):/, ''))});
   const opt = (o: FinPick) => `<option value="${esc(o.id)}"${o.id === selected ? ' selected' : ''}>${esc(o.name)}</option>`;
-  return `<option value=""${selected ? '' : ' selected'}>Teammate or team</option>${mates.length ? `<optgroup label="Teammates">${mates.sort((a, b) => a.name.localeCompare(b.name)).map(opt).join('')}</optgroup>` : ''}${teams.length ? `<optgroup label="Teams">${teams.sort((a, b) => a.name.localeCompare(b.name)).map(opt).join('')}</optgroup>` : ''}${all.some(o => o.id === selected) && !mates.some(o => o.id === selected) && !teams.some(o => o.id === selected) ? opt(all.find(o => o.id === selected)!) : ''}`;
+  return `<option value=""${selected ? '' : ' selected'}>${esc(blank)}</option>${mates.length ? `<optgroup label="Teammates">${mates.sort((a, b) => a.name.localeCompare(b.name)).map(opt).join('')}</optgroup>` : ''}${teams.length ? `<optgroup label="Teams">${teams.sort((a, b) => a.name.localeCompare(b.name)).map(opt).join('')}</optgroup>` : ''}${all.some(o => o.id === selected) && !mates.some(o => o.id === selected) && !teams.some(o => o.id === selected) ? opt(all.find(o => o.id === selected)!) : ''}`;
 }
 function finShareRowHtml(who: string, pct: string): string {
   return `<div class="fin-share-row" data-share-row><select aria-label="Teammate or team">${finShareOpts(who)}</select>
@@ -142,7 +142,7 @@ function finShareRead(root: ParentNode): FinShare[] {
 
 // ----------------------------------------------------------------- the rail's "Attributed to"
 // The line ids a Transactions row holds (a bank row's lines, or an entry's own line) and the rail's section for each.
-async function finShareRailLoad(key: string, lines: {line_id: string; account?: string}[]): Promise<void> {
+async function finShareRailLoad(key: string, lines: {line_id: string; account?: string | undefined}[]): Promise<void> {
   const box = document.getElementById('fin-tx-share');
   if (!box || !lines.length) return;
   const reads = await Promise.all(lines.map(l => get(`/v2/finance/lines/${encodeURIComponent(l.line_id)}/attribution${finAs('?')}`, {fresh: true})

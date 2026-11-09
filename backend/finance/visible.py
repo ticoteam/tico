@@ -22,14 +22,18 @@ Nothing here reads a table directly: the store layer (store/ap.py, store/attribu
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
+from . import attribution as ATTR
+from . import platform_share as PS
 from .context import Ctx
+from .core import attribution as CA
 from .core import view as VW
 from .core.errors import invalid
+from .core.org import manager_of
 from .store import ap as SAP
 from .store import attribution as SATT
 from .store import ledger as SL
 
-KINDS = ("vendor",)  # the record kinds the rule covers today; later steps add theirs here
+KINDS = ("vendor", "campaign")  # the record kinds the rule covers; a campaign takes campaigns_visible, not cells
 
 
 @dataclass(frozen=True)
@@ -153,3 +157,107 @@ def records_visible(
             excl=record in lost,
         )
     return out
+
+
+Owner = tuple[
+    str, str, str
+]  # (platform, team, teammate): a campaign's owner on one ad platform; one of team and teammate
+# is blank (the owner an ad account's campaigns count for)
+
+
+def _platform_attributed(ctx: Ctx, viewer: str, platforms: Iterable[str], first: str, last: str) -> set[Owner]:
+    """The platform owners the viewer sees in a platform charge line in [first, last]: a line on a platform's own vendor
+    contact whose in-force platform share names the owner, and which the viewer sees. One query for every platform."""
+    owner_of_contact: dict[str, str] = {}
+    for platform in platforms:
+        for key in PS.contact_keys(ctx, platform):
+            owner_of_contact[key] = platform
+    if not owner_of_contact:
+        return set()
+    marks = ",".join("?" * len(owner_of_contact))
+    platform_of_line: dict[str, str] = {
+        str(r[0]): owner_of_contact[str(r[1])]
+        for r in ctx.c.execute(
+            "SELECT l.id, l.contact_id FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id JOIN fin_attributions a "
+            "ON a.line_id=l.id AND a.superseded_at IS NULL WHERE l.book_id=? AND l.contact_id IN (" + marks + ") "
+            "AND l.entry_date BETWEEN ? AND ? AND e.status='posted' AND e.reverses_id IS NULL AND a.source='platform'",
+            [ctx.book.id, *owner_of_contact, first, last],
+        )
+    }
+    if not platform_of_line:
+        return set()
+    found = SL.lines(ctx.c, list(platform_of_line))
+    in_force = SATT.in_force_rows(ctx.c, list(found))
+    out: set[Owner] = set()
+    for line_id, (_, line) in found.items():
+        row = in_force.get(line_id)
+        if row is None or not ATTR.visible(ctx, viewer, line):
+            continue
+        platform = platform_of_line[line_id]
+        for share in SATT.parse_splits(str(row["splits"])):
+            if share.teammate:
+                out.add((platform, "", share.teammate))
+            if share.team:
+                out.add((platform, share.team, ""))
+    return out
+
+
+def campaigns_visible(ctx: Ctx, viewer: str, owners: Iterable[Owner], first: str, last: str) -> set[Owner]:
+    """The campaign kind of the view rule: which of the owners' campaigns the viewer sees in [first, last]. Campaigns are
+    not ledger cells, so the rule works on owners: a full-detail reader sees all; a campaign's owner teammate sees it;
+    the members and leads of an owning team do; a manager of the owner does (someone above a teammate, or a team's lead);
+    and anyone who sees a platform charge line whose share names the owner does. The platform lines are read once for
+    the whole list."""
+    owners = list(owners)
+    if ctx.view(viewer).everything:
+        return set(owners)
+    seen: set[Owner] = set()
+    pending: list[Owner] = []
+    under = ctx.org.reports(viewer)
+    led = ctx.org.led_by(viewer)
+    for owner in owners:
+        platform, team, mate = owner
+        if mate and mate == viewer:
+            seen.add(owner)
+        elif team and (team in led or ctx.org.team_of.get(viewer, "") in ctx.org.below(team)):
+            seen.add(owner)
+        elif mate and (mate in under or manager_of(ctx.org, mate) == viewer):
+            seen.add(owner)
+        else:
+            pending.append(owner)
+    if pending:
+        attributed = _platform_attributed(ctx, viewer, {o[0] for o in pending}, first, last)
+        for owner in pending:
+            platform, team, mate = owner
+            if (platform, team, mate) in attributed:
+                seen.add(owner)
+    return seen
+
+
+def _owns(ctx: Ctx, viewer: str, split: CA.Split, under: frozenset[str], led: frozenset[str], own_team: str) -> bool:
+    """Whether a share in force on a subscription's latest charge names the viewer: the teammate itself, someone under
+    them, or the manager of that teammate; or a team the viewer leads or belongs to (below the team)."""
+    if split.teammate:
+        return split.teammate == viewer or split.teammate in under or manager_of(ctx.org, split.teammate) == viewer
+    if split.team:
+        return split.team in led or own_team in ctx.org.below(split.team)
+    return False
+
+
+def subscriptions_visible(ctx: Ctx, viewer: str, items: Iterable[tuple[str, Sequence[CA.Split], bool]]) -> set[str]:
+    """The subscription kind of the view rule (subscriptions.py): which subscriptions the viewer sees. Subscriptions are
+    not ledger cells, so the rule works on each one's owners and its latest charge: items are (id, the attribution in force
+    on its latest charge line, whether the viewer sees that line). A full-detail reader sees all. Otherwise the viewer sees
+    a subscription whose owners name them (campaigns_visible's owner rule), or who sees its latest charge line."""
+    view = ctx.view(viewer)
+    rows = list(items)
+    if view.everything:
+        return {sid for sid, _, _ in rows}
+    under = ctx.org.reports(viewer)
+    led = ctx.org.led_by(viewer)
+    own_team = ctx.org.team_of.get(viewer, "")
+    return {
+        sid
+        for sid, splits, line_seen in rows
+        if line_seen or any(_owns(ctx, viewer, sp, under, led, own_team) for sp in splits)
+    }

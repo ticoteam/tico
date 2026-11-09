@@ -5237,6 +5237,7 @@ class Execution:
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
         from .chat_goals import current
         from . import task_context, worktrees
+        from .finance import brief as finance_brief
 
         make_page_task = self.auth.task(c, acting or bot_who, making_page["task"]) if making_page else None
         if making_page:
@@ -5319,6 +5320,9 @@ class Execution:
                 # (backend/learned.py; rendered by runner-rs/src/prompt.rs). Outside their own chat only
                 # `strategy`, the team's published strategy, which every turn carries (backend/strategy.py).
                 "learned": learned.for_turn(c, self.store.settings, conv, row["bot_id"]),
+                # What changed in Finance for whoever this turn is for: the person in their own Assistant turn, else the
+                # bot (backend/finance/brief.py). Standing lines in the prompt, so a resumed thread gets them when they change.
+                "finance": finance_brief.for_turn(c, (acting or bot_who).actor),
                 "task_context": task_context.for_turn(c, self.auth, acting or bot_who, make_page_task or task),
                 **({"make_page": {"task": runner_wire.task(make_page_task)}} if making_page else {}),
                 # place "updates": the recent updates that person may read and open, read now as them

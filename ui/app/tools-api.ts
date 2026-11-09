@@ -268,12 +268,30 @@ async function taFinanceLoad() {
   const state = TA; if (!TAF_SERVICES.includes(state?.data?.tool?.service)) return;
   let found = null;
   try { found = await get('/v2/finance/ad-accounts?tool_id=' + encodeURIComponent(state.id), {fresh: true}); } catch { found = null; }
+  if (found) found.campaigns = await taCampaignList();
   if (TA !== state) return;
   state.fin = found;
   const slot = $('#tool-api [data-ta-finance]');
   if (slot && !formBusy(slot)) { slot.innerHTML = found ? taFinanceCard(found) : ''; taFinanceBind(slot); }
 }
-function taFinanceCard(f) {
+// This month's campaigns the viewer sees (finance-campaigns.ts draws them under their ad accounts). The owner picker
+// needs the teammates and teams list, which the finance page loads: fetched here when it is not in yet.
+const taMonthKey = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+async function taCampaignList() {
+  try { if (!FIN_ACCESS) await finProbe(); } catch { /* the picker shows the current owner only */ }
+  try { return (await get('/v2/finance/campaigns?month=' + taMonthKey(), {fresh: true})).campaigns || []; } catch { return []; }
+}
+// The ad accounts read the Finance card last drew, with its campaigns.
+let taFinDrawn: {campaigns?: unknown} | null = null;
+// After an owner change: the campaigns read again and the card is drawn in place.
+async function taCampaignsReload() {
+  const fin = taFinDrawn, slot = $('#tool-api [data-ta-finance]');
+  if (!fin || !slot) return;
+  fin.campaigns = await taCampaignList();
+  if (slot.isConnected && taFinDrawn === fin) slot.innerHTML = taFinanceCard(fin);
+}
+function taFinanceCard(f, campaigns = f.campaigns || []) {
+  taFinDrawn = f;
   const imp = f.import, on = imp.enabled, other = f.elsewhere;
   const seg = `<div class="theme-seg" role="radiogroup" aria-label="Ad spend">${[[true, 'On'], [false, 'Off']].map(([v, label]) =>
     `<button type="button" role="radio" aria-checked="${on === v}" data-taf-on="${v}"${other && v && !on ? ' disabled' : ''}>${label}</button>`).join('')}</div>`;
@@ -284,7 +302,7 @@ function taFinanceCard(f) {
   const rows = f.accounts.filter(a => a.active || a.month_to_date).map(a => `<tr data-taf-account="${esc(a.id)}">
       <td>${esc(a.name)} <span class="muted mono">${esc(a.external_id)}</span></td>
       <td>${a.bot_slug ? '' : '<span class="pill needs">Not assigned</span> '}<select data-taf-bot="${esc(a.id)}" aria-label="Spend goes to">${tafOptions(bots, a.bot_slug || '', 'Not assigned')}</select></td>
-      <td class="tnum">${esc(tafMoney(a.month_to_date, a.currency))}</td></tr>`).join('');
+      <td class="tnum">${esc(tafMoney(a.month_to_date, a.currency))}</td></tr>${finCampaignRows(a.id, campaigns, a.currency)}`).join('');
   return `<section class="card" id="tool-finance"><header><h2>Finance</h2>${status}</header>
     <div class="taf-row"><span class="taf-k">Ad spend</span>${seg}<span class="muted">every ${imp.every_hours} h · from</span><input type="date" data-taf-from value="${esc(imp.history_from)}" aria-label="From"></div>
     ${other ? `<p class="muted taf-note">${other.account ? `Account ${esc(other.account)} imports` : 'Imports'} from ${esc(other.tool_name)}</p>` : ''}
@@ -321,6 +339,7 @@ function taFinanceBind(slot) {
     if (el.matches('[data-taf-from]') && el.value) void save(() => settings({history_from: el.value}), el);
     else if (el.matches('[data-taf-line]')) void save(() => settings({account_id: el.value}), el);
     else if (el.matches('[data-taf-slot]')) void save(() => settings({credentials: {[el.dataset.tafSlot]: el.value || null}}), el);
+    else if (el.matches('[data-fc-owner]')) void finCampaignOwnerChange(el);
     else if (el.matches('[data-taf-bot]')) {
       void save(async () => {
         const row = await patch('/v2/finance/ad-accounts/' + encodeURIComponent(el.dataset.tafBot), {bot_slug: el.value || null});

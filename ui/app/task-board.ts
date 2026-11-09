@@ -13,6 +13,8 @@ function taskBoardFoldsSaved() {
 }
 // Two or more backlog steps start folded and a single one open; the finished steps start folded.
 function taskBoardFolds(state, type, backlogSteps = 0) {
+  // A phone shows one stage at a time, each a chip, finished stages included: nothing folds there.
+  if (pipelinePhone()) return {backlog: false, finished: false};
   const saved = taskBoardFoldsSaved()[type.id] || {};
   return {backlog: saved.backlog ?? backlogSteps > 1, finished: saved.finished ?? true};
 }
@@ -134,9 +136,10 @@ function taskBoardClick(state, ev) {
 // Select all in this column: every card it shows. A type's step column is also a filter the server can run (that type,
 // that step, the open statuses a board shows), so the bulk change reaches the step's tasks as the board has them.
 function taskBoardSelectColumn(state, button) {
-  const column = button.closest('.bcol'); if (!column) return;
+  // A board column is a .bcol; a phone's one stage (task-pipelines.js pipePhoneStageHTML) is a .pipe-stage.
+  const column = button.closest('.bcol, .pipe-stage'); if (!column) return;
   const keys = [...column.querySelectorAll('.bcard[data-task-key]')].map(card => card.dataset.taskKey);
-  const name = column.querySelector('h2')?.textContent || '';
+  const name = column.querySelector('h2')?.textContent || column.getAttribute('aria-label') || '';
   const byId = tasksById(state);
   // A finished or declined card in the column is shown, but the open statuses would miss it: its tasks go by id.
   const open = keys.every(k => ['open', 'doing', 'waiting', 'review', 'ready'].includes(byId.get(k.slice(1))?.status || 'open'));
@@ -345,6 +348,7 @@ function taskBoardSave(state, t, body, fields, refused) {
       state.boardMoves.delete(id);
       state.tasks = state.tasks.map(x => String(x.id) === id && Number(x.version) <= Number(t.version) ? t : x);
       if (e.status === 409) toast('Changed elsewhere. Showing the latest.', true);
+      else if (pipelineOverrideOffer(state, t, body, fields, e)) { /* a pipeline editor may move it anyway (task-requirements.ts) */ }
       else taskRefusedSet(state, t, `${refused}: ${e.message || 'refused'}`);
       tasksRender(state);
     }

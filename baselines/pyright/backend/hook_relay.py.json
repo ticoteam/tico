@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/hook_relay.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 26,
+                    "endColumn": 48,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}
