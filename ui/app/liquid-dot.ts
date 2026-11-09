@@ -73,7 +73,7 @@ function ldotGhost(): HTMLElement | null {
   return ghost;
 }
 function ldotFly(el: Element | null | undefined, from: LdotRect | null | undefined,
-  {to = null, pace = 1}: {to?: LdotRect | null; pace?: number} = {}): Animation | null {
+  {to = null, pace = 1}: {to?: LdotRect | null | undefined; pace?: number} = {}): Animation | null {
   if (!(el instanceof HTMLElement) || !el.isConnected || !from?.width || ldotCalm() || typeof el.animate !== 'function') return null;
   to ||= el.getBoundingClientRect();
   const dx = from.left - to.left, dy = from.top - to.top, dist = Math.hypot(dx, dy);
