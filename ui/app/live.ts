@@ -140,7 +140,6 @@ function liveTaskScope(): TaskScope {
   const r = typeof S !== 'undefined' && S.route || '';
   if (isTasksRoute(r) || r.startsWith('#/meetings')) return {all: true};
   if (r.startsWith('#/task/')) return {task: [decodeURIComponent(String(r.slice(7).split(/[/?]/)[0]))], party: []};
-  // @ts-expect-error TASK_CHAT is implicitly any until task-modal.ts types its declaration (not this slot's file); remove this when it does
   const open: string[] = typeof TASK_CHAT !== 'undefined' && TASK_CHAT?.id ? [String(TASK_CHAT.id)] : [];
   // A bot's route may name it by slug (a link made from a label); its actor is its id.
   const botRef = r.startsWith('#/bot/') ? decodeURIComponent(String(r.slice(6).split(/[/?]/)[0])) : '';

@@ -3,6 +3,10 @@
    script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+/** The ticket fields the section reads, as GET /v2/tasks/{id} types them (ui/types/api.d.ts Task): its id, its
+    pipeline (type_id, null off a pipeline) and its requirements, the board's dots, which the schema types loosely. */
+type TaskReqTicket = Pick<import('../types/api').Task, 'id' | 'type_id' | 'requirements'>;
+
 const TASK_REQ_STATE_WORDS: Record<PipelineReqState, string> = {
   met: 'Met', waiting: 'Waiting', out_of_date: 'Out of date', failed: 'Not passed', missing: 'Missing',
 };
@@ -74,7 +78,7 @@ function taskRequirementsSection(taskId: string, typeId: string, reqs: PipelineR
 
 /** The requirements section of the ticket as the board's dots give it, or '' when its stage has none. It fills in from
     the ticket's own requirements (taskRequirementsLoad) once it is on the page. */
-function taskRequirementsHTML(task: { id: string | number; type_id?: string; requirements?: (ServerDot | PipelineRequirement)[] | null }): string {
+function taskRequirementsHTML(task: TaskReqTicket): string {
   return taskRequirementsSection(String(task.id), task.type_id ?? '', pipelineBoardDots(task.requirements ?? []));
 }
 

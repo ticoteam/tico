@@ -588,7 +588,7 @@ function mktSpend(host: HTMLElement, first: Record<string, MktSpend | null>) {
 
 // The layers that hold someone, each node a link to its note with the money it has where the page knows it (`money`:
 // id to dollars a year). Empty when no layer holds anyone.
-function mktChainHtml(data: MktChain | null | undefined, money: Map<string, number>): string {
+function mktChainHtml(data: MktChain | null | undefined, money: Map<string | undefined, number>): string {
   const layers = (data?.layers || []).filter((l): l is MktChainLayerWithNodes => (l.nodes || []).length > 0);
   if (!layers.length) return '';
   return `<div class="mkt-chain" style="--n:${layers.length}">${layers.map(l => `<section class="mkt-layer" data-layer="${esc(l.key)}"><h4 class="mkt-lab">${esc(l.title)}</h4>

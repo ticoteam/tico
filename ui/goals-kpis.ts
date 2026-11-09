@@ -362,7 +362,7 @@ function stratPropBetName(id: string | undefined) {
 function stratPropWrongText(w: unknown) {
   if (!w) return '';
   const el = document.createElement('span');
-  el.innerHTML = strategyWrongIfHtml(w);
+  el.innerHTML = strategyWrongIfHtml(w as StratWrongIf);
   return el.textContent.trim();
 }
 // One changed thing on a strategy card: its name, then Now / Proposed (or only what is proposed without a draft to read).

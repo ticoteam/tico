@@ -6,6 +6,7 @@
 // Every bot is hosted by the keeper (`host: keeper`, the only host there is), so the record is hub.db, not GitHub:
 // chat is `messages`, work is `tasks`, approvals are one tap, and every bot has one status row with
 // its history. Every fetch is guarded, so a hub with no hub.db yet looks exactly as it does today.
+/** @type {Record<string, string>} */
 const V2_WORD = {idle: 'Idle', running: 'Running', waiting_human: 'Waiting on a human',
                  waiting_bot: 'Waiting on a bot', blocked: 'Blocked', limited: 'Rate limited',
                  crashed: 'Crashed', paused: 'Paused', quarantined: 'Paused for review'};
@@ -13,6 +14,7 @@ const V2_WORD = {idle: 'Idle', running: 'Running', waiting_human: 'Waiting on a 
 const statusWord = status => status === 'planned' ? 'Setting up' : String(status || '');
 const V2_PILL = {running: 'in-progress', waiting_human: 'needs', waiting_bot: 'waiting', blocked: 'blocked',
                  limited: 'waiting', crashed: 'fail', quarantined: 'fail', idle: ''};
+/** @type {Record<string, string>} */
 const V2_KIND = {decision: 'Decision', approval: 'Approval', review: 'Review', declined: 'Declined',
                  question: 'Question', task: 'Task', notice: 'Message', setup: 'Set up'};
 const v2StatusOf = slug => S.v2.status[slug] || null;

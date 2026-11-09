@@ -31,7 +31,7 @@ interface ToastOptions {
   /** Show an error even while signed out (the signed-out banner is the usual place). */
   keepWhenSignedOut?: boolean;
   /** An open modal dialog the toast sits in, so its button can be pressed. */
-  host?: Element | null;
+  host?: Element | null | undefined;
 }
 
 // ---------------------------------------------------------------- the signed-in person (S.me, GET /api/me)
@@ -69,12 +69,46 @@ interface SelfPerson extends Omit<Partial<import('./api').Person>, 'id'> {
 
 // ---------------------------------------------------------------- the server's config (S.config, state.ts)
 
+/** One known issue the update check lists (`update.known_issues`). */
+interface ConfigKnownIssue {
+  title: string;
+  url?: string | null;
+  fixed_in?: string | null;
+}
+
 /** An available new version, as the config carries it (`update`), or null when none is known. */
 interface ConfigUpdate {
   available?: boolean;
   latest?: string;
   current?: string;
+  /** Known issues in the running version, from the update check (backend/releases.py); `known_issues_checked` is false when GitHub was not asked. */
+  known_issues?: ConfigKnownIssue[];
+  known_issues_checked?: boolean;
+  /** The release Tico support set for this hosted server (backend/hosted_updates.py), until it is on it. */
+  scheduled?: string;
+  /** Tico runs this server's updates (a cloud company, backend/releases.py). */
+  managed?: boolean;
+  /** The release's changelog link. */
+  url?: string;
+  /** Notices from Tico for this install (backend/hosted_updates.py). */
+  messages?: UpdateMessage[];
+  /** The message Tico HQ has for this version (backend/releases.py). */
+  message?: UpdateMessage | null;
   [key: string]: unknown;
+}
+
+/** One notice Tico sent: its tone (`kind`), its text (`body`) and an optional https link (`url`). */
+interface UpdateMessage {
+  id?: string | number | null;
+  body?: string;
+  kind?: string;
+  url?: string;
+}
+
+/** The "How is Tico working for you?" question the server asks at a set moment (backend/support_asks.py). */
+interface FeedbackAsk {
+  moment: string;
+  question: string;
 }
 
 /** The environment's names and switches: state.ts's CONFIG_DEFAULTS, with whatever the server sends over them. */
@@ -105,13 +139,15 @@ interface AppConfig {
   hosted?: boolean;
   visuals?: 'full' | 'hosted' | 'media';
   ui_build?: string;
-  beta?: { id: string; templates?: string[]; harnesses?: string[] }[];
+  beta?: { id: string; name?: string; docs?: string[]; templates?: string[]; harnesses?: string[] }[];
   providers_configured?: boolean;
   default_runtime?: string;
+  /** The release the server runs, as runners compare it (settings-devices.ts serverReleaseTag). */
+  runner_compat?: { version?: string };
   in_docker?: boolean;
-  feedback_question?: string;
+  feedback_question?: FeedbackAsk | null;
   usage_count_notice?: unknown;
-  changelog?: unknown;
+  changelog?: { unread_count?: number; [key: string]: unknown } | null;
   [key: string]: unknown;
 }
 
@@ -143,12 +179,28 @@ interface BotMachine {
   last_seen_at?: string | null;
   platform?: string;
   version?: string;
+  /** The computer's screen: off, view or control, and whether the computer offers it (computer-screen.ts). */
+  screen?: string | null;
+  screen_available?: boolean;
   [key: string]: unknown;
+}
+
+/** A computer's readiness report (SettingsMachine.readiness): what each runtime and harness can do, as the computer last reported it. */
+interface MachineReadiness {
+  runtimes?: Record<string, { authenticated?: string; goals?: boolean | null } | undefined>;
+  harnesses?: Record<string, MachineHarness | undefined>;
+}
+/** One harness in a computer's readiness report: the runtime it runs on, and whether goals work there. */
+interface MachineHarness {
+  runtime?: string;
+  goals?: boolean | null;
 }
 
 /** An external agent's sync state (`agent`, a Grok Bot or Dots, backend/agents.py). */
 interface BotAgent {
   label?: string;
+  /** The harness the agent runs (settings-devices.ts agentKind). */
+  harness?: string;
   synced?: boolean;
   last_seen_at?: string | null;
   credential?: unknown;
@@ -171,21 +223,35 @@ interface Employee {
   slug?: string;
   display_name?: string;
   status?: string;
+  /** The state a bot row may carry besides status (overview.ts reads it). */
+  state?: string;
+  icon?: string;
   template?: string;
   harness?: string;
+  /** The bot's own model choice (an older row says runtime and effort for harness and reasoning_effort). */
+  model?: string;
+  runtime?: string;
+  reasoning_effort?: string;
+  effort?: string;
   team?: string;
   reports_to?: string | null;
   owner_id?: string | null;
+  /** The bot a branch follows (a slug); absent on a bot that is not a branch. */
+  shared_from?: string | null;
   is_branch?: boolean;
   can_chat?: boolean;
   my_access?: AccessLevel;
+  /** The bot's access policy (settings-access.ts reads it): see, read and write; null or absent when it is not set. */
+  access_policy?: {see: import('./api').AccessAudience; read: import('./api').AccessAudience; write: import('./api').AccessAudience} | null;
   access?: BotAccess[] | null;
   machine?: BotMachine | null;
+  /** The computer a bot is placed on (`assignments` row), when the server sends it. */
+  assignment?: { runner_id?: string } | null;
   agent?: BotAgent | null;
   /** Whether the bot's computer or agent is up, and whether its setup is done (the status tooltip, ui/app/tooltip.ts, reads them). */
   online?: boolean;
   ready?: boolean;
-  readiness?: { gateway?: string | null } | null;
+  readiness?: { gateway?: string | null; goals?: boolean | null | undefined } | null;
   users?: BriefPerson[];
   bot_owners?: BriefPerson[];
   /** Read by overview.js; no server path sends it on a bot row today, so it is optional and not relied on. */
@@ -196,12 +262,13 @@ interface Employee {
 /** A team (group) on the org chart. */
 interface OrgGroup {
   id: string;
-  name?: string;
+  name?: string | undefined;
   lead?: string;   // the lead's ref (person:<id> or bot:<slug>), "" for none (backend/groups.py)
   order?: number;
   parent?: string;
   org_parent?: string;
   root?: string;
+  bots?: string[];   // the group's members (GET /v2/groups `bots`)
 }
 
 /** A person on the chart: the roster row plus the fields the server sends that the generated type leaves out. */
@@ -290,7 +357,7 @@ interface WentAway {
 /** One row of Needs you (`S.v2.needs`). */
 interface NeedsItem {
   kind: string;
-  id?: string;
+  id: string;
   requested_by_id?: string;
   requester_id?: string;
   [key: string]: unknown;
@@ -326,15 +393,37 @@ interface LastRead {
   /** The Overview's bot-hours answer (overview-hours.ts). */
   hours?: BotHours | null;
   /** The Dashboard's places, keyed by the place's key. */
-  places?: Record<string, unknown>;
+  places?: Record<string, DashView>;
   [page: string]: unknown;
 }
 
 // ---------------------------------------------------------------- S, the page's shared state (ui/app/state.ts)
 
+/** A roster person as S.people holds them: the Person row plus the profile, Slack and notice fields the human page reads. */
+type RosterPerson = import('./api').Person & {
+  hidden?: boolean;
+  left?: boolean;
+  about?: string | null;
+  goals?: string;
+  notes?: string | null;
+  github?: string | null;
+  phone?: string | null;
+  slack?: string | null;
+  /** The bot a "Notes go to" line names (a slug). */
+  bot?: string | null;
+  bots?: string[];
+  my_access?: AccessLevel;
+  slack_muted_bots?: string[] | null;
+  notify_slack_task_done?: boolean;
+  notify_slack_bot_messages?: boolean;
+  notify_browser?: boolean;
+  email_digest?: boolean;
+  update_draft?: boolean;
+};
+
 interface AppState {
   emps: Employee[];
-  people: (import('./api').Person & { hidden?: boolean; left?: boolean })[];
+  people: RosterPerson[];
   orgGroups: OrgGroup[];
   status: ServerStatus | null;
   statusPending: boolean;
@@ -364,4 +453,42 @@ interface HTMLElement {
  *  check for it first (visual-cards.ts visualSwap, overview.ts). */
 interface ParentNode {
   moveBefore(node: Node, child: Node | null): void;
+}
+
+/** The open Growth page (ui/app/growth-page.ts GR): its route's load, sub-page and month; `data` is Sources' own. */
+interface GrowthState {
+  load: number;
+  sub: string;
+  month: string;
+  data: unknown;
+}
+
+// ---------------------------------------------------------------- the health answer (HL, ui/health.ts) and live task drafts (task-live.ts)
+
+/** A bot the health answer lists as stuck (`HL.stuck`). */
+interface HealthStuckRow {
+  bot: string;
+  why: string;
+  [key: string]: unknown;
+}
+
+/** A bot on a fallback model since a time (`HL.on_fallback`). */
+interface HealthFallbackRow {
+  changed_at?: string | null;
+  [key: string]: unknown;
+}
+
+/** The health answer the app polls (`HL`, ui/health.ts): the parts the other pages read. */
+interface HealthSnapshot {
+  checks?: unknown[];
+  audience?: string;
+  stuck?: HealthStuckRow[];
+  on_fallback?: HealthFallbackRow[];
+  limited?: unknown[];
+  [key: string]: unknown;
+}
+
+/** A task open in its dialog, live (`dialog.taskLive`; TaskLive is task-live.ts's). */
+interface HTMLDialogElement {
+  taskLive?: TaskLive | null;
 }
