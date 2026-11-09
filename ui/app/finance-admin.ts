@@ -20,8 +20,7 @@ type FinConnResult = import('../types/api').FinanceConnectionResult;
 // A row of GET /api/v2/tool-index, with the service an API tool is for.
 type FinToolRow = import('../types/api').ToolIndexRow & {service?: string};
 type FinToolKeyApi = import('../types/api').ApiTool['keys'][number];
-// The viewer's own Finance rights (finCaps in finance.js) once the access row is read.
-type FinCapsNow = NonNullable<ReturnType<typeof finCaps>>;
+// FinCapsNow (the viewer's own Finance rights, finCaps) is in finance.ts.
 // An event whose listener sits on a known element (a button's click, an input's input).
 type FinEventAt<E extends Element> = Event & {readonly currentTarget: E};
 type FinInputEvent = Event & {readonly target: HTMLInputElement};
@@ -64,13 +63,7 @@ type FinKeyForm = FinFormOf<{token: HTMLInputElement; level: HTMLSelectElement; 
 // A Finance trigger (backend/triggers.py summary) and the one POST /v2/triggers makes.
 type FinHookTrigger = WebhookTrigger & {last_received?: string | null};
 interface FinHookMade { id: string; url: string; replayed?: boolean }
-// GET /api/v2/finance/access with its grants (backend/finance/tab.py _grant_row) and the owner's finance approver.
-interface FinGrant {
-  id: string; what: string; whose: string; whose_team: string | null; account_ids: string[];
-  granted_by: string | null; expires_at: string | null; status: string; live?: boolean;
-}
-type FinAccMate = Omit<FinAccess['teammates'][number], 'grants'> & {grants: FinGrant[]};
-type FinAccData = Omit<FinAccess, 'teammates'> & {teammates: FinAccMate[]; finance_approver?: string | null};
+// FinGrant, FinAccMate, FinAccData (GET /api/v2/finance/access): finance.ts, beside FIN_ACCESS.
 type FinAccTeam = FinAccData['teams'][number];
 // A row of the Access table: a group's heading, or a teammate, at depth d.
 type FinAccRow = {t: FinAccMate; d: number; group?: undefined} | {group: string; d: number; t?: undefined};
@@ -262,7 +255,7 @@ const FIN_KEY_SOURCES: FinKeySources = {mercury: {name: 'Mercury', secret: 'API 
   stripe: {name: 'Stripe', secret: 'Restricted key', paste: 'Paste the key', hint: 'rk_live_…', level: 'read'}};
 // Ad platforms: their spend import is set up on the platform's tool page (Tools), not here.
 const FIN_AD_SOURCES: Record<string, string> = {'google-ads': 'Google Ads', 'meta-ads': 'Meta Ads'};
-// FIN_BOOKS (finance.js) read by any provider name: one it lacks reads undefined.
+// FIN_BOOKS (finance.ts) read by any provider name: one it lacks reads undefined.
 const FIN_BOOK_NAMES: Record<string, string> = FIN_BOOKS;
 const finService = (s: unknown) => String(s || '').trim().toLowerCase().replace(/_/g, '-');
 // The reader's tools for a service (GET /api/v2/tool-index, its API tools) and each one's keys (GET /api-tools/{id}).
@@ -394,7 +387,7 @@ function finConnect(v: string) {
 }
 // QuickBooks or Xero: POST /api/v2/finance/books/connect {provider} -> {url, expires_in}, HQ's consent page. The server
 // takes the browser's return (GET /api/v2/finance/books/return/{flow}) and sends it to #/finance?books=connected or
-// ?books=error&reason=<code> (finBooksReturn in finance.js).
+// ?books=error&reason=<code> (finBooksReturn in finance.ts).
 function finConnectBooks(provider: string) {
   const name = FIN_BOOK_NAMES[provider];
   finDialog('Connect ' + name, '', 'Continue', async () => {
