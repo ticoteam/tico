@@ -88,7 +88,7 @@ async function readOnly(page, writes) {
       assert.match(await page.locator('tr.au-row').innerText(), /Daily at 07:00/);
       await page.locator('tr.au-row[data-row="au_sys_still"] a').click();
       await page.waitForSelector('.au-about');
-      assert.match(await page.locator('.au-about').innerText(), /tasks open for 30 days[\s\S]*Built-in: can’t be edited or deleted/);
+      assert.match(await page.locator('.au-about').innerText(), /Asks a KPI keeper for a reading when it goes out of date\.[\s\S]*Built-in: can’t be edited or deleted/);
       assert.match(await page.locator('.au-trig').innerText(), /System job[\s\S]*Daily at 07:00/);
       assert.equal(await page.locator('.au-add').count(), 0);
       assert.equal(await page.locator('[data-spend]').count(), 0);

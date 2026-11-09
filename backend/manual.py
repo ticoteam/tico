@@ -6,6 +6,7 @@ backed up as team content, and a team doc can never be mistaken for it. It is ve
 the index is rebuilt when the running version (or a file) changes, with no network. Results carry
 `collection: "manual"` and the label "Tico manual", the file (`docs/<name>.md`) and a link to that page.
 """
+
 import re
 import math
 import threading
@@ -16,8 +17,10 @@ from . import releases
 DOCS_DIR = Path(__file__).resolve().parents[1] / "docs"
 LABEL = "Tico manual"
 GITHUB = "https://github.com/ticoteam/tico/blob/"
-STOP = frozenset("a an and are as at be but by do does for from how i in is it my of on or our the to us was we what "
-                 "when where which who why with you your can could should would please tell me about into new say says next long its want like help know".split())
+STOP = frozenset(
+    "a an and are as at be but by do does for from how i in is it my of on or our the to us was we what "
+    "when where which who why with you your can could should would please tell me about into new say says next long its want like help know".split()
+)
 HEADING = re.compile(r"^(#{1,3})\s+(.+?)\s*#*\s*$")
 _lock = threading.Lock()
 _cache = {"key": None, "pages": {}}
@@ -42,7 +45,12 @@ def _words(text):
 
 def page_text(name, text, title=None):
     provided_title = title
-    title, sections, current, in_code = title or name.replace("-", " ").title(), [], {"heading": "", "anchor": "", "lines": []}, False
+    title, sections, current, in_code = (
+        title or name.replace("-", " ").title(),
+        [],
+        {"heading": "", "anchor": "", "lines": []},
+        False,
+    )
     for line in text.splitlines():
         if line.lstrip().startswith("```"):
             in_code = not in_code
@@ -61,8 +69,15 @@ def page_text(name, text, title=None):
     for s in sections:
         body = " ".join(" ".join(s["lines"]).split())
         if s["heading"] or body:
-            out.append({"heading": s["heading"], "anchor": s["anchor"], "body": body,
-                        "words": set(_words(s["heading"] + " " + body)), "head_words": set(_words(s["heading"]))})
+            out.append(
+                {
+                    "heading": s["heading"],
+                    "anchor": s["anchor"],
+                    "body": body,
+                    "words": set(_words(s["heading"] + " " + body)),
+                    "head_words": set(_words(s["heading"])),
+                }
+            )
     return {"name": name, "title": title, "body": text, "sections": out, "title_words": set(_words(title + " " + name))}
 
 
@@ -102,10 +117,13 @@ def query_words(q, glossary=None):
 
 
 def query_weights(wanted):
-    corpus = [page["title_words"] | set().union(*(section["words"] for section in page["sections"]))
-              for page in pages().values()]
-    return {term: 1 + math.log((len(corpus) + 1) / (1 + sum(_hits(words, term) for words in corpus)))
-            for term in wanted}
+    corpus = [
+        page["title_words"] | set().union(*(section["words"] for section in page["sections"]))
+        for page in pages().values()
+    ]
+    return {
+        term: 1 + math.log((len(corpus) + 1) / (1 + sum(_hits(words, term) for words in corpus))) for term in wanted
+    }
 
 
 def best_section(page, wanted, weights=None):
@@ -118,9 +136,16 @@ def best_section(page, wanted, weights=None):
         if len(have) < need:
             continue
         body = section["body"].casefold()
-        score = sum(weights[t] * (10 + 5 * _hits(page["title_words"], t)
-                                  + 15 * _hits(section["head_words"], t)
-                                  + min(body.count(_stem(t)), 5)) for t in have)
+        score = sum(
+            weights[t]
+            * (
+                10
+                + 5 * _hits(page["title_words"], t)
+                + 15 * _hits(section["head_words"], t)
+                + min(body.count(_stem(t)), 5)
+            )
+            for t in have
+        )
         if best is None or score > best[0]:
             best = (score, section)
     return best
@@ -135,16 +160,23 @@ def _excerpt(body, tokens):
     if begin:
         begin = body.find(" ", begin) + 1
     end = body.rfind(" ", begin, begin + 1200)
-    return body[begin:end if end > begin else begin + 1200].strip()
+    return body[begin : end if end > begin else begin + 1200].strip()
 
 
 def result(page, section, version, score):
     heading = section["heading"] if section["heading"] and section["heading"] != page["title"] else ""
-    return {"type": "manual", "collection": "manual", "label": LABEL, "id": "manual:" + page["name"],
-            "path": f"docs/{page['name']}.md", "title": page["title"] + (" > " + heading if heading else ""),
-            "excerpt": "",
-            "url": manual_url(version, page["name"], section["anchor"] if heading else ""), "version": version,
-            "score": round(score, 3)}
+    return {
+        "type": "manual",
+        "collection": "manual",
+        "label": LABEL,
+        "id": "manual:" + page["name"],
+        "path": f"docs/{page['name']}.md",
+        "title": page["title"] + (" > " + heading if heading else ""),
+        "excerpt": "",
+        "url": manual_url(version, page["name"], section["anchor"] if heading else ""),
+        "version": version,
+        "score": round(score, 3),
+    }
 
 
 def search(q, limit=20):
@@ -176,8 +208,18 @@ def _name(ref):
 
 def listing():
     version = releases.version()
-    return [{"id": "manual:" + p["name"], "path": f"docs/{p['name']}.md", "title": p["title"], "collection": "manual",
-             "label": LABEL, "url": manual_url(version, p["name"]), "version": version} for p in pages().values()]
+    return [
+        {
+            "id": "manual:" + p["name"],
+            "path": f"docs/{p['name']}.md",
+            "title": p["title"],
+            "collection": "manual",
+            "label": LABEL,
+            "url": manual_url(version, p["name"]),
+            "version": version,
+        }
+        for p in pages().values()
+    ]
 
 
 def read(ref):
@@ -186,6 +228,14 @@ def read(ref):
     if not page:
         return None
     version = releases.version()
-    return {"id": "manual:" + page["name"], "path": f"docs/{page['name']}.md", "title": page["title"], "body": page["body"],
-            "collection": "manual", "label": LABEL, "read_only": True, "version": version,
-            "url": manual_url(version, page["name"])}
+    return {
+        "id": "manual:" + page["name"],
+        "path": f"docs/{page['name']}.md",
+        "title": page["title"],
+        "body": page["body"],
+        "collection": "manual",
+        "label": LABEL,
+        "read_only": True,
+        "version": version,
+        "url": manual_url(version, page["name"]),
+    }

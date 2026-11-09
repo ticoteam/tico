@@ -1,4 +1,5 @@
 """Reading an action's payload: every field is checked and typed here, so nothing downstream handles raw JSON."""
+
 import re
 from collections.abc import Mapping, Sequence
 from typing import cast
@@ -28,8 +29,10 @@ _WORD = re.compile(r"\w")
 # A CVC (or CVV, security code) typed beside its three or four digits, in any sentence: `CVC 123`, `cvv2: 4567`,
 # `security code 987`, `CVC is 123`. Its digits are the code, whatever else the text says (§8.3, §13). A bare CSC is
 # not matched: a memo can name a year or an invoice with it (`CSC 2026`).
-_CVC_TEXT = re.compile(r"(?i)\b(?:cvc2?|cvv2?|security\s+code)(?![a-z])(?:\s*(?:is|was|no\.?|number|code)\b)?"
-                       r"[\W_]{0,3}\d{3,4}(?!\d)")
+_CVC_TEXT = re.compile(
+    r"(?i)\b(?:cvc2?|cvv2?|security\s+code)(?![a-z])(?:\s*(?:is|was|no\.?|number|code)\b)?"
+    r"[\W_]{0,3}\d{3,4}(?!\d)"
+)
 
 
 def _luhn(digits: str) -> bool:
@@ -46,8 +49,9 @@ def _card_int(n: int) -> bool:
 
 def _joined_right(text: str, at: int) -> bool:
     """Whether an id runs on past `at`: a letter or digit right there, or a dash with one after it."""
-    return _WORD.match(text, at) is not None or \
-        (_DASH.match(text, at) is not None and _WORD.match(text, at + 1) is not None)
+    return _WORD.match(text, at) is not None or (
+        _DASH.match(text, at) is not None and _WORD.match(text, at + 1) is not None
+    )
 
 
 def _joined_left(text: str, at: int) -> bool:
@@ -62,8 +66,11 @@ def _code_after(text: str, spans: list[tuple[int, int]], j: int) -> bool:
     if j + 1 >= len(spans):
         return False
     code_start, code_end = spans[j + 1]
-    return _GAP.fullmatch(text, spans[j][1], code_start) is not None and 1 <= code_end - code_start <= _CODE_MAX \
+    return (
+        _GAP.fullmatch(text, spans[j][1], code_start) is not None
+        and 1 <= code_end - code_start <= _CODE_MAX
         and not _joined_right(text, code_end)
+    )
 
 
 def _code_before(text: str, spans: list[tuple[int, int]], i: int) -> bool:
@@ -71,8 +78,11 @@ def _code_before(text: str, spans: list[tuple[int, int]], i: int) -> bool:
     if i < 1:
         return False
     code_start, code_end = spans[i - 1]
-    return _GAP.fullmatch(text, code_end, spans[i][0]) is not None and 1 <= code_end - code_start <= _CODE_MAX \
+    return (
+        _GAP.fullmatch(text, code_end, spans[i][0]) is not None
+        and 1 <= code_end - code_start <= _CODE_MAX
         and not _joined_left(text, code_start)
+    )
 
 
 def _card_text(text: str) -> bool:
@@ -86,7 +96,7 @@ def _card_text(text: str) -> bool:
         for j in range(i, len(spans)):
             if j > i and _GAP.fullmatch(text, spans[j - 1][1], spans[j][0]) is None:
                 break
-            digits += text[spans[j][0]:spans[j][1]]
+            digits += text[spans[j][0] : spans[j][1]]
             if len(digits) > 19:
                 break
             end = spans[j][1]

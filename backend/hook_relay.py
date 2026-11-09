@@ -27,6 +27,7 @@ run (`wake_url`), and HQ posts a signed `tico.wake` to it when a delivery has wa
 secret and shows it once; this server keeps only the address, who set it and when. Hosted servers are woken by HQ already
 (backend/sleep_idle.py), so this is for installs people run themselves.
 """
+
 import asyncio
 import base64
 import binascii
@@ -53,23 +54,23 @@ from .auth import validate_identity
 from .models import Contract, Empty
 from .store import Problem
 
-TRANSPORT = None                 # tests' fake HQ, never the live one
-EVERY = 15                       # seconds between pulls when this server has a relay address of its own
-NOTICES_EVERY = 60               # ... and with only a Gateway key, where the pull brings Tico Team's notices
-RELAYS_EVERY = 3600              # HQ's list of relays, for its system relay for `_tico`, is asked at most this often
-BACKOFF_MAX = 300                # a failing pull waits 15 s, 30 s, ... up to this
-PAGE = 20                        # deliveries per pull: a page is at most PAGE x 256 KB (base64)
-PAGES = 10                       # pulls in one tick while HQ says there is more
+TRANSPORT = None  # tests' fake HQ, never the live one
+EVERY = 15  # seconds between pulls when this server has a relay address of its own
+NOTICES_EVERY = 60  # ... and with only a Gateway key, where the pull brings Tico Team's notices
+RELAYS_EVERY = 3600  # HQ's list of relays, for its system relay for `_tico`, is asked at most this often
+BACKOFF_MAX = 300  # a failing pull waits 15 s, 30 s, ... up to this
+PAGE = 20  # deliveries per pull: a page is at most PAGE x 256 KB (base64)
+PAGES = 10  # pulls in one tick while HQ says there is more
 MAX_ANSWER = 12 * 1024 * 1024
 TIMEOUT = 15
-PENDING_EVERY = 60               # the status view's count from HQ is asked at most this often
-FAILING_FOR = 15 * 60            # Health speaks after pulls have failed this long
-OLD_PENDING = 3600               # ... or when the oldest waiting delivery is this old
-POISON = 5                       # a delivery whose handling raised this many times is skipped, so one cannot block the rest
+PENDING_EVERY = 60  # the status view's count from HQ is asked at most this often
+FAILING_FOR = 15 * 60  # Health speaks after pulls have failed this long
+OLD_PENDING = 3600  # ... or when the oldest waiting delivery is this old
+POISON = 5  # a delivery whose handling raised this many times is skipped, so one cannot block the rest
 RELAY = re.compile(r"hr_[0-9a-f]{16}")
 # The system relays HQ makes per install, one for each trigger (hooks/store.py SYSTEM_RELAYS). Each is listed with
 # `system: true`, recorded from that list only, and fed only from the relay recorded for its own trigger.
-FINANCE_TRIGGER = "_finance"     # the books' calls: HQ's envelope, fed to the books connection it names (books_link)
+FINANCE_TRIGGER = "_finance"  # the books' calls: HQ's envelope, fed to the books connection it names (books_link)
 SYSTEM_TRIGGERS = (tico_notices.ID, postal_mail.TRIGGER, FINANCE_TRIGGER)
 
 
@@ -80,10 +81,12 @@ def _prefix(address, relay_id):
     segments = parts.path.split("/")
     if parts.scheme != "https" or not parts.netloc or parts.query or parts.fragment or relay_id not in segments[-2:]:
         return ""
-    return f"https://{parts.netloc}" + "/".join(segments[:segments.index(relay_id, len(segments) - 2) + 1])
+    return f"https://{parts.netloc}" + "/".join(segments[: segments.index(relay_id, len(segments) - 2) + 1])
+
+
 WAKE_URL_MAX = 2000
-NO_KEY = "Connect the Tico Gateway in Settings > Gateway first: an address through Tico Gateway needs its key."
-now = time.time                  # tests' controlled clock
+NO_KEY = "Connect the Tico Gateway in Settings > Models first: an address through Tico Gateway needs its key."
+now = time.time  # tests' controlled clock
 
 
 class RelayWake(Contract):
@@ -110,21 +113,43 @@ class Failed(Exception):
 # ----------------------------------------------------------------------------- state
 def state(c):
     row = c.execute("SELECT * FROM hook_relay_state WHERE singleton=1").fetchone()
-    return dict(row) if row else {"cursor": 0, "acked": 0, "last_pull_at": None, "failing_since": None,
-                                  "last_error": "", "stopped_for": "", "pending": None, "oldest": None,
-                                  "pending_at": None, "wake_url": None, "wake_url_set_at": None, "wake_url_set_by": None}
+    return (
+        dict(row)
+        if row
+        else {
+            "cursor": 0,
+            "acked": 0,
+            "last_pull_at": None,
+            "failing_since": None,
+            "last_error": "",
+            "stopped_for": "",
+            "pending": None,
+            "oldest": None,
+            "pending_at": None,
+            "wake_url": None,
+            "wake_url_set_at": None,
+            "wake_url_set_by": None,
+        }
+    )
 
 
 def save(c, **fields):
     c.execute("INSERT OR IGNORE INTO hook_relay_state(singleton) VALUES(1)")
-    c.execute("UPDATE hook_relay_state SET " + ",".join(k + "=?" for k in fields) + " WHERE singleton=1",
-              tuple(fields.values()))
+    c.execute(
+        "UPDATE hook_relay_state SET " + ",".join(k + "=?" for k in fields) + " WHERE singleton=1",
+        tuple(fields.values()),
+    )
 
 
 def live(c):
     """The relay addresses people made, not the one HQ keeps for Tico Team's notices."""
-    return [dict(r) for r in c.execute("SELECT * FROM trigger_relays WHERE deleted_at IS NULL AND trigger_id<>? ORDER BY created_at",
-                                       (tico_notices.ID,)).fetchall()]
+    return [
+        dict(r)
+        for r in c.execute(
+            "SELECT * FROM trigger_relays WHERE deleted_at IS NULL AND trigger_id<>? ORDER BY created_at",
+            (tico_notices.ID,),
+        ).fetchall()
+    ]
 
 
 def _row(c, trigger_id):
@@ -134,8 +159,15 @@ def _row(c, trigger_id):
 def public(row):
     """The relay as a trigger shows it. `wake` is whether a delivery starts a sleeping server (HQ's switch, as last
     listed), null until HQ has said."""
-    return {"address_prefix": row["address_prefix"], "created_at": row["created_at"],
-            "wake": None if row["wake"] is None else bool(row["wake"])} if row else None
+    return (
+        {
+            "address_prefix": row["address_prefix"],
+            "created_at": row["created_at"],
+            "wake": None if row["wake"] is None else bool(row["wake"]),
+        }
+        if row
+        else None
+    )
 
 
 def attach(c, items):
@@ -153,9 +185,12 @@ def forget(c: Any, trigger_id: str) -> None:
 
 def keep(c, *, relay_id, trigger_id, prefix, by):
     """HQ's relay kept as the trigger's live one, with its audit event."""
-    c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at) VALUES(?,?,?,?,?) "
-              "ON CONFLICT(relay_id) DO UPDATE SET trigger_id=excluded.trigger_id,address_prefix=excluded.address_prefix,"
-              "deleted_at=NULL,hq_gone=0", (relay_id, trigger_id, prefix, by, H.now()))
+    c.execute(
+        "INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at) VALUES(?,?,?,?,?) "
+        "ON CONFLICT(relay_id) DO UPDATE SET trigger_id=excluded.trigger_id,address_prefix=excluded.address_prefix,"
+        "deleted_at=NULL,hq_gone=0",
+        (relay_id, trigger_id, prefix, by, H.now()),
+    )
     H.event(c, by, "trigger.relay_created", trigger_id, {"relay": relay_id})
 
 
@@ -167,14 +202,22 @@ def record_system(c, trigger_id: str, relay_id: str) -> bool:
     if relay_recorded(c, trigger_id, relay_id):
         return True
     c.execute("DELETE FROM trigger_relays WHERE trigger_id=? AND deleted_at IS NULL", (trigger_id,))
-    c.execute("INSERT OR REPLACE INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at,deleted_at,hq_gone) "
-              "VALUES(?,?,?,?,?,NULL,0)", (relay_id, trigger_id, "", H.KEEPER, H.now()))
+    c.execute(
+        "INSERT OR REPLACE INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at,deleted_at,hq_gone) "
+        "VALUES(?,?,?,?,?,NULL,0)",
+        (relay_id, trigger_id, "", H.KEEPER, H.now()),
+    )
     return True
 
 
 def relay_recorded(c, trigger_id: str, relay_id: str) -> bool:
-    return c.execute("SELECT 1 FROM trigger_relays WHERE trigger_id=? AND relay_id=? AND deleted_at IS NULL",
-                     (trigger_id, relay_id)).fetchone() is not None
+    return (
+        c.execute(
+            "SELECT 1 FROM trigger_relays WHERE trigger_id=? AND relay_id=? AND deleted_at IS NULL",
+            (trigger_id, relay_id),
+        ).fetchone()
+        is not None
+    )
 
 
 def system_accepts(c, trigger_id: str, relay_id: str) -> bool:
@@ -191,8 +234,15 @@ def clean_wake_url(value):
         parts.port
     except ValueError:
         parts = None
-    if (not parts or not value or len(value) > WAKE_URL_MAX or parts.scheme != "https" or not parts.hostname
-            or "@" in parts.netloc or any(ch.isspace() or ord(ch) < 32 or ch == "\\" for ch in value)):
+    if (
+        not parts
+        or not value
+        or len(value) > WAKE_URL_MAX
+        or parts.scheme != "https"
+        or not parts.hostname
+        or "@" in parts.netloc
+        or any(ch.isspace() or ord(ch) < 32 or ch == "\\" for ch in value)
+    ):
         raise Problem("url", "The wake address starts with https://, has a host, and no spaces, user or password", 422)
     return value
 
@@ -204,16 +254,30 @@ class Link:
     def __init__(self, key: str, base: str, fingerprint: str) -> None:
         self.key, self.base, self.fingerprint = key, base, fingerprint
 
-    def call(self, method: str, path: str, body: object = None, idempotency: str | None = None, *,
-             area: str = "hooks", transport: object = None, cap: int = MAX_ANSWER) -> dict[str, Any]:
+    def call(
+        self,
+        method: str,
+        path: str,
+        body: object = None,
+        idempotency: str | None = None,
+        *,
+        area: str = "hooks",
+        transport: object = None,
+        cap: int = MAX_ANSWER,
+    ) -> dict[str, Any]:
         """One call to `<base>/<area>/<path>`. `area` and `cap` let the sleep client (backend/sleep_idle.py) share the
         key, the pinned client settings and the answer cap; `transport` is a test's fake HQ."""
         sent = {"Authorization": "Bearer " + self.key, "User-Agent": user_agent(), "Accept-Encoding": "identity"}
         if idempotency:
             sent["Idempotency-Key"] = idempotency[:200]
         try:
-            with httpx.Client(transport=transport or TRANSPORT, timeout=TIMEOUT, trust_env=False, follow_redirects=False,
-                              verify=outbound_tls.context(trust_env=False)) as client:
+            with httpx.Client(
+                transport=transport or TRANSPORT,
+                timeout=TIMEOUT,
+                trust_env=False,
+                follow_redirects=False,
+                verify=outbound_tls.context(trust_env=False),
+            ) as client:
                 with client.stream(method, f"{self.base}/{area}/{path}", headers=sent, json=body) as response:
                     raw = bytearray()
                     for chunk in response.iter_bytes():
@@ -231,10 +295,13 @@ class Link:
         if status == 401:
             raise Stop()
         if status >= 400:
-            error = answer.get("error", answer.get("code"))      # {"error": "x"}, {"error": {"code": "x"}} or {"code": "x"}
+            error = answer.get("error", answer.get("code"))  # {"error": "x"}, {"error": {"code": "x"}} or {"code": "x"}
             error = error.get("code") if isinstance(error, dict) else error
-            raise Failed(error if isinstance(error, str) and re.fullmatch(r"[a-z_]{1,40}", error) else f"http_{status}",
-                         status, answer)
+            raise Failed(
+                error if isinstance(error, str) and re.fullmatch(r"[a-z_]{1,40}", error) else f"http_{status}",
+                status,
+                answer,
+            )
         return answer
 
 
@@ -258,7 +325,7 @@ class HookRelay:
         self.next_try = 0.0
         self.poison = {}
         self.interval = EVERY
-        self.listed = 0.0            # when HQ's relays were last listed
+        self.listed = 0.0  # when HQ's relays were last listed
 
     @property
     def off(self):
@@ -284,17 +351,19 @@ class HookRelay:
         with self.store.read() as c:
             link = self.link(c)
             current, relays = state(c), live(c)
-            deleting = c.execute("SELECT count(*) FROM trigger_relays WHERE deleted_at IS NOT NULL AND hq_gone=0").fetchone()[0]
+            deleting = c.execute(
+                "SELECT count(*) FROM trigger_relays WHERE deleted_at IS NOT NULL AND hq_gone=0"
+            ).fetchone()[0]
             owner = self.owner(c)
             complete = tico_notices.complete(c, owner) if link else True
         self.interval = EVERY if relays or deleting else NOTICES_EVERY
         if not link:
             return
-        if not complete:                            # the built-in trigger and its rules, from the first pull on
+        if not complete:  # the built-in trigger and its rules, from the first pull on
             with self.store.transaction() as c:
                 tico_notices.ensure(c, owner)
         if current["stopped_for"] and current["stopped_for"] == link.fingerprint:
-            return                                  # HQ refused this key; a new key is a new chance
+            return  # HQ refused this key; a new key is a new chance
         if current["stopped_for"]:
             with self.store.transaction() as c:
                 save(c, stopped_for="", last_error="", failing_since=None)
@@ -306,12 +375,16 @@ class HookRelay:
             self.pull(link, current)
             if relays:
                 self.count(link)
-            self.learn_notice_relay(link)           # also finds the system relay before any notice has come
+            self.learn_notice_relay(link)  # also finds the system relay before any notice has come
             self.worked()
         except Stop:
             with self.store.transaction() as c:
-                save(c, stopped_for=link.fingerprint, last_error="key_revoked",
-                     failing_since=current["failing_since"] or now())
+                save(
+                    c,
+                    stopped_for=link.fingerprint,
+                    last_error="key_revoked",
+                    failing_since=current["failing_since"] or now(),
+                )
         except Failed as failed:
             self.failed(failed.code)
 
@@ -329,7 +402,7 @@ class HookRelay:
 
     def pull(self, link, current):
         cursor = current["cursor"]
-        forced = False                              # HQ's relay list is forced at most once per pull
+        forced = False  # HQ's relay list is forced at most once per pull
         for _ in range(PAGES):
             try:
                 page = link.call("POST", "pull", {"cursor": cursor, "limit": PAGE})
@@ -367,7 +440,7 @@ class HookRelay:
         with self.store.read() as c:
             done = state(c)["acked"]
         if cursor <= done:
-            return                                  # a lost ack is tried again here next time: acked stays behind
+            return  # a lost ack is tried again here next time: acked stays behind
         try:
             link.call("POST", "ack", {"through_hq_seq": cursor})
         except Failed as failed:
@@ -389,13 +462,18 @@ class HookRelay:
             self.poison[seq] = self.poison.get(seq, 0) + 1
             if self.poison[seq] < POISON:
                 raise Failed("receive_failed") from error
-            self.poison.pop(seq, None)              # skipped for good, and said so
+            self.poison.pop(seq, None)  # skipped for good, and said so
             with self.store.transaction() as c:
                 save(c, cursor=seq)
-                H.event(c, "keeper", "trigger.relay_skipped", str(item.get("trigger_id") or ""),
-                        {"delivery": str(item.get("delivery_id") or "")[:200], "error": type(error).__name__})
+                H.event(
+                    c,
+                    "keeper",
+                    "trigger.relay_skipped",
+                    str(item.get("trigger_id") or ""),
+                    {"delivery": str(item.get("delivery_id") or "")[:200], "error": type(error).__name__},
+                )
             return seq
-        if not saved:                               # an undecodable body: terminal, and the cursor still moves
+        if not saved:  # an undecodable body: terminal, and the cursor still moves
             with self.store.transaction() as c:
                 save(c, cursor=seq)
         return seq
@@ -404,10 +482,11 @@ class HookRelay:
         """Hand one delivery to the trigger. The cursor moves in the same transaction as `receive`'s writes, so a crash
         never leaves one without the other. False when the body was not decodable and nothing was written."""
         from . import triggers
+
         try:
             body = base64.b64decode(str(item.get("body_b64") or ""), validate=True)
         except (binascii.Error, ValueError):
-            return False                            # not a body anyone can use: terminal
+            return False  # not a body anyone can use: terminal
         headers = item.get("headers") if isinstance(item.get("headers"), dict) else {}
         headers = {str(k): str(v) for k, v in headers.items()}
         trigger_id, relay_id = str(item.get("trigger_id") or ""), str(item.get("relay_id") or "")
@@ -427,10 +506,17 @@ class HookRelay:
             # HQ's envelope for a QuickBooks or Xero call (backend/finance/books_link.py): fed only from the relay recorded
             # for `_finance`, to the books connection it names. Anything else from that relay is acked and not kept.
             from .finance import actions as finance
+
             with self.store.transaction() as c:
                 if system_accepts(c, FINANCE_TRIGGER, relay_id):
-                    finance.books_relayed(c, body, delivery_id=str(item.get("delivery_id") or ""),
-                                          received_at=received(item.get("received_at")), vault=self.vault(), auth=self.auth)
+                    finance.books_relayed(
+                        c,
+                        body,
+                        delivery_id=str(item.get("delivery_id") or ""),
+                        received_at=received(item.get("received_at")),
+                        vault=self.vault(),
+                        auth=self.auth,
+                    )
                 save(c, cursor=seq)
             return True
         with self.store.transaction() as c:
@@ -441,15 +527,27 @@ class HookRelay:
                 if ok:
                     tico_notices.ensure(c, self.owner(c))
             else:
-                ok = c.execute("SELECT 1 FROM trigger_relays WHERE relay_id=? AND trigger_id=? AND deleted_at IS NULL",
-                               (relay_id, trigger_id)).fetchone()
+                ok = c.execute(
+                    "SELECT 1 FROM trigger_relays WHERE relay_id=? AND trigger_id=? AND deleted_at IS NULL",
+                    (relay_id, trigger_id),
+                ).fetchone()
             if not ok:
                 save(c, cursor=seq)
                 return True
             # A signed delivery (github, standard, stripe, slack, hmac) is checked here, so it needs the vault; rules and
             # routines need `auth` to run as the people who made them.
-            triggers.receive(c, trigger_id, body, headers, secret=None, via="gateway", delivery_id=str(item.get("delivery_id") or ""),
-                    received_at=received(item.get("received_at")), vault=self.vault(), auth=self.auth)
+            triggers.receive(
+                c,
+                trigger_id,
+                body,
+                headers,
+                secret=None,
+                via="gateway",
+                delivery_id=str(item.get("delivery_id") or ""),
+                received_at=received(item.get("received_at")),
+                vault=self.vault(),
+                auth=self.auth,
+            )
             save(c, cursor=seq)
         return True
 
@@ -463,8 +561,11 @@ class HookRelay:
 
     def unknown_system_relay(self, items):
         """Whether a delivery in this page names a system trigger (SYSTEM_TRIGGERS) through a relay not recorded for it."""
-        wanted = {(str(i.get("trigger_id")), str(i.get("relay_id") or "")) for i in items
-                  if isinstance(i, dict) and i.get("trigger_id") in SYSTEM_TRIGGERS}
+        wanted = {
+            (str(i.get("trigger_id")), str(i.get("relay_id") or ""))
+            for i in items
+            if isinstance(i, dict) and i.get("trigger_id") in SYSTEM_TRIGGERS
+        }
         if not wanted:
             return False
         with self.store.read() as c:
@@ -481,7 +582,7 @@ class HookRelay:
         except Failed:
             if force:
                 raise
-            self.listed = now()                     # asked again in an hour: the pull has its own backoff
+            self.listed = now()  # asked again in an hour: the pull has its own backoff
             return
         self.listed = now()
         items = answer.get("items")
@@ -493,10 +594,13 @@ class HookRelay:
         with self.store.transaction() as c:
             for item in listed:
                 if isinstance(item, dict) and isinstance(item.get("wake"), bool):
-                    c.execute("UPDATE trigger_relays SET wake=? WHERE relay_id=?", (int(item["wake"]), str(item.get("relay_id"))))
+                    c.execute(
+                        "UPDATE trigger_relays SET wake=? WHERE relay_id=?",
+                        (int(item["wake"]), str(item.get("relay_id"))),
+                    )
             for trigger_id, relays in found.items():
                 if len(relays) != 1:
-                    continue                            # two system relays listed for one trigger: neither is trusted
+                    continue  # two system relays listed for one trigger: neither is trusted
                 if trigger_id == tico_notices.ID:
                     if tico_notices.record_relay(c, relays[0]):
                         tico_notices.ensure(c, self.owner(c))
@@ -506,8 +610,12 @@ class HookRelay:
     def sweep_deleted(self, link):
         """Tell HQ about relays deleted here, a few at a time; HQ having no such relay is as good as deleted."""
         with self.store.read() as c:
-            gone = [r["relay_id"] for r in c.execute(
-                "SELECT relay_id FROM trigger_relays WHERE deleted_at IS NOT NULL AND hq_gone=0 LIMIT 10").fetchall()]
+            gone = [
+                r["relay_id"]
+                for r in c.execute(
+                    "SELECT relay_id FROM trigger_relays WHERE deleted_at IS NOT NULL AND hq_gone=0 LIMIT 10"
+                ).fetchall()
+            ]
         for relay_id in gone:
             try:
                 link.call("POST", f"relays/{relay_id}/delete", {}, idempotency="forget:" + relay_id)
@@ -525,15 +633,21 @@ class HookRelay:
         answer = link.call("GET", "pending")
         pending, oldest = answer.get("pending"), answer.get("oldest_received_at")
         with self.store.transaction() as c:
-            save(c, pending=pending if type(pending) is int else None,
-                 oldest=oldest if isinstance(oldest, str) else None, pending_at=now())
+            save(
+                c,
+                pending=pending if type(pending) is int else None,
+                oldest=oldest if isinstance(oldest, str) else None,
+                pending_at=now(),
+            )
 
     async def loop(self, stop):
         while not stop.is_set():
+            from . import system_routines as SR  # each pull is one run of Gateway webhooks (Settings > Routines)
+
             try:
-                await asyncio.to_thread(self.tick)
+                await asyncio.to_thread(SR.pass_of, self.store, "gateway_webhooks", self.tick)
             except Exception:
-                pass                                # the next tick tries again; the error is in the state row
+                pass  # the next tick tries again; the error is in the state row
             try:
                 await asyncio.wait_for(stop.wait(), self.interval)
             except TimeoutError:
@@ -543,14 +657,19 @@ class HookRelay:
     def gate(self, request, trigger_id, *, create=False):
         """The caller may manage this trigger and the Gateway is connected; returns (link, trigger row)."""
         from . import task_privacy, triggers
+
         who = request.state.identity
         with self.store.read_transaction() as c:
             validate_identity(c, who)
             task_privacy.guard_write(c, who, request.url.path, self.auth)
             row = triggers._row(c, trigger_id)
-            triggers._may_change(c, who, row, "change")      # a Finance trigger's address is a finance admin's (spec 3.4)
+            triggers._may_change(c, who, row, "change")  # a Finance trigger's address is a finance admin's (spec 3.4)
             if triggers.builtin(trigger_id):
-                raise Problem("relay", f"{tico_notices.NAME} notices come through Tico Gateway already; there is no address to make", 422)
+                raise Problem(
+                    "relay",
+                    f"{tico_notices.NAME} notices come through Tico Gateway already; there is no address to make",
+                    422,
+                )
             relay = _row(c, trigger_id)
             if create and relay:
                 raise Problem("relay", "This trigger already has an address through Tico Gateway", 409)
@@ -565,8 +684,13 @@ class HookRelay:
         if not key:
             raise Problem("idempotency_key", "Provide an Idempotency-Key", 422)
         who, link, trigger, _ = self.gate(request, trigger_id, create=True)
-        answer = self.ask(link, "POST", "relays", {"trigger_id": trigger_id, "name": trigger["name"]},
-                          "relay-create:" + trigger_id + ":" + key)
+        answer = self.ask(
+            link,
+            "POST",
+            "relays",
+            {"trigger_id": trigger_id, "name": trigger["name"]},
+            "relay-create:" + trigger_id + ":" + key,
+        )
         relay_id, secret = str(answer.get("relay_id") or ""), answer.get("secret")
         if not RELAY.fullmatch(relay_id):
             raise Problem("gateway", "The Tico Gateway gave an answer this server cannot use. Try again.", 502)
@@ -577,37 +701,57 @@ class HookRelay:
         with self.store.transaction() as c:
             existing = _row(c, trigger_id)
             if existing and existing["relay_id"] != relay_id:
-                extra = relay_id                    # a second request made a different one first: this one goes back
+                extra = relay_id  # a second request made a different one first: this one goes back
             elif existing:
-                pass                                # the same HQ relay (a concurrent retry with the same key): keep it
+                pass  # the same HQ relay (a concurrent retry with the same key): keep it
             else:
                 keep(c, relay_id=relay_id, trigger_id=trigger_id, prefix=prefix, by=who.actor)
-                tico_notices.ensure(c, self.owner(c))      # HQ made this install's Tico Team relay with its first
+                tico_notices.ensure(c, self.owner(c))  # HQ made this install's Tico Team relay with its first
         if extra:
             self.ask(link, "POST", f"relays/{extra}/delete", {}, "forget:" + extra, quiet=True)
             raise Problem("relay", "This trigger already has an address through Tico Gateway", 409)
         replayed = not secret
-        self.listed = 0.0                           # the next tick lists HQ's relays, which say whether this one wakes
-        return {"relay": {"trigger": trigger_id, "relay_id": relay_id, "address_prefix": prefix,
-                          "address": prefix if replayed else f"{prefix}/{secret}", "replayed": replayed}}
+        self.listed = 0.0  # the next tick lists HQ's relays, which say whether this one wakes
+        return {
+            "relay": {
+                "trigger": trigger_id,
+                "relay_id": relay_id,
+                "address_prefix": prefix,
+                "address": prefix if replayed else f"{prefix}/{secret}",
+                "replayed": replayed,
+            }
+        }
 
     def rotate(self, request, trigger_id, key):
         if not key:
             raise Problem("idempotency_key", "Provide an Idempotency-Key", 422)
         who, link, _, relay = self.gate(request, trigger_id)
-        answer = self.ask(link, "POST", f"relays/{relay['relay_id']}/rotate", {}, "relay-rotate:" + relay["relay_id"] + ":" + key)
+        answer = self.ask(
+            link, "POST", f"relays/{relay['relay_id']}/rotate", {}, "relay-rotate:" + relay["relay_id"] + ":" + key
+        )
         secret = answer.get("secret")
         with self.store.transaction() as c:
             H.event(c, who.actor, "trigger.relay_rotated", trigger_id, {"relay": relay["relay_id"]})
-        return {"relay": {"trigger": trigger_id, "relay_id": relay["relay_id"], "address_prefix": relay["address_prefix"],
-                          "address": relay["address_prefix"] if not secret else f"{relay['address_prefix']}/{secret}",
-                          "replayed": not secret}}
+        return {
+            "relay": {
+                "trigger": trigger_id,
+                "relay_id": relay["relay_id"],
+                "address_prefix": relay["address_prefix"],
+                "address": relay["address_prefix"] if not secret else f"{relay['address_prefix']}/{secret}",
+                "replayed": not secret,
+            }
+        }
 
     def wake(self, request, trigger_id, on, key):
         """Whether a delivery to this address starts a sleeping server (backend/sleep_idle.py); HQ keeps the switch."""
         who, link, _, relay = self.gate(request, trigger_id)
-        answer = self.ask(link, "POST", f"relays/{relay['relay_id']}", {"wake": on},
-                          f"relay-wake:{relay['relay_id']}:{key or H.new_id()}")
+        answer = self.ask(
+            link,
+            "POST",
+            f"relays/{relay['relay_id']}",
+            {"wake": on},
+            f"relay-wake:{relay['relay_id']}:{key or H.new_id()}",
+        )
         on = answer["wake"] if isinstance(answer.get("wake"), bool) else on
         with self.store.transaction() as c:
             c.execute("UPDATE trigger_relays SET wake=? WHERE relay_id=?", (int(on), relay["relay_id"]))
@@ -625,13 +769,14 @@ class HookRelay:
             with self.store.transaction() as c:
                 c.execute("UPDATE trigger_relays SET hq_gone=1 WHERE relay_id=?", (relay["relay_id"],))
         except Problem:
-            told = False                            # the loop tells HQ when it can; the address here is already off
+            told = False  # the loop tells HQ when it can; the address here is already off
         return {"relay": {"trigger": trigger_id, "deleted": True, "gateway_told": told}}
 
     # ------------------------------------------------------------------------- the wake address, for the owner
     def wake_gate(self, request, *, write=False):
         """Only the owner reads or changes the wake address: it is a way to start this server."""
         from . import task_privacy
+
         who = request.state.identity
         with self.store.read_transaction() as c:
             validate_identity(c, who)
@@ -657,31 +802,48 @@ class HookRelay:
             link = self.link(c)
         if not link:
             raise Problem("gateway", NO_KEY, 409)
-        answer = self.ask(link, "POST", "wake", {"url": url, "secret": None}, "wake-url:" + (key or H.new_id()),
-                          refused=("invalid_url", "The Tico Gateway cannot use that address. It must be a public https address."))
+        answer = self.ask(
+            link,
+            "POST",
+            "wake",
+            {"url": url, "secret": None},
+            "wake-url:" + (key or H.new_id()),
+            refused=("invalid_url", "The Tico Gateway cannot use that address. It must be a public https address."),
+        )
         if url is not None and isinstance(answer.get("url"), str):
-            url = answer["url"]                     # HQ's own spelling of it
+            url = answer["url"]  # HQ's own spelling of it
         secret = answer.get("secret") if url is not None and isinstance(answer.get("secret"), str) else None
         with self.store.transaction() as c:
             save(c, wake_url=url, wake_url_set_at=H.now() if url else None, wake_url_set_by=who.actor if url else None)
             # The address can carry a token in its path: the audit names the host only.
-            H.event(c, who.actor, "hooks.wake_url_set" if url else "hooks.wake_url_cleared", "",
-                    {"host": urllib.parse.urlsplit(url).hostname} if url else {})
+            H.event(
+                c,
+                who.actor,
+                "hooks.wake_url_set" if url else "hooks.wake_url_cleared",
+                "",
+                {"host": urllib.parse.urlsplit(url).hostname} if url else {},
+            )
         return {"url": url, "secret": secret}
 
     def ask(self, link, method, path, body, idempotency, quiet=False, refused=None):
         try:
             return link.call(method, path, body, idempotency)
         except Stop:
-            raise Problem("gateway", "The Tico Gateway does not accept this server's key. Check it in Settings > Gateway.",
-                          409) from None
+            raise Problem(
+                "gateway", "The Tico Gateway does not accept this server's key. Check it in Settings > Models.", 409
+            ) from None
         except Failed as failed:
             if refused and failed.code == refused[0]:
                 raise Problem("url", refused[1], 422) from None
             if failed.status == 404 and path.endswith("/delete"):
                 return {}
-            raise Problem("gateway", "The Tico Gateway did not answer. Try again in a minute."
-                          if failed.code == "unreachable" else f"The Tico Gateway refused this ({failed.code}).", 502) from None
+            raise Problem(
+                "gateway",
+                "The Tico Gateway did not answer. Try again in a minute."
+                if failed.code == "unreachable"
+                else f"The Tico Gateway refused this ({failed.code}).",
+                502,
+            ) from None
 
     # ------------------------------------------------------------------------- what Settings and Health show
     def status(self, c):
@@ -689,12 +851,21 @@ class HookRelay:
         current, relays = state(c), live(c)
         stopped = bool(link and current["stopped_for"] and current["stopped_for"] == link.fingerprint)
         key = "revoked" if stopped else "connected" if link else "none"
-        deleting = c.execute("SELECT count(*) FROM trigger_relays WHERE deleted_at IS NOT NULL AND hq_gone=0").fetchone()[0]
+        deleting = c.execute(
+            "SELECT count(*) FROM trigger_relays WHERE deleted_at IS NOT NULL AND hq_gone=0"
+        ).fetchone()[0]
         pulled = current["last_pull_at"]
-        return {"key": key, "relays": len(relays), "cursor": current["cursor"],
-                "last_pull": _iso(pulled), "last_error": current["last_error"],
-                "pending": current["pending"], "oldest": current["oldest"], "deleting": deleting,
-                "active": bool(link and not self.off and not stopped and (relays or deleting))}
+        return {
+            "key": key,
+            "relays": len(relays),
+            "cursor": current["cursor"],
+            "last_pull": _iso(pulled),
+            "last_error": current["last_error"],
+            "pending": current["pending"],
+            "oldest": current["oldest"],
+            "deleting": deleting,
+            "active": bool(link and not self.off and not stopped and (relays or deleting)),
+        }
 
 
 def received(value):
@@ -720,18 +891,27 @@ def health(c, settings=None):
         return None
     current, at = state(c), now()
     if current["failing_since"] and at - current["failing_since"] >= FAILING_FOR:
-        words = ("Tico Gateway does not accept this server's key" if current["last_error"] == "key_revoked"
-                 else "this server cannot reach Tico Gateway")
-        return {"status": "warn", "summary": f"Webhooks sent to an address through Tico Gateway are waiting: {words}. "
-                                             "They are delivered once it works again."}
+        words = (
+            "Tico Gateway does not accept this server's key"
+            if current["last_error"] == "key_revoked"
+            else "this server cannot reach Tico Gateway"
+        )
+        return {
+            "status": "warn",
+            "summary": f"Webhooks sent to an address through Tico Gateway are waiting: {words}. "
+            "They are delivered once it works again.",
+        }
     oldest = current["oldest"]
     if oldest and current["pending"]:
         waited = H.parse_ts(oldest)
         if waited and waited.tzinfo is None:
             waited = waited.replace(tzinfo=timezone.utc)
         if waited and at - waited.timestamp() >= OLD_PENDING:
-            return {"status": "warn", "summary": f"{current['pending']} webhook(s) have waited over an hour at Tico Gateway "
-                                                 "and are not coming through."}
+            return {
+                "status": "warn",
+                "summary": f"{current['pending']} webhook(s) have waited over an hour at Tico Gateway "
+                "and are not coming through.",
+            }
     return None
 
 

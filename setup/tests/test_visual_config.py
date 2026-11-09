@@ -1,4 +1,5 @@
 """Same-installation configuration fences and environment/crash safety."""
+
 import base64
 import copy
 import hashlib
@@ -13,11 +14,24 @@ ID = "12345678-1234-4234-8234-123456789abc"
 
 
 def request(**changes):
-    return {"operation_id": "operation_a", "revision": 1, "account_id": ID, "company_id": ID,
-            "workspace_id": ID, "preview_id": "preview_1", "attempt_id": "attempt_1",
-            "address": "pv-abcdefgh.preview.acme.example", "public_hostname": "acme.tico.dev", "enabled": True,
-            "lease_id": ID, "hostname": "acme.ticofiles.com", "receipt": "a" * 32,
-            "instance_id": "i-123456789abcdef01", "install_id": ID, "challenge": "b" * 64} | changes
+    return {
+        "operation_id": "operation_a",
+        "revision": 1,
+        "account_id": ID,
+        "company_id": ID,
+        "workspace_id": ID,
+        "preview_id": "preview_1",
+        "attempt_id": "attempt_1",
+        "address": "pv-abcdefgh.preview.acme.example",
+        "public_hostname": "acme.tico.dev",
+        "enabled": True,
+        "lease_id": ID,
+        "hostname": "acme.ticofiles.com",
+        "receipt": "a" * 32,
+        "instance_id": "i-123456789abcdef01",
+        "install_id": ID,
+        "challenge": "b" * 64,
+    } | changes
 
 
 class Docker:
@@ -37,10 +51,16 @@ class Docker:
         self.calls.append(verb)
         if verb == "probe" and self.fail == "probe":
             raise wire.Pending("probe_material_expired")
-        return {"install_id": ID, "public_hostname": "acme.tico.dev", "configuration": self.running,
-                "unrelated_digest": "f" * 64,
-                "generation": wire.digest(self.running), "file_sha256": "c" * 64,
-                "revision": "e" * 40, "runtime_files": {"docker/caddy-supervisor.sh": "d" * 64}}
+        return {
+            "install_id": ID,
+            "public_hostname": "acme.tico.dev",
+            "configuration": self.running,
+            "unrelated_digest": "f" * 64,
+            "generation": wire.digest(self.running),
+            "file_sha256": "c" * 64,
+            "revision": "e" * 40,
+            "runtime_files": {"docker/caddy-supervisor.sh": "d" * 64},
+        }
 
     def caddy(self, expected=None):
         return "d" * 64, {"generation": wire.digest(self.running), "file_sha256": "c" * 64}
@@ -79,8 +99,9 @@ def test_same_install_on_off_reenable_duplicate_stale_and_rollback(install):
     assert [x for x in docker.calls if isinstance(x, tuple)] == mutations
     off = request(operation_id="operation_b", revision=2, challenge="c" * 64, enabled=False)
     assert control.apply(off, root, docker=docker, launch=False)["checks"]["listener_retired"] is True
-    b = request(operation_id="operation_c", revision=3, challenge="d" * 64,
-                lease_id="12345678-1234-4234-8234-123456789abd")
+    b = request(
+        operation_id="operation_c", revision=3, challenge="d" * 64, lease_id="12345678-1234-4234-8234-123456789abd"
+    )
     control.apply(b, root, docker=docker, launch=False)
     for stale in (a, off):
         with pytest.raises(wire.Pending, match="operation_stale"):
@@ -173,7 +194,12 @@ def test_wire_rejects_versions_duplicate_fields_wrong_types_and_oversize():
     value = request()
     argument = base64.urlsafe_b64encode(wire.encoded(value)).rstrip(b"=").decode()
     assert wire.from_argument(argument) == value
-    for wrong in (value | {"enabled": 1}, value | {"revision": True}, value | {"protocol": "future"}, value | {"hostname": "hub.ticofiles.com"}):
+    for wrong in (
+        value | {"enabled": 1},
+        value | {"revision": True},
+        value | {"protocol": "future"},
+        value | {"hostname": "hub.ticofiles.com"},
+    ):
         with pytest.raises(wire.Pending):
             wire.validate(wrong)
     for raw in (b'{"revision":1,"revision":2}', b"x" * 4097):
@@ -184,30 +210,47 @@ def test_wire_rejects_versions_duplicate_fields_wrong_types_and_oversize():
 
 
 def test_multiline_and_duplicate_managed_environment_cannot_change_unrelated_bytes():
-    for raw in (b'UNRELATED="multi\nTICO_VISUAL_ORIGIN=still-in-a-secret\n"\n',
-                b"TICO_CADDY_VISUALS=0\nTICO_CADDY_VISUALS=1\n"):
+    for raw in (
+        b'UNRELATED="multi\nTICO_VISUAL_ORIGIN=still-in-a-secret\n"\n',
+        b"TICO_CADDY_VISUALS=0\nTICO_CADDY_VISUALS=1\n",
+    ):
         with pytest.raises(wire.Pending, match="environment_ambiguous"):
             control.patch_environment(raw, wire.configuration(request()))
 
 
 def test_installer_manifest_and_actual_runtime_must_match_not_just_revision(tmp_path):
-    names = ("setup/__init__.py", "setup/cli.py", "setup/settings.py", "setup/envfile.py", "setup/contract.py", "setup/route53.py",
-             "setup/visual_contract.py", "setup/visual_config.py", "compose.yaml")
+    names = (
+        "setup/__init__.py",
+        "setup/cli.py",
+        "setup/settings.py",
+        "setup/envfile.py",
+        "setup/contract.py",
+        "setup/route53.py",
+        "setup/visual_contract.py",
+        "setup/visual_config.py",
+        "compose.yaml",
+    )
     for name in names:
         p = tmp_path / name
         p.parent.mkdir(exist_ok=True)
         p.write_bytes(b"fixture\n")
-    manifest = {"protocol": wire.PROTOCOL, "revision": "a" * 40,
-                "files": {n: hashlib.sha256((tmp_path / n).read_bytes()).hexdigest() for n in names},
-                "runtime_files": {n: "b" * 64 for n in wire.RUNTIME_FILES}}
+    manifest = {
+        "protocol": wire.PROTOCOL,
+        "revision": "a" * 40,
+        "files": {n: hashlib.sha256((tmp_path / n).read_bytes()).hexdigest() for n in names},
+        "runtime_files": {n: "b" * 64 for n in wire.RUNTIME_FILES},
+    }
     (tmp_path / "installer-manifest.json").write_bytes(wire.encoded(manifest))
     assert control.installer_capability(tmp_path) == manifest
+
     class Runtime:
         def runtime(self, verb):
             return {"revision": "a" * 40, "runtime_files": manifest["runtime_files"]}
+
         def container(self, service):
             assert service == "caddy"
             return "f" * 64
+
     assert control.supported(tmp_path, Runtime())["runtime_revision"] == "a" * 40
     manifest["runtime_files"]["backend/visual_config.py"] = "c" * 64
     with pytest.raises(wire.Pending, match="selected_runtime_unsupported"):
@@ -219,15 +262,26 @@ def test_installer_manifest_and_actual_runtime_must_match_not_just_revision(tmp_
 
 @pytest.mark.parametrize('stopped', [False, True])
 def test_real_discovery_and_journaled_recovery_do_not_require_caddy_already_healthy(tmp_path, monkeypatch, stopped):
-    names = ("setup/__init__.py", "setup/cli.py", "setup/settings.py", "setup/envfile.py", "setup/contract.py",
-             "setup/visual_contract.py", "setup/visual_config.py", "compose.yaml")
+    names = (
+        "setup/__init__.py",
+        "setup/cli.py",
+        "setup/settings.py",
+        "setup/envfile.py",
+        "setup/contract.py",
+        "setup/visual_contract.py",
+        "setup/visual_config.py",
+        "compose.yaml",
+    )
     for name in names:
         path = tmp_path / name
         path.parent.mkdir(exist_ok=True)
         path.write_bytes(b"selected source\n")
-    manifest = {"protocol": wire.PROTOCOL, "revision": "e" * 40,
+    manifest = {
+        "protocol": wire.PROTOCOL,
+        "revision": "e" * 40,
         "files": {name: hashlib.sha256((tmp_path / name).read_bytes()).hexdigest() for name in names},
-        "runtime_files": {name: "d" * 64 for name in wire.RUNTIME_FILES}}
+        "runtime_files": {name: "d" * 64 for name in wire.RUNTIME_FILES},
+    }
     (tmp_path / "installer-manifest.json").write_bytes(wire.encoded(manifest))
     raw = b'TICO_DOMAIN=acme.tico.dev\nPRIVATE=preserved\n'
     journal = control.load(tmp_path)
@@ -252,20 +306,36 @@ def test_real_discovery_and_journaled_recovery_do_not_require_caddy_already_heal
                 assert args in (("ps", "--all", "-q", args[-1]), ("ps", "-q", args[-1]))
                 missing = self.absent or (self.stopped and '--all' not in args)
                 return b'' if missing and args[-1] == "caddy" else ("1" * 64).encode()
-            assert args == ("up", "-d", "--no-deps", "--force-recreate", "--pull", "never", "--no-build",
-                            "--wait", "--wait-timeout", "45", "caddy")
+            assert args == (
+                "up",
+                "-d",
+                "--no-deps",
+                "--force-recreate",
+                "--pull",
+                "never",
+                "--no-build",
+                "--wait",
+                "--wait-timeout",
+                "45",
+                "caddy",
+            )
             self.calls.append(args)
-            kwargs['on_start']({'pid':99999999, 'start':'1'})
+            kwargs['on_start']({'pid': 99999999, 'start': '1'})
             self.caddy_healthy, self.stopped = True, False
 
         def runtime(self, verb, payload=None):
-            capability = {"revision":manifest['revision'], "runtime_files":manifest['runtime_files']}
+            capability = {"revision": manifest['revision'], "runtime_files": manifest['runtime_files']}
             if verb == "capabilities":
                 return capability
             assert verb in ("observe", "probe")
-            return capability | {"install_id":ID, "public_hostname":"acme.tico.dev",
-                "configuration":wire.configuration(request()), "unrelated_digest":"f" * 64,
-                "generation":wire.digest(wire.configuration(request())), "file_sha256":"c" * 64}
+            return capability | {
+                "install_id": ID,
+                "public_hostname": "acme.tico.dev",
+                "configuration": wire.configuration(request()),
+                "unrelated_digest": "f" * 64,
+                "generation": wire.digest(wire.configuration(request())),
+                "file_sha256": "c" * 64,
+            }
 
         def run(self, args, **kwargs):
             if args[3:] == ["sha256sum", "/generated/supervisor.sh"]:
@@ -275,8 +345,14 @@ def test_real_discovery_and_journaled_recovery_do_not_require_caddy_already_heal
                     raise wire.Pending("runtime_pending")
                 return b''
             assert args[3:] == ["cat", "/tmp/tico-caddy/applied"]
-            return wire.encoded({"generation":wire.digest(wire.configuration(request())),
-                                 "file_sha256":"c" * 64, "pid":10, "supervisor_pid":9})
+            return wire.encoded(
+                {
+                    "generation": wire.digest(wire.configuration(request())),
+                    "file_sha256": "c" * 64,
+                    "pid": 10,
+                    "supervisor_pid": 9,
+                }
+            )
 
     docker = Boundary()
     # This is the actual discovery command's control flow, also called by the
@@ -285,7 +361,7 @@ def test_real_discovery_and_journaled_recovery_do_not_require_caddy_already_heal
     assert capability['same_instance_apply'] and 'checks' not in capability
     assert docker.calls == [] and not docker.caddy_healthy
     # Uncertain dispatch remains fenced even when source discovery succeeds.
-    operation['mutation_pending'] = {'service':'caddy', 'before':'1' * 64, 'client':None}
+    operation['mutation_pending'] = {'service': 'caddy', 'before': '1' * 64, 'client': None}
     control.save(tmp_path, journal)
     with pytest.raises(wire.Pending, match="mutation_outcome_unknown"):
         control.apply(request(), tmp_path, docker=docker, launch=False)

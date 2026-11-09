@@ -14,6 +14,7 @@ Two layers keep that one name:
 The runner's wire protocol is not the public contract and keeps its own names (contracts/runner): `RUNNER_WIRE`
 lists the paths `public_json` leaves alone.
 """
+
 import re
 
 from .status_values import ATTEMPT_STATES
@@ -22,13 +23,13 @@ from .status_values import ATTEMPT_STATES
 # runner, so nothing is known about what it did) and `interrupted` (the runner stopped it: an update, a drain, a
 # person's Stop) stay distinct, because recovery treats them differently.
 STATE = {
-    "leased": "leased",            # a runner holds the lease and has not started the harness yet
-    "running": "running",          # the harness is working
-    "input": "input",              # paused for input the run asked for
-    "completed": "completed",      # finished and reported its result
-    "failed": "failed",            # ended on an error it reported
+    "leased": "leased",  # a runner holds the lease and has not started the harness yet
+    "running": "running",  # the harness is working
+    "input": "input",  # paused for input the run asked for
+    "completed": "completed",  # finished and reported its result
+    "failed": "failed",  # ended on an error it reported
     "interrupted": "interrupted",  # the runner stopped it before it finished
-    "expired": "expired",          # the lease ran out without a report
+    "expired": "expired",  # the lease ran out without a report
 }
 assert set(STATE) == set(ATTEMPT_STATES), "every stored attempt state needs a run state"
 STATES = tuple(dict.fromkeys(STATE.values()))
@@ -47,7 +48,8 @@ def state(attempt_state):
 RUNNER_WIRE = re.compile(
     r"/api/v2/(?:runners/(?:enroll|errors|heartbeat|desired|assignments|eligible|adopt|me|connectors|importers"
     r"|performance|watchers)(?:/.*)?|runner-[^/]+(?:/.*)?|attempts/.+|jobs/claim|files/uploads|enrollments(?:/.*)?"
-    r"|bots/[^/]+/memory/report|imports/sources/[^/]+/status|github/token|connectors(?:/.*)?)")
+    r"|bots/[^/]+/memory/report|imports/sources/[^/]+/status|github/token|connectors(?:/.*)?)"
+)
 
 _KEY, _PUBLIC_KEY = b'"attempt_id":', b'"run_id":'
 

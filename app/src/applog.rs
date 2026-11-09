@@ -44,13 +44,21 @@ fn rotated(path: &Path) -> PathBuf {
 
 fn home() -> Option<String> {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    let home = home.to_string_lossy().trim_end_matches(['/', '\\']).to_string();
+    let home = home
+        .to_string_lossy()
+        .trim_end_matches(['/', '\\'])
+        .to_string();
     (home.len() > 1).then_some(home)
 }
 
 impl FileLog {
     fn new(level: Option<log::LevelFilter>, max: u64, home: Option<String>) -> Self {
-        FileLog { level, max, home, sink: Mutex::new(Sink::default()) }
+        FileLog {
+            level,
+            max,
+            home,
+            sink: Mutex::new(Sink::default()),
+        }
     }
 
     fn sink(&self) -> std::sync::MutexGuard<'_, Sink> {
@@ -74,10 +82,16 @@ impl FileLog {
 
     fn write_line(&self, sink: &mut Sink, line: &str) {
         let Some(path) = sink.path.clone() else {
-            if sink.early.len() < EARLY_LINES { sink.early.push(line.to_string()); }
+            if sink.early.len() < EARLY_LINES {
+                sink.early.push(line.to_string());
+            }
             return;
         };
-        let full = sink.file.as_ref().and_then(|f| f.metadata().ok()).map(|m| m.len() + line.len() as u64 > self.max);
+        let full = sink
+            .file
+            .as_ref()
+            .and_then(|f| f.metadata().ok())
+            .map(|m| m.len() + line.len() as u64 > self.max);
         if full.unwrap_or(false) {
             // Closed before the rename, which Windows refuses on an open file.
             sink.file = None;
@@ -90,7 +104,13 @@ impl FileLog {
     }
 
     fn line(&self, record: &log::Record) -> String {
-        let line = format!("{} {} {}: {}\n", timestamp(SystemTime::now()), record.level(), record.target(), record.args());
+        let line = format!(
+            "{} {} {}: {}\n",
+            timestamp(SystemTime::now()),
+            record.level(),
+            record.target(),
+            record.args()
+        );
         match &self.home {
             Some(home) => line.replace(home.as_str(), "~"),
             None => line,
@@ -100,11 +120,13 @@ impl FileLog {
 
 impl log::Log for FileLog {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        let level = self.level.unwrap_or(if metadata.target().starts_with(env!("CARGO_CRATE_NAME")) {
-            log::LevelFilter::Info
-        } else {
-            log::LevelFilter::Warn
-        });
+        let level =
+            self.level
+                .unwrap_or(if metadata.target().starts_with(env!("CARGO_CRATE_NAME")) {
+                    log::LevelFilter::Info
+                } else {
+                    log::LevelFilter::Warn
+                });
         metadata.level() <= level
     }
 
@@ -158,7 +180,9 @@ pub fn tail(path: &Path, keep: usize) -> Vec<String> {
 }
 
 fn tail_of(path: &Path) -> Vec<String> {
-    let Ok(mut file) = File::open(path) else { return Vec::new() };
+    let Ok(mut file) = File::open(path) else {
+        return Vec::new();
+    };
     let len = file.metadata().map(|m| m.len()).unwrap_or(0);
     let start = len.saturating_sub(TAIL_BYTES);
     let mut bytes = Vec::new();
@@ -176,7 +200,10 @@ fn tail_of(path: &Path) -> Vec<String> {
 
 /// `2026-10-16T06:47:31Z`, UTC, without a date library.
 fn timestamp(now: SystemTime) -> String {
-    let secs = now.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let secs = now
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     let (days, rest) = (secs / 86400, secs % 86400);
     // Civil date from days since 1970-01-01 (Howard Hinnant's days_from_civil, inverted).
     let z = days as i64 + 719468;
@@ -188,7 +215,12 @@ fn timestamp(now: SystemTime) -> String {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + if month <= 2 { 1 } else { 0 };
-    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", rest / 3600, rest % 3600 / 60, rest % 60)
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
 }
 
 #[cfg(test)]
@@ -204,8 +236,13 @@ mod tests {
     }
 
     fn line(logger: &FileLog, text: &str) {
-        logger.log(&log::Record::builder().level(log::Level::Info).target(env!("CARGO_CRATE_NAME"))
-            .args(format_args!("{text}")).build());
+        logger.log(
+            &log::Record::builder()
+                .level(log::Level::Info)
+                .target(env!("CARGO_CRATE_NAME"))
+                .args(format_args!("{text}"))
+                .build(),
+        );
     }
 
     #[test]
@@ -232,21 +269,37 @@ mod tests {
         let dir = scratch("early");
         let logger = FileLog::new(None, MAX_BYTES, Some("/Users/ana".into()));
         line(&logger, "plugin started");
-        line(&logger, "could not read /Users/ana/Library/Application Support/x");
+        line(
+            &logger,
+            "could not read /Users/ana/Library/Application Support/x",
+        );
         logger.attach(&dir).unwrap();
         line(&logger, "after");
         let lines = tail(&dir.join(FILE_NAME), 10);
         assert_eq!(lines.len(), 3, "{lines:?}");
-        assert!(lines[0].ends_with("plugin started") && lines[2].ends_with("after"), "{lines:?}");
-        assert!(lines[1].ends_with("could not read ~/Library/Application Support/x"), "{lines:?}");
-        assert!(!std::fs::read_to_string(dir.join(FILE_NAME)).unwrap().contains("ana"));
+        assert!(
+            lines[0].ends_with("plugin started") && lines[2].ends_with("after"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[1].ends_with("could not read ~/Library/Application Support/x"),
+            "{lines:?}"
+        );
+        assert!(!std::fs::read_to_string(dir.join(FILE_NAME))
+            .unwrap()
+            .contains("ana"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn other_crates_log_warnings_only_and_without_a_folder_nothing_panics() {
         let logger = FileLog::new(None, MAX_BYTES, None);
-        let info = |target| log::Metadata::builder().level(log::Level::Info).target(target).build();
+        let info = |target| {
+            log::Metadata::builder()
+                .level(log::Level::Info)
+                .target(target)
+                .build()
+        };
         assert!(logger.enabled(&info(env!("CARGO_CRATE_NAME"))));
         assert!(!logger.enabled(&info("hyper::client")));
         for _ in 0..EARLY_LINES + 5 {
@@ -258,7 +311,13 @@ mod tests {
     #[test]
     fn timestamps_are_utc_dates() {
         assert_eq!(timestamp(UNIX_EPOCH), "1970-01-01T00:00:00Z");
-        assert_eq!(timestamp(UNIX_EPOCH + Duration::from_secs(1_792_133_251)), "2026-10-16T06:47:31Z");
-        assert_eq!(timestamp(UNIX_EPOCH + Duration::from_secs(951_782_400)), "2000-02-29T00:00:00Z");
+        assert_eq!(
+            timestamp(UNIX_EPOCH + Duration::from_secs(1_792_133_251)),
+            "2026-10-16T06:47:31Z"
+        );
+        assert_eq!(
+            timestamp(UNIX_EPOCH + Duration::from_secs(951_782_400)),
+            "2000-02-29T00:00:00Z"
+        );
     }
 }

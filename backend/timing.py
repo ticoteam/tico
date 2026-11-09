@@ -7,6 +7,7 @@ bodies, no people. `GET /api/v2/ops/timing` reads it; every answer carries `Serv
 flight recorder is on (backend/flight.py), every request and loop wake is also handed to it, which keeps
 history in the database.
 """
+
 import asyncio
 import threading
 import time
@@ -47,13 +48,27 @@ class Timing:
             for route, samples in self.routes.items():
                 auth = [a for a, _ in samples]
                 total = [t for _, t in samples]
-                rows.append({"route": route, "n": len(samples), "auth_p50": _pct(auth, .5), "auth_p95": _pct(auth, .95),
-                             "p50": _pct(total, .5), "p95": _pct(total, .95), "max": round(max(total), 1)})
+                rows.append(
+                    {
+                        "route": route,
+                        "n": len(samples),
+                        "auth_p50": _pct(auth, 0.5),
+                        "auth_p95": _pct(auth, 0.95),
+                        "p50": _pct(total, 0.5),
+                        "p95": _pct(total, 0.95),
+                        "max": round(max(total), 1),
+                    }
+                )
             lag = list(self.lag)
-            return {"since": self.since, "inflight": self.inflight, "peak_inflight": self.peak,
-                    "loop_lag_p50": _pct(lag, .5), "loop_lag_p95": _pct(lag, .95),
-                    "loop_lag_max": round(max(lag), 1) if lag else 0,
-                    "routes": sorted(rows, key=lambda r: -r["p95"] * r["n"])}
+            return {
+                "since": self.since,
+                "inflight": self.inflight,
+                "peak_inflight": self.peak,
+                "loop_lag_p50": _pct(lag, 0.5),
+                "loop_lag_p95": _pct(lag, 0.95),
+                "loop_lag_max": round(max(lag), 1) if lag else 0,
+                "routes": sorted(rows, key=lambda r: -r["p95"] * r["n"]),
+            }
 
 
 async def watch_loop(timing, stop, every=0.5):
@@ -68,4 +83,4 @@ async def watch_loop(timing, stop, every=0.5):
                 timing.recorder.tick(lag)
     finally:
         if timing.recorder is not None:
-            timing.recorder.beat = None     # a probe that stopped is not a stalled loop
+            timing.recorder.beat = None  # a probe that stopped is not a stalled loop

@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/assistant_routines.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 58,
+                    "endColumn": 61,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

@@ -17,6 +17,7 @@ given (`Table`) and the columns and states that describe a row's life.
 Times are whatever the caller stores (ISO text or epoch seconds): this module compares them and passes them on, and the
 caller does the arithmetic through `later`.
 """
+
 import logging
 import random
 import threading
@@ -33,9 +34,10 @@ _counts = Counter()
 @dataclass(frozen=True)
 class Table:
     """Where one outbox keeps its rows. The names are the caller's constants, never user input."""
+
     name: str
-    due: str                       # the state of a row waiting to be sent
-    flight: str                    # the state while a worker holds it (its lease is set)
+    due: str  # the state of a row waiting to be sent
+    flight: str  # the state while a worker holds it (its lease is set)
     due_at: str = "next_attempt_at"
     lease: str = "claimed_at"
     attempts: str = "attempts"
@@ -48,6 +50,7 @@ class Waits:
     """Seconds to wait after the 1st, 2nd... failed attempt. With `repeat_last` the last wait repeats and nothing gives
     up; otherwise the attempt after the last wait is the one that gives up. `jitter` spreads each wait by up to that
     fraction either way."""
+
     seconds: tuple[float, ...]
     jitter: float = 0.0
     repeat_last: bool = False
@@ -80,6 +83,7 @@ class Waits:
 class Doubling:
     """`first` seconds after the first failure, doubling for each one after it, never more than `cap`. The doubling
     stops after `steps` doublings. It never gives up."""
+
     first: float
     cap: float
     steps: int = 8
@@ -92,8 +96,13 @@ class Doubling:
 def claim(c, table, row_id, now):
     """Take one row: due to flight, lease stamped `now`. True when it was ours. A row that is not due (sent, given up,
     canceled, or held by another worker) is refused, which is what makes a repeat of it a no-op."""
-    moved = c.execute(f"UPDATE {table.name} SET state=?, {table.lease}=? WHERE {table.id}=? AND state=?",
-                      (table.flight, now, row_id, table.due)).rowcount == 1
+    moved = (
+        c.execute(
+            f"UPDATE {table.name} SET state=?, {table.lease}=? WHERE {table.id}=? AND state=?",
+            (table.flight, now, row_id, table.due),
+        ).rowcount
+        == 1
+    )
     if moved:
         count(table.name, "claimed", 1)
     return moved
@@ -101,8 +110,10 @@ def claim(c, table, row_id, now):
 
 def claim_next(c, table, now, *, accept=None, limit=100):
     """The first due row (by due time) that `accept` allows, claimed; or None. `accept` sees each candidate row."""
-    rows = c.execute(f"SELECT * FROM {table.name} WHERE state=? AND {table.due_at}<=? ORDER BY {table.due_at} LIMIT ?",
-                     (table.due, now, limit)).fetchall()
+    rows = c.execute(
+        f"SELECT * FROM {table.name} WHERE state=? AND {table.due_at}<=? ORDER BY {table.due_at} LIMIT ?",
+        (table.due, now, limit),
+    ).fetchall()
     for row in rows:
         if accept is not None and not accept(row):
             continue
@@ -113,14 +124,21 @@ def claim_next(c, table, now, *, accept=None, limit=100):
 
 def release(c, table, row_id):
     """Give a claimed row back unsent, with no attempt counted: it is due again without waiting. True when it was held."""
-    return c.execute(f"UPDATE {table.name} SET state=?, {table.lease}=NULL WHERE {table.id}=? AND state=?",
-                     (table.due, row_id, table.flight)).rowcount == 1
+    return (
+        c.execute(
+            f"UPDATE {table.name} SET state=?, {table.lease}=NULL WHERE {table.id}=? AND state=?",
+            (table.due, row_id, table.flight),
+        ).rowcount
+        == 1
+    )
 
 
 def reclaim_stale(c, table, before, now):
     """Rows still in flight whose lease was stamped before `before` go back to due at `now`. Returns how many."""
-    back = c.execute(f"UPDATE {table.name} SET state=?, {table.lease}=NULL, {table.due_at}=? "
-                     f"WHERE state=? AND {table.lease}<?", (table.due, now, table.flight, before)).rowcount
+    back = c.execute(
+        f"UPDATE {table.name} SET state=?, {table.lease}=NULL, {table.due_at}=? WHERE state=? AND {table.lease}<?",
+        (table.due, now, table.flight, before),
+    ).rowcount
     if back:
         count(table.name, "reclaimed", back)
     return back
@@ -129,8 +147,14 @@ def reclaim_stale(c, table, before, now):
 # ---------------------------------------------------------------------------------------------- settle the attempt
 def finish(c, table, row_id, state, *, attempts, error, due_at, extra=None):
     """Write a row's terminal (or any non-flight) state and release its lease. `extra` adds columns the caller keeps."""
-    cols = {"state": state, table.attempts: attempts, table.error: error, table.due_at: due_at, table.lease: None,
-            **(extra or {})}
+    cols = {
+        "state": state,
+        table.attempts: attempts,
+        table.error: error,
+        table.due_at: due_at,
+        table.lease: None,
+        **(extra or {}),
+    }
     assignments = ", ".join(f"{column}=?" for column in cols)
     c.execute(f"UPDATE {table.name} SET {assignments} WHERE {table.id}=?", (*cols.values(), row_id))
 

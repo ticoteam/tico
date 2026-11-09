@@ -1,4 +1,4 @@
-// Offline browser regression: the Tico team chat (ui/support.js). The ? beside Search (in the phone's More drawer, beside
+// Offline browser regression: the Tico team chat (ui/support.ts). The ? beside Search (in the phone's More drawer, beside
 // the Search row) opens one ongoing conversation with the Tico team: every ticket's messages merged in time order as
 // bubbles (theirs with the writer's name when it changes, a date line where the day changes), one box and a paperclip
 // for diagnostics. No list, no form, no statuses. Sending writes to the open ticket, or starts a new one with the
@@ -26,7 +26,7 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       // ago' on yesterday. A fixed-offset zone where it is about noon keeps every day line where the test expects it.
       const noon = `Etc/GMT${(h => (h > 0 ? '+' : '-') + Math.abs(h))(new Date().getUTCHours() - 12)}`.replace('-0', '+0');
       const ctx = await browser.newContext({viewport, serviceWorkers: 'block', userAgent, timezoneId: noon});
-      await ctx.addInitScript(v => localStorage.setItem('tico.theme', v), theme);   // ui/theme.js
+      await ctx.addInitScript(v => localStorage.setItem('tico.theme', v), theme);   // ui/theme.ts
       // A phone keyboard, as iOS Safari reports it: the layout viewport keeps its size while window.visualViewport
       // shrinks to what is left above the keyboard and pans (offsetTop); pinch zoom divides its height by the scale.
       // __keys(height, top, scale) sets it.
@@ -62,10 +62,10 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       await page.route('**/*', async route => {
         const req = route.request(), p = new URL(req.url()).pathname;
         const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-        const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+        const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
         if (ui && fs.existsSync(uiFile(ui[1])))
           return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-        if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+        if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
         const config = {version: '0.2.17', update: null, app_name: 'Tico', usage_count_notice: false, beta, feedback_question: feedback, changelog: {unread_count: 2}};
         if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
@@ -138,7 +138,7 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       return {page, ctx, errors, calls, hq};
     };
     // A link to #/support, as an Assistant reply carries ("Talk to the Tico team"), opens the chat over the page (the
-    // app's click handler for any such link, ui/app/ask-panel.js); it is ready once the box (or the "turned off" line)
+    // app's click handler for any such link, ui/app/ask-panel.ts); it is ready once the box (or the "turned off" line)
     // shows. Focus goes back to the link on closing.
     const supportLink = page => page.evaluate(() => {
       if (document.getElementById('t-support')) return;
@@ -380,6 +380,9 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     await strip.getByRole('button', {name: 'Let the Tico team in'}).click();
     const letIn = v.page.locator('dialog[aria-label="Let the Tico team in"]');
     assert.equal(await letIn.locator('[name=tier][value=full]').isDisabled(), true, "full access is the owner's to give");
+    assert.equal(await letIn.locator('[name=hours]').inputValue(), '72');
+    assert.deepEqual(await letIn.locator('[name=hours] option').evaluateAll(options => options.map(o => [o.value, o.textContent])),
+      [['1', '1 hour'], ['4', '4 hours'], ['24', '24 hours'], ['72', '3 days'], ['168', '7 days'], ['720', '30 days'], ['2160', '90 days'], ['8760', '365 days'], ['custom', 'Other…']]);
     await letIn.locator('[name=hours]').selectOption('4');
     await letIn.locator('[type=submit]').click();
     await v.page.locator('#support-access-banner:not([hidden])').waitFor();
@@ -397,7 +400,47 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     await v.page.locator('#support-access-banner').waitFor({state: 'hidden'});
     await strip.getByRole('button', {name: 'Let the Tico team in'}).waitFor();
     releaseAccess(); v.hq.accessGate = null;
+    // Every longer preset sends its duration in hours, and Stop still ends it immediately.
+    for (const hours of ['720', '2160', '8760']) {
+      await strip.getByRole('button', {name: 'Let the Tico team in'}).click();
+      await letIn.locator('[name=hours]').selectOption(hours);
+      await letIn.locator('[type=submit]').click();
+      await v.page.locator('#support-access-banner:not([hidden])').waitFor();
+      assert.ok(v.calls.includes(`POST access {"ticket_id":"sup_9","tier":"app","hours":${hours}}`));
+      await strip.getByRole('button', {name: 'Stop'}).click();
+      await strip.getByRole('button', {name: 'Let the Tico team in'}).waitFor();
+    }
     assert.equal(await v.page.evaluate(() => window.__pwned), undefined);
+    assert.deepEqual(v.errors, []);
+    await v.ctx.close();
+
+    // The phone uses the same custom control: both native and JS validation allow 8760, refuse 8761.
+    v = await visit({viewport: {width: 390, height: 844},
+      seed: [{id: 'sup_10', created_at: at(1), status: 'open', message: 'Help with setup', messages: [], sent: {}}],
+      access: {available: true, off_reason: '', active: null, last: null, sessions: [], can_start: true, can_full: true}});
+    await openSupport(v.page);
+    await v.page.locator('[data-access-start]').click();
+    const customDialog = v.page.locator('dialog[aria-label="Let the Tico team in"]');
+    await customDialog.locator('[name=hours]').selectOption('custom');
+    const customHours = customDialog.locator('[name=custom]');
+    assert.equal(await customHours.getAttribute('max'), '8760');
+    await customHours.fill('8761');
+    assert.equal(await customHours.evaluate(el => el.validity.rangeOverflow), true);
+    await customDialog.locator('[type=submit]').click();
+    assert.ok(!v.calls.some(c => c.startsWith('POST access ')), 'native validation sends no grant');
+    await customDialog.locator('form').evaluate(el => { el.noValidate = true; });
+    await customDialog.locator('[type=submit]').click();
+    await customDialog.locator('[data-error]:not([hidden])').waitFor();
+    assert.match(await customDialog.locator('[data-error]').innerText(), /8760/);
+    assert.ok(!v.calls.some(c => c.startsWith('POST access ')), 'JS validation sends no grant');
+    await customDialog.locator('form').evaluate(el => { el.noValidate = false; });
+    await customHours.fill('8760');
+    assert.equal(await customHours.evaluate(el => el.checkValidity()), true);
+    await customDialog.locator('[type=submit]').click();
+    await v.page.locator('#support-access-banner:not([hidden])').waitFor();
+    assert.ok(v.calls.includes('POST access {"ticket_id":"sup_10","tier":"app","hours":8760}'));
+    await v.page.locator('#support-pop [data-access-stop]').click();
+    await v.page.locator('#support-access-banner').waitFor({state: 'hidden'});
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 

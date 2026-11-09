@@ -5,6 +5,7 @@ backend/migrations/ddl_allowlist.txt counts them per file, and the count may onl
 with one, fails and is told to write a migration; an entry above what the code has fails too, so the list follows the code
 down. Temporary objects (CREATE TEMP/TEMPORARY, backend/sql.py) never persist and are not counted.
 """
+
 import ast
 import re
 from pathlib import Path
@@ -71,8 +72,10 @@ def test_persistent_ddl_outside_migrations_only_shrinks():
     stale = {path: (total, found.get(path, 0)) for path, total in allowed.items() if found.get(path, 0) < total}
     assert not grew, (
         "Persistent schema change outside backend/migrations (allowed, found): " + repr(grew) + ". Write a migration "
-        "instead: a new backend/migrations/NNNN_name.sql (or .py with up(conn)), applied once and recorded in "
-        "schema_migrations. Do not add to backend/migrations/ddl_allowlist.txt.")
+        "instead: run python3 scripts/new_migration.py name (or add --py for up(conn)), applied once and recorded in "
+        "schema_migrations. Do not add to backend/migrations/ddl_allowlist.txt."
+    )
     assert not stale, (
         "backend/migrations/ddl_allowlist.txt lists more than the code has (listed, found): " + repr(stale) + ". Lower "
-        "those counts: the list only shrinks.")
+        "those counts: the list only shrinks."
+    )

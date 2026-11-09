@@ -14,7 +14,10 @@ def test_a_declined_task_leaves_its_requesters_list_a_day_after_its_last_change(
         old = H.task_create(c, ANA, "Hire a caterer", "x", OPS)
         for task in (recent, edge, old):
             H.task_update(c, OPS, task["id"], status="declined", note="Duplicate - no answer needed here.")
-        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), hours=-(H.DECLINED_NEEDS_HOURS - 1)), edge["id"]))
+        c.execute(
+            "UPDATE tasks SET updated_at=? WHERE id=?",
+            (H.shift(H.now(), hours=-(H.DECLINED_NEEDS_HOURS - 1)), edge["id"]),
+        )
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), days=-21), old["id"]))
         declined = {t["id"] for t in H.needs_you(c, ANA)["declined"]}
     assert {recent["id"], edge["id"]} <= declined and old["id"] not in declined

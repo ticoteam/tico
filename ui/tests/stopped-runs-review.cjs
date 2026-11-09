@@ -59,7 +59,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         reason: 'quarantined', text: 'Vault (vault): 1 job queued, oldest 180 min; Quarantined: queued work waits for the quarantine to clear.',
         fixes: [{label: 'Open bot settings', href: '#/bot/vault/more'}], fix: 'hub run list vault'}]};
     // Builder's work behind its stopped runs is Health's Stuck row too, its queue split as Pipeline splits it.
-    const health = {audience: 'owner', attention: 2, checks: [stoppedCheck, quarantineCheck], computers: [], waiting: [],
+    const health = {audience: 'owner', attention: 2, checks: [stoppedCheck, quarantineCheck],
+      computers: [{id: 'r1', label: 'Studio Mac', online: true, runtimes: []}], waiting: [],
       slow: [], failures: [],
       stuck: [{bot: 'builder', name: 'Builder', reason: 'uncertain', why: 'An interrupted run waits for review in Runs',
         queued: 0, dead: 3, held: 1, oldest: '2026-10-26T05:39:09Z', computer: 'Studio Mac'}],
@@ -67,18 +68,18 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.route('**/*', route => {
       const p = new URL(route.request().url()).pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1])))
         return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
       if (p.startsWith('/vendor/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({body: fs.readFileSync(uiFile(p.slice(1))),
         contentType: p.endsWith('.woff2') ? 'font/woff2' : 'application/javascript'});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const config = {version: '0.3.0', app_name: 'Tico'};
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/v2/health') return json(health);
-      if (p === '/api/v2/health-monitor') return json({state: 'active', on: true, findings: []});
+      if (p === '/api/v2/health/findings') return json({findings: [], botops: true, reports_without_asking: false});
       if (p === '/api/v2/system/metrics') return json({});
       if (p === '/api/employees' || p === '/api/issues') return json([]);
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
@@ -101,8 +102,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
 
     await page.goto('https://tico-ui.test/#/settings');
     // Settings' System checks card has none of these, since BotOps reviews them; Health lists each bot's as a note.
-    await page.locator('#settings-more > summary').click();
-    await page.locator('[data-settings-tab=health]').click();
+    // General's Health line counts the checks by severity and the two notes as FYI: none of them is a person's.
+    await page.waitForFunction(() => document.querySelector('#settings-health-line [data-hl-counts]')?.textContent === '1 urgent · 1 to fix · 2 FYI');
+    await page.locator('#settings-health-line [data-hl-details]').click();   // Health has no tab: General's Health line opens it
     const builderNote = page.locator('#hl-page .hl-notes [data-execution-review="builder"]');
     const writerNote = page.locator('#hl-page .hl-notes [data-execution-review="writer"]');
     await builderNote.waitFor({timeout: t(5000)});
@@ -112,9 +114,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const stuck = await page.locator('#hl-page [data-stuck="builder"] .muted').innerText();
     assert.match(stuck, /3 behind an interrupted run · 1 held on purpose$/);
     assert.doesNotMatch(stuck, /queued/, 'nothing that can start is called queued');
-    // Health shows both BotOps checks with their own rows, and the person's dot stays dark: the checks are warn and bad
-    // (window.hlAttention), yet BotOps reviews them, so ui/app/heartbeat.js leaves them off the dot.
-    assert.deepEqual(await page.evaluate(() => window.hlAttention().map(check => check.id)), ['stopped_runs', 'quarantine']);
+    // Health shows both BotOps checks with their own rows, and the person's dot stays dark: the checks are warn and bad,
+    // yet BotOps reviews them, so ui/app/heartbeat.ts never lists them.
     assert.equal(await page.locator('#hl-summary').innerText(), '2 issues to look at');
     const stoppedRow = page.locator('#hl-page [data-hl-check="stopped_runs"]'), quarantineRow = page.locator('#hl-page [data-hl-check="quarantine"]');
     assert.equal(await stoppedRow.getAttribute('data-status'), 'warn');

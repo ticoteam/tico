@@ -3,6 +3,7 @@ strict answer picks a destination and a body, the body goes out as the reply (a 
 destination's chain runs. A malformed answer, a turn that did not finish, the spend cap or a held webhook runs the
 default destination with no reply. Each effect is keyed by the step's record, so a resumed run repeats none of them.
 Fake services, as in test_automation_steps.py."""
+
 import json
 
 import pytest
@@ -10,21 +11,41 @@ import pytest
 from backend import automation_engine as E
 from backend.tests.automation_fakes import Services
 
-MESSAGE = {"message": {"id": "m1", "mailbox": "ana@acme.example", "from": "ceo@acme.example",
-                       "subject": "Board pack", "body": "Can you send the deck?"}}
-DESTS = [{"id": "legal", "name": "Legal", "then": [{"do": "create_task", "args": {"title": "Review"}}]},
-         {"id": "sales", "name": "Sales", "then": [{"do": "label", "args": {"name": "Sales"}}]},
-         {"id": "other", "name": "Other", "then": []}]
+MESSAGE = {
+    "message": {
+        "id": "m1",
+        "mailbox": "ana@acme.example",
+        "from": "ceo@acme.example",
+        "subject": "Board pack",
+        "body": "Can you send the deck?",
+    }
+}
+DESTS = [
+    {"id": "legal", "name": "Legal", "then": [{"do": "create_task", "args": {"title": "Review"}}]},
+    {"id": "sales", "name": "Sales", "then": [{"do": "label", "args": {"name": "Sales"}}]},
+    {"id": "other", "name": "Other", "then": []},
+]
 
 
 def flow(*steps, **extra):
-    return {"name": "Test", "owner": "person:ana", "trigger": {"type": "message", "inbox": "ana@acme.example"},
-            "steps": list(steps), **extra}
+    return {
+        "name": "Test",
+        "owner": "person:ana",
+        "trigger": {"type": "message", "inbox": "ana@acme.example"},
+        "steps": list(steps),
+        **extra,
+    }
 
 
 def llm(choose=None):
-    step = {"id": "draft", "type": "llm", "enabled": True, "as": "assistant:ana",
-            "prompt": "Answer {{message.from}} about {{message.subject}}.", "out": "draft"}
+    step = {
+        "id": "draft",
+        "type": "llm",
+        "enabled": True,
+        "as": "assistant:ana",
+        "prompt": "Answer {{message.from}} about {{message.subject}}.",
+        "out": "draft",
+    }
     return step if choose is None else {**step, "choose": choose}
 
 
@@ -53,14 +74,19 @@ def run_choose(text, *, ok=True, services=None, mode="draft", to=("legal", "sale
 # ---------------------------------------------------------------------------------------------- the good answer
 def test_a_good_answer_drafts_the_reply_and_then_runs_the_chosen_chain():
     run, services = run_choose(json.dumps({"to": "legal", "body": "Sending the deck today."}))
-    assert services.acted == [("draft_reply", {"body": "Sending the deck today."}), ("create_task", {"title": "Review"})]
+    assert services.acted == [
+        ("draft_reply", {"body": "Sending the deck today."}),
+        ("create_task", {"title": "Review"}),
+    ]
     # The reply is keyed by the step's record (0), the chain's effects follow it.
     assert services.keys == ["0.0", "0.1"]
     assert services.producers == ["draft@0.0", "draft@0.1"]
     record = run["steps"][0]
     assert record["status"] == "ok" and record["outputs"]["to"] == "legal" and record["cost"] == 0.02
     assert [(a["do"], a["from"]) for a in record["outputs"]["actions"]] == [
-        ("draft_reply", "reply"), ("create_task", "destination")]
+        ("draft_reply", "reply"),
+        ("create_task", "destination"),
+    ]
     assert run["status"] == "ok" and run["threads"][0]["state"] == "done"
 
 
@@ -91,15 +117,15 @@ def test_a_refused_reply_fails_the_step_and_skips_its_chain():
 
 # ---------------------------------------------------------------------------------------------- the fallbacks
 BAD = [
-    "Sure, legal would be best.",                              # not JSON
-    '```json\n{"to": "legal", "body": "x"}\n```',              # fenced: the answer must be the object alone
-    json.dumps({"to": "legal", "body": "x", "cc": "boss"}),    # an extra key
-    json.dumps({"to": "legal"}),                                # no body
-    json.dumps(["legal", "x"]),                                 # not an object
-    json.dumps({"to": "other", "body": "x"}),                   # a destination of the flow, not one it may choose
-    json.dumps({"to": "Legal", "body": "x"}),                   # a name, not an id
-    json.dumps({"to": "legal", "body": "x" * 8001}),            # too long
-    json.dumps({"to": "legal", "body": 3}),                     # a body that is not text
+    "Sure, legal would be best.",  # not JSON
+    '```json\n{"to": "legal", "body": "x"}\n```',  # fenced: the answer must be the object alone
+    json.dumps({"to": "legal", "body": "x", "cc": "boss"}),  # an extra key
+    json.dumps({"to": "legal"}),  # no body
+    json.dumps(["legal", "x"]),  # not an object
+    json.dumps({"to": "other", "body": "x"}),  # a destination of the flow, not one it may choose
+    json.dumps({"to": "Legal", "body": "x"}),  # a name, not an id
+    json.dumps({"to": "legal", "body": "x" * 8001}),  # too long
+    json.dumps({"to": "legal", "body": 3}),  # a body that is not text
 ]
 
 
@@ -168,9 +194,9 @@ def test_a_crash_after_the_draft_then_resume_repeats_no_effect():
     f = flow(llm(choosing()), destinations=DESTS)
     run = E.execute(f, MESSAGE, services)
     E.answer(run, "msg_1", json.dumps({"to": "legal", "body": "Sending."}), flow=f)
-    saved = json.loads(json.dumps(run))   # what the hub saves when the answer comes in
+    saved = json.loads(json.dumps(run))  # what the hub saves when the answer comes in
     with pytest.raises(Crash):
-        E.advance(f, run, services)       # the draft is out; the chain's create_task crashes
+        E.advance(f, run, services)  # the draft is out; the chain's create_task crashes
     resumed = E.advance(f, saved, services)
     assert services.acted == [("draft_reply", {"body": "Sending."}), ("create_task", {"title": "Review"})]
     assert services.keys == ["0.0", "0.1"]
@@ -194,8 +220,10 @@ def test_a_bot_turn_a_chosen_destination_reads_waits_for_it_and_that_destination
     """`_reads` counts a choose step's destinations: the brief's turn waits, and the destination's note gets what the bot
     wrote, while the reply is drafted from the turn's own answer."""
     brief = {"id": "brief", "type": "bot_turn", "bot": "librarian", "prompt": "Write the briefing."}
-    dests = [{"id": "legal", "name": "Legal", "then": [{"do": "note", "args": {"text": "Brief: {{brief.text}}"}}]},
-             {"id": "sales", "name": "Sales", "then": []}]
+    dests = [
+        {"id": "legal", "name": "Legal", "then": [{"do": "note", "args": {"text": "Brief: {{brief.text}}"}}]},
+        {"id": "sales", "name": "Sales", "then": []},
+    ]
     services = Services()
     f = flow(brief, llm(choosing()), destinations=dests)
     run = E.execute(f, MESSAGE, services)
@@ -205,8 +233,10 @@ def test_a_bot_turn_a_chosen_destination_reads_waits_for_it_and_that_destination
     assert statuses(run) == [("brief", "ok"), ("draft", "waiting")]
     assert E.answer(run, "msg_2", json.dumps({"to": "legal", "body": "Sending."}), cost=0.02, flow=f)
     run = E.advance(f, run, services)
-    assert services.acted == [("draft_reply", {"body": "Sending."}),
-                              ("note", {"text": "Brief: Northwind cut its price."})]
+    assert services.acted == [
+        ("draft_reply", {"body": "Sending."}),
+        ("note", {"text": "Brief: Northwind cut its price."}),
+    ]
     assert run["status"] == "ok"
 
 
@@ -218,8 +248,9 @@ def test_a_choose_turn_runs_as_the_owner_it_was_saved_for():
     assert run["status"] == "waiting" and services.turns[0]["who"] == "bot:ops"
 
 
-@pytest.mark.parametrize("owner, who", [("bot:other", "bot:ops"), ("person:bob", "assistant:ana"),
-                                       ("group:legal-team", "assistant:ana")])
+@pytest.mark.parametrize(
+    "owner, who", [("bot:other", "bot:ops"), ("person:bob", "assistant:ana"), ("group:legal-team", "assistant:ana")]
+)
 def test_a_queued_choose_run_takes_its_owner_as_it_is_now_and_starts_no_turn_as_the_old_one(owner, who):
     step = {**llm(choosing()), "as": who}
     services = Services()
@@ -254,16 +285,18 @@ def test_a_crash_after_the_chosen_chain_then_an_owner_change_resumes_the_recorde
     f = flow(llm(choosing()), destinations=DESTS)
     run = E.execute(f, MESSAGE, services)
     assert E.answer(run, "msg_1", json.dumps({"to": "legal", "body": "Sending."}), flow=f)
-    saved = json.loads(json.dumps(run))   # what the hub saves when the answer comes in
+    saved = json.loads(json.dumps(run))  # what the hub saves when the answer comes in
     with pytest.raises(Crash):
-        E.advance(f, run, services)       # the reply and the chain's first effect are out; the crash follows
+        E.advance(f, run, services)  # the reply and the chain's first effect are out; the crash follows
     resumed = E.advance({**f, "owner": "group:legal-team"}, saved, services)
     assert services.acted == [("draft_reply", {"body": "Sending."}), ("create_task", {"title": "Review"})]
     assert len(services.keys) == len(set(services.keys)) == 2
     out = resumed["steps"][0]["outputs"]
     assert out["to"] == "legal" and "skipped" not in out and "error" not in out
     assert [(a["do"], a["from"], a["ok"]) for a in out["actions"]] == [
-        ("draft_reply", "reply", True), ("create_task", "destination", True)]
+        ("draft_reply", "reply", True),
+        ("create_task", "destination", True),
+    ]
     assert resumed["status"] == "ok" and resumed["threads"][0]["state"] == "done"
 
 
@@ -285,5 +318,20 @@ def test_a_crash_after_the_reply_then_an_owner_change_keeps_the_reply_in_the_rec
     out = resumed["steps"][0]["outputs"]
     assert out["to"] == "legal" and "skipped" not in out
     assert [(a["do"], a["from"], a["ok"]) for a in out["actions"]] == [
-        ("draft_reply", "reply", True), ("create_task", "destination", True)]
+        ("draft_reply", "reply", True),
+        ("create_task", "destination", True),
+    ]
     assert resumed["status"] == "ok"
+
+
+def test_the_answer_format_is_the_last_thing_a_choose_turn_is_asked_after_a_long_message():
+    """The format comes after the message's data blocks, never templated or clipped with them, so a long message
+    cannot push the one JSON answer out of the turn (`_choice_tail`)."""
+    long_body = "Board pack notes, line by line. " * 400
+    f = flow(llm(choosing()), destinations=DESTS)
+    services = Services()
+    run = E.execute(f, {"message": {**MESSAGE["message"], "body": long_body}}, services)
+    assert run["status"] == "waiting", run
+    prompt = services.turns[0]["prompt"]
+    assert prompt.endswith(E._choice_tail(f, choosing())) and prompt.count('"to": "<id>"') == 1
+    assert len(prompt) <= E.F.MAX_PROMPT + len(E._choice_tail(f, choosing()))

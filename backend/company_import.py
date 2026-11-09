@@ -13,6 +13,7 @@ A seat with a `team` goes in the group of that name: one group per name, made in
 has it. A seat without one goes in its template's group. A built-in is the only bot a file makes, and it stays outside
 groups whatever its team says (backend/groups.py).
 """
+
 import hashlib
 import json
 from datetime import date, timedelta
@@ -98,8 +99,9 @@ def plan(onboarding, c, who, text):
 
     selected = {}
     try:
-        names = M.OnboardingNames(company_name=draft["company"]["name"],
-                                  owner_name=(D.owner(draft) or {"name": ""})["name"])
+        names = M.OnboardingNames(
+            company_name=draft["company"]["name"], owner_name=(D.owner(draft) or {"name": ""})["name"]
+        )
         display = O.display_names(onboarding.settings, {"names": names.model_dump()})
         for slug, (bot, card) in builtins.items():
             parent = D.manager_of(draft, bot)
@@ -114,24 +116,40 @@ def plan(onboarding, c, who, text):
             instructions = O.render(card, display, bot["title"])["instructions"]
             if bot["reason"]:
                 instructions += "\n\nWhy this role is on the company chart:\n" + bot["reason"]
-            selected[slug] = M.OnboardingSelection(template=card["template"], display_name=bot["title"],
-                                                   instructions=instructions, reports_to=parent)
-        body = M.OnboardingDraft(names=names, answers=M.OnboardingAnswers(what_we_do=draft["company"]["about"]),
-                                 selected=selected)
+            selected[slug] = M.OnboardingSelection(
+                template=card["template"], display_name=bot["title"], instructions=instructions, reports_to=parent
+            )
+        # The places are sent only when the file names them: a file without them keeps the places already saved.
+        places = {"regions": draft["company"]["regions"]} if draft["company"].get("regions") else {}
+        body = M.OnboardingDraft(
+            names=names,
+            answers=M.OnboardingAnswers(what_we_do=draft["company"]["about"], **places),
+            selected=selected,
+        )
         seats = {}
         for key, (bot, card) in roles.items():
             reports_to, waits = line(bot)
-            seats[key] = {"title": M.SeatCreate(title=bot["title"]).title, "template": bot["template"],
-                          "description": O.job_description(card or {}, display, bot["reason"]),
-                          "reports_to": reports_to, "waits_on": waits, "team": bot.get("team", "")}
+            seats[key] = {
+                "title": M.SeatCreate(title=bot["title"]).title,
+                "template": bot["template"],
+                "description": O.job_description(card or {}, display, bot["reason"]),
+                "reports_to": reports_to,
+                "waits_on": waits,
+                "team": bot.get("team", ""),
+            }
     except ValidationError:
-        raise Problem("company_file", "A company name, title or instruction is too long for this Tico setup", 422) from None
+        raise Problem(
+            "company_file", "A company name, title or instruction is too long for this Tico setup", 422
+        ) from None
     titles = {}
     for bot in draft["bots"]:
         if bot["id"] in held:
             titles.setdefault(held[bot["id"]], []).append(bot["title"])
-    people = [{"id": p["id"], "name": p["name"], "title": ", ".join(titles.get(p["id"]) or []) or p["role"]}
-              for p in draft["people"] if p["id"] != owner_id]
+    people = [
+        {"id": p["id"], "name": p["name"], "title": ", ".join(titles.get(p["id"]) or []) or p["role"]}
+        for p in draft["people"]
+        if p["id"] != owner_id
+    ]
     fingerprint = hashlib.sha256(encode(saved).encode()).hexdigest()
     deferred = []
     if "models" in saved:
@@ -142,17 +160,37 @@ def plan(onboarding, c, who, text):
         deferred.append("first_jobs")
     if any(b.get("routine") for b in draft["bots"]):
         deferred.append("routines")
-    summary = {"fingerprint": fingerprint, "company_name": names.company_name,
-               "employees": [{"id": slug, "template": choice.template, "title": choice.display_name,
-                              "reports_to": choice.reports_to, "start": "now"}
-                             for slug, choice in selected.items()],
-               "seats": [{"id": key, "template": seat["template"], "title": seat["title"],
-                          "reports_to": seat["reports_to"], **({"waits_on": seat["waits_on"]} if seat["waits_on"] else {})}
-                         for key, seat in seats.items()],
-               "people": people,
-               "goals": [{"id": goal["id"], "title": goal_title(goal), "owner": goal_owner(goal, owner_id, ids, required)}
-                         for goal in draft["goals"]],
-               "builtins": sorted(required), "deferred": deferred}
+    summary = {
+        "fingerprint": fingerprint,
+        "company_name": names.company_name,
+        "employees": [
+            {
+                "id": slug,
+                "template": choice.template,
+                "title": choice.display_name,
+                "reports_to": choice.reports_to,
+                "start": "now",
+            }
+            for slug, choice in selected.items()
+        ],
+        "seats": [
+            {
+                "id": key,
+                "template": seat["template"],
+                "title": seat["title"],
+                "reports_to": seat["reports_to"],
+                **({"waits_on": seat["waits_on"]} if seat["waits_on"] else {}),
+            }
+            for key, seat in seats.items()
+        ],
+        "people": people,
+        "goals": [
+            {"id": goal["id"], "title": goal_title(goal), "owner": goal_owner(goal, owner_id, ids, required)}
+            for goal in draft["goals"]
+        ],
+        "builtins": sorted(required),
+        "deferred": deferred,
+    }
     if D.has_strategy(saved):
         summary["strategy"] = strategy_preview(saved["strategy"])
     return body, saved, seats, summary
@@ -195,29 +233,37 @@ def import_goals(c, actor, goals, bets=None):
         made = G.create(c, actor, goal_title(goal), owner, bet_id=(bets or {}).get(goal.get("bet")))
         if not goal["measure"]:
             continue
-        kpi = G.kpi_create(c, actor, owner, {"name": goal["measure"], "unit": goal["unit"], "direction": goal["direction"]})
+        kpi = G.kpi_create(
+            c, actor, owner, {"name": goal["measure"], "unit": goal["unit"], "direction": goal["direction"]}
+        )
         aim = target(goal)
         G.kpi_link(c, actor, made["id"], kpi["id"], {"kind": "none"} if K.validate_target(kpi, aim)[1] else aim)
 
 
 # ----------------------------------------------------------------------------- the strategy block (format 0.3)
-SOURCE = "the company file"     # the unconfirmed line: "_Unconfirmed: drafted from the company file._"
-WATCHING = "watching"           # the extra section the listening requests are kept in
+SOURCE = "the company file"  # the unconfirmed line: "_Unconfirmed: drafted from the company file._"
+WATCHING = "watching"  # the extra section the listening requests are kept in
 WATCHING_TITLE = "Watching"
 
 
 def strategy_preview(strategy):
     """What the strategy block will add, for the preview."""
     market, listening = strategy["market"], strategy["listening"]
-    return {"summary": bool(strategy["summary"]), "vision": bool(strategy["vision"]),
-            "sections": [k for k in S.FIXED_KEYS if strategy["sections"].get(k)] + (["watching"] if listening["requests"]
-                                                                                 else []),
-            "bets": [{"id": b["id"], "statement": b["statement"]} for b in strategy["bets"] if b["statement"]],
-            "market": {"root": market["definition"]["root"], "segments": len(market["segments"]),
-                       "sizes": sum(1 for s in market["segments"] if s["usd"] is not None),
-                       "players": [p["name"] for p in market["players"]]},
-            "watches": [p["url"] for p in market["players"] if p["url"]],
-            "insights": len(listening["posts"])}
+    return {
+        "summary": bool(strategy["summary"]),
+        "vision": bool(strategy["vision"]),
+        "sections": [k for k in S.FIXED_KEYS if strategy["sections"].get(k)]
+        + (["watching"] if listening["requests"] else []),
+        "bets": [{"id": b["id"], "statement": b["statement"]} for b in strategy["bets"] if b["statement"]],
+        "market": {
+            "root": market["definition"]["root"],
+            "segments": len(market["segments"]),
+            "sizes": sum(1 for s in market["segments"] if s["usd"] is not None),
+            "players": [p["name"] for p in market["players"]],
+        },
+        "watches": [p["url"] for p in market["players"] if p["url"]],
+        "insights": len(listening["posts"]),
+    }
 
 
 def _safe_url(url):
@@ -259,8 +305,11 @@ def _strategy_draft(c, actor, strategy):
     """Summary, vision and the company file's sections where the draft's are empty (How we sell is not in the file, so
     it stays as the draft has it), and the listening requests as the Watching section. Never published."""
     row = S.draft(c)
-    sections = {k: SS.unconfirmed(strategy["sections"].get(k), SOURCE) for k in S.FIXED_KEYS
-                if strategy["sections"].get(k) and not row["sections"][k].strip()}
+    sections = {
+        k: SS.unconfirmed(strategy["sections"].get(k), SOURCE)
+        for k in S.FIXED_KEYS
+        if strategy["sections"].get(k) and not row["sections"][k].strip()
+    }
     requests = strategy["listening"]["requests"]
     if requests and WATCHING not in row["sections"]["extra"]:
         sections["extra"] = {WATCHING: {"title": WATCHING_TITLE, "body": "\n".join("- " + r for r in requests)}}
@@ -285,8 +334,14 @@ def _strategy_bets(c, actor, bets, today, skipped):
             continue
         check_by = item["check_by"] or (today + timedelta(days=SS.CHECK_DAYS)).isoformat()
         wrong = {"kind": "text", "text": item["wrong_if"], "check_by": check_by} if item["wrong_if"] else None
-        bet = _best_effort(c, "company_file_bet", lambda item=item, wrong=wrong: S.add_bet(
-            c, actor, item["statement"], item["why"], item["rules_out"], wrong, None, "proposed")[0], skipped)
+        bet = _best_effort(
+            c,
+            "company_file_bet",
+            lambda item=item, wrong=wrong: S.add_bet(
+                c, actor, item["statement"], item["why"], item["rules_out"], wrong, None, "proposed"
+            )[0],
+            skipped,
+        )
         if bet:
             ids[item["id"]] = live[item["statement"].strip().lower()] = bet["id"]
     return ids
@@ -295,8 +350,16 @@ def _strategy_bets(c, actor, bets, today, skipped):
 def _own_company(c, actor, name, evidence):
     """`company/self`, the centre of the market graph, made when the graph has none yet."""
     if not MK.entity(c, MK.OWN_COMPANY_ID):
-        MK.create_entity(c, actor, type="company", name=name, summary=name + ".", evidence_ids=[evidence], force=True,
-                         entity_id=MK.OWN_COMPANY_ID)
+        MK.create_entity(
+            c,
+            actor,
+            type="organization",
+            name=name,
+            summary=name + ".",
+            evidence_ids=[evidence],
+            force=True,
+            entity_id=MK.OWN_COMPANY_ID,
+        )
     return MK.OWN_COMPANY_ID
 
 
@@ -307,10 +370,17 @@ def _market(c, actor, market, company, skipped):
     definition, segments = market["definition"], market["segments"]
     if (MS.definition(c) or {}).get("root") or not (definition["root"] or segments):
         return {}
-    MS.set_definition(c, actor, {"root_name": definition["root"] or company + " market", "description": definition["in"],
-                                 "includes": [definition["in"]] if definition["in"] else None,
-                                 "excludes": [definition["out"]] if definition["out"] else None,
-                                 "year": definition["year"]})
+    MS.set_definition(
+        c,
+        actor,
+        {
+            "root_name": definition["root"] or company + " market",
+            "description": definition["in"],
+            "includes": [definition["in"]] if definition["in"] else None,
+            "excludes": [definition["out"]] if definition["out"] else None,
+            "year": definition["year"],
+        },
+    )
     root = MS.definition(c)["root"]
     evidence = MS.definition_evidence(c, actor)
     by_key = {s["key"]: s for s in segments}
@@ -322,29 +392,62 @@ def _market(c, actor, market, company, skipped):
         return n
 
     ids = {}
-    for segment in sorted(segments, key=depth):           # a parent before its sub-segments
+    for segment in sorted(segments, key=depth):  # a parent before its sub-segments
         parent = ids.get(segment["parent"], root) if segment["parent"] else root
         if depth(segment) > MS.MAX_DEPTH or (segment["parent"] and segment["parent"] not in ids):
-            skipped.append({"part": "company_file_segment", "reason": "%s is deeper than %d levels or under a segment "
-                            "left out" % (segment["name"] or segment["key"], MS.MAX_DEPTH)})
+            skipped.append(
+                {
+                    "part": "company_file_segment",
+                    "reason": "%s is deeper than %d levels or under a segment "
+                    "left out" % (segment["name"] or segment["key"], MS.MAX_DEPTH),
+                }
+            )
             continue
 
         def made(segment=segment, parent=parent):
-            # Forced past a name the tree already has: a segment named like the root is still the file's own.
-            seg = MS._new_segment(c, actor, segment["name"] or segment["key"], evidence_ids=[evidence], parent=parent,
-                                  entity_id=_segment_id(c, segment["key"]),
-                                  properties={"next": True} if segment["next"] else None, force=True)
+            # Forced past a name the tree already has: a segment named like the root is still the file's own. Its own
+            # places (`regions`) are said in its summary, where a bot reads a segment.
+            serves = segment.get("regions") or []
+            properties: dict[str, object] = {"next": True} if segment["next"] else {}
+            seg = MS._new_segment(
+                c,
+                actor,
+                segment["name"] or segment["key"],
+                summary=("Serves: " + "; ".join(serves) + ".") if serves else "",
+                evidence_ids=[evidence],
+                parent=parent,
+                entity_id=_segment_id(c, segment["key"]),
+                properties=properties or None,
+                force=True,
+            )
             urls = [u for u in map(_safe_url, segment["evidence"]) if u]
             if segment["usd"] is not None and urls:
-                MS.create_size(c, actor, {"segment_id": seg["id"], "method": segment["method"],
-                                          "spend_usd": segment["usd"], "low_usd": segment["usd"],
-                                          "high_usd": segment["usd"], "arithmetic": segment["arithmetic"],
-                                          "evidence": [{"source_url": u, "source_kind": "other"} for u in urls],
-                                          "year": definition["year"], "confidence": "low"})
+                MS.create_size(
+                    c,
+                    actor,
+                    {
+                        "segment_id": seg["id"],
+                        "method": segment["method"],
+                        "spend_usd": segment["usd"],
+                        "low_usd": segment["usd"],
+                        "high_usd": segment["usd"],
+                        "arithmetic": segment["arithmetic"],
+                        "evidence": [{"source_url": u, "source_kind": "other"} for u in urls],
+                        "year": definition["year"],
+                        "confidence": "low",
+                    },
+                )
             if segment["ours"]:
-                MK.create_edge(c, actor, src=_own_company(c, actor, company, evidence), rel="operates_in",
-                               dst=seg["id"], evidence_ids=[evidence])
+                MK.create_edge(
+                    c,
+                    actor,
+                    src=_own_company(c, actor, company, evidence),
+                    rel="operates_in",
+                    dst=seg["id"],
+                    evidence_ids=[evidence],
+                )
             return seg["id"]
+
         found = _best_effort(c, "company_file_segment", made, skipped)
         if found:
             ids[segment["key"]] = found
@@ -360,25 +463,45 @@ def _players(c, actor, players, segments, company, skipped):
 
         def one(player=player):
             host = (urlsplit(player["url"]).hostname or "").removeprefix("www.") if player["url"] else ""
-            evidence, _ = MK.create_evidence(c, actor, source_url=player["url"], source_kind="site" if host else "other",
-                                             our_read="A player in the market, named in the company file from setup.")
+            evidence, _ = MK.create_evidence(
+                c,
+                actor,
+                source_url=player["url"],
+                source_kind="site" if host else "other",
+                our_read="A player in the market, named in the company file from setup.",
+            )
             # Forced past a shared domain: two players the page found on one site (a marketplace, say) are still two.
-            entity, _ = MK.create_entity(c, actor, type="company", name=player["name"],
-                                         external_ids={"domain": host} if host else None, evidence_ids=[evidence["id"]],
-                                         force=True)
+            entity, _ = MK.create_entity(
+                c,
+                actor,
+                type="organization",
+                name=player["name"],
+                external_ids={"domain": host} if host else None,
+                evidence_ids=[evidence["id"]],
+                force=True,
+            )
             for key in player["segments"]:
                 if key in segments:
-                    MK.create_edge(c, actor, src=entity["id"], rel="operates_in", dst=segments[key],
-                                   evidence_ids=[evidence["id"]])
-            MK.create_edge(c, actor, src=entity["id"], rel="competes_with",
-                           dst=_own_company(c, actor, company, evidence["id"]), evidence_ids=[evidence["id"]])
+                    MK.create_edge(
+                        c, actor, src=entity["id"], rel="operates_in", dst=segments[key], evidence_ids=[evidence["id"]]
+                    )
+            MK.create_edge(
+                c,
+                actor,
+                src=entity["id"],
+                rel="competes_with",
+                dst=_own_company(c, actor, company, evidence["id"]),
+                evidence_ids=[evidence["id"]],
+            )
             return entity["id"]
+
         entity_id = _best_effort(c, "company_file_player", one, skipped)
         if entity_id:
             made.append(entity_id)
             if player["url"]:
-                _best_effort(c, "company_file_watch", lambda: MW.add(c, actor, entity_id, player["url"], "home"),
-                             skipped)
+                _best_effort(
+                    c, "company_file_watch", lambda: MW.add(c, actor, entity_id, player["url"], "home"), skipped
+                )
     return made
 
 
@@ -389,9 +512,21 @@ def _posts(c, actor, posts, skipped):
         if not _safe_url(post["url"]):
             skipped.append({"part": "company_file_post", "reason": "an address with a user name or password"})
             continue
-        found = _best_effort(c, "company_file_post", lambda post=post: MK.report(
-            c, actor, kind="other", about="Listening: " + post["tag"], claim=post["title"] or post["url"],
-            source_url=post["url"], confidence="low", source_ref="company-file:" + post["url"]), skipped)
+        found = _best_effort(
+            c,
+            "company_file_post",
+            lambda post=post: MK.report(
+                c,
+                actor,
+                kind="other",
+                about="Listening: " + post["tag"],
+                claim=post["title"] or post["url"],
+                source_url=post["url"],
+                confidence="low",
+                source_ref="company-file:" + post["url"],
+            ),
+            skipped,
+        )
         if found:
             filed.append(found["id"])
     return filed
@@ -400,14 +535,23 @@ def _posts(c, actor, posts, skipped):
 def import_strategy(c, actor, strategy, company, today=None):
     """The block, part by part (see the module's docstring). Answers ({file bet id: bet id}, what was written)."""
     skipped = []
-    written = {"draft": _best_effort(c, "company_file_draft", lambda: _strategy_draft(c, actor, strategy), skipped) or []}
+    written = {
+        "draft": _best_effort(c, "company_file_draft", lambda: _strategy_draft(c, actor, strategy), skipped) or []
+    }
     bets = _strategy_bets(c, actor, strategy["bets"], today or date.today(), skipped)
-    segments = _best_effort(c, "company_file_market", lambda: _market(c, actor, strategy["market"], company, skipped),
-                            skipped) or {}
+    segments = (
+        _best_effort(c, "company_file_market", lambda: _market(c, actor, strategy["market"], company, skipped), skipped)
+        or {}
+    )
     players = _players(c, actor, strategy["market"]["players"], segments, company, skipped)
     insights = _posts(c, actor, strategy["listening"]["posts"], skipped)
-    written.update(bets=sorted(bets.values()), segments=sorted(segments.values()), players=players,
-                   insights=insights, skipped=skipped)
+    written.update(
+        bets=sorted(bets.values()),
+        segments=sorted(segments.values()),
+        players=players,
+        insights=insights,
+        skipped=skipped,
+    )
     return bets, written
 
 
@@ -423,7 +567,7 @@ def apply(onboarding, c, who, text, fingerprint):
     record = O.load(c)
     previous = record.get("company_import") or {}
     if previous.get("fingerprint") == fingerprint:
-        clear_failure(c)        # this file is the one already applied, so nothing from setup is left unimported
+        clear_failure(c)  # this file is the one already applied, so nothing from setup is left unimported
         return onboarding.view(c, who)
     builtins = set(summary["builtins"])
     existing = [r[0] for r in c.execute("SELECT id FROM bots") if r[0] not in builtins]
@@ -435,13 +579,20 @@ def apply(onboarding, c, who, text, fingerprint):
     # it resolves a newly-created parent. Neither staging nor a partial chart is
     # visible outside this transaction; the confirmed choices are restored below.
     home = "human:" + onboarding.auth.owner_id(c)
-    staging = body.model_copy(update={"selected": {
-        slug: choice.model_copy(update={"reports_to": home}) for slug, choice in body.selected.items()}})
+    staging = body.model_copy(
+        update={
+            "selected": {slug: choice.model_copy(update={"reports_to": home}) for slug, choice in body.selected.items()}
+        }
+    )
     # The strategy goes in first, so complete() links each group it makes to the bet it serves.
-    bets, strategy = import_strategy(c, who.actor, saved["strategy"], body.names.company_name) \
-        if D.has_strategy(saved) else ({}, None)
+    bets, strategy = (
+        import_strategy(c, who.actor, saved["strategy"], body.names.company_name)
+        if D.has_strategy(saved)
+        else ({}, None)
+    )
     onboarding.save(c, who, staging)
     onboarding.complete(c, who)
+
     # complete() preserves existing definitions, including the seeded built-ins'
     # managers. Apply the confirmed chart after all targets exist, parents first
     # so replacing the old seed hierarchy cannot create a temporary cycle.
@@ -453,11 +604,14 @@ def apply(onboarding, c, who, text, fingerprint):
         row = c.execute("SELECT reports_to,revision FROM bot_config WHERE bot=?", (slug,)).fetchone()
         parent = body.selected[slug].reports_to
         if row["reports_to"] != parent:
-            onboarding.admin.update_bot(c, who, slug, M.BotDefinitionUpdate(reports_to=parent, expected_revision=row["revision"]))
+            onboarding.admin.update_bot(
+                c, who, slug, M.BotDefinitionUpdate(reports_to=parent, expected_revision=row["revision"])
+            )
     # Every other role on the chart is a Recruiting seat: no bot, repository, computer slot or BotOps task. A seat with a
     # team goes in the group of that name; one without goes in its template's group, as it always has.
-    teams = Groups.seat_teams(c, onboarding.settings,
-                              sorted({seat["template"] for seat in seats.values() if not seat["team"]}))
+    teams = Groups.seat_teams(
+        c, onboarding.settings, sorted({seat["template"] for seat in seats.values() if not seat["team"]})
+    )
     named = Groups.team_groups(c, [seat["team"] for seat in seats.values() if seat["team"]])
     chart = {}
     for key, seat in seats.items():
@@ -470,17 +624,32 @@ def apply(onboarding, c, who, text, fingerprint):
     record["selected"] = {slug: choice.model_dump() for slug, choice in body.selected.items()}
     record["seats"] = made
     # The people who hold a role, to invite (Settings > People): each with the seats that report to them meanwhile.
-    people = [{**person, "seats": sorted(made[key] for key, seat in seats.items() if seat["waits_on"] == person["id"])}
-              for person in summary["people"]]
-    record["company_import"] = {"fingerprint": fingerprint, "imported_at": H.now(), "by": who.actor,
-                                "deferred": summary["deferred"], "seats": len(made), "people": people,
-                                **({"strategy": strategy} if strategy else {})}
+    people = [
+        {**person, "seats": sorted(made[key] for key, seat in seats.items() if seat["waits_on"] == person["id"])}
+        for person in summary["people"]
+    ]
+    record["company_import"] = {
+        "fingerprint": fingerprint,
+        "imported_at": H.now(),
+        "by": who.actor,
+        "deferred": summary["deferred"],
+        "seats": len(made),
+        "people": people,
+        **({"strategy": strategy} if strategy else {}),
+    }
     onboarding._store(c, record, who.actor)
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-              (PLAN_KEY, encode(saved)))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (PLAN_KEY, encode(saved)),
+    )
     clear_failure(c)
-    H.event(c, who.actor, "onboarding.company_imported", "", {"fingerprint": fingerprint,
-                                                              "bots": sorted(body.selected), "seats": len(made)})
+    H.event(
+        c,
+        who.actor,
+        "onboarding.company_imported",
+        "",
+        {"fingerprint": fingerprint, "bots": sorted(body.selected), "seats": len(made)},
+    )
     return onboarding.view(c, who)
 
 
@@ -507,11 +676,13 @@ def add_invitee(onboarding, c, who, key, email):
             return row
     _, row = Access.add_person(c, who.actor, roster, name=entry["name"], email=email, title=entry.get("title") or "")
     home = "human:" + onboarding.auth.owner_id(c)
-    for seat_id in entry.get("seats") or []:          # a seat someone has moved since stays where they put it
+    for seat_id in entry.get("seats") or []:  # a seat someone has moved since stays where they put it
         seat = c.execute("SELECT reports_to FROM seats WHERE id=? AND closed_at IS NULL", (seat_id,)).fetchone()
         if seat and seat["reports_to"] == home:
-            c.execute("UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE id=?",
-                      ("human:" + row["id"], H.now(), who.actor, seat_id))
+            c.execute(
+                "UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE id=?",
+                ("human:" + row["id"], H.now(), who.actor, seat_id),
+            )
             H.event(c, who.actor, "seat.updated", seat_id, {"fields": ["reports_to"]})
     people[at] = {**entry, "person": row["id"]}
     record["company_import"] = {**imported, "people": people}
@@ -531,7 +702,7 @@ def load_on_start(onboarding, c):
         raise Problem("company_file", "The company file setup gave this server is empty", 422)
     draft = starter.unpack(settings.company_file_data)
     if (O.load(c).get("company_import") or {}).get("fingerprint") == hashlib.sha256(encode(draft).encode()).hexdigest():
-        clear_failure(c)        # a file fixed back to the one already applied ends an earlier start's failure
+        clear_failure(c)  # a file fixed back to the one already applied ends an earlier start's failure
         return None
     who = onboarding.auth.owner_identity(c)
     summary = preview(onboarding, c, who, draft)
@@ -556,8 +727,10 @@ def start(onboarding, store, telemetry=None):
                 telemetry.capture("company_import", exc)
         failure = {"at": H.now(), "reason": reason[:500]}
         with store.transaction() as c:
-            c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                      (FAILED_KEY, encode(failure)))
+            c.execute(
+                "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (FAILED_KEY, encode(failure)),
+            )
             H.event(c, "system", "onboarding.company_import_failed", "", {"reason": failure["reason"]})
         return failure
 

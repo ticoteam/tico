@@ -93,7 +93,7 @@ invoices, payroll changes) has nobody. Then:
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the team with `hub team show`, `hub task list`, `hub update list --bot <slug>` and
-`hub calendar list`. A question for the owner is `hub task ask <id>`, one open question per task. When the summary is
+`hub calendar list`. A question for the owner is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. When the summary is
 ready, it reaches the owner as `hub message send --fyi <owner> "<one line and the link>"`. Team goals and KPIs belong to
 the Strategy Bot; read them with `hub goal list`, never keep your own.
 

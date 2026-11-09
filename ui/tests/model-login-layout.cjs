@@ -1,8 +1,7 @@
 // A sign-in begins empty and receives its provider instructions on a later poll. Intrinsic dialog sizing must
-// give that content space in WebKit as well as Chromium, and keep Cancel reachable when the content must scroll.
-const {chromium, webkit} = require('playwright');
+// give that content space in WebKit, and keep Cancel reachable when the content must scroll.
+const {webkit} = require('playwright');
 const assert = require('node:assert/strict');
-const path = require('node:path');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const css = [...html.matchAll(/<link\b[^>]*href="\/tico\/ui\/([^"?]+\.css)(?:\?[^"]*)?"/g)]
@@ -29,7 +28,8 @@ async function check(engine) {
         };
         window.get = async () => ({...row});
       });
-      await page.addScriptTag({path: path.join(__dirname, '../model-login.js')});
+      // model-login reads two shared helpers the app bundle defines first (eventElement, errorMessage).
+      for (const name of ['app/dom.ts', 'app/errors.ts', 'model-login.ts']) await page.addScriptTag({path: uiFile(name)});
       for (const runtime of ['codex', 'claude']) {
         await page.setViewportSize(viewport);
         await page.evaluate(runtime => {
@@ -83,6 +83,8 @@ async function check(engine) {
   } finally { await browser.close(); }
 }
 (async () => {
-  for (const engine of [webkit, chromium]) await check(engine);
-  console.log('model sign-in layout: WebKit and Chromium, dynamic instructions, code entry, bounded content and cancel');
+  // WebKit only: the sizing bug was WebKit's (ee04afbc6), and the Chromium dialog flow, code entry and cancel are driven
+  // by model-login (loginHosted), so a second engine here repeated the same layout in the engine that was never wrong.
+  await check(webkit);
+  console.log('model sign-in layout: WebKit, dynamic instructions, code entry, bounded content and cancel');
 })().catch(error => { console.error(error); process.exit(1); });

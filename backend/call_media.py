@@ -36,9 +36,9 @@ AUDIO_SOURCES = ("microphone", "screen_share", "screen_share_audio")
 SAMPLE_RATE = 16000
 TWIRP_TIMEOUT = 8
 TRANSCRIBE_TIMEOUT = 120
-TRANSCRIBE_MODEL = "elevenlabs/scribe-v2"     # the Recorder's default speech-to-text model (recorder/src/settings.rs)
-CONNECT_TIMEOUT = 15                          # the recorder's join, and its leave
-RECORDER_PREFIX = "tico-recorder-"            # the recorder's identity is this and the call id, never a person's
+TRANSCRIBE_MODEL = "elevenlabs/scribe-v2"  # the Recorder's default speech-to-text model (recorder/src/settings.rs)
+CONNECT_TIMEOUT = 15  # the recorder's join, and its leave
+RECORDER_PREFIX = "tico-recorder-"  # the recorder's identity is this and the call id, never a person's
 
 
 class MediaUnavailable(Exception):
@@ -55,8 +55,8 @@ class MediaRefused(Exception):
 
 @dataclass(frozen=True)
 class MeetConfig:
-    url: str            # what clients connect to (wss://...), from TICO_MEET_URL
-    internal_url: str   # the server's address for LiveKit's server API, from TICO_MEET_INTERNAL_URL
+    url: str  # what clients connect to (wss://...), from TICO_MEET_URL
+    internal_url: str  # the server's address for LiveKit's server API, from TICO_MEET_INTERNAL_URL
     api_key: str
     api_secret: str
 
@@ -64,12 +64,18 @@ class MeetConfig:
 def config_from_env(environ=None):
     """The Tico Meet settings, or None when the meet profile is not set up (every value must be present)."""
     environ = os.environ if environ is None else environ
-    values = {name: str(environ.get(name, "")).strip() for name in
-              ("TICO_MEET_URL", "TICO_MEET_INTERNAL_URL", "TICO_MEET_API_KEY", "TICO_MEET_API_SECRET")}
+    values = {
+        name: str(environ.get(name, "")).strip()
+        for name in ("TICO_MEET_URL", "TICO_MEET_INTERNAL_URL", "TICO_MEET_API_KEY", "TICO_MEET_API_SECRET")
+    }
     if not all(values.values()):
         return None
-    return MeetConfig(url=values["TICO_MEET_URL"].rstrip("/"), internal_url=values["TICO_MEET_INTERNAL_URL"].rstrip("/"),
-                      api_key=values["TICO_MEET_API_KEY"], api_secret=values["TICO_MEET_API_SECRET"])
+    return MeetConfig(
+        url=values["TICO_MEET_URL"].rstrip("/"),
+        internal_url=values["TICO_MEET_INTERNAL_URL"].rstrip("/"),
+        api_key=values["TICO_MEET_API_KEY"],
+        api_secret=values["TICO_MEET_API_SECRET"],
+    )
 
 
 def _b64(data):
@@ -92,15 +98,28 @@ def _claims(config, identity, name, video, ttl, now):
 
 def person_token(config, room, identity, name, *, now=None, ttl=TOKEN_TTL_SECONDS):
     """A person's join token for one call room: audio and screen share, never camera or data."""
-    video = {"roomJoin": True, "room": room, "canSubscribe": True, "canPublish": True, "canPublishData": False,
-             "canPublishSources": list(AUDIO_SOURCES), "canUpdateOwnMetadata": False}
+    video = {
+        "roomJoin": True,
+        "room": room,
+        "canSubscribe": True,
+        "canPublish": True,
+        "canPublishData": False,
+        "canPublishSources": list(AUDIO_SOURCES),
+        "canUpdateOwnMetadata": False,
+    }
     return sign(_claims(config, identity, name, video, ttl, now), config.api_secret)
 
 
 def recorder_token(config, room, identity, *, now=None, ttl=TOKEN_TTL_SECONDS):
     """The server's own participant: hidden, subscribe only, so it hears the room and says nothing."""
-    video = {"roomJoin": True, "room": room, "canSubscribe": True, "canPublish": False, "canPublishData": False,
-             "hidden": True}
+    video = {
+        "roomJoin": True,
+        "room": room,
+        "canSubscribe": True,
+        "canPublish": False,
+        "canPublishData": False,
+        "hidden": True,
+    }
     return sign(_claims(config, identity, "Tico recorder", video, ttl, now), config.api_secret)
 
 
@@ -114,18 +133,23 @@ def admin_token(config, room="", *, now=None):
 
 def _post_json(url, token, payload):
     data = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(url, data=data, method="POST", headers={
-        "Authorization": "Bearer " + token, "Content-Type": "application/json", "Accept": "application/json"})
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method="POST",
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json", "Accept": "application/json"},
+    )
     try:
         with urllib.request.urlopen(request, timeout=TWIRP_TIMEOUT) as response:
             return json.loads(response.read(1_000_000) or b"{}")
     except urllib.error.HTTPError as exc:
-        code = ""
-        try:
-            code = str(json.loads(exc.read(10_000) or b"{}").get("code") or "")
-        except (ValueError, AttributeError):
-            pass
-        raise MediaRefused(exc.code, code) from None
+        with exc:
+            code = ""
+            try:
+                code = str(json.loads(exc.read(10_000) or b"{}").get("code") or "")
+            except (ValueError, AttributeError):
+                pass
+            raise MediaRefused(exc.code, code) from None
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise MediaUnavailable("LiveKit did not answer") from exc
 
@@ -167,7 +191,7 @@ class Recorder:
         self.room.on("disconnected", self._disconnected)
         await self.room.connect(self.url, self.token, options=self.sdk.RoomOptions(auto_subscribe=True))
         self.joined_at = time.monotonic()
-        if self.closed:         # closed while joining: leave again, so no recorder stays in the room unseen
+        if self.closed:  # closed while joining: leave again, so no recorder stays in the room unseen
             await self.room.disconnect()
 
     def _subscribed(self, track, publication, participant):
@@ -177,7 +201,7 @@ class Recorder:
 
     async def _listen(self, track, identity):
         stream = self.sdk.AudioStream(track, sample_rate=SAMPLE_RATE, num_channels=1)
-        heard, base = 0, None   # samples heard from this speaker, and where their first frame falls (ms since joining)
+        heard, base = 0, None  # samples heard from this speaker, and where their first frame falls (ms since joining)
         try:
             async for event in stream:
                 if self.closed:
@@ -192,7 +216,7 @@ class Recorder:
             await stream.aclose()
 
     def _disconnected(self, *_reason):
-        self.lost = True        # LiveKit dropped the recorder: the sweep sees it is not running and joins again
+        self.lost = True  # LiveKit dropped the recorder: the sweep sees it is not running and joins again
 
     def close(self):
         self.closed = True
@@ -212,8 +236,8 @@ class LiveKitMedia:
     def __init__(self, config):
         self.config = config
         self.recorders = {}
-        self.lock = threading.Lock()        # guards `recorders` and the media loop
-        self.starting = threading.Lock()    # one recorder joins at a time, so a call never has two
+        self.lock = threading.Lock()  # guards `recorders` and the media loop
+        self.starting = threading.Lock()  # one recorder joins at a time, so a call never has two
         self.loop = None
 
     @property
@@ -225,14 +249,15 @@ class LiveKitMedia:
         return recorder is not None and recorder.alive()
 
     def _twirp(self, method, payload, room=""):
-        return _post_json(f"{self.config.internal_url}/twirp/livekit.RoomService/{method}",
-                          admin_token(self.config, room), payload)
+        return _post_json(
+            f"{self.config.internal_url}/twirp/livekit.RoomService/{method}", admin_token(self.config, room), payload
+        )
 
     def remove(self, room, identity):
         try:
             self._twirp("RemoveParticipant", {"room": room, "identity": identity}, room)
         except MediaRefused as exc:
-            if exc.status != 404:       # not_found: the person is already out of the room
+            if exc.status != 404:  # not_found: the person is already out of the room
                 raise
 
     def room_exists(self, room):
@@ -301,8 +326,13 @@ def transcribe(base, key, audio, *, model=TRANSCRIBE_MODEL, language=""):
     body = {"model": model, "input_audio": {"data": base64.b64encode(audio).decode("ascii"), "format": "wav"}}
     if language:
         body["language"] = language
-    status, answer = G.relay("POST", base + "/audio/transcriptions", json.dumps(body).encode("utf-8"),
-                             {"Authorization": "Bearer " + key}, TRANSCRIBE_TIMEOUT)
+    status, answer = G.relay(
+        "POST",
+        base + "/audio/transcriptions",
+        json.dumps(body).encode("utf-8"),
+        {"Authorization": "Bearer " + key},
+        TRANSCRIBE_TIMEOUT,
+    )
     if status != 200:
         raise MediaUnavailable(f"The Gateway's speech-to-text answered {status}")
     try:

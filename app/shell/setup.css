@@ -31,3 +31,10 @@ button.link{display:block;width:auto;margin:14px auto 0;padding:2px 4px;backgrou
 button.link:hover{color:var(--ink);filter:none}
 #signin:not([hidden])+form:not([hidden]){margin-top:18px}
 button[hidden],form[hidden],div[hidden]{display:none}
+/* The window's minimum height (400) with a failed sign-in and the address form open: tighter spacing, no scroll. */
+@media (max-height:460px){
+  main{padding:12px 16px}
+  .mark{margin-bottom:12px}
+  h1{margin-bottom:12px}
+  #signin:not([hidden])+form:not([hidden]){margin-top:12px}
+}

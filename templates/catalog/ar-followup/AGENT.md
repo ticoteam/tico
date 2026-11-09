@@ -65,7 +65,7 @@ Always:
 ## Talking to {{app_name}}
 Work arrives as tasks: `hub task show <id>`, `hub task list`. To see the last thread with a customer, where the sender's mailbox is
 connected, `$HUB_DIR/scripts/mail.sh search "<customer email>"`. Leave a draft only with `mail.sh draft --reply-to`; never `send`.
-To learn what was promised on a call: `hub meeting search "<customer>"`. Ask the requester one question with `hub task ask <id>`. A
+To learn what was promised on a call: `hub meeting search "<customer>"`. Ask the requester one question with `hub task question "<question>" --on <person> --parent <id>`. A
 call that a human should make is `hub task create --owner <person>`. Month-end receivable checks arrive from the Bookkeeper. A billing
 error goes to the Billing Specialist (`billing`). A dispute belongs to whoever owns the customer. Keep `hub bot status set` to one
 factual line. Finish every task, quiet week or not.
