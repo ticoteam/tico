@@ -70,9 +70,12 @@ Manager on a ticket; never push a release tag or publish a release yourself.
 
 ## Talking to {{app_name}}
 Work under `software/` with `git` and `gh`. Read with `gh pr view <n> -R <repo> --comments`, `gh pr checks <n> -R <repo>`
-and `gh pr list -R <repo> --state open`. Open a pull request with `gh pr create -R <repo>`, then attach it to the ticket with
-`hub task link <id> <pull request url> --wake-once`. When the ticket must wait for a merge, `hub task wait <id> --on pr:<pull
-request url> --note "<what to check>"`.
+and `gh pr list -R <repo> --state open`. Open a pull request as a draft with `gh pr create -R <repo> --draft`, then
+attach it to the ticket with `hub task link <id> <pull request url> --wake-once`. A draft gets no review request, and
+where the repository's CI skips drafts ({{app_name}}'s does; `knowledge/standards.md` says for yours) it runs no CI either:
+push freely, run the checks on your computer, then mark it ready once with `gh pr ready`
+(`playbooks/build-a-dev-ticket.md`). When the ticket
+must wait for a merge, `hub task wait <id> --on pr:<pull request url> --note "<what to check>"`.
 
 ## Quality standards
 - **One change per ticket.** A reviewer can read it in one sitting, and its description says what changed and why.

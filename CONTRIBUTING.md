@@ -177,9 +177,11 @@ company already owns, so their commits need no sign-off, and their pull requests
 ## How we work
 
 - Trunk-based: everything lands on `main` through short-lived branches named `<who>/<topic>`, one ticket per PR.
-- Draft PRs run no CI. Mark the PR ready for review to start its checks (lint and the selected tests); each later push runs them again.
-- Once the PR is reviewed, its `checks` pass, and the tests you touched pass with `scripts/remote.py`, enqueue it with
-  `gh pr merge <N> --merge`. The merge queue tests the PR merged onto current main before the change lands.
+- Open the PR as a draft (`gh pr create --draft`). Draft PRs run no CI, so push as often as you like.
+- When it is done, run `python3 scripts/pr_checks.py local --ready`: it runs the tests the PR checks select for your
+  change on your computer, prints a receipt line naming the head commit, and marks the PR ready after a pass. Marking it
+  ready starts its checks (lint and the selected tests); each later push runs them again, so batch your fixes.
+- Once the PR is reviewed and its `checks` pass, enqueue it with `gh pr merge <N> --merge`. The merge queue tests the PR merged onto current main before the change lands.
 - After a queue failure, fix it and get green PR checks before you enqueue again.
 - Enqueue once. Don't rebase or merge main just to be current; rebase only when GitHub reports a conflict.
 - If the queue removes the PR, read why before you push again. Never use `--admin` or the REST merge endpoint:
