@@ -1,7 +1,7 @@
 // A task with a question to you, opened before the first Needs you list is held (boot sends that read after the roster
 // and the opening page): the plain ask shows, and its question box takes its place once a list lands, without
 // reopening the task. A first read that fails keeps the wait for the next one that answers (ui/app/task-modal.ts
-// taskQcardWait, ui/app/hub-v2.js NEEDS_FIRST).
+// taskQcardWait, ui/app/hub-v2.ts NEEDS_FIRST).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {open} = require('./tasks-page.cjs');

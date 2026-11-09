@@ -300,6 +300,7 @@ interface HealthIssue {
   bot?: string;
   bots?: string[];
   since?: string;
+  title: string;
   can_review?: boolean;
   [key: string]: unknown;
 }
@@ -314,7 +315,7 @@ interface ServerStatus {
   [key: string]: unknown;
 }
 
-// ---------------------------------------------------------------- the live hub state (S.v2, hub-v2.js)
+// ---------------------------------------------------------------- the live hub state (S.v2, hub-v2.ts)
 
 /** Why a bot is quarantined and whether it lifts by itself (`quarantine` on a live bot state, backend/events.py). */
 interface Quarantine {
@@ -322,7 +323,7 @@ interface Quarantine {
   resumes_at?: string | null;
   since?: string | null;
   why?: string;
-  review?: { found?: string; [key: string]: unknown } | null;
+  review?: { found?: string; what?: string; [key: string]: unknown } | null;
   builder_notice?: unknown;
   [key: string]: unknown;
 }
@@ -341,6 +342,16 @@ interface V2BotState {
   /** The status tooltip's Needs humans row and Next run row (ui/app/tooltip.ts). */
   needs_human?: number;
   next_due_at?: string | null;
+  /** The spend limit holding its new work (backend/usage_limits.py `over`). */
+  limit?: SpendLimit | null;
+  [key: string]: unknown;
+}
+
+/** A spend limit a bot is over: its own, or its team's or a group's (`scope`). */
+interface SpendLimit {
+  scope?: string;
+  name?: string;
+  period?: string;
   [key: string]: unknown;
 }
 
@@ -353,10 +364,20 @@ interface WentAway {
   days?: number;
 }
 
+/** The question a Needs you row asks (`ask`): to whom, and whether it was delivered. */
+interface NeedsAsk {
+  id?: string;
+  recipient_id?: string | null;
+  sender_id?: string;
+  created_at?: string;
+  delivered_at?: string | null;
+}
+
 /** One row of Needs you (`S.v2.needs`). */
 interface NeedsItem {
   kind: string;
   id: string;
+  ask?: NeedsAsk | null;
   requested_by_id?: string;
   requester_id?: string;
   [key: string]: unknown;
@@ -368,7 +389,7 @@ interface V2State {
   needs: NeedsItem[];
   needsVersion?: string | null;
   needsCount?: number;
-  needsNext?: unknown;
+  needsNext?: string | null;
   needsBots?: Record<string, number> | null;
   needsPlateCount?: number | null;
   needsByKind?: Record<string, number> | null;

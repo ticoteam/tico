@@ -105,7 +105,7 @@ function auRunToggle(id: string): void {
 function auRunTime(at: string | null | undefined): string {
   const d = new Date(at ?? '');
   if (Number.isNaN(d.getTime())) return '';
-  return d.toDateString() === new Date().toDateString() ? clockTime(at)
+  return d.toDateString() === new Date().toDateString() ? clockTime(at!)
     : d.toLocaleString([], {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
 }
 const auMoney = (n: unknown): string => {

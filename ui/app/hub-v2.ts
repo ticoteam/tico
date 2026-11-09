@@ -1,34 +1,122 @@
-/* ui/app/hub-v2.js — Hub v2 helpers: statuses, actors, task text, paused notices
+/* ui/app/hub-v2.ts — Hub v2 helpers: statuses, actors, task text, paused notices
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
+
+/** What a bot's status row says on GET /v2/status: its live state, keyed by `bot`. */
+interface V2StatusReply {
+  bots?: (V2BotState & { bot: string })[];
+  updating?: boolean;
+}
+/** Who or what wrote a row (`source` on message, task history and event rows; rowSource). */
+interface RowSource {
+  kind: string;
+  name: string;
+  link: string | null;
+}
+/** The refs rowSource and sourceCarriesCard read: a message's `refs`, a history row's `data` or an event's `detail`. */
+interface SourceRefs {
+  source?: unknown;
+  for?: unknown;
+  carried?: unknown;
+  task?: unknown;
+  action?: unknown;
+  credential_request?: unknown;
+  approval?: unknown;
+  questions?: unknown;
+  chat_goal?: unknown;
+  read_back?: unknown;
+  update?: unknown;
+  card?: unknown;
+  reconnect?: unknown;
+}
+/** A row a surface draws: a message, a task history row or an event. Each surface sends its own fields. */
+interface SourceRow {
+  id?: unknown;
+  kind?: unknown;
+  body?: unknown;
+  sender_id?: unknown;
+  created_at?: WhenInput;
+  source?: RowSource | null | undefined;
+  refs?: SourceRefs | null | undefined;
+  data?: SourceRefs | null | undefined;
+  detail?: SourceRefs | null | undefined;
+}
+/** A row in a run of task updates: a message, or a task's history item that carries one. */
+interface SourceRunRow extends SourceRow {
+  ts?: WhenInput;
+  message?: { id?: unknown; created_at?: WhenInput } | null | undefined;
+}
+interface SourceLineOptions {
+  src?: RowSource | undefined;
+  at?: WhenInput;
+  text?: unknown;
+  cls?: string | undefined;
+  attrs?: string | undefined;
+  tail?: string | undefined;
+}
+/** The task fields the task text helpers read. */
+interface HubTask {
+  requester_id?: string | null | undefined;
+  origin_actor?: string | null | undefined;
+  owner_id?: string | null | undefined;
+  title?: string | null | undefined;
+  body?: string | null | undefined;
+  attachments?: readonly unknown[] | null | undefined;
+}
+/** A read of Needs you (GET /v2/needs-you): a page, the whole list, the items named by `ids=`, or `unchanged`. */
+interface NeedsRead {
+  items?: NeedsItem[];
+  version?: string | null;
+  count?: number;
+  next?: string | null;
+  bots?: Record<string, number> | null;
+  plate_count?: number | null;
+  by_kind?: Record<string, number> | null;
+  folded_task_ids?: string[] | null;
+  went_away?: WentAway | null;
+  unchanged?: boolean;
+  restart?: boolean;
+  /** An `ids=` read: each item's place in the list at `version`. */
+  positions?: Record<string, number>;
+}
+/** A live `needs` event: the ids that changed since `base`, or (from a server without changes) the whole list. */
+interface NeedsChange extends NeedsRead {
+  count: number;
+  base?: string | null;
+  changed?: (string | number)[] | null;
+  removed?: (string | number)[] | null;
+}
+/** An item past the pages held, read alone. */
+interface NeedsOne {
+  read?: Promise<NeedsItem | null>;
+  it: NeedsItem | null;
+}
 
 // ----------------------------------------------------------------- hub v2 (docs/history/hub-v2.md)
 // Every bot is hosted by the keeper (`host: keeper`, the only host there is), so the record is hub.db, not GitHub:
 // chat is `messages`, work is `tasks`, approvals are one tap, and every bot has one status row with
 // its history. Every fetch is guarded, so a hub with no hub.db yet looks exactly as it does today.
-/** @type {Record<string, string>} */
-const V2_WORD = {idle: 'Idle', running: 'Running', waiting_human: 'Waiting on a human',
+const V2_WORD: Record<string, string> = {idle: 'Idle', running: 'Running', waiting_human: 'Waiting on a human',
                  waiting_bot: 'Waiting on a bot', blocked: 'Blocked', limited: 'Rate limited',
                  crashed: 'Crashed', paused: 'Paused', quarantined: 'Paused for review'};
 // A bot the server has registered but not switched on yet. People read "Setting up"; the API value stays `planned`.
-const statusWord = status => status === 'planned' ? 'Setting up' : String(status || '');
-const V2_PILL = {running: 'in-progress', waiting_human: 'needs', waiting_bot: 'waiting', blocked: 'blocked',
+const statusWord = (status: unknown) => status === 'planned' ? 'Setting up' : String(status || '');
+const V2_PILL: Record<string, string> = {running: 'in-progress', waiting_human: 'needs', waiting_bot: 'waiting', blocked: 'blocked',
                  limited: 'waiting', crashed: 'fail', quarantined: 'fail', idle: ''};
-/** @type {Record<string, string>} */
-const V2_KIND = {decision: 'Decision', approval: 'Approval', review: 'Review', declined: 'Declined',
+const V2_KIND: Record<string, string> = {decision: 'Decision', approval: 'Approval', review: 'Review', declined: 'Declined',
                  question: 'Question', task: 'Task', notice: 'Message', setup: 'Set up'};
-const v2StatusOf = slug => S.v2.status[slug] || null;
-const actorSlug = a => String(a || '').startsWith('bot:') ? String(a).slice(4) : '';
-const actorPerson = a => String(a || '').startsWith('human:') ? String(a).slice(6) : '';
-const titleCase = s => String(s || '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+const v2StatusOf = (slug: string) => S.v2.status[slug] || null;
+const actorSlug = (a: unknown) => String(a || '').startsWith('bot:') ? String(a).slice(4) : '';
+const actorPerson = (a: unknown) => String(a || '').startsWith('human:') ? String(a).slice(6) : '';
+const titleCase = (s: unknown) => String(s || '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 // Display names are independent of persisted actor and host identifiers.
-const personDisplay = id => {
+const personDisplay = (id: unknown) => {
   const p = (S.people || []).find(x => x.id === id);
   return (p && p.name) || titleCase(id);
 };
 // What a sender, "added by" or "by" slot says for the keeper: it happened automatically.
 const KEEPER_LABEL = 'Automatic';
-const actorLabel = a => {
+const actorLabel = (a: unknown): string => {
   const slug = actorSlug(a);
   if (slug) return botDisplayName(slug);
   const pid = actorPerson(a);
@@ -37,9 +125,9 @@ const actorLabel = a => {
   return a === 'keeper' ? KEEPER_LABEL : String(a || '');
 };
 // Notices the hub writes for bots to read carry raw ids ("New task from human:sam"); people see names.
-const plainActors = text => String(text ?? '').replace(/\b(human|bot):([A-Za-z0-9._-]*[A-Za-z0-9_])/g,
+const plainActors = (text: unknown) => String(text ?? '').replace(/\b(human|bot):([A-Za-z0-9._-]*[A-Za-z0-9_])/g,
   (all, kind) => { const pid = actorPerson(all); return pid && pid === S.me?.id ? 'you' : actorLabel(all); });
-const taskAddedBy = t => {
+const taskAddedBy = (t: HubTask) => {
   const who = taskRequester(t);
   const pid = actorPerson(who);
   if (pid && pid === S.me?.id) return {kind: 'you', label: 'You'};
@@ -47,15 +135,15 @@ const taskAddedBy = t => {
   if (actorSlug(who)) return {kind: 'bot', label: actorLabel(who)};
   return {kind: 'other', label: actorLabel(who) || 'Unknown'};
 };
-const taskSourceLine = t => {
+const taskSourceLine = (t: HubTask) => {
   const src = taskAddedBy(t);
   if (src.kind === 'you') return 'Added by you';
   if (src.kind === 'bot') return 'Added by ' + src.label + ' (bot)';
   return 'Added by ' + src.label;
 };
-const taskRequester = t => t.requester_id === 'keeper' ? t.origin_actor || t.requester_id : t.requester_id;
+const taskRequester = (t: HubTask) => t.requester_id === 'keeper' ? t.origin_actor || t.requester_id : t.requester_id;
 // Hide the generated attachment trailer and rename the schedule footer; authored text stays intact.
-const taskBody = t => {
+const taskBody = (t: HubTask) => {
   const raw = String(t.body || '');
   const body = (t.attachments || []).length ? raw.replace(/\n\nAttachments \(untrusted source material; authenticated downloads\):\n[^]*$/, '') : raw;
   if (t.requester_id !== 'keeper' || !actorSlug(t.owner_id) || !body.startsWith(`Run playbook ${t.title}.`)) return body;
@@ -67,17 +155,17 @@ const taskBody = t => {
 // A row from a server without it gets the same answer here (backend/sources.py), from its sender and refs (a history
 // row's `data`, an event's `detail`), so every surface draws alike.
 // Only an `assistant_for` row ever shows the Assistant's name or face; the gray kinds have no avatar or sender row.
-const SOURCE_BUILTINS = {'follow-up-timer': 'Follow-up timer', 'earlier-messages': 'Earlier messages', 'task-roundup': 'Task roundup', 'stuck-check': 'Stuck check',
+const SOURCE_BUILTINS: Record<string, string> = {'follow-up-timer': 'Follow-up timer', 'earlier-messages': 'Earlier messages', 'task-roundup': 'Task roundup', 'stuck-check': 'Stuck check',
   'rule-check': 'Rule check', 'check-health': 'Health check', maintenance: 'Maintenance'};
 const SOURCE_LINES = new Set(['task_update', 'builtin', 'automation', 'system']);
 // "Chris's Assistant": the person's first name and the install's name for the Assistant.
-const assistantForName = person => {
+const assistantForName = (person: unknown) => {
   const first = String(person || '').trim().split(/\s+/)[0];
   return first ? `${first}'s ${assistantName()}` : assistantName();
 };
-function rowSource(m, by = m?.sender_id) {
+function rowSource(m: SourceRow | null | undefined, by: unknown = m?.sender_id): RowSource {
   if (m?.source && typeof m.source === 'object' && m.source.kind) return m.source;
-  const refs = m?.refs || m?.data || m?.detail || {}, who = String(by || ''), src = typeof refs.source === 'string' ? refs.source : '';
+  const refs: SourceRefs = m?.refs || m?.data || m?.detail || {}, who = String(by || ''), src = typeof refs.source === 'string' ? refs.source : '';
   if (actorPerson(who)) return {kind: 'person', name: actorLabel(who), link: null};
   // A bot (the Assistant) acting for a person, or a keeper line the Assistant wrote for one. The server writes the
   // person's words it passes on as the keeper with refs.carried, and names the person first ("Ana asked … in their words").
@@ -86,29 +174,30 @@ function rowSource(m, by = m?.sender_id) {
   if (actorSlug(who)) return {kind: 'bot', name: actorLabel(who), link: null};
   if (who !== 'keeper') return {kind: who ? 'bot' : 'system', name: who ? actorLabel(who) : '', link: null};
   if (src.startsWith('automation:')) return {kind: 'automation', name: 'Automation', link: AUTOMATION_HREF(src.slice(11))};
-  if (SOURCE_BUILTINS[src]) return {kind: 'builtin', name: SOURCE_BUILTINS[src], link: null};
+  const builtin = SOURCE_BUILTINS[src];
+  if (builtin) return {kind: 'builtin', name: builtin, link: null};
   if (src.startsWith('system:')) return {kind: 'system', name: '', link: null};
   if (refs.carried) return {kind: 'assistant_for', name: assistantForName(forName()), link: null};
   if (refs.task && m?.refs) return {kind: 'task_update', name: 'Task update', link: null};     // a message, never a history row
   return {kind: 'system', name: '', link: null};
 }
-const AUTOMATION_HREF = id => id ? '#/automations/' + encodeURIComponent(id) : '#/automations';
+const AUTOMATION_HREF = (id: string) => id ? '#/automations/' + encodeURIComponent(id) : '#/automations';
 // Whether a message draws as a gray line. One that asks something of a person, or carries a card, keeps its own row
 // whoever wrote it: its controls are never folded away.
-const sourceCarriesCard = m => { const r = m?.refs || {};
+const sourceCarriesCard = (m: SourceRow | null | undefined) => { const r: SourceRefs = m?.refs || {};
   return m?.kind === 'ask' || !!(r.action || r.credential_request || r.approval || r.questions || r.chat_goal || r.read_back || r.update || r.card || r.reconnect); };
-const isSourceLine = (m, by) => SOURCE_LINES.has(rowSource(m, by).kind) && !sourceCarriesCard(m);
+const isSourceLine = (m: SourceRow | null | undefined, by?: unknown) => SOURCE_LINES.has(rowSource(m, by).kind) && !sourceCarriesCard(m);
 // Plain words for a gray line: names for actor ids, markdown marks and link targets dropped.
-const sourcePlain = text => plainActors(String(text ?? '').replace(/^New task from keeper: /, 'New task: ')).replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>~|]/g, '').trim();
+const sourcePlain = (text: unknown) => plainActors(String(text ?? '').replace(/^New task from keeper: /, 'New task: ')).replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`#>~|]/g, '').trim();
 // The name a gray line leads with: bold for a built-in, a link for an automation, nothing for a task update or system.
-function sourceLeadHTML(src) {
+function sourceLeadHTML(src: RowSource) {
   if (!src.name || !['builtin', 'automation'].includes(src.kind)) return '';
   return src.kind === 'automation' && src.link
     ? `<a class="src-name" href="${esc(src.link)}">${esc(src.name)}</a> ` : `<b class="src-name">${esc(src.name)}</b> `;
 }
 // One gray line for a row no person or bot wrote. `cls` and `attrs` let each surface keep its own row hooks; the
 // hover says what made it and when, and the whole text when the line may be cut.
-function sourceLineHTML(m, {src = rowSource(m), at = m.created_at, text = m.body, cls = '', attrs = '', tail = ''} = {}) {
+function sourceLineHTML(m: SourceRow, {src = rowSource(m), at = m.created_at, text = m.body, cls = '', attrs = '', tail = ''}: SourceLineOptions = {}) {
   const words = sourcePlain(text || ''), first = words.split('\n').map(s => s.trim()).find(Boolean) || '';
   const tip = [src.name, at ? fmt(at) : ''].filter(Boolean).join(' · ') + (words.length > first.length || first.length > 60 ? '\n\n' + words.slice(0, 600) : '');
   const when = at ? `<time class="src-time" data-ago="${esc(at)}">${esc(ago(at))}</time>` : '';
@@ -119,20 +208,19 @@ function sourceLineHTML(m, {src = rowSource(m), at = m.created_at, text = m.body
 // Every other row is drawn by `draw`. `open(run)` says whether a group is open, so a redraw keeps it: the surface keeps
 // the ids of the rows in groups opened (sourceGroupToggle), nothing is stored, and a group stays open when updates join
 // it at either end, live or from an older page.
-/**
- * @param {any[]} items
- * @param {{line: (it: any) => string, draw: (it: any, i: number) => string, open?: (run: any[]) => boolean, isUpdate?: (it: any) => boolean}} opts
- */
-function sourceRunsHTML(items, {line, draw, open = () => false, isUpdate = it => rowSource(it).kind === 'task_update'}) {
-  const out = [];
+function sourceRunsHTML<T extends SourceRunRow>(items: T[], {line, draw, open = () => false, isUpdate = it => rowSource(it).kind === 'task_update'}: {
+  line: (it: T) => string; draw: (it: T, i: number) => string; open?: (run: T[]) => boolean; isUpdate?: (it: T) => boolean;
+}) {
+  const out: string[] = [];
   for (let i = 0; i < items.length;) {
-    if (!isUpdate(items[i])) { out.push(draw(items[i], i)); i++; continue; }
+    const item = items[i]!;
+    if (!isUpdate(item)) { out.push(draw(item, i)); i++; continue; }
     let end = i;
-    while (end < items.length && isUpdate(items[end])) end++;
-    const run = items.slice(i, end);
-    if (run.length === 1) out.push(line(run[0]));
+    while (end < items.length && isUpdate(items[end]!)) end++;
+    const run = items.slice(i, end), first = run[0]!;
+    if (run.length === 1) out.push(line(first));
     else {
-      const key = String(run[0].id || run[0].message?.id || ''), last = run.at(-1), at = last.created_at || last.ts || last.message?.created_at;
+      const key = String(first.id || first.message?.id || ''), last = run.at(-1)!, at = last.created_at || last.ts || last.message?.created_at;
       out.push(`<details class="src-group" data-src-group="${esc(key)}"${open(run) ? ' open' : ''}><summary class="src-line src-task_update">${
         run.length} task updates<span class="src-chev" aria-hidden="true">▸</span>${at ? `<time class="src-time" data-ago="${esc(at)}" title="${esc(fmt(at))}">${esc(ago(at))}</time>` : ''}</summary>${
         run.map(line).join('')}</details>`);
@@ -142,29 +230,29 @@ function sourceRunsHTML(items, {line, draw, open = () => false, isUpdate = it =>
   return out.join('');
 }
 // A group opened or shut (its `toggle`): the ids of its rows join or leave `set`.
-function sourceGroupToggle(set, el) {
-  if (!set || !el?.matches?.('details.src-group')) return;
-  for (const row of el.querySelectorAll('[data-message]')) set[el.open ? 'add' : 'delete'](row.dataset.message);
+function sourceGroupToggle(set: Set<string> | null | undefined, el: EventTarget | null | undefined) {
+  if (!set || !(el instanceof HTMLDetailsElement) || !el?.matches?.('details.src-group')) return;
+  for (const row of el.querySelectorAll<HTMLElement>('[data-message]')) set[el.open ? 'add' : 'delete'](row.dataset.message!);
 }
-const actorChip = a => {
+const actorChip = (a: unknown) => {
   const slug = actorSlug(a);
   return slug && botRow(slug)
     ? `<a class="chip" href="#/bot/${encodeURIComponent(slug)}">${avatar(slug, 16)}<span>${empName(slug)}</span></a>`
     : `<span class="chip">${personCircle(actorLabel(a), 16)}<span>${esc(actorLabel(a))}</span></span>`;
 };
-const v2Firstline = body => String(body || '').split('\n').map(s => s.trim()).find(Boolean) || '';
+const v2Firstline = (body: unknown) => String(body || '').split('\n').map(s => s.trim()).find(Boolean) || '';
 const myActor = () => S.me?.id ? `human:${S.me.id}` : '';
 // The person on a chat bubble is the local part of their address: jo@example.com is "jo".
 // Takes an actor (human:jo), an email, a roster id, or the Issue's "Jo"; '' when unknown.
-const personHandle = x => (actorPerson(x) || String(x || '')).split('@')[0].trim().toLowerCase();
+const personHandle = (x: unknown) => (actorPerson(x) || String(x || '')).split('@')[0]!.trim().toLowerCase();
 const ownerHandle = () => S.me?.owner_id || 'owner';           // unsigned Issue text is the owner's
 const myHandle = () => personHandle(S.me?.id || S.me?.email) || ownerHandle();
-const unsigned = body => String(body || '').replace(/\n*_?— [^\s_]+@[^\s_]+ via the hub_?\s*$/, '');
+const unsigned = (body: unknown) => String(body || '').replace(/\n*_?— [^\s_]+@[^\s_]+ via the hub_?\s*$/, '');
 // every v2 read is optional: a hub without hub.db answers 404 and the caller falls back
-async function v2Get(path, opts) { try { return await get(path, opts); } catch { return null; } }
+async function v2Get<T = UntypedJson>(path: string, opts?: {fresh?: boolean}): Promise<T | null> { try { return await get<T>(path, opts); } catch { return null; } }
 
 async function v2Refresh() {
-  const [st, needs] = await Promise.all([v2Get('/v2/status'), v2NeedsRead()]);
+  const [st, needs] = await Promise.all([v2Get<V2StatusReply>('/v2/status'), v2NeedsRead()]);
   S.v2.on = !!st;
   if (st) S.v2.status = Object.fromEntries((st.bots || []).map(b => [b.bot, b]));
   // when Tico is updating itself, say so at the top of the sidebar
@@ -184,27 +272,27 @@ async function v2Refresh() {
 // lands after a newer one is not kept. A server without pages sends the whole list, and there is no next page.
 const NEEDS_PAGE = 50, NEEDS_PAGE_MAX = 200;
 // Where the next page starts in the list at `version`: the server's cursor (backend/views.py needs_cursor).
-const needsCursor = (version, n) => `${version}.${n}`;
+const needsCursor = (version: string, n: number) => `${version}.${n}`;
 const needsAll = () => !S.v2.needsNext;
 // An item past the pages held, read alone (`ids=`) for a task's question box; forgotten whenever the list moves.
-const NEEDS_ONE = new Map();     // id -> {read, it}
-function v2NeedsOne(id) {
+const NEEDS_ONE = new Map<string, NeedsOne>();     // id -> {read, it}
+function v2NeedsOne(id: unknown) {
   const key = String(id);
   if (!NEEDS_ONE.has(key)) {
-    const one = {it: null};
-    one.read = v2Get(`/v2/needs-you?ids=${encodeURIComponent(key)}`).then(r => (one.it = (r?.items || [])[0] || null));
+    const one: NeedsOne = {it: null};
+    one.read = v2Get<NeedsRead>(`/v2/needs-you?ids=${encodeURIComponent(key)}`).then(r => (one.it = (r?.items || [])[0] || null));
     NEEDS_ONE.set(key, one);
   }
-  return NEEDS_ONE.get(key).read;
+  return NEEDS_ONE.get(key)!.read!;
 }
-const needsOneHeld = id => NEEDS_ONE.get(String(id))?.it || null;
+const needsOneHeld = (id: unknown) => NEEDS_ONE.get(String(id))?.it || null;
 // A question to the person is delivered once their Needs you holds it, and read once they open its card or its task
 // (POST /v2/needs-you/seen, /v2/tasks/{id}/seen): a question withdrawn later tells its bot whether they had seen it.
 // Delivery is sent once per question per page load; one that fails is sent again with the next list.
-const ASKS_SENT = {seen: new Set(), read: new Set()};
-const askToMe = a => a?.id && actorPerson(a.recipient_id || '') === S.me?.id;
-function needsSeen(items) {
-  const ids = (items || []).map(it => it.ask).filter(a => askToMe(a) && !a.delivered_at && !ASKS_SENT.seen.has(a.id))
+const ASKS_SENT = {seen: new Set<string>(), read: new Set<string>()};
+const askToMe = <A extends NeedsAsk>(a: A | null | undefined): a is A & {id: string} => !!a?.id && actorPerson(a.recipient_id || '') === S.me?.id;
+function needsSeen(items: NeedsItem[] | null | undefined) {
+  const ids = (items || []).map(it => it.ask).filter((a): a is NeedsAsk & {id: string} => askToMe(a) && !a.delivered_at && !ASKS_SENT.seen.has(a.id))
     .map(a => a.id).slice(0, 200);
   if (!ids.length) return;
   ids.forEach(id => ASKS_SENT.seen.add(id));
@@ -213,7 +301,7 @@ function needsSeen(items) {
 // Reads a task's open questions to the person (the server marks each open one). A card that shows one question sends
 // once per page load for that question (askId), so repaints stay quiet; opening the full task always sends, because a
 // question asked after an earlier open is read only by a request made then.
-function taskAsksRead(id, askId) {
+function taskAsksRead(id: string | number, askId?: string | number | null) {
   const key = String(id);
   if (!key) return;
   if (askId) {
@@ -224,10 +312,10 @@ function taskAsksRead(id, askId) {
 }
 // The first list held: a page drawn before it (a task opened from a link) fills its question box then. A read that
 // fails holds no list, so the wait goes on to the next one that answers.
-let needsFirstDone = null;
-const NEEDS_FIRST = new Promise(done => { needsFirstDone = done; });
+let needsFirstDone: (() => void) | null = null;
+const NEEDS_FIRST = new Promise<void>(done => { needsFirstDone = done; });
 const needsFirstIn = () => !needsFirstDone;
-function needsTake(needs) {
+function needsTake(needs: NeedsRead) {
   NEEDS_ONE.clear();
   S.v2.needs = needs.items || []; S.v2.needsVersion = needs.version || null;
   for (let at = 0; at < S.v2.needs.length; at += 200) needsSeen(S.v2.needs.slice(at, at + 200));
@@ -244,7 +332,7 @@ async function v2NeedsRead() {
   const held = S.v2.needsVersion, seq = ++NEEDS_READ, revision = NEEDS_REVISION;
   // As many as are held, so a list that moved does not drop the pages already read.
   const limit = Math.min(NEEDS_PAGE_MAX, Math.max(NEEDS_PAGE, (S.v2.needs || []).length));
-  const needs = await v2Get(`/v2/needs-you?limit=${limit}` + (held ? `&version=${encodeURIComponent(held)}` : ''), {fresh: true});
+  const needs = await v2Get<NeedsRead>(`/v2/needs-you?limit=${limit}` + (held ? `&version=${encodeURIComponent(held)}` : ''), {fresh: true});
   if (!needs) return null;
   if (seq < NEEDS_KEPT || revision !== NEEDS_REVISION) return null;
   NEEDS_KEPT = seq;
@@ -254,13 +342,13 @@ async function v2NeedsRead() {
   return needs;
 }
 // The next page, one read at a time. Resolves true when the list grew (or was read again because it moved).
-let NEEDS_MORE = null;
+let NEEDS_MORE: Promise<boolean> | null = null;
 function v2NeedsMore() {
   if (needsAll()) return Promise.resolve(false);
   return NEEDS_MORE ||= (async () => {
     try {
       const cursor = S.v2.needsNext, read = NEEDS_READ;
-      const r = await v2Get(`/v2/needs-you?limit=${NEEDS_PAGE}&cursor=${encodeURIComponent(cursor)}`, {fresh: true});
+      const r = await v2Get<NeedsRead>(`/v2/needs-you?limit=${NEEDS_PAGE}&cursor=${encodeURIComponent(cursor!)}`, {fresh: true});
       // A newer read owns the next snapshot even before it lands; this older page must not invalidate it.
       if (!r || read !== NEEDS_READ || S.v2.needsNext !== cursor) return false;
       if (r.restart || r.version !== S.v2.needsVersion) { await v2NeedsRead(); return true; }
@@ -281,8 +369,8 @@ function v2NeedsMore() {
 // when the list may have moved. A changed item whose place falls past the pages held stays unread: only the count
 // moves, and the next page starts after what is held. Missing folded ids keep the held set; null reads it whole.
 let NEEDS_MEND = Promise.resolve(false);
-const v2NeedsChanged = d => (NEEDS_MEND = NEEDS_MEND.catch(() => false).then(() => v2NeedsMend(d)));
-async function v2NeedsMend(d) {
+const v2NeedsChanged = (d: unknown) => (NEEDS_MEND = NEEDS_MEND.catch(() => false).then(() => v2NeedsMend(d as NeedsChange)));
+async function v2NeedsMend(d: NeedsChange) {
   if (d.went_away) S.v2.wentAway = d.went_away;
   if (Array.isArray(d.items)) {       // a server without changes
     NEEDS_REVISION++;
@@ -297,13 +385,13 @@ async function v2NeedsMend(d) {
   const items = (S.v2.needs || []).filter(it => !out.has(String(it.id)));
   let plateCount = d.plate_count;
   if (d.changed.length) {
-    const r = await v2Get(`/v2/needs-you?ids=${encodeURIComponent(d.changed.join(','))}`);
+    const r = await v2Get<NeedsRead & {positions: Record<string, number>}>(`/v2/needs-you?ids=${encodeURIComponent(d.changed.join(','))}`);
     if (!r || r.version !== d.version) return whole();
     plateCount = r.plate_count ?? plateCount;
     // Unchanged items kept their order against each other, so each changed one goes back at its place, first place
     // first. Past the end of the pages held, the rest wait for their page.
-    for (const it of (r.items || []).slice().sort((a, b) => r.positions[String(a.id)] - r.positions[String(b.id)])) {
-      const at = r.positions[String(it.id)];
+    for (const it of (r.items || []).slice().sort((a, b) => r.positions[String(a.id)]! - r.positions[String(b.id)]!)) {
+      const at = r.positions[String(it.id)]!;
       if (!all && at > items.length) break;
       items.splice(at, 0, it);
     }
@@ -325,12 +413,12 @@ async function v2NeedsMend(d) {
 // its Mac has been offline for ten minutes. Messages still save and run when it is back; this
 // only says why nothing is happening yet. A stopped run holds only its own request while other
 // work continues. Redrawn from the 30 s refresh, never its own poll.
-const PAUSED_WHY = {limited: 'usage limit'};
-const clockTime = at => new Date(at).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+const PAUSED_WHY: Record<string, string> = {limited: 'usage limit'};
+const clockTime = (at: string | number | Date) => new Date(at).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
 // Why a quarantined bot is paused, in plain words. An escape says what the safety check matched in the
 // bot's own words, never that something was read or edited: the check reads only the text it refused.
-function quarantineWhy(slug) {
-  const q = v2StatusOf(slug)?.quarantine || {}, r = q.review || {};
+function quarantineWhy(slug: string) {
+  const q: Quarantine = v2StatusOf(slug)?.quarantine || {}, r: NonNullable<Quarantine['review']> = q.review || {};
   if (q.why) return q.why;
   if (q.auto) return `Quarantined for repeated refused writes (rule 8): resumes by itself ${q.resumes_at ? `at ${new Date(q.resumes_at).toISOString().slice(0, 16).replace('T', ' ')} UTC` : 'after its cooldown'}; a person who manages it can clear it sooner.`;
   const found = r.found === 'secrets/' ? 'a secrets/ path' : r.found ? `another bot's folder (${r.found})` : "a secrets path or another bot's folder";
@@ -338,64 +426,64 @@ function quarantineWhy(slug) {
   return `Quarantined until a person clears it. The safety check stopped ${what} that named ${found}. It matched text only; nothing was sent or changed.`;
 }
 const QUARANTINE_RESUME_NOTE = 'Resume releases this pause; the checks stay on.';
-async function quarantineResume(slug) {
+async function quarantineResume(slug: string) {
   await post(`/v2/bots/${encodeURIComponent(slug)}/quarantine/clear`, {});
   await v2Refresh();
   toast(`${empName(slug)} resumed`);
 }
 // Try now: a person who renewed the plan clears the usage-limit cooldown for this bot and the others
 // limited on the same runtime and computer (backend/execution.py `clear_limits`).
-async function limitRetry(slug) {
+async function limitRetry(slug: string) {
   await post(`/v2/bots/${encodeURIComponent(slug)}/limit/retry`, {});
   await v2Refresh();
   toast(`${empName(slug)} will try again now`);
 }
-const limitRetryButton = (slug, cls = 'linkish') => v2StatusOf(slug)?.state === 'limited' && settingsCanManageBot(botRow(slug))
+const limitRetryButton = (slug: string, cls = 'linkish') => v2StatusOf(slug)?.state === 'limited' && settingsCanManageBot(botRow(slug))
   ? ` <button type="button" class="${cls}" data-limit-retry>Try now</button>` : '';
 // Release: Tico stopped the bot (backend/bot_stops.py: five fast failed runs, or over its run budget) and a person
 // who manages it lets it run again (POST /v2/bots/{bot}/release, which clears both). One click, wherever it shows.
-async function botRelease(slug) {
+async function botRelease(slug: string) {
   await post(`/v2/bots/${encodeURIComponent(slug)}/release`, {});
   await v2Refresh();
   toast(`${empName(slug)} released`);
 }
-const botMayRelease = slug => settingsCanManageBot(botRow(slug));
-const botReleaseButton = (slug, cls = 'linkish') => botMayRelease(slug)
+const botMayRelease = (slug: string | undefined) => settingsCanManageBot(botRow(slug));
+const botReleaseButton = (slug: string | undefined, cls = 'linkish') => botMayRelease(slug)
   ? ` <button type="button" class="${cls}" data-bot-release="${esc(slug)}">Release</button>` : '';
 // Every Release button (the chat line, the bot page, Health) goes through one listener; each page redraws its own.
 document.addEventListener('click', async ev => {
-  const button = ev.target.closest?.('[data-bot-release]');
+  const button = eventElement(ev)?.closest<HTMLButtonElement>('[data-bot-release]');
   if (!button || button.disabled) return;
   button.disabled = true;
   try {
-    await botRelease(button.dataset.botRelease);
+    await botRelease(button.dataset.botRelease!);
     if (typeof pausedRender === 'function') pausedRender();
     if (typeof botAlertDraw === 'function' && $('#bot-alert')) botAlertDraw();
     if (button.closest('#hl-page')) window.hlRefresh?.();
-  } catch (error) { button.disabled = false; toast(error.message, true); }
+  } catch (error) { button.disabled = false; toast(errorMessage(error, ''), true); }
 });
-function pausedNotice(slug) {
-  const s = v2StatusOf(slug) || {};
+function pausedNotice(slug: string) {
+  const s: Partial<V2BotState> = v2StatusOf(slug) || {};
   // Tico's own words for the stop, as the server sends them: what happened and what to check.
   if (s.stopped) return `${esc(s.focus || `Tico stopped ${empName(slug)}`)}${botReleaseButton(slug)}`;
   if (s.backoff) return esc(s.backoff);
-  const when = since => since ? ` since ${clockTime(since)}` : '';
+  const when = (since: string | null | undefined) => since ? ` since ${clockTime(since)}` : '';
   if (s.bot_state === 'quarantined') {
     // A refusal-count quarantine lifts itself after an hour; anything else waits for a person (backend/hubdb.py).
-    const q = s.quarantine || {}, e = botRow(slug);
+    const q: Quarantine = s.quarantine || {}, e = botRow(slug);
     const resume = e && settingsCanManageBot(e) ? ' <button type="button" class="linkish" data-quarantine-resume>Resume bot</button>' : '';
     const at = q.since || s.changed_at, paused = (at ? ` paused at ${clockTime(at)}` : ' is paused') + (q.auto ? '' : ' for review');
     const who = q.auto || resume ? '' : ' A person who manages it can resume it.';
     return `${empName(slug)}${esc(paused)}. ${esc(quarantineWhy(slug) + who)} Your messages are saved and run when it's back.${resume}`;
   }
-  let why = PAUSED_WHY[s.state], since = s.changed_at;
-  if (s.state === 'paused' && /^Paused: over /.test(s.focus || '')) why = s.focus.replace(/^Paused: /, '');     // a spend limit (Usage)
+  let why = PAUSED_WHY[String(s.state)], since = s.changed_at;
+  if (s.state === 'paused' && /^Paused: over /.test(s.focus || '')) why = s.focus!.replace(/^Paused: /, '');     // a spend limit (Usage)
   if (s.state === 'crashed')
     return s.last_stop ? `${empName(slug)}: ${esc(s.last_stop.text)}`
       : `${empName(slug)} saved a stopped run for later${esc(when(since))} — only that request is paused; other work continues`;
   if (!why) {
     const off = (S.status?.health_issues || []).find(i => i.kind === 'machine' && (i.bots || [i.bot]).includes(slug) && i.since);
-    if (off && Date.now() - Date.parse(off.since) > 10 * 60000) { why = off.title; since = off.since; }
+    if (off && Date.now() - Date.parse(off.since!) > 10 * 60000) { why = off.title; since = off.since; }
   }
   if (!why) return '';
   return `${empName(slug)} is paused${esc(when(since))} — ${esc(why)}; your messages will run when it's back${limitRetryButton(slug)}`;
@@ -404,7 +492,7 @@ function pausedNotice(slug) {
 // message waits for it, and whether the agent has been reporting in.
 // The 30 s refresh reloads the health issues, not the roster, so the two warnings follow the
 // issue the server raises and only the quiet line reads the roster's last-seen time.
-function agentNotice(slug) {
+function agentNotice(slug: string) {
   const e = botRow(slug); if (!e?.agent) return '';
   const a = e.agent, name = agentKind(a);
   // A Grok Bot or Dots is synced in by the agent itself (docs/external-agent-sync.md): its history is copied
@@ -418,7 +506,7 @@ function agentNotice(slug) {
   // not move it. Settings and More show last seen on a page that has just loaded it.
   return `${empName(slug)} is a ${name}; it reads its messages on its own schedule · reporting in`;
 }
-function agentQuiet(slug) {
+function agentQuiet(slug: string) {
   return !(S.status?.health_issues || []).some(i => i.kind === 'agent' && i.bot === slug) && !!botRow(slug)?.agent?.credential;
 }
 function pausedRender() {
@@ -435,7 +523,7 @@ function pausedRender() {
       await quarantineResume(slug);
       pausedRender();
       if (typeof botAlertDraw === 'function') botAlertDraw();
-    } catch (error) { resume.disabled = false; toast(error.message, true); }
+    } catch (error) { resume.disabled = false; toast(errorMessage(error, ''), true); }
   };
   const retry = el.querySelector('[data-limit-retry]');
   if (retry) retry.onclick = async () => {
@@ -444,14 +532,14 @@ function pausedRender() {
       await limitRetry(slug);
       pausedRender();
       if (typeof botAlertDraw === 'function') botAlertDraw();
-    } catch (error) { retry.disabled = false; toast(error.message, true); }
+    } catch (error) { retry.disabled = false; toast(errorMessage(error, ''), true); }
   };
 }
 // A bot over its spend limit (backend/usage_limits.py `over`): its status carries the limit while it holds new work.
-const overLimit = slug => v2StatusOf(slug)?.limit || null;
+const overLimit = (slug: string) => v2StatusOf(slug)?.limit || null;
 // A hold by the team's or a group's limit names it: raising the bot's own limit would not lift it.
-const overLimitWord = limit => limit.scope && limit.scope !== 'bot' ? `Waiting: ${limit.name} is over its ${limit.period} limit` : `Over its ${limit.period} limit`;
-function v2StatePill(slug) {
+const overLimitWord = (limit: SpendLimit) => limit.scope && limit.scope !== 'bot' ? `Waiting: ${limit.name} is over its ${limit.period} limit` : `Over its ${limit.period} limit`;
+function v2StatePill(slug: string) {
   const s = v2StatusOf(slug);
   if (!s) return botStatePill(slug);
   // A back-off keeps the bot's state; its wait is the line beside it until the next try.

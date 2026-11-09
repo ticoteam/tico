@@ -814,7 +814,7 @@ function thvUpdateReveal(view: ThvView, id: string) {
   const group = thvLineGroups(view).get(id);
   if (group) view.openLines.add(group);
 }
-// ---- gray lines: rows no person or bot wrote (rowSource, ui/app/hub-v2.js). A task update, a built-in's or an automation's
+// ---- gray lines: rows no person or bot wrote (rowSource, ui/app/hub-v2.ts). A task update, a built-in's or an automation's
 // line, or a system line has no avatar or sender row; two or more task updates in a row are one "N task updates" row,
 // shut until opened. A normal message after them starts its own group.
 const thvTaskUpdate = (row: ThvRow | undefined) => !!row?.m && !row.m.deleted && isSourceLine(row.m) && rowSource(row.m).kind === 'task_update';
