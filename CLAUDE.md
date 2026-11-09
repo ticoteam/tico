@@ -63,7 +63,7 @@ when the branch would not merge into origin/main and names the files. Skip once 
 run the same static checks, so a skipped failure still shows there. CONTRIBUTING.md lists where the local gate differs from CI.
 
 ## How we work
-Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no CI. The flow: work in draft and run the tests you touched locally, run
+Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Drafts run no CI; mark the PR ready to run checks. The flow: work in draft and run the tests you touched locally, run
 `gh pr ready` when done, wait for green `checks` on that run (not skipped), and once it is reviewed, enqueue it with
 `gh pr merge <N> --merge`: the merge queue tests the PR merged onto current main before it lands. Enqueue once.
 After a queue failure, fix it and get green PR checks before enqueuing again.
