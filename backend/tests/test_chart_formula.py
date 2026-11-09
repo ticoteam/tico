@@ -484,6 +484,8 @@ def test_every_template_the_formula_can_emit_is_a_card_in_roles_json():
 def test_a_seat_on_a_card_carries_the_cards_department():
     for case in CASES.values():
         for seat in F.build(case["inputs"], case.get("removed", ()))["employees"]:
+            if seat["template"] in HELPERS:
+                continue  # a built-in on the chart (the Finance Owner is the Bookkeeper) has no role card
             assert seat["department"] == CARDS[seat["template"]], seat["title"]
 
 

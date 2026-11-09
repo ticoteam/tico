@@ -128,7 +128,7 @@
           "id": "product-pipeline-manager",
           "title": "Product Pipeline Manager",
           "template": "pipeline-manager",
-          "department": "product",
+          "department": "operations",
           "reports_to": "product-team-manager",
           "reason": "Moves the product pipeline's cards from idea to validated, and keeps its stages healthy.",
           "live": true
@@ -175,7 +175,7 @@
           "id": "engineering-pipeline-manager",
           "title": "Engineering Pipeline Manager",
           "template": "pipeline-manager",
-          "department": "engineering",
+          "department": "operations",
           "reports_to": "engineering-team-manager",
           "reason": "Moves the engineering pipeline's cards through build, review and release.",
           "live": true
@@ -263,7 +263,7 @@
           "id": "growth-experiments-pipeline-manager",
           "title": "Growth Experiments Pipeline Manager",
           "template": "pipeline-manager",
-          "department": "marketing",
+          "department": "operations",
           "reports_to": "growth-team-manager",
           "reason": "Runs the growth experiments: one idea at a time, measured and kept or dropped."
         },
@@ -272,7 +272,7 @@
           "id": "lead-pipeline-manager",
           "title": "Lead Pipeline Manager",
           "template": "pipeline-manager",
-          "department": "sales",
+          "department": "operations",
           "reports_to": "growth-team-manager",
           "reason": "Moves leads from targets to qualified, and hands qualified ones on."
         },
@@ -281,7 +281,7 @@
           "id": "opportunity-pipeline-manager",
           "title": "Opportunity Pipeline Manager",
           "template": "pipeline-manager",
-          "department": "sales",
+          "department": "operations",
           "reports_to": "growth-team-manager",
           "reason": "Moves each opportunity from first talk to a signed deal or a loss."
         },
@@ -338,7 +338,7 @@
           "id": "success-team-manager",
           "title": "Success Team Manager",
           "template": "success-team-manager",
-          "department": "support",
+          "department": "success",
           "reports_to": null,
           "reason": "Leads success: support, onboarding and renewals, and its owners."
         },
@@ -347,7 +347,7 @@
           "id": "customer-pipeline-manager",
           "title": "Customer Pipeline Manager",
           "template": "pipeline-manager",
-          "department": "support",
+          "department": "operations",
           "reports_to": "success-team-manager",
           "reason": "Moves each new customer from onboarding to active, referred or closed."
         },
@@ -356,7 +356,7 @@
           "id": "success-experiments-pipeline-manager",
           "title": "Success Experiments Pipeline Manager",
           "template": "pipeline-manager",
-          "department": "support",
+          "department": "operations",
           "reports_to": "success-team-manager",
           "reason": "Runs the success experiments: one idea at a time, measured and kept or dropped."
         },
@@ -365,7 +365,7 @@
           "id": "support-owner",
           "title": "Support Owner",
           "template": "support-owner",
-          "department": "support",
+          "department": "success",
           "reports_to": "success-team-manager",
           "reason": "Owns customer support: answering and resolving customer issues."
         },
@@ -374,7 +374,7 @@
           "id": "success-owner",
           "title": "Success Owner",
           "template": "success-owner",
-          "department": "support",
+          "department": "success",
           "reports_to": "success-team-manager",
           "reason": "Owns customer success: onboarding, adoption and renewals."
         }
@@ -388,7 +388,7 @@
           "id": "corporate-team-manager",
           "title": "Corporate Team Manager",
           "template": "corporate-team-manager",
-          "department": "operations",
+          "department": "corporate",
           "reports_to": null,
           "reason": "Leads the corporate team: legal, finance and partnerships, and its owners."
         },
@@ -397,7 +397,7 @@
           "id": "legal-owner",
           "title": "Legal Owner",
           "template": "legal-owner",
-          "department": "legal",
+          "department": "corporate",
           "reports_to": "corporate-team-manager",
           "reason": "Owns legal: contracts, terms and compliance."
         },
@@ -416,7 +416,7 @@
           "id": "partnerships-owner",
           "title": "Partnerships Owner",
           "template": "partnerships-owner",
-          "department": "sales",
+          "department": "corporate",
           "reports_to": "corporate-team-manager",
           "reason": "Owns partnerships with other companies."
         }
