@@ -592,6 +592,7 @@ def set_parent(conn, actor, child_id, parent_id, mover=None, note="", private=No
         if any(above.intersection(blocker_ids(conn, tid)) for tid in (child_id, *descendant_ids(conn, child_id))):
             H.refuse(conn, actor, "kind", "A child task cannot be blocked by its own parent or ancestor")
     from .strategy_acts import TASK, person_task
+
     # A person's task stays theirs (backend/strategy_acts.py).
     person_task(conn, actor, row, f"move {TASK} under another task" if new else f"take {TASK} out of its parent")
     at = H.now()
@@ -726,7 +727,8 @@ def add_blocker(conn, actor, task_id, blocker_id, mover=None, note=""):
     mover = _mover(conn, actor, mover)
     _mine(conn, actor, row, mover)
     from .strategy_acts import TASK, person_task
-    person_task(conn, actor, row, f"make {TASK} wait on another task")      # a person's task stays theirs
+
+    person_task(conn, actor, row, f"make {TASK} wait on another task")  # a person's task stays theirs
     _blocker_gate(conn, actor, row, mover)
     if _exists(conn, blocker_id, task_id, "blocks"):
         return False
@@ -774,7 +776,8 @@ def remove_blocker(conn, actor, task_id, blocker_id, mover=None, note="", keeper
         _mine(conn, actor, row, mover)
         if _exists(conn, blocker_id, task_id, "blocks"):
             from .strategy_acts import TASK, person_task
-            person_task(conn, actor, row, f"take a wait off {TASK}")      # a person's task stays theirs
+
+            person_task(conn, actor, row, f"take a wait off {TASK}")  # a person's task stays theirs
         _blocker_gate(conn, actor, row, mover)
     blocker = H.task(conn, blocker_id)
     if not _delete(conn, blocker_id, task_id, "blocks"):
