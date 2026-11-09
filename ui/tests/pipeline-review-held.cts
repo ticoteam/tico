@@ -3,24 +3,25 @@
 // the question card Decide draws), then two subtasks (one Done, one Sent back with a note). Each answer or finish takes its
 // item out: the next one comes up, "For you · i of N" and the header's count drop at once. At a phone's 390 by 844, dark and
 // light. GC_SHOTS=<dir> writes screenshots there.
+import type {Browser, Page} from 'playwright';
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {install} = require('./support/pipeline-fixture.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
+const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
 
 const SHOTS = process.env.GC_SHOTS || '';
 const PHONE = {width: 390, height: 844};
 const QUESTION_TEXT = "Does 'close all' include bot-owned tasks?";
 
-async function openReview(browser, theme) {
+async function openReview(browser: Browser, theme: string) {
   const context = await browser.newContext({viewport: PHONE, serviceWorkers: 'block'});
   await context.addInitScript(([theme]) => {
     try { localStorage.setItem('tico.theme', theme); localStorage.setItem('tico.tasks.type', 'dev-tickets'); } catch {}
-  }, [theme]);
+  }, [theme] as const);
   const page = await context.newPage();
-  const errors = [];
+  const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   const state = await install(page, {held: true});
   await page.goto('http://tico-ui.test/#/tasks?type=dev-tickets&view=board');
@@ -37,21 +38,19 @@ async function openReview(browser, theme) {
   return {context, page, state, errors};
 }
 
-async function shot(page, name) {
+async function shot(page: Page, name: string) {
   if (!SHOTS) return;
   fs.mkdirSync(SHOTS, {recursive: true});
   await page.screenshot({path: path.join(SHOTS, name)});
 }
 
-const countText = page => page.locator('.pipe-review .pipe-review-count').innerText().then(s => s.replace(/\s+/g, ' ').trim());
-const cardTitle = page => page.locator('.pipe-review-card-title').innerText().then(s => s.trim());
-async function waitCount(page, text) {
-  await page.waitForFunction(want => document.querySelector('.pipe-review .pipe-review-count')?.textContent.replace(/\s+/g, ' ').trim() === want,
+const countText = (page: Page) => page.locator('.pipe-review .pipe-review-count').innerText().then(s => s.replace(/\s+/g, ' ').trim());
+const cardTitle = (page: Page) => page.locator('.pipe-review-card-title').innerText().then(s => s.trim());
+async function waitCount(page: Page, text: string) {
+  await page.waitForFunction(want => document.querySelector('.pipe-review .pipe-review-count')?.textContent!.replace(/\s+/g, ' ').trim() === want,
     text, {timeout: t(5000)});
 }
-// The header's ▶ count, as its button says it (the board's count of the queue rows that are this person's).
-const playLabel = page => page.locator('.pipe-play').first().getAttribute('aria-label');
-async function waitPlay(page, text) {
+async function waitPlay(page: Page, text: string) {
   await page.waitForFunction(want => document.querySelector('.pipe-play')?.getAttribute('aria-label') === want, text, {timeout: t(5000)});
 }
 

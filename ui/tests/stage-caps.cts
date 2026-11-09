@@ -1,6 +1,12 @@
 // Stage caps (D68, D69) on a phone at 390x844: a full stage's chip reads "3/3", the ✎ editor's "At most" field sets a
 // stage's cap (PATCH /v2/pipeline-stages/{id} with card_cap), "No cap" clears it, and On ice reads "At most: 0".
 // Screenshots go to $TICO_UI_SHOTS when it names a folder.
+import type {Browser, Locator, Page} from 'playwright';
+interface Step {id: string; name: string; status: string; card_cap: number | null; limit_minutes: number | null}
+// The fixture's write body: the fields the stage PATCH reads, plus anything else sent.
+interface Body {step?: string; card_cap?: number | null; limit_minutes?: number | null; [key: string]: unknown}
+interface Write {method: string; p: string; body: Body}
+interface FixtureState {steps: Step[]; where: Record<string, string>; moves: unknown[]; snoozed: string[]; liveGo: boolean; liveServed: boolean}
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -10,7 +16,7 @@ const {unrouted} = require('./support/routes.cjs');
 
 const stamp = '2026-11-08T09:00:00Z';
 const SHOTS = process.env.TICO_UI_SHOTS;
-const shot = (page, name, locator) => {
+const shot = (page: Page, name: string, locator?: Locator) => {
   if (!SHOTS) return Promise.resolve();
   fs.mkdirSync(SHOTS, {recursive: true});
   return (locator ? locator.screenshot({path: path.join(SHOTS, name)}) : page.screenshot({path: path.join(SHOTS, name)}));
@@ -27,31 +33,31 @@ function initialSteps() {
 }
 
 // Like the server's pipeline payload: each stage's held count is its unfinished cards, snoozed ones included (D68).
-function typeOf(state) {
-  const held = step => tasksOf(state).filter(t => t.step_id === step && !['done', 'closed'].includes(t.status)).length;
+function typeOf(state: FixtureState) {
+  const held = (step: string) => tasksOf(state).filter(t => t.step_id === step && !['done', 'closed'].includes(t.status)).length;
   return {id: 'dev', name: 'Dev tickets', prefix: 'D', pipeline_owner_id: 'human:ana', manager: null, role: 'engineering', has_requirements: true,
     steps: state.steps.map(s => ({...s, held: held(s.id)}))};
 }
 
 // Where each card sits: the three specs in Specifying, and Build the export in In development until a person moves it.
-const HOME = {T41: 'spec', T42: 'spec', T43: 'spec', T44: 'dev'};
-function taskOf(state, id) {
+const HOME: Record<string, string> = {T41: 'spec', T42: 'spec', T43: 'spec', T44: 'dev'};
+function taskOf(state: FixtureState, id: string) {
   const where = state.where[id] ?? HOME[id];
-  const step = state.steps.find(s => s.id === where);
-  const title = {T41: 'Spec the export', T42: 'Spec the import', T43: 'Spec the sync', T44: 'Build the export'}[id];
+  const step = state.steps.find(s => s.id === where)!;
+  const title = ({T41: 'Spec the export', T42: 'Spec the import', T43: 'Spec the sync', T44: 'Build the export'} as Record<string, string>)[id];
   const holds = state.snoozed.includes(id) ? [{kind: 'snoozed', until: '2099-06-01T09:00:00Z'}] : [];
   return {id, number: Number(id.slice(1)), title, body: '', owner_id: 'bot:builder', requester_id: 'human:ana', status: step.status, lane: 'company',
     version: 1, labels: [], links: [], holds, parts: {total: 0, done: 0}, rank: Number(id.slice(1)), created_at: stamp, updated_at: stamp, step_since: stamp,
     type_id: 'dev', type: {id: 'dev', name: 'Dev tickets'}, step_id: where, step: {...step, type_id: 'dev'}};
 }
-function tasksOf(state) {
+function tasksOf(state: FixtureState) {
   return Object.keys(HOME).map(id => taskOf(state, id));
 }
 
-async function open(browser, opts = {}) {
+async function open(browser: Browser, opts: {live?: boolean; snoozed?: string[]} = {}) {
   const page = await browser.newPage({viewport: {width: 390, height: 844}, serviceWorkers: 'block', hasTouch: true, isMobile: true});
-  const errors = [], writes = [];
-  const state = {steps: initialSteps(), where: {}, moves: [], snoozed: opts.snoozed || [], liveGo: false, liveServed: false};
+  const errors: string[] = [], writes: Write[] = [];
+  const state: FixtureState = {steps: initialSteps(), where: {}, moves: [], snoozed: opts.snoozed || [], liveGo: false, liveServed: false};
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => { try { localStorage.setItem('tico.theme', 'dark'); } catch {} });
   const me = {id: 'ana', role: 'owner', name: 'Ana Ruiz', email: 'ana@example.com', cloud: true, registered: true, owner_id: 'ana', mover: true, config: {company_name: 'Acme Bikes'}};
@@ -59,7 +65,7 @@ async function open(browser, opts = {}) {
     owner_id: 'human:ana', manager_id: null, members: [], judge_models: ['haiku-5.5'], default_judge_model: 'haiku-5.5'};
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
-    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p.startsWith('/tico/ui/')) {
@@ -68,7 +74,7 @@ async function open(browser, opts = {}) {
     }
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
-    const body = method === 'GET' ? null : req.postDataJSON();
+    const body = (method === 'GET' ? null : req.postDataJSON()) as Body;
     if (method !== 'GET') writes.push({method, p, body});
     if (p === '/api/me') return json(me);
     if (p === '/api/employees') return json([]);
@@ -79,16 +85,16 @@ async function open(browser, opts = {}) {
     if (p === '/api/v2/needs-you') return json({items: [], count: 0, plate_count: 0});
     if (p === '/api/v2/tasks' && method === 'GET') return json({tasks: tasksOf(state), next: null, labels: [], tags: []});
     const one = p.match(/^\/api\/v2\/tasks\/(T\d+)$/);
-    if (one && method === 'GET') return json({task: taskOf(state, one[1]), children: [], parent: null, comments: [], events: [], messages: [], mover: true});
+    if (one && method === 'GET') return json({task: taskOf(state, one[1]!), children: [], parent: null, comments: [], events: [], messages: [], mover: true});
     if (one && method === 'POST') {
       // Like the server: a person's move into a full stage stands and answers over_cap (D68).
       const target = body.step;
       const cap = state.steps.find(s => s.id === target)?.card_cap;
-      const held = tasksOf(state).filter(t => t.step_id === target && t.id !== one[1]).length;
+      const held = tasksOf(state).filter(t => t.step_id === target && t.id !== one[1]!).length;
       const over = !!target && cap != null && held >= cap;
-      state.where[one[1]] = target || HOME[one[1]];
-      state.moves.push({id: one[1], body, over});
-      return json({task: taskOf(state, one[1]), ...(over ? {over_cap: true} : {})});
+      state.where[one[1]!] = target || HOME[one[1]!]!;
+      state.moves.push({id: one[1]!, body, over});
+      return json({task: taskOf(state, one[1]!), ...(over ? {over_cap: true} : {})});
     }
     if (p === '/api/v2/tasks/labels') return json({labels: [], tags: []});
     if (p === '/api/v2/tags') return json({tags: []});
@@ -102,9 +108,9 @@ async function open(browser, opts = {}) {
     if (stageReqs && method === 'GET') return json({requirements: []});
     const stage = p.match(/^\/api\/v2\/pipeline-stages\/(\w+)$/);
     if (stage && method === 'PATCH') {
-      const s = state.steps.find(x => x.id === stage[1]);
-      if ('card_cap' in body) s.card_cap = body.card_cap;
-      if ('limit_minutes' in body) s.limit_minutes = body.limit_minutes;
+      const s = state.steps.find(x => x.id === stage[1])!;
+      if ('card_cap' in body) s.card_cap = body.card_cap as number | null;
+      if ('limit_minutes' in body) s.limit_minutes = body.limit_minutes as number | null;
       return json({});
     }
     if (p.startsWith('/api/v2/preferences/')) return json({key: 'tasks.view', value: null});
@@ -126,11 +132,11 @@ async function open(browser, opts = {}) {
   return {page, errors, writes, state};
 }
 
-const settled = async page => { await page.waitForTimeout(100); await page.waitForLoadState('networkidle'); };
-const lastPatch = (writes, id) => writes.filter(w => w.method === 'PATCH' && w.p === `/api/v2/pipeline-stages/${id}`).at(-1)?.body;
+const settled = async (page: Page) => { await page.waitForTimeout(100); await page.waitForLoadState('networkidle'); };
+const lastPatch = (writes: Write[], id: string) => writes.filter(w => w.method === 'PATCH' && w.p === `/api/v2/pipeline-stages/${id}`).at(-1)?.body;
 
 (async () => {
-  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     const {page, errors, writes} = await open(browser);
 
@@ -156,7 +162,7 @@ const lastPatch = (writes, id) => writes.filter(w => w.method === 'PATCH' && w.p
     await page.locator('.pchip', {hasText: 'Specifying'}).filter({hasText: '4/3'}).waitFor();
 
     // The ✎ editor: On ice reads 0, Specifying has the "At most" field beside "Warn after".
-    await page.waitForFunction(() => !document.getElementById('task-pipeline-edit').hidden);
+    await page.waitForFunction(() => !document.getElementById('task-pipeline-edit')!.hidden);
     await page.locator('#task-pipeline-edit').click();
     // The stage names are inputs in the editor (for a mover), so the stages are found by their order: On ice, then Specifying.
     const stages = page.locator('#pe-dialog .pe-stage');

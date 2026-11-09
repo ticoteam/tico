@@ -3,24 +3,26 @@
 // With an attachment the attachment is shown; with none, the card's body, acceptance criteria and checkpoint, under "No spec
 // attached". "Why you" names the requirement and the pipeline. The footer names the card by its title, never its id. The two
 // Message buttons name their bots and fit. A markdown file on the ticket shows as text. GC_SHOTS=<dir> writes screenshots there.
+import type {Browser, Page} from 'playwright';
+import type {PipelineInstallOptions} from './support/pipeline-fixture.cjs';
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {install} = require('./support/pipeline-fixture.cjs');
-const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
+const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();
 
 const SHOTS = process.env.GC_SHOTS || '';
 const PHONE = {width: 390, height: 844};
 const BUTTONS = ['Message Product Manager', 'Message Product Pipeline Manager'];
 
-async function openReview(browser, theme, options = {}) {
+async function openReview(browser: Browser, theme: string, options: PipelineInstallOptions = {}) {
   const context = await browser.newContext({viewport: PHONE, serviceWorkers: 'block'});
   await context.addInitScript(([theme]) => {
     try { localStorage.setItem('tico.theme', theme); localStorage.setItem('tico.tasks.type', 'dev-tickets'); } catch {}
-  }, [theme]);
+  }, [theme] as const);
   const page = await context.newPage();
-  const errors = [];
+  const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   const state = await install(page, options);
   await page.goto('http://tico-ui.test/#/tasks?type=dev-tickets&view=board');
@@ -31,14 +33,14 @@ async function openReview(browser, theme, options = {}) {
   return {context, page, state, errors};
 }
 
-async function shot(page, name) {
+async function shot(page: Page, name: string) {
   if (!SHOTS) return;
   fs.mkdirSync(SHOTS, {recursive: true});
   await page.screenshot({path: path.join(SHOTS, name)});
 }
 
 // What every card shows: its title, the Why line, the two named Message buttons (none clipped), no ticket id, no sideways scroll.
-async function checkCard(page, label, {title, why, buttons = BUTTONS}) {
+async function checkCard(page: Page, label: string, {title, why, buttons = BUTTONS}: {title: string; why: string; buttons?: string[]}) {
   assert.equal((await page.locator('.pipe-review-card-title').innerText()).trim(), title, label + ': the card title');
   assert.equal((await page.locator('.pipe-review-side > p').first().innerText()).trim(), why, label + ': why you');
   const names = (await page.locator('.pipe-review-sendback .btn').allInnerTexts()).map(s => s.trim());
@@ -66,7 +68,7 @@ async function checkCard(page, label, {title, why, buttons = BUTTONS}) {
         await shot(page, `attached-${theme}.png`);
 
         await page.locator('[data-review-next]').click();
-        await page.waitForFunction(() => document.querySelector('.pipe-review-count')?.textContent.includes('2 of 2'), null, {timeout: t(5000)});
+        await page.waitForFunction(() => document.querySelector('.pipe-review-count')?.textContent!.includes('2 of 2'), null, {timeout: t(5000)});
         await checkCard(page, label + ' next', {title: 'Pipeline stages, requirements and the manager rules', why: 'Spec page · Dev tickets'});
         assert.equal((await page.locator('.pipe-review-moves').innerText()).trim(),
           'Last requirement · moves Pipeline stages, requirements and the… to Build', label + ': the footer names the card by its title');
@@ -98,7 +100,7 @@ async function checkCard(page, label, {title, why, buttons = BUTTONS}) {
         const {context, page, errors} = await openReview(browser, theme, {text: true});
         await page.locator('[data-review-next]').click();
         await page.waitForSelector('pre.pipe-review-file-text', {timeout: t(5000)});
-        const shown = await page.locator('pre.pipe-review-file-text').evaluate(el => ({text: el.textContent, headings: el.querySelectorAll('h1').length}));
+        const shown = await page.locator('pre.pipe-review-file-text').evaluate(el => ({text: el.textContent!, headings: el.querySelectorAll('h1').length}));
         assert.match(shown.text, /^# Pipeline manager spec/, label + ': the markdown shows as written');
         assert.equal(shown.headings, 0, label + ': it is not rendered as markdown');
         assert.equal((await page.locator('.pipe-review-tab').innerText()).trim(), 'Pipeline manager spec v1.md', label + ': the file is named');
