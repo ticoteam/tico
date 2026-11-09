@@ -449,15 +449,6 @@ interface HealthSnapshot {
   [key: string]: unknown;
 }
 
-/** A chat or input box the page keeps (pill.ts PILLS): its mode, its bot's slug and its element. */
-interface PillState {
-  mode?: string;
-  slug?: string;
-  el: HTMLElement;
-  files: unknown[];
-  [key: string]: unknown;
-}
-
 /** A task open in its dialog, live (`dialog.taskLive`; TaskLive is task-live.ts's). */
 interface HTMLDialogElement {
   taskLive?: TaskLive | null;
