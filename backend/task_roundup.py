@@ -614,7 +614,7 @@ def _asks_back(c, slug, actor, at):
             "SELECT id, body, recipient_id, refs, conversation_id FROM messages WHERE id=?", (ask_id,)
         ).fetchone()
         card = None if ask else H.task(c, ask_id)
-        if card and H.on_ice_ids(c, [card["id"]]):
+        if card and H.on_ice_row(c, card):
             continue  # a question a person parked On ice (D69) since it went back is theirs now: no line asks again
         if card and question_tasks.is_question(card):
             # A question task sent back (still_needed.send_back): named as the task it was asked from, else itself.

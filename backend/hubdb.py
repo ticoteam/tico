@@ -1492,6 +1492,20 @@ def on_ice_ids(conn, ids):
     return found
 
 
+def on_ice_row(conn, row):
+    """Whether this task row is On ice (ON_ICE), read from its step_id and the snapshot's shared step rows
+    (read_cache, roster_clock): a check a loop over many tasks can make without a statement of its own."""
+    from .read_cache import rows as shared_rows
+
+    step = (row or {}).get("step_id")
+    if not step:
+        return False
+    return any(
+        s["id"] == step and dict(s).get("card_cap") == 0
+        for s in shared_rows(conn, "SELECT * FROM task_steps ORDER BY position,id")
+    )
+
+
 def add_column(conn, table, column, declaration):
     """ALTER TABLE ... ADD COLUMN unless the column is there: SQLite has no IF NOT EXISTS for it."""
     if column not in {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}:
@@ -9636,7 +9650,7 @@ def own_stuck_blockers(conn, row, at=None, blockers=None):
             or block.get("resume")
             or milestone_pending(conn, block["id"])
             or own_job(conn, block, claimable=True)
-            or on_ice_ids(conn, [block["id"]])  # parked On ice (D69) by a person: the wait is theirs, never stuck
+            or on_ice_row(conn, block)  # parked On ice (D69) by a person: the wait is theirs, never stuck
         ):
             return []
     return [block["id"] for block in blockers]
