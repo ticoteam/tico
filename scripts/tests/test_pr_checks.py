@@ -2,6 +2,7 @@
 
 from collections import Counter
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -689,26 +690,26 @@ def test_a_listing_that_uses_only_names_sees_added_files_and_a_content_listing_s
 
 
 def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measured_time(tmp_path, monkeypatch, mapped):
-    # One VM holds WORKERS x (target - setup) seconds of one-worker test time, and at least WORKERS x MIN_JOB_SECONDS;
+    # One VM holds WORKERS x (target - setup) seconds of one-worker test time, so it is never planned past the target;
     # never 0 VMs, never past the cap.
-    per_python = checks.WORKERS * max(checks.JOB_SECONDS - checks.SETUP_SECONDS["python"], checks.MIN_JOB_SECONDS)
+    per_python = checks.WORKERS * (checks.JOB_SECONDS - checks.SETUP_SECONDS["python"])
     assert checks.job_count(0, "python") == 1
-    # One VM past the target by a file's worth is still one VM: 1 s more is 0.25 s more wall time on each of its workers.
-    assert checks.job_count(per_python, "python") == 1 and checks.job_count(per_python + 1, "python") == 1
+    assert checks.job_count(per_python, "python") == 1 and checks.job_count(per_python + 1, "python") == 2
     assert checks.job_count(2 * per_python, "python") == 2
     assert checks.job_count(10**9, "python") == checks.MAX_JOBS
-    # The cap only stops a runaway plan: Nov 5's default suite (40,000 one-worker seconds in 936 files) held at 16 VMs
-    # ran 11-14 minutes per shard. It now splits into VMs of at most TICO_CI_JOB_SECONDS, setup included.
+    # The recorded suite (Nov 9: about 25,800 one-worker seconds in 1,050 files) splits into VMs of about
+    # TICO_CI_JOB_SECONDS each, setup included: 36 of them, under MAX_JOBS.
     suite = Counter({f"backend/tests/test_{i}.py": 1 for i in range(936)})
-    split, loads = checks.groups(suite, {name: 40000 / 936 for name in suite})
-    # Files are whole, so a VM can run one file past its target (the same 60 s margin the 180 s target had).
-    assert len(split) > 16 and max(loads) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.JOB_SECONDS + 60
+    split, loads = checks.groups(suite, {name: 25800 / 936 for name in suite})
+    # Files are whole, so a VM can run one file past its target (a file's worth of about 30 s on each worker).
+    assert len(split) == checks.job_count(25800, "python") == 36
+    assert max(loads) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.JOB_SECONDS + 30
     # A small selection still takes one VM.
     assert len(checks.groups(Counter({"a.py": 3}), {"a.py": 200})[0]) == 1
     counts = Counter({f"t{i}.py": 1 for i in range(30)})
     split, loads = checks.groups(counts, {name: 100 for name in counts})
-    # A remainder under the minimum folds into the VMs before it, so a VM holds under two minimums.
-    assert len(split) == checks.job_count(3000, "python") and max(loads) < 2 * checks.WORKERS * checks.MIN_JOB_SECONDS
+    assert len(split) == checks.job_count(3000, "python")
+    assert max(loads) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.JOB_SECONDS
     assert sorted(sum(split, [])) == sorted(counts)
 
     names = [f"s{i}" for i in range(40)]
@@ -1219,7 +1220,7 @@ def test_the_factory_shards_cover_every_scenario_once_in_about_five_minutes_a_vm
     groups = [factory.pack(pairs, count, timings)[index] for index in range(count)]
     assert sorted(pair for group in groups for pair in group) == sorted(pairs)
     slowest_vm = max(sum(timings[name] for name, _ in group) for group in groups) / factory.REMOTE_CPUS
-    assert slowest_vm <= 300, slowest_vm
+    assert slowest_vm <= checks.FACTORY_LEG_SECONDS + max(timings.values()) / factory.REMOTE_CPUS, slowest_vm
 
 
 def test_the_factory_sim_runs_in_the_queue_and_on_a_ready_pull_request_on_the_plans_shards():
@@ -1617,41 +1618,49 @@ def test_a_ui_file_converted_to_typescript_keeps_the_map_entry_its_js_name_had(t
     assert not any("is not in UI_MAP" in note for note in plan["uncertain"])
 
 
-def test_a_remainder_under_five_minutes_of_work_a_vm_folds_into_one_vm():
-    # A VM carries at least MIN_JOB_SECONDS (5 minutes) of tests per worker, setup excluded: a 1,100 s selection is one
-    # VM of about 5 minutes, not two VMs of 2.3 minutes that each spend their setup on a small share of tests.
-    assert checks.MIN_JOB_SECONDS >= 300
-    assert checks.job_count(1100, "python") == 1
-    # Under twice the minimum stays one VM; a selection only splits once each VM gets 5 minutes.
-    assert checks.job_count(checks.WORKERS * checks.MIN_JOB_SECONDS * 2 - 1, "python") == 1
-    assert checks.job_count(checks.WORKERS * checks.MIN_JOB_SECONDS * 2, "python") == 2
-    counts = Counter({f"t{i}.py": 1 for i in range(11)})
-    split, loads = checks.groups(counts, {name: 100 for name in counts})
-    assert len(split) == 1 and loads == [1100.0]
+@pytest.mark.parametrize("seconds", [1, 396, 959, 960, 961, 1500, 2161, 5000])
+def test_no_planned_python_vm_runs_past_the_target_however_small_the_selection(seconds):
+    # 959 one-worker seconds once folded into one VM planned at 390 s; a VM holds WORKERS x (target - setup) = 720 of
+    # them, so the selection takes two VMs of about 270 s, and a selection under one VM's work takes one.
+    counts = Counter({f"t{i}.py": 1 for i in range(seconds)})  # one-second files: the packing is exact
+    split, loads = checks.groups(counts, {name: 1.0 for name in counts})
+    assert len(split) == checks.job_count(seconds, "python") == max(1, math.ceil(seconds / 720))
+    assert max(loads) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.JOB_SECONDS
+    assert checks.overrun_warnings(loads, checks.SETUP_SECONDS["python"], checks.JOB_SECONDS, "Python") == []
 
 
-def test_the_factory_legs_hold_four_minutes_of_work_each():
-    # The sim's work is fixed by its scenarios, not by the selection: its legs fold to the same four-minute minimum.
+def test_a_vm_planned_past_the_target_gets_a_warning():
+    assert checks.overrun_warnings([720.0], checks.SETUP_SECONDS["python"], checks.JOB_SECONDS, "Python") == []
+    lines = checks.overrun_warnings([960.0], checks.SETUP_SECONDS["python"], checks.JOB_SECONDS, "Python")
+    assert len(lines) == 1 and lines[0].startswith("::warning::A Python VM is planned for 390s")
+    # 480 one-worker seconds are 240 s of tests on the planner's four workers (the incremental browser VMs run -j 4 too).
+    assert not checks.overrun_warnings([480.0], checks.SETUP_SECONDS["browser"], checks.JOB_SECONDS, "browser")
+    assert checks.overrun_warnings([1000.0], checks.SETUP_SECONDS["browser"], checks.JOB_SECONDS, "browser")
+
+
+def test_the_factory_legs_hold_about_two_minutes_of_work_per_vcpu_each():
+    # The sim's work is fixed by its scenarios, not by the selection: enough legs that each takes about
+    # FACTORY_LEG_SECONDS of scenario time per vCPU (four legs for the recorded 2,000 s of scenarios).
     from evals.factory import run as factory
 
     timings = factory.timings()
     pairs = [(name, 1) for name in sorted(timings)]
     total = sum(timings[name] for name, _ in pairs)
-    legs = max(
-        1, min(factory.groups_for(pairs, timings), int(total // (factory.REMOTE_CPUS * checks.FACTORY_LEG_SECONDS)))
-    )
-    assert len(checks.factory_shards()) == legs
-    assert legs == 1 or total / legs / factory.REMOTE_CPUS >= checks.FACTORY_LEG_SECONDS
+    legs = max(1, min(len(pairs), math.ceil(total / (factory.REMOTE_CPUS * checks.FACTORY_LEG_SECONDS))))
+    assert len(checks.factory_shards()) == legs == 4
+    assert legs == 1 or total / legs / factory.REMOTE_CPUS <= checks.FACTORY_LEG_SECONDS
 
 
-def test_size_groups_raises_the_target_to_meet_a_ceiling_and_stops_at_the_cap():
+def test_size_groups_plans_at_the_target_and_only_stretches_toward_an_explicit_cap():
     counts = Counter({f"backend/tests/test_{i}.py": 1 for i in range(346)})
     timings = {name: 6720 / 346 for name in counts}
-    # An ordinary pull request's ceiling is 8 test jobs: 2 fixed jobs and 2 factory legs leave 4 for the Python VMs,
-    # which takes VMs of about 8 minutes (the cap) for a 346-file change.
+    # The planner's cap is its target, so a ceiling never stretches a VM: the job count is reported, not forced down.
+    assert checks.MAX_JOB_SECONDS == checks.JOB_SECONDS
     sized = checks.size_groups(counts, timings, fixed=2, shards=2, ceiling=8)
-    assert checks.JOB_SECONDS < sized["target"] <= checks.MAX_JOB_SECONDS
-    assert sized["tests"] == len(sized["split"]) + 4 and sized["tests"] <= 8
+    assert sized["target"] == checks.JOB_SECONDS and sized["tests"] == len(sized["split"]) + 4
+    # A call that names a higher cap still raises the target toward it until the count fits the ceiling.
+    stretched = checks.size_groups(counts, timings, fixed=2, shards=2, ceiling=10, cap=480)
+    assert checks.JOB_SECONDS < stretched["target"] <= 480 and stretched["tests"] <= 10
     # Already under the ceiling, the target stays at the usual one.
     small = checks.size_groups(Counter({"a.py": 1}), {"a.py": 100}, fixed=1, shards=0, ceiling=8)
     assert small["target"] == checks.JOB_SECONDS and small["tests"] == 2
@@ -1661,17 +1670,14 @@ def test_size_groups_raises_the_target_to_meet_a_ceiling_and_stops_at_the_cap():
     assert capped["target"] == checks.MAX_JOB_SECONDS and capped["tests"] > 8
 
 
-def test_a_queue_group_packs_toward_six_test_jobs_of_up_to_twelve_minutes():
-    """Every queue group shares the organisation's ~60 concurrent hosted jobs, so a group packs its tests into fewer,
-    longer VMs than a pull request: each VM spends about two minutes on setup. A selection too big for six VMs at the cap
-    keeps the cap's VMs: only a narrower selection brings it within six."""
-    assert checks.CEILING["merge_group"] == 6 and checks.QUEUE_MAX_JOB_SECONDS > checks.MAX_JOB_SECONDS
-    # Nov 8's typical backend group: about 930 files, 22,300 one-worker seconds, a browser group, the contract tests and
-    # two factory legs. At the pull request's cap it takes 13 Python VMs; the queue's cap takes fewer.
+def test_a_full_queue_group_packs_at_the_target_and_a_narrowed_one_stays_under_the_ceiling():
+    """Every VM is planned at the target (330 s, setup included), queue groups too. The recorded full suite (about 25,800
+    one-worker seconds) takes about 36 Python VMs; a narrowed queue group (NARROW) takes at most its shard cap."""
+    assert checks.CEILING["merge_group"] == 30 and checks.QUEUE_MAX_JOB_SECONDS == checks.JOB_SECONDS
     counts = Counter({f"backend/tests/test_{i}.py": 1 for i in range(930)})
-    timings = {name: 22300 / 930 for name in counts}
-    browser = (Counter(dict.fromkeys([f"s{i}" for i in range(32)], 1)), dict.fromkeys([f"s{i}" for i in range(32)], 50))
-    pr = checks.size_groups(counts, timings, browser=browser, fixed=1, shards=2, ceiling=checks.CEILING["merge_group"])
+    timings = {name: 25800 / 930 for name in counts}
+    names = [f"s{i}" for i in range(32)]
+    browser = (Counter(dict.fromkeys(names, 1)), dict.fromkeys(names, 50))
     queue = checks.size_groups(
         counts,
         timings,
@@ -1681,15 +1687,13 @@ def test_a_queue_group_packs_toward_six_test_jobs_of_up_to_twelve_minutes():
         ceiling=checks.CEILING["merge_group"],
         cap=checks.QUEUE_MAX_JOB_SECONDS,
     )
-    assert queue["target"] == checks.QUEUE_MAX_JOB_SECONDS and len(queue["split"]) < len(pr["split"])
-    # 13 test jobs (9 Python, a browser, the contracts, 2 factory legs) against 17 at the pull request's cap.
-    assert queue["tests"] == 13 and pr["tests"] == 17
-    # No VM is planned past the cap by more than one file's worth.
-    assert max(queue["loads"]) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.QUEUE_MAX_JOB_SECONDS + 30
-    # A small group stays at the usual target in one or two VMs: 30 minutes of one-worker tests is one VM.
+    assert queue["target"] == checks.JOB_SECONDS and len(queue["split"]) == 36
+    assert max(queue["loads"]) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.JOB_SECONDS + 30
+    assert queue["tests"] == 36 + checks.job_count(1600, "browser") + 1 + 2
+    # A small group stays at the usual target in one VM: 20 files of 90 s is one VM.
     small = Counter({f"t{i}.py": 1 for i in range(20)})
     sized = checks.size_groups(
-        small, {n: 90 for n in small}, ceiling=checks.CEILING["merge_group"], cap=checks.QUEUE_MAX_JOB_SECONDS
+        small, {n: 30 for n in small}, ceiling=checks.CEILING["merge_group"], cap=checks.QUEUE_MAX_JOB_SECONDS
     )
     assert sized["target"] == checks.JOB_SECONDS and len(sized["split"]) == 1
 
@@ -1957,7 +1961,7 @@ def test_a_light_plan_caps_its_python_tests_by_priority_and_a_changed_test_alway
     # Past the budget a changed test file and the smoke set still run; what is left is listed in priority order.
     kept, left = checks.cap_tests(list(tier), tier, seconds, budget=10)
     assert kept == ["changed.py", "smoke.py"] and left == ["near_short.py", "near_long.py", "far.py"]
-    # The budget is four VMs of about eight minutes of four workers, setup excluded.
+    # The budget is four VMs of the job target of four workers, setup excluded.
     assert checks.narrow_budget(4) == 4 * checks.WORKERS * (
         checks.NARROW_SHARD_SECONDS - checks.SETUP_SECONDS["python"]
     )
@@ -2031,8 +2035,9 @@ def test_both_tiers_plan_light_and_the_required_check_keeps_its_contract():
     jobs = workflow_jobs()["jobs"]
     step = next(s for s in jobs["plan"]["steps"] if s.get("id") == "plan")
     assert step["run"].endswith("--light")
-    # NARROW decides per event: a pull request one level and four VMs, a queue group two levels and eight VMs.
-    assert checks.NARROW == {"pull_request": {"depth": 1, "shards": 4}, "merge_group": {"depth": 2, "shards": 8}}
+    # NARROW decides per event: a pull request one level and ten VMs, a queue group two levels and nineteen VMs.
+    assert checks.NARROW == {"pull_request": {"depth": 1, "shards": 10}, "merge_group": {"depth": 2, "shards": 19}}
+    assert checks.NARROW_SHARD_SECONDS == checks.JOB_SECONDS
     # `checks` still needs every job and runs after any of them (a draft skips it with everything else).
     assert jobs["checks"]["if"] == "${{ always() && !github.event.pull_request.draft }}"
     assert set(jobs["checks"]["needs"]) == set(jobs) - {"checks", "timings"}
@@ -2046,7 +2051,10 @@ def test_a_queue_group_runs_the_tests_two_levels_from_a_change_and_keeps_its_oth
     # leaf's test (level 1) and helper's (level 2: it runs helper, which runs leaf); outer's is three levels away.
     assert set(group["python"]) == {"backend/tests/test_leaf.py", "backend/tests/test_helper.py"} | set(smoke_tests)
     record = group["narrow"]
-    assert record["left_transitive"] == ["backend/tests/test_outer.py"] and record["shards"] == 8
+    assert (
+        record["left_transitive"] == ["backend/tests/test_outer.py"]
+        and record["shards"] == checks.NARROW["merge_group"]["shards"]
+    )
     assert record["tier"]["backend/tests/test_leaf.py"] == 2 and record["tier"]["backend/tests/test_helper.py"] == 3
     # A queue group keeps its browser scripts, Caddy job and contracts as the selection decided.
     assert (group["browser"], group["caddy"], group["contracts"]) == (full["browser"], full["caddy"], full["contracts"])
@@ -2098,14 +2106,22 @@ def test_a_light_plan_adds_the_smoke_set_only_when_it_drops_a_test_and_packs_wit
 
     monkeypatch.setattr(checks, "selection", fake_selection)
     monkeypatch.setattr(checks, "narrow", fake_narrow)
-    monkeypatch.setattr(checks, "committed_timings", lambda: dict.fromkeys(direct, 600.0))
+    # The smoke set is about two minutes in all (its files are small); the direct files are ten minutes each.
+    monkeypatch.setattr(
+        checks, "committed_timings", lambda: dict.fromkeys(direct, 600.0) | dict.fromkeys(smoke_tests, 20.0)
+    )
     # Fourteen ten-minute files: the cap drops some, so the smoke set runs (it ranks before them).
     plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", light=True)
     assert plan["narrow"]["left_over_budget"] and plan["narrow"]["smoke"]
     assert set(smoke_tests) <= set(plan["python"])
     # Packed from the same seconds: no VM carries more than its share of the budget plus one file.
     python = [job for job in plan["matrix"]["include"] if job["suite"].startswith("python-")]
-    assert len(python) == 4 and max(plan["estimated_seconds"][: len(python)]) <= checks.narrow_budget(4) / 4 + 600
+    loads = plan["estimated_seconds"][: len(python)]
+    assert (
+        len(python) == 4
+        and max(loads) <= sum(loads) / 4 + 600
+        and sum(loads) <= checks.narrow_budget(4) + 600 * len(smoke_tests)
+    )
     # Two files fit: nothing is dropped, so the smoke set does not run.
     size["n"] = 2
     plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", light=True)
@@ -2165,3 +2181,103 @@ def test_a_light_plan_packs_untimed_files_with_the_cap_estimate_and_keeps_the_sm
     plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", light=True)
     python = [job for job in plan["matrix"]["include"] if job["suite"].startswith("python-")]
     assert sum(plan["estimated_seconds"][: len(python)]) == pytest.approx(plan["narrow"]["selected_seconds"], abs=1)
+
+
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+@pytest.mark.parametrize("light", [False, True])
+def test_no_planned_test_job_runs_past_the_target_for_a_full_or_narrowed_selection(tmp_path, monkeypatch, event, light):
+    """Every Python and browser VM of a plan finishes within the target (JOB_SECONDS, setup included, one file's margin),
+    for the recorded full suite and for a narrowed plan (NARROW), in pull request and merge queue runs."""
+    files = [f"backend/tests/test_{i:03}.py" for i in range(930)]
+    names = [f"s{i}" for i in range(40)]
+    monkeypatch.setattr(checks, "collect", lambda: Counter(dict.fromkeys(files, 1)))
+    monkeypatch.setattr(checks, "committed_timings", lambda: {})
+    monkeypatch.setattr(checks, "browser_scripts", lambda args, root=None: names)
+    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
+    monkeypatch.setattr(checks, "image_checks", lambda changed, root=None: None)
+    monkeypatch.setattr(checks, "merge_parent", lambda base: base)
+    monkeypatch.setattr(checks, "script_changes", lambda base, head, changed, root=None: [])
+    monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/x.py"])
+    monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
+    monkeypatch.setattr(checks, "factory_plan", lambda event, changed, own_inputs=False: {"run": False, "shards": []})
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    timings = tmp_path / "durations.json"
+    timings.write_text(
+        json.dumps({**{name: 25800 / 930 for name in files}, **{f"ui/tests/{n}.cjs": 60 for n in names}})
+    )
+
+    def fake_selection(changed, event, base=None, added=None, graph=None):
+        empty = {"caddy": False, "contracts": False, "conformance": False, "rust": []}
+        return {**empty, "python": list(files), "browser": list(names), "reason": "measured", "uncertain": []}
+
+    def fake_narrow(picked, changed, event, added=None, graph=None):
+        mode = checks.NARROW[event]
+        record = {
+            "event": event,
+            "depth": mode["depth"],
+            "shards": mode["shards"],
+            "budget_seconds": checks.narrow_budget(mode["shards"]),
+            "smoke": False,
+            "smoke_unless_capped": [],
+            "left_transitive": [],
+            "tier": {name: 2 for name in picked["python"]},
+        }
+        return {**picked, "narrow": record}
+
+    monkeypatch.setattr(checks, "selection", fake_selection)
+    monkeypatch.setattr(checks, "narrow", fake_narrow)
+    plan = checks.prepare(event, "base", tmp_path / "plan.json", timings, light=light)
+    python = [job for job in plan["matrix"]["include"] if job["suite"].startswith("python-")]
+    browser = [job for job in plan["matrix"]["include"] if job["suite"].startswith("browser-")]
+    assert python and browser and len(python) <= checks.MAX_JOBS
+    if light:
+        # The narrowed plan caps its VMs at the event's shards, and never runs more than that many.
+        assert len(python) <= checks.NARROW[event]["shards"]
+    else:
+        assert len(python) == checks.job_count(25800, "python")
+    loads = plan["estimated_seconds"]
+    python_loads, browser_loads = loads[: len(python)], loads[len(python) :]
+    margin = 30  # a file's worth of one-worker time on each worker: files are whole
+    assert max(python_loads) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.JOB_SECONDS + margin
+    assert max(browser_loads) / checks.WORKERS + checks.SETUP_SECONDS["browser"] <= checks.JOB_SECONDS + margin
+    assert plan["job_target_seconds"] == checks.JOB_SECONDS
+    assert all(seconds <= checks.JOB_SECONDS + margin for seconds in [s / checks.WORKERS + 150 for s in python_loads])
+
+
+def test_release_factory_legs_plan_under_the_target_with_setup_on_top():
+    # Release validation runs seeds 1-3 in twelve legs (ci.yml: --shard K/12). Each leg's planned tests, its setup on top
+    # (about 40 s of checkout and install), stay under the 330 s target, and a leg is never more than one scenario over.
+    from evals.factory import run as factory
+    from scripts import pr_checks as checks
+
+    seconds = factory.timings()
+    pairs = [(name, seed) for seed in (1, 2, 3) for name in sorted(seconds)]
+    legs = 12
+    groups = [factory.pack(pairs, legs, seconds)[index] for index in range(legs)]
+    assert sorted(pair for group in groups for pair in group) == sorted(pairs)
+    setup = 40
+    for group in groups:
+        planned = sum(seconds[name] for name, _ in group) / factory.REMOTE_CPUS
+        assert planned + setup <= checks.JOB_SECONDS + max(seconds.values()) / factory.REMOTE_CPUS
+
+
+def test_a_contracts_lane_whose_measured_files_overrun_is_split_and_warned(tmp_path, monkeypatch, capsys):
+    # The three release contracts can carry measured seconds (their own slow tests). Files are whole, so each file gets
+    # its own timed VM, named contracts-N and run with -m slow; a single file past one VM's work is warned, not hidden.
+    picked = {"python": [], "browser": [], "caddy": False, "conformance": False, "rust": [], "contracts": True}
+    monkeypatch.setattr(checks, "selection", lambda *a, **kw: dict(picked))
+    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
+    monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
+    monkeypatch.setattr(checks, "collect", Counter)
+    timings = tmp_path / "durations.json"
+    timings.write_text(json.dumps({name: 500.0 for name in checks.CONTRACT_TESTS}))
+    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", timings_path=timings)
+    jobs = [job for job in plan["matrix"]["include"] if job["suite"].startswith("contracts")]
+    assert [job["suite"] for job in jobs] == ["contracts-1", "contracts-2", "contracts-3"]
+    assert sorted(sum((job["files"] for job in jobs), [])) == sorted(checks.CONTRACT_TESTS)
+    assert "::warning::" not in capsys.readouterr().out
+    assert set(plan["estimated_seconds"]) <= {0.0}  # the contracts VMs do not change the python and browser loads
+    timings.write_text(json.dumps({name: 1000.0 for name in checks.CONTRACT_TESTS}))  # 400 s a VM: past the target
+    checks.prepare("pull_request", "base", tmp_path / "plan.json", timings_path=timings)
+    assert "::warning::A contracts VM is planned for 400s" in capsys.readouterr().out
