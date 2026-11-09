@@ -23,11 +23,15 @@ def booted(tmp_path_factory) -> Path:
     return path
 
 
-def two(tmp_path, booted):
+def two(tmp_path, booted=None):
+    """Two pipelines on a fresh hub: a copy of the module's boot, or (from other modules) a boot of its own."""
     path = tmp_path / "hub.sqlite"
     path.parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(booted)) as source, closing(sqlite3.connect(path)) as target:
-        source.backup(target)
+    if booted is None:
+        boot(path)
+    else:
+        with closing(sqlite3.connect(booted)) as source, closing(sqlite3.connect(path)) as target:
+            source.backup(target)
     c = hub(path)
     sales = H.type_create(
         c,
