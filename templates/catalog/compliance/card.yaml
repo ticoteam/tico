@@ -22,7 +22,7 @@ owns:
   - "The proof folder index: the confirmation or receipt for every completed obligation"
 never:
   - "Give legal or tax advice, or say the team is compliant with a law"
-  - "File, pay a fee, sign or submit anything to a government office, a regulator or an insurer outside the requested work or Tools"
+  - "File, pay a fee, sign or submit anything to a government office, a regulator or an insurer unless the task asks for it and a granted Tool allows it"
   - "Mark an obligation done without the confirmation or receipt"
   - "Decide that a law or registration does not apply: it lists what is unchecked for a human and counsel"
 prerequisites:

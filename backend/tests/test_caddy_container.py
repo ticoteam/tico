@@ -5,6 +5,7 @@ is synthetic: these tests do not prove signed-file authorization, DNS, ACME or a
 full old updater's first adoption/rollback. Every Docker resource belongs to this
 fixture; no host Docker socket is mounted in a container.
 """
+
 import hashlib
 import http.client
 import json
@@ -118,7 +119,11 @@ class Containers:
         assert re.fullmatch(r"caddy:2-alpine@sha256:[0-9a-f]{64}", self.vendor)
 
     def redact(self, value):
-        return value.replace(SIGNED_PATH, "<synthetic-path>").replace(TOKEN, "<synthetic-token>").replace("a" * 43, "<synthetic-mac>")
+        return (
+            value.replace(SIGNED_PATH, "<synthetic-path>")
+            .replace(TOKEN, "<synthetic-token>")
+            .replace("a" * 43, "<synthetic-mac>")
+        )
 
     def docker(self, *args, check=True, timeout=90):
         try:
@@ -133,16 +138,33 @@ class Containers:
     def create(self, image, flags, command):
         name = self.prefix + "-" + uuid.uuid4().hex[:8]
         self.owned[name] = name  # exact fixture-owned name also covers an uncertain create response
-        cid = self.docker("create", "--name", name, "--label", "tico.caddy.qa=" + self.prefix,
-                          *flags, image, *command).stdout.strip()
+        cid = self.docker(
+            "create", "--name", name, "--label", "tico.caddy.qa=" + self.prefix, *flags, image, *command
+        ).stdout.strip()
         assert re.fullmatch(r"[0-9a-f]{64}", cid)
         self.owned[name] = cid
         return cid
 
     def once(self, entrypoint, command, flags=()):
-        cid = self.create(self.image, ["--network", "none", "--read-only", "--tmpfs", "/tmp",
-                                      "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
-                                      "--no-healthcheck", "--entrypoint", entrypoint, *flags], command)
+        cid = self.create(
+            self.image,
+            [
+                "--network",
+                "none",
+                "--read-only",
+                "--tmpfs",
+                "/tmp",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges:true",
+                "--no-healthcheck",
+                "--entrypoint",
+                entrypoint,
+                *flags,
+            ],
+            command,
+        )
         self.docker("start", cid)
         code = self.docker("wait", cid, timeout=45).stdout.strip()
         log = self.docker("logs", cid, check=False)
@@ -153,7 +175,9 @@ class Containers:
         return log.stdout
 
     def volume_python(self, code):
-        return self.once("python", ["-c", code], ["--mount", "type=volume,src=" + self.generated + ",dst=/caddy-generated"])
+        return self.once(
+            "python", ["-c", code], ["--mount", "type=volume,src=" + self.generated + ",dst=/caddy-generated"]
+        )
 
     def setup(self):
         image = json.loads(self.docker("image", "inspect", self.image).stdout)[0]
@@ -163,29 +187,70 @@ class Containers:
             assert image["Architecture"] == os.environ["TICO_CADDY_EXPECTED_ARCH"]
         if os.environ.get("GITHUB_SHA"):
             assert image["Config"]["Labels"]["org.opencontainers.image.revision"] == os.environ["GITHUB_SHA"]
-        manifest = json.loads(self.once("python", ["-c", "from pathlib import Path; print(Path('/opt/tico/release-manifest.json').read_text())"]))
+        manifest = json.loads(
+            self.once(
+                "python", ["-c", "from pathlib import Path; print(Path('/opt/tico/release-manifest.json').read_text())"]
+            )
+        )
         if os.environ.get("GITHUB_SHA"):
-            assert manifest["commit"] == os.environ["GITHUB_SHA"] and manifest["repository"] == os.environ["GITHUB_REPOSITORY"]
-        self.steps.append({"image_id": image["Id"], "architecture": image["Architecture"],
-                           "os": image["Os"], "source": manifest["commit"], "repository": manifest["repository"]})
+            assert (
+                manifest["commit"] == os.environ["GITHUB_SHA"]
+                and manifest["repository"] == os.environ["GITHUB_REPOSITORY"]
+            )
+        self.steps.append(
+            {
+                "image_id": image["Id"],
+                "architecture": image["Architecture"],
+                "os": image["Os"],
+                "source": manifest["commit"],
+                "repository": manifest["repository"],
+            }
+        )
         self.network = self.prefix
         # Match the shipped edge's ordinary bridge: internal-only Docker networks do not publish host ports.
         # This synthetic HTTP fixture disables ACME and binds its sole host port explicitly to loopback.
-        self.network = self.docker("network", "create", "--driver", "bridge", "--label", "tico.caddy.qa=" + self.prefix, self.prefix).stdout.strip()
+        self.network = self.docker(
+            "network", "create", "--driver", "bridge", "--label", "tico.caddy.qa=" + self.prefix, self.prefix
+        ).stdout.strip()
         for suffix in ("generated", "data", "config"):
             name = self.prefix + "-" + suffix
             self.volumes.append(name)
-            assert self.docker("volume", "create", "--label", "tico.caddy.qa=" + self.prefix, name).stdout.strip() == name
+            assert (
+                self.docker("volume", "create", "--label", "tico.caddy.qa=" + self.prefix, name).stdout.strip() == name
+            )
         self.generated, self.data, self.config = self.volumes
-        self.backend = self.create(self.image, ["--network", self.network, "--network-alias", "server",
-                    "--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
-                    "--no-healthcheck", "--entrypoint", "python"], ["-u", "-c", BACKEND])
+        self.backend = self.create(
+            self.image,
+            [
+                "--network",
+                self.network,
+                "--network-alias",
+                "server",
+                "--read-only",
+                "--tmpfs",
+                "/tmp",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges:true",
+                "--no-healthcheck",
+                "--entrypoint",
+                "python",
+            ],
+            ["-u", "-c", BACKEND],
+        )
         self.docker("start", self.backend)
         self.wait(lambda: self.count() == 0, "synthetic backend startup")
 
     def count(self):
-        result = self.docker("exec", self.backend, "python", "-c",
-            "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8765/__qa_count', timeout=1).read().decode())", check=False)
+        result = self.docker(
+            "exec",
+            self.backend,
+            "python",
+            "-c",
+            "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8765/__qa_count', timeout=1).read().decode())",
+            check=False,
+        )
         return json.loads(result.stdout)["count"] if result.returncode == 0 else None
 
     def backend_count(self):
@@ -194,42 +259,84 @@ class Containers:
         return count
 
     def produce(self, flag=None, origin="https://" + VISUAL, app=APP):
-        flags = ["--mount", "type=volume,src=" + self.generated + ",dst=/caddy-generated",
-                 "--env", "TICO_DOMAIN=" + app, "--env", "TICO_VISUAL_ORIGIN=" + origin]
+        flags = [
+            "--mount",
+            "type=volume,src=" + self.generated + ",dst=/caddy-generated",
+            "--env",
+            "TICO_DOMAIN=" + app,
+            "--env",
+            "TICO_VISUAL_ORIGIN=" + origin,
+        ]
         if flag is not None:
             flags += ["--env", "TICO_CADDY_VISUALS=" + flag]
         self.once("tico-entrypoint", ["caddy-config"], flags)
         metadata = json.loads(self.volume_python(HTTP_FIXTURE))
         assert metadata["stats"]["directory"] == [10001, 10001, 0o755]
-        assert all(metadata["stats"][name] == [10001, 10001, 0o644]
-                   for name in ("caddy.json", "supervisor.sh", "fixture.json"))
+        assert all(
+            metadata["stats"][name] == [10001, 10001, 0o644] for name in ("caddy.json", "supervisor.sh", "fixture.json")
+        )
         configuration = metadata.pop("configuration")
         (self.output / (metadata["fixture_sha256"] + ".json")).write_text(json.dumps(configuration, indent=2) + "\n")
         self.steps.append({"producer": metadata})
         return metadata
 
     def start_caddy(self, *, legacy=False):
-        flags = ["--network", self.network, "--read-only", "--tmpfs", "/tmp", "--init",
-                 "--cap-drop", "ALL", "--cap-add", "NET_BIND_SERVICE", "--security-opt", "no-new-privileges:true",
-                 "--mount", "type=volume,src=" + self.data + ",dst=/data",
-                 "--mount", "type=volume,src=" + self.config + ",dst=/config",
-                 "--publish", "127.0.0.1::8080"]
+        flags = [
+            "--network",
+            self.network,
+            "--read-only",
+            "--tmpfs",
+            "/tmp",
+            "--init",
+            "--cap-drop",
+            "ALL",
+            "--cap-add",
+            "NET_BIND_SERVICE",
+            "--security-opt",
+            "no-new-privileges:true",
+            "--mount",
+            "type=volume,src=" + self.data + ",dst=/data",
+            "--mount",
+            "type=volume,src=" + self.config + ",dst=/config",
+            "--publish",
+            "127.0.0.1::8080",
+        ]
         if legacy:
             flags += ["--entrypoint", "/usr/bin/caddy"]
             command = ["reverse-proxy", "--from", "http://" + APP + ":8080", "--to", "server:8765"]
         else:
-            flags += ["--mount", "type=volume,src=" + self.generated + ",dst=/generated,readonly",
-                      "--env", "TICO_CADDY_CONFIG=/generated/fixture.json", "--entrypoint", "/bin/sh",
-                      "--health-cmd", "/bin/sh /generated/supervisor.sh health", "--health-interval", "1s",
-                      "--health-timeout", "3s", "--health-start-period", "1s", "--health-retries", "1"]
+            flags += [
+                "--mount",
+                "type=volume,src=" + self.generated + ",dst=/generated,readonly",
+                "--env",
+                "TICO_CADDY_CONFIG=/generated/fixture.json",
+                "--entrypoint",
+                "/bin/sh",
+                "--health-cmd",
+                "/bin/sh /generated/supervisor.sh health",
+                "--health-interval",
+                "1s",
+                "--health-timeout",
+                "3s",
+                "--health-start-period",
+                "1s",
+                "--health-retries",
+                "1",
+            ]
             command = ["/generated/supervisor.sh"]
         self.caddy = self.create(self.vendor, flags, command)
         self.docker("start", self.caddy)
         info = self.inspect()
-        self.steps.append({"started_container": self.caddy, "state": info["State"],
-                           "cap_drop": info["HostConfig"]["CapDrop"], "cap_add": info["HostConfig"]["CapAdd"],
-                           "requested_ports": info["HostConfig"]["PortBindings"],
-                           "published_ports": info["NetworkSettings"]["Ports"]})
+        self.steps.append(
+            {
+                "started_container": self.caddy,
+                "state": info["State"],
+                "cap_drop": info["HostConfig"]["CapDrop"],
+                "cap_add": info["HostConfig"]["CapAdd"],
+                "requested_ports": info["HostConfig"]["PortBindings"],
+                "published_ports": info["NetworkSettings"]["Ports"],
+            }
+        )
         vendor = json.loads(self.docker("image", "inspect", self.vendor).stdout)[0]
         assert vendor["Os"] == "linux"
         if os.environ.get("TICO_CADDY_EXPECTED_ARCH"):
@@ -242,18 +349,26 @@ class Containers:
         if not legacy:
             mount = next(row for row in info["Mounts"] if row["Destination"] == "/generated")
             assert mount["RW"] is False
-            denied = self.docker("exec", self.caddy, "/bin/sh", "-c", "echo synthetic >/generated/forbidden", check=False).returncode
+            denied = self.docker(
+                "exec", self.caddy, "/bin/sh", "-c", "echo synthetic >/generated/forbidden", check=False
+            ).returncode
             assert denied != 0
             self.steps.append({"generated_read_only": True, "write_attempt_rc": denied})
-        self.steps.append({"container": self.caddy, "legacy_command": legacy,
-                           "pinned_vendor": self.vendor, "vendor_image_id": info["Image"],
-                           "vendor_architecture": vendor["Architecture"]})
+        self.steps.append(
+            {
+                "container": self.caddy,
+                "legacy_command": legacy,
+                "pinned_vendor": self.vendor,
+                "vendor_image_id": info["Image"],
+                "vendor_architecture": vendor["Architecture"],
+            }
+        )
 
     def inspect(self):
         return json.loads(self.docker("inspect", self.caddy).stdout)[0]
 
-    def request(self, host, path="/", method="GET", headers=None):
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=2)
+    def request(self, host, path="/", method="GET", headers=None, timeout=2):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
         try:
             connection.request(method, path, headers={"Host": host, **(headers or {})})
             response = connection.getresponse()
@@ -261,8 +376,8 @@ class Containers:
         finally:
             connection.close()
 
-    def expect(self, host, path, status, method="GET", headers=None):
-        result = self.request(host, path, method, headers)
+    def expect(self, host, path, status, method="GET", headers=None, timeout=2):
+        result = self.request(host, path, method, headers, timeout)
         self.steps.append({"host": host, "target_sha256": digest(path), "method": method, "status": result[0]})
         if result[0] != status:
             raise AssertionError("routing expectation failed: target sha256=%s status=%s" % (digest(path), result[0]))
@@ -276,7 +391,7 @@ class Containers:
                     return
             except (OSError, http.client.HTTPException, ValueError):
                 pass
-            time.sleep(.2)
+            time.sleep(0.2)
         raise AssertionError("fixture transition timed out: " + description)
 
     def applied(self):
@@ -286,11 +401,19 @@ class Containers:
     def ready(self, metadata):
         def confirmed():
             proof = self.applied()
-            return (proof and proof["file_sha256"] == metadata["fixture_sha256"]
-                    and proof["generation"] == metadata["generation"] and proof["pid"] > 1
-                    and proof["supervisor_pid"] > 0
-                    and self.docker("exec", self.caddy, "/bin/sh", "/generated/supervisor.sh", "health", check=False).returncode == 0
-                    and self.inspect()["State"]["Health"]["Status"] == "healthy")
+            return (
+                proof
+                and proof["file_sha256"] == metadata["fixture_sha256"]
+                and proof["generation"] == metadata["generation"]
+                and proof["pid"] > 1
+                and proof["supervisor_pid"] > 0
+                and self.docker(
+                    "exec", self.caddy, "/bin/sh", "/generated/supervisor.sh", "health", check=False
+                ).returncode
+                == 0
+                and self.inspect()["State"]["Health"]["Status"] == "healthy"
+            )
+
         self.wait(confirmed, "exact frozen generation and owned-child health")
         proof = self.applied()
         self.steps.append({"applied": proof})
@@ -298,9 +421,19 @@ class Containers:
 
     def unavailable(self, old_pid):
         def stopped():
-            return (not self.applied() and self.inspect()["State"]["Running"]
-                    and self.docker("exec", self.caddy, "/bin/sh", "/generated/supervisor.sh", "health", check=False).returncode != 0
-                    and self.docker("exec", self.caddy, "/bin/sh", "-c", '! kill -0 "$1" 2>/dev/null', "qa", str(old_pid), check=False).returncode == 0)
+            return (
+                not self.applied()
+                and self.inspect()["State"]["Running"]
+                and self.docker(
+                    "exec", self.caddy, "/bin/sh", "/generated/supervisor.sh", "health", check=False
+                ).returncode
+                != 0
+                and self.docker(
+                    "exec", self.caddy, "/bin/sh", "-c", '! kill -0 "$1" 2>/dev/null', "qa", str(old_pid), check=False
+                ).returncode
+                == 0
+            )
+
         self.wait(stopped, "proof cleared and prior child reaped")
         try:
             self.request(VISUAL, SIGNED_PATH)
@@ -331,7 +464,7 @@ class Containers:
         args = ("inspect", "--type", "container", target) if kind == "container" else (kind, "inspect", target)
         result = self.docker(*args, check=False)
         assert result.returncode == 0, "fixture cleanup cannot resolve owned " + kind
-        row, = json.loads(result.stdout)
+        (row,) = json.loads(result.stdout)
         labels = row.get("Config", {}).get("Labels", {}) if kind == "container" else row.get("Labels", {})
         assert labels.get("tico.caddy.qa") == self.prefix, "fixture cleanup refused an unowned " + kind
         return row["Name"] if kind == "volume" else row["Id"]
@@ -366,9 +499,18 @@ class Containers:
                 cleanup_errors.append(type(error).__name__)
         for name, value in self.logs.items():
             (self.output / name).write_text(value)
-        (self.output / "receipt.json").write_text(json.dumps({"passed": self.passed and not cleanup_errors,
-            "steps": self.steps, "cleanup_errors": cleanup_errors,
-            "limits": "Synthetic HTTP container mechanics; no ACME, production DNS, actual signed authorization or full historical updater execution."}, indent=2) + "\n")
+        (self.output / "receipt.json").write_text(
+            json.dumps(
+                {
+                    "passed": self.passed and not cleanup_errors,
+                    "steps": self.steps,
+                    "cleanup_errors": cleanup_errors,
+                    "limits": "Synthetic HTTP container mechanics; no ACME, production DNS, actual signed authorization or full historical updater execution.",
+                },
+                indent=2,
+            )
+            + "\n"
+        )
         hashes = {path.name: digest(path.read_bytes()) for path in self.output.iterdir() if path.is_file()}
         (self.output / "files-sha256.json").write_text(json.dumps(hashes, indent=2, sort_keys=True) + "\n")
         assert not cleanup_errors, "fixture-owned resource cleanup failed; see receipt"
@@ -392,7 +534,7 @@ def containers(tmp_path, request):
 
 def test_shipped_linux_producer_and_pinned_caddy_enforce_visual_boundary(containers):
     qa = containers
-    first = qa.produce()   # Default OFF with a nonempty external visual origin.
+    first = qa.produce()  # Default OFF with a nonempty external visual origin.
     qa.start_caddy()
     qa.ready(first)
     before = qa.backend_count()
@@ -402,14 +544,26 @@ def test_shipped_linux_producer_and_pinned_caddy_enforce_visual_boundary(contain
     qa.ready(metadata)
     app_auth = {"Cookie": "synthetic=app", "Authorization": "Bearer fictional"}
     _, headers, _ = qa.expect(APP, "/api/v2/config", 200, headers=app_auth)
-    assert headers["x-qa-auth-hash"] == digest(json.dumps({key.lower(): value for key, value in app_auth.items()}, sort_keys=True))
+    assert headers["x-qa-auth-hash"] == digest(
+        json.dumps({key.lower(): value for key, value in app_auth.items()}, sort_keys=True)
+    )
     assert headers["set-cookie"] == "synthetic=fixture"
-    auth = {**app_auth, "Proxy-Authorization": "Basic fictional", "Cf-Access-Jwt-Assertion": "fictional",
-            "Cf-Access-Authenticated-User-Email": "bot@acme.example", "X-Amzn-Oidc-Data": "fictional",
-            "X-Amzn-Oidc-Identity": "fictional", "X-Tico-Assistant-Action": "fictional", "X-Tico-Other": "fictional"}
-    for method, extra, status, body in (("GET", {}, 200, b"0123456789"), ("HEAD", {}, 200, b""),
-            ("GET", {"Range": "bytes=2-4", "If-Range": ETAG}, 206, b"234"),
-            ("GET", {"If-None-Match": ETAG}, 304, b"")):
+    auth = {
+        **app_auth,
+        "Proxy-Authorization": "Basic fictional",
+        "Cf-Access-Jwt-Assertion": "fictional",
+        "Cf-Access-Authenticated-User-Email": "bot@acme.example",
+        "X-Amzn-Oidc-Data": "fictional",
+        "X-Amzn-Oidc-Identity": "fictional",
+        "X-Tico-Assistant-Action": "fictional",
+        "X-Tico-Other": "fictional",
+    }
+    for method, extra, status, body in (
+        ("GET", {}, 200, b"0123456789"),
+        ("HEAD", {}, 200, b""),
+        ("GET", {"Range": "bytes=2-4", "If-Range": ETAG}, 206, b"234"),
+        ("GET", {"If-None-Match": ETAG}, 304, b""),
+    ):
         _, headers, actual = qa.expect(VISUAL, SIGNED_PATH, status, method, {**auth, **extra})
         assert actual == body and headers["x-qa-auth-names"] == "" and "set-cookie" not in headers
         assert headers["content-security-policy"] == "sandbox; default-src 'none'"
@@ -418,20 +572,30 @@ def test_shipped_linux_producer_and_pinned_caddy_enforce_visual_boundary(contain
         if status == 206:
             assert headers["content-range"] == "bytes 2-4/10" and headers["x-qa-if-range"] == ETAG
     before = qa.backend_count()
-    for path in ("/api/v2/config", "/auth/login", SIGNED_PATH + "?x=1", SIGNED_PATH + "?",
-                 "/visuals/x/../" + TOKEN, "/visuals/%2e%2e/" + TOKEN,
-                 "/visuals//" + TOKEN, SIGNED_PATH.replace(".", "%2e"), READY):
+    for path in (
+        "/api/v2/config",
+        "/auth/login",
+        SIGNED_PATH + "?x=1",
+        SIGNED_PATH + "?",
+        "/visuals/x/../" + TOKEN,
+        "/visuals/%2e%2e/" + TOKEN,
+        "/visuals//" + TOKEN,
+        SIGNED_PATH.replace(".", "%2e"),
+        READY,
+    ):
         qa.expect(VISUAL, path, 404)
     for method in ("POST", "OPTIONS"):
         qa.expect(VISUAL, SIGNED_PATH, 404, method)
     qa.expect("unknown.acme.example", SIGNED_PATH, 404)
     assert qa.backend_count() == before
     qa.docker("stop", qa.backend)
-    qa.expect(VISUAL, SIGNED_PATH, 502, headers={"Referer": "https://" + VISUAL + SIGNED_PATH})
-    def error_logged():
-        log = qa.docker("logs", qa.caddy)
-        return '"logger":"http.log.error"' in log.stdout + log.stderr
-    qa.wait(error_logged, "actual error log without request credentials", seconds=5)
+    # The proxy holds the request while the server is gone (caddy_assets.HOLD_FOR), then answers a plain 503.
+    # The error route answers it, so Caddy logs the error at DEBUG, below this config's INFO; whatever it does log
+    # must still leave the signed path out.
+    _, headers, body = qa.expect(
+        VISUAL, SIGNED_PATH, 503, headers={"Referer": "https://" + VISUAL + SIGNED_PATH}, timeout=45
+    )
+    assert headers["retry-after"] == "5" and body.startswith(b"Tico is starting")
     log = qa.docker("logs", qa.caddy)
     if TOKEN in log.stdout + log.stderr:
         raise AssertionError("Caddy error log exposed the synthetic signed path")
@@ -453,9 +617,11 @@ def test_linux_generation_removal_failure_recovery_and_legacy_command_rollback(c
         qa.expect(VISUAL, SIGNED_PATH, 404)
         assert qa.backend_count() == before
         proof = qa.ready(qa.produce("1"))
-    qa.volume_python("import json,os; from pathlib import Path; p=Path('/caddy-generated/fixture.json'); "
+    qa.volume_python(
+        "import json,os; from pathlib import Path; p=Path('/caddy-generated/fixture.json'); "
         "c=json.loads(p.read_bytes()); c['apps']['http']['servers']['tico']['routes'][0]['handle']=[{'handler':'fictional_invalid_handler'}]; "
-        "t=p.with_name('.invalid-new'); t.write_text(json.dumps(c)); os.replace(t,p)")
+        "t=p.with_name('.invalid-new'); t.write_text(json.dumps(c)); os.replace(t,p)"
+    )
     qa.unavailable(proof["pid"])
     proof = qa.ready(qa.produce("1"))
     qa.volume_python("from pathlib import Path; Path('/caddy-generated/fixture.json').unlink()")
@@ -463,7 +629,15 @@ def test_linux_generation_removal_failure_recovery_and_legacy_command_rollback(c
     metadata = qa.produce("1")
     qa.ready(metadata)
     marker = uuid.uuid4().hex
-    qa.docker("exec", qa.caddy, "/bin/sh", "-c", 'printf %s "$1" >/data/qa-marker; printf %s "$1" >/config/qa-marker', "qa", marker)
+    qa.docker(
+        "exec",
+        qa.caddy,
+        "/bin/sh",
+        "-c",
+        'printf %s "$1" >/data/qa-marker; printf %s "$1" >/config/qa-marker',
+        "qa",
+        marker,
+    )
     qa.remove_caddy()
     qa.start_caddy()
     qa.ready(metadata)
@@ -486,7 +660,14 @@ def test_linux_generation_removal_failure_recovery_and_legacy_command_rollback(c
     assert qa.backend_count() == before
     assert qa.docker("exec", qa.caddy, "cat", "/data/qa-marker", "/config/qa-marker").stdout == marker * 2
     qa.steps.append({"certificate_volume_markers_preserved": True, "marker_sha256": digest(marker)})
-    qa.steps.append({"legacy_running": True, "entrypoint": legacy["Config"]["Entrypoint"],
-                     "command": legacy["Config"]["Cmd"], "applied_generation": False,
-                     "asset_host_not_forwarded": True, "asset_response_bytes": len(body)})
+    qa.steps.append(
+        {
+            "legacy_running": True,
+            "entrypoint": legacy["Config"]["Entrypoint"],
+            "command": legacy["Config"]["Cmd"],
+            "applied_generation": False,
+            "asset_host_not_forwarded": True,
+            "asset_response_bytes": len(body),
+        }
+    )
     qa.passed = True

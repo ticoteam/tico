@@ -67,7 +67,7 @@ span.use-limit{display:block}
 .use-dialog p.muted{margin:0;font-size:var(--t-sm)}
 /* An amount: "$" inside the box, hidden while the box shows its hint. */
 .use-money{display:flex;align-items:center;gap:2px;height:32px;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--muted);cursor:text}
-.use-money:focus-within{border-color:var(--accent);outline:var(--focus-halo);outline-offset:0}
+.use-money:focus-within{border-color:var(--focus);outline:var(--focus-halo);outline-offset:0}
 .use-money:has(input:placeholder-shown)>span{visibility:hidden}
 .use-money input{flex:1;min-width:0;width:100%;height:100%;padding:0;border:0;background:none;box-shadow:none;outline:0;text-align:right;color:var(--ink);font-variant-numeric:tabular-nums}
 .use-money input::placeholder{color:color-mix(in srgb,var(--muted) 75%,transparent)}

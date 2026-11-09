@@ -7,11 +7,12 @@ and https on the ordinary ports, every address the name resolves to public (no l
 metadata address), each redirect checked again, 5 MB and 20 seconds a page, at most PAGES pages and BUDGET_S seconds
 in all, and no credential of the server's ever sent. Then one model call, with no runner: the writer the daily-update
 drafts use (backend/updates.py `writer_for`: the Tico AI Gateway, else the team's own provider with a server key), with
-the shared prompt in backend/strategy_prompt.py (Tico HQ's setup page asks the same). It answers a summary, a vision,
-the four sections and three bets the site implies, each with what it rules out and a suggested wrong-if.
+the shared prompt in backend/strategy_prompt.py (Tico HQ's setup page asks the same). It answers a summary, the seven
+sections (How we know they want it and Why now only when the pages show it) and three bets the site implies, each with what it rules out and a suggested wrong-if. It asks for no vision:
+`found` keeps `vision: ""` and the draft's vision is left as it is.
 
 What it writes, as the owner who started it, and never published:
-- the summary and vision, and each of the four sections, only where the draft's is empty; each section starts with
+- the summary, and each of the seven sections, only where the draft's is empty; each section starts with
   the UNCONFIRMED line, which the owner deletes by keeping or editing the text;
 - each bet as `proposed`, its wrong-if a sentence with a check date CHECK_DAYS out.
 
@@ -23,6 +24,7 @@ The latest KEEP jobs are kept in `registry_metadata` (`strategy.draft_from`), so
 `running` STALE_S after it started (the server restarted under it) reads as `failed`. A job's states:
 running (step reading|thinking) -> done | gave_up | failed; no_model at once.
 """
+
 import ipaddress
 import json
 import logging
@@ -42,22 +44,24 @@ from .store import Problem, encode
 log = logging.getLogger("tico.strategy_setup")
 
 KEY = "strategy.draft_from"
-KEEP = 5                    # jobs kept: the latest is what setup reads
-PAGES = 4                   # the home page and at most three more
-PAGE_CHARS = 8_000          # of each page's text sent to the model
-BUDGET_S = 45               # no new page is read after this many seconds
-STALE_S = 600               # a job running this long was cut off by a restart
+KEEP = 5  # jobs kept: the latest is what setup reads
+PAGES = 4  # the home page and at most three more
+PAGE_CHARS = 8_000  # of each page's text sent to the model
+BUDGET_S = 45  # no new page is read after this many seconds
+STALE_S = 600  # a job running this long was cut off by a restart
 BETS = P.BETS
-CHECK_DAYS = 90             # a suggested wrong-if says when to look again
-SECTION_CHARS = 1_500       # a drafted section: a start, not the owner's page
+CHECK_DAYS = 90  # a suggested wrong-if says when to look again
+SECTION_CHARS = 1_500  # a drafted section: a start, not the owner's page
 WHY_CHARS = 600
 TEXT_MAX = 4_000
 STATES = ("running", "done", "gave_up", "failed", "no_model")
 UNCONFIRMED = "_Unconfirmed: drafted from {source}._"
 # The pages after the home page, in order, and the words their addresses carry.
-WANTED = (("about", r"about|company|our-story|who-we-are"),
-          ("pricing", r"pricing|plans|price"),
-          ("customers", r"customers|case-stud|stories|testimonials"))
+WANTED = (
+    ("about", r"about|company|our-story|who-we-are"),
+    ("pricing", r"pricing|plans|price"),
+    ("customers", r"customers|case-stud|stories|testimonials"),
+)
 INSTRUCTIONS = P.INSTRUCTIONS
 
 # Test seams: names and sockets for the fetch, and how the job is started.
@@ -72,6 +76,7 @@ def spawn(work):
 def writer(c, settings, store):
     """The model a draft is written with, or None: the daily-update drafts' writer (backend/updates.py)."""
     from . import updates
+
     return updates.writer_for(c, settings, store)
 
 
@@ -87,11 +92,15 @@ def normalize_url(value):
     try:
         parts = urlsplit(text)
         host = parts.hostname or ""
-        parts.port                      # "acme.example:abc" raises here
+        parts.port  # "acme.example:abc" raises here
     except ValueError:
         parts, host = None, ""
-    if not parts or parts.scheme.lower() not in ("http", "https") or "@" in parts.netloc \
-            or ("." not in host and not _literal(host)):
+    if (
+        not parts
+        or parts.scheme.lower() not in ("http", "https")
+        or "@" in parts.netloc
+        or ("." not in host and not _literal(host))
+    ):
         raise ValueError("a website is an http or https address, like https://acme.example")
     return text
 
@@ -113,8 +122,12 @@ def refuse_unsafe(url):
         raise Problem("validation", exc.message, 422, extra={"reason": exc.code}) from None
     internal = host == "localhost" or host.endswith((".localhost", ".local", ".internal", ".lan", ".home.arpa"))
     if internal or (_literal(host) and not F.public_address(host.strip("[]"))):
-        raise Problem("validation", "That address is this computer or an internal one; give the team's public website",
-                      422, extra={"reason": "private_address"})
+        raise Problem(
+            "validation",
+            "That address is this computer or an internal one; give the team's public website",
+            422,
+            extra={"reason": "private_address"},
+        )
 
 
 def source_of(url):
@@ -128,7 +141,7 @@ def unconfirmed(text, source):
 
 # ----------------------------------------------------------------------------- the jobs
 def _jobs(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     found = S.loads(row[0], {}) if row else {}
     return [j for j in found.get("jobs") or [] if isinstance(j, dict)]
 
@@ -141,8 +154,10 @@ def _put(c, job):
         jobs.insert(0, job)
     else:
         jobs[at] = job
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
-              (KEY, encode({"jobs": jobs[:KEEP]})))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (KEY, encode({"jobs": jobs[:KEEP]})),
+    )
     return job
 
 
@@ -195,13 +210,25 @@ def start(c, who, settings, store, url="", text=""):
     if url:
         refuse_unsafe(url)
     model = writer(c, settings, store) is not None
-    job = {"id": H.new_id(), "state": "running" if model else "no_model",
-           "step": ("reading" if url else "thinking") if model else None, "url": url, "text": text,
-           "actor": who.actor, "revision": S.draft(c)["revision"], "started": H.now(),
-           "finished": None if model else H.now(), "pages": [], "found": None, "written": None, "error": None}
+    job = {
+        "id": H.new_id(),
+        "state": "running" if model else "no_model",
+        "step": ("reading" if url else "thinking") if model else None,
+        "url": url,
+        "text": text,
+        "actor": who.actor,
+        "revision": S.draft(c)["revision"],
+        "started": H.now(),
+        "finished": None if model else H.now(),
+        "pages": [],
+        "found": None,
+        "written": None,
+        "error": None,
+    }
     _put(c, job)
-    H.event(c, who.actor, "strategy.draft_from", job["id"], {"url": bool(url), "text": bool(text),
-                                                            "state": job["state"]})
+    H.event(
+        c, who.actor, "strategy.draft_from", job["id"], {"url": bool(url), "text": bool(text), "state": job["state"]}
+    )
     return view(job)
 
 
@@ -214,8 +241,9 @@ def _update(store, job_id, **changes):
 
 
 def _fail(store, job_id, code, message, **more):
-    _update(store, job_id, state="failed", step=None, finished=H.now(), error={"code": code, "message": message},
-            **more)
+    _update(
+        store, job_id, state="failed", step=None, finished=H.now(), error={"code": code, "message": message}, **more
+    )
 
 
 def run(store, job_id):
@@ -237,11 +265,16 @@ def run(store, job_id):
             _update(store, job_id, step="thinking", pages=[_page_row(p) for p in pages])
             if not any(p.get("text") for p in pages) and not job["text"]:
                 first = next((p for p in pages if p.get("error")), {}).get("error") or {}
-                return _fail(store, job_id, first.get("code") or "unreadable",
-                             first.get("message") or "Nothing could be read from that website")
+                return _fail(
+                    store,
+                    job_id,
+                    first.get("code") or "unreadable",
+                    first.get("message") or "Nothing could be read from that website",
+                )
         found = draft(write, job, pages)
-    except Exception as exc:      # a model's answer or a page can be anything: the job says so and the form remains
+    except Exception as exc:  # a model's answer or a page can be anything: the job says so and the form remains
         from clients import judge as J
+
         code = exc.code if isinstance(exc, J.JudgeError) else "error"
         log.info("Strategy research failed (%s)", type(exc).__name__)
         return _fail(store, job_id, code, "The model did not answer usably; fill the fields in yourself")
@@ -306,28 +339,44 @@ def read_site(url, clock=time.monotonic):
 # ----------------------------------------------------------------------------- the model
 def _clip(value, limit, one_line=False):
     text = " ".join(str(value or "").split()) if one_line else str(value or "").strip()
-    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 def draft(write, job, pages):
-    """{summary, vision, serve, sell, know, not, bets: [{statement, why, rules_out, wrong_if}]} from one model call,
-    clipped to what the draft takes."""
-    user = json.dumps({"owner_words": job["text"], "website": job["url"],
-                       "pages": [{"url": p["url"], "title": p.get("title") or "", "text": p["text"]}
-                                 for p in pages if p.get("text")]}, ensure_ascii=False)
+    """{summary, vision, serve, sell, proof, now, know, how, not, bets: [{statement, why, rules_out, wrong_if}]} from one
+    model call, clipped to what the draft takes. The prompt asks for no vision, so `vision` is always ""."""
+    user = json.dumps(
+        {
+            "owner_words": job["text"],
+            "website": job["url"],
+            "pages": [
+                {"url": p["url"], "title": p.get("title") or "", "text": p["text"]} for p in pages if p.get("text")
+            ],
+        },
+        ensure_ascii=False,
+    )
     raw = write(INSTRUCTIONS, user)
     raw = raw if isinstance(raw, dict) else {}
     bets = []
     for item in raw.get("bets") if isinstance(raw.get("bets"), list) else []:
         if not isinstance(item, dict) or not _clip(item.get("statement"), S.STATEMENT_MAX, True):
             continue
-        bets.append({"statement": _clip(item.get("statement"), S.STATEMENT_MAX, True),
-                     "why": _clip(item.get("why"), WHY_CHARS), "rules_out": _clip(item.get("rules_out"), WHY_CHARS),
-                     "wrong_if": _clip(item.get("wrong_if"), S.WRONG_TEXT_MAX, True)})
+        bets.append(
+            {
+                "statement": _clip(item.get("statement"), S.STATEMENT_MAX, True),
+                "why": _clip(item.get("why"), WHY_CHARS),
+                "rules_out": _clip(item.get("rules_out"), WHY_CHARS),
+                "wrong_if": _clip(item.get("wrong_if"), S.WRONG_TEXT_MAX, True),
+            }
+        )
         if len(bets) == BETS:
             break
-    return {"summary": _clip(raw.get("summary"), S.SUMMARY_MAX, True), "vision": _clip(raw.get("vision"), S.VISION_MAX, True),
-            **{k: _clip(raw.get(k), SECTION_CHARS) for k in S.FIXED_KEYS}, "bets": bets}
+    return {
+        "summary": _clip(raw.get("summary"), S.SUMMARY_MAX, True),
+        "vision": "",
+        **{k: _clip(raw.get(k), SECTION_CHARS) for k in S.FIXED_KEYS if k in P.FIELDS},
+        "bets": bets,
+    }
 
 
 # ----------------------------------------------------------------------------- writing the draft
@@ -337,19 +386,32 @@ def finish(c, job_id, found):
     job = _find(c, job_id)
     if not job or job["state"] != "running":
         return None
-    if _stale(job):          # the owner was already told it stopped and given the form
+    if _stale(job):  # the owner was already told it stopped and given the form
         return _put(c, {**job, "state": "failed", "step": None, "finished": H.now(), "error": INTERRUPTED})
     row = S.draft(c)
     newest = _jobs(c)[0]["id"] == job_id
     if row["revision"] != job["revision"] or not newest:
         reason = "edited" if newest else "superseded"
-        return _put(c, {**job, "state": "gave_up", "step": None, "finished": H.now(), "found": found,
-                        "error": {"code": reason, "message": "The draft changed while this ran, so nothing was "
-                                  "written; what it found is below" if newest else "A newer research job replaced "
-                                  "this one"}})
+        return _put(
+            c,
+            {
+                **job,
+                "state": "gave_up",
+                "step": None,
+                "finished": H.now(),
+                "found": found,
+                "error": {
+                    "code": reason,
+                    "message": "The draft changed while this ran, so nothing was written; what it found is below"
+                    if newest
+                    else "A newer research job replaced this one",
+                },
+            },
+        )
     actor, source = job["actor"], source_of(job["url"])
-    sections = {k: unconfirmed(found[k], source) for k in S.FIXED_KEYS
-                if found.get(k) and not row["sections"][k].strip()}
+    sections = {
+        k: unconfirmed(found[k], source) for k in S.FIXED_KEYS if found.get(k) and not row["sections"][k].strip()
+    }
     lines = {k: found[k] for k in ("summary", "vision") if found.get(k) and not row[k].strip()}
     if sections or lines:
         S.update_draft(c, actor, row["revision"], sections=sections or None, **lines)
@@ -371,9 +433,22 @@ def finish(c, job_id, found):
         if bet:
             made.append(bet["id"])
             known.add(item["statement"].lower())
-    return _put(c, {**job, "state": "done", "step": None, "finished": H.now(), "found": found,
-                    "written": {"sections": sorted(sections), "fields": sorted(lines), "bets": made,
-                                "revision": S.draft(c)["revision"]}})
+    return _put(
+        c,
+        {
+            **job,
+            "state": "done",
+            "step": None,
+            "finished": H.now(),
+            "found": found,
+            "written": {
+                "sections": sorted(sections),
+                "fields": sorted(lines),
+                "bets": made,
+                "revision": S.draft(c)["revision"],
+            },
+        },
+    )
 
 
 # ----------------------------------------------------------------------------- HTTP
@@ -385,8 +460,9 @@ def install(app, store, auth, mutate):
     def owner(who):
         auth.domain(who)
         if not goal_routes.company_editor(who):
-            raise Problem("forbidden", "Only the owner drafts the strategy from the team's website, on their own click",
-                          403)
+            raise Problem(
+                "forbidden", "Only the owner drafts the strategy from the team's website, on their own click", 403
+            )
 
     @app.post("/api/v2/strategy/draft-from")
     def strategy_draft_from(request: Request, body: M.StrategyDraftFrom):

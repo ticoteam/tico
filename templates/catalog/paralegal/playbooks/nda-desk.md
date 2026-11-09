@@ -43,3 +43,8 @@ the requester once for any missing value. Never guess a legal entity name.
 `reports/YYYY-MM-DD-nda-desk.md`: counts by status first, then each NDA in one line (party, status, the one
 thing that matters, who acts), packets waiting, index rows added. `hub file publish` it, commit, and
 `hub task update <id> --status done --note` with the counts first.
+
+## Done when
+- Every open NDA on the queue has a status, the exact changes, and an owner, or a question open on its task.
+- `reports/ndas/<party>.md` exists for each NDA checked today, and the desk report is published.
+- The task is closed with the counts first, and any NDA that needs counsel is named in its first line.

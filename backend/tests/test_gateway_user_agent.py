@@ -2,7 +2,7 @@
 answers a library's default one (`Python-urllib/3.12`) with 403 before the request reaches the Gateway, so a Decide
 call sent without it never arrives, and with no other provider left nothing answers. CI talks to a fake Gateway
 directly; here that fake refuses every agent that is not Tico's, the way the release guard's proxy does for the runner
-(runner/tests/test_conformance.py `RefusingProxy`)."""
+(runner_support/tests/test_conformance.py `RefusingProxy`)."""
 
 import json
 import re
@@ -52,16 +52,32 @@ class RefusingGateway:
 
             def do_GET(self):
                 if self.edge():
-                    self.answer(200, {"status": "active", "month": "2026-10", "cap_usd": 50.0, "spent_usd": 1.0,
-                                      "used": 0.02, "warning": False, "cap_reached": False})
+                    self.answer(
+                        200,
+                        {
+                            "status": "active",
+                            "month": "2026-10",
+                            "cap_usd": 50.0,
+                            "spent_usd": 1.0,
+                            "used": 0.02,
+                            "warning": False,
+                            "cap_reached": False,
+                        },
+                    )
 
             def do_POST(self):
                 asked = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
                 if not self.edge():
                     return
                 if self.path.endswith("/decisions"):
-                    self.answer(200, {"model": "tico-decide-1.0", "answers": answer_all(asked["questions"]),
-                                      "usage": {"input_tokens": 120, "output_tokens": 0, "cost_usd": 0.00001}})
+                    self.answer(
+                        200,
+                        {
+                            "model": "tico-decide-low",
+                            "answers": answer_all(asked["questions"]),
+                            "usage": {"input_tokens": 120, "output_tokens": 0, "cost_usd": 0.00001},
+                        },
+                    )
                 else:
                     self.answer(200, {"choices": [{"message": {"role": "assistant", "content": '{"ok": true}'}}]})
 
@@ -83,13 +99,13 @@ def refusing_gateway():
 def decide(base):
     """Decide asking the Gateway with a gateway key (backend/judge.py's first provider)."""
     result = J.gateway(KEY, G.decisions_url(base))({"team": "Acme"}, QUESTIONS)
-    assert (result["provider"], result["model"]) == ("Tico AI Gateway", "tico-decide-1.0")
+    assert (result["provider"], result["model"]) == ("Tico AI Gateway", "tico-decide-low")
     return "POST", "/v1/gateway/decisions"
 
 
 def write(base):
     """Writing on a Tico model through the Gateway's chat completions (backend/updates.py's waiting messages)."""
-    assert J.gateway_writer(lambda: KEY, base, "tico-cheap-1.0")("system", "user") == {"ok": True}
+    assert J.gateway_writer(lambda: KEY, base, "tico-low-1.0")("system", "user") == {"ok": True}
     return "POST", "/v1/gateway/chat/completions"
 
 
@@ -115,6 +131,14 @@ def turn(base):
 CALLS = {"decisions": decide, "chat completions": write, "key check": check, "enroll": enrol, "rotate": turn}
 
 
+def letters(base):
+    G.letters(KEY, base, "?limit=1")
+    return "GET", "/v1/gateway/letters?limit=1"
+
+
+CALLS["letters"] = letters
+
+
 @pytest.mark.parametrize("call", list(CALLS))
 def test_every_gateway_call_carries_ticos_user_agent_past_an_edge_that_refuses_the_default(call, monkeypatch):
     monkeypatch.setenv("TICO_VERSION", "v0.3.65")
@@ -132,8 +156,17 @@ def test_without_tico_s_user_agent_the_edge_refuses_the_call_and_decide_falls_th
     assert refused.value.status == 403 and fake.seen == [("POST", "/v1/gateway/decisions", "Python-urllib/3.12")]
 
 
-@pytest.mark.parametrize("version, sent", [("0.3.65", "0.3.65"), ("v1.2.3-rc.1", "1.2.3-rc.1"), ("", "dev"),
-                                           ("dev", "dev"), ("1.0\r\nX-Injected: 1", "dev"), ("x" * 65, "dev")])
+@pytest.mark.parametrize(
+    "version, sent",
+    [
+        ("0.3.65", "0.3.65"),
+        ("v1.2.3-rc.1", "1.2.3-rc.1"),
+        ("", "dev"),
+        ("dev", "dev"),
+        ("1.0\r\nX-Injected: 1", "dev"),
+        ("x" * 65, "dev"),
+    ],
+)
 def test_the_user_agent_names_the_app_version_and_never_carries_a_bad_header_value(version, sent, monkeypatch):
     monkeypatch.setenv("TICO_VERSION", version)
     assert G.user_agent() == "Tico-Client/" + sent
@@ -141,19 +174,24 @@ def test_the_user_agent_names_the_app_version_and_never_carries_a_bad_header_val
 
 # What names Tico HQ or the Gateway in a module, and what a module uses to send HTTP.
 HQ_NAMES = re.compile(r"updates\.tico\.team|TICO_HQ_URL|hq_url\(|DEFAULT_HQ|TICO_GATEWAY_URL|/v1/gateway|gateway_url")
-SENDS = re.compile(r"urllib\.request|httpx|\brequests\.|aiohttp|http\.client")
+SENDS = re.compile(
+    r"urllib\.request|httpx|\brequests\.(?:get|post|put|patch|delete|head|request|Session)\b|aiohttp|http\.client"
+)
 # Each module that sends to HQ or the Gateway, and how it names its user agent.
 HQ_CLIENTS = {
     "backend/company_server.py": '"User-Agent": user_agent()',
     "backend/inbound.py": '"User-Agent": user_agent()',
+    "backend/postal_mail.py": '"User-Agent": user_agent()',
     "backend/recruit.py": '"User-Agent": "tico"',
     "backend/billing_check.py": '"User-Agent": "tico-billing-check"',
     "backend/releases.py": '"User-Agent": "tico-update-check"',
     "backend/support.py": '"User-Agent": "tico-support"',
     "backend/support_access.py": '"User-Agent": "tico-support-access"',
+    "backend/suggestions.py": '"User-Agent": G.user_agent()',
     "clients/gateway.py": "branded_opener(*handlers).open(",
     "clients/judge.py": "G.branded_opener(*handlers).open(",
     "setup/support.py": '"User-Agent": "tico-setup"',
+    "setup/cell_stats.py": '"User-Agent": "tico-cell-stats"',
 }
 
 
@@ -161,7 +199,7 @@ def test_every_module_that_sends_to_tico_hq_is_known_and_names_its_user_agent():
     """A new client of Tico HQ or the Gateway fails here until it sends a user agent of its own (a library's default
     is refused at the edge) and is listed above; one that stops naming its agent fails too."""
     found = set()
-    for folder in ("backend", "clients", "setup", "connectors", "runner", "scripts"):
+    for folder in ("backend", "clients", "setup", "connectors", "runner_support", "scripts"):
         for path in (ROOT / folder).rglob("*.py"):
             if "tests" in path.relative_to(ROOT).parts:
                 continue

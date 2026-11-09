@@ -23,7 +23,7 @@ const path = require('node:path');
     get:()=>new Promise(resolve=>{resolveCatalog=resolve;}),
     post:async(url,body)=>{created.push({url,body});return url==='/v2/seats'?{id:'seat-1'}:{};},refresh:async()=>{},loadSettings:async()=>{},toast(){},settingsEditBot(){}
   });
-  vm.runInContext(fs.readFileSync(path.join(__dirname,'../app/recruit.js'),'utf8'),context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../../build/ui/app/recruit.js'),'utf8'),context);
   context.recruitSeat=async id=>{opened.push(id);};
   const opening = context.settingsRecruitFlow({title:values.title,brief:values.brief,template:'support'});
   assert.equal(typeof submitHandlerAtShow,'function','submission is intercepted before the form is shown');

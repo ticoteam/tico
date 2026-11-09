@@ -32,15 +32,22 @@ from .store import H
 ENV_KEY = "TICO_HQ_STAFF_READ_KEY"
 KEY = "hq-billing-check"
 PATH = "/v1/staff/billing/check"
-STALE_HOURS = 26             # the check runs at 02:00 UTC every night; two hours late counts as missed
-UNREAD_HOURS = 3             # three hourly reads in a row failed: HQ's word is unknown, which is not clean
-SHOWN = 20                   # mismatches listed one by one; past that, one more item counts the rest
-WAIT = 10                    # seconds for HQ's answer
-TRANSPORT = None             # tests replace it with an httpx.MockTransport: nothing reaches the network
-KINDS = {"balance": "its cached balance", "debit": "debit", "credit": "credit",
-         "cross_account": "cross-company allocation"}
-FAILURES = {"refused": "HQ refused the read-only key", "unreachable": "HQ did not answer",
-            "invalid": "HQ's answer was not a billing check"}
+STALE_HOURS = 26  # the check runs at 02:00 UTC every night; two hours late counts as missed
+UNREAD_HOURS = 3  # three hourly reads in a row failed: HQ's word is unknown, which is not clean
+SHOWN = 20  # mismatches listed one by one; past that, one more item counts the rest
+WAIT = 10  # seconds for HQ's answer
+TRANSPORT = None  # tests replace it with an httpx.MockTransport: nothing reaches the network
+KINDS = {
+    "balance": "its cached balance",
+    "debit": "debit",
+    "credit": "credit",
+    "cross_account": "cross-company allocation",
+}
+FAILURES = {
+    "refused": "HQ refused the read-only key",
+    "unreachable": "HQ did not answer",
+    "invalid": "HQ's answer was not a billing check",
+}
 ACCOUNT = re.compile(r"[A-Za-z0-9-]{1,64}")
 KIND = re.compile(r"[a-z_]{1,40}")
 SUBJECT = re.compile(r"[A-Za-z0-9_.:-]{1,80}")
@@ -76,22 +83,37 @@ def parse(body):
     check = body["check"]
     if check is None:
         return None
-    if not isinstance(check, dict) or not isinstance(check.get("checked_at"), str) \
-            or not STAMP.fullmatch(check["checked_at"]) or type(check.get("accounts")) is not int \
-            or not isinstance(check.get("findings"), list):
+    if (
+        not isinstance(check, dict)
+        or not isinstance(check.get("checked_at"), str)
+        or not STAMP.fullmatch(check["checked_at"])
+        or type(check.get("accounts")) is not int
+        or not isinstance(check.get("findings"), list)
+    ):
         raise ValueError("check shape")
     _parse_at(check["checked_at"])
     findings = []
     for item in check["findings"]:
-        if not isinstance(item, dict) or not isinstance(item.get("account_id"), str) \
-                or not ACCOUNT.fullmatch(item["account_id"]) or not isinstance(item.get("kind"), str) \
-                or not KIND.fullmatch(item["kind"]) or type(item.get("difference_micros")) is not int:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("account_id"), str)
+            or not ACCOUNT.fullmatch(item["account_id"])
+            or not isinstance(item.get("kind"), str)
+            or not KIND.fullmatch(item["kind"])
+            or type(item.get("difference_micros")) is not int
+        ):
             raise ValueError("finding shape")
         subject = item.get("subject_id")
         if subject is not None and not (isinstance(subject, str) and SUBJECT.fullmatch(subject)):
             raise ValueError("finding subject")
-        findings.append({"account_id": item["account_id"], "kind": item["kind"], "subject_id": subject,
-                         "difference_micros": item["difference_micros"]})
+        findings.append(
+            {
+                "account_id": item["account_id"],
+                "kind": item["kind"],
+                "subject_id": subject,
+                "difference_micros": item["difference_micros"],
+            }
+        )
     return {"checked_at": check["checked_at"], "accounts": check["accounts"], "findings": findings}
 
 
@@ -103,7 +125,7 @@ def fetch(key, base=None):
             response = http.get((base or hq_url()) + PATH, headers=headers)
     except httpx.HTTPError:
         return "unreachable", None
-    if response.status_code in (401, 403, 404):         # HQ answers 404 on staff routes when no staff key is set
+    if response.status_code in (401, 403, 404):  # HQ answers 404 on staff routes when no staff key is set
         return "refused", None
     if response.status_code != 200:
         return "unreachable", None
@@ -114,7 +136,7 @@ def fetch(key, base=None):
 
 
 def _row(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
     except ValueError:
@@ -130,8 +152,10 @@ def record(c, state, check, now):
         stored = {"read_at": now, "check": check}
     else:
         stored = {**stored, "failure": state, "failing_since": stored.get("failing_since") or now, "tried_at": now}
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
-              (KEY, json.dumps(stored, sort_keys=True)))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (KEY, json.dumps(stored, sort_keys=True)),
+    )
 
 
 def read_now(store, settings=None):
@@ -151,11 +175,13 @@ def read_now(store, settings=None):
 
 def read_later(store, settings=None):
     """`read_now` on a background thread, for the hourly sweep: a tick never waits on HQ."""
+
     def run():
         try:
             read_now(store, settings)
         except Exception:
-            pass                                          # the next hour tries again; the last answer stays
+            pass  # the next hour tries again; the last answer stays
+
     thread = threading.Thread(target=run, name="billing-check", daemon=True)
     thread.start()
     return thread
@@ -175,14 +201,26 @@ def health(c, settings=None, now=None):
         return []
     stored, now = _row(c), now or datetime.now(timezone.utc)
     if not stored:
-        return [{"id": "billing_check", "label": "Billing check", "status": "unknown",
-                 "summary": "Tico HQ's nightly billing check has not been read yet.", "fixes": []}]
+        return [
+            {
+                "id": "billing_check",
+                "label": "Billing check",
+                "status": "unknown",
+                "summary": "Tico HQ's nightly billing check has not been read yet.",
+                "fixes": [],
+            }
+        ]
     out = []
     if stored.get("failure") and _hours(stored["failing_since"], now) >= UNREAD_HOURS:
-        out.append(_bad("unread", f"Could not read Tico HQ's nightly billing check since "
-                                  f"{stored['failing_since'][:16].replace('T', ' ')} UTC: "
-                                  f"{FAILURES.get(stored['failure'], 'HQ did not answer')}. Until it is read again, "
-                                  "a billing mismatch would not show here."))
+        out.append(
+            _bad(
+                "unread",
+                f"Could not read Tico HQ's nightly billing check since "
+                f"{stored['failing_since'][:16].replace('T', ' ')} UTC: "
+                f"{FAILURES.get(stored['failure'], 'HQ did not answer')}. Until it is read again, "
+                "a billing mismatch would not show here.",
+            )
+        )
     if "check" not in stored:
         return out
     check = stored["check"]
@@ -190,17 +228,32 @@ def health(c, settings=None, now=None):
         return out + [_bad("missed", "Tico HQ has no nightly billing check yet: no company's ledger has been checked.")]
     at = check["checked_at"][:16].replace("T", " ")
     if _hours(check["checked_at"], now) >= STALE_HOURS:
-        out.append(_bad("missed", f"Tico HQ's nightly billing check last ran {at} UTC: it has missed a night. "
-                                  "The mismatches shown are from that check."
-                                  if check["findings"] else f"Tico HQ's nightly billing check last ran {at} UTC: it "
-                                  "has missed a night, so the ledgers are not known to be clean."))
+        out.append(
+            _bad(
+                "missed",
+                f"Tico HQ's nightly billing check last ran {at} UTC: it has missed a night. "
+                "The mismatches shown are from that check."
+                if check["findings"]
+                else f"Tico HQ's nightly billing check last ran {at} UTC: it "
+                "has missed a night, so the ledgers are not known to be clean.",
+            )
+        )
     for item in check["findings"][:SHOWN]:
         what = KINDS.get(item["kind"], item["kind"].replace("_", " "))
         row = f" {item['subject_id']}" if item["subject_id"] else ""
-        out.append(_bad(f"{item['account_id']}:{item['kind']}:{item['subject_id'] or ''}",
-                        f"Company {item['account_id']}: {what}{row} is off by {dollars(item['difference_micros'], True)} "
-                        f"in the {at} UTC check. Nothing was changed; HQ keeps the record."))
+        out.append(
+            _bad(
+                f"{item['account_id']}:{item['kind']}:{item['subject_id'] or ''}",
+                f"Company {item['account_id']}: {what}{row} is off by {dollars(item['difference_micros'], True)} "
+                f"in the {at} UTC check. Nothing was changed; HQ keeps the record.",
+            )
+        )
     if len(check["findings"]) > SHOWN:
-        out.append(_bad("more", f"{len(check['findings']) - SHOWN} more billing mismatches in the {at} UTC check "
-                                "(GET /v1/staff/billing/check on HQ lists them all)."))
+        out.append(
+            _bad(
+                "more",
+                f"{len(check['findings']) - SHOWN} more billing mismatches in the {at} UTC check "
+                "(GET /v1/staff/billing/check on HQ lists them all).",
+            )
+        )
     return out

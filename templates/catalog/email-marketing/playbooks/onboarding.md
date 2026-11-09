@@ -4,6 +4,9 @@ Runs once, on the first message or task you receive, while `state.md` says setup
 finished. Budget 25 minutes. The outcome is five recorded answers, a real draft of the next email on
 the task and the first routine checked.
 
+Inputs: the setup task, any read-only mailbox or past campaign attached to it, and the five questions in step 3.
+Done when: `state.md` holds five dated answers, the draft is attached and labelled, the routine is checked, and the decision is logged in `memory/decisions.md`.
+
 ---
 
 ## 1. Read before you ask
@@ -40,13 +43,13 @@ reviewed". Nothing is sent.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will draft your next email every Tuesday at 09:00 and a human sends it." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will draft your next email every Tuesday at 09:00 and a human sends it." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

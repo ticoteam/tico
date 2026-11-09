@@ -1,7 +1,7 @@
 # Setup
 
 Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 30 minutes. The outcome is six recorded answers, a first weekly finance summary from
+finished. Budget 30 minutes. The outcome is five recorded answers, a first weekly finance summary from
 real balances and reports, and the first routine checked.
 
 ---
@@ -31,12 +31,13 @@ answers only some, record those and use the defaults for the rest, saying which 
    `knowledge/team.md`; every line names who acts.
 2. Where does cash live (bank and card accounts, by name only)? Attach this week's balances and last
    month's bank export. The forecast starts from real balances.
-3. What big, known cash movements are coming in the next three months? Seeds the forecast with what the
-   books cannot show yet.
+3. What big cash movements and finance dates are coming in the next three months (payroll, rent, loan and
+   tax payments, large customer payments, the close deadline, tax filings, board meeting, loan covenants),
+   and which dates must never be missed? Seeds the forecast; the must-not-miss dates become the finance
+   calendar.
 4. What is the minimum cash you never want to go below, and what runway would worry you? (Default: two
    payrolls; under 9 months.) Sets the alert lines.
-5. Which finance dates must never be missed? Becomes the finance calendar.
-6. Who reads the weekly summary, and when? (Default: you, Mondays at 08:30.) Sets the routine.
+5. Who reads the weekly summary, and when? (Default: you, Mondays at 08:30.) Sets the routine.
 
 ## 4. Record
 
@@ -54,13 +55,13 @@ nobody but the requester.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will write this every Monday at 08:30." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will write this every Monday at 08:30." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

@@ -1,4 +1,4 @@
-// The Lenses tab (ui/lenses-page.js) against a stand-in for /api/v2/lenses and the strategy it reads (fixtures only, the
+// The Lenses tab (ui/lenses-page.ts) against a stand-in for /api/v2/lenses and the strategy it reads (fixtures only, the
 // Acme example): the owner sees the listed lenses in Strategy and Market groups with Run, a member the same rows without
 // it; a run asks the steps one at a time (a list adds rows on Enter, the scores grid is built from the earlier answers,
 // Back keeps what was typed, a skipped step is left out of the answers) and goes to the run page, which polls until done and
@@ -66,7 +66,7 @@ const table = {kind: 'table', columns: ['Segment', 'Size', 'Fit'], rows: [['Smal
 
 const done = (id, lens, over = {}, result = {}) => ({id, lens, name: LENSES.find(l => l.id === lens)?.name || lens, applies_to: LENSES.find(l => l.id === lens)?.applies_to || 'strategy',
   on_draft: false, strategy_n: 1, status: 'done', answers: {rivals: ['Acme Clean']}, applied: [], sharpen_tasks: {}, proposal_id: null, created_by: 'human:ana',
-  created: '2026-10-24T09:00:00Z', finished: '2026-10-24T09:01:00Z', error: null,
+  created_at: '2026-10-24T09:00:00Z', finished_at: '2026-10-24T09:01:00Z', error: null,
   result: {summary: 'Acme wins on price and setup, and loses on reporting.', sections: [{title: 'The curve today', body: 'Rivals lead on **reporting**.\n\n- Price: we lead\n- Reporting: they lead'}],
     chart: curve, findings: [{kind: 'challenges', bet_id: 'b-price', text: 'Two rivals already score 5 on price.'}, {kind: 'supports', bet_id: 'b-offices', text: 'Nobody serves managers.'}, {kind: 'gap', bet_id: null, text: 'No data on churn.'}],
     assumptions: ['Rivals prices assumed from their websites.'],
@@ -75,6 +75,8 @@ const done = (id, lens, over = {}, result = {}) => ({id, lens, name: LENSES.find
 
 async function open(browser, {role = 'owner', route = '#/strategy/lenses', viewport = DESKTOP, published = true, runs = [], noPublished = false, slow = false} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', locale: 'en-GB'});
+  // The clock is fixed in October: a run the stub starts is stamped with it, and the page shows its date ("27 Oct").
+  await page.clock.install({time: new Date('2026-10-27T12:00:00Z')});
   const errors = [], sent = [];
   page.on('pageerror', e => errors.push(e.message));
   const owner = role === 'owner';
@@ -89,7 +91,7 @@ async function open(browser, {role = 'owner', route = '#/strategy/lenses', viewp
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     if (p === '/api/v2/config') return json({});
     if (p === '/api/employees') return json(bots);
@@ -106,7 +108,7 @@ async function open(browser, {role = 'owner', route = '#/strategy/lenses', viewp
       if (!run || !visible(run)) return json({error: {code: 'not_found', detail: 'No such run'}}, 404);
       // A run that is running answers once more as running, then as done (the page polls every two seconds).
       st.gets[run.id] = (st.gets[run.id] || 0) + 1;
-      if (run.status === 'running' && st.gets[run.id] > 1) Object.assign(run, done(run.id, run.lens, {answers: run.answers, on_draft: run.on_draft, created: run.created}));
+      if (run.status === 'running' && st.gets[run.id] > 1) Object.assign(run, done(run.id, run.lens, {answers: run.answers, on_draft: run.on_draft, created_at: run.created_at}));
       return json(run);
     }
     const start = p.match(/^\/api\/v2\/lenses\/([^/]+)\/runs$/);
@@ -117,7 +119,7 @@ async function open(browser, {role = 'owner', route = '#/strategy/lenses', viewp
       if (body.on === 'published' && (!published || noPublished)) return json({error: {code: 'no_published', detail: 'Nothing is published'}}, 422);
       const lens = LENSES.find(l => l.id === start[1]);
       const run = {id: 'r-new' + st.runs.length, lens: lens.id, name: lens.name, applies_to: lens.applies_to, on_draft: body.on === 'draft', strategy_n: body.on === 'draft' ? null : 1,
-        status: slow ? 'no_model' : 'running', answers: body.answers, result: null, applied: [], sharpen_tasks: {}, proposal_id: null, created_by: 'human:ana', created: new Date().toISOString(), finished: null, error: null};
+        status: slow ? 'no_model' : 'running', answers: body.answers, result: null, applied: [], sharpen_tasks: {}, proposal_id: null, created_by: 'human:ana', created_at: '2026-10-27T12:00:00.000Z', finished_at: null, error: null};
       st.runs.unshift(run);
       return json(run, 202);
     }

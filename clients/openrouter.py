@@ -5,13 +5,16 @@ OpenRouter (backend/judge.py), so both send OpenRouter the same id. Change the r
 model; the catalog id (backend/providers.py) stays.
 """
 
-MODELS = {"deepseek-v4.1-flash": "deepseek/deepseek-v4.1-flash",
-          "deepseek-v4-pro": "deepseek/deepseek-v4-pro",
-          "kimi-k3": "moonshotai/kimi-k3",
-          "kimi-k2.7-code": "moonshotai/kimi-k2.7-code",
-          "llama-4-maverick": "meta-llama/llama-4-maverick",
-          "mistral-medium-3.5": "mistralai/mistral-medium-3-5",
-          "devstral-2512": "mistralai/devstral-2512"}
+MODELS = {
+    "deepseek-v4.1-flash": "deepseek/deepseek-v4.1-flash",
+    "deepseek-v4-pro": "deepseek/deepseek-v4-pro",
+    "kimi-k3": "moonshotai/kimi-k3",
+    "kimi-k2.7-code": "moonshotai/kimi-k2.7-code",
+    "llama-4-maverick": "meta-llama/llama-4-maverick",
+    "mistral-medium-3.5": "mistralai/mistral-medium-3-5",
+    "devstral-2512": "mistralai/devstral-2512",
+    "mercury-3": "inception/mercury-3",
+}
 DEFAULT = "deepseek-v4.1-flash"
 
 

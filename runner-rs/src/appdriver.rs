@@ -37,9 +37,26 @@ const WATCH_BUSY: Duration = Duration::from_secs(60);
 const WATCH_BUSY_FOR: Duration = Duration::from_secs(30 * 60);
 /// The error codes a call reports that the next probe cannot see, or sees no sooner: they stand in readiness
 /// until a clean probe or a call that works.
-const STICKY: &[&str] = &["no_permission", "not_signed_in", "needs_foreground", "ui_changed"];
+const STICKY: &[&str] = &[
+    "no_permission",
+    "not_signed_in",
+    "needs_foreground",
+    "ui_changed",
+];
 /// The contract's error codes: the only ones the server takes in a report.
-const CODES: &[&str] = &["no_permission", "not_installed", "not_running", "not_signed_in", "bot_not_found", "busy", "needs_foreground", "ui_changed", "timeout", "needs_human", "send_failed"];
+const CODES: &[&str] = &[
+    "no_permission",
+    "not_installed",
+    "not_running",
+    "not_signed_in",
+    "bot_not_found",
+    "busy",
+    "needs_foreground",
+    "ui_changed",
+    "timeout",
+    "needs_human",
+    "send_failed",
+];
 
 /// Where a bot's app delivery is: the app and the bot's own id and name in it.
 #[derive(Clone, Debug, PartialEq)]
@@ -55,7 +72,10 @@ pub fn delivery(config: &Value) -> Option<Delivery> {
         return None;
     }
     let app = text_of(&config["app_delivery"]["app"]);
-    Some(Delivery { app: if app.is_empty() { "grok".into() } else { app }, bot: config["app_bot"].clone() })
+    Some(Delivery {
+        app: if app.is_empty() { "grok".into() } else { app },
+        bot: config["app_bot"].clone(),
+    })
 }
 
 /// The app as people know it.
@@ -64,7 +84,9 @@ pub fn label(app: &str) -> String {
         "grok" | "" => "Grok".into(),
         other => {
             let mut c = other.chars();
-            c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+            c.next()
+                .map(|f| f.to_uppercase().chain(c).collect())
+                .unwrap_or_default()
         }
     }
 }
@@ -78,7 +100,10 @@ pub fn driver() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os(OVERRIDE_ENV).filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(p)).filter(|p| p.is_file());
     }
-    let beside = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(EXECUTABLE))).filter(|p| p.is_file());
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| d.join(EXECUTABLE)))
+        .filter(|p| p.is_file());
     beside.or_else(|| crate::env::which(EXECUTABLE, &std::env::var("PATH").unwrap_or_default()))
 }
 
@@ -96,7 +121,13 @@ pub fn driver_env() -> Env {
 /// The lock every call to `app` on this computer holds: an app has one window to drive.
 pub fn gate(app: &str) -> Arc<tokio::sync::Mutex<()>> {
     static GATES: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
-    GATES.get_or_init(Default::default).lock().unwrap().entry(app.to_string()).or_default().clone()
+    GATES
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .entry(app.to_string())
+        .or_default()
+        .clone()
 }
 
 /// The turn failure for a driver error, in plain words, naming the app.
@@ -117,18 +148,34 @@ pub fn failure_line(app: &str, code: &str, detail: &str, bot_name: &str) -> Stri
         "send_failed" => format!("{app} on this Mac didn't take the message"),
         other => format!("{app} on this Mac failed ({})", if other.is_empty() { "no reason given" } else { other }),
     };
-    if detail.is_empty() { base } else { format!("{base} ({detail})") }
+    if detail.is_empty() {
+        base
+    } else {
+        format!("{base} ({detail})")
+    }
 }
 
 /// One driver call's lines and whether it exited 0. Err is a driver that did not start or ran past `timeout`
 /// (it is killed).
-pub async fn call(driver: &Path, request: &Value, timeout: Duration) -> Result<(Vec<Value>, bool), String> {
+pub async fn call(
+    driver: &Path,
+    request: &Value,
+    timeout: Duration,
+) -> Result<(Vec<Value>, bool), String> {
     let mut command = tokio::process::Command::new(driver);
-    command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).env_clear().envs(driver_env()).kill_on_drop(true);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .env_clear()
+        .envs(driver_env())
+        .kill_on_drop(true);
     if let Some(home) = std::env::var_os("HOME") {
         command.current_dir(home);
     }
-    let mut child = command.spawn().map_err(|e| format!("could not start {EXECUTABLE}: {e}"))?;
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("could not start {EXECUTABLE}: {e}"))?;
     let body = request.to_string();
     let mut stdin = child.stdin.take();
     let stdout = child.stdout.take();
@@ -150,7 +197,9 @@ pub async fn call(driver: &Path, request: &Value, timeout: Duration) -> Result<(
         let ok = child.wait().await.is_ok_and(|s| s.success());
         (out, ok)
     };
-    tokio::time::timeout(timeout, run).await.map_err(|_| format!("{EXECUTABLE} did not answer within {}s", timeout.as_secs()))
+    tokio::time::timeout(timeout, run)
+        .await
+        .map_err(|_| format!("{EXECUTABLE} did not answer within {}s", timeout.as_secs()))
 }
 
 /// The `{code, detail, text}` of a call's error line.
@@ -186,7 +235,9 @@ struct Shared {
 
 fn shared() -> std::sync::MutexGuard<'static, Shared> {
     static S: OnceLock<Mutex<Shared>> = OnceLock::new();
-    S.get_or_init(Default::default).lock().unwrap_or_else(|p| p.into_inner())
+    S.get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
 }
 
 fn wake() -> &'static tokio::sync::Notify {
@@ -220,7 +271,11 @@ pub fn report(slug: &str, app: &str, error: Value) {
     if !CODES.contains(&error["code"].as_str().unwrap_or_default()) {
         return;
     }
-    let report = Report { slug: slug.to_string(), key: format!("appdriver-report-{}", uuid::Uuid::new_v4().simple()), body: json!({"app": app, "messages": [], "error": error}) };
+    let report = Report {
+        slug: slug.to_string(),
+        key: format!("appdriver-report-{}", uuid::Uuid::new_v4().simple()),
+        body: json!({"app": app, "messages": [], "error": error}),
+    };
     let mut s = shared();
     s.reports.push(report);
     let over = s.reports.len().saturating_sub(REPORTS_KEPT);
@@ -245,20 +300,29 @@ pub fn take_reports() -> Vec<Report> {
 /// One bot's waiting reports, leaving the others' (tests run side by side).
 #[cfg(test)]
 pub fn take_reports_for(slug: &str) -> Vec<Value> {
-    take_report_entries_for(slug).into_iter().map(|r| r.body).collect()
+    take_report_entries_for(slug)
+        .into_iter()
+        .map(|r| r.body)
+        .collect()
 }
 
 #[cfg(test)]
 fn take_report_entries_for(slug: &str) -> Vec<Report> {
     let mut s = shared();
-    let (mine, rest) = std::mem::take(&mut s.reports).into_iter().partition(|r| r.slug == slug);
+    let (mine, rest) = std::mem::take(&mut s.reports)
+        .into_iter()
+        .partition(|r| r.slug == slug);
     s.reports = rest;
     mine
 }
 
 /// The bot configs assigned here that deliver through an app.
 fn deliveries(assignments: &[Value]) -> Vec<Delivery> {
-    assignments.iter().filter(|e| e["state"] != "archived").filter_map(|e| delivery(&e["config"])).collect()
+    assignments
+        .iter()
+        .filter(|e| e["state"] != "archived")
+        .filter_map(|e| delivery(&e["config"]))
+        .collect()
 }
 
 /// Whether this Mac reports and probes its desktop apps: a bot here delivers through one, TICO_APPDRIVER is set,
@@ -282,9 +346,15 @@ pub fn readiness(assignments: &[Value]) -> Option<Value> {
         return None;
     }
     let wanted = wanted_apps;
-    let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|_| "tico-runner".into());
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "tico-runner".into());
     let s = shared();
-    let probe = if driver().is_some() { s.probe.as_ref() } else { None };
+    let probe = if driver().is_some() {
+        s.probe.as_ref()
+    } else {
+        None
+    };
     let mut apps: Vec<String> = wanted.into_iter().map(|d| d.app).collect();
     apps.sort();
     apps.dedup();
@@ -293,23 +363,49 @@ pub fn readiness(assignments: &[Value]) -> Option<Value> {
 
 /// The `appdriver` field from the last probe (None: not yet run), the sticky call errors, the apps bots here use
 /// and the executable that needs the permission.
-pub fn document(driver: bool, probe: Option<&Result<Vec<Value>, String>>, sticky: &HashMap<String, String>, apps: &[String], exe: &str) -> Value {
+pub fn document(
+    driver: bool,
+    probe: Option<&Result<Vec<Value>, String>>,
+    sticky: &HashMap<String, String>,
+    apps: &[String],
+    exe: &str,
+) -> Value {
     if !driver {
         return json!({"trusted": false, "detail": format!("{EXECUTABLE} is not installed beside tico-runner"), "apps": {}});
     }
-    let permission = format!("Give {exe} Accessibility permission: System Settings → Privacy & Security → Accessibility");
+    let permission = format!(
+        "Give {exe} Accessibility permission: System Settings → Privacy & Security → Accessibility"
+    );
     let lines = match probe {
-        None => return json!({"trusted": false, "detail": "Checking the apps on this Mac", "apps": {}}),
+        None => {
+            return json!({"trusted": false, "detail": "Checking the apps on this Mac", "apps": {}})
+        }
         Some(Err(why)) => {
             let mut out = Map::new();
-            for app in apps.iter().map(String::as_str).chain(apps.is_empty().then_some("grok")) {
-                out.insert(app.into(), app_row(&Value::Null, "error", &format!("{EXECUTABLE} could not check {}: {why}", label(app))));
+            for app in apps
+                .iter()
+                .map(String::as_str)
+                .chain(apps.is_empty().then_some("grok"))
+            {
+                out.insert(
+                    app.into(),
+                    app_row(
+                        &Value::Null,
+                        "error",
+                        &format!("{EXECUTABLE} could not check {}: {why}", label(app)),
+                    ),
+                );
             }
             return json!({"trusted": false, "detail": format!("{EXECUTABLE} could not check this Mac: {why}"), "apps": out});
         }
         Some(Ok(lines)) => lines,
     };
-    let summary = lines.iter().rev().find(|l| l["type"] == "probe").cloned().unwrap_or(Value::Null);
+    let summary = lines
+        .iter()
+        .rev()
+        .find(|l| l["type"] == "probe")
+        .cloned()
+        .unwrap_or(Value::Null);
     let trusted = summary["trusted"] == true;
     let mut out = Map::new();
     for line in lines.iter().filter(|l| l["type"] == "app") {
@@ -325,7 +421,10 @@ pub fn document(driver: bool, probe: Option<&Result<Vec<Value>, String>>, sticky
         } else if line["signed_in"] != true {
             ("not_signed_in".into(), format!("Sign in to {name}"))
         } else if line["background_ok"] != true {
-            ("needs_foreground".into(), format!("{name} answers only while it is in front on this Mac"))
+            (
+                "needs_foreground".into(),
+                format!("{name} answers only while it is in front on this Mac"),
+            )
         } else {
             ("ready".into(), "Ready".into())
         };
@@ -384,23 +483,37 @@ pub async fn watch_pass(client: &Client, driver: &Path) -> Pass {
         Ok(v) => v,
         Err(e) if e.status == 404 => return Pass::Unsupported,
         Err(e) => {
-            crate::util::diagnostic(&format!("Tico runner: app delivery list failed ({})", crate::runner::describe(&e)));
+            crate::util::diagnostic(&format!(
+                "Tico runner: app delivery list failed ({})",
+                crate::runner::describe(&e)
+            ));
             return Pass::Done(false);
         }
     };
     let mut fresh = false;
     for row in list["bots"].as_array().into_iter().flatten() {
-        let (slug, app) = (text_of(&row["slug"]), text_of(&row["app"]));
+        // The bot's id names it to the server; a server from before ids sends only `slug`, which was its id then.
+        let slug = Some(text_of(&row["id"]))
+            .filter(|id| !id.is_empty())
+            .unwrap_or_else(|| text_of(&row["slug"]));
+        let app = text_of(&row["app"]);
         if slug.is_empty() || app.is_empty() {
             continue;
         }
         let read = {
-            let Ok(_held) = gate(&app).try_lock_owned() else { continue };
+            let Ok(_held) = gate(&app).try_lock_owned() else {
+                continue;
+            };
             let request = json!({"op": "read", "app": app, "bot": row["bot"], "after": row["after"], "limit": READ_LIMIT});
             call(driver, &request, READ_TIMEOUT).await
         };
         let (messages, error) = read_result(read);
-        note_call(&app, error.as_ref().map(|e| e["code"].as_str().unwrap_or_default()));
+        note_call(
+            &app,
+            error
+                .as_ref()
+                .map(|e| e["code"].as_str().unwrap_or_default()),
+        );
         // Nothing new and nothing wrong: posted only when the server still holds an error for this app, so a clean
         // read clears it from Health.
         if messages.is_empty() && error.is_none() && !row["error"].as_bool().unwrap_or(false) {
@@ -408,9 +521,15 @@ pub async fn watch_pass(client: &Client, driver: &Path) -> Pass {
         }
         let bot_spoke = messages.iter().any(|m| m["role"] == "bot");
         let body = json!({"app": app, "messages": messages, "error": error});
-        match client.post(&format!("runners/me/app-delivery/{slug}"), &body, None).await {
+        match client
+            .post(&format!("runners/me/app-delivery/{slug}"), &body, None)
+            .await
+        {
             Ok(_) => fresh |= bot_spoke,
-            Err(e) => crate::util::diagnostic(&format!("Tico runner: {slug}: app delivery post failed ({})", crate::runner::describe(&e))),
+            Err(e) => crate::util::diagnostic(&format!(
+                "Tico runner: {slug}: app delivery post failed ({})",
+                crate::runner::describe(&e)
+            )),
         }
     }
     Pass::Done(fresh)
@@ -419,7 +538,10 @@ pub async fn watch_pass(client: &Client, driver: &Path) -> Pass {
 /// A read's messages, as the server takes them, and its error.
 fn read_result(read: Result<(Vec<Value>, bool), String>) -> (Vec<Value>, Option<Value>) {
     match read {
-        Err(why) => (vec![], Some(json!({"code": "timeout", "detail": why, "text": ""}))),
+        Err(why) => (
+            vec![],
+            Some(json!({"code": "timeout", "detail": why, "text": ""})),
+        ),
         Ok((lines, ok)) => {
             // Only what the server takes: a message without its key, role or text would refuse the whole report.
             let messages = lines
@@ -427,9 +549,16 @@ fn read_result(read: Result<(Vec<Value>, bool), String>) -> (Vec<Value>, Option<
                 .filter(|l| l["type"] == "msg" && (l["role"] == "bot" || l["role"] == "user") && !text_of(&l["key"]).is_empty() && !text_of(&l["text"]).is_empty())
                 .map(|m| json!({"key": text_of(&m["key"]), "role": text_of(&m["role"]), "text": text_of(&m["text"]), "at": m["at"], "needs_human": false}))
                 .collect();
-            let error = lines.iter().rev().find(|l| l["type"] == "error").map(error_of).filter(|e| CODES.contains(&e["code"].as_str().unwrap_or_default()));
+            let error = lines
+                .iter()
+                .rev()
+                .find(|l| l["type"] == "error")
+                .map(error_of)
+                .filter(|e| CODES.contains(&e["code"].as_str().unwrap_or_default()));
             if !ok && error.is_none() {
-                crate::util::diagnostic(&format!("Tico runner: {EXECUTABLE} read failed without a known error code"));
+                crate::util::diagnostic(&format!(
+                    "Tico runner: {EXECUTABLE} read failed without a known error code"
+                ));
             }
             (messages, error)
         }
@@ -443,7 +572,13 @@ async fn probe(driver: &Path) {
     };
     let result = match result {
         Ok((lines, true)) => Ok(lines),
-        Ok((lines, false)) => Err(lines.iter().rev().find(|l| l["type"] == "error").map(|l| text_of(&l["detail"])).filter(|d| !d.is_empty()).unwrap_or_else(|| "the probe failed".into())),
+        Ok((lines, false)) => Err(lines
+            .iter()
+            .rev()
+            .find(|l| l["type"] == "error")
+            .map(|l| text_of(&l["detail"]))
+            .filter(|d| !d.is_empty())
+            .unwrap_or_else(|| "the probe failed".into())),
         Err(why) => Err(why),
     };
     let mut s = shared();
@@ -468,22 +603,36 @@ async fn send_these(client: &Client, reports: Vec<Report>) {
             again.push(report);
             continue;
         }
-        match client.post(&format!("runners/me/app-delivery/{}", report.slug), &report.body, Some(&report.key)).await {
+        match client
+            .post(
+                &format!("runners/me/app-delivery/{}", report.slug),
+                &report.body,
+                Some(&report.key),
+            )
+            .await
+        {
             Ok(_) => {}
             Err(e) if e.retryable => {
-                crate::util::diagnostic(&format!("Tico runner: {}: app delivery report failed, kept for the next try ({})", report.slug, crate::runner::describe(&e)));
+                crate::util::diagnostic(&format!(
+                    "Tico runner: {}: app delivery report failed, kept for the next try ({})",
+                    report.slug,
+                    crate::runner::describe(&e)
+                ));
                 down = true;
                 again.push(report);
             }
             Err(e) if e.status == 404 => {}
-            Err(e) => crate::util::diagnostic(&format!("Tico runner: {}: app delivery report refused ({})", report.slug, crate::runner::describe(&e))),
+            Err(e) => crate::util::diagnostic(&format!(
+                "Tico runner: {}: app delivery report refused ({})",
+                report.slug,
+                crate::runner::describe(&e)
+            )),
         }
     }
     if !again.is_empty() {
         keep(again);
     }
 }
-
 
 /// The watch and the probe, for as long as the runner runs. Nothing at all on a computer without the driver.
 pub async fn run_loop(runner: Arc<crate::runner::Runner>) {
@@ -496,7 +645,11 @@ pub async fn run_loop(runner: Arc<crate::runner::Runner>) {
         send_reports(&runner.client).await;
         let assignments = runner.assignments_seen();
         let found = driver();
-        let wanted = wanted(!deliveries(&assignments).is_empty(), overridden(), found.is_some());
+        let wanted = wanted(
+            !deliveries(&assignments).is_empty(),
+            overridden(),
+            found.is_some(),
+        );
         if let Some(driver) = found.filter(|_| wanted) {
             if Instant::now() >= next_probe {
                 probe(&driver).await;
@@ -518,7 +671,10 @@ pub async fn run_loop(runner: Arc<crate::runner::Runner>) {
         let since = shared().activity.map(|a| a.elapsed());
         // A turn's end brings the next read forward to the busy interval.
         next_read = next_read.min(Instant::now() + interval(since));
-        let until = next_read.min(next_probe).saturating_duration_since(Instant::now()).max(Duration::from_secs(1));
+        let until = next_read
+            .min(next_probe)
+            .saturating_duration_since(Instant::now())
+            .max(Duration::from_secs(1));
         let _ = tokio::time::timeout(until.min(Duration::from_secs(30)), wake().notified()).await;
     }
 }
@@ -530,18 +686,30 @@ mod tests {
     #[test]
     fn the_watch_reads_every_minute_for_half_an_hour_after_activity_then_every_three() {
         assert_eq!(interval(None), Duration::from_secs(180));
-        assert_eq!(interval(Some(Duration::from_secs(5))), Duration::from_secs(60));
-        assert_eq!(interval(Some(Duration::from_secs(29 * 60))), Duration::from_secs(60));
-        assert_eq!(interval(Some(Duration::from_secs(30 * 60))), Duration::from_secs(180));
+        assert_eq!(
+            interval(Some(Duration::from_secs(5))),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            interval(Some(Duration::from_secs(29 * 60))),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            interval(Some(Duration::from_secs(30 * 60))),
+            Duration::from_secs(180)
+        );
     }
 
     #[test]
     fn the_probe_becomes_readiness_and_a_sticky_call_error_overrides_it() {
         let exe = "/Applications/Tico.app/Contents/MacOS/tico-runner";
-        let app = |signed_in: bool, background_ok: bool| {
-            json!({"type": "app", "app": "grok", "installed": true, "version": "1.4", "running": true, "signed_in": signed_in, "background_ok": background_ok})
+        let app = |signed_in: bool, background_ok: bool| json!({"type": "app", "app": "grok", "installed": true, "version": "1.4", "running": true, "signed_in": signed_in, "background_ok": background_ok});
+        let probe = |trusted: bool, line: Value| {
+            Ok(vec![
+                line,
+                json!({"type": "probe", "trusted": trusted, "macos": "15.1"}),
+            ])
         };
-        let probe = |trusted: bool, line: Value| Ok(vec![line, json!({"type": "probe", "trusted": trusted, "macos": "15.1"})]);
         let none = HashMap::new();
         let grok = vec!["grok".to_string()];
         let ready = document(true, Some(&probe(true, app(true, true))), &none, &grok, exe);
@@ -550,26 +718,85 @@ mod tests {
             json!({"trusted": true, "macos": "15.1", "detail": "", "apps": {"grok": {"installed": true, "version": "1.4", "running": true, "signed_in": true,
                    "background_ok": true, "ready": true, "state": "ready", "detail": "Ready"}}})
         );
-        let untrusted = document(true, Some(&probe(false, app(true, true))), &none, &grok, exe);
+        let untrusted = document(
+            true,
+            Some(&probe(false, app(true, true))),
+            &none,
+            &grok,
+            exe,
+        );
         assert_eq!(untrusted["apps"]["grok"]["state"], "no_permission");
-        assert!(text_of(&untrusted["detail"]).starts_with(&format!("Give {exe} Accessibility permission")));
-        let signed_out = document(true, Some(&probe(true, app(false, true))), &none, &grok, exe);
-        assert_eq!((signed_out["apps"]["grok"]["state"].clone(), signed_out["apps"]["grok"]["detail"].clone()), (json!("not_signed_in"), json!("Sign in to Grok")));
-        assert_eq!(document(true, Some(&probe(true, app(true, false))), &none, &grok, exe)["apps"]["grok"]["state"], "needs_foreground");
+        assert!(text_of(&untrusted["detail"])
+            .starts_with(&format!("Give {exe} Accessibility permission")));
+        let signed_out = document(
+            true,
+            Some(&probe(true, app(false, true))),
+            &none,
+            &grok,
+            exe,
+        );
+        assert_eq!(
+            (
+                signed_out["apps"]["grok"]["state"].clone(),
+                signed_out["apps"]["grok"]["detail"].clone()
+            ),
+            (json!("not_signed_in"), json!("Sign in to Grok"))
+        );
+        assert_eq!(
+            document(
+                true,
+                Some(&probe(true, app(true, false))),
+                &none,
+                &grok,
+                exe
+            )["apps"]["grok"]["state"],
+            "needs_foreground"
+        );
         let sticky = HashMap::from([("grok".to_string(), "ui_changed".to_string())]);
-        let changed = document(true, Some(&probe(true, app(true, true))), &sticky, &grok, exe);
-        assert_eq!((changed["apps"]["grok"]["state"].clone(), changed["apps"]["grok"]["ready"].clone()), (json!("ui_changed"), json!(false)));
-        assert_eq!(document(true, Some(&Err("it crashed".into())), &none, &grok, exe)["apps"]["grok"]["state"], "error");
-        assert_eq!(document(false, None, &none, &grok, exe), json!({"trusted": false, "detail": "tico-appdriver is not installed beside tico-runner", "apps": {}}));
+        let changed = document(
+            true,
+            Some(&probe(true, app(true, true))),
+            &sticky,
+            &grok,
+            exe,
+        );
+        assert_eq!(
+            (
+                changed["apps"]["grok"]["state"].clone(),
+                changed["apps"]["grok"]["ready"].clone()
+            ),
+            (json!("ui_changed"), json!(false))
+        );
+        assert_eq!(
+            document(true, Some(&Err("it crashed".into())), &none, &grok, exe)["apps"]["grok"]
+                ["state"],
+            "error"
+        );
+        assert_eq!(
+            document(false, None, &none, &grok, exe),
+            json!({"trusted": false, "detail": "tico-appdriver is not installed beside tico-runner", "apps": {}})
+        );
     }
 
     #[test]
     fn only_a_grok_bot_with_app_delivery_is_delivered_through_the_app() {
         let bot = json!({"id": "b-1", "name": "Acme Helper"});
         let config = json!({"harness": "grokbot", "runtime": "grokbot", "app_delivery": {"computer": "c-1", "app": "grok"}, "app_bot": bot});
-        assert_eq!(delivery(&config), Some(Delivery { app: "grok".into(), bot }));
-        assert_eq!(delivery(&json!({"harness": "grokbot", "runtime": "grokbot"})), None);
-        assert_eq!(delivery(&json!({"harness": "claude-code", "app_delivery": {"app": "grok"}})), None);
+        assert_eq!(
+            delivery(&config),
+            Some(Delivery {
+                app: "grok".into(),
+                bot
+            })
+        );
+        assert_eq!(
+            delivery(&json!({"harness": "grokbot", "runtime": "grokbot"})),
+            None
+        );
+        assert_eq!(
+            delivery(&json!({"harness": "claude-code", "app_delivery": {"app": "grok"}})),
+            None
+        );
     }
 
     /// A hub answering the list, then taking one post, recording both requests.
@@ -586,7 +813,9 @@ mod tests {
         let log_ = seen.clone();
         tokio::spawn(async move {
             loop {
-                let Ok((mut sock, _)) = listener.accept().await else { return };
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
                 let (mut got, mut buf) = (vec![], vec![0u8; 65536]);
                 loop {
                     let n = sock.read(&mut buf).await.unwrap_or(0);
@@ -596,18 +825,33 @@ mod tests {
                     got.extend_from_slice(&buf[..n]);
                     let text = String::from_utf8_lossy(&got).to_string();
                     if let Some(end) = text.find("\r\n\r\n") {
-                        let length = text[..end].lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0))).unwrap_or(0);
+                        let length = text[..end]
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
                         if got.len() >= end + 4 + length {
                             break;
                         }
                     }
                 }
                 let text = String::from_utf8_lossy(&got).to_string();
-                let posts = log_.lock().unwrap().iter().filter(|t: &&String| t.starts_with("POST ")).count();
+                let posts = log_
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|t: &&String| t.starts_with("POST "))
+                    .count();
                 let (status, body) = if text.starts_with("GET ") {
                     ("200 OK", list.to_string())
                 } else if posts < fail {
-                    ("503 Service Unavailable", json!({"error": {"code": "unavailable", "detail": "down"}}).to_string())
+                    (
+                        "503 Service Unavailable",
+                        json!({"error": {"code": "unavailable", "detail": "down"}}).to_string(),
+                    )
                 } else {
                     ("200 OK", json!({"after": "k2", "posted": 2}).to_string())
                 };
@@ -622,7 +866,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_read_from_the_servers_cursor_is_posted_to_the_bot() {
-        let dir = std::env::temp_dir().join(format!("fake-appdriver-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("fake-appdriver-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let driver = dir.join("tico-appdriver");
         let lines = [
@@ -630,33 +875,63 @@ mod tests {
             json!({"type": "msg", "key": "k2", "role": "bot", "text": "Thursday.", "at": "2026-10-01T10:00:05Z"}),
         ];
         let body: String = lines.iter().map(|l| format!("echo '{l}'\n")).collect();
-        crate::util::write_script(&driver, &format!("#!/bin/sh\ncat > '{}'\n{body}exit 0\n", dir.join("request.json").display()));
+        crate::util::write_script(
+            &driver,
+            &format!(
+                "#!/bin/sh\ncat > '{}'\n{body}exit 0\n",
+                dir.join("request.json").display()
+            ),
+        );
         let bot = json!({"id": "b-1", "name": "Acme Helper"});
         // An app of its own: the host tests beside it hold Grok's gate, and a held gate skips the read.
-        let (url, seen) = hub(json!({"bots": [{"slug": "helper", "app": "acme-chat", "bot": bot, "after": "k0"}]})).await;
+        // A row names the Tico bot by its id (a UUID for a bot made now) beside its slug; the report goes to the id.
+        let id = "01a19806-0460-77a7-860b-b797cea3f270";
+        let (url, seen) = hub(json!({"bots": [{"id": id, "slug": "helper", "app": "acme-chat", "bot": bot, "after": "k0"}]})).await;
         let client = Client::new(&url, "runner-token", 5, 0).unwrap();
         assert_eq!(watch_pass(&client, &driver).await, Pass::Done(true));
-        let request: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("request.json")).unwrap()).unwrap();
-        assert_eq!(request, json!({"op": "read", "app": "acme-chat", "bot": bot, "after": "k0", "limit": 50}));
+        let request: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("request.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            request,
+            json!({"op": "read", "app": "acme-chat", "bot": bot, "after": "k0", "limit": 50})
+        );
         let seen = seen.lock().unwrap();
         assert!(seen[0].starts_with("GET /api/v2/runners/me/app-delivery "));
-        assert!(seen[1].starts_with("POST /api/v2/runners/me/app-delivery/helper "));
-        let posted: Value = serde_json::from_str(&seen[1][seen[1].find("\r\n\r\n").unwrap() + 4..]).unwrap();
+        assert!(seen[1].starts_with(&format!("POST /api/v2/runners/me/app-delivery/{id} ")));
+        let posted: Value =
+            serde_json::from_str(&seen[1][seen[1].find("\r\n\r\n").unwrap() + 4..]).unwrap();
         assert_eq!(posted["error"], Value::Null);
-        assert_eq!(posted["messages"][1], json!({"key": "k2", "role": "bot", "text": "Thursday.", "at": "2026-10-01T10:00:05Z", "needs_human": false}));
+        assert_eq!(
+            posted["messages"][1],
+            json!({"key": "k2", "role": "bot", "text": "Thursday.", "at": "2026-10-01T10:00:05Z", "needs_human": false})
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn a_mac_with_the_driver_installed_reports_its_apps_before_any_bot_is_delivered_there() {
         // A fresh runner: no assignment, no TICO_APPDRIVER, the driver beside it or on PATH.
         assert!(wanted(false, false, true));
-        assert!(wanted(true, false, false), "a delivered bot with no driver hears that it's missing");
+        assert!(
+            wanted(true, false, false),
+            "a delivered bot with no driver hears that it's missing"
+        );
         assert!(wanted(false, true, false));
-        assert!(!wanted(false, false, false), "a Mac without the driver says nothing about apps");
+        assert!(
+            !wanted(false, false, false),
+            "a Mac without the driver says nothing about apps"
+        );
     }
 
     fn header(request: &str, name: &str) -> String {
-        request.lines().find_map(|l| l.split_once(':').filter(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.trim().to_string())).unwrap_or_default()
+        request
+            .lines()
+            .find_map(|l| {
+                l.split_once(':')
+                    .filter(|(k, _)| k.eq_ignore_ascii_case(name))
+                    .map(|(_, v)| v.trim().to_string())
+            })
+            .unwrap_or_default()
     }
 
     #[tokio::test]
@@ -664,34 +939,57 @@ mod tests {
         let (url, seen) = hub_failing(json!({"bots": []}), 1).await;
         let client = Client::new(&url, "runner-token", 5, 0).unwrap();
         let ask = json!({"code": "needs_human", "detail": "", "text": "Which account?"});
-        let report = Report { slug: "keeper-test".into(), key: "appdriver-report-k1".into(), body: json!({"app": "grok", "messages": [], "error": ask}) };
+        let report = Report {
+            slug: "keeper-test".into(),
+            key: "appdriver-report-k1".into(),
+            body: json!({"app": "grok", "messages": [], "error": ask}),
+        };
         send_these(&client, vec![report]).await;
         let kept = take_report_entries_for("keeper-test");
         assert_eq!(kept.len(), 1, "kept after the client gave up");
         assert_eq!(kept[0].key, "appdriver-report-k1");
         send_these(&client, kept).await;
-        assert!(take_report_entries_for("keeper-test").is_empty(), "taken once the server answers");
+        assert!(
+            take_report_entries_for("keeper-test").is_empty(),
+            "taken once the server answers"
+        );
         let seen = seen.lock().unwrap();
-        let posts: Vec<&String> = seen.iter().filter(|t| t.starts_with("POST /api/v2/runners/me/app-delivery/keeper-test ")).collect();
+        let posts: Vec<&String> = seen
+            .iter()
+            .filter(|t| t.starts_with("POST /api/v2/runners/me/app-delivery/keeper-test "))
+            .collect();
         assert_eq!(posts.len(), 2);
-        assert!(posts.iter().all(|p| header(p, "Idempotency-Key") == "appdriver-report-k1"), "the same key on every try");
+        assert!(
+            posts
+                .iter()
+                .all(|p| header(p, "Idempotency-Key") == "appdriver-report-k1"),
+            "the same key on every try"
+        );
     }
 
     #[test]
     fn reports_that_could_not_go_stay_ahead_of_newer_ones() {
         let error = json!({"code": "busy", "detail": "", "text": ""});
         report("order-test", "grok", error.clone());
-        keep(vec![Report { slug: "order-test".into(), key: "older".into(), body: Value::Null }]);
+        keep(vec![Report {
+            slug: "order-test".into(),
+            key: "older".into(),
+            body: Value::Null,
+        }]);
         let kept = take_report_entries_for("order-test");
         assert_eq!(kept.len(), 2);
         assert_eq!(kept[0].key, "older");
         assert_eq!(kept[1].body["error"], error);
-        assert_ne!(kept[1].key, "", "every report has its own key from the start");
+        assert_ne!(
+            kept[1].key, "",
+            "every report has its own key from the start"
+        );
     }
 
     #[tokio::test]
     async fn a_clean_empty_read_is_posted_only_while_the_server_holds_an_error_for_it() {
-        let dir = std::env::temp_dir().join(format!("fake-appdriver-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("fake-appdriver-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let driver = dir.join("tico-appdriver");
         crate::util::write_script(&driver, "#!/bin/sh\ncat > /dev/null\nexit 0\n");
@@ -701,11 +999,17 @@ mod tests {
             let client = Client::new(&url, "runner-token", 5, 0).unwrap();
             assert_eq!(watch_pass(&client, &driver).await, Pass::Done(false));
             let seen = seen.lock().unwrap();
-            let post = seen.iter().find(|t| t.starts_with("POST /api/v2/runners/me/app-delivery/healed "));
+            let post = seen
+                .iter()
+                .find(|t| t.starts_with("POST /api/v2/runners/me/app-delivery/healed "));
             assert_eq!(post.is_some(), posted, "error {error}");
             if let Some(post) = post {
-                let body: Value = serde_json::from_str(&post[post.find("\r\n\r\n").unwrap() + 4..]).unwrap();
-                assert_eq!(body, json!({"app": "heal-chat", "messages": [], "error": null}));
+                let body: Value =
+                    serde_json::from_str(&post[post.find("\r\n\r\n").unwrap() + 4..]).unwrap();
+                assert_eq!(
+                    body,
+                    json!({"app": "heal-chat", "messages": [], "error": null})
+                );
             }
         }
         std::fs::remove_dir_all(dir).unwrap();

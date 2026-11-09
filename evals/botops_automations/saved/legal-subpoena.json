@@ -1,0 +1,55 @@
+{
+  "created": [
+    {
+      "name": "Subpoena mail to Legal",
+      "owner": "person:dana",
+      "enabled": false,
+      "trigger": {
+        "type": "message",
+        "inbox": "dana@acme.example"
+      },
+      "steps": [
+        {
+          "id": "gate",
+          "type": "filter",
+          "enabled": true,
+          "rules": [
+            {
+              "when": [
+                {
+                  "field": "message.subject",
+                  "op": "matches",
+                  "value": "subpoena"
+                }
+              ],
+              "then": [
+                {
+                  "do": "label",
+                  "args": {
+                    "name": "STARRED"
+                  }
+                }
+              ],
+              "to": "legal"
+            }
+          ]
+        }
+      ],
+      "destinations": [
+        {
+          "id": "legal",
+          "name": "Legal",
+          "color": "red",
+          "then": [
+            {
+              "do": "create_task",
+              "args": {
+                "title": "Review the subpoena"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

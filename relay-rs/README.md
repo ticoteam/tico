@@ -14,7 +14,8 @@ Public ingress blocks `/control/*` and `/_tico/*`; policy callbacks and versione
 never leave loopback. `TICO_TRUSTED_PROXIES` selects the ingress IPs/CIDRs whose forwarding headers
 the relay preserves; the binary's default is loopback only, and the standard Compose file adds its two
 front doors' fixed addresses. IPv4-mapped IPv6 peers are compared as IPv4. Other peers get a fresh
-X-Forwarded-For chain.
+X-Forwarded-For chain. `TICO_CLIENT_IP_HEADER` (`x-forwarded-for` or `cf-connecting-ip`) selects the header that
+names the client behind a trusted proxy, read as the server reads it.
 Direct remote clients cannot spoof trusted proxy identity headers. Existing
 TLS termination, cookies, Cloudflare origins and public hostnames remain unchanged. See the
 installation matrix and native job migration in `docs/install.md`.
@@ -56,6 +57,52 @@ and stalled writes at five seconds. Saturation refuses admission instead of grow
 Cancellation interrupts stalled pumps; close handshakes have a one-second deadline per socket.
 A failed revocation RPC stops lease renewal, so durable revocation still closes sockets within the
 six-second lease plus close deadline. HTTP control calls have two-second deadlines.
+
+## Browser exits
+
+The same relay carries browser-exit tunnels (`src/exit.rs`, `docs/computers.md`): a bot's browser
+reaching the web from another Tico computer whose owner shares its internet with that bot. Python
+decides who may use which exit; Rust moves opaque bytes (the browser's own TLS) and counts them.
+
+- `/api/v2/runners/me/browser-exit/ws` (exit computer's link, runner bearer; Python's policy callback
+  answers `{"kind": "exit_link"}` with the runner id). One link per exit; a newer one replaces it.
+- `/api/v2/runners/me/browser-exit/seen` (GET, same bearer and check): `{"seen": ip}`, the address the request
+  came from. The exit asks over IPv4 and IPv6 and refuses each answer as its own address.
+- `/api/v2/runners/me/browser-exit/tunnels/{id}/ws?ticket=...` (bot computer's end)
+- `/api/v2/runners/me/browser-exit/tunnels/{id}/exit?ticket=...` (exit computer's end)
+
+Control operations, under the same lease and sequence rules:
+
+- `exit_policy` carries `runner_id` and `policy` (`generation`, `sharing`, `bots`, `cap` in bytes per
+  UTC day). Older generations are refused. Tunnels of bots no longer allowed close (`exit_not_shared`),
+  and turning sharing off drops the link.
+- `exit_grant` carries the tunnel `id`, the bot's `runner_id`, the `exit` runner id, `bot`, `host`,
+  `port` (80 or 443), the UTC `day`, the bytes Python has recorded for that exit today (`used`) and
+  the policy as Python read it (a stale generation fails `exit_stale`). Refusals: `exit_not_shared`
+  (403), `exit_offline` (409, no link), `exit_over_cap` (429), `exit_busy` (429). An admitted grant
+  sends `{"op": "open", "id", "host", "port", "ticket"}` down the exit's link and returns the bot
+  computer's ticket. Both tickets are one-use.
+- `exit_close` closes the tunnels of a `bot` and/or an `exit`, with a `reason`.
+- `heartbeat` also takes `exit_ack` and returns `exit_usage`, one batch (`id`, `seq`, `rows` of `exit`,
+  `runner_id`, `bot`, `host`, `day`, `bytes`, `tunnels`; at most 2,048 rows) resent until its `id` is
+  acknowledged, and `exit_backlog`, the rows not yet acknowledged. `seq` grows by one per batch within
+  a relay `boot`: Python records a batch only above the highest `seq` it recorded for that boot.
+- `stop` closes every socket (counting the open tunnels' last bytes) and returns `exit_backlog`. While
+  that is above zero the lease stays for heartbeats only, and ends with the heartbeat that finds
+  nothing left; anything left when the lease lapses waits for the next one.
+
+Python's heartbeat (every 2 s) keeps asking within the same tick while `exit_backlog` is more than the
+batch in hand, up to 16 batches, so no backlog builds up. Usage lives only in the relay's memory: a relay
+stopped on its own (SIGTERM) waits up to 6 s for Python to collect it, and loses at most about one tick's
+bytes otherwise.
+
+Both ends must connect within 15 seconds or the tunnel closes (`exit_no_answer` when the exit did
+not). The exit's first message may be a short text status (`{"ok": true}` or `{"ok": false,
+"error"}`); everything else is binary and counted both ways. Crossing the day's cap closes every
+tunnel of that exit (4429 `exit_over_cap`), so the cap can be overshot only by bytes in flight. The
+per-exit day count survives a Python restart and starts from Python's recorded bytes after a relay
+restart. Bounds: 4,096 live tunnels, 256 per exit, 16,384 retained reports, 1 MiB messages, a
+one-hour tunnel deadline and 60-second stalled writes.
 
 ## Startup and rollback
 

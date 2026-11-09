@@ -18,40 +18,83 @@ outcome sets a 0.01 cap but does not spend first, so the cap is only reached if 
 args are empty except post-update's text (an action refused for want of its args is the action's, not a turn's). The
 sender's session is the one the task sample names (CONTRACT names no field for it): builder-claude's live
 session, which a warm-up turn opens before any automation exists."""
+
 import random
 from datetime import timedelta
 
 from ..fakes import ReplayJudge, attach_judge
-from ..harness import (DANA, DANA_REF, CLAUDE_ID, CLAUDE_REF, LEAD_ID, W3, Check, Reply, Scenario, Unmet, body,
-                       mail_message, publish_mail, replied, rows, run_now, setup, turn_of, work)
+from ..harness import (
+    DANA,
+    DANA_REF,
+    CLAUDE_ID,
+    CLAUDE_REF,
+    LEAD_ID,
+    W3,
+    Check,
+    Reply,
+    Scenario,
+    Unmet,
+    body,
+    mail_message,
+    publish_mail,
+    replied,
+    rows,
+    run_now,
+    setup,
+    turn_of,
+    work,
+)
 from ..matrix import coverage, feasible_pairs, lower_bound, pairs_of, plan
 from .engine import nested, wide
 from .inboxes import BUCKET
 
 INBOX = "dana@acme.example"
 DESTINATION = "matrix-leads"
-SENDER_SESSION = "redesign"   # the thread every turn in the harness starts on (Org.turn): builder-claude's live session
+SENDER_SESSION = "redesign"  # the thread every turn in the harness starts on (Org.turn): builder-claude's live session
 WORKERS = ("llm", "bot_turn")
 # About one turn in ten fails, drawn per turn from the seed and the combination, so a seed replays exactly.
 TURN_FAIL_SHARE = 0.10
-CLAIM_LIMIT = 200   # claims per turn: each completes an older queued job for the bot before the turn's own
-FAILED_WAIT = timedelta(minutes=2)   # the clock after a failed turn: past a bot's first waits
-TURN_ROUNDS = 10   # answer passes per run: a turn that starts after an answer is answered by the next
+CLAIM_LIMIT = 200  # claims per turn: each completes an older queued job for the bot before the turn's own
+FAILED_WAIT = timedelta(minutes=2)  # the clock after a failed turn: past a bot's first waits
+TURN_ROUNDS = 10  # answer passes per run: a turn that starts after an answer is answered by the next
 # The usage a completed turn reports: small, so the run cost is real and the spend limits stay out of the way.
-TURN_USAGE = {"input_tokens": 2_000, "cached_tokens": 0, "output_tokens": 200, "model": "claude-opus-5-5",
-              "runtime": "claude", "billing": "api"}
-ARGS = {"post-update": {"text": "Matrix update"}}   # what an action cannot run without (post_update needs text)
-ACTION = {"archive": "archive", "leave-for-you": "leave_for_you", "draft-reply": "draft_reply",
-          "send-reply": "send_reply", "create-task": "create_task", "label": "label", "forward": "forward",
-          "wake-bot": "wake_bot", "note": "note", "post-update": "post_update", "call-webhook": "call_webhook",
-          "assign": "assign"}
+TURN_USAGE = {
+    "input_tokens": 2_000,
+    "cached_tokens": 0,
+    "output_tokens": 200,
+    "model": "claude-opus-5-5",
+    "runtime": "claude",
+    "billing": "api",
+}
+ARGS = {"post-update": {"text": "Matrix update"}}  # what an action cannot run without (post_update needs text)
+ACTION = {
+    "archive": "archive",
+    "leave-for-you": "leave_for_you",
+    "draft-reply": "draft_reply",
+    "send-reply": "send_reply",
+    "create-task": "create_task",
+    "label": "label",
+    "forward": "forward",
+    "wake-bot": "wake_bot",
+    "note": "note",
+    "post-update": "post_update",
+    "call-webhook": "call_webhook",
+    "assign": "assign",
+}
 # CONTRACT §2 Runs: a step is ok, skipped, failed, spend_cap or waiting (a queued mail action, or a turn still held).
 STATUSES = {"ok", "skipped", "failed", "spend_cap", "waiting"}
 # The trigger field a text condition reads, per kind: the field the kind's input carries its text in. A schedule has no
 # input, so its condition is never met (see Limits).
-TEXT = {"task": "task.title", "email": "message.subject", "slack": "message.text", "webhook": "body.title",
-        "listening": "item.content", "event": "event.data.title", "schedule": "task.title"}
-SPEC = {   # condition value -> (field, op, value, min); TEXT stands for the kind's text field
+TEXT = {
+    "task": "task.title",
+    "email": "message.subject",
+    "slack": "message.text",
+    "webhook": "body.title",
+    "listening": "item.content",
+    "event": "event.data.title",
+    "schedule": "task.title",
+}
+SPEC = {  # condition value -> (field, op, value, min); TEXT stands for the kind's text field
     "is": (TEXT, "is", "urgent", None),
     "is-min": ("d1.bucket", "is", "reply", 0.7),
     "is-not": (TEXT, "is_not", "lunch", None),
@@ -100,15 +143,28 @@ def fork_for(row, cond, never):
     shape = row["shape"]
     if shape in ("two-paths", "four-paths"):
         count = 2 if shape == "two-paths" else 4
-        paths = [{"name": f"p{k}", "when": [cond if k == 0 else never],
-                  "steps": [marker(f"p{k}")] + branch_steps(row, str(k))} for k in range(count)]
+        paths = [
+            {
+                "name": f"p{k}",
+                "when": [cond if k == 0 else never],
+                "steps": [marker(f"p{k}")] + branch_steps(row, str(k)),
+            }
+            for k in range(count)
+        ]
         otherwise = {"steps": [marker("po")] + branch_steps(row, "y")}
         return node("fork", "paths", paths=paths, otherwise=otherwise), [[f"p{k}" for k in range(count)] + ["po"]]
-    inner = node("inner", "paths",   # a fork inside the first branch of the outer one
-                 paths=[{"name": "q0", "when": [cond], "steps": [marker("q0")] + branch_steps(row, "0")}],
-                 otherwise={"steps": [marker("qo")] + branch_steps(row, "x")})
-    outer = node("fork", "paths", paths=[{"name": "p0", "when": [cond], "steps": [marker("p0"), inner]}],
-                 otherwise={"steps": [marker("po")] + branch_steps(row, "y")})
+    inner = node(
+        "inner",
+        "paths",  # a fork inside the first branch of the outer one
+        paths=[{"name": "q0", "when": [cond], "steps": [marker("q0")] + branch_steps(row, "0")}],
+        otherwise={"steps": [marker("qo")] + branch_steps(row, "x")},
+    )
+    outer = node(
+        "fork",
+        "paths",
+        paths=[{"name": "p0", "when": [cond], "steps": [marker("p0"), inner]}],
+        otherwise={"steps": [marker("po")] + branch_steps(row, "y")},
+    )
     return outer, [["p0", "po"], ["q0", "qo"]]
 
 
@@ -127,7 +183,7 @@ def build(row, outcome):
     """The flow for one row: (steps, fork groups, top-level step ids, the id switched off or None)."""
     kind = row["trigger"]
     cond = condition_node(row["condition"], kind)
-    never = {"field": TEXT[kind], "op": "is", "value": "never-sent"}   # the paths that must not match
+    never = {"field": TEXT[kind], "op": "is", "value": "never-sent"}  # the paths that must not match
     straight = row["shape"] == "straight"
     first = []
     if row["first"] == "find":
@@ -167,10 +223,15 @@ def judge_for(row, matched):
     if row["outcome"] == "step-fails":
         return ReplayJudge(fail=RuntimeError("judge unavailable"))
     urgency = (2 if matched else 5) if row["condition"] == "lte" else (4 if matched else 1)
-    answer = {"bucket": {"type": "choice", "choice": "reply" if matched else "archive",
-                         "confidence": 0.9 if matched else 0.3,
-                         "probabilities": {"reply": 0.9 if matched else 0.1, "archive": 0.1 if matched else 0.7}},
-              "urgency": {"type": "score", "score": urgency}}
+    answer = {
+        "bucket": {
+            "type": "choice",
+            "choice": "reply" if matched else "archive",
+            "confidence": 0.9 if matched else 0.3,
+            "probabilities": {"reply": 0.9 if matched else 0.1, "archive": 0.1 if matched else 0.7},
+        },
+        "urgency": {"type": "score", "score": urgency},
+    }
     return ReplayJudge(script=[answer])
 
 
@@ -182,6 +243,7 @@ def text_of(row):
 def event_for(n):
     """A catalog event whose payload carries a title, picked by the combination's number: (name, its example data)."""
     from backend.event_catalog import EVENTS
+
     named = sorted(name for name, event in EVENTS.items() if "title" in event.example)
     return named[n % len(named)], dict(EVENTS[named[n % len(named)]].example)
 
@@ -216,13 +278,27 @@ def sample_for(kind, n, row, mails):
     if kind == "slack":
         return {"message": {"channel": "dm", "from": "omar@acme.example", "text": text, "ts": f"1700000000.{n:06d}"}}
     if kind == "task":
-        return {"task": {"title": text, "body": "Matrix task.", "owner": DANA_REF, "requester": CLAUDE_REF,
-                         "session": SENDER_SESSION}}
+        return {
+            "task": {
+                "title": text,
+                "body": "Matrix task.",
+                "owner": DANA_REF,
+                "requester": CLAUDE_REF,
+                "session": SENDER_SESSION,
+            }
+        }
     if kind == "webhook":
         return {"body": {"title": text}}
     if kind == "listening":
-        return {"item": {"source": "forum", "native_id": f"matrix-{n}", "url": f"https://forum.acme.example/t/{n}",
-                         "author": "omar", "content": text}}
+        return {
+            "item": {
+                "source": "forum",
+                "native_id": f"matrix-{n}",
+                "url": f"https://forum.acme.example/t/{n}",
+                "author": "omar",
+                "content": text,
+            }
+        }
     if kind == "event":
         name, data = event_for(n)
         return {"event": {"name": name, "version": 1, "data": {**data, "title": text}}}
@@ -239,11 +315,16 @@ def queue_of(org, slug, task):
     report only)."""
     with org.store.read() as c:
         bot = c.execute("SELECT state FROM bots WHERE slug=?", (slug,)).fetchone()
-        states = c.execute("SELECT state, count(*) FROM jobs WHERE bot=? GROUP BY state", (slug,)).fetchall()
-        own = c.execute("SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "
-                        "AND json_extract(m.refs_json,'$.task')=?", (slug, task)).fetchall()
-    return (f"bot {bot[0] if bot else None}, its jobs {dict((k, v) for k, v in states)}, "
-            f"the turn's job {[row[0] for row in own]}")
+        states = c.execute("SELECT state, count(*) FROM jobs WHERE bot_id=? GROUP BY state", (slug,)).fetchall()
+        own = c.execute(
+            "SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
+            "AND json_extract(m.refs,'$.task')=?",
+            (slug, task),
+        ).fetchall()
+    return (
+        f"bot {bot[0] if bot else None}, its jobs {dict((k, v) for k, v in states)}, "
+        f"the turn's job {[row[0] for row in own]}"
+    )
 
 
 def claim_turn(org, bot, task, outcome):
@@ -254,18 +335,28 @@ def claim_turn(org, bot, task, outcome):
     slug = bot.split(":")[-1]
     why = "no claim"
     for _ in range(CLAIM_LIMIT):
-        claim = org.api("post", "/api/v2/jobs/claim", {"bot": slug, "start_places": True}, who=org.runner["token"],
-                        wave=W3)
+        claim = org.api(
+            "post", "/api/v2/jobs/claim", {"bot": slug, "start_places": True}, who=org.runner["token"], wave=W3
+        )
         body = claim.body if isinstance(claim.body, dict) else {}
         attempt = body.get("attempt")
         if not attempt:
             return False, body.get("waiting") or body.get("paused") or f"no job handed out; {queue_of(org, slug, task)}"
         mine = ((attempt.get("message") or {}).get("refs") or {}).get("task") == task
         base = f"/api/v2/attempts/{attempt['id']}"
-        for step, payload in (("started", {"thread_id": "redesign"}),
-                              ("complete", {"outcome": outcome if mine else "completed",
-                                            "text": "done" if outcome == "completed" else "turn failed",
-                                            "last_seq": 0, "limited": False, "usage": TURN_USAGE})):
+        for step, payload in (
+            ("started", {"thread_id": "redesign"}),
+            (
+                "complete",
+                {
+                    "outcome": outcome if mine else "completed",
+                    "text": "done" if outcome == "completed" else "turn failed",
+                    "last_seq": 0,
+                    "limited": False,
+                    "usage": TURN_USAGE,
+                },
+            ),
+        ):
             reply = org.api("post", f"{base}/{step}", payload, who=org.runner["token"], wave=W3)
             if not 200 <= reply.status < 300:
                 raise RuntimeError(f"attempt {step} {reply.status}: {reply.excerpt()}")
@@ -284,10 +375,18 @@ def dismiss_held(org, attempt):
     """A failed turn may have acted, so the hub holds its job for review and the bot with it (execution.py: failed work
     is held). Its operator reviews it and dismisses it, the way a person does under Needs you, so the bot is free for
     the next turn. The run already has the failure."""
-    reply = org.api("post", f"/api/v2/jobs/{attempt['job_id']}/reconcile",
-                    {"attempt_id": attempt["id"], "decision": "dismiss", "acknowledge_uncertain_effects": True,
-                     "note": "The turn failed in the matrix run; nothing it did needs repeating."},
-                    who=DANA, wave=W3)
+    reply = org.api(
+        "post",
+        f"/api/v2/jobs/{attempt['job_id']}/reconcile",
+        {
+            "run_id": attempt["id"],
+            "decision": "dismiss",
+            "acknowledge_uncertain_effects": True,
+            "note": "The turn failed in the matrix run; nothing it did needs repeating.",
+        },
+        who=DANA,
+        wave=W3,
+    )
     if not 200 <= reply.status < 300:
         raise RuntimeError(f"reconcile {attempt['id']} {reply.status}: {reply.excerpt()}")
 
@@ -306,8 +405,15 @@ def answer_turns(org, run, rng, seen):
         seen.add(turn["task"])
         failed = rng.random() < TURN_FAIL_SHARE
         claimed, why = claim_turn(org, turn["bot"], turn["task"], "failed" if failed else "completed")
-        answered.append({"step": step.get("id"), "held": step.get("status") == "waiting", "failed": failed,
-                         "claimed": claimed, "why": why})
+        answered.append(
+            {
+                "step": step.get("id"),
+                "held": step.get("status") == "waiting",
+                "failed": failed,
+                "claimed": claimed,
+                "why": why,
+            }
+        )
     return answered
 
 
@@ -317,20 +423,35 @@ def run_combo(org, n, row, mails, seed):
     registered."""
     kind, outcome = row["trigger"], row["outcome"]
     steps, groups, top, off = build(row, outcome)
-    if kind == "webhook":   # the incoming trigger the automation listens on (CONTRACT §2 Webhook trigger)
+    if kind == "webhook":  # the incoming trigger the automation listens on (CONTRACT §2 Webhook trigger)
         made = org.api("post", "/api/v2/triggers", {"name": f"Matrix {n}", "id": f"matrix-{n}"}, wave=W3)
         if made.status >= 300:
             raise Unmet(W3, f"trigger matrix-{n}: {made.status} {made.excerpt()}")
-    payload = {"name": f"Matrix {n} · dana", "owner": DANA_REF, "enabled": True, "builtin": False,
-               "trigger": trigger_for(kind, n), "steps": steps}
+    payload = {
+        "name": f"Matrix {n} · dana",
+        "owner": DANA_REF,
+        "enabled": True,
+        "builtin": False,
+        "trigger": trigger_for(kind, n),
+        "steps": steps,
+    }
     if outcome == "spend-cap":
         payload["spend_cap"] = {"per_30m": 0.01}
     if "decide" in row["first"]:
         attach_judge(org, judge_for(row, outcome != "no-match"))
     made = org.api("post", "/api/v2/automations", payload, wave=W3)
-    record = {"label": label_of(n, row), "saved": 200 <= made.status < 300, "groups": groups, "top": top,
-              "outcome": outcome, "disabled": [off] if off else [], "run": None, "runs": 0, "turns": [],
-              "sender_session": SENDER_SESSION if kind == "task" else None}
+    record = {
+        "label": label_of(n, row),
+        "saved": 200 <= made.status < 300,
+        "groups": groups,
+        "top": top,
+        "outcome": outcome,
+        "disabled": [off] if off else [],
+        "run": None,
+        "runs": 0,
+        "turns": [],
+        "sender_session": SENDER_SESSION if kind == "task" else None,
+    }
     if not record["saved"]:
         record["label"] += f" (create {made.status})"
         return record
@@ -358,7 +479,7 @@ def run_combo(org, n, row, mails, seed):
     try:
         org.api("patch", f"/api/v2/automations/{auto.get('id')}", {"enabled": False}, wave=W3)
     except Unmet:
-        pass   # tidying only: the record is already read
+        pass  # tidying only: the record is already read
     return record
 
 
@@ -383,8 +504,11 @@ def one_path(r):
         return no_run(r)
     for group in r["groups"]:
         for item in items_of(r["run"]):
-            won = [sid for sid in group
-                   if any(s.get("status") == "ok" and s.get("item") == item for s in row_of(r["run"], sid))]
+            won = [
+                sid
+                for sid in group
+                if any(s.get("status") == "ok" and s.get("item") == item for s in row_of(r["run"], sid))
+            ]
             if len(won) > 1:
                 return f"{won} all ran in one fork" + (f" for item {item}" if item is not None else "")
     return ""
@@ -407,8 +531,8 @@ def top_logged(r):
         return no_run(r)
     ids = r["top"]
     stop = stop_index(r["run"], ids)
-    reached = ids if stop is None else ids[:stop + 1]
-    unreached = [] if stop is None else ids[stop + 1:]
+    reached = ids if stop is None else ids[: stop + 1]
+    unreached = [] if stop is None else ids[stop + 1 :]
     missing = [sid for sid in reached if not row_of(r["run"], sid)]
     logged_after = [sid for sid in unreached if row_of(r["run"], sid)]
     bad = [s.get("id") for s in r["run"].get("steps") or [] if s.get("id") in ids and s.get("status") not in STATUSES]
@@ -443,9 +567,12 @@ def turns_answered(r):
 def action_once(r):
     if r["run"] is None:
         return no_run(r)
-    ran = [(s.get("id"), s.get("item")) for s in r["run"].get("steps") or []
-           if str(s.get("id", "")).startswith("act") and s.get("status") == "ok"]
-    twice = sorted({key for key in ran if ran.count(key) > 1}, key=str)   # (step id, item): once per item
+    ran = [
+        (s.get("id"), s.get("item"))
+        for s in r["run"].get("steps") or []
+        if str(s.get("id", "")).startswith("act") and s.get("status") == "ok"
+    ]
+    twice = sorted({key for key in ran if ran.count(key) > 1}, key=str)  # (step id, item): once per item
     return f"action ran more than once (step, item): {twice}" if twice else ""
 
 
@@ -509,13 +636,17 @@ def across(rule):
         if bad:
             return False, f"{head}; first: {bad[0][0]}: {bad[0][1]} ({len(bad)} failing)"
         return True, head
+
     return check
 
 
 def all_saved(f):
     done, stuck = gate(f)
     refused = [r["label"] for r in done if not r["saved"]]
-    return not refused, f"{len(done) - len(refused)} of {len(done)} saved; {len(stuck)} not built; refused: {refused[:3]}"
+    return (
+        not refused,
+        f"{len(done) - len(refused)} of {len(done)} saved; {len(stuck)} not built; refused: {refused[:3]}",
+    )
 
 
 def probes_refused(f):
@@ -548,8 +679,14 @@ def combo_floor(rows_):
 
 
 def probe_payload(name, steps):
-    return {"name": name, "owner": DANA_REF, "enabled": True, "builtin": False,
-            "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}, "steps": steps}
+    return {
+        "name": name,
+        "owner": DANA_REF,
+        "enabled": True,
+        "builtin": False,
+        "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"},
+        "steps": steps,
+    }
 
 
 def matrix_scenario(seed):
@@ -559,24 +696,42 @@ def matrix_scenario(seed):
         # Before any automation exists: builder-claude's live session (the task sender's), the listening destination,
         # and every email combination's mail, published once through the mail sync.
         org.step(f, "warm", work, org, CLAUDE_ID, "Matrix warm-up")
-        org.step(f, "destination", org.api, "put", f"/api/v2/listening/destinations/{DESTINATION}",
-                 {"category": "lead", "threshold": 0.7, "receiver": LEAD_ID, "what": "Matrix leads"}, wave=W3)
+        org.step(
+            f,
+            "destination",
+            org.api,
+            "put",
+            f"/api/v2/listening/destinations/{DESTINATION}",
+            {"category": "lead", "threshold": 0.7, "receiver": LEAD_ID, "what": "Matrix leads"},
+            wave=W3,
+        )
         mails = {n: mail_for(n, row) for n, row in enumerate(rows_) if row["trigger"] == "email"}
         org.step(f, "mail", publish_mail, org, INBOX, list(mails.values()))
         for n, row in enumerate(rows_):
             org.step(f, f"c{n}", run_combo, org, n, row, mails, seed)
-        org.step(f, "probe_11", org.api, "post", "/api/v2/automations",
-                 probe_payload("Matrix probe 11", wide(11)), wave=W3)
-        org.step(f, "probe_deep", org.api, "post", "/api/v2/automations",
-                 probe_payload("Matrix probe deep", nested(4)), wave=W3)
+        org.step(
+            f, "probe_11", org.api, "post", "/api/v2/automations", probe_payload("Matrix probe 11", wide(11)), wave=W3
+        )
+        org.step(
+            f,
+            "probe_deep",
+            org.api,
+            "post",
+            "/api/v2/automations",
+            probe_payload("Matrix probe deep", nested(4)),
+            wave=W3,
+        )
         org.step(f, "listing", org.api, "get", "/api/v2/automations", wave=W3)
 
     checks = [
         Check("every dimension value is in at least one combination", W3, lambda f: plan_values(rows_)),
         Check("every feasible pair is in at least one combination", W3, lambda f: pairs_covered(rows_)),
         Check("the combination count is at least the all-pairs floor", W3, lambda f: combo_floor(rows_)),
-        Check("the inputs are in place: the email combinations' mail is published", W3,
-              lambda f: replied(f, "mail", 200, 201)),
+        Check(
+            "the inputs are in place: the email combinations' mail is published",
+            W3,
+            lambda f: replied(f, "mail", 200, 201),
+        ),
         Check("every valid combination is saved as an automation", W3, all_saved),
         Check("exactly one path runs per fork", W3, across(one_path)),
         Check("every top-level step is logged with a status", W3, across(top_logged)),
@@ -588,6 +743,11 @@ def matrix_scenario(seed):
         Check("every LLM or Bot turn step names its turn, never in the sender's session", W3, across(turn_origin)),
         Check("a refused flow is never saved (11 paths, 4 nesting levels: 422)", W3, probes_refused),
     ]
-    return Scenario(0, f"matrix-seed-{seed}",
-                    f"All-pairs coverage matrix, seed {seed}: {len(rows_)} combinations", steps, checks,
-                    bots={"coo": ("assistant", "claude")})   # the team's Assistant bot, which assistant:<person> names
+    return Scenario(
+        0,
+        f"matrix-seed-{seed}",
+        f"All-pairs coverage matrix, seed {seed}: {len(rows_)} combinations",
+        steps,
+        checks,
+        bots={"coo": ("assistant", "claude")},
+    )  # the team's Assistant bot, which assistant:<person> names

@@ -4,8 +4,7 @@
 //! endpoint (404/405) is polled as before and asked again every LEGACY_RETRY_S. A stream that comes back after it
 //! was lost or unavailable says so, so a support bundle shows the outage ended.
 
-use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -25,7 +24,39 @@ pub const READ_TIMEOUT_S: u64 = 90;
 pub const HEARTBEAT_LIVE_S: f64 = 60.0;
 /// A stream that stayed up this long before it dropped had a fresh drop: its reconnect backoff starts over.
 pub const STABLE_S: u64 = 30;
-pub const ALL: &[&str] = &["claim", "sync", "config", "heartbeat", "logins", "harness", "imports", "refresh"];
+/// Every channel the runner reads on its own clock. A channel's bit in `Events::pending` is its index here.
+pub const CHANNELS: [&str; 9] = [
+    "claim",
+    "sync",
+    "config",
+    "heartbeat",
+    "logins",
+    "harness",
+    "imports",
+    "refresh",
+    "keys",
+];
+/// What a catch-up pass reads: every channel but `keys`, which only a credential change asks for.
+pub const ALL: &[&str] = &[
+    "claim",
+    "sync",
+    "config",
+    "heartbeat",
+    "logins",
+    "harness",
+    "imports",
+    "refresh",
+];
+
+/// A channel's index in `CHANNELS`, or None for a name the runner does not read.
+pub fn index(channel: &str) -> Option<usize> {
+    CHANNELS.iter().position(|c| *c == channel)
+}
+
+fn bit(channel: &str) -> u16 {
+    debug_assert!(index(channel).is_some(), "unknown event channel {channel}");
+    index(channel).map_or(0, |i| 1 << i)
+}
 
 /// What each event kind asks the runner to read again.
 pub fn channels(kind: &str) -> &'static [&'static str] {
@@ -35,7 +66,7 @@ pub fn channels(kind: &str) -> &'static [&'static str] {
         // A credential's value changed: the model keys from the app are asked for again at once (signin.rs).
         "credentials" => &["sync", "keys"],
         "config" => &["sync", "config"],
-        "worktrees" | "restart" | "performance" => &["heartbeat"],
+        "worktrees" | "restart" | "performance" | "browser_exit" => &["heartbeat"],
         "capacity" => &["heartbeat"],
         "logins" => &["logins"],
         "harness_actions" => &["harness"],
@@ -59,7 +90,8 @@ enum Failure {
 }
 
 pub struct Events {
-    pending: Mutex<HashSet<&'static str>>,
+    /// The channels the server asked for since each was last taken, one bit per channel (`index`).
+    pending: AtomicU16,
     state: Mutex<Stream>,
     last_id: Mutex<Option<String>>,
     /// When the stream was last said to be lost or unavailable, until it is said to be back.
@@ -73,7 +105,7 @@ pub struct Events {
 impl Events {
     pub fn new() -> Arc<Events> {
         Arc::new(Events {
-            pending: Mutex::new(HashSet::new()),
+            pending: AtomicU16::new(0),
             state: Mutex::new(Stream::Down),
             last_id: Mutex::new(None),
             down_since: Mutex::new(None),
@@ -93,13 +125,13 @@ impl Events {
 
     /// True once for each time the server asked for `channel` since it was last taken.
     pub fn take(&self, channel: &str) -> bool {
-        let mut p = self.pending.lock().unwrap();
-        let found = p.iter().find(|c| **c == channel).copied();
-        found.is_some_and(|c| p.remove(c))
+        let bit = bit(channel);
+        self.pending.fetch_and(!bit, Ordering::SeqCst) & bit != 0
     }
 
     pub fn ask(&self, channels: &[&'static str]) {
-        self.pending.lock().unwrap().extend(channels.iter().copied());
+        let asked = channels.iter().fold(0, |set, channel| set | bit(channel));
+        self.pending.fetch_or(asked, Ordering::SeqCst);
         self.wake.notify_one();
     }
 
@@ -113,7 +145,8 @@ impl Events {
         let mut said_down = false;
         while !self.stop.load(Ordering::SeqCst) {
             if self.state() == Stream::Legacy && Instant::now() < legacy_until {
-                tokio::time::sleep((legacy_until - Instant::now()).min(Duration::from_secs(60))).await;
+                tokio::time::sleep((legacy_until - Instant::now()).min(Duration::from_secs(60)))
+                    .await;
                 continue;
             }
             let started = Instant::now();
@@ -130,12 +163,17 @@ impl Events {
                 Err(Failure::Broken(why)) => {
                     if self.state() == Stream::Up {
                         delay = backoff_after_drop(delay, started.elapsed());
-                        log(&format!("Tico runner: event stream lost ({why}); polling until it is back"));
+                        log(&format!(
+                            "Tico runner: event stream lost ({why}); polling until it is back"
+                        ));
                         *self.down_since.lock().unwrap() = Some(Instant::now());
                     } else if !said_down {
                         said_down = true;
                         *self.down_since.lock().unwrap() = Some(Instant::now());
-                        log(&format!("Tico runner: event stream unavailable ({}); polling", why.chars().take(120).collect::<String>()));
+                        log(&format!(
+                            "Tico runner: event stream unavailable ({}); polling",
+                            why.chars().take(120).collect::<String>()
+                        ));
                     }
                     false
                 }
@@ -154,7 +192,10 @@ impl Events {
     async fn read_once(&self, client: &Client) -> Result<bool, Failure> {
         let recovering = self.state() != Stream::Up;
         let after = self.last_id.lock().unwrap().clone();
-        let query = after.as_ref().map(|a| format!("?after={}", quote_plus(a))).unwrap_or_default();
+        let query = after
+            .as_ref()
+            .map(|a| format!("?after={}", quote_plus(a)))
+            .unwrap_or_default();
         let token = bearer(&client.token).map_err(|e| Failure::Broken(e.to_string()))?;
         let http = http_client(Some(Duration::from_secs(READ_TIMEOUT_S)));
         let mut req = http
@@ -165,7 +206,10 @@ impl Events {
         if let Some(a) = &after {
             req = req.header("Last-Event-ID", a.as_str());
         }
-        let response = req.send().await.map_err(|e| Failure::Broken(format!("URLError: {e}")))?;
+        let response = req
+            .send()
+            .await
+            .map_err(|e| Failure::Broken(format!("URLError: {e}")))?;
         let status = response.status().as_u16();
         if status == 404 || status == 405 {
             return Err(Failure::NotSupported);
@@ -175,7 +219,8 @@ impl Events {
         }
         let mut body = response.bytes_stream();
         let mut buffer: Vec<u8> = vec![];
-        let (mut name, mut ident, mut data): (Option<String>, Option<String>, Value) = (None, None, Value::Null);
+        let (mut name, mut ident, mut data): (Option<String>, Option<String>, Value) =
+            (None, None, Value::Null);
         loop {
             let chunk = match body.next().await {
                 None => break,
@@ -185,11 +230,17 @@ impl Events {
             buffer.extend_from_slice(&chunk);
             while let Some(at) = buffer.iter().position(|b| *b == b'\n') {
                 let raw: Vec<u8> = buffer.drain(..=at).collect();
-                let line = String::from_utf8_lossy(&raw).trim_end_matches(['\r', '\n']).to_string();
+                let line = String::from_utf8_lossy(&raw)
+                    .trim_end_matches(['\r', '\n'])
+                    .to_string();
                 if line.is_empty() {
                     if let Some(event) = name.take() {
                         let payload = std::mem::replace(&mut data, Value::Null);
-                        let payload = if payload.is_null() { Value::Object(Default::default()) } else { payload };
+                        let payload = if payload.is_null() {
+                            Value::Object(Default::default())
+                        } else {
+                            payload
+                        };
                         self.dispatch(&event, ident.take(), &payload, recovering);
                         if self.stop.load(Ordering::SeqCst) {
                             return Ok(true);
@@ -206,7 +257,10 @@ impl Events {
                     let (field, value) = line.split_once(':').unwrap_or((line.as_str(), ""));
                     let value = value.strip_prefix(' ').unwrap_or(value);
                     match field {
-                        "data" => data = serde_json::from_str(value).unwrap_or(Value::Object(Default::default())),
+                        "data" => {
+                            data = serde_json::from_str(value)
+                                .unwrap_or(Value::Object(Default::default()))
+                        }
                         "event" => name = Some(value.to_string()),
                         "id" => ident = Some(value.to_string()),
                         _ => {}
@@ -229,7 +283,12 @@ impl Events {
                         *last = frame.seq.map(|seq| seq.to_string());
                     }
                 }
-                let changed = self.release.lock().unwrap().as_ref().is_some_and(|r| *r != release);
+                let changed = self
+                    .release
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .is_some_and(|r| *r != release);
                 // Back after an outage or on a new server release: one full pass catches up on anything unsaid.
                 if recovering || changed {
                     self.ask(ALL);
@@ -237,7 +296,10 @@ impl Events {
                 *self.release.lock().unwrap() = Some(release);
                 *self.state.lock().unwrap() = Stream::Up;
                 if let Some(since) = self.down_since.lock().unwrap().take() {
-                    diagnostic(&format!("Tico runner: event stream back after {} s; polling stops", since.elapsed().as_secs()));
+                    diagnostic(&format!(
+                        "Tico runner: event stream back after {} s; polling stops",
+                        since.elapsed().as_secs()
+                    ));
                 }
                 self.wake.notify_one();
             }
@@ -267,7 +329,11 @@ impl Events {
 /// RECONNECT_MAX_S. One that drops soon after `ready` keeps backing off, so a stream that cannot stay up does not
 /// reconnect, with a full catch-up, every second.
 fn backoff_after_drop(delay: f64, lasted: Duration) -> f64 {
-    if lasted >= Duration::from_secs(STABLE_S) { 1.0 } else { delay }
+    if lasted >= Duration::from_secs(STABLE_S) {
+        1.0
+    } else {
+        delay
+    }
 }
 
 /// Why a stream's body ended early, in words: a read timeout is the server going quiet past READ_TIMEOUT_S
@@ -298,29 +364,90 @@ mod tests {
         assert_eq!(channels("capacity"), &["heartbeat"]);
         assert_eq!(channels("something new"), ALL);
         let e = Events::new();
-        e.dispatch("ready", Some("7".into()), &serde_json::json!({"seq": 7, "release": "v1"}), true);
+        e.dispatch(
+            "ready",
+            Some("7".into()),
+            &serde_json::json!({"seq": 7, "release": "v1"}),
+            true,
+        );
         assert!(e.live() && e.take("claim") && !e.take("claim"));
-        e.pending.lock().unwrap().clear();
-        e.dispatch("runner", Some("8".into()), &serde_json::json!({"kind": "work"}), false);
+        e.pending.store(0, Ordering::SeqCst);
+        e.dispatch(
+            "runner",
+            Some("8".into()),
+            &serde_json::json!({"kind": "work"}),
+            false,
+        );
         assert!(e.take("claim") && !e.take("sync"));
         assert_eq!(e.last_id.lock().unwrap().as_deref(), Some("8"));
     }
 
     #[test]
+    fn every_channel_has_its_own_bit_and_a_catch_up_pass_leaves_keys_out() {
+        for kind in [
+            "work",
+            "config",
+            "credentials",
+            "capacity",
+            "logins",
+            "harness_actions",
+            "credential_imports",
+            "subscription_refresh",
+            "worktrees",
+            "something new",
+        ] {
+            assert!(channels(kind).iter().all(|c| index(c).is_some()), "{kind}");
+        }
+        assert!(ALL.iter().all(|c| index(c).is_some()) && !ALL.contains(&"keys"));
+        let e = Events::new();
+        e.ask(&CHANNELS);
+        for name in CHANNELS {
+            assert!(e.take(name) && !e.take(name), "{name}");
+        }
+        e.ask(ALL);
+        assert!(!e.take("keys") && e.take("sync") && !e.take("sync"));
+        e.ask(&["keys"]);
+        assert!(e.take("keys") && !e.take("keys"));
+    }
+
+    #[test]
     fn a_drop_after_a_stable_stream_restarts_the_backoff_and_a_quick_one_does_not() {
         assert_eq!(backoff_after_drop(32.0, Duration::from_secs(STABLE_S)), 1.0);
-        assert_eq!(backoff_after_drop(32.0, Duration::from_secs(STABLE_S - 1)), 32.0);
+        assert_eq!(
+            backoff_after_drop(32.0, Duration::from_secs(STABLE_S - 1)),
+            32.0
+        );
     }
 
     #[test]
     fn a_stream_back_after_an_outage_says_so_once() {
         let e = Events::new();
-        e.dispatch("ready", None, &serde_json::json!({"seq": 1, "release": "v1"}), true);
-        let back = |lines: Vec<String>| lines.iter().filter(|l| l.contains("event stream back")).count();
+        e.dispatch(
+            "ready",
+            None,
+            &serde_json::json!({"seq": 1, "release": "v1"}),
+            true,
+        );
+        let back = |lines: Vec<String>| {
+            lines
+                .iter()
+                .filter(|l| l.contains("event stream back"))
+                .count()
+        };
         let before = back(crate::util::recent_errors());
         *e.down_since.lock().unwrap() = Some(Instant::now());
-        e.dispatch("ready", None, &serde_json::json!({"seq": 2, "release": "v1"}), true);
-        e.dispatch("ready", None, &serde_json::json!({"seq": 3, "release": "v1"}), true);
+        e.dispatch(
+            "ready",
+            None,
+            &serde_json::json!({"seq": 2, "release": "v1"}),
+            true,
+        );
+        e.dispatch(
+            "ready",
+            None,
+            &serde_json::json!({"seq": 3, "release": "v1"}),
+            true,
+        );
         assert_eq!(back(crate::util::recent_errors()), before + 1);
         assert!(e.down_since.lock().unwrap().is_none());
     }
@@ -339,13 +466,21 @@ mod tests {
                 if close {
                     drop(sock);
                 } else {
-                    tokio::spawn(async move { tokio::time::sleep(Duration::from_secs(5)).await; drop(sock) });
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        drop(sock)
+                    });
                 }
             }
         });
         for expected in ["TimeoutError: no data", "ConnectionError: "] {
             let http = http_client(Some(Duration::from_millis(300)));
-            let mut body = http.get(format!("http://{at}/")).send().await.unwrap().bytes_stream();
+            let mut body = http
+                .get(format!("http://{at}/"))
+                .send()
+                .await
+                .unwrap()
+                .bytes_stream();
             let err = loop {
                 match body.next().await {
                     Some(Ok(_)) => continue,

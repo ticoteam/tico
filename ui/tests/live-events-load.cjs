@@ -1,4 +1,4 @@
-// Live task events at scale (ui/app/live.js, ui/app/refresh.js): every open tab gets every task change, and a busy
+// Live task events at scale (ui/app/live.ts, ui/app/refresh.ts): every open tab gets every task change, and a busy
 // team's bots create and change tasks every few seconds. When each change made a tab read whole task lists, a few
 // open tabs kept the server at 100% CPU. This sends 50 task events over about three seconds and caps the requests
 // the page makes in reply:
@@ -12,18 +12,20 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
 
 const EVENTS = 50;
 const CEILING = 5;   // requests a page may make for the whole burst; reading lists per change makes 15 or more
 const now = new Date().toISOString();
-const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Details.', owner: 'bot:ops', requester: 'human:ana',
-  status: 'doing', lane: 'company', labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3, created: now, updated: now, ...over});
+const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Details.', owner_id: 'bot:ops', requester_id: 'human:ana',
+  status: 'doing', lane: 'company', labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3, created_at: now, updated_at: now, ...over});
 
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage({viewport: {width: 1300, height: 820}, serviceWorkers: 'block'});
   const errors = [], requests = [];
+  const threads = threadsFake({bot: 'ops', messages: [{id: 'm1', sender_id: 'human:ana', body: 'Draft the release notes'}]});
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => {
     window.EventSource = class {
@@ -43,10 +45,10 @@ const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Detail
     const url = new URL(route.request().url()), p = url.pathname;
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     // Not counted: boot.js re-reads the observability config on a timer, events or not, and on a slow
     // box that read can land inside a burst.
     if (p.startsWith('/api/') && p !== '/api/v2/observability') requests.push(p + url.search);
@@ -54,9 +56,8 @@ const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Detail
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
     if (p === '/api/issues') return json([]);
-    if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with')
-      ? [{id: 'c-ops', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:ops']}] : []});
-    if (p === '/api/v2/conversations/c-ops/snapshot') return json({messages: [{id: 'm1', from_actor: 'human:ana', body: 'Draft the release notes', created: now}], execution: null});
+    const answer = threads(p, url, route.request().method());
+    if (answer !== undefined) return json(answer);
     if (p === '/api/v2/tasks') return json({tasks: [task()], next_offset: null, cursor: '12.a'});
     if (p === '/api/v2/tasks/labels') return json({labels: [], tags: []});
     if (p === '/api/v2/needs-you') return json({items: [], version: 'v0'});
@@ -93,8 +94,8 @@ const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Detail
   await page.locator('#task-body', {hasText: `Check release link ${EVENTS - 2}`}).waitFor();
 
   // A bot's page in a hidden tab reads nothing while hidden.
-  await page.evaluate(() => { location.hash = '#/bot/ops/chat'; });
-  await page.waitForFunction(() => V2C?.rendered, null, {timeout: t(8000)});
+  await page.evaluate(() => { location.hash = '#/bot/ops'; });
+  await page.locator('#bot-thread').waitFor({timeout: t(8000)});
   await settle();
   const visible = shown => page.evaluate(shown => {
     Object.defineProperty(document, 'hidden', {configurable: true, get: () => !shown});

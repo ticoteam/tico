@@ -15,9 +15,9 @@ involved, ask for the expected uplift once; do not invent one.
 
 ## 2. Run the numbers
 
-From `knowledge/items.md` and the latest exports: current stock, daily sales, lead time, the date stock
-would reach zero at the normal rate and at the expected rate, and the latest date an order could be
-placed to avoid that.
+From `knowledge/items.md` and the latest exports, use `skills/work-out-the-last-order-day/SKILL.md`: current stock,
+the clean daily sales, the observed lead time, the date stock would reach zero at the normal rate and at the expected
+rate, and the latest date an order could be placed to land before that.
 
 ## 3. For "why did we run out"
 
@@ -28,4 +28,5 @@ without blaming a person; propose one change (a higher safety stock, an earlier 
 ## 4. Answer
 
 First line: the answer ("Yes, if you order 300 by 12 October"). Then the numbers and the export dates.
-Record anything learned in `knowledge/items.md` or `knowledge/suppliers.md`, and finish the task.
+Record anything learned in `knowledge/items.md` or `knowledge/suppliers.md`, and finish the task. Done when the first
+line answers the question, every date carries its stock count date, and the task is closed with that answer.

@@ -39,11 +39,14 @@ CHILD_MAPS = ("properties", "$defs", "patternProperties")
 
 # --- reading the contract ------------------------------------------------------------------------------------------
 
+
 def load(directory=CONTRACT):
     """{"wire": ..., "requests": ...} for the contract in `directory`."""
     directory = Path(directory)
-    return {"wire": json.loads((directory / "wire.json").read_text()),
-            "requests": json.loads((directory / "requests.json").read_text())}
+    return {
+        "wire": json.loads((directory / "wire.json").read_text()),
+        "requests": json.loads((directory / "requests.json").read_text()),
+    }
 
 
 def generate_requests():
@@ -51,11 +54,15 @@ def generate_requests():
     sys.path.insert(0, str(ROOT))
     from pydantic.json_schema import models_json_schema
     from backend import models as M
-    _, document = models_json_schema([(getattr(M, name), "validation") for name in REQUEST_MODELS],
-                                     ref_template="#/$defs/{model}")
-    return {"title": "Tico runner wire contract: requests",
-            "x-note": "Generated from backend/models.py by scripts/check_wire_contract.py --write-requests.",
-            "$defs": document["$defs"]}
+
+    _, document = models_json_schema(
+        [(getattr(M, name), "validation") for name in REQUEST_MODELS], ref_template="#/$defs/{model}"
+    )
+    return {
+        "title": "Tico runner wire contract: requests",
+        "x-note": "Generated from backend/models.py by scripts/check_wire_contract.py --write-requests.",
+        "$defs": document["$defs"],
+    }
 
 
 def render(document):
@@ -69,8 +76,11 @@ def stripped(node):
         for key, value in node.items():
             if key in ANNOTATIONS or key.startswith("x-") and key != "x-open-enum":
                 continue
-            out[key] = ({k: stripped(v) for k, v in value.items()} if key in CHILD_MAPS and isinstance(value, dict)
-                        else stripped(value))
+            out[key] = (
+                {k: stripped(v) for k, v in value.items()}
+                if key in CHILD_MAPS and isinstance(value, dict)
+                else stripped(value)
+            )
         return out
     if isinstance(node, list):
         return [stripped(item) for item in node]
@@ -96,12 +106,42 @@ def window(kept):
 
 # --- validating a value --------------------------------------------------------------------------------------------
 
-VALIDATING = {"$ref", "anyOf", "oneOf", "allOf", "const", "enum", "type", "properties", "required",
-              "additionalProperties", "patternProperties", "propertyNames", "maxProperties", "items", "prefixItems",
-              "minItems", "maxItems", "minLength", "maxLength", "pattern", "minimum", "maximum", "exclusiveMinimum",
-              "exclusiveMaximum", "$defs"}
-JSON_TYPES = {dict: "object", list: "array", str: "string", bool: "boolean", int: "integer", float: "number",
-              type(None): "null"}
+VALIDATING = {
+    "$ref",
+    "anyOf",
+    "oneOf",
+    "allOf",
+    "const",
+    "enum",
+    "type",
+    "properties",
+    "required",
+    "additionalProperties",
+    "patternProperties",
+    "propertyNames",
+    "maxProperties",
+    "items",
+    "prefixItems",
+    "minItems",
+    "maxItems",
+    "minLength",
+    "maxLength",
+    "pattern",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "$defs",
+}
+JSON_TYPES = {
+    dict: "object",
+    list: "array",
+    str: "string",
+    bool: "boolean",
+    int: "integer",
+    float: "number",
+    type(None): "null",
+}
 
 
 def json_type(value):
@@ -164,8 +204,12 @@ def errors(value, schema, root, where="$"):
         if "pattern" in schema and not re.search(schema["pattern"], value):
             found.append("%s: %r does not match %s" % (where, value, schema["pattern"]))
     elif isinstance(value, (int, float)) and not isinstance(value, bool):
-        for key, fails in (("minimum", lambda v, b: v < b), ("maximum", lambda v, b: v > b),
-                           ("exclusiveMinimum", lambda v, b: v <= b), ("exclusiveMaximum", lambda v, b: v >= b)):
+        for key, fails in (
+            ("minimum", lambda v, b: v < b),
+            ("maximum", lambda v, b: v > b),
+            ("exclusiveMinimum", lambda v, b: v <= b),
+            ("exclusiveMaximum", lambda v, b: v >= b),
+        ):
             if key in schema and fails(value, schema[key]):
                 found.append("%s: %r is outside %s %r" % (where, value, key, schema[key]))
     return found
@@ -218,13 +262,16 @@ def array_errors(value, schema, root, where):
 
 # --- comparing two schemas -----------------------------------------------------------------------------------------
 
+
 class Compare:
     """Whether a reader schema takes everything a writer schema allows, conservatively: a problem reported may be
     one a real value never hits, never the other way round. `lenient`: the reader ignores fields it does not know
-    (a runner reading an answer), rather than refusing them (a server reading a request)."""
+    (a runner reading an answer), rather than refusing them (a server reading a request). `gated`: paths whose
+    problems do not count, inside an optional value's `anyOf` too (the wire contract's `gated`)."""
 
-    def __init__(self, reader_root, writer_root, lenient):
+    def __init__(self, reader_root, writer_root, lenient, gated=()):
         self.reader_root, self.writer_root, self.lenient = reader_root, writer_root, lenient
+        self.gated = tuple(gated)
         self.problems, self.seen = [], set()
 
     def check(self, reader, writer, where):
@@ -246,19 +293,23 @@ class Compare:
         for key in ("anyOf", "oneOf"):
             if key in writer:
                 for option in writer[key]:
-                    self.check(reader, {**{k: v for k, v in writer.items() if k != key}, **option}
-                               if len(writer) > 1 else option, where)
+                    self.check(
+                        reader,
+                        {**{k: v for k, v in writer.items() if k != key}, **option} if len(writer) > 1 else option,
+                        where,
+                    )
                 return
         for key in ("anyOf", "oneOf"):
             if key in reader:
                 tries = []
                 for option in reader[key]:
-                    sub = Compare(self.reader_root, self.writer_root, self.lenient)
+                    sub = Compare(self.reader_root, self.writer_root, self.lenient, self.gated)
                     sub.seen = set(self.seen)
                     sub.check(option, writer, where)
-                    if not sub.problems:
+                    problems = [p for p in sub.problems if not p.startswith(self.gated)]
+                    if not problems:
                         return
-                    tries.append(sub.problems)
+                    tries.append(problems)
                 best = min(tries, key=len)
                 self.problems.append("%s: no reader option takes what the writer sends (%s)" % (where, best[0]))
                 return
@@ -283,18 +334,24 @@ class Compare:
         reader_types, writer_types = self.types(reader), self.types(writer)
         if reader_types is not None:
             if writer_types is None:
-                self.problems.append("%s: the writer's type is open; the reader takes only %s" % (where, sorted(reader_types)))
+                self.problems.append(
+                    "%s: the writer's type is open; the reader takes only %s" % (where, sorted(reader_types))
+                )
             else:
                 for kind in sorted(writer_types):
                     if kind not in reader_types and not (kind == "integer" and "number" in reader_types):
-                        self.problems.append("%s: the writer may send %s; the reader takes %s"
-                                             % (where, kind, "/".join(sorted(reader_types))))
+                        self.problems.append(
+                            "%s: the writer may send %s; the reader takes %s"
+                            % (where, kind, "/".join(sorted(reader_types)))
+                        )
         reader_values = [reader["const"]] if "const" in reader else reader.get("enum")
         writer_values = [writer["const"]] if "const" in writer else writer.get("enum")
         if reader_values is None or reader.get("x-open-enum"):
             return
         if writer_values is None:
-            self.problems.append("%s: the reader takes only %r; the writer is not limited to them" % (where, reader_values))
+            self.problems.append(
+                "%s: the reader takes only %r; the writer is not limited to them" % (where, reader_values)
+            )
             return
         for value in writer_values:
             if not any(same(value, r) for r in reader_values):
@@ -323,7 +380,9 @@ class Compare:
         open_writer = [e for e in writer_extra if e is not False]
         if open_writer and not self.lenient:
             if reader_extra is False and not reader.get("patternProperties"):
-                self.problems.append(where + ": the writer may send fields of any name; the reader refuses unknown ones")
+                self.problems.append(
+                    where + ": the writer may send fields of any name; the reader refuses unknown ones"
+                )
             elif isinstance(reader_extra, dict):
                 for extra in open_writer:
                     self.check(reader_extra, extra if isinstance(extra, dict) else True, where + ".*")
@@ -335,29 +394,45 @@ class Compare:
     def arrays(self, reader, writer, where):
         reader_prefix, writer_prefix = reader.get("prefixItems", []), writer.get("prefixItems", [])
         for i, sub in enumerate(writer_prefix):
-            self.check(reader_prefix[i] if i < len(reader_prefix) else reader.get("items", True), sub,
-                       "%s[%d]" % (where, i))
+            self.check(
+                reader_prefix[i] if i < len(reader_prefix) else reader.get("items", True), sub, "%s[%d]" % (where, i)
+            )
         if "items" in writer or not writer_prefix:
             for i in range(len(writer_prefix), len(reader_prefix)):
                 self.check(reader_prefix[i], writer.get("items", True), "%s[%d]" % (where, i))
             self.check(reader.get("items", True), writer.get("items", True), where + "[]")
 
     def bounds(self, reader, writer, where):
-        for key, wider in (("minLength", lambda r, w: r > w), ("minItems", lambda r, w: r > w),
-                           ("minimum", lambda r, w: r > w), ("exclusiveMinimum", lambda r, w: r > w)):
+        for key, wider in (
+            ("minLength", lambda r, w: r > w),
+            ("minItems", lambda r, w: r > w),
+            ("minimum", lambda r, w: r > w),
+            ("exclusiveMinimum", lambda r, w: r > w),
+        ):
             if key in reader and ("const" not in writer and "enum" not in writer):
                 if key not in writer or wider(reader[key], writer[key]):
-                    self.problems.append("%s: the reader's %s is %r, the writer's %r" % (where, key, reader[key], writer.get(key)))
+                    self.problems.append(
+                        "%s: the reader's %s is %r, the writer's %r" % (where, key, reader[key], writer.get(key))
+                    )
         for key in ("maxLength", "maxItems", "maximum", "exclusiveMaximum"):
             if key in reader and ("const" not in writer and "enum" not in writer):
                 if key not in writer or reader[key] < writer[key]:
-                    self.problems.append("%s: the reader's %s is %r, the writer's %r" % (where, key, reader[key], writer.get(key)))
-        if "pattern" in reader and writer.get("pattern") != reader["pattern"] and "enum" not in writer and "const" not in writer:
-            self.problems.append("%s: the reader's pattern is %s, the writer's %s" % (where, reader["pattern"], writer.get("pattern")))
+                    self.problems.append(
+                        "%s: the reader's %s is %r, the writer's %r" % (where, key, reader[key], writer.get(key))
+                    )
+        if (
+            "pattern" in reader
+            and writer.get("pattern") != reader["pattern"]
+            and "enum" not in writer
+            and "const" not in writer
+        ):
+            self.problems.append(
+                "%s: the reader's pattern is %s, the writer's %s" % (where, reader["pattern"], writer.get("pattern"))
+            )
 
 
-def compare(reader, reader_root, writer, writer_root, lenient, where):
-    run = Compare(reader_root, writer_root, lenient)
+def compare(reader, reader_root, writer, writer_root, lenient, where, gated=()):
+    run = Compare(reader_root, writer_root, lenient, gated)
     run.check(reader, writer, where)
     return run.problems
 
@@ -380,16 +455,25 @@ def breaks(new, old, old_name="the previous release"):
             found.append("both ways: %s moved from %s %s" % (name, old_end["method"], old_end["path"]))
             continue
         if "request" in old_end:
-            for p in compare(ref(end["request"]), new["requests"], ref(old_end["request"]), old["requests"], False,
-                             name + ".request"):
+            for p in compare(
+                ref(end["request"]), new["requests"], ref(old_end["request"]), old["requests"], False, name + ".request"
+            ):
                 found.append("old runner, new server: " + p)
-            for p in compare(ref(old_end["request"]), old["requests"], ref(end["request"]), new["requests"], False,
-                             name + ".request"):
+            for p in compare(
+                ref(old_end["request"]),
+                old["requests"],
+                ref(end["request"]),
+                new["requests"],
+                False,
+                name + ".request",
+                gated,
+            ):
                 if not any(p.startswith(g) for g in gated):
                     found.append("new runner, old server (list it under gated once the runner waits for it): " + p)
         answers = [("answer", end.get("answer"), old_end.get("answer"))] + [
             ("stream." + frame, end.get("stream", {}).get(frame), old_frame)
-            for frame, old_frame in old_end.get("stream", {}).items()]
+            for frame, old_frame in old_end.get("stream", {}).items()
+        ]
         for label, current, previous in answers:
             if previous is None:
                 continue
@@ -402,8 +486,10 @@ def breaks(new, old, old_name="the previous release"):
                 found.append("new runner, old server: " + p)
     for name in new_wire["endpoints"]:
         if name not in old_wire["endpoints"] and name not in gated:
-            found.append("new runner, old server (list it under gated once the runner copes without it): "
-                         "%s is new since %s" % (name, old_name))
+            found.append(
+                "new runner, old server (list it under gated once the runner copes without it): "
+                "%s is new since %s" % (name, old_name)
+            )
     error, old_error = {"$ref": "#/$defs/" + new_wire["error"]}, {"$ref": "#/$defs/" + old_wire["error"]}
     for p in compare(old_error, old_wire, error, new_wire, True, "error"):
         found.append("old runner, new server: " + p)
@@ -413,6 +499,7 @@ def breaks(new, old, old_name="the previous release"):
 
 
 # --- the command ---------------------------------------------------------------------------------------------------
+
 
 def snapshot(version, contract=CONTRACT, directory=RELEASES):
     """Keep the current contract and its fixtures as release `version`'s copy."""

@@ -13,6 +13,7 @@ deactivations stops at the owner's mass-leave limit.
 
 A user's SCIM `id` is the roster person id; `userName` is the email.
 """
+
 import hmac
 from functools import wraps
 import json
@@ -54,11 +55,17 @@ def _error(status, detail, scim_type="", headers=None):
 
 def resource(p, base):
     first, _, last = p["name"].partition(" ")
-    out = {"schemas": [USER], "id": p["id"], "userName": p["email"], "displayName": p["name"],
-           "name": {"formatted": p["name"], "givenName": first, "familyName": last},
-           "title": p["title"], "active": not p["hidden"],
-           "emails": [{"value": p["email"], "type": "work", "primary": True}],
-           "meta": {"resourceType": "User", "location": f"{base}/Users/{p['id']}"}}
+    out = {
+        "schemas": [USER],
+        "id": p["id"],
+        "userName": p["email"],
+        "displayName": p["name"],
+        "name": {"formatted": p["name"], "givenName": first, "familyName": last},
+        "title": p["title"],
+        "active": not p["hidden"],
+        "emails": [{"value": p["email"], "type": "work", "primary": True}],
+        "meta": {"resourceType": "User", "location": f"{base}/Users/{p['id']}"},
+    }
     if p["external_id"]:
         out["externalId"] = p["external_id"]
     if p["reports_to"]:
@@ -69,8 +76,13 @@ def resource(p, base):
 
 # ----------------------------------------------------------------------------------- parsing
 _TERM = re.compile(r'^\s*([A-Za-z0-9_.:\[\]"\- ]+?)\s+eq\s+("(?:[^"\\]|\\.)*"|[^\s"]+)\s*$', re.I)
-_ATTRS = {"username": "email", "emails.value": "email", "externalid": "external_id", "id": "id",
-          "emails[type eq \"work\"].value": "email"}
+_ATTRS = {
+    "username": "email",
+    "emails.value": "email",
+    "externalid": "external_id",
+    "id": "id",
+    "emails[type eq \"work\"].value": "email",
+}
 
 
 def parse_filter(text):
@@ -82,16 +94,18 @@ def parse_filter(text):
         m = _TERM.match(part)
         field = _ATTRS.get(m.group(1).strip().lower()) if m else None
         if not field:
-            raise ScimError(400, "Only eq filters on userName, externalId, emails.value and id are supported", "invalidFilter")
+            raise ScimError(
+                400, "Only eq filters on userName, externalId, emails.value and id are supported", "invalidFilter"
+            )
         value = m.group(2)
-        value = json.loads(value) if value.startswith('"') else value    # Entra may send it unquoted
+        value = json.loads(value) if value.startswith('"') else value  # Entra may send it unquoted
         terms.append((field, str(value)))
     return terms
 
 
 def _bool(value):
     if isinstance(value, str):
-        return value.strip().lower() == "true"          # Entra sends "True"/"False" as text
+        return value.strip().lower() == "true"  # Entra sends "True"/"False" as text
     return bool(value)
 
 
@@ -100,7 +114,7 @@ def _set(state, path, value, op):
     p = re.sub(r"\s+", " ", str(path or "")).strip()
     low = p.lower()
     if low.startswith(ENTERPRISE.lower() + ":"):
-        low = low[len(ENTERPRISE) + 1:]
+        low = low[len(ENTERPRISE) + 1 :]
     remove = op == "remove"
     if low == "active":
         state["active"] = False if remove else _bool(value)
@@ -110,8 +124,9 @@ def _set(state, path, value, op):
     elif low == "emails" or low.startswith("emails") and low.endswith("value"):
         # Only a fallback: Entra may map userName and the work email to different attributes.
         if isinstance(value, list):
-            value = next((e.get("value") for e in value if isinstance(e, dict) and e.get("primary")), None) or \
-                    next((e.get("value") for e in value if isinstance(e, dict)), "")
+            value = next((e.get("value") for e in value if isinstance(e, dict) and e.get("primary")), None) or next(
+                (e.get("value") for e in value if isinstance(e, dict)), ""
+            )
         if not remove and value:
             state["alt"] = str(value).strip().lower()
     elif low in ("displayname", "name.formatted"):
@@ -127,7 +142,9 @@ def _set(state, path, value, op):
     elif low == "externalid":
         state["external_id"] = "" if remove else str(value or "").strip()
     elif low in ("manager", "manager.value"):
-        state["manager"] = "" if remove else str((value or {}).get("value") if isinstance(value, dict) else value or "").strip()
+        state["manager"] = (
+            "" if remove else str((value or {}).get("value") if isinstance(value, dict) else value or "").strip()
+        )
     elif not p and isinstance(value, dict):
         for k, v in value.items():
             _set(state, k, v, op)
@@ -139,11 +156,17 @@ def _set(state, path, value, op):
 
 def desired(body, current=None, ops=None):
     """The record a create/replace/patch asks for. `current` is the person being changed."""
-    state = {"email": current["email"] if current else "", "name": current["name"] if current else "",
-             "title": current["title"] if current else "", "active": not current["hidden"] if current else True,
-             "external_id": current["external_id"] if current else "", "manager": current["reports_to"] if current else "",
-             "parts": {}, "alt": ""}
-    if ops is None:                                     # POST / PUT: the whole resource
+    state = {
+        "email": current["email"] if current else "",
+        "name": current["name"] if current else "",
+        "title": current["title"] if current else "",
+        "active": not current["hidden"] if current else True,
+        "external_id": current["external_id"] if current else "",
+        "manager": current["reports_to"] if current else "",
+        "parts": {},
+        "alt": "",
+    }
+    if ops is None:  # POST / PUT: the whole resource
         state["name"] = state["title"] = ""
         for key, value in body.items():
             if key not in ("schemas", "id", "meta", "groups"):
@@ -158,7 +181,9 @@ def desired(body, current=None, ops=None):
         state["name"] = " ".join(x for x in (state["parts"].get("givenname"), state["parts"].get("familyname")) if x)
     elif state["parts"] and ops is not None:
         first, _, last = state["name"].partition(" ")
-        state["name"] = " ".join(x for x in (state["parts"].get("givenname", first), state["parts"].get("familyname", last)) if x)
+        state["name"] = " ".join(
+            x for x in (state["parts"].get("givenname", first), state["parts"].get("familyname", last)) if x
+        )
     return state
 
 
@@ -199,14 +224,17 @@ def install_scim(app, settings, store):
                 guard(kw["request"])
                 return await fn(*args, **kw)
             except ScimError as exc:
-                return _error(exc.status, exc.detail, exc.scim_type,
-                              {"WWW-Authenticate": "Bearer"} if exc.status == 401 else None)
+                return _error(
+                    exc.status, exc.detail, exc.scim_type, {"WWW-Authenticate": "Bearer"} if exc.status == 401 else None
+                )
             except Problem as exc:
                 return _error(exc.status, exc.detail, headers={"Retry-After": "3600"} if exc.status == 429 else None)
+
         return handler
 
     def roster_of(c):
         from .views import roster
+
         return roster(c)
 
     def apply_one(state, current):
@@ -214,8 +242,14 @@ def install_scim(app, settings, store):
         email = state["email"]
         if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
             raise ScimError(400, "userName must be an email address", "invalidValue")
-        record = {"email": email, "name": state["name"], "title": state["title"], "active": state["active"],
-                  "external_id": state["external_id"], "manager": state["manager"]}
+        record = {
+            "email": email,
+            "name": state["name"],
+            "title": state["title"],
+            "active": state["active"],
+            "external_id": state["external_id"],
+            "manager": state["manager"],
+        }
         blocked, person = False, None
         with store.transaction() as c:
             live = roster_of(c)
@@ -225,7 +259,13 @@ def install_scim(app, settings, store):
             if not blocked:
                 for key in ("protected", "skipped"):
                     for x in found[key]:
-                        H.event(c, lock_actor, "directory.person_protected", "", {"email": x["email"], "reason": x.get("reason")})
+                        H.event(
+                            c,
+                            lock_actor,
+                            "directory.person_protected",
+                            "",
+                            {"email": x["email"], "reason": x.get("reason")},
+                        )
                 D.apply(c, lock_actor, "scim", found, live)
                 person = next((p for p in roster_of(c)["people"] if p["email"] == email), None)
                 cfg = D.load(c)
@@ -235,13 +275,20 @@ def install_scim(app, settings, store):
             # Its own transaction: a refusal rolls back the one it is raised in.
             with store.transaction() as c:
                 H.event(c, lock_actor, "directory.scim_guard", "", {"email": email})
-            raise Problem("too_many", "Too many deactivations in the last hour; the owner's mass-leave limit stopped this one", 429)
+            raise Problem(
+                "too_many",
+                "Too many deactivations in the last hour; the owner's mass-leave limit stopped this one",
+                429,
+            )
         return person
 
     def _recent_leaves(c):
         since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-        return c.execute("SELECT COUNT(*) FROM events WHERE action='directory.person_left' AND actor=? AND ts>=?",
-                         (lock_actor, since)).fetchone()[0]
+        return c.execute(
+            "SELECT COUNT(*) FROM events INDEXED BY events_task_origin "
+            "WHERE action='directory.person_left' AND actor=? AND created_at>=?",
+            (lock_actor, since),
+        ).fetchone()[0]
 
     def refresh():
         with store.read() as c:
@@ -256,29 +303,75 @@ def install_scim(app, settings, store):
     @app.get("/scim/v2/ServiceProviderConfig")
     @wrap
     async def config(request: Request):
-        return _reply({"schemas": ["urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"],
-                       "patch": {"supported": True}, "bulk": {"supported": False, "maxOperations": 0, "maxPayloadSize": 0},
-                       "filter": {"supported": True, "maxResults": MAX_COUNT}, "changePassword": {"supported": False},
-                       "sort": {"supported": False}, "etag": {"supported": False},
-                       "authenticationSchemes": [{"type": "oauthbearertoken", "name": "Bearer token",
-                                                  "description": "A token created in Settings > Humans"}]})
+        return _reply(
+            {
+                "schemas": ["urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"],
+                "patch": {"supported": True},
+                "bulk": {"supported": False, "maxOperations": 0, "maxPayloadSize": 0},
+                "filter": {"supported": True, "maxResults": MAX_COUNT},
+                "changePassword": {"supported": False},
+                "sort": {"supported": False},
+                "etag": {"supported": False},
+                "authenticationSchemes": [
+                    {
+                        "type": "oauthbearertoken",
+                        "name": "Bearer token",
+                        "description": "A token created in Settings > Humans",
+                    }
+                ],
+            }
+        )
 
     @app.get("/scim/v2/ResourceTypes")
     @wrap
     async def resource_types(request: Request):
-        return _reply({"schemas": [LIST], "totalResults": 1, "startIndex": 1, "itemsPerPage": 1, "Resources": [
-            {"schemas": ["urn:ietf:params:scim:schemas:core:2.0:ResourceType"], "id": "User", "name": "User",
-             "endpoint": "/Users", "schema": USER, "schemaExtensions": [{"schema": ENTERPRISE, "required": False}]}]})
+        return _reply(
+            {
+                "schemas": [LIST],
+                "totalResults": 1,
+                "startIndex": 1,
+                "itemsPerPage": 1,
+                "Resources": [
+                    {
+                        "schemas": ["urn:ietf:params:scim:schemas:core:2.0:ResourceType"],
+                        "id": "User",
+                        "name": "User",
+                        "endpoint": "/Users",
+                        "schema": USER,
+                        "schemaExtensions": [{"schema": ENTERPRISE, "required": False}],
+                    }
+                ],
+            }
+        )
 
     @app.get("/scim/v2/Schemas")
     @wrap
     async def schemas(request: Request):
-        return _reply({"schemas": [LIST], "totalResults": 2, "startIndex": 1, "itemsPerPage": 2, "Resources": [
-            {"id": USER, "name": "User", "description": "User account",
-             "attributes": [{"name": n, "type": "string", "multiValued": False, "required": n == "userName"}
-                            for n in ("userName", "displayName", "title", "externalId")]},
-            {"id": ENTERPRISE, "name": "EnterpriseUser", "description": "Enterprise user",
-             "attributes": [{"name": "manager", "type": "complex", "multiValued": False, "required": False}]}]})
+        return _reply(
+            {
+                "schemas": [LIST],
+                "totalResults": 2,
+                "startIndex": 1,
+                "itemsPerPage": 2,
+                "Resources": [
+                    {
+                        "id": USER,
+                        "name": "User",
+                        "description": "User account",
+                        "attributes": [
+                            {"name": n, "type": "string", "multiValued": False, "required": n == "userName"}
+                            for n in ("userName", "displayName", "title", "externalId")
+                        ],
+                    },
+                    {
+                        "id": ENTERPRISE,
+                        "name": "EnterpriseUser",
+                        "description": "Enterprise user",
+                        "attributes": [{"name": "manager", "type": "complex", "multiValued": False, "required": False}],
+                    },
+                ],
+            }
+        )
 
     @app.get("/scim/v2/Groups")
     @wrap
@@ -308,9 +401,16 @@ def install_scim(app, settings, store):
             people = roster_of(c)["people"]
         for field, value in terms:
             people = [p for p in people if str(p[field]).lower() == value.lower()]
-        page = people[start - 1:start - 1 + count]
-        return _reply({"schemas": [LIST], "totalResults": len(people), "startIndex": start,
-                       "itemsPerPage": len(page), "Resources": [resource(p, base) for p in page]})
+        page = people[start - 1 : start - 1 + count]
+        return _reply(
+            {
+                "schemas": [LIST],
+                "totalResults": len(people),
+                "startIndex": start,
+                "itemsPerPage": len(page),
+                "Resources": [resource(p, base) for p in page],
+            }
+        )
 
     @app.post("/scim/v2/Users")
     @wrap
@@ -367,7 +467,16 @@ def install_scim(app, settings, store):
     async def delete(request: Request, pid: str):
         with store.read() as c:
             current = person_by(c, pid)
-        apply_one({"email": current["email"], "name": current["name"], "title": current["title"], "active": False,
-                   "external_id": current["external_id"], "manager": ""}, current)
+        apply_one(
+            {
+                "email": current["email"],
+                "name": current["name"],
+                "title": current["title"],
+                "active": False,
+                "external_id": current["external_id"],
+                "manager": "",
+            },
+            current,
+        )
         refresh()
         return Response(status_code=204)

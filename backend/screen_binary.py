@@ -1,4 +1,5 @@
 """Get the Rust relay matching this checkout; release downloads are checksum verified."""
+
 import fcntl
 import gzip
 import hashlib
@@ -38,8 +39,11 @@ def prepare(root=ROOT, env=None):
     wanted = source_id(root)
     target = Path(env.get("CARGO_TARGET_DIR") or root / "relay-rs" / "target").resolve()
     downloaded = target / "dist" / wanted / "tico-screen-relay"
-    candidates = [Path(env.get("TICO_SCREEN_RELAY_BIN") or shutil.which("tico-screen-relay") or "/nonexistent"),
-                  target / "release" / "tico-screen-relay", downloaded]
+    candidates = [
+        Path(env.get("TICO_SCREEN_RELAY_BIN") or shutil.which("tico-screen-relay") or "/nonexistent"),
+        target / "release" / "tico-screen-relay",
+        downloaded,
+    ]
     for path in candidates:
         if current(path, wanted):
             return path
@@ -49,8 +53,9 @@ def prepare(root=ROOT, env=None):
         for path in candidates:
             if current(path, wanted):
                 return path
-        from runner.engine import _get, asset
-        from runner.release_update import checkout_release
+        from runner_support.engine import _get, asset
+        from runner_support.release_update import checkout_release
+
         release = checkout_release(root)
         name = asset().replace("tico-runner-", "tico-screen-relay-")
         if release and name:
@@ -72,9 +77,24 @@ def prepare(root=ROOT, env=None):
                 pass  # A source build can still supply the exact revision.
         cargo = shutil.which("cargo", path=env.get("PATH"))
         if not cargo:
-            raise RuntimeError("No matching Rust screen relay. Install this release's binary or Rust 1.92+ to build it.")
-        subprocess.run([cargo, "build", "--release", "--locked", "--manifest-path", str(root / "relay-rs/Cargo.toml"),
-                        "--target-dir", str(target)], env=env, check=True, timeout=1800)
+            raise RuntimeError(
+                "No matching Rust screen relay. Install this release's binary or Rust 1.92+ to build it."
+            )
+        subprocess.run(
+            [
+                cargo,
+                "build",
+                "--release",
+                "--locked",
+                "--manifest-path",
+                str(root / "relay-rs/Cargo.toml"),
+                "--target-dir",
+                str(target),
+            ],
+            env=env,
+            check=True,
+            timeout=1800,
+        )
         if not current(candidates[1], wanted):
             raise RuntimeError("Rust screen relay does not match this checkout")
         return candidates[1]

@@ -1,4 +1,5 @@
 """Native goals belong to a conversation, independently of company goals."""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS chat_goals (
  id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id),

@@ -63,9 +63,11 @@ The operator should create the following routine on Upgrades, preserving its exi
 > retry a refused write, create a second ticket manually, or close an Engineering ticket. Do not add
 > this command to PR checks, required checks or release gates. Save the scan receipt in your repository.
 
-An operator who owns Upgrades can configure it with `hub routine set`, supplying that text via
-`--text-file`, `--bot bot:upgrades --cron '23 8 * * *' --timezone Etc/UTC`. Follow the team's approval
-policy before that write. Afterwards verify the saved schedule and run the first check. An ordinary
+An operator who owns Upgrades can create it with `hub automation create --file -`: a JSON flow with
+`"owner": "bot:upgrades"`, the trigger `{"type": "schedule", "cron": "23 8 * * *", "tz": "Etc/UTC"}`, and one
+`bot_turn` step on `"bot": "upgrades"` whose `prompt` is the text above. Send `"enabled": false` until the team's
+approval policy allows that write, then turn it on with `hub automation update <id> --enable`. Afterwards check it
+with `hub automation show <id>` (schedule and next run) and run the first check with `hub automation run <id>`. An ordinary
 scheduled finding does not run or fail any PR workflow; no workflow or required-check setting is changed.
 
 ## Focused verification

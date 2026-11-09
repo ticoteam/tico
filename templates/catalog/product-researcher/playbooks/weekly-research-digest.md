@@ -33,7 +33,7 @@ more, from different people). Move anything that does not serve the outcome to t
 ## 5. Pick one thing to test
 
 The opportunity with the most evidence and the least testing. Name its riskiest assumption and one cheap way
-to test it that a human can run in a week. Do not choose the solution.
+to test it that a human can run in a week. Do not choose the solution. Follow `skills/choose-the-next-test/SKILL.md`.
 
 ## 6. Write the digest
 

@@ -7,21 +7,35 @@ from backend.tests.test_api import api, get, headers, post  # noqa: F401
 
 def pair(api, profile="scout", ip=None, harness="hermes"):
     extra = {"cf-connecting-ip": ip} if ip else {}
-    r = api.post("/api/v2/agents/pairings", json={"profile": profile, "harness": harness, "host": "mac-mini", "version": "1.0"},
-                 headers=extra)
+    r = api.post(
+        "/api/v2/agents/pairings",
+        json={"profile": profile, "harness": harness, "host": "mac-mini", "version": "1.0"},
+        headers=extra,
+    )
     return r
 
 
 def poll(api, pairing, secret=None):
-    return api.get("/api/v2/agents/pairings/" + pairing["pairing_id"],
-                   headers={"X-Pairing-Secret": secret if secret is not None else pairing["secret"]})
+    return api.get(
+        "/api/v2/agents/pairings/" + pairing["pairing_id"],
+        headers={"X-Pairing-Secret": secret if secret is not None else pairing["secret"]},
+    )
+
+
+def bot_id(api, slug="scout"):
+    with api.app.state.store.read() as c:
+        return H.resolve_bot(c, slug)["id"]
 
 
 def approve(api, code, bot="scout", token="ana-test"):
     return api.post("/api/v2/agents/pairings/approve", json={"code": code, "bot": bot}, headers=headers(token))
 
 
-def test_the_pairing_lifecycle_hands_the_credential_over_once(api):
+def openclaw_bot(api, slug="claw"):
+    return hermes_bot(api, slug=slug, model="openclaw-own", harness="openclaw", display_name="Claw")
+
+
+def test_the_pairing_lifecycle_preview_sealing_and_an_upgrade_credential(api):
     hermes_bot(api, status="planned")
     made = pair(api)
     assert made.status_code == 201, made.text
@@ -36,20 +50,21 @@ def test_the_pairing_lifecycle_hands_the_credential_over_once(api):
     # Approval needs a person's sign-in, and a code nobody asked for is a plain 404.
     assert api.post("/api/v2/agents/pairings/approve", json={"code": code, "bot": "scout"}).status_code == 401
     assert approve(api, "ZZZZ-ZZZZ").status_code == 404
+    scout = bot_id(api)
     done = approve(api, code.lower().replace("-", " "))
     assert done.status_code == 200, done.text
-    assert done.json() == {"bot": "scout", "profile": "scout", "host": "mac-mini"}
+    assert done.json() == {"bot": scout, "profile": "scout", "host": "mac-mini"}
     # A code is single use.
     assert approve(api, code).status_code == 404
     with api.app.state.store.read() as c:
         row = c.execute("SELECT * FROM agent_pairings WHERE id=?", (pairing["pairing_id"],)).fetchone()
         assert pairing["secret"] not in tuple(row) and code.replace("-", "") not in tuple(row)
     first = poll(api, pairing).json()
-    assert first["state"] == "approved" and first["bot"] == "scout" and first["token"].startswith("tico-agent-")
+    assert first["state"] == "approved" and first["bot"] == scout and first["token"].startswith("tico-agent-")
     assert first["url"] == api.app.state.store.settings.runner_url
-    assert get(api, "me", token=first["token"])["actor"] == "bot:scout"
+    assert get(api, "me", token=first["token"])["actor"] == H.bot_actor(scout)
     assert poll(api, pairing).json()["token"] == first["token"]  # installation can retry before a heartbeat
-    assert beat(api, first["token"])["bot"] == "scout"
+    assert beat(api, first["token"])["bot"] == scout
     assert next(bot for bot in get(api, "bots") if bot["slug"] == "scout")["state"] == "active"
     # The token is returned exactly once, and is gone from the row.
     assert poll(api, pairing).json() == {"state": "claimed"}
@@ -60,10 +75,58 @@ def test_the_pairing_lifecycle_hands_the_credential_over_once(api):
     assert approve(api, again["code"]).status_code == 200
     second = poll(api, again).json()["token"]
     assert api.get("/api/v2/me", headers=headers(first["token"])).status_code == 401
-    assert get(api, "me", token=second)["actor"] == "bot:scout"
+    assert get(api, "me", token=second)["actor"] == H.bot_actor(scout)
+    # Preview does not rotate a working credential.
+    token = credential(api)["token"]
+    made = pair(api).json()
+    shown = get(api, "agents/pairing-preview?code=" + made["code"])
+    assert shown["profile"] == "scout" and shown["host"] == "mac-mini" and shown["harness"] == "hermes"
+    assert "token" not in shown
+    assert get(api, "me", token=token)["actor"] == H.bot_actor(bot_id(api))
+    assert poll(api, made).json()["state"] == "pending"
+    # The held credential is sealed with the profile's secret and never in the row.
+    pairing = pair(api).json()
+    assert approve(api, pairing["code"]).status_code == 200
+    with api.app.state.store.read() as c:
+        row = dict(c.execute("SELECT * FROM agent_pairings WHERE id=?", (pairing["pairing_id"],)).fetchone())
+    token = poll(api, pairing).json()["token"]
+    assert token.startswith("tico-agent-") and get(api, "me", token=token)["actor"] == H.bot_actor(bot_id(api))
+    # The row holds a sealed form only, and nothing in it is the token or the secret.
+    flat = repr(row)
+    assert row["token"] and token not in flat and "tico-agent-" not in flat and pairing["secret"] not in flat
+    # The server cannot open it without the secret: another secret's key does not.
+    from backend import agents
+
+    with api.app.state.store.read() as c:
+        assert agents.open_held_token(row, pairing["secret"]) == token
+        assert agents.open_held_token(row, "a-different-secret") is None
+    # A poll with a wrong secret is still a 404, and collection still clears it.
+    assert poll(api, pairing, "wrong").status_code == 404
+    beat(api, token)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT token FROM agent_pairings WHERE id=?", (pairing["pairing_id"],)).fetchone()[0] is None
+    # A credential held in plaintext before the upgrade is still collected, then wiped.
+    from backend.store import Store
+
+    live, stale = pair(api).json(), pair(api).json()
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE agent_pairings SET state='approved',bot='scout',token='tico-agent-legacy-live',token_key='' "
+            "WHERE id=?",
+            (live["pairing_id"],),
+        )
+        c.execute(
+            "UPDATE agent_pairings SET state='approved',bot='scout',token='tico-agent-legacy-stale',token_key='',"
+            "expires_at=? WHERE id=?",
+            (H.shift(H.now(), seconds=-1), stale["pairing_id"]),
+        )
+    Store(api.app.state.store.settings).initialize()
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT token FROM agent_pairings WHERE id=?", (stale["pairing_id"],)).fetchone()[0] is None
+    assert poll(api, live).json()["token"] == "tico-agent-legacy-live"
 
 
-def test_a_pairing_expires_and_can_be_declined(api):
+def test_expiry_decline_who_may_approve_and_which_harness_pairs(api):
     hermes_bot(api)
     late = pair(api).json()
     with api.app.state.store.transaction() as c:
@@ -74,7 +137,9 @@ def test_a_pairing_expires_and_can_be_declined(api):
     held = pair(api).json()
     assert approve(api, held["code"]).status_code == 200
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE agent_pairings SET expires_at=? WHERE id=?", (H.shift(H.now(), seconds=-1), held["pairing_id"]))
+        c.execute(
+            "UPDATE agent_pairings SET expires_at=? WHERE id=?", (H.shift(H.now(), seconds=-1), held["pairing_id"])
+        )
     assert poll(api, held).json() == {"state": "expired"}
     with api.app.state.store.read() as c:
         assert c.execute("SELECT token FROM agent_pairings WHERE id=?", (held["pairing_id"],)).fetchone()[0] is None
@@ -83,26 +148,7 @@ def test_a_pairing_expires_and_can_be_declined(api):
     assert declined.status_code == 200 and declined.json()["declined"] is True
     assert poll(api, refused).json() == {"state": "declined"}
     assert approve(api, refused["code"]).status_code == 404
-
-
-def test_pairing_requests_are_rate_limited_per_address_and_capped_overall(api):
-    from fastapi.testclient import TestClient
-    api.app.state.store.settings.client_ip_header = 'cf-connecting-ip'
-    proxy = TestClient(api.app, client=('127.0.0.1', 1234))
-    try:
-        for _ in range(10):
-            assert pair(proxy, ip="10.0.0.1").status_code == 201
-        limited = pair(proxy, ip="10.0.0.1")
-        assert limited.status_code == 429 and limited.json()["error"]["code"] == "rate_limited"
-        for _ in range(10):
-            assert pair(proxy, ip="10.0.0.2").status_code == 201
-        assert pair(proxy, ip="10.0.0.3").status_code == 429
-    finally:
-        proxy.close()
-
-
-def test_who_may_approve_and_what_may_be_approved(api):
-    hermes_bot(api)
+    # Who may approve and what may be approved.
     code = pair(api).json()["code"]
     # Cara neither owns Scout nor manages it: the server's own rule refuses, and the code stays open.
     assert approve(api, code, token="cara-test").status_code == 403
@@ -121,48 +167,8 @@ def test_who_may_approve_and_what_may_be_approved(api):
     hermes_bot(api, slug="old", status="planned")
     post(api, "bots/old/archive", {"expected_revision": get(api, "bots/old/access")["revision"]})
     assert approve(api, pair(api).json()["code"], bot="old").status_code == 409
-
-
-def test_restore_brings_an_archived_bot_back_to_what_it_was(api):
-    hermes_bot(api)
-    assert post(api, "bots/scout/archive", {"expected_revision": get(api, "bots/scout/access")["revision"]})["status"] == "archived"
-    # Nobody who does not manage it restores it, and a bot that is not archived has nothing to restore.
-    assert api.post("/api/v2/bots/scout/restore", json={}, headers=headers("cara-test")).status_code == 403
-    assert api.post("/api/v2/bots/ops/restore", json={}, headers=headers()).status_code == 409
-    restored = post(api, "bots/scout/restore", {})
-    assert restored["status"] == "active" and restored["restored"] is True and restored["agent"]["harness"] == "hermes"
-    assert next(b for b in get(api, "bots") if b["slug"] == "scout")["state"] == "active"
-    # A bot that was archived before the status was recorded comes back planned.
-    post(api, "bots/scout/archive", {"expected_revision": get(api, "bots/scout/access")["revision"]})
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE events SET detail_json='{}' WHERE action='bot.archived' AND target='scout'")
-    assert post(api, "bots/scout/restore", {})["status"] == "planned"
-    # Register says where an archived slug went.
-    post(api, "bots/scout/archive", {"expected_revision": get(api, "bots/scout/access")["revision"]})
-    r = api.post("/api/v2/bots/register", json={"slug": "scout", "model": "hermes"}, headers=headers("cara-test"))
-    assert r.status_code == 409 and "restore" in r.json()["error"]["detail"].lower()
-
-
-def test_archiving_a_hermes_bot_says_its_agent_stops_and_revokes_the_credential(api):
-    hermes_bot(api)
-    token = post(api, "bots/scout/agent-credential", {})["token"]
-    beat(api, token)
-    archived = post(api, "bots/scout/archive", {"expected_revision": get(api, "bots/scout/access")["revision"]})
-    assert archived["agent"]["harness"] == "hermes" and archived["agent"]["credential_revoked"] is True
-    assert "Hermes agent will stop" in archived["agent"]["detail"]
-    r = api.post("/api/v2/agents/heartbeat", json={}, headers=headers(token))
-    assert r.status_code == 401
-    # A bot on a computer says nothing about an agent.
-    assert "agent" not in post(api, "bots/cpo/archive", {"expected_revision": get(api, "bots/cpo/access")["revision"]})
-
-
-def openclaw_bot(api, slug="claw"):
-    return hermes_bot(api, slug=slug, model="openclaw-own", harness="openclaw", display_name="Claw")
-
-
-def test_an_openclaw_profile_pairs_only_with_an_openclaw_bot(api):
+    # An OpenClaw profile pairs only with an OpenClaw bot.
     openclaw_bot(api)
-    hermes_bot(api)
     code = pair(api, profile="claw", harness="openclaw").json()["code"]
     # A Hermes bot cannot take an OpenClaw profile's code, and the code stays open.
     refused = approve(api, code, bot="scout")
@@ -182,52 +188,52 @@ def test_an_openclaw_profile_pairs_only_with_an_openclaw_bot(api):
     assert get(api, "me", token=token)["agent"] == "openclaw"
 
 
-def test_pairing_preview_does_not_rotate_a_working_credential(api):
+def test_pairing_requests_are_rate_limited_per_address_and_capped_overall(api):
+    from fastapi.testclient import TestClient
+
+    api.app.state.store.settings.client_ip_header = 'cf-connecting-ip'
+    proxy = TestClient(api.app, client=('127.0.0.1', 1234))
+    try:
+        for _ in range(10):
+            assert pair(proxy, ip="10.0.0.1").status_code == 201
+        limited = pair(proxy, ip="10.0.0.1")
+        assert limited.status_code == 429 and limited.json()["error"]["code"] == "rate_limited"
+        for _ in range(10):
+            assert pair(proxy, ip="10.0.0.2").status_code == 201
+        assert pair(proxy, ip="10.0.0.3").status_code == 429
+    finally:
+        proxy.close()
+
+
+def test_restore_and_archiving_a_hermes_bot(api):
     hermes_bot(api)
-    token = credential(api)["token"]
-    made = pair(api).json()
-    shown = get(api, "agents/pairing-preview?code=" + made["code"])
-    assert shown["profile"] == "scout" and shown["host"] == "mac-mini" and shown["harness"] == "hermes"
-    assert "token" not in shown
-    assert get(api, "me", token=token)["actor"] == "bot:scout"
-    assert poll(api, made).json()["state"] == "pending"
-
-
-def test_the_held_credential_is_sealed_with_the_profiles_secret_and_never_in_the_row(api):
-    hermes_bot(api, status="planned")
-    pairing = pair(api).json()
-    assert approve(api, pairing["code"]).status_code == 200
-    with api.app.state.store.read() as c:
-        row = dict(c.execute("SELECT * FROM agent_pairings WHERE id=?", (pairing["pairing_id"],)).fetchone())
-    token = poll(api, pairing).json()["token"]
-    assert token.startswith("tico-agent-") and get(api, "me", token=token)["actor"] == "bot:scout"
-    # The row holds a sealed form only, and nothing in it is the token or the secret.
-    flat = repr(row)
-    assert row["token"] and token not in flat and "tico-agent-" not in flat and pairing["secret"] not in flat
-    # The server cannot open it without the secret: another secret's key does not.
-    from backend import agents
-    with api.app.state.store.read() as c:
-        assert agents.open_held_token(row, pairing["secret"]) == token
-        assert agents.open_held_token(row, "a-different-secret") is None
-    # A poll with a wrong secret is still a 404, and collection still clears it.
-    assert poll(api, pairing, "wrong").status_code == 404
+    assert (
+        post(api, "bots/scout/archive", {"expected_revision": get(api, "bots/scout/access")["revision"]})["status"]
+        == "archived"
+    )
+    # Nobody who does not manage it restores it, and a bot that is not archived has nothing to restore.
+    assert api.post("/api/v2/bots/scout/restore", json={}, headers=headers("cara-test")).status_code == 403
+    assert api.post("/api/v2/bots/ops/restore", json={}, headers=headers()).status_code == 409
+    restored = post(api, "bots/scout/restore", {})
+    assert restored["status"] == "active" and restored["restored"] is True and restored["agent"]["harness"] == "hermes"
+    assert next(b for b in get(api, "bots") if b["slug"] == "scout")["state"] == "active"
+    token = post(api, "bots/scout/agent-credential", {})["token"]
     beat(api, token)
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT token FROM agent_pairings WHERE id=?", (pairing["pairing_id"],)).fetchone()[0] is None
-
-
-def test_a_credential_held_in_plaintext_before_the_upgrade_is_still_collected_then_wiped(api):
-    """A pairing approved by the previous release (plaintext `token`, no sealing key) still hands over within its ten
-    minutes; one past its time, or not approved, is wiped on start."""
-    from backend.store import Store
-    hermes_bot(api, status="planned")
-    live, stale = pair(api).json(), pair(api).json()
+    archived = post(api, "bots/scout/archive", {"expected_revision": get(api, "bots/scout/access")["revision"]})
+    assert archived["agent"]["harness"] == "hermes" and archived["agent"]["credential_revoked"] is True
+    assert "Hermes agent will stop" in archived["agent"]["detail"]
+    r = api.post("/api/v2/agents/heartbeat", json={}, headers=headers(token))
+    assert r.status_code == 401
+    # A bot on a computer says nothing about an agent.
+    assert "agent" not in post(api, "bots/cpo/archive", {"expected_revision": get(api, "bots/cpo/access")["revision"]})
+    post(api, "bots/scout/restore", {})
+    # A bot that was archived before the status was recorded comes back planned.
+    post(api, "bots/scout/archive", {"expected_revision": get(api, "bots/scout/access")["revision"]})
+    scout = bot_id(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE agent_pairings SET state='approved',bot='scout',token='tico-agent-legacy-live',token_key='' "
-                  "WHERE id=?", (live["pairing_id"],))
-        c.execute("UPDATE agent_pairings SET state='approved',bot='scout',token='tico-agent-legacy-stale',token_key='',"
-                  "expires_at=? WHERE id=?", (H.shift(H.now(), seconds=-1), stale["pairing_id"]))
-    Store(api.app.state.store.settings).initialize()
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT token FROM agent_pairings WHERE id=?", (stale["pairing_id"],)).fetchone()[0] is None
-    assert poll(api, live).json()["token"] == "tico-agent-legacy-live"
+        c.execute("UPDATE events SET detail='{}' WHERE action='bot.archived' AND target=?", (scout,))
+    assert post(api, "bots/scout/restore", {})["status"] == "planned"
+    # Register says where an archived slug went.
+    post(api, "bots/scout/archive", {"expected_revision": get(api, "bots/scout/access")["revision"]})
+    r = api.post("/api/v2/bots/register", json={"slug": "scout", "model": "hermes"}, headers=headers("cara-test"))
+    assert r.status_code == 409 and "restore" in r.json()["error"]["detail"].lower()

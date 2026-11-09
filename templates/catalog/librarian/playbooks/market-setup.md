@@ -56,7 +56,7 @@ Write the team's own node first. Its id is `company/self` (the Market page draws
     hub market report --kind new-entity --about "<Name>" --claim "<one sentence: what it sells, to whom>" \
         --source <url> --quote "<the words on the page>"
     hub market apply <insight id> --source <url> --source-kind site --quote "<the words>" \
-        --our-read "<your sentence>" --entity-type company --entity-name "<Name>" \
+        --our-read "<your sentence>" --entity-type organization --entity-name "<Name>" \
         --new-id company/self --summary "<one sentence>"
 
 Then write a first Overview (see step 5) so the page has something within a few minutes.
@@ -89,31 +89,31 @@ Find, in this order and no deeper than the budget allows:
 
 ## 4. Write the graph as you go
 
-One finding, one entity, one source. For each organization, segment, channel, person or regulation:
+One finding, one entity, one source. For each organization, segment, channel, person or document (a law or rule):
 
     hub market find "<name>"        # the server refuses a duplicate; reuse what is already there
     hub market report --kind new-entity --about "<name>" --claim "<one sentence>" --source <url> --quote "<the words>"
     hub market apply <insight id> --source <url> --source-kind <site|news|filing|reddit|linkedin|other> \
         --quote "<the words>" --our-read "<your sentence>" \
-        --entity-type <company|segment|channel|person|regulation|event> --entity-name "<name>" \
+        --entity-type <organization|segment|channel|person|document|event> --entity-name "<name>" \
         [--tier core|lookalike|secondary|phrase-stealer] --summary "<one sentence>" \
         --edge-src <id> --edge-rel <relation> --edge-dst <id>
 
 The entity and the edge that connects it go in the same `apply`, so they share one evidence row. Ids are
-`<type>/<name-as-a-slug>` (`company/cleanco`, `segment/property-managers`). The relations that matter here:
+`<type>/<name-as-a-slug>` (`organization/cleanco`, `segment/property-managers`). The relations that matter here:
 
 | Fact | Edge |
 |---|---|
 | a competitor or lookalike of the team | `<competitor> competes_with company/self` |
 | the team sells to a segment | `company/self sells_to <segment>` |
 | a competitor sells to a segment | `<competitor> sells_to <segment>` |
-| the team or a competitor is reached or discussed in a channel | `<company> distributes_through <channel>` or `mentioned_in` |
-| a person leads or founded an organization | `<company> led_by <person>` or `<person> founded <company>` |
-| an organization is subject to a rule | `<company> regulated_by <regulation>` |
+| the team or a competitor is reached or discussed in a channel | `<organization> distributes_through <channel>` or `mentioned_in` |
+| a person leads or founded an organization | `<person> works_at <organization>` with properties.role = leader, or `<person> founded <organization>` |
+| an organization is subject to a rule | `<document> regulates <organization>` |
 
 Use only the sixteen relations the server knows (`competes_with`, `partners_with`, `integrates_with`,
-`distributes_through`, `sells_to`, `operates_in`, `acquired`, `invested_in`, `employs`, `led_by`, `founded`,
-`formerly`, `regulated_by`, `subject_of`, `member_of`, `mentioned_in`). Do not draw `competes_with` from a
+`distributes_through`, `sells_to`, `operates_in`, `acquired`, `invests_in`, `works_at`, `founded`,
+`formerly`, `regulates`, `subject_of`, `member_of`, `mentioned_in`, `located_in`). Do not draw `competes_with` from a
 name alone. Never delete or retire an entity. If a write is refused, read why and fix that one write: do not
 retry the same call.
 
@@ -122,9 +122,9 @@ retry the same call.
 For each **core** competitor in the graph, watch the pages where a change is news. The server reads each one daily and
 files an insight when it changes by a real amount; the first read is only a baseline.
 
-    hub market watch add company/<slug> https://<their site>/pricing --kind pricing
-    hub market watch add company/<slug> https://<their site>/changelog --kind changelog
-    hub market watch add company/<slug> https://<their site>/careers --kind careers
+    hub market watch add organization/<slug> https://<their site>/pricing --kind pricing
+    hub market watch add organization/<slug> https://<their site>/changelog --kind changelog
+    hub market watch add organization/<slug> https://<their site>/careers --kind careers
 
 Use the address you read in step 3, never a guess: a page you could not open is not watched. Kinds are `pricing`,
 `careers`, `changelog`, `docs`, `home` and `other`. At most 200 pages are watched at once; `hub market watch list`
@@ -160,7 +160,7 @@ A page with nothing found says what you looked for, in one line. Do not pad it.
 2. From here on you keep the map current from what others report: the daily "Curate the market" routine
    (`playbooks/curate-the-market.md`). Note in `state.md` what is thin and which sources could not be read, so
    the next curate pass knows where to look.
-3. Put unreadable sources in `_librarian/missing.md` under broken sources (`playbooks/faq-and-gaps.md`).
+3. Put unreadable sources in `_librarian/missing.md` under **Sources I could not read** (`playbooks/faq-and-gaps.md`).
 4. Rewrite `state.md`. Record anything durable about reading these kinds of sites in `memory/learnings.md`.
    Commit this repository.
 5. Finish the task: `hub task update <id> --status done --note "<the update>"`. This note is what the owner

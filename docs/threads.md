@@ -1,0 +1,299 @@
+# Threads
+
+Everything people and bots say to each other is in a **thread**. A thread has a title, members, and an
+**audience** that decides who may read it. Threads replace the old chats: the bot chat on a page is now the bot's
+Home or a DM, and a chat a bot shared with its people is a thread for its members.
+
+## Terms
+
+- **Thread**: a conversation. It lists under Threads, with its messages in order.
+- **Home**: a bot's or a person's public thread, readable by their Read audience. A bot's Home is where its open asks
+  wait, so the next person who looks finds them.
+- **DM**: a private thread for exactly the people in it. Starting one with the same people reuses the open one.
+- **Sub-thread**: a side topic under one message. It has its own read state and sits under that message in the thread.
+- **Call**: a [Tico Meet](meet.md) call started in a thread. Its transcript and action items go back into that thread.
+
+## Who can read a thread
+
+A thread's audience is one of these:
+
+| Audience | Who reads it |
+|---|---|
+| `company` | every person on the team |
+| `team` | the people in one group and its sub-groups, and the company owner |
+| `members` | the people, bots and groups added to it (the default: private) |
+| `home` | the Read audience of the bot or person whose Home it is |
+| `personal` | the people in a DM |
+| `task` | whoever may read the task it belongs to |
+| `participants` | the people in an older direct conversation, and the company owner |
+| `meeting` | the people who may see the meeting, as they do today |
+
+- A new thread is private to its members. Its starter, or an admin, can make it public to a group or to the company.
+  Making a thread public changes its audience, so it needs no Write on the group.
+- Adding a person, bot or group needs **Write** on them. Removing someone needs the thread's owner or an admin.
+- A group added to a thread is resolved live: whoever leaves the group loses the thread.
+- A bot's earlier messages reach its Home readers only once a manager of the bot opens them: **Open earlier messages to
+  Read** in the Home's **Thread settings** or on the notice each manager gets in their DM with the bot, or
+  `hub thread open-earlier <thread>`. Until then readers see one **Earlier messages** row.
+- Sub-threads follow the audience of the thread they branch from.
+- Mentions and follows never give access. Naming someone outside the thread leaves a warning for the author, and
+  nothing else happens until that person is added.
+- Search returns only messages the searcher may read, and a thread they may not read is not named. A thread you may
+  not read answers 404, the same as one that does not exist.
+- Bots read like people in their seat: an internal bot reads every `company` thread and the `team` threads of its group
+  or any group above it. A `members`, `personal` or `participants` thread opens to a bot only as a member. An external
+  agent reads only the threads it is in ([Permissions](permissions.md#threads-and-their-audiences)).
+- A thread can also reach outside the company through a linked [Slack](slack.md) channel. The **Who can read** row in
+  [Thread settings](#thread-settings) shows it under Slack.
+
+## Thread settings
+
+Open **Thread settings** with the ⋯ button in a thread's header. The panel holds the thread's settings. Each row saves as
+you change it, so there is no Save button. A row you may not use is left out. On a phone the panel fills the screen.
+
+- **Name**: the thread's title. Press Enter to save. A manager sees it, except on a Home and in a DM with one teammate.
+- **Who can read**: **Only members**, **A team** or **Company**. Choosing **A team** saves once you pick the team. A
+  manager sees it on a top-level thread that is not a DM or a Home.
+- **Members**: opens the Members list, with its count. Shown on a top-level thread whose audience is `company`, `team`,
+  `members` or `personal`.
+- **Notifications**: **All**, **Mentions**, **Digest** or **Off**. Everyone sees this row. See
+  [Following and unread](#following-and-unread).
+- **Pin for everyone**: a switch. A manager sees it on a company, team or members thread, or on a group DM, that is not
+  archived. See [Pinned and Catch up](#pinned-and-catch-up).
+- **Keep messages**: **Keep forever**, **30 days**, **90 days** or **1 year**. A manager sees it on a top-level thread
+  that is not a task's or a meeting's. Another limit shows as its number of days. See [Keeping messages](#keeping-messages).
+- **Summarize**: posts a summary of what is new in the thread and its sub-threads to your DM with **Assistant**.
+- **Mark all read**: marks the thread and every sub-thread under it read.
+- **Open earlier messages to Read**: on a Home with earlier messages. See [Who can read a thread](#who-can-read-a-thread).
+- **Archive** or **Unarchive**: a manager sees it, except on a Home. Archive takes the thread off the Threads list.
+  Unarchive puts it back.
+
+## Replies
+
+**Reply** on a message answers it in the thread: your message goes at the bottom, with a short quote of the one it
+answers. Replying to a bot's message wakes that bot, as an @mention does. A quote of a message you can't read shows
+only that it is hidden. `hub thread post <thread> "..." --reply-to <message>` replies from the command line; the
+message must be in the same thread or a sub-thread under it, and one you can read.
+
+`hub thread show <thread> --flat` reads the thread and its open sub-threads as one list in time order.
+
+## Sub-threads
+
+Reply under one message when the side topic would bury the main discussion:
+`hub thread reply <thread> <message> "..."`. `hub thread sub <message>` opens the sub-thread without posting.
+Use them sparingly. The work that everyone needs to see stays in the thread.
+
+A thread shows its sub-threads inline: each message is followed by its sub-thread's messages, indented and quieter, in
+tree order. They organize; they don't hide. Tap one to open that sub-thread with the path back above it, and it shows
+its own sub-threads the same way. A long sub-thread shows its latest messages under an **N more** row that loads the
+rest in place. `hub thread show` returns the same tree: each row has its `depth`, and a `collapsed` row's `cursor` reads
+the rest with `hub thread show <that thread> --cursor <cursor>`.
+
+Opening a thread reads what it shows, per thread: it and each sub-thread inline, up to the last message drawn. A
+sub-thread whose **N more** holds something unread stays unread until you open that part.
+
+## Following and unread
+
+Each reader follows a thread at one level. Choose it in the **Notifications** row of
+[Thread settings](#thread-settings):
+
+- **All** (`live`): every new message (the default; a bot following a chat starts at Mentions),
+- **Mentions** (`mentions`): only messages that name you or reply to you,
+- **Digest** (`digest`): in a batch (an email an hour for a person, one run an hour for a bot),
+- **Off** (`muted`): unread counts stay, nothing is sent. Off lasts until you choose another level. A thread you do not
+  follow shows as Off too.
+
+Posting in a thread does not follow it. Starting a thread, being @mentioned or being replied to does, and you can
+follow from Thread settings or `hub thread follow`. A message reaches whoever it @mentions or replies to, whatever
+their level, and the thread's followers by their level ([Steer, queue or defer](using-tico.md#steer-queue-or-defer)).
+
+The list shows top-level threads only. A row sums up the sub-threads under it, and when something new is in a
+sub-thread, tapping the row opens that reply. Following only a sub-thread still lists its thread.
+
+A task's own thread is listed only while it has something unread for you. Being its maker, requester or owner, or having
+posted in it, is no reason to list it, and neither is a bot's activity there. Read it and it leaves the list; the Threads
+page, the Tasks page and search still find it. A task you make is not unread for you: its first notice is your own action.
+
+Only human messages, and anything addressed to you, count as unread. A bot's post in a thread you follow is activity:
+a dot, not a count. **Needs attention** at the top of the list holds the threads with something open on your Needs you list: a mention or
+ask you have not answered, an unread DM, a post of yours held for review or held for you to review, and any thread you
+are in where the loop guard paused the bots' wakes; posting there lets them all go, and without a post they go by
+themselves, as many as the thread's hour has room for. Unread threads come next, then the rest, newest first. A thread's
+row counts its sub-threads too. `hub thread read <thread> --seq N` marks a thread read up to a message; `--all` also marks every
+sub-thread under it.
+
+## Bots in threads
+
+- A bot keeps **one progress message per task**. It posts it once and edits it as the work moves
+  (`hub thread edit <message> "..."`), instead of a line per step. A run's output is already in its run view.
+- A bot woken in a thread answers there, in the sub-thread it was asked in, addressed to whoever asked. If it was
+  removed from the thread during the run, the reply is not posted.
+- A message that names nobody reaches the bots following the thread at All; a bot follows a chat at Mentions unless
+  someone sets it to All, so @mention a bot to reach it. A DM with a bot and a bot's Home always reach that bot.
+- Under the messages, a thread shows the bots it is waiting on: working (with what it is doing now), up next (finishing
+  other work first) or can't reply (why, with a Fix link). `hub thread bot-status <thread>` lists the same.
+- A bot that follows a thread on digest gets one run an hour for all its threads with new messages.
+- A bot acknowledges a request with a one-word `✅` in its thread.
+- A bot's open asks to people go in its Home.
+- A bot's messages into a thread, including a reply in a sub-thread and the first message of a new thread, pass the
+  org rules check the same way a message to a person does ([Rules](rules-plan.md)). A held message writes nothing: a
+  held first message makes no thread, sub-thread or DM. Send anyway posts it then, and makes the thread with it. The
+  author can withdraw a held message (a person's comes back as Edit and resend), and so can the person a bot reports
+  to.
+
+## Pinned and Catch up
+
+Anyone who reads a thread can pin it for themselves. A manager can pin a thread for everyone who reads it (the **Pin for
+everyone** switch in [Thread settings](#thread-settings)), except a DM with one teammate, a Home, a task's thread or a
+meeting's; anyone can still unpin it for themselves. Pinned threads lead
+the thread list. Catch up shows every thread with new messages for you, ones that mention you first, each with its new
+messages. A group DM and every other new thread need a name; only a DM with one teammate may go unnamed.
+
+A card has **Later**, **Mute** and **Mark read**, and a reply box if you can post in its thread. Type a reply and a
+**Send** button appears. Send posts the reply. If you already follow the thread, the sent message stays on the card while
+Catch up stays open, and the card stays until you choose **Mark read**, **Mute** or **Later**, or you read the thread
+somewhere else. Reopening Catch up shows only the new messages from others, not your reply. If you did not follow it,
+posting makes you follow it, and the card leaves Catch up at once. Whether it comes back depends on your last read of the
+thread. If you had never read it, your reply marks everything before it as read, and those messages do not bring the card
+back. If you had read it before, or had stopped following it, the card comes back the next time you open Catch up when
+others wrote messages after that read, and it shows only those messages, not your reply. A reply a rule holds is
+not added to the card: a notice says it was held, and the box is cleared. While a reply is sending, its box and **Send**
+are disabled, even if you close and reopen Catch up. What you type stays in the box as you move between cards; closing
+Catch up clears it.
+
+**Mark read**, **Mute** and **Later** each move the card on and show **Undo** in place of the progress bar for 5
+seconds. **Mark read** and **Mute** mark the thread read, and **Mute** also sets its follow level to muted. To bring the
+card back where it was, click **Undo**, or press Ctrl+Z (Cmd+Z on a Mac) when you are not typing.
+
+**Later** sends nothing, so the thread stays unread. The card goes to the back of the list and comes back in the same
+visit once the cards not yet put off are done; it is also there the next time you open Catch up. On the last card left,
+**Later** does nothing. **Mark read** and **Mute** take effect at the first of these:
+
+- 5 seconds after the click,
+- choosing **Mark read**, **Mute** or **Later** on the card that comes next (**Later** does nothing when that card is the
+  only one left),
+- closing Catch up, or
+- leaving the page.
+
+A message written after the click stays unread if the read goes out within 10 minutes of the click, with one exception: a
+message written in the first moment after the click, about as long as the read takes to reach the server, may be marked
+read. Normally the read goes out 5 seconds after the click. A late read, for example from a background tab the browser
+has paused, works the same way if it still goes out within those 10 minutes. A read that goes out more than 10 minutes
+after the click covers what was written up to 10 minutes before it reaches the server. So a message written after the
+click, and more than 10 minutes before that read reaches the server, can be marked read.
+Details: [threads contract §10.1](dev/threads-contract.md).
+
+## Who wrote it
+
+Every line says who or what made it, from the same rule on every surface (chat, a bot's Home, a task's history and the
+Log). Nothing says "Assistant" unless the Assistant wrote it. The stored actor `keeper` is what Tico's server writes as
+when no person or bot did; it is not shown as a name.
+
+| Line | How it shows |
+|---|---|
+| A person's message | Their name, as usual. |
+| A bot's message | The bot's name, as usual. |
+| The Assistant, for a person | A normal message from **<first name>'s Assistant**. |
+| A task update (a keeper line about a task) | A small gray line. Two or more in a row fold into "N task updates", collapsed by default. |
+| A built-in: Follow-up timer, Earlier messages, Task roundup, Stuck check, Rule check, Health check, Maintenance | A small gray line led by its name. |
+| One of your automations | A small gray line; the name opens the automation. |
+| System (an update, a backup, a migration), or any other keeper line | A small gray line with no sender. |
+
+Which label a line gets changes what you see only. Who or what wakes a bot, what is delivered and what counts as
+unread stay as they were. A bot's turn reads the same labels ("Task update", "Stuck check"), not "keeper". Task
+history and the Log read the same rule, from the row's actor and what it names.
+
+## Editing and deleting
+
+People and bots edit and delete their own messages. Asks, answers and notices cannot be edited. An edit is a new
+revision that readers see as edited. Someone an edit newly names is told; someone it no longer names, if not told yet, is
+not. A delete leaves a marker with no text, and the asks it answered reopen.
+
+## Keeping messages
+
+A thread keeps its messages for good unless its owner sets a limit: `hub thread update <thread> --keep-days 90`, and
+`--keep-forever` to take it off. The **Keep messages** row in [Thread settings](#thread-settings) sets the same limit.
+The limit covers the thread and its sub-threads, and the worker deletes older messages
+a batch at a time, as a delete does: a marker stays and the text goes from search and from every copy here. A file
+attached to the message goes with it, its bytes within a minute or so, unless another message, a task, a meeting or the
+Library still holds it. Two kinds of copy stay: a linked Slack channel or another install keeps what it received, and a
+bot's run keeps what it read in its transcript.
+
+## Commands and tools
+
+Each command is also an MCP tool with the same name and arguments ([Connect an agent](connect-an-agent.md)).
+
+| Command | Tool | What it does |
+|---|---|---|
+| `hub thread list [--with ACTOR]` | `hub_thread_list` | your threads: needs attention, then unread, then recent; DMs apart; a task's thread only while it is unread; `--with` only the threads shared with that person, bot or group |
+| `hub thread show <thread> [--flat]` | `hub_thread_show` | the messages in tree order, each sub-thread under its message; `--flat` one list in time order |
+| `hub thread home <actor>` | `hub_thread_home` | a teammate's Home, made on first use; needs Read on them |
+| `hub thread dm <actor>` | `hub_thread_dm` | your DM with one person or bot, the open one or a new one; needs Write |
+| `hub thread dm-group <actor> <actor> ... --title "..." [--body "..."]` | `hub_thread_dm_group` | a group DM with these people or bots; a new one needs `--title`; `--body` is the first message |
+| `hub thread create "title"` | `hub_thread_create` | start a thread: `--audience`, `--group`, `--member` (repeat), `--body`, `--pin-for-members` |
+| `hub thread post <thread> "..."` | `hub_thread_post` | a message: `--kind say\|ask`, `--to`, `--reply-to MESSAGE`, `--ref KIND:ID` (repeat) |
+| `hub thread bot-status <thread>` | `hub_thread_bot_status` | the bots the thread waits on: working, up next or can't reply, and why |
+| `hub thread reply <thread> <message> "..."` | `hub_thread_reply` | a side topic in that message's sub-thread (to answer a message, `post --reply-to`) |
+| `hub thread edit <message> "..."` | `hub_thread_edit` | a new revision of your own message |
+| `hub thread sub <message>` | `hub_thread_sub` | open a message's sub-thread without posting |
+| `hub thread react <message-id> <emoji>` | `hub_thread_react` | your reaction to a message, such as `:+1:` |
+| `hub thread unreact <message-id> <emoji>` | `hub_thread_unreact` | remove your reaction |
+| `hub thread open-earlier <thread>` | `hub_thread_open_earlier` | a manager of a bot opens its earlier messages to its Home readers |
+| `hub thread task <message-id> --title T --owner O` | `hub_thread_task` | a task from a message, private unless the thread is company-wide |
+| `hub thread delete <message-id>` | `hub_thread_delete` | delete your message: a marker stays and the asks it answered reopen |
+| `hub thread upload <thread> <file> [--text ..] [--kind say\|ask] [--to ACTOR] [--under MESSAGE]` | `hub_thread_upload` | a message with a local file streamed to the thread (or to a message's sub-thread) |
+| `hub thread follow <thread> [--notify ...]` | `hub_thread_follow` | follow at a level |
+| `hub thread unfollow <thread>` | `hub_thread_unfollow` | stop following |
+| `hub thread read <thread> [--seq N \| --all]` | `hub_thread_read` | mark read |
+| `hub thread pin <thread>` | `hub_thread_pin` | pin a thread for you |
+| `hub thread unpin <thread>` | `hub_thread_unpin` | unpin it for you, even one pinned for everyone |
+| `hub thread catch-up [--cursor C]` | `hub_thread_catch_up` | the threads with new messages for you, mentions first, each with its new messages |
+| `hub thread search "..."` | `hub_thread_search` | messages in threads you can read |
+| `hub thread members list\|add\|remove` | `hub_thread_members_list`, `_add`, `_remove` | who reads the thread; `add --owner` makes an owner |
+| `hub thread update <thread>` | `hub_thread_update` | `--title`, `--archive` or `--unarchive`, `--audience`, `--group`, `--keep-days N` or `--keep-forever`, `--pin-for-everyone` or `--unpin-for-everyone` (managers) |
+| `hub thread link-slack <thread> [<channel>] [--history] [--off]` | `hub_thread_link_slack` | link a Slack channel (admins), list the thread's links, or take them away ([Slack](slack.md)) |
+| `hub thread slack-resume <link-id>` | `hub_thread_slack_resume` | check a suspended or refused Slack link again (admins) |
+
+The commands are `hub thread` in the CLI and `hub_thread_*` over MCP. The REST routes live under `/api/v2/threads`
+and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The thread routes a client calls are:
+
+- `GET /api/v2/threads/home/{actor}`: a teammate's Home, with the actor in the path (`bot:ops` keeps its colon).
+- `GET /api/v2/threads/dm?with=<actor>`: your DM with one person or bot, made if there is none. With `create=false` it
+  makes nothing and answers 404 `no_dm`. `POST /api/v2/threads/dm` with `members` and an optional `body` makes a group DM.
+- `GET /api/v2/threads?with=<actor>&cursor=&limit=`: the threads shared with that actor that you can read.
+- `PUT` and `DELETE /api/v2/messages/{id}/reactions/{emoji}`: add or remove your reaction.
+- `POST /api/v2/threads/{id}/open-earlier`: a bot's manager opens its earlier messages to its Home readers.
+- `POST /api/v2/uploads/threads/{id}/messages`: a person posts a message with files attached (multipart, `text` and
+  `file`), under the chat upload size caps: `hub thread upload`.
+- `DELETE /api/v2/messages/{id}`: delete your message (`hub thread delete`).
+- `POST /api/v2/slack/links/{id}/resume`: check a suspended or refused link again (`hub thread slack-resume`).
+- `POST /api/v2/threads/messages/{id}/task` with `title` and `owner`: a task made from a message you can read. The server
+  copies the message and a link back, and the task stays private unless the thread is company-wide
+  (`hub thread task <message-id> --title T --owner O`).
+
+BotOps acting for a person runs the thread writes above as that person, the same as the CLI: edits, deletes, reactions, DMs,
+uploads, Slack links and call steps (start, end, leave, bots, retry). It does not join a call or take a call's token; the
+person joins in the app or with `hub call join`.
+
+## Webhooks
+
+Three events describe threads: `thread.created` (from every way of making a thread, older routes included), `message.created` (to outgoing webhooks only; agents post a lot of
+messages, so no automation runs for each one), and `message.held` when the org rules hold a message before it reaches
+its thread. Each event carries ids and facts, never a message's words. An endpoint hears of a thread event only if its
+owner could read the thread. `message.held` names the hold and the thread it was going to; a held first message has no
+thread yet and sends no event ([Webhooks](webhooks.md)).
+
+## Older conversations
+
+`hub conversation show` and `/api/v2/conversations/*` keep working as aliases for one release. Older conversations
+map onto threads as follows: a bot's main chat becomes its Home, and a personal chat with a bot moves into that bot's
+Home with its messages, unless its owner may not read that Home. The Assistant's and the Strategy Bot's chats stay
+with their owner. A bot's shared chat becomes a thread for its members, a task's discussion stays with the task, and a
+direct conversation becomes a thread among its participants.
+
+A thread with six or more prompts shows an **Outline** pill. It lists the prompts people sent, across every page, and
+choosing one loads older pages until that message is on screen. Each row passes the same checks a page does
+(`GET /api/v2/conversations/{id}/outline`).
+
+A [chat goal](chat-goals.md) pins an outcome to a thread. A bot with [branches](creating-bots.md#branches) opens a
+thread with the original on your active branch.

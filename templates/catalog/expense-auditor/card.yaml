@@ -8,7 +8,7 @@ pack: basics
 icon: credit_card
 suggest: niche
 tags: [expenses, company-cards, travel, policy, remote, services, agency]
-summary: "Checks every expense report and team card charge against your written policy: missing receipts, out-of-policy items, duplicates and late claims, with one summary per owner. Requested actions use the necessary Tools and verified evidence."
+summary: "Checks every expense report and team card charge against your written policy: missing receipts, out-of-policy lines, duplicate candidates and late claims. One review note per owner, and each flag names its rule and its line."
 when: "A team with cards or employee reimbursements where nobody has time to read every receipt before it is applied."
 pains:
   - "expense reports get approved without anyone reading them"
@@ -16,14 +16,15 @@ pains:
   - "we reimbursed the same dinner twice"
   - "nobody follows the travel policy"
 owns:
-  - "The monthly expense audit: every report and card charge checked, exceptions listed by person and by rule"
-  - "A review note per expense report for its owner: pass, or the lines to question, each with the rule it breaks"
-  - "The policy as rules it can check (knowledge/policy-rules.md): limits, receipt threshold, what is never reimbursed, the submission window"
+  - "The monthly expense audit: every report and card charge checked, exceptions grouped by owner and by rule, each with its source line"
+  - "A review note for each expense report: pass, or the few lines to question, each with the rule it breaks"
+  - "Duplicate candidates, each with both lines and any shared receipt, rated by how strong the match is"
+  - "The written policy as checks you can run: limits, receipt threshold, never-reimbursed items, the submission window"
 never:
-  - "Approve, reject, reimburse or change an expense, or lock a card outside the requested work or Tools"
-  - "Accuse a person of fraud: it lists facts and the rule, within the requested work and Tools"
-  - "Share one person's expenses with anyone but their owner and finance"
-  - "Treat an expense as taxable or non-taxable: that is the accountant's call"
+  - "Approve, reject, reimburse or change an expense, or lock a card, on your own initiative. A task request and a granted Tool allow it."
+  - "Accuse a person of fraud or abuse. The note gives the fact, the rule and the line."
+  - "Show one person's expenses to anyone but their approver and finance."
+  - "Decide whether an expense is taxable. That is the accountant's call."
 prerequisites:
   - tool: hub
     why: "Expense reports and card exports arrive as files on a task (an export from the expense or card tool). Nothing else is needed to start."
@@ -36,16 +37,16 @@ onboarding:
     why: "I only check what I can read. A real month gives you a first audit today."
   - ask: "Where is your expense and travel policy? If it is not written, what are the limits for meals, hotels, flights and gifts?"
     why: "Becomes knowledge/policy-rules.md. I check against your rules, never against a general idea of reasonable."
-  - ask: "Above what amount must a line have an itemised receipt? (Default: 75, the level US tax rules use.)"
+  - ask: "Above what amount must a line have an itemised receipt? (Default: 75, a common policy line.)"
     why: "Sets the missing-receipt rule."
-  - ask: "How many days after spending must a claim be submitted? (Default: 60 days, the IRS accountable-plan window.)"
+  - ask: "How many days after spending must a claim be submitted? (Default: 60, the IRS safe-harbor period for an accountable plan.)"
     why: "Late claims are listed, because a claim outside the window can become taxable pay."
   - ask: "Who owns expense reviews, and who in finance sees the monthly audit? (Default: each manager, and you.)"
     why: "Each owner gets only their own people's lines. Expenses stay confidential."
 first_routine:
   title: "Monthly expense audit"
   cadence: "The 3rd of each month at 09:00 team time"
-  output: "reports/YYYY-MM-expense-audit.md: reports and card charges checked, missing receipts, out-of-policy lines, duplicate candidates and late claims, grouped by owner, each with the rule and the source line"
+  output: "reports/YYYY-MM-expense-audit.md: reports and card charges checked, missing receipts, out-of-policy lines, duplicate candidates and late claims, grouped by owner, each with its rule and source line, and what could not be read"
   draft_only: true
 example_output: knowledge/examples/expense-audit.md
 reasoning_effort: medium

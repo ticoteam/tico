@@ -1,14 +1,20 @@
 """The HTTP client's retry rule (clients/tico.py): 429 and every 5xx retry, the rest do not."""
+
 import io
 import json
 import unittest
 import urllib.error
 from unittest import mock
 
-from clients.tico import APIError, Client
+from clients.tico import APIError, Client, gmail_read_timeout
 
-CLOUDFLARE_530 = {"type": "about:blank", "title": "Error 1033: Cloudflare Tunnel error", "status": 530,
-                  "detail": "The host is unreachable", "retryable": False}
+CLOUDFLARE_530 = {
+    "type": "about:blank",
+    "title": "Error 1033: Cloudflare Tunnel error",
+    "status": 530,
+    "detail": "The host is unreachable",
+    "retryable": False,
+}
 
 
 class _Opener:
@@ -55,7 +61,9 @@ class Retries(unittest.TestCase):
         self.assertEqual(caught.exception.code, "http_error")
         self.assertEqual(caught.exception.detail, "HTTP 530: Error 1033: Cloudflare Tunnel error")
         # Every attempt of one request carries the same idempotency key.
-        self.assertEqual({r.get_header("Idempotency-key") for r in client.opener.calls}, {caught.exception.operation_id})
+        self.assertEqual(
+            {r.get_header("Idempotency-key") for r in client.opener.calls}, {caught.exception.operation_id}
+        )
 
     def test_a_404_is_not_retried(self):
         client = self.client([(404, {"error": {"code": "not_found", "detail": "No such attempt"}})])
@@ -66,7 +74,14 @@ class Retries(unittest.TestCase):
         self.assertFalse(caught.exception.retryable)
         self.assertEqual((caught.exception.code, caught.exception.detail), ("not_found", "No such attempt"))
 
+
+def test_live_mail_waits_for_metadata_batches_without_changing_other_routes():
+    assert gmail_read_timeout("GET", "/api/v2/mail/messages?mailbox=ana%40acme.example", 15) == 90
+    assert gmail_read_timeout("GET", "/api/v2/mail/threads/t1", 60) == 90
+    assert gmail_read_timeout("GET", "/api/v2/mail/messages/m1", 120) == 120
+    assert gmail_read_timeout("GET", "/api/v2/mail/mailboxes", 15) == 15
+    assert gmail_read_timeout("POST", "/api/v2/mail/messages", 15) == 15
+
+
 if __name__ == "__main__":
     unittest.main()
-
-

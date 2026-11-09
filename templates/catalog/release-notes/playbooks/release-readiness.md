@@ -18,19 +18,21 @@ behind a feature flag.
 ## 2. Run the checklist
 
 One line each, with its evidence and date:
-- Main branch checks green on the release commit (`gh run list`).
+- Main branch checks green on the release commit (`gh run list`), and that commit is still the head of the default branch.
+  If the branch moved, the checks run on the new head or the commit is named again.
 - No open issue labelled blocker or for this milestone (`gh issue list -R <repo> --milestone <m>`).
 - The QA Engineer's test plan for this release exists and its results are recorded (ask `issue-triage` if not).
 - Database migrations listed, each with whether it can be reversed.
 - Feature flags that change state with this release, and who turns each on.
-- Rollback plan: the previous version and how it is restored, from `knowledge/`.
+- Rollback plan, judged with `skills/judge-whether-a-release-can-roll-back/SKILL.md`: the previous version, how it is restored,
+  and whether data the new version wrote still works on the old one.
 - Notes and changelog ready (`playbooks/weekly-release-notes.md`).
 - Anyone who must know before release (support, sales) named, from `knowledge/`.
 
 ## 3. Recommend
 
 Go when every line is green. No-go names the one to three items that block and who clears each. Unknown is
-not green: a line you could not check says so. The decision is the release owner's.
+not green: a line you could not check says so. A line marked not checked is not green and blocks a go until someone checks it. The decision is the release owner's.
 
 ## 4. Hand over
 

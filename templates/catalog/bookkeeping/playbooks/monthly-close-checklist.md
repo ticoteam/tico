@@ -4,8 +4,8 @@ Schedule: the 1st of each month at 09:00 team time (routine `monthly-close-check
 still run, and say which lines are waiting on the feed. Budget 40 minutes. The outcome is one status
 the owner or accountant can act on in five minutes. Nothing is posted.
 
-The line order follows public month-end guidance (see the sources in docs/starter-bots.md); replace
-it with `knowledge/close-checklist.md` wherever the team's own differs.
+The line order below is the default. `knowledge/close-checklist.md`, written at setup, replaces it
+wherever the team's own order differs.
 
 ---
 
@@ -31,7 +31,7 @@ For each line write done, open or blocked, who owes it, and the evidence:
 8. Receivables aging: invoices over 30 days go to `hub task create --owner ar-followup`.
 9. Payables: bills that arrived but are not in the export.
 10. Compare draft income and expense totals with last month; name any category that moved by more than
-    the threshold in `knowledge/rhythm.md` (default 25 percent and 500 in the currency) with the
+    the threshold in `knowledge/close-checklist.md` (default 25 percent and 500 in the currency) with the
     two rows behind it.
 11. Period lock: never yours; state that it waits for the accountant.
 

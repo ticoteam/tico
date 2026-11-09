@@ -21,7 +21,7 @@ report. If the read fails or is partial, stop and say so: a report from a partia
 
 Open deals and dollars by stage; deals entered, moved, won, lost since last week's read; average days in
 each stage against `knowledge/stages.md`; close dates that moved out, and how many times. Weight by
-probability only if `knowledge/stages.md` carries the team's own probabilities; otherwise count and sum.
+probability only if `knowledge/stages.md` carries the team's own probabilities; otherwise count and sum. Where the CRM cannot give a figure, write "not available" and why; do not estimate it.
 
 ## 3b. Roll up the forecast
 
@@ -40,7 +40,7 @@ for anything no rule covers.
 For each open deal above the review size, check: owner present, stage matches its exit criteria, close
 date valid (not in the past, not pushed three or more times), amount present, next step specific and
 dated, activity within the stale threshold (default 14 days). Every exception is one line: record id,
-owner, the problem, the proposed fix, the date first seen (from `knowledge/exceptions.md`).
+owner, the problem, the proposed fix, the date first seen (from `knowledge/exceptions.md`). A blank field is not a clean record: name the fields you read and the date range before you call a record clean.
 
 ## 5. Monthly and quarterly checks
 
