@@ -1542,8 +1542,17 @@ def test_the_real_factory_setup_makes_the_nine_pipelines_with_their_managers(env
     preview_and_import(api, live_text())
     assert not rows(api, "SELECT action FROM events WHERE action='onboarding.pipelines_failed'")
     types = {r["name"]: r for r in rows(api, "SELECT name,manager,manager_seat FROM task_types")}
-    for name in ("Product", "Engineering", "Growth Experiments", "Lead", "Opportunity", "Customer",
-                 "Success Experiments", "Legal", "Finance"):
+    for name in (
+        "Product",
+        "Engineering",
+        "Growth Experiments",
+        "Lead",
+        "Opportunity",
+        "Customer",
+        "Success Experiments",
+        "Legal",
+        "Finance",
+    ):
         assert name in types, name
     ids = bot_ids(api)
     seats = {r["title"]: r["id"] for r in rows(api, "SELECT id,title FROM seats")}

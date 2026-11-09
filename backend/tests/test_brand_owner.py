@@ -138,7 +138,6 @@ def test_a_company_that_hired_a_brand_manager_keeps_it(environment, bot_id):
     assert theirs() == before and len(before[0]) == 1
 
 
-
 def test_the_updates_and_automations_owners_are_built_in_like_the_brand_owner(environment):
     """The two section owners every new company gets are the owner's alone and can't be archived."""
     api = environment(seed={}, cards=BASE)
