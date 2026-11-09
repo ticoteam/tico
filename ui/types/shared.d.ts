@@ -347,3 +347,11 @@ interface AppState {
 interface HTMLElement {
   anchor?: Element | null;
 }
+
+// ---------------------------------------------------------------- moving a node without taking it out of the page
+
+/** Element.moveBefore (Chromium 133+), shaped as lib.dom declares it from TypeScript 6. Older engines lack it: callers
+ *  check for it first (visual-cards.ts visualSwap, overview.ts). */
+interface ParentNode {
+  moveBefore(node: Node, child: Node | null): void;
+}
