@@ -4,8 +4,9 @@ FastAPI would describe every route, runner and bot endpoint included. A frontend
 resources a person's app is built from, so this module keeps only those (STABLE below), names
 each operation, groups them by resource and describes the answers a person gets. Handlers return
 plain dictionaries rather than response models, so the answer shapes are declared here; a test
-(backend/tests/test_openapi_v2.py) checks them against live responses, and that the committed copy
-`docs/openapi/v2.json` matches. Regenerate it with `python -m backend.openapi_v2`.
+(backend/tests/test_openapi_v2.py) checks them against live responses. The document is generated, not committed:
+`python3 -m backend.openapi_v2 > openapi-v2.json` writes it, `--check` confirms it generates the same bytes twice, and
+the server serves it at `GET /api/v2/openapi.json`.
 
 Anything not listed is internal and may change in any release. See docs/api.md.
 """
@@ -19,7 +20,6 @@ from . import needs_shape
 from .sources import KINDS as SOURCE_KINDS
 
 VERSION = "2.0.0"
-COPY = Path(__file__).resolve().parents[1] / "docs" / "openapi" / "v2.json"
 
 TAGS = {
     "Session": "Who is calling, and how a frontend signs in (docs/custom-frontend.md).",
@@ -11876,7 +11876,7 @@ STABLE.extend(
 
 
 def generate():
-    """The document for a default installation: what docs/openapi/v2.json holds."""
+    """The document for a default installation: what GET /api/v2/openapi.json serves to a signed-in caller."""
     import tempfile
     from .app import create_app
     from .config import Settings
@@ -11889,14 +11889,15 @@ def render(document):
     return json.dumps(document, indent=2, sort_keys=False) + "\n"
 
 
+def determinism_problem():
+    """None when two generations give the same bytes, else the reason they do not (the static PR job runs this)."""
+    first = render(generate())
+    if render(generate()) != first:
+        return "the API spec differs between two generations of the same code: something in it is not deterministic"
+    return None
+
+
 if __name__ == "__main__":
-    text = render(generate())
     if "--check" in sys.argv:
-        sys.exit(
-            0
-            if COPY.exists() and COPY.read_text() == text
-            else "docs/openapi/v2.json is stale: python -m backend.openapi_v2"
-        )
-    COPY.parent.mkdir(parents=True, exist_ok=True)
-    COPY.write_text(text)
-    print("wrote", COPY)
+        sys.exit(determinism_problem() or 0)  # a message exits non-zero; None exits 0
+    sys.stdout.write(render(generate()))
