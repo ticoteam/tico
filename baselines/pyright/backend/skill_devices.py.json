@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/skill_devices.py": [
+            {
+                "code": "reportOperatorIssue",
+                "range": {
+                    "startColumn": 33,
+                    "endColumn": 57,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

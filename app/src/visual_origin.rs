@@ -126,7 +126,7 @@ pub fn is_visual_navigation(allowed: Option<&Url>, url: &Url) -> bool {
     base64url(body) && mac.len() == 43 && base64url(mac)
 }
 
-/// No fragment, or the frame's view marker (ui/app/pages.js pageViewSrc, read by backend/visuals.py's reporter):
+/// No fragment, or the frame's view marker (ui/app/pages.ts pageViewSrc, read by backend/visuals.py's reporter):
 /// `tico-view=card|full&tico-size=small|medium|large|full`. A fragment never reaches the server; only this one is
 /// allowed so the allowance stays a fixed shape.
 fn view_marker(fragment: Option<&str>) -> bool {

@@ -261,7 +261,15 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
             "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?",
             (H.shift(H.now(), hours=-5), late["id"]),
         )
-        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), hours=-5), late["id"]))
+        c.execute(
+            "UPDATE tasks SET updated_at=?, created_at=? WHERE id=?",
+            (H.shift(H.now(), hours=-5), H.shift(H.now(), hours=-5), late["id"]),
+        )
+        # The one Late rule starts the clock when the ticket entered its stage.
+        c.execute(
+            "UPDATE stage_visits SET entered_at=? WHERE task_id=? AND left_at IS NULL",
+            (H.shift(H.now(), hours=-5), late["id"]),
+        )
         H.task_update(c, "bot:cpo", row["id"], status="done", note="Shipped")
         return late
 

@@ -105,6 +105,13 @@ ALL = (
     "attribute_undo",
     "attribution_rule_set",
     "attribution_rule_delete",
+    "attribution_map",
+    # ad campaigns: the teammate or team a campaign's spend counts for (backend/finance/campaigns.py)
+    "campaign_owner_set",
+    "campaign_owner_undo",
+    # subscriptions: confirm a suggested recurring charge, or put back what it was (backend/finance/subscriptions.py)
+    "subscription_confirm",
+    "subscription_undo",
     # vendor identity: one vendor per merchant (backend/finance/vendors.py)
     "vendor_merge",
     "vendor_unmerge",
@@ -188,6 +195,11 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
     "attribute_undo": R.ATTRIBUTION,
     "attribution_rule_set": R.ATTRIBUTION,
     "attribution_rule_delete": R.ATTRIBUTION,
+    "attribution_map": R.ATTRIBUTION,
+    "campaign_owner_set": R.ATTRIBUTION,
+    "campaign_owner_undo": R.ATTRIBUTION,
+    "subscription_confirm": R.BOOK,
+    "subscription_undo": R.BOOK,
     "vendor_merge": R.BOOK,
     "vendor_unmerge": R.BOOK,
 }
@@ -620,9 +632,9 @@ SHAPES: dict[str, tuple[Field, ...]] = {
         ("name", "str", ""),
         (
             "match",
-            "{kind: vendor|account|money_account, id: str}",
+            "{kind: vendor|account|money_account|class|location|project, id: str}",
             "vendor: a vendor's contact id; account: a P&L account; money_account: the bank or card account "
-            "a line was paid with",
+            "a line was paid with; class, location, project: the record a mirrored line's tag holds",
         ),
         ("splits", "list[{teammate?: str, team?: str, share_bps: int}]", "as on attribute, at least one"),
         ("enabled?", "bool", "default true"),
@@ -633,6 +645,28 @@ SHAPES: dict[str, tuple[Field, ...]] = {
         ),
     ),
     "attribution_rule_delete": (("id", "str", "lines it attributed go back to their tags; overrides stay"),),
+    "attribution_map": (
+        (
+            "items",
+            "list[{kind: class|location|project, id: str, team?: str, teammate?: str}]",
+            "one rule per dimension: its lines go to the team and/or teammate (100%) from the earliest line on; "
+            "neither clears the dimension's rule",
+        ),
+    ),
+    "campaign_owner_set": (
+        ("campaign_id", "str", "a campaign the ad spend import reads"),
+        ("team?", "str", "the team its spend counts for"),
+        ("teammate?", "str", "or the teammate (a bot or a person); neither: back to the account's bot"),
+    ),
+    "campaign_owner_undo": (("campaign_id", "str", "the owner before the latest change is put back"),),
+    "subscription_confirm": (
+        ("subscription_id", "str", "a subscription the daily look suggested, or one already confirmed"),
+        ("status", "active|ignored|cancelled", "active: it is one; ignored: it is not; cancelled: it has ended"),
+        ("amount?", "minor", "the expected amount each charge is judged against (a price rise shows as a finding)"),
+        ("cadence?", "monthly|annual", "how often it is charged"),
+        ("seats?", "int", "how many seats it covers (null: none)"),
+    ),
+    "subscription_undo": (("subscription_id", "str", "the fields before the latest confirmation are put back"),),
     "vendor_merge": (
         ("into", "str", "the vendor contact the others become"),
         ("merge", "list[str]", "vendor names (as a bank row reads them) or vendor contact ids to fold into it"),
@@ -869,6 +903,11 @@ WORDS: dict[str, str] = {
     "attribute_undo": "Put back the attribution a line had before its latest change.",
     "attribution_rule_set": "Create or change a rule that attributes lines by vendor, account or money account.",
     "attribution_rule_delete": "Delete a rule: its lines go back to their tags (overrides stay).",
+    "attribution_map": "Map classes, departments or projects to teams or teammates, one rule each.",
+    "campaign_owner_set": "Give an ad campaign's spend to a teammate or team (neither: the account's bot).",
+    "campaign_owner_undo": "Put back the owner an ad campaign had before its latest change.",
+    "subscription_confirm": "Confirm a recurring charge as a subscription, ignore it, or mark it cancelled.",
+    "subscription_undo": "Put back a subscription's fields from before its latest confirmation.",
     "vendor_merge": "Fold names and vendor contacts into one vendor: their rows, bills and budgets count as it.",
     "vendor_unmerge": "Undo a vendor merge: each name goes back where it was, and archived contacts come back.",
     "invoice_create": "Draft an invoice.",

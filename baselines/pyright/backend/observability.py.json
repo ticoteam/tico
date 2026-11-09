@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/observability.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 28,
+                    "endColumn": 42,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 49,
+                    "endColumn": 54,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

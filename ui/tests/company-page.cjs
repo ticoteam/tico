@@ -1,4 +1,4 @@
-// The Company page (ui/app/company-page.js) against a fake hub: Acme (acme.example). Company's Share tab shows owners and admins
+// The Company page (ui/app/company-page.ts) against a fake hub: Acme (acme.example). Company's Share tab shows owners and admins
 // the page in a sandboxed frame, a share panel and Manage; a member has no tab and no way in by address. The section: Transparency warns before Open and says what stops being visible before
 // anything is taken away, and sends nothing on Cancel. The queue puts a held edition first with its reason. Approve shows
 // only to the person an approval is addressed to and goes through the approvals API. Override needs a note. Text from a
@@ -144,7 +144,7 @@ async function open(browser, {viewer = 'ana', viewport = DESKTOP, hash = '#/comp
     if (url.origin !== 'http://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
-    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: /\.(?:js|ts)$/.test(file) ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     const payload = method === 'GET' ? null : req.postDataJSON?.() ?? null;
     if (method === 'PUT' && p.endsWith('/disclosure') && hub.disclosureDelay)
@@ -212,12 +212,12 @@ async function shotPart(page, id, name) {
     await close();
     // Overview as it always was: no tab, no way in by address, and search doesn't offer it.
     const tab = await open(browser, {viewer: 'erin', hash: '#/overview', ready: false});
-    assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Dashboard', 'Campus', 'Graph']);
+    assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories']);
     assert.equal(await tab.page.evaluate(() => searchEntries().some(x => x.label === 'Share')), false);
     await tab.page.evaluate(h => { location.hash = h; }, '#/overview/company-page');
     await tab.page.locator('#cp-tab-body .empty-state').waitFor();
     assert.equal(await tab.page.locator('.cp-frame, [data-cp-preview], [data-cp-share], [data-cp-manage]').count(), 0, 'no frame, no controls');
-    assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Dashboard', 'Campus', 'Graph']);
+    assert.deepEqual(await tabLabels(tab.page), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories']);
     assert.deepEqual(tab.hub.reads, [], 'a member asks the server for nothing here');
     assert.deepEqual(tab.hub.previews, []);
     assert.deepEqual(tab.errors, []);
@@ -230,7 +230,7 @@ async function shotPart(page, id, name) {
     assert.match(await page.locator('#cp-page').innerText(), /Owners and admins only/);
     await page.evaluate(h => { location.hash = h; }, '#/overview/company-page');
     await page.locator('#cp-tab-body .empty-state').waitFor();
-    assert.deepEqual(await tabLabels(page), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Share']);
+    assert.deepEqual(await tabLabels(page), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories', 'Share']);
     assert.equal(await page.locator('.cp-frame').count(), 0, 'no frame');
     assert.equal(await page.locator('.cp-tab-acts').isVisible(), false, 'no controls');
     assert.deepEqual(hub.previews, []);
@@ -636,7 +636,7 @@ async function shotPart(page, id, name) {
   // Overview's tab: the page in a sandboxed frame, the share panel, Manage and back.
   {
     const {page, hub, errors, natives, close} = await open(browser, {hash: '#/overview', theme: 'dark', ready: false});
-    assert.deepEqual(await tabLabels(page), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Share']);
+    assert.deepEqual(await tabLabels(page), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories', 'Share']);
     assert.equal(await page.evaluate(() => searchEntries().find(x => x.label === 'Share')?.href), '#/overview/company-page', 'search finds it');
     await page.locator('.dash-tabs a', {hasText: 'Share'}).click();
     const frame = page.locator('iframe.cp-frame');
