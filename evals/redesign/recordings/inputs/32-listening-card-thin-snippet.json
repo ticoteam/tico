@@ -1,0 +1,15 @@
+{
+  "id": "32-listening-card-thin-snippet",
+  "kind": "listening",
+  "questions": "listening-card",
+  "level": "low",
+  "state": {
+    "source": "search",
+    "about": "project tracking for small teams",
+    "title": "Tracking work, thoughts?",
+    "snippet": "Anyone have thoughts on this",
+    "date": "2026-10-27",
+    "url": "https://forum.example/t/98217"
+  },
+  "note": "Too thin to decide: unclear, open the source before dismissing it."
+}

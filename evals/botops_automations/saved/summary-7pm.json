@@ -1,0 +1,28 @@
+{
+  "live": {
+    "trigger": {
+      "type": "schedule",
+      "cron": "0 19 * * 1-5"
+    },
+    "steps": [
+      {
+        "id": "summarize",
+        "type": "bot_turn",
+        "enabled": true,
+        "bot": "chief-of-staff",
+        "prompt": "Summarize what got done on Acme today in five short bullets.",
+        "out": "summary"
+      },
+      {
+        "id": "post",
+        "type": "action",
+        "enabled": true,
+        "do": "post_update",
+        "args": {
+          "text": "{{summary}}"
+        }
+      }
+    ]
+  },
+  "pending": []
+}

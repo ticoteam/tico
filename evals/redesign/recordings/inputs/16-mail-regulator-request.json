@@ -1,0 +1,26 @@
+{
+  "id": "16-mail-regulator-request",
+  "kind": "mail",
+  "questions": "mail-triage",
+  "level": "low",
+  "state": {
+    "mailbox": "dana@acme.example",
+    "from": "records@acme.example",
+    "from_name": "Northvale Data Protection Office",
+    "to": "dana@acme.example",
+    "date": "2026-10-27T07:00:00Z",
+    "subject": "Subject access request, reference DPO-7731",
+    "snippet": "A former user has asked for a copy of the personal data we hold. Please provide the records within 30 days of this letter, or explain any exemption.",
+    "unsubscribe": false,
+    "list_id": null,
+    "attachments": [
+      "DPO-7731-request.pdf"
+    ],
+    "is_internal": false,
+    "is_calendar_invite": false,
+    "labels": [
+      "INBOX"
+    ]
+  },
+  "note": "A regulator's demand with a deadline: needs the owner and legal, and is urgent this week."
+}

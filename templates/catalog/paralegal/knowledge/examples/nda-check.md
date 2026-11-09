@@ -28,6 +28,8 @@ an allowed variation.
 ## Who acts
 Marco asks Northwind for the two changes (text above). If Northwind refuses either, it goes to General Counsel.
 
+**Summary for a human, not legal advice. Have counsel review anything that matters before you sign or rely on it.**
+
 ## Sources
 - northwind-nda.pdf, 4 pages, read 2026-09-28; `knowledge/standard-nda.md` and `knowledge/variations.md`, 2026-09-14
 ```

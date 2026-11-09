@@ -39,7 +39,7 @@ def install(app, store, auth, mutate, task_views):
     def list_tags(request: Request, is_template: bool | None = None):
         auth.domain(request.state.identity)
         with store.read() as c:
-            return {"tags": [t for t in H.tags(c, is_template) if privacy.tag_readable(c, request.state.identity, t)]}
+            return {"tags": privacy.tags_readable(c, request.state.identity, H.tags(c, is_template))}
 
     @app.get("/api/v2/tags/{tag_id}")
     def show_tag(request: Request, tag_id: str, limit: int = 500, offset: int = 0):
@@ -49,16 +49,22 @@ def install(app, store, auth, mutate, task_views):
             row = require_tag(c, who, tag_id)
             limit, offset = max(1, min(limit, 500)), max(0, offset)
             tasks = H.tasks(c, label=row["key"], visible=auth.task_sql(c, who), limit=limit + 1, offset=offset)
-            return {"tag": row, "editable": H.tag_can_edit(c, who.actor, row, mover(c, who)),
-                    "tasks": task_views(tasks[:limit], c, who, auth.task_sql(c, who)),
-                    "next_offset": offset + limit if len(tasks) > limit else None}
+            return {
+                "tag": row,
+                "editable": H.tag_can_edit(c, who.actor, row, mover(c, who)),
+                "tasks": task_views(tasks[:limit], c, who, auth.task_sql(c, who)),
+                "next_offset": offset + limit if len(tasks) > limit else None,
+            }
 
     def create(c, who, body, template_id=None):
         auth.domain(who)
         owner = auth.target(c, who, body.owner) if body.owner else who.actor
         fields = body.model_dump(exclude={"owner", "template_id"})
-        return {"tag": H.tag_create(c, who.actor, **fields, owner=owner,
-                    template_id=template_id or body.template_id, mover=mover(c, who))}
+        return {
+            "tag": H.tag_create(
+                c, who.actor, **fields, owner=owner, template_id=template_id or body.template_id, mover=mover(c, who)
+            )
+        }
 
     @app.post("/api/v2/tags")
     def create_tag(request: Request, body: TagCreate):
@@ -71,6 +77,7 @@ def install(app, store, auth, mutate, task_views):
             if body.template_id and H.tag(c, body.template_id) != template:
                 raise Problem("kind", "Use the template named in the path", 422)
             return create(c, request.state.identity, body, template["id"])
+
         return mutate(request, body, work)
 
     @app.post("/api/v2/tags/{tag_id}")
@@ -86,6 +93,6 @@ def install(app, store, auth, mutate, task_views):
             fields = body.model_dump(exclude={"version"}, exclude_none=True)
             if fields.get("owner"):
                 fields["owner"] = auth.target(c, who, fields["owner"])
-            return {"tag": H.tag_update(c, who.actor, row["id"], body.version,
-                                       **fields, mover=mover(c, who))}
+            return {"tag": H.tag_update(c, who.actor, row["id"], body.version, **fields, mover=mover(c, who))}
+
         return mutate(request, body, work)

@@ -1,0 +1,39 @@
+{
+  "id": "18-slack-release-ask",
+  "kind": "slack",
+  "questions": "slack-route",
+  "level": "low",
+  "state": {
+    "message": {
+      "channel": "C-release",
+      "is_dm": false,
+      "from": "priya",
+      "text": "Can someone cut the 0.4.10 notes by end of day? Release is waiting on them for Friday's build."
+    },
+    "thread": null,
+    "previous_routing": null,
+    "roster": [
+      {
+        "bot": "engineering-lead",
+        "role": "Engineering Lead: plans and reviews engineering work"
+      },
+      {
+        "bot": "release-manager",
+        "role": "Release Manager: cuts releases and their notes"
+      },
+      {
+        "bot": "legal",
+        "role": "Legal helper: contracts, terms and policies"
+      },
+      {
+        "bot": "support",
+        "role": "Support agent: customer tickets and setup help"
+      },
+      {
+        "bot": "sales-ops",
+        "role": "Sales ops: pipeline and outreach"
+      }
+    ]
+  },
+  "note": "An ask aimed at the release team with no bot named: asks yes, names none."
+}

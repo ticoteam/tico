@@ -38,10 +38,12 @@ def import_text_archives(store, runtime):
     """
     runtime = runtime.resolve()
     report = {"files": 0, "bytes": 0, "skipped": [], "excluded": {}}
+
     def excluded(reason, size):
         row = report["excluded"].setdefault(reason, {"files": 0, "bytes": 0})
         row["files"] += 1
         row["bytes"] += size
+
     for folder in ("help", "runs", "meetings"):
         base = runtime / folder
         if not base.exists():
@@ -66,13 +68,21 @@ def import_text_archives(store, runtime):
                 payload = {"text": text, "encoding": "utf-8", "source": str(relative)}
             except UnicodeDecodeError:
                 import base64
+
                 payload = {"base64": base64.b64encode(raw).decode(), "encoding": "base64", "source": str(relative)}
             with store.transaction() as c:
                 owner = _archive_owner(c, runtime, relative)
-                kind = ("conversation" if relative.parts[:2] == ("help", "threads")
-                        else "restricted_log" if folder == "runs" else "historical_text")
-                c.execute("INSERT OR IGNORE INTO archives VALUES(?,?,?,?,?,?)",
-                          (str(relative) + "@" + hashed, hashed, H.now(), owner, kind, encode(payload)))
+                kind = (
+                    "conversation"
+                    if relative.parts[:2] == ("help", "threads")
+                    else "restricted_log"
+                    if folder == "runs"
+                    else "historical_text"
+                )
+                c.execute(
+                    "INSERT OR IGNORE INTO archives VALUES(?,?,?,?,?,?)",
+                    (str(relative) + "@" + hashed, hashed, H.now(), owner, kind, encode(payload)),
+                )
             report["files"] += 1
             report["bytes"] += len(raw)
     return report
@@ -80,14 +90,21 @@ def import_text_archives(store, runtime):
 
 def install_archives(app, store):
     def authorized(who, row):
-        return who.role == "owner" or who.role == "human" and row["owner"] == who.actor
+        return who.role == "owner" or who.role == "human" and row["owner_id"] == who.actor
 
     @app.get("/api/v2/archives")
     def listing(request: Request):
         who = request.state.identity
         with store.read() as c:
-            return {"archives": [dict(row) for row in c.execute("SELECT source,digest,imported,owner,kind FROM archives ORDER BY imported,source")
-                                 if authorized(who, row)]}
+            return {
+                "archives": [
+                    dict(row)
+                    for row in c.execute(
+                        "SELECT source,digest,imported_at,owner,kind FROM archives ORDER BY imported_at,source"
+                    )
+                    if authorized(who, row)
+                ]
+            }
 
     @app.get("/api/v2/archive")
     def read(request: Request, source: str):
@@ -95,5 +112,7 @@ def install_archives(app, store):
             row = c.execute("SELECT * FROM archives WHERE source=?", (source,)).fetchone()
             if not row or not authorized(request.state.identity, row):
                 raise Problem("not_found", "Archive not found or unavailable to this account", 404)
-            return {**{k: row[k] for k in ("source", "digest", "imported", "owner", "kind")},
-                    "content": json.loads(row["payload_json"])}
+            return {
+                **{k: row[k] for k in ("source", "digest", "imported_at", "owner", "kind")},
+                "content": json.loads(row["payload"]),
+            }

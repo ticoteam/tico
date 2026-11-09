@@ -29,6 +29,7 @@ import jwt
 from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from . import brand_icons
 from .config import PRODUCT_NAME
 from .store import H, Problem, digest
 
@@ -54,6 +55,8 @@ LOOPBACK = ("127.0.0.1", "localhost", "::1")
 # Only asymmetric algorithms: an HMAC "signature" would be checkable with a public key.
 ALGORITHMS = ("RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512")
 LEEWAY = 60
+# Which account chooser the provider shows at /auth/login?prompt=: only these two (login is the provider's own choice).
+PROMPTS = ("select_account", "login")
 LOGIN_WINDOW = 600
 TOUCH_EVERY = 60
 DISCOVERY_TTL = 3600
@@ -75,6 +78,24 @@ class NotOnRoster(Exception):
     def __init__(self, email):
         super().__init__("not on roster")
         self.email = email
+
+
+def _retry_after(reply):
+    """Seconds to wait after a 429: the JSON `retry_after` if it parses, else the Retry-After header, else 300; at most
+    an hour."""
+    wait = None
+    try:
+        body = reply.json()
+        if isinstance(body, dict) and body.get("retry_after") is not None:
+            wait = float(body["retry_after"])
+    except (ValueError, TypeError):
+        wait = None
+    if wait is None:
+        try:
+            wait = float(reply.headers.get("Retry-After", ""))
+        except ValueError:
+            wait = None
+    return int(min(3600, max(0, 300 if wait is None else wait)))
 
 
 def _loopback(url):
@@ -122,9 +143,10 @@ def check(settings):
     if _microsoft(issuer):
         tenant = urlparse(issuer).path.strip("/").split("/")[0].lower()
         if not tenant or tenant in UNPINNED_TENANTS:
-            raise RuntimeError("TICO_OIDC_ISSUER for Microsoft must name your own tenant "
-                               "(https://login.microsoftonline.com/<tenant-id>/v2.0), not "
-                               + (tenant or "an empty tenant"))
+            raise RuntimeError(
+                "TICO_OIDC_ISSUER for Microsoft must name your own tenant "
+                "(https://login.microsoftonline.com/<tenant-id>/v2.0), not " + (tenant or "an empty tenant")
+            )
     if settings.oidc_client_secret_file and not settings.oidc_client_secret:
         settings.oidc_client_secret = read_secret_file(settings.oidc_client_secret_file)
     if not settings.oidc_client_secret:
@@ -210,8 +232,11 @@ class Oidc:
             value = doc.get(field)
             if not isinstance(value, str) or not value:
                 raise SignInError("discovery lacks " + field, 502)
-            if field != "issuer" and urlparse(value).scheme != "https" and not (
-                    _loopback(self.issuer) and _loopback(value)):
+            if (
+                field != "issuer"
+                and urlparse(value).scheme != "https"
+                and not (_loopback(self.issuer) and _loopback(value))
+            ):
                 raise SignInError("discovery " + field + " is not https", 502)
         with self._lock:
             self._discovery, self._discovered_at = doc, time.monotonic()
@@ -232,8 +257,7 @@ class Oidc:
     def _key(self, kid, doc):
         with self._lock:
             key = self._keys.get(kid)
-            recent = (self._jwks_at is not None
-                      and time.monotonic() - self._jwks_at < self.jwks_min_interval)
+            recent = self._jwks_at is not None and time.monotonic() - self._jwks_at < self.jwks_min_interval
             if key or recent:
                 if not key:
                     raise SignInError("unknown signing key")
@@ -265,31 +289,49 @@ class Oidc:
             raise SignInError("login expired")
         return payload
 
-    def begin(self, target, fresh=False, challenge=""):
+    def begin(self, target, fresh=False, challenge="", prompt=""):
         """The provider URL to send the browser to, and the signed cookie that remembers this attempt.
-        `target` is a same-origin path, or (with the PKCE `challenge`) the URL of an allowed frontend."""
+        `target` is a same-origin path, or (with the PKCE `challenge`) the URL of an allowed frontend.
+        `prompt` is passed to the provider when it is one of PROMPTS; `fresh` asks for the account chooser."""
         doc = self._discover()
         state, nonce, verifier = secrets.token_urlsafe(24), secrets.token_urlsafe(24), secrets.token_urlsafe(48)
-        params = {"response_type": "code", "client_id": self.settings.oidc_client_id,
-                  "redirect_uri": self.redirect_uri, "scope": "openid email profile",
-                  "state": state, "nonce": nonce, "code_challenge_method": "S256",
-                  "code_challenge": _b64(hashlib.sha256(verifier.encode()).digest())}
+        params = {
+            "response_type": "code",
+            "client_id": self.settings.oidc_client_id,
+            "redirect_uri": self.redirect_uri,
+            "scope": "openid email profile",
+            "state": state,
+            "nonce": nonce,
+            "code_challenge_method": "S256",
+            "code_challenge": _b64(hashlib.sha256(verifier.encode()).digest()),
+        }
         domains = self.settings.oidc_allowed_domains
         if _google(self.issuer) and len(domains) == 1:
-            params["hd"] = domains[0]            # a hint only; the ID token's claim is what is checked
-        if fresh:
+            params["hd"] = domains[0]  # a hint only; the ID token's claim is what is checked
+        if prompt in PROMPTS:
+            params["prompt"] = prompt
+        elif fresh:
             params["prompt"] = "select_account"
         endpoint = doc["authorization_endpoint"]
         url = endpoint + ("&" if "?" in endpoint else "?") + urlencode(params)
         frontend = bool(challenge)
-        cookie = self._sign({"s": state, "n": nonce, "v": verifier, "x": target if frontend else safe_next(target),
-                             "c": challenge, "e": time.time() + LOGIN_WINDOW})
+        cookie = self._sign(
+            {
+                "s": state,
+                "n": nonce,
+                "v": verifier,
+                "x": target if frontend else safe_next(target),
+                "c": challenge,
+                "e": time.time() + LOGIN_WINDOW,
+            }
+        )
         return url, cookie
 
-    def finish(self, query, cookie):
-        """The verified email of a finished login, the path (or frontend URL) to return to, and the
-        frontend's PKCE challenge ("" for the built-in page). Raises SignInError.
-        No database is held open: this waits on the provider."""
+    def finish(self, query, cookie, joined=()):
+        """The verified email of a finished login, the path (or frontend URL) to return to, the frontend's PKCE
+        challenge ("" for the built-in page), and the account it is: (issuer, subject). Raises SignInError.
+        `joined` is the allow list's domains (a domain join: Settings > People). No database is held open: this waits
+        on the provider."""
         pending = self._unsign(cookie)
         if query.get("error"):
             raise SignInError("provider refused: " + re.sub(r"[^a-z_]", "", str(query["error"]))[:40])
@@ -298,23 +340,97 @@ class Oidc:
             raise SignInError("state mismatch")
         doc = self._discover()
         claims = self._verify(self._exchange(doc, code, pending["v"]), pending["n"], doc)
-        return self._email(claims), pending["x"], str(pending.get("c") or "")
+        return (
+            self._email(claims, joined),
+            pending["x"],
+            str(pending.get("c") or ""),
+            (str(claims["iss"]), str(claims["sub"])),
+        )
 
-    def person(self, c, email):
-        """The roster id for this email, the same match every proxy gets. Raises NotOnRoster."""
+    def person(self, c, email, account=None):
+        """The roster id this verified sign-in is. The account (issuer, subject) is matched first, so a person who changed
+        their address keeps their place, and the address moves to the new one unless someone else has it. Otherwise the
+        email is matched, and the account is remembered. An address the owner admits joins here on its first verified
+        sign-in (the same rule as the proxy's join, under this transaction). Raises NotOnRoster."""
+        from . import access
+
+        if account:
+            issuer, sub = account
+            row = c.execute("SELECT id,email FROM humans WHERE idp_issuer=? AND idp_sub=?", (issuer, sub)).fetchone()
+            if row:
+                if self._refused(c, row["id"]):
+                    raise NotOnRoster(email)
+                if str(row["email"] or "").lower() != email:
+                    self._move_email(c, row["id"], email)
+                return row["id"]
         row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (email,)).fetchone()
-        if not row or self._left(c, row["id"]):
+        if not row:
+            # An address the owner admits (Settings > People) joins on its first verified sign-in; a retired one never does.
+            if email in access.retired_emails(c) or not access.admitted(access.load_access(c, self.settings), email):
+                raise NotOnRoster(email)
+            row = {"id": access.join_on_sign_in(c, email)}
+        elif self._refused(c, row["id"]):
             raise NotOnRoster(email)
+        if account:
+            self._remember(c, row["id"], account)
         return row["id"]
 
-    def _left(self, c, human):
+    def _move_email(self, c, pid, email):
+        """The person's sign-in address changes to the one the account verified now. Refused (NotOnRoster) when a
+        retired address or another person's. Everything follows: see access.change_email / change_owner_email."""
+        from . import access, views
+        from . import people as P
+
+        if email in access.retired_emails(c) or access._email_taken(c, email, pid):
+            raise NotOnRoster(email)
+        roster = views.roster(c)
+        person = P.person(pid, roster)
+        owner = access.load_owner(c, self.settings)
+        actor = "human:" + pid
+        try:
+            if person and person["email"] and person["email"] == owner["email"]:
+                access.change_owner_email(
+                    c,
+                    actor,
+                    roster,
+                    owner,
+                    email,
+                    expected_revision=owner["revision"],
+                    now=H.now(),
+                    settings=self.settings,
+                    via="sign_in",
+                )
+            else:
+                access.change_email(c, actor, roster, pid, email, now=H.now(), settings=self.settings, via="sign_in")
+        except Problem as exc:
+            log.info("sign-in address change refused: %s", exc.code)
+            raise NotOnRoster(email) from exc
+
+    def _remember(self, c, pid, account):
+        """Store the account a person signed in with. A different subject from the same issuer is an account change: it
+        is audited, and this issuer's email check is still what let it in."""
+        issuer, sub = account
+        row = c.execute("SELECT idp_issuer,idp_sub FROM humans WHERE id=?", (pid,)).fetchone()
+        if row and row["idp_sub"] and row["idp_issuer"] == issuer and row["idp_sub"] != sub:
+            H.event(c, "human:" + pid, "person.account_changed", pid, {"issuer": issuer})
+        c.execute("UPDATE humans SET idp_issuer=?, idp_sub=? WHERE id=?", (issuer, sub, pid))
+
+    def _refused(self, c, human):
+        """Whether the roster refuses this person's sign-in: hidden, left the directory, or sign-in turned off. Checked
+        before any address moves, account is remembered or session issued."""
         from . import views
+        from . import people as P
+
         person = next((p for p in views.roster(c).get("people", []) if p.get("id") == human), None)
-        return bool(person and person.get("hidden"))
+        return bool(person and not P.may_sign_in(person))
 
     def _exchange(self, doc, code, verifier):
-        data = {"grant_type": "authorization_code", "code": code, "redirect_uri": self.redirect_uri,
-                "code_verifier": verifier}
+        data = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": self.redirect_uri,
+            "code_verifier": verifier,
+        }
         auth = None
         methods = doc.get("token_endpoint_auth_methods_supported")
         if isinstance(methods, list) and "client_secret_post" not in methods and "client_secret_basic" in methods:
@@ -342,13 +458,22 @@ class Oidc:
             raise SignInError("id token algorithm or key id not accepted")
         key = self._key(header["kid"], doc)
         try:
-            claims = jwt.decode(token, key, algorithms=[header["alg"]], audience=self.settings.oidc_client_id,
-                                issuer=doc["issuer"], leeway=LEEWAY,
-                                options={"require": ["exp", "iat", "iss", "aud", "sub"]})
+            claims = jwt.decode(
+                token,
+                key,
+                algorithms=[header["alg"]],
+                audience=self.settings.oidc_client_id,
+                issuer=doc["issuer"],
+                leeway=LEEWAY,
+                options={"require": ["exp", "iat", "iss", "aud", "sub"]},
+            )
         except jwt.PyJWTError as exc:
             raise SignInError("id token rejected: " + type(exc).__name__) from exc
-        if isinstance(claims["aud"], list) and len(claims["aud"]) > 1 \
-                and claims.get("azp") != self.settings.oidc_client_id:
+        if (
+            isinstance(claims["aud"], list)
+            and len(claims["aud"]) > 1
+            and claims.get("azp") != self.settings.oidc_client_id
+        ):
             raise SignInError("id token authorized party mismatch")
         if not hmac.compare_digest(str(claims.get("nonce") or "").encode(), str(nonce).encode()):
             raise SignInError("nonce mismatch")
@@ -358,7 +483,24 @@ class Oidc:
                 raise SignInError("token is from another tenant")
         return claims
 
-    def _email(self, claims):
+    def _email(self, claims, joined=()):
+        email = self._verified_email(claims)
+        domain = email.rsplit("@", 1)[1]
+        domains = self.settings.oidc_allowed_domains
+        if domains:
+            if domain not in domains:
+                raise SignInError("email domain is not allowed")
+            if _google(self.issuer) and str(claims.get("hd") or "").lower() not in domains:
+                raise SignInError("hosted domain is not allowed")
+        # A domain join ("Anyone with a <domain> Google login"): a Google sign-in for that domain must be the company's
+        # own Workspace account, so its hd claim is that domain. The Tico account issuer keeps the verified-email rule.
+        if _google(self.issuer) and domain in joined and str(claims.get("hd") or "").lower() != domain:
+            raise SignInError("hosted domain is not the company's")
+        return email
+
+    def _verified_email(self, claims):
+        """The address the ID token vouches for, lowercased. Who may join the team is `_email`'s to add: a Company page
+        reader (backend/company_page/reader_app.py) comes from anywhere and takes only this."""
         microsoft = _microsoft(self.issuer)
         email = claims.get("email")
         if microsoft and not (isinstance(email, str) and "@" in email):
@@ -372,12 +514,6 @@ class Oidc:
         # Microsoft publishes no email_verified; its tenant check above is what vouches for the address.
         if ("email_verified" in claims or not microsoft) and verified is not True:
             raise SignInError("email is not verified")
-        domains = self.settings.oidc_allowed_domains
-        if domains:
-            if email.rsplit("@", 1)[1] not in domains:
-                raise SignInError("email domain is not allowed")
-            if _google(self.issuer) and str(claims.get("hd") or "").lower() not in domains:
-                raise SignInError("hosted domain is not allowed")
         return email
 
     # ---- sessions -----------------------------------------------------------------------
@@ -388,11 +524,15 @@ class Oidc:
         now = H.now()
         if previous:
             c.execute("DELETE FROM oidc_sessions WHERE id_hash=?", (digest(previous),))
-        c.execute("DELETE FROM oidc_sessions WHERE expires_at<=? OR last_seen<?",
-                  (now, H.shift(now, seconds=-self.settings.session_idle_seconds)))
+        c.execute(
+            "DELETE FROM oidc_sessions WHERE expires_at<=? OR last_seen_at<?",
+            (now, H.shift(now, seconds=-self.settings.session_idle_seconds)),
+        )
         sid = secrets.token_urlsafe(32)
-        c.execute("INSERT INTO oidc_sessions(id_hash,human,email,created,last_seen,expires_at) VALUES(?,?,?,?,?,?)",
-                  (digest(sid), human, email, now, now, H.shift(now, seconds=self.settings.session_absolute_seconds)))
+        c.execute(
+            "INSERT INTO oidc_sessions(id_hash,human,email,created_at,last_seen_at,expires_at) VALUES(?,?,?,?,?,?)",
+            (digest(sid), human, email, now, now, H.shift(now, seconds=self.settings.session_absolute_seconds)),
+        )
         return sid
 
     # ---- invites (backend/invites.py) ---------------------------------------------------
@@ -402,16 +542,20 @@ class Oidc:
         sends no invites. Only a Tico account issuer does: its discovery names `tico_invite_endpoint` on its own host,
         so this client's secret never goes anywhere the token exchange would not send it. A rehearsal asks nothing,
         discovery included: it is a copy of real data, and the issuer would mail a real person."""
-        return self._tico_call("tico_invite_endpoint", email, "Invites are off in a rehearsal: this server is a copy of "
-                                                              "real data and sends no mail")
+        return self._tico_call(
+            "tico_invite_endpoint",
+            email,
+            "Invites are off in a rehearsal: this server is a copy of real data and sends no mail",
+        )
 
     def make_account(self, email):
         """Ask the issuer to make `email` a Tico account with a generated password (backend/invites.py
         `make_password`): (HTTP status, answer), or None when the issuer makes none. Same rules as `invite`: only a
         Tico account issuer's own `tico_accounts_endpoint`, never in a rehearsal. The answer carries the password once;
         the caller hands it to the owner and keeps nothing."""
-        return self._tico_call("tico_accounts_endpoint", email, "Accounts aren't made in a rehearsal: this server is a "
-                                                                "copy of real data")
+        return self._tico_call(
+            "tico_accounts_endpoint", email, "Accounts aren't made in a rehearsal: this server is a copy of real data"
+        )
 
     def offers(self, field):
         """Whether the issuer's discovery names a usable `field` endpoint (the cached copy, or a fresh read). For the
@@ -423,20 +567,27 @@ class Oidc:
 
     def _endpoint(self, doc, field):
         endpoint = doc.get(field)
-        if not isinstance(endpoint, str) or urlparse(endpoint).netloc != urlparse(self.issuer).netloc or (
-                urlparse(endpoint).scheme != "https" and not (_loopback(self.issuer) and _loopback(endpoint))):
+        if (
+            not isinstance(endpoint, str)
+            or urlparse(endpoint).netloc != urlparse(self.issuer).netloc
+            or (urlparse(endpoint).scheme != "https" and not (_loopback(self.issuer) and _loopback(endpoint)))
+        ):
             return None
         return endpoint
 
     def _tico_call(self, field, email, rehearsal):
         from .invites import rehearsing
+
         if rehearsing(self.settings):
             raise Problem("rehearsal", rehearsal, 422)
         endpoint = self._endpoint(self._discover(), field)
         if endpoint is None:
             return None
-        data = {"client_id": self.settings.oidc_client_id, "client_secret": self.settings.oidc_client_secret,
-                "email": email}
+        data = {
+            "client_id": self.settings.oidc_client_id,
+            "client_secret": self.settings.oidc_client_secret,
+            "email": email,
+        }
         try:
             reply = httpx.post(endpoint, data=data, timeout=20, follow_redirects=False)
             answer = reply.json()
@@ -444,31 +595,96 @@ class Oidc:
             raise SignInError(field.split("_")[1] + " failed: " + type(exc).__name__, 502) from exc
         return reply.status_code, answer if isinstance(answer, dict) else {}
 
+    def push_people(self, rows):
+        """Send the install's sign-in list to the Tico account (backend/people_mirror.py): (HTTP status, answer), or None
+        when the account takes none (no `tico_people_endpoint`) or this is a rehearsal, which sends nothing out.
+        Same client credentials as `invite`; only the issuer's own host is ever sent to."""
+        from .invites import rehearsing
+
+        if rehearsing(self.settings):
+            return None
+        endpoint = self._endpoint(self._discover(), "tico_people_endpoint")
+        if endpoint is None:
+            return None
+        data = {
+            "client_id": self.settings.oidc_client_id,
+            "client_secret": self.settings.oidc_client_secret,
+            "people": json.dumps(rows, separators=(",", ":"), sort_keys=True),
+        }
+        try:
+            reply = httpx.post(endpoint, data=data, timeout=20, follow_redirects=False)
+        except httpx.HTTPError as exc:
+            raise SignInError("people list failed: " + type(exc).__name__, 502) from exc
+        if reply.status_code == 429:
+            # The account may answer in HTML (a proxy's limit page): the wait then comes from its header, if any.
+            return 429, {"retry_after": _retry_after(reply)}
+        try:
+            answer = reply.json()
+        except ValueError:
+            answer = None
+        return reply.status_code, answer if isinstance(answer, dict) else {}
+
+    def digest(self, email, threads):
+        """Ask the issuer to mail `email` one digest of unread threads (backend/thread_digest.py): (HTTP status, answer),
+        or None when the issuer takes none or this is a rehearsal. Same rules as `push_people`: only the issuer's own
+        host, and nothing goes out of a rehearsal. `threads` is [{title, unread, path}]; the issuer mails only an email
+        on this install's people list. Neither the email nor a title is ever logged, here or in the error reason."""
+        from .invites import rehearsing
+
+        if rehearsing(self.settings):
+            return None
+        endpoint = self._endpoint(self._discover(), "tico_digest_endpoint")
+        if endpoint is None:
+            return None
+        data = {
+            "client_id": self.settings.oidc_client_id,
+            "client_secret": self.settings.oidc_client_secret,
+            "email": email,
+            "threads": json.dumps(threads, separators=(",", ":"), sort_keys=True),
+        }
+        try:
+            reply = httpx.post(endpoint, data=data, timeout=20, follow_redirects=False)
+        except httpx.HTTPError as exc:
+            raise SignInError("digest failed: " + type(exc).__name__, 502) from exc
+        if reply.status_code == 429:
+            return 429, {"retry_after": _retry_after(reply)}
+        try:
+            answer = reply.json()
+        except ValueError:
+            answer = None
+        return reply.status_code, answer if isinstance(answer, dict) else {}
+
     def email(self, headers, c):
         """The signed-in person's email, or None when the request has no live session."""
         from .auth import cookies
+
         return self.session_email(cookies(headers).get(self.cookie, ""), c)
 
     def session_email(self, raw, c):
         """The email behind a session id, from the cookie or from a bearer session."""
         if not raw:
             return None
-        row = c.execute("SELECT s.id_hash,s.last_seen,s.expires_at,h.email FROM oidc_sessions s "
-                        "JOIN humans h ON h.id=s.human WHERE s.id_hash=?", (digest(raw),)).fetchone()
+        row = c.execute(
+            "SELECT s.id_hash,s.last_seen_at,s.expires_at,h.email FROM oidc_sessions s "
+            "JOIN humans h ON h.id=s.human WHERE s.id_hash=?",
+            (digest(raw),),
+        ).fetchone()
         if not row:
             return None
         now = H.now()
-        if row["expires_at"] <= now or row["last_seen"] < H.shift(now, seconds=-self.settings.session_idle_seconds):
+        if row["expires_at"] <= now or row["last_seen_at"] < H.shift(now, seconds=-self.settings.session_idle_seconds):
             return None
-        if row["last_seen"] < H.shift(now, seconds=-TOUCH_EVERY):
+        if row["last_seen_at"] < H.shift(now, seconds=-TOUCH_EVERY):
             # A hint for the idle clock, written only if the database is free right now (auth.touch): a sign-in never
             # queues behind writers for it, and a skipped one is retried by the next request a minute on.
             from .auth import touch
-            touch(c, "UPDATE oidc_sessions SET last_seen=? WHERE id_hash=?", (now, row["id_hash"]))
+
+            touch(c, "UPDATE oidc_sessions SET last_seen_at=? WHERE id_hash=?", (now, row["id_hash"]))
         return str(row["email"] or "").lower()
 
     def logout(self, headers):
         from .auth import cookies
+
         raw = cookies(headers).get(self.cookie, "")
         if raw:
             with self.store.transaction() as c:
@@ -485,9 +701,13 @@ class Oidc:
             url = urlparse(str(value or ""))
             origin = "%s://%s" % (url.scheme, url.netloc)
             path = url.path or "/"
-            if (origin.lower() not in self.settings.cors_origins or url.username is not None or url.fragment
-                    or not (path == "/" or SAFE_NEXT.fullmatch(path))
-                    or any(ord(ch) < 32 for ch in str(value))):
+            if (
+                origin.lower() not in self.settings.cors_origins
+                or url.username is not None
+                or url.fragment
+                or not (path == "/" or SAFE_NEXT.fullmatch(path))
+                or any(ord(ch) < 32 for ch in str(value))
+            ):
                 return None
             return origin.lower() + path + ("?" + url.query if url.query else "")
         except ValueError:
@@ -498,8 +718,10 @@ class Oidc:
         now = H.now()
         c.execute("DELETE FROM oidc_codes WHERE expires_at<=?", (now,))
         code = secrets.token_urlsafe(32)
-        c.execute("INSERT INTO oidc_codes(code_hash,human,email,challenge,origin,expires_at) VALUES(?,?,?,?,?,?)",
-                  (digest(code), human, email, challenge, origin, H.shift(now, seconds=CODE_WINDOW)))
+        c.execute(
+            "INSERT INTO oidc_codes(code_hash,human,email,challenge,origin,expires_at) VALUES(?,?,?,?,?,?)",
+            (digest(code), human, email, challenge, origin, H.shift(now, seconds=CODE_WINDOW)),
+        )
         return code
 
     def redeem_code(self, c, code, verifier, origin):
@@ -508,8 +730,13 @@ class Oidc:
         if row:
             c.execute("DELETE FROM oidc_codes WHERE code_hash=?", (digest(code),))
         good = _b64(hashlib.sha256(verifier.encode()).digest()) if VERIFIER.fullmatch(verifier) else ""
-        if (not row or row["expires_at"] <= H.now() or not hmac.compare_digest(good, row["challenge"])
-                or not origin or origin.lower() != row["origin"]):
+        if (
+            not row
+            or row["expires_at"] <= H.now()
+            or not hmac.compare_digest(good, row["challenge"])
+            or not origin
+            or origin.lower() != row["origin"]
+        ):
             return None
         return self.start_session(c, row["human"], row["email"]), row["human"]
 
@@ -518,8 +745,7 @@ class Oidc:
             c.execute("DELETE FROM oidc_sessions WHERE id_hash=?", (digest(raw),))
 
     def set_cookie(self, response, name, value, max_age):
-        response.set_cookie(name, value, max_age=max_age, path="/", secure=self.secure,
-                            httponly=True, samesite="lax")
+        response.set_cookie(name, value, max_age=max_age, path="/", secure=self.secure, httponly=True, samesite="lax")
 
 
 @functools.lru_cache(maxsize=4)
@@ -537,9 +763,18 @@ def _brand(settings):
     that named its app gets the name as text."""
     if settings.app_name != PRODUCT_NAME:
         return '<p class="brand">' + html.escape(settings.app_name) + "</p>"
-    light, dark = _wordmark(settings.ui_dir, "tico-wordmark.svg"), _wordmark(settings.ui_dir, "tico-wordmark-reversed.svg")
-    return '<div class="brand" role="img" aria-label="' + html.escape(PRODUCT_NAME) + '">' + (
-        '<span class="on-light">' + light + '</span><span class="on-dark">' + dark + "</span></div>") if light and dark else ""
+    light, dark = (
+        _wordmark(settings.ui_dir, "tico-wordmark.svg"),
+        _wordmark(settings.ui_dir, "tico-wordmark-reversed.svg"),
+    )
+    return (
+        '<div class="brand" role="img" aria-label="'
+        + html.escape(PRODUCT_NAME)
+        + '">'
+        + ('<span class="on-light">' + light + '</span><span class="on-dark">' + dark + "</span></div>")
+        if light and dark
+        else ""
+    )
 
 
 def _page(settings, status, title, message, action=None):
@@ -549,7 +784,12 @@ def _page(settings, status, title, message, action=None):
     body = (
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         '<meta name=viewport content="width=device-width,initial-scale=1">'
-        "<title>" + html.escape(title) + " - " + html.escape(settings.app_name) + "</title>"
+        + brand_icons.HEAD
+        + "<title>"
+        + html.escape(title)
+        + " - "
+        + html.escape(settings.app_name)
+        + "</title>"
         "<style>body{font:16px/1.5 system-ui,sans-serif;background:#f6f6f4;color:#1c1c1a;margin:0;"
         "display:grid;place-items:center;min-height:100vh}main{max-width:26rem;padding:2rem;background:#fff;"
         "border-radius:12px;box-shadow:0 1px 8px #0002;margin:1rem}h1{font-size:1.25rem;margin:0 0 .5rem}"
@@ -557,8 +797,16 @@ def _page(settings, status, title, message, action=None):
         "text-decoration:none}.brand{margin:0 0 1.25rem;font-weight:700;font-size:1.25rem}.logo{height:1.75rem;width:auto;display:block}"
         ".on-dark{display:none}@media(prefers-color-scheme:dark){body{background:#151514;color:#eee}"
         "main{background:#222}.b{background:#eee;color:#111}.on-light{display:none}.on-dark{display:block}}"
-        "</style></head><body><main>" + _brand(settings) + "<h1>"
-        + html.escape(title) + "</h1><p>" + message + "</p>" + button + "</main></body></html>")
+        "</style></head><body><main>"
+        + _brand(settings)
+        + "<h1>"
+        + html.escape(title)
+        + "</h1><p>"
+        + message
+        + "</p>"
+        + button
+        + "</main></body></html>"
+    )
     return HTMLResponse(body, status_code=status)
 
 
@@ -584,46 +832,72 @@ def register(app, auth):
         try:
             incoming = urlparse("//" + host)
             port = 443 if canonical.scheme == "https" else 80
-            same = (bool(canonical.hostname) and bool(host) and host.isascii()
-                    and all(32 < ord(ch) < 127 for ch in host)
-                    and incoming.netloc == host and not host.endswith(":")
-                    and incoming.username is None and incoming.password is None
-                    and not (incoming.path or incoming.query or incoming.fragment)
-                    and incoming.hostname == canonical.hostname
-                    and (incoming.port if incoming.port is not None else port)
-                    == (canonical.port if canonical.port is not None else port))
+            same = (
+                bool(canonical.hostname)
+                and bool(host)
+                and host.isascii()
+                and all(32 < ord(ch) < 127 for ch in host)
+                and incoming.netloc == host
+                and not host.endswith(":")
+                and incoming.username is None
+                and incoming.password is None
+                and not (incoming.path or incoming.query or incoming.fragment)
+                and incoming.hostname == canonical.hostname
+                and (incoming.port if incoming.port is not None else port)
+                == (canonical.port if canonical.port is not None else port)
+            )
         except ValueError:
             same = False
         if same:
             return None
         query = urlencode({key: value for key, value in query.items() if value})
-        return RedirectResponse(settings.public_url + path + ("?" + query if query else ""), status_code=302,
-                                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+        return RedirectResponse(
+            settings.public_url + path + ("?" + query if query else ""),
+            status_code=302,
+            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+        )
 
     @app.get(LOGIN_PATH)
-    def login(request: Request, next: str = "/", fresh: str = "", code_challenge: str = ""):
+    def login(request: Request, next: str = "/", fresh: str = "", code_challenge: str = "", prompt: str = ""):
         oidc = active()
         challenge = ""
         target = None if next.startswith("/") else oidc.frontend_target(next)
         if target or (code_challenge and not next.startswith("/")):
             # A separate frontend: only an allowed origin, and only with a PKCE challenge.
             if not target or not CHALLENGE.fullmatch(code_challenge):
-                return _page(settings, 400, "This app cannot sign you in",
-                             "Its address is not one this server allows (TICO_CORS_ORIGINS), or it did not send "
-                             "a PKCE code_challenge.")
+                return _page(
+                    settings,
+                    400,
+                    "This app cannot sign you in",
+                    "Its address is not one this server allows (TICO_CORS_ORIGINS), or it did not send "
+                    "a PKCE code_challenge.",
+                )
             next, challenge = target, code_challenge
         next = next if challenge else safe_next(next)
-        entry = canonical_entry(request, LOGIN_PATH, {
-            "next": next if next != "/" else "", "fresh": "1" if fresh else "", "code_challenge": challenge})
+        prompt = prompt if prompt in PROMPTS else ""
+        entry = canonical_entry(
+            request,
+            LOGIN_PATH,
+            {
+                "next": next if next != "/" else "",
+                "fresh": "1" if fresh else "",
+                "code_challenge": challenge,
+                "prompt": prompt,
+            },
+        )
         if entry is not None:
             return entry
         try:
-            url, cookie = oidc.begin(next, bool(fresh), challenge)
+            url, cookie = oidc.begin(next, bool(fresh), challenge, prompt)
         except SignInError as exc:
             log.warning("sign-in could not start: %s", exc.reason)
-            return _page(settings, 502, "Sign-in is unavailable",
-                         "The sign-in provider could not be reached. Try again in a minute.",
-                         (LOGIN_PATH, "Try again"))
+            return _page(
+                settings,
+                502,
+                "Sign-in is unavailable",
+                "The sign-in provider could not be reached. Try again in a minute.",
+                (LOGIN_PATH, "Try again"),
+            )
         response = RedirectResponse(url, status_code=302)
         oidc.set_cookie(response, oidc.login_cookie, cookie, LOGIN_WINDOW)
         return response
@@ -639,21 +913,32 @@ def register(app, auth):
         target = LOGIN_PATH + ("?" + urlencode({"next": next}) if next != "/" else "")
         if not settings.oidc_label:
             return RedirectResponse(target, status_code=302)
-        page = _page(settings, 200, "Sign in to " + settings.app_name,
-                     "You come straight back here once you're signed in.",
-                     (target, "Sign in with " + settings.oidc_label))
+        page = _page(
+            settings,
+            200,
+            "Sign in to " + settings.app_name,
+            "You come straight back here once you're signed in.",
+            (target, "Sign in with " + settings.oidc_label),
+        )
         page.headers["Cache-Control"] = "no-store"
         return page
 
     @app.get(CALLBACK_PATH)
     def callback(request: Request):
         from .auth import cookies
+
         oidc = active()
         jar = cookies(request.headers)
         try:
-            email, target, challenge = oidc.finish(dict(request.query_params), jar.get(oidc.login_cookie, ""))
+            from . import access
+
+            with store.read() as c:
+                joined = access.load_access(c, settings)["allowed_domains"]
+            email, target, challenge, account = oidc.finish(
+                dict(request.query_params), jar.get(oidc.login_cookie, ""), joined
+            )
             with store.transaction() as c:
-                human = oidc.person(c, email)
+                human = oidc.person(c, email, account)
                 if challenge:
                     # No cookie for a frontend: it gets a code, in the fragment so no server or log sees it.
                     origin = "%s://%s" % urlparse(target)[:2]
@@ -662,18 +947,35 @@ def register(app, auth):
                 else:
                     sid = oidc.start_session(c, human, email, jar.get(oidc.cookie, ""))
         except NotOnRoster as exc:
-            response = _page(settings, 403, "You're not on the list",
-                             "<b>" + html.escape(exc.email) + "</b> is not on " + html.escape(settings.company_name)
-                             + "'s list of people for " + html.escape(settings.app_name)
-                             + ". Ask whoever runs it to add you, or sign in with a different account.",
-                             (LOGIN_PATH + "?fresh=1", "Use another account"))
+            # The browser's old session (of whoever was signed in before) ends with this refusal.
+            if jar.get(oidc.cookie):
+                oidc.revoke_session(jar.get(oidc.cookie))
+            response = _page(
+                settings,
+                403,
+                "You're not on the list",
+                "You're signed in as <b>"
+                + html.escape(exc.email)
+                + "</b>, and that address is not on "
+                + html.escape(settings.company_name)
+                + "'s list for "
+                + html.escape(settings.app_name)
+                + ".",
+                (LOGIN_PATH + "?prompt=select_account", "Use another account"),
+            )
             response.delete_cookie(oidc.login_cookie, path="/", secure=oidc.secure, httponly=True)
+            response.delete_cookie(oidc.cookie, path="/", secure=oidc.secure, httponly=True)
             return response
         except SignInError as exc:
             log.warning("sign-in refused: %s", exc.reason)
-            response = _page(settings, exc.status, "Sign-in did not complete",
-                             "Your sign-in could not be confirmed. Start again; if it keeps failing, "
-                             "check that you are using your work account.", (LOGIN_PATH, "Try again"))
+            response = _page(
+                settings,
+                exc.status,
+                "Sign-in did not complete",
+                "Your sign-in could not be confirmed. Start again; if it keeps failing, "
+                "check that you are using your work account.",
+                (LOGIN_PATH, "Try again"),
+            )
             response.delete_cookie(oidc.login_cookie, path="/", secure=oidc.secure, httponly=True)
             return response
         if challenge:
@@ -694,18 +996,27 @@ def register(app, auth):
             body = None
         if not isinstance(body, dict) or not all(isinstance(body.get(k), str) for k in ("code", "code_verifier")):
             raise Problem("invalid_request", "Send JSON with code and code_verifier", 400)
+
         def redeem():
             with store.transaction() as c:
-                return oidc.redeem_code(c, body["code"][:200], body["code_verifier"][:200],
-                                        request.headers.get("origin", ""))
+                return oidc.redeem_code(
+                    c, body["code"][:200], body["code_verifier"][:200], request.headers.get("origin", "")
+                )
+
         made = await asyncio.to_thread(redeem)
         if not made:
             raise Problem("invalid_grant", "The code is wrong, expired, already used, or from another app", 400)
         sid, human = made
-        return JSONResponse({"access_token": BEARER_PREFIX + sid, "token_type": "Bearer",
-                             "expires_in": settings.session_absolute_seconds,
-                             "idle_timeout": settings.session_idle_seconds, "person": human},
-                            headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
+        return JSONResponse(
+            {
+                "access_token": BEARER_PREFIX + sid,
+                "token_type": "Bearer",
+                "expires_in": settings.session_absolute_seconds,
+                "idle_timeout": settings.session_idle_seconds,
+                "person": human,
+            },
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+        )
 
     @app.post(REVOKE_PATH)
     def revoke(request: Request):
@@ -713,11 +1024,16 @@ def register(app, auth):
         oidc = active()
         bearer = request.headers.get("authorization", "")
         if bearer.startswith("Bearer " + BEARER_PREFIX):
-            oidc.revoke_session(bearer[7 + len(BEARER_PREFIX):])
+            oidc.revoke_session(bearer[7 + len(BEARER_PREFIX) :])
         return {"revoked": True}
 
     @app.get(SIGNED_OUT_PATH)
     def signed_out():
         active()
-        return _page(settings, 200, "You're signed out", "Your session on this browser has ended.",
-                     (LOGIN_PATH + "?fresh=1", "Sign in again"))
+        return _page(
+            settings,
+            200,
+            "You're signed out",
+            "Your session on this browser has ended.",
+            (LOGIN_PATH + "?fresh=1", "Sign in again"),
+        )

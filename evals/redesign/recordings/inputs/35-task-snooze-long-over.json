@@ -1,0 +1,23 @@
+{
+  "id": "35-task-snooze-long-over",
+  "kind": "task",
+  "questions": "stale-review",
+  "level": "low",
+  "state": {
+    "task": {
+      "title": "Check the new Slack scope with the workspace admin",
+      "status": "waiting",
+      "step": "Waiting for the workspace admin",
+      "owner": "support",
+      "created": "2026-09-08",
+      "updated": "2026-09-08",
+      "parent": null,
+      "reason": "Snoozed until 2026-09-15, six weeks ago",
+      "comments": [
+        "Asked the admin on 8 September",
+        "Snoozed for a week"
+      ]
+    }
+  },
+  "note": "A snooze long over, owner must check: ask the owner."
+}

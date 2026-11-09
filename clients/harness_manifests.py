@@ -1,4 +1,4 @@
-"""The harness manifests (runner/harnesses/*.toml) as the server and the clients read them: one row per harness,
+"""The harness manifests (runner-rs/harnesses/*.toml) as the server and the clients read them: one row per harness,
 keyed by the id bot configs use (`harness`, which is also the server's id), with its capabilities filled in.
 
 The runner installs from the same files (runner-rs/src/harness_tools.rs); this module only reads what Tico does
@@ -10,7 +10,7 @@ import tomllib
 from functools import lru_cache
 from pathlib import Path
 
-DIRECTORY = Path(__file__).resolve().parents[1] / "runner" / "harnesses"
+DIRECTORY = Path(__file__).resolve().parents[1] / "runner-rs" / "harnesses"
 
 # Every key `[capabilities]` may hold, with its type and the value an absent key means.
 FIELDS = {
@@ -28,6 +28,7 @@ FIELDS = {
     "weekly_usage": (str, ""),
     "account": (str, ""),
     "tool_events": (bool, False),
+    "skill_events": (bool, False),
     "mcp_transports": (list, []),
     "mcp_unsupported": (str, ""),
     "resume_after_interrupt": (bool, True),
@@ -38,17 +39,22 @@ FIELDS = {
     "one_turn_per_login": (bool, False),
     "isolated_user": (bool, False),
     "compaction": (bool, False),
+    "compaction_events": (bool, False),
     "resume_command": (str, ""),
     "model_list": (str, ""),
     "model_list_args": (list, []),
     "readiness": (bool, True),
     "repo_permission_lint": (bool, False),
     "repo_commands": (bool, False),
+    "packet_only": (bool, False),
     "sign_in_status": (dict, {}),
 }
-CHOICES = {"api_keys": ("", "computer", "bot"), "weekly_usage": ("", "refresh", "turns", "manual"),
-           "account": ("", "status-json", "app-server"),
-           "model_list": ("", "host", "command")}
+CHOICES = {
+    "api_keys": ("", "computer", "bot"),
+    "weekly_usage": ("", "refresh", "turns", "manual"),
+    "account": ("", "status-json", "app-server"),
+    "model_list": ("", "host", "command"),
+}
 CHECKS = ("none", "command", "json", "file", "bot-key")
 TRANSPORTS = ("http", "sse")
 
@@ -86,22 +92,40 @@ def _row(harness, runtime, data, where, auth=None, login=None):
     keys = list(auth.get("api_key_env") or []) if caps["api_keys"] or caps["api_key_in_turn"] else []
     relay = list((login or {}).get("command") or [])
     # What the API says: the manifest's own values plus the sign-in facts [login] and [auth] already hold.
-    public = {**caps, "sign_in_status": caps["sign_in_status"].get("check", "none"),
-              "browser_sign_in": bool(relay), "paste_code": bool((login or {}).get("paste_code")),
-              # Sign out and Switch account from the app (backend/model_login.py): the CLI's own logout command.
-              "sign_out": bool(relay and (login or {}).get("logout")),
-              # Platforms where the login is in the system keychain, so Switch account cannot sign in on the side.
-              "switch_unavailable_on": list((login or {}).get("keychain") or []) if relay and (login or {}).get("logout") else [],
-              "terminal_login": " ".join([executable, *caps["terminal_login"]]) if caps["terminal_login"] else "",
-              "container_login": " ".join([executable, *(relay or caps["terminal_login"])]) if relay or caps["terminal_login"] else "",
-              "api_key_env": keys, "api_key_login": bool(caps["api_key_login"]),
-              "api_key_check": bool(caps["api_key_check"]),
-              "resume_command": caps["resume_command"] or f"{executable} --resume"}
+    public = {
+        **caps,
+        "sign_in_status": caps["sign_in_status"].get("check", "none"),
+        "browser_sign_in": bool(relay),
+        "paste_code": bool((login or {}).get("paste_code")),
+        # Sign out and Switch account from the app (backend/model_login.py): the CLI's own logout command.
+        "sign_out": bool(relay and (login or {}).get("logout")),
+        # Connect in Settings > Models: a command that signs a plan in for a company subscription.
+        "subscription_connect": bool(relay and (login or {}).get("connect")),
+        # Platforms where the login is in the system keychain, so Switch account cannot sign in on the side.
+        "switch_unavailable_on": list((login or {}).get("keychain") or [])
+        if relay and (login or {}).get("logout")
+        else [],
+        "terminal_login": " ".join([executable, *caps["terminal_login"]]) if caps["terminal_login"] else "",
+        "container_login": " ".join([executable, *(relay or caps["terminal_login"])])
+        if relay or caps["terminal_login"]
+        else "",
+        "api_key_env": keys,
+        "api_key_login": bool(caps["api_key_login"]),
+        "api_key_check": bool(caps["api_key_check"]),
+        "resume_command": caps["resume_command"] or f"{executable} --resume",
+    }
     for private in ("profile_dirs", "model_list_args"):
         public.pop(private)
-    return {"id": harness, "runtime": runtime, "name": str(data.get("name") or harness), "host": str(data.get("host") or ""),
-            "executable": executable, "capabilities": public, "sign_in_status": caps["sign_in_status"],
-            "model_list_args": caps["model_list_args"]}
+    return {
+        "id": harness,
+        "runtime": runtime,
+        "name": str(data.get("name") or harness),
+        "host": str(data.get("host") or ""),
+        "executable": executable,
+        "capabilities": public,
+        "sign_in_status": caps["sign_in_status"],
+        "model_list_args": caps["model_list_args"],
+    }
 
 
 def parse(data, source="manifest"):
@@ -132,7 +156,9 @@ def load(directory=DIRECTORY):
             raise ManifestError(f"{path.name}: {exc}")
         for row in parse(data, path.name):
             if row["id"] in found:
-                raise ManifestError(f"{path.name}: harness {row['id']} is already claimed by {found[row['id']]['manifest']}")
+                raise ManifestError(
+                    f"{path.name}: harness {row['id']} is already claimed by {found[row['id']]['manifest']}"
+                )
             found[row["id"]] = row
     return found
 
@@ -156,5 +182,8 @@ def of(config, runtime=None):
 
 def with_capability(name, value=True):
     """The harness ids whose capability `name` equals `value` (truthy when value is True)."""
-    return tuple(h for h, row in load().items()
-                 if (bool(row["capabilities"].get(name)) if value is True else row["capabilities"].get(name) == value))
+    return tuple(
+        h
+        for h, row in load().items()
+        if (bool(row["capabilities"].get(name)) if value is True else row["capabilities"].get(name) == value)
+    )

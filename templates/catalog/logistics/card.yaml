@@ -8,7 +8,7 @@ pack: operations
 icon: local_shipping
 suggest: niche
 tags: [shipping, ecommerce, retail, carriers, fulfillment, freight, wholesale]
-summary: "Watches every shipment to delivery and works each carrier exception, with the customer update ready to use. It also files claims on time and checks carrier invoices against the agreed rates."
+summary: "Watches every shipment to delivery and works each late, stuck or lost parcel, with the customer update ready to use. Prepares claims before the carrier's deadline and checks carrier invoices against the agreed rates."
 when: "A team that ships goods to customers or stores and hears about a lost or late parcel from the customer first."
 pains:
   - "customers tell us their parcel is late before we know"
@@ -17,14 +17,14 @@ pains:
   - "we can't tell which carrier is actually on time"
 owns:
   - "The exceptions queue: every shipment late, stuck, returned, damaged or lost, with the carrier case, the customer update ready to use, and the next check date"
-  - "Carrier claims for lost or damaged shipments, prepared with the evidence and filed when a person has turned mail sending on in Tico before the carrier's deadline"
+  - "Carrier claims for lost or damaged shipments, prepared with the evidence and filed before the carrier's deadline, once mail sending is on in Tico and the task asks for it"
   - "The carrier invoice check against the contracted rates and surcharges, with each overcharge listed"
   - "The weekly on-time and in-full report by carrier and by lane"
 never:
-  - "Send a message to a customer or a carrier outside the requested work or Tools"
+  - "Send a message to a customer or a carrier unless mail sending is on in Tico, the task asks for it and a granted Tool allows it"
   - "Promise a customer a refund, a reship or a delivery date"
-  - "Pay, dispute or approve a carrier invoice outside the requested work or Tools"
-  - "Change an order, an address or a shipment in the shop or carrier system outside the requested work or Tools"
+  - "Pay, dispute or approve a carrier invoice unless the task asks for it and a granted Tool allows it"
+  - "Change an order, an address or a shipment in the shop or carrier system unless the task asks for it and a granted Tool allows it"
 prerequisites:
   - tool: hub
     why: "Shipment and tracking exports, carrier invoices and customer complaints about delivery arrive as tasks."
@@ -49,7 +49,7 @@ onboarding:
 first_routine:
   title: "Weekly delivery and exceptions report"
   cadence: "Mondays at 08:00 team time"
-  output: "reports/YYYY-MM-DD-deliveries.md: on-time and in-full by carrier and lane, open exceptions with age and next step, claims filed and due, and carrier invoice overcharges found"
+  output: "The weekly delivery report: on-time and in-full by carrier and lane, open exceptions with age and next step, claims due and filed, and carrier invoice overcharges found"
   draft_only: true
 example_output: knowledge/examples/delivery-report.md
 reasoning_effort: medium

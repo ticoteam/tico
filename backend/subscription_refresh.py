@@ -1,4 +1,5 @@
 """Explicit, bounded runner reads of provider allowance. Credentials stay on the computer."""
+
 import json
 from typing import Literal
 
@@ -38,14 +39,18 @@ def view(value):
     return result
 
 
+def signin_key(runner, profile):
+    return f'subscription-reading-after:{runner}:{profile}'
+
+
 def signin_after(c, runner, profile):
-    return metadata(c, f'subscription-reading-after:{runner}:{profile}')
+    return metadata(c, signin_key(runner, profile))
 
 
 def invalidate_signin(c, runner, profile, runtime, at):
     if profile:
         value = signin_after(c, runner, profile)
-        save_metadata(c, f'subscription-reading-after:{runner}:{profile}', {**value, runtime: at})
+        save_metadata(c, signin_key(runner, profile), {**value, runtime: at})
         storage_key = key(runner, profile, runtime)
         refresh = metadata(c, storage_key)
         if refresh and refresh['state'] == 'requested':
@@ -54,35 +59,52 @@ def invalidate_signin(c, runner, profile, runtime, at):
 
 def request_refresh(c, auth, who, body):
     auth.domain(who)
-    runner = c.execute('SELECT * FROM runners WHERE id=? AND revoked_at IS NULL', (body.runner_id,)).fetchone()
-    if not runner or who.role not in ('human', 'owner') or not (
-            auth.bot_admin(who) or runner['operator'] == H.actor_id(who.actor)):
+    runner = c.execute(
+        'SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL', (body.runner_id,)
+    ).fetchone()
+    if (
+        not runner
+        or who.role not in ('human', 'owner')
+        or not (auth.bot_admin(who) or runner['owner_id'] == H.actor_id(who.actor))
+    ):
         raise Problem('forbidden', 'Only a computer operator or administrator can refresh weekly usage', 403)
-    row = c.execute('SELECT runtimes_json FROM computer_profiles WHERE runner_id=? AND profile=?',
-                    (body.runner_id, body.profile)).fetchone()
+    row = c.execute(
+        'SELECT runtimes FROM computer_profiles WHERE runner_id=? AND profile=?', (body.runner_id, body.profile)
+    ).fetchone()
     state = json.loads(row[0] or '{}').get(body.runtime) if row else None
     if state is None:
         raise Problem('not_found', 'Subscription runtime not found on this computer', 404)
-    if c.execute("SELECT 1 FROM model_logins WHERE runner_id=? AND profile=? AND runtime=? "
-                 "AND state IN ('requested','starting','waiting','finishing') AND expires_at>?",
-                 (body.runner_id, body.profile, body.runtime, H.now())).fetchone():
+    if c.execute(
+        "SELECT 1 FROM model_logins WHERE runner_id=? AND profile=? AND runtime=? "
+        "AND state IN ('requested','starting','waiting','finishing') AND expires_at>?",
+        (body.runner_id, body.profile, body.runtime, H.now()),
+    ).fetchone():
         raise Problem('busy', 'Finish signing in before refreshing weekly usage', 409)
     storage_key = key(body.runner_id, body.profile, body.runtime)
     old = metadata(c, storage_key)
     same_signin = old and old['requested_at'] >= signin_after(c, body.runner_id, body.profile).get(body.runtime, '')
-    if same_signin and ((old['state'] == 'requested' and old['expires_at'] > H.now())
-                        or old['requested_at'] > H.shift(H.now(), seconds=-COOLDOWN)):
+    if same_signin and (
+        (old['state'] == 'requested' and old['expires_at'] > H.now())
+        or old['requested_at'] > H.shift(H.now(), seconds=-COOLDOWN)
+    ):
         return view(old)
     now = H.now()
-    value = {'id': H.new_id(), 'profile': body.profile, 'runtime': body.runtime,
-             'state': 'requested', 'requested_at': now, 'updated_at': now,
-             'expires_at': H.shift(now, seconds=LIFETIME), 'weekly': old.get('weekly')}
+    value = {
+        'id': H.new_id(),
+        'profile': body.profile,
+        'runtime': body.runtime,
+        'state': 'requested',
+        'requested_at': now,
+        'updated_at': now,
+        'expires_at': H.shift(now, seconds=LIFETIME),
+        'weekly': old.get('weekly'),
+    }
     # Only a runtime whose weekly usage can be read on demand (`weekly_usage = "refresh"`) is asked.
     if caps(body.runtime).get('weekly_usage') != 'refresh':
         value['state'] = 'unavailable'
     elif state.get('signed_in') is False:
         raise Problem('signed_out', 'Sign in before refreshing this subscription', 409)
-    elif not runner['last_seen'] or runner['last_seen'] < H.shift(now, seconds=-60):
+    elif not runner['last_seen_at'] or runner['last_seen_at'] < H.shift(now, seconds=-60):
         raise Problem('offline', 'This computer is offline; its last weekly reading is unchanged', 409)
     elif len(pending(c, body.runner_id)) >= 5:
         raise Problem('busy', 'This computer already has weekly refreshes queued; try again shortly', 409)
@@ -94,14 +116,17 @@ def request_refresh(c, auth, who, body):
 def pending(c, runner):
     prefix = f'subscription-refresh:{runner}:'
     # LIKE is unnecessary: runner IDs may contain wildcard characters.
-    rows = c.execute('SELECT value_json FROM registry_metadata WHERE substr(key,1,?)=? ORDER BY key',
-                     (len(prefix), prefix))
-    return [view(value) for row in rows if (value := json.loads(row[0])).get('state') == 'requested'
-            and value['expires_at'] > H.now()][:5]
+    rows = c.execute('SELECT value FROM registry_metadata WHERE substr(key,1,?)=? ORDER BY key', (len(prefix), prefix))
+    return [
+        view(value)
+        for row in rows
+        if (value := json.loads(row[0])).get('state') == 'requested' and value['expires_at'] > H.now()
+    ][:5]
 
 
 def report(c, runner, rid, body):
     from .subscriptions import weekly_snapshot
+
     storage_key = key(runner, body.profile, body.runtime)
     value = metadata(c, storage_key)
     if not value or value['id'] != rid:
@@ -110,12 +135,20 @@ def report(c, runner, rid, body):
         raise Problem('changed', 'Sign-in changed after this refresh was requested', 409)
     if value['state'] != 'requested' or value['expires_at'] <= H.now():
         return view(value)
-    row = c.execute('SELECT runtimes_json FROM computer_profiles WHERE runner_id=? AND profile=?',
-                    (runner, body.profile)).fetchone()
+    row = c.execute(
+        'SELECT runtimes FROM computer_profiles WHERE runner_id=? AND profile=?', (runner, body.profile)
+    ).fetchone()
     state = json.loads(row[0] or '{}').get(body.runtime) if row else None
     weekly = weekly_snapshot(body.weekly.model_dump()) if body.weekly else None
-    if body.state == 'succeeded' and (not weekly or H.parse_ts(weekly['reported_at']) < H.parse_ts(value['requested_at'])
-                                    or state is None or state.get('signed_in') is False):
+    if weekly:
+        # A named login's refresh is never a plan's reading, whatever the computer sent: no provenance is kept.
+        weekly['origin'] = weekly['subscription_id'] = None
+    if body.state == 'succeeded' and (
+        not weekly
+        or H.parse_ts(weekly['reported_at']) < H.parse_ts(value['requested_at'])
+        or state is None
+        or state.get('signed_in') is False
+    ):
         raise Problem('invalid', 'Weekly refresh has no current valid reading', 422)
     value.update(state=body.state, updated_at=H.now())
     if body.state == 'succeeded':
@@ -139,4 +172,8 @@ def install(app, store, auth, mutate):
     @app.post('/api/v2/runner-subscription-refreshes/{rid}/report')
     def report_refresh(request: Request, rid: str, body: Report):
         who = request.state.identity
-        return mutate(request, body, lambda c: (request.app.state.execution.runner(c, who), report(c, who.runner_id, rid, body))[1])
+        return mutate(
+            request,
+            body,
+            lambda c: (request.app.state.execution.runner(c, who), report(c, who.runner_id, rid, body))[1],
+        )

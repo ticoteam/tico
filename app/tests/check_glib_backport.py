@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline integrity and Cargo-routing check for the GLib security backport."""
+
 import hashlib
 import json
 from pathlib import Path
@@ -20,7 +21,10 @@ def require(condition, detail):
 
 def check():
     provenance = json.loads((APP / "vendor/glib-provenance.json").read_text())
-    require(provenance["archive_sha256"] == "233daaf6e83ae6a12a52055f568f9d7cf4671dabb78ff9560ab6da230ce00ee5", "Unexpected upstream package")
+    require(
+        provenance["archive_sha256"] == "233daaf6e83ae6a12a52055f568f9d7cf4671dabb78ff9560ab6da230ce00ee5",
+        "Unexpected upstream package",
+    )
     require(provenance["fix_commit"] == "b5a4071e439bef2b5eea76c3aa25e5ae84839e34", "Unexpected upstream fix")
     original = provenance["original_file_sha256"]
     patched = provenance["patched_file_sha256"]
@@ -32,12 +36,16 @@ def check():
         require(not path.is_symlink(), "Symlink: " + name)
         require(sha(path.read_bytes()) == patched.get(name, original[name]), "Changed file: " + name)
     data = files["src/variant_iter.rs"].read_bytes()
-    before = data.replace(b"let mut p: *mut libc::c_char = std::ptr::null_mut();",
-                          b"let p: *mut libc::c_char = std::ptr::null_mut();", 1)
+    before = data.replace(
+        b"let mut p: *mut libc::c_char = std::ptr::null_mut();", b"let p: *mut libc::c_char = std::ptr::null_mut();", 1
+    )
     before = before.replace(b"                &mut p,", b"                &p,", 1)
     require(sha(before) == original["src/variant_iter.rs"], "Backport differs from the exact upstream two-line fix")
     package = tomllib.loads(files["Cargo.toml"].read_text())["package"]
-    require(package["name"] == "glib" and package["version"] == "0.18.5" and package["license"] == "MIT", "Package metadata changed")
+    require(
+        package["name"] == "glib" and package["version"] == "0.18.5" and package["license"] == "MIT",
+        "Package metadata changed",
+    )
     app = tomllib.loads((APP / "Cargo.toml").read_text())
     require(app["patch"]["crates-io"]["glib"] == {"path": "vendor/glib", "version": "=0.18.5"}, "App patch changed")
     regression = APP / "tests/glib-backport"

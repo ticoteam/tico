@@ -49,6 +49,8 @@ HEALTH_TRIES=${TICO_INSTALL_HEALTH_TRIES:-60}
 MIN_MEM_KB=900000   # a 1 GB computer reports a little under 1,000,000 kB
 MIN_DISK_KB=1000000
 VERSION_RE='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'
+# backend/company_file/starter.py ENV_PACKED: a packed company file this long or shorter goes in .env.
+ENV_PACKED_MAX=7168
 
 # A Mac (Docker Desktop) keeps its files in the home folder: /opt needs sudo there, and nothing else does.
 MAC=
@@ -64,6 +66,7 @@ LOCAL=
 RECOMMENDED=
 SUPPORT=
 COMPANY=
+COMPANY_FILE=
 OWNER_EMAIL=
 OWNER_NAME=
 PORT=
@@ -116,6 +119,8 @@ Usage: install.sh [options] [-- tico-setup flags]
   --owner-email E    with --local: the owner's email (asked when omitted)
   --owner-name NAME  with --local: prefill your name in Finish setup
   --team-name NAME   with --local: prefill the team name (default: My Team); --company is an alias
+  --company-file PATH  the company file (tico.company.yaml) to start with: with --local its team is loaded on first start,
+                     with --recommended it replaces the sample company; a team install passes it to the setup wizard
   --port PORT        server host port (default: 8765; kept on upgrades unless given)
   --tunnel           Cloudflare Tunnel: no public ports needed, so ports 80 and 443 are not checked
   --docker-only      only make sure Docker and Compose are installed (used for runner boxes)
@@ -172,6 +177,8 @@ while [ $# -gt 0 ]; do
     --owner-email=*) OWNER_EMAIL=${1#--owner-email=}; shift ;;
     --team-name|--company) [ $# -ge 2 ] || { usage >&2; die 2 "$1 needs a value"; }; COMPANY=$2; shift 2 ;;
     --team-name=*|--company=*) COMPANY=${1#*=}; shift ;;
+    --company-file) [ -n "${2:-}" ] || { usage >&2; die 2 "--company-file needs a path"; }; COMPANY_FILE=$2; shift 2 ;;
+    --company-file=*) [ -n "${1#--company-file=}" ] || { usage >&2; die 2 "--company-file needs a path"; }; COMPANY_FILE=${1#--company-file=}; shift ;;
     --owner-name) [ $# -ge 2 ] || { usage >&2; die 2 "--owner-name needs a value"; }; OWNER_NAME=$2; shift 2 ;;
     --owner-name=*) OWNER_NAME=${1#--owner-name=}; shift ;;
     --port) [ $# -ge 2 ] || { usage >&2; die 2 "--port needs a value"; }; PORT=$2; shift 2 ;;
@@ -265,6 +272,21 @@ if [ -n "$OWNER_NAME" ]; then
 fi
 if [ -n "$LOCAL" ] && [ -n "$RUNNER_URL" ]; then
   printf '%s' "$RUNNER_URL" | grep -Eq '^http://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?$' || die 2 "--local --url needs a loopback address such as http://localhost:8765."
+fi
+# The file is read by this user, before any sudo, so a path it cannot read stops here, before anything is installed.
+# The shell does not expand ~ after --company-file=, so it is expanded here. The install changes folder, so the path
+# is made absolute now.
+case $COMPANY_FILE in
+  \~) COMPANY_FILE=${HOME:-} ;;
+  \~/*) COMPANY_FILE=${HOME:-}/${COMPANY_FILE#'~/'} ;;
+  ''|/*) ;;
+  *) COMPANY_FILE=$(pwd)/$COMPANY_FILE ;;
+esac
+if [ -n "$COMPANY_FILE" ]; then
+  if [ ! -f "$COMPANY_FILE" ] || [ ! -r "$COMPANY_FILE" ]; then die 2 "Cannot read --company-file; use a readable UTF-8 company YAML file"; fi
+  [ -z "$RUNNER$DOCKER_ONLY" ] || die 2 "--company-file goes with --local, --recommended or a team install."
+  # A team install hands the file to the setup wizard, as `-- --company-file` always did.
+  if [ -z "$LOCAL" ]; then set -- --company-file "$COMPANY_FILE" "$@"; fi
 fi
 printf '%s' "$DIR" | grep -Eq '^/[A-Za-z0-9._/-]+$' || die 2 "--dir must be an absolute path made of letters, digits and . _ - /"
 
@@ -463,6 +485,8 @@ fetch_bundle() {
   if [ -n "$RUNNER" ]; then
     # A runner needs the compose file and nothing else; the server's compose.yaml stays out of this directory.
     tar -xzf "$work/$bundle" -C "$work" docker/runner.compose.yaml || die 4 "$bundle has no docker/runner.compose.yaml."
+    # Older releases have no memory rule: such a runner gets no default cap, as it always had.
+    tar -xzf "$work/$bundle" -C "$work" docker/runner-memory.sh 2>/dev/null || true
     as_root install -m 0644 "$work/docker/runner.compose.yaml" "$DIR/runner.compose.yaml"
     printf '%s\n' "$VERSION" | as_root tee "$DIR/.bundle-version" >/dev/null
     say "ok: runner.compose.yaml for $VERSION is in $DIR"
@@ -533,6 +557,56 @@ run_wizard() {
   fi
 }
 
+# A company file becomes the first start's team. The server image packs it with the code that reads it on start
+# (backend/company_file/starter.py), so this computer needs no Python. A packed plan that fits goes in .env as
+# TICO_COMPANY_FILE_B64; a bigger one is a private file the server container reads, named by TICO_COMPANY_FILE, as
+# setup does for a server (setup/settings.py). It runs before .env is installed, so a file that does not pack leaves
+# nothing behind to skip the team on a re-run.
+# PACKER uses only what every 0.4 image has (starter.pack, MAX_BYTES, MAX_PACKED), so --version can pick an older one.
+# Exit 2 with the reason on stderr for a file Tico cannot import.
+PACKER='import sys
+from backend.company_file import draft, starter
+raw = sys.stdin.buffer.read(starter.MAX_BYTES + 1)
+try:
+    if len(raw) > starter.MAX_BYTES:
+        raise draft.DraftError("the company file is too large")
+    print(starter.pack(raw.decode("utf-8"), starter.MAX_PACKED))
+except UnicodeError:
+    print("Cannot read --company-file; use a readable UTF-8 company YAML file", file=sys.stderr)
+    sys.exit(2)
+except draft.DraftError as exc:
+    print(exc, file=sys.stderr)
+    sys.exit(2)
+'
+pack_company_file() {
+  env_out=$1
+  step "Packing $COMPANY_FILE"
+  ( cd "$DIR" && as_root env TICO_TAG="$VERSION" docker compose pull --quiet server ) \
+    || die 6 "docker compose could not pull the Tico image in $DIR. Run this again."
+  # The packer exits 2 with the reason for a file Tico cannot import; any other failure is docker compose's.
+  packed=$( cd "$DIR" && as_root env TICO_TAG="$VERSION" TICO_PACKER="$PACKER" docker compose run --rm -T --no-deps \
+    -e TICO_PACKER server python -c 'import os; exec(os.environ["TICO_PACKER"])' <"$COMPANY_FILE" ) || {
+    rc=$?
+    rm -f "$env_out"
+    [ "$rc" = 2 ] && die 2 "The company file is not one Tico can import (the reason is above). Nothing was installed."
+    die 6 "docker compose could not pack the company file in $DIR (the error is above). Nothing was installed."
+  }
+  case $packed in
+    ''|*[!A-Za-z0-9+/=]*) rm -f "$env_out"; die 5 "The server image did not give a packed company file. Nothing was installed." ;;
+  esac
+  if [ "${#packed}" -le "$ENV_PACKED_MAX" ]; then
+    printf 'TICO_COMPANY_FILE_B64=%s\n' "$packed" >> "$env_out"
+  else
+    # The folder compose.yaml mounts read-only into the server (setup/contract.py), read by the container's user 10001.
+    plan_dir=$DIR/company-file
+    as_root install -d -m 0755 "$plan_dir"
+    printf '%s\n' "$packed" | as_root tee "$plan_dir/plan.b64" >/dev/null
+    if [ -n "$MAC" ]; then as_root chmod 0644 "$plan_dir/plan.b64"
+    else as_root chown 10001:10001 "$plan_dir/plan.b64" && as_root chmod 0600 "$plan_dir/plan.b64"; fi
+    printf 'TICO_COMPANY_FILE_DIR=%s\nTICO_COMPANY_FILE=/run/tico/company-file/plan.b64\n' "$plan_dir" >> "$env_out"
+  fi
+}
+
 # The quick start: a server on this computer only. The server sees no domain and no TICO_AUTH_PROXY, so it serves
 # 127.0.0.1 and the owner signs in with a token from the data volume.
 run_local() {
@@ -543,7 +617,8 @@ run_local() {
   fi
   printf '%s' "$OWNER_EMAIL" | grep -Eq '^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$' || die 2 "--owner-email must be a plain email address."
   if [ -z "$COMPANY" ]; then
-    if [ -n "$RECOMMENDED" ]; then COMPANY="Sample Co"; else COMPANY="My Team"; fi
+    # With a company file the team is the file's, so the sample company's name would be wrong.
+    if [ -n "$RECOMMENDED" ] && [ -z "$COMPANY_FILE" ]; then COMPANY="Sample Co"; else COMPANY="My Team"; fi
   fi
   printf '%s' "$COMPANY" | grep -Eq '^[^"$`\\]{1,80}$' || die 2 "--team-name is 1 to 80 characters without quotes, dollar signs, backticks or backslashes."
   env_tmp=$(mktemp)
@@ -557,10 +632,14 @@ run_local() {
       [ -z "$SUPPORT" ] || printf 'TICO_SUPPORT=%s\n' "$SUPPORT"
       if [ -n "$RECOMMENDED" ]; then
         # The recommended choices, read by the server on its first start (sample company, models preset, Gateway enrollment).
-        printf 'TICO_INSTALL_PRESET=recommended\nTICO_SAMPLE_COMPANY=on\nTICO_MODELS_PRESET=subscriptions-gateway\n'
+        # A company file is the team instead of the sample company, so the sample is not switched on.
+        printf 'TICO_INSTALL_PRESET=recommended\n'
+        [ -n "$COMPANY_FILE" ] || printf 'TICO_SAMPLE_COMPANY=on\n'
+        printf 'TICO_MODELS_PRESET=subscriptions-gateway\n'
         [ -z "$GATEWAY_INVITE" ] || printf 'TICO_GATEWAY_INVITE=%s\n' "$GATEWAY_INVITE"
       fi
     } > "$env_tmp" )
+  [ -z "$COMPANY_FILE" ] || pack_company_file "$env_tmp"
   as_root install -m 0600 "$env_tmp" "$DIR/.env"
   rm -f "$env_tmp"
   start_stack
@@ -571,13 +650,20 @@ run_local() {
   if [ -n "$token" ]; then say "Keep this reusable owner sign-in link private. Sign in as $OWNER_EMAIL: ${RUNNER_URL:-http://127.0.0.1:${PORT:-8765}}/api/v2/local-signin?token=$token"
   else say "Sign in as $OWNER_EMAIL with the token from: cd $DIR && docker compose exec server cat /data/local-owner.token"; fi
   say "Recover the sign-in token: cd $DIR && docker compose exec server cat /data/local-owner.token"
+  [ -z "$COMPANY_FILE" ] || say "If the team does not load, Health in the app says why."
   if [ -n "$RECOMMENDED" ]; then
-    say "The sample company is loaded and Tico Support is ${SUPPORT}."
+    if [ -n "$COMPANY_FILE" ]; then say "Your team from $COMPANY_FILE is loaded, and Tico Support is ${SUPPORT}."
+    else say "The sample company is loaded and Tico Support is ${SUPPORT}."; fi
     if [ -n "$GATEWAY_INVITE" ]; then say "Tico Gateway: it connects on the first start, from the invite this install was given."
     else say "Tico Gateway: not set up (this install was given no invite). Bots use your Claude and ChatGPT subscriptions."; fi
     say "One step is left: in the app, Settings > Computers > Server computer > Sign in, to Claude and to ChatGPT."
   else
-    say "In the app, follow Finish setup: name the team, pick its groups, and use Add computer to join this computer."
+    if [ -n "$COMPANY_FILE" ]; then
+      say "Your team from $COMPANY_FILE is loaded."
+      say "In the app, use Add computer to join this computer."
+    else
+      say "In the app, follow Finish setup: name the team, pick its groups, and use Add computer to join this computer."
+    fi
     say "Bots need an AI provider to run: Settings > Computers > Models, any time."
   fi
   say "Add a domain and sign-in for your humans later: docs/install.md, \"Add a domain and sign-in later\"."
@@ -726,10 +812,20 @@ run_runner() {
     printf 'services:\n  runner:\n    networks: [default, server]\nnetworks:\n  server:\n    external: true\n    name: %s\n' "$SERVER_NETWORK" \
       | as_root tee "$DIR/runner.override.yaml" >/dev/null
   fi
+  # The default memory cap, unless .env has TICO_RUNNER_MEMORY (empty counts as set, and 0 means no limit). It goes in
+  # the environment of compose, which outranks .env, so it is never written to .env: a later, bigger computer gets a new default.
+  memory_env=
+  if ! as_root grep -Eq '^[[:space:]]*(export[[:space:]]+)?TICO_RUNNER_MEMORY[[:space:]]*[=:]' "$DIR/.env" && [ -f "$work/docker/runner-memory.sh" ]; then
+    cap=$(sh "$work/docker/runner-memory.sh" "$MEMINFO" 2>/dev/null) || cap=
+    if [ -n "$cap" ]; then
+      memory_env="TICO_RUNNER_MEMORY=$cap"
+      say "Memory cap: $cap, a default for this computer (set TICO_RUNNER_MEMORY in $DIR/.env to change it; 0 means no limit)."
+    fi
+  fi
   files="-f runner.compose.yaml"
   [ -f "$DIR/runner.override.yaml" ] && files="$files -f runner.override.yaml"
   # shellcheck disable=SC2086  # $files is two or four words on purpose
-  ( cd "$DIR" && as_root docker compose $files pull --quiet && as_root docker compose $files up -d ) \
+  ( cd "$DIR" && as_root env $memory_env docker compose $files pull --quiet && as_root env $memory_env docker compose $files up -d ) \
     || die 6 "docker compose failed in $DIR. Run 'docker compose $files logs' there."
   say ""
   say "The runner is starting; it shows online in Settings > Computers in a minute."
@@ -750,6 +846,8 @@ say "Tico counts active installs anonymously (a random ID, version, and three ye
 say "Details: PRIVACY.md in the Tico repository."
 
 if [ -f "$DIR/.env" ]; then
+  # The team is loaded on a server's first start only: an install that has its .env keeps the team it has.
+  [ -z "$COMPANY_FILE" ] || warn "--company-file is used when Tico is first installed; $DIR/.env exists, so the file was not used."
   have=$(installed_version)
   if [ -n "$have" ] && [ "$have" != "$VERSION" ] && [ -z "$FORCED" ] \
      && [ "$(printf '%s\n%s\n' "$have" "$VERSION" | sort -V | tail -n 1)" = "$have" ]; then

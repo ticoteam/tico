@@ -1,0 +1,41 @@
+{
+  "created": [
+    {
+      "name": "Refund mentions in #sales become Priya's tasks",
+      "owner": "person:dana",
+      "enabled": false,
+      "trigger": {
+        "type": "message",
+        "inbox": "slack:#sales"
+      },
+      "steps": [
+        {
+          "id": "sort",
+          "type": "filter",
+          "enabled": true,
+          "rules": [
+            {
+              "when": [
+                {
+                  "field": "message.text",
+                  "op": "contains",
+                  "value": "refund"
+                }
+              ],
+              "then": [
+                {
+                  "do": "create_task",
+                  "args": {
+                    "owner": "person:priya",
+                    "title": "Refund mentioned in #sales"
+                  }
+                }
+              ],
+              "stop": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

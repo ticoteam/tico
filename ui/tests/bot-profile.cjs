@@ -1,4 +1,4 @@
-// A bot's profile picker in its settings (ui/app/bot-profile.js, backend/profiles.py). Guards: only someone who manages
+// A bot's profile picker in its settings (ui/app/bot-profile.ts, backend/profiles.py). Guards: only someone who manages
 // the bot can change it; a pick is held until Save bot, and each save carries the bot's revision; Custom's own fields
 // save as Custom; leaving Custom asks first, naming how many rules go, and sends nothing more when declined; a Lead's
 // digest hour saves; at phone width the row stays inside the screen. Fixtures only.
@@ -25,10 +25,10 @@ async function open(browser, role, viewport = {width: 1280, height: 900}) {
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
-    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+    const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-    if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+    if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.1.0', app_name: 'Tico'};
     if (p === '/api/me') return json({id: manage ? 'ana' : 'cara', role: manage ? 'owner' : 'human', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
@@ -78,7 +78,7 @@ const picker = page => page.locator('[data-bot-profile]');
       // The choices come from the server, with the bot's own profile picked.
       await page.waitForFunction(() => document.querySelectorAll('[data-bot-profile] option').length === 6);
       assert.equal(await picker(page).inputValue(), 'custom');
-      assert.equal(await page.locator('[data-profile-rules]').getAttribute('href'), '#/settings/rules?bot=ops');
+      assert.equal(await page.locator('[data-profile-rules]').getAttribute('href'), '#/automations?q=Ops');
       const until = async (test, what) => { for (let i = 0; i < 100 && !test(); i++) await page.waitForTimeout(50); assert.ok(test(), what); };
       const save = () => page.locator('#bot-editor button[type=submit]').click();
       const ask = page.locator('dialog.settings-confirm');
@@ -89,6 +89,8 @@ const picker = page => page.locator('[data-bot-profile]');
       await save();
       await until(() => posts.length === 1, 'Save bot sends the profile');
       assert.deepEqual(posts[0], {profile: 'custom', takes: 'review', expected_revision: 6});
+      // The save ends by redrawing the editor; a pick made before that redraw would be wiped.
+      await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-status]')?.textContent === 'Saved');
       // Leaving Custom: Save bot asks first, naming the rules; declined, nothing more is sent and the editor says so.
       await page.waitForFunction(() => document.querySelector('[data-profile-key="takes"]')?.value === 'review');
       await picker(page).selectOption('doer');

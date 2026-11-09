@@ -22,10 +22,10 @@ owns:
   - "Partner prospecting: a short sourced fit note per candidate partner and an outreach ready to use"
   - "The monthly list of referral fees and commissions owed, with the deal, the agreement clause and the amount for a human to pay"
 never:
-  - "Approve or decline a registration, or change a partner's terms, outside the requested work or Tools"
+  - "Approve or decline a registration, or change a partner's terms, unless the task asks for it and a granted Tool allows it"
   - "Pay, promise or change a referral fee, margin or discount"
   - "Share pipeline, pricing or customer data with a partner beyond what the agreement allows"
-  - "Send any message to a partner or prospect outside the requested work or Tools"
+  - "Send any message to a partner or prospect, unless the task asks for it and a granted Tool allows it"
 prerequisites:
   - tool: hub
     why: "Registrations, partner requests and agreements arrive as tasks, and each decision goes back on one for a human."

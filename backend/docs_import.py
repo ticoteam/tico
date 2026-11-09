@@ -35,8 +35,24 @@ def normalize(text):
 # ---------------------------------------------------------------------------- HTML
 class _Html(HTMLParser):
     SKIP = {"script", "style", "head", "noscript", "template", "svg", "iframe"}
-    BLOCKS = {"p", "div", "section", "article", "main", "header", "footer", "nav", "aside", "figure", "figcaption",
-              "table", "tr", "dl", "dt", "dd"}
+    BLOCKS = {
+        "p",
+        "div",
+        "section",
+        "article",
+        "main",
+        "header",
+        "footer",
+        "nav",
+        "aside",
+        "figure",
+        "figcaption",
+        "table",
+        "tr",
+        "dl",
+        "dt",
+        "dd",
+    }
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -208,8 +224,16 @@ def _runs(paragraph, links):
             if child.tag == W + "hyperlink":
                 walk(child, links.get(child.get(R + "id"), ""))
             elif child.tag == W + "r":
-                text = "".join((t.text or "") if t.tag == W + "t" else "\t" if t.tag == W + "tab"
-                               else "\n" if t.tag == W + "br" else "" for t in child)
+                text = "".join(
+                    (t.text or "")
+                    if t.tag == W + "t"
+                    else "\t"
+                    if t.tag == W + "tab"
+                    else "\n"
+                    if t.tag == W + "br"
+                    else ""
+                    for t in child
+                )
                 if not text:
                     continue
                 props = child.find(W + "rPr")
@@ -244,15 +268,27 @@ def from_docx(data):
         rels, numbering = {}, {}
         rel_xml = _xml(archive, "word/_rels/document.xml.rels")
         if rel_xml is not None:
-            rels = {r.get("Id"): r.get("Target", "") for r in rel_xml.iter(REL + "Relationship")
-                    if r.get("TargetMode") == "External" and r.get("Target", "").lower().startswith(("http://", "https://", "mailto:"))}
+            rels = {
+                r.get("Id"): r.get("Target", "")
+                for r in rel_xml.iter(REL + "Relationship")
+                if r.get("TargetMode") == "External"
+                and r.get("Target", "").lower().startswith(("http://", "https://", "mailto:"))
+            }
         num_xml = _xml(archive, "word/numbering.xml")
         if num_xml is not None:
-            abstract = {a.get(W + "abstractNumId"): (a.find(W + "lvl/" + W + "numFmt").get(W + "val")
-                                                     if a.find(W + "lvl/" + W + "numFmt") is not None else "bullet")
-                        for a in num_xml.iter(W + "abstractNum")}
-            numbering = {n.get(W + "numId"): abstract.get(n.find(W + "abstractNumId").get(W + "val"), "bullet")
-                         for n in num_xml.iter(W + "num") if n.find(W + "abstractNumId") is not None}
+            abstract = {
+                a.get(W + "abstractNumId"): (
+                    a.find(W + "lvl/" + W + "numFmt").get(W + "val")
+                    if a.find(W + "lvl/" + W + "numFmt") is not None
+                    else "bullet"
+                )
+                for a in num_xml.iter(W + "abstractNum")
+            }
+            numbering = {
+                n.get(W + "numId"): abstract.get(n.find(W + "abstractNumId").get(W + "val"), "bullet")
+                for n in num_xml.iter(W + "num")
+                if n.find(W + "abstractNumId") is not None
+            }
     except zipfile.BadZipFile as exc:
         raise ValueError("That is not a valid .docx file") from exc
     except ET.ParseError as exc:
@@ -265,7 +301,11 @@ def from_docx(data):
     def paragraph(node):
         nonlocal title
         props = node.find(W + "pPr")
-        style = props.find(W + "pStyle").get(W + "val", "") if props is not None and props.find(W + "pStyle") is not None else ""
+        style = (
+            props.find(W + "pStyle").get(W + "val", "")
+            if props is not None and props.find(W + "pStyle") is not None
+            else ""
+        )
         text = _runs(node, rels).strip()
         if not text:
             return ""
@@ -277,8 +317,16 @@ def from_docx(data):
             return "#" * min(int(heading.group(1)), 6) + " " + text
         num = props.find(W + "numPr") if props is not None else None
         if num is not None or style.lower().startswith("listparagraph"):
-            level = int(num.find(W + "ilvl").get(W + "val", "0")) if num is not None and num.find(W + "ilvl") is not None else 0
-            ident = num.find(W + "numId").get(W + "val", "") if num is not None and num.find(W + "numId") is not None else ""
+            level = (
+                int(num.find(W + "ilvl").get(W + "val", "0"))
+                if num is not None and num.find(W + "ilvl") is not None
+                else 0
+            )
+            ident = (
+                num.find(W + "numId").get(W + "val", "")
+                if num is not None and num.find(W + "numId") is not None
+                else ""
+            )
             ordered = numbering.get(ident) not in (None, "bullet", "none")
             counters[(ident, level)] = counters.get((ident, level), 0) + 1
             return "  " * level + (f"{counters[(ident, level)]}. " if ordered else "- ") + text
@@ -288,14 +336,20 @@ def from_docx(data):
     def table(node):
         rows = []
         for tr in node.iter(W + "tr"):
-            rows.append([" ".join(" ".join(_runs(p, rels) for p in tc.iter(W + "p")).split()).replace("|", "\\|")
-                         for tc in tr.findall(W + "tc")])
+            rows.append(
+                [
+                    " ".join(" ".join(_runs(p, rels) for p in tc.iter(W + "p")).split()).replace("|", "\\|")
+                    for tc in tr.findall(W + "tc")
+                ]
+            )
         if not rows:
             return ""
         width = max(len(r) for r in rows)
         rows = [r + [""] * (width - len(r)) for r in rows]
-        return "\n".join(["| " + " | ".join(rows[0]) + " |", "|" + " --- |" * width]
-                         + ["| " + " | ".join(r) + " |" for r in rows[1:]])
+        return "\n".join(
+            ["| " + " | ".join(rows[0]) + " |", "|" + " --- |" * width]
+            + ["| " + " | ".join(r) + " |" for r in rows[1:]]
+        )
 
     previous_list = False
     for node in body:
@@ -318,6 +372,7 @@ def from_docx(data):
 def from_pdf(data):
     try:
         from pypdf import PdfReader
+
         reader = PdfReader(io.BytesIO(data))
         if reader.is_encrypted:
             raise ValueError("That PDF is password protected")
@@ -325,7 +380,7 @@ def from_pdf(data):
             raise ValueError(f"That PDF has more than {MAX_PDF_PAGES} pages; split it first")
         pages = [(page.extract_text() or "").strip() for page in reader.pages]
         title = str((reader.metadata or {}).get("/Title") or "").strip()
-    except ValueError:
+    except (ValueError, MemoryError):
         raise
     except Exception as exc:
         raise ValueError("That PDF could not be read") from exc

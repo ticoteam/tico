@@ -15,7 +15,7 @@ if (bundled) {
   process.on('exit', () => { try { fs.rmSync(out, {recursive: true, force: true}); } catch {} });
 }
 exports.bundled = bundled;
-// The harness catalog GET /v2/models sends, with each CLI's capabilities read from runner/harnesses/*.toml, so a
+// The harness catalog GET /v2/models sends, with each CLI's capabilities read from runner-rs/harnesses/*.toml, so a
 // test's mock answers what the server would.
 // Read on first use: most scripts never ask, and starting Python costs every one of them.
 let harnesses;
@@ -29,5 +29,7 @@ Object.defineProperty(exports, 'beta', {enumerable: true, get: () => beta ||= JS
   process.env.TICO_PYTHON || 'python3', ['-c', 'import json; from backend.beta import listing; print(json.dumps(listing()))'],
   {cwd: path.join(ui, '..')}).toString())});
 exports.html = fs.readFileSync(path.join(out || ui, 'index.html'), 'utf8');
-// A path under ui/ (what follows /tico/ui/ in a URL) to the file on disk; the bundles live in the temp folder.
-exports.uiFile = name => out && (name === 'app.bundle.js' || name === 'app.bundle.css') ? path.join(out, name) : path.join(ui, name);
+// A path under ui/ (what follows /tico/ui/ in a URL) to the file on disk; the bundles live in the temp folder, and a
+// TypeScript file is served as its compiled JavaScript (npm run build:ui, backend/ui_build.py).
+exports.uiFile = name => out && /^app\.bundle(?:\.\d+)?\.(?:js|css)$/.test(name) ? path.join(out, name)
+  : name.endsWith('.ts') ? path.join(ui, '..', 'build', 'ui', name.replace(/\.ts$/, '.js')) : path.join(ui, name);

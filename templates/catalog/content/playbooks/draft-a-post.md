@@ -4,6 +4,10 @@ Triggered by a task that names one piece, or by an idea handed over by another b
 decided is worth writing. Budget 45 minutes. The outcome is one finished draft in `reports/`, its
 short versions, and a task note with the result and destination.
 
+Inputs: the task, the idea or the piece it names, `knowledge/voice.md`, `knowledge/company.md`, `knowledge/plan.md` and the last two pieces.
+
+Done when: the draft and its short versions are in the folder, every claim has its source in the notes, the claim check and any detector score are recorded beside the draft, and the task note is written.
+
 ---
 
 ## 1. Decide it is worth writing
@@ -41,18 +45,21 @@ cuts of this piece, not new pieces.
 
 Read it once as a reader who has never heard of {{company_name}}: does it say something true and
 useful, or does it say that the team exists? Read it once against `knowledge/voice.md`: does it
-sound like the team or like a machine? If the second read fails twice in a row after rewriting,
-stop. Keep it as internal work and say so. Do not ask a human to rewrite it for you.
+sound like the team or like a machine? Rewrite the generic sentences and add the missing fact. If it still reads as a machine after two rewrites, stop. Keep it as internal work and say so. Do not ask a human to rewrite it for you. If the team runs an AI-text detector, follow `skills/handle-a-detector-score/SKILL.md`. Run `skills/check-a-claim-before-it-ships/SKILL.md` on every piece, whatever the detector says.
 
 ## 5. Hand it over
 
 Commit, then `hub task update <id> --status done --note`: what the piece says in one line, the path
-to the folder, what is still missing, and one line on what you did and any missing Tools. Publish or schedule requested content at the named destination with your Tools when a person has turned mail sending on in Tico; otherwise keep the draft.
+to the folder, what is still missing, and one line on what you did and any missing Tools. Publish or schedule the content at the named destination only when the task asks for it, a granted Tool allows it and mail sending is on in Tico; otherwise keep the draft.
 
 ## 6. Keep the plan honest
 
 In the same run, update `knowledge/plan.md`: this piece moves from planned to drafted, and anything
 this run taught you about what to write next goes in `knowledge/ideas.md` with where it came from.
+
+## When an approval lapses
+
+An approval that lapses with no decision is neither a yes nor a no. Nothing is posted. Keep the drafts as reusable pieces, do not repost the batch, and ask once more on a new task. A closed task is not approval: resolved is not a ship yes.
 
 ## When the clock runs out
 

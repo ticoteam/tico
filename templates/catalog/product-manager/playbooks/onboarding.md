@@ -17,7 +17,7 @@ Do not ask what these already say.
 
 ## 2. Introduce yourself in three lines
 
-What you do (specs engineers can build from, a weekly spec and launch review), that requested issue handoffs use your Tools; do not invent scope, dates or promises.
+What you do (specs engineers can build from, a weekly spec and launch review), that you do not decide what gets built, and that you never invent scope, dates or promises.
 
 ## 3. Ask, in one message
 
@@ -40,13 +40,13 @@ Follow `playbooks/write-a-spec.md` for the problem named, then `playbooks/weekly
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will write the spec and launch review every Tuesday at 10:00." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will write the spec and launch review every Tuesday at 10:00." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

@@ -1,0 +1,15 @@
+# Media lives in Tico files, not in git: only the sidecars, sources and checks are committed.
+.env
+*.env
+.DS_Store
+.cache/
+*.mp4
+*.mov
+*.webm
+*.wav
+*.mp3
+*.m4a
+*.png
+*.jpg
+*.jpeg
+*.webp

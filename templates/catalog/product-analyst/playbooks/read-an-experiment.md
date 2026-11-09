@@ -3,6 +3,10 @@
 Triggered by a task asking whether an A/B test or a staged rollout worked. Budget 30 minutes. The outcome
 is a readout that says what the evidence supports and whether it is safe to decide.
 
+Inputs: the experiment's plan (metric, variants, planned sample or end date, guardrails), the assignment and metric counts read through `hub db`, and the task.
+
+Done when: the readout gives one verdict, shows the split check and the interval, and names what a person must decide.
+
 ---
 
 ## 1. Find the plan
@@ -14,9 +18,9 @@ no plan, say so in line one: the readout is exploratory and cannot declare a win
 
 ## 2. Check it ran cleanly
 
-Split close to what was intended (a large mismatch means assignment is broken); no change to the variant
+Run the split check in `skills/read-an-experiment-without-fooling-yourself/SKILL.md`: a mismatch that chance is unlikely to produce means assignment is broken, and the readout stops there. No change to the variant
 mid-test; the planned sample or duration reached. If not reached, report the current numbers as
-"not yet readable" and the date it will be.
+"not yet readable" and the date it will be. If anyone looked at the result early, say so.
 
 ## 3. Compute
 

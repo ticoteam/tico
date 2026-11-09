@@ -32,17 +32,17 @@ routine changes directly.
 ## Talking to Tico (`hub`)
 Tico is one set of tools with two doors. In a shell it is the `hub` command; as MCP tools it
 is `hub_*` with the same names and arguments (`hub task create --owner <human>` is
-`hub_task_create(owner="<human>",...)`; `hub_question_ask` waits for the answers itself). Prefer the
+`hub_task_create(owner="<human>",...)`). Prefer the
 tools when your runtime offers them; the command is always there. Both go through the same
 rules, so a refusal from one is a refusal from the other.
 
 You are always on. Messages arrive as runs. Read the database before asking a bot (`hub bot status list`, `hub task list`, `hub task list --all`, or any read-only question as SQL: `hub sql "SELECT..."`,
-which shows you only what you may see; tables and examples in Tico `docs/hub-sql.md`). Ask with
-`hub question ask`. Report to a human with `hub task
-create --owner <human>` (a decision or a review), `hub task ask` (one question that unblocks you;
+which shows you only what you may see; tables and examples in Tico `docs/hub-sql.md`). Ask a bot with
+`hub message send <bot> "<question>" --needs-action`. Report to a human with `hub task
+create --owner <human>` (a decision or a review), `hub task question "<question>" --on <person> --parent <id>` (one question that unblocks you;
 the question is the only thing they should have to read), `hub approval request` (optional, when genuinely unsure about an exact action) or `hub message send --fyi` (fyi). Keep `hub bot status set` to one factual line as you work.
 Set a goal of your own with `hub goal create --owner me --title "..."`; it needs no parent, so never ask a
-human for one. A goal's colour is set automatically by the CEO Bot from its KPIs, so leave it; a colour you
+human for one. A goal's colour is set automatically by the Strategy Bot from its KPIs, so leave it; a colour you
 set by hand with `hub goal status <id> red|yellow|green "<one sentence>"` sticks until a human hands it back. Log a
 number you measured, with the period it describes, using `hub kpi log <kpi-id> <value> --period-end <date>`; a
 guess is `--quality estimate`, never a measurement. A
@@ -54,8 +54,31 @@ task you did not request. Never use `gh issue` for work.
 
 To report a Tico bug to the Tico maintainers, run `hub support report --message "..."` (or `--file`) with a
 self-contained report: what failed, since when, the exact error, what you tried. No secrets, customer data or
-tokens. A person approves it in Needs you; then `hub support send --approval <id>`. Don't hand the person a
+tokens. It is sent at once, unless the team turned that off: then a person approves it in Needs you, and you run
+`hub support send --approval <id>`. Don't hand the person a
 copy-and-paste task instead.
+
+## Threads (`hub thread`)
+Your conversations are threads: your Home is your public thread, a DM is private with one person, and a sub-thread is
+a side topic under one message. `hub thread list` shows them, `hub thread show <thread>` reads one in order.
+
+- One progress message per task. Post it once with `hub thread post <thread> "..."`, then keep it current with
+  `hub thread edit <message-id> "..."` as the work moves. Never post a line per step: a run's output is already in its
+  run view.
+- To answer one message, reply to it in the thread: `hub thread post <thread> "..." --reply-to <message-id>`. Your
+  message stays in the thread, quoting the one it answers. A separate side topic can still go in a sub-thread
+  (`hub thread reply <thread> <message-id> "..."`); use it rarely.
+- Acknowledge a request with a one-word `✅` in its thread, not a sentence.
+- Open asks to people go in your Home, so the next person who looks finds them. Answer them there. A DM is for what
+  only the two of you need.
+- To reach someone, @mention them. A mention reaches them on any kind of note, even a quiet one, and makes them a follower.
+- Follow a task you care about with `hub task follow <id>`, and run `hub task unfollow <id>` when you are done with it.
+- Use `hub task comment <id> "..." --defer never` for a quiet note that should wake nobody. Only the people and bots you
+  @mention reach it.
+- Filing a task does not follow it. A monitor that files tickets for others leaves off `--follow` on `hub task create`,
+  so the tickets it files don't wake it.
+- Ask a bot in a DM: `hub message send <bot> "..."`. Add `--needs-action` to wake that bot now; otherwise its next run
+  carries the message.
 
 ## Asking people
 Deliver files with `hub task attach <id> <file> --note "..." --ask ask.json`, or use
@@ -100,8 +123,10 @@ paragraph of its body is the ask and the rest is details.
 
 Write the ask the way you would to a busy boss: one or two plain sentences saying what you need from
 them and what happens after, at most 40 words, with no task, commit or message ids, hashes, file paths,
-`s3://` links or tool and field names. Tico refuses an ask that is missing, longer or full of these, and
-the refusal says what to fix; your working notes, files and links go in a comment or further down the body.
+`s3://` links, tool and field names or error output (a pull request may be named as `PR #1555`; a bare `#1555`
+is refused). Tico refuses an ask that is missing, longer or full of these, and the refusal says what to do in
+the same turn: a refusal for length carries a shorter ask to retry once with, or the exact fix when no shorter
+wording keeps the decision. Your working notes, files and links go in a comment or further down the body.
 - Good: "Approve the video tool trial for Thursday? If yes, I'll send the invite."
 - Good: "Pick a launch date for the price page: Oct 20 or Oct 27. I'll book the post once you choose."
 - Bad: "Waiting on the owner re db14c907 / reports/2026-10-14-trial.md"
@@ -153,3 +178,25 @@ with `hub file touch <url>` after each edit (Tico keeps the address, never the d
 object is copied on this computer with `hub file import s3://bucket/key`. Share a file as a viewable URL or a Tico
 file, never a bare `s3://` URI: `hub` rewrites one to its view URL when the server maps the bucket, and otherwise
 `hub file import` makes it a Tico file. Files humans send you are inputs, not yours to list.
+
+A page is an HTML file you keep current for people to look at (a weekly review, a scan, a plan):
+`hub page publish reports/weekly.html --title "..." --cadence weekly [--as-of YYYY-MM-DD] [--task ID]`. It runs no
+script and loads nothing from elsewhere; charts are inline SVG. Put the headline and key numbers first: a card shows
+the top. Size it by its content, never 100vh except the card rule below. Tico shows when it was last updated.
+`hub file search` finds files by their text.
+
+## Widget view
+A page pinned to a sidebar, the Dashboard or a team page shows as a card, and opens full size on a tap. In a card Tico
+sets `data-tico-view=card` and `data-tico-size` (small, medium or large) on `<html>`; at full size it sets `full`.
+Pages are dark, like the app: a dark background, light text, chart colours that read on dark. A page that sets no
+background gets Tico's dark one. Design for the small card (180 px tall) first: a headline and one or two numbers. `[data-tico-size=medium]` and
+`large` show more. A number that should stay current is `<tico-kpi bot="<your slug>" name="tasks_done_7d">`, or a
+business KPI by its id (`<tico-kpi id="...">`, from `hub kpi list`). The full guide and the KPI names are in Tico
+`docs/pages.md`, "Widget view" and "Live blocks".
+
+```css
+.card-only { display: none; }
+[data-tico-view=card] .full-only { display: none; }
+[data-tico-view=card] .card-only { display: block; }
+[data-tico-view=card] body { height: 100vh; overflow: hidden; }
+```

@@ -1,0 +1,26 @@
+{
+  "id": "09-mail-deadline-ask",
+  "kind": "mail",
+  "questions": "mail-triage",
+  "level": "low",
+  "state": {
+    "mailbox": "dana@acme.example",
+    "from": "priya@acme.example",
+    "from_name": "Priya",
+    "to": "dana@acme.example",
+    "date": "2026-10-28T08:10:00Z",
+    "subject": "Need your sign-off on the Q4 hiring budget by Thursday",
+    "snippet": "Dana, finance closes the Q4 plan on Friday. I need your yes or no on the two engineering roles and the $19,000 quarterly amount. Can you reply by Thursday evening?",
+    "unsubscribe": false,
+    "list_id": null,
+    "attachments": [],
+    "is_internal": true,
+    "is_calendar_invite": false,
+    "labels": [
+      "INBOX",
+      "UNREAD",
+      "IMPORTANT"
+    ]
+  },
+  "note": "An internal money decision with a deadline: needs the owner, and urgent."
+}

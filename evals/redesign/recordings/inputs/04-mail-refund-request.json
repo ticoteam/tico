@@ -1,0 +1,24 @@
+{
+  "id": "04-mail-refund-request",
+  "kind": "mail",
+  "questions": "mail-triage",
+  "level": "low",
+  "state": {
+    "mailbox": "dana@acme.example",
+    "from": "sam.whitfield@acme.example",
+    "from_name": "Sam Whitfield",
+    "to": "dana@acme.example",
+    "date": "2026-10-25T12:30:00Z",
+    "subject": "Charged twice in October, please refund one",
+    "snippet": "I was billed twice on 2 October for the Team plan. Please refund the second charge to the card ending 4417. Thanks, Sam.",
+    "unsubscribe": false,
+    "list_id": null,
+    "attachments": [],
+    "is_internal": false,
+    "is_calendar_invite": false,
+    "labels": [
+      "INBOX"
+    ]
+  },
+  "note": "A refund request: money and a direct ask, so the owner decides."
+}

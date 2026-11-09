@@ -1,0 +1,35 @@
+{
+  "expected": [
+    {
+      "text": "Do not use information from the service for spam, including unsolicited email or selling personal information.",
+      "quote": "You may not use information from the Service (whether scraped, collected through our API, or obtained otherwise) for spamming purposes",
+      "section": "Information from the Service",
+      "who_hint": "marketing"
+    },
+    {
+      "text": "Do not post another person's personal information without consent.",
+      "quote": "or violates the privacy of any third party, such as by posting another person's personal information without consent.",
+      "section": "Privacy",
+      "who_hint": "legal"
+    },
+    {
+      "text": "Anyone collecting data from the service must follow the GitHub Privacy Statement.",
+      "quote": "Any person, entity, or service collecting data from the Service must comply with the GitHub Privacy Statement",
+      "section": "Information from the Service",
+      "who_hint": "data"
+    },
+    {
+      "text": "Promotional text in READMEs must relate to the project hosted on GitHub.",
+      "quote": "they must be related to the project you are hosting on GitHub.",
+      "section": "Advertising",
+      "who_hint": "marketing"
+    }
+  ],
+  "url": "https://docs.github.com/en/site-policy/acceptable-use-policies/github-acceptable-use-policies",
+  "fetched_at": "2026-10-30T23:39:40Z",
+  "from": {
+    "name": "GitHub Acceptable Use Policies",
+    "kind": "vendor"
+  },
+  "truncated": false
+}

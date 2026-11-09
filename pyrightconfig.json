@@ -1,0 +1,20 @@
+{
+  "include": [
+    "backend"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    ".venv-pyright",
+    ".remote-runs",
+    "backend/tests",
+    "backend/migrations/renames_data.py"
+  ],
+  "strict": [
+    "backend/finance",
+    "backend/records"
+  ],
+  "pythonPlatform": "Linux",
+  "pythonVersion": "3.15",
+  "typeCheckingMode": "standard"
+}

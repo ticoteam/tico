@@ -20,6 +20,84 @@ with the text first, so lint and the reviewer read the same body Gmail shows.
 
 import base64, hashlib, re
 from email.message import EmailMessage
+from email.parser import BytesParser
+from email import policy
+from datetime import timezone
+
+
+def with_invitation(raw, event, mailbox, attendees, start, end, summary):
+    """The invitation is part of the same frozen MIME send and approval as its confirmation."""
+
+    def text(value):
+        return (
+            str(value)
+            .replace("\\", "\\\\")
+            .replace("\r", "")
+            .replace("\n", "\\n")
+            .replace(";", "\\;")
+            .replace(",", "\\,")
+        )
+
+    def stamp(value):
+        return value.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    from .calendar import _meeting_url
+
+    join = _meeting_url(event)
+    points = (event.get("conferenceData") or {}).get("entryPoints") or []
+    conference = [str(point["uri"]).replace("\r", "").replace("\n", "") for point in points if point.get("uri")]
+    description = "\n".join(filter(None, [event.get("description"), "Join: " + join if join else "", *conference]))
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Tico//Calendar//EN",
+        "METHOD:REQUEST",
+        "BEGIN:VEVENT",
+        "UID:" + text(event.get("iCalUID") or str(event["id"]) + "@google.com"),
+        "SEQUENCE:0",
+        "DTSTAMP:" + stamp(start),
+        "DTSTART:" + stamp(start),
+        "DTEND:" + stamp(end),
+        "SUMMARY:" + text(summary),
+        "ORGANIZER:mailto:" + mailbox,
+    ]
+    if join:
+        lines += ["URL:" + join]
+    if event.get("location"):
+        lines += ["LOCATION:" + text(event["location"])]
+    if description:
+        lines += ["DESCRIPTION:" + text(description)]
+    lines += ["CONFERENCE;VALUE=URI:" + uri for uri in dict.fromkeys([join, *conference]) if uri]
+    lines += ["ATTENDEE;RSVP=TRUE:mailto:" + address for address in attendees]
+    lines += ["END:VEVENT", "END:VCALENDAR", ""]
+    msg = BytesParser(policy=policy.SMTP).parsebytes(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
+    details = "\n".join(
+        filter(
+            None,
+            [
+                "Join: " + join if join else "",
+                "Location: " + str(event["location"]) if event.get("location") else "",
+                str(event.get("description") or ""),
+            ],
+        )
+    )
+    if details:
+        body = msg.get_body(preferencelist=("plain",))
+        if body is None:
+            raise ValueError("An invitation needs a visible plain-text body")
+        body.set_content(body.get_content().rstrip() + "\n\n" + details + "\n")
+    folded = []
+    for line in lines:
+        current = ""
+        for character in line:
+            if len((current + character).encode()) > 75:
+                folded.append(current)
+                current = " "
+            current += character
+        folded.append(current)
+    msg.add_attachment("\r\n".join(folded), subtype="calendar", filename="invitation.ics", params={"method": "REQUEST"})
+    return base64.urlsafe_b64encode(msg.as_bytes()).decode()
+
 
 RE_PREFIX = re.compile(r"(?i)^\s*(re\s*:\s*)+")
 
@@ -47,7 +125,7 @@ def send_key(employee, issue, draft_id):
 
 
 def reply_subject(subject):
-    """"Re: X" once, never "Re: Re: X"."""
+    """ "Re: X" once, never "Re: Re: X"."""
     base = RE_PREFIX.sub("", str(subject or "")).strip()
     return f"Re: {base}" if base else ""
 
@@ -59,8 +137,7 @@ def thread_headers(messages):
     ordered = sorted(messages, key=lambda m: m.get("epoch") or 0)
     last = ordered[-1]
     mid = (last.get("headers") or {}).get("message-id", "").strip()
-    refs = " ".join(x for x in [(last.get("headers") or {}).get("references", "").strip(), mid]
-                    if x).strip()
+    refs = " ".join(x for x in [(last.get("headers") or {}).get("references", "").strip(), mid] if x).strip()
     people = []
     for m in ordered:
         for a in [m.get("from")] + list(m.get("to") or []) + list(m.get("cc") or []):
@@ -86,8 +163,27 @@ def build(to, subject, body, from_addr="", cc=(), in_reply_to="", references="",
     msg.set_content(body or "")
     for a in attachments or ():
         main, _, sub = str(a.get("type") or "application/octet-stream").partition("/")
-        msg.add_attachment(a["data"], maintype=main or "application",
-                           subtype=sub or "octet-stream", filename=a["name"])
+        msg.add_attachment(a["data"], maintype=main or "application", subtype=sub or "octet-stream", filename=a["name"])
+    return base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=")
+
+
+def with_warning(raw, line):
+    """The same message with `line` above its text (each text/plain part, and as a paragraph above each text/html
+    part), headers and attachments untouched: an org rule's Warn on the recipient's copy."""
+    import email
+    import html
+    from email import policy
+
+    s = str(raw or "").replace("-", "+").replace("_", "/")
+    msg = email.message_from_bytes(base64.b64decode(s + "=" * (-len(s) % 4)), policy=policy.default)
+    for part in msg.walk():
+        if part.is_multipart() or part.get_content_disposition() == "attachment":
+            continue
+        kind = part.get_content_type()
+        if kind == "text/plain":
+            part.set_content(line + "\n\n" + part.get_content())
+        elif kind == "text/html":
+            part.set_content("<p>" + html.escape(line) + "</p>\n" + part.get_content(), subtype="html")
     return base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=")
 
 

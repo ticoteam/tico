@@ -1,42 +1,52 @@
 # Weekly developer pulse
 
-Schedule: Thursdays at 10:00 team time (routine `weekly-developer-pulse`), after setup. Also run by hand. Budget 50 minutes. The outcome is one page: every open public question with a
-ready answer, the friction themes, and one sample worth writing. Nothing is posted.
+Schedule: Thursdays at 10:00 team time (routine `weekly-developer-pulse`), after setup. Also run by hand. Budget 50
+minutes. Nothing is posted.
 
 ---
 
-## 1. Read where things stand
+## Inputs
 
-    hub task show <id>
+- `knowledge/channels.md`, `knowledge/do-not-say.md`, `knowledge/friction-log.md`, and last week's pulse.
+- Public questions in each channel since the last pulse. The first run after setup covers the last 14 days.
+- The product's public docs, and the SDK and example repositories the owner has listed.
 
-Then `knowledge/channels.md`, `knowledge/do-not-say.md`, `knowledge/friction-log.md` and last week's pulse.
-Check which sourced answers were posted and whether the asker replied.
+## Steps
 
-## 2. Sweep the channels
+1. **Read where things stand.** `hub task show <id>`, then the inputs above. Note which answers were posted and
+   whether the asker replied.
+2. **Sweep the channels.** For each channel in `knowledge/channels.md`, list new questions and older ones with no
+   team reply. For each: link, date, the question in one line, and the language and SDK version if given.
+3. **Prepare the answers.** For each open question, find the answer in the docs (`hub doc search`, `hub doc ask`) and
+   in the code. Write the reply: the fix, one line of why, the doc link. Run any code using
+   `skills/test-a-code-sample/SKILL.md`, and name the version. Check the reply against `knowledge/do-not-say.md`.
+   A requested reply is posted only when the task asks for it, a Tool allows it and a person has turned mail sending
+   on in Tico. Otherwise it stays a draft with its destination. A question you cannot answer goes to the named
+   engineer as a proposed task.
+4. **Count the friction.** Use `skills/tag-and-count-friction/SKILL.md`: tag each question with its integration step,
+   add counts and links to `knowledge/friction-log.md`, and name the fix for each theme.
+5. **Propose one sample.** The theme with the highest count that a working example would answer. One paragraph: what
+   it shows, the language, the rough effort. Write it only when the requester asked for it, with
+   `playbooks/write-a-sample.md`.
+6. **Write and hand over.** Write the report, `hub file publish` it, commit, then close the task.
 
-Each channel in `knowledge/channels.md` since the last pulse: new questions, and older ones still without an
-answer from the team. For each: link, date, the question in one line, the language and SDK version if
-given.
+## Output
 
-## 3. Prepare the answers
+`reports/YYYY-MM-DD-developer-pulse.md`, in this order, in the shape of `knowledge/examples/developer-pulse.md`:
 
-For each open question: find the answer in the docs (`hub doc search`, `hub doc ask`) and the code; write the
-reply (the fix, one line of why, the doc link); run any code against the stated SDK version where you can,
-and say which version. Check it against `knowledge/do-not-say.md`. A question you cannot answer goes to the
-named engineer as a proposed task. Post requested replies with your Tools when a person has turned mail sending on in Tico; otherwise keep drafts with their destinations.
+- **Headline:** new questions, questions waiting more than two working days, and the top friction with its count.
+- **Answers ready to use:** one entry per open question, with the channel, date, the reply text, and the SDK version it
+  was run against (or "not run" and why).
+- **Needs an engineer:** questions the docs and the code cannot answer, each with its proposed task.
+- **Friction:** the table for this period from `knowledge/friction-log.md`.
+- **Proposed sample:** one line, then one paragraph.
+- **Could not read:** each channel or page you could not reach, with the reason.
+- **Sources:** the channels, the date range, the SDK versions, and the date the docs were read.
 
-## 4. Update the friction log
+## Done when
 
-Tag each question with the integration step it hit (auth, first call, webhooks, pagination, rate limits,
-errors). Add counts and links to `knowledge/friction-log.md`. A step hit twice or more is a theme; name the
-fix that would remove it (a doc change for the Technical Writer, a product change for Product, a better error
-message for engineering).
-
-## 5. Propose one sample
-
-The theme with the highest count that a working example would answer. One paragraph: what it shows, the
-language, how long it would take. Write it with `playbooks/write-a-sample.md` within the requested work.
-
-## 6. Write and hand over
-
-Write `reports/YYYY-MM-DD-developer-pulse.md` in the shape of `knowledge/examples/developer-pulse.md`, `hub file publish` it, commit, then `hub task update <id> --status done --note`.
+- Every question in the window is listed as answered in draft, waiting for an engineer, or unreadable.
+- Each code answer names an SDK version and a run date, or says "not run".
+- Every friction theme has two or more linked threads.
+- The report is published with `hub file publish`, and the task is closed with `hub task update <id> --status done
+  --note`. The note gives the report path and the number of questions still waiting.

@@ -15,9 +15,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       await page.emulateMedia({reducedMotion: 'reduce'});
       const errors = [], writes = [];
       page.on('pageerror', error => errors.push(error.message));
-      const base = {host: 'keeper', status: 'active', state: 'active', can_chat: true, can_manage: true, operator: 'sam',
+      const base = {host: 'keeper', status: 'active', state: 'active', can_chat: true, can_manage: true, owner_id: 'sam',
         my_access: {see: true, read: true, write: true}, schedules: [], revision: 1, thread_mode: 'personal', users: []};
-      const computer = (id, more) => ({runner_id: id, generation: 1, label: id, operator: 'sam', last_seen: new Date().toISOString(),
+      const computer = (id, more) => ({runner_id: id, generation: 1, label: id, owner_id: 'sam', last_seen_at: new Date().toISOString(),
         platform: 'linux', version: '0.3.52', screen: 'off', screen_available: false, ...more});
       const bot = (name, online, machine) => ({...base, name, slug: name, display_name: name, online, machine});
       const bots = [
@@ -27,19 +27,19 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         bot('mac', true, computer('c-mac', {platform: 'darwin'})),
         bot('offline', false, computer('c-offline', {screen: 'view', screen_available: true})),
         bot('none', false, null),
-        bot('unowned', true, computer('c-unowned', {operator: null, screen: 'view', screen_available: true})),
-        bot('flip', true, computer('c-flip', {operator: 'ana', screen: 'view'})),
+        bot('unowned', true, computer('c-unowned', {owner_id: null, screen: 'view', screen_available: true})),
+        bot('flip', true, computer('c-flip', {owner_id: 'ana', screen: 'view'})),
         // Seen, not read: the server leaves out the computer, online and agent (backend/views.py).
-        {name: 'seen', display_name: 'seen', state: 'active', status: 'active', description: '', reports_to: '', operator: 'sam',
+        {name: 'seen', display_name: 'seen', state: 'active', status: 'active', description: '', reports_to: '', owner_id: 'sam',
          my_access: {see: true, read: false, write: false}, can_manage: false, bot_owners: [], private_tasks_default: false,
          team: '', org_parent: '', is_branch: false, users: [], icon: '', helper: false, can_chat: false}];
       await page.route('**/*', route => {
         const request = route.request(), p = new URL(request.url()).pathname;
         const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
         if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-        const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+        const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
         if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-        if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
+        if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
         if (p === '/api/me') return json({...me, cloud: true, registered: true, config: {version: '0.3.52', app_name: 'Tico'}});
         if (p === '/api/employees') return json(bots);
         if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam'}, {id: 'bo', name: 'Bo'}], teams: {}});
@@ -50,7 +50,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, today: {}});
         if (p === '/api/v2/tasks') return json({tasks: []});
         if (p === '/api/v2/operations') return json({machines: bots.filter(b => b.machine).map(b => ({id: b.machine.runner_id, label: b.machine.label,
-          operator: b.machine.operator, online: b.online, platform: b.machine.platform, screen: b.machine.screen, screen_available: b.machine.screen_available})), services: []});
+          owner_id: b.machine.owner_id, online: b.online, platform: b.machine.platform, screen: b.machine.screen, screen_available: b.machine.screen_available})), services: []});
         if (p === '/api/v2/conversations') return json({conversations: []});
         if (/^\/api\/v2\/computers\/[^/]+\/screen$/.test(p)) {
           const body = JSON.parse(request.postData()); writes.push(body);
@@ -81,7 +81,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const admin = await visit({id: 'ana', name: 'Ana', role: 'owner'});
     await admin.open('ready');
     assert.equal(await admin.page.locator('#bot-top #bot-screen').count(), 1);
-    assert.deepEqual(await admin.page.locator('[data-bot-detail-tab]').allTextContents(), ['Info', 'Instructions', 'History', 'Settings']);
+    assert.deepEqual(await admin.page.locator('[data-bot-detail-tab]').allTextContents(), ['Info', 'Rules', 'Instructions', 'History', 'Settings']);
     assert.equal(await admin.page.locator('#sess-card').count(), 0);
     await admin.page.locator('[data-bot-detail-tab=settings]').click();
     await admin.page.locator('#bot-editor form').waitFor();
@@ -145,7 +145,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await member.page.locator('#bot-editor form').waitFor();
     assert.equal(await member.page.locator('[data-screen-toggle]').count(), 0);
     await member.open('seen');
-    assert.deepEqual(await member.page.locator('[data-bot-detail-tab]').allTextContents(), ['Info']);
+    assert.deepEqual(await member.page.locator('[data-bot-detail-tab]').allTextContents(), ['Info', 'Rules']);
     assert.equal(await member.page.locator('#bot-editor').count(), 0);
     assert.equal(await member.page.locator('[data-screen-toggle]').count(), 0);
     assert.deepEqual(member.writes, []);

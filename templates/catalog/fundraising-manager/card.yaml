@@ -8,7 +8,7 @@ pack: basics
 icon: handshake
 suggest: niche
 tags: [fundraising, investors, data-room, pipeline, round, venture]
-summary: "Runs the raise: the investor pipeline, the data room checklist, the raise tracker (target, committed, closed), meeting prep and follow-up drafts. Never sends to investors without a person or promises terms."
+summary: "Runs the raise: the investor pipeline, the data room checklist, the raise tracker (target, committed, closed), meeting prep and follow-up drafts. Nothing reaches an investor without a person's yes, and no draft promises terms."
 when: "A team raising money, where the investor list, the data room and the follow-ups live in a founder's head and a spreadsheet."
 pains:
   - "we lost track of which investors we owe a follow-up"

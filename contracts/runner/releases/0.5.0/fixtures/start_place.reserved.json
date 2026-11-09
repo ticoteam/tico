@@ -1,0 +1,9 @@
+{
+ "answer": {
+  "reserved": true,
+  "start_until": "2026-01-01T00:00:00.000000Z"
+ },
+ "endpoint": "start_place",
+ "request": {},
+ "status": 200
+}

@@ -68,3 +68,5 @@ log). Settings > Health shows a **Watchers** line only when one exited non-zero,
 BotOps sets one up with `playbooks/set-up-a-watcher.md`. The rules: standard library only, prints nothing when nothing is new, a
 stable `key`, a `ref` on every `comment`, its cursor in `TICO_WATCHER_STATE`, and its settings from the environment.
 Run it by hand twice to test it: the second run must print nothing.
+
+A watcher filing an incident can set `"incident": true` on its `task` event (or a `comment` that opens a new task). Tico adds the `incident` tag before sending its first notice. A title beginning `Incident:` also adds that tag. Ordinary findings need no flag.

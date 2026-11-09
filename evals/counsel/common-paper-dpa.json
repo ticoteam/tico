@@ -1,0 +1,37 @@
+{
+  "expected": [
+    {
+      "text": "Tell the provider of an objection to a subprocessor change within 30 days of notice, so both sides work it out.",
+      "quote": "If Customer objects to the change within 30 days of notice",
+      "section": "Subprocessors",
+      "who_hint": "legal"
+    },
+    {
+      "text": "Fill in the approved subprocessors and the SCC annex details in the agreement.",
+      "quote": "Then fill out the details of your agreement like approved subprocessors",
+      "section": "How to use this DPA",
+      "who_hint": "legal"
+    },
+    {
+      "text": "If Customer objects to a subprocessor change, both sides cooperate in good faith to resolve it.",
+      "quote": "Customer and Provider will cooperate in good faith to resolve Customer’s objection or concern.",
+      "section": "Subprocessors",
+      "who_hint": "legal"
+    }
+  ],
+  "url": "https://commonpaper.com/standards/data-processing-agreement/",
+  "fetched_at": "2026-10-30T23:39:41Z",
+  "from": {
+    "name": "Common Paper DPA",
+    "kind": "other"
+  },
+  "truncated": false,
+  "not_ours": [
+    {
+      "text": "The provider will not retain, use, or disclose our personal data beyond the service.",
+      "quote": "In addition, Provider will not retain, use, or disclose any Personal Data provided by Customer under the Agreement",
+      "section": "Processing",
+      "who_hint": ""
+    }
+  ]
+}

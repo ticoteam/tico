@@ -1,0 +1,98 @@
+# Tico Recorder for Mac: a signed, notarized, universal app and disk image, plus the updater archive and its signature.
+# Built on a version tag by release.yml (only when recorder/ changed since the previous release, or it is carried
+# forward), on main when recorder/ changes, and by hand. Signing and updater keys are the desktop app's (app.yml).
+name: Tico Recorder
+
+on:
+  push:
+    branches: [main]
+    paths: ["recorder/**", "scripts/app_release.py", ".github/workflows/recorder.yml"]
+  workflow_dispatch:
+  workflow_call:    # a version tag whose recorder changed (release.yml); the server release never waits for it
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: recorder
+          shared-key: recorder
+      - name: The recorder's version is the release's
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          PY=$(command -v python3 || command -v python)
+          "$PY" -c "import json,os; p='recorder/tauri.conf.json'; d=json.load(open(p)); d['version']=os.environ['GITHUB_REF_NAME'].removeprefix('v'); json.dump(d, open(p,'w'), indent=2)"
+      - name: Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+      - name: Apple signing identity
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          # Keychain output can contain private certificate subject names.
+          exec >/dev/null 2>&1
+          [ -n "$APPLE_CERTIFICATE" ] || exit 0
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p ci build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p ci build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+          rm certificate.p12
+      - name: Apple signing and notarization, only when the secrets exist
+        env:
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          ID: ${{ secrets.APPLE_ID }}
+          PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # An empty APPLE_SIGNING_IDENTITY makes the bundler try to sign with nothing; only a
+          # real identity goes into the environment. Without one, tauri.conf.json signs ad hoc.
+          [ -n "$IDENTITY" ] && echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          [ -n "$ID" ] && echo "APPLE_ID=$ID" >> "$GITHUB_ENV"
+          [ -n "$PASSWORD" ] && echo "APPLE_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+          [ -n "$TEAM" ] && echo "APPLE_TEAM_ID=$TEAM" >> "$GITHUB_ENV"
+          true
+      - name: Build
+        working-directory: recorder
+        shell: bash
+        run: |
+          # Signing tools can print private certificate subjects or identifiers.
+          if ! cargo tauri build --target universal-apple-darwin --features desktop --bundles app,dmg >/dev/null 2>&1; then
+            echo '::error::Recorder build failed; verify build dependencies and signing configuration.'
+            exit 1
+          fi
+      - name: Collect bundles
+        shell: bash
+        run: |
+          mkdir -p out
+          find recorder/target/universal-apple-darwin/release/bundle -type f \( -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' \) -exec cp {} out/ \;
+          shopt -s nullglob
+          dmgs=(out/*.dmg)
+          [ "${#dmgs[@]}" -eq 1 ] || { echo "::error::Expected one recorder disk image, found ${#dmgs[@]}"; exit 1; }
+          # GitHub turns spaces in asset names into dots, so the release names have none (the signed bytes are unchanged).
+          for file in out/*; do mv "$file" "${file// /-}"; done
+          # The stable name the download link uses; the versioned disk image stays next to it.
+          cp out/Tico-Recorder_*.dmg out/Tico-Recorder.dmg
+          ls out/*.app.tar.gz.sig >/dev/null || { echo "::error::No recorder updater signature"; exit 1; }
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recorder
+          path: out/
+          if-no-files-found: error

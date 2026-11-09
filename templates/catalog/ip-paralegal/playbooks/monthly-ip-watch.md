@@ -31,4 +31,10 @@ and anyone still "does not" or "not seen".
 `reports/YYYY-MM-DD-ip-watch.md` in the shape of `knowledge/examples/ip-watch.md`: the headline, deadlines inside
 12 months, domains inside 90 days, look-alikes, assignments, what you could not search, then the not-legal-advice
 line. `hub file publish` it, commit, and `hub task update <id> --status done --note` with the nearest deadline first.
-A deadline inside 60 days becomes a task for the decision-maker on this task.
+A deadline inside 60 days becomes a task for the decision-maker, with `hub task create --owner <person>`.
+
+## Done when
+- Every mark and domain in `knowledge/register.md` has its next deadline, window and rule, cited to the office page with the date read.
+- Every look-alike kept has its mark, owner, number, status and one line on why it may matter, and the rest are counted.
+- Every person in `knowledge/assignments.md` has "assigns", "does not" or "not seen".
+- The watch is published, and the task is closed with the nearest deadline first.

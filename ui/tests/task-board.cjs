@@ -27,35 +27,35 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
           cpo: {resolved_model: 'gpt-6.1-sol', resolved_effort: 'high', model_source: 'bot'},
           cmo: {resolved_model: 'claude-opus-5-5', resolved_effort: '', model_source: 'company'}}[name]}));
     const now = new Date().toISOString();
-    const task = (id, over) => ({id, title: id, body: 'Details.', owner: 'bot:cmo', requester: 'human:reviewer', status: 'open',
-      lane: 'company', rank: 1, labels: [], links: [], parts: {total: 0, done: 0}, version: 3, created: now, updated: now, ...over});
+    const task = (id, over) => ({id, title: id, body: 'Details.', owner_id: 'bot:cmo', requester_id: 'human:reviewer', status: 'open',
+      lane: 'company', rank: 1, labels: [], links: [], parts: {total: 0, done: 0}, version: 3, created_at: now, updated_at: now, ...over});
     let me = {id: 'reviewer', name: 'Test Reviewer', email: 'reviewer@example.test', role: 'owner', mover: true, cloud: true};
     const tags = [
       {id: 'tag-newsletter', key: 'newsletter', label: 'release', metadata: {date: '2026-10-02'},
         markdown: '# Release\n\n- [ ] Smoke checks\n- [x] Tell the team\n\n```md\n- [ ] Literal example\n```\n\n<script>window.tagUnsafe = true</script>',
-        is_template: false, template_id: null, owner: 'human:reviewer', version: 1},
+        is_template: false, template_id: null, owner_id: 'human:reviewer', version: 1},
       {id: 'tag-template', key: 'release-checklist', label: 'release', metadata: {channel: 'stable'},
-        markdown: '- [ ] Migrations / scripts to run', is_template: true, template_id: null, owner: 'human:reviewer', version: 1},
+        markdown: '- [ ] Migrations / scripts to run', is_template: true, template_id: null, owner_id: 'human:reviewer', version: 1},
     ];
     let staleTag = false, raceStarter = false;
     let tasks = [
       task('Draft the newsletter', {rank: 2, labels: ['newsletter'], tags: [tags[0]], body: 'Review [packet](http://tico-ui.test/api/v2/files/doc).',
         attachments: [{id: 'doc', name: 'review-packet.md'}, {id: 'clip', name: 'first-cut.mp4'}, {id: 'archive', name: 'source.zip'}]}),
-      task('Approve the budget', {owner: 'human:reviewer', requester: 'bot:coo', rank: 1, labels: ['finance'], note: 'Waiting on finance approval'}),
+      task('Approve the budget', {owner_id: 'human:reviewer', requester_id: 'bot:coo', rank: 1, labels: ['finance'], note: 'Waiting on finance approval'}),
       task('Write the copy', {rank: 1, labels: ['newsletter', 'copy'], relations: {
-        related: [{id: 'Draft the newsletter', title: 'Draft the newsletter', status: 'open', owner: 'bot:cmo', direction: 'both'}],
-        duplicate_of: [{id: 'Fix the checkout bug', title: 'Fix the checkout bug', status: 'open', owner: 'bot:cpo', direction: 'in'}]}}),
-      task('Ship the pricing page', {owner: 'bot:cpo', lane: 'product', status: 'review', rank: 1,
+        related: [{id: 'Draft the newsletter', title: 'Draft the newsletter', status: 'open', owner_id: 'bot:cmo', direction: 'both'}],
+        duplicate_of: [{id: 'Fix the checkout bug', title: 'Fix the checkout bug', status: 'open', owner_id: 'bot:cpo', direction: 'in'}]}}),
+      task('Ship the pricing page', {owner_id: 'bot:cpo', lane: 'product', status: 'review', rank: 1,
         links: [{id: 'l1', kind: 'pr', url: 'https://github.com/ticoteam/tico/pull/412', title: 'tico#412', state: 'open'}], parts: {total: 2, done: 1}}),
-      task('Fix the checkout bug', {owner: 'bot:cpo', lane: 'product', status: 'open', rank: 2, labels: ['bug']}),
+      task('Fix the checkout bug', {owner_id: 'bot:cpo', lane: 'product', status: 'open', rank: 2, labels: ['bug']}),
     ];
-    const comments = [{id: 'm1', kind: 'say', from_actor: 'human:ben', to_actor: 'bot:cmo', body: 'Use the September numbers.', created: now, edited_at: now, refs: {task: 'Draft the newsletter', comment: true, attachments: [{id: 'doc', name: 'review-packet.md'}]}}];
-    const events = [{id: 'e1', task_id: 'Draft the newsletter', ts: now, actor: 'human:reviewer', field: 'status', old: null, new: 'open', note: ''},
-                    {id: 'e2', task_id: 'Draft the newsletter', ts: now, actor: 'bot:cmo', field: 'status', old: 'open', new: 'doing', note: 'Drafting from the brief'},
-                    {id: 'e3', task_id: 'Draft the newsletter', ts: now, actor: 'bot:cmo', field: 'note', old: '', new: 'Drafting from the brief', note: 'Drafting from the brief'},
-                    {id: 'e4', task_id: 'Draft the newsletter', ts: now, actor: 'bot:cmo', field: 'note', old: '', new: 'Waiting on the logo', note: ''},
-                    {id: 'e5', task_id: 'Draft the newsletter', ts: now, actor: 'human:ben', field: 'comment', old: 'm1', new: 'm1', note: ''},
-                    {id: 'e6', task_id: 'Draft the newsletter', ts: now, actor: 'human:ben', field: 'comment', old: 'm0', new: null, note: ''}];
+    const comments = [{id: 'm1', kind: 'say', sender_id: 'human:ben', recipient_id: 'bot:cmo', body: 'Use the September numbers.', created_at: now, edited_at: now, refs: {task: 'Draft the newsletter', comment: true, attachments: [{id: 'doc', name: 'review-packet.md'}]}}];
+    const events = [{id: 'e1', task_id: 'Draft the newsletter', created_at: now, actor: 'human:reviewer', field: 'status', old: null, new: 'open', note: ''},
+                    {id: 'e2', task_id: 'Draft the newsletter', created_at: now, actor: 'bot:cmo', field: 'status', old: 'open', new: 'doing', note: 'Drafting from the brief'},
+                    {id: 'e3', task_id: 'Draft the newsletter', created_at: now, actor: 'bot:cmo', field: 'note', old: '', new: 'Drafting from the brief', note: 'Drafting from the brief'},
+                    {id: 'e4', task_id: 'Draft the newsletter', created_at: now, actor: 'bot:cmo', field: 'note', old: '', new: 'Waiting on the logo', note: ''},
+                    {id: 'e5', task_id: 'Draft the newsletter', created_at: now, actor: 'human:ben', field: 'comment', old: 'm1', new: 'm1', note: ''},
+                    {id: 'e6', task_id: 'Draft the newsletter', created_at: now, actor: 'human:ben', field: 'comment', old: 'm0', new: null, note: ''}];
     const posted = [];
     const people = [];
     let preferencePending = true, tasksStartedBeforePreference = false;
@@ -68,7 +68,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui) { const file = uiFile(ui[1]); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p === '/vendor/marked.min.js') return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
       if (p === '/api/employees') return json(bots);
@@ -76,16 +76,21 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       if (p === '/api/me') return json(me);
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: []});
-      if (p === '/api/v2/routines') return json({routines: [
-        {id: 'weekly-review', title: 'Review customer signals', employee: 'cmo', cron: '0 9 * * 1', active: true, enabled: true, next: now},
-        {id: 'release-review', title: 'Review release readiness', employee: 'cpo', cron: '0 9 * * 1', active: true, enabled: true, next: now},
-        {id: 'build-review', title: 'Review build health', employee: 'cto', cron: '0 9 * * 1', active: true, enabled: true, next: now}]});
+      if (p === '/api/v2/needs-you') {
+        // Needs you draws from this feed; held with the first task list so the first visit shows its skeleton.
+        if (!process.env.TICO_TAG_TEST_ONLY) await initialTasksGate;
+        const actor = 'human:' + me.id;
+        const items = tasks.filter(t => t.lane === 'company' && !['done', 'closed', 'declined'].includes(t.status)
+          && (t.owner_id === actor || t.waiting_on === actor || t.ask?.recipient_id === actor))
+          .map(t => ({...t, kind: t.ask ? 'question' : t.waiting_on ? 'waiting' : 'task'}));
+        return json({items, count: items.length, plate_count: items.length});
+      }
       if (p === '/api/humans') return json({people});
       if (p === '/api/v2/tasks/flow') {
         flowAsked.push(Object.fromEntries(url.searchParams));
         const day = back => { const d = new Date(); d.setDate(d.getDate() - back);
           return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
-        const days = Array.from({length: 20}, (_, i) => ({day: day(i), created: 3 + (i % 5), doing: 2 + (i % 3), done: 1 + (i * 7 % 6), closed: i % 4}));
+        const days = Array.from({length: 20}, (_, i) => ({day: day(i), created_at: 3 + (i % 5), doing: 2 + (i % 3), done: 1 + (i * 7 % 6), closed: i % 4}));
         const totals = {}; for (const d of days) for (const [k, v] of Object.entries(d)) if (k !== 'day') totals[k] = (totals[k] || 0) + v;
         return json({since: now, days, totals, steps: [], stages: {open: {n: 40, median_hours: 0.4, p90_hours: 9}, doing: {n: 38, median_hours: 2.5, p90_hours: 30},
           done: {n: 20, median_hours: 52, p90_hours: 80}}, people: [{actor: 'bot:cmo', created: 30, done: 22, closed: 10}, {actor: 'human:reviewer', created: 8, done: 3}]});
@@ -94,7 +99,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       if (p === '/api/v2/tags' && req.method() === 'GET') return json({tags});
       if (p === '/api/v2/tags' && req.method() === 'POST') {
         const body = req.postDataJSON(); posted.push({path: p, body});
-        const tag = {...body, id: 'tag-starter', metadata: {}, owner: 'human:reviewer', version: 1};
+        const tag = {...body, id: 'tag-starter', metadata: {}, owner_id: 'human:reviewer', version: 1};
         tags.push(tag);
         if (raceStarter) {
           Object.assign(tag, {is_template: false, label: 'Existing release', markdown: '- [x] Keep our notes'});
@@ -151,8 +156,8 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
         const lane = url.searchParams.get('lane');
         if (lane) rows = rows.filter(task => (task.lane || 'company') === lane);
         const owner = url.searchParams.get('owner');
-        if (owner) rows = rows.filter(task => task.owner === owner || task.owner === 'bot:' + owner);
-        if (url.searchParams.get('sort') === 'finished') rows.sort((a, b) => String(b.closed_at || b.updated).localeCompare(String(a.closed_at || a.updated)));
+        if (owner) rows = rows.filter(task => task.owner_id === owner || task.owner_id === 'bot:' + owner);
+        if (url.searchParams.get('sort') === 'finished') rows.sort((a, b) => String(b.closed_at || b.updated_at).localeCompare(String(a.closed_at || a.updated_at)));
         const offset = Number(url.searchParams.get('offset') || 0), limit = Number(url.searchParams.get('limit') || 500);
         return json({tasks: rows.slice(offset, offset + limit), next_offset: rows.length > offset + limit ? offset + limit : null});
       }
@@ -170,7 +175,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       const cm = p.match(/^\/api\/v2\/tasks\/([^/]+)\/comments$/);
       if (cm && req.method() === 'POST') {
         const body = req.postDataJSON(); posted.push({path: p, body});
-        comments.push({id: 'm' + comments.length, kind: 'say', from_actor: 'human:reviewer', to_actor: 'bot:cmo', body: body.text, created: new Date().toISOString(), refs: {task: decodeURIComponent(cm[1]), comment: true}});
+        comments.push({id: 'm' + comments.length, kind: 'say', sender_id: 'human:reviewer', recipient_id: 'bot:cmo', body: body.text, created_at: new Date().toISOString(), refs: {task: decodeURIComponent(cm[1]), comment: true}});
         return json({comment: comments.at(-1), comments, woke: true});
       }
       if (p === '/api/v2/conversations') return json({conversations: []});
@@ -193,44 +198,64 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       await page.setViewportSize({width, height: 900});
       const result = await page.evaluate(() => {
         const head = document.querySelector('.tl-head');
-        const items = ['h1', '.tl-search', '#task-new', '#task-view'].map(s => head.querySelector(s).getBoundingClientRect());
+        const items = ['h1', '#task-scope', '.tl-search', '#task-filter', '#task-archive', '#task-more', '#task-new', '[data-go-through]']
+          .map(s => head.querySelector(s)).filter(el => el.checkVisibility()).map(el => el.getBoundingClientRect());
         return {tops: items.map(r => Math.round(r.top)), right: Math.max(...items.map(r => r.right)), edge: head.getBoundingClientRect().right,
-          search: items[1].width, overflow: head.scrollWidth > head.clientWidth + 1};
+          search: head.querySelector('.tl-search').getBoundingClientRect().width, overflow: head.scrollWidth > head.clientWidth + 1};
       });
       if (oneLine) assert(Math.max(...result.tops) - Math.min(...result.tops) <= 8, `${width}px toolbar wraps: ${JSON.stringify(result)}`);
       assert(result.right <= result.edge + 1 && !result.overflow, `${width}px toolbar overflows: ${JSON.stringify(result)}`);
-      assert(result.search >= 60, `${width}px search is too narrow: ${JSON.stringify(result)}`);
+      if (await page.locator('.tl-search').isVisible() && !await page.locator('.tl-head.s-fold').count()) assert(result.search >= 60, `${width}px search is too narrow: ${JSON.stringify(result)}`);
     };
     await checkDesktopToolbar(1280);
-    await checkDesktopToolbar(1000, false);
-    await checkDesktopToolbar(768, false);    // a narrow window puts the tabs on their own line, never off the edge
+    await checkDesktopToolbar(1000);
+    await checkDesktopToolbar(768);    // a narrow window folds the search to its icon, never off the edge
     await page.setViewportSize({width: 1200, height: 900});
-    // Labelled tabs (no icon-only buttons), the selected one marked for screen readers.
-    assert.deepEqual(await page.locator('#task-view [role=tab]').evaluateAll(tabs => tabs.map(b => [b.firstChild.textContent, b.getAttribute('aria-selected')])),
-      [['Needs you', 'true'], ['Open', 'false'], ['Board', 'false'], ['Routines', 'false'], ['Done', 'false'], ['Closed', 'false']]);
-    assert.equal(await page.locator('#task-view .nav-icon').count(), 0);
+    // The scope names You with its count; the icon buttons are named for screen readers.
+    assert.equal(await page.locator('#task-scope .tl-scope-l').innerText(), 'You');
+    assert.equal((await page.locator('#task-new').innerText()).trim(), '');
+    assert.equal(await page.locator('#task-new').getAttribute('aria-label'), 'New task');
+    // The + is the scope's control height, square, and centred on the row beside it.
+    const desktopPlus = await page.evaluate(() => {
+      const r = s => document.querySelector(s).getBoundingClientRect();
+      const add = r('#task-new'), scope = r('#task-scope');
+      return {w: add.width, h: add.height, scopeH: scope.height, mid: add.top + add.height / 2, scopeMid: scope.top + scope.height / 2};
+    });
+    assert.equal(desktopPlus.h, desktopPlus.scopeH, 'the + is the scope control height: ' + JSON.stringify(desktopPlus));
+    assert.equal(desktopPlus.w, desktopPlus.h, 'the + is square: ' + JSON.stringify(desktopPlus));
+    assert.ok(Math.abs(desktopPlus.mid - desktopPlus.scopeMid) < 1, 'the + is centred on the row: ' + JSON.stringify(desktopPlus));
+    for (const id of ['#task-filter', '#task-archive', '#task-more', '#task-layout [data-layout="list"]', '#task-layout [data-layout="board"]'])
+      assert.ok(await page.locator(id).getAttribute('aria-label') && await page.locator(id).getAttribute('title'), id + ' is named');
+    assert.equal(await page.locator('.tl-search').isHidden(), true, 'You has no search');
+    assert.equal(await page.locator('#task-layout').isHidden(), true, 'You is always a list');
+    assert.equal(await page.locator('#task-bar').isHidden(), true);
+    // A type's list keeps the search and filters; check its layout and keyboard order too.
+    await page.locator('#task-scope').click();
+    await page.locator('#task-filter-pop [data-task-type="general"]').click();
+    await page.waitForFunction(() => TASKS_ST.view === 'list');
+    await checkDesktopToolbar(1280);
+    await checkDesktopToolbar(1000);
+    await checkDesktopToolbar(768);
+    await page.setViewportSize({width: 1200, height: 900});
     await page.locator('#task-q').focus();
-    await page.keyboard.press('Tab');
-    assert.equal(await page.evaluate(() => document.activeElement.id), 'task-new');
-    await page.keyboard.press('Tab');
-    assert.equal(await page.evaluate(() => document.activeElement.id), 'task-who');
     await page.keyboard.press('Tab');
     assert.equal(await page.evaluate(() => document.activeElement.id), 'task-filter');
+    await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.layout), 'list');
     await page.locator('#task-q').focus();
     await page.keyboard.press('Shift+Tab');
-    assert.equal(await page.evaluate(() => document.activeElement.dataset.taskType), 'general', 'the type selector precedes search');
-    await page.keyboard.press('Shift+Tab');
-    assert.equal(await page.evaluate(() => document.activeElement.dataset.view), 'foryou', 'one tab stop for the view tabs');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'task-scope', 'the scope precedes search');
     if (screenshotDir) await page.screenshot({path: path.join(screenshotDir, 'task-toolbar-desktop.png')});
 
     // List and Board are every open task again, by column; For you stays who needs me.
-    await page.locator('#task-view [data-view="list"]').click();
     await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 3);
     assert.ok((await page.locator('#task-body .tl-gname').count()) > 0, 'grouped');
-    await page.locator('#task-view [data-view="board"]').click();
+    await page.locator('#task-layout [data-layout="board"]').click();
     await page.waitForFunction(() => document.querySelectorAll('#task-body .bcol').length === 4 && document.querySelectorAll('#task-body .bcard').length === 3);
     if (screenshotDir) await page.screenshot({path: path.join(screenshotDir, 'task-board-kanban.png')});
     // Stats: status changes over time. A tile picks the charted stage; an owner row narrows to that owner.
+    await page.locator('#task-more').click();
+    assert.deepEqual(await page.locator('#task-filter-pop .tl-mi').allInnerTexts(), ['Stats', 'Pin to sidebar'], 'the ⋯ menu');
     await page.locator('#task-stats').click();
     await page.locator('#task-stats-dialog .flow-chart .flow-bar').first().waitFor();
     assert.equal(await page.locator('#task-stats-dialog .flow-col').count(), 12, 'twelve weeks by default');
@@ -252,6 +277,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.locator('#task-stats-dialog [data-days="365"]').click();
     await page.waitForFunction(() => !document.querySelector('#task-stats-dialog .flow-tile-d'), null, {timeout: 5000});   // a year has no previous period
     await page.locator('#task-stats-dialog [data-days="7"]').click();
+    assert.equal(await page.locator('#task-stats-dialog .flow-people tr[data-owner="cmo"] td').nth(1).textContent(), '30');
     await page.locator('#task-stats-dialog .flow-people tr[data-owner="cmo"]').click();
     await page.waitForFunction(() => document.querySelector('#task-stats-dialog select[data-flow="owner"]').value === 'cmo');
     assert.ok(flowAsked.some(q => q.owner === 'cmo' && q.days === '7'));
@@ -264,11 +290,12 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.locator('#task-peek[open]').waitFor();
     assert.equal(await page.locator('#task-modal[open]').count(), 0, 'a card opens beside the board, not over it');
     await page.locator('#task-peek [data-modal-close]').click();
-    // Needs you: the tasks that wait on me, grouped by what they take; grouped by who asks, a way into that bot's chat.
-    await page.locator('#task-view [data-view="foryou"]').click();
+    // You: the tasks that wait on me, grouped by kind; grouped by who asks, a way into that bot's chat.
+    await page.locator('#task-scope').click();
+    await page.locator('#task-filter-pop [data-scope="you"]').click();
     await page.locator('#task-body .tl-row').first().waitFor();
-    assert.equal(await page.locator('#task-group .v').innerText(), 'What it takes');
-    await page.locator('#task-group').click();
+    await page.locator('#task-filter').click();
+    assert.equal(await page.locator('#task-filter-pop [data-pick-group][aria-checked=true]').innerText(), 'Kind');
     await page.locator('[data-pick-group="requester"]').click();
     await page.locator('#task-body .tl-ghead a.tl-gchat').waitFor();
     assert.equal(await page.locator('#task-body .tl-row').count(), 1);
@@ -305,9 +332,11 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     assert.equal(await page.locator('#task-modal .tf-view script').count(), 0, 'untrusted Markdown is sanitized');
     assert.equal(await page.locator('#task-modal .task-comments [data-tf-jump="doc"]').count(), 1, 'a comment\'s file links to its tile');
     if (screenshotDir) await page.screenshot({path: path.join(screenshotDir, 'task-attachment-preview.png')});
+    await page.locator('#task-modal [data-tf-close]').click();
     await page.locator('#task-modal .tf-tile[data-tf-file="clip"]').click();
     await page.locator('#task-modal .tf-view video').waitFor();
     assert.equal(await page.locator('#task-modal .tf-view video').getAttribute('controls'), '');
+    await page.locator('#task-modal [data-tf-close]').click();
     await page.locator('#task-modal .tf-tile[data-tf-file="archive"]').click();
     await page.locator('#task-modal .tf-view .tf-card a[download]').waitFor();
     await page.locator('#task-modal [data-tf-close]').click();
@@ -320,6 +349,8 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.locator('#task-modal .tdesc a[href="/api/v2/files/doc"]').click();
     await page.locator('#task-modal .tf-tile[data-tf-file="doc"][aria-expanded="true"]').waitFor();
     await page.getByText(/Script one.*Approve the storyboard/s).waitFor();
+    await page.keyboard.press('Escape');
+    await page.locator('#task-modal .tf-view').waitFor({state: 'hidden'});
     await page.locator('#task-modal').getByRole('textbox', {name: 'Message'}).fill('Add the promo line.');
     await page.locator('#task-modal').getByRole('button', {name: 'Send', exact: true}).click();
     await page.locator('#task-modal .task-comments .tcomment', {hasText: 'Add the promo line.'}).waitFor();
@@ -363,31 +394,81 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     assert.equal(await page.locator('#task-modal [data-prop-row="parent"] .prop-v.ro').count(), 1, 'shown, read-only');
     assert.equal(await page.locator('#task-modal').getByRole('textbox', {name: 'Message'}).count(), 1);
     await page.locator('#task-modal [data-modal-close]').click();
+    // Reopened on the server, not through the page: a read already on its way shares its answer with a load that
+    // joins it (api.js GET_INFLIGHT), so the change waits until no read is out, and the list waits until it is open.
+    await page.waitForFunction(() => GET_INFLIGHT.size === 0);
     tasks.find(t => t.id === 'Approve the budget').status = 'open';
     await page.evaluate(() => tasksLoad(TASKS_ST));
-    await page.waitForFunction(() => TASKS_ST.tasks.some(t => t.id === 'Approve the budget'));
+    await page.waitForFunction(() => TASKS_ST.tasks.some(t => t.id === 'Approve the budget' && t.status === 'open'));
 
     await page.setViewportSize({width: 375, height: 844});
     // the sidebar's drawer transition has started and ended (two frames, then no finite animation running)
     await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
     await page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || a.effect?.getComputedTiming().iterations === Infinity));
-    await page.locator('#task-view [data-view="foryou"]').click();
+    await page.locator('#task-scope').click();
+    await page.locator('#task-filter-pop [data-scope="you"]').click();
     await page.locator('#task-body .tl').waitFor();
+    assert.equal(await page.locator('.tl-search').isHidden(), true);
+    assert.equal(await page.locator('#task-bar').isHidden(), true);
+    await page.locator('#task-scope').click();
+    await page.locator('#task-filter-pop [data-task-type="general"]').click();
+    await page.waitForFunction(() => TASKS_ST.view === 'board', null, {timeout: t(5000)});    // a type opens in the layout last used
+    await page.locator('#task-layout [data-layout="list"]').click();
+    await page.waitForFunction(() => TASKS_ST.view === 'list');
     const mobile = await page.evaluate(() => {
       const head = document.querySelector('.tl-head');
-      const rect = s => head.querySelector(s).getBoundingClientRect();
-      return {top: [rect('#task-type').top, rect('.tl-search').top], strip: rect('#task-view').top,
-        right: rect('#task-new').right, edge: head.getBoundingClientRect().right};
+      // The page title is visually hidden on a phone (it sits outside the rows), so it is not a row of the header.
+      const tops = new Set([...head.children].filter(c => c.tagName !== 'H1' && c.getClientRects().length && c.getBoundingClientRect().width)
+        .map(c => Math.round(c.getBoundingClientRect().top / 8)));
+      return {rows: tops.size, right: head.querySelector('#task-new').getBoundingClientRect().right, edge: head.getBoundingClientRect().right};
     });
-    assert(Math.max(...mobile.top) - Math.min(...mobile.top) <= 8, 'phone type selector and search share a line');
-    assert(mobile.strip > mobile.top[0] && mobile.right <= mobile.edge + 1, 'phone view switch is on its own line');
+    assert(mobile.rows <= 2 && mobile.right <= mobile.edge + 1, 'phone header fits: ' + JSON.stringify(mobile));
+    // The phone + is the row's 30-wide icon width at the 32px control height, centred on the first row's ⋯ beside it.
+    const phonePlus = await page.evaluate(() => {
+      const r = s => document.querySelector(s).getBoundingClientRect();
+      const add = r('#task-new'), more = r('#task-more');
+      return {w: add.width, h: add.height, mid: add.top + add.height / 2, searchMid: more.top + more.height / 2};
+    });
+    assert.equal(phonePlus.w, 30, 'phone + width: ' + JSON.stringify(phonePlus));
+    assert.equal(phonePlus.h, 32, 'phone + height: ' + JSON.stringify(phonePlus));
+    assert.ok(Math.abs(phonePlus.mid - phonePlus.searchMid) < 1, 'phone + is centred on the first row: ' + JSON.stringify(phonePlus));
+    // An empty search is its icon; tapped, it takes the row; emptied, it is an icon again.
+    const searchRow = () => page.evaluate(() => {
+      const r = s => document.querySelector(s).getBoundingClientRect();
+      return {box: Math.round(r('.tl-search').width), row: Math.round(r('.tl-head').width)};
+    });
+    let row = await searchRow();
+    assert(row.box <= 34, `an empty search is an icon on a phone: ${JSON.stringify(row)}`);
+    await page.locator('.tl-search').click();
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'task-q');
+    row = await searchRow();
+    assert(Math.abs(row.box - row.row) <= 1, `tapped, the search takes the row: ${JSON.stringify(row)}`);
+    await page.locator('#task-q').fill('');
+    await page.locator('#task-q').blur();
+    assert((await searchRow()).box <= 34, 'emptied, it is an icon again');
+    // The filter bar scrolls sideways on a narrow phone: its edge fades while more is to the right, not at the end.
+    // On Open with two filter chips, the bar is wider than a 330px phone.
+    await page.evaluate(() => { TASKS_ST.filters = {...TASKS_ST.filters, owner: ['human:reviewer'], tag: ['quarterly-budget-review']}; tasksTools(TASKS_ST); });
+    await page.setViewportSize({width: 330, height: 844});
+    await page.waitForFunction(() => document.querySelector('#task-bar').classList.contains('more'), null, {timeout: t(5000)}).catch(async e => {
+      const bar = await page.locator('#task-bar').evaluate(b => ({cls: b.className, sw: b.scrollWidth, cw: b.clientWidth, sl: b.scrollLeft,
+        kids: [...b.children].map(k => `${k.className || k.id}:${k.hidden ? 'hidden' : Math.round(k.getBoundingClientRect().width)}`), view: TASKS_ST.view}));
+      throw new Error('narrow phone filter bar never fades: ' + JSON.stringify(bar), {cause: e});
+    });
+    await page.locator('#task-bar').evaluate(bar => { bar.scrollLeft = bar.scrollWidth; });
+    await page.waitForFunction(() => !document.querySelector('#task-bar').classList.contains('more'));
+    await page.locator('#task-bar').evaluate(bar => { bar.scrollLeft = 0; });
+    await page.evaluate(() => { TASKS_ST.filters = {...TASKS_ST.filters, owner: [], tag: []}; tasksTools(TASKS_ST); });
+    await page.setViewportSize({width: 375, height: 844});
     await page.locator('#task-filter').click();
     await page.waitForFunction(() => document.querySelector('#task-filter-pop').matches(':popover-open'));
     assert.equal(await page.locator('#task-filter-pop').evaluate(el => Math.round(el.getBoundingClientRect().bottom)), 844, 'filter is a bottom sheet');
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('#task-filter-pop').evaluate(el => el.matches(':popover-open')), false);
     await page.locator('#task-filter').click();
-    await page.locator('.tl-head h1').click();
+    // An outside tap, at the page title's place (the title is visually hidden on a phone): the sheet closes on the tap, wherever it lands.
+    const title = await page.locator('.tl-head h1').boundingBox();
+    await page.mouse.click(title.x + title.width / 2, title.y + title.height / 2);
     assert.equal(await page.locator('#task-filter-pop').evaluate(el => el.matches(':popover-open')), false, 'outside tap closes the sheet');
     for (const theme of ['light', 'dark']) {
       await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
@@ -395,21 +476,22 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     }
     if (screenshotDir) await page.screenshot({path: path.join(screenshotDir, 'task-board-mobile.png')});
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'no sideways scroll on a phone');
-    for (const [route, view] of [['#/board', 'board'], ['#/issues', 'list'], ['#/recurring', 'recurring']]) {
+    for (const [route, view] of [['#/board', 'board'], ['#/issues', 'list']]) {
       await page.goto('http://tico-ui.test/' + route);
       const activeCount = tasks.filter(task => task.lane === 'company' && !['done', 'closed'].includes(task.status)).length;
       await page.waitForFunction(({view, activeCount}) => TASKS_ST?.view === view && TASKS_ST.tasks.length === activeCount,
         {view, activeCount});
-      assert.equal(await page.locator(`#task-view [data-view="${view}"]`).getAttribute('aria-selected'), 'true');
+      if (view !== 'foryou') assert.equal(await page.locator(`#task-layout [data-layout="${view}"]`).getAttribute('aria-pressed'), 'true');
     }
-    // A view other than Needs you stays in the address, so a board link is stable; #/tasks/<id> opens the task.
+    // A view other than You stays in the address, so a board link is stable; #/tasks/<id> opens the task.
     await page.goto('http://tico-ui.test/#/tasks?view=board');
     await page.waitForFunction(() => TASKS_ST?.view === 'board');
     await page.waitForFunction(() => location.hash.includes('type='));    // the type is written into the address
     assert.equal(new URL(page.url()).hash, '#/tasks?type=general&view=board');
-    await page.locator('#task-view [data-view="list"]').click();
+    await page.locator('#task-layout [data-layout="list"]').click();
     await page.waitForFunction(() => location.hash === '#/tasks?type=general&view=list');
-    await page.locator('#task-view [data-view="foryou"]').click();
+    await page.locator('#task-scope').click();
+    await page.locator('#task-filter-pop [data-scope="you"]').click();
     await page.waitForFunction(() => location.hash === '#/tasks?type=general&view=foryou');
     await page.goto('http://tico-ui.test/#/tasks/Approve%20the%20budget');
     await page.locator('#task-modal', {hasText: 'Approve the budget'}).waitFor();
@@ -445,8 +527,8 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     // Rich tag chips keep their keys while opening a shared checklist.
     page.setDefaultTimeout(t(5000));
     me = {...me, role: 'owner', mover: true};
-    await page.goto('http://tico-ui.test/#/tasks');
-    await page.locator('#task-view [data-view="list"]').click();
+    await page.goto('http://tico-ui.test/#/tasks?view=list');
+    await page.waitForFunction(() => TASKS_ST?.view === 'list');
     await page.locator('#task-filter').click();
     await page.locator('#task-filter-pop [data-pick-field="tag"]').click();
     assert.equal(await page.locator('#task-filter-pop input[value="newsletter"]').locator('xpath=..').innerText(), 'release · Oct 2');
@@ -522,16 +604,56 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       body: {key: 'release-2026-10-02', metadata: {date: '2026-10-02'}}});
     assert.deepEqual(tags.at(-1).metadata, {channel: 'stable', date: '2026-10-02'});
 
+    // A long name makes the same 40-character key the server saves, shown live under Advanced (C2).
+    const newTag = async () => {
+      await page.goto('http://tico-ui.test/#/settings/tasks');
+      const form = page.locator('#settings-tags [data-tag-create]');
+      await form.waitFor();
+      // A settings refresh preserves Advanced, so open it only when it is shut.
+      if (!await form.locator('.tag-advanced').evaluate(d => d.open)) await form.locator('.tag-advanced > summary').click();
+      return form;
+    };
+    let form = await newTag();
+    // The pane's refresh can land after Advanced is opened; it stays open.
+    await page.evaluate(() => renderTags($('#settings-tags')));
+    assert.equal(await form.locator('.tag-advanced').evaluate(d => d.open), true);
+    assert.equal(await form.locator('input[name="key"]').getAttribute('maxlength'), '40');
+    assert.equal(await form.locator('[data-tag-key-line]').innerText(), 'Key: made from the name');
+    await form.locator('input[name="label"]').fill('Quarterly roadmap review for the platform team now');
+    assert.equal(await form.locator('[data-tag-key-line]').innerText(), 'Key: quarterly-roadmap-review-for-the-platfor');
+    await form.locator('button[type="submit"]').click();
+    await page.waitForURL('**/#/tag/quarterly-roadmap-review-for-the-platfor');
+    await page.locator('[data-tag-heading]', {hasText: 'Quarterly roadmap review for the platform team now'}).waitFor();
+    assert.equal(posted.at(-1).body.key, 'quarterly-roadmap-review-for-the-platfor');
+    // A cut that lands on a word gap drops the hyphen, so the key is 39 characters and the server keeps it as posted.
+    form = await newTag();
+    await form.locator('input[name="label"]').fill('Notes on the customer interviews we ran in spring 2027');
+    // The key line is written on input. Wait for the text rather than reading it once, so a redraw in between cannot fail the read.
+    await page.waitForFunction(() => document.querySelector('#settings-tags [data-tag-key-line]')?.innerText === 'Key: notes-on-the-customer-interviews-we-ran');
+    await form.locator('input[name="key"]').fill('  Spring Interviews ');
+    assert.equal(await form.locator('[data-tag-key-line]').innerText(), 'Key: spring-interviews', 'a typed key shows as it will be saved');
+    assert.equal(await page.evaluate(() => tagKeyTyped('a'.repeat(39) + ' b')), 'a'.repeat(39), 'a typed key cut at a gap ends without a hyphen');
+    await form.locator('button[type="submit"]').click();
+    await page.waitForURL('**/#/tag/spring-interviews');
+    // The hash changes before the view transition draws the tag. Settle that page before changing fixtures or
+    // returning to Settings, where the previous form and starter can still be visible with their old tag list.
+    await page.locator('[data-tag-heading]', {hasText: 'Notes on the customer interviews we ran in spring 2027'}).waitFor();
+    assert.equal(posted.at(-1).body.key, 'spring-interviews');
+    for (const key of ['quarterly-roadmap-review-for-the-platfor', 'spring-interviews']) tags.splice(tags.findIndex(tag => tag.key === key), 1);
+
     // The starter creates only on click and handles a key another person creates while the list is open.
     tags.splice(tags.findIndex(tag => tag.key === 'release-checklist'), 1);
     const settingsTags = async () => {
-      await page.goto('http://tico-ui.test/#/settings');
-      await page.locator('[data-settings-tab="tasks"]').click();
+      // The Tasks tab is remembered. Clicking it again starts a second tag-list render that
+      // can replace the starter button between pointer down and pointer up.
+      await page.goto('http://tico-ui.test/#/settings/tasks');
+      await page.locator('#settings-tags .tags-empty').waitFor();
       await page.locator('#settings-tags [data-release-starter]').waitFor();
     };
     await settingsTags();
     assert.equal(tags.some(tag => tag.key === 'release-checklist'), false, 'opening Tags does not seed the starter');
     await page.locator('#settings-tags [data-release-starter]').click();
+    await page.waitForURL('**/#/tag/release-checklist');
     await page.locator('[data-tag-notes] input').nth(3).waitFor();
     const starter = tags.find(tag => tag.key === 'release-checklist');
     assert.equal(starter.label, 'release');
@@ -541,12 +663,14 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await settingsTags();
     raceStarter = true;
     await page.locator('#settings-tags [data-release-starter]').click();
+    await page.waitForURL('**/#/tag/release-checklist');
     await page.locator('[data-tag-notes] input:checked').waitFor();
     assert.equal(await page.locator('[data-tag-heading]').innerText(), 'Existing release');
     assert.equal(await page.locator('.page-tags [data-tag-create]').count(), 0, 'an existing non-template key is opened as it is');
     await settingsTags();
     const afterRace = posted.length;
     await page.locator('#settings-tags [data-release-starter]').click();
+    await page.waitForURL('**/#/tag/release-checklist');
     await page.locator('[data-tag-notes] input:checked').waitFor();
     assert.equal(posted.length, afterRace);
     assert.deepEqual(errors, []);

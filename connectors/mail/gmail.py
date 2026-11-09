@@ -11,7 +11,7 @@ text/plain, or HTML stripped), attachments listed but not downloaded, and whethe
 carries an unsubscribe link.
 """
 
-import base64, binascii, html, re, time
+import base64, binascii, contextlib, html, re, time
 from datetime import datetime, timezone
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 
@@ -24,14 +24,16 @@ HISTORY_TYPES = ("messageAdded", "labelAdded", "labelRemoved", "messageDeleted")
 class HistoryExpired(Failure):
     """Gmail no longer retains this startHistoryId; the caller should query instead."""
 
+
 RETRY_STATUS = (403, 429, 500, 502, 503, 504)
 MAX_ATTEMPTS = 4
 MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
-INLINE_RAW_LIMIT = 4 * 1024 * 1024          # a bigger draft goes up as media (_draft_body)
+INLINE_RAW_LIMIT = 4 * 1024 * 1024  # a bigger draft goes up as media (_draft_body)
 ATTACHMENT_REF_RE = re.compile(r"a[1-9][0-9]{0,5}\Z")
 
 
 # ---------------------------------------------------------------- client
+
 
 def _status(exc):
     """HTTP status of a googleapiclient HttpError, without importing googleapiclient."""
@@ -51,7 +53,7 @@ def _retryable(exc):
     st = _status(exc)
     if st is None or st not in RETRY_STATUS:
         return False
-    if st == 403:                                       # only the rate-limit flavours of 403
+    if st == 403:  # only the rate-limit flavours of 403
         text = str(exc).lower()
         return "ratelimit" in text or "rate limit" in text or "userratelimitexceeded" in text
     return True
@@ -62,22 +64,36 @@ class Gmail:
 
     def __init__(self, service, mailbox, sleep=time.sleep):
         self.service, self.mailbox, self.sleep = service, mailbox, sleep
-        self.granted = getattr(service, "_tico_granted", None)   # a connected account's scopes; None: service account
+        self.granted = getattr(service, "_tico_granted", None)  # a connected account's scopes; None: service account
+        self.company = None  # the company's What Tico may do for this run (oauth.company_allows); None: unset
+        self._part_of = None  # the draft or send Tico's own markers belong to (marking); None: Organize mail
         self._labels = None
 
+    @contextlib.contextmanager
+    def marking(self, capability):
+        """Tico's own markers on a draft or send it just made (hub/drafted, hub/handled/<bot>) are part of that write, so
+        the company's box for it holds them, not Organize mail: Send mail on with Organize mail off still sends."""
+        was, self._part_of = self._part_of, capability
+        try:
+            yield self
+        finally:
+            self._part_of = was
+
     # -- plumbing ---------------------------------------------------
-    def _exec(self, request, what):
+    def _exec(self, request, what, *, retry=True):
         last = None
-        for attempt in range(MAX_ATTEMPTS):
+        attempts = MAX_ATTEMPTS if retry else 1
+        for attempt in range(attempts):
             try:
                 return request.execute()
-            except Exception as e:                      # HttpError, socket errors
+            except Exception as e:  # HttpError, socket errors
                 last = e
-                if attempt == MAX_ATTEMPTS - 1 or not _retryable(e):
+                if attempt == attempts - 1 or not _retryable(e):
                     break
-                self.sleep(2 ** attempt)
-        raise Failure(f"Gmail {what} failed for {self.mailbox}: {last}",
-                      gmail_hint(last, self.mailbox), status=_status(last))
+                self.sleep(2**attempt)
+        raise Failure(
+            f"Gmail {what} failed for {self.mailbox}: {last}", gmail_hint(last, self.mailbox), status=_status(last)
+        )
 
     def _pages(self, method, params, key, limit=None, what="list"):
         out, token = [], None
@@ -108,10 +124,9 @@ class Gmail:
 
     def create_label(self, name):
         oauth.require(self.granted, "labels", self.mailbox, "create labels")
-        body = {"name": name, "labelListVisibility": "labelShow",
-                "messageListVisibility": "show"}
-        lab = self._exec(self.service.users().labels().create(userId="me", body=body),
-                         "labels.create")
+        oauth.company_allows(self.company, self._part_of or "labels", self.mailbox, "create labels")
+        body = {"name": name, "labelListVisibility": "labelShow", "messageListVisibility": "show"}
+        lab = self._exec(self.service.users().labels().create(userId="me", body=body), "labels.create")
         self._labels = None
         return lab
 
@@ -121,25 +136,24 @@ class Gmail:
             params["q"] = query
         if label_ids:
             params["labelIds"] = list(label_ids)
-        msgs = self._pages(self.service.users().messages().list, params, "messages",
-                           limit=limit, what="messages.list")
+        msgs = self._pages(self.service.users().messages().list, params, "messages", limit=limit, what="messages.list")
         return [m["id"] for m in msgs if m.get("id")]
 
     def get(self, msg_id, fmt="full"):
-        return self._exec(
-            self.service.users().messages().get(userId="me", id=msg_id, format=fmt),
-            "messages.get")
+        return self._exec(self.service.users().messages().get(userId="me", id=msg_id, format=fmt), "messages.get")
 
     def get_attachment(self, msg_id, attachment_id):
         """Fetch one attachment through the authenticated Gmail service."""
         return self._exec(
-            self.service.users().messages().attachments().get(
-                userId="me", messageId=msg_id, id=attachment_id),
-            "messages.attachments.get")
+            self.service.users().messages().attachments().get(userId="me", messageId=msg_id, id=attachment_id),
+            "messages.attachments.get",
+        )
 
     def thread(self, thread_id):
-        data = self._exec(self.service.users().threads().get(userId="me", id=thread_id,
-                                                             format="full"), "threads.get") or {}
+        data = (
+            self._exec(self.service.users().threads().get(userId="me", id=thread_id, format="full"), "threads.get")
+            or {}
+        )
         return data.get("messages") or []
 
     def history(self, start_history_id, history_types=None, limit=None):
@@ -158,8 +172,7 @@ class Gmail:
                 p = dict(params)
                 if token:
                     p["pageToken"] = token
-                data = self._exec(self.service.users().history().list(userId="me", **p),
-                                  "history.list") or {}
+                data = self._exec(self.service.users().history().list(userId="me", **p), "history.list") or {}
                 out.extend(data.get("history") or [])
                 if data.get("historyId"):
                     latest = str(data["historyId"])
@@ -170,47 +183,57 @@ class Gmail:
             if e.status == 404 or _history_gone(e):
                 raise HistoryExpired(
                     f"Gmail history id {start_history_id} has expired for {self.mailbox}",
-                    "Fall back to after:<last_run − 2d>.", status=404) from e
+                    "Fall back to after:<last_run − 2d>.",
+                    status=404,
+                ) from e
             raise
         return {"history": out[:limit] if limit else out, "historyId": latest}
 
     # -- state changes ----------------------------------------------
     def modify(self, msg_id, add=(), remove=()):
         oauth.require(self.granted, "labels", self.mailbox, "label, archive or mark mail read")
+        oauth.company_allows(self.company, self._part_of or "labels", self.mailbox, "label, archive or mark mail read")
         body = {"addLabelIds": list(add), "removeLabelIds": list(remove)}
-        return self._exec(
-            self.service.users().messages().modify(userId="me", id=msg_id, body=body),
-            "messages.modify")
+        return self._exec(self.service.users().messages().modify(userId="me", id=msg_id, body=body), "messages.modify")
 
     # -- drafts and sending (stage 2; every caller is behind policy.py and lint.py) --
     def create_draft(self, raw, thread_id=""):
         oauth.require(self.granted, "drafts", self.mailbox, "write drafts")
+        oauth.company_allows(self.company, "drafts", self.mailbox, "write drafts")
         body, media = _draft_body(raw, thread_id)
-        return self._exec(self.service.users().drafts().create(userId="me", body=body, **media),
-                          "drafts.create")
+        return self._exec(self.service.users().drafts().create(userId="me", body=body, **media), "drafts.create")
 
     def update_draft(self, draft_id, raw, thread_id=""):
         oauth.require(self.granted, "drafts", self.mailbox, "write drafts")
+        oauth.company_allows(self.company, "drafts", self.mailbox, "write drafts")
         body, media = _draft_body(raw, thread_id)
         return self._exec(
-            self.service.users().drafts().update(userId="me", id=draft_id, body=body, **media),
-            "drafts.update")
+            self.service.users().drafts().update(userId="me", id=draft_id, body=body, **media), "drafts.update"
+        )
 
     def get_draft(self, draft_id):
-        return self._exec(self.service.users().drafts().get(userId="me", id=draft_id,
-                                                            format="full"), "drafts.get")
+        return self._exec(self.service.users().drafts().get(userId="me", id=draft_id, format="full"), "drafts.get")
+
+    def get_draft_raw(self, draft_id):
+        """The draft's whole MIME message, base64url, as `update_draft` takes it back."""
+        got = self._exec(self.service.users().drafts().get(userId="me", id=draft_id, format="raw"), "drafts.get")
+        return (got.get("message") or {}).get("raw") or ""
 
     def delete_draft(self, draft_id):
         oauth.require(self.granted, "drafts", self.mailbox, "delete drafts")
-        return self._exec(self.service.users().drafts().delete(userId="me", id=draft_id),
-                          "drafts.delete")
+        oauth.company_allows(self.company, "drafts", self.mailbox, "delete drafts")
+        return self._exec(self.service.users().drafts().delete(userId="me", id=draft_id), "drafts.delete")
 
-    def send_draft(self, draft_id):
-        """The only path out of the company. Policy, lint and the reviewer sit in front of it."""
+    def send_raw(self, raw, thread_id=""):
+        """Send exactly the frozen MIME in this request, with no mutable draft lookup or automatic retry."""
         oauth.require(self.granted, "drafts", self.mailbox, "send mail")
+        oauth.company_allows(self.company, "send", self.mailbox, "send mail")
+        draft_body, media = _draft_body(raw, thread_id)
         return self._exec(
-            self.service.users().drafts().send(userId="me", body={"id": draft_id}),
-            "drafts.send")
+            self.service.users().messages().send(userId="me", body=draft_body.get("message", {}), **media),
+            "messages.send",
+            retry=False,
+        )
 
 
 def _draft_body(raw, thread_id=""):
@@ -221,28 +244,33 @@ def _draft_body(raw, thread_id=""):
         body["message"]["threadId"] = thread_id
     if len(raw or "") <= INLINE_RAW_LIMIT:
         return body, {}
-    from googleapiclient.http import MediaInMemoryUpload  # noqa: PLC0415  (only real sends get here)
+    from googleapiclient.http import MediaInMemoryUpload  # (only real sends get here)
+
     s = str(raw).replace("-", "+").replace("_", "/")
     mime = base64.b64decode(s + "=" * (-len(s) % 4))
     body = {"message": {"threadId": thread_id}} if thread_id else {}
-    return body, {"media_body": MediaInMemoryUpload(mime, mimetype="message/rfc822",
-                                                    resumable=True)}
+    return body, {"media_body": MediaInMemoryUpload(mime, mimetype="message/rfc822", resumable=True)}
 
 
 def gmail_hint(exc, mailbox):
     text = str(exc or "").lower()
     if "insufficient" in text and _connected(mailbox):
-        return (f"{mailbox} connected its own Google account without this capability (it starts read-only). "
-                "Connect again adding it, e.g. --allow labels or --allow drafts: "
-                + oauth.connect_command(mailbox))
+        return (
+            f"{mailbox} connected its own Google account without this capability (it starts read-only). "
+            "Connect again adding it, e.g. --allow labels or --allow drafts: " + oauth.connect_command(mailbox)
+        )
     if "unauthorized_client" in text or "not authorized" in text:
-        return ("domain-wide delegation is not granted, or not for these scopes. Google Workspace "
-                "Admin console > Security > Access and data control > API controls > Domain-wide "
-                "delegation: add the service account's client id with gmail.modify and calendar.")
+        return (
+            "domain-wide delegation is not granted, or not for these scopes. Google Workspace "
+            "Admin console > Security > Access and data control > API controls > Domain-wide "
+            "delegation: add the service account's client id with gmail.modify and calendar."
+        )
     if "invalid_grant" in text:
-        return (f"Google will not let the service account act as {mailbox}. Check the address "
-                "exists as a real user mailbox in this Workspace (not a group or an alias) and "
-                "that the clock on this Mac is right.")
+        return (
+            f"Google will not let the service account act as {mailbox}. Check the address "
+            "exists as a real user mailbox in this Workspace (not a group or an alias) and "
+            "that the clock on this Mac is right."
+        )
     if "insufficient" in text or "insufficientpermissions" in text:
         return "The delegation is missing the gmail.modify scope. Add it and try again."
     if "has not been used" in text or "accessnotconfigured" in text or "disabled" in text:
@@ -267,8 +295,16 @@ def _history_gone(exc):
 # ---------------------------------------------------------------- normalization (pure)
 
 UNSUB_HREF_RE = re.compile(r"""href\s*=\s*["']([^"']+)["']""", re.I)
-UNSUB_WORDS = ("unsubscribe", "opt-out", "optout", "opt_out", "email-preferences",
-               "email_preferences", "manage-preferences", "list-unsubscribe")
+UNSUB_WORDS = (
+    "unsubscribe",
+    "opt-out",
+    "optout",
+    "opt_out",
+    "email-preferences",
+    "email_preferences",
+    "manage-preferences",
+    "list-unsubscribe",
+)
 URL_RE = re.compile(r"https?://[^\s<>()\[\]\"']+", re.I)
 TAG_RE = re.compile(r"<[^>]+>")
 DROP_RE = re.compile(r"<(script|style|head)\b.*?</\1>", re.I | re.S)
@@ -294,7 +330,7 @@ def decode(part_body, charset="utf-8"):
             return raw.decode(enc)
         except (UnicodeDecodeError, LookupError):
             continue
-    return raw.decode("utf-8", "replace")               # pragma: no cover
+    return raw.decode("utf-8", "replace")  # pragma: no cover
 
 
 def strip_html(source):
@@ -366,18 +402,18 @@ def attachment_refs(payload):
             except (TypeError, ValueError):
                 size = 0
             attachment_id = str(body.get("attachmentId") or "")
-            found.append({
-                "ref": f"a{len(found) + 1}",
-                "name": safe_filename(original or
-                                      ("invite.ics" if mime == "text/calendar"
-                                       else "attachment.bin")),
-                "type": mime or "application/octet-stream",
-                "size": size,
-                "part_id": str(part.get("partId") or path),
-                "attachment_id": attachment_id,
-                "inline": "data" in body,
-                "_data": body.get("data") if "data" in body else None,
-            })
+            found.append(
+                {
+                    "ref": f"a{len(found) + 1}",
+                    "name": safe_filename(original or ("invite.ics" if mime == "text/calendar" else "attachment.bin")),
+                    "type": mime or "application/octet-stream",
+                    "size": size,
+                    "part_id": str(part.get("partId") or path),
+                    "attachment_id": attachment_id,
+                    "inline": "data" in body,
+                    "_data": body.get("data") if "data" in body else None,
+                }
+            )
         for index, child in enumerate(part.get("parts") or []):
             visit(child, f"{path}.{index}" if path else str(index))
 
@@ -392,29 +428,39 @@ def attachment_bytes(encoded, declared_size=0, limit=MAX_ATTACHMENT_BYTES):
     except (TypeError, ValueError):
         declared = 0
     if declared > limit:
-        raise Failure(f"attachment is {declared} bytes; the download limit is {limit} bytes.",
-                      "Retrieve unusually large files directly in Gmail.")
+        raise Failure(
+            f"attachment is {declared} bytes; the download limit is {limit} bytes.",
+            "Retrieve unusually large files directly in Gmail.",
+        )
     if encoded is None:
-        raise Failure("Gmail returned an attachment without data.",
-                      "Try the download again; if it repeats, open the message in Gmail.")
+        raise Failure(
+            "Gmail returned an attachment without data.",
+            "Try the download again; if it repeats, open the message in Gmail.",
+        )
     try:
         raw = str(encoded).encode("ascii")
     except UnicodeEncodeError:
-        raise Failure("Gmail returned invalid attachment encoding.",
-                      "Try the download again; if it repeats, open the message in Gmail.")
+        raise Failure(
+            "Gmail returned invalid attachment encoding.",
+            "Try the download again; if it repeats, open the message in Gmail.",
+        )
     max_encoded = ((limit + 2) // 3) * 4 + 4
     if len(raw) > max_encoded:
-        raise Failure(f"attachment exceeds the {limit}-byte download limit.",
-                      "Retrieve unusually large files directly in Gmail.")
+        raise Failure(
+            f"attachment exceeds the {limit}-byte download limit.", "Retrieve unusually large files directly in Gmail."
+        )
     raw += b"=" * (-len(raw) % 4)
     try:
         decoded = base64.b64decode(raw, altchars=b"-_", validate=True)
     except (binascii.Error, ValueError):
-        raise Failure("Gmail returned invalid attachment encoding.",
-                      "Try the download again; if it repeats, open the message in Gmail.")
+        raise Failure(
+            "Gmail returned invalid attachment encoding.",
+            "Try the download again; if it repeats, open the message in Gmail.",
+        )
     if len(decoded) > limit:
-        raise Failure(f"attachment exceeds the {limit}-byte download limit.",
-                      "Retrieve unusually large files directly in Gmail.")
+        raise Failure(
+            f"attachment exceeds the {limit}-byte download limit.", "Retrieve unusually large files directly in Gmail."
+        )
     return decoded
 
 
@@ -426,16 +472,20 @@ def bodies_and_attachments(payload):
         name = p.get("filename") or ""
         body = p.get("body") or {}
         if name:
-            atts.append({"name": safe_filename(name), "type": mime or "application/octet-stream",
-                         "size": int(body.get("size") or 0)})
+            atts.append(
+                {
+                    "name": safe_filename(name),
+                    "type": mime or "application/octet-stream",
+                    "size": int(body.get("size") or 0),
+                }
+            )
             continue
         if mime == "text/plain":
             plain.append(decode(body, charset_of(p)))
         elif mime == "text/html":
             rich.append(decode(body, charset_of(p)))
         elif mime == "text/calendar":
-            atts.append({"name": "invite.ics", "type": "text/calendar",
-                         "size": int(body.get("size") or 0)})
+            atts.append({"name": "invite.ics", "type": "text/calendar", "size": int(body.get("size") or 0)})
     return plain, rich, atts
 
 
@@ -444,7 +494,7 @@ def truncate(text):
     message refused every batch of its mailbox (a 32,809-character body)."""
     if len(text) <= MAX_BODY:
         return text, False
-    return text[:MAX_BODY - len(TRUNCATED)] + TRUNCATED, True
+    return text[: MAX_BODY - len(TRUNCATED)] + TRUNCATED, True
 
 
 def find_unsubscribe(header_value, body_text, html_text):
@@ -536,13 +586,23 @@ def normalize(msg, label_names=None, tz_name=DEFAULT_TZ):
         "unsubscribe": has_unsub,
         "unsubscribe_url": unsub_url,
         "list_id": hdrs.get("list-id", ""),
-        "is_internal": bool(everyone) and all(
-            a.endswith("@" + INTERNAL_DOMAIN) or a.endswith("." + INTERNAL_DOMAIN)
-            for a in everyone),
+        "is_internal": bool(everyone)
+        and all(a.endswith("@" + INTERNAL_DOMAIN) or a.endswith("." + INTERNAL_DOMAIN) for a in everyone),
         "is_calendar_invite": any(a["type"] == "text/calendar" for a in atts)
         or "method=request" in str(hdrs.get("content-type", "")).lower()
         or any(a["name"].lower().endswith(".ics") for a in atts),
         "headers": hdrs,
+        "send_facts": {
+            **{
+                key: str(hdrs.get(key) or "")[:1000]
+                for key in ("auto-submitted", "precedence", "return-path", "message-id")
+            },
+            "delivery-status": "\n".join(
+                decode(p.get("body") or {}, charset_of(p))
+                for p in walk(payload)
+                if p.get("mimeType") == "message/delivery-status"
+            )[:4096],
+        },
     }
 
 
@@ -557,6 +617,7 @@ def thread_last_reply_by(messages, tz_name=DEFAULT_TZ):
 
 
 # ---------------------------------------------------------------- rendering
+
 
 def render_md(messages, title="Messages"):
     """One block per message. Model-readable, no tables, nothing to parse."""
@@ -591,7 +652,7 @@ BRIEF_FROM, BRIEF_SUBJECT, BRIEF_SNIPPET = 40, 90, 160
 def clip(text, n):
     """One line, at most n characters; a cut is marked with '...' inside the budget."""
     s = " ".join(str(text or "").split())
-    return s if len(s) <= n else s[:max(n - 3, 0)] + "..."
+    return s if len(s) <= n else s[: max(n - 3, 0)] + "..."
 
 
 def brief_from(m):
@@ -624,7 +685,8 @@ def render_brief(messages, title="Messages"):
             f"unsub:{'y' if m.get('unsubscribe') else 'n'}  att:{atts or '-'}",
             f"  > {clip(m.get('snippet'), BRIEF_SNIPPET)}",
         ]
-        if m.get("judgment"):                       # `inbox --judge` (connectors/mail/judge.py)
+        if m.get("judgment"):  # `inbox --judge` (connectors/mail/judge.py)
             from .judge import render_judgment
+
             out.append(render_judgment(m["judgment"]))
     return "\n".join(out) + "\n"

@@ -8,7 +8,7 @@ pack: engineering
 icon: view_timeline
 suggest: default
 tags: [saas, software, specs, prd, launches, acceptance-criteria]
-summary: "Turns a chosen problem into a one-page spec engineers can build from, with evidence, non-goals and testable acceptance criteria. Then it drives the spec to launch: open questions closed by named humans and a readiness checklist signed line by line."
+summary: "Turns a chosen problem into a one-page spec engineers can build from: evidence, a time budget, non-goals and acceptance criteria that can be checked. Then it drives the spec to launch, with open questions closed by named humans and a readiness check signed line by line."
 when: "A software team where work starts before the problem is written down, or where launches slip because nobody owns the checklist."
 pains:
   - "engineers start building before the problem is clear"
@@ -17,9 +17,10 @@ pains:
   - "requirements live in someone's head"
   - "QA finds out what 'done' means after the build"
 owns:
-  - "One spec per chosen problem: problem and who has it, evidence with sources, goal it serves, scope, non-goals, acceptance criteria in Given/When/Then, open questions, risks"
-  - "The weekly spec and launch review: each spec in flight, the questions blocking engineering and who owes the answer, launch checklist items due"
-  - "The launch readiness checklist per release: QA, docs gap reported to the Librarian, support briefing, release notes, messaging hand-off, rollback plan"
+  - "One spec per chosen problem: the problem and who has it, evidence with sources, the appetite (how much the problem is worth), scope, non-goals, acceptance criteria in Given/When/Then, open questions, risks"
+  - "Acceptance criteria tagged for when they can be checked: before release, or only after launch, with the person who watches"
+  - "The weekly spec and launch review: each spec in flight, the questions blocking engineering and who owes the answer, launch lines due"
+  - "The launch readiness check per release: QA, support briefing, release notes, messaging hand-off, rollout and rollback plan, each line signed by a named owner"
   - "Keeping each spec current: every scope change dated with who agreed it"
 never:
   - "Decide what gets built or change priority: the Head of Product and the owner decide"
@@ -53,7 +54,7 @@ onboarding:
 first_routine:
   title: "Weekly spec and launch review"
   cadence: "Tuesdays at 10:00 team time"
-  output: "reports/YYYY-MM-DD-spec-review.md: each spec in flight with status, the questions blocking engineering and who owes them, scope changes, launch checklist items due, and what could not be read"
+  output: "reports/YYYY-MM-DD-spec-review.md: each spec in flight with its status, the questions blocking engineering and who owes them, scope changes, launch lines due and who signs them, and what could not be read"
   draft_only: true
 example_output: knowledge/examples/spec-review.md
 reasoning_effort: high

@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/org_routes.py": [
+            {
+                "code": "reportPossiblyUnboundVariable",
+                "range": {
+                    "startColumn": 51,
+                    "endColumn": 59,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 63,
+                    "endColumn": 81,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

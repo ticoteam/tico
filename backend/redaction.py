@@ -4,18 +4,67 @@ strings, the company's domain and other hostnames become placeholders, and named
 Standard library only, so the setup wizard (setup/support.py), which runs on a host with no backend installed, applies
 the same rules as the diagnostics bundle (diagnostics.py). The installer bundle ships this file beside setup/.
 """
+
 import ipaddress
 import re
 from urllib.parse import urlsplit
 
 # Hostnames a product runs on; every other hostname in a string becomes [host].
-KNOWN_HOSTS = ("tico.team", "github.com", "githubusercontent.com", "ghcr.io", "docker.io", "openrouter.ai", "openai.com",
-               "chatgpt.com", "anthropic.com", "claude.ai", "claude.com", "googleapis.com", "x.ai", "cursor.com",
-               "google.com", "npmjs.org", "pypi.org")
+KNOWN_HOSTS = (
+    "tico.team",
+    "github.com",
+    "githubusercontent.com",
+    "ghcr.io",
+    "docker.io",
+    "openrouter.ai",
+    "openai.com",
+    "chatgpt.com",
+    "anthropic.com",
+    "claude.ai",
+    "claude.com",
+    "googleapis.com",
+    "x.ai",
+    "cursor.com",
+    "google.com",
+    "npmjs.org",
+    "pypi.org",
+)
 # A dotted word is a hostname only when it ends in a real top-level domain: `service.py` and `hub.db` are files.
-TLDS = ("com", "org", "net", "io", "dev", "ai", "team", "cloud", "xyz", "us", "uk", "de", "fr", "nl", "eu", "ca", "au", "jp",
-        "ch", "se", "info", "biz", "tech", "online", "site", "example", "local", "internal", "lan", "test", "localdomain",
-        "corp", "home")
+TLDS = (
+    "com",
+    "org",
+    "net",
+    "io",
+    "dev",
+    "ai",
+    "team",
+    "cloud",
+    "xyz",
+    "us",
+    "uk",
+    "de",
+    "fr",
+    "nl",
+    "eu",
+    "ca",
+    "au",
+    "jp",
+    "ch",
+    "se",
+    "info",
+    "biz",
+    "tech",
+    "online",
+    "site",
+    "example",
+    "local",
+    "internal",
+    "lan",
+    "test",
+    "localdomain",
+    "corp",
+    "home",
+)
 
 
 # ---------------------------------------------------------------------- the redactor
@@ -33,17 +82,23 @@ SECRETS = [
 # Unquoted values may contain spaces; discard through the next field separator.
 SECRET_FIELD = re.compile(
     r'''(?i)(["']?\b[A-Za-z0-9_.-]*(?:api[_-]?key|token|secret|password|passwd)[A-Za-z0-9_.-]*["']?\s*[=:]\s*)'''
-    r'''(?:"(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|[^,;\r\n}\]]+)''')
+    r'''(?:"(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|[^,;\r\n}\]]+)'''
+)
 LONG = re.compile(r"(?<![A-Za-z0-9+/_=-])[A-Za-z0-9+/_=-]{32,}")
-CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u2028\u2029\u202a-\u202e\u2066-\u2069]")   # HQ refuses these in a ticket
+CONTROL = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u2028\u2029\u202a-\u202e\u2066-\u2069]"
+)  # HQ refuses these in a ticket
 UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 EMAIL = re.compile(r"[A-Za-z0-9._%+'-]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\.[A-Za-z]{2,24}")
 QUERY = re.compile(r"(\b[a-z][a-z0-9+.-]*://[^\s?#\"'<>]*)\?[^\s\"'<>#]*(#[^\s\"'<>]*)?", re.I)
 AUTHORITY = re.compile(r'''(\b[a-z][a-z0-9+.-]*://)([^/\s?#"'<>]+)''', re.I)
 IPV4 = re.compile(r"(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?![\d.]*\d)")
 IPV6 = re.compile(r"(?<![A-Za-z0-9:])[0-9A-Fa-f:]*:[0-9A-Fa-f:.]*(?![A-Za-z0-9:])")
-HOST = re.compile(r"(?<![A-Za-z0-9@._-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+(?:%s)\b(?![A-Za-z0-9_-])"
-                  % "|".join(TLDS), re.I)
+HOST = re.compile(
+    r"(?<![A-Za-z0-9@._-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+(?:%s)\b(?![A-Za-z0-9_-])"
+    % "|".join(TLDS),
+    re.I,
+)
 
 
 def _looks_secret(token):
@@ -56,13 +111,15 @@ def _ipv6(match):
     if text.count(":") < 2:
         return text
     try:
-        ipaddress.IPv6Address(text.strip(":") if not text.startswith("::") and text.endswith(":") and not text.endswith("::") else text)
+        ipaddress.IPv6Address(
+            text.strip(":") if not text.startswith("::") and text.endswith(":") and not text.endswith("::") else text
+        )
     except ValueError:
         return text
     return "[ip]"
 
 
-WORD_MIN = 4        # a name or slug shorter than this is not a word: `coo` or `pm` would relabel ordinary text
+WORD_MIN = 4  # a name or slug shorter than this is not a word: `coo` or `pm` would relabel ordinary text
 ACTOR = re.compile(r"(?<![A-Za-z0-9])(bot|human):([A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?)")
 
 
@@ -76,10 +133,10 @@ class Redactor:
 
     def __init__(self, company_domains=(), bots=(), people=()):
         self.domains = sorted({d.lower().strip(".") for d in company_domains if d and "." in d}, key=len, reverse=True)
-        self.labels = {}                      # lower-case spelling -> label
-        self.exact = {}                       # case-sensitive short aliases (given names) -> label
-        self.actors = {"bot": {}, "human": {}}    # the slug or person id, lower case -> label
-        self._names = []                      # (compiled pattern, label), longest spelling first
+        self.labels = {}  # lower-case spelling -> label
+        self.exact = {}  # case-sensitive short aliases (given names) -> label
+        self.actors = {"bot": {}, "human": {}}  # the slug or person id, lower case -> label
+        self._names = []  # (compiled pattern, label), longest spelling first
         for number, (slug, names) in enumerate(sorted(bots), 1):
             self._alias("bot-%d" % number, [slug, *names])
             self.actors["bot"].setdefault(str(slug or "").strip().lower(), "bot-%d" % number)
@@ -87,10 +144,23 @@ class Redactor:
             self._alias("person-%d" % number, [ident, *names], parts=True)
             self.actors["human"].setdefault(str(ident or "").strip().lower(), "person-%d" % number)
         self._names.sort(key=lambda item: len(item[0]), reverse=True)
-        self._pattern = re.compile("|".join("(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(spelling)
-                                          for spelling, _ in self._names), re.I) if self._names else None
-        self._exact = re.compile("|".join("(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(s) for s in
-                                          sorted(self.exact, key=len, reverse=True))) if self.exact else None
+        self._pattern = (
+            re.compile(
+                "|".join("(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(spelling) for spelling, _ in self._names), re.I
+            )
+            if self._names
+            else None
+        )
+        self._exact = (
+            re.compile(
+                "|".join(
+                    "(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(s)
+                    for s in sorted(self.exact, key=len, reverse=True)
+                )
+            )
+            if self.exact
+            else None
+        )
 
     def _alias(self, label, spellings, parts=False):
         for spelling in spellings:
@@ -132,7 +202,9 @@ class Redactor:
         s = IPV4.sub("[ip]", s)
         s = IPV6.sub(_ipv6, s)
         for domain in self.domains:
-            s = re.sub(r"(?<![A-Za-z0-9-])(?:[A-Za-z0-9-]+\.)*%s\b" % re.escape(domain), "[company-domain]", s, flags=re.I)
+            s = re.sub(
+                r"(?<![A-Za-z0-9-])(?:[A-Za-z0-9-]+\.)*%s\b" % re.escape(domain), "[company-domain]", s, flags=re.I
+            )
         return HOST.sub(lambda m: m.group(0) if known_host(m.group(0)) else "[host]", s)
 
     def _authority(self, match):

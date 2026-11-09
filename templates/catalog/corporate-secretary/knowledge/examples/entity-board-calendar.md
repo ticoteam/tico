@@ -16,11 +16,11 @@ still unsigned.**
 | 2026-10-22 | Q4 board, parent | 2026-10-15 | 2026-10-08 | Agenda drafted; finance paper missing (Omar) |
 | 2026-12-10 | Annual shareholder meeting, parent | 2026-11-19 (21 days, bylaws 2.4) | 2026-11-26 | Not started |
 
-## ready for review or signature
+## Ready for review or signature
 - **July board minutes (2026-07-16)**: settled by counsel 2026-08-02, not yet signed by the chair. 62 days.
 - **Consent: new bank signatories**: signed by 4 of 5 directors; waiting on Kenji since 2026-09-21.
 
-## Cap table changes while outbound_send is off
+## Cap table changes with no approval found
 - Options for 2 hires (Lena, Marco), granted in the cap table (Equity Manager's change log) 2026-08-15 and 2026-09-01. No consent or minute
   found. Proposed: a resolution in the Q4 pack approving both at the board's chosen date. For counsel.
 

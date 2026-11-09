@@ -19,10 +19,10 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
     await page.route('**/*', route => {
       const request = route.request(), p = new URL(request.url()).pathname;
       const json = (body, status=200) => route.fulfill({status,contentType:'application/json',body:JSON.stringify(body)});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType:ui[1].endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(uiFile(ui[1]),'utf8')});
       if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType:'font/woff2',body:fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
-      if (p.endsWith('.js')) return route.fulfill({contentType:'application/javascript',body:''});
+      if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType:'application/javascript',body:''});
       if (p === '/') return route.fulfill({contentType:'text/html',body:html});
       if (p === '/api/v2/team/icon') {
         if (request.method() === 'GET') return route.fulfill({contentType:'image/png',body:logo});
@@ -97,18 +97,15 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
     await page.locator('#settings-tabs').waitFor();
     assert.equal(await page.locator('#settings-team').count(),0);
     // A local hub's owner gets the Team card without the team icon; the Stale ticket review and Topic changed switches
-    // moved to Settings > Rules (ui/app/settings-recurring.js): one line with a link, no switch here.
+    // live in Settings > System (ui/app/settings-recurring.ts): no switch here, and no note saying they moved.
     role = 'owner'; cloud = false;
     await page.reload();
     await page.locator('[data-settings-tab=general]').click();
     assert.equal(await page.locator('#settings-team-icon-change').count(),0);
     assert.equal(await page.locator('#settings-stale-review, #settings-topic-fresh').count(),0);
-    const moved = page.locator('#settings-team [data-settings-moved]');
-    assert.equal(await moved.innerText(),'Moved to Settings > Rules');
-    await moved.click();
-    await page.waitForFunction(() => !document.querySelector('#settings-recurring')?.hidden);
+    assert.equal(await page.locator('#settings-team [data-settings-moved], #settings-team-moved').count(),0);
     assert.deepEqual(ruleWrites,[]);
     assert.deepEqual(errors,[]);
-    console.log('Team icon: owner-only control, bounded binary uploads, stable retries, refresh preservation and phone layout passed; the moved team switches link to Settings > Rules');
+    console.log('Team icon: owner-only control, bounded binary uploads, stable retries, refresh preservation and phone layout passed; no moved-switches note');
   } finally { await browser.close(); }
 })().catch(error => {console.error(error);process.exitCode=1;});

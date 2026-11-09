@@ -3,6 +3,10 @@
 Schedule: Mondays at 09:00 team time (routine `weekly-content-plan`), after setup. Also run by hand. Budget 45 minutes. The outcome is the next four weeks of content,
 one finished draft for the top item with its short versions, and an honest ideas list. Nothing is published.
 
+Inputs: `knowledge/plan.md`, `knowledge/ideas.md`, `knowledge/voice.md`, the last two pieces in `reports/`, and the open tasks from other bots.
+
+Done when: the plan covers four to six weeks with a status on each piece, the top item has a draft or a stated reason it has none, the plan page is published, and the task note carries the headline.
+
 ---
 
 ## 1. Read where things stand

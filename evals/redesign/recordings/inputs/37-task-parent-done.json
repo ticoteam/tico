@@ -1,0 +1,25 @@
+{
+  "id": "37-task-parent-done",
+  "kind": "task",
+  "questions": "stale-review",
+  "level": "low",
+  "state": {
+    "task": {
+      "title": "Write the backups section of the migration guide",
+      "status": "open",
+      "step": "Not started",
+      "owner": "builder-claude",
+      "created": "2026-10-10",
+      "updated": "2026-10-10",
+      "parent": {
+        "title": "Ship migration guide v2",
+        "status": "done"
+      },
+      "reason": "Parent task finished on 2026-10-27",
+      "comments": [
+        "Created under the guide task"
+      ]
+    }
+  },
+  "note": "The parent task finished: update, or ask the owner."
+}

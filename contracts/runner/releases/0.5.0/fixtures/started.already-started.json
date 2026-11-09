@@ -1,0 +1,14 @@
+{
+ "answer": {
+  "error": {
+   "code": "already_started",
+   "detail": "This attempt was already started",
+   "retryable": false
+  }
+ },
+ "endpoint": "started",
+ "request": {
+  "thread_id": "thread-1"
+ },
+ "status": 409
+}

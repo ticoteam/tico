@@ -4,6 +4,10 @@ Runs once, on the first message or task you receive, while `state.md` says setup
 finished. Budget 25 minutes. The outcome is five recorded answers, the policy turned into checks, the
 open requests worked, a first returns report, and the first routine checked.
 
+Inputs: the task list, `hub team show`, the open return and refund requests, and the policy the Librarian cites.
+
+Done when: the five answers are in `state.md`, the policy checks and the ledger are written, the open requests have a decision each, the first report is on the task, the routine is checked, and `hub bot setup-done` has run.
+
 ---
 
 ## 1. Read before you ask
@@ -42,13 +46,13 @@ Label the report "First draft, not yet reviewed". Issue nothing.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will write this report every Monday at 09:00." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will write this report every Monday at 09:00." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

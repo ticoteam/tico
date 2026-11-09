@@ -20,12 +20,17 @@
 #   mpim:read             list group DMs                            (inbox)
 #   app_mentions:read     receive @Tico mentions in joined channels (gateway app_mention)
 #   files:read            open files people share, e.g. screenshots (file --id, url_private)
+#   links:read            see task links pasted in Slack            (gateway link_shared)
+#   links:write           show a preview under them                 (gateway chat.unfurl)
 # Events arrive over Socket Mode (an outbound websocket held by tico-slack-gateway.service on
 # the server; no public receiver, no signing secret): `app_mention` in any channel the app is
 # in, `message.im` for DMs to it, and `message.channels` / `message.groups` for everything
 # else said in a channel it is in. A person's DM or @Tico wakes the bot the router picks
 # to at once; every other channel message is stored and reaches the channel's readers
 # (the channel list in Settings > Tools > Slack) on the hourly pass (docs/slack-gateway.md).
+# `link_shared` is a task link pasted on one of `unfurl_domains`: the gateway answers with a preview.
+# Put your Tico's host there (and any in TICO_SLACK_UNFURL_HOSTS); Settings > Slack's manifest fills it in.
+# Interactivity is on so the preview's open button is acknowledged over the same socket.
 # The app-level token (connections:write) is minted under Basic Information > App-Level Tokens.
 
 display_information:
@@ -47,6 +52,8 @@ features:
   bot_user:
     display_name: Tico
     always_online: false
+  unfurl_domains:
+    - tico.acme.example
 
 oauth_config:
   scopes:
@@ -68,16 +75,19 @@ oauth_config:
       - mpim:read
       - app_mentions:read
       - files:read
+      - links:read
+      - links:write
 
 settings:
   org_deploy_enabled: false
   socket_mode_enabled: true
   token_rotation_enabled: false
   interactivity:
-    is_enabled: false
+    is_enabled: true
   event_subscriptions:
     bot_events:
       - app_mention
       - message.im
       - message.channels
       - message.groups
+      - link_shared

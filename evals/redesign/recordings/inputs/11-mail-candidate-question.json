@@ -1,0 +1,24 @@
+{
+  "id": "11-mail-candidate-question",
+  "kind": "mail",
+  "questions": "mail-triage",
+  "level": "low",
+  "state": {
+    "mailbox": "dana@acme.example",
+    "from": "jordan.ebeling@acme.example",
+    "from_name": "Jordan Ebeling",
+    "to": "dana@acme.example",
+    "date": "2026-10-24T11:12:00Z",
+    "subject": "Application: senior frontend engineer",
+    "snippet": "Hi, I applied last week for the frontend role. Is the team still hiring, and is a remote role in the US an option?",
+    "unsubscribe": false,
+    "list_id": null,
+    "attachments": [],
+    "is_internal": false,
+    "is_calendar_invite": false,
+    "labels": [
+      "INBOX"
+    ]
+  },
+  "note": "A candidate's question: it belongs to hiring, not to an owner decision."
+}

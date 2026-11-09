@@ -4,6 +4,7 @@ Only an explicit CLI unsubscribe invocation submits a request. Unsupported metho
 fall back to following a body link or sending an email. URLs contain recipient tokens: keep
 only hashes and hostnames in output/audit/state.
 """
+
 import hashlib
 import http.client
 import ipaddress
@@ -21,6 +22,7 @@ class Unsupported(ValueError):
 
 def endpoint(raw):
     import dkim
+
     msg = BytesParser(policy=policy.default).parsebytes(raw)
     for name in ('List-Unsubscribe', 'List-Unsubscribe-Post', 'From'):
         if len(msg.get_all(name, [])) != 1:
@@ -51,9 +53,15 @@ def endpoint(raw):
 def parsed_url(url):
     try:
         p = urlsplit(url)
-        valid = (p.scheme == 'https' and p.hostname and p.port in (None, 443)
-                 and not p.username and not p.password and not p.fragment
-                 and not any(ord(c) <= 32 or ord(c) >= 127 for c in url))
+        valid = (
+            p.scheme == 'https'
+            and p.hostname
+            and p.port in (None, 443)
+            and not p.username
+            and not p.password
+            and not p.fragment
+            and not any(ord(c) <= 32 or ord(c) >= 127 for c in url)
+        )
     except ValueError:
         valid = False
     if not valid:
@@ -85,8 +93,12 @@ def post(url):
     conn = PinnedHTTPS(p.hostname, timeout=15, context=ssl.create_default_context())
     try:
         target = (p.path or '/') + ('?' + p.query if p.query else '')
-        conn.request('POST', target, body=b'List-Unsubscribe=One-Click',
-                     headers={'Content-Type': 'application/x-www-form-urlencoded'})
+        conn.request(
+            'POST',
+            target,
+            body=b'List-Unsubscribe=One-Click',
+            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+        )
         return conn.getresponse().status
     finally:
         conn.close()
@@ -98,24 +110,24 @@ def submit(conn, mailbox, url, dry_run=False):
     result = {'endpoint_host': host, 'request_key': key, 'accepted': False}
     if dry_run:
         return dict(result, status='ready', would_unsubscribe=True)
-    conn.execute('CREATE TABLE IF NOT EXISTS unsubscribe_requests '
-                 '(key TEXT PRIMARY KEY, status TEXT NOT NULL, http_status INTEGER)')
+    conn.execute(
+        'CREATE TABLE IF NOT EXISTS unsubscribe_requests '
+        '(key TEXT PRIMARY KEY, status TEXT NOT NULL, http_status INTEGER)'
+    )
     conn.commit()
     # Claim before network I/O: an uncertain timeout must not cause automatic resubmission.
     with conn:
-        claimed = conn.execute("INSERT OR IGNORE INTO unsubscribe_requests VALUES (?, 'pending', NULL)",
-                               (key,)).rowcount
+        claimed = conn.execute(
+            "INSERT OR IGNORE INTO unsubscribe_requests VALUES (?, 'pending', NULL)", (key,)
+        ).rowcount
     if not claimed:
-        row = conn.execute('SELECT status, http_status FROM unsubscribe_requests WHERE key=?',
-                           (key,)).fetchone()
-        return dict(result, status=row[0], http_status=row[1], accepted=row[0] == 'accepted',
-                    already_attempted=True)
+        row = conn.execute('SELECT status, http_status FROM unsubscribe_requests WHERE key=?', (key,)).fetchone()
+        return dict(result, status=row[0], http_status=row[1], accepted=row[0] == 'accepted', already_attempted=True)
     try:
         code = post(url)
         status = 'accepted' if 200 <= code < 300 else 'manual_required'
     except Exception:
         code, status = None, 'unknown'
     with conn:
-        conn.execute('UPDATE unsubscribe_requests SET status=?, http_status=? WHERE key=?',
-                     (status, code, key))
+        conn.execute('UPDATE unsubscribe_requests SET status=?, http_status=? WHERE key=?', (status, code, key))
     return dict(result, status=status, http_status=code, accepted=status == 'accepted')
