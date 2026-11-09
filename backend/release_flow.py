@@ -456,8 +456,8 @@ def _docs_task(c, writer, tag, tickets, url):
     title = f"{prefix} {len(tickets)} ticket{'s' if len(tickets) != 1 else ''}"
     body = (
         f"{tag} is published" + (f" ({url})" if url else "") + ". Update the docs for the changes people will see, "
-        "each with its pull request; skip what nobody sees. The version's CHANGELOG section comes on its release "
-        "notes task.\n\nIn this release:\n" + _listing(c, tickets, f"at {tag}")
+        "each with its pull request; skip what nobody sees. Release notes are on each release's approval issue "
+        "(label release-approval).\n\nIn this release:\n" + _listing(c, tickets, f"at {tag}")
     )
     return H.task_create(
         c, H.KEEPER, title, body, owner, deduplicate=False, trigger=EVENT, trigger_source=tag, wake_refs={"wake": EVENT}

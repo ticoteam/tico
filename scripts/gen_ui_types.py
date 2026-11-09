@@ -3,7 +3,7 @@
 
 The file is generated, not committed (ui/types/api.d.ts is in .gitignore). scripts/check_ui_types.sh runs this
 before tsc, which is the only reader. The document is built in-process from the same function that writes
-docs/openapi/v2.json, so no server runs. Each component schema becomes an exported type; each operation gets
+GET /api/v2/openapi.json, so no server runs. Each component schema becomes an exported type; each operation gets
 <Name>Params, <Name>Body and <Name>Response.
 """
 

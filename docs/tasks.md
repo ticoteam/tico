@@ -154,7 +154,7 @@ A ticket has at most one open **Review 1**, **Review 2**, **QA** or **Post Relea
 
 ### Check pools: who takes a ticket's check
 
-Each check step (**Review 1**, **Review 2**, **In QA**, **Post Release QA**) can have a pool: the bots that may do that check, and how many open checks each may hold (2 unless set, up to 20). Set them on the step in Settings → Tasks → Edit type (`check_pool` and `check_limit` on each step of `POST /api/v2/task-types/{id}`); a step with no pool files nothing by itself. The editor and bot-assignment picker show a bot's configured model and provider beside its name. When the latest completed run used a different or unknown provider, they show that runtime evidence separately; it describes that run, not the next one. A Dev tickets type starts with the proposed pools, with the bots the company has: Review 1 and Review 2 `pr-reviewer-sol`, `reviewer-2`, `reviewer-xai`, `reviewer-muse`; In QA `qa-engineer`, `qa-claude`, `qa-xai`, `qa-muse`; Post Release QA `qa-engineer-copy`.
+Each check step (**Review 1**, **Review 2**, **In QA**, **Post Release QA**) can have a pool: the bots that may do that check, and how many open checks each may hold (2 unless set, up to 20). Set them on the step in Settings → Tasks → Edit type (`check_pool` and `check_limit` on each step of `POST /api/v2/task-types/{id}`); a step with no pool files nothing by itself. The editor and bot-assignment picker show a bot's configured model and provider beside its name. When the latest completed run used a different or unknown provider, they show that runtime evidence separately; it describes that run, not the next one. A Dev tickets type starts with the proposed pools, with the bots the company has: Review 1 and Review 2 `pr-reviewer-sol`, `reviewer-2`, `reviewer-xai`, `reviewer-muse`; on a board with QA steps, In QA `qa-engineer`, `qa-claude`, `qa-xai`, `qa-muse` and Post Release QA `qa-engineer-copy`.
 
 When a ticket enters a step with a pool and has a linked PR but no open check there for its current head, Tico files the check (`Review 1: PR #412`, `QA: PR #412`, `Post Release QA: PR #412`, the head recorded) as the ticket's owner would, so the same gate applies and the verdict comes back to the Builder. It prefers a different model company from the Builder, then orders eligible pool bots by fewest open checks and longest since their last run. Eligible means active, on a computer seen in the last 5 minutes, not paused or held, under its limit, never the Builder, and for Review 2 not a bot that did Review 1. The model company is the Builder's company as its runs on the ticket actually ran (the Builder's configured company only while none of them is known), and a bot's company is the one a check given to it runs on: its task model's when it has one that can run now, else its configured model's, or what its last few such runs ran on. Each check step has an **Another model company** setting (`other_company` in its flow, see Step flow), `prefer` by default, and it decides what a bot of the Builder's company may do. With `prefer`, that bot takes the check only when no other pool bot is free, rather than the check waiting, for a review and a QA check alike, and a bot whose company Tico can't name comes after one of another company it can. With `require`, a bot of the Builder's company is never given the check, not even when it is the only free one: the check waits when every free bot runs on that company (the reason says so), and a bot of the Builder's company that finishes its own check does not take it. Require also never gives the check to a bot whose company Tico can't name (a model it doesn't know or a reseller picks, such as Cursor's auto, or part of a recent run on one), and while any part of the Builder's runs on the ticket is of unknown company the check waits for every bot. The bot is woken at once.
 
@@ -191,7 +191,8 @@ kept by id, so renaming a step keeps its flow. All keys are optional:
 | `after_green` | A work step: green CI on a head newer than the one its check judged moves the ticket here (`merge` to merge next). Without it the owner moves the ticket on when its work is done. |
 | `on_merge` | The one step a ticket goes to when its pull request merges, from any earlier step. |
 | `skip_tag` | A ticket with this tag passes the step: it goes straight to `on_pass`, and the skip is recorded. |
-| `timeout_hours` | A check still open this long is closed unanswered and the round skipped: the ticket goes on as if it passed with no comments, unless a check there already gave a fail, changes or comments at the pull request's head, in which case it moves to `on_fail`. |
+| `timeout_hours` | A check still open this long is closed unanswered and the round skipped: the ticket goes on as if it passed with no comments, unless a check there already gave a fail, changes or comments at the pull request's head, in which case it moves to `on_fail`. Without `on_timeout`, this is the rule. |
+| `on_timeout` | `refile`, on a review check with `timeout_hours`: an unanswered check past its hours is closed with a note naming the bot that did not answer, and the same check is filed again for the same head to another free pool bot, preferring another model family than the Builder's. The bot that did not answer is passed over for that refile. A second review goes to a different bot than the first wherever one is free, in this order: a bot that has not timed out on the ticket; a bot that timed out earlier on the ticket (not the one just refiled); a bot that reviewed an earlier round, only when no other bot is left in the pool (a bot that timed out earlier counts as left); and last the bot just refiled. With every bot busy, rate-limited or offline the check waits at the step as "Waiting for a reviewer", and the retry files it. The ticket never moves on by a timeout. |
 | `late_hours` | A ticket this long at a working step is listed as late on its manager's task roundup, and again every seven days while it stays late. Dev working steps default to 4. `status_hours` is still accepted but wakes no one. |
 | `assign` | `{pool, slots}`: an unowned ticket here goes to the least busy pool bot with a free slot (tickets past this step it holds). |
 | `backlog` | `{over, per, notify, every_hours}`: more than `over` tickets at the step (`per: step`) or for one owner (`per: owner`) lists it on the task roundup of `notify`: `manager` (the type's), `owner`, `owner_manager` (one level up on the org chart), or a named bot (a named person is not told by the roundup). Relisted once every `every_hours` (4) while over. |
@@ -200,10 +201,12 @@ kept by id, so renaming a step keeps its flow. All keys are optional:
 | `check` | The kind of check the step asks for: `review`, `qa` or `release_qa`. Review pools, the one-open-check rule, Review 2 never going to an earlier review's bot, QA waivers and blocked checks find their steps by this, so a renamed check step keeps working. A check request is titled with the step's name (`QA` for a QA step); `Review <n>`, `QA` and `Post Release QA` still name the board's nth review, its QA and its after-release check. |
 | `other_company` | On a check step only: `prefer` (the default, also when left out) or `require`. Prefer gives the check to a bot of another model company than the Builder's before one of the Builder's company, which takes it only when no other is free. Require never gives it to one of the Builder's company: the check waits when every free bot runs on that company. See Check pools. |
 
-A Dev tickets type is given the Dev board's flow once: Review 1 and Review 2 are `review` checks, In QA is `qa` and
-Post Release QA is `release_qa`; reviews send their feedback back to the Builder's Fixes step
-whichever way they go, In QA passes to the merge (skip tag `skip-qa`), Pending Release takes merged tickets, and
-released steps never hold. Change any of it on the steps. A published release moves the Dev tickets it carries (merged pull request in its repository) from Pending
+A Dev tickets type is given the Dev board's flow once: Review 1 and Review 2 are `review` checks. Review 1 sends its
+feedback back to the Builder's Fixes step whichever way it goes. Review 2's approval goes to the merge, and a fix made
+after it merges once CI is green on its head. Without QA steps, Review 1 and Review 2 both time out after an hour with `on_timeout: refile`: an unanswered check is filed
+again to another reviewer, never passed on (see `on_timeout`). On a board with QA steps, Review 2 sends its feedback to Review 2 Fixes,
+In QA is `qa`, Post Release QA is `release_qa`, and In QA passes to the merge (skip tag `skip-qa`). Pending Release
+takes merged tickets, and released steps never hold. Change any of it on the steps. A published release moves the Dev tickets it carries (merged pull request in its repository) from Pending
 Release to the next step, with the note "Shipped in vX.Y.Z", and closes the schedule's open Release task once nothing
 is left at Pending Release.
 
@@ -783,7 +786,8 @@ specific wins (the **What wakes** automations on the Automations page). The mess
 An event no rule names waits as a note (`default_note`): the bot reads it on its next run. Work still wakes the bot: an
 assignment or a task handed back to it, a review or QA request, a blocker, a routine, a schedule, a due date, a snooze
 ending, a requested update, a release published, the Task Manager's report, a pull request's
-checks finishing, a subtask or a blocker finishing, and a task the bot asked for being finished, declined
+checks finishing, a pull request merging on a card waiting or blocked on it (its own, a card it blocks, or its parent: once
+per merge, `_merge_wakes` in backend/github.py), a subtask or a blocker finishing, and a task the bot asked for being finished, declined
 or blocked on someone else (`task_blocked`). A plain
 comment, another bot's status or step move, and the bot's own write (`own_write`, ignored) do not. A rule's outcome is
 `ignore`, `note`, `batch`, `wake`, `ask` or `action`. **Ask** writes the message as a note and puts one item in the
@@ -848,9 +852,9 @@ bot; writing `send_webhook` is for a person, or a bot with outbound sending on, 
 
 A task entering a step is the event `step_entered`; a rule's `when` can name the `step` and the `role` (`owner`,
 `requester`, `qa`, `release_manager`, `other`). A team with no `step_entered` rule writes nothing on a step move. A Dev
-tickets type is given three editable rows when it is created or renamed: **QA Fixes** wakes the Builder that owns the
-ticket, **Pending Release** is a note to the Release Manager, and **In QA** wakes QA only. Delete a row and it stays
-deleted.
+tickets type is given its editable rows when it is created or renamed: **Pending Release** is a note to the Release
+Manager. A board with QA steps also gets **QA Fixes** (wakes the Builder that owns the ticket) and **In QA** (wakes QA
+only). Delete a row and it stays deleted.
 
 A rule's `step` names a step of its type, by the step's name or its id (case ignored). Saving a wake rule that names a
 step its type does not have is refused (422), and the message lists the type's real steps. Renaming a step moves the
