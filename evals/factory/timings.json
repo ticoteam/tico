@@ -7,6 +7,7 @@
  "ci_direct_dispatch": 16.7,
  "ci_pr_check_exhausted": 16.9,
  "ci_ticket_cap": 18.2,
+ "close_stops_work": 29.0,
  "computer_off": 57.1,
  "contain_poison_job": 42.8,
  "design_board": 33.4,

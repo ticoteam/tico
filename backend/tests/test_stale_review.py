@@ -561,7 +561,15 @@ def test_the_pass_stops_before_the_hour_is_over(stale):
     assert done["calls"] == 1 and done["deferred"] == 2 and done["why"] == "time"
 
 
-def test_other_reasons_parent_blockers_snooze_and_twin_titles(stale):
+def test_candidates_name_every_reason_and_the_quiet_rule(stale, subtests):
+    """One install for the two candidate-reason checks (SR.candidates only, no pass): the other reasons, then the
+    quiet rule. Each makes its own tasks with titles apart."""
+    for check in (_other_reasons_parent_blockers_snooze_and_twin_titles, _quiet_means_a_week_and_three_days_for_doing):
+        with subtests.test(check.__name__):
+            check(stale)
+
+
+def _other_reasons_parent_blockers_snooze_and_twin_titles(stale):
     api, store, task = stale
     parent = task("Launch plan", status="doing", days_ago=0)
     child = task("Launch copy", status="open", days_ago=0)
@@ -594,7 +602,7 @@ def test_other_reasons_parent_blockers_snooze_and_twin_titles(stale):
     assert found[snoozed].startswith("Its snooze ended")
 
 
-def test_quiet_means_a_week_and_three_days_for_doing(stale):
+def _quiet_means_a_week_and_three_days_for_doing(stale):
     api, store, task = stale
     doing_quiet = task("Draft the pricing page", status="doing", days_ago=4)
     doing_fresh = task("Draft the launch post", status="doing", days_ago=2)

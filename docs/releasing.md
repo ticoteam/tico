@@ -78,6 +78,13 @@ Tico's own releases (ticoteam/tico) ship from release windows (one every hour, 1
   the new head, one validation at a time. A red or cancelled head waits for the next push; it is not run again, except
   by a manual run (below), which validates it again (a flaky check). A window still red at the next open carries on.
   The next window that ships closes the issue.
+- **Main is red.** A red Release validation run on main reviews, once per break, each merged pull request that changed
+  a file a failing test uses (a review, so Tico routes it to the pull request's owner). With more than three such
+  pull requests and only pytest tests failing, the bisect job on RunsOn runs the failing tests at the commits between
+  the last green run and the red one, twice each, and reviews only the merge where they first fail. A mix of results is
+  flaky: nothing is reviewed, and the test is a candidate for `ci/quarantine/` (see Quarantined tests). One open `main-red` issue lists
+  the suspects, the verdict and the likely flaky tests. The next green run on main closes it. See
+  `scripts/main_red.py`.
 - **Canary and stable.** The canary is Tico Team's install, stable is TIDY's. Both are updated through their update
   keys ([Service keys](service-keys.md#update-keys)) with `GET`/`POST /api/v2/system/update`, never a browser or SSH.
 - **Approval.** Stable takes the canary's release only when someone has approved it (see [Approval](#approval)), its
@@ -127,7 +134,8 @@ A window validates a head in one of two ways. A **full** validation is the whole
   main's head in full as it does today. Once that run is a day old, the window may dispatch a full validation again on
   its own. Until then a release can wait up to a day, so a person who needs it sooner runs it by hand.
 - **Incremental candidate.** A later head runs only: what `scripts/pr_checks.py` selection picks for anchor..head (the
-  merge queue's rules, never the full suite), the browser smoke set, the factory part when its inputs changed, the
+  merge queue's rules before its light plan's two-level cut, never the full suite; so it runs the tests a queue group
+  left out), the browser smoke set, the factory part when its inputs changed, the
   product part (the upgrade journey and the Docker smoke checks) when the candidate's previous release is not the
   anchor's, and the tests that failed in the open red runs (below). A failed file that marks slow tests also runs in the
   contracts lane (`-m slow`). The plan is `scripts/release_increment.py`.
@@ -467,8 +475,11 @@ GitHub reports a conflict. `--admin` and the REST merge endpoint skip the queue;
 
 **A red queue run** removes the failing pull request from the queue, and the queue retests the entries behind it. Fix the
 failure on the branch, push, mark the PR ready again if it went back to draft, and enqueue it again. A failing test shows on
-the pull request's own run first, because a ready pull request runs its selected tests. After a queue failure, fix it and get
-green PR checks before enqueuing again.
+the pull request's own run first when the change reaches it directly: a ready pull request runs a light set (the tests
+that import, name or read a changed file, the smoke set, at most four VMs), and its queue group goes one level further (at
+most eight VMs). Each plan's job summary lists what it left out; release validation's incremental runs select the full
+closure over every change since the last full validation, so a test a queue group left out still runs before a release. After a queue failure, fix it and get green PR
+checks before enqueuing again.
 
 **Hotfixes do not bypass the queue.** Land the fix through the queue like any change, then dispatch `hotfix.yml` once it
 has landed (see Hotfixes above). The queue itself is a repository ruleset (`merge_queue`, and `checks` as the required
@@ -656,7 +667,7 @@ rollback step: it runs on the candidate's updater.
 
 **Before and after screenshots.** `.github/workflows/release-shots.yml` runs `scripts/release_shots.py` on the seeded
 demo for the base tag and the candidate, and shoots each page that a changed `ui/` file draws (its `ui` globs in
-`scripts/screenshots/index.js`): desktop 1440 px and phone 390 px, light, plus dark when a dark-theme file changed. A
+`scripts/screenshots/index.cts`): desktop 1440 px and phone 390 px, light, plus dark when a dark-theme file changed. A
 shared file shoots every page, and a `ui/` file that no table names fails the test suite until one names it. The
 changed pictures go to the `release-evidence` branch under the version's folder, and the markdown section "What it
 looks like" links them. Both sides run this checkout's harness against their own demo, on a frozen clock
@@ -836,7 +847,7 @@ directly and sends no ID.
 
 The updater contract is `POST {TICO_UPDATER_URL}/update` with `{"version": "X.Y.Z"}` and
 `GET {TICO_UPDATER_URL}/status`, which answers `{state, from, to, message}` where `state` is one of
-`idle`, `pulling`, `restarting`, `healthy`, `rolled_back` or `failed`. Both carry
+`idle`, `pulling`, `snapshotting`, `restarting`, `uncertain`, `healthy`, `rolled_back` or `failed`. Both carry
 `Authorization: Bearer <TICO_UPDATER_TOKEN>`. Without an updater, "Update now" shows the command to
 run on the server: `docker compose pull && docker compose up -d`.
 

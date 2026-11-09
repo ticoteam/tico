@@ -13,6 +13,9 @@ from evals.factory.scenarios import SCENARIOS  # the built-ins: scenarios.py def
 from .ci_caps import SCENARIOS as _ci_caps
 
 SCENARIOS += _ci_caps
+from .close_stops_work import SCENARIOS as _close_stops_work
+
+SCENARIOS += _close_stops_work
 from .freezes import SCENARIOS as _freezes
 
 SCENARIOS += _freezes

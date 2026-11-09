@@ -10,7 +10,10 @@ if [ "${1:-}" != --once ]; then
 fi
 shift
 suite=${1:?suite required}
-python3 -m venv "$RUNNER_TEMP/venv"
+# A venv restored from the cache (pr-checks.yml, keyed on the exact Python, the arch, the lock and this script) is kept;
+# one that cannot start is rebuilt. pip still installs the lock either way: on a whole restored venv every pin is already
+# satisfied (a few seconds, no downloads), and a missing or wrong package is installed, so a broken lock still fails.
+"$RUNNER_TEMP/venv/bin/python" -c '' 2>/dev/null || python3 -m venv --clear "$RUNNER_TEMP/venv"
 "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check --retries 1 --timeout 30 -r backend/requirements-dev.txt
 # Every suite serves the UI, whose TypeScript files run as their compiled JavaScript (backend/ui_build.py refuses
 # a missing or stale one): the lock's esbuild compiles them to build/ui.

@@ -22,10 +22,11 @@ from concurrent.futures import Future
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 import httpx
 import jwt
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -136,6 +137,12 @@ MAX_EXTRA_REPOS = 20
 # and Health already name it; it says nothing about whether the App works, so it never marks the token unhealthy.
 BOT_SCOPED = ("github_repo_missing", "github_repo_not_accessible", "rehearsal")
 RECONNECT = "Reconnect GitHub in Tools."
+WEB = "https://github.com"  # the OAuth endpoints, which are not the REST API
+USER_AAD = b"tico-github-user-token:v1"
+ACCESS_MARGIN = 10 * 60  # a user token this close to its end is refreshed first
+NOT_AUTHORIZED = (
+    "Tico is not authorized to create repositories in the personal account yet: authorize Tico in Tools > GitHub"
+)
 
 # Replaced in tests with an httpx.MockTransport so nothing reaches the network.
 TRANSPORT = None
@@ -166,6 +173,11 @@ def account_word(row):
     return "account" if account_kind(row) == PERSONAL else "organization"
 
 
+# The install link is Tico's own route: it mints the single-use state the install's return must carry, then sends
+# the owner on to GitHub's install page.
+INSTALL_PATH = "/api/v2/github/app/install"
+
+
 def links(row):
     """The GitHub pages for the App and its installation, built from the row: an organization's settings live under its
     own URL, a personal account's under the user's. Every link Tico shows or sends a person to is built here."""
@@ -180,18 +192,18 @@ def links(row):
     return {
         "settings_url": base,
         "permissions_url": base + "/permissions",
-        "install_url": f"https://github.com/apps/{slug}/installations/new",
+        "install_url": INSTALL_PATH,
         "uninstall_url": installations,
     }
 
 
-def _client():
+def _client(base=API):
     return httpx.Client(
-        base_url=API,
+        base_url=base,
         timeout=TIMEOUT,
         transport=TRANSPORT,
         headers={
-            "Accept": "application/vnd.github+json",
+            "Accept": "application/vnd.github+json" if base == API else "application/json",
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": "Tico-GitHub-App",
         },
@@ -200,6 +212,16 @@ def _client():
 
 def _iso(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+
+
+def _ends(seconds):
+    """The ISO time `seconds` from now, in the format the rest of the database keeps."""
+    return H.shift(H.now(), seconds=int(seconds))
+
+
+def user_callback(settings):
+    """Where GitHub sends the owner after they authorize Tico for a personal account: the App's callback URL."""
+    return settings.public_url + "/api/v2/github/app/authorized"
 
 
 def repo_of(repo, default_owner):
@@ -256,6 +278,7 @@ class GitHubApp:
         # Serialize confirmed product creates in this process so same-process retries see the
         # completed receipt. The committed operation row is the cross-process/crash fence.
         self.product_repo_create_lock = threading.Lock()
+        self.user_lock = threading.Lock()  # one refresh of the owner's user token at a time (it rotates)
         self.repository_sync_attempt = 0
         self.repository_sync_failures = 0
         self.repository_queue_lock = threading.Lock()
@@ -410,11 +433,14 @@ class GitHubApp:
                 "pem": conversion["pem"],
                 "webhook_secret": conversion.get("webhook_secret") or "",
                 "client_secret": conversion.get("client_secret") or "",
+                "owner_id": int(owner.get("id") or 0),
+                "callback_in_manifest": kind == PERSONAL,
             }
         ).encode()
         nonce = os.urandom(12)
         sealed = AESGCM(self._key(c)).encrypt(nonce, secrets_blob, b"tico-github-app:v1")
         c.execute("DELETE FROM github_app")
+        c.execute("DELETE FROM github_user_token")  # an authorization is for one App: a new App starts with none
         c.execute(
             "INSERT INTO github_app(id,app_id,slug,client_id,org,administration,installation_id,html_url,ciphertext,nonce,"
             "created_at,created_by,account_type) VALUES('app',?,?,?,?,?,NULL,?,?,?,?,?,?)",
@@ -469,12 +495,243 @@ class GitHubApp:
         forget(c)
         c.execute("UPDATE repositories SET reachable=0 WHERE reachable<>0")
         c.execute("DELETE FROM github_app_states")
+        c.execute("DELETE FROM github_user_token")
+        c.execute("DELETE FROM github_user_states")
         c.execute(
             "DELETE FROM registry_metadata WHERE key IN ('repositories-reachability-verified','repositories-confirmed-missing')"
         )
         c.execute("DELETE FROM service_health WHERE service=?", (GITHUB_HEALTH,))  # nothing left to be unhealthy
         self.cache.clear()
         self.live.clear()
+
+    # -- the owner's user token (a personal account) ------------------------------------------
+    # The App's user-to-server token lets Tico create an EMPTY repository in the personal account (POST /user/repos); nothing
+    # else uses it. It is sealed like the App's secrets, refreshed when near its end, and forgotten when GitHub refuses it.
+    def _app_secrets(self, c, row):
+        """The App's sealed secrets, opened: its client secret is what GitHub's OAuth endpoints check."""
+        blob = self.open_sealed(c, row, b"tico-github-app:v1")
+        if blob is None:
+            raise Problem("github_unavailable", MISSING_KEY, 503)
+        return json.loads(blob)
+
+    def _user_token_row(self, c):
+        return c.execute("SELECT * FROM github_user_token WHERE id='app'").fetchone()
+
+    def _open_user(self, c, stored):
+        """The sealed user token pair (access_token, refresh_token), opened. The values never leave this module."""
+        blob = self.open_sealed(c, stored, USER_AAD, table="github_user_token")
+        if blob is None:
+            raise Problem("github_unavailable", MISSING_KEY, 503)
+        return json.loads(blob)
+
+    def _seal_user(self, c, tokens):
+        blob = json.dumps(
+            {"access_token": tokens["access_token"], "refresh_token": tokens.get("refresh_token") or ""}
+        ).encode()
+        key = self._key(c)
+        if key is None:
+            raise Problem("github_unavailable", MISSING_KEY, 503)
+        nonce = os.urandom(12)
+        return AESGCM(key).encrypt(nonce, blob, USER_AAD), nonce
+
+    def user_authorized(self, c=None):
+        """Whether the owner authorized Tico for the personal account: a stored user token for the App's own login. It says
+        nothing about whether GitHub still accepts the token; a refused refresh forgets it (user_token)."""
+        if c is None:
+            with self.store.read() as conn:
+                return self.user_authorized(conn)
+        row, stored = self.row(c), self._user_token_row(c)
+        return bool(
+            row
+            and stored
+            and account_kind(row) == PERSONAL
+            and stored["client_id"] == row["client_id"]  # a token from an earlier App is not this App's
+            and str(stored["login"]).lower() == str(row["org"]).lower()
+        )
+
+    def owner_id(self, c):
+        """The numeric id of the account the App was made for, sealed at save (0 for an App saved before it was recorded)."""
+        row = self.row(c)
+        return int(self._app_secrets(c, row).get("owner_id") or 0) if row else 0
+
+    def callback_in_manifest(self):
+        """Whether the App's manifest asked for the authorization callback. Apps saved before that did not, so GitHub needs the
+        callback URL added on its settings page."""
+        with self.store.read() as c:
+            row = self.row(c)
+            return bool(row and self._app_secrets(c, row).get("callback_in_manifest"))
+
+    def save_user_token(self, c, actor, login, github_id, tokens):
+        """Store the authorization the owner just gave, replacing an earlier one: the sealed pair, the expiry times, and the
+        App and account it is for (a token from another App or account is never used)."""
+        app = self.row(c)
+        sealed, nonce = self._seal_user(c, tokens)
+        c.execute("DELETE FROM github_user_token")
+        c.execute(
+            "INSERT INTO github_user_token(id,login,github_id,client_id,ciphertext,nonce,access_expires_at,"
+            "refresh_expires_at,authorized_by,authorized_at,refreshed_at) VALUES('app',?,?,?,?,?,?,?,?,?,NULL)",
+            (
+                login,
+                int(github_id),
+                app["client_id"],
+                sealed,
+                nonce,
+                _ends(tokens["expires_in"]) if tokens.get("expires_in") else None,
+                _ends(tokens["refresh_token_expires_in"]) if tokens.get("refresh_token_expires_in") else None,
+                actor,
+                H.now(),
+            ),
+        )
+
+    def _user_grant(self, form):
+        """GitHub's answer to an OAuth token request made with the App's client credentials: the token fields, or None when
+        GitHub refused it (GitHub answers refusals in the body). GitHub unreachable, rate limited or failing is a retryable
+        Problem, and nothing about the stored authorization is then known."""
+        row = self.row()
+        if not row:
+            raise Problem("github_not_connected", "Connect the GitHub App first", 409)
+        with self.store.read() as c:
+            credentials = self._app_secrets(c, row)
+        r = self._call(
+            "POST",
+            "/login/oauth/access_token",
+            base=WEB,
+            data={**form, "client_id": row["client_id"], "client_secret": credentials.get("client_secret") or ""},
+        )
+        if r.status_code >= 500 or rate_limited(r):
+            raise Problem(
+                "github_unreachable",
+                "GitHub could not check Tico's authorization; try again shortly",
+                502,
+                retryable=True,
+            )
+        try:
+            data = r.json()
+        except ValueError:
+            data = {}
+        if not isinstance(data, dict) or "error" in data or not data.get("access_token"):
+            return None
+        return data
+
+    def exchange_user(self, code):
+        """The owner's authorization for the code GitHub sent back after they authorized Tico."""
+        tokens = self._user_grant({"code": code})
+        if tokens is None:
+            raise Problem("github_exchange", "GitHub did not accept that authorization; start again from Tools", 400)
+        return tokens
+
+    def user_identity(self, token):
+        """GitHub's login and numeric id for the token (GET /user). The id is the account itself; a login can be renamed."""
+        r = self._call("GET", "/user", headers={"Authorization": "Bearer " + token})
+        if r.status_code >= 300:
+            raise Problem(
+                "github_unreachable", "GitHub would not say who authorized Tico; try again shortly", 502, retryable=True
+            )
+        data = r.json()
+        return str(data.get("login") or ""), int(data.get("id") or 0)
+
+    def _lose_user_token(self, reason, stored):
+        """The authorization `stored` (the row that was read) is no good: GitHub refused its refresh, or it was rejected. Only
+        that row is deleted (compare-and-delete on its nonce), so an authorization made in the meantime is kept. Recorded
+        without any token value."""
+        with self.store.transaction() as c:
+            gone = c.execute("DELETE FROM github_user_token WHERE id='app' AND nonce=?", (stored["nonce"],)).rowcount
+            if gone:
+                H.event(c, H.KEEPER, "github.user_authorization_lost", "", {"reason": reason})
+
+    def _forget_rejected(self, token):
+        """GitHub rejected this access token (401): forget the authorization if it is still the stored one, compared by value,
+        so a newer authorization is never dropped. Only the reason is recorded."""
+        with self.user_lock:
+            with self.store.read() as c:
+                stored = self._user_token_row(c)
+                current = self._open_user(c, stored) if stored else None
+            if stored and current and current.get("access_token") == token:
+                self._lose_user_token("rejected", stored)
+
+    def user_token(self):
+        """The owner's user access token, for the empty repositories Tico creates in the personal account, refreshed when it is
+        near its end. GitHub rotates the refresh token on each refresh, so refreshes run one at a time (user_lock, which
+        authorizing takes too), and the new pair is stored before its access token is used. GitHub refusing the refresh
+        forgets the authorization: the owner authorizes again (github_user_token, 409). GitHub unreachable is retryable
+        (github_unreachable, 502) and forgets nothing."""
+        with self.user_lock:
+            with self.store.read() as c:
+                stored = self._user_token_row(c)
+                if not stored or not self.user_authorized(c):
+                    raise Problem("github_user_token", NOT_AUTHORIZED, 409)
+                current = self._open_user(c, stored)
+            if not stored["access_expires_at"] or _iso(stored["access_expires_at"]) - ACCESS_MARGIN > time.time():
+                return current["access_token"]
+            if not current.get("refresh_token"):
+                self._lose_user_token("no_refresh_token", stored)
+                raise Problem("github_user_token", NOT_AUTHORIZED, 409)
+            # GitHub rotates the refresh token as it accepts this one, so the old pair dies here. Unavoidable: if the process
+            # stops between GitHub's answer and the commit below, the stored pair is dead too and the owner authorizes again.
+            tokens = self._user_grant({"grant_type": "refresh_token", "refresh_token": current["refresh_token"]})
+            if tokens is None:
+                self._lose_user_token("refresh_refused", stored)
+                raise Problem("github_user_token", NOT_AUTHORIZED, 409)
+            with self.store.transaction() as c:
+                sealed, nonce = self._seal_user(
+                    c,
+                    {
+                        "access_token": tokens["access_token"],
+                        "refresh_token": tokens.get("refresh_token") or current["refresh_token"],
+                    },
+                )
+                c.execute(
+                    "UPDATE github_user_token SET ciphertext=?,nonce=?,access_expires_at=?,refresh_expires_at=?,"
+                    "refreshed_at=? WHERE id='app'",
+                    (
+                        sealed,
+                        nonce,
+                        _ends(tokens["expires_in"]) if tokens.get("expires_in") else None,
+                        _ends(tokens["refresh_token_expires_in"]) if tokens.get("refresh_token_expires_in") else None,
+                        H.now(),
+                    ),
+                )
+            return tokens["access_token"]
+
+    def _user_create(self, token, body):
+        """POST /user/repos as the owner: the empty repository in their own account. A token GitHub rejects is forgotten."""
+        r = self._call("POST", "/user/repos", headers={"Authorization": "Bearer " + token}, json=body)
+        if r.status_code == 401:
+            self._forget_rejected(token)
+            raise Problem("github_user_token", NOT_AUTHORIZED, 409)
+        return r
+
+    def revoke_user_token(self, token=None):
+        """Best effort, on disconnect and when a new authorization is refused: GitHub revokes the owner's whole authorization of
+        the App (the grant, with its refresh token).
+        A failure is logged without any token value; the owner can also remove the authorization in GitHub's settings."""
+        with self.store.read() as c:
+            row, stored = self.row(c), self._user_token_row(c)
+            if not row:
+                return False
+            try:
+                credentials = self._app_secrets(c, row)
+                if token is None and stored is not None:
+                    token = self._open_user(c, stored)["access_token"]
+            except (Problem, InvalidTag, ValueError, KeyError, TypeError):
+                return False
+        if not token:
+            return False
+        client_id = str(row["client_id"])
+        try:
+            r = self._call(
+                "DELETE",
+                f"/applications/{quote(client_id, safe='')}/grant",
+                auth=(client_id, credentials.get("client_secret") or ""),
+                json={"access_token": token},
+            )
+        except Problem:
+            log.warning("The GitHub App's user authorization could not be revoked on GitHub")
+            return False
+        if r.status_code >= 300:
+            log.warning("The GitHub App's user authorization was not revoked on GitHub (HTTP %s)", r.status_code)
+            return False
+        return True
 
     # -- GitHub calls -----------------------------------------------------------------------
     def app_jwt(self, c, row):
@@ -500,11 +757,11 @@ class GitHubApp:
         with self.store.transaction() as c:  # the at-rest key may be written the first time it is read
             return self.app_jwt(c, self.row(c))
 
-    def _call(self, method, path, **kw):
+    def _call(self, method, path, base=API, **kw):
         if self.settings.rehearsal:
             raise Problem("rehearsal", "GitHub is not contacted from a rehearsal", 409)
         try:
-            with _client() as http:
+            with _client(base) as http:
                 return http.request(method, path, **kw)
         except httpx.HTTPError as exc:
             raise Problem(
@@ -551,6 +808,25 @@ class GitHubApp:
             c.execute("UPDATE github_app SET installation_id=? WHERE id='app'", (found["id"] if found else None,))
         return int(found["id"]) if found else None
 
+    def installation_account_id(self, installation_id):
+        """The numeric id of the account one of this App's installations is on, or None when GitHub does not know the
+        installation as this App's: GitHub answers for this App's own installations only."""
+        token = self._jwt()
+        r = self._call("GET", f"/app/installations/{installation_id}", headers={"Authorization": "Bearer " + token})
+        if r.status_code == 404:
+            return None
+        if r.status_code >= 300:
+            limited = rate_limited(r)
+            raise Problem(
+                "github_installations",
+                "GitHub would not show the app's installation",
+                502,
+                retryable=limited,
+                extra={"github_status": r.status_code, "rate_limited": limited},
+            )
+        account = r.json().get("account") or {}
+        return int(account["id"]) if account.get("id") else None
+
     def live_permissions(self, refresh=False):
         """The installation's permissions as GitHub reports them now, cached briefly; None when they
         cannot be learned (not installed, GitHub unreachable or silent, a stored key that will not sign, or a demo,
@@ -594,11 +870,11 @@ class GitHubApp:
             until = self.live.get(raised.refused_key)
         return bool(until and until > time.time())
 
-    def can_create_repos(self, refresh=False):
+    def can_create_repos(self, refresh=False, empty=False):
         """Whether Tico creates repositories for the app: the installation's live Administration permission
         (write), falling back to the stored choice when GitHub cannot be asked. The stored flag follows
-        the live value so status views stay right. A personal account is never True yet: creating a repository
-        there is not built (the next change adds it), so a bot waits for a person (repo_waits)."""
+        the live value so status views stay right. An EMPTY repository in a personal account is made with the owner's user
+        token, so it also needs that authorization; a template one needs Administration alone."""
         row = self.row()
         if not row:
             return False
@@ -610,7 +886,9 @@ class GitHubApp:
             if allowed != bool(row["administration"]):
                 with self.store.transaction() as c:
                     c.execute("UPDATE github_app SET administration=? WHERE id='app'", (int(allowed),))
-        return allowed and account_kind(row) == ORGANIZATION
+        if empty and account_kind(row) == PERSONAL:
+            return allowed and self.user_authorized()
+        return allowed
 
     def mint_turn(self, repos, base, narrow=True, **kw):
         """`mint_reachable` for a bot's turn: `base` plus the TURN_READS the installation has accepted (`base` wins, so it
@@ -644,12 +922,6 @@ class GitHubApp:
         if repository.split("/")[0].lower() != row["org"].lower():
             raise Problem(
                 "github_repo", f"The repository must be in the connected {account_word(row)} ({row['org']})", 422
-            )
-        if account_kind(row) == PERSONAL:
-            raise Problem(
-                "github_account",
-                "Deleting a repository in a personal account is not available yet; delete it on GitHub",
-                409,
             )
         if not self.can_create_repos(refresh=True):
             raise Problem(
@@ -931,8 +1203,9 @@ class GitHubApp:
             )
         elif (row := self.row()) and account_kind(row) == PERSONAL:
             create = (
-                "Tico does not create repositories in a personal account yet: create it yourself in GitHub "
-                "(empty, for a bot built locally, whose history its runner then pushes)"
+                "Tico can't create repositories in the personal account right now (Administration is off, or it is not "
+                "authorized there): create it yourself in GitHub (empty, for a bot built locally, whose history its runner "
+                "then pushes)"
             )
         else:
             create = (
@@ -995,7 +1268,17 @@ class GitHubApp:
         with self.store.read() as c:  # the repository is named for the bot (H.bot_repository_name), id or slug in
             name = H.bot_repository_name(c, slug)
             slug = (H.resolve_bot(c, slug) or {}).get("slug", slug)
-        if not self.can_create_repos(refresh=True):
+        personal = account_kind(row) == PERSONAL
+        ready = self.can_create_repos(refresh=True, empty=empty)
+        user = None
+        if ready and personal and empty:
+            try:
+                user = self.user_token()
+            except Problem as problem:
+                if problem.code != "github_user_token":
+                    raise
+                ready = False
+        if not ready:
             from .repo_waits import fixes
 
             with self.store.read() as c:
@@ -1005,33 +1288,44 @@ class GitHubApp:
                 if empty
                 else f"from the {template} template (https://github.com/{template} > Use this template)"
             )
-            if account_kind(row) == PERSONAL:
+            if personal and empty and not self.user_authorized():
                 detail = (
-                    f"A person must act: Tico does not create repositories in a personal account yet, so "
-                    f"{row['org']}/{name} was not created. Create it {how} ({found['create_url']})."
+                    f"A person must act: Tico is not authorized to create repositories in {row['org']} yet, so "
+                    f"{row['org']}/{name} was not created. Authorize Tico in Tools > GitHub, or create it {how} "
+                    f"({found['create_url']})."
                 )
             else:
+                word = "account" if personal else "organisation"
                 detail = (
-                    f"A person must act: the GitHub App was set up without permission to create repositories, so "
-                    f"{row['org']}/{name} was not created. Create it {how} ({found['create_url']}), or let BotOps "
-                    f"create repositories by turning on Administration for the app ({found['permissions_url']}) and "
-                    "accepting it for the organisation."
+                    f"A person must act: the GitHub App was set up without permission to create repositories in the "
+                    f"{word}, so {row['org']}/{name} was not created. Create it {how} ({found['create_url']}), or let "
+                    f"BotOps create repositories by turning on Administration for the app ({found['permissions_url']}) "
+                    f"and accepting it for the {word}."
                 )
             raise Problem("github_permission_missing", detail, 409, extra=found)
-        token, _ = self.mint(None, CREATE_PERMISSIONS)
+        if empty and personal:
+            if user is None:  # ready said the owner's token is there; this keeps the type honest for the calls below
+                raise Problem("github_user_token", NOT_AUTHORIZED, 409)
+            token = user  # the owner's user token: the empty repository is made as them, in their own account
+        else:
+            token, _ = self.mint(None, CREATE_PERMISSIONS)
         if empty:
             # For a bot whose history already exists on a computer: nothing generated, the runner pushes into it.
-            r = self._call(
-                "POST",
-                f"/orgs/{row['org']}/repos",
-                headers={"Authorization": "Bearer " + token},
-                json={
-                    "name": name,
-                    "private": True,
-                    "auto_init": False,
-                    "description": f"Tico bot repository for {slug.removeprefix('emp-')}",
-                },
-            )
+            body = {
+                "name": name,
+                "private": True,
+                "auto_init": False,
+                "description": f"Tico bot repository for {slug.removeprefix('emp-')}",
+            }
+            if personal:
+                r = self._user_create(token, body)
+            else:
+                r = self._call(
+                    "POST",
+                    f"/orgs/{row['org']}/repos",
+                    headers={"Authorization": "Bearer " + token},
+                    json=body,
+                )
             if r.status_code == 422:
                 raise Problem(
                     "github_repo_exists", f"{row['org']}/{name} already exists or the name is not allowed", 409
@@ -1092,11 +1386,6 @@ class GitHubApp:
         row = self.row()
         if not row:
             return {"status": "not_connected", "detail": "Connect the GitHub App before creating a product repository."}
-        if account_kind(row) == PERSONAL:
-            return {
-                "status": "not_available",
-                "detail": "Product repositories are not available for a personal account yet. Create the repository on GitHub.",
-            }
         try:
             installation = self.installation()
         except (Problem, ValueError):
@@ -1122,8 +1411,14 @@ class GitHubApp:
                 "detail": (
                     "The GitHub App installation is missing Administration: write, so it cannot create repositories. "
                     f"The Owner changes this once on GitHub: set Administration to Read and write on {url}, then accept "
-                    "the new permission for the organization when GitHub asks. No repository has been created."
+                    f"the new permission for the {'account' if account_kind(row) == PERSONAL else 'organization'} when "
+                    "GitHub asks. No repository has been created."
                 ),
+            }
+        if account_kind(row) == PERSONAL and not self.user_authorized():
+            return {
+                "status": "missing",
+                "detail": f"Tico is not authorized to create repositories in {row['org']} yet. Authorize Tico in Tools > GitHub first. No repository has been created.",
             }
         return {"status": "available", "detail": "The connected installation currently has Administration: write."}
 
@@ -1144,8 +1439,13 @@ class GitHubApp:
             }.get(capability["status"], "github_capability_unknown")
             raise Problem(code, capability["detail"], 409)
         try:
-            token, _ = self.mint(None, PRODUCT_CREATE_PERMISSIONS)
-        except (Problem, ValueError):
+            if account_kind(row) == PERSONAL:
+                token = self.user_token()  # the owner's user token makes the empty repository in their account
+            else:
+                token = self.mint(None, PRODUCT_CREATE_PERMISSIONS)[0]
+        except (Problem, ValueError) as problem:
+            if getattr(problem, "code", "") == "github_user_token":
+                raise
             # GitHub error bodies are not an appropriate place to echo an installation or connection secret.
             raise Problem(
                 "github_token_unavailable",
@@ -1154,15 +1454,17 @@ class GitHubApp:
             ) from None
         return row["org"], token
 
-    def create_product_repo(self, org, name, token):
-        """Create one exact, empty private repository. Never changes bot grants or repo selection."""
+    def create_product_repo(self, org, name, token, personal=False):
+        """Create one exact, empty private repository. Never changes bot grants or repo selection. In a personal account it is
+        made with the owner's user token (POST /user/repos), as a bot's empty repository is."""
+        body = {"name": name, "private": True, "auto_init": False, "description": "Tico product repository"}
         try:
-            response = self._call(
-                "POST",
-                f"/orgs/{org}/repos",
-                headers={"Authorization": "Bearer " + token},
-                json={"name": name, "private": True, "auto_init": False, "description": "Tico product repository"},
-            )
+            if personal:
+                response = self._user_create(token, body)
+            else:
+                response = self._call(
+                    "POST", f"/orgs/{org}/repos", headers={"Authorization": "Bearer " + token}, json=body
+                )
         except Problem as problem:
             if problem.code == "github_unreachable":
                 raise Problem(
@@ -1276,12 +1578,12 @@ def rate_limited(response):
     )
 
 
-def manifest(settings, name, administration):
+def manifest(settings, name, administration, personal=False):
     public = settings.public_url
     permissions = {**TURN_READS, **TURN_PERMISSIONS}  # a write a bot needs wins over the same read
     if administration:
         permissions["administration"] = "write"
-    return {
+    body = {
         "name": name[:34],
         "url": public,
         "redirect_url": public + "/api/v2/github/app/callback",
@@ -1301,6 +1603,12 @@ def manifest(settings, name, administration):
             "release",
         ],
     }
+    if personal:
+        # A personal account's App takes the owner's authorization for the empty repositories Tico creates there: the
+        # callback that receives it, asked for at install as well.
+        body["callback_urls"] = [user_callback(settings)]
+        body["request_oauth_on_install"] = True
+    return body
 
 
 def extra_repos(c, bot):
@@ -1467,6 +1775,8 @@ def install_github_app(app, settings, store):
         if not row:
             return {"connected": False}
         administration = service.can_create_repos(refresh=refresh)
+        personal = account_kind(row) == PERSONAL
+        authorized = service.user_authorized() if personal else False
         with store.read() as c:
             fix = fixes(c, row)
             waiting = [
@@ -1488,6 +1798,8 @@ def install_github_app(app, settings, store):
             "app_id": row["app_id"],
             "administration": administration,
             "installed": bool(row["installation_id"]),
+            "authorized": authorized,
+            "callback_url": user_callback(settings) if personal and not service.callback_in_manifest() else "",
             "install_url": page["install_url"],
             "settings_url": page["settings_url"],
             "permissions_url": fix["permissions_url"],
@@ -1545,7 +1857,9 @@ def install_github_app(app, settings, store):
                 "INSERT INTO github_app_states(nonce,actor,org,administration,created_at,account_type) VALUES(?,?,?,?,?,?)",
                 (nonce, who.actor, org, int(administration), time.time(), kind),
             )
-        body = manifest(settings, (name or f"{settings.company_name} Tico").strip(), administration)
+        body = manifest(
+            settings, (name or f"{settings.company_name} Tico").strip(), administration, personal=kind == PERSONAL
+        )
         base = (
             "https://github.com/settings/apps/new"
             if kind == PERSONAL
@@ -1570,6 +1884,17 @@ def install_github_app(app, settings, store):
         who = owner(request)
         with store.transaction() as c:
             return {"replaced": service.replace_lost_key(c, who.actor)}
+
+    def install_page(actor, slug):
+        """GitHub's install page for the App, with a fresh single-use state made for this person. The install's return
+        carries it back to /authorized, and only a state Tico made is taken."""
+        nonce = secrets.token_urlsafe(24)
+        with store.transaction() as c:
+            c.execute("DELETE FROM github_user_states WHERE created_at<?", (time.time() - STATE_TTL,))
+            c.execute(
+                "INSERT INTO github_user_states(nonce,actor,created_at) VALUES(?,?,?)", (nonce, actor, time.time())
+            )
+        return f"https://github.com/apps/{quote(str(slug), safe='')}/installations/new?" + urlencode({"state": nonce})
 
     @app.get("/api/v2/github/app/callback")
     def callback(request: Request, code: str = "", state: str = ""):
@@ -1601,11 +1926,106 @@ def install_github_app(app, settings, store):
                 conversion["slug"],
                 {"org": saved["org"], "account_type": saved["account_type"], "app_id": conversion["id"]},
             )
-        return RedirectResponse(f"https://github.com/apps/{conversion['slug']}/installations/new", status_code=302)
+        # The install's return to the authorize callback carries this state back; the callback takes only a state Tico made.
+        return RedirectResponse(install_page(who.actor, conversion["slug"]), status_code=302)
 
-    @app.get("/api/v2/github/app/installed")
-    def installed(request: Request):
+    @app.get("/api/v2/github/app/authorize-link")
+    def authorize_link(request: Request):
+        """The GitHub page where the owner authorizes Tico to create repositories in the personal account. The single-use state
+        is bound to this session; GitHub sends the owner back to /authorized with it."""
         who = owner(request)
+        row = service.row()
+        if not row:
+            raise Problem("github_not_connected", "Connect the GitHub App first", 409)
+        if account_kind(row) != PERSONAL:
+            raise Problem("github_account", "Only a personal account is authorized this way", 409)
+        nonce = secrets.token_urlsafe(24)
+        with store.transaction() as c:
+            c.execute("DELETE FROM github_user_states WHERE created_at<?", (time.time() - STATE_TTL,))
+            c.execute(
+                "INSERT INTO github_user_states(nonce,actor,created_at) VALUES(?,?,?)", (nonce, who.actor, time.time())
+            )
+        query = urlencode({"client_id": row["client_id"], "redirect_uri": user_callback(settings), "state": nonce})
+        return {"url": f"{WEB}/login/oauth/authorize?{query}"}
+
+    @app.get("/api/v2/github/app/install")
+    def install_link(request: Request):
+        """The App's install page on GitHub. Every Install link in the UI comes here, so the install's return carries a
+        state Tico made for this session, the way the Authorize link's does."""
+        who = owner(request)
+        row = service.row()
+        if not row:
+            raise Problem("github_not_connected", "Connect the GitHub App first", 409)
+        return RedirectResponse(install_page(who.actor, row["slug"]), status_code=302)
+
+    @app.get("/api/v2/github/app/authorized")
+    def authorized(
+        request: Request,
+        code: str = "",
+        state: str = "",
+        installation_id: str = "",
+        setup_action: str = "",
+        error: str = "",
+    ):
+        """Where GitHub sends the owner after they authorize Tico for the personal account, or after an install. Every return
+        must carry the single-use state Tico made for this session (the Authorize link or the install link), unused and
+        fresh, except an install's return with no state: that one is taken only for an installation on the owner's own
+        account, and with a code only when the token is the owner's too (installed_without_state). An install's return runs
+        the install step first, and an installation_id must be the App's own installation. A return without a code (the
+        owner declined, or the install asked for no authorization) goes back to Tools after that. An error with no state
+        (the owner declined on GitHub's page) goes back to Tools as well, with nothing changed."""
+        who = owner(request)
+        if error and not state:
+            return RedirectResponse("/#/tools/github?github=declined", status_code=302)
+        if installation_id and not state:
+            return installed_without_state(who, installation_id, code)
+        with store.transaction() as c:
+            found = c.execute("SELECT * FROM github_user_states WHERE nonce=?", (state,)).fetchone() if state else None
+            if found:
+                c.execute("DELETE FROM github_user_states WHERE nonce=?", (state,))
+        if (
+            not found
+            or found["actor"] != who.actor
+            or time.time() - found["created_at"] > STATE_TTL
+            or not secrets.compare_digest(found["nonce"], state)
+        ):
+            raise Problem(
+                "github_state",
+                "This GitHub authorization link is not valid or has expired; start again from Tools",
+                400,
+            )
+        row = service.row()
+        if not row or account_kind(row) != PERSONAL:
+            raise Problem("github_not_connected", "Connect the personal GitHub account first", 409)
+        if installation_id or setup_action:
+            installation = installed_now(who.actor)
+            if installation_id and str(installation or "") != installation_id:
+                raise Problem(
+                    "github_installation", "That installation is not this GitHub App's; start again from Tools", 409
+                )
+        if error:
+            return RedirectResponse("/#/tools/github?github=declined", status_code=302)
+        if not code:
+            if installation_id or setup_action:
+                # An install that asked the owner for no authorization: the install step ran, and Tools goes on from here.
+                return RedirectResponse("/#/tools/github?github=installed", status_code=302)
+            raise Problem("github_exchange", "GitHub did not send an authorization code", 400)
+        tokens = service.exchange_user(code)
+        login, github_id = service.user_identity(tokens["access_token"])
+        with store.read_transaction() as c:
+            expected = service.owner_id(c)
+        if login.lower() != row["org"].lower() or (expected and github_id != expected):
+            service.revoke_user_token(tokens["access_token"])
+            raise Problem(
+                "github_user_login",
+                f"Sign in to GitHub as {row['org']} to authorize Tico for that account (this sign-in was {login})",
+                403,
+            )
+        return saved_authorization(who.actor, row, login, github_id, tokens)
+
+    def installed_now(actor):
+        """The install step: refresh the App's installation and sync its repositories. Returns the installation's id, or None
+        when there is none yet. Runs on the setup redirect and on an install's return to the authorize callback."""
         found = service.installation(refresh=True)
         if found:
             try:
@@ -1613,12 +2033,64 @@ def install_github_app(app, settings, store):
             except Problem as exc:
                 log.warning("Repository sync failed: %s", exc.code)
         with store.transaction() as c:
-            H.event(c, who.actor, "github.app_installed", "", {"installed": bool(found)})
+            H.event(c, actor, "github.app_installed", "", {"installed": bool(found)})
+        return found
+
+    def saved_authorization(actor, row, login, github_id, tokens):
+        """Keeps the owner's authorization for the account, under the lock a refresh takes, and lets the bots waiting for
+        their repository in it go on. Returns Tools' redirect."""
+        with service.user_lock:  # the lock a refresh takes: no refresh runs against the pair this replaces
+            with store.transaction() as c:
+                service.save_user_token(c, actor, login, github_id, tokens)
+                H.event(c, actor, "github.user_authorized", row["slug"], {"login": login})
+        from .repo_waits import resume
+
+        try:
+            resume(service)  # a bot waiting for its empty repository in this account goes on now
+        except (Problem, ValueError):
+            log.warning("Checking waiting bots after the authorization failed")
+        return RedirectResponse("/#/tools/github?github=authorized", status_code=302)
+
+    def installed_without_state(who, installation_id: str, code: str):
+        """An install's return with no state, which GitHub may send without the one Tico made. The installation must be this
+        App's and sit on the owner's own account: GitHub answers for this App's installations alone, so the account id is the
+        check. A code (the install may ask for the authorization too) is exchanged only then, and its token is kept only when
+        GET /user gives the owner's id as well; any other token is revoked and never saved. A code that comes with a state
+        never comes here."""
+        row = service.row()
+        if not row or account_kind(row) != PERSONAL:
+            raise Problem("github_not_connected", "Connect the personal GitHub account first", 409)
+        with store.read_transaction() as c:
+            expected = service.owner_id(c)
+        account = service.installation_account_id(int(installation_id)) if installation_id.isdigit() else None
+        if not expected or account != expected:
+            raise Problem(
+                "github_installation", "That installation is not this account's GitHub App; start again from Tools", 409
+            )
+        installed_now(who.actor)  # the install step does not need the code, so it runs before any token is exchanged
+        if not code:
+            return RedirectResponse("/#/tools/github?github=installed", status_code=302)
+        tokens = service.exchange_user(code)
+        login, github_id = service.user_identity(tokens["access_token"])
+        if github_id != expected:
+            service.revoke_user_token(tokens["access_token"])
+            raise Problem(
+                "github_user_login",
+                f"Sign in to GitHub as {row['org']} to authorize Tico for that account (this sign-in was {login})",
+                409,
+            )
+        return saved_authorization(who.actor, row, login, github_id, tokens)
+
+    @app.get("/api/v2/github/app/installed")
+    def installed(request: Request):
+        who = owner(request)
+        found = installed_now(who.actor)
         return RedirectResponse("/#/tools/github?github=" + ("connected" if found else "pending"), status_code=302)
 
     @app.post("/api/v2/github/app/disconnect")
     def disconnect(request: Request):
         who = owner(request)
+        service.revoke_user_token()  # GitHub's copy of the owner's authorization, while the App's secrets can still sign
         with store.transaction() as c:
             row = service.row(c)
             service.forget(c)
@@ -2036,7 +2508,7 @@ def install_github_app(app, settings, store):
         try:
             result = service.create_repo(slug, template, empty=body.empty)
         except Problem as problem:
-            if problem.code != "github_permission_missing":
+            if problem.code not in ("github_permission_missing", "github_user_token"):
                 raise
             # A person must act. One Needs-you task per bot, however often this is retried; the bot keeps its
             # local build and finishes on its own once the repository or the permission appears (repo_waits).
@@ -2262,7 +2734,7 @@ def install_github_app(app, settings, store):
                     return previous
 
             try:
-                result = service.create_product_repo(org, name, token)
+                result = service.create_product_repo(org, name, token, personal=account_kind(row) == PERSONAL)
             except Problem as problem:
                 if problem.code != "github_create_outcome_unknown":
                     # A definite GitHub rejection is replayable. If this write fails, the operation

@@ -685,6 +685,40 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
     return fid
 
 
+def settle_taken_in(ctx: Ctx, fid: str, money: Any, t: F.FeedTxn) -> None:
+    """A settled row a statement upload put in: announced and settled as ingest does a row first seen (statement_upload.py),
+    so payments, documents, refunds, posting rules and attribution apply to it as to a synced row. On a connected account
+    whose backfill is done, its opening moves for it (_before_opening)."""
+    event(ctx, NEW_EVENT, fid, {"feed_id": fid})
+    _settle(ctx, SK.get(ctx.c, "fin_feed_txns", fid), money, None, t)
+    if ctx.book.mode != "mirror" and _backfilled(ctx, money):
+        if str(SK.get(ctx.c, "fin_feed_txns", fid)["status"]) not in ("covered", "ignored"):
+            _before_opening(ctx, money, t)
+
+
+def unsettle_uploaded(ctx: Ctx, row: Any, memo: str) -> None:
+    """A statement upload's row leaving the books (statement_upload.statement_undo): its hold is released and its entry
+    reversed, as undo does for a canceled row, with `memo` on the reversal."""
+    if row["hold_id"]:
+        budgeting.release(ctx, str(row["hold_id"]))
+        SB.void_settled(ctx.c, str(row["hold_id"]), ctx.at)
+    if row["entry_id"]:
+        unpost_row(ctx, row, memo)
+
+
+def settle_again(ctx: Ctx, feed_ids: Sequence[str]) -> None:
+    """Rows another row's removal left unposted (the other side of a transfer or card payment an undone upload's row
+    shared an entry with): each still waiting settles again, as a sync would settle it, so it posts on its own."""
+    for fid in feed_ids:
+        row = SK.get(ctx.c, "fin_feed_txns", fid)
+        if row is None or row["entry_id"] or str(row["status"]) != "new" or int(row["pending"]):
+            continue
+        money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
+        card = SK.get(ctx.c, "fin_cards", str(row["card_id"])) if row["card_id"] else None
+        if money is not None:
+            _settle(ctx, row, money, card, _txn_of(row))
+
+
 def _txn_of(row: Any) -> F.FeedTxn:
     """A stored feed row as the provider transaction it came from, to settle it again."""
     return F.FeedTxn(
@@ -1910,6 +1944,61 @@ def connection_map(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     )
 
 
+def money_account_add(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """Add a bank account or card Tico cannot connect: a money account with no provider and no connection, whose rows
+    come from statement uploads (statement_upload.py) and which reconciles like any other. It maps to `account_id` when
+    given (an asset line for a bank or debit card, a liability line for a credit card, one money account per line), else
+    to a new line made as connecting makes one (from 1000 for cash, 2100 for a credit card). A mirrored book refuses it
+    (mirror.REFUSED): its accounts are the provider's."""
+    V.only(p, ("kind", "name", "last4", "subtype", "account_id"))
+    kind = V.choice(p, "kind", ("bank", "card_program"))
+    name = V.text(p, "name", 120)
+    last4 = V.opt_text(p, "last4", 4) or None
+    if last4 is not None and not (len(last4) == 4 and last4.isdigit()):
+        raise invalid("last4 is the account number's last 4 digits")
+    subtypes = ("checking", "savings") if kind == "bank" else ("credit", "debit")
+    subtype = V.choice(p, "subtype", subtypes, subtypes[0])
+    credit = kind == "card_program" and subtype == "credit"
+    want = "liability" if credit else "asset"
+    gl: L.Account | None = None
+    if p.get("account_id") is not None:
+        gl = ctx.accounts.get(V.text(p, "account_id", 80))
+        if gl is None or not gl.active:
+            raise FinanceError(NOT_FOUND, "no such account")
+        if gl.type != want:
+            raise invalid(f"a {'credit card' if credit else 'bank account'} maps to an {want} line")
+        if any(str(m["account_id"] or "") == gl.id for m in SK.money_accounts(ctx.c, ctx.book.id)):
+            raise FinanceError(CONFLICT, f"{gl.name} already belongs to another money account")
+    _in_view(ctx, who, [], [gl] if gl is not None else [])
+    labeled = f"{name} ••{last4}" if last4 else name
+
+    def apply(aid: str) -> Result:
+        line = gl or new_account(
+            ctx, CARDS if credit else BANK, labeled, want, "credit_card" if credit else "bank", who
+        )
+        mid = SK.insert(
+            ctx.c,
+            "fin_money_accounts",
+            {
+                "book_id": ctx.book.id,
+                "kind": kind,
+                "subtype": subtype,
+                "name": name,
+                "provider": "",
+                "connection_id": None,
+                "account_id": line.id,
+                "last4": last4,
+                "holds_cash": 0 if credit else 1,
+                "balance_currency": ctx.book.base_currency,
+                "created_at": ctx.at,
+                "created_by": who,
+            },
+        )
+        return {"money_account_id": mid, "kind": kind, "account_id": line.id, "code": line.code}
+
+    return Plan(K.ALLOW, f"Add {labeled} ({'card' if kind == 'card_program' else 'bank'}, no connection)", apply)
+
+
 def connection_settings(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Set the Mercury user a card is issued to when the card names none (`card_user_id`): one of the connection's own
     users, or empty to clear it. A card never falls back to a guessed user (cards.py `_mercury_user`)."""
@@ -1939,6 +2028,7 @@ __all__ = [
     "connection_disconnect",
     "connection_map",
     "connection_settings",
+    "money_account_add",
     "ingest",
     "categorize_feed",
     "reconcile",
