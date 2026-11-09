@@ -146,6 +146,12 @@ runs its own checks as you, so what you could not do yourself it cannot do for y
 shows you as the actor, `via` assistant, and the audit event's `delegation` names the message (`{"for": "human:<you>",
 "cited": "<message id>", "run": "asked"}`). A bulk change (`hub task bulk`) records each task the same way.
 
+**Unreleased:** closing many tasks is counted first. The Assistant counts the tasks your words match, says the count with
+what it covers, and asks **Close N? Say yes.** It closes them only on your yes. Your own tasks are kept unless you say to
+include them, such as "mine too" or "everything". Tasks owned by bots are included when the filter takes them. A close of
+more than 200 tasks is split into parts; each part is counted, and the total is given before you say yes. Each task it
+closes is listed under [Undo](#undo), where it can be reopened.
+
 **Never on your words.** These stay a Confirm card, or your own tap in Tico or Settings, whatever you ask
 (`NEVER` in backend/assistant.py lists the routes): a personal token, service key, stored credential or its grants,
 enrollment, runner or agent pairing, a password, a reader's invite, single sign-on and the directory's SCIM token; owner
