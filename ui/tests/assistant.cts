@@ -1,5 +1,5 @@
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
 // The Assistant page (ui/app/assistant-page.ts): its own chat at #/assistant with the bot chat's thread and composer,
 // reached from your own person page's Assistant tab (absent from anyone else's); search
 // (⌘K) does not offer it. An empty chat offers suggestions, a lookup answers at once with in-app
@@ -7,8 +7,8 @@ import type * as Routes from './support/routes.cjs';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
 type Card = {id: string; summary: string; method: string; path: string; status: string; result: {status_code?: number; error?: string} | null;
   description: string; diff: {field: string; new: string; routine?: boolean}[]; body: Record<string, unknown>; proposed_via: string; proposer?: string};
 type Msg = {id: string; sender_id: string; body: string; refs: Record<string, unknown>; created_at: string; kind: string};

@@ -3,8 +3,8 @@
 // (only owners and bot administrators), add, open, edit and remove a linked doc, search across both
 // kinds, and import a file. On a first visit to an empty Docs it asks where the docs are.
 // TICO_SCREENSHOT_DIR=<dir> saves the review screenshots (both themes, and a phone).
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
@@ -17,9 +17,9 @@ type Req = {api: string; method?: string | undefined; id?: string | undefined; n
 type ReqLog = Req[] & {findLast(pred: (r: Req) => boolean): Req};
 interface PageWin { __pwned?: unknown }
 type Chat = {id: string; title: string; created_at: string; closed_at: string | null};
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 const shots = process.env.TICO_SCREENSHOT_DIR;
 const shot = async (page: import('playwright').Page, name: string) => {
   if (!shots) return;

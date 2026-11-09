@@ -9,8 +9,8 @@ import type {Route} from 'playwright';
 //  - Then adds and removes a link; a phone opens the editor as a bottom sheet with no sideways scroll.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {html, isUiPath, serveUi} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
+const {html, isUiPath, serveUi} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 
 type Write = {method: string; p: string; body: unknown};
 type Req = {id: string; name: string; kind: string; needs: unknown; reviewed_by: string; reviewer_id: string | null; backup_reviewer_id?: string | null};

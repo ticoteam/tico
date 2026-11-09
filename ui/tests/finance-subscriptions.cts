@@ -4,14 +4,14 @@
 // then the section reads again with the new total; with no subscriptions the section is hidden. Desktop and 390px, with no
 // sideways scroll. TICO_UI_SHOTS=<dir> saves screenshots.
 import type {Browser, Page, Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 declare const S: {me: unknown; emps: unknown[]};
 interface Sub {id: string; vendor: {id: string; name: string}; status: string; cadence: string; amount: number; monthly: number; seats: number | null; next_charge_on: string | null; card: {id: string; name: string} | null; attribution: unknown[]; source: string; as_of: string}
 const uiDir = path.join(__dirname, '..');

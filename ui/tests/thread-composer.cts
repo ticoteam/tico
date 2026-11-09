@@ -10,17 +10,17 @@
 // Stop takes Send's place while the bot runs (read from the thread's conversation snapshot) and posts the stop; "/"
 // opens the commands menu, and a command does what it did in the old chat (ui/app/slash-commands.ts). Fixtures only.
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots.
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-import type * as ThreadsFake from './support/threads-fake.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+import type * as ThreadsFake from './support/threads-fake.cts';
 import type {Browser, Locator, Page, Route} from 'playwright';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {threadsFake} = require('./support/threads-fake.cjs') as typeof ThreadsFake;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {threadsFake} = require('./support/threads-fake.cts') as ThreadsFake.Api;
 const launch = () => chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
 type Json = {[key: string]: unknown};
 type PageBot = {thread?: {view?: {state?: string; id?: string; goals?: {goalSupported?: boolean; conv?: unknown}; execution?: unknown}}};

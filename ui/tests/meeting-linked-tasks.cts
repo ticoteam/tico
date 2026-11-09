@@ -5,14 +5,14 @@
 // apply authorized task and link events without rereading the linked-task list (linkedTasks, phone and desktop).
 // Each keeps its own assertions and names itself in a failure ("[taskMeetings] ...").
 import type {Browser, Page} from 'playwright';
-import type * as RealHubSupport from './support/real-hub.cjs';
+import type * as RealHubSupport from './support/real-hub.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {startHub, pageAs} = require('./support/real-hub.cjs') as typeof RealHubSupport;
-const {t} = require('./support/load.cjs') as {t: (ms: number) => number};
-const e2e = require('./support/e2e.cjs') as E2E;
+const {startHub, pageAs} = require('./support/real-hub.cts') as RealHubSupport.Api;
+const {t} = require('./support/load.cts') as {t: (ms: number) => number};
+const e2e = require('./support/e2e.cts') as E2E;
 
-// The e2e helper (ui/tests/support/e2e.cjs) is JavaScript with no declaration file: its surface, as this spec uses it.
+// The e2e helper (ui/tests/support/e2e.cts): its surface, as this spec uses it.
 interface E2E {
   open: (browser: Browser, hub: RealHubSupport.Hub, who: string, options?: {phone?: boolean; hash?: string}) => Promise<Page>;
   go: (page: Page, hash: string) => unknown;

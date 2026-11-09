@@ -1,20 +1,20 @@
 // Offline browser regression: the Connection card of Tools › Settings › Email (ui/google-connect.ts) over the contract's
-// GET /v2/google, with a fake hub (ui/tests/support/google-fake.cjs). An admin sees the two ways (Whole company, Each
+// GET /v2/google, with a fake hub (ui/tests/support/google-fake.cts). An admin sees the two ways (Whole company, Each
 // person signs in) as one toggle: neither picked while nothing is set up, the way set up picked otherwise, one way shown
 // at a time. Each way's setup is a prompt for the person's own agent by default (the Workspace one makes its setup code
 // only on Make prompt), or the steps by hand: the Whole company key in three steps, the check polling on a 20 s timer for
 // 10 minutes (Playwright's fake clock), disconnect and replace confirming in the page. A member sees Connect Google for
 // their own mailbox only (nothing when the company's key covers it), and a phone width has no sideways scroll.
 // Leaving Tools › Settings and coming back keeps the card's state (ui/app/inboxes-email.ts keeps one host, MB_GOOGLE_HOST,
-// off the page while away). What Tico may do is ui/tests/inboxes.cjs.
+// off the page while away). What Tico may do is ui/tests/inboxes.cts.
 import type {Browser, Page} from 'playwright';
-import type {GoogleFake} from './support/google-fake.cjs';
+import type {GoogleFake} from './support/google-fake.cts';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof import('./support/page.cjs');
-const {unrouted} = require('./support/routes.cjs') as typeof import('./support/routes.cjs');
-const {googleFake, row} = require('./support/google-fake.cjs') as typeof import('./support/google-fake.cjs');
+const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
+const {googleFake, row} = require('./support/google-fake.cts') as import('./support/google-fake.cts').Api;
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
 interface GoogleHost extends HTMLElement {_googleState?: {g: {pending: {generation: number} | null}}; _googleWatch?: {timer: unknown} | null; _googleKeep?: Record<string, unknown>}
 interface GoogleWin {__copied: string[]; mountGoogleConnect: (host: Element | null) => void}

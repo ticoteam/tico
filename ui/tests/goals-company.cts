@@ -5,13 +5,13 @@
 // the new one. At level 2 a recovery in Needs you is approved one option at a time.
 // Fixtures only.
 import type {Browser, Page, Route} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RouteSupport from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RouteSupport from './support/routes.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RouteSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 interface Goal {id: string; title: string; owner_id: string; parent_id: string | null; status: string; status_source: string; rank: number; kpis: unknown[]; why: string}
 interface Proposal {id: string; kind: string; goal_id: string | null; kpi_id: null; status: string; reason: string; proposed_by: string; proposed_at: string; may_decide?: boolean; payload: {why?: string; [key: string]: unknown}}
 

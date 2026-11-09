@@ -1,5 +1,5 @@
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
 import type {Page} from 'playwright';
 // Tico support on cloud machines (ui/app/cloud-machines.ts, GET/PUT /api/v2/cloud-machines/support), fixtures only:
 //  - Settings > People: on Tico Cloud the owner's team rules carry the switch, as HQ reads it; a change PUTs it, and a
@@ -11,8 +11,8 @@ import type {Page} from 'playwright';
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
 
 // Defined by ui/app/router.ts, ui/app/api.ts and ui/app/cloud-machines.ts, which the page loads.
 declare function route(hash?: string): void;

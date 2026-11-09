@@ -1,11 +1,15 @@
-import type * as Tasks from './tasks-page.cjs';
+import type * as Tasks from './tasks-page.cts';
 // A task with a question to you, opened before the first Needs you list is held (boot sends that read after the roster
 // and the opening page): the plain ask shows, and its question box takes its place once a list lands, without
 // reopening the task. A first read that fails keeps the wait for the next one that answers (ui/app/task-modal.ts
 // taskQcardWait, ui/app/hub-v2.ts NEEDS_FIRST).
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
-const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const {open} = require('./tasks-page.cts') as Tasks.Api;
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var S: Tasks.Globals['S'];
+declare var needsFirstIn: Tasks.Globals['needsFirstIn'];
+declare var v2Refresh: Tasks.Globals['v2Refresh'];
 const NOW = Date.now(), at = (hours: number) => new Date(NOW - hours * 3600e3).toISOString();
 const late = {id: 't-late', kind: 'question', title: 'Which launch date?', body: '', owner_id: 'bot:writer', requester_id: 'bot:writer',
   status: 'waiting', waiting_on: 'human:ana', version: 1, created_at: at(5), updated_at: at(5), open_asks: 1, labels: [], tags: [],

@@ -2,11 +2,11 @@
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
-import type * as PageSupport from './support/page.cjs';
-import type * as Routes from './support/routes.cjs';
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof Routes;
-const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+import type * as PageSupport from './support/page.cts';
+import type * as Routes from './support/routes.cts';
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as Routes.Api;
+const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 
 // A bot made since bots got ids: its id is a UUID, its slug only a label. The picker and the meeting's bots use the id.
 const FINANCE = '0192f0c4-7b1e-7cc2-9d1a-3f5e8a6b2c10';
@@ -349,7 +349,7 @@ async function main() {
     assert.equal(await page.locator('.live-screen').count(), 0, 'leaving a meeting removes its shared image');
     assert.deepEqual(errors, []);
     await context.close();
-    await (require('./support/recorder-pause.cjs') as typeof import('./support/recorder-pause.cjs'))(browser);
+    await (require('./support/recorder-pause.cts') as import('./support/recorder-pause.cts').Api)(browser);
   } finally { await browser.close(); }
 }
 

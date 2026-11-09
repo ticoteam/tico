@@ -1,9 +1,23 @@
-import type * as TaskCode from './task-code.cjs';
+import type * as Tasks from './tasks-page.cts';
+import type * as TaskCode from './task-code.cts';
 import type {Page} from 'playwright';
 // Concurrent task drafts, versions, focus and authorized-place lifecycle in the real app bundle.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {open} = require('./task-code.cjs') as typeof TaskCode;
+const {open} = require('./task-code.cts') as TaskCode.Api;
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var S: Tasks.Globals['S'];
+declare var TASKS_ST: Tasks.Globals['TASKS_ST'];
+declare var TASK_EDIT_DRAFTS: Tasks.Globals['TASK_EDIT_DRAFTS'];
+declare var get: Tasks.Globals['get'];
+declare var leavingLive: Tasks.WindowMarks['leavingLive'];
+declare var propertySave: Tasks.WindowMarks['propertySave'];
+declare var taskLiveStop: Tasks.Globals['taskLiveStop'];
+declare var taskModal: Tasks.Globals['taskModal'];
+declare var taskModalShow: Tasks.Globals['taskModalShow'];
+declare var taskSaveQueued: Tasks.Globals['taskSaveQueued'];
+declare var taskSources: Tasks.WindowMarks['taskSources'];
+declare const window: Window & typeof globalThis & Pick<Tasks.WindowMarks, 'leavingLive' | 'propertySave' | 'taskSources'>;
 const gate = () => { let resolve!: (value?: unknown) => void; const promise = new Promise<unknown>(r => { resolve = r; }); return {promise, resolve}; };
 type Gate = ReturnType<typeof gate>;
 (async () => {

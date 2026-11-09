@@ -3,15 +3,15 @@
 // so a click reaches the computer at once, with View one tap away; at View a view session and no switch. It draws what
 // a pretend VNC server sends and says when the computer did not answer (close code 4404). Every request and socket is
 // intercepted.
-import type * as PageSupport from './support/page.cjs';
-import type * as RoutesSupport from './support/routes.cjs';
-import type * as FakeVncSupport from './support/fake-vnc.cjs';
+import type * as PageSupport from './support/page.cts';
+import type * as RoutesSupport from './support/routes.cts';
+import type * as FakeVncSupport from './support/fake-vnc.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RoutesSupport;
-const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs') as typeof FakeVncSupport;
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RoutesSupport.Api;
+const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cts') as FakeVncSupport.Api;
 
 // Page globals from app/settings and app/screen (the page defines them; this spec only reads them).
 declare const SETTINGS_DATA: {machines: {screen: string}[]};

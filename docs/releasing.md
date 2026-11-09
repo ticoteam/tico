@@ -135,7 +135,7 @@ The train validates a head in one of two ways. A **full** validation is the whol
   head waits for a push.
 - **Limits.** Only full validations run every test: a changed file's slow tests run in an incremental one only through the
   contracts lane, and `alone` tests never do. A UI script runs when its own files change or a `UI_MAP` entry selects it:
-  `ui/tests/task-code.cjs` has no entry for the UI files it covers, so a change to them does not select it. The measured
+  `ui/tests/task-code.cts` has no entry for the UI files it covers, so a change to them does not select it. The measured
   UI test map (#2897, `ci/ui-test-map`) closes that gap; until it lands, the next full validation is the check.
 - **Not changed.** Hotfixes, approval, promotion, the `release-train` issue and the concurrency group.
   `release.yml` accepts an incremental run's title for the tag, because the title starts the same way.
@@ -645,7 +645,7 @@ at 30% idle, the defaults are three jobs and slowdown 1.67; at 50% idle, four jo
 If CPU counters do not advance or the core count changes during sampling, it conservatively uses
 one job and slowdown four. The selected settings stay fixed for that run.
 Shared browser support applies `30000 * slowdown` milliseconds to context/page action and navigation
-timeouts, including popups. `ui/tests/support/load.cjs` exports `SLOWDOWN`, `t(ms)` (rounded scaled
+timeouts, including popups. `ui/tests/support/load.cts` exports `SLOWDOWN`, `t(ms)` (rounded scaled
 milliseconds), and `applyTimeouts(contextOrPage)` for scripts' explicit waits. Direct script runs
 default to slowdown one unless the environment sets it. Explicit per-script timeout options still
 override the shared defaults; those waits should use `t(...)` and wait on conditions.

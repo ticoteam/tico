@@ -1,4 +1,4 @@
-import type * as Tasks from './tasks-page.cjs';
+import type * as Tasks from './tasks-page.cts';
 // Needs you (the You tab) on a busy company: grouped by kind (Answer, Pay, Connect, Review, Do)
 // with a count per group, in the server's order (due first); an approval reads what it approves; a deadline shows as a
 // due chip; a card with folded duplicates says "+N"; an ask with a recommendation offers "Do what you recommend", which
@@ -9,7 +9,11 @@ const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {open} = require('./tasks-page.cjs') as typeof Tasks;
+const {open} = require('./tasks-page.cts') as Tasks.Api;
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var TASKS_ST: Tasks.Globals['TASKS_ST'];
+declare var tasksRender: Tasks.Globals['tasksRender'];
+declare var v2Refresh: Tasks.Globals['v2Refresh'];
 const SHOTS = process.env.NEEDS_SHOTS || '';
 const inDays = (days: number) => new Date(Date.now() + days * 86400000).toISOString();
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();

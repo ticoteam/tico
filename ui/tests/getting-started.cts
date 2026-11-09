@@ -11,11 +11,11 @@ const assert: typeof import('node:assert/strict') = require('node:assert/strict'
 const fs = require('node:fs') as typeof import('node:fs');
 const path = require('node:path') as typeof import('node:path');
 import type {Page} from 'playwright';
-import type * as PageSupport from './support/page.cjs';
-import type * as RoutesSupport from './support/routes.cjs';
-const {html, uiFile} = require('./support/page.cjs') as typeof PageSupport;
-const {unrouted} = require('./support/routes.cjs') as typeof RoutesSupport;
-const {t} = (() => { try { return require('./support/load.cjs') as typeof import('./support/load.cjs'); } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
+import type * as PageSupport from './support/page.cts';
+import type * as RoutesSupport from './support/routes.cts';
+const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
+const {unrouted} = require('./support/routes.cts') as RoutesSupport.Api;
+const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 interface PageWin { gsStartTour: () => void }
 type Answers = {sell: string; buyers: string; competitors: string; watch: string};
 interface Body { action?: string; answers?: Answers; step?: number; tour?: boolean; checklist?: boolean; skip?: string }

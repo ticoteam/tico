@@ -8,11 +8,11 @@
 // and Mail filters; Close CRM's levels, keys, check squares and recent calls; its Activity tab and Refused filter;
 // Ledger export's Move to proxy; the mailbox's page. Phone only; TICO_UI_SHOTS=<dir> saves each in dark and light.
 import type {Page} from 'playwright';
-import type * as E2E from './support/e2e.cjs';
+import type * as E2E from './support/e2e.cts';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
-const {journey, open, go, must, call, assertClean, sideways, t, SEEDS} = require('./support/e2e.cjs') as typeof E2E;
+const {journey, open, go, must, call, assertClean, sideways, t, SEEDS} = require('./support/e2e.cts') as E2E.Api;
 
 // The hub's answers this journey reads (only the fields it checks).
 interface ToolRow {

@@ -1,8 +1,31 @@
-import type * as TaskCode from './task-code.cjs';
+import type * as Tasks from './tasks-page.cts';
+import type * as TaskCode from './task-code.cts';
 // Regressions for stale focused fields, redraws of every Add form, draft ownership and reload recovery.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {open} = require('./task-code.cjs') as typeof TaskCode;
+const {open} = require('./task-code.cts') as TaskCode.Api;
+// Page globals read inside page.evaluate (types: tasks-page.cts).
+declare var S: Tasks.Globals['S'];
+declare var SESSION: Tasks.Globals['SESSION'];
+declare var SESSION_RETURN: Tasks.Globals['SESSION_RETURN'];
+declare var TASKS_ST: Tasks.Globals['TASKS_ST'];
+declare var TASK_EDIT_DRAFTS: Tasks.Globals['TASK_EDIT_DRAFTS'];
+declare var TASK_EDIT_STORAGE: Tasks.Globals['TASK_EDIT_STORAGE'];
+declare var TASK_MODAL_BACK: Tasks.Globals['TASK_MODAL_BACK'];
+declare var TASK_TYPES: Tasks.Globals['TASK_TYPES'];
+declare var TASK_TYPES_READ: Tasks.Globals['TASK_TYPES_READ'];
+declare var get: Tasks.Globals['get'];
+declare var oldView: Tasks.WindowMarks['oldView'];
+declare var sessionKeep: Tasks.Globals['sessionKeep'];
+declare var sessionReturn: Tasks.Globals['sessionReturn'];
+declare var signedOut: Tasks.Globals['signedOut'];
+declare var taskLiveStop: Tasks.Globals['taskLiveStop'];
+declare var taskLiveStorageKey: Tasks.Globals['taskLiveStorageKey'];
+declare var taskModal: Tasks.Globals['taskModal'];
+declare var taskModalShow: Tasks.Globals['taskModalShow'];
+declare var taskSafety: Tasks.WindowMarks['taskSafety'];
+declare var taskSources: Tasks.WindowMarks['taskSources'];
+declare const window: Window & typeof globalThis & Pick<Tasks.WindowMarks, 'oldView' | 'taskSafety' | 'taskSources'>;
 const gate = () => { let resolve!: (value?: unknown) => void; const promise = new Promise<unknown>(r => { resolve = r; }); return {promise, resolve}; };
 type Gate = ReturnType<typeof gate>;
 const init = () => {

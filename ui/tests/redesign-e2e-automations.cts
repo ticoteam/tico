@@ -7,12 +7,12 @@
 // Each keeps its own assertions and names itself in a failure ("[paths, phone] ..."). Phone, then desktop.
 // redesign-e2e-bot (its own bot_proposal seed changes Inbox triage) stays a separate script.
 import type {Page} from 'playwright';
-import type {PassContext} from './support/redesign-e2e.cjs';
-import type * as R from './support/redesign-e2e.cjs';
-import type * as E2E from './support/e2e.cjs';
+import type {PassContext} from './support/redesign-e2e.cts';
+import type * as R from './support/redesign-e2e.cts';
+import type * as E2E from './support/e2e.cts';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {run, open, go, api, ok, automationNamed, sideways, shot, t} = require('./support/redesign-e2e.cjs') as typeof R;
-const e2e = require('./support/e2e.cjs') as typeof E2E;
+const {run, open, go, api, ok, automationNamed, sideways, shot, t} = require('./support/redesign-e2e.cts') as R.Api;
+const e2e = require('./support/e2e.cts') as E2E.Api;
 const promoInput = require('./fixtures/redesign-automation-promo.json');
 
 // The fields of a hub automation, and of one of its steps, that these journeys read.
