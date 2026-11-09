@@ -3,7 +3,7 @@
 import json
 
 from backend.store import H, encode
-from backend.tests.test_tasks_board import api, bot_token, get, headers, post  # noqa: F401
+from backend.tests.helpers.tasks_board import api, bot_token, get, headers, post  # noqa: F401
 
 
 def make_task(api, title, **fields):

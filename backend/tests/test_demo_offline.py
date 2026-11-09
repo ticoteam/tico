@@ -5,7 +5,7 @@ through `tico demo`). It used to ask the Tico Gateway during an org rule check, 
 import socket
 
 from backend import demo
-from backend.tests.test_demo_company import NOW
+from backend.tests.helpers.demo_company import NOW
 
 
 def test_a_demo_build_looks_up_no_remote_host(tmp_path, monkeypatch):

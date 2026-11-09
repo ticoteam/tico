@@ -14,8 +14,18 @@ from backend.finance import actions as FA
 from backend.finance import gateway_sync
 from backend.finance import reads as FR
 from backend.finance.store import tico as finance_tico
-from backend.tests.test_api import api, get, headers  # noqa: F401
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, budget, finance_template, spend, store  # noqa: F401
+from backend.tests.helpers.api import get, headers  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
+    AT,
+    OWNER,
+    account,
+    act,
+    books,
+    budget,
+    finance_template,
+    spend,
+    store,
+)  # noqa: F401
 
 NOON = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
 

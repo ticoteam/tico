@@ -6,85 +6,24 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from backend import (
-    audit_log,
-    call_items,
-    call_media,
-    calls,
-    events,
-    gateway_connection,
-    live_privacy,
-    teammate_access,
-    threads,
-)
+from backend import audit_log, call_items, call_media, calls, events, live_privacy, teammate_access, threads
 from backend.auth import Identity
 from backend.store import H, Problem
-from backend.tests.test_api import api, assign, get, headers, post, runner  # noqa: F401
-from backend.tests.test_call_media import CONFIG, decode, fake_rtc, wait_until  # noqa: F401
-from backend.tests.test_live_meetings import live, settle  # noqa: F401
+from backend.tests.helpers.api import assign, get, headers, post, runner  # noqa: F401
+from backend.tests.helpers.call_media import CONFIG, decode, fake_rtc, wait_until  # noqa: F401
+from backend.tests.helpers.live_meetings import live, settle  # noqa: F401
 from clients import gateway
-
-PCM_ONE_SECOND = b"\x01\x00" * 16000
-PCM_EIGHT_SECONDS = PCM_ONE_SECOND * 8
-SYNTHETIC_SPEECH = "The rollout needs a reliability review"
-
-
-class FakeMedia:
-    """A stand-in for LiveKit: rooms are sets of identities, and the recorder is a callback the test feeds."""
-
-    url = "wss://meet.acme.example"
-
-    def __init__(self):
-        self.rooms, self.removed, self.recorders, self.ended = {}, [], {}, []
-        self.down = False  # LiveKit unreachable: every call to it is refused until the test clears this
-
-    def _reachable(self):
-        if self.down:
-            raise call_media.MediaUnavailable("the media server is down")
-
-    def person_token(self, room, identity, name):
-        return call_media.person_token(CONFIG, room, identity, name)
-
-    def room_exists(self, room):
-        self._reachable()
-        return room in self.rooms
-
-    def remove(self, room, identity):
-        self._reachable()
-        self.removed.append((room, identity))
-        self.rooms.get(room, set()).discard(identity)
-
-    def end_room(self, room):
-        self._reachable()
-        self.rooms.pop(room, None)
-        self.ended.append(room)
-
-    def start_recorder(self, call_id, room, on_audio):
-        self.recorders[call_id] = on_audio
-        self.rooms.setdefault(room, set()).add("tico-recorder")
-
-    def stop_recorder(self, call_id):
-        self.recorders.pop(call_id, None)
-
-    def running(self, call_id):
-        return call_id in self.recorders
-
-
-@pytest.fixture
-def meet(live, monkeypatch):
-    live.app.state.call_media = FakeMedia()
-    monkeypatch.setattr(call_media, "transcribe", lambda base, key, audio: SYNTHETIC_SPEECH)
-    monkeypatch.setattr(
-        gateway_connection,
-        "target",
-        lambda c, vault, settings=None: ("synthetic-gateway-key", "https://gateway.acme.example/v1", "x"),
-    )
-    live.app.state.live_meeting_decider = lambda state, questions, label: {
-        "model": "synthetic-decider",
-        "ms": 1,
-        "answers": {key: {"noul": 0.99, "confidence": 0.95} for key in questions},
-    }
-    return live
+from backend.tests.helpers.calls import (
+    PCM_EIGHT_SECONDS,
+    PCM_ONE_SECOND,
+    SYNTHETIC_SPEECH,
+    _restricted,
+    join,
+    meet,
+    start_call,
+    thread,
+    thread_texts,
+)
 
 
 @pytest.fixture
@@ -115,20 +54,6 @@ def drafted(items):
     return json.dumps({"choices": [{"message": {"content": content}}]}).encode()
 
 
-def thread(api, subject="Acme launch"):
-    """A thread between Ana (the owner, who acts), Ben and the Ops bot."""
-    with api.app.state.store.transaction() as c:
-        return H.open_conversation(c, "human:ana", ["human:ben", "bot:ops"], kind="chat", subject=subject)["id"]
-
-
-def start_call(api, cid, token="ana-test", title="Acme launch call"):
-    return post(api, f"threads/{cid}/calls", {"title": title}, token=token)
-
-
-def join(api, call_id, token="ana-test"):
-    return post(api, f"calls/{call_id}/join", {}, token=token)
-
-
 def private_lanes_ready(api, machine, bot):
     """A current runner that takes a private meeting's turns: a call is a private meeting (execution.PRIVATE_LANES)."""
     return post(
@@ -153,12 +78,6 @@ def bot_reply_by_run(api, bot, text):
         token=machine["token"],
     )
     return attempt
-
-
-def thread_texts(api, cid, token="ana-test"):
-    response = api.get(f"/api/v2/conversations/{cid}/messages", headers=headers(token))
-    assert response.status_code == 200, response.text
-    return [message["body"] for message in response.json()["messages"]]
 
 
 def test_synthetic_speech_becomes_a_transcript_and_a_bot_reply_in_the_thread(meet):
@@ -509,16 +428,6 @@ def _chunks(api, meeting_id):
         ]
 
 
-def _restricted(api, prefix):
-    with api.app.state.store.read() as c:
-        return [
-            row["restricted"]
-            for row in c.execute(
-                "SELECT restricted FROM messages WHERE body LIKE ? ORDER BY created_at", (prefix + "%",)
-            )
-        ]
-
-
 def _threads_events(api, actor):
     """The `threads` topic events `actor` is sent, as the events stream reads them."""
     auth = api.app.state.calls.auth
@@ -576,7 +485,7 @@ def test_the_call_tools_run_the_same_routes_the_rest_api_has(meet):
 
 
 def test_the_declared_call_answers_match_the_live_ones(meet):
-    from backend.tests.test_openapi_v2 import conforms
+    from backend.tests.helpers.openapi_v2 import conforms
 
     document = meet.get("/api/v2/openapi.json", headers=headers("ana-test")).json()
     by_id = {op["operationId"]: op for ops in document["paths"].values() for op in ops.values()}

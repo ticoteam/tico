@@ -1,9 +1,9 @@
 """The faster defaults for permissions: what BotOps does with requester rights (docs/permissions.md). Ana owns the Team, Ben is an admin, Cara is a member (the base fixture)."""
 
 from backend import botops_act as B
-from backend.tests.test_api import api, post, put, ready  # noqa: F401  (fixture)
-from backend.tests.test_botops_parity import act
-from backend.tests.test_member_bots import botops, call, turn  # noqa: F401  (fixtures)
+from backend.tests.helpers.api import post, put, ready  # noqa: F401  (fixture)
+from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.member_bots import botops, call, turn  # noqa: F401  (fixtures)
 
 
 def test_which_routes_run_without_a_card_and_which_still_need_one():

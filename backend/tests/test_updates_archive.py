@@ -5,7 +5,7 @@ from datetime import date, timedelta
 
 from backend import openapi_v2, updates
 from backend.store import H
-from backend.tests.test_api import api, as_member, get, headers, post, restrict, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import as_member, get, headers, post, restrict, setup_attempt  # noqa: F401
 
 
 SLIDES = {
@@ -135,7 +135,7 @@ def test_logical_days_restore_and_archive_are_personal_and_kind_scoped(api):
 
 
 def test_the_tree_leaves_out_what_this_reader_archived_and_keeps_the_reports_below(api, monkeypatch):
-    from backend.tests.test_bot_contact import bot
+    from backend.tests.helpers.bot_contact import bot
 
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     bot(api, "boss", "Manager", reports_to="human:ana")

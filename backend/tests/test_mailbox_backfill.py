@@ -8,7 +8,6 @@ import json
 from backend import bot_settings as BS
 from backend import mailbox_access as MA
 from backend.store import H, encode
-from backend.tests.test_api import api  # noqa: F401
 
 ANA, BEN, CARA = "ana@acme.example", "ben@acme.example", "cara@acme.example"
 SUPPORT = "support@acme.example"

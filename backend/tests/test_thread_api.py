@@ -5,38 +5,12 @@ that follows edits and deletes. Fictional people only: ana (owner), ben and cara
 import time
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the fixture and its helpers)
-from backend.tests.test_org_rule_check import COLOR, bodies, hold_row, ruled  # noqa: F401  (the Judge fixture)
-from backend.tests.test_org_rules import rule
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the fixture and its helpers)
+from backend.tests.helpers.org_rule_check import COLOR, bodies, hold_row, ruled  # noqa: F401  (the Judge fixture)
+from backend.tests.helpers.org_rules import rule
 from backend import org_rule_check, threads
 from backend.store import Problem
-
-
-def new_thread(api, title="Budget", members=("human:ben",), body=None, parent_message_id=None):
-    payload = {"title": title, "audience": "members", "members": list(members)}
-    if body:
-        payload["body"] = body
-    if parent_message_id:
-        payload["parent_message_id"] = parent_message_id
-    response = api.post("/api/v2/threads", json=payload, headers=headers("ana-test"))
-    assert response.status_code == 200, response.text
-    return response.json()
-
-
-def say(api, thread_id, text, token="ana-test"):
-    response = api.post(f"/api/v2/threads/{thread_id}/messages", json={"text": text}, headers=headers(token))
-    assert response.status_code == 200, response.text
-    return response.json()
-
-
-def get_thread(api, thread_id, token="ben-test"):
-    return api.get(f"/api/v2/threads/{thread_id}", headers=headers(token))
-
-
-def search(api, query, token):
-    response = api.get("/api/v2/threads/search", params={"q": query}, headers=headers(token))
-    assert response.status_code == 200, response.text
-    return response.json()
+from backend.tests.helpers.thread_api import get_thread, new_thread, row_of, say, search, set_bot_access, sidebar
 
 
 def test_a_member_reads_a_members_thread_and_a_stranger_gets_404_and_no_listing(api):
@@ -139,16 +113,6 @@ def test_context_search_finds_a_thread_message_the_viewer_may_read_and_never_a_h
     assert [h["kind"] for h in hits] == ["thread_message"] and hits[0]["url"].startswith("#/thread/")
     assert context("secret", "cara-test") == [] and context("secret", "ben-test") == []
     assert context("secret", "ana-test")
-
-
-def set_bot_access(api, slug, see, read, write):
-    revision = api.get(f"/api/v2/bots/{slug}/access", headers=headers()).json()["revision"]
-    response = api.put(
-        f"/api/v2/bots/{slug}/access",
-        headers=headers(),
-        json={"see": see, "read": read, "write": write, "revision": revision},
-    )
-    assert response.status_code == 200, response.text
 
 
 def home_as(api, actor, token="ana-test"):
@@ -468,16 +432,6 @@ def test_the_people_list_says_my_access_with_see_read_write_and_manage(api):
     assert cara["ops"]["my_access"] == {"see": True, "read": True, "write": True, "manage": False}
     assert "inbox" not in cara  # the mail bot is Ana's alone
     assert bot_rows(api, "ana-test")["ops"]["my_access"]["manage"] is True
-
-
-def sidebar(api, token="ben-test", **params):
-    response = api.get("/api/v2/threads", params=params, headers=headers(token))
-    assert response.status_code == 200, response.text
-    return response.json()
-
-
-def row_of(listed, thread_id):
-    return next((t for t in listed["threads"] + listed["dms"] if t["id"] == thread_id), None)
 
 
 def post_as(api, thread_id, actor, text, **kw):

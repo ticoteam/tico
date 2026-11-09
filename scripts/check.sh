@@ -130,6 +130,13 @@ else
   skip "lint (ruff baseline, format)" "no Python, ruff or pytest config changed"
 fi
 
+# 1a. No Python file imports a test module (scripts/check_test_imports.py): shared names live in the tests' helpers/.
+if touched '\.py$|^scripts/test-imports-allowed\.txt$'; then
+  job "test imports (no test module imported)" python3 scripts/check_test_imports.py
+else
+  skip "test imports (no test module imported)" "no Python file changed"
+fi
+
 # 2. Migration names and timestamps against origin/main's history, as CI checks a pull request. Only additions matter.
 if touched '^backend/migrations/|^scripts/check_migration_order\.py$'; then
   if [ -n "$ratchet" ]; then

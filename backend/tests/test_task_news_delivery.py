@@ -8,28 +8,7 @@ Fictional people only: ana (owner), ben (a person); the bot ops comes from the a
 from backend import threads
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend.tests.test_api import api  # noqa: F401  (the fixture)
-
-
-def rows(api, sql, *args):
-    with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute(sql, args).fetchall()]
-
-
-def delivery(api, message_id, recipient):
-    found = rows(api, "SELECT * FROM message_deliveries WHERE message_id=? AND recipient=?", message_id, recipient)
-    return found[0] if found else None
-
-
-def budget_thread(api):
-    """A members thread Ana started with Ben in it."""
-    with api.app.state.store.transaction() as c:
-        return threads.create(c, "human:ana", title="Budget", audience="members", members=["human:ben"])["id"]
-
-
-def unread_for(api, actor, thread_id):
-    with api.app.state.store.read() as c:
-        return threads.unread(c, threads.actor_viewer(c, actor), thread_id)["unread"]
+from backend.tests.helpers.task_news_delivery import budget_thread, delivery, rows, unread_for
 
 
 def task_notice(api, thread_id, body="Started task: Budget review", kind="notice"):

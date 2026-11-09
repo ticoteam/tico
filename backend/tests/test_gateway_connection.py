@@ -12,10 +12,10 @@ import pytest
 
 from backend.credentials import CredentialCipher
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, put, runner  # noqa: F401
-from backend.tests.test_credentials import FakeKMS
-from backend.tests.test_decide_gateway import answer_all
-from backend.tests.test_judge import QUESTIONS
+from backend.tests.helpers.api import assign, claim, get, headers, post, put, runner  # noqa: F401
+from backend.tests.helpers.credentials import FakeKMS  # noqa: F401
+from backend.tests.helpers.decide_gateway import answer_all  # noqa: F401
+from backend.tests.helpers.judge import QUESTIONS  # noqa: F401
 from clients import gateway as G
 from backend import bot_settings as BS
 

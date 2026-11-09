@@ -2,7 +2,8 @@
 
 import json
 
-from backend.tests.test_api import api, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import get, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.model_login import stored
 
 
 def online(api):
@@ -17,11 +18,6 @@ def start(api, r, runtime="codex", **kw):
 
 def report(api, r, lid, **body):
     return post(api, f"runner-logins/{lid}/report", body, token=r["token"])
-
-
-def stored(api):
-    with api.app.state.store.read() as c:
-        return [dict(row) for row in c.execute("SELECT * FROM model_logins")]
 
 
 def test_other_members_cannot_start_read_or_cancel_a_login(api):

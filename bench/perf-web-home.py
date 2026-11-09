@@ -22,10 +22,9 @@ if __name__ == "__main__":
 
 from backend import bot_settings as BS, threads
 from backend.store import H, Problem
-from backend.tests import test_api
-from backend.tests.test_api import headers
+from backend.tests.helpers.api_app import api_client
+from backend.tests.helpers.api import headers
 
-api = test_api.api  # the fixture, bound so that tests can take it
 BOTS = [f"bot{n:02d}" for n in range(70)]
 THREADS, DMS, POSTS = int(os.environ.get("THREADS", 1200)), int(os.environ.get("DMS", 150)), 6
 UPDATE_DAYS = 30
@@ -226,7 +225,7 @@ if __name__ == "__main__":
     import tempfile
 
     with tempfile.TemporaryDirectory(prefix=".tmp-home-", dir=Path(__file__).resolve().parents[1]) as directory:
-        install = api.__wrapped__(Path(directory), None)
+        install = api_client(Path(directory), None)
         try:
             test_home_and_its_neighbours(next(install))
         finally:

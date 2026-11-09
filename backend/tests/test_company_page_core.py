@@ -16,8 +16,9 @@ from backend.auth import Identity
 from backend.company_page import audiences as A, disclosure as D, release, render, settings as S, stats as ST
 from backend.finance import actions as FA, reads as FR
 from backend.store import Problem
-from backend.tests.test_api import api, headers  # noqa: F401
-from backend.tests.test_finance_fixtures import OWNER, account, act, books, finance_template, spend, store  # noqa: F401
+from backend.tests.helpers.api import headers  # noqa: F401
+from backend.tests.helpers.finance_fixtures import OWNER, account, act, books, finance_template, spend, store  # noqa: F401
+from backend.tests.helpers.company_page_core import make_kpi, numbers, on_board, post_income, read, setup, shown
 
 STAT_KEYS = {"id", "label", "definition", "chart", "period", "as_of", "display", "stale", "series"}
 POINT_KEYS = {"period", "value", "display"}
@@ -36,30 +37,6 @@ def rebuilds(monkeypatch):
 
     monkeypatch.setattr(release, "rebuild", spy)
     return calls
-
-
-def make_kpi(c, name="Signups", unit="", cadence="monthly"):
-    return K.create(c, OWNER, OWNER, {"name": name, "unit": unit, "cadence": cadence})
-
-
-def read(c, kpi, value, end, **kw):
-    return K.add_reading(c, OWNER, kpi, value, period_end=end, **kw)
-
-
-def on_board(c, kpi, cls="kpi", label=None, chart="number"):
-    return ST.create_stat(c, OWNER, "kpi", kpi["id"], data_class=cls, label=label or kpi["name"], chart=chart)
-
-
-def setup(store, *rules, audience="investors"):
-    with store.transaction() as c:
-        A.seed(c)
-        for rule in rules:
-            D.set_rule(c, OWNER, audience, *rule[:2], **rule[2])
-    return audience
-
-
-def shown(cls, ref="", **kw):
-    return (cls, ref, {"mode": "show", **kw})
 
 
 def by_label(result):
@@ -345,16 +322,6 @@ def test_a_plural_unit_reads_singular_at_exactly_one_and_a_word_ending_in_ss_doe
     assert ST._text(2, "posts") == "2 posts" and ST._text(1, "class") == "1 class"
 
 
-# ------------------------------------------------------------------------------------------- the derivation check
-def numbers(c, *specs):
-    """KPIs on the board, each with two months of readings: (label, data class, unit)."""
-    for label, cls, unit in specs:
-        kpi = make_kpi(c, label, unit)
-        read(c, kpi, 12_000, "2026-08-31")
-        read(c, kpi, 13_000, "2026-09-30")
-        on_board(c, kpi, cls=cls, label=label)
-
-
 def test_runway_next_to_burn_or_cash_holds_when_the_third_is_kept_back(store):
     setup(store, shown("burn"), shown("cash_runway"), ("cash_runway", "cash", {"mode": "hidden"}))
     with store.transaction() as c:
@@ -479,22 +446,6 @@ def test_a_delayed_value_cant_be_worked_out_before_its_time(store):
         numbers(c, ("Runway", "cash_runway", "months"), ("Burn", "burn", "$"))
         c.execute("UPDATE disclosure_rules SET mode='delayed', lag_days=60 WHERE ref_id='cash'")
         assert held_labels(ST.project(c, "investors", "2026-11-01")) == {"Runway", "Burn"}
-
-
-def post_income(c, code, amount, day="2026-09-12"):
-    made = act(c, OWNER, "account_create", {"code": code, "name": f"Income {code}", "type": "income"})
-    line = str(made.result["account_id"])
-    FA.post_entry(
-        c,
-        {
-            "date": day,
-            "source": "usage",
-            "source_id": f"sale-{code}",
-            "lines": [{"account_id": line, "amount": -amount}, {"account_id": account(c, "1000"), "amount": amount}],
-        },
-        at="2026-09-12T00:00:00.000000Z",
-    )
-    return line
 
 
 def test_an_exact_total_minus_exact_parts_recovers_the_hidden_part(books):

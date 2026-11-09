@@ -1,6 +1,6 @@
 """Service keys: another system files, updates, closes and reopens its tasks with one, and reaches nothing else."""
 
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
 
 
 def inbound(api, secret, expected=200, **body):

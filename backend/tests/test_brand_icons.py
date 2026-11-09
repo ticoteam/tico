@@ -5,8 +5,8 @@ from pathlib import Path
 
 from backend import oidc
 from backend.company_page import render
-from backend.tests.test_api import api, api_settings, headers  # noqa: F401  (the api fixture)
-from backend.tests.test_company_page_release import view_model
+from backend.tests.helpers.api import api_settings, headers  # noqa: F401  (the api fixture)
+from backend.tests.helpers.company_page_release import view_model
 
 UI = Path(__file__).resolve().parents[2] / "ui" / "assets"
 

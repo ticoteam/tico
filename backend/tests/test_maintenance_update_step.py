@@ -20,8 +20,8 @@ from backend.maintenance_steps import update as step
 from backend.scheduler import Scheduler
 from backend.store import H
 from clients.judge import gateway_writer, llm_writer
-from backend.tests.test_api import api, post  # noqa: F401
-from backend.tests.test_bot_contact import bot
+from backend.tests.helpers.api import post  # noqa: F401
+from backend.tests.helpers.bot_contact import bot
 
 TUESDAY = datetime(2026, 9, 29, 13, 0, tzinfo=timezone.utc)  # Tuesday 06:00 Pacific
 FRIDAY = datetime(2026, 10, 2, 13, 0, tzinfo=timezone.utc)  # Friday 06:00 Pacific

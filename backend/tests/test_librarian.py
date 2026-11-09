@@ -5,7 +5,7 @@ import pytest
 
 from backend import librarian
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
 from backend import bot_settings as BS
 
 RESULTS = [
@@ -167,7 +167,7 @@ def test_a_bot_asks_the_librarian_with_a_needs_action_message_and_the_final_text
 
 def test_mcp_docs_ask_status_collects_the_same_private_answer(desk):
     from backend.mcp import InProcessApi
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
 
     assert InProcessApi.docs_wait_max == 20
     err, pending = call(desk, "hub_doc_ask", {"question": "Refund window?", "wait_s": 0})

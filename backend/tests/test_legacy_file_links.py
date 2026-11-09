@@ -2,7 +2,7 @@
 
 from backend.auth import Identity
 from backend.blobs import register
-from backend.tests.test_api import api, headers, post  # noqa: F401
+from backend.tests.helpers.api import headers, post  # noqa: F401
 
 
 def test_adopted_legacy_urls_serve_original_and_new_ids_serve_latest(api):

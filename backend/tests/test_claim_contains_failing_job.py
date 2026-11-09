@@ -29,19 +29,9 @@ from backend import (
     wake_presets,
 )
 from backend.store import H
-from backend.tests.test_api import (  # noqa: F401 (api is a fixture)
-    api,
-    assign,
-    claim,
-    get,
-    headers,
-    post,
-    ready,
-    runner,
-    setup_attempt,
-)
-from backend.tests.test_held_runs import task_held
-from backend.tests.test_run_backoff import at, complete, setup as budget_setup
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt
+from backend.tests.helpers.held_runs import task_held
+from backend.tests.helpers.run_backoff import at, complete, setup as budget_setup
 
 
 @pytest.fixture(autouse=True)

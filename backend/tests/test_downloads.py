@@ -10,7 +10,7 @@ import pytest
 
 from backend.downloads import Downloads, MANIFEST_MAX_BYTES
 
-from backend.tests.test_api import api, headers  # noqa: F401
+from backend.tests.helpers.api import headers  # noqa: F401
 
 MANIFEST = {
     "version": "2.1.0",

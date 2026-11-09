@@ -10,8 +10,8 @@ import pytest
 
 from backend import hubdb as H
 from backend import task_relations as TR
-from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401  (fixtures)
-from backend.tests.test_upgrade import FIXTURES, boot
+from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401  (fixtures)
+from backend.tests.helpers.upgrade import FIXTURES, boot
 
 
 def hub(path):

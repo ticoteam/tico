@@ -4,27 +4,11 @@ the background shells and monitors still running, and the checkpoint. Nothing fr
 import json
 
 from backend.store import H
-from backend.tests.test_shared_logins import queued_login  # noqa: F401
-from backend.tests.test_api import api, assign, claim, expire, get, post, put, ready, runner  # noqa: F401
-from backend.tests.test_execution_review import aged, sweep
+from backend.tests.helpers.shared_logins import queued_login  # noqa: F401
+from backend.tests.helpers.api import assign, claim, expire, get, post, put, ready, runner  # noqa: F401
+from backend.tests.helpers.execution_review import aged, sweep
 from backend.enqueue import enqueue_stored
-
-
-def task_attempt(api, machine, title="Count the words"):
-    task = post(api, "tasks", {"owner": "ops", "title": title, "body": "Count them."})
-    attempt = claim(api, machine)
-    assert attempt["task"]["id"] == task["id"]
-    post(api, f"attempts/{attempt['id']}/started", {"thread_id": title}, machine["token"])
-    return task["id"], attempt
-
-
-def events(api, machine, aid, rows, first=1):
-    post(
-        api,
-        f"attempts/{aid}/events",
-        {"events": [{"seq": first + i, "kind": k, "payload": p} for i, (k, p) in enumerate(rows)]},
-        machine["token"],
-    )
+from backend.tests.helpers.run_view import DEV_563_NOTE, botops_decides, events, task_attempt
 
 
 def test_a_run_shows_its_subagent_and_the_background_command_it_left_running(api):
@@ -414,7 +398,7 @@ def test_a_persons_message_carried_to_another_bot_in_a_task_reads_as_the_person(
     """A person's message to a bot that neither owns nor asked the task reaches that bot as a keeper carrier. The task's
     line reads it as the person's: CPU overload does not stand for it, but a memory hold still does."""
     from backend import views
-    from backend.tests.test_scheduler import _wake_by_hand
+    from backend.tests.helpers.scheduler import _wake_by_hand
 
     machine = runner(api, "ana")
     assign(api, machine, "ops")
@@ -458,7 +442,7 @@ def test_a_persons_message_carried_to_another_bot_in_a_task_reads_as_the_person(
         True,
     )
     assert humans and all(h is True for h in humans), "the carried message keeps its person's priority"
-    from backend.tests.test_start_places import memory, overload
+    from backend.tests.helpers.start_places import memory, overload
 
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET platform='linux' WHERE id=?", (machine['runner_id'],))
@@ -471,7 +455,7 @@ def test_a_persons_message_carried_to_another_bot_in_a_task_reads_as_the_person(
 
 
 def test_local_memory_wait_is_visible_with_diagnostics_off_and_clears_on_start(api):
-    from backend.tests.test_api import headers
+    from backend.tests.helpers.api import headers
 
     machine = runner(api, 'ana')
     assign(api, machine, 'ops')
@@ -513,7 +497,7 @@ def test_local_memory_wait_is_visible_with_diagnostics_off_and_clears_on_start(a
 
 
 def test_an_opt_in_login_queue_names_the_holder_only_to_who_may_see_it(api, queued_login):
-    from backend.tests.test_api import as_member, restrict
+    from backend.tests.helpers.api import as_member, restrict
 
     as_member(api, "ben@acme.example")
     with api.app.state.store.transaction() as c:  # finance is Ana's alone: Ben may not even learn it is busy
@@ -672,32 +656,6 @@ def test_codex_ignores_old_login_wait_events_in_tasks_chat_status_and_health(api
         for row in get(api, "health")["stuck"]
         if row["bot"] == "ops" and row.get("reason") == "login_holder_unknown"
     ]
-
-
-DEV_563_NOTE = (
-    "Run finished its work before the 60-min limit: PR 1596 pushed at 8cf2a8e, hosted checks passed, "
-    "Review 1 requested. Nothing to redo."
-)
-
-
-def botops_decides(api, job_id, attempt_id, decision, note, at):
-    """BotOps' own review of a held run (execution.reconcile_job, as `bot:botops`), saved at `at`."""
-    from types import SimpleNamespace
-    from backend.auth import Identity
-
-    with api.app.state.store.transaction() as c:
-        if not H.bot(c, H.FLEET_MAINTAINER):
-            c.execute(
-                "INSERT INTO bots(id, slug, display_name, state) VALUES(?, ?, 'BotOps', 'active')",
-                (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER),
-            )
-        api.app.state.execution.reconcile_job(
-            c,
-            Identity("bot:" + H.FLEET_MAINTAINER, "bot"),
-            job_id,
-            SimpleNamespace(run_id=attempt_id, decision=decision, note=note, acknowledge_uncertain_effects=True),
-        )
-        c.execute("UPDATE job_recovery SET created_at=? WHERE job_id=?", (at, job_id))
 
 
 def held_run(api, title):

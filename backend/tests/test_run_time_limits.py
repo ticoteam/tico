@@ -3,9 +3,9 @@
 import pytest
 
 from backend.store import H
-from backend.tests.test_api import api, claim, get, post
-from backend.tests.test_task_lanes import task_bot, new_task
-from backend.tests.test_execution_review import add_recovery_reviewer, job_state, sweep
+from backend.tests.helpers.api import claim, get, post
+from backend.tests.helpers.task_lanes import task_bot, new_task
+from backend.tests.helpers.execution_review import add_recovery_reviewer, job_state, sweep
 
 
 def running(api):

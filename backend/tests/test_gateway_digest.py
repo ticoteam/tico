@@ -4,8 +4,8 @@ it. The Gateway is faked: no call leaves the test."""
 
 import pytest
 
-from backend.tests.test_api import api, headers  # noqa: F401
-from backend.tests.test_mcp import call
+from backend.tests.helpers.api import headers  # noqa: F401
+from backend.tests.helpers.mcp import call
 from clients import gateway as G
 
 ITEMS = [

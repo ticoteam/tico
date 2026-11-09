@@ -1,6 +1,6 @@
 """Independent checks for caller authority and uncertain external creation through MCP."""
 
-from backend.tests.test_github_app import api, gh, auth, connect  # noqa: F401
+from backend.tests.helpers.github_app import api, gh, auth, connect  # noqa: F401
 
 
 def mcp(api, args, token="owner-test"):

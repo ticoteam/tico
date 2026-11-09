@@ -15,10 +15,9 @@ from array import array
 import pytest
 
 from backend import call_media, calls
-from backend.tests.test_api import api  # noqa: F401
-from backend.tests.test_call_media import wait_until
-from backend.tests.test_calls import SYNTHETIC_SPEECH, _restricted, join, post, start_call, thread, thread_texts
-from backend.tests.test_live_meetings import live  # noqa: F401
+from backend.tests.helpers.call_media import wait_until
+from backend.tests.helpers.calls import SYNTHETIC_SPEECH, _restricted, join, post, start_call, thread, thread_texts
+from backend.tests.helpers.live_meetings import live  # noqa: F401
 from clients import gateway
 
 LIVE = os.environ.get("TICO_LIVE_LIVEKIT", "").rstrip("/")

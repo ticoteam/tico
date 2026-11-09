@@ -6,10 +6,10 @@ from collections import Counter
 from backend import batch, views
 from backend import question_tasks as QT
 from backend import hubdb as H
-from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
-from backend.tests.test_batch import approval_for_ana
-from backend.tests.test_task_privacy_reads import traced
-from backend.tests.test_question_tasks import keep_asking
+from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.batch import approval_for_ana
+from backend.tests.helpers.task_privacy_reads import traced
+from backend.tests.helpers.question_tasks import keep_asking
 
 SEND = {
     "to": ["Jennie Ooten <jennie@acme.example>"],
@@ -184,7 +184,7 @@ def test_do_what_you_recommend_answers_and_closes_the_card(api):
 
 def test_do_what_you_recommend_answers_a_question_on_a_file_version(api):
     keep_asking(api)  # this case asks with a reversible default on purpose (backend/ask_refusals.py)
-    from backend.tests.test_file_reviews import ask as review_ask, publish
+    from backend.tests.helpers.file_reviews import ask as review_ask, publish
 
     _, _, finance = setup_attempt(api, "finance")
     v1 = publish(api, finance["token"], "# Plan", "plan.md")

@@ -4,12 +4,11 @@ before the report still gets a row, and that a private bot's tools stay private 
 import json
 
 from backend.store import H
-from backend.tests.test_api import api, assign, get, headers, post, ready, restrict, runner  # noqa: F401  (fixtures)
-from backend.tests.test_credentials import setup
-from backend.tests.test_model_subscriptions import add, company, give, machine, on
-from backend import bot_settings as BS
+from backend.tests.helpers.api import assign, get, headers, post, ready, restrict, runner  # noqa: F401  (fixtures)
+from backend.tests.helpers.credentials import setup
+from backend.tests.helpers.model_subscriptions import add, company, give, machine, on
+from backend.tests.helpers.bot_tools import configure, report
 
-RUNTIMES = {"codex": {"installed": True, "authenticated": "ready"}}
 TOOLS = [
     {
         "service": "posthog",
@@ -30,33 +29,6 @@ TOOLS = [
     },
     {"service": "meeting-notes", "can": ["use"], "credential": "not-declared"},
 ]
-
-
-def configure(api, bot="ops"):
-    with api.app.state.store.transaction() as c:
-        c.execute('UPDATE bot_config SET repo=? WHERE bot=?', ('acme-co/emp-' + bot, bot))
-        BS.write(c, bot, {'name': bot, 'runtime': 'codex', 'model': 'gpt-6-luna', 'reasoning_effort': 'high'})
-
-
-def report(api, machine, bot, tools):
-    row = {
-        "ready": True,
-        "runtime": "codex",
-        "model": "gpt-6-luna",
-        "repository_present": True,
-        "configuration_valid": True,
-        "problems": [],
-        **({"tools": tools} if tools is not None else {}),
-    }
-    return api.post(
-        "/api/v2/runners/heartbeat",
-        headers=headers(machine["token"]),
-        json={
-            "version": "test",
-            "platform": "test",
-            "readiness": {"schema_version": 1, "runtimes": RUNTIMES, "bots": {bot: row}},
-        },
-    )
 
 
 def tools_of(api, bot="ops", who="ana-test"):

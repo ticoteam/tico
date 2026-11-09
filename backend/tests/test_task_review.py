@@ -3,14 +3,11 @@ answer."""
 
 import pytest
 
-from backend.tests.test_api import api, assign, claim, headers, post, ready, restrict, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, headers, post, ready, restrict, runner  # noqa: F401
 from backend import question_tasks as QT
 from backend.store import H
 from clients.hubcli import parser
-
-
-def task(api, title="Review the draft"):
-    return post(api, "tasks", {"owner": "ops", "title": title, "body": "Read the report."})["id"]
+from backend.tests.helpers.task_review import get, task
 
 
 def card(api, tid, who="ben", question="Is this ready?", options=("Approve", "Request changes")):
@@ -39,12 +36,6 @@ def card(api, tid, who="ben", question="Is this ready?", options=("Approve", "Re
 
 def attach(api, tid, name="report.md", **fields):
     return post(api, f"tasks/{tid}/files", {"name": name, "text": "# Report", **fields})
-
-
-def get(api, path, who="ana-test"):
-    response = api.get("/api/v2/" + path, headers=headers(who))
-    assert response.status_code == 200, response.text
-    return response.json()
 
 
 def test_version_names_scopes_archive_and_author_edits(api):

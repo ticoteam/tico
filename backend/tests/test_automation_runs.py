@@ -11,36 +11,14 @@ import time_machine
 
 from backend import automations, mailbox_access
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_automation_api import patch
-from backend.tests.test_automation_turns import draft_then_tell, finish
-
-EVENT = {"type": "event", "name": "x.y"}
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.automation_api import patch
+from backend.tests.helpers.automation_turns import draft_then_tell, finish
+from backend.tests.helpers.automation_runs import EVENT, FIND, make, queued, run_row, sql
 
 
 class Stop(BaseException):
     """The server stopping mid-run: nothing in the hub catches it."""
-
-
-def make(api, steps, trigger=EVENT, owner="person:ana", **extra):
-    return post(api, "automations", {"name": "Test", "owner": owner, "trigger": trigger, "steps": steps, **extra})["id"]
-
-
-def queued(api, aid, payload=None):
-    with api.app.state.store.transaction() as c:
-        row = dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone())
-        return automations.queue(c, row, payload or {}, "test")
-
-
-def run_row(api, rid):
-    with api.app.state.store.read() as c:
-        row = dict(c.execute("SELECT * FROM automation_runs WHERE id=?", (rid,)).fetchone())
-    return {**row, "state": json.loads(row["saved_state"] or "{}")}
-
-
-def sql(api, query, args=()):
-    with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute(query, args)]
 
 
 def hub(api):
@@ -525,7 +503,7 @@ def test_a_manual_run_while_held_is_refused_and_queues_nothing(api):
 
 
 def test_only_someone_who_may_change_it_releases_or_drops_its_held_runs(api):
-    from backend.tests.test_automation_api import as_bot
+    from backend.tests.helpers.automation_api import as_bot
 
     aid = webhook_auto(api)
     slow_drain(api, aid)
@@ -669,10 +647,6 @@ def test_an_inherited_sample_mailbox_still_requires_the_owners_access(api):
         mailbox_access.revoke(c, "person:ana", box["id"], grant["id"])
     post(api, f"automations/{aid}/run", sample, expected=403)
     assert len(get(api, f"automations/{aid}/runs")["runs"]) == 1
-
-
-# ---------------------------------------------------------------------------------------------- the find watermark
-FIND = {"id": "look", "type": "find", "source": "tasks", "query": "Acme batch", "limit": 1}
 
 
 def test_items_with_the_same_time_are_all_found_one_page_at_a_time(api):

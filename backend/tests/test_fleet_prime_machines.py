@@ -1,8 +1,8 @@
 """fleet_snapshot primes machine() rows once for readable bots."""
 
-from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
-from backend.tests.test_task_privacy_reads import traced
-from backend.tests.test_views import as_member
+from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.task_privacy_reads import traced
+from backend.tests.helpers.views import as_member
 
 
 def test_fleet_snapshot_reads_no_assignment_per_bot(api):

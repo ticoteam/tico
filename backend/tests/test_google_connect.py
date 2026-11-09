@@ -6,67 +6,28 @@ computer that syncs mail finishes the sign-in and keeps the grant.
 No Workspace admin, no service account, no domain-wide delegation, and nobody connects anyone else's mailbox.
 """
 
-import io
 import json
 import subprocess
 import time
-import urllib.error
-import urllib.parse
 
-import pytest
 
 from backend import google_connect
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import get, headers, post, runner, setup_attempt  # noqa: F401
 from connectors.mail import oauth
 from runner_support.connectors import ConnectorPublisher, failure_reason
-
-CLIENT = "1234-tico.apps.googleusercontent.com"
-
-
-@pytest.fixture
-def app(api):
-    settings = api.app.state.store.settings
-    settings.google_oauth_client_id, settings.google_oauth_client_secret = CLIENT, "tico-secret"
-    with api.app.state.store.transaction() as c:  # a signed-in agent, as a Hermes bot is
-        c.execute(
-            "INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('inbox','hermes','x',?,"
-            "'human:ana')",
-            (H.now(),),
-        )
-    settings.test_identities["inbox-test"] = Identity("bot:inbox", "bot", agent="hermes")
-    return api
-
-
-@pytest.fixture
-def own_app(app, monkeypatch):
-    """The company's own Google app, set in Tools, signs people in: the environment's client is cleared so
-    that it is the one a connect uses now (oauth_client prefers the environment)."""
-    settings = app.app.state.store.settings
-    monkeypatch.setattr(settings, "google_oauth_client_id", None)
-    monkeypatch.setattr(settings, "google_oauth_client_secret", None)
-    r = app.put(
-        "/api/v2/google/oauth-client",
-        json={"client_id": "own-client", "client_secret": "own-secret"},
-        headers=headers("ana-test"),
-    )
-    assert r.status_code == 200, r.text
-    return app
-
-
-def start(api, token="cara-test"):
-    answer = post(api, "mail/google/connect", {}, token)
-    query = urllib.parse.parse_qs(urllib.parse.urlsplit(answer["auth_url"]).query)
-    return answer, {k: v[0] for k, v in query.items()}
-
-
-def back(api, token="cara-test", **query):
-    r = api.get(
-        "/api/v2/mail/google/callback?" + urllib.parse.urlencode(query), headers=headers(token), follow_redirects=False
-    )
-    assert r.status_code == 302, r.text
-    return r.headers["location"]
+from backend.tests.helpers.google_connect import (
+    CLIENT,
+    FakeGoogle,
+    app,
+    back,
+    claimed_connect,
+    exchanged,
+    own_app,
+    refresh,
+    start,
+)
 
 
 def row(api, person="cara"):
@@ -175,26 +136,6 @@ def test_the_mail_computer_finishes_it_and_the_code_is_cleared(app):
     assert get(app, "runners/connectors", machine["token"])["connectors"] == []
 
 
-class FakeGoogle:
-    """Google's OAuth endpoints as google_connect.post_token sees them: `calls` and `uris`, in the order asked."""
-
-    def __init__(self, answer=None, error=None, status=400):
-        self.calls, self.uris, self.answer, self.error, self.status = [], [], answer, error, status
-
-    def __call__(self, fields, uri=google_connect.TOKEN_URI):
-        self.calls.append(dict(fields))
-        self.uris.append(uri)
-        if isinstance(self.error, OSError) and not hasattr(self.error, "code"):
-            raise self.error
-        if self.error:
-            raise urllib.error.HTTPError(
-                uri, self.status, "Refused", {}, io.BytesIO(json.dumps({"error": self.error}).encode())
-            )
-        return dict(
-            self.answer or {"access_token": "ya29.fresh", "expires_in": 3599, "scope": oauth.G + "gmail.readonly"}
-        )
-
-
 class RevokeDown(FakeGoogle):
     """Google answers the exchange but cannot be reached to revoke the grant it made."""
 
@@ -204,12 +145,6 @@ class RevokeDown(FakeGoogle):
         self.calls.append(dict(fields))
         self.uris.append(uri)
         raise OSError("unreachable")
-
-
-def claimed_connect(app, machine):
-    _, query = start(app)
-    back(app, state=query["state"], code="c-1")
-    return post(app, "connectors/mail/google/claim", {"holds_mail": True}, machine["token"])["connect"]
 
 
 def test_the_server_trades_the_code_once_for_the_computer_that_claimed_it(app, monkeypatch):
@@ -255,41 +190,12 @@ def test_a_refused_exchange_names_google_s_reason_only(app, monkeypatch):
     assert "tico-secret" not in r.text and "c-1" not in r.text
 
 
-def exchanged(app, machine, refresh_token="1//grant", status="connected", kind="", scope=None):
-    """A connect claimed, exchanged at the server for a grant with `refresh_token` (granted `scope`, when given), and
-    answered by `machine`."""
-    claimed = claimed_connect(app, machine)
-    answer = {"access_token": "ya29.first", "expires_in": 3599, "refresh_token": refresh_token}
-    if scope is not None:
-        answer["scope"] = scope
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(google_connect, "post_token", FakeGoogle(answer))
-        post(app, f"connectors/mail/google/{claimed['id']}/exchange", {}, machine["token"])
-    post(
-        app,
-        f"connectors/mail/google/{claimed['id']}/result",
-        {"status": status, "can": ["read"]} if status == "connected" else {"status": status, "kind": kind},
-        machine["token"],
-    )
-
-
 def holding(app, monkeypatch, google=None):
     machine = runner(app)
     exchanged(app, machine)
     google = google or FakeGoogle()
     monkeypatch.setattr(google_connect, "post_token", google)
     return machine, google
-
-
-def refresh(app, token, **body):
-    body = {
-        "mailbox": "cara@acme.example",
-        "service": "gmail",
-        "refresh_token": "1//grant",
-        "scopes": [oauth.G + "gmail.readonly"],
-        **body,
-    }
-    return app.post("/api/v2/connectors/mail/google/token", json=body, headers=headers(token))
 
 
 def test_the_server_refreshes_a_grant_and_returns_only_the_access_token(app, monkeypatch, caplog, capsys):

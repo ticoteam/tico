@@ -22,8 +22,8 @@ import pytest
 from backend.finance import qbo as QC
 from backend.finance import reads as FR
 from backend.finance.core.errors import NOT_AVAILABLE
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
-from backend.tests.test_finance_mirror import _connection, _drain, _mirror
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.tests.helpers.finance_mirror import _connection, _drain, _mirror
 
 FAKE = Path(__file__).resolve().parents[2] / "scripts" / "fake_quickbooks.py"
 WINDOW = ("2026-10-01", "2026-10-31")

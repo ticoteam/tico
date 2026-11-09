@@ -24,11 +24,11 @@ from backend.chat_goals import readable_active
 from backend.harnesses import resolve_harness
 from backend.settings_admin import SettingsAdmin, compact_at as compact_at_of
 from backend.store import H, P, encode, repo_url
-from backend.tests import test_api as T
-from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers import api as T
+from backend.tests.helpers.api_app import api_client
 from backend import bot_settings as BS
+from backend.tests.helpers.bot_list_reads import BASE, add_bots
 
-BASE = ("coo", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater")
 SEE_ONLY = (
     "slug",
     "display_name",
@@ -191,15 +191,6 @@ def per_bot_list(api, token):
         return json.loads(json.dumps(out))
 
 
-def add_bots(api, extra):
-    with api.app.state.store.transaction() as c:
-        bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in (*BASE, *extra)}
-        H.sync_registry(c, bots, {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
-        for slug, config in extra.items():
-            c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, None, 'ana'))
-            BS.write(c, slug, {**bots[slug], **config})
-
-
 def test_bot_list_answers_as_read_one_bot_at_a_time(api):
     """Private tasks, queued jobs, notes, statuses, approvals, questions, a branch, an external agent,
     a bot one member may only see and a manager another may not see: each caller's list is the same."""
@@ -327,7 +318,7 @@ def test_hot_reads_do_not_grow_with_bots(tmp_path, monkeypatch):
     measured = []
     for name, extra in (("few", []), ("many", [f"b{i:02d}" for i in range(23)])):
         (tmp_path / name).mkdir()
-        install = T.api.__wrapped__(tmp_path / name, None)
+        install = api_client(tmp_path / name, None)
         try:
             measured.append(costs(next(install), extra))
         finally:

@@ -167,7 +167,7 @@ function assistantEarlier(earlier: AssistantEarlier | null | undefined, load: nu
 }
 
 // The rail: the assistant's active tasks, its latest update and its files, each only when it has
-// some, as on a bot page (ui/app/bot-page.js); the whole rail only when one of them shows and the window is wide.
+// some, as on a bot page (ui/app/bot-page.ts); the whole rail only when one of them shows and the window is wide.
 function assistantRailFit() {
   const rail = $('#pane-tasks');
   if (S.route !== ASSISTANT || !rail || !$('#asst-active')) return;
@@ -179,7 +179,7 @@ function assistantRailFit() {
 let ASSISTANT_RAIL_WATCH = false;
 async function assistantRail(slug: string, load: number) {
   const rail = $('#pane-tasks');
-  if (!ASSISTANT_RAIL_WATCH) { ASSISTANT_RAIL_WATCH = true; BOT_WIDE.addEventListener('change', assistantRailFit); }   // bot-page.js loads after this file
+  if (!ASSISTANT_RAIL_WATCH) { ASSISTANT_RAIL_WATCH = true; BOT_WIDE.addEventListener('change', assistantRailFit); }   // bot-page.ts loads after this file
   new MutationObserver(assistantRailFit).observe(rail, {subtree: true, attributes: true, attributeFilter: ['hidden']});
   window.botFiles?.mount($('#asst-files'), {slug, get, esc, openFile: openFileLink});
   const [owned, latest] = await Promise.all([v2Get(`/v2/tasks?owner=${encodeURIComponent(slug)}&status=${V2_ACTIVE.join(',')}&brief=true`),

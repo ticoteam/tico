@@ -3,7 +3,7 @@
 
 from backend import question_tasks as QT, team_rules
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, headers, post, ready, runner, setup_attempt  # noqa: F401  (fixture)
+from backend.tests.helpers.api import assign, claim, headers, post, ready, runner, setup_attempt  # noqa: F401  (fixture)
 
 
 def _ask(api, attempt, question, **more):

@@ -9,10 +9,10 @@ import pytest
 from backend import lenses as L
 from backend import strategy as S
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_company import bot, with_strategy_bot
-from backend.tests.test_goal_asks import asks, sync
-from backend.tests.test_strategy import draft, publish, ready, write
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.company import bot, with_strategy_bot
+from backend.tests.helpers.goal_asks import asks, sync
+from backend.tests.helpers.strategy import draft, publish, ready, write
 from backend import bot_settings as BS
 
 ANSWERS = {
@@ -437,7 +437,7 @@ def test_a_draft_whose_guide_file_moved_falls_back_to_the_default_guide(api):
 
 
 def test_a_market_lens_and_the_startup_idea_check_read_the_market_sizes_and_other_strategy_lenses_do_not(api, model):
-    from backend.tests.test_market_spend import B, defined, size
+    from backend.tests.helpers.market_spend import B, defined, size
 
     first, second, _ = defined(api)
     size(api, first, 4 * B, accept=True)

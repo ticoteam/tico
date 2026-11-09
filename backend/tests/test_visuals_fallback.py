@@ -1,7 +1,7 @@
 """Visuals always on 1/3 (Dev 313): without a separate visual address, pictures, video and audio still show inline,
 served from the app's own address as media only; pages and SVG are cards that open the file viewer, and are never
 served from the app's own address. No visual response ever sets a cookie. Spec tests 1-4 and 7 (Product roadmap
-"Visuals always on"); the UI half is ui/tests/visual-fallback.cjs."""
+"Visuals always on"); the UI half is ui/tests/visual-fallback.cts."""
 
 import base64
 from dataclasses import replace
@@ -9,9 +9,9 @@ from dataclasses import replace
 import pytest
 
 from backend import visuals as V
-from backend.tests.test_api import api, headers, post  # noqa: F401  (fixtures)
-from backend.tests.test_files import publish, turn
-from backend.tests.test_visuals import PNG, VISUALS, bot_reply, media_settled, task_with_file, visual_on_task, wav
+from backend.tests.helpers.api import headers, post  # noqa: F401  (fixtures)
+from backend.tests.helpers.files import publish, turn
+from backend.tests.helpers.visuals import PNG, VISUALS, bot_reply, media_settled, task_with_file, visual_on_task, wav
 
 SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
 CLIP = bytes(range(256)) * 8

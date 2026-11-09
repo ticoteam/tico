@@ -5,8 +5,8 @@ Answered asks stay as history, a private task's ask stays private, and it all ha
 
 from backend import hubdb as H, question_tasks as QT, task_relations as TR
 from backend.tests.old_asks import old_answer, old_ask, with_refs
-from backend.tests.test_api import api, get  # noqa: F401  (fixture)
-from backend.tests.test_derived_waiting import _migration
+from backend.tests.helpers.api import get  # noqa: F401  (fixture)
+from backend.tests.helpers.derived_waiting import _migration
 
 UP = _migration("20261106131713_asks_to_question_tasks").up
 QUESTIONS = [
@@ -127,7 +127,7 @@ def test_each_kind_of_open_ask_moves_once_and_answered_ones_stay_history(api):
 
 def test_a_private_tasks_ask_becomes_a_question_task_only_its_people_read(api):
     store = api.app.state.store
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     with store.transaction() as c:
         unrelated_task_managers(c)

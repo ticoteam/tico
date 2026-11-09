@@ -17,7 +17,8 @@ from backend import usage_limits as U
 from backend.demo_sections import budgets as B
 from backend.app import create_app
 
-NOW = datetime(2026, 11, 6, 18, 30, tzinfo=timezone.utc)  # a Friday evening: the week is complete
+from backend.tests.helpers.demo_company import NOW  # noqa: F401
+
 ROSTER = {slug for slug, _template, _parent in D.BOTS}
 DAY = {"from": "2026-10-31", "to": "2026-11-06"}
 PER_INSTALL = {

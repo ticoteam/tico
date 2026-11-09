@@ -152,7 +152,7 @@ function auMaintRow(m: MaintView) {
 }
 // The list with Maintenance and System jobs beside it first; an older hub (no steps) leaves it as it is.
 // Generic, as auHeartList is: a list comes back as the type it went in (automations.js passes one it has not typed).
-function auMaintList<T extends Array<import('../types/api').Automation>>(list: T, m: MaintView): T {
+function auMaintList<T extends Array<Pick<import('../types/api').Automation, 'id'>>>(list: T, m: MaintView): T {
   if (!auMaintOk(m)) return list;
   return [auMaintRow(m), auSysJobsRow(), ...list.filter(a => a.id !== AU_MAINT && a.id !== AU_SYSJOBS)] as T;
 }

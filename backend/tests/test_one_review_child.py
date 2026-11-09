@@ -5,8 +5,8 @@ import json
 import pytest
 
 from backend import hubdb as H
-from backend.tests.test_github import api, get, headers, hook, pr_event  # noqa: F401
-from backend.tests.test_review_gate import HEAD, OLD, ticket
+from backend.tests.helpers.github import api, get, headers, hook, pr_event  # noqa: F401
+from backend.tests.helpers.review_gate import HEAD, OLD, ticket
 
 
 def child(api, task, title, owner="cmo", expected=200):

@@ -10,16 +10,8 @@ from backend import bot_settings as BS
 from backend import google_workspace as W
 from backend import routines
 from backend.store import H, encode
-from backend.tests.test_api import api, headers  # noqa: F401
-from backend.tests.test_google_workspace import (  # noqa: F401  (fixtures)
-    MAILBOX,
-    connected,
-    fresh_state,
-    google,
-    keys,
-    personal,
-    private,
-)
+from backend.tests.helpers.api import headers  # noqa: F401
+from backend.tests.helpers.google_workspace import MAILBOX, connected, fresh_state, google, keys, personal, private
 
 PEOPLE = "/api/v2/google/people"
 

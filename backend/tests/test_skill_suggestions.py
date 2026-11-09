@@ -15,10 +15,10 @@ from backend import skill_suggestions as SS
 from backend import skill_usage as U
 from backend.maintenance_steps import suggest as step
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (fixture)
-from backend.tests.test_botops_parity import bot_id
-from backend.tests.test_skill_usage import NOW, skill_id, ts, use
-from backend.tests.test_skills import proposal, publish
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (fixture)
+from backend.tests.helpers.botops_parity import bot_id
+from backend.tests.helpers.skill_usage import NOW, skill_id, ts, use
+from backend.tests.helpers.skills import proposal, publish
 
 
 def unlisted(api, name, bot, uses, days=1, at=NOW):

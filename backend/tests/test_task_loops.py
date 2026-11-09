@@ -1,7 +1,7 @@
 """A task moved back and forth an unusual number of times is flagged in Health and to its people once; never blocked."""
 
 from backend import task_loops
-from backend.tests.test_api import api, headers, post  # noqa: F401
+from backend.tests.helpers.api import headers, post  # noqa: F401
 from backend.store import H
 
 

@@ -11,8 +11,9 @@ from backend import hubdb as H
 from backend import pipeline_engine as E
 from backend import pipeline_links as L
 from backend import task_delete
-from backend.tests.test_pipeline_engine import BEN, requirement, states
-from backend.tests.test_pipeline_foundation import ANA, boot, hub, rows, step_id
+from backend.tests.helpers.pipeline_engine import BEN, requirement, states
+from backend.tests.helpers.pipeline_foundation import ANA, boot, hub, rows, step_id
+from backend.tests.helpers.pipeline_links import two
 
 
 @pytest.fixture(scope="module")
@@ -21,40 +22,6 @@ def booted(tmp_path_factory) -> Path:
     path = tmp_path_factory.mktemp("pipeline-links") / "booted.sqlite"
     boot(path)
     return path
-
-
-def two(tmp_path, booted=None):
-    """Two pipelines on a fresh hub: a copy of the module's boot, or (from other modules) a boot of its own."""
-    path = tmp_path / "hub.sqlite"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if booted is None:
-        boot(path)
-    else:
-        with closing(sqlite3.connect(booted)) as source, closing(sqlite3.connect(path)) as target:
-            source.backup(target)
-    c = hub(path)
-    sales = H.type_create(
-        c,
-        ANA,
-        "Sales",
-        [
-            {"name": "Lead", "status": "open"},
-            {"name": "Won", "status": "done"},
-            {"name": "Lost", "status": "closed"},
-        ],
-        mover=True,
-    )
-    success = H.type_create(
-        c,
-        ANA,
-        "Success",
-        [{"name": "Onboarding", "status": "doing"}, {"name": "Active", "status": "doing"}],
-        mover=True,
-    )
-    other = H.type_create(c, ANA, "Support", [{"name": "Inbox", "status": "open"}], mover=True)
-    for t in (sales, success, other):
-        c.execute("UPDATE task_types SET pipeline_owner_id=? WHERE id=?", (ANA, t["id"]))
-    return c, sales, success, other
 
 
 def refused(fn):
@@ -143,7 +110,7 @@ def test_a_handoff_row_follows_its_ticket_through_delete_and_restore(tmp_path, b
 def test_a_move_link_handoff_keeps_the_source_approval_in_force_once_the_work_changes(tmp_path, booted):
     """The source pipeline's approval, given before the handoff, still gates the target: new work makes it out of date
     and the ticket cannot move on in the target pipeline until it is approved again."""
-    from backend.tests.test_pipeline_engine import decide
+    from backend.tests.helpers.pipeline_engine import decide
 
     c, sales, success, _ = two(tmp_path, booted)
     L.create_link(c, ANA, step_id(c, sales["id"], "Won"), success["id"], "move")

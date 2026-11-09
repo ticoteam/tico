@@ -4,9 +4,9 @@ import copy
 
 import pytest
 
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_assistant import assistant_turn
-from backend.tests.test_automation_templates import fill
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.assistant import assistant_turn
+from backend.tests.helpers.automation_templates import fill
 
 
 def flow(mode=None):

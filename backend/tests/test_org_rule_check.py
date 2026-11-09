@@ -17,13 +17,13 @@ from backend import org_rule_check as K
 from backend import thread_attention
 from backend import approval_expiry
 from backend import threads
-from backend.tests.test_question_tasks import keep_asking
+from backend.tests.helpers.question_tasks import keep_asking  # noqa: F401
 from backend import updates
 from backend.auth import Identity
 from backend.names import SUPPORT_ACTOR, SUPPORT_NAME
 from backend.store import H, Problem
-from backend.tests.test_api import claim, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_org_rules import api, as_bot, edit, org, rule  # noqa: F401
+from backend.tests.helpers.api import claim, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.org_rules import as_bot, edit, org, rule  # noqa: F401
 from backend import bot_settings as BS
 
 
@@ -1074,9 +1074,9 @@ def test_no_engine_call_happens_under_the_write_lock(ruled):
 
 
 def test_hub_rules_check_and_appeal_over_the_cli_and_mcp(ruled):
-    from backend.tests.test_org_rules_surfaces import cli, mcp
+    from backend.tests.helpers.org_rules_surfaces import cli, mcp  # noqa: F401
     from clients import hubcli, remotecli
-    from backend.tests.test_automation_cli import Client
+    from backend.tests.helpers.automation_cli import Client  # noqa: F401
 
     api, judge = ruled
     color_rule(api, reviewer="ben")
@@ -1199,7 +1199,7 @@ def test_automation_assign_judges_the_task_handed_over_and_replies_reach_their_p
 
 def review_turn(api):
     """A review subtask for ops in its own room, claimed and started: its reply waits until the task is done."""
-    from backend.tests.test_api import assign, ready, runner
+    from backend.tests.helpers.api import assign, ready, runner  # noqa: F401
 
     r = runner(api, "ana")
     assign(api, r, "ops")
@@ -1966,7 +1966,7 @@ def test_chat_updates_and_task_questions_are_held_under_a_block_rule(ruled, monk
 
 
 def test_the_update_tool_answers_with_the_hold_or_the_warning(ruled, monkeypatch):
-    from backend.tests.test_org_rules_surfaces import mcp
+    from backend.tests.helpers.org_rules_surfaces import mcp  # noqa: F401
 
     api, _ = ruled
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
@@ -2614,7 +2614,7 @@ def test_the_send_queue_checks_a_bots_own_email_against_the_rules(ruled, monkeyp
     # The mail CLI only queues: POST email/sends runs the org rule check itself (backend/email_sending.py rule_gate).
     import base64
     from backend import email_sending as S, mailbox_access as MA
-    from backend.tests.test_email_sending import BOX, mime
+    from backend.tests.helpers.email_sending import BOX, mime  # noqa: F401
 
     api, judge = ruled
     monkeypatch.setattr(

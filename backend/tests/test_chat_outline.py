@@ -1,6 +1,6 @@
 """The Outline's list of prompts reaches past the loaded pages, so it keeps a page's privacy."""
 
-from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.helpers.api import get, post  # noqa: F401
 
 
 def test_outline_lists_the_readers_prompts_and_no_one_elses(api):

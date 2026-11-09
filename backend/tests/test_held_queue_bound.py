@@ -7,8 +7,8 @@ import pytest
 
 from backend import hubdb as H
 from backend.store import Store
-from backend.tests.test_api import api, get, post, restrict, runner, assign, ready, claim, setup_attempt  # noqa: F401
-from backend.tests.test_member_bots import finish
+from backend.tests.helpers.api import get, post, restrict, runner, assign, ready, claim, setup_attempt  # noqa: F401
+from backend.tests.helpers.member_bots import finish
 from backend import bot_settings as BS
 
 
@@ -406,7 +406,7 @@ def test_queue_full_does_not_trigger_escalation_from_prior_refusals(queue, monke
 
 
 def test_messages_resume_never_drains_are_not_charged_and_goal_events_still_post(api, monkeypatch):
-    from backend.tests.test_chat_goals import setup, action, goal_event
+    from backend.tests.helpers.chat_goals import setup, action, goal_event
 
     machine, cid = setup(api)
     action(api, cid, objective='Produce the Acme summary')

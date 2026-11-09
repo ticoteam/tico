@@ -10,7 +10,7 @@ import uuid
 
 import pytest
 
-from backend.tests.test_api import headers
+from backend.tests.helpers.api import headers
 
 API_NOT_BUILT = "not built yet: threads API (docs/dev/threads-contract.md section 10)"
 

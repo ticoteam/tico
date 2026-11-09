@@ -3,8 +3,9 @@ import json
 
 from backend.store import encode
 
-from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
 from backend import bot_settings as BS
+from backend.tests.helpers.settings_transitions import _company_default
 
 
 def _report(api, machine, bots):
@@ -31,16 +32,6 @@ def _report(api, machine, bots):
 def _placed(api, bot):
     with api.app.state.store.read() as c:
         return c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()[0]
-
-
-def _company_default(api, bot, model="gpt-6-sol"):
-    """Set a company Codex default while `bot` names neither setting."""
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO registry_metadata VALUES('providers',?)",
-            (encode({"enabled": ["openai"], "runtime": "codex", "model": model, "revision": 1}),),
-        )
-        BS.write(c, bot, {'name': bot})
 
 
 def test_move_refuses_a_destination_that_is_not_ready_for_the_bot(api):
@@ -274,7 +265,7 @@ def test_a_go_live_that_breaks_while_finishing_never_fails_the_heartbeat(api, mo
 def test_a_waiting_go_live_shows_in_health_and_expires_with_one_notice(api, monkeypatch):
     from datetime import datetime, timezone
     from backend.scheduler import Scheduler
-    from backend.tests.test_api import as_member
+    from backend.tests.helpers.api import as_member
 
     as_member(api, "ben@acme.example")  # a plain member who manages cpo
     machine, waiting = _waiting(api, monkeypatch, github=("unknown", None))

@@ -6,8 +6,8 @@ import pytest
 
 from backend import execution, task_relations as TR
 from backend.store import H
-from backend.tests.test_api import api, claim, post  # noqa: F401  (api is a fixture)
-from backend.tests.test_task_lanes import task_bot
+from backend.tests.helpers.api import claim, post  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.task_lanes import task_bot
 from backend.tests.hold_rows import set_holds
 
 VERDICT = "VERDICT: approve PR #12 head "

@@ -8,7 +8,7 @@ import pytest
 
 from backend import hubdb as H
 from backend import task_relations as TR
-from backend.tests.test_api import api, get, headers, post, restrict, setup_attempt  # noqa: F401  (fixture)
+from backend.tests.helpers.api import get, headers, post, restrict, setup_attempt  # noqa: F401  (fixture)
 
 
 @pytest.fixture

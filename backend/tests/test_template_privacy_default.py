@@ -6,7 +6,7 @@ import pytest
 
 from backend import bot_settings as BS
 from backend.store import H
-from backend.tests.test_api import api, headers  # noqa: F401  (fixture)
+from backend.tests.helpers.api import headers  # noqa: F401
 
 
 def make(api, slug, **fields):

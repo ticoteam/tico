@@ -6,9 +6,9 @@ import pytest
 
 from backend import bot_settings as BS
 from backend import hubdb as H, move_retry
-from backend.tests.test_github import api, get, headers  # noqa: F401
-from backend.tests.test_review_gate import ticket, move, HEAD, BASE
-from backend.tests.test_api import hold
+from backend.tests.helpers.github import api, get, headers  # noqa: F401
+from backend.tests.helpers.review_gate import ticket, move, HEAD, BASE
+from backend.tests.helpers.api import hold
 
 RECEIPT = f'Tests: base {BASE} head {HEAD}: 9 passed, 0 failed'
 

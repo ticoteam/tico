@@ -2,10 +2,10 @@
 
 from backend import events as E, file_library
 from backend.auth import Identity
-from backend.tests.test_api import api, get, headers, post, restrict  # noqa: F401
-from backend.tests.test_cards import delete, page as seeded_page, patch, place, task
-from backend.tests.test_files import publish, turn
-from backend.tests.test_pages import page, read
+from backend.tests.helpers.api import get, headers, post, restrict  # noqa: F401
+from backend.tests.helpers.cards import delete, page as seeded_page, patch, place, task
+from backend.tests.helpers.files import publish, turn
+from backend.tests.helpers.pages import page, read
 
 
 def test_a_task_reader_links_a_page_without_sharing_it_with_other_task_readers(api):

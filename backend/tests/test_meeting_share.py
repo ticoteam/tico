@@ -2,9 +2,9 @@
 
 import pytest
 
-from backend.tests.test_api import api, get, headers, post, restrict  # noqa: F401
-from backend.tests.test_live_meetings import attach, chunk, live, settle  # noqa: F401
-from backend.tests.test_mcp import call
+from backend.tests.helpers.api import get, headers, post, restrict  # noqa: F401
+from backend.tests.helpers.live_meetings import attach, chunk, live, settle  # noqa: F401
+from backend.tests.helpers.mcp import call
 
 
 def test_added_person_can_add_people_and_bots_without_joining_private_meeting(live):

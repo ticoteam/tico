@@ -62,7 +62,6 @@ RUN_LIMIT = 55  # seconds one pytest run may take
 BUILD_LIMIT = 10  # seconds the UI build may take
 STEP_LIMIT = REPEATS * RUN_LIMIT + BUILD_LIMIT  # seconds one probe may take: 120, two minutes
 BISECT_LIMIT = 15 * 60  # seconds a whole bisect may take
-UI_TEST = "ui/tests/%s.cjs"  # a browser script that UI_MAP names for a UI file
 ALL_UI = "ui/tests/*"  # any browser script: a UI file UI_MAP does not name
 PYTEST_FAILED = re.compile(r"\bFAILED (\S+::\S+)")
 PYTEST_NODE = re.compile(r"\S+\.py::\S+$")
@@ -179,7 +178,12 @@ def newer_finished(run, runs):
 
 def test_file(test):
     """The repository file a failing test is defined in: a UI script's file, or a pytest node id's path."""
-    return "ui/tests/" + test if test.endswith(".cjs") else test.split("::", 1)[0]
+    return "ui/tests/" + test if test.endswith((".cjs", ".cts")) else test.split("::", 1)[0]
+
+
+def ui_test_files(stem):
+    """Both files a browser script stem may be: ui/tests/<stem>.cjs or .cts (only one exists)."""
+    return {"ui/tests/%s.cjs" % stem, "ui/tests/%s.cts" % stem}
 
 
 def test_def(test):
@@ -246,7 +250,7 @@ def _reach(graph, changed):
     # A UI file runs the browser scripts that UI_MAP names for it. One it does not map runs every script.
     for name in changed:
         if checks.ui_map_key(name) in checks.UI_MAP:
-            found |= {UI_TEST % script for script in checks.UI_MAP[checks.ui_map_key(name)]}
+            found |= {path for script in checks.UI_MAP[checks.ui_map_key(name)] for path in ui_test_files(script)}
     if unmapped:
         found.add(ALL_UI)
     return found
@@ -255,7 +259,7 @@ def _reach(graph, changed):
 def hit(test, used):
     if used is None or test_file(test) in used:
         return True
-    return test.endswith(".cjs") and ALL_UI in used
+    return test.endswith((".cjs", ".cts")) and ALL_UI in used
 
 
 def verdict(test, baseline, red, git, graph, cache):

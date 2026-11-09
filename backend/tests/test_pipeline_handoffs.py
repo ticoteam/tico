@@ -5,9 +5,9 @@ and a card the reader may not open shows no stage and no link."""
 from backend import hubdb as H
 from backend import pipeline_engine as E
 from backend import pipeline_links as L
-from backend.tests.test_pipeline_engine import decide, requirement
-from backend.tests.test_pipeline_foundation import ANA, rows, step_id
-from backend.tests.test_pipeline_links import two
+from backend.tests.helpers.pipeline_engine import decide, requirement
+from backend.tests.helpers.pipeline_foundation import ANA, rows, step_id
+from backend.tests.helpers.pipeline_links import two
 
 
 def test_a_move_names_the_gate_that_passed_the_card(tmp_path):

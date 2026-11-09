@@ -9,7 +9,7 @@ from backend.credentials import Vault
 from backend.finance import banking, sync
 from backend.finance.mercury import Answer
 from backend.finance.store import banking as SK
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
     OWNER,

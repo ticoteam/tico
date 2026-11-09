@@ -10,24 +10,14 @@ from backend import hubdb as H
 from backend import reconnects
 from backend import threads as CORE
 from backend.store import encode
-from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_batch import approval_for_ana
+from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.batch import approval_for_ana
 from backend.tests.hold_rows import set_holds
+from backend.tests.helpers.payload_budgets import clone
 
 KB = 1024
 MARKER = "TOOL-OUTPUT-MARKER-7f3a"
 BODY = "A long reply with a table and notes. " * 160  # about 6 KB a message
-
-
-def clone(c, table, row, n, **changes):
-    """`n` copies of `row` in `table`, each with a fresh id and `changes(i)` applied."""
-    cols = list(row)
-    rows = []
-    for i in range(n):
-        copy = dict(row, id=uuid.uuid4().hex)
-        copy.update({k: f(i) for k, f in changes.items()})
-        rows.append([copy[k] for k in cols])
-    c.executemany(f"INSERT INTO {table}({','.join(cols)}) VALUES({','.join('?' * len(cols))})", rows)
 
 
 def waits_on_keys(c, task_ids, person="human:ana"):

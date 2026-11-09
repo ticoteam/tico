@@ -12,8 +12,8 @@ from backend import identity_proxy, oidc, owner_link
 from backend.app import create_app
 from backend.config import Settings
 from backend.store import digest
-from backend.tests.test_api import api, post  # noqa: F401  (the api fixture)
-from backend.tests.test_oidc import CLIENT, SECRET, provider, signin  # noqa: F401  (the fixtures)
+from backend.tests.helpers.api import post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.oidc import CLIENT, SECRET, provider, signin  # noqa: F401  (the fixtures)
 
 URL = "https://acme.hosted.example"
 OWNER = "ana@acme.example"

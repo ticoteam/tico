@@ -8,7 +8,7 @@ import pytest
 
 from backend import gateway_tiers as T
 from backend import providers
-from backend.tests.test_api import api, get, headers  # noqa: F401
+from backend.tests.helpers.api import get, headers  # noqa: F401
 from clients import gateway as G
 from clients import judge as J
 
@@ -344,7 +344,7 @@ def test_the_fetch_route_checks_its_input_and_needs_a_connected_gateway(api, mon
 
 
 def test_the_fetch_tool_asks_the_route_with_the_url_and_a_default_size(api, monkeypatch):
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
     from clients import hubtools
 
     tool = hubtools.BY_NAME["hub_gateway_fetch"]

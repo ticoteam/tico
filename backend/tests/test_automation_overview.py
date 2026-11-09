@@ -4,8 +4,8 @@ Seeing a run follows seeing its automation, so these are a privacy boundary."""
 import json
 
 from backend.store import H
-from backend.tests.test_api import api, get  # noqa: F401
-from backend.tests.test_automation_api import as_bot
+from backend.tests.helpers.api import get  # noqa: F401
+from backend.tests.helpers.automation_api import as_bot
 
 
 def _make(api, name, owner, kind="event"):

@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from backend import threads
 from backend.models import Completion
 from backend.store import H, encode
-from backend.tests.test_api import api, setup_attempt, post, get, ready, claim, runner, assign, headers
+from backend.tests.helpers.api import setup_attempt, post, get, ready, claim, runner, assign, headers
 from backend import bot_settings as BS
 
 
@@ -174,7 +174,7 @@ def test_routine_reply_in_a_personal_room_is_not_lost_to_an_unrelated_private_ta
     runner, origin, attempt = setup_attempt(api)
     start(api, runner, attempt)
     finish(api, runner, attempt)
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)

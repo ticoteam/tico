@@ -3,9 +3,9 @@ red Crashed for a run its computer took and never started, with nothing lost and
 
 import pytest
 
-from backend.tests.test_api import api, claim, expire, get, post, ready, setup_attempt  # noqa: F401 (fixture)
+from backend.tests.helpers.api import claim, expire, get, post, ready, setup_attempt  # noqa: F401 (fixture)
 from backend.store import H
-from backend.tests.test_execution_review import interrupted
+from backend.tests.helpers.execution_review import interrupted
 
 
 def lapse(api, attempt):

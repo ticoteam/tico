@@ -6,48 +6,10 @@ import uuid
 
 from backend import openapi_v2
 from backend.finance import actions as FA
-from backend.tests.test_api import api, headers  # noqa: F401  (the api fixture)
-from backend.tests.test_credentials import setup as setup_vault
-from backend.tests.test_finance_fixtures import account
-
-
-def conforms(value, schema, root, where="$"):
-    """The subset of JSON Schema the contract uses: type, required, properties, items, oneOf, enum, $ref."""
-    if "$ref" in schema:
-        return conforms(value, root["components"]["schemas"][schema["$ref"].rsplit("/", 1)[1]], root, where)
-    if "oneOf" in schema:
-        errors = [conforms(value, option, root, where) for option in schema["oneOf"]]
-        return None if any(e is None for e in errors) else "; ".join(errors)
-    if "enum" in schema:
-        return None if value in schema["enum"] else "%s: %r not in %r" % (where, value, schema["enum"])
-    kinds = schema.get("type")
-    kinds = [kinds] if isinstance(kinds, str) else kinds
-    names = {
-        dict: "object",
-        list: "array",
-        str: "string",
-        bool: "boolean",
-        int: "integer",
-        float: "number",
-        type(None): "null",
-    }
-    actual = names[type(value)]
-    if kinds and actual not in kinds and not (actual == "integer" and "number" in kinds):
-        return "%s: %s is not %s" % (where, actual, kinds)
-    if isinstance(value, dict):
-        if schema.get("additionalProperties") is False and set(value) - set(schema.get("properties", {})):
-            return where + ": unexpected fields " + str(set(value) - set(schema.get("properties", {})))
-        for key in schema.get("required", []):
-            if key not in value:
-                return "%s: missing %s" % (where, key)
-        for key, sub in schema.get("properties", {}).items():
-            if key in value and (error := conforms(value[key], sub, root, where + "." + key)):
-                return error
-    if isinstance(value, list) and "items" in schema:
-        for i, item in enumerate(value):
-            if error := conforms(item, schema["items"], root, "%s[%d]" % (where, i)):
-                return error
-    return None
+from backend.tests.helpers.api import headers  # noqa: F401  (the api fixture)
+from backend.tests.helpers.credentials import setup as setup_vault
+from backend.tests.helpers.finance_fixtures import account
+from backend.tests.helpers.openapi_v2 import conforms
 
 
 def test_a_spec_that_generates_the_same_bytes_twice_passes(monkeypatch):
@@ -376,10 +338,10 @@ def test_the_finance_record_and_order_answers_match_the_live_ones(api):
 
 
 def test_closed_status_uses_close_permissions_and_rejects_combined_edits(api):
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
     from backend.store import H
-    from backend.tests.test_task_lanes import task_bot
-    from backend.tests.test_subtask_results import start
+    from backend.tests.helpers.task_lanes import task_bot
+    from backend.tests.helpers.subtask_results import start
 
     machine = task_bot(api, lanes=True)
     task = post(api, "tasks", {"title": "Check closure alias", "body": "Check it.", "owner": "bot:ops"})

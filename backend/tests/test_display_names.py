@@ -7,7 +7,7 @@ from backend import meetings
 from backend import question_tasks as QT
 from backend.store import H
 from backend.tests.old_asks import old_ask
-from backend.tests.test_api import api, headers, post  # noqa: F401
+from backend.tests.helpers.api import headers, post  # noqa: F401
 
 
 @pytest.fixture

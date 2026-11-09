@@ -6,11 +6,11 @@ import sqlite3
 import pytest
 
 from backend import hubdb as H, meetings
-from backend.tests.test_api import api, as_member, get, headers, post, restrict, runner, setup_attempt  # noqa: F401
-from backend.tests.test_mcp import call
-from backend.tests.test_member_bots import botops, turn  # noqa: F401
-from backend.tests.test_lifecycle import debrief
-from backend.tests.test_new_bot_flows import create_bot
+from backend.tests.helpers.api import as_member, get, headers, post, restrict, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.mcp import call
+from backend.tests.helpers.member_bots import botops, turn  # noqa: F401
+from backend.tests.helpers.lifecycle import debrief
+from backend.tests.helpers.new_bot_flows import create_bot
 
 
 def imported(api, token='ben-test', **fields):

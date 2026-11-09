@@ -6,10 +6,10 @@ version a person turns on. Ana owns the company, Cara is a member (the base fixt
 
 from backend import botops_act
 from backend.store import H
-from backend.tests.test_api import api, claim, get, headers, post  # noqa: F401  (fixture)
-from backend.tests.test_automation_api import NOTE_STEP, audit_rows
-from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixtures)
-from backend.tests.test_mcp import call as mcp
+from backend.tests.helpers.api import claim, get, headers, post  # noqa: F401  (fixture)
+from backend.tests.helpers.automation_api import NOTE_STEP, audit_rows
+from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixtures)
+from backend.tests.helpers.mcp import call as mcp
 
 CARA_INBOX = {"type": "message", "inbox": "cara@acme.example"}
 ARCHIVE = {

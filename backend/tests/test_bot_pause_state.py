@@ -4,8 +4,8 @@ import pytest
 
 from backend import company_billing
 from backend.store import H
-from backend.tests.test_api import api, get, post, restrict  # noqa: F401
-from backend.tests.test_openapi_v2 import headers
+from backend.tests.helpers.api import get, post, restrict  # noqa: F401
+from backend.tests.helpers.openapi_v2 import headers
 
 
 @pytest.fixture(autouse=True)

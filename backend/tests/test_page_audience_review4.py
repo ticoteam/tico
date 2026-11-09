@@ -9,22 +9,12 @@ from backend import files
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.old_asks import with_refs
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_file_reviews import ask as review_ask, answer as review_answer
-from backend.tests.test_files import turn
-from backend.tests.test_org_rules import org
-from backend.tests.test_page_audience import edit
-from backend.tests.test_pages import HTML, page
-from backend.tests.test_question_tasks import keep_asking
-
-
-def public_page(api):
-    org(api)
-    _, attempt = turn(api)
-    tid = post(api, "tasks", {"owner": "ops", "title": "Review drafts", "body": "Review", "private": False})["id"]
-    made = page(api, attempt, task=tid, title="Confidential draft")
-    assert made.status_code == 200, made.text
-    return tid, attempt, made.json()["page"]["file_id"]
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.file_reviews import ask as review_ask, answer as review_answer
+from backend.tests.helpers.page_audience import edit
+from backend.tests.helpers.pages import HTML, page
+from backend.tests.helpers.question_tasks import keep_asking
+from backend.tests.helpers.page_audience_review4 import public_page
 
 
 def test_real_pick_labels_and_generated_answer_bodies_retain_sources(api):

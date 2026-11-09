@@ -14,8 +14,9 @@ from backend import automation_due as D
 from backend import automation_engine as E
 from backend import automations, cloud_access, hubdb
 from backend.tests.automation_fakes import Services
-from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_automation_runs import FIND, make, sql
+from backend.tests.helpers.api import assign, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.automation_runs import FIND, make, sql
+from backend.tests.helpers.automation_due import drain, runs_of, tick
 
 OPEN = {"id": "open", "type": "action", "do": "create_task", "args": {"title": "Payroll", "owner": "coo"}}
 
@@ -23,18 +24,6 @@ OPEN = {"id": "open", "type": "action", "do": "create_task", "args": {"title": "
 def due(api, trigger, steps=(OPEN,), owner="person:ana", at=datetime(2030, 1, 1, tzinfo=timezone.utc)):
     with time_machine.travel(at, tick=False):
         return make(api, list(steps), trigger={"type": "due", **trigger}, owner=owner)
-
-
-def runs_of(api, aid):
-    return sorted(run["trigger_ref"] for run in get(api, f"automations/{aid}/runs")["runs"])
-
-
-def tick(api, at):
-    automations.tick(api.app.state.store, at)
-
-
-def drain(api):
-    api.app.state.store.automations.drain()
 
 
 LLM = {"id": "draft", "type": "llm", "as": "bot:ops", "prompt": "Draft the payroll note", "out": "reply"}
