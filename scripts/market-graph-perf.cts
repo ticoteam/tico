@@ -30,6 +30,17 @@ declare const metrics: Metrics;
 declare const S: {route: string};
 declare const MARKET_VIEW: {cite(ids: string[]): void};
 declare function pageMarket(): Promise<void>;
+declare global {
+  interface Window {
+    S: {route: string; status: object; me: {role: string}};
+    $: (selector: string) => Element | null;
+    esc: (text: unknown) => string;
+    get: (url: string) => Promise<unknown>;
+    safeMd: (text: string) => string;
+    toast: (text: string) => never;
+    metrics: Omit<Metrics, 'start'>;
+  }
+}
 
 const data: Fixtures = JSON.parse(fs.readFileSync(path.join(dir, 'fixtures.json')) as unknown as string);
 
@@ -64,7 +75,7 @@ const data: Fixtures = JSON.parse(fs.readFileSync(path.join(dir, 'fixtures.json'
       await page.evaluate(() => {
         window.S = {route: '#/strategy/market', status: {}, me: {role: 'owner'}};
         window.$ = (selector: string) => document.querySelector(selector);
-        window.esc = (text: unknown) => String(text).replace(/[&<>"']/g, (ch: string) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]));
+        window.esc = (text: unknown) => String(text).replace(/[&<>"']/g, (ch: string) => (({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[ch]));
         window.get = async (url: string) => { const response = await fetch('/api' + url); if (!response.ok) throw Error('API failed'); return response.json(); };
         window.safeMd = (text: string) => text;
         window.toast = (text: string) => { throw Error(text); };

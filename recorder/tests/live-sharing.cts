@@ -1,4 +1,5 @@
 // Synthetic replay of the real Recorder window. No server, model or bot is contacted.
+import type {Route} from 'playwright';
 // Run from the repository root: node recorder/tests/live-sharing.cts
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -17,6 +18,7 @@ async function replay(browser: import('playwright').Browser): Promise<void> {
       await route.fulfill({path: file});
     });
     // Disable preview polling: a choice must redraw through the action's own refresh.
+    // @ts-expect-error the preview replaces the timer with a constant
     await page.addInitScript(() => { window.setInterval = () => 0; });
     await page.goto('http://recorder.example/preview/index.html?scene=live');
     await page.evaluate(() => {

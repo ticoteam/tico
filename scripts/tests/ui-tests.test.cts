@@ -6,6 +6,7 @@ const vm: typeof import('node:vm') = require('node:vm');
 const {spawnSync}: typeof import('node:child_process') = require('node:child_process');
 const os: typeof import('node:os') = require('node:os');
 const {EventEmitter}: typeof import('node:events') = require('node:events');
+type Emitter = import('node:events').EventEmitter;
 const {resources, runScript, runScripts, sampleCpu, stopTree, stoppedReport}: typeof import('../ui-tests.cjs') = require('../ui-tests.cjs');
 
 test('frame timing scripts run alone after the parallel pool, within the selected files', async () => {
@@ -88,6 +89,7 @@ test('one CPU-idle policy, explicit overrides and shared context/page timeouts',
   await ctx.newPage(); // includes popups/other pages: each gets its defaults before the script uses it
   assert.equal(calls.length, 6);
   calls.length = 0;
+  // @ts-expect-error the fake engine ignores its profile argument
   await playwright.chromium.launchPersistentContext('synthetic-profile');
   assert.deepEqual(calls, [['context', 60000], ['context-navigation', 60000]]);
 });
@@ -127,7 +129,7 @@ test('a hung browser script is named with its pending call; it and everything it
       for (const pid of pids) { const [ppid, ...start] = ps(pid).split(/\s+/); if (Number(ppid) === parent) owned.set(pid, start.join(' ')); }
     }
     const hung = await running;
-    helper = hung.out.match(/started (\d+) (\d+)/).slice(1).map(Number);
+    helper = hung.out.match(/started (\d+) (\d+)/)!.slice(1).map(Number);
     assert.deepEqual([...owned.keys()].sort(), [...helper].sort(), 'each helper identity was taken while it was ours');
     assert.equal(hung.timedOut, true);
     assert.notEqual(hung.code, 0);
@@ -151,7 +153,7 @@ test('a hung browser script is named with its pending call; it and everything it
 test('newPage and page.close fail with their name instead of waiting forever', {timeout: 30000}, async () => {
   const never = (): Promise<never> => new Promise(() => {});
   const page = {setDefaultTimeout() {}, setDefaultNavigationTimeout() {}, close: never};
-  const context = {setDefaultTimeout() {}, setDefaultNavigationTimeout() {}, on: (event: string, callback: unknown) => { context.onPage = callback; },
+  const context: FakeContext = {setDefaultTimeout() {}, setDefaultNavigationTimeout() {}, on: (event: string, callback: unknown) => { context.onPage = callback as FakeContext['onPage']; },
                    newPage: never};
   const engine = () => ({launch: async () => ({newContext: async () => context}), launchPersistentContext: async () => context});
   const playwright = {chromium: engine(), firefox: engine(), webkit: engine()};
@@ -162,14 +164,29 @@ test('newPage and page.close fail with their name instead of waiting forever', {
   });
   const ctx = await (await playwright.chromium.launch()).newContext();
   await assert.rejects(ctx.newPage(), /browserContext\.newPage did not finish in 0\.05s/);
-  ctx.onPage(page);
+  ctx.onPage!(page);
   await assert.rejects(page.close(), /page\.close did not finish in 0\.05s/);
   assert.deepEqual(errors, ['browserContext.newPage did not finish in 0.05s', 'page.close did not finish in 0.05s']);
   const quick = {setDefaultTimeout() {}, setDefaultNavigationTimeout() {}, close: async () => 'closed'};
-  ctx.onPage(quick);
+  ctx.onPage!(quick);
   assert.equal(await quick.close(), 'closed');
 });
 
+interface FakeStream extends Emitter {
+  destroy?: () => void;
+}
+interface FakeChild extends Emitter {
+  pid: number;
+  stdout: FakeStream;
+  stderr: FakeStream;
+}
+interface FakeContext {
+  onPage?: (p: unknown) => void;
+  setDefaultTimeout(n?: number): void;
+  setDefaultNavigationTimeout(n?: number): void;
+  on(event: string, callback: unknown): void;
+  newPage(): Promise<unknown>;
+}
 interface ProcRow {
   pid: number;
   ppid: number;
@@ -179,10 +196,10 @@ interface ProcRow {
 
 // The runner loaded with a fake child_process and platform: no real process is started, frozen or killed.
 function fakeRunner({platform = 'darwin', execFileSync = () => { throw new Error('ps must not run'); }}: {platform?: string; execFileSync?: (cmd: string, args: string[]) => unknown} = {}) {
-  const child = new EventEmitter();
+  const child = new EventEmitter() as unknown as FakeChild;
   child.pid = 123;
-  for (const pipe of ['stdout', 'stderr']) { child[pipe] = new EventEmitter(); child[pipe].destroy = () => {}; }
-  const sandbox: {exports: {runScript?: unknown; stopTree?: unknown; stoppedReport?: unknown}} = {exports: {}};
+  for (const pipe of ['stdout', 'stderr'] as const) { child[pipe] = new EventEmitter() as unknown as FakeStream; child[pipe].destroy = () => {}; }
+  const sandbox: {exports: typeof import('../ui-tests.cjs')} = {exports: {} as typeof import('../ui-tests.cjs')};
   vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../ui-tests.cjs'), 'utf8'), {
     module: sandbox, __dirname: path.resolve(__dirname, '..'), setTimeout, clearTimeout, console, Buffer,
     require: (name: string) => name === 'node:child_process' ? {spawn: () => child, execFileSync} : require(name),
@@ -191,7 +208,7 @@ function fakeRunner({platform = 'darwin', execFileSync = () => { throw new Error
   return {child, runner: sandbox.exports};
 }
 const row = (pid: number, ppid: number, start: string, command = 'fixture'): ProcRow => ({pid, ppid, start, command});
-const settles = (promise: Promise<unknown>, ms: number): Promise<unknown> => Promise.race([promise, new Promise(r => setTimeout(() => r('unsettled'), ms))]);
+const settles = <T,>(promise: Promise<T>, ms: number): Promise<T> => Promise.race([promise, new Promise<T>(r => setTimeout(() => r('unsettled' as T), ms))]);
 
 test('a pid that left the tree and was reused by another process is never stopped', () => {
   // Freezing 101 fails (it exited); the next list shows 101 reused by an unrelated process with a child of its own.

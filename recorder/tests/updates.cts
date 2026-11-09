@@ -1,4 +1,5 @@
 // Synthetic replay of the Recorder's Updates row and Move to Applications prompt. No server is contacted.
+import type {Route} from 'playwright';
 // Run from the repository root: node recorder/tests/updates.cts
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');

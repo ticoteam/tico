@@ -1,6 +1,7 @@
 // Recorder meeting polish: task search that follows the typing, a type filter, obvious picks, @me in Add a task,
 // Enter to add, the transcript's copy button, Stop as the one end action, and suggested tasks without a Details
 // sheet: a created task's row opens it in Tico.
+import type {Route} from 'playwright';
 require('../../ui/tests/support/browser.cjs');
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -95,8 +96,8 @@ const rows = (page: import('playwright').Page): Promise<string[]> => page.locato
     const copy = page.locator('.side-head [data-act="copy-transcript"]');
     assert.equal(await copy.getAttribute('aria-label'), 'Copy transcript');
     await copy.click();
-    await page.waitForFunction(() => window.copiedText);
-    const copied = await page.evaluate(() => window.copiedText);
+    await page.waitForFunction(() => window.copiedText!);
+    const copied = await page.evaluate(() => window.copiedText!);
     assert.match(copied, /^\[\d+:\d\d\] \S/);
     await page.locator('.side-head [data-act="copy-transcript"][aria-label="Copied"]').waitFor();
     await page.close();
@@ -121,7 +122,7 @@ const rows = (page: import('playwright').Page): Promise<string[]> => page.locato
     await draft.getByRole('button', {name:'Create', exact:true}).click();
     const created = page.locator('.item.task', {hasText:'Confirm the transcript link'});
     await created.waitFor();
-    const url = await page.evaluate(() => window.__PREVIEW__.state.meetings.m1.actions.items.find(i => i.id === 'i1').task_url);
+    const url = await page.evaluate(() => window.__PREVIEW__.state.meetings.m1.actions.items.find(i => i.id === 'i1')!.task_url!);
     assert.match(url, /^https:\/\/hub\.tico\.team\/#\/tasks\/\d+$/);
     assert.equal(await created.getAttribute('data-url'), url);
     assert.equal(await created.getByRole('button', {name:'Open', exact:true}).count(), 0);
@@ -163,7 +164,7 @@ const rows = (page: import('playwright').Page): Promise<string[]> => page.locato
     assert.equal(await page.locator('.topbar [data-act="finish-open"]').count(), 0);
     await page.click('[data-act="stop"]');
     await page.waitForSelector('.topbar .badge:has-text("In Tico")', {timeout:8000});
-    const saved = await page.evaluate(() => window.saved);
+    const saved = await page.evaluate(() => window.saved!);
     assert.equal(saved.destination, 'team');
     assert.equal(saved.audience, 'team');
     assert.equal(await page.locator('#sheet.finish').count(), 0);
