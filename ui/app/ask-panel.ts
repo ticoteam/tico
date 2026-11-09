@@ -57,14 +57,13 @@ interface AskBody {
   sender_id: string;
   recipient_id: string;
   body?: string;
-  created_at?: string | null;
+  created_at?: string;
   refs?: { questions?: unknown[] | null; [key: string]: unknown } | null;
 }
 // Needs you: a bot's question carries its ask here; the panel reads these fields of each item.
 interface NeedsItem {
-  id?: string;
   ask?: AskBody;
-  created_at?: string | null;
+  created_at?: string;
 }
 // A question as the question card reads it (qcardQuestion), with its options.
 interface AskQuestion {

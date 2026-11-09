@@ -9,7 +9,7 @@ interface NeedItem {
   title?: string;
   first_line?: string;
   body?: string;
-  requester_id?: string;
+  requester_id?: string | null;
   conversation_id?: string;
   created_at?: string;
   ready_since?: string;
