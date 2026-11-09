@@ -190,6 +190,18 @@ def test_the_refusal_is_noted_on_the_task_in_one_sentence_and_nobody_is_asked(ap
     assert not err and feed_id in {r["feed_id"] for r in left["items"]}, left
 
 
+@pytest.mark.parametrize("carried", [("books",), ("watch",)])
+def test_a_private_run_may_categorize_but_never_ignore_a_row(api, carried):
+    """Ignoring a feed row reverses its entry, so a row a payment paid would return to owed: from a private run the
+    categorize is refused when it ignores, and the row stays in the queue."""
+    token, made, _ = private_run(api, carried=carried)
+    feed_id = deposit_feed_id(api, token)
+    refused = post_finance(api, token, "categorize", {"feed_id": feed_id, "ignore": True}, f"ignore:{feed_id}")
+    assert refused.status_code == 403 and BK.PRIVATE_FINANCE_REFUSAL in refused.text, refused.text
+    err, left = call(api, "hub_finance_inbox", {"kind": "uncategorized"}, token=token)
+    assert not err and feed_id in {r["feed_id"] for r in left["items"]}, left
+
+
 def test_a_month_close_from_its_own_private_run_is_refused_and_no_approval_is_asked(api):
     """A close is the month-ready task's work, not the Books check's: from a private run it is refused like the other
     money kinds, so no approval is asked and the Bookkeeper never decides one (the owner approves a close the close turn

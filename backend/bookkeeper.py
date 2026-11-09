@@ -345,15 +345,20 @@ def private_finance_run(c, who) -> bool:
 # does not spend or approve from work no person filed (Chris, Nov 8).
 PRIVATE_FINANCE_KINDS = frozenset({"categorize", "attach"})
 PRIVATE_FINANCE_REFUSAL = (
-    "The Books check and Watch may only categorize rows and attach receipts from their private task; "
+    "The Books check and Watch may only categorize rows (never ignore one) and attach receipts from their private task; "
     "this action is refused there."
 )
 
 
-def private_finance_kind_allowed(c, who, kind: str) -> bool:
-    """Whether this action kind may run for `who`: any kind outside a private Books check or Watch run, and only
-    PRIVATE_FINANCE_KINDS inside one."""
-    return kind in PRIVATE_FINANCE_KINDS or not private_finance_run(c, who)
+def private_finance_kind_allowed(c, who, kind: str, payload=None) -> bool:
+    """Whether this action may run for `who`: anything outside a private Books check or Watch run; inside one, only
+    PRIVATE_FINANCE_KINDS, and a categorize never ignores a row (ignoring reverses the row's entry, so a row a payment
+    paid would go back to owed)."""
+    if not private_finance_run(c, who):
+        return True
+    if kind not in PRIVATE_FINANCE_KINDS:
+        return False
+    return not (kind == "categorize" and isinstance(payload, dict) and payload.get("ignore"))
 
 
 def _own_private_work(c, task_id: str) -> bool:

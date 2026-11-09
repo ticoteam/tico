@@ -1154,7 +1154,7 @@ def install(app, store, auth, mutate):
         attaches must be Library files the asker may read."""
         who = viewer(request)
         with store.read() as c:
-            if not BK.private_finance_kind_allowed(c, who, body.kind):
+            if not BK.private_finance_kind_allowed(c, who, body.kind, body.payload):
                 raise Problem("privacy", BK.PRIVATE_FINANCE_REFUSAL, 403)
         readable_files(request, who, body)
         audit_private_read(request, who.actor)  # the receipt and a dry run both carry the action's impact (spec 7.5)
