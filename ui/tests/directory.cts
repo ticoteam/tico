@@ -120,7 +120,7 @@ async function flow(page: Page, tag: string) {
     // A member sees where we operate without the controls (the hub refuses their writes too).
     const member = await pageAs(browser, hub, 'omar');
     try {
-      await member.waitForFunction(() => document.querySelector('#main')?.children.length > 0, null, {timeout: t(20000)});
+      await member.waitForFunction(() => document.querySelector('#main')?.children.length! > 0, null, {timeout: t(20000)});
       await member.goto(member.url().split('#')[0] + '#/settings/directory');
       await member.locator('[data-dirs-place="place:us-tx"]').waitFor({timeout: t(20000)});
       assert.equal(await member.locator('[data-dirs-unplace], [data-dirs-place-q]').count(), 0);
