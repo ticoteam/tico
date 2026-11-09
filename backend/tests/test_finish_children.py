@@ -1,6 +1,8 @@
 """Closing or finishing a task closes open descendants, with the usual history and close permissions."""
 
 import json
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -17,7 +19,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 ANA, BEN, CMO, SEO = "human:ana", "human:ben", "bot:cmo", "bot:seo"
 
 
-def hub(path):
+def _built_hub(path):
     # The full schema, so a subtask's reader is worked out as the hub does (bot access reads bot_config).
     Store(Settings(db_path=path, registry_dir=FIXTURES / "registry")).initialize(seed_market=False)
     c = H.connect(path)
@@ -28,7 +30,32 @@ def hub(path):
         {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in ("cmo", "seo")},
         {"people": [{"id": "ana", "email": "ana@acme.example"}, {"id": "ben", "email": "ben@acme.example"}]},
     )
+    c.commit()
     return c
+
+
+_TEMPLATE = {}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _hub_template(tmp_path_factory):
+    """Where this module's one built hub lives; hub() builds it on first use (once per worker), never shared beyond."""
+    _TEMPLATE["factory"] = tmp_path_factory
+    yield
+    _TEMPLATE.clear()
+
+
+def hub(path):
+    """A fresh hub at `path`: a copy (SQLite backup) of this module's built hub, so each test still starts from the same
+    empty, fully initialized database without paying Store.initialize again."""
+    if "path" not in _TEMPLATE:
+        template = _TEMPLATE["factory"].mktemp("finish-children-hub") / "hub.db"
+        with closing(_built_hub(template)):
+            pass
+        _TEMPLATE["path"] = template
+    with closing(sqlite3.connect(_TEMPLATE["path"])) as source, closing(sqlite3.connect(path)) as target:
+        source.backup(target)
+    return H.connect(path)
 
 
 def make(c, actor, title, owner, parent=None):
@@ -146,7 +173,7 @@ def test_private_subtask_refuses_the_whole_finish_without_detaching_or_leaking_i
     )
     assert not H.task_private_readable(c, ANA, secret)
     before = [(H.task(c, kid["id"]), history(c, kid)) for kid in (parent, visible, secret)]
-    with pytest.raises(H.Refused, match="The open subtask a subtask is not yours") as exc:
+    with pytest.raises(H.Refused, match="An open subtask under it is not yours to close") as exc:
         if operation == "close":
             H.task_close(c, ANA, parent["id"])
         else:

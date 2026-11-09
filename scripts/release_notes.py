@@ -36,6 +36,12 @@ HEADING = re.compile(r"^##\s+(.+?)\s*$")
 RISK = re.compile(r"^(high|medium|low)\b(?:\s+risk\b)?[\s:,.;—–-]*(.*)$", re.IGNORECASE)
 RISK_LABELS = {"risk:high": "high", "high-risk": "high", "risk:medium": "medium", "risk:low": "low"}
 RECEIPT = re.compile(r"^\s*[-*]?\s*\**(verdict|receipt)\**\s*:\s*(.+)$", re.IGNORECASE)
+# The line Tico writes into a Dev ticket's pull request at merge: `Review page: <url>`, or `Review page: none (<reason>)`.
+# A Dev ticket's pull request with no line at all shows `missing`; a pull request that names no Dev ticket is exempt.
+REVIEW_PAGE = re.compile(r"^Review page:[ \t]*(.*?)[ \t]*$", re.M)
+# How the server finds the Dev ticket a pull request names (backend/github.py TICKET_NAMED): "Dev 665", "Dev #665",
+# "Dev ticket 665" or "dev-665" in the branch, title or body. Copied here because this file is loaded by path, alone.
+DEV_TICKET = re.compile(r"(?<![A-Za-z0-9])dev(?:[ _-]ticket)?[ _#-]{1,2}(\d{1,9})(?!\d)", re.I)
 FAILED = {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
 NONE_RECORDED = "none recorded"  # checks_of's answer for a head commit with no check runs
 NOTHING_GIVEN = "No spec, demo steps or risk given."
@@ -55,6 +61,8 @@ AREAS = (
 USER_AREAS = frozenset({"ui", "clients", "app"})
 BACKEND_AREAS = frozenset({"backend", "runner", "recorder", "templates"})
 GROUPS = (("high", "High risk"), ("user", "User-facing"), ("backend", "Backend"), ("internal", "Internal"))
+HIGH_RISK_HEADING = "## " + dict(GROUPS)["high"]
+CUT_SHORT = "The range has more commits than these notes read; the list stops at the last one read."
 
 # Per-pull-request evidence beyond the fields above. A provider takes the parsed pull request and returns the lines to
 # add under its block (a demo recording's link, say). None is registered yet, so no block prints an evidence line.
@@ -75,6 +83,8 @@ class Pull:
     checks: str
     failed: tuple[str, ...]
     reviews: tuple[str, ...]
+    review_page: str | None = None  # the body's Review page line: a URL or "none (...)"; None when there is no line
+    dev_ticket: bool = False  # the branch, title or body names a Dev ticket: its line is due, so none shows "missing"
 
 
 def area_of(path: str) -> str:
@@ -193,6 +203,13 @@ def pr_numbers(commits: list[dict[str, Any]]) -> list[int]:
     return numbers
 
 
+def names_dev_ticket(data: dict[str, Any]) -> bool:
+    """Whether the pull request's branch, title or body names a Dev ticket (DEV_TICKET)."""
+    head_ref: dict[str, Any] = data.get("head") or {}
+    text = "\n".join(str(item or "") for item in (head_ref.get("ref"), data.get("title"), data.get("body")))
+    return DEV_TICKET.search(text) is not None
+
+
 def load(api: Api, number: int, shas: set[str]) -> Pull | None:
     """The pull request, when it is merged and its merge commit is in the range (`shas`)."""
     data: dict[str, Any] = api.get("pulls/%d" % number)
@@ -223,6 +240,8 @@ def load(api: Api, number: int, shas: set[str]) -> Pull | None:
         checks=checks,
         failed=failed,
         reviews=reviews_of(reviews, comments),
+        review_page=review_page_of(str(data.get("body") or "")),
+        dev_ticket=names_dev_ticket(data),
     )
 
 
@@ -233,6 +252,25 @@ def pulls_between(api: Api, base: str, head: str) -> tuple[list[Pull], bool]:
     loaded = [load(api, number, shas) for number in pr_numbers(commits)]
     pulls = [pull for pull in loaded if pull is not None]
     return pulls, len(commits) >= PAGE * COMMIT_PAGES
+
+
+def review_page_of(body: str) -> str | None:
+    """The body's Review page value (a URL, or `none (reason)`), or None when the body has no such line."""
+    found = REVIEW_PAGE.search(body)
+    return found.group(1) if found else None
+
+
+def has_review_page(pull: Pull) -> bool:
+    """Whether the notes show a Review page line for the pull request: it has one, or it is a Dev ticket's."""
+    return pull.review_page is not None or pull.dev_ticket
+
+
+def review_page_text(pull: Pull) -> str:
+    """The Review page line's value as the notes say it: the link, why there is none, or `missing` when a Dev ticket's
+    body never got its line."""
+    if pull.review_page is None:
+        return "missing"
+    return pull.review_page or "none recorded"
 
 
 def field(name: str, text: str) -> list[str]:
@@ -272,6 +310,8 @@ def block(pull: Pull) -> list[str]:
         lines.append(checks)
     if pull.reviews:
         lines.append("- Review: " + "; ".join(pull.reviews))
+    if has_review_page(pull):
+        lines.append("- Review page: " + review_page_text(pull))
     lines.append("- Touches: " + (", ".join(pull.areas) or "tests only"))
     for provider in EVIDENCE:
         lines += ["- " + line for line in provider(pull)]
@@ -287,8 +327,12 @@ def build(api: Api, base: str, head: str) -> str:
         % (base, count["user"], count["high"], count["backend"], count["internal"]),
         "",
     ]
+    paged = [pull for pull in pulls if has_review_page(pull)]
+    if paged:
+        linked = sum(1 for pull in paged if (pull.review_page or "").startswith("http"))
+        lines += ["Review pages: %d of %d" % (linked, len(paged)), ""]
     if truncated:
-        lines += ["The range has more commits than these notes read; the list stops at the last one read.", ""]
+        lines += [CUT_SHORT, ""]
     if not pulls:
         lines.append("No merged pull request names a commit in this range.")
     order = [key for key, _ in GROUPS]
@@ -300,7 +344,19 @@ def build(api: Api, base: str, head: str) -> str:
         lines += ["## " + title, ""]
         for pull in group:
             if key == "internal":
-                lines.append("- #%d %s (@%s)" % (pull.number, pull.title, pull.author))
+                suffix = " · Review page: " + review_page_text(pull) if has_review_page(pull) else ""
+                lines.append("- #%d %s (@%s)%s" % (pull.number, pull.title, pull.author, suffix))
             else:
                 lines += block(pull)
     return "\n".join(lines).rstrip() + "\n"
+
+
+def high_risk(text: str) -> bool:
+    """Whether notes built here (alone, or inside an approval issue's body) list a High risk item: a pull request whose
+    Risk section or label says high. scripts/release_train.py reads it to decide whether a release needs a person."""
+    return any(line.strip() == HIGH_RISK_HEADING for line in text.splitlines())
+
+
+def cut_short(text: str) -> bool:
+    """Whether the notes stopped before the end of their range, so a High risk item may be missing from them."""
+    return CUT_SHORT in text

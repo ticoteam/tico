@@ -48,7 +48,7 @@ All of these before the job is done:
 4. **Who sees it.** Default is everyone. If they said otherwise, `hub bot access <slug> ...` now. Do
    not ask a question they did not raise.
 5. **Verify the live routines.** Step 2 seeded the template's routines into Tico as automations. Read them as
-   the requester with `hub automation list --owner bot:<slug>`, then `hub automation show <id>` for each one's
+   the requester with `hub automation list`, then `hub automation show <id>` for each one's
    trigger (cron and time zone) and enabled state. Apply the requested schedule with
    `hub automation update <id> --file <f>` (a JSON object with the fields to change; `hub automation guide` has the
    flow format), disable unrelated template routines with `hub automation update <id> --disable`, and read back
@@ -106,7 +106,7 @@ off) happen at once, and each can be undone from Settings > Bots history.
   The bot's own repository stays write. If a requested repository is not ticked, tick it with
   `hub_repo_update` as the requester, then verify again. A Tool declaration (`hub tool update`,
   `tools:`) describes allowed actions separately; changing it does not grant repository access.
-- "Turn off the Monday routine": find it with `hub automation list --owner bot:<bot>`, then `hub automation update <id> --disable`.
+- "Turn off the Monday routine": find it with `hub automation list`, then `hub automation update <id> --disable`.
 - "Pause X": `hub bot pause <bot>`. "Why isn't X live?": `hub health check`, then fix or explain.
 - "Delete X" or "remove X": `hub bot archive <bot>`. Say that its history stays. A repository is
   separate: delete one only when asked, with `hub api DELETE github/repos/<owner>/<repo>` using the

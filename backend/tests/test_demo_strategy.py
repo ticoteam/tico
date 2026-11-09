@@ -39,7 +39,7 @@ def signed_in(settings):
     return client
 
 
-def test_the_published_strategy_has_three_active_bets_and_its_sections(built):
+def _the_published_strategy_has_three_active_bets_and_its_sections(built):
     with signed_in(built) as api:
         strategy = api.get("/api/v2/strategy").json()
     version = strategy["current"]
@@ -55,7 +55,7 @@ def test_the_published_strategy_has_three_active_bets_and_its_sections(built):
     assert strategy["draft"] is not None and strategy["may_edit"] is True
 
 
-def test_an_earlier_version_and_a_diff_show_the_change(built):
+def _an_earlier_version_and_a_diff_show_the_change(built):
     with signed_in(built) as api:
         versions = api.get("/api/v2/strategy/versions").json()
         diff = api.get("/api/v2/strategy/diff?from=1&to=2").json()
@@ -73,7 +73,7 @@ def test_an_earlier_version_and_a_diff_show_the_change(built):
     ]
 
 
-def test_bets_serve_the_goals_the_core_seed_made(built):
+def _bets_serve_the_goals_the_core_seed_made(built):
     with signed_in(built) as api:
         strategy = api.get("/api/v2/strategy").json()
         goals = {g["id"]: g for g in api.get("/api/v2/goals?all=true").json()["goals"]}
@@ -83,7 +83,7 @@ def test_bets_serve_the_goals_the_core_seed_made(built):
         assert all(goals[row["id"]]["bet_id"] == bet_id for row in rows)
 
 
-def test_the_strategy_bot_proposal_is_accepted_into_the_draft(built):
+def _the_strategy_bot_proposal_is_accepted_into_the_draft(built):
     """The briefing's bet was proposed by the Strategy Bot and Ana said yes on her card: it sits in the draft as a
     proposed bet, unpublished, and nothing waits on Goals."""
     with signed_in(built) as api:
@@ -103,7 +103,7 @@ def test_the_strategy_bot_proposal_is_accepted_into_the_draft(built):
     assert not [item for item in needs["items"] if item["kind"] == "proposal"]
 
 
-def test_this_weeks_briefing_is_posted_by_the_librarian(built):
+def _this_weeks_briefing_is_posted_by_the_librarian(built):
     with signed_in(built) as api:
         briefing = api.get("/api/v2/market/briefings/latest").json()["briefing"]
     assert briefing["week"] == this_week(NOW)
@@ -137,7 +137,7 @@ def test_a_check_day_is_the_servers_calendar_day(monkeypatch):
         time.tzset()
 
 
-def test_the_owners_card_for_the_proposal_was_filed_when_it_was_proposed_and_closed_by_her_yes(built):
+def _the_owners_card_for_the_proposal_was_filed_when_it_was_proposed_and_closed_by_her_yes(built):
     # Her yes settled the card (backend/strategy.py settle_card), which drops its goal_asks row: the task stays.
     with sqlite3.connect(built.db_path) as db:
         row = db.execute(
@@ -154,7 +154,7 @@ def test_the_owners_card_for_the_proposal_was_filed_when_it_was_proposed_and_clo
     assert parse(created) > NOW - timedelta(days=2) and parse(decided) > parse(created)
 
 
-def test_where_we_play_has_a_market_with_us_next_and_sized_segments(built):
+def _where_we_play_has_a_market_with_us_next_and_sized_segments(built):
     with signed_in(built) as api:
         spend = api.get("/api/v2/market/spend").json()
     assert spend["definition"]["root"] == "segment/holiday-light-shows"
@@ -171,7 +171,7 @@ def test_where_we_play_has_a_market_with_us_next_and_sized_segments(built):
     assert "Lumenhaus" in {player["name"] for player in segments["Home light shows"]["players"]}
 
 
-def test_related_news_lists_listening_finds_from_the_last_week(built):
+def _related_news_lists_listening_finds_from_the_last_week(built):
     with signed_in(built) as api:
         insights = api.get("/api/v2/market/insights").json()["insights"]
     finds = [i for i in insights if i["about"].startswith("Listening:") and i["status"] != "rejected"]
@@ -180,9 +180,26 @@ def test_related_news_lists_listening_finds_from_the_last_week(built):
     assert all(i["source_url"].startswith("https://") for i in recent)
 
 
-def test_the_brand_book_is_published_by_the_owner(built):
+def _the_brand_book_is_published_by_the_owner(built):
     with signed_in(built) as api:
         published = api.get("/api/v2/brand").json()["published"]
     assert published["n"] == 1 and published["published_by"] == "human:ana"
     assert published["body"]["name"] == "Acme Lights"
     assert published["body"]["words"]["avoid"] and published["body"]["claims"]["never"]
+
+
+def test_the_demo_strategy_tells_its_story(built, subtests):
+    """Every check reads the one demo build, in file order, each as its own subtest."""
+    for check in (
+        _the_published_strategy_has_three_active_bets_and_its_sections,
+        _an_earlier_version_and_a_diff_show_the_change,
+        _bets_serve_the_goals_the_core_seed_made,
+        _the_strategy_bot_proposal_is_accepted_into_the_draft,
+        _this_weeks_briefing_is_posted_by_the_librarian,
+        _the_owners_card_for_the_proposal_was_filed_when_it_was_proposed_and_closed_by_her_yes,
+        _where_we_play_has_a_market_with_us_next_and_sized_segments,
+        _related_news_lists_listening_finds_from_the_last_week,
+        _the_brand_book_is_published_by_the_owner,
+    ):
+        with subtests.test(check.__name__):
+            check(built)

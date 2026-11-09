@@ -1,9 +1,93 @@
 """A bulk change by filter (POST /api/v2/task-bulk): it selects with the task list's own filters, changes each task as
 its single update would (permissions, refusals and events alike), is capped, and a dry run writes nothing."""
 
+import sqlite3
+from contextlib import closing
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from backend import bot_settings as BS
 from backend import hubdb as H
 from backend import pipeline_review
-from backend.tests.test_tasks_board import api, bot_token, get, pipeline, post  # noqa: F401
+from backend.app import create_app
+from backend.auth import Identity
+from backend.config import Settings
+from backend.store import encode
+from backend.tests.test_tasks_board import bot_token, get, pipeline, post  # noqa: F401
+
+
+def _seed(app):
+    """The tasks board's fixture data (test_tasks_board.api), written once into the module's booted hub."""
+    with app.state.store.transaction() as c:
+        bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in ("ops", "cpo", "cmo")}
+        H.sync_registry(
+            c,
+            bots,
+            {
+                "people": [
+                    {"id": "ana", "email": "ana@acme.example", "team": "leadership"},
+                    {"id": "ben", "email": "ben@acme.example", "team": "product"},
+                    {"id": "priya", "email": "priya@acme.example", "team": "sales"},
+                ]
+            },
+        )
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('people',?)",
+            (
+                encode(
+                    {
+                        "people": [
+                            {"id": "ana", "email": "ana@acme.example", "team": "leadership", "primary_for": ["*"]},
+                            {"id": "ben", "email": "ben@acme.example", "team": "product"},
+                            {"id": "priya", "email": "priya@acme.example", "team": "sales"},
+                        ]
+                    }
+                ),
+            ),
+        )
+        for slug, config in bots.items():
+            c.execute(
+                "INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)",
+                (slug, "product" if slug == "cpo" else "marketing" if slug == "cmo" else None, "ana"),
+            )
+            BS.write(c, slug, config)
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),)
+        )
+
+
+@pytest.fixture(scope="module")
+def booted(tmp_path_factory) -> Path:
+    """One initialized and seeded hub for the module: each test copies this file (the boot is the slow part)."""
+    path = tmp_path_factory.mktemp("bulk") / "booted.sqlite"
+    app = create_app(Settings(db_path=path))
+    with TestClient(app) as client:
+        _seed(client.app)
+    return path
+
+
+@pytest.fixture
+def api(tmp_path, monkeypatch, booted):
+    monkeypatch.setattr(H, "TITLE_LINT", "warn")
+    path = tmp_path / "hub.db"
+    with closing(sqlite3.connect(booted)) as source, closing(sqlite3.connect(path)) as target:
+        source.backup(target)
+    app = create_app(
+        Settings(
+            db_path=path,
+            test_identities={
+                "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
+                "ben-test": Identity("human:ben", "human", "ben@acme.example"),
+                "priya-test": Identity("human:priya", "human", "priya@acme.example"),
+                # BotOps acting for Ben (backend/botops_act.py): his rights, not Ben signed in.
+                "ben-via-botops": Identity("human:ben", "human", "ben@acme.example", via="botops", confirmed=True),
+            },
+        )
+    )
+    with TestClient(app) as client:
+        yield client
 
 
 def bulk(api, filter, action, token="ana-test", expected=200, **change):
@@ -350,3 +434,250 @@ def test_a_non_member_bulk_change_touches_no_ticket_of_a_members_only_pipeline(a
     mine = bulk(api, {"owner": "ben"}, "close", token="ben-test")
     assert mine["changed"] == 1
     assert get(api, "tasks/" + own["id"], "ana-test")["task"]["status"] == "closed"
+
+
+def test_everything_not_mine_closes_by_excluding_the_callers_owner(api):
+    """`exclude_owner` is "everything not mine": the caller's own tasks stay, while other people's and bots' tasks in
+    the same filter close. A dry run counts the same set and changes nothing; an owner who is nobody is refused, since
+    an exclusion that names nobody would otherwise read as every task."""
+    mine = [label(api, task(api, f"Ana's note {i}", owner="human:ana"), "sweep") for i in range(2)]
+    theirs = [
+        label(api, task(api, "Draft the cmo brief", owner="cmo"), "sweep"),
+        label(api, task(api, "Ship the ops runbook", owner="ops"), "sweep"),
+        label(api, task(api, "Ben's memo", owner="human:ben"), "sweep"),
+    ]
+    chosen = {"label": "sweep", "exclude_owner": "human:ana", "status": "open,doing,waiting"}
+
+    dry = bulk(api, chosen, "close", dry_run=True)
+    assert (dry["matched"], dry["changed"], dry["skipped"]) == (3, 3, 0)
+    assert {t["id"] for t in dry["tasks"]["changed"]} == {t["id"] for t in theirs}
+    assert {get(api, "tasks/" + t["id"])["task"]["status"] for t in mine + theirs} == {"open"}
+
+    out = bulk(api, chosen, "close", note="Clearing the sweep")
+    assert (out["changed"], out["skipped"]) == (3, 0)
+    assert {get(api, "tasks/" + t["id"])["task"]["status"] for t in theirs} == {"closed"}
+    assert {get(api, "tasks/" + t["id"])["task"]["status"] for t in mine} == {"open"}
+    assert bulk(api, chosen, "close")["matched"] == 0
+
+    # Not owned by me is a filter of its own: with nothing else named it selects, and my tasks are never in it.
+    alone = bulk(api, {"exclude_owner": "human:ana"}, "close", dry_run=True)
+    assert alone["matched"] >= 3 and not {t["id"] for t in mine} & {t["id"] for t in alone["tasks"]["changed"]}
+    # An owner who is nobody is refused, never read as "exclude nobody": that would be every task.
+    refused = bulk(api, {"label": "sweep", "exclude_owner": "nobody-here"}, "close", expected=422)
+    assert refused["error"]["code"] == "exclude_owner"
+    assert get(api, "tasks/" + mine[0]["id"])["task"]["status"] == "open"
+
+
+def test_the_cli_and_the_mcp_tool_leave_out_my_tasks_with_not_owner(api):
+    """The Assistant's `--where-not-owner me` is the route's exclude_owner, with `me` resolved as the caller."""
+    from clients import hubcli, remotecli
+    from backend.tests.test_mcp import call
+
+    sent = []
+
+    class Client:
+        def get(self, path, **query):
+            return {"actor": "human:ana"}
+
+        def post(self, path, body, key=None):
+            sent.append((path, body))
+            return {}
+
+    args = hubcli.parser().parse_args(
+        [
+            "task",
+            "bulk",
+            "close",
+            "--where-not-owner",
+            "me",
+            "--where-status",
+            "open",
+            "--where-status",
+            "doing",
+            "--dry-run",
+        ]
+    )
+    remotecli.via_tool(Client(), args)
+    assert sent == [
+        (
+            "task-bulk",
+            {
+                "filter": {"exclude_owner": "human:ana", "status": "open,doing"},
+                "action": "close",
+                "dry_run": True,
+            },
+        )
+    ]
+
+    mine = label(api, task(api, "Ana's kept note", owner="human:ana"), "kept")
+    theirs = label(api, task(api, "Draft the kept note", owner="cmo"), "kept")
+    err, out = call(api, "hub_task_bulk", {"filter": {"label": "kept", "exclude_owner": "me"}, "action": "close"})
+    assert not err and out["changed"] == 1
+    assert get(api, "tasks/" + mine["id"])["task"]["status"] == "open"
+    assert get(api, "tasks/" + theirs["id"])["task"]["status"] == "closed"
+
+    # Two owners to leave out name one filter: the pair is refused, not an explicit exclude_owner overwritten by the alias.
+    from clients import hubtools
+
+    with pytest.raises(ValueError, match="same filter"):
+        hubtools.task_bulk(
+            None, {"filter": {"exclude_owner": "human:ana", "not_owner": "human:priya"}, "action": "close"}
+        )
+
+
+def test_a_bulk_close_never_takes_a_subtask_the_change_leaves_out(api):
+    """Closing a parent closes its open subtasks as well, so a bulk close must not take one the filter leaves out: the
+    caller's own (excluded by exclude_owner), or a private one the caller cannot read. Such a parent is skipped with its
+    reason and its subtasks stay open. A parent whose whole tree is in the change closes with all of it, and the counts
+    name every task that closed, the subtasks it took with it included."""
+    chosen = {"label": "subtree", "exclude_owner": "human:ana", "status": "open,doing,waiting"}
+    left = task(api, "Launch the spring campaign", owner="cmo", labels=["subtree"], token="priya-test")
+    mine = task(
+        api,
+        "Ana's launch checklist",
+        owner="human:ana",
+        labels=["subtree"],
+        relations=[{"task": left["id"], "kind": "parent"}],
+    )
+    secret = task(
+        api,
+        "Priya's contract note",
+        owner="human:priya",
+        labels=["subtree"],
+        private=True,
+        token="priya-test",
+        relations=[{"task": left["id"], "kind": "parent"}],
+    )
+    right = task(api, "Ship the ops runbook", owner="cmo", labels=["subtree"])
+    kid = task(
+        api, "Ops follow-up", owner="ops", labels=["subtree"], relations=[{"task": right["id"], "kind": "parent"}]
+    )
+
+    dry = bulk(api, chosen, "close", dry_run=True)
+    assert (dry["matched"], dry["changed"], dry["skipped"]) == (3, 2, 1)
+    assert {t["id"] for t in dry["tasks"]["changed"]} == {right["id"], kid["id"]}
+    assert [(t["id"], t["code"]) for t in dry["tasks"]["skipped"]] == [(left["id"], "subtasks_left_out")]
+    assert {get(api, "tasks/" + t["id"])["task"]["status"] for t in (left, mine, right, kid)} == {"open"}
+
+    out = bulk(api, chosen, "close", note="Closing the ops runbook")
+    assert (out["matched"], out["changed"], out["skipped"]) == (3, 2, 1)
+    assert {t["id"] for t in out["tasks"]["changed"]} == {right["id"], kid["id"]}
+    assert get(api, "tasks/" + left["id"])["task"]["status"] == "open"
+    assert get(api, "tasks/" + mine["id"])["task"]["status"] == "open"
+    assert get(api, "tasks/" + secret["id"], token="priya-test")["task"]["status"] == "open"
+    assert get(api, "tasks/" + right["id"])["task"]["status"] == "closed"
+    assert get(api, "tasks/" + kid["id"])["task"]["status"] == "closed"
+
+
+def test_a_bulk_close_leaves_the_callers_own_subtask_open(api):
+    """The parent cascade closes an open subtask the filter excluded: a bulk close of a bot's task must leave Ana's own
+    subtask open, and skip the parent with its reason."""
+    solo = task(api, "Plan the spring webinar", owner="cmo", labels=["solo"])
+    mine = task(
+        api,
+        "Ana's webinar slides",
+        owner="human:ana",
+        labels=["solo"],
+        relations=[{"task": solo["id"], "kind": "parent"}],
+    )
+    out = bulk(api, {"label": "solo", "exclude_owner": "human:ana", "status": "open"}, "close")
+    assert (out["matched"], out["changed"], out["skipped"]) == (1, 0, 1)
+    assert [(t["id"], t["code"]) for t in out["tasks"]["skipped"]] == [(solo["id"], "subtasks_left_out")]
+    assert get(api, "tasks/" + solo["id"])["task"]["status"] == "open"
+    assert get(api, "tasks/" + mine["id"])["task"]["status"] == "open"
+
+
+@pytest.mark.parametrize(("action", "change"), [("status", {"status": "done"}), ("step", {"step": "general-done"})])
+def test_a_bulk_finish_leaves_the_callers_own_subtask_open(api, action, change):
+    """Done, or a move into a done step, retires open subtasks as a close does: the same guard skips the parent."""
+    solo = task(api, "Plan the spring webinar", owner="cmo", labels=["solo"])
+    mine = task(
+        api,
+        "Ana's webinar slides",
+        owner="human:ana",
+        labels=["solo"],
+        relations=[{"task": solo["id"], "kind": "parent"}],
+    )
+    out = bulk(api, {"label": "solo", "exclude_owner": "human:ana", "status": "open"}, action, **change)
+    assert [(t["id"], t["code"]) for t in out["tasks"]["skipped"]] == [(solo["id"], "subtasks_left_out")]
+    assert get(api, "tasks/" + solo["id"])["task"]["status"] == "open"
+    assert get(api, "tasks/" + mine["id"])["task"]["status"] == "open"
+
+
+def test_a_selected_subtask_the_change_holds_keeps_its_parent_open(api):
+    """A subtask the filter selects but the loop does not finish (here a waiting approval on its stage refuses its done)
+    stays open. Its parent is skipped with subtasks_left_out: closing the parent would end the held subtask through the
+    cascade."""
+    typ = post(
+        api,
+        "task-types",
+        {"name": "Build", "steps": [{"name": "Draft", "status": "open"}, {"name": "Done", "status": "closed"}]},
+        token="ana-test",
+    )["type"]
+    draft = next(s["id"] for s in typ["steps"] if s["name"] == "Draft")
+    parent = task(api, "Plan the spring webinar", labels=["pair"])
+    kid = task(
+        api,
+        "Ship the campaign",
+        type=typ["id"],
+        step=draft,
+        labels=["pair"],
+        relations=[{"task": parent["id"], "kind": "parent"}],
+    )
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO stage_requirements (id, pipeline_id, pipeline_stage_id, name, kind, needs, reviewed_by, reviewer_id, "
+            "version, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "req-campaign-signoff",
+                typ["id"],
+                draft,
+                "Ana signs off",
+                "approval",
+                "{}",
+                "person",
+                "human:ana",
+                1,
+                "human:ana",
+                "2026-11-07T12:00:00.000000Z",
+                "2026-11-07T12:00:00.000000Z",
+            ),
+        )
+        c.execute(
+            "INSERT INTO stage_requirement_versions (stage_requirement_id, version, definition, changed_by, created_at) "
+            "VALUES (?,?,?,?,?)",
+            ("req-campaign-signoff", 1, "{}", "human:ana", "2026-11-07T12:00:00.000000Z"),
+        )
+    out = bulk(api, {"label": "pair"}, "status", status="done")
+    assert (out["changed"], out["skipped"]) == (0, 2)
+    assert {t["id"] for t in out["tasks"]["skipped"] if t["code"] == "subtasks_left_out"} == {parent["id"]}
+    assert get(api, "tasks/" + parent["id"])["task"]["status"] == "open"
+    assert get(api, "tasks/" + kid["id"])["task"]["status"] == "open"
+
+
+def test_a_bulk_move_between_two_done_steps_is_no_finish(api):
+    """From one done step to another nothing is retired, so a left-out open subtask does not hold the parent back."""
+    typ = post(
+        api,
+        "task-types",
+        {
+            "name": "Release",
+            "steps": [
+                {"name": "Draft", "status": "open"},
+                {"name": "Shipped", "status": "done"},
+                {"name": "Measured", "status": "done"},
+            ],
+        },
+    )["type"]
+    shipped = task(api, "Ship the spring release", type=typ["id"], step="Shipped", labels=["rel"])
+    mine = task(
+        api,
+        "Ana's release notes",
+        owner="human:ana",
+        labels=["rel"],
+        relations=[{"task": shipped["id"], "kind": "parent"}],
+    )
+    out = bulk(api, {"label": "rel", "exclude_owner": "human:ana", "type": typ["id"]}, "step", step="Measured")
+    assert (out["changed"], out["skipped"]) == (1, 0), out
+    assert get(api, "tasks/" + shipped["id"])["task"]["step"]["name"] == "Measured"
+    assert get(api, "tasks/" + mine["id"])["task"]["status"] == "open"

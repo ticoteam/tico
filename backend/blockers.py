@@ -12,21 +12,24 @@ from . import bot_settings as BS
 
 # The DevOps bot template (templates/); a team that renamed the bot still built it from that template.
 TEMPLATE = "devops"
+# The new org's DevOps bot (templates/catalog/infrastructure-owner) comes after the old ones.
+NEW_TEMPLATE = "infrastructure-owner"
 SLUGS = ("devops-engineer", "devops")
 GONE = ("paused", "planned", "archived", "quarantined")
 
 
+def _built(c, template):
+    """The ids of the bots made from `template`, in id order."""
+    if not H._has_table(c, "bot_config"):
+        return []
+    return [
+        r[0] for r in c.execute(f"SELECT bot FROM bot_config bc {BS.JOIN} WHERE s.template=? ORDER BY bot", (template,))
+    ]
+
+
 def devops(c):
     """The id of the active DevOps bot, or None."""
-    built = (
-        [
-            r[0]
-            for r in c.execute(f"SELECT bot FROM bot_config bc {BS.JOIN} WHERE s.template=? ORDER BY bot", (TEMPLATE,))
-        ]
-        if H._has_table(c, "bot_config")
-        else []
-    )
-    for ident in (*built, *SLUGS):
+    for ident in (*_built(c, TEMPLATE), *SLUGS, *_built(c, NEW_TEMPLATE)):
         row = H.resolve_bot(c, ident)
         if row and row.get("state") not in GONE:
             return row["id"]

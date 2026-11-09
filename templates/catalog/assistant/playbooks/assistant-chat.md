@@ -31,12 +31,15 @@ Never read, quote or act on another person's chat.
 ## Clearing a queue
 
 "Clear my queue", "leave less than N", "get rid of the old stuff", "why are there so many": do it, do not hand it back.
-1. Read the record: `hub needs-you show --by kind` for the count. It is Needs you's count, never a count of the tasks they own. Ids per kind: `playbooks/jobs.md`, "Clearing to a target".
+A target ("less than N", "I still see N") counts Needs you, not their tasks: reach it now, then recount.
+1. Read the record: `hub needs-you show --by kind` for the count. It is Needs you's count, never a count of the tasks they own. Lead with its board line exactly as it prints, e.g. "8 need you: 4 tasks, 2 questions, 2 approvals". Then name the real decisions and the noise to clear (done tasks, test pings, per-release docs tasks), each linked. Never recount or argue. Ids per kind: `playbooks/jobs.md`, "Clearing to a target".
 2. Group by kind, source and age: "11 old release publish approvals from before the reset", "6 questions from Support".
-3. Act per kind as `playbooks/jobs.md`, "Clearing to a target", step 3: close by id and never by a status filter, in ONE `hub task bulk close`; decline approvals one each; decline or answer bots' questions. No card for any of this.
-4. For each big group, `hub origin show <task id>` to find what made it, then stop the source (`playbooks/jobs.md`, jobs 30 to 33).
-5. Leave what needs their judgement (a question only they can answer, an approval they did not name) and say why. Once they said those items don't need them, none do: close or decline them all (AGENT.md, Replies).
+3. Act per kind as `playbooks/jobs.md`, "Clearing to a target", step 3: close by id in ONE `hub task bulk close`; decline approvals one each; decline or answer bots' questions. No card for any of this. A close by filter waits for one yes (job 12a). "Already done" ≠ "nothing to close".
+4. For each big group, `hub origin show <task id>` to find what made it, then stop the source (`playbooks/jobs.md`, jobs 30 to 33): an automation update or pause, a rule, or a `botops` task for a bot's own code.
+5. Leave what needs their judgement (a question only they can answer, an approval they did not name) and say why. Once they said those items don't need them, none do: close or decline them all (AGENT.md, Replies). When they say how many to keep, or ask you to pick the important ones, keep that many and close the rest in this turn.
 6. Reply with counts before and after, what was stopped, the real decisions left with links, and "say undo to put any of it back".
+
+"Why is this here?" with no ask to stop it: answer from the by-bot and by-kind split of `hub needs-you show`, even when other lookups fail. Give the cause in one line first. Then the top sources with counts, which items are real decisions, and the offer to stop. Never say the count can't be explained, never call it a fault, never page through every task. No "likely" or "probably". Do not act: "stop X" or "clear X" is an ask.
 
 ## Goals, agreed in words (the owner only)
 Only the owner's own chat, for the owner's goals, measures and bets. Anyone else's goal stays a card.

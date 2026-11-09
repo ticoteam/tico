@@ -33,7 +33,6 @@ files:
   - backend/runner_wire.py        # puts the runner wire's old names back on runner bodies
   - backend/tests/test_runner_wire_names.py
   - backend/migrations/0*         # applied migration files are history: they ran on the shape of their day
-  - CHANGELOG.md
 names:
   clients/*.py: [body_json]       # hub_goal_save's exact method/path/body_json step, not a column
   clients/tests/*.py: [body_json]
@@ -43,7 +42,7 @@ names:
   ui/app/task-board.js: [finished]      # the board's folded-column choices
   ui/app/task-pipelines.js: [finished]
   ui/tests/task-pipelines.cjs: [finished]   # the board's folded-column choices, as stored
-  ui/tests/bot-pause-strip.cjs: [finished]  # a held request's own finished promise
+  ui/tests/bot-pause-strip.cts: [finished]  # a held request's own finished promise
   ui/app/settings-billing.ts: [expires]   # Tico HQ's billing credits (backend/company_billing.py), another system's fields
   ui/tests/settings-billing.cjs: [expires]
   # next: the login page's next= parameter; bot: its own chat state and kind literal; state: Execution.state; actor: Me.actor.

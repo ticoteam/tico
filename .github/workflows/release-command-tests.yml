@@ -11,8 +11,8 @@ permissions:
   contents: read
 jobs:
   command:
-    # A draft pull request runs nothing; its push to main and a ready pull request run it.
-    if: ${{ github.event_name == 'push' || !github.event.pull_request.draft }}
+    # A draft pull request runs nothing; marking it ready for review runs these tests. Push and merge_group are unchanged.
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

@@ -2,8 +2,10 @@
 still has the seed's stage names (Approved, Building, Shipped) or pipeline_setup renamed them (Review, In development,
 Done). Setup keeps the stage ids, so the sync finds each stage by its id or by either name."""
 
+import json
+
 from backend import hubdb as H
-from backend import pipeline_setup, roadmap_flow
+from backend import onboarding, pipeline_review, pipeline_setup, roadmap_flow
 from backend.tests.test_pipeline_foundation import ANA, boot, hub, step_id
 
 T = "2026-11-07T09:00:00.000000Z"
@@ -34,6 +36,26 @@ def card_in(c, stage_name, stage_id=None):
     product = roadmap_flow.role_type(c, roadmap_flow.PRODUCT)
     step = stage_id or step_id(c, product, stage_name)
     row = H.task_create(c, ANA, "Dark mode", "", ANA, type=product, step=step, lint=False)
+    c.commit()
+    return row["id"]
+
+
+def card_past_spec(c):
+    """A Product card in Review while its requirements are live: made at Ideas, moved to Specifying, its Spec page met by the
+    owner, then moved on, as a real card is."""
+    product = roadmap_flow.role_type(c, roadmap_flow.PRODUCT)
+    specifying = step_id(c, product, "Specifying")
+    row = H.task_create(c, ANA, "Dark mode", "", ANA, type=product, lint=False)
+    c.commit()
+    H.task_update(c, ANA, row["id"], step=specifying, mover=True)
+    c.commit()
+    spec_page = c.execute(
+        "SELECT id FROM stage_requirements WHERE pipeline_stage_id = ? AND name = 'Spec page' AND retired_at IS NULL",
+        (specifying,),
+    ).fetchone()[0]
+    pipeline_review.mark_met(c, ANA, row["id"], spec_page, "Spec page written in the test")
+    c.commit()
+    H.task_update(c, ANA, row["id"], step=step_id(c, product, "Review"), mover=True)
     c.commit()
     return row["id"]
 
@@ -89,7 +111,7 @@ def test_after_setup_a_card_follows_its_shipped_ticket_to_done(tmp_path):
 
 def test_after_setup_with_requirements_live_the_legacy_sync_moves_nothing(tmp_path):
     c = setup_ran(tmp_path)
-    card = card_in(c, "Review")
+    card = card_past_spec(c)
     task = ticket(c, card, "Todo")
     move(c, task, "Doing")
     assert stage_of(c, card) == "Review"
@@ -104,17 +126,43 @@ def test_after_setup_a_card_with_no_linked_tickets_does_not_move(tmp_path):
     assert stage_of(c, card) == "Review"
 
 
-def test_a_new_hub_starts_with_its_product_and_engineering_pipelines(tmp_path):
-    """The manager_since migration adds task_types.manager before the hub's first-start step, which used to seed the two
-    role pipelines only when that column was missing. A new hub still gets both, each with its manager stamped."""
+def test_a_new_hub_starts_with_its_product_and_engineering_pipelines_and_no_manager(tmp_path):
+    """A new hub's onboarding is not complete, so its role types start with no legacy manager and no manager_since: the
+    company's own setup binds the pipeline managers (pipeline_setup). A second start adds nothing."""
     c = H.connect(str(tmp_path / "fresh.db"))
     for role in (roadmap_flow.PRODUCT, roadmap_flow.ENGINEERING):
         found = roadmap_flow.role_type(c, role)
         assert found is not None
-        assert c.execute("SELECT manager_since FROM task_types WHERE id=?", (found,)).fetchone()[0]
+        assert tuple(c.execute("SELECT manager, manager_since FROM task_types WHERE id=?", (found,)).fetchone()) == (
+            None,
+            None,
+        )
     c.close()
     again = H.connect(str(tmp_path / "fresh.db"))  # a second start adds nothing
     assert again.execute("SELECT COUNT(*) FROM task_types WHERE role IS NOT NULL AND role<>''").fetchone()[0] == 2
+
+
+def _drop_role_type(c, role):
+    c.execute("DELETE FROM task_steps WHERE type_id IN (SELECT id FROM task_types WHERE role=?)", (role,))
+    c.execute("DELETE FROM task_types WHERE role=?", (role,))
+
+
+def test_a_missing_role_type_gets_its_legacy_manager_only_once_onboarding_is_complete(tmp_path):
+    c = H.connect(str(tmp_path / "hub.db"))
+    _drop_role_type(c, roadmap_flow.PRODUCT)
+    roadmap_flow.ensure(c)
+    manager = "SELECT manager FROM task_types WHERE role=?"
+    assert c.execute(manager, (roadmap_flow.PRODUCT,)).fetchone()[0] is None  # onboarding not complete: no legacy bot
+    _drop_role_type(c, roadmap_flow.PRODUCT)
+    c.execute(
+        "INSERT OR REPLACE INTO registry_metadata(key, value) VALUES(?, ?)",
+        (onboarding.KEY, json.dumps({"completed": T})),
+    )
+    roadmap_flow.ensure(c)
+    assert (
+        c.execute(manager, (roadmap_flow.PRODUCT,)).fetchone()[0] == roadmap_flow.LEGACY_MANAGERS[roadmap_flow.PRODUCT]
+    )
+    c.close()
 
 
 def test_a_type_with_no_manager_stays_without_one_when_the_roles_are_ensured(tmp_path):

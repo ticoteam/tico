@@ -13,6 +13,7 @@ from backend.finance import actions as FA
 from backend.finance import sync
 from backend.finance import reads as FR
 from backend.finance.core import feeds as F
+from backend.finance.store import ap as SAP
 from backend.finance.store import ledger as SL
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     ACME_ADDRESS,
@@ -699,9 +700,10 @@ def test_defaults_are_seeded_once_stay_as_edited_and_guard_bots(books):
             **entry,
             "lines": [{**entry["lines"][0], "amount": 1_000_001}, {**entry["lines"][1], "amount": -1_000_001}],
         }
-        assert act(c, "bot:coder", "journal", big).status == "needs_approval"
+        result = act(c, "bot:coder", "journal", big)
+        assert result.status == "needs_approval", result
         assert (
-            act(c, "bot:coder", "account_create", {"code": "6150", "name": "Tools", "type": "expense"}).status
+            act(c, "bot:coder", "account_create", {"code": "6160", "name": "Tools", "type": "expense"}).status
             == "needs_approval"
         )
 
@@ -851,7 +853,7 @@ def test_a_posting_rule_categorizes_a_tico_card_charge_and_keeps_the_holder_card
         codes = {str(r[0]): str(r[1]) for r in c.execute("SELECT id, code FROM fin_accounts")}
         lines = [(codes[x.account_id], dict(x.tags), x.amount) for _, x in SL.entry_lines(c, entry)]
         assert ("5100", {"teammate": "human:eve", "team": "web", "project": "site"}, 4_500) in lines
-        assert [a for code, _, a in lines if code == "2100"] == [-4_500]  # still on the card liability
+        assert [a for code, _, a in lines if code == "2101"] == [-4_500]  # still on the card liability
         assert _card_use(c, card_id, "2026-10") == 4_500 and _card_holds(c) == [(4_250, "settled")]
         assert not _events(c, "finance.feed.needs_category")
 
@@ -1036,10 +1038,7 @@ def test_phase_two_keys_a_budget_vendor_name_and_never_takes_a_contact_id(books)
         assert (took.status, took.code) == ("failed", "invalid")
         book = str(c.execute("SELECT id FROM fin_books").fetchone()[0])
         other = _vendor(c, "Globex")
-        c.execute(
-            "INSERT INTO fin_vendor_aliases(book_id, name_key, contact_id, created_at) VALUES(?,?,?,?)",
-            (book, vendor, other, AT),
-        )  # as if it got in
+        SAP.alias_add(c, book, vendor, other, AT)  # as if it got in
         assert SB.budgets(c, book)[held].vendor == vendor
 
 

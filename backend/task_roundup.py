@@ -349,7 +349,9 @@ def _items(c, slug, at, shared, skip_tasks=(), *, allowed=None):
     groups = {group: [] for group in range(QUIET + 1)}
     rows = H._rows(
         c.execute(
-            "SELECT * FROM " + H.TASKS + " tasks WHERE owner_id=? AND status IN (" + _marks() + ") ORDER BY updated_at",
+            "SELECT * FROM " + H.TASKS + " tasks WHERE owner_id=? AND status IN (" + _marks() + ") "
+            # A card On ice (D69, a stage with cap 0) wakes nobody: no owner line, no follow-up due.
+            "AND (step_id IS NULL OR step_id NOT IN (SELECT id FROM task_steps WHERE card_cap = 0)) ORDER BY updated_at",
             (actor, *H.ACTIVE_STATUSES),
         )
     )
@@ -413,8 +415,12 @@ def _items(c, slug, at, shared, skip_tasks=(), *, allowed=None):
         if sweeping
         else _backlogs(c, slug, actor, at, shared, managed_only=True)
     )
-    for group, sort, item in _asks_back(c, slug, actor, at) + _resume_stops(c, slug, actor, at) + sweep_lines:
-        groups[group].append((sort, item))
+    found = _asks_back(c, slug, actor, at) + _resume_stops(c, slug, actor, at) + sweep_lines
+    # A card On ice (D69) wakes no bot, whichever line would name it: a question sent back, a stop, a backlog, a blocker.
+    parked = H.on_ice_ids(c, {item["tid"] for _, _, item in found})
+    for group, sort, item in found:
+        if item["tid"] not in parked:
+            groups[group].append((sort, item))
     ordered, seen = [], set()
     for group in range(QUIET + 1):
         for sort, item in sorted(groups[group], key=lambda found: found[0], reverse=group == MISSED):
@@ -441,7 +447,7 @@ def _missed_starts(c, slug, actor, at):
     """A snooze that ended at its deadline, or a deferred time that passed, within MISSED_START_LOOKBACK and more than
     MISSED_START_GRACE before the run, on a live task the bot owns (a deferral it made on a task it owns), with no turn on the
     task and no delivery to it since that time: one line per such time. A deferred task must still wait for its next run,
-    with no resume condition holding it (H.next_run_waiting)."""
+    with no resume condition holding it (H.next_run_waiting). A card On ice (D69) starts nothing."""
     from . import task_snooze as TS
 
     since = H.shift(at, seconds=-int(MISSED_START_LOOKBACK.total_seconds()))
@@ -452,7 +458,8 @@ def _missed_starts(c, slug, actor, at):
         c.execute(
             f"SELECT e.old AS appointment, t.* FROM history_events e JOIN {H.TASKS} t ON t.id=e.subject_id "
             "WHERE e.subject_type='task' AND e.kind='snoozed_until' AND e.new IS NULL AND e.note='snooze over' "
-            f"AND e.old>? AND e.old<=? AND t.owner_id=? AND t.status IN ({marks}) ORDER BY e.old",
+            f"AND e.old>? AND e.old<=? AND t.owner_id=? AND t.status IN ({marks}) AND NOT {H.ON_ICE % 't'} "
+            "ORDER BY e.old",
             (since, before, actor, *H.ACTIVE_STATUSES),
         )
     )
@@ -460,7 +467,8 @@ def _missed_starts(c, slug, actor, at):
         c.execute(
             f"SELECT d.due_at AS appointment, t.* FROM deferrals d JOIN {H.TASKS} t ON t.id=d.item "
             "WHERE d.kind='task' AND d.bot=? AND t.owner_id=? AND d.settled_at IS NULL AND d.fired_job IS NULL "
-            f"AND d.due_at IS NOT NULL AND d.due_at>? AND d.due_at<=? AND t.status IN ({marks}) ORDER BY d.due_at",
+            f"AND d.due_at IS NOT NULL AND d.due_at>? AND d.due_at<=? AND t.status IN ({marks}) "
+            f"AND NOT {H.ON_ICE % 't'} ORDER BY d.due_at",
             (slug, actor, since, before, *H.ACTIVE_STATUSES),
         )
     )
@@ -527,14 +535,19 @@ def _person_held(c, row):
     """Whether a person holds the task: a hold on a person, on nobody, or on a task the reader cannot see (backend/task_holds.py)."""
     from . import task_holds as TH
 
-    return any(h["on"] is None or H.is_human(h["on"]) or h["kind"] == "private" for h in TH.holds(c, row))
+    found = TH.holds(c, row)
+    if any(h["on"] is None or H.is_human(h["on"]) or h["kind"] == "private" for h in found):
+        return True
+    # A subtask or blocker On ice (D69) waits on the person who parked it.
+    return bool(H.on_ice_ids(c, [h.get("task") for h in found]))
 
 
 def _blocked_waits(c, at):
-    """{bot id: [(task row, what)]}: each waiting task a bot owns, of an active bot, whose every hold is on a bot
-    (backend/task_holds.py), under the bot it waits on. The owner and active-bot filters are in the query, so a person's
+    """{bot id: [(task row, what, held task ids)]}: each waiting task a bot owns, of an active bot, whose every hold is on
+    a bot (backend/task_holds.py), under the bot it waits on, with the child or blocker tasks that bot holds it by. The owner and active-bot filters are in the query, so a person's
     task never reaches task_holds. Each recipient's mark suppresses only that recipient's line for this update.
-    Read once per run (the shared reads of discover and of each send)."""
+    Read once per run (the shared reads of discover and of each send). A task On ice (D69) waits on no one, and no one
+    is asked about a hold that is On ice."""
     from . import task_holds as TH, task_snooze as TS
 
     out = {}
@@ -542,7 +555,7 @@ def _blocked_waits(c, at):
         c.execute(
             "SELECT tasks.* FROM " + H.TASKS + " tasks JOIN bots b ON tasks.owner_id='bot:'||b.id "
             "WHERE tasks.status='waiting' AND tasks.owner_id LIKE 'bot:%' AND b.state='active' "
-            "ORDER BY tasks.updated_at"
+            f"AND NOT {H.ON_ICE % 'tasks'} ORDER BY tasks.updated_at"
         )
     )
     for row in rows:
@@ -551,27 +564,36 @@ def _blocked_waits(c, at):
         found = TH.holds(c, row)
         if not found or any(h["kind"] == "private" or not h["on"] or not H.is_bot(h["on"]) for h in found):
             continue
-        whats = {}
+        # A subtask or blocker On ice waits on the person who parked it, so its owner is not asked about it.
+        parked = H.on_ice_ids(c, [h.get("task") for h in found])
+        found = [h for h in found if h.get("task") not in parked]
+        whats, held = {}, {}
         for hold in found:
-            whats.setdefault(H.actor_id(hold["on"]), hold["what"])
+            slug = H.actor_id(hold["on"])
+            whats.setdefault(slug, hold["what"])
+            if hold.get("task"):
+                held.setdefault(slug, []).append(hold["task"])
         for slug, what in whats.items():
             if _mark(c, _key("blocked", slug, f"{row['id']}:{row['updated_at']}")) is None:
-                out.setdefault(slug, []).append((row, what))
+                out.setdefault(slug, []).append((row, what, held.get(slug, [])))
     return out
 
 
 def _blocked_by(c, slug, actor, at, shared):
     """A waiting task that the bot's own work holds, on this bot's list (the bot it waits on), not its owner's: listed once per
     update of the task, since its key carries the task's updated_at. A task the bot cannot read (its privacy, or
-    H.bot_reads_task), or one it is already running for, is named nowhere."""
+    H.bot_reads_task), or one it is already running for, is named nowhere. Nor is one whose holding child or blocker the
+    bot is already running or has queued: an architect mid-turn on a ticket's Plan is not told the ticket waits on it.
+    The line is not marked then, so a hold still there after that turn is listed on a later run."""
     out = []
-    for row, what in _shared(shared, "blocked", lambda: _blocked_waits(c, at)).get(slug, []):
+    for row, what, held in _shared(shared, "blocked", lambda: _blocked_waits(c, at)).get(slug, []):
         key = _key("blocked", slug, f"{row['id']}:{row['updated_at']}")
         if (
             _mark(c, key) is not None
             or not H.task_private_readable(c, actor, row)
             or not H.bot_reads_task(c, actor, row)
             or _running(c, slug, row)
+            or any((other := H.task(c, tid)) and _running(c, slug, other) for tid in held)
         ):
             continue
         private = H.task_private(c, row)
@@ -598,6 +620,8 @@ def _asks_back(c, slug, actor, at):
             "SELECT id, body, recipient_id, refs, conversation_id FROM messages WHERE id=?", (ask_id,)
         ).fetchone()
         card = None if ask else H.task(c, ask_id)
+        if card and H.on_ice_row(c, card):
+            continue  # a question a person parked On ice (D69) since it went back is theirs now: no line asks again
         if card and question_tasks.is_question(card):
             # A question task sent back (still_needed.send_back): named as the task it was asked from, else itself.
             ask = question_tasks.as_ask(card)

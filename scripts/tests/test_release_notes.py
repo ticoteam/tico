@@ -64,6 +64,7 @@ def pr_routes(
     runs=(),
     reviews=(),
     comments=(),
+    ref="",
 ):
     """The REST answers one pull request needs: its record, files, head checks, reviews and comments."""
     head = "%040x" % (1000 + number)
@@ -75,7 +76,7 @@ def pr_routes(
             "user": {"login": author},
             "merged_at": "2026-11-05T10:00:00Z" if merged else None,
             "merge_commit_sha": merge_sha or SHA[number],
-            "head": {"sha": head},
+            "head": {"sha": head, "ref": ref},
             "body": body,
             "labels": [{"name": name} for name in labels],
         },
@@ -354,6 +355,19 @@ def test_a_range_that_is_cut_short_says_so(monkeypatch):
     assert "The range has more commits than these notes read" in text
 
 
+def test_high_risk_and_cut_short_are_read_from_the_notes_built_here(monkeypatch):
+    built = notes.build(scenario(), "v0.5.200", "v0.5.201")
+    assert notes.high_risk(built) and not notes.cut_short(built)
+    # Inside an approval issue's body, under its candidate line, the notes still read the same.
+    assert notes.high_risk("Candidate v0.5.201 at abc (validated: u)\n\n" + built)
+    empty = notes.build(FakeApi({"compare/v0.5.200...v0.5.201": {"commits": []}}), "v0.5.200", "v0.5.201")
+    assert not notes.high_risk(empty), "the count line's '0 high risk' is no High risk item"
+    assert not notes.high_risk("### #3 High risk of rain in the demo copy\n- Risk: low")
+    monkeypatch.setattr(notes, "PAGE", 2)
+    monkeypatch.setattr(notes, "COMMIT_PAGES", 1)
+    assert notes.cut_short(notes.build(scenario(), "v0.5.200", "v0.5.201"))
+
+
 def test_notes_are_read_only():
     api = scenario()
     notes.build(api, "v0.5.200", "v0.5.201")
@@ -383,3 +397,84 @@ def test_checks_print_only_when_one_failed_or_none_ran():
     failed = notes.block(pull(checks="1 passed, 1 failed", failed=("e2e",)))
     assert "- Checks: 1 passed, 1 failed (failed: e2e)" in failed
     assert "- Checks: none recorded" in notes.block(pull(checks=notes.NONE_RECORDED))
+
+
+# ---- the review page line a Dev ticket's pull request carries ----
+
+
+def test_the_review_line_is_read_from_the_body_and_absent_when_there_is_none():
+    body = "## Spec\nShows the week.\n\nReview page: https://tico.example/#/page/p1\n"
+    assert notes.review_page_of(body) == "https://tico.example/#/page/p1"
+    assert notes.review_page_of("Review page: none (could not build it)") == "none (could not build it)"
+    assert notes.review_page_of("## Spec\nno line here") is None
+
+
+def test_a_block_prints_its_review_page_line_only_when_the_body_has_one():
+    assert not any(line.startswith("- Review page") for line in notes.block(pull(number=5)))
+    lines = notes.block(pull(number=6, review_page="https://tico.example/#/page/p6"))
+    assert "- Review page: https://tico.example/#/page/p6" in lines
+
+
+def review_scenario():
+    """Three merged pull requests: a Dev ticket's with its page, a Dev ticket's whose page could not be built, and one
+    with no Dev ticket (no line, so exempt from the count)."""
+    routes = {}
+    routes.update(
+        pr_routes(
+            21,
+            title="Dashboard",
+            body="## Spec\nShows the week.\n\nReview page: https://tico.example/#/page/p21\n",
+            files=("backend/dash.py",),
+            runs=[check("unit")],
+        )
+    )
+    routes.update(
+        pr_routes(22, title="Copy tweak", body="Review page: none (could not build it)\n", files=("scripts/copy.py",))
+    )
+    routes.update(pr_routes(23, title="Lint config", files=("scripts/lint.py",)))
+    commits = [("Dashboard (#21)", 21), ("Copy tweak (#22)", 22), ("Lint config (#23)", 23)]
+    routes["compare/v0.5.200...v0.5.201"] = {
+        "commits": [{"sha": SHA[number], "commit": {"message": subject}} for subject, number in commits]
+    }
+    return FakeApi(routes)
+
+
+def test_the_notes_count_review_pages_among_the_pull_requests_that_have_a_line_and_link_each_one():
+    text = notes.build(review_scenario(), "v0.5.200", "v0.5.201")
+    assert "Review pages: 1 of 2\n" in text
+    assert "- Review page: https://tico.example/#/page/p21\n" in text
+    assert "- #22 Copy tweak (@alice) · Review page: none (could not build it)\n" in text
+    assert "- #23 Lint config (@alice)\n" in text
+
+
+def test_the_server_finds_a_dev_ticket_the_same_way_in_the_branch_title_or_body():
+    assert notes.names_dev_ticket({"title": "Export fix (Dev 665)"})
+    assert notes.names_dev_ticket({"title": "Export fix (Dev #665)"})
+    assert notes.names_dev_ticket({"title": "Export fix, Dev ticket 665"})
+    assert notes.names_dev_ticket({"head": {"ref": "fix/dev-665-export"}})
+    assert notes.names_dev_ticket({"body": "Closes Dev 665."})
+    assert not notes.names_dev_ticket({"title": "Bump the lockfile (#2851)", "body": "Closes #2851"})
+    assert not notes.names_dev_ticket({"title": "Developer tools 12", "head": {"ref": "dev-tools"}})
+
+
+def test_a_dev_ticket_pull_request_with_no_review_line_shows_missing_and_counts_in_the_review_pages():
+    routes = {}
+    routes.update(
+        pr_routes(31, title="Export fix (Dev 665)", body="## Spec\nFixes the export.\n", files=("backend/export.py",))
+    )
+    routes.update(pr_routes(32, title="Lint config", files=("scripts/lint.py",)))
+    routes.update(
+        pr_routes(
+            33, title="Quiet the log", ref="fix/dev-666-quiet", body="## Spec\nQuieter.\n", files=("backend/log.py",)
+        )
+    )
+    routes.update(pr_routes(34, title="Tidy the docs (Dev 667)", files=("scripts/docs.py",)))
+    commits = [("Export fix (#31)", 31), ("Lint config (#32)", 32), ("Quiet the log (#33)", 33), ("Tidy (#34)", 34)]
+    routes["compare/v0.5.200...v0.5.201"] = {
+        "commits": [{"sha": SHA[number], "commit": {"message": subject}} for subject, number in commits]
+    }
+    text = notes.build(FakeApi(routes), "v0.5.200", "v0.5.201")
+    assert "Review pages: 0 of 3\n" in text, "the Lint config pull request names no Dev ticket: not counted"
+    assert text.count("- Review page: missing\n") == 2
+    assert "- #34 Tidy the docs (Dev 667) (@alice) · Review page: missing\n" in text
+    assert "- #32 Lint config (@alice)\n" in text

@@ -64,7 +64,7 @@ interface MeetState {
   noteDraft?: {id: string; value: string} | null; noteTimer?: number; noteSaving?: boolean; noteAgain?: boolean;
   live?: Record<string, {chat: MeetChatMessage[]; bots: {bot: string; name?: string}[]}>;
   linkedTasks?: Record<string, MeetLinked>; linkedTaskChanges?: Record<string, Map<string, MeetLinkedTask | null>>;
-  itemLoadSequence?: number; pendingDrafts?: Map<string, MeetDraft>;
+  itemLoadSequence?: number; pendingDrafts?: Map<string, MeetDraft>; shared?: SharedPlaceHandle | null | undefined;
 }
 let MEET: MeetState | null = null;
 function meetStop() {
@@ -588,7 +588,7 @@ const meetSourceLabel = (s?: string): string => ({...IMPORT_SOURCES, manual: 'Ty
 // The source in words; a meeting the Recorder filed says so.
 const meetSourceName = (r: MeetRec) => r.client === 'tico-recorder' ? 'Tico Recorder' : r.source === 'tico-live' ? 'Tico live' : meetSourceLabel(r.source);
 const meetIcon = (name: string, label = '') => `<span class="nav-icon" aria-hidden="true">${name}</span>${label}`;
-const meetStatusWord = (s: string | undefined) => (typeof STATUS_WORD === 'object' && STATUS_WORD[s]) || s || '';
+const meetStatusWord = (s: string | undefined) => (typeof STATUS_WORD === 'object' && typeof s === 'string' && STATUS_WORD[s]) || s || '';
 // Who was there: people, then the bots attached to its live meeting and the bot it was shared with. Each is an
 // avatar; its name shows on hover, or on tap (focus) on a phone.
 function meetFaces(state: MeetState, rec: MeetRec): string {
@@ -1323,7 +1323,7 @@ function meetPendingRender(state: MeetState, rec: MeetRec, data: MeetItems): voi
     for (const field of node.querySelectorAll('[data-pending-field]')) {
       const key = field.dataset.pendingField;
       if (draft.sending) continue;
-      const value = key === 'text' ? displayed.text : displayed.detail[key] || '';
+      const value = key === 'text' ? displayed.text : displayed.detail?.[key] || '';
       if (key === 'owner') {
         const options = [...(S.people || []).map((p): [string, string | undefined] => ['human:' + p.id, p.name || p.id]),
                          ...activeEmps().map((b): [string, string | undefined] => ['bot:' + b.id, b.display_name])]
@@ -1347,7 +1347,7 @@ function meetPendingRender(state: MeetState, rec: MeetRec, data: MeetItems): voi
     if (!conflict) { conflict = document.createElement('div'); conflict.className = 'mp-sub'; conflict.dataset.current = ''; node.querySelector('.mp-prop-body').append(conflict); }
     conflict.hidden = !draft.current;
     conflict.textContent = draft.current ? 'Current: ' + draft.current.text + ' · ' + Object.values(draft.current.detail || {}).join(' · ') : '';
-    const owner = displayed.detail.owner;
+    const owner = displayed.detail?.owner;
     const proposal = item.section === 'task' && item.proposed_task_id;
     node.querySelector('[data-send]').textContent = proposal ? 'Link' : 'Create';
     node.querySelector('[data-send]').disabled = draft.sending || !(data.can_send ?? data.can_push) || (!proposal && !owner);
