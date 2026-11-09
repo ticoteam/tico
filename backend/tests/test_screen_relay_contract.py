@@ -97,9 +97,9 @@ class Service:
         binary = self.binary or relay_binary()
         # Both listeners bind port 0 and the relay reports the ports it took, so no port is picked here and released for
         # another test to take. A restart keeps the relay's own port, the one the API was given: if another test took it
-        # once the old relay exited, the start is tried again.
+        # once the old relay exited, the start is tried again for up to 10 seconds.
         port = 0 if self.relay_url == self.origin else int(self.relay_url.rsplit(":", 1)[1])
-        for attempt in range(10):
+        for attempt in range(100):
             self.process = subprocess.Popen(
                 [str(binary)],
                 stdout=subprocess.PIPE,
@@ -117,9 +117,9 @@ class Service:
             if line.startswith("screen relay listening on "):
                 break
             self.process.wait(5)
-            if "AddrInUse" not in line or attempt == 9:
+            if "AddrInUse" not in line or attempt == 99:
                 raise RuntimeError("Relay did not start: " + line)
-            time.sleep(0.2)
+            time.sleep(0.1)
         self.relay_url = "http://" + line.strip().split()[-1]
         self.public_origin = gateway_origin(self.process)
 

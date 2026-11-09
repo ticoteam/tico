@@ -115,6 +115,7 @@ TABLES = {
     rows.EntityValueRow: "entity_values",
     rows.EntityViewRow: "entity_views",
     rows.LinkTypeRow: "link_types",
+    rows.SetupHandoffRow: "setup_handoffs",
 }
 
 
@@ -122,6 +123,8 @@ TABLES = {
 # in the same change, and adding a name here is a visible decision in review, not a way around the row shapes.
 UNTYPED = frozenset(
     {
+        # Finance receipts (backend/finance/receipts.py): a Library file read and matched to a feed row.
+        "fin_receipts",
         # Native threads (backend/threads.py, calls, Slack threads), merged before their row shapes.
         "call_holds",
         "call_participants",
@@ -296,6 +299,7 @@ UNTYPED = frozenset(
         "fin_attachments",
         "fin_bill_lines",
         "fin_bills",
+        "fin_book_entities",
         "fin_books",
         "fin_budget_versions",
         "fin_budgets",
@@ -305,7 +309,6 @@ UNTYPED = frozenset(
         "fin_cash_rollups",
         "fin_close_snapshots",
         "fin_connections",
-        "fin_contacts",
         "fin_credit_refunds",
         "fin_dimensions",
         "fin_entries",
@@ -342,7 +345,6 @@ UNTYPED = frozenset(
         "fin_tax_seeds",
         "fin_transfers",
         "fin_usage_snapshots",
-        "fin_vendor_aliases",
         "fin_vendor_labels",
         "fin_view_defaults",
         "fin_view_grants",

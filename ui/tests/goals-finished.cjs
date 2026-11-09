@@ -67,7 +67,8 @@ const goals = [
     const until = async (fn, what) => { for (const end = Date.now() + t(4000); Date.now() < end;) { if (await fn()) return; await new Promise(r => setTimeout(r, 50)); } if (!await fn()) assert.fail('timed out: ' + what); };
     const panel = page.locator('#goal-panel');
     const open = async owner => {
-      if (await panel.evaluate(d => d.open).catch(() => false)) await panel.locator('[data-gp-close]').click();
+      // Count first: before the first open there is no panel, and evaluate would wait out its 30 s timeout.
+      if (await panel.count() && await panel.evaluate(d => d.open)) await panel.locator('[data-gp-close]').click();
       await page.locator(`#goal-tree .gt-row[data-owner="${owner}"]:not(.gt-cont) .gt-name`).click();
       await panel.locator('.gp-body').waitFor();
     };

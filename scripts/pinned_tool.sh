@@ -93,8 +93,10 @@ verified_archive() {  # <tool>: the path of its archive in downloads/, checked a
     rm -f "$kept"
   fi
   echo "pinned_tool: downloading $tool $version for $plat" >&2
-  if ! curl -fsSL --retry 3 -o "$TMP/$archive" "$url"; then
-    echo "pinned_tool: could not download $url" >&2
+  # Retries cover the transient 5xx answers GitHub gives during a release-asset blip (a 504 run lasted about 7 s, past
+  # the old 3 quick retries). A failed download stops here with a message, rather than hashing a missing file.
+  if ! curl -fsSL --retry 5 --retry-delay 10 --retry-max-time 240 -o "$TMP/$archive" "$url"; then
+    echo "pinned_tool: download of $archive failed after retries: $url" >&2
     return 1
   fi
   got="$(sha256_of "$TMP/$archive")"

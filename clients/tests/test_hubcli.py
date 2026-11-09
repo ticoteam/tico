@@ -103,6 +103,7 @@ SUBCOMMANDS = [
     "agent",
     "human",
     "group",
+    "setup",
     "api",
     "computer",
     "credential",

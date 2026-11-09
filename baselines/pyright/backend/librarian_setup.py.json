@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/librarian_setup.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 31,
+                    "endColumn": 35,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

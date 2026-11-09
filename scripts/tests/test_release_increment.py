@@ -285,6 +285,14 @@ def test_an_app_change_runs_the_desktop_part_and_a_caddy_change_the_product_part
     assert [job["name"] for job in plan["jobs"]] == ["product", "desktop"]
 
 
+def test_the_product_and_desktop_vms_of_a_plan_place_the_release_binaries():
+    # Both parts run native_binaries (hosted_release_check.py), so their VMs must wait for and place the binaries.
+    plan = plan_of(selected(caddy=True), changed=["app/src/main.rs"], smoke=(), gone=())
+    include = ri.matrix_of(json.dumps(plan))["include"]
+    assert [entry["name"] for entry in include] == ["product", "desktop"]
+    assert all("binaries" not in entry for entry in include)
+
+
 def test_a_carried_factory_failure_runs_the_factory_sim():
     assert plan_of(selected(), carried={ri.FACTORY}, smoke=(), gone=())["factory"] is True
 
