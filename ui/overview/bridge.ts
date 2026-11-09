@@ -10,7 +10,7 @@ interface Member { id: string; name: string; type: string; state: string; detail
 interface Group { id: string; name: string; kind: string; members: Member[] }
 interface Model { company: string; fresh: boolean; groups: Group[] }
 interface Preferences { layout?: string; floorId?: string | null }
-interface Incoming { type?: string; model?: Model; data?: unknown; names?: Record<string, string>; words?: Record<string, string> }
+interface Incoming { type?: string; model?: Model; data?: Parameters<typeof createReplay>[1]; names?: Record<string, string>; words?: Record<string, string> }
 
 const $ = (selector: string) => document.querySelector<HTMLElement>(selector);
 const origin = location.origin;
@@ -124,6 +124,7 @@ async function showReplay(message: Incoming) {
   const bar = $('#replay-bar');
   if (!bar || !model) return;
   bar.hidden = false;
+  if (!message.data) return;   // G: createReplay read data.items and threw without it
   replay = createReplay($('#replay'), message.data, {names: message.names || {}, words: message.words || {}, reduced: reducedMotion,
     scene: () => scene, onState: () => { if (model) scene?.update(currentData(model)); }, onEnd: stopReplay});
   scene?.update(currentData(model));
