@@ -241,9 +241,12 @@ def _nudge(c: sqlite3.Connection, task: dict[str, Any], who: str, cap: int, at: 
         return
     told = managers[0]
     slug = _actor_id(who)
-    label = f"Ticket {task['number']}" if task["number"] else task["title"]
+    # A private ticket's title stays with its readers: the nudge is a company task, so it names the ticket only.
+    private = cast(Callable[[sqlite3.Connection, Any], bool], H.task_private)(c, task)
+    title = "A private ticket" if private else task["title"]
+    label = f"Ticket {task['number']}" if task["number"] else title
     body = (
-        f"{task['title']}\n\n{slug} has used its {cap} VM-minutes of remote test runs on this ticket, so its next run is "
+        f"{title}\n\n{slug} has used its {cap} VM-minutes of remote test runs on this ticket, so its next run is "
         f"refused. You may grant one extension of {extension_minutes(ACTIVE['minutes'])} more (POST /api/v2/ci/extensions "
         "with the task id), or close or reassign the ticket."
     )
@@ -294,7 +297,10 @@ def permit(
     task = _task(c, body.task_id)
     if task is None:
         raise Problem("not_found", "No such ticket for this run", 404)
-    seen = c.execute("SELECT status, reason FROM ci_runs WHERE remote_id=?", (body.remote_id,)).fetchone()
+    seen = c.execute("SELECT status, reason, task_id, bot FROM ci_runs WHERE remote_id=?", (body.remote_id,)).fetchone()
+    if seen is not None and (seen["task_id"] != body.task_id or seen["bot"] != who):
+        # A run id is one run on one ticket by one asker: another ticket's or asker's answer is never handed back.
+        raise Problem("conflict", "This run id was already asked for on another ticket or by another asker", 409)
     if seen is not None:  # a retried permit gets the answer it had
         ok = seen["status"] == "permitted"
         return {"allowed": ok, "message": "" if ok else f"Remote run refused: {seen['reason']}."}
@@ -525,13 +531,16 @@ def install(app: "FastAPI", store: "Store", auth: "Auth", mutate: "Callable[...,
         cast(Any, auth).domain(who)
         settings = current_settings()
 
-        def work(c: sqlite3.Connection) -> dict[str, Any]:
+        def asker(c: sqlite3.Connection) -> None:
+            # Checked before a replayed Idempotency-Key's answer too: access is current on every retry.
             task = _task(c, body.task_id)
             if task is not None:
                 may_ask(c, who, auth, task)
+
+        def work(c: sqlite3.Connection) -> dict[str, Any]:
             return permit(c, who.actor, body, settings.ci_rate_per_job_minute, settings.ci_minutes_per_ticket, _now())
 
-        return mutate(request, body, work)
+        return mutate(request, body, work, check=asker)
 
     @app.post("/api/v2/ci/extensions")
     def ci_extension(request: Request, body: Extension) -> Any:

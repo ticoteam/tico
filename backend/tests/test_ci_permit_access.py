@@ -95,3 +95,44 @@ def test_a_person_who_cannot_read_a_private_ticket_is_refused(api):
     r = ask(api, "ana-test", row["id"])
     assert r.status_code == 404, r.text
     assert builder_runs(api, row["id"]) == []
+
+
+def test_a_retried_key_is_asked_again_and_refused_once_the_bot_no_longer_works_the_ticket(api):
+    row = ticket(api, owner="bot:ops")
+    attempt = run_on(api, ticket(api, owner="bot:cpo", title="Its own work"), bot="cpo")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], row["id"]))
+    body = {"task_id": row["id"], "remote_id": f"{next(_ids):012x}", "cpus": 4, "minutes": 10}
+    key = headers(attempt["token"])
+    assert api.post("/api/v2/ci/permits", json=body, headers=key).status_code == 200
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET carried_by=NULL WHERE id=?", (row["id"],))
+    r = api.post("/api/v2/ci/permits", json=body, headers=key)  # the same Idempotency-Key, replayed
+    assert r.status_code == 403, r.text
+
+
+def test_a_run_id_already_used_on_another_ticket_is_refused_not_replayed(api):
+    mine, theirs = ticket(api, title="Mine"), ticket(api, title="Theirs")
+    attempt = run_on(api, mine)
+    remote_id = f"{next(_ids):012x}"
+    first = {"task_id": theirs["id"], "remote_id": remote_id, "cpus": 4, "minutes": 10}
+    assert api.post("/api/v2/ci/permits", json=first, headers=headers(attempt["token"])).status_code == 200
+    again = {**first, "task_id": mine["id"]}
+    r = api.post("/api/v2/ci/permits", json=again, headers=headers(attempt["token"]))
+    assert r.status_code == 409, r.text
+    assert builder_runs(api, mine["id"]) == []
+
+
+def test_the_managers_nudge_on_a_private_ticket_names_no_title(api, monkeypatch):
+    from backend import ci_runs
+
+    row = ticket(api, private=True, title="Secret acquisition export")
+    monkeypatch.setattr(ci_runs, "_above", lambda c, who: ["bot:cpo"])
+    with api.app.state.store.transaction() as c:
+        ci_runs._nudge(c, ci_runs._task(c, row["id"]), "bot:ops", 120, H.now())
+        made = c.execute(
+            "SELECT title, body FROM tasks WHERE owner_id IN ('bot:cpo','cpo') AND requester_id=? ORDER BY created_at DESC",
+            (H.KEEPER,),
+        ).fetchone()
+    assert made is not None
+    assert "Secret acquisition" not in made["title"] and "Secret acquisition" not in made["body"]
