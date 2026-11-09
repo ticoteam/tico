@@ -2215,7 +2215,6 @@ def test_no_planned_test_job_runs_past_the_target_for_a_full_or_narrowed_selecti
     monkeypatch.setattr(checks, "collect", lambda: Counter(dict.fromkeys(files, 1)))
     monkeypatch.setattr(checks, "committed_timings", lambda: {})
     monkeypatch.setattr(checks, "browser_scripts", lambda args, root=None: names)
-    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
     monkeypatch.setattr(checks, "image_checks", lambda changed, root=None: None)
     monkeypatch.setattr(checks, "merge_parent", lambda base: base)
     monkeypatch.setattr(checks, "script_changes", lambda base, head, changed, root=None: [])
@@ -2289,7 +2288,6 @@ def test_a_contracts_lane_whose_measured_files_overrun_is_split_and_warned(tmp_p
     # its own timed VM, named contracts-N and run with -m slow; a single file past one VM's work is warned, not hidden.
     picked = {"python": [], "browser": [], "caddy": False, "conformance": False, "rust": [], "contracts": True}
     monkeypatch.setattr(checks, "selection", lambda *a, **kw: dict(picked))
-    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
     monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
     monkeypatch.setattr(checks, "collect", Counter)
     timings = tmp_path / "durations.json"
