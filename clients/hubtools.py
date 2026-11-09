@@ -6928,6 +6928,55 @@ def people_list(api, args):
 
 
 @tool(
+    "hub_setup_show",
+    "Where Finish setup stands, for the owner or an admin: whether the welcome wizard is finished (`completed`, "
+    "`needed`), its saved answers and picks, the people the company file from setup names (`company_import.people`: "
+    "`id` is the key `hub_setup_invite` takes, `person` is set once they are on the roster, `invited_at` once Tico "
+    "mailed them), a company file that could not be imported (`company_import_failed`), and the getting-started "
+    "checklist (`getting_started.items`: `done`, `optional`, `skipped`).",
+    {},
+)
+def setup_show(api, args):
+    setup = api.get("setup")
+    started = api.get("getting-started")
+    return {**setup, "getting_started": {k: started.get(k) for k in ("items", "done", "total", "complete")}}
+
+
+@tool(
+    "hub_setup_complete",
+    "Finish the welcome wizard with the answers and picks it has saved (`hub_setup_show`), as the owner: the built-in "
+    "bots are created and every other role becomes a Recruiting seat. Finishing twice keeps the first time. The "
+    "same as the wizard's Create my team. Answers with the setup record. The wizard's choices are saved with "
+    "`hub_api` PUT /api/v2/setup, or come from the company file or sample company the install was given.",
+    {},
+    writes=True,
+)
+def setup_complete(api, args):
+    return api.post("setup/complete", {}, key=_key(args))
+
+
+@tool(
+    "hub_setup_invite",
+    "Invite one person the company file from setup names, as the owner: they go on the roster and the sign-in list "
+    "with this email, the seats that waited with the owner now report to them, and Tico mails the invitation. "
+    "Inviting again sends again. Take `person_key` from `hub_setup_show` (`company_import.people[].id`). Answers with "
+    "the setup record.",
+    {
+        "person_key": _s("The person's id in the company file (`company_import.people[].id` from hub_setup_show)"),
+        "email": _s("Their email address; leave out to use the one they were added with"),
+    },
+    required=("person_key",),
+    writes=True,
+)
+def setup_invite(api, args):
+    return api.post(
+        f"setup/company/people/{quote(str(args['person_key']), safe='')}/invite",
+        {"email": args.get("email") or ""},
+        key=_key(args),
+    )
+
+
+@tool(
     "hub_group_list",
     "The groups: sub-teams of the team, each with its id, name, parent group (groups nest), the "
     "humans in it (ids) and the bots in it (slugs) you may see. A teammate, human or bot, is in one group at a time.",
@@ -12223,6 +12272,7 @@ FINANCE_REPORTS = [
     "ar_aging",
     "spend_by",
     "campaigns",
+    "subscriptions",
     "close",
     "sales_tax",
     "1099",
@@ -12245,6 +12295,7 @@ FINANCE_METRICS = [
     "unattributed",
     "ad_spend",
     "per_conversion",
+    "subscriptions_monthly",
 ]
 FINANCE_SEARCH = [
     "entry",
@@ -12259,6 +12310,7 @@ FINANCE_SEARCH = [
     "project",
     "vendor",
     "campaign",
+    "subscription",
 ]
 FINANCE_INBOX = [
     "uncategorized",
@@ -12480,18 +12532,18 @@ def _fin_paged(api, path, query, key, budget):
 
 @tool(
     "hub_finance_search",
-    "Search the books you may see: entries, bank and card rows, bills, invoices, contacts, "
-    "rules and cards (each card with the vendor accounts it is saved on). account finds the chart's lines by code or "
-    "name, with their ids, for categorize, bill_create and rule_create. campaign finds an ad campaign by name with its "
-    "owner and the month's spend, clicks and conversions (month: YYYY-MM, default this month). Name a kind to page with "
-    "cursor; without one you get the first few of each kind (not accounts, vendors or campaigns: name that kind).",
+    "Search what you may see: entries, bank and card rows, bills, invoices, contacts, rules, cards (each with the "
+    "vendors it is saved on). account: chart lines by code or name, with ids, for categorize, bill_create and "
+    "rule_create. campaign: an ad campaign by name, with owner, spend, clicks and conversions. subscription: a "
+    "recurring charge by vendor name, with status, monthly cost and next charge. Name a kind to page with cursor; "
+    "otherwise the first few of each kind, except accounts, vendors, campaigns and subscriptions (name one of those).",
     {
         "kind": _s("What to search", enum=FINANCE_SEARCH),
         "q": _s("Words to match"),
         "status": _s("Row, document or card status"),
         "contact_id": _s("Bills/invoices: this vendor or customer"),
-        "vendor": _s("Cards: saved on this vendor (a contact's id or name): which of your cards works there"),
-        "account_id": _s("Entries/rows: this chart-of-accounts line"),
+        "vendor": _s("Cards: saved on this vendor (contact id or name)"),
+        "account_id": _s("Entries/rows: this chart line"),
         "money_account_id": _s("Entries/rows: this bank or card account"),
         "start": FIN_DAY,
         "end": FIN_DAY,
@@ -12499,7 +12551,7 @@ def _fin_paged(api, path, query, key, budget):
         "contact_kind": _s("Contacts: vendor, customer or both", enum=["vendor", "customer", "both"]),
         "active": {"type": "boolean", "description": "Contacts: active or not"},
         "rule_kind": _s("Rules: gate or posting", enum=["gate", "posting"]),
-        "month": _s("Campaigns: the month, YYYY-MM (default this month)"),
+        "month": _s("Campaigns: YYYY-MM (default this month)"),
         "cursor": _s("next_cursor from the last page (needs kind)"),
         "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows per page (default 50)"},
     },
@@ -12553,16 +12605,16 @@ def finance_search(api, args):
 
 @tool(
     "hub_finance_report",
-    "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, "
-    "ar_aging, spend_by, campaigns (the ad campaigns with their owner, spend, clicks and conversions), or close (a "
-    "month's close checklist). Rows past top_n fold into \"Other · n\". sales_tax and "
-    "1099 are the tax workpapers for a year: whole or not at all, and only for someone who sees everything.",
+    "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, "
+    "campaigns (owner, spend, clicks, conversions), subscriptions (monthly total, renewals in 30 days) or close (a "
+    "month's checklist). Rows past top_n fold into \"Other · n\". sales_tax and 1099 are a year's tax workpapers: "
+    "whole, and only for someone who sees everything.",
     {
         "kind": _s("The report", enum=FINANCE_REPORTS),
         "start": FIN_DAY,
         "end": FIN_DAY,
         "period": _s("Column size", enum=["day", "week", "month", "quarter", "year"]),
-        "basis": _s("cash or accrual (default: the company's)", enum=["cash", "accrual"]),
+        "basis": _s("cash or accrual (default: company's)", enum=["cash", "accrual"]),
         "compare": _s("prior adds the window before", enum=["prior"]),
         "top_n": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows before Other (default 20)"},
         "by": _s(
@@ -12588,7 +12640,7 @@ def finance_search(api, args):
             "type": "integer",
             "minimum": 2000,
             "maximum": 2100,
-            "description": "sales_tax, 1099: the calendar year (this year when omitted)",
+            "description": "sales_tax, 1099: the year (default this year)",
         },
     },
     ("kind",),
@@ -12609,10 +12661,10 @@ def finance_report(api, args):
 
 @tool(
     "hub_finance_metric",
-    "One number you may see, with when it was worked out: cash, burn, runway_months, revenue, "
-    "spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, "
-    "unattributed, ad_spend (your campaigns' spend over start..end, this month by default), per_conversion (that spend "
-    "over the conversions, null with none).",
+    "One number you may see, with when it was worked out: cash, burn, runway_months, revenue, spend, "
+    "budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, unattributed, "
+    "ad_spend (your campaigns' spend over start..end; default this month), per_conversion (ad spend over conversions, "
+    "null if none), subscriptions_monthly (monthly cost of active subscriptions, with count).",
     {
         "name": _s("The metric", enum=FINANCE_METRICS),
         "budget_id": _s("budget_remaining/budget_pct_used: the budget"),
@@ -12620,7 +12672,7 @@ def finance_report(api, args):
         "end": FIN_DAY,
         "account_id": _s("cash: one money account"),
         "team": _s("spend: one team"),
-        "teammate": _s("spend: one teammate (human:… or bot:…)"),
+        "teammate": _s("spend: one teammate (human:id or bot:id)"),
         "days": {"type": "integer", "minimum": 0, "maximum": 3650, "description": "ap_due/ar_overdue: within n days"},
     },
     ("name",),
@@ -12632,8 +12684,8 @@ def finance_metric(api, args):
 
 @tool(
     "hub_finance_brief",
-    "What changed in Finance for you: a few short lines about the money you may see (your budgets, your team's, "
-    "cash and burn where you see the company), with as_of (when those numbers last moved) and changed_since.",
+    "Finance changes for you: short lines on the money you may see (budgets, your team's, cash and burn where you see "
+    "the company), with as_of (when the numbers last moved) and changed_since.",
     {},
     (),
 )
@@ -12643,9 +12695,8 @@ def finance_brief(api, args):
 
 @tool(
     "hub_finance_act",
-    "Ask for one Finance action: committed, sent for approval, denied or failed. kind=help lists "
-    "every kind; kind=help with payload {\"kind\": k} gives k's fields. dry_run says what would happen. "
-    "Requires operation_id, which is the action's key: a retry never acts twice.",
+    "One Finance action: committed, sent for approval, denied or failed. kind=help lists kinds; kind=help with payload "
+    "{'kind': k} gives k's fields. Requires operation_id, the action's key: a retry never acts twice.",
     {
         "kind": _s("The action kind, or help"),
         "payload": {"type": "object", "description": "The kind's fields"},
@@ -12680,12 +12731,11 @@ def finance_action(api, args):
 
 @tool(
     "hub_finance_inbox",
-    "Your Finance work queue: uncategorized rows, bills to enter, receipts, bills due, overdue "
-    "invoices, budgets near limit, failed syncs, months ready to close, books not reconciled for over a month "
-    "(unreconciled), emailed bills Finance did not take (bill_email); with counts per kind. Name a kind to page "
-    "through that kind alone, past its first 200.",
+    "Your Finance work queue, with counts per kind: uncategorized rows, bills to enter, receipts, bills due, overdue "
+    "invoices, budgets near limit, failed syncs, months ready to close, unreconciled (not reconciled for over a month), "
+    "bill_email (emailed bills Finance did not take). Name a kind to page through it alone, past its first 200.",
     {
-        "kind": _s("Only this kind of work, paged on with cursor", enum=FINANCE_INBOX),
+        "kind": _s("Only this kind, paged with cursor", enum=FINANCE_INBOX),
         "cursor": _s("next_cursor from the last page (same kind)"),
         "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Items per page (default 50)"},
     },
@@ -13382,6 +13432,11 @@ AUDIENCE = {
     "hub_message_redact": BOTOPS,
     "hub_support_file": BOTOPS,
     "hub_bot_repo_create": ("owner", "botops"),
+    # Finish setup (backend/onboarding.py): the owner finishes it, and an admin reads it. A person's own agent, handed over
+    # from setup (docs/connect-an-agent.md), uses these with their personal token.
+    "hub_setup_show": ("owner", "admin"),
+    "hub_setup_complete": ("owner",),
+    "hub_setup_invite": ("owner",),
     "hub_skill_submit": PEOPLE + BOTS,  # any person or bot proposes; an admin approves (backend/skills.py)
     "hub_repo_review": ("bot", "botops"),
     "hub_repo_product_create": ("owner", "bot", "botops"),  # a bot needs Create product repositories (server)

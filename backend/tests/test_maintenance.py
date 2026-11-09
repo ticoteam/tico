@@ -638,3 +638,12 @@ def test_the_replaced_jobs_mirrors_are_retired_once():
         )
     with sqlite3.connect(":memory:") as c:
         migration.up(c)  # a file with no automations yet
+
+
+def test_the_api_saves_the_rules_cap_beside_decides_and_shows_what_is_in_effect(api, monkeypatch):
+    monkeypatch.setattr(M, "_start", lambda *args, **kwargs: None)
+    body = patch(api, "maintenance", {"rules_monthly_cap_usd": 80})
+    assert body["settings"]["rules_monthly_cap_usd"] == 80
+    assert body["settings"]["rules_monthly_cap_usd_in_effect"] == 80
+    assert body["settings"]["monthly_cap_usd"] is None  # Decide's cap is not touched
+    patch(api, "maintenance", {"rules_monthly_cap_usd": -5}, expected=422)

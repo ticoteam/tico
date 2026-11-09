@@ -1,0 +1,30 @@
+{
+    "files": {
+        "./backend/releases.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 36,
+                    "endColumn": 41,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 49,
+                    "endColumn": 53,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 77,
+                    "endColumn": 81,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

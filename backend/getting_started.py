@@ -122,8 +122,18 @@ def _login_target(runners, wanted, c=None):
 
 def built_in(settings):
     """The bots every install starts with: the four a person talks to, the Task Manager (docs/task-manager.md), the
-    Bookkeeper (docs/bookkeeper.md) and the Brand Owner."""
-    return {settings.assistant_bot, BOTOPS, LIBRARIAN, "goal-manager", "task-manager", "bookkeeper", H.BRAND_OWNER}
+    Bookkeeper (docs/bookkeeper.md), the Brand Owner and Counsel, which onboarding.ensure_counsel adds once a computer
+    enrolls. Counsel is built in, so it is not one of the company's own bots (own_bots)."""
+    return {
+        settings.assistant_bot,
+        BOTOPS,
+        LIBRARIAN,
+        "goal-manager",
+        "task-manager",
+        "bookkeeper",
+        H.BRAND_OWNER,
+        H.COUNSEL,
+    }
 
 
 def own_bots(c, settings):

@@ -165,6 +165,7 @@ EMPTY = (
     "service_keys",
     "service_key_tasks",
     "owner_links",
+    "setup_handoffs",
     # credentials
     "credentials",
     "credential_keys",

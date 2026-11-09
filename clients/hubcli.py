@@ -608,6 +608,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            delete a group; its teammates and groups move up to its parent
     hub group access <group> [--see V] [--read V] [--write V]
                                            show or set who sees, reads, writes to a group (a lead or an admin)
+    hub setup show                         where Finish setup stands: the wizard, the company file's people, the checklist
+    hub setup complete                     the owner finishes the welcome wizard with its saved answers (Create my team)
+    hub setup invite <person_key> [--email E]
+                                           the owner invites a person the company file from setup names (docs/onboarding.md)
     hub api GET|POST|PUT|PATCH|DELETE <path> ['{json}']
                                            BotOps: any v2 route, as the person who asked; a Confirm card for what
                                            always needs their click. Never a secret in the body
@@ -4928,6 +4932,17 @@ def parser():
     for level in ("see", "read", "write"):
         s.add_argument("--" + level, help="everyone, or a comma list: human ids, group:<id>, bot:<slug>")
     s.set_defaults(fn="group access")
+    setup = sub.add_parser("setup", help="Finish setup, the welcome wizard (the owner)").add_subparsers(dest="sub")
+    setup.add_parser(
+        "show", help="where it stands: the wizard, the people the company file names, the checklist"
+    ).set_defaults(fn="setup show")
+    setup.add_parser("complete", help="the owner finishes the wizard with its saved answers").set_defaults(
+        fn="setup complete"
+    )
+    s = setup.add_parser("invite", help="the owner invites a person the company file from setup names")
+    s.add_argument("person_key", help="their id in the company file (hub setup show: company_import.people[].id)")
+    s.add_argument("--email", help="their email; leave out to use the one they were added with")
+    s.set_defaults(fn="setup invite")
     s = sub.add_parser("api", help="BotOps: any v2 route, as the person who asked")
     s.add_argument("method", type=str.upper, choices=["GET", "POST", "PUT", "PATCH", "DELETE"])
     s.add_argument("path", help="/api/v2/... or the part after it")

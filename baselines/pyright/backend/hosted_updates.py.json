@@ -1,0 +1,30 @@
+{
+    "files": {
+        "./backend/hosted_updates.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 8,
+                    "endColumn": 20,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportInvalidTypeArguments",
+                "range": {
+                    "startColumn": 20,
+                    "endColumn": 21,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportGeneralTypeIssues",
+                "range": {
+                    "startColumn": 34,
+                    "endColumn": 40,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

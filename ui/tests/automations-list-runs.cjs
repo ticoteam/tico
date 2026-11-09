@@ -29,9 +29,9 @@ const screen = page => page.locator('#au-root').getAttribute('data-screen');
       await shot(page, 'phone-list');
 
       // The header: Automations | Runs and the range, then search, filters and +; no title and no Ask (the tab bar has
-      // the Assistant). The search is on the page and narrows the list.
+      // the Assistant, and the list is below). The search is on the page and narrows the list.
       assert.equal(await page.locator('.au-ph h1').isVisible(), false);
-      assert.equal(await page.locator('.au-ph [data-ask-open]').isVisible(), false);
+      assert.equal(await page.locator('.au-ph [data-ask-open]').count(), 0, 'no Ask on Automations');
       assert.equal(await page.locator('.au-ph .au-tabs [data-tab="list"]').isVisible(), true);
       await page.fill('.au-ph .au-q', 'deploy');
       assert.deepEqual(await rows(page), ['au_deploy']);
@@ -146,9 +146,20 @@ const screen = page => page.locator('#au-root').getAttribute('data-screen');
       await page.waitForTimeout(200);
       assert.match(page.url(), /#\/automations$/, 'no automation opens by itself');
       assert.equal(await page.locator('.au-rail').isVisible(), true);
-      // The header is one row (title, range, Ask, + New); search, the tabs and every filter section show in place.
+      // The header is one row (title, range, +); search, the tabs and every filter section show in place.
       assert.equal(await page.locator('.au-ph h1').isVisible(), true);
-      assert.equal(await page.locator('.au-new').innerText(), '+ New');
+      assert.equal(await page.locator('.au-ph [data-ask-open]').count(), 0, 'no Ask on Automations');
+      // The + is icon-only, named for screen readers, and is the range's row height, square, centred on it.
+      assert.equal((await page.locator('.au-new').innerText()).trim(), '');
+      assert.equal(await page.locator('.au-new').getAttribute('aria-label'), 'New automation');
+      const plus = await page.evaluate(() => {
+        const r = s => document.querySelector(s).getBoundingClientRect();
+        const add = r('.au-new'), range = r('.au-range');
+        return {h: add.height, w: add.width, rangeH: range.height, mid: add.top + add.height / 2, rangeMid: range.top + range.height / 2};
+      });
+      assert.equal(plus.h, plus.rangeH, 'the + is the range control height: ' + JSON.stringify(plus));
+      assert.equal(plus.w, plus.h, 'the + is square');
+      assert.ok(Math.abs(plus.mid - plus.rangeMid) < 1, 'the + is centred on the range: ' + JSON.stringify(plus));
       assert.equal(await page.locator('[data-filters]').isVisible(), false);
       assert.equal(await page.locator('.au-rail .au-q').isVisible(), true);
       assert.equal(await page.locator('.au-ctl .au-tabs').isVisible(), true);
