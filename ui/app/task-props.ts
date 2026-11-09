@@ -28,6 +28,8 @@ interface TaskDialog extends HTMLDialogElement {
   focusProp?: string;
   propsErrs?: PropsErrors | null;
   liveTask?: PropTask | null;
+  taskLive?: TaskLive | null;
+  saveQueue?: Promise<unknown>;
 }
 // The rights a signed-in person has on one task (taskPropRights).
 interface PropRights { mover: boolean; party: boolean; live: boolean; edit: boolean; links: boolean; reopen: boolean; snooze: boolean; }
