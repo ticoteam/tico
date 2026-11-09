@@ -1,7 +1,7 @@
 # Starter bots
 
-There are 107 role templates: 105 in nine groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
-Product and Engineering) and a two-template Leadership extra, enough to staff a team of ten to two hundred humans. **Every
+There are 119 role templates: 116 in nine groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
+Product and Engineering) and a three-template Leadership extra, enough to staff a team of ten to two hundred humans. **Every
 template is a real role that does the work within its granted Tools.** Each is a job title a team would
 hire and put on its team chart (Sales Development Representative, Bookkeeper, Recruiter, Site Reliability Engineer), never a
 feature or a document: it does the research, keeps its records, prepares the finished work and carries it to the point of
@@ -28,21 +28,23 @@ Chief of Staff is no longer a default.
 | Group | Icon | Head | Templates | Goal |
 |---|---|---|---|---|
 | Sales | `handshake` | Sales Manager (`sales-lead`) | 11 | Turn interest into revenue |
-| Marketing | `campaign` | Head of Marketing (`marketing-lead`) | 17 | Be known by the customers you want |
+| Marketing | `campaign` | Head of Marketing (`marketing-lead`) | 21 | Be known by the customers you want |
 | Customer Support | `support_agent` | Head of Customer Support (`support-lead`) | 10 | Every customer helped and kept |
-| Finance | `account_balance` | Head of Finance (`finance-lead`) | 14 | Know where the money is |
-| Operations | `settings_suggest` | Operations Manager (`ops-manager`) | 13 | Run smoothly, nothing dropped |
+| Finance | `account_balance` | Head of Finance (`finance-lead`) | 13 | Know where the money is |
+| Operations | `settings_suggest` | Operations Manager (`ops-manager`) | 14 | Run smoothly, nothing dropped |
 | Legal | `gavel` | General Counsel (`general-counsel`) | 8 | Sign with eyes open |
 | HR | `groups` | Head of People (`people-lead`) | 11 | Hire well, keep good people |
-| Product | `category` | Head of Product (`product-lead`) | 9 | Build what customers need |
-| Engineering | `code` | Head of Engineering (`engineering-lead`) | 12 | Ship reliable software, steadily |
-| Leadership | `star` | Chief of Staff (`chief-of-staff`) | 2 | Keep the leaders focused |
+| Product | `category` | Head of Product (`product-lead`) | 10 | Build what customers need |
+| Engineering | `code` | Head of Engineering (`engineering-lead`) | 18 | Ship reliable software, steadily |
+| Leadership | `star` | Chief of Staff (`chief-of-staff`) | 3 | Keep the leaders focused |
 
-Every group has a head (`lead: true`): it writes the group's weekly summary from what its bots and humans
+Every group has a head, the template its row names (`lead: true`): it writes the group's weekly summary from what its bots and humans
 produced, proposes who should take a stuck or misrouted request, and **hires**: when repeated work in the group is not
 covered, it proposes a specific worker template from its `team_templates` with the reason and that template's first routine,
 and only after the owner confirms asks BotOps to set it up (`hub task create --owner botops`). Heads never create bots
 themselves and never do their team's work.
+
+Three Team Managers (Product, Engineering and Growth) are also `lead: true`. Each runs its team's week and routes the team's work to its owners and pipeline managers; none takes the group's head seat.
 
 Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, Strategy Bot) and message bots (Inbox Manager) have plain
 function names and live outside it.
@@ -99,6 +101,8 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 | `query_stats` | `cro-owner` | Conversion Rate Optimization Owner | A weekly funnel map with a count on every rate, the ranked leaks, and experiment briefs with sample size and stop rules worked out before launch | common | Tico and web access to the pages; a funnel export optional |
 | `dynamic_feed` | `social-ads-owner` | Social Ad Owner | A weekly review of each paid social campaign's cost per result against target, creative fatigue with a replacement for each tired ad, and each budget, creative or audience change prepared for review | common | Tico only; ad-platform reporting, landing pages and a CRM optional |
 | `manage_search` | `search-ads-owner` | Search Ad Owner | A weekly review of each paid search campaign's cost per result against target, the search terms that spend without converting with their negatives, and bidding only where conversions support it | common | Tico only; ad-platform reporting, landing pages and a CRM optional |
+| `campaign` | `growth-team-manager` | Growth Team Manager (team lead) | A weekly growth page: marketing and pipeline movement, the blocked work, the six-week calendar and the forecast call pack, with routing and hiring proposals. Channel owners and pipeline managers do the work; it routes each piece of it to them | default | Tico; CRM, calendar and meetings optional |
+| `travel_explore` | `seo-owner` | SEO Owner | Each week, how the team shows up in search and in AI answers, with the three page fixes worth doing first, drafted to apply in minutes; it never edits a live page itself | common | Public web; docs and GitHub optional |
 
 ### Customer Support
 
@@ -153,6 +157,7 @@ up. The `bookkeeping` template is retired: it is no longer offered, and bots alr
 | `route` | `dispatcher` | Dispatcher | Tomorrow's plan for field crews by skill, area and window, the clash list with options, draft arrival notices, jobs not closed out | niche | A jobs export on a task; crew calendars optional |
 | `calendar_month` | `scheduling-bookings` | Scheduling & Bookings | The booking rules, a weekly bookings page with clashes and gaps, reschedule options that fit the rules and no-show follow-up drafts; never changes prices or sends without a person | niche | A bookings export on a task; calendar and mail optional |
 | `task_alt` | `quality-inspections` | Quality & Inspections | Inspection checklists per job type, an inspection log, re-do tracking with causes and a quality score per crew with the jobs behind it; never disciplines staff | niche | Inspection results and a jobs export on a task |
+| `account_tree` | `pipeline-manager` | Pipeline Manager | Runs one pipeline: moves each card through its stages, puts it with the bot or person its stage needs, checks each stage's requirements and limits, and reports what is stuck and why | niche | Tico, with a pipeline to run |
 
 ### Legal
 
@@ -196,6 +201,7 @@ up. The `bookkeeping` template is retired: it is no longer offered, and bots alr
 | `text_fields` | `ux-writer` | UX Writer | Copy tables for each spec (labels, errors, empty states), the product glossary, and a weekly review of pull requests that change user-facing text, for an engineer to post | niche | GitHub connected (read) |
 | `sell` | `pricing` | Pricing Analyst | A monthly pricing review (competitor price changes, discounts given, plan mix) and impact notes for a price change being weighed | niche | Public web; a CRM optional |
 | `target` | `segment-product-owner` | Product Owner | Each week, one customer segment's activation and retention: its problems ranked from tickets, feedback, calls and usage, and one-page product briefs for the product lead to approve | common | Tico only; meetings, a CRM and GitHub optional |
+| `lightbulb` | `product-team-manager` | Product Team Manager (team lead) | A weekly product summary: the roadmap, the decisions waiting on a person, what each Product Owner and the product pipeline found, and scored proposals for what to build next; routes each piece of product work to its owner | default | Tico; GitHub, docs and meetings optional |
 
 ### Engineering
 
@@ -216,6 +222,11 @@ up. The `bookkeeping` template is retired: it is no longer offered, and bots alr
 
 To run these bots as one team that builds, reviews, tests and releases software, see
 [The software factory](software-factory.md): the roles in order, which model each runs on and the Dev tickets steps.
+| `developer_board` | `engineering-team-manager` | Engineering Team Manager (team lead) | Turns a requested change into a plan with one child task per repository, follows each builder's pull requests to merge, and routes tests, security, CI and releases to their owners | common | GitHub connected |
+| `bug_report` | `qa-owner` | QA Owner | Owns every automated test, unit to end to end: a flaky test register with a fix or quarantine decision for each, a weekly suite health report, and product bugs filed into the Engineering pipeline | niche | GitHub connected; chat optional |
+| `security` | `security-owner` | Security Owner | A weekly dependency and advisory report ranked by real exposure, a patch plan in merge order, and a private report of any committed credential, by location only | common | GitHub and public web connected; chat optional |
+| `deployed_code` | `infrastructure-owner` | Infrastructure Owner | A weekly CI health report: slow jobs, red-main streaks, runner and workflow faults, and deploy frequency, each with a fix plan; flaky tests go to the QA Owner | niche | GitHub connected; chat optional |
+| `new_releases` | `release-owner` | Release Owner | A weekly report of how long merged changes take to reach users, which checks gate merging, and failed deploys; for each release, its readiness check, notes and staged rollout | niche | GitHub and Tico connected; docs and chat optional |
 
 ### Message bots
 
@@ -232,6 +243,7 @@ head or `suggest`. Finish setup offers it on its own, off by default, beside the
 |---|---|---|---|---|---|
 | `star` | `chief-of-staff` | Chief of Staff (head) | A weekly brief to the owner from goals, tasks, updates and meetings, stalled-goal follow-up, the Monday agenda, and hiring proposals for Leadership bots or a missing group head | niche | Tico only |
 | `strategy` | `strategy-planning` | Strategy Analyst | A quarterly plan and OKR draft (three to five objectives, about three measurable key results each), last quarter graded 0 to 1, and a mid-quarter check-in | niche | Tico only |
+| `flag` | `initiative-owner` | Initiative Owner | A weekly check-in for each strategy bet: progress against its wrong-if test, the next step with an owner and a date, and who is blocked; when the evidence says the bet looks wrong, it says so | niche | Tico; docs and meetings optional |
 
 Every starter drafts messages to outsiders until a person who manages it turns mail sending on in Tico.
 Authorized work uses the bot's granted Tools directly; paying, changing a record or deleting does

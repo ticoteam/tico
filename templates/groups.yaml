@@ -1,7 +1,8 @@
 # The groups a team builds its team chart from, in the order setup offers them.
 #
 # Each template card names its group (`group:` in templates/catalog/<id>/card.yaml), and exactly one card
-# per group is its head (`lead: true`, the template named in `head:` below). The head's card lists the rest of
+# per group is its head: the template named in `head:` below, which is `lead: true`. A Team Manager is also
+# `lead: true` and does not take the head's seat. The head's card lists the rest of
 # the group in `team_templates:`; a card's `suggest:` says whether it is pre-checked (default), offered (common)
 # or offered only when the briefing asks for it (niche). `icon` is a Material Symbols name in the font the UI ships
 # (ui/vendor/fonts/icons.txt). `software_only: true` groups are offered only when software is the product.

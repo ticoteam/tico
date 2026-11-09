@@ -538,7 +538,7 @@ the same template is one of the two command line routes; Tico gives it a slug of
 
 ## Adding a template
 
-Tico ships 104 role templates, by group, each with a card. `templates/catalog/` holds 114 folders in all: those 104, four built-in bots (`assistant`, `botops`, `goal-manager`, `librarian`), five helper bots (`bookkeeper`, `brand`, `inbox`, `task-manager`, `tico-counsel`), and one retired template kept for existing installs (`bookkeeping`). [Starter bots](starter-bots.md) lists the 104.
+Tico ships 119 role templates, by group, each with a card. `templates/catalog/` holds 131 folders in all: those 119, four built-in bots (`assistant`, `botops`, `goal-manager`, `librarian`), five helper and message bots (`bookkeeper`, `brand`, `inbox`, `task-manager`, `tico-counsel`), and three retired templates kept for existing installs (`bookkeeping`, `cro`, `lead-generation`). [Starter bots](starter-bots.md) lists the 119.
 
 `templates/catalog/<template>/` is one template. The folder name is what `--template` takes.
 

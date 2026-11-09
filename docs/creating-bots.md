@@ -23,7 +23,7 @@ For another template, a task goes to BotOps to build the repository, apply the r
 You can also ask BotOps for a custom bot in a DM; it takes the bot through placement and setup as you.
 Assistant, BotOps, Librarian, Strategy Bot, Task Manager, Bookkeeper and Brand Owner are Built-in bots; they cannot be archived or deleted.
 
-The 104 role templates, in nine groups with a Leadership extra, are described in
+The 119 role templates, in nine groups with a Leadership extra, are described in
 [Starter bots](starter-bots.md), with the card fields and the quality bar this page's advice is
 measured against.
 
