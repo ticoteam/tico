@@ -26,8 +26,9 @@ declare global {
     S: {config: {hosted: boolean}};
     writes: LoginWrite[];
     row: LoginRow;
-    post: (url: string, body: LoginWrite['body']) => Promise<LoginRow>;
-    get: () => Promise<LoginRow>;
+    // Shared with other specs' Window augmentations, so the signatures must match theirs exactly.
+    post: (url: string, body?: unknown) => Promise<unknown>;
+    get: (url: string) => Promise<unknown>;
   }
 }
 declare let row: LoginRow;
@@ -52,8 +53,8 @@ async function check(engine: import('playwright').BrowserType) {
         window.S = {config: {hosted: false}};
         window.writes = [];
         window.row = {id: 'fixture', state: 'starting', created_at: new Date().toISOString(), lines: []};
-        window.post = async (url: string, body: LoginWrite['body']) => {
-          writes.push({url, body});
+        window.post = async (url: string, body?: unknown) => {
+          writes.push({url, body: body as LoginWrite['body']});
           if (url.endsWith('/cancel')) row.state = 'canceled';
           if (url.endsWith('/code')) row.code_sent = true;
           return {...row};
