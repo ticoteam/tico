@@ -1,29 +1,110 @@
 /* Market is a Strategy tab (ui/strategy-page.ts): one page of five questions (ui/app/redesign-market.ts) and, behind
    Open map, the note and the graph of who connects to whom. It is not the Docs library. */
 'use strict';
-let MARKET_VIEW = null;   // what is mounted: {kind: 'page' | 'map', shell, open(at), stop()}
+
+/** Where an address goes (marketAt): a question on the page, or a note on the map. */
+type MarketAt = {kind: 'page'; section: string; dimension?: string} | {kind: 'map'; note: string};
+
+/** What a mount gives back: the page (ui/app/redesign-market.ts), the map, or the empty state. */
+interface MarketMounted {
+  shell: HTMLElement;
+  open(at: string | MarketAt): Promise<unknown>;
+  stop(): void;
+}
+
+interface MarketView extends MarketMounted {
+  kind: MarketAt['kind'];
+}
+
+/** An entity as the market's lists and graph answer it (GET /v2/market/entities, /v2/market/graph); a page in the
+    index list is drawn as one too, with its title as the name. */
+interface MarketRow {
+  id: string;
+  name: string;
+  title?: string;
+  type?: string;
+  tier?: string | null;
+  degree?: number;
+}
+
+interface MarketEdge {
+  src: string;
+  dst: string;
+  rel: string;
+}
+
+interface MarketGraphAnswer {
+  entities?: MarketRow[];
+  edges?: MarketEdge[];
+}
+
+interface MarketEntityList {
+  entities?: MarketRow[];
+  next_offset?: number | null;
+  total?: number;
+}
+
+/** A page in the market's collection (GET /company-docs?collection=market). */
+interface MarketDoc {
+  id: string;
+  title: string;
+  seeded?: boolean;
+  fetched?: string | null;
+}
+
+interface MarketDocList {
+  documents?: MarketDoc[];
+}
+
+/** One entity with its relations and evidence (GET /v2/market/entities/{id}?names=true). */
+interface MarketShown {
+  entity: MarketRow & {summary?: string; aliases?: string[]};
+  neighbors?: MarketRow[];
+  edges?: Record<string, {out?: MarketEdge[]; in?: MarketEdge[]}>;
+  evidence?: Array<{our_read?: string; quote?: string}>;
+}
+
+/** The research notice's record: when it was filed, its task, and the market's signature then (marketSig). */
+interface MarketResearchRow {
+  at: number;
+  task: string;
+  base: string | null;
+}
+
+/** Market's setup questions as GET /v2/librarian/setup (market) and POST /v2/librarian/setup/market answer them
+    (backend/librarian_setup.py). */
+interface MarketSetupState {
+  answers: Record<string, string>;
+  can_answer: boolean;
+  skipped: boolean;
+  step: number;
+  task: {id: string; status: string; created_at: string} | null;
+}
+
+let MARKET_VIEW: MarketView | null = null;   // what is mounted: {kind: 'page' | 'map', shell, open(at), stop()}
 // Old #/market links land here (ui/app/router.ts), keeping their query or note path.
 const MARKET_ROUTE = '#/strategy/market';
 const MARKET_MAP = MARKET_ROUTE + '/map';
-const isMarketRoute = r => r === MARKET_ROUTE || r.startsWith(MARKET_ROUTE + '?') || r.startsWith(MARKET_ROUTE + '/');
+const isMarketRoute = (r: string) => r === MARKET_ROUTE || r.startsWith(MARKET_ROUTE + '?') || r.startsWith(MARKET_ROUTE + '/');
 // The tab's old views each land on the page at their question; Players opens the map. A note id always has a slash
 // in it, so a bare key is never a note.
-const MARKET_SECTIONS = {briefing: 'changed', spend: 'money', buyers: 'money', growth: 'money', 'value-chain': 'reach', listening: 'saying'};
+const MARKET_SECTIONS: Record<string, string> = {briefing: 'changed', spend: 'money', buyers: 'money', growth: 'money', 'value-chain': 'reach', listening: 'saying'};
 let MARKET_PAGE = 0;
 
 // Where an address goes: {kind: 'page', section, dimension} or {kind: 'map', note}.
-function marketAt(route) {
-  const [path, query] = route.slice(MARKET_ROUTE.length).split('?');
+function marketAt(route: string): MarketAt {
+  const [path, query] = route.slice(MARKET_ROUTE.length).split('?') as [string, string | undefined];
   const note = new URLSearchParams(query || '').get('note');
   const key = path.replace(/^\//, '');
   if (note) return {kind: 'map', note};
   if (!key) return {kind: 'page', section: ''};
-  if (MARKET_SECTIONS[key]) return {kind: 'page', section: MARKET_SECTIONS[key], dimension: key === 'buyers' ? 'buyer' : ''};
+  const section = MARKET_SECTIONS[key];
+  if (section) return {kind: 'page', section, dimension: key === 'buyers' ? 'buyer' : ''};
   if (key === 'map' || key === 'players') return {kind: 'map', note: MARKET_BRIEF};
   return {kind: 'map', note: decodeURIComponent(key)};
 }
 
-const MARKET_TYPES = [
+const MARKET_TYPES: Array<[string, string]> = [
   ['organization', 'Organizations'],
   ['segment', 'Segments'],
   ['channel', 'Channels'],
@@ -77,7 +158,7 @@ function marketNoteId() {
   return at.kind === 'map' ? at.note : MARKET_BRIEF;
 }
 
-function marketHref(id) {
+function marketHref(id: string) {
   return MARKET_ROUTE + '?note=' + encodeURIComponent(id);
 }
 
@@ -109,7 +190,7 @@ window.pageMarket = async function pageMarket() {
       if (page !== MARKET_PAGE) { mounted.stop(); return; }   // another address was asked for meanwhile
       MARKET_VIEW = {...mounted, kind: at.kind};
     } catch (error) {
-      shell.innerHTML = `<p class="market-loading">${esc(error.message || 'The market did not load.')}</p>`;
+      shell.innerHTML = `<p class="market-loading">${esc(errorMessage(error, 'The market did not load.'))}</p>`;
       return;
     }
   }
@@ -118,7 +199,7 @@ window.pageMarket = async function pageMarket() {
 
 // The market has content once it has an active entity, or a page the seed did not write ("None in the seed."). Until
 // then, and while the research notice shows, Market is its empty state. Returns the pages it may list.
-function marketBlank(count, docs) {
+function marketBlank(count: number, docs: MarketDoc[] | undefined) {
   const pages = (docs || []).filter(doc => count || !doc.seeded);
   let researching = marketResearchGet();
   const blank = !count && !pages.length;
@@ -126,16 +207,16 @@ function marketBlank(count, docs) {
   return {blank: blank || !!researching, pages};
 }
 
-async function mountMarket(shell) {
+async function mountMarket(shell: HTMLElement): Promise<MarketMounted> {
   const today = new Date().toISOString().slice(0, 10);
-  const graphUrl = (id, fill = false) => {
-    const params = new URLSearchParams({focus: id, fill, limit: 250, as_of: today});
+  const graphUrl = (id: string, fill = false) => {
+    const params = new URLSearchParams({focus: id, fill: String(fill), limit: '250', as_of: today});
     return '/v2/market/graph?' + params;
   };
   const [initial, listing, library] = await Promise.all([
-    get(graphUrl(marketSelfId(), true)),
-    get('/v2/market/entities?status=active&limit=50'),
-    get('/company-docs?collection=market'),
+    get<MarketGraphAnswer>(graphUrl(marketSelfId(), true)),
+    get<MarketEntityList>('/v2/market/entities?status=active&limit=50'),
+    get<MarketDocList>('/company-docs?collection=market'),
   ]);
   const nodes = initial.entities || [];
   const byId = new Map(nodes.map(row => [row.id, row]));
@@ -163,23 +244,23 @@ async function mountMarket(shell) {
   let listVersion = 0, listTimer = 0, stopped = false, graphVersion = 0, openVersion = 0;
   let graphFocus = marketSelfId(), graphDefault = true;
 
-  async function loadGraph(id, fill = false) {
+  async function loadGraph(id: string, fill = false) {
     const version = ++graphVersion;
     if (graphFocus === id && graphDefault === fill) { graph.focus(fill ? null : id); return; }
-    const data = await get(graphUrl(id, fill));
+    const data = await get<MarketGraphAnswer>(graphUrl(id, fill));
     if (stopped || version !== graphVersion) return;
     (data.entities || []).forEach(row => byId.set(row.id, row));
     graph.update(data.entities || [], data.edges || [], fill ? null : id);
     graphFocus = id; graphDefault = fill;
   }
-  $('#market-reset').onclick = () => void loadGraph(marketSelfId(), true).catch(error => toast(error.message));
+  $('#market-reset').onclick = () => void loadGraph(marketSelfId(), true).catch(error => toast(errorMessage(error, '')));
 
-  function renderIndex(data, query, offset = 0) {
+  function renderIndex(data: MarketEntityList, query: string, offset = 0) {
     const q = query.trim().toLowerCase();
-    const match = row => !q || (row.name || row.title || '').toLowerCase().includes(q) || (row.id || '').toLowerCase().includes(q);
+    const match = (row: {id: string; name?: string; title?: string}) => !q || (row.name || row.title || '').toLowerCase().includes(q) || (row.id || '').toLowerCase().includes(q);
     const rows = data.entities || [];
     rows.forEach(row => byId.set(row.id, row));
-    const groups = [['Pages', pages.filter(doc => doc.id !== 'market/overview' && match(doc)).map(doc => ({id: doc.id, name: doc.title}))]];
+    const groups: Array<[string, MarketRow[]]> = [['Pages', pages.filter(doc => doc.id !== 'market/overview' && match(doc)).map(doc => ({id: doc.id, name: doc.title}))]];
     for (const [type, label] of MARKET_TYPES) {
       const typed = rows.filter(row => row.type === type);
       if (typed.length) groups.push([label, typed]);
@@ -193,14 +274,14 @@ async function mountMarket(shell) {
       ${data.next_offset != null ? '<button type="button" data-market-next>Next</button>' : ''}</div>`);
     const prev = index.querySelector('[data-market-prev]'), next = index.querySelector('[data-market-next]');
     if (prev) prev.onclick = () => void fetchIndex(query, Math.max(0, offset - 50));
-    if (next) next.onclick = () => void fetchIndex(query, data.next_offset);
+    if (next) next.onclick = () => void fetchIndex(query, data.next_offset!);   // Next is drawn only with a next_offset
   }
-  async function fetchIndex(query, offset = 0) {
+  async function fetchIndex(query: string, offset = 0) {
     const version = ++listVersion;
     try {
-      const data = await get('/v2/market/entities?' + new URLSearchParams({status: 'active', limit: 50, offset, q: query}));
+      const data = await get<MarketEntityList>('/v2/market/entities?' + new URLSearchParams({status: 'active', limit: '50', offset: String(offset), q: query}));
       if (!stopped && version === listVersion) renderIndex(data, query, offset);
-    } catch (error) { if (!stopped && version === listVersion) index.textContent = error.message; }
+    } catch (error) { if (!stopped && version === listVersion) index.textContent = errorMessage(error, ''); }
   }
   renderIndex(listing, '');
   filter.oninput = () => {
@@ -209,25 +290,25 @@ async function mountMarket(shell) {
   };
   // Research on the page or entry being read (ui/docs-editor.js).
   let shownBody = '';
-  $('#market-read').addEventListener('click', event => {
-    const button = event.target.closest('[data-market-research]');
+  $('#market-read').addEventListener('click', (event: MouseEvent) => {
+    const button = eventElement(event)?.closest<HTMLElement>('[data-market-research]');
     if (button) DocsEditor.researchDialog({target: button.dataset.marketResearch, body: shownBody});
   });
 
-  async function open(id) {
+  async function open(id: string) {
     const version = ++openVersion;
     const overview = $('#market-overview');
     const onBrief = id === MARKET_BRIEF;
     overview.classList.toggle('cur', onBrief);
     if (onBrief) overview.setAttribute('aria-current', 'page'); else overview.removeAttribute('aria-current');
-    index.querySelectorAll('a').forEach(link => {
+    index.querySelectorAll('a').forEach((link: HTMLAnchorElement) => {
       const on = link.dataset.marketNote === id;
       link.classList.toggle('cur', on);
       if (on) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
     });
     const read = $('#market-read');
-    const showDoc = async doc => {
-      const full = await get('/company-docs/' + doc.id.split('/').map(encodeURIComponent).join('/'));
+    const showDoc = async (doc: MarketDoc) => {
+      const full = await get<{content?: string}>('/company-docs/' + doc.id.split('/').map(encodeURIComponent).join('/'));
       if (stopped || version !== openVersion) return;
       shownBody = full.content || '';
       read.innerHTML = `${marketHead('Market', doc.id === 'market/weekly-delta' ? '' : doc.id)}<div class="md market-md">${safeMd(shownBody)}</div>`;
@@ -244,7 +325,7 @@ async function mountMarket(shell) {
     if (!doc) {
       try {
         const [shown] = await Promise.all([
-          get('/v2/market/entities/' + id.split('/').map(encodeURIComponent).join('/') + '?names=true'), loadGraph(id),
+          get<MarketShown>('/v2/market/entities/' + id.split('/').map(encodeURIComponent).join('/') + '?names=true'), loadGraph(id),
         ]);
         if (stopped || version !== openVersion) return;
         byId.set(id, shown.entity);
@@ -256,7 +337,7 @@ async function mountMarket(shell) {
         if (current) current.scrollIntoView({block: 'nearest'});
       } catch (error) {
         if (!stopped && version === openVersion) {
-          read.innerHTML = `<p class="market-empty">${esc(error.message || 'That note is not in the market.')}</p>`;
+          read.innerHTML = `<p class="market-empty">${esc(errorMessage(error, 'That note is not in the market.'))}</p>`;
           graph.focus(null);
         }
       }
@@ -278,9 +359,9 @@ async function mountMarket(shell) {
 // is read every thirty seconds (two small GETs), and the page is drawn again once the notice is done.
 const MARKET_RESEARCH_KEY = 'tico.market.researching';
 const MARKET_RESEARCH_MIN = 2 * 60 * 1000, MARKET_RESEARCH_MAX = 30 * 60 * 1000, MARKET_RESEARCH_POLL = 30 * 1000;
-let MARKET_RESEARCH = null;        // the same record in memory, for a browser that will not store it
+let MARKET_RESEARCH: MarketResearchRow | null = null;        // the same record in memory, for a browser that will not store it
 // [key, question, hint, placeholder]. Only the first must be answered: the research finds the rest.
-const MARKET_QUESTIONS = [
+const MARKET_QUESTIONS: Array<[string, string, string, string]> = [
   ['sell', 'What do you sell?', 'Your website, or a sentence or two.', 'https://example.com'],
   ['buyers', 'Who buys it?', 'The kinds of companies or people, and where they are. Optional.', 'Property managers in the US Midwest'],
   ['competitors', 'Who do you compete with?', 'Names or websites, one per line. Optional.', 'CleanCo\nhttps://sparkle.example'],
@@ -296,7 +377,7 @@ function marketResearchGet() {
   return null;
 }
 
-function marketResearchSet(row) {
+function marketResearchSet(row: MarketResearchRow | null) {
   MARKET_RESEARCH = row;
   try { if (row) localStorage.setItem(MARKET_RESEARCH_KEY, JSON.stringify(row)); else localStorage.removeItem(MARKET_RESEARCH_KEY); } catch { /* memory only */ }
 }
@@ -304,13 +385,13 @@ function marketResearchSet(row) {
 // What the market holds, in one string: how many entities, and when its newest page was written. The seed's
 // pages are already there when the owner asks, so "has content" means "differs from what it was when asked".
 async function marketSig() {
-  const [entities, pages] = await Promise.all([get('/v2/market/entities?limit=1'), get('/company-docs?collection=market')]);
+  const [entities, pages] = await Promise.all([get<MarketEntityList>('/v2/market/entities?limit=1'), get<MarketDocList>('/company-docs?collection=market')]);
   const written = (pages.documents || []).filter(doc => doc.id !== 'market/weekly-delta').map(doc => String(doc.fetched || ''));
   return `${(entities.total ?? (entities.entities || []).length)}|${written.reduce((a, b) => a > b ? a : b, '')}`;
 }
 
-function marketQuestionHtml(setup) {
-  const [key, question, hint, placeholder] = MARKET_QUESTIONS[setup.step];
+function marketQuestionHtml(setup: MarketSetupState) {
+  const [key, question, hint, placeholder] = MARKET_QUESTIONS[setup.step]!;
   const last = setup.step === MARKET_QUESTIONS.length - 1;
   return `<form class="market-start" data-market-setup data-step="${setup.step}" novalidate>
       <h1><label for="market-answer">${esc(question)}</label></h1>
@@ -324,7 +405,7 @@ function marketQuestionHtml(setup) {
     </form>`;
 }
 
-function marketBlankHtml(row, setup) {
+function marketBlankHtml(row: MarketResearchRow | null, setup: MarketSetupState | null) {
   if (row) return `<div class="market-researching" data-market-researching role="status">
       <span class="market-spin" aria-hidden="true"></span>
       <div><strong>Researching your market.</strong>
@@ -340,10 +421,10 @@ function marketBlankHtml(row, setup) {
     </div>`;
 }
 
-async function mountBlank(shell) {
-  let poll = 0, setup = null;
+async function mountBlank(shell: HTMLElement): Promise<MarketMounted> {
+  let poll = 0, setup: MarketSetupState | null = null;
   if (S.me?.cloud && S.me.role === 'owner') {
-    try { setup = (await get('/v2/librarian/setup')).market; } catch { setup = null; }
+    try { setup = (await get<{market: MarketSetupState | null}>('/v2/librarian/setup')).market; } catch { setup = null; }
     if (setup) setup = {...setup, answers: {...setup.answers}};
     // Filed from another browser and still being worked on: the notice, not the questions. Its thirty minutes
     // count from when the task was filed, so a reload never starts them again.
@@ -352,7 +433,7 @@ async function mountBlank(shell) {
         && Date.now() - filed < MARKET_RESEARCH_MAX)
       marketResearchSet({at: filed, task: setup.task.id, base: null});
   }
-  const watch = on => {
+  const watch = (on: boolean) => {
     if (!on) { clearInterval(poll); poll = 0; }
     else if (!poll) poll = setInterval(() => { if (!document.hidden) void tick(); }, MARKET_RESEARCH_POLL);
   };
@@ -361,12 +442,12 @@ async function mountBlank(shell) {
     shell.className = 'market-shell market-shell-blank';
     shell.innerHTML = marketBlankHtml(row, setup);
     watch(!!row);
-    if (!row) shell.querySelector('#market-answer')?.focus();
+    if (!row) shell.querySelector<HTMLElement>('#market-answer')?.focus();
   };
   async function tick() {
     const row = marketResearchGet();
     if (!row) { watch(false); window.marketReload(); return; }          // thirty minutes passed: the questions are back
-    let sig;
+    let sig: string;
     try { sig = await marketSig(); } catch { return; }                   // the next tick tries again
     const arrived = row.base == null ? !sig.startsWith('0|') : sig !== row.base;
     if (arrived && Date.now() - Number(row.at) >= MARKET_RESEARCH_MIN) {
@@ -377,38 +458,44 @@ async function mountBlank(shell) {
   }
   // Keeps what is typed in the open question, then tells the server where the owner is.
   const keep = () => {
-    const field = shell.querySelector('#market-answer');
-    if (field) setup.answers[MARKET_QUESTIONS[setup.step][0]] = field.value.trim();
+    if (!setup) return;
+    const field = shell.querySelector<HTMLTextAreaElement>('#market-answer');
+    const asked = MARKET_QUESTIONS[setup.step];
+    if (field && asked) setup.answers[asked[0]] = field.value.trim();
   };
   // One write at a time, in the order they were made: a slow Back save never lands after the Next that followed it.
-  let saving = Promise.resolve();
-  const send = (step, action) => {
-    const body = {answers: {...setup.answers}, step, action};
-    const sent = saving.catch(() => {}).then(() => post('/v2/librarian/setup/market', body));
+  let saving: Promise<unknown> = Promise.resolve();
+  // Only the open question's buttons send, and they are drawn only once setup is read.
+  const send = (step: number, action: string) => {
+    const body = {answers: {...setup!.answers}, step, action};
+    const sent: Promise<MarketSetupState> = saving.catch(() => {}).then(() => post('/v2/librarian/setup/market', body));
     saving = sent;
     return sent;
   };
-  const fail = (form, error) => {
-    const line = form.querySelector('[data-market-error]');
-    line.textContent = error.message || 'That did not go through.'; line.hidden = false;
+  const fail = (form: Element, error: unknown) => {
+    const line = form.querySelector<HTMLElement>('[data-market-error]');
+    if (!line) return;
+    line.textContent = errorMessage(error, 'That did not go through.'); line.hidden = false;
     form.querySelectorAll('button').forEach(button => { button.disabled = false; });
   };
   shell.onclick = async event => {
-    if (event.target.closest('[data-market-continue]')) { setup.skipped = false; draw(); return; }
-    const form = event.target.closest('[data-market-setup]');
+    const target = eventElement(event);
+    if (!setup) return;
+    if (target?.closest('[data-market-continue]')) { setup.skipped = false; draw(); return; }
+    const form = target?.closest('[data-market-setup]');
     if (!form) return;
-    if (event.target.closest('[data-market-back]')) {
+    if (target?.closest('[data-market-back]')) {
       keep(); setup.step -= 1; draw();
       send(setup.step, 'save').catch(() => { /* kept here; the next answer saves it */ });
-    } else if (event.target.closest('[data-market-skip]')) {
+    } else if (target?.closest('[data-market-skip]')) {
       keep();
       form.querySelectorAll('button').forEach(button => { button.disabled = true; });
       try { setup = {...setup, ...(await send(setup.step, 'skip')), answers: setup.answers}; draw(); } catch (error) { fail(form, error); }
     }
   };
   shell.onsubmit = async event => {
-    const form = event.target.closest('[data-market-setup]');
-    if (!form) return;
+    const form = eventElement(event)?.closest('[data-market-setup]');
+    if (!form || !setup) return;
     event.preventDefault();
     keep();
     if (setup.step === 0 && !setup.answers.sell) return fail(form, new Error('Add your website, or a sentence about what you sell.'));
@@ -428,17 +515,17 @@ async function mountBlank(shell) {
 }
 
 // The note's kicker, and Research for a page or entry the research can add to.
-function marketHead(kicker, target) {
+function marketHead(kicker: string, target: string) {
   return `<div class="market-read-head"><p class="market-kicker">${esc(kicker)}</p>${target && S.me?.role === 'owner'
     ? `<button class="market-research" type="button" data-market-research="${esc(target)}">Research</button>` : ''}</div>`;
 }
 
-function renderEntity(shown, names) {
+function renderEntity(shown: MarketShown, names: Map<string, MarketRow>) {
   const entity = shown.entity;
   const bits = [entity.type, entity.tier].filter(Boolean).join(' · ');
   const aliases = (entity.aliases || []).filter(name => name && name !== entity.name);
-  const nameOf = id => names.get(id)?.name || id;
-  const lines = [];
+  const nameOf = (id: string) => names.get(id)?.name || id;
+  const lines: string[] = [];
   for (const [rel, bucket] of Object.entries(shown.edges || {})) {
     for (const edge of [...(bucket.out || []), ...(bucket.in || [])]) {
       const other = edge.src === entity.id ? edge.dst : edge.src;

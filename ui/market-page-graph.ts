@@ -2,9 +2,58 @@
    simulation, drawn in the theme's colours, panned with a drag and zoomed with the wheel. A click opens the node's note. */
 'use strict';
 
-function mountGraph(canvas, rows, edges) {
-  let nodes = [], byId = new Map(), links = [];
-  function replace(rows, edges, parentId = null) {
+/** A node as the graph lays it out: the row's facts, its radius, place and speed. */
+interface MarketGraphNode {
+  id: string;
+  name: string;
+  type: string | undefined;
+  tier?: string | null | undefined;
+  r: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  pinned: boolean;
+}
+
+interface MarketGraphLink {
+  a: MarketGraphNode;
+  b: MarketGraphNode;
+  rel: string;
+}
+
+interface MarketGraphPalette {
+  bg: string;
+  ink: string;
+  soft: string;
+  muted: string;
+  line: string;
+  ok: string;
+  accent: string;
+}
+
+/** A press on the canvas: where it started, the view then, and the node under it. */
+interface MarketGraphDrag {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  moved: boolean;
+  node: MarketGraphNode | null;
+}
+
+/** A label's box in the graph's coordinates. */
+interface MarketGraphBox {
+  l: number;
+  r: number;
+  t: number;
+  b: number;
+}
+
+function mountGraph(canvas: HTMLCanvasElement, rows: MarketRow[], edges: MarketEdge[]) {
+  // Keyed by id; a null look-up (no parent, no focus) finds nothing.
+  let nodes: MarketGraphNode[] = [], byId = new Map<string | null, MarketGraphNode>(), links: MarketGraphLink[] = [];
+  function replace(rows: MarketRow[], edges: MarketEdge[], parentId: string | null = null) {
     const old = byId, parent = old.get(parentId);
     nodes = rows.slice(0, 300).map((row, index) => {
       const kept = old.get(row.id);
@@ -17,25 +66,25 @@ function mountGraph(canvas, rows, edges) {
         vx: 0, vy: 0, pinned: !!kept || row.id === parentId};
     });
     byId = new Map(nodes.map(node => [node.id, node]));
-    links = edges.map(edge => ({a: byId.get(edge.src), b: byId.get(edge.dst), rel: edge.rel})).filter(link => link.a && link.b);
+    links = edges.map(edge => ({a: byId.get(edge.src), b: byId.get(edge.dst), rel: edge.rel})).filter(link => link.a && link.b) as MarketGraphLink[];
     const self = byId.get(marketSelfId());
     if (self && !old.has(self.id)) { self.x = 0; self.y = 0; }
   }
   replace(rows, edges);
-  let focus = null;
-  let hover = null;
+  let focus: string | null = null;
+  let hover: string | null = null;
   let ticks = 0, settled = 0, raf = 0;
   let running = true;
   const view = {x: 0, y: 0, k: 1};
-  let drag = null;
+  let drag: MarketGraphDrag | null = null;
 
   function step() {
     // Beyond nearby cells repulsion is negligible; the grid avoids all-pairs work.
-    const grid = new Map(), cellSize = 100;
+    const grid = new Map<string, MarketGraphNode[]>(), cellSize = 100;
     for (const node of nodes) {
       const key = Math.floor(node.x / cellSize) + ',' + Math.floor(node.y / cellSize);
       if (!grid.has(key)) grid.set(key, []);
-      grid.get(key).push(node);
+      grid.get(key)!.push(node);
     }
     for (const node of nodes) {
       if (node.pinned) continue;
@@ -78,7 +127,7 @@ function mountGraph(canvas, rows, edges) {
   }
 
   function neighbors() {
-    const near = new Set();
+    const near = new Set<string>();
     if (!focus) return near;
     near.add(focus);
     for (const link of links) {
@@ -89,13 +138,13 @@ function mountGraph(canvas, rows, edges) {
   }
 
   // The theme's colours (ui/styles/tokens.css), read once a frame so a theme switch repaints at once.
-  let pal = {};
+  let pal = {} as MarketGraphPalette;   // palette() fills it before each frame reads it
   function palette() {
-    const cs = getComputedStyle(canvas), v = name => cs.getPropertyValue(name).trim();
+    const cs = getComputedStyle(canvas), v = (name: string) => cs.getPropertyValue(name).trim();
     pal = {bg: v('--bg') || '#121417', ink: v('--ink') || '#e6e9ee', soft: v('--g7') || '#b6bec9', muted: v('--muted') || '#8a93a0',
       line: v('--g5') || '#5b6470', ok: v('--ok') || '#6cc48f', accent: v('--accent') || '#45c09c'};
   }
-  function color(node, near) {
+  function color(node: MarketGraphNode, near: Set<string>) {
     if (node.id === focus || near.has(node.id)) return pal.ink;
     if (node.type === 'segment') return pal.ok;
     if (node.tier === 'core') return pal.ink;
@@ -114,6 +163,7 @@ function mountGraph(canvas, rows, edges) {
       canvas.width = width; canvas.height = height;
     }
     const ctx = canvas.getContext('2d');
+    if (!ctx) return;
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     ctx.clearRect(0, 0, rect.width, rect.height);
     palette();
@@ -148,15 +198,15 @@ function mountGraph(canvas, rows, edges) {
     // Labels go in order of importance, each to the right, left, above or below its node, wherever it covers no
     // label already drawn and no other node; a minor one with no free spot is left out.
     const few = nodes.length <= 40;
-    const rank = node => node.id === focus || node.id === hover ? 0 : near.has(node.id) ? 1 : node.tier === 'core' || node.id === marketSelfId() ? 2 : 3;
-    const placed = [], h = 14;
-    const hits = (box, self) => placed.some(o => box.l < o.r && box.r > o.l && box.t < o.b && box.b > o.t)
+    const rank = (node: MarketGraphNode) => node.id === focus || node.id === hover ? 0 : near.has(node.id) ? 1 : node.tier === 'core' || node.id === marketSelfId() ? 2 : 3;
+    const placed: MarketGraphBox[] = [], h = 14;
+    const hits = (box: MarketGraphBox, self: MarketGraphNode) => placed.some(o => box.l < o.r && box.r > o.l && box.t < o.b && box.b > o.t)
       || nodes.some(n => n !== self && n.x + n.r > box.l && n.x - n.r < box.r && n.y + n.r > box.t && n.y - n.r < box.b);
     ctx.lineJoin = 'round';
     for (const node of [...nodes].sort((a, b) => rank(a) - rank(b)).slice(0, 60)) {
       if (!few && rank(node) === 3) continue;
       const w = ctx.measureText(node.name).width, gap = node.r + 5;
-      const spots = [[node.x + gap, node.y], [node.x - gap - w, node.y], [node.x - w / 2, node.y - gap - 4], [node.x - w / 2, node.y + gap + 4]]
+      const spots = ([[node.x + gap, node.y], [node.x - gap - w, node.y], [node.x - w / 2, node.y - gap - 4], [node.x - w / 2, node.y + gap + 4]] satisfies Array<[number, number]>)
         .map(([x, y]) => ({x, y, box: {l: x - 2, r: x + w + 2, t: y - h / 2, b: y + h / 2}}));
       const spot = spots.find(o => !hits(o.box, node)) || (rank(node) < 3 ? spots[0] : null);
       if (!spot) continue;
@@ -180,15 +230,15 @@ function mountGraph(canvas, rows, edges) {
   document.addEventListener('visibilitychange', visibility);
   invalidate();
 
-  function world(event) {
+  function world(event: MouseEvent) {
     const rect = canvas.getBoundingClientRect();
     return {
       x: (event.clientX - rect.left - rect.width / 2 - view.x) / view.k,
       y: (event.clientY - rect.top - rect.height / 2 - view.y) / view.k,
     };
   }
-  function hit(point) {
-    let found = null;
+  function hit(point: {x: number; y: number}) {
+    let found: MarketGraphNode | null = null;
     let best = 14 / view.k;
     for (const node of nodes) {
       const dist = Math.hypot(node.x - point.x, node.y - point.y);
@@ -220,7 +270,7 @@ function mountGraph(canvas, rows, edges) {
     if (!moved && picked) location.hash = marketHref(picked.id);
   };
   window.addEventListener('mouseup', release);
-  const wheel = event => {
+  const wheel = (event: WheelEvent) => {
     event.preventDefault();
     const next = Math.min(2.4, Math.max(0.45, view.k * (event.deltaY < 0 ? 1.08 : 0.92)));
     view.k = next;
@@ -229,7 +279,7 @@ function mountGraph(canvas, rows, edges) {
   canvas.addEventListener('wheel', wheel, {passive: false});
 
   return {
-    update(rows, edges, id) {
+    update(rows: MarketRow[], edges: MarketEdge[], id: string | null) {
       replace(rows, edges, id);
       focus = byId.has(id) ? id : null;
       const parent = byId.get(id);
@@ -237,7 +287,7 @@ function mountGraph(canvas, rows, edges) {
       else { view.x = 0; view.y = 0; view.k = 1; }
       ticks = 0; settled = 0; invalidate();
     },
-    focus(id) { focus = byId.has(id) ? id : null; invalidate(); },
+    focus(id: string | null) { focus = byId.has(id) ? id : null; invalidate(); },
     stop() {
       running = false; cancelAnimationFrame(raf);
       resize.disconnect(); theme.disconnect();
