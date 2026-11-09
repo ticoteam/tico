@@ -57,7 +57,7 @@ function nativeVisualRepaint() {
   // neither while an answer from it is on its way, so its controls stay off.
   if (typeof DEC !== 'undefined' && DEC && !DEC.busy) decidePaintBody(DEC);
   if (typeof qcardRedraw === 'function')
-    for (const box of document.querySelectorAll('[data-qcard]:not([aria-busy="true"])'))
+    for (const box of document.querySelectorAll<HTMLElement>('[data-qcard]:not([aria-busy="true"])'))
       if (qcardShown(box)) { qcardDraft(box); qcardRedraw(box); }
 }
 const visualRef = f => `${f.file_id}@${Number(f.version)}`;
