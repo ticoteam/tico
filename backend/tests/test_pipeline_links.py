@@ -1,6 +1,10 @@
 """Handoff links between pipelines (Track A): a move link lands the ticket in the first stage of the target pipeline, a link
 that would branch is refused, only rule editors link, and a handoff row goes to the trash and back with its ticket."""
 
+import sqlite3
+from contextlib import closing
+from pathlib import Path
+
 import pytest
 
 from backend import hubdb as H
@@ -11,9 +15,20 @@ from backend.tests.test_pipeline_engine import BEN, requirement, states
 from backend.tests.test_pipeline_foundation import ANA, boot, hub, rows, step_id
 
 
-def two(tmp_path):
-    boot(tmp_path / "hub.sqlite")
-    c = hub(tmp_path / "hub.sqlite")
+@pytest.fixture(scope="module")
+def booted(tmp_path_factory) -> Path:
+    """One boot for the module (Store.initialize is the slow part); each test copies it."""
+    path = tmp_path_factory.mktemp("pipeline-links") / "booted.sqlite"
+    boot(path)
+    return path
+
+
+def two(tmp_path, booted):
+    path = tmp_path / "hub.sqlite"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(booted)) as source, closing(sqlite3.connect(path)) as target:
+        source.backup(target)
+    c = hub(path)
     sales = H.type_create(
         c,
         ANA,
@@ -44,8 +59,8 @@ def refused(fn):
     return raised.value
 
 
-def test_a_move_link_sends_the_ticket_to_the_targets_first_stage_and_records_it(tmp_path):
-    c, sales, success, _ = two(tmp_path)
+def test_a_move_link_sends_the_ticket_to_the_targets_first_stage_and_records_it(tmp_path, booted):
+    c, sales, success, _ = two(tmp_path, booted)
     link = L.create_link(c, ANA, step_id(c, sales["id"], "Won"), success["id"], "move")
     assert L.link_for_stage(c, step_id(c, sales["id"], "Won"))["id"] == link["id"]
     requirement(c, success, "Onboarding", "Kickoff held", reviewed_by="person")
@@ -61,8 +76,8 @@ def test_a_move_link_sends_the_ticket_to_the_targets_first_stage_and_records_it(
     ] == "handoff"
 
 
-def test_advance_without_a_link_goes_to_the_next_stage_and_stops_at_the_end(tmp_path):
-    c, sales, _, _ = two(tmp_path)
+def test_advance_without_a_link_goes_to_the_next_stage_and_stops_at_the_end(tmp_path, booted):
+    c, sales, _, _ = two(tmp_path, booted)
     task = H.task_create(c, ANA, "Acme deal", "", ANA, type=sales["id"], step="Lead", lint=False)["id"]
     assert E.advance(c, ANA, task)["to"] == step_id(c, sales["id"], "Won")
     assert E.advance(c, ANA, task) == {
@@ -74,8 +89,8 @@ def test_advance_without_a_link_goes_to_the_next_stage_and_stops_at_the_end(tmp_
     }
 
 
-def test_advance_obeys_requirements_and_undoes_only_itself(tmp_path):
-    c, sales, _, _ = two(tmp_path)
+def test_advance_obeys_requirements_and_undoes_only_itself(tmp_path, booted):
+    c, sales, _, _ = two(tmp_path, booted)
     requirement(c, sales, "Lead", "Qualified", reviewed_by="person")
     task = H.task_create(c, ANA, "Acme deal", "", ANA, type=sales["id"], step="Lead", lint=False)["id"]
     out = E.advance(c, ANA, task)
@@ -84,8 +99,8 @@ def test_advance_obeys_requirements_and_undoes_only_itself(tmp_path):
     assert states(c, task) == {"Qualified": "waiting"}
 
 
-def test_a_link_that_branches_loops_or_has_nowhere_to_go_is_refused(tmp_path):
-    c, sales, success, other = two(tmp_path)
+def test_a_link_that_branches_loops_or_has_nowhere_to_go_is_refused(tmp_path, booted):
+    c, sales, success, other = two(tmp_path, booted)
     won = step_id(c, sales["id"], "Won")
     L.create_link(c, ANA, won, success["id"], "move")
     assert "no branches" in refused(lambda: L.create_link(c, ANA, won, other["id"], "spawn")).detail
@@ -96,8 +111,8 @@ def test_a_link_that_branches_loops_or_has_nowhere_to_go_is_refused(tmp_path):
     assert len(L.links(c)) == 1
 
 
-def test_only_rule_editors_change_links_and_a_retired_link_frees_the_stage(tmp_path):
-    c, sales, success, other = two(tmp_path)
+def test_only_rule_editors_change_links_and_a_retired_link_frees_the_stage(tmp_path, booted):
+    c, sales, success, other = two(tmp_path, booted)
     won = step_id(c, sales["id"], "Won")
     assert refused(lambda: L.create_link(c, BEN, won, success["id"])).rule == "link"
     link = L.create_link(c, ANA, won, success["id"])
@@ -108,8 +123,8 @@ def test_only_rule_editors_change_links_and_a_retired_link_frees_the_stage(tmp_p
     assert refused(lambda: L.retire_link(c, ANA, link["id"])).rule == "link"
 
 
-def test_a_handoff_row_follows_its_ticket_through_delete_and_restore(tmp_path):
-    c, sales, success, _ = two(tmp_path)
+def test_a_handoff_row_follows_its_ticket_through_delete_and_restore(tmp_path, booted):
+    c, sales, success, _ = two(tmp_path, booted)
     link = L.create_link(c, ANA, step_id(c, sales["id"], "Won"), success["id"])
     task = H.task_create(c, ANA, "Acme deal", "", ANA, type=sales["id"], step="Won", lint=False)["id"]
     other = H.task_create(c, ANA, "Beta deal", "", ANA, type=sales["id"], step="Won", lint=False)["id"]
@@ -121,12 +136,12 @@ def test_a_handoff_row_follows_its_ticket_through_delete_and_restore(tmp_path):
     c.close()
 
 
-def test_a_move_link_handoff_keeps_the_source_approval_in_force_once_the_work_changes(tmp_path):
+def test_a_move_link_handoff_keeps_the_source_approval_in_force_once_the_work_changes(tmp_path, booted):
     """The source pipeline's approval, given before the handoff, still gates the target: new work makes it out of date
     and the ticket cannot move on in the target pipeline until it is approved again."""
     from backend.tests.test_pipeline_engine import decide
 
-    c, sales, success, _ = two(tmp_path)
+    c, sales, success, _ = two(tmp_path, booted)
     L.create_link(c, ANA, step_id(c, sales["id"], "Won"), success["id"], "move")
     signed = requirement(c, sales, "Won", "Signed off")
     task = H.task_create(c, ANA, "Acme deal", "", ANA, type=sales["id"], step="Won", lint=False)["id"]
@@ -139,13 +154,13 @@ def test_a_move_link_handoff_keeps_the_source_approval_in_force_once_the_work_ch
     assert error.rule == "requirement" and "Signed off" in error.detail
 
 
-def test_a_refused_parent_move_after_a_subtask_finishes_keeps_the_subtasks_change(tmp_path, monkeypatch):
+def test_a_refused_parent_move_after_a_subtask_finishes_keeps_the_subtasks_change(tmp_path, monkeypatch, booted):
     """Track Y: a subtask's finish moves its parent on from inside the subtask's own write. When the parent's move is
     refused (here a spawn that could not be filed), only the parent's move rolls back: the subtask's change stands, and the
     refusal is logged on the parent with its reason."""
     from backend.store import Problem
 
-    c, _, _, _ = two(tmp_path)
+    c, _, _, _ = two(tmp_path, booted)
     product = H.type_create(
         c,
         ANA,
@@ -179,7 +194,7 @@ def test_a_refused_parent_move_after_a_subtask_finishes_keeps_the_subtasks_chang
     assert "could not be filed" in logged["note"]
 
 
-def test_a_blob_shared_by_many_tasks_is_skipped_in_a_few_statements(tmp_path):
+def test_a_blob_shared_by_many_tasks_is_skipped_in_a_few_statements(tmp_path, booted):
     """Codex r6 blocker 2: the provenance walk counted blobs and files but not tasks, and read every row of each lookup, so
     one blob on 10,000 tasks ran 20,000 statements under the writer. Tasks count toward the budget and each lookup reads
     at most the budget left plus one: past it the item is unsure (skipped), after a handful of statements."""
