@@ -83,6 +83,7 @@ Changing a task's type preserves its status and finds a matching step in the new
 empty step to clear just the step. Status permissions, completion notes, closing and reopening
 work the same way for step changes. Moving between two steps with the same status changes only
 the step, without another completion note or notice. Step changes appear in the task history.
+Closing or declining a task stops the bot work on it: its queued runs are canceled and its running turns are asked to stop, except the turn that makes the close. A stopped turn's answer is kept on its run rather than posted into the closed task, and the history records how many runs were stopped or canceled.
 
 Movers (the owner and humans on the leadership, product or engineering teams) create, rename,
 reorder and delete types and steps. Move every task off a step before deleting it, including

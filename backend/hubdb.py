@@ -8338,6 +8338,10 @@ def task_update(
         _parent_finished(conn, after, row["status"], actor, told=heard, wake=wake_others)
     if asked_in:
         after = {**after, "asked_in": {k: asked_in[k] for k in ("id", "title", "owner_id")}}
+    if status in ("closed", "declined") and (row or {}).get("status") != status:
+        # Last, so a wake this update queued after the status (a new owner's assignment) is stopped too. A close with a
+        # step already stopped the work in task_close; this then cancels only what was queued since.
+        stop_ended_work(conn, actor, task_id, status)
     return {**after, "warnings": plain} if plain else after
 
 
@@ -8827,6 +8831,30 @@ def _children_kept_closed(conn, task_id):
         )
 
 
+def _work_said(stopped, canceled):
+    """The history line a close writes about the bot work it stopped (`stop_ended_work`), or None when none was in flight."""
+    parts = []
+    if stopped:
+        parts.append(f"stopped {stopped} running {'turn' if stopped == 1 else 'turns'}")
+    if canceled:
+        parts.append(f"canceled {canceled} queued {'run' if canceled == 1 else 'runs'}")
+    return ("; ".join(parts) + ".").capitalize() if parts else None
+
+
+def stop_ended_work(conn, actor, task_id, status):
+    """A task closed or declined: the bot work on it stops (execution.end_task_work). Its queued runs are canceled and its
+    running turns asked to stop, never the turn that makes the close. One history event on the task counts them."""
+    from . import execution
+
+    stopped, canceled = execution.end_task_work(conn, actor, task_id, status)
+    said = _work_said(stopped, canceled)
+    if said:
+        _task_event(
+            conn, task_id, actor, "work", None, said, data={"stopped": stopped, "canceled": canceled, "ended": status}
+        )
+    return stopped, canceled
+
+
 @private_task_write
 def task_close(
     conn,
@@ -8965,6 +8993,8 @@ def task_close(
         )
     _recount(conn, after["owner_id"])
     _recount(conn, after["requester_id"])
+    # Last, after the close's own wakes are queued, so none of them is left running on the closed task.
+    stop_ended_work(conn, actor, task_id, "closed")
     return after
 
 
