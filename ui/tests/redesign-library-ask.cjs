@@ -1,6 +1,7 @@
 // Library on a real hub: Docs, Meetings and Tools › Keys each have an Ask button that opens the Ask panel
 // (ui/app/ask-panel.ts), which sees the page; no Librarian rail, sidebar row or settings link. The Library and Company sidebar
-// groups fold behind a chevron (kept per browser, open again on their own pages). Phone, then desktop.
+// groups fold behind a chevron (kept per browser, open again on their own pages).
+// Desktop only: the folds are the desktop sidebar's, and the phone's Ask is the same panel (ask-panel.cjs).
 const assert = require('node:assert/strict');
 const {run, open, go, sideways, shot, t} = require('./support/redesign-e2e.cjs');
 
@@ -72,4 +73,4 @@ run('redesign-library-ask', ['org', 'toured'], async ({hub, browser, phone, tag}
   }
   assert.deepEqual(page.errors, [], `${tag}: no page errors`);
   await page.context().close();
-});
+}, {only: 'desktop'});

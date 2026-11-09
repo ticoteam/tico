@@ -86,7 +86,8 @@ const judged = g => g.kpis.some(k => ['red', 'yellow', 'green'].includes(k.statu
     await page.evaluate(() => { window.__sameLoad = true; });
     const panel = page.locator('#goal-panel');
     const openPanel = async owner => {
-      if (await panel.evaluate(d => d.open).catch(() => false)) await panel.locator('[data-gp-close]').click();
+      // Count first: before the first open there is no panel, and evaluate would wait out its 30 s timeout.
+      if (await panel.count() && await panel.evaluate(d => d.open)) await panel.locator('[data-gp-close]').click();
       await page.locator(`#goal-tree .gt-row[data-owner="${owner}"]:not(.gt-cont) .gt-name`).click();
       await panel.locator('.gp-goal').first().waitFor();
     };
