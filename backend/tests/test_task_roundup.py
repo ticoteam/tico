@@ -2139,7 +2139,6 @@ def test_a_blocker_on_ice_puts_the_card_it_holds_on_no_bots_list(api):
         assert f"{mine[:8]} Print the menu: Waiting on you" in only_list(c, "ops")
 
 
-
 @pytest.mark.parametrize("state", ["running", "queued"])
 def test_a_waiting_task_is_not_listed_to_a_bot_already_working_the_task_that_holds_it(api, state):
     """PR #3092 factory sim (architect): Find stuck ran while the architect was mid-turn on Plan: Ticket 4 and told it
