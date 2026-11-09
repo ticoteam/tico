@@ -3,7 +3,7 @@ fixes it when it is a known gap today, so a failing check reads as "not built ye
 
 from collections import Counter
 
-from .board import design_board
+from .board import design_board, qa_board
 from .sim import Scenario, at, tickets
 from .world import START
 
@@ -64,8 +64,9 @@ def noise_under(share):
 
 
 def one_review_per_round(run):
-    """Linear reviews: a review step that sends changes to fixes, which then go on to another step, gets one check per
-    ticket; only a step whose fixes come back to it (QA) can have several."""
+    """Linear reviews: a review step that sends changes to fixes, which then go on to another step, gets one review per
+    ticket; only a step whose fixes come back to it (QA) can have several. A check filed again with no verdict is not a
+    review, so only checks that gave a verdict count."""
     board = run.w.board
     once = {
         s.name
@@ -74,24 +75,76 @@ def one_review_per_round(run):
     }
     extra = []
     for t in run.final:
-        kinds = Counter(run.w.check_step(c) for c in run.w.checks(t["id"]) if not c["title"].startswith("Plan:"))
+        kinds = Counter(
+            run.w.check_step(c)
+            for c in run.w.checks(t["id"])
+            if not c["title"].startswith("Plan:") and c.get("verdict")
+        )
         extra += [f"{t['title']} {k} x{n}" for k, n in kinds.items() if k in once and n > 1]
     return not extra, ", ".join(extra[:6])
 
 
+def _hours(run, start, stop):
+    return (run.w.H.parse_ts(stop) - run.w.H.parse_ts(start)).total_seconds() / 3600
+
+
 def max_at_check(slack=0.5):
-    """No check keeps a ticket waiting longer than its timeout (plus `slack` hours for the sweep to act): from the
-    ticket reaching the step to its verdict, its skipped round or its merge wake."""
+    """No check and no wait for a reviewer keeps a ticket past its step's timeout (plus `slack` hours for the sweep to
+    act). A check is timed from its own filing to its verdict or its refile, so a refiled check's time is not added to
+    the next one's. A wait is timed from when it began to its filing (or to the end, while it waits); its reason says
+    which pool bots were passed over."""
 
     def check(run):
+        end = run.end.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         long = []
         for t in run.final:
-            spans = run.w.check_waits(t["id"], until=run.end.strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
-            for name, span in spans:
-                step = run.w.board.step(name)
-                if step and step.check and span > step.check.timeout_hours + slack:
-                    long.append(f"{t['title']} {name} {span:.1f}h")
+            for ch in run.w.checks(t["id"]):
+                name = None if ch["title"].startswith("Plan:") else run.w.check_step(ch)
+                step = run.w.board.step(name) if name else None
+                if not step or not step.check:
+                    continue
+                stop = ch["updated_at"] if ch["status"] in ("done", "closed") else end
+                span = _hours(run, ch["created_at"], stop)
+                if span > step.check.timeout_hours + slack:
+                    long.append(f"{t['title']} {name} check {span:.1f}h")
+            for w in run.w.sql(
+                "SELECT w.created_at, w.updated_at, w.state, w.reason, s.name FROM check_waits w "
+                "JOIN task_steps s ON s.id=w.step_id WHERE w.ticket_id=?",
+                (t["id"],),
+            ):
+                step = run.w.board.step(w["name"])
+                if not step or not step.check:
+                    continue
+                stop = end if w["state"] == "waiting" else w["updated_at"]
+                span = _hours(run, w["created_at"], stop)
+                if span > step.check.timeout_hours + slack:
+                    long.append(f"{t['title']} {w['name']} wait {span:.1f}h ({w['reason']})")
         return not long, ", ".join(long[:6])
+
+    return check
+
+
+def reviewed_by_others(silent):
+    """Every ticket is merged and was judged at Review 1 and Review 2 by a bot other than the `silent` one, which was
+    still given checks in the run, so the refile was exercised rather than skipped."""
+    bot = "bot:" + silent
+
+    def check(run):
+        short = []
+        for t in run.final:
+            step = run.w.board.step(t["step"])
+            if not (step and step.merged):
+                short.append(f"{t['title']} not merged")
+                continue
+            for name in ("Review 1", "Review 2"):
+                judged = run.w.judged(t["id"], name)
+                if judged is None:
+                    short.append(f"{t['title']} {name} not judged")
+                elif judged["owner_id"] == bot:
+                    short.append(f"{t['title']} {name} judged by {silent}")
+        if not run.w.sql("SELECT 1 FROM tasks WHERE owner_id=? LIMIT 1", (bot,)):
+            short.append(f"{silent} was never given a check")
+        return not short, ", ".join(short[:6])
 
     return check
 
@@ -444,7 +497,7 @@ def standard(*extra):
 SCENARIOS = [
     Scenario(
         "happy_path",
-        "Six tickets, every bot answers well: assigned, R1, R2, QA, merge, release.",
+        "Six tickets, every bot answers well: assigned, R1, R2, merge, release.",
         setup=lambda run, w, team: tickets(run, w, 6),
         checks=standard(
             ("at most a fifth of turns are noise", QUEUE, noise_under(0.2)),
@@ -468,10 +521,13 @@ SCENARIOS = [
     ),
     Scenario(
         "silent_reviewer",
-        "One reviewer never reports back: its reviews time out and the round is skipped.",
+        "One reviewer never reports back: its checks time out and are filed again to another reviewer.",
         setup=lambda run, w, team: tickets(run, w, 6),
         styles={"reviewer-gpt": {"silent": 1.0}},
-        checks=standard(*REVIEW_TIMEOUT),
+        checks=standard(
+            *REVIEW_TIMEOUT,
+            ("every ticket merged, reviewed by other bots", None, reviewed_by_others("reviewer-gpt")),
+        ),
     ),
     Scenario(
         "fallback_model_stop",
@@ -554,6 +610,7 @@ SCENARIOS = [
         setup=lambda run, w, team: tickets(run, w, 8),
         styles={"qa": {"fail": 0.33, "cant_test": 0.33}},
         checks=standard(),
+        board=qa_board,
     ),
     Scenario(
         "skip_qa",
@@ -561,6 +618,7 @@ SCENARIOS = [
         setup=lambda run, w, team: tickets(run, w, 8),
         styles={"qa": {"fail": 0.5}, "builder": {"skip_check": 0.5}},
         checks=standard(),
+        board=qa_board,
     ),
     Scenario(
         "off_script",

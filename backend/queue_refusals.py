@@ -63,7 +63,8 @@ def current(c, settings, bot, suspect=None, default=None, loads=None):
             c, settings, row['runner_id'], bot, default, oldest=True, with_job=True, suspect=suspect, loads=loads
         ),
     )
-    if not job or not why or why == 'lane_held':
+    # A job held for a card On ice (D69) waits on purpose until a person moves the card out: never an aged refusal.
+    if not job or not why or why in ('lane_held', 'on_ice'):
         return {}
     return {
         'bot': bot,
