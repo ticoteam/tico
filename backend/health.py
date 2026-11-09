@@ -21,6 +21,7 @@ from . import (
     hosted_updates,
     inbox_isolation,
     model_login,
+    models_preset,
     pipeline_stats,
     providers,
     releases,
@@ -203,6 +204,23 @@ def _login_dependencies(c, settings):
     return found
 
 
+def _gateway_covered(c, settings, documents):
+    """{runner_id: {runtime}}: the runtimes whose active bots' turns the Tico AI Gateway runs on each computer while its
+    subscription is not signed in there. `documents` is each computer's readiness document; the rule is
+    models_preset.gateway_line's, the claim's own."""
+    from .shared_bots import follow
+
+    record, covered = providers.load(c, settings), {}
+    for row in c.execute(
+        f"SELECT a.runner_id,a.bot,{BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
+        f"AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN}"
+    ):
+        config = providers.fill(record, follow(c, row['bot'], H._json(row['config'], {}) or {}))
+        if models_preset.gateway_line(c, row['bot'], documents.get(row['runner_id'], {}), settings, config=config):
+            covered.setdefault(row['runner_id'], set()).add(config.get('runtime'))
+    return covered
+
+
 def _login_problem(state):
     # A missing/rejected login's detail still needs the sign-in action; failed can mean a folder problem.
     return str(
@@ -271,6 +289,8 @@ def _computers(c, runners_online, settings, limits=None):
     prime(c, RUNNER_CAPABILITIES_SQL, {(r["id"],): r for r in found})  # in_effect's runner read, for every computer
     # The disk as of its last minute's sample: readiness sends the disk again only when something else changed.
     disks = latest_disks(c, [r["id"] for r in found])
+    # Runtimes whose bots the Gateway runs meanwhile, since their subscription is not signed in (models_preset).
+    covered = _gateway_covered(c, settings, {r["id"]: readiness_document(r["readiness"]) for r in found})
     for r in found:
         document = readiness_document(r["readiness"])
         runtimes = document.get("runtimes") or {}
@@ -315,8 +335,10 @@ def _computers(c, runners_online, settings, limits=None):
                         "login_unavailable": (
                             n in run_on.get(r["id"], ())
                             and n not in plan
+                            and n not in covered.get(r["id"], ())
                             and computer_login(document, n).get("authenticated") in SIGNED_OUT
                         ),
+                        "gateway_covered": n in covered.get(r["id"], ()),
                         "login_problem": _login_problem(computer_login(document, n)),
                         "signable": bool(v.get("installed"))
                         and v.get("authenticated") != "ready"
@@ -731,13 +753,14 @@ def _rejected(computers):
 
 
 def _needs_sign_in(computers):
-    """(computer, model CLI) for online computers that have to be signed in to a model they run, by hand or BotOps."""
+    """(computer, model CLI) for online computers that have to be signed in to a model they run, by hand or BotOps.
+    A model whose bots the Tico AI Gateway runs meanwhile (`gateway_covered`) is not one of them."""
     return [
         (x["label"], providers.RUNTIME_LABELS.get(r["name"], r["name"]))
         for x in computers
         if x["online"]
         for r in x["runtimes"]
-        if r["sign_in"]
+        if r["sign_in"] and not r["gateway_covered"]
     ]
 
 
@@ -3597,6 +3620,10 @@ def view(c, who, settings, auth, github, config):
             (r["name"] for x in computers if x["online"] for r in x["runtimes"] if r["name"] in wanted and r["ready"]),
             "",
         )
+        gateway_runs = next(
+            (r["name"] for x in computers if x["online"] for r in x["runtimes"] if r["gateway_covered"]),
+            "",
+        )
         rejected = _rejected(computers)
         if not wanted:
             checks.append(
@@ -3619,6 +3646,16 @@ def view(c, who, settings, auth, github, config):
                         _fix("Open Keys", "#/tools/keys?show=credentials"),
                         _fix("Open Computers", "#/settings", "devices"),
                     ],
+                )
+            )
+        elif online and not signed and gateway_runs:
+            # Its bots' turns run on the Tico AI Gateway until the subscription is signed in (models_preset.gateway_line).
+            checks.append(
+                _check(
+                    "models",
+                    "Models",
+                    "ok",
+                    f"Bots run on Tico AI Gateway until {_harness_name(gateway_runs)} is signed in.",
                 )
             )
         elif online and not signed:

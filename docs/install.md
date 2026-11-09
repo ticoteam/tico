@@ -134,7 +134,8 @@ like the one above.
 a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No GitHub account, outside Tool or real company data.
 
 1. **Check the AI provider is ready** before any real work. Open **Settings > General > Health > Details**: **Models** should read "Codex is signed
-   in." (or Claude Code). "No AI provider is chosen yet" or "No online computer is signed in to your model" means stop and follow
+   in." (or Claude Code), or "Bots run on Tico AI Gateway until Claude Code is signed in." while the Gateway runs the bots
+   meanwhile. "No AI provider is chosen yet" or "No online computer is signed in to your model" means stop and follow
    [First-result recovery](#first-result-recovery). Runs cost what your provider charges; [Usage](usage.md) shows the estimate.
    With no spending limit set (the default) there is no cap. A bot that reaches an hourly, daily, weekly or monthly limit (its own, its group's or the team's) takes no new work
    ("Paused: over its daily limit") until the period turns over or someone raises it; a run already in progress finishes.
