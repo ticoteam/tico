@@ -601,8 +601,9 @@ with no stored audience is decided by the pre-threads rules, exactly** (`threads
 of `threads.readable_sql`): a task room by the task; a person by `scope` (personal: its owner, the Strategy room
 owner-only; shared: `rooms.shared_member_ids` plus Read on the bot, live; otherwise the owner or a participant), a
 bound meeting room by the meeting; an agent bot by participation or `rooms.room_bot`; a run by its attempt's grant.
-The only narrowing: a person who left, or whose sign-in is off, reads nothing. The e2e reader-set goldens
-(`backend/tests/fixtures/threads/reader-sets-*.json`) pin it. The audience *label* is still derived live from
+The only narrowing: a person who left, or whose sign-in is off, reads nothing. The e2e test
+(`backend/tests/test_threads_migration_e2e.py`) reads the pre-threads reader sets live in the same run and checks
+`threads.readable` against them after `threads.migrate`. The audience *label* is still derived live from
 `room_key`, `scope`, `kind` and `task_id` (`threads.audience_of`) for sessions, wakes and posting rules,
 because legacy writers set those columns after the insert. A sub-thread of such a root reads as its root. Likewise `owner_actor` stays as written.
 Threads made by `threads.create`/`home`/`sub_thread` store an audience, and so does each bot's open shared room: the
