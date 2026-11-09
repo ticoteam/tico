@@ -233,3 +233,50 @@ def test_no_manager_gets_one_notice_at_the_team_owner_and_ci_pricing_runs_the_th
             ).fetchone()[0]
             == 1
         )
+
+
+def test_an_earlier_finance_cutoff_keeps_its_reason_when_a_pipeline_cap_is_reached(api):
+    from backend import usage_limits
+    from backend.finance import actions as finance
+    from backend.tests.helpers.finance_fixtures import OWNER, act as finance_act, budget, spend as record_expense
+
+    pipeline = make_pipeline(api, "Stacked limits")
+    settings(api, pipeline, {"daily_cap_usd": 0.01})
+    at = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
+
+    with api.app.state.store.transaction() as c:
+        finance.setup(c, OWNER, "2026-10-15T12:00:00.000000Z")
+        ai_budget = budget(c, "AI services")
+        changed = finance_act(
+            c,
+            OWNER,
+            "budget_update",
+            {"budget_id": ai_budget, "amount": 1},
+            at="2026-10-15T12:00:00.000000Z",
+        )
+        assert changed.status == "committed"
+        record_expense(c, "5100", 1, day="2026-10-15", teammate="bot:ops")
+        finance_hold = usage_limits.state(c, "ops", at=at)["blocked_by"]
+        assert finance_hold["scope"] == "budget"
+        assert usage_limits.why(finance_hold) == "Paused: AI services budget reached"
+
+        task = pipeline_task(c, pipeline)
+        c.execute(
+            "INSERT INTO attempts(id,bot_id,task_id,created_at,settled_at,est_cost_usd) VALUES(?,?,?,?,?,?)",
+            (
+                "in-flight-before-finance-cutoff",
+                "ops",
+                task["id"],
+                "2026-10-15T10:00:00",
+                "2026-10-15T11:30:00",
+                0.01,
+            ),
+        )
+        pipeline_budgets.after_run(c, task["id"], at)
+        assert pipeline_budgets.hold_reason(c, task["id"], at) == "pipeline_cap_daily"
+
+        # The Finance cutoff was already active before this in-flight run finished; bot-level claim admission keeps it
+        # as the effective reason while the separate pipeline reason remains scoped to this task.
+        finance_hold = usage_limits.state(c, "ops", at=at)["blocked_by"]
+        assert finance_hold["scope"] == "budget"
+        assert usage_limits.why(finance_hold) == "Paused: AI services budget reached"
