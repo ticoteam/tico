@@ -355,3 +355,11 @@ interface HTMLElement {
 interface ParentNode {
   moveBefore(node: Node, child: Node | null): void;
 }
+
+/** The open Growth page (ui/app/growth-page.ts GR): its route's load, sub-page and month; `data` is Sources' own. */
+interface GrowthState {
+  load: number;
+  sub: string;
+  month: string;
+  data: unknown;
+}

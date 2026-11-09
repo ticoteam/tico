@@ -21,7 +21,7 @@ interface GrState { load: number; sub: string; month: string; data: GrSourcesDat
 let GR: GrState | null = null;            // the open Growth page: {load, sub, month}, and Sources' {data}
 let GR_LOAD = 0;
 const GR_STAGES = [['reach', 'Reach'], ['acquire', 'Acquire'], ['activate', 'Activate'], ['retain', 'Retain'], ['refer', 'Refer']];
-const GR_CH_STAGE = {idea: 'Idea', testing: 'Testing', scaling: 'Scaling', paused: 'Paused'};
+const GR_CH_STAGE: Record<string, string> = {idea: 'Idea', testing: 'Testing', scaling: 'Scaling', paused: 'Paused'};
 // A marketing task's step, by its stage (backend/cards.py growth_board; the step names of backend/marketing_tasks.py).
 const GR_TASK_STAGE = {idea: 'On deck', building: 'In development', testing: 'Live', scaling: 'Working'};
 
