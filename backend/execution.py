@@ -6343,10 +6343,14 @@ class Execution:
                 )
                 continue
             ended = _ended_work(c, mid)
-            job = ended and c.execute(
-                "SELECT id,bot_id,attempt_id,message_id FROM jobs WHERE message_id=? AND attempt_id=?", (mid, aid)
-            ).fetchone()
-            if job:
+            job = (
+                c.execute(
+                    "SELECT id,bot_id,attempt_id,message_id FROM jobs WHERE message_id=? AND attempt_id=?", (mid, aid)
+                ).fetchone()
+                if ended
+                else None
+            )
+            if ended and job:
                 # Its task was closed or declined while this input waited (end_task_work): it does not run again.
                 suppress_notice(c, dict(job), ended[0], f"Its task was {H.TASK_ENDED[ended[1]]}.")
                 c.execute("UPDATE jobs SET attempt_id=NULL WHERE id=?", (job["id"],))
