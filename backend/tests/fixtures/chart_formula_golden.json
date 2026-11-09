@@ -96,7 +96,7 @@
           },
           {
             "id": "conversion-rate-optimization-owner",
-            "template": "cro",
+            "template": "cro-owner",
             "title": "Conversion Rate Optimization Owner",
             "department": "marketing",
             "reports_to": "marketing-team-manager",
@@ -146,7 +146,7 @@
           },
           {
             "id": "lead-generation-owner",
-            "template": "lead-generation",
+            "template": "lead-generation-owner",
             "title": "Lead Generation Owner",
             "department": "sales",
             "reports_to": "sales-manager",
@@ -445,7 +445,7 @@
           },
           {
             "id": "lead-generation-owner",
-            "template": "lead-generation",
+            "template": "lead-generation-owner",
             "title": "Lead Generation Owner",
             "department": "sales",
             "reports_to": "sales-manager",
@@ -742,7 +742,7 @@
           },
           {
             "id": "conversion-rate-optimization-owner",
-            "template": "cro",
+            "template": "cro-owner",
             "title": "Conversion Rate Optimization Owner",
             "department": "marketing",
             "reports_to": "marketing-team-manager",
@@ -792,7 +792,7 @@
           },
           {
             "id": "lead-generation-owner",
-            "template": "lead-generation",
+            "template": "lead-generation-owner",
             "title": "Lead Generation Owner",
             "department": "sales",
             "reports_to": "sales-manager",
@@ -1028,7 +1028,7 @@
           },
           {
             "id": "conversion-rate-optimization-owner",
-            "template": "cro",
+            "template": "cro-owner",
             "title": "Conversion Rate Optimization Owner",
             "department": "marketing",
             "reports_to": "marketing-team-manager",
@@ -1078,7 +1078,7 @@
           },
           {
             "id": "lead-generation-owner",
-            "template": "lead-generation",
+            "template": "lead-generation-owner",
             "title": "Lead Generation Owner",
             "department": "sales",
             "reports_to": "sales-manager",
@@ -1307,7 +1307,7 @@
           },
           {
             "id": "conversion-rate-optimization-owner",
-            "template": "cro",
+            "template": "cro-owner",
             "title": "Conversion Rate Optimization Owner",
             "department": "marketing",
             "reports_to": "marketing-team-manager",
@@ -1357,7 +1357,7 @@
           },
           {
             "id": "lead-generation-owner",
-            "template": "lead-generation",
+            "template": "lead-generation-owner",
             "title": "Lead Generation Owner",
             "department": "sales",
             "reports_to": "sales-manager",
@@ -1573,7 +1573,7 @@
           },
           {
             "id": "conversion-rate-optimization-owner",
-            "template": "cro",
+            "template": "cro-owner",
             "title": "Conversion Rate Optimization Owner",
             "department": "marketing",
             "reports_to": "marketing-team-manager",
@@ -1623,7 +1623,7 @@
           },
           {
             "id": "lead-generation-owner",
-            "template": "lead-generation",
+            "template": "lead-generation-owner",
             "title": "Lead Generation Owner",
             "department": "sales",
             "reports_to": "sales-manager",
@@ -1885,7 +1885,7 @@
           },
           {
             "id": "lead-generation-owner",
-            "template": "lead-generation",
+            "template": "lead-generation-owner",
             "title": "Lead Generation Owner",
             "department": "sales",
             "reports_to": "sales-manager",
@@ -2110,7 +2110,7 @@
           },
           {
             "id": "conversion-rate-optimization-owner",
-            "template": "cro",
+            "template": "cro-owner",
             "title": "Conversion Rate Optimization Owner",
             "department": "marketing",
             "reports_to": "marketing-team-manager",
@@ -2160,7 +2160,7 @@
           },
           {
             "id": "lead-generation-owner",
-            "template": "lead-generation",
+            "template": "lead-generation-owner",
             "title": "Lead Generation Owner",
             "department": "sales",
             "reports_to": "sales-manager",

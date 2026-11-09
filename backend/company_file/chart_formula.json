@@ -16,7 +16,7 @@
     "statement": ": “{statement}”"
   },
   "channels": [
-    {"key": "cro", "title": "Conversion Rate Optimization Owner", "template": "cro", "department": "marketing", "reason": "Owns conversion: turning visitors into customers."},
+    {"key": "cro", "title": "Conversion Rate Optimization Owner", "template": "cro-owner", "department": "marketing", "reason": "Owns conversion: turning visitors into customers."},
     {"key": "seo", "title": "SEO Owner", "template": "seo-visibility", "department": "marketing", "reason": "Owns search visibility: getting found in search results."},
     {"key": "social-ads", "title": "Social Ads Owner", "template": "paid-media", "department": "marketing", "reason": "Owns paid ads on social networks."},
     {"key": "search-ads", "title": "Search Ads Owner", "template": "paid-media", "department": "marketing", "reason": "Owns paid ads in search results."},
@@ -48,7 +48,7 @@
       "team": "Sales",
       "seats": [
         {"key": "sales-lead", "title": "Sales Manager", "template": "sales-lead", "department": "sales", "reports_to": null, "reason": "Leads sales and its owners."},
-        {"key": "lead-generation", "title": "Lead Generation Owner", "template": "lead-generation", "department": "sales", "reports_to": "sales-lead", "reason": "Owns finding new leads."},
+        {"key": "lead-generation", "title": "Lead Generation Owner", "template": "lead-generation-owner", "department": "sales", "reports_to": "sales-lead", "reason": "Owns finding new leads."},
         {"key": "inbound-sales", "title": "Inbound Sales Owner", "template": "sales", "department": "sales", "reports_to": "sales-lead", "reason": "Owns inbound leads: answering, qualifying and closing them."},
         {"key": "outbound-sales", "title": "Outbound Sales Owner", "template": "sdr-research", "department": "sales", "reports_to": "sales-lead", "reason": "Owns outbound prospecting: finding and reaching out to buyers."}
       ]

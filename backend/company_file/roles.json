@@ -607,44 +607,6 @@
    "default": false
   },
   {
-   "slug": "cro",
-   "template": "cro",
-   "name": "Conversion Rate Optimization Owner",
-   "department": "marketing",
-   "lead": false,
-   "core": false,
-   "summary": "Finds the step that loses the most visitors on the team's site each week, from the landing page to the signup, trial or purchase, and proposes one test with a written hypothesis and a stop rule. It reads each result honestly and never calls a winner early. Changes to the site stay drafts until a person ships them.",
-   "when": "A team whose visitors arrive steadily but whose signups, trials or sales do not, and that changes its site without checking whether the change helped.",
-   "tags": [
-    "conversion",
-    "funnel",
-    "landing-pages",
-    "signup",
-    "ab-tests",
-    "ecommerce",
-    "saas"
-   ],
-   "pains": [
-    "we get visitors but few of them sign up or buy",
-    "we don't know which step of the site loses the most people",
-    "we changed the page and never checked whether it helped",
-    "our A/B tests get called early and then reversed",
-    "nobody owns the signup or checkout flow"
-   ],
-   "recommend_when": [
-    "sells_to_consumers",
-    "sells_to_businesses",
-    "sells_software"
-   ],
-   "first_routine": "Weekly conversion review · Wednesdays at 09:00 team time",
-   "tools": [
-    "crm",
-    "docs",
-    "web"
-   ],
-   "default": false
-  },
-  {
    "slug": "cro-owner",
    "template": "cro-owner",
    "name": "Conversion Rate Optimization Owner",
@@ -1591,43 +1553,6 @@
    "tools": [
     "chat",
     "docs"
-   ],
-   "default": false
-  },
-  {
-   "slug": "lead-generation",
-   "template": "lead-generation",
-   "name": "Lead Generation Owner",
-   "department": "sales",
-   "lead": false,
-   "core": false,
-   "summary": "Keeps the supply of qualified leads steady each week: says which sources bring the leads Sales accepts, drafts the forms and lead magnets that capture them, and builds sourced target lists. It never sends: first touch belongs to the Sales Development Representative, and every message stays a draft until a person turns mail sending on for this bot in Tico.",
-   "when": "A team that wants more qualified leads each week and has no one counting which sources bring the ones its sellers accept.",
-   "tags": [
-    "b2b",
-    "lead-generation",
-    "lead-magnets",
-    "forms",
-    "lists",
-    "pipeline",
-    "saas",
-    "smb"
-   ],
-   "pains": [
-    "we don't know which lead sources actually produce customers",
-    "sales says the leads we send are not good enough",
-    "our forms and lead magnets are out of date",
-    "we run out of new leads every quarter",
-    "nobody builds lists of the buyers we want to reach"
-   ],
-   "recommend_when": [
-    "sells_to_businesses"
-   ],
-   "first_routine": "Weekly lead generation review · Mondays at 08:30 team time",
-   "tools": [
-    "crm",
-    "docs",
-    "web"
    ],
    "default": false
   },
