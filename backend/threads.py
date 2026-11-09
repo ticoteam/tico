@@ -3812,8 +3812,11 @@ def _clear_tree_words(c, row, actor):
     for message_id in ids:
         message = H.message(c, message_id, include_deleted=True) or {}
         origin = (message.get("refs") or {}).get("origin")
+        # The message's own older words; and a copy that shares its origin only where that copy is already empty (a
+        # carrier or note whose text the origin's delete cleared). A copy whose words still stand keeps its history.
         c.execute(
-            "UPDATE message_revisions SET body=NULL WHERE (message_id=? OR origin_id=?) AND body IS NOT NULL",
+            "UPDATE message_revisions SET body=NULL WHERE body IS NOT NULL AND (message_id=? OR (origin_id=? AND "
+            "message_id IN (SELECT id FROM messages WHERE deleted_at IS NOT NULL OR body='')))",
             (message_id, message.get("origin_id") or message_id),
         )
         c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump({"origin": origin} if origin else {}), message_id))

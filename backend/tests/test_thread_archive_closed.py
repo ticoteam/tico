@@ -274,6 +274,11 @@ def test_a_thread_delete_removes_its_words_attachment_references_and_files(api):
     )
     assert sent.status_code == 200, sent.text
     message_id = sent.json()["message"]["id"]
+    with api.app.state.store.read() as c:
+        blob_id, digest = c.execute(
+            "SELECT a.blob_id, b.digest FROM message_assets a JOIN blobs b ON b.id=a.blob_id WHERE a.message_id=?",
+            (message_id,),
+        ).fetchone()
     edited = api.patch(f"/api/v2/messages/{message_id}", json={"text": "Budget final"}, headers=headers("ana-test"))
     assert edited.status_code == 200, edited.text
     with api.app.state.store.read() as c:
@@ -294,6 +299,10 @@ def test_a_thread_delete_removes_its_words_attachment_references_and_files(api):
         assert words == 0
         tombstone = c.execute("SELECT body, deleted_at FROM messages WHERE id=?", (message_id,)).fetchone()
         assert tombstone[0] == "" and tombstone[1] is not None
+        # The file itself: its blob row is gone, no file version still points at it, and its bytes are queued for removal.
+        assert c.execute("SELECT COUNT(*) FROM blobs WHERE id=?", (blob_id,)).fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM bot_file_versions WHERE blob_id=?", (blob_id,)).fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM blob_purges WHERE digest=?", (digest,)).fetchone()[0] == 1
 
 
 def test_a_home_is_never_deleted(api):
