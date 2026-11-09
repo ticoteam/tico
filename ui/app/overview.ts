@@ -1,6 +1,20 @@
 /* The campus receives only visible identities, readable assignments and read-permitted status. */
 'use strict';
-/** @type {any} bridged: ui/app/refresh.ts reads it on every live change; typed when this file converts */ let OVERVIEW_PAGE = null;
+/** The Overview page's state. The bot-hours card (overview-hours.ts) keeps its answer and loading marks on it too. */
+interface OverviewPage {
+  frame: HTMLIFrameElement;
+  abort: AbortController;
+  ready: boolean;
+  sent?: string;
+  model?: unknown;
+  computers: {id?: string; label?: string; revoked_at?: string | null}[];
+  loadingComputers?: boolean;
+  hours?: BotHours | null | undefined;
+  hoursLoading?: boolean;
+  hoursAt?: number;
+}
+/** ui/app/refresh.ts reads it on every live change. */
+let OVERVIEW_PAGE: OverviewPage | null = null;
 function overviewModel() {
   const groups = [], machines = new Map(), humans = new Map(), placed = new Set();
   const fresh = S.overviewRosterFresh !== false && S.status !== null && S.v2.on;

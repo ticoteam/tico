@@ -2,6 +2,7 @@ name: Release command tests
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
     paths: ['tools/release-command/**', 'scripts/release', '.github/workflows/release-command-tests.yml']
   push:
     branches: [main]
@@ -10,6 +11,8 @@ permissions:
   contents: read
 jobs:
   command:
+    # A draft pull request runs nothing; marking it ready for review runs these tests. Push and merge_group are unchanged.
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

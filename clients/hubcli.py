@@ -2444,6 +2444,12 @@ def parser():
         choices=list(TASK_STATUSES),
         help="only tasks with this status; repeat for more",
     )
+    s.add_argument(
+        "--where-not-owner",
+        dest="where_not_owner",
+        metavar="OWNER",
+        help="only tasks owned by anyone else: a bot slug, a human id or me (the rest of the filter still applies)",
+    )
     s.add_argument("--where-lane", dest="where_lane", choices=["company", "product"])
     s.add_argument("--where-number", dest="where_number", type=int, help="only this task number")
     s.add_argument("--where-snoozed", dest="where_snoozed", choices=["hide", "only", "all"])
