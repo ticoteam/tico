@@ -376,7 +376,7 @@ interface LastRead {
   /** The Overview's bot-hours answer (overview-hours.ts). */
   hours?: BotHours | null;
   /** The Dashboard's places, keyed by the place's key. */
-  places?: Record<string, unknown>;
+  places?: Record<string, DashView>;
   [page: string]: unknown;
 }
 
