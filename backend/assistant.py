@@ -30,7 +30,6 @@ from . import models as M
 from . import visuals
 from .media import upload_contract
 from . import rooms
-from . import settings_asks
 from .store import H, Problem, digest
 
 RUNNING_TTL_S = 120  # a confirm that has not settled in two minutes failed
@@ -51,7 +50,6 @@ CREATE INDEX IF NOT EXISTS assistant_actions_owner ON assistant_actions(owner, s
 def ensure_schema(c):
     c.executescript(SCHEMA)
     have = {r[1] for r in c.execute("PRAGMA table_info(assistant_actions)")}
-    # ask: the ask a card carries to someone who may (backend/settings_asks.py), settled with the card.
     for column in ("confirm_hash", "running_since", "description", "diff", "proposer", "ask"):
         if column not in have:
             c.execute("ALTER TABLE assistant_actions ADD COLUMN %s TEXT" % column)
@@ -103,10 +101,6 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     # Undoing one of the person's own Assistant changes (backend/assistant_changes.py): the route takes a person only, and
     # `restore` checks each change against that person's own rights, so the undo runs on the person's cited turn.
     if re.fullmatch(r"/api/v2/assistant/changes/[^/]+/restore", path):
-        return True
-    # Asking someone who can (backend/settings_asks.py) changes nothing either: it puts a card in front of a person who
-    # may, and the route itself requires the person's cited words.
-    if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/ask", path):
         return True
     # Queuing mail does not deliver it: the shared send gate owns approval, undo, revocation and dispatch.
     if path == "/api/v2/email/sends" or re.fullmatch(r"/api/v2/email/sends/[^/]+/cancel", path):
@@ -2266,9 +2260,7 @@ def install(app, store, auth, mutate, onboarding):
         ).fetchone()
 
     def expire(c):
-        """A confirm that never settled (a restart, a dropped connection) fails after two minutes; an asked one also
-        settles its ask (backend/settings_asks.py), its asker told it may not have finished."""
-        settings_asks.recover(c)
+        """A confirm that never settled (a restart, a dropped connection) fails after two minutes."""
         c.execute(
             "UPDATE assistant_actions SET status='failed', decided_at=?, confirm_hash=NULL, result=? "
             "WHERE status='running' AND running_since<?",
@@ -2298,7 +2290,6 @@ def install(app, store, auth, mutate, onboarding):
                 (status, H.now(), json.dumps(result), aid),
             )
             row = load(c, who, aid)
-            settings_asks.settled(c, row, status, result)
             room = H.conversation(c, row["conversation_id"]) if row["conversation_id"] else None
             if room and note:
                 by = row.get("proposer") or "assistant"
@@ -2326,7 +2317,6 @@ def install(app, store, auth, mutate, onboarding):
                 raise Problem("state", "This proposal is already " + row["status"], 409)
             c.execute("UPDATE assistant_actions SET status='canceled', decided_at=? WHERE id=?", (H.now(), aid))
             H.event(c, who.actor, "assistant.action.canceled", aid, {})
-            settings_asks.settled(c, row, "canceled")
             return {"action": action_view(load(c, who, aid), c)}
 
         return mutate(request, body, work)
@@ -2347,7 +2337,7 @@ def install(app, store, auth, mutate, onboarding):
                 raise Problem("state", "This proposal is already " + row["status"], 409)
             reason = " ".join(str(body.reason or "").split())[:300]
             who_name = (
-                settings_asks._name(c, who.actor)
+                H.actor_name(c, who.actor)
                 if who.actor.startswith("human:")
                 else (H.resolve_bot(c, who.actor.removeprefix("bot:")) or {}).get("display_name")
                 or who.actor.removeprefix("bot:")
@@ -2360,7 +2350,6 @@ def install(app, store, auth, mutate, onboarding):
                 aid,
                 {"summary": row["summary"][:200], "reason": reason, "owner": row["owner"]},
             )
-            settings_asks.settled(c, row, "withdrawn")
             room = H.conversation(c, row["conversation_id"]) if row["conversation_id"] else None
             if room and not room.get("closed_at"):
                 # Said by the proposing bot (the Assistant in its own room), to the card's owner.
@@ -2437,7 +2426,6 @@ def install(app, store, auth, mutate, onboarding):
                 if row["created_at"] < H.shift(H.now(), hours=-CONFIRM_TTL_H):
                     # Recorded here, raised after the transaction commits (raising inside it rolls it back).
                     c.execute("UPDATE assistant_actions SET status='expired', decided_at=? WHERE id=?", (H.now(), aid))
-                    settings_asks.settled(c, row, "expired")
                     return None
                 # Only the run that holds this secret (the in-process call below) is "confirmed".
                 c.execute(
