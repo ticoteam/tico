@@ -369,7 +369,7 @@ def live_run(
             "AND t.state IN ('leased', 'running')) w "
             "CROSS JOIN jobs j ON j.message_id = w.id JOIN attempts a ON a.id = j.attempt_id "
             "JOIN messages m ON m.id = w.id "
-            f"WHERE j.bot_id=? AND a.state IN ('leased', 'running') AND a.lease_until > ? AND {_ON_TASK} LIMIT 1",
+            f"WHERE j.bot_id=? AND a.state IN ('leased', 'running') AND a.lease_until > ? AND {_ON_TASK_ROW} LIMIT 1",
             (
                 *_range(task["id"]),
                 on_task[-1] if on_task[-2] else "",  # the conversation's messages, only when it is this task's alone
@@ -391,16 +391,41 @@ _RUNS = (
 )
 
 
-def _on_task_sql(task: str, low: str, high: str, task_too: str, alone: str, conversation: str) -> str:
-    """`_ON_TASK` over six SQL values: `?` each for one task, or columns for many in one read (`prime`)."""
-    return (
-        f"(a.task_id = {task} OR (m.wake_key >= {low} AND m.wake_key < {high}) OR json_extract(m.refs, '$.task') = "
-        f"{task_too} OR ({alone} AND a.task_id IS NULL AND m.wake_key IS NULL AND json_extract(m.refs, '$.task') IS "
-        f"NULL AND m.conversation_id = {conversation}))"
+# `_ON_TASK` asked of one run row (`a` and its message `m`): what `live_run` checks of the few live runs it finds.
+_ON_TASK_ROW = (
+    "(a.task_id = ? OR (m.wake_key >= ? AND m.wake_key < ?) OR json_extract(m.refs, '$.task') = ? OR (? AND a.task_id "
+    "IS NULL AND m.wake_key IS NULL AND json_extract(m.refs, '$.task') IS NULL AND m.conversation_id = ?))"
+)
+
+
+def _runs_of(k: str) -> str:
+    """The runs on each task of the table `k` (columns t, lo, hi, t2, alone, conv: what `_on_task` gives) as rows
+    (t, rid): the attempt's rowid. One indexed lookup for each way a run is on a task (`_RUNS`): the attempt names the
+    task (attempts_task), or the message it ran on, its own or its job's, has the task's wake key (messages_wake_key)
+    or names the task in its refs (messages_refs_task), or, naming no task, is in the task's conversation while no other
+    open task has it (messages_conversation). Each finds the task's own runs, never every run of the bot: asked as one
+    condition joined across the three tables (an OR), SQLite read every run of the bot for each task, and a pass over
+    10,000 tasks took 148 s."""
+    named = "json_extract(y.refs, '$.task')"
+    ways = (
+        f"y.wake_key >= {k}.lo AND y.wake_key < {k}.hi",
+        f"{named} = {k}.t2 AND {named} IS NOT NULL",
+        f"{k}.alone AND y.conversation_id = {k}.conv AND y.wake_key IS NULL AND {named} IS NULL",
     )
+    # CROSS JOIN keeps this order (task, message, job, run), and `+` keeps a test for "names none" off an index: else
+    # SQLite may start from every run with no message or no task.
+    alone = " AND +x.task_id IS NULL"
+    out = [f"SELECT {k}.t AS t, x.rowid AS rid FROM {k} CROSS JOIN attempts x ON x.task_id = {k}.t"]
+    for n, way in enumerate(ways):
+        extra = alone if n == 2 else ""
+        found = f"SELECT {k}.t, x.rowid FROM {k} CROSS JOIN messages y ON {way} CROSS JOIN "
+        out.append(f"{found}attempts x ON x.message_id = y.id{extra}")
+        out.append(f"{found}jobs z ON z.message_id = y.id CROSS JOIN attempts x ON x.job_id = z.id AND +x.message_id IS NULL{extra}")
+    return " UNION ".join(out)
 
 
-_ON_TASK = _on_task_sql(*"??????")
+# A run (`a`) is on the task: bound by `_on_task`'s six values.
+_ON_TASK = f"a.rowid IN (WITH p(t, lo, hi, t2, alone, conv) AS (SELECT ?, ?, ?, ?, ?, ?) SELECT rid FROM ({_runs_of('p')}))"
 # How many other open tasks share a task's conversation (`_on_task`).
 _SHARING = "SELECT COUNT(*) FROM tasks WHERE conversation_id=? AND status='open' AND id<>?"
 
@@ -424,7 +449,7 @@ def last_run(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | 
 
 
 _LAST_RUN = (
-    f"SELECT a.state, a.finished_at {_RUNS}WHERE a.bot_id=? AND a.started_at IS NOT NULL AND {_ON_TASK} "
+    f"SELECT a.state, a.finished_at {_RUNS}WHERE +a.bot_id=? AND a.started_at IS NOT NULL AND {_ON_TASK} "
     "ORDER BY a.rowid DESC LIMIT 1"
 )
 
@@ -451,19 +476,10 @@ def started(conn: "sqlite3.Connection", attempt: str) -> None:
 # A run started since the change: its start is newer than the visit's (`run_starts`), or, for a run that started with
 # no start row (before there were any, or written straight into attempts), its attempt row is newer. Each run's start
 # is looked up for that run (run_starts.attempt_id is unique), never gathered into a list of every start since the
-# mark. The runs read are bounded by attempt row: none older than the attempt mark or the oldest run that started
-# since the start mark, whichever is older (one number, not a list). Bound: the attempt mark, the start mark, the
-# attempt mark, then the start mark and the attempt mark.
-def _started_since_sql(attempt_mark: str, start_mark: str) -> str:
-    """`_STARTED_SINCE` over the two marks: `?` for one task (bound five times, as above), or columns (`prime`)."""
-    return (
-        f"a.rowid > MIN({attempt_mark}, COALESCE((SELECT MIN(r.rowid) - 1 FROM run_starts s JOIN attempts r ON "
-        f"r.id = s.attempt_id WHERE s.id > {start_mark}), {attempt_mark})) AND a.started_at IS NOT NULL AND "
-        f"COALESCE((SELECT s.id > {start_mark} FROM run_starts s WHERE s.attempt_id = a.id), a.rowid > {attempt_mark})"
-    )
-
-
-_STARTED_SINCE = _started_since_sql("?", "?")
+# mark: the runs read are the task's own (`_ON_TASK`). Bound: the start mark, then the attempt mark.
+_STARTED_SINCE = (
+    "a.started_at IS NOT NULL AND COALESCE((SELECT s.id > ? FROM run_starts s WHERE s.attempt_id = a.id), a.rowid > ?)"
+)
 
 
 def runs_since(conn: "sqlite3.Connection", task: Row, *, starting: bool = False, besides: str | None = None) -> int:
@@ -476,7 +492,7 @@ def runs_since(conn: "sqlite3.Connection", task: Row, *, starting: bool = False,
     attempt_mark, _, start_mark = _marks(task)
     counted, args = (
         f"({_STARTED_SINCE})",
-        list[object]([attempt_mark, start_mark, attempt_mark, start_mark, attempt_mark]),
+        list[object]([start_mark, attempt_mark]),
     )
     if starting:
         counted = f"({counted} OR (a.state = 'leased' AND a.started_at IS NULL AND a.lease_until > ?))"
@@ -614,7 +630,8 @@ _LOST = (
 )
 # A run of the bot on the task that started on that wake's job, or on a wake written after it.
 _TAKEN = (
-    f"SELECT 1 {_RUNS}WHERE a.bot_id=? AND a.started_at IS NOT NULL AND (a.job_id=? OR ({_ON_TASK} "
+    f"SELECT 1 {_RUNS}WHERE +a.bot_id=? AND a.started_at IS NOT NULL AND (a.rowid IN (SELECT x.rowid FROM attempts x "
+    f"WHERE x.job_id=?) OR ({_ON_TASK} "
     "AND m.rowid > ?)) LIMIT 1"
 )
 
@@ -840,9 +857,9 @@ def prime(conn: "sqlite3.Connection", tasks: "Collection[Row]", bots: dict[str, 
         if a in asked[t] and found[3] and found[4] not in LIVE_JOBS
     ]
     taken = conn.execute(
-        _runs_on("i", "slug", "job", *_ON_COLUMNS, "rid") + "SELECT k.i, EXISTS (SELECT 1 FROM r WHERE r.bot_id=k.slug "
-        "AND r.started_at IS NOT NULL AND (r.job_id=k.job OR (r.mrid > k.rid AND r.rid IN "
-        "(SELECT o.rid FROM on_k o WHERE o.t = k.t))))FROM k",
+        _runs_on("i", "slug", "job", *_ON_COLUMNS, "rid") + "SELECT k.i, EXISTS (SELECT 1 FROM attempts x WHERE "
+        "x.job_id = k.job AND +x.bot_id = k.slug AND x.started_at IS NOT NULL) OR EXISTS (SELECT 1 FROM on_k o JOIN r "
+        "ON r.rid = o.rid WHERE o.t = k.t AND r.bot_id = k.slug AND r.started_at IS NOT NULL AND r.mrid > k.rid) FROM k",
         (json.dumps([[i, slug, found[0], *on[t], found[2]] for i, (t, slug, found) in enumerate(unsure)]),),
     ).fetchall()
     took = {int(i): bool(yes) for i, yes in taken}
@@ -866,36 +883,31 @@ def prime(conn: "sqlite3.Connection", tasks: "Collection[Row]", bots: dict[str, 
     }
     RC.prime(conn, _LAST_RUN, {(slugs[a], *on[t]): ran.get((t, slugs[a])) for t in rows for a in asked[t]})
 
-    # `_STARTED_SINCE` for each task: the oldest run it reads (`floor`) once a task, then each run on it.
+    # `_STARTED_SINCE` for each task, over the runs on it.
     since = {t: _marks(row) for t, row in rows.items()}
-    counts = conn.execute(
-        _runs_on("am", "sm", *_ON_COLUMNS) + ", f AS MATERIALIZED (SELECT k.t, k.am, k.sm, MIN(k.am, COALESCE("
-        "(SELECT MIN(x.rowid) - 1 FROM run_starts s JOIN attempts x ON x.id = s.attempt_id WHERE s.id > k.sm), k.am)) "
-        "AS floor FROM k) SELECT f.t, (SELECT COUNT(*) FROM on_k o JOIN r ON r.rid = o.rid WHERE o.t = f.t AND "
-        "r.rid > f.floor AND r.started_at IS NOT NULL AND COALESCE((SELECT s.id > f.sm FROM run_starts s WHERE "
-        "s.attempt_id = r.id), r.rid > f.am)) FROM f",
-        (json.dumps([[since[t][0], since[t][2], *on[t]] for t in rows]),),
-    ).fetchall()
+    counts = dict(
+        conn.execute(
+            _runs_on("am", "sm", *_ON_COLUMNS) + "SELECT k.t, COUNT(*) FROM k JOIN on_k o ON o.t = k.t JOIN r ON "
+            "r.rid = o.rid WHERE r.started_at IS NOT NULL AND COALESCE((SELECT s.id > k.sm FROM run_starts s WHERE "
+            "s.attempt_id = r.id), r.rid > k.am) GROUP BY k.t",
+            (json.dumps([[since[t][0], since[t][2], *on[t]] for t in rows]),),
+        ).fetchall()
+    )
     RC.prime(
         conn,
         f"SELECT COUNT(*) {_RUNS}WHERE ({_STARTED_SINCE}) AND {_ON_TASK}",
-        {(*_since_args(since[str(t)]), *on[str(t)]): (n,) for t, n in counts},
+        {(*_since_args(since[t]), *on[t]): (counts.get(t, 0),) for t in rows},
     )
 
 
 def _runs_on(*columns: str) -> str:
-    """`_listed` with two more tables: `r`, every run (attempt) with what puts it on a task, read once, and `on_k`,
-    each task of `k` with the runs on it (`rid`), as `_ON_TASK` places them: one lookup for each of its four ways,
-    where asking `_ON_TASK` of every run for every task reads every run once a task."""
+    """`_listed` with two more tables: `on_k`, each task of `k` with the runs on it (`rid`), as `_ON_TASK` places them
+    (`_runs_of`: indexed lookups from each task), and `r`, those runs with the message each ran on (`mrid`). Only the
+    listed tasks' runs are read, never every run."""
     return (
-        _listed(*columns)[:-1] + ", r AS MATERIALIZED (SELECT a.rowid AS rid, a.id, a.bot_id, a.state, a.finished_at, "
-        "a.started_at, a.job_id, m.rowid AS mrid, a.task_id AS at, m.wake_key AS wk, json_extract(m.refs, '$.task') "
-        f"AS rt, m.conversation_id AS mc {_RUNS}), on_k AS MATERIALIZED ("
-        "SELECT k.t, r.rid FROM k JOIN r ON r.at = k.t "
-        "UNION SELECT k.t, r.rid FROM k JOIN r ON r.wk >= k.lo AND r.wk < k.hi "
-        "UNION SELECT k.t, r.rid FROM k JOIN r ON r.rt = k.t2 "
-        "UNION SELECT k.t, r.rid FROM k JOIN r ON k.alone AND r.at IS NULL AND r.wk IS NULL AND r.rt IS NULL "
-        "AND r.mc = k.conv) "
+        _listed(*columns)[:-1] + f", on_k AS MATERIALIZED ({_runs_of('k')}), r AS MATERIALIZED (SELECT a.rowid AS rid, "
+        f"a.id, a.bot_id, a.state, a.finished_at, a.started_at, a.job_id, m.rowid AS mrid {_RUNS}WHERE a.rowid IN "
+        "(SELECT rid FROM on_k)) "
     )
 
 
@@ -912,6 +924,6 @@ def prime_holds(conn: "sqlite3.Connection", task_ids: list[str]) -> None:
 
 
 def _since_args(marks: tuple[int, int, int]) -> tuple[int, ...]:
-    """The five values `_STARTED_SINCE` binds, from `_marks`."""
+    """The two values `_STARTED_SINCE` binds, from `_marks`."""
     attempt_mark, _, start_mark = marks
-    return (attempt_mark, start_mark, attempt_mark, start_mark, attempt_mark)
+    return (start_mark, attempt_mark)

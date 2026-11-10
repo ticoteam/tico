@@ -2242,6 +2242,12 @@ class Store:
                     # A message's runs: task_delete counts them on every delete, and topic_change
                     # and the run visibility (sql.py) look them up by message.
                     ("attempts_message", "attempts(message_id)"),
+                    # The messages that name a task in their refs: the runs on a task (task_wakes._runs_of), read
+                    # for every open task on each never-stuck pass. The query's expression word for word.
+                    (
+                        "messages_refs_task",
+                        "messages(json_extract(refs, '$.task')) WHERE json_extract(refs, '$.task') IS NOT NULL",
+                    ),
                     # Runs by when their record closed: bot hours, health, the usage reads.
                     ("attempts_settled", "attempts(settled_at)"),
                     # A bot's last settled run (the team list's latest run): one seek.

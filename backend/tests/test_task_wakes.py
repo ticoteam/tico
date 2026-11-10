@@ -555,13 +555,10 @@ def _run_plans(c, read, row):
     ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="task_wakes._ON_TASK (backend/task_wakes.py:342) ORs a.task_id with terms on messages, so last_run (:364) "
-    "and lost (:532) seek attempts by bot_id alone and read every run the bot ever had; attempts_task is never used",
-)
 def test_last_run_and_lost_seek_the_tasks_runs_not_every_run_of_the_bot(c, general):
-    """A bot's runs grow forever; a task's few. last_run and lost read the task's runs through attempts_task."""
+    """A bot's runs grow forever; a task's few. last_run and lost read the task's runs through attempts_task and the
+    task's messages, never every run of the bot (attempts_bot_*) or every run (SCAN): asked as one OR across the joined
+    tables they did, and a pass over 10,000 tasks took 148 s."""
     from backend import task_engine as E
 
     row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
@@ -572,13 +569,15 @@ def test_last_run_and_lost_seek_the_tasks_runs_not_every_run_of_the_bot(c, gener
     assert plans
     for text in plans:
         assert "attempts_task" in text, text
+        assert "attempts_bot" not in text and "SCAN a " not in f"{text} " and "SCAN x" not in text, text
+        assert "SCAN y" not in text and "SCAN messages" not in text and "SCAN attempts" not in text, text
 
 
 def test_a_run_count_reads_the_runs_since_the_change_and_looks_up_each_ones_start(c, general):
     """The never-stuck pass counts runs for every task that is due: the count must not gather every start in the
-    company since the task's change into a list (`LIST SUBQUERY`) or read every run there ever was (`SCAN a`). It reads
-    the attempts from a row bound (the attempt mark, or the oldest run started since the start mark) and looks up each
-    one's start by its unique attempt id."""
+    company since the task's change or read every run there ever was (`SCAN a`). It reads the task's own runs (each
+    found by an index from the task: attempts_task, its wakes, its messages) and looks up each one's start by its unique
+    attempt id."""
     from backend import task_engine as E
 
     row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
@@ -598,6 +597,12 @@ def test_a_run_count_reads_the_runs_since_the_change_and_looks_up_each_ones_star
         c.set_trace_callback(None)
     (counted,) = [s for s in statements if s.lstrip().startswith("SELECT COUNT(*) FROM attempts")]
     plan = [str(step[3]) for step in c.execute(f"EXPLAIN QUERY PLAN {counted}").fetchall()]
-    assert "SEARCH a USING INTEGER PRIMARY KEY (rowid>?)" in plan, plan
-    assert not [step for step in plan if "LIST SUBQUERY" in step or step.startswith("SCAN")], plan
+    assert "SEARCH a USING INTEGER PRIMARY KEY (rowid=?)" in plan and any("attempts_task" in s for s in plan), plan
+    # Only the one-row table of the task's values and the list of its runs are scanned.
+    assert not [
+        s
+        for s in plan
+        if s.startswith("SCAN") and s not in ("SCAN p", "SCAN CONSTANT ROW") and not s.startswith("SCAN (subquery")
+    ], plan
+    assert not [s for s in plan if "run_starts" in s and "(attempt_id=?)" not in s], plan
     assert any("run_starts" in step and "(attempt_id=?)" in step for step in plan), plan
