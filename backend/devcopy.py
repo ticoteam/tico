@@ -228,6 +228,8 @@ EMPTY = (
     "personal_alerts",
     # Which Recorder each person's computers run (backend/recorder_installs.py): per-machine, the copy starts without it.
     "recorder_installs",
+    # Browsers that take Web Push (backend/web_push.py): a copy pushes to none of the live install's.
+    "push_subscriptions",
     "bills_inbound",  # emailed bills: senders, subjects and HQ delivery ids
     "usage_alerts",
     "task_requesters",
@@ -835,6 +837,8 @@ def prune(c, days, keep_automations=False):
         c.execute(
             "UPDATE registry_metadata SET value=? WHERE key='roadmap_ip_secret'", (json.dumps(secrets.token_hex(32)),)
         )
+        # The Web Push key pair is the live install's too; the copy makes its own on first need.
+        c.execute("DELETE FROM registry_metadata WHERE key='web_push_vapid'")
     # Finance makes its tables inert itself: pending actions, undrained events, links to emptied holds, and the rows that
     # move money or call a provider (DEV_COPY_EMPTIED). Any Finance table present means the scrub runs: a copy missing one
     # table still has the rest made inert (scrub_dev_copy skips the tables a copy does not have).

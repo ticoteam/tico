@@ -47,6 +47,18 @@ class RecorderInstallRow(TypedDict):
     updated_at: str
 
 
+class PushSubscriptionRow(TypedDict):
+    id: str
+    actor: str
+    endpoint: str
+    p256dh: str
+    auth: str
+    created_at: str
+    last_ok_at: str | None
+    failed_at: str | None
+    gone_at: str | None
+
+
 class AlertCompanySettingRow(TypedDict):
     id: int
     monthly_cap: int
