@@ -38,6 +38,8 @@ from .hubdb import now, shift
 
 # Emptied, never pruned: one surviving row is one thing the copy could do.
 EMPTY = (
+    # A file from before the Pipelines v3 cut-over still has the old OKs; the copy's first start drops the table.
+    "approvals",
     # Provider jobs and send grants never become actionable in a rehearsal copy.
     "letter_sources",
     "letter_proofs",
@@ -60,7 +62,6 @@ EMPTY = (
     "effects",  # a GitHub call a task's move still owes (backend/stage_effects.py): the copy makes none
     "ok_grants",  # an OK bound to an email, a letter or a page (backend/task_asks.py): the copy acts on none
     "ok_shown",  # what a person was shown of one
-    "check_head_provenance",
     "idempotency",  # bindings too
     "idempotency_messages",
     "blob_media_retries",
@@ -70,8 +71,6 @@ EMPTY = (
     "google_signin_refusals",
     # refusal holds on one task or chat: their cooldowns belong to the source's runs; the copy starts with none
     "quarantine_holds",
-    # A note a migration leaves for the first start (seed the roadmap types once); a copy of a started hub has none.
-    "first_start_seeds",
     # The retired Nightly memory tidy pilot's ledger: history only.
     "memory_tidy_passes",
     "memory_tidy_packets",
@@ -555,6 +554,8 @@ KEEP = (
             "snoozes",
             "links",
             "task_move_guards",
+            # The order runs started in (backend/task_wakes.py): kept with the runs it orders.
+            "run_starts",
             "turns",
             "update_archive_overrides",
             "update_reads",

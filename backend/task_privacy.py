@@ -226,11 +226,16 @@ def _attempt_tasks(c, aid):
     _prime_inputs(c, rows)
     for row in rows:
         ids.update(message_tasks(c, row, include_run=False, current=True))
+    ids.update(r[0] for r in c.execute(RUN_TASK_SQL, (aid,)))
     for row in c.execute(
         "SELECT detail FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL + ") AND target=?", (aid,)
     ):
         ids.update(references(c, H._json(row[0], {}) or {}))
     return ids
+
+
+# The task a run works on (attempts.task_id): its run carries that task's text, as a carried task did before.
+RUN_TASK_SQL = "SELECT task_id FROM attempts WHERE id=? AND task_id IS NOT NULL"
 
 
 def carried_tasks(c, aid):
@@ -252,6 +257,7 @@ def carried_tasks(c, aid):
             refs = {key: value for key, value in refs.items() if key != "reconcile"}
             row = {**row, "refs": refs}
         ids.update(_message_tasks(c, row, include_run=False, current=True))
+    ids.update(r[0] for r in c.execute(RUN_TASK_SQL, (aid,)))
     for row in c.execute(
         "SELECT detail FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL + ") AND target=?", (aid,)
     ):
@@ -288,6 +294,9 @@ def prime_attempts(c, aids):
             row = dict(row)
             inputs[row.pop("primed_attempt")].append(row)
         _prime_inputs(c, [message for rows in inputs.values() for message in rows])
+        worked = {aid: [] for aid in chunk}
+        for row in c.execute(f"SELECT id,task_id FROM attempts WHERE task_id IS NOT NULL AND id IN ({marks})", chunk):
+            worked[row[0]].append(row[1])
         events = {aid: [] for aid in chunk}
         moved = {aid: [] for aid in chunk}
         for row in c.execute(
@@ -311,7 +320,7 @@ def prime_attempts(c, aids):
         tasks = set()
         for aid in chunk:
             try:
-                ids = set()
+                ids = set(worked[aid])
                 for message in inputs[aid]:
                     ids.update(message_tasks(c, message, include_run=False, current=True))
                 for detail in events[aid]:
