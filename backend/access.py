@@ -45,7 +45,9 @@ def domains(values):
 
 
 def _load_json(c, key):
-    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (key,)).fetchone()
+    from . import read_cache
+
+    row = read_cache.metadata(c, key)  # once a snapshot; a write in it reads again
     try:
         value = json.loads(row[0]) if row else None
     except ValueError:

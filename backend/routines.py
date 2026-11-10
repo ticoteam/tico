@@ -261,7 +261,9 @@ def no_input(c, settings, schedule, local):
 
 
 def _roster(c):
-    found = c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()
+    from . import read_cache
+
+    found = read_cache.metadata(c, "people")  # once a snapshot: a page asks it for every bot
     if found:
         return P.load(json.loads(found[0]))
     return P.load({"people": H.humans(c)})
