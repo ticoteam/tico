@@ -808,15 +808,14 @@ def _restore(c, actor, task, item, since, note):
     writer = H.KEEPER if H.task_private(c, task) else actor
     why = f"Undone by {_name(c, actor)}: the {strategy_bot.name(c)} did this on its own"
     if "status" in back:
-        # A decision only closes a task, so its status goes back by reopening it.
+        # A decision only closes a task, so its status goes back by reopening it. Reopened, it goes to its stage's
+        # owner, which may not be the owner it had.
         H.task_move(c, writer, task["id"], H.TASK_REOPEN, why, mover=True)
-    if "owner_id" in back:
+    if H.task(c, task["id"])["owner_id"] != before["owner_id"]:
         H.task_reassign(c, writer, task["id"], before["owner_id"], why, mover=True)
     fields = {}
-    if "owner_id" in back:
-        # A new owner puts it at the bottom of their queue: the place it had goes back too.
-        fields["rank"] = before["rank"]
-    elif "rank" in back:
+    # A new owner (or a reopen) puts it at the end of their queue: the place it had goes back too.
+    if H.task(c, task["id"])["rank"] != before["rank"]:
         fields["rank"] = before["rank"]
     if "note" in back:
         fields["note"] = before.get("note") or ""

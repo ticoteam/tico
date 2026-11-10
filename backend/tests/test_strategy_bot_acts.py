@@ -170,6 +170,23 @@ def test_undo_reopens_every_task_a_close_closed_under_it(c):
     assert [H.task(c, t)["status"] for t in (top, middle, low)] == ["open"] * 3
 
 
+def test_undo_of_a_close_gives_the_task_back_to_the_owner_it_had_in_its_place(c):
+    """In a stage Ops owns, a task given to Finance before the decision closed it is reopened with Finance, not the
+    stage's owner, at the place in Finance's queue it had."""
+    X.pipeline(c, "invoices", "Invoices", stages=({"name": "Check", "owner": "bot:ops"},))
+    _filed(c, "finance", "Pay the cleaners")
+    work = H.task_create(c, "bot:ops", "Reconcile the vendor invoices", "Work it.", "bot:ops", pipeline="invoices")
+    work = work["id"]
+    _filed(c, "finance", "File the quarterly return")
+    H.task_reassign(c, OWNER, work, "bot:finance", "Finance owns invoices")
+    H.task_update(c, OWNER, work, rank=-5, mover=True)
+    before = H.task(c, work)
+    made = _decide(c, [{"do": "close", "task_id": work, "note": "Done by the bank"}])
+    SA.undo(c, OWNER, made["id"])
+    back = H.task(c, work)
+    assert (back["status"], back["owner_id"], back["rank"]) == ("open", "bot:finance", before["rank"])
+
+
 # ----------------------------------------------------------------------------- through the routes
 
 
