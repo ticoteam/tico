@@ -215,7 +215,9 @@ const init = () => {
    assert.deepEqual(clean.errors, []);
    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem(taskLiveStorageKey(taskModal().dataset.task, 'title'))!).value), 'New view failed draft', 'closing clean B preserves A’s failed text');
    await page.evaluate(() => taskModal().close()); await page.waitForFunction(() => !taskModal().taskLive);
-   await page.evaluate(async task => taskModalShow(task), task);
+   // Closing left the task's address; open it by its address again, so a reload opens it too.
+   await page.evaluate(id => { location.hash = '#/task/' + id; }, task.id);
+   await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor(); await idle();
    assert.equal(await title.textContent(), 'New view failed draft');
    // Offline title/details survive a real reload with their old revisions and still conflict before overwriting B.
    await page.getByRole('button', {name: 'Edit details', exact: true}).click();
@@ -320,6 +322,8 @@ const init = () => {
    assert.equal(await page.evaluate(id => JSON.parse(localStorage.getItem(taskLiveStorageKey(id, 'title'))!).value, task.id), 'Ana private title');
    const count = writes.length;
    me = {...me, id: 'ben', name: 'Ben'}; offline = false;
+   // Closing left the task's address: Ben's reload is on it again.
+   await page.evaluate(id => history.replaceState(null, '', '#/task/' + id), task.id);
    await page.reload(); await page.waitForFunction(() => SESSION.identity === JSON.stringify(['acme-org', 'ben']));
    await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor(); await idle();
    assert.equal(await title.textContent(), task.title);
