@@ -8,6 +8,7 @@ import sqlite3
 
 import pytest
 
+from backend import task_delete
 from backend import task_engine as E
 from backend import task_requirements as R
 from backend.store import H
@@ -54,8 +55,10 @@ def test_a_task_on_the_engine_changes_stage_owner_and_status_only_through_the_en
         with pytest.raises(sqlite3.IntegrityError, match="only through move"):
             c.execute(f"UPDATE tasks SET {write} WHERE id=?", (row["id"],))
     c.execute("UPDATE tasks SET title='Write the launch note today' WHERE id=?", (row["id"],))
-    old = H.task_create(c, ANA, "File the receipts", "Body.", ANA, lint=False)
-    c.execute("UPDATE tasks SET status='doing' WHERE id=?", (old["id"],))  # not on the engine yet: untouched
+    # A row is never born in a stage or ended: it starts open, in no pipeline, and enter() places it.
+    for columns, values in (("status", "'done'"), ("status, stage_id", "'open', 'general-todo'")):
+        with pytest.raises(sqlite3.IntegrityError, match="a new task starts open"):
+            c.execute(f"INSERT INTO tasks (id, {columns}) VALUES ('made-by-hand', {values})")
     assert X.guard_closed(c)
 
 
@@ -70,8 +73,9 @@ def test_a_new_task_starts_in_the_first_stage_with_one_open_visit_and_one_wake(c
     assert mine["owner_id"] == ANA and X.wakes(c, mine["id"]) == []  # a person's list is a read: nothing is sent
 
 
-def test_a_task_with_no_assignee_wakes_the_manager_bot_to_pick_one(c, general):
-    row = X.new_task(c, ANA, "Sort the shared inbox")
+def test_a_task_in_a_stage_nobody_owns_wakes_the_manager_bot_to_pick_an_owner(c, general):
+    X.pipeline(c, "intake", "Intake", ({"name": "Sort", "requirements": [{"kind": "owner_done"}]},), "bot:manager")
+    row = X.new_task(c, ANA, "Sort the shared inbox", "intake")
     assert row["owner_id"] is None
     assert [w[1] for w in X.wakes(c, row["id"])] == ["bot:manager"]
 
@@ -207,8 +211,7 @@ def test_a_filed_task_that_was_deleted_counts_as_closed_not_done(c, general):
     two = X.new_task(c, ANA, "Build the payment form", assignee="bot:builder", parent=parent["id"])
     X.say_done(c, one)
     E.advance(c, one["id"])
-    c.execute("PRAGMA foreign_keys=OFF")
-    c.execute("DELETE FROM tasks WHERE id=?", (two["id"],))
+    assert task_delete.delete_tasks(c, [two["id"]], apply=True, keep_work=True)["applied"]
     standing = R.standings(c, E.task(c, parent["id"]))[0]
     assert (standing.state, standing.line) == (R.NOT_MET, "A deleted task was closed: It was deleted")
     assert E.advance(c, parent["id"]) is None
@@ -322,7 +325,8 @@ def test_a_snooze_ends_when_the_task_leaves_the_stage_it_was_set_aside_in(c, bui
 
 
 def test_a_snooze_cancels_every_wake_queued_for_the_task_whoever_it_was_for(c, general):
-    row = X.new_task(c, ANA, "Write the launch note")  # no owner: the manager bot is woken to pick one
+    X.pipeline(c, "intake", "Intake", ({"name": "Sort", "requirements": [{"kind": "owner_done"}]},), "bot:manager")
+    row = X.new_task(c, ANA, "Write the launch note", "intake")  # no owner: the manager bot is woken to pick one
     E.reassign(c, row["id"], "bot:builder", ANA)
     mine = "message_id IN (SELECT id FROM messages WHERE wake_key LIKE ?)"
     c.execute(f"UPDATE jobs SET state='queued' WHERE {mine}", (row["id"] + ":%",))

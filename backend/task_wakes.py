@@ -67,9 +67,14 @@ def add(
     try_n: int = 0,
     wake_key: str | None = None,
     quiet: bool = False,
+    refs: Row | None = None,
+    trigger: str | None = None,
+    source: str | None = None,
 ) -> str | None:
     """Wake `target` about `task`, once per key. Returns the message id, or None when this wake was already written or
-    there is nobody to tell."""
+    there is nobody to tell. `refs` are a caller's own facts for the run it starts (an automation's run and step, the
+    other work to reconcile with); they never replace the engine's. `trigger` and `source` say what the run is for,
+    where the caller knows better than "work a task"."""
     H = _h()
     if not target:
         return None
@@ -78,10 +83,11 @@ def add(
         return None
     if not H._actor_exists(conn, target) or not H.task_private_readable(conn, target, task):
         return None
-    refs: Row = {"task": task["id"], "wake": "task_turn", "visit": visit["id"], "level": level, "try": try_n}
-    refs["version"] = task.get("version")
+    own: Row = {"task": task["id"], "wake": "task_turn", "visit": visit["id"], "level": level, "try": try_n}
+    own["version"] = task.get("version")
     if quiet:
-        refs["quiet"] = True
+        own["quiet"] = True
+    stamped: Row = RT.stamp({**(refs or {}), **own}, trigger or "task_turn", source)
     message = H._write_message(
         conn,
         H.KEEPER,
@@ -89,7 +95,7 @@ def add(
         text,
         H.conversation(conn, task["conversation_id"]),
         "notice",
-        RT.stamp(refs, "task_turn"),
+        stamped,
         None,
         None,
     )

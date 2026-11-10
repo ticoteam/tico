@@ -1,8 +1,8 @@
 """Rows for tests of the one task engine (backend/task_engine.py): a pipeline with its stages and requirements, a bot,
 and a task put into a pipeline's first stage.
 
-Until the cut-over `new_task` makes the row through `H.task_create` (so it has a conversation and a number like any
-task) and then calls `task_engine.enter`. After it, `H.task_create` does both.
+`new_task` makes the task through `H.task_create`, as everything does: it has a conversation, and the engine has put
+it into the pipeline's first stage.
 """
 
 import json
@@ -157,10 +157,19 @@ def settled(c):
 
 
 def new_task(c, by, title, pipeline_id="general", assignee=None, parent=None):
-    """A task in the first stage of `pipeline_id`, as `task_engine.task()` gives it."""
-    row = H.task_create(c, by, title, "What to do and how to tell it is done.", assignee or by, lint=False)
-    settled(c)
-    return E.enter(c, row["id"], pipeline_id, by, assignee=assignee, parent=parent)
+    """A task in the first stage of `pipeline_id`, as `task_engine.task()` gives it: made the way every task is
+    (`H.task_create`), given to `assignee`, or to whoever files it when nobody is named."""
+    row = H.task_create(
+        c,
+        by,
+        title,
+        "What to do and how to tell it is done.",
+        assignee or by,
+        parent_id=parent,
+        pipeline=pipeline_id,
+        lint=False,
+    )
+    return E.task(c, row["id"])
 
 
 def say_done(c, row, by=None):

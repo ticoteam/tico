@@ -776,13 +776,25 @@ def preset(conn: "sqlite3.Connection", key: str) -> Row:
 
 
 def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
-    """Boot: make each preset pipeline the org does not have yet. Returns the ids it made. A preset the org has, under
-    its id or as its preset, is never changed, nor one it retired. A preset whose name or prefix another pipeline
-    already uses is left out, so boot never fails on it."""
+    """Every start: make each preset pipeline the org does not have yet. Returns the ids it made. A preset the org
+    has, under its id or as its preset, is never changed, nor one it retired, with one exception: General is made at
+    the first start, before the org has any bot, so while nobody has changed it and it has no manager, it gets the
+    preset's manager once that bot exists. A preset whose name or prefix another pipeline already uses is left out,
+    so a start never fails on it."""
     made: list[str] = []
     for key in PRESETS:
         record = preset(conn, key)
-        if conn.execute("SELECT 1 FROM pipelines WHERE id=? OR preset=?", (record["id"], key)).fetchone():
+        have = conn.execute(
+            "SELECT id, manager_id, settings_version, retired_at FROM pipelines WHERE id=? OR preset=?",
+            (record["id"], key),
+        ).fetchone()
+        if have:
+            untouched = int(have[2] or 1) == 1 and not have[1] and not have[3]
+            if untouched and record.get("manager_id"):
+                conn.execute(
+                    "UPDATE pipelines SET manager_id=?, updated_at=? WHERE id=?",
+                    (record["manager_id"], _h().now(), have[0]),
+                )
             continue
         if check(conn, record):
             continue

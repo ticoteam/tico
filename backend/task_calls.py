@@ -286,13 +286,23 @@ def task_answer(
         return A.answer(conn, task_id, requirement_id, actor, value, note, seen_version=seen_version)
 
 
-def task_give(conn: "sqlite3.Connection", actor: str, task_id: str, requirement_id: str, person: str) -> Row:
+def task_give(
+    conn: "sqlite3.Connection",
+    actor: str,
+    task_id: str,
+    requirement_id: str,
+    person: str,
+    seen_version: int | str | None = None,
+) -> Row:
     """Give an ask to another person: it gets their name and moves to their list."""
     from . import answers as A
 
     H = _h()
     _open(conn, actor, task_id, work=False)
-    return A.give_to(conn, task_id, requirement_id, actor, H.resolve_actor(conn, person) or person)
+    with task_effects.because(actor):
+        return A.give_to(
+            conn, task_id, requirement_id, actor, H.resolve_actor(conn, person) or person, seen_version=seen_version
+        )
 
 
 def task_answer_undo(conn: "sqlite3.Connection", actor: str, answer_id: str) -> Row:

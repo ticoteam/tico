@@ -152,7 +152,9 @@ def _may_answer(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row,
         if value != DONE:
             _refuse(conn, by, "task_requirement", "Say done", task_id)
         manager = _part(row, "pipeline").get("manager_id")
-        if by not in (row.get("owner_id"), manager) and not is_human(by):
+        # The engine itself says it for code that finishes a task for nobody (a routine's own upkeep), never to get
+        # past anything else the stage needs.
+        if by not in (row.get("owner_id"), manager, E.SYSTEM) and not is_human(by):
             _refuse(conn, by, "task_requirement", "Only the owner, the manager or a person says it is done", task_id)
         return
     person = R.person_of(conn, requirement, row["visit"]["id"])
@@ -250,12 +252,21 @@ def answer(
     return out
 
 
-def give_to(conn: "sqlite3.Connection", task_id: str, requirement_id: str, by: str, person: str) -> Row:
+def give_to(
+    conn: "sqlite3.Connection",
+    task_id: str,
+    requirement_id: str,
+    by: str,
+    person: str,
+    *,
+    seen_version: int | str | None = None,
+) -> Row:
     """Give an ask to another person: it gets their name and moves to their list. A requirement added to one task gets
     the new name. A stage's OK gets a `give` answer naming them. The owner's own "done" is a reassign (C29: only a
-    person is named, and one who is still here)."""
+    person is named, and one who is still here). A bot says which version of the task it saw."""
     H = _h()
     row = _open_task(conn, task_id, by)
+    E.check_version(conn, by, row, seen_version)
     if not is_human(person):
         _refuse(conn, by, "task_requirement", "Give it to a person", task_id)
     if not R.active_person(conn, person):
@@ -267,7 +278,7 @@ def give_to(conn: "sqlite3.Connection", task_id: str, requirement_id: str, by: s
     if kind == "owner_done":
         if by != row.get("owner_id") and not is_human(by):
             _refuse(conn, by, "task_requirement", "Only the owner or a person gives this task to someone", task_id)
-        return E.reassign(conn, task_id, person, by)
+        return E.reassign(conn, task_id, person, by, seen_version=row.get("version"))
     if kind not in ASKS:
         _refuse(conn, by, "task_requirement", f"{R.name_of(requirement)} can't name a person", task_id)
     visit = row["visit"]

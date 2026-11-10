@@ -18,7 +18,7 @@ import json
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, NoReturn
 
-from . import hubdb_core, stage_effects
+from . import hubdb_core, stage_effects, task_effects
 from . import task_requirements as R
 from . import task_wakes
 from .hubdb_core import KEEPER as SYSTEM
@@ -46,9 +46,44 @@ def _h() -> Any:
     return hubdb
 
 
-def _refuse(conn: "sqlite3.Connection", by: str, rule: str, detail: str, task_id: str | None = None) -> NoReturn:
-    _h().refuse(conn, by, rule, detail, task=task_id)
+def _refuse(
+    conn: "sqlite3.Connection",
+    by: str,
+    rule: str,
+    detail: str,
+    task_id: str | None = None,
+    *,
+    missing: Sequence[str] = (),
+    then: Sequence[str] = (),
+    version: object = None,
+) -> NoReturn:
+    """Refuse, with what the caller needs to act on it: what is `missing`, the commands allowed next (`then`) and the
+    task's `version`. They go out with the refusal (store.refused), so a bot is never left to guess."""
+    extra: Row = {}
+    if missing:
+        extra["missing"] = list(missing)
+    if then:
+        extra["next"] = list(then)
+    if version is not None:
+        extra["version"] = int(str(version) or 0)
+    _h().refuse(conn, by, rule, detail, task=task_id, extra=extra)
     raise AssertionError("refuse() always raises")  # pragma: no cover
+
+
+def _then(row: Row, *which: str) -> list[str]:
+    """The commands a refusal offers, for this task at its version: `push` (go on anyway), `back`, `ask`, `file`,
+    `snooze`, `close`, `show`."""
+    ident, version = row["id"], row.get("version")
+    said = {
+        "push": f'hub task move {ident} next -m "why" --version {version}',
+        "back": f'hub task move {ident} <earlier stage> -m "why" --version {version}',
+        "ask": f'hub task ask {ident} --to <person> "one sentence" --version {version}',
+        "file": f'hub task file --parent {ident} "title"',
+        "snooze": f'hub task snooze {ident} -m "why" --version {version}',
+        "close": f'hub task close {ident} -m "why" --version {version}',
+        "show": f"hub task show {ident}",
+    }
+    return [said[name] for name in which]
 
 
 def _part(row: Row, key: str) -> Row:
@@ -208,10 +243,26 @@ def check_version(
         return
     if seen_version is None:
         if is_bot(by):
-            _refuse(conn, by, "task_changed", "Say which version of the task you saw", row["id"])
+            _refuse(
+                conn,
+                by,
+                "task_changed",
+                "Say which version of the task you saw",
+                row["id"],
+                then=_then(row, "show"),
+                version=row.get("version"),
+            )
         return
     if int(seen_version) != int(row.get("version") or 0):
-        _refuse(conn, by, "task_changed", "The task changed since you looked. Read it again.", row["id"])
+        _refuse(
+            conn,
+            by,
+            "task_changed",
+            "The task changed since you looked. Read it again.",
+            row["id"],
+            then=_then(row, "show"),
+            version=row.get("version"),
+        )
 
 
 def _need_why(
@@ -230,18 +281,38 @@ def _event(
     new: str | None = None,
     note: str | None = None,
     data: Row | None = None,
-) -> None:
-    _h().history_event(conn, "task", task_id, by, kind, old, new, note, data)
+) -> str:
+    """One row of the task's history; returns its id. Through hubdb's writer, so a change made as part of a Strategy
+    Bot decision or by an Assistant for a person is marked as such."""
+    return str(_h()._task_event(conn, task_id, by, kind, old, new, note or "", data=data))
 
 
-def _wake_turn(conn: "sqlite3.Connection", row: Row, lead: str = "") -> str | None:
+def _wake_turn(
+    conn: "sqlite3.Connection",
+    row: Row,
+    lead: str = "",
+    *,
+    refs: Row | None = None,
+    trigger: str | None = None,
+    source: str | None = None,
+) -> str | None:
     """Tell whoever has the turn in a stage the task just entered, once per visit. A person is not told: their list is a
-    read. A stage with nobody set wakes the pipeline's manager bot to pick someone (C25)."""
+    read. A stage with nobody set wakes the pipeline's manager bot to pick someone (C25). `refs`, `trigger` and
+    `source` are a new task's own (task_engine.enter)."""
     if row["stage"]["kind"] != "work" or row.get("snooze") or row["stage"].get("by_hand"):
         return None
     owner = row.get("owner_id")
     if is_bot(owner):
-        return task_wakes.add(conn, row, owner, row["visit"], task_wakes.body(conn, row, lead))
+        return task_wakes.add(
+            conn,
+            row,
+            owner,
+            row["visit"],
+            task_wakes.body(conn, row, lead),
+            refs=refs,
+            trigger=trigger,
+            source=source,
+        )
     if not owner:
         manager = _part(row, "pipeline").get("manager_id")
         if is_bot(manager):
@@ -260,9 +331,14 @@ def enter(
     assignee: str | None = None,
     parent: str | None = None,
     link: str = "sub_task",
+    wake: Row | None = None,
+    trigger: str | None = None,
+    source: str | None = None,
 ) -> Row:
     """New. Put a task that is not on the engine yet into its pipeline's first stage, open its visit and wake the
-    owner. `parent` links it to the task that filed it, on that task's open visit."""
+    owner. `parent` links it to the task that filed it, on that task's open visit. `wake` (what the owner bot's run
+    should know: the other work to reconcile with, an automation's run and step), `trigger` and `source` go on the
+    owner's wake."""
     H = _h()
     row = H._one(conn, "SELECT * FROM tasks WHERE id=?", (task_id,))
     if not row:
@@ -301,7 +377,7 @@ def enter(
     _event(conn, task_id, by, "move", None, first["id"], None, {"move": "new", "owner": owner, "parent": parent})
     entered = _task(conn, task_id)
     stage_effects.enter(conn, entered, by)
-    _wake_turn(conn, entered)
+    _wake_turn(conn, entered, refs=wake, trigger=trigger, source=source)
     return entered
 
 
@@ -365,16 +441,43 @@ def _skipped(conn: "sqlite3.Connection", row: Row, target: Row) -> list[R.Standi
 def _may_push_past(conn: "sqlite3.Connection", by: str, row: Row, why: str | None, missing: list[R.Standing]) -> None:
     """Hold a forward move to what is missing. With a reason, anyone pushes past, except a requirement whose switch is
     off, or a people-only OK when anyone but a person tries. Refuses, or returns. Writes nothing."""
+    lines = [f"{each.name}: {each.line}" if each.line and each.line != each.name else each.name for each in missing]
+    version = row.get("version")
     for standing in missing:
         requirement = standing.requirement
         if not (why or "").strip():
-            _refuse(conn, by, "task_not_met", f"Not met: {standing.name}. {standing.line}".strip(), row["id"])
+            _refuse(
+                conn,
+                by,
+                "task_not_met",
+                f"Not met: {standing.name}. {standing.line}".strip(),
+                row["id"],
+                missing=lines,
+                then=_then(row, "push", "ask", "file", "snooze", "close"),
+                version=version,
+            )
         if not R.can_push_past(requirement):
             _refuse(
-                conn, by, "task_no_push_past", f"{standing.name} can't be pushed past. Move back or close.", row["id"]
+                conn,
+                by,
+                "task_no_push_past",
+                f"{standing.name} can't be pushed past. Move back or close.",
+                row["id"],
+                missing=lines,
+                then=_then(row, "back", "ask", "snooze", "close"),
+                version=version,
             )
         if R.people_only(requirement) and not is_human(by):
-            _refuse(conn, by, "task_needs_person", f"{standing.name} needs a person", row["id"])
+            _refuse(
+                conn,
+                by,
+                "task_needs_person",
+                f"{standing.name} needs a person",
+                row["id"],
+                missing=lines,
+                then=_then(row, "ask", "snooze", "close"),
+                version=version,
+            )
 
 
 def _push_past(
@@ -412,6 +515,8 @@ def _may_close(conn: "sqlite3.Connection", by: str, row: Row) -> None:
         f"{name} asked for this task, so only a person can close it. Ask {name}, in one sentence, why it can't be "
         "done: they will close it or reassign it.",
         row["id"],
+        then=_then(row, "ask", "snooze"),
+        version=row.get("version"),
     )
 
 
@@ -443,7 +548,15 @@ def move(
         missing = R.unmet(conn, row) + _skipped(conn, row, target)
         _may_push_past(conn, by, row, why, missing)
         if target["kind"] == "work" and not has_room(conn, target):
-            _refuse(conn, by, "task_stage_full", f"No room in {target['name']}", task_id)
+            _refuse(
+                conn,
+                by,
+                "task_stage_full",
+                f"No room in {target['name']}. The task moves in when there is room.",
+                task_id,
+                then=_then(row, "snooze", "close"),
+                version=row.get("version"),
+            )
         pushed = _push_past(conn, by, row, why, missing, ts)
     elif kind == "reopen":
         _need_why(conn, by, why, "reopen it", task_id, everyone=True)
@@ -482,7 +595,7 @@ def move(
         **extra,
     )
     _open_visit(conn, task_id, target["id"], how, ts)
-    _event(
+    revision = _event(
         conn,
         task_id,
         by,
@@ -505,7 +618,10 @@ def move(
         _ended(conn, moved, by)
     if pushed:
         _tell_manager(conn, moved, f"Pushed past {', '.join(p['name'] for p in pushed)}: {why}", "pushed_past")
-    return moved
+    # What a move causes beyond the task's own row: the events, a routine's day, stopping work on a closed task
+    # (backend/task_effects.py). Last, and for every move, so nothing that moves a task can leave them out.
+    task_effects.moved(conn, row, moved, kind, by, why, revision)
+    return _task(conn, task_id)
 
 
 def _close_under(conn: "sqlite3.Connection", task_id: str, by: str, note: str) -> None:
@@ -652,7 +768,11 @@ def reassign(
     task_wakes.drop(conn, task_id)
     _write(conn, task_id, **fields)
     _reset_ladder(conn, row["visit"], ts, by)
-    _event(conn, task_id, by, "reassign", row.get("owner_id"), owner, why, {"stage": row["stage_id"]})
+    revision = _event(conn, task_id, by, "reassign", row.get("owner_id"), owner, why, {"stage": row["stage_id"]})
+    moved = _task(conn, task_id)
+    # What follows the owner: its private default, sessions, worktree, followers, place in the new owner's queue
+    # (backend/task_effects.py). Before the wake, so a task that just became private wakes only who may read it.
+    task_effects.reassigned(conn, row, moved, by, why, revision)
     moved = _task(conn, task_id)
     if is_bot(owner) and not moved.get("snooze") and not moved["stage"].get("by_hand"):
         task_wakes.add(
@@ -767,19 +887,75 @@ def _end_snooze(conn: "sqlite3.Connection", snoozed: Row, by: str, ts: str) -> N
 
 
 def on_delete(conn: "sqlite3.Connection", task_ids: Sequence[str], by: str) -> int:
-    """The delete path (`task_delete.delete_tasks`), before the rows go: a deleted task's open snooze ends, so nothing
-    waits for its date. Its visit, requirements and links stay for a restore; every read skips a task that is gone.
-    Returns how many snoozes it ended."""
+    """The delete path (`task_delete.delete_tasks`), before the rows go: a deleted task keeps no place in a pipeline.
+    Its snooze, its visits with their answers, the asks added to them and the effects they owed are removed, and its
+    queued wakes are canceled. The links to and from it stay: the task that filed it reads a deleted task as closed,
+    and a restore (`restore`) starts it on a new visit. Returns how many visits went."""
     ids = [str(task_id) for task_id in task_ids if task_id]
     if not ids:
         return 0
-    cursor = conn.execute(
-        "UPDATE snoozes SET ended_at=?, ended_by_id=? WHERE ended_at IS NULL AND task_id IN ("
-        + ",".join("?" * len(ids))
-        + ")",
-        (_h().now(), str(by), *ids),
-    )
-    return cursor.rowcount
+    marks = ",".join("?" * len(ids))
+    visits = f"SELECT id FROM visits WHERE task_id IN ({marks})"
+    for task_id in ids:
+        task_wakes.drop(conn, task_id)
+    conn.execute(f"DELETE FROM effects WHERE visit_id IN ({visits})", ids)
+    conn.execute(f"DELETE FROM answers WHERE visit_id IN ({visits})", ids)
+    conn.execute(f"DELETE FROM requirements WHERE visit_id IN ({visits})", ids)
+    conn.execute(f"DELETE FROM snoozes WHERE task_id IN ({marks})", ids)
+    return conn.execute(f"DELETE FROM visits WHERE task_id IN ({marks})", ids).rowcount
+
+
+def restore(conn: "sqlite3.Connection", task_id: str, by: str, was: Row) -> Row:
+    """Place a task that came back from the trash (`task_delete.restore_tasks`): its row is open and in no stage.
+    `was` is what the trash kept of where it stood: `status`, `pipeline_id`, `stage_id`, `owner_id`, `assignee_id`,
+    `done_at`, `closed_at`, `closed_by_id`.
+
+    An open task starts a new visit in the stage it was in, or the first one if that stage is gone, owned as the
+    stage says, and a bot that owns it is woken. A done or closed one goes back as it ended: same owner, same times,
+    nobody woken. A pipeline that is gone or retired gives General. What it was asked before is not asked again."""
+    H = _h()
+    row = H._one(conn, "SELECT * FROM tasks WHERE id=?", (task_id,))
+    if not row:
+        _refuse(conn, by, "not-found", "No such task")
+    if row.get("pipeline_id"):
+        _refuse(conn, by, "task_changed", "The task is already in a pipeline", task_id)
+    pipe = pipeline(conn, str(was.get("pipeline_id") or "")) if was.get("pipeline_id") else None
+    if not pipe or pipe.get("retired_at"):
+        pipe = pipeline(conn, H.GENERAL_PIPELINE)
+    order = stages(conn, pipe["id"]) if pipe else []
+    work = [s for s in order if s["kind"] == "work"]
+    status = str(was.get("status") or "open")
+    if status == "open":
+        target = next((s for s in work if s["id"] == was.get("stage_id")), None) or (work[0] if work else None)
+    else:
+        target = next((s for s in order if s["kind"] == status), None)
+    if not pipe or not target:
+        _refuse(conn, by, "task_no_such_stage", "No pipeline to restore the task into", task_id)
+    ts = H.now()
+    assignee = was.get("assignee_id") or was.get("owner_id")
+    fields: Row = {
+        "pipeline_id": pipe["id"],
+        "stage_id": target["id"],
+        "status": status,
+        "assignee_id": assignee,
+        "updated_at": ts,
+    }
+    if status == "open":
+        fields["owner_id"] = owner_for(target, assignee)
+    else:
+        fields["owner_id"] = was.get("owner_id")
+        fields["done_at"] = was.get("done_at") if status == "done" else None
+        fields["closed_at"] = was.get("closed_at") if status == "closed" else None
+        fields["closed_by_id"] = was.get("closed_by_id") if status == "closed" else None
+    _write(conn, task_id, **fields)
+    how = {"open": "new", "done": "met", "closed": "closed"}[status]
+    _open_visit(conn, task_id, target["id"], how, ts)
+    _event(conn, task_id, by, "move", None, target["id"], "Restored", {"move": "restored", "owner": fields["owner_id"]})
+    placed = _task(conn, task_id)
+    if status == "open":
+        stage_effects.enter(conn, placed, by)
+        _wake_turn(conn, placed, "This task was restored.")
+    return placed
 
 
 def snooze(

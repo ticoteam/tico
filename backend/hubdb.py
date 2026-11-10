@@ -1126,6 +1126,9 @@ class Refused(Exception):
         self.detail = detail
         self.severity = severity
         self.task = task  # the task a `label` refusal was about (refuse)
+        # What the caller needs to act on it, sent out beside the rule and the detail: for the task engine's refusals
+        # what is missing, the commands allowed next and the task's version (store.refused).
+        self.extra = {}
 
 
 # ----------------------------------------------------------------------------- basics
@@ -1766,7 +1769,7 @@ VIA = contextvars.ContextVar("hub_via", default="")
 DELEGATION = contextvars.ContextVar("hub_delegation", default=None)
 
 PRIVATE_WRITE = contextvars.ContextVar("hub_private_write", default=False)
-# Close preflight reads the same rules as a close without recording or escalating a refusal.
+# A dry run reads the same rules as the write without recording or escalating a refusal (backend/mcp.py).
 CLOSE_PROBE = contextvars.ContextVar("hub_close_probe", default=False)
 # The run (attempt id) whose token made this request (backend/app.py request_guard): each write it logs is counted on
 # that run's `attempts.writes`, which says whether the run acted (backend/run_triggers.py).
@@ -1928,12 +1931,17 @@ def writing_refusal(rule, detail):
     )
 
 
-def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=None, scope=None) -> NoReturn:
+def refuse(
+    conn, actor, rule, detail="", severity="normal", context=None, task=None, scope=None, extra=None
+) -> NoReturn:
     """Record a refusal, escalate it (rule 8), and raise. Never returns. `context` is what a person
     reviewing the refusal reads; a private task write keeps only what was refused. `task` is the task
-    a `label` refusal was about, which _escalate counts it by."""
+    a `label` refusal was about, which _escalate counts it by. `extra` goes out with the refusal, unrecorded: what the
+    caller needs to act on it (`Refused.extra`)."""
     if CLOSE_PROBE.get():
-        raise Refused(rule, detail, severity, task)
+        probed = Refused(rule, detail, severity, task)
+        probed.extra = dict(extra or {})
+        raise probed
     from . import task_quarantine
 
     scope = scope or task_quarantine.source(conn, actor, task or REFUSAL_TASK.get() or (context or {}).get("task"))
@@ -1972,6 +1980,7 @@ def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=N
         detail += ". Rewrite the title/body to fix these writing errors and retry. Do not ask the human to waive formatting rules."
     refused = Refused(rule, detail, severity, task)
     refused.scope = scope  # survives the domain-write rollback (store.refused)
+    refused.extra = dict(extra or {})
     raise refused
 
 
@@ -5383,7 +5392,7 @@ def task_create(
     public_title=None,
     public_summary=None,
     wake_refs=None,
-    trigger="status_or_relation",
+    trigger=None,
     trigger_source=None,
     from_private=False,
     routine=False,
@@ -5797,7 +5806,15 @@ def _reuse_occurrence(conn, actor, target, task_id, title, wake_refs, trigger, t
     if _turn_identity(wake_refs):
         if row["status"] not in ACTIVE_STATUSES:
             refuse(conn, actor, "duplicate", f"that occurrence's task {task_id} is already finished")
-        _wake(conn, row, target, f"Again: {title}", wake_refs, trigger=trigger, source=trigger_source)
+        _wake(
+            conn,
+            row,
+            target,
+            f"Again: {title}",
+            wake_refs,
+            trigger=trigger or "status_or_relation",
+            source=trigger_source,
+        )
     return row
 
 
@@ -6271,10 +6288,11 @@ def history_event(
 
 
 def _task_event(conn, task_id, actor, field, old, new, note="", *, event_id=None, data=None):
+    """One row of a task's history; returns its id."""
     # A Strategy Bot decision (or its Undo) stamps each change it makes with its action id (backend/strategy_acts.py).
     from .strategy_acts import ACTION
 
-    history_event(
+    return history_event(
         conn,
         "task",
         task_id,

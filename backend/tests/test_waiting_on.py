@@ -54,8 +54,10 @@ def test_a_task_a_bot_owns_is_the_bots_turn_and_a_persons_task_is_theirs(c, gene
 
 
 def test_a_task_with_no_owner_is_the_manager_bots_and_with_no_manager_a_persons(c, general):
-    X.pipeline(c, "ops", "Operations")
-    assert _states(c, X.new_task(c, ANA, "Sort the shared inbox")["id"]) == [("bot", "bot:manager")]
+    unowned = ({"name": "Sort", "requirements": [{"kind": "owner_done"}]},)
+    X.pipeline(c, "intake", "Intake", unowned, manager="bot:manager")
+    X.pipeline(c, "ops", "Operations", unowned)
+    assert _states(c, X.new_task(c, ANA, "Sort the shared inbox", "intake")["id"]) == [("bot", "bot:manager")]
     assert _states(c, X.new_task(c, ANA, "Renew the domain", "ops")["id"]) == [("person", ANA)]  # whoever asked
 
 

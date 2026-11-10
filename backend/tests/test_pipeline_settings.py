@@ -97,8 +97,10 @@ def _without_ids(value):
 
 
 def test_general_from_its_preset_has_the_fixed_ids_and_a_task_goes_from_to_do_to_done(c):
+    # The first start made General before the company had a bot. Once the Task Manager exists it manages it.
+    assert PS.read(c, "general")["manager_id"] is None
     X.bot(c, "task-manager")
-    assert PS.ensure_presets(c) == ["general"]
+    assert PS.ensure_presets(c) == []
     general = PS.read(c, "general")
     assert (general["name"], general["preset"], general["manager_id"]) == ("General", "general", "bot:task-manager")
     assert [s["id"] for s in general["stages"]] == ["general-todo"]
@@ -114,7 +116,12 @@ def test_general_from_its_preset_has_the_fixed_ids_and_a_task_goes_from_to_do_to
 
 
 def test_presets_run_on_every_boot_make_general_once_and_never_change_it_again(c):
-    assert PS.ensure_presets(c) == ["general"]
+    assert [row[0] for row in c.execute("SELECT id FROM pipelines")] == ["general"]  # the first start made it
+    assert PS.ensure_presets(c) == []
+    c.execute("DELETE FROM requirements WHERE stage_id IN (SELECT id FROM stages WHERE pipeline_id='general')")
+    c.execute("DELETE FROM stages WHERE pipeline_id='general'")
+    c.execute("DELETE FROM pipelines WHERE id='general'")
+    assert PS.ensure_presets(c) == ["general"]  # a database without it gets it at the next start
     assert PS.ensure_presets(c) == []
     changed = PS.read(c, "general")
     changed["goal"] = "Everything that has no other home"
