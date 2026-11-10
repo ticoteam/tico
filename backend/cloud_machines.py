@@ -151,8 +151,13 @@ SYNC = 60  # seconds between HQ lists
 DELETION_BATCH = 4  # old ids reconciled per look, even when HQ's list cannot be read
 DELETION_WARN = 24 * 60 * 60  # an unsettled disk may still cost money even after its bot has a fresh machine
 HEARTBEAT = 60
+# An own machine HQ still runs whose runner has been silent this long while claimable work waits is stopped, and the
+# work's wake starts it again (HQ's start leaves a live machine as it is). At most one per OFFLINE_RESTART_GAP, and none
+# again until its runner has checked in since the last.
 OFFLINE_RESTART_DELAY = 15 * 60
+OFFLINE_RESTART_GAP = 60 * 60
 OFFLINE_RESTARTING = "offline_restarting"
+OFFLINE_REASON = "offline_with_work"
 PAUSE_MINUTES = 30  # a machine with no Pause after of its own pauses after this many idle minutes
 PAUSE_MIN, PAUSE_MAX = 5, 1440  # the whole minutes a person may set
 BACKOFF, BACKOFF_MAX = 15, 900
@@ -486,8 +491,9 @@ def checked_in(c, runner_id):
     c.execute(
         "UPDATE cloud_machines SET state=CASE WHEN state='starting' THEN 'running' ELSE state END,"
         "problem=CASE WHEN problem=? THEN '' ELSE problem END,"
-        "problem_at=CASE WHEN problem=? THEN NULL ELSE problem_at END,updated_at=? WHERE runner_id=?",
-        (OFFLINE_RESTARTING, OFFLINE_RESTARTING, H.now(), runner_id),
+        "problem_at=CASE WHEN problem=? THEN NULL ELSE problem_at END,updated_at=? "
+        "WHERE runner_id=? AND (state='starting' OR problem=?)",
+        (OFFLINE_RESTARTING, OFFLINE_RESTARTING, H.now(), runner_id, OFFLINE_RESTARTING),
     )
 
 
@@ -1020,10 +1026,17 @@ def facts(c, settings, current, at):
         "update": None,
         "updating": False,
         "last_seen": None,
+        "restarted_at": None,
     }
-    if runner_id:
-        seen = c.execute("SELECT last_seen_at FROM runner_states WHERE runner_id=?", (runner_id,)).fetchone()
-        out["last_seen"] = epoch(seen["last_seen_at"]) if seen else None
+    if runner_id and key != SHARED and current["state"] == "running":
+        heard = c.execute("SELECT last_seen_at FROM runner_states WHERE runner_id=?", (runner_id,)).fetchone()
+        out["last_seen"] = epoch(heard["last_seen_at"]) if heard else None
+        restarted = c.execute(
+            "SELECT created_at FROM events WHERE actor=? AND action='cloud_machine.stopped' AND target=? "
+            "AND detail LIKE ? ORDER BY created_at DESC LIMIT 1",
+            (H.KEEPER, key, f"%{OFFLINE_REASON}%"),
+        ).fetchone()
+        out["restarted_at"] = epoch(restarted["created_at"]) if restarted else None
     if current["problem"] == "out_of_credit" and not out["frozen"]:
         said = cloud_access.state(c) or {}
         out["retry_now"] = bool(
@@ -1197,7 +1210,7 @@ def decide(current, found, at, idle_s):
         return "delete", None  # its code expired unused: it can never enroll
     if on:
         if offline_restart_ready(current, found, at):
-            return "start", None
+            return "stop", None
         # Work queued for it that its runner has not taken yet is activity: stopping now would only start it again.
         # So is an update under way: stopping it would cut the update short, and the wake for it would be spent.
         last = max(found["activity"] or 0, current["active_at"] or 0, found["want_at"] or 0)
@@ -1222,13 +1235,13 @@ def decide(current, found, at, idle_s):
 
 
 def offline_restart_ready(current, found, at):
-    """An own machine still up at HQ has gone silent while claimable queued work waits."""
+    """An own machine still up at HQ has gone silent while claimable queued work waits: stop it, and the work's wake
+    starts it again."""
     if (
         current["bot"] == SHARED
         or current.get("placement", "own") != "own"
         or current["state"] != "running"
         or not current["runner_id"]
-        or current["problem"] == OFFLINE_RESTARTING
         or resizing(current)
         or (current.get("stop_until") or 0) > at
         or found["turns"]
@@ -1237,6 +1250,9 @@ def offline_restart_ready(current, found, at):
         or found.get("last_seen") is None
     ):
         return False
+    restarted = found.get("restarted_at")
+    if restarted and (found["last_seen"] <= restarted or at - restarted < OFFLINE_RESTART_GAP):
+        return False  # the last restart has not brought it back, or was too recent: no loop
     waited_since = max(found["last_seen"], found["want_at"] or 0)
     return at - waited_since >= OFFLINE_RESTART_DELAY
 
@@ -1268,23 +1284,6 @@ def reserve(c, settings, key, action, machine_id):
         current = count_enrollment_failure(c, key, machine_id)
         intend_delete(c, current, "never_enrolled")
     return {**current, "stop_until": at + STOP_HOLD}
-
-
-def reserve_offline_restart(c, settings, current):
-    """Fence new claims before an offline machine is restarted, without ever cutting an existing turn."""
-    at = now()
-    live = row(c, current["bot"])
-    if not live or live["machine_id"] != current["machine_id"] or live["runner_id"] != current["runner_id"]:
-        return None
-    found = facts(c, settings, live, at)
-    if not offline_restart_ready(live, found, at):
-        return None
-    if c.execute(
-        "SELECT 1 FROM attempts WHERE runner_id=? AND state IN ('leased','running') LIMIT 1", (live["runner_id"],)
-    ).fetchone():
-        return None
-    save(c, live["bot"], stop_until=at + STOP_HOLD)
-    return row(c, live["bot"])
 
 
 RESIZE_HELD = "This cloud machine restarts at a new size once its turns finish. Its bots' work waits for it."
@@ -1763,7 +1762,10 @@ class Manager:
 
     def act(self, hq, current, action, found, at):
         key = current["bot"]
-        offline_restart = action == "start" and offline_restart_ready(current, found, at)
+        # The stop half of an offline restart (`offline_restart_ready`), or the start that follows it.
+        offline_restart = action == "stop" and offline_restart_ready(current, found, at)
+        restarting = action == "start" and current["problem"] == OFFLINE_RESTARTING
+        restarting_since = current["problem_at"] if restarting else None
         replacing = current.get("deleting") or bool(current["machine_id"] and current["state"] in DEAD)
         code = None
         if action in ("stop", "delete"):
@@ -1815,11 +1817,6 @@ class Manager:
                 code = mint(c, key, self.execution.auth.owner_id(c) if key == SHARED else None)
                 save(c, key, start_asked_at=None, create_asked_at=at)
         elif action == "start":
-            if offline_restart:
-                with self.store.transaction() as c:
-                    current = reserve_offline_restart(c, self.settings, current)
-                if current is None:
-                    return  # a turn started or the facts changed under the claim lock
             # Persist before HQ is asked: a restart can recover the start even if its answer never arrives.
             with self.store.transaction() as c:
                 save(c, key, start_asked_at=at)
@@ -1859,7 +1856,7 @@ class Manager:
                     save(c, key, heartbeat_at=at, ttl_s=ttl, failures=0, next_try_at=None)
                 return
         except Refused as refused:
-            self.refused(current, action, refused, at, offline_restart=offline_restart)
+            self.refused(current, action, refused, at, restarting=restarting)
             return
         with self.store.read() as c:
             fenced = action == "create" and deleting(c, machine["id"])
@@ -1884,6 +1881,8 @@ class Manager:
         if action == "stop" and resizing(current):
             # Stopped to resize: its next want is fresh, even one it was woken for before the drain held it.
             fields.update(wake_key=None, drain_started_at=None, grow_note="")
+        if offline_restart:
+            fields.update(wake_key=None)  # the work it was woken for never ran: its wake starts it again
         with self.store.transaction() as c:
             if action == "create":
                 # Enrollment may have arrived while HQ answered. Both recovery paths read it under the write lock.
@@ -1896,8 +1895,8 @@ class Manager:
                     **fields,
                     failures=0,
                     next_try_at=None,
-                    problem=OFFLINE_RESTARTING if offline_restart else "",
-                    problem_at=H.now() if offline_restart else None,
+                    problem=OFFLINE_RESTARTING if offline_restart or restarting else "",
+                    problem_at=H.now() if offline_restart else restarting_since,
                     stop_until=None,
                     start_asked_at=None,
                 )
@@ -1909,7 +1908,7 @@ class Manager:
                 {
                     "size": machine["size"],
                     "machine": machine["id"],
-                    **({"reason": "offline_with_work"} if offline_restart else {}),
+                    **({"reason": OFFLINE_REASON} if offline_restart else {}),
                 },
             )
 
@@ -1927,7 +1926,7 @@ class Manager:
         # answers with that one (act), which is not the new machine.
         deleted(c, live, H.KEEPER, details={"reason": "never_enrolled", "tries": fails})
 
-    def refused(self, current, action, refused, at, *, offline_restart=False):
+    def refused(self, current, action, refused, at, *, restarting=False):
         key = current["bot"]
         fields = {}
         if refused.status == 402:
@@ -1960,8 +1959,6 @@ class Manager:
                 fields["stop_until"] = None  # HQ said it did not: its runner may take work again
         if action == "start" and 0 < refused.status < 500:
             fields["start_asked_at"] = None  # a refusal says the start did not happen
-        if action == "start" and refused.status:
-            fields["stop_until"] = None  # a definitive response releases an offline-restart claim fence
         if (
             action == "start"
             and current["machine_size"]
@@ -1996,7 +1993,7 @@ class Manager:
                 fields["grow_note"] = STOP_REFUSED
         with self.store.transaction() as c:
             save(c, key, **fields)
-            if offline_restart and refused.code in ("starts_full", "cpu_cap"):
+            if restarting and refused.code in ("starts_full", "cpu_cap"):
                 from .cloud_machine_health import file_card as file_health_card
 
                 file_health_card(c, key, refused.code, at, getattr(self.settings, "owner_email", ""))
@@ -2045,7 +2042,7 @@ PROBLEMS = {
     "stuck": "Started, but its work did not run there",
     "no_enroll": "Made, but it never connected to this server",
     "disk_full": "Disk nearly full",
-    OFFLINE_RESTARTING: "Restarting: offline with work waiting",
+    OFFLINE_RESTARTING: "Restarting",
 }
 ASLEEP = "asleep; starts when work can run"
 

@@ -47,7 +47,7 @@ interface Machine {
         return {live, busy, asleep, offline, restarting, revoked};
       });
       assert.deepEqual(status, {live: 'idle', busy: '1 running', asleep: 'asleep', offline: 'offline',
-        restarting: 'Restarting: offline with work waiting', revoked: 'revoked'});
+        restarting: 'Restarting', revoked: 'revoked'});
       assert.match(await page.locator('#status').innerText(), /Own cloud machine · Running · Default/);
       await page.close();
     }

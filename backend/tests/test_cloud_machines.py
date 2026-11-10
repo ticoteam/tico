@@ -56,29 +56,43 @@ def test_decide_wakes_for_work_and_creates_on_first_use():
 
 
 def test_an_offline_own_machine_restarts_only_after_fifteen_minutes_of_runnable_work():
+    # HQ's start leaves a live machine as it is, so the restart is a stop; the work's wake then starts it.
     current = machine_row(state="running", active_at=1000, heartbeat_at=1000)
+    HOUR = 3600  # a pause longer than the wait, so its idle stop is not the stop seen here
     waiting = facts(want="job:a", want_at=1000, last_seen=1000)
-    assert CM.decide(current, waiting, 1899, 300)[0] != "start"
-    assert CM.decide(current, waiting, 1900, 300) == ("start", None)
-    assert CM.decide(current, facts(want="job:a", want_at=1000, last_seen=1000, turns=True), 1900, 300)[0] != "start"
-    assert CM.decide(current, facts(want="job:a", want_at=1000, last_seen=1000, updating=True), 1900, 300)[0] != "start"
+    assert CM.decide(current, waiting, 1899, HOUR)[0] != "stop"
+    assert CM.decide(current, waiting, 1900, HOUR) == ("stop", None)
+    assert CM.decide(current, facts(want="job:a", want_at=1000, last_seen=1000, turns=True), 1900, HOUR)[0] != "stop"
+    assert CM.decide(current, facts(want="job:a", want_at=1000, last_seen=1000, updating=True), 1900, HOUR)[0] != "stop"
     assert (
-        CM.decide(current, facts(want="watcher:ops:daily:done", want_at=1000, last_seen=1000), 1900, 300)[0] != "start"
+        CM.decide(current, facts(want="watcher:ops:daily:done", want_at=1000, last_seen=1000), 1900, HOUR)[0] != "stop"
     )
     assert (
         CM.decide(
             machine_row(bot=CM.SHARED, placement="shared", state="running", active_at=1000, heartbeat_at=1000),
             waiting,
             1900,
-            300,
+            HOUR,
         )[0]
-        != "start"
+        != "stop"
     )
     assert not CM.offline_restart_ready({**current, "state": "stopping"}, waiting, 1900)
     assert not CM.offline_restart_ready({**current, "state": "stopped"}, waiting, 1900)
+    assert not CM.offline_restart_ready({**current, "placement": "shared"}, waiting, 1900)
     assert not CM.offline_restart_ready({**current, "size": "large", "machine_size": "small"}, waiting, 1900)
     assert not CM.offline_restart_ready({**current, "stop_until": 1901}, waiting, 1900)
-    assert not CM.offline_restart_ready({**current, "problem": CM.OFFLINE_RESTARTING}, waiting, 1900)
+
+
+def test_an_offline_restart_never_loops():
+    current = machine_row(state="running", active_at=0, heartbeat_at=0)
+    gap = CM.OFFLINE_RESTART_GAP
+    # Restarted at 1000 and never heard from since: no second restart, however long the work waits.
+    never_back = facts(want="job:a", want_at=0, last_seen=900, restarted_at=1000)
+    assert not CM.offline_restart_ready(current, never_back, 1000 + 10 * gap)
+    # Back at 1100, silent again: not again within the gap, once after it.
+    flapping = facts(want="job:a", want_at=0, last_seen=1100, restarted_at=1000)
+    assert not CM.offline_restart_ready(current, flapping, 1000 + gap - 1)
+    assert CM.offline_restart_ready(current, flapping, 1000 + gap)
     assert CM.decide(machine_row(), facts(active=False, want="job:a"), 1000, 300) == (None, None)
     # A drain lets the turn out finish on it first.
     assert CM.decide(machine_row(state="running"), facts(active=False, turns=True), 1000, 300) == ("heartbeat", None)
@@ -801,13 +815,24 @@ def silent_with_waiting_work(cloud):
 
 def test_an_offline_own_machine_is_restarted_and_recorded_without_a_person_card(cloud):
     computer = silent_with_waiting_work(cloud)
-    assert cloud.tick(CM.OFFLINE_RESTART_DELAY + 1) == ["start"]
-    assert cloud.row()["problem"] == CM.OFFLINE_RESTARTING
+    # HQ's start leaves a running machine as it is: the restart stops it, and the waiting work starts it again.
+    assert cloud.tick(CM.OFFLINE_RESTART_DELAY + 1) == ["stop"]
+    assert cloud.row()["state"] == "stopped" and cloud.row()["problem"] == CM.OFFLINE_RESTARTING
+    stopped = events(cloud, "cloud_machine.stopped")[-1]
+    assert json.loads(stopped["detail"])["reason"] == CM.OFFLINE_REASON
+    assert cloud.tick(1) == ["stop", "start"]
+    assert cloud.hq.machines["m1"]["state"] == "starting"
     assert CM.machine_view(cloud.row())["restarting"] is True
-    started = events(cloud, "cloud_machine.started")[-1]
-    assert json.loads(started["detail"])["reason"] == "offline_with_work"
     reported(cloud, computer)
     assert cloud.row()["problem"] == ""
+    # Silent again at once: not restarted again within the hour.
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), computer["runner_id"]))
+    cloud.hq.machines["m1"]["state"] = "running"
+    cloud.hq.calls.clear()
+    cloud.tick(CM.OFFLINE_RESTART_DELAY + 1)
+    restarts = [e for e in events(cloud, "cloud_machine.stopped") if CM.OFFLINE_REASON in (e["detail"] or "")]
+    assert len(restarts) == 1
     with cloud.store.read() as c:
         active, want, _, _ = CM.bot_want(c, cloud.store.settings, "ops", computer["runner_id"], cloud.at[0])
         assert active and want.startswith("job:")
@@ -819,7 +844,8 @@ def test_an_offline_own_machine_is_restarted_and_recorded_without_a_person_card(
 def test_a_refused_offline_restart_files_one_health_card_and_keeps_the_existing_retry(cloud, code, status):
     silent_with_waiting_work(cloud)
     cloud.hq.fail["start"] = [CM.Refused(code, status)]
-    assert cloud.tick(CM.OFFLINE_RESTART_DELAY + 1) == ["start"]
+    assert cloud.tick(CM.OFFLINE_RESTART_DELAY + 1) == ["stop"]
+    assert cloud.tick(1) == ["stop", "start"]
     current = cloud.row()
     assert current["machine_id"] == "m1" and current["problem"] == "hq:" + code
     assert current["next_try_at"] == cloud.at[0] + CM.BACKOFF
