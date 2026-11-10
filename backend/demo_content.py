@@ -2984,7 +2984,7 @@ ASKS = [
     ),
 ]
 
-# Days from the build until an ask is due. Needs you sorts what is due soonest first, so the December price leads the queue.
+# Days from the build until a task given to a person is due: the December price is due tomorrow.
 ASK_DUE = {"home-pro-price": 1.0}
 
 # (bot, [(from, text)...]), hours ago at the first message. Owners' names are the three people the tokens belong to.

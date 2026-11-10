@@ -137,7 +137,7 @@ def _a_demo_task_and_meeting_link_to_each_other(api):
     assert meeting in {row['meeting_id'] for row in response.json()['meetings']}
 
 
-def _meeting_follow_up_has_an_answerable_needs_you_card(api):
+def _meeting_follow_up_is_an_ask_in_needs_you(api):
     meetings = api.get('/api/v2/meetings').json()['meetings']
     linked = {
         row['task_id']
@@ -145,13 +145,8 @@ def _meeting_follow_up_has_an_answerable_needs_you_card(api):
         for row in api.get(f"/api/v2/meetings/{meeting['id']}/tasks").json()['tasks']
     }
     needs = api.get('/api/v2/needs-you?limit=200').json()['items']
-
-    def filed_under_meeting(item):
-        detail = api.get(f"/api/v2/tasks/{item['id']}").json()['task']
-        return any(parent['id'] in linked for parent in detail['relations'].get('parent', []))
-
-    # The follow-up is a question task Ana owns, filed under the meeting's task; its card is answered by an update.
-    assert any('update' in it.get('actions', []) and filed_under_meeting(it) for it in needs)
+    # The follow-up is an OK the meeting's task asks of Ana, on that task.
+    assert any(item['kind'] == 'ask' and item['task_id'] in linked for item in needs)
 
 
 def _demo_task_has_an_editor_for_the_live_task_page(api):
@@ -210,7 +205,7 @@ def test_the_demo_fills_every_page_and_links_its_records(api, subtests):
     for check in (
         _full_page_audience_editor_has_a_restricted_example,
         _a_demo_task_and_meeting_link_to_each_other,
-        _meeting_follow_up_has_an_answerable_needs_you_card,
+        _meeting_follow_up_is_an_ask_in_needs_you,
         _demo_task_has_an_editor_for_the_live_task_page,
         _task_pages_have_demo_data,
         _a_demo_task_has_a_page_made_by_its_person,
