@@ -667,6 +667,8 @@ def run(args, who=None):
         if fn == "service-key revoke":
             return client.post("service-keys/" + args.id + "/revoke", {}, key=os.environ.get("HUB_OPERATION_ID"))
         return client.get("service-keys")["keys"]
+    if args.cmd == "ok":
+        return unwrap(via_tool(client, args))
     if args.cmd == "webhook":
         from clients import hubtools
 
@@ -829,6 +831,7 @@ def run(args, who=None):
             "reassign",
             "ask",
             "answer",
+            "thumbs",
             "file",
             "snooze",
             "unsnooze",

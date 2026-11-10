@@ -4,12 +4,13 @@
     python3 software/pipeline.py status projects/<slug> [--task ID] [--owner NAME]
     python3 software/pipeline.py next projects/<slug> [--task ID] [--owner NAME]   the one step to take now
     python3 software/pipeline.py gate projects/<slug>/<stage>/<file>               exit 0 when the next stage may use it
-    python3 software/pipeline.py raise projects/<slug> --usd N --ok ID             record a budget raise the owner OK'd
+    python3 software/pipeline.py raise projects/<slug> --usd N --ok ID             use the owner's OK, then record the raise
 
 Stages, their movers, the owner and the budget come from pipeline.yaml at the repository root. A project is a folder per
 stage (projects/<slug>/<stage>/<asset>). An asset may have a provenance sidecar: the same file name with `.json` added,
 holding `cost_usd`. A self-moved stage is done when its folder holds a `.done` file. The budget raised by the owner is in
-projects/<slug>/budget.json. Approval is `hub file approved <path>`: exit 0 when approved, 1 when its answer says
+projects/<slug>/budget.json, recorded only after Tico takes the owner's OK of exactly that project and amount
+(`hub ok use`): an OK never given, still waiting, for another amount or already used is refused. Approval is `hub file approved <path>`: exit 0 when approved, 1 when its answer says
 `"approved": false`. Any other result stops the pipeline with an error, since a failed call also exits 1.
 Standard library only.
 """
@@ -144,11 +145,38 @@ def budget_record(project):
     }
 
 
+def raise_subject(project):
+    """What a budget raise's OK is bound to: this project."""
+    return f"budget_raise:{project.name}"
+
+
+def raise_content(project, usd):
+    """Exactly what the owner OKs: the project and the amount, written the same way when asked and when used."""
+    return {"project": project.name, "usd": f"{float(usd):.2f}"}
+
+
+def use_raise_ok(project, usd, ok_id):
+    """`hub ok use`: Tico takes the OK once, only when the owner gave it for this project and exactly this amount.
+    Anything else, or a call that fails, raises Problem: nothing is recorded without it."""
+    content = json.dumps(raise_content(project, usd), separators=(",", ":"))
+    command = ["hub", "ok", "use", ok_id, "--for", raise_subject(project), "--content", content]
+    command += ["-m", f"Budget for {project.name} raised by {float(usd):.2f} USD"]
+    try:
+        done = subprocess.run(command, cwd=REPO, capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise Problem(f"hub ok use could not run: {exc}; the budget is not raised") from None
+    if done.returncode != 0:
+        output = (done.stderr.strip() or done.stdout.strip())[-500:] or "no output"
+        raise Problem(f"Tico did not take OK {ok_id} for {usd:g} USD on {project.name}: {output}")
+
+
 def record_raise(project, usd, ok_id):
-    """Add a raise the owner OK'd to the project's budget. The same OK is recorded once, however often this runs."""
+    """Add a raise the owner OK'd to the project's budget, after Tico takes that OK (use_raise_ok). The same OK is
+    recorded once, however often this runs."""
     record = budget_record(project)
     if ok_id in record["oks"]:
         return record
+    use_raise_ok(project, usd, ok_id)
     record = {
         "extra_usd": record["extra_usd"] + float(usd),
         "ok": ok_id,
@@ -207,6 +235,13 @@ def ask_ok(task, person, text, shows=0):
     return command + " --show file:<FILE@N>" * shows + " --version N"
 
 
+def ask_raise(task, person, text, project, usd):
+    """`hub task ask --for`: the owner's OK bound to this project and exactly this amount, used once by `raise`."""
+    content = json.dumps(raise_content(project, usd), separators=(",", ":"))
+    command = ["hub", "task", "ask", task, "--to", person, text, "--for", raise_subject(project), "--content", content]
+    return shlex.join(command) + " --version N"
+
+
 def request(project, cfg, stage, files, task, owner):
     """The step that puts a stage's unapproved files to its mover."""
     mover = stage["mover"]
@@ -254,7 +289,12 @@ def self_step(project, cfg, stage, task, owner):
         f"Spend {raise_by} USD more on {project.name}? {used:.2f} of {limit:.2f} USD used. An OK lets its self-moved "
         "stages go on; no ends them."
     )
-    return f"over budget ({used:.2f} of {limit:.2f} USD used): ask the owner for an OK: " + ask_ok(task, owner, line)
+    ask = ask_raise(task, owner, line, project, cfg["budget"])
+    use = shlex.join(["python3", "software/pipeline.py", "raise", rel(project), "--usd", f"{cfg['budget']:.2f}"])
+    return (
+        f"over budget ({used:.2f} of {limit:.2f} USD used): ask the owner for an OK: {ask}\n"
+        f"once they OK it: {use} --ok <the requirement id it printed>"
+    )
 
 
 def next_step(project, cfg, task="TASK-ID", owner=None):

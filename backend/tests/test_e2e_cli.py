@@ -179,6 +179,8 @@ def argument_value(action, command):
         return str(next(iter(action.choices)))
     if action.type in (int, float):
         return "0" if "wait" in dest else "1"
+    if action.type is hubcli.json_value:
+        return '{"project": "acme-smoke"}'
     if dest in (
         "id",
         "task",

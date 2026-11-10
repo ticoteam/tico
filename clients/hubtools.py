@@ -537,12 +537,12 @@ def unnote(api, args):
     return api.post(f"notes/{args['id']}/cancel", {}, key=_key(args))["note"]
 
 
-FEEDBACK_SUBJECT = _s("What was rated", enum=["message", "task", "approval"])
+FEEDBACK_SUBJECT = _s("What was rated", enum=["message", "task"])
 
 
 @tool(
     "hub_feedback_give",
-    "Rate a message, task or approval a bot made, 👍 (up) or 👎 (down), with an optional reason. "
+    "Rate a message or task a bot made, 👍 (up) or 👎 (down), with an optional reason (an ask: hub_task_thumbs). "
     "Rating again replaces your earlier one. tell_bot (a 👎 only) leaves the bot a note for its next run in that "
     "conversation. People only.",
     {
@@ -563,6 +563,27 @@ def feedback_give(api, args):
 
 
 @tool(
+    "hub_task_thumbs",
+    "Was this ask worth asking: 👍 (up) or 👎 (down) on an ask a bot put to you, with an optional note saying what was "
+    "wrong. A 👎 sends an open ask back to the bot with your words. For the person asked only.",
+    {
+        "id": _s("The task id"),
+        "requirement": _s("The ask's requirement id"),
+        "up": {"type": "boolean", "description": "true for 👍, false for 👎"},
+        "note": _s("What was wrong, in a few words (at most 2000 characters)"),
+    },
+    required=("id", "requirement", "up"),
+    writes=True,
+)
+def task_thumbs(api, args):
+    body = {"up": bool(args["up"])}
+    if args.get("note"):
+        body["note"] = args["note"]
+    path = f"tasks/{quote(args['id'], safe='')}/asks/{quote(args['requirement'], safe='')}/thumbs"
+    return api.post(path, body, key=_key(args))
+
+
+@tool(
     "hub_feedback_remove",
     "Remove your feedback; a note it left that no run carried yet is taken back.",
     {"id": _s("The feedback id")},
@@ -577,7 +598,9 @@ def feedback_remove(api, args):
     "hub_feedback_markers",
     "Your own feedback on these subjects (at most 200 ids) and everyone's up/down counts, for the ones you may read.",
     {
-        "subject_type": FEEDBACK_SUBJECT,
+        "subject_type": _s(
+            "What was rated; an ask's id is <visit-id>:<requirement-id>", enum=["message", "task", "ask"]
+        ),
         "subject_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 200, "description": "Their ids"},
     },
     required=("subject_type", "subject_ids"),
@@ -1387,6 +1410,11 @@ def _own_ask(api, task_id, requirement=None):
             "maxItems": 10,
             "description": "What they look at to answer, shown with the ask",
         },
+        "subject": _s(
+            "An OK bound to what you will do, as <kind>:<id> (budget_raise:launch-video): the OK covers exactly "
+            "`content`, and you use it once with hub_ok_use just before you act"
+        ),
+        "content": {"description": "With subject: exactly what the OK covers (any JSON)"},
         "withdraw": {"type": "boolean", "description": "Take back your open ask on this task instead"},
         "requirement": _s("With withdraw: the ask's requirement id, when more than one may be withdrawn"),
         "why": _s("With withdraw: why, in a sentence"),
@@ -1404,10 +1432,38 @@ def task_ask(api, args):
     if missing:
         raise ValueError(f"An ask names who it is for and the one line they are asked: give {' and '.join(missing)}")
     body = {"to": args["to"], "line": args["line"], "version": _seen(args)}
+    if args.get("subject"):
+        if args.get("choices") or args.get("kind") == "answer" or "content" not in args:
+            raise ValueError("An OK bound to a subject is an ok with its content, never a question with choices")
+        body.update({"subject": args["subject"], "content": args["content"]})
+        if args.get("show"):
+            body["show"] = args["show"]
+        return api.post(f"tasks/{args['id']}/oks", body, key=_key(args))
     for field in ("kind", "choices", "show"):
         if args.get(field):
             body[field] = args[field]
     return api.post(f"tasks/{args['id']}/asks", body, key=_key(args))
+
+
+@tool(
+    "hub_ok_use",
+    "Use an OK you asked for with a subject (hub_task_ask `subject`), once, just before you act: Tico checks it was "
+    "given by the person's own tap, for the same subject and exactly the same content, and not used before. Refused "
+    "otherwise; then do not act.",
+    {
+        "requirement": _s("The OK's requirement id, as hub_task_ask returned it"),
+        "subject": _s("The same subject the OK was asked for"),
+        "content": {"description": "Exactly the content the OK was asked for"},
+        "note": _s("What was done, in a sentence", maxLength=300),
+    },
+    required=("requirement", "subject", "content"),
+    writes=True,
+)
+def ok_use(api, args):
+    body = {"subject": args["subject"], "content": args["content"]}
+    if args.get("note"):
+        body["note"] = args["note"]
+    return api.post(f"oks/{quote(args['requirement'], safe='')}/use", body, key=_key(args))
 
 
 @tool(
