@@ -48,16 +48,17 @@ gh pr create -R <org>/bot-<slug> --base main --head <branch> --title "..." --bod
 gh pr merge -R <org>/bot-<slug> <number> --merge --delete-branch  # your own repo, checks passed
 ```
 
-For a repository whose merge still needs human review (a docs-only pull request does not; see policies/approvals.md), request that exact action:
-`hub approval request --kind merge --payload '{"repo": "<org>/<repo>", "pr": 123,
-"head_sha": "..."}'`.
+For a repository whose merge still needs a person (a docs-only pull request does not; see policies/approvals.md), ask
+for an OK on the task with the pull request shown:
+`hub task ask <id> --to <person> "<one sentence>" --kind ok --show <pr url> --version N`.
+The OK covers the head they saw. Merge only that head; after a new commit, ask again.
 
 ## Rules
 
-- GitHub Issues are disabled for work. Never `gh issue`; tasks, asks and approvals go through
+- GitHub Issues are disabled for work. Never `gh issue`; tasks, asks and OKs go through
   `hub`.
 - A bot may merge a PR into its own `bot-<slug>` repository after relevant tests and required
-  checks pass, without human approval. Other repositories follow their scoped review and approval
+  checks pass, without a person's OK. Other repositories follow their scoped review and approval
   rules; never bypass branch protection. Deleting, archiving or changing repository visibility
   remains gated.
 - Never push to another repository's default branch. Changes go on a branch as a draft or review

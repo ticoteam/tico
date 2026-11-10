@@ -525,6 +525,7 @@ async function hlCheckUpdates(): Promise<void> {
     // An available update is already the Version line, refreshed above: say it once, not twice.
     HL_CHECK_MSG = notice?.checking ? {text: 'Still checking. Look again in a moment.'}
       : notice?.available ? null
+      : notice?.held ? {text: `${nvVersion(notice.latest)} is out. ${notice.held}.`}
       : {text: notice?.latest ? `You are on the latest release, ${nvVersion(notice.current)}.`
         : 'Checked. No release information came back.'};
   } catch (error) {

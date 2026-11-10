@@ -18,7 +18,7 @@ opens a task before it is optional.
 | Reading a contract for what binds us | Nothing | The core of this plan |
 | Legal dates | Tasks have `due`; the scheduler runs daily jobs (`backend/scheduler.py`) | Nothing says "file X by Y every year, start 2 weeks before" |
 | Who may message a bot, sending outside, limits | `bot_access.py` write audience (Open by default); the Email sending policy (`backend/email_sending.py`); `usage_limits.py`, `turn_budgets.py`, `task_caps.py` | All exist and are editable, but spread across Settings; there's no single view per bot |
-| Checks on outbound calls | Optional approvals (`hub approval request --kind send\|spend\|publish\|merge`, payload-bound, consumed once); Tico's send queue, which decides every email (`backend/email_sending.py`) | Nothing ties an outside obligation to the action it governs |
+| Checks on outbound calls | An OK asked on the task (`hub task ask <id> --to <person>`), answered in Needs you; Tico's send queue, which decides every email (`backend/email_sending.py`) | Nothing ties an outside obligation to the action it governs |
 
 ## The model
 

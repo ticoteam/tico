@@ -317,6 +317,42 @@ class Checker:
 CHECKER = Checker()
 
 
+# 0.6 starts fresh (docs/updates.md, "From 0.5 to 0.6"): a 0.6 server refuses a 0.5 database that has tasks. So a server
+# below FRESH_START whose database has tasks is not offered a release at or past it, and does not start one: not by the
+# owner, an update key, or Tico support's target. scripts/release_train.py keeps the same line for Tico's own installs.
+FRESH_START = (0, 6, 0)
+FRESH_WORDS = "0.6 starts fresh: this company's tasks would not carry over"
+
+
+def crosses_fresh_start(current, target):
+    """Whether moving from `current` to `target` crosses FRESH_START (an rc of 0.6 included)."""
+    have, want = parse(current), parse(str(target or "").strip().lstrip("v"))
+    return bool(have and want) and have[:3] < FRESH_START <= want[:3]
+
+
+def held(c, target, current=None):
+    """FRESH_WORDS when this server may not move to `target`: it crosses FRESH_START and the database has tasks."""
+    if not crosses_fresh_start(current or version(), target):
+        return ""
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tasks'").fetchone():
+        return ""
+    return FRESH_WORDS if c.execute("SELECT 1 FROM tasks LIMIT 1").fetchone() else ""
+
+
+def offered(c, out):
+    """A notice (`notice`, `check_now`) as this server may take it: a release it may not move to is not `available`,
+    and `held` says why."""
+    why = held(c, out.get("latest") or "", out.get("current")) if out.get("available") else ""
+    return {**out, "available": False, "held": why} if why else {**out, "held": ""}
+
+
+def refuse_held(c, target):
+    """Problem `fresh_start` (409) when `held` says this server may not move to `target`."""
+    why = held(c, target)
+    if why:
+        raise Problem("fresh_start", why + ".", 409)
+
+
 def managed():
     """Tico updates this server from outside (TICO_UPDATES=tico): there is nothing for the owner to run."""
     return os.environ.get("TICO_UPDATES", "").strip().lower() == "tico"
