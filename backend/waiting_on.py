@@ -270,7 +270,8 @@ def turns(conn: "sqlite3.Connection", row: Row, waits: Sequence[Wait] | None = N
         return set()
     found = of(conn, row) if waits is None else waits
     out = {str(wait.who) for wait in found if wait.state in (BOT, PAUSED) and wait.who}
-    manager = (row.get("pipeline") or {}).get("manager_id")
+    pipe: Row = row.get("pipeline") or {}
+    manager: str | None = pipe.get("manager_id")
     if level == "manager" and is_bot(manager) and out:
         out.add(str(manager))
     return out
@@ -291,7 +292,8 @@ def turn(
     bots = sorted((w for w in found if w.state in states and w.who), key=lambda w: (w.state != BOT, w.ask))
     if not bots:
         return None
-    manager = (row.get("pipeline") or {}).get("manager_id")
+    pipe: Row = row.get("pipeline") or {}
+    manager: str | None = pipe.get("manager_id")
     if level == "manager" and is_bot(manager):
         return str(manager)
     return bots[0].who
