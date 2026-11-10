@@ -224,7 +224,7 @@ def test_a_working_beat_stores_one_row_with_only_the_steps_that_did_something(ap
     (state,) = rows(api, "SELECT * FROM heartbeat_states")
     assert state["quiet_since_at"] is None and state["quiet_beats_count"] == 1 and state["beats_count"] == 2
     (step,) = rows(api, "SELECT * FROM heartbeat_steps WHERE key='deferred'")
-    assert step["last_did"] == "2 snoozes ended" and step["did_count"] == 1 and step["runs_count"] == 2
+    assert step["last_did"] == "2 deferred runs started" and step["did_count"] == 1 and step["runs_count"] == 2
     runs = rows(api, "SELECT * FROM system_runs WHERE job='heartbeat' ORDER BY started_at")
     assert runs[-1]["result"] == "2 steps did something"
 
@@ -298,7 +298,7 @@ def test_get_shows_the_steps_and_the_log_and_put_needs_an_owner_or_admin(api, fa
     assert len(page["beats"]) == 2 and page["next"]
     rest = get(api, "heartbeat?limit=2&before=" + page["next"])
     assert [b["id"] for b in page["beats"] + rest["beats"]] == [b["id"] for b in data["beats"]] and rest["next"] is None
-    assert rest["beats"][0]["steps"][0]["name"] == "Due reminders"
+    assert rest["beats"][0]["steps"][0]["name"] == "Deferred runs"
     get(api, "heartbeat?before=nonsense", expected=422)
 
     put(api, "heartbeat", {"interval_s": 20}, token="cara-test", expected=403)
