@@ -37,7 +37,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-SKIP_PREFIXES = ("docs/history/", "reports/", ".git/")
+# An applied migration is never edited (backend/migrations checks each file's checksum), comments included.
+SKIP_PREFIXES = ("docs/history/", "reports/", ".git/", "backend/migrations/")
 SKIP_GLOBS = ("scripts/cleanup/report-*.md",)
 KEEP = {
     "clients/renames.json",  # check-names' map of the old spellings a bot's files may still use
