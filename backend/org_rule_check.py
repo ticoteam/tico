@@ -459,6 +459,42 @@ def _place_now(c, place, author, recipients):
     return place or None
 
 
+def _judged(store, engine, qset, level, operation, batch, questions, state, draft, is_person):
+    """One call of a check, on one batch of its rules: (the ids of the rules it found broken, or None; the error code;
+    the `judge.call` event's id, or None when nothing was asked)."""
+    result, error = _ask(calls_for(store), engine, state, questions, qset["label"], level)
+    if error in ("busy", "breaker", "budget"):
+        return None, error, None  # nothing was asked: no judge.call row
+    if result is not None and not isinstance(result, dict):
+        result, error = None, "shape"
+    broken = None
+    if result is not None and not error:
+        try:
+            answers = J.check_answers(result.get("answers"), questions)
+            cut = float(qset["thresholds"]["broken"])
+            broken = [batch[int(qid[1:]) - 1]["id"] for qid in questions if J.noul(answers, qid) >= cut]
+        except (J.JudgeError, AttributeError, KeyError, TypeError, ValueError, IndexError):
+            error = "shape"
+    detail = {
+        "label": qset["label"],
+        "questions": len(questions),
+        "operation": operation,
+        "level": level,
+        "rules": [r["id"] for r in batch],
+        **({"draft": True} if draft else {}),
+        **({"people": True} if is_person else {}),
+    }
+    if result is not None:
+        detail.update(B.audit_detail(result))
+    if error or broken is None:
+        detail["error"] = error or "shape"
+    else:
+        detail["broken"] = len(broken)
+    with store.transaction() as c:
+        call = H.event(c, H.KEEPER, "judge.call", qset["label"], detail)
+    return broken, (None if broken is not None else error or "shape"), call["id"]
+
+
 @SRC.scoped("rule-check")
 def check_as(
     store,
@@ -541,68 +577,60 @@ def check_as(
                     "call": hit[1],
                     **({"unchecked_rules": unchecked} if unchecked else {}),
                 }
-            questions = _questions(qset, rules[: J.MAX_QUESTIONS])
-            state = {
-                "rules": [{"id": f"r{n}", "text": r["text"]} for n, r in enumerate(rules[: J.MAX_QUESTIONS], 1)],
-                "operation": OPERATIONS.get(operation, operation),
-                "output": output,
-                "from": _names(c, [author])[0],
-                "to": _names(c, recipients),
-                "context": context or {},
-            }
-            if len(json.dumps(state, default=str)) > J.MAX_STATE_CHARS:
-                return {**verdict, "outcome": "too_large", "broken": [r["id"] for r in rules]}
+            # Every matching rule is judged: one call per MAX_QUESTIONS rules, never silently the first ones only.
+            batches = []
+            for at in range(0, len(rules), J.MAX_QUESTIONS):
+                batch = rules[at : at + J.MAX_QUESTIONS]
+                state = {
+                    "rules": [{"id": f"r{n}", "text": r["text"]} for n, r in enumerate(batch, 1)],
+                    "operation": OPERATIONS.get(operation, operation),
+                    "output": output,
+                    "from": _names(c, [author])[0],
+                    "to": _names(c, recipients),
+                    "context": context or {},
+                }
+                if len(json.dumps(state, default=str)) > J.MAX_STATE_CHARS:
+                    return {**verdict, "outcome": "too_large", "broken": [r["id"] for r in rules]}
+                batches.append((batch, _questions(qset, batch), state))
             engine = B.server_engine(store, c, primary, backup=False)
             if engine is None:
                 capped = B.over_spend_cap(c, store.settings)
                 return {**verdict, "outcome": "unchecked", "error": "budget" if capped else "no_engine"}
-            if calls_today(c, people=is_person) >= B.daily_cap(store.settings, "human" if is_person else "bot"):
+            cap = B.daily_cap(store.settings, "human" if is_person else "bot")
+            if calls_today(c, people=is_person) + len(batches) > cap:
                 return {**verdict, "outcome": "unchecked", "error": "day_cap"}
-        result, error = _ask(calls_for(store), engine, state, questions, qset["label"], level)
-        if error in ("busy", "breaker", "budget"):
-            return {**verdict, "outcome": "unchecked", "error": error}  # nothing was asked: no judge.call row
-        if result is not None and not isinstance(result, dict):
-            result, error = None, "shape"
-        broken = None
-        if result is not None and not error:
-            try:
-                answers = J.check_answers(result.get("answers"), questions)
-                cut = float(qset["thresholds"]["broken"])
-                broken = [rules[int(qid[1:]) - 1]["id"] for qid in questions if J.noul(answers, qid) >= cut]
-            except (J.JudgeError, AttributeError, KeyError, TypeError, ValueError, IndexError):
-                error = "shape"
-        detail = {
-            "label": qset["label"],
-            "questions": len(questions),
-            "operation": operation,
-            "level": level,
-            "rules": [r["id"] for r in rules[: J.MAX_QUESTIONS]],
-            **({"draft": True} if draft else {}),
-            **({"people": True} if is_person else {}),
-        }
-        if result is not None:
-            detail.update(B.audit_detail(result))
-        if error:
-            detail["error"] = error
-        else:
-            detail["broken"] = len(broken)
+        broken, failed, errors, calls = [], [], [], []
+        for batch, questions, state in batches:
+            found, error, call = _judged(
+                store, engine, qset, level, operation, batch, questions, state, draft, is_person
+            )
+            calls += [call] if call else []
+            if found is None:
+                failed += [r["id"] for r in batch]
+                errors.append(error)
+            else:
+                broken += found
+        call = calls[0] if calls else None
+        if failed and len(failed) == len(rules):
+            return {**verdict, "outcome": "unchecked", "error": errors[0], "call": call}
+        if failed:
+            # Some calls answered and some did not (the judge out part-way): what was found holds or warns, and the
+            # rules not judged are recorded unchecked. Not cached: the next try asks again.
+            return {
+                **verdict,
+                "broken": broken,
+                "outcome": "broken" if broken else "pass",
+                "call": call,
+                "error": errors[0],
+                "unchecked_rules": failed,
+            }
         with store.transaction() as c:
-            call = H.event(c, H.KEEPER, "judge.call", qset["label"], detail)
-            if broken is not None:
-                # A partial check (past MAX_QUESTIONS rules) keeps which rules it left out, so a retry that hits the
-                # cache still records them unchecked.
-                unchecked = [r["id"] for r in rules[J.MAX_QUESTIONS :]]
-                stored = {"broken": broken, "unchecked": unchecked} if unchecked else broken
-                c.execute(
-                    "INSERT OR REPLACE INTO org_rule_verdicts(digest, broken, call_id, created_at) VALUES(?,?,?,?)",
-                    (key, json.dumps(stored), call["id"], H.now()),
-                )
-                c.execute("DELETE FROM org_rule_verdicts WHERE created_at<?", (H.shift(H.now(), days=-CACHE_DAYS),))
-        if len(rules) > J.MAX_QUESTIONS and broken is not None:
-            verdict["unchecked_rules"] = [r["id"] for r in rules[J.MAX_QUESTIONS :]]
-        if broken is None:
-            return {**verdict, "outcome": "unchecked", "error": error or "shape", "call": call["id"]}
-        return {**verdict, "broken": broken, "outcome": "broken" if broken else "pass", "call": call["id"]}
+            c.execute(
+                "INSERT OR REPLACE INTO org_rule_verdicts(digest, broken, call_id, created_at) VALUES(?,?,?,?)",
+                (key, json.dumps(broken), call, H.now()),
+            )
+            c.execute("DELETE FROM org_rule_verdicts WHERE created_at<?", (H.shift(H.now(), days=-CACHE_DAYS),))
+        return {**verdict, "broken": broken, "outcome": "broken" if broken else "pass", "call": call}
     except Exception as exc:
         # Only the judge being out fails open (`_ask` turns its failures into error codes: a timeout, an error, a
         # malformed answer, the breaker). Anything else is a fault here: the write fails, never goes unchecked.

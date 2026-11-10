@@ -8,6 +8,7 @@ import pytest
 
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post
+from backend.tests.helpers.org_rules import rule
 from backend.tests.test_org_rule_check import (  # noqa: F401 - fixtures
     _not_a_friday,
     color_rule,
@@ -279,6 +280,20 @@ def test_a_done_note_with_every_call_slot_busy_writes_nothing(ruled, monkeypatch
     task = task_for_ops(api)
     got = done_by_ops(api, task, "All shipped.", 503)
     assert problem(got) == ("rule_check_busy", True), got
+    assert row(api, task["id"])["status"] != "done"
+
+
+def test_a_rule_past_what_one_call_judges_still_holds_the_write(ruled, monkeypatch):
+    api, judge = ruled
+    from clients import judge as J
+
+    monkeypatch.setattr(J, "MAX_QUESTIONS", 2)
+    for n in range(4):  # made first: the rules matched are read oldest first
+        rule(api, {"kind": "internal", "text": f"Keep note {n} short.", "who": {"bots": ["ops"]}})
+    color_rule(api)
+    task = task_for_ops(api)
+    assert done_by_ops(api, task, "Our favorite color is red.")["held"]
+    assert len(judge.calls) == 3 and reasons(api) == []
     assert row(api, task["id"])["status"] != "done"
 
 

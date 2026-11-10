@@ -99,7 +99,8 @@ def local_cause(verdict):
         return verdict["local"]
     if verdict.get("outcome") == "too_large":
         return "too_large"
-    if verdict.get("outcome") == "unchecked" and verdict.get("error") in LOCAL:
+    # Unchecked whole, or in part (some of its calls answered, `unchecked_rules` the rest).
+    if (verdict.get("outcome") == "unchecked" or verdict.get("unchecked_rules")) and verdict.get("error") in LOCAL:
         return verdict["error"]
     return None
 
