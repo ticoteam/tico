@@ -447,3 +447,43 @@ def test_a_person_or_the_assistant_never_approves_a_file_by_a_direct_review(api)
     assert not found["approved"], found
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM ok_grants WHERE subject LIKE ?", (f"file:{fid}%",)).fetchone()
+
+
+def test_an_ok_sent_back_stays_dead_when_the_send_back_is_undone(api):
+    """Codex review 2, finding 2: OK, then send back, then undo the send back used to bring the first OK back, and the
+    bot used it with no new click. A send back (or an OK taken back) revokes the grant for good; the Assistant never
+    reaches an undo that touches an OK."""
+    from backend.tests.helpers.assistant import assistant_turn
+
+    bot = as_bot(api)
+    tid = bots_task(api, bot)
+    rid = ask(api, bot, tid)
+    assert give(api, tid, rid)[0] == 200
+    status, _, _, out = call(
+        api, "POST", f"tasks/{tid}/asks/{rid}/answer", "ben-test", {"value": "no", "note": "Wait."}
+    )
+    assert status == 200
+    with api.app.state.store.read() as c:
+        back = c.execute(
+            "SELECT id FROM answers WHERE requirement_id=? AND answer='no' ORDER BY created_at DESC LIMIT 1", (rid,)
+        ).fetchone()[0]
+        given = c.execute("SELECT answer_id FROM ok_grants WHERE requirement_id=?", (rid,)).fetchone()[0]
+    _, attempt = assistant_turn(api, "ana-test")
+    for answer_id in (back, given):  # the Assistant reaches no undo on an OK
+        assert call(api, "POST", f"answers/{answer_id}/undo", attempt["token"], {})[0] in (403, 409)
+    assert call(api, "POST", f"answers/{back}/undo", "ben-test", {})[0] == 200
+    assert standing(api, rid) != K.OK
+    status, code, _, _ = use(api, rid, bot)
+    assert (status, code) == (409, "task_ok_missing")
+    # Nor does a fresh click bring that grant back: the bot asks again.
+    status, code, _, _ = give(api, tid, rid)
+    assert status == 409
+    assert use(api, rid, bot)[0] == 409
+    # Taking the OK itself back revokes it too.
+    tid2 = bots_task(api, bot)
+    rid2 = ask(api, bot, tid2)
+    assert give(api, tid2, rid2)[0] == 200
+    with api.app.state.store.read() as c:
+        given2 = c.execute("SELECT answer_id FROM ok_grants WHERE requirement_id=?", (rid2,)).fetchone()[0]
+    assert call(api, "POST", f"answers/{given2}/undo", "ben-test", {})[0] == 200
+    assert use(api, rid2, bot)[0] == 409

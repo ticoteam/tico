@@ -313,6 +313,10 @@ def _state(conn: "sqlite3.Connection", row: Row) -> tuple[str, Row | None, Row |
     visit = _visit(conn, requirement.get("visit_id")) if requirement else None
     if not requirement or not visit:
         return WITHDRAWN, requirement, visit
+    if row.get("revoked_at"):
+        # Sent back or taken back: dead for good, whatever the answers say since (an undone send back included).
+        newest = _newest_answer(conn, visit["id"], requirement["id"]) or {}
+        return (SENT_BACK if newest.get("answer") == "no" else WITHDRAWN), requirement, visit
     # The engine ends a visit's asks with it (task_engine._close_visit). A visit that ended because what it needed was
     # met, this OK among it, moved on with the OK: that is the OK doing its work, not taking it back.
     met = visit.get("how") == "met" and requirement.get("withdrawn_at") == visit.get("left_at")
@@ -545,6 +549,8 @@ def give_ok(
         _refuse(conn, person, "consumed", "This OK was already used", task_id)
     if state == OK:
         return
+    if row.get("revoked_at"):
+        _refuse(conn, person, "task_requirement", "This was sent back or taken back: it needs a new ask", task_id)
     if state == WITHDRAWN or not requirement or not visit or visit.get("left_at"):
         _refuse(conn, person, "task_requirement", "This is not asked any more", task_id)
     asked_of = R.person_of(conn, requirement, visit["id"])
@@ -650,6 +656,16 @@ def use(conn: "sqlite3.Connection", requirement_id: str, subject: str, content: 
     if not spent:
         _refuse(conn, by, "consumed", "This OK was already used")
     H.event(conn, by, "ok.used", requirement_id, {"subject": subject})
+
+
+def revoke(conn: "sqlite3.Connection", requirement_id: str) -> None:
+    """An OK sent back, or its OK taken back (backend/answers.py): marked once, for good. Undoing the send back never
+    brings it back, and no later click on this ask gives it again; the bot asks anew. A used grant is left as it is."""
+    H = _h()
+    conn.execute(
+        "UPDATE ok_grants SET revoked_at=? WHERE requirement_id=? AND used_at IS NULL AND revoked_at IS NULL",
+        (H.now(), requirement_id),
+    )
 
 
 def withdraw(conn: "sqlite3.Connection", requirement_id: str, why: str) -> None:
