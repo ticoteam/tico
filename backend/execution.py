@@ -5132,11 +5132,9 @@ class Execution:
             if notes:
                 H.event(c, H.KEEPER, "note.carried", aid, {"bot": row["bot_id"], "notes": [n["id"] for n in notes]})
         # What was deferred to this turn (backend/delivery.py): the session's comments and messages, written out in the
-        # prompt since the history page may not reach them, and the deferred notes above. Their deadlines are met. A
-        # deferred task this turn works as its own is met too, though not counted: it is the turn's task.
+        # prompt since the history page may not reach them, and the deferred notes above. Their deadlines are met.
         from . import delivery
 
-        own = [task["id"]] if task and task.get("id") else []
         deferred = (
             ""
             if making_page
@@ -5146,12 +5144,10 @@ class Execution:
                     row["bot_id"],
                     aid,
                     [conv["id"], (task or {}).get("conversation_id")],
-                    own,
                     [item["id"] for item in notes],
                     job=row["id"],
                     current=msg["id"],
                 ),
-                tasks=0,
                 notes=len(notes),
             )
         )

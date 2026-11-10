@@ -117,7 +117,7 @@ ACTIONS = {
     "ask_goal_owner": ("ask a goal's owner when a KPI goes off track", ("kpi", "goal", "ask", "remind")),
     "check_health": ("check Tico's health", ("health", "check")),
     "check_invariants": (
-        "check production invariants (stuck runs and tasks, unreachable owners, refusal loops, "
+        "check production invariants (stuck runs, refusal loops, "
         "provider sign-in, webhooks, automations, relays) and raise one task per failing check",
         ("health", "invariants", "production", "alert", "stuck"),
     ),

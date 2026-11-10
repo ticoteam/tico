@@ -212,8 +212,7 @@ def edition_times(c, when):
 
 
 def fixed_times(c, when):
-    """Next run of each switched-on system job set to a time of day, and of the release schedule."""
-    from . import release_flow
+    """Next run of each switched-on system job set to a time of day."""
     from . import system_routines as SR
 
     out = []
@@ -224,12 +223,6 @@ def fixed_times(c, when):
                 found = SR.next_due(cfg, last.get(key), when)
                 if found:
                     out.append(found.timestamp())
-    except Exception:
-        pass
-    try:
-        found = release_flow.next_at(release_flow.load(c), when)
-        if found:
-            out.append(found.timestamp())
     except Exception:
         pass
     return out

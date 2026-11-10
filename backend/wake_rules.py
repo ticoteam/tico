@@ -3,11 +3,11 @@
 A message to a bot starts a run (backend/enqueue.py queues a job) unless it is quiet. `gate` is asked once for
 every message about to be written to a bot that would start one (H._write_message), and decides with two rules:
 
-- `own_write`: the bot's own write caused it. Its own comments, step moves, status changes, relations and
-  checkpoints, on any of its tasks, never wake that same bot: its run already knows.
-- `parked`: it is about a task the bot owns that waits on something (an unfinished `blocked_by` task, a pull
-  request link armed with `wake_once`, or a milestone in backend/milestone_waits.py), and it is not that thing
-  arriving. A comment, a relation change or a step move does not wake a parked task; its blocker finishing does.
+- `own_write`: the bot's own write caused it. Its own comments, moves, relations and checkpoints, on any of its
+  tasks, never wake that same bot: its run already knows.
+- `parked`: it is about a task the bot owns that waits on something (a pull request link armed with `wake_once`, or
+  an account to reconnect), and it is not that thing arriving. A comment or a relation change does not wake a parked
+  task; what it waits for arriving does.
 
 A skipped wake is never dropped. The message is written to its task's room as before, quietly, and a quiet note
 linked to it (the one bot_to_bot.hold leaves, carried and marked read by execution.claim) takes it to the bot's
@@ -31,7 +31,6 @@ Fail open: anything `gate` cannot read wakes.
 import contextvars
 import hashlib
 import json
-import re
 
 # Who made the request whose writes are being made (backend/app.py request_guard): the person, or the bot, or the
 # person a bot or the Assistant acts for. Empty for the keeper's own sweeps and the runner's calls, which no rule
@@ -40,56 +39,27 @@ CAUSE = contextvars.ContextVar("wake_cause", default="")
 
 # Never filtered. Each entry: (key, what it is). `always_wakes` returns the key that matched.
 ALWAYS_WAKE = (
-    ("check_back", "a scheduled task follow-up owed now, even when the task waits on a handoff"),
     ("task_turn", "a task in a pipeline is the bot's to work: the one task engine's wake (backend/task_wakes.py)"),
-    ("person", "a person's message or comment, or a notice of a person's own act (an approval, a step move)"),
+    ("person", "a person's message or comment, or a notice of a person's own act (an OK, a move)"),
     ("manager", "a task comment from a party’s org-chart manager"),
     ("ask", "an ask, answer or steer: a question to the bot, or the answer it waits on"),
-    ("approval", "an approval decided, withdrawn or asked about, or a structured question"),
+    ("approval", "an instruction or a structured question: a command, a run now, an OK asked or given"),
     ("needs_action", "a message its sender flagged needs-action (or a flag that is not plainly true or false)"),
     ("mention", "another bot's message that @mentions the bot (addressed: it goes by the message's way)"),
     ("reply", "a reply to the bot's own ask, to a message it flagged needs-action, or to one it waits on (wait_s)"),
-    ("gate", "a factory gate verdict on the bot's ticket: Review 1, Review 2, QA or Security"),
-    (
-        "handoff",
-        "a builder hand-off on its Dev ticket: a verdict to act on, a failed check, a merge conflict or a merge",
-    ),
 )
 ALWAYS_KINDS = frozenset({"ask", "answer", "steer"})
 # References that make a message more than news: a decision, a question, an instruction.
 ALWAYS_REFS = frozenset({"approval", "questions", "command", "run_now"})
 FLAG = "needs_action"
-VERDICT = re.compile(r"^\s*VERDICT:\s*(approve|changes)\s+PR\s+#\d+\s+head\s+[0-9a-f]{7,40}\b", re.I | re.M)
-# The same verdict read for its fields, as a clause anywhere in prose: a review or QA child's verdict and the head it
-# judged (hubdb.record_verdict). A quoted format line ("approve|changes", "pass or fail", "PR #<n> head <sha>")
-# names no verdict, so it never overwrites a real one before it.
-VERDICT_FIELDS = re.compile(
-    r"\bVERDICT:\s*(approve|changes|pass|fail)(?![\w-])(?!\s*[|/])(?!\s+or\b)"
-    r"(?:\s+PR\s+#\d+\b)?(?:\s+head\s+([0-9a-f]{7,40})\b)?(?!\s+(?:PR|head)\b)",
-    re.I | re.M,
-)
-
-
-def verdict_fields(text):
-    """The last VERDICT clause wins, including clauses inside prose."""
-    found = None
-    for found in VERDICT_FIELDS.finditer(str(text or "")):
-        pass
-    return (found[1].lower(), (found[2] or "").lower() or None) if found else None
 
 
 # What a parked task waits for, by the refs its wake carries. These wake even when the bot's own write caused them.
 AWAITED = (
-    ("blocker_done", "a task this one waits on (blocked_by) finished"),
     ("wake_once", "a pull request link armed with wake_once got its result (github.flush_wakes, trigger pr_checks)"),
     ("subtask", "a subtask moved or finished"),
     ("worktree", "the worktree it waited for is ready"),
     ("watcher", "something the bot watches moved or ended"),
-    ("resume", "a deferred task's stored resume condition came true (backend/quiet_work.py)"),
-    (
-        "milestone",
-        "a pull request it waits for merged or a release it waits for was published (backend/milestone_waits.py)",
-    ),
     ("reconnected", "the account or credential its reconnect card waited for works again (backend/reconnects.py)"),
 )
 # Only news may wait: a comment, or a task's status, step or relation moving (run_triggers.TRIGGERS). A schedule,
@@ -132,8 +102,8 @@ SILENT = ("same_state", "ignored")
 # Holds a table rule makes (backend/rules.py): the generic words, as the rule's own id is on the event.
 ROW_HOLDS = ("rule", "ignored")
 SKIPPED = "wake.skipped"
-# A task in one of these still has work to do; a blocker in one of them still blocks.
-UNFINISHED = ("open", "doing", "waiting", "review", "ready", "blocked")
+# A task in one of these still has work to do.
+UNFINISHED = ("open",)
 
 
 def always_wakes(conn, actor, target, kind, refs, body, cause=None, in_reply_to=None):
@@ -141,8 +111,6 @@ def always_wakes(conn, actor, target, kind, refs, body, cause=None, in_reply_to=
     cannot read matches "reply": fail open."""
     refs = refs if isinstance(refs, dict) else {}
     cause = CAUSE.get() if cause is None else cause
-    if actor == "keeper" and refs.get("wake") == "check_back":
-        return "check_back"
     if actor == "keeper" and refs.get("wake") == "task_turn":
         return "task_turn"  # the one task engine's wake (backend/task_wakes.py): the task is the bot's to work
     if str(actor).startswith("human:") or str(cause).startswith("human:"):
@@ -164,10 +132,6 @@ def always_wakes(conn, actor, target, kind, refs, body, cause=None, in_reply_to=
 
         if threads.names(conn, target, body):
             return "mention"  # an @mention is addressed: never the bot_to_bot hold (threads contract §4.1)
-    if VERDICT.search(str(body or "")):
-        return "gate"
-    if actor == "keeper" and refs.get("handoff"):
-        return "handoff"  # only Tico marks one (backend/verdict_moves.py)
     if in_reply_to and _awaited_reply(conn, target, in_reply_to):
         return "reply"
     return None
@@ -190,8 +154,6 @@ def _awaited_reply(conn, target, in_reply_to):
 def awaited(refs):
     """The AWAITED key this wake's refs name, or None."""
     wake = refs.get("wake")
-    if refs.get("blocker_done"):
-        return "blocker_done"
     if refs.get("trigger") == "pr_checks" and wake != "pr_review":  # a review note is news, not a result
         return "wake_once"
     if refs.get("subtask"):
@@ -200,36 +162,21 @@ def awaited(refs):
         return "worktree"
     if wake in ("watcher", "watcher-done"):
         return "watcher"
-    if wake == "resume":
-        return "resume"
-    if refs.get("milestone"):
-        return "milestone"
     if refs.get("reconnected"):
         return "reconnected"
     return None
 
 
 def parked(conn, task_row):
-    """What the task waits on: 'blocked_by', 'wake_once', 'milestone', 'reconnect', or None when it is not parked."""
+    """What the task waits on: 'wake_once', 'reconnect', or None when it is not parked."""
     if not task_row or task_row.get("status") not in UNFINISHED:
         return None
-    marks = ",".join("?" * len(UNFINISHED))
-    if conn.execute(
-        "SELECT 1 FROM task_relations r JOIN tasks t ON t.id=r.from_task WHERE r.to_task=? "
-        f"AND r.kind='blocks' AND t.status IN ({marks}) LIMIT 1",
-        (task_row["id"], *UNFINISHED),
-    ).fetchone():
-        return "blocked_by"
     if conn.execute(
         "SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND state IN ('open','draft','merged') "
         "AND json_extract(detail,'$.wake_once') IS NOT NULL LIMIT 1",
         (task_row["id"],),
     ).fetchone():
         return "wake_once"
-    from .milestone_waits import pending
-
-    if pending(conn, task_row["id"]):
-        return "milestone"
     from .reconnects import pending as reconnect_pending
 
     if reconnect_pending(conn, task_row["id"]):
@@ -296,12 +243,10 @@ def state_of(conn, task_row):
         if not row:
             return None
         parts = {
-            # waiting_on is None since step 6b (derived, from the question tasks in "relations"): kept, so a
-            # task's hash reads as it did before.
-            "task": [
-                row.get(k)
-                for k in ("status", "step_id", "owner_id", "requester_id", "waiting_on", "snoozed_until", "version")
-            ],
+            "task": [row.get(k) for k in ("status", "stage_id", "owner_id", "requester_id", "version")],
+            "snoozed": bool(
+                conn.execute("SELECT 1 FROM snoozes WHERE task_id=? AND ended_at IS NULL", (tid,)).fetchone()
+            ),
             "relations": [
                 list(r)
                 for r in conn.execute(
@@ -519,9 +464,7 @@ def hold(conn, msg, rule, rule_id=None):
         if rule in ROW_HOLDS
         else {
             "own_write": "your own write caused it",
-            "blocked_by": "the task waits on another task (blocked by)",
             "wake_once": "the task waits on its pull request's checks (wake once)",
-            "milestone": "the task waits for a pull request to merge or a release to be published",
             "reconnect": "the task waits for an account to be reconnected",
         }.get(rule if rule == "own_write" else parked(conn, task_row), "the task is waiting")
     )

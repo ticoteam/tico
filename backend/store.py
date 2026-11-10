@@ -652,9 +652,8 @@ EVENT_NOISE_ACTIONS = (
     "bot.repository_read",
 )
 EVENT_NOISE_RETENTION_DAYS = 7
-# Thirty days: `message.notice` as before, and `github.pull_request`, which quiet_work.settle reads back to the start of
-# the run that carried a task (no run has a length cap, so a 30-day keep is the most it can rely on). Its own mark,
-# since the old one had walked past every github.pull_request row already on disk.
+# Thirty days: `message.notice` as before, and `github.pull_request`. Its own mark, since the old one had walked past
+# every github.pull_request row already on disk.
 EVENT_SWEEP_ACTIONS = ("message.notice", "github.pull_request")
 EVENT_RETENTION_DAYS = 30
 # Rows per write transaction. A delete costs about 2 ms a row on TIDY (six indexes on events, cold pages), so 5000
@@ -2233,7 +2232,7 @@ class Store:
                     ("attempts_message", "attempts(message_id)"),
                     # Runs by when their record closed: bot hours, health, the usage reads.
                     ("attempts_settled", "attempts(settled_at)"),
-                    # A bot's last settled run (the team list's latest run, check_pools): one seek.
+                    # A bot's last settled run (the team list's latest run): one seek.
                     ("attempts_bot_settled", "attempts(bot_id, settled_at, id) WHERE settled_at IS NOT NULL"),
                     # A bot's runs newest first (the bot's Runs page, H.turns).
                     ("attempts_bot_created", "attempts(bot_id, created_at)"),
@@ -2325,11 +2324,8 @@ class Store:
                 from . import profiles as Profiles
 
                 Profiles.migrate(c)
-                # Stale ticket review's converted automation (a no-op) is undone, once, and its team rule set from it
-                # (backend/redesign_migration.py repair_stale_review). Idempotent by its marker.
                 from . import redesign_migration as Redesign
 
-                Redesign.repair_stale_review(c)
                 # Inboxes the cutover moved with the Inbox Manager's whole instructions go to the short routing
                 # prompt, once (backend/redesign_migration.py repair_inbox_prompts). Idempotent by its marker. A
                 # failure here is logged, never raised: the repair is tried again at the next start.

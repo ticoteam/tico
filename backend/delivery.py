@@ -7,8 +7,9 @@
   `<n>m`, `<n>h`, `<n>d` or `never`).
 
 A session is where the item lands. A comment's is its task's room, a person's chat message's is that chat: the
-bot's next turn there reads it in the room's history. A deferred task or message (a note) is tied to no session:
-the bot's next turn of any kind carries it (execution.claim), so those batch per bot.
+bot's next turn there reads it in the room's history. A deferred message (a note) is tied to no session: the bot's
+next turn of any kind carries it (execution.claim), so those batch per bot. A task is never deferred: a task for a bot
+wakes it.
 
 Ride-along: a defer sent while the bot has a turn going in the same session becomes a queue, so it goes in right
 after that turn. A turn on another task does not count.
@@ -33,12 +34,12 @@ from . import bot_settings as BS
 WAYS = ("steer", "queue", "defer")
 DEFER_FOR = r"^(never|[1-9][0-9]{0,5}[mhd])$"
 NEVER = "never"
-# A comment's and a new task's deadline when none is named: a day. A chat message and a note have none.
-TASK_DEFAULT = "24h"
+# A comment's deadline when none is named: a day. A chat message and a note have none.
+COMMENT_DEFAULT = "24h"
 CHAT_DEFAULT = NEVER
 MAX_DAYS = 730
-KINDS = ("comment", "message", "task", "note")
-WORDS = {"comment": ("comment", "comments"), "message": ("message", "messages"), "task": ("task", "tasks")}
+KINDS = ("comment", "message", "note")
+WORDS = {"comment": ("comment", "comments"), "message": ("message", "messages")}
 EVENT = "delivery.deferred.due"
 
 
@@ -101,12 +102,12 @@ def running_in_session(conn, bot, conversation_ids, task_id=None):
 
 def defer(conn, bot, kind, item, *, conversation_id="", task_id=None, defer_for=None):
     """Record a deferred item for `bot` (its id): a comment or chat message in its session (`conversation_id`), or a
-    task or note for the bot's next turn of any kind (no conversation). Returns its deadline (None: none)."""
+    note for the bot's next turn of any kind (no conversation). Returns its deadline (None: none)."""
     H = _H()
     if kind not in KINDS:
         raise ValueError(kind)
     created = H.now()
-    due = until(defer_for or (TASK_DEFAULT if kind in ("comment", "task") else CHAT_DEFAULT), created)
+    due = until(defer_for or (COMMENT_DEFAULT if kind == "comment" else CHAT_DEFAULT), created)
     conn.execute(
         "INSERT INTO deferrals(id,bot,kind,item,conversation_id,task_id,due_at,created_at) VALUES(?,?,?,?,?,?,?,?)",
         (H.new_id(), H.actor_id(bot), kind, item, conversation_id or "", task_id, due, created),
@@ -121,9 +122,9 @@ ITEM_CHARS = 1500
 BLOCK_CHARS = 12000
 
 
-def carried(conn, bot, attempt_id, conversation_ids, tasks=(), notes=(), *, job=None, current=None):
+def carried(conn, bot, attempt_id, conversation_ids, notes=(), *, job=None, current=None):
     """Settle what the turn being handed out carries: the deferred comments and messages in its session, written out in
-    its prompt (the room's history page may not reach back to them), and the deferred tasks and notes it takes.
+    its prompt (the room's history page may not reach back to them), and the deferred notes it takes.
     `current` is the turn's own message, which its prompt already holds. A deadline run (`fired_job`) whose items this
     turn settled is no longer needed and is dropped, unless it is `job`, this turn's own.
 
@@ -174,13 +175,12 @@ def carried(conn, bot, attempt_id, conversation_ids, tasks=(), notes=(), *, job=
     # What did not fit waits on: its deadline, if passed, starts a run of its own.
     for part in H.chunks(left):
         conn.execute(f"UPDATE deferrals SET fired_job=NULL WHERE id IN ({','.join('?' * len(part))})", part)
-    for kind, items in (("task", list(tasks)), ("note", list(notes))):
-        for part in H.chunks(items):
-            conn.execute(
-                f"UPDATE deferrals SET settled_at=?,how='carried',attempt=? WHERE bot=? AND kind=? AND "
-                f"settled_at IS NULL AND item IN ({','.join('?' * len(part))})",
-                (stamp, attempt_id, bot, kind, *part),
-            )
+    for part in H.chunks(list(notes)):
+        conn.execute(
+            f"UPDATE deferrals SET settled_at=?,how='carried',attempt=? WHERE bot=? AND kind='note' AND "
+            f"settled_at IS NULL AND item IN ({','.join('?' * len(part))})",
+            (stamp, attempt_id, bot, *part),
+        )
     _drop_spent(conn, H, attempt_id, job, "Its deferred items went in with another turn.")
     return counts, lines, len(left)
 
@@ -221,8 +221,8 @@ def task_closed(conn, task):
         conn.execute(
             "SELECT d.id,d.fired_job FROM deferrals d LEFT JOIN messages m ON m.id=d.item "
             "LEFT JOIN conversations cv ON cv.id=m.conversation_id WHERE d.settled_at IS NULL AND "
-            f"((d.kind IN ('comment','message') AND {H.MESSAGE_TASK_SQL}=?) OR (d.kind='task' AND d.item=?))",
-            (task["id"], task["id"]),
+            f"d.kind IN ('comment','message') AND {H.MESSAGE_TASK_SQL}=?",
+            (task["id"],),
         )
     )
     _settle(conn, H, rows, H.now(), "moot")
@@ -230,12 +230,12 @@ def task_closed(conn, task):
     _drop_jobs(conn, H, jobs, "Its task ended, canceling its deferred deliveries.")
 
 
-def summary(carried_=None, tasks=0, notes=0):
-    """The turn prompt's block on what was deferred to it: "Deferred since your last turn: 2 comments, 1 task", then
+def summary(carried_=None, notes=0):
+    """The turn prompt's block on what was deferred to it: "Deferred since your last turn: 2 comments, 1 message", then
     the deferred comments and messages themselves. `carried_` is what `carried` returned (or bare counts)."""
     counts, lines, left = carried_ if isinstance(carried_, tuple) else (carried_ or {}, [], 0)
-    n = {"comment": counts.get("comment", 0), "message": counts.get("message", 0) + notes, "task": tasks}
-    parts = [f"{n[k]} {WORDS[k][0] if n[k] == 1 else WORDS[k][1]}" for k in ("comment", "message", "task") if n[k]]
+    n = {"comment": counts.get("comment", 0), "message": counts.get("message", 0) + notes}
+    parts = [f"{n[k]} {WORDS[k][0] if n[k] == 1 else WORDS[k][1]}" for k in ("comment", "message") if n[k]]
     if not parts and not left:
         return ""
     out = "Deferred since your last turn: " + (", ".join(parts) or "nothing that fits this turn")
@@ -265,8 +265,6 @@ def _carrier_ok(conn, bot, item, refs, room, session):
 def _alive(conn, row):
     """Whether a deferred item still waits and its task, if any, has not ended."""
     H = _H()
-    if row["kind"] == "task":
-        return H.next_run_waiting(conn, H.task(conn, row["item"]))
     if row["kind"] == "note":
         return H.note_waiting(conn, H.note(conn, row["item"]))
     found = conn.execute(
@@ -394,20 +392,6 @@ def _settle(conn, H, rows, at, how):
         conn.execute(
             f"UPDATE deferrals SET settled_at=?,how=? WHERE id IN ({','.join('?' * len(part))})", (at, how, *part)
         )
-
-
-def holds_task(conn, task_id):
-    """Whether a deferred task still waits on its deadline (or on none): the stalled-task check leaves it alone, since
-    the deadline, not a quiet half hour, says when the bot must look (hubdb.stalled_tasks)."""
-    try:
-        return (
-            conn.execute(
-                "SELECT 1 FROM deferrals WHERE kind='task' AND item=? AND settled_at IS NULL LIMIT 1", (task_id,)
-            ).fetchone()
-            is not None
-        )
-    except Exception:  # noqa: BLE001 - an older database has no deferrals yet
-        return False
 
 
 def next_due(conn):
