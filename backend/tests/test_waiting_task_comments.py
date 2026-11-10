@@ -1,15 +1,12 @@
-"""A person's comment on a bot's Waiting task wakes the bot at once, whatever the task waits on (docs/tasks.md,
-Comments): a person's message is on the always-wake floor (backend/wake_rules.py), and the claim's task waits
-(auto_tasks.refusal) only hold the keeper's notices, never a person's message (execution.job_refusal)."""
+"""A person's comment on a bot's task wakes the bot at once, whatever the task waits on (docs/tasks.md, Comments): a
+person's message is on the always-wake floor (backend/wake_rules.py), so neither a sub-task, an ask of a person nor a
+snooze holds it back (execution.job_refusal)."""
 
 import pytest
 
-from backend import milestone_waits
-from backend import task_relations as TR
 from backend.store import H
 from backend.tests.helpers.api import claim, post  # noqa: F401
 from backend.tests.helpers.task_lanes import task_bot
-from backend.tests.hold_rows import set_holds
 
 
 def finish(api, machine, attempt, text="Done."):
@@ -22,25 +19,18 @@ def finish(api, machine, attempt, text="Done."):
 
 
 def park(c, tid, wait):
-    """Put the bot's task in Waiting on `wait`, as its own turn would."""
+    """Leave the bot's task waiting on `wait`, as its own turn would."""
+    version = H.task(c, tid)["version"]
     if wait == "child":
         H.task_create(c, "bot:ops", "Review receipts", "Review #1994.", "bot:cpo", parent_id=tid, lint=False)
-    elif wait == "blocked_by":
-        other = H.task_create(c, "bot:ops", "Review receipts", "Review #1994.", "bot:cpo", lint=False)
-        TR.relate(c, "bot:ops", tid, other["id"], "blocked_by")
     elif wait == "person":
-        # A bot's wait on a person is a card they own that blocks the task (hubdb._ask_in_subtask): parked.
-        H.task_update(c, "bot:ops", tid, status="waiting", waiting_on="human:ben", note="Ben signs off first")
-        return
-    H.task_update(c, "bot:ops", tid, status="waiting", note="Waiting")
-    if wait == "milestone":
-        milestone_waits.add(c, "bot:ops", H.task(c, tid), "release:ticoteam/tico@v0.5.22")
+        H.task_ask(c, "bot:ops", tid, "human:ben", "Can you sign off on the release checklist?", seen_version=version)
     elif wait == "snooze":
-        set_holds(c, tid, snoozed_until=H.shift(H.now(), hours=4))
+        H.task_snooze(c, "bot:ops", tid, "Waiting for the freeze to end", H.shift(H.now(), hours=4), version)
 
 
 def waiting_task(api, machine, wait, requester="human:ana"):
-    """A task the bot worked once and left in Waiting on `wait`."""
+    """A task the bot worked once and left waiting on `wait`."""
     with api.app.state.store.transaction() as c:
         tid = H.task_create(c, requester, "Release v0.5.22 checklist", "Cut the release.", "bot:ops", lint=False)["id"]
     first = claim(api, machine)
@@ -48,14 +38,15 @@ def waiting_task(api, machine, wait, requester="human:ana"):
     post(api, f"attempts/{first['id']}/started", {"thread_id": "release"}, machine["token"])
     with api.app.state.store.transaction() as c:
         park(c, tid, wait)
-        assert H.task(c, tid)["status"] == "waiting"
+        assert H.task(c, tid)["status"] == "open"
+        assert (H.task_view(c, tid)["snooze"] is not None) == (wait == "snooze")
     finish(api, machine, first, "Waiting.")
     return tid
 
 
 @pytest.mark.parametrize(
     "wait,requester",
-    [(w, "human:ana") for w in ["nothing", "child", "blocked_by", "person", "milestone", "snooze"]]
+    [(w, "human:ana") for w in ["nothing", "child", "person", "snooze"]]
     + [("nothing", "bot:ops")],
 )
 def test_a_persons_comment_on_a_waiting_task_starts_the_bots_turn(api, wait, requester):
