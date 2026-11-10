@@ -854,7 +854,7 @@ def test_a_schedule_absorbs_an_occurrence_while_its_last_task_is_open(api):
     turn_tasks = sql(api, "SELECT id FROM tasks WHERE owner_id='bot:ops' AND title='Test'")
     assert len(turn_tasks) == 1
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (turn_tasks[0]["id"],))
+        H.task_close(c, "human:ana", turn_tasks[0]["id"], "Finished with")
     assert queued(api, aid)
 
 
