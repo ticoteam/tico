@@ -11,7 +11,9 @@ from backend.tests.helpers.api import get, headers, post
 from backend.tests.helpers.org_rules import rule
 from backend.tests.test_org_rule_check import (  # noqa: F401 - fixtures
     COLOR,
+    LAUNCH,
     _not_a_friday,
+    hand_over,
     color_rule,
     hold_row,
     ruled,
@@ -362,4 +364,59 @@ def test_a_held_hand_off_of_a_private_task_keeps_its_text_off_the_hold(ruled):
     assert got["held"], got
     stored = json.loads(hold_row(api, got["held"]["id"])["payload"])
     assert "favorite color" not in stored["text"] and "Palette plan" not in stored["text"]
+    assert row(api, task["id"])["owner_id"] == "bot:ops"
+
+
+def private_task(api, body="Our favorite color is red."):
+    with api.app.state.store.transaction() as c:
+        return H.task_create(c, "human:ana", "Palette plan", body, "bot:ops", lint=False, private=True)
+
+
+def every_word_but_the_hold(api, words):
+    """Nothing but the hold's own input names `words`: not the events, not the hold's reviewer view."""
+    for e in sql(api, "SELECT detail, target FROM events"):
+        assert words not in json.dumps(e), e
+
+
+def test_a_held_automation_hand_off_of_a_private_task_shows_the_reviewer_none_of_its_words(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    task = private_task(api)
+    post(api, f"automations/{hand_over(api)}/run", {"input": {"task": {"id": task["id"]}}})
+    [held] = sql(api, "SELECT id, payload FROM org_rule_holds")
+    stored = json.loads(held["payload"])
+    assert "color is red" not in stored["text"] and "Palette plan" not in stored["text"]
+    assert "color is red" in stored["input"]["text"]  # kept for the recheck alone
+    view = get(api, f"rule-holds/{held['id']}", token="ben-test")
+    assert "color is red" not in json.dumps(view) and "Palette plan" not in json.dumps(view)
+    listed = get(api, "rule-holds", token="ben-test")
+    assert "color is red" not in json.dumps(listed) and "Palette plan" not in json.dumps(listed)
+    every_word_but_the_hold(api, "color is red")
+    assert row(api, task["id"])["owner_id"] == "bot:ops"
+
+
+def test_send_anyway_of_a_private_hand_off_rechecks_a_new_rule_on_the_whole_task(ruled):
+    api, judge = ruled
+    rule(
+        api,
+        {
+            "kind": "internal",
+            "text": "Never say the word pineapple.",
+            "who": {"bots": ["ops"]},
+            "if_broken": "escalate",
+            "reviewer": "ben",
+        },
+    )
+    judge.needles["pineapple"] = "pineapple"
+    task = private_task(api, "The launch date is May 5.")
+    got = ops(api, f"tasks/{task['id']}/owner", {"owner": "ana", "why": "Pineapple time.", "version": task["version"]})
+    held = got["held"]
+    stored = json.loads(hold_row(api, held["id"])["payload"])
+    assert "launch date" not in stored["text"] and "launch date" in stored["input"]["text"]
+    # A rule added since the hold covers the private task's body, which the reviewer never saw.
+    rule(api, {"kind": "internal", "text": LAUNCH, "who": {"bots": ["ops"]}})
+    judge.needles[LAUNCH] = "launch date is"
+    view = get(api, f"rule-holds/{held['id']}", token="ben-test")
+    r = api.post(f"/api/v2/rule-holds/{held['id']}/send", json={"nonce": view["nonce"]}, headers=headers("ben-test"))
+    assert r.status_code == 409 and "launch date" in r.text, r.text
     assert row(api, task["id"])["owner_id"] == "bot:ops"

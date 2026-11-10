@@ -752,7 +752,7 @@ def _warn_structured(c, verdict, warned, tell):
     return {"warn": line, "warned": {"rules": [{"id": r["id"], "text": r["text"]} for r in warned], "text": told}}
 
 
-def _structured_apply(c, verdict, payload, replay, tell):
+def _structured_apply(c, verdict, payload, replay, tell, judged_text=None):
     """A structured verdict inside the write. The Directory's check runs again here on the same input (it calls no engine,
     so it runs under the write's lock), and what it finds now holds the write. A check that cannot complete holds it too
     (fail closed; its class is the reason). A judged block the verdict was checked with (`judged`) holds it with the
@@ -812,6 +812,7 @@ def _structured_apply(c, verdict, payload, replay, tell):
         tell,
         check="structured",
         error=now["error"],
+        judged=judged_text,
     )
 
 
@@ -1290,7 +1291,7 @@ def _people(recipients, author):
     return sorted({r for r in recipients or () if r and r != author})
 
 
-def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audience_now=None):
+def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audience_now=None, judged=None):
     """The verdict inside the write. Returns None to deliver as is; {"warn": line, ...} to deliver with the warning
     line on the recipient's copy; {"held": view} to write nothing and answer with the hold. `payload` is the text the
     reviewer reads, `replay` what Send anyway needs to run the normal write. `tell` also leaves the bot a note (a
@@ -1300,7 +1301,9 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     `audience_now`: the recipients the write reads now (the route's audience, read inside the write). Every verdict
     belongs to the audience it checked, including a route recorded with `outcome=no_rules` when no rule matched,
     so a different one comes back as {"moved": True}. A refused verdict
-    (`refused`) raises its error here, so the write fails with it."""
+    (`refused`) raises its error here, so the write fails with it. `judged`: the whole text the check judged, when the
+    reviewer's `payload` leaves some of it out (a private task's words): a hold keeps it where only Send anyway's
+    recheck reads it (`hold_input`), never shown."""
     if verdict and "refused" in verdict:
         raise verdict["refused"]
     if verdict and "applied" in verdict:
@@ -1313,7 +1316,7 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     if audience_now is not None and _people(audience_now, author) != list(verdict["recipients"]):
         return {"moved": True}
     if verdict.get("check") == "structured":
-        return _structured_apply(c, verdict, payload, replay, tell)
+        return _structured_apply(c, verdict, payload, replay, tell, judged)
     if verdict["outcome"] in ("broken", "too_large"):
         # The rules in force now must be the ones checked: a rule edited, retired or added since is a new check, which
         # cannot run here (no engine under the write lock), so the output goes through unchecked.
@@ -1392,11 +1395,24 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
         if tell:
             _tell_bot(c, author, told)
         return {"warn": line, "warned": {"rules": [{"id": r["id"], "text": r["text"]} for r in broken], "text": told}}
-    return _write_hold(c, verdict, broken, strictest, mode, repeat, too_large, payload, replay, tell)
+    return _write_hold(c, verdict, broken, strictest, mode, repeat, too_large, payload, replay, tell, judged=judged)
 
 
 def _write_hold(
-    c, verdict, broken, strictest, mode, repeat, too_large, payload, replay, tell, *, check="judged", error=None
+    c,
+    verdict,
+    broken,
+    strictest,
+    mode,
+    repeat,
+    too_large,
+    payload,
+    replay,
+    tell,
+    *,
+    check="judged",
+    error=None,
+    judged=None,
 ):
     """The hold a write is held in, written and told. `broken` are the rules that hold it, `strictest` the one the hold
     is on and `mode` its outcome (`block` or `escalate`; an escalation with no reviewer is a block). `check` is the check
@@ -1421,6 +1437,9 @@ def _write_hold(
         if task_id is None and reviewer:
             task_id = _review_task(c, hold_id, author, strictest, reviewer)
     text = payload if isinstance(payload, str) else json.dumps(payload, sort_keys=True, default=str)
+    # The whole text the check judged, kept only when the reviewer's copy leaves some of it out.
+    judged = judged if isinstance(judged, str) or judged is None else json.dumps(judged, sort_keys=True, default=str)
+    judged = judged if judged and judged != text else None
     body = (replay or {}).get("body") or {}
     if operation == "task_answer":
         asked = H.answer_question(c, body.get("target") or {})
@@ -1456,6 +1475,9 @@ def _write_hold(
             # The entities and addresses the Directory walk started from: a structured recheck (Send anyway, an
             # approved mail or letter) walks from the same recipients. Older holds have neither and recheck without.
             **{k: list(verdict[k]) for k in ("targets", "contacts") if verdict.get(k)},
+            # What the check read when the reviewer's text leaves some of it out (a private task's words). Only
+            # `recheck` reads it: never a hold's view, its list, its events or its answer.
+            **({"text": judged} if judged else {}),
         },
     }
     matched = (
@@ -2153,7 +2175,7 @@ def recheck(store, primary, hold, audience=None, auth=None):
         prov.get("authenticated") or hold["author"],
         prov.get("via") or "",
         hold["operation"],
-        stored.get("text") or "",
+        shown.get("text") or stored.get("text") or "",
         people,
         context=shown.get("context") or None,
         obj=shown.get("obj") or "",

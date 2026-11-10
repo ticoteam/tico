@@ -238,8 +238,13 @@ class TaskRules:
             rules = covering(verdict)
             if rules:
                 H.refuse(c, who.actor, COVERS, not_asked(rules[0]))
+        # The reviewer reads the write without a private task's words; the hold keeps what was judged for Send
+        # anyway's recheck alone (`judged`).
         payload = said_text(row, said, hands_over, hide_task=bool(row and H.task_private(c, row)))
-        gate = org_rule_check.apply(c, verdict, payload, replay, obj_now=obj_now, audience_now=audience_now)
+        judged = said_text(row, said, hands_over)
+        gate = org_rule_check.apply(
+            c, verdict, payload, replay, obj_now=obj_now, audience_now=audience_now, judged=judged
+        )
         if gate and gate.get("moved"):
             raise Problem("task_changed", CHANGED, 409, retryable=True)
         return gate
