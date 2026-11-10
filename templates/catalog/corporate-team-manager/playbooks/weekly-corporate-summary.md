@@ -16,7 +16,7 @@ and the task is done with its headline.
 3. Legal: open requests, the oldest five, and who holds each.
 4. Books: the headline from the Finance Owner's latest report, as reported. Name any figure that was not available.
 5. Partners: deals and registrations waiting on the company, each with its owner.
-6. Decisions: at most three, each one line with the date, the deadline and the options, asked with `hub task question`.
+6. Decisions: at most three, each one line with the date, the deadline and the options, asked with `hub task ask`.
 7. Write `reports/YYYY-MM-DD-corporate-summary.md`, publish it with `hub file publish`, and finish the task with the headline,
    the path and what you could not read.
 

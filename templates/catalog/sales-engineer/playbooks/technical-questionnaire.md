@@ -27,5 +27,5 @@ In the buyer's format, or a table: question, answer, status, source and date, ow
 ## 4. Hand back
 
 Attach it to the task and hand it to the Account Executive, who merges it with the commercial half. Once an
-owner confirms a new answer, record it for reuse with the owner and date. `hub task update <id> --status
-done --note`: counts by status, owners and the date each answer is needed.
+owner confirms a new answer, record it for reuse with the owner and date. `hub task done <id> -m
+"..." --version N`: counts by status, owners and the date each answer is needed.

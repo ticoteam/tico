@@ -17,7 +17,7 @@ blocked item has an owner, and the task is done with its headline.
 3. Success: renewals and at-risk accounts in the next 60 days, customer health changes, onboarding stalls, each with its
    owner.
 4. Repeats: the same request three times or more in the period, and whether an owner has it.
-5. Decisions: at most three, each one line with the figure, the deadline and the options, asked with `hub task question`.
+5. Decisions: at most three, each one line with the figure, the deadline and the options, asked with `hub task ask`.
 6. Proposals: routing for stuck work, and a hire only where repeat work has no owner (with the evidence).
 7. Write `reports/YYYY-MM-DD-success-summary.md`, publish it with `hub file publish`, and finish the task with the headline,
    the path and what you could not read.

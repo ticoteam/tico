@@ -1,16 +1,14 @@
 # Write a spec page
 
-Triggered when your manager approves a brief. The Product pipeline (`hub pipeline --type "Product"`) then holds the
-approved idea in its Ideas stage. Budget 60 minutes. The outcome is one Spec page on the card, in the Review stage, that
-a person can approve from the page alone. You write it yourself: the Product pipeline's Specifying stage needs a Spec
-page, and nobody else on this team writes one.
+Triggered when your manager approves a brief, with a task for its spec. Budget 60 minutes. The outcome is one Spec page
+on the task, and a person's OK asked for it, that they can give from the page alone. You write it yourself: nobody else
+on this team writes one.
 
 ---
 
-## 1. Take the card
+## 1. Read the task
 
     hub task show <id>
-    hub task update <id> --step Specifying
 
 Read the brief in its task and its evidence in `knowledge/briefs.md`. Work only from the approved brief: a comment after
 the approval that changes its scope goes back to your manager first.
@@ -39,18 +37,17 @@ write "open question" and name who decides.
 - It says how it gets validated.
 - No customer's name, email address or other personal detail appears. Name an account by its id.
 
-## 4. Attach it and move it to Review
+## 4. Attach it and ask for the OK
 
     hub page publish reports/<name>.html --title "Spec: <problem, under ten words>" --cadence none --task <id>
-    hub task update <id> --step Review
-    hub task comment <id> "<one line: what the spec decides, and what the approver must check>"
+    hub task ask <id> --to <your manager or the person who approves specs> "Approve the spec for <problem>? It decides <one line>." --show page:<page id> --version N
 
-`--task` files the page on the card. Publishing the same path again adds a version, so fix a page by publishing it again
-before the card moves. A person approves the spec at Review (its "Spec approved" step). Nothing starts in Engineering
-until that approval; the card reaches In development only after it.
+`--task` files the page on the task. Publishing the same path again adds a version, so fix a page by publishing it again
+before you ask. Nothing starts in Engineering until that OK. When it comes, finish the task:
+`hub task done <id> -m "Spec approved: <page>" --version N`.
 
-## 5. At Validate
+## 5. After it ships
 
-When the card reaches Validate, read the measures on the read date with the export named in the spec. Publish a page
+When the work has shipped, read the measures on the read date with the export named in the spec. Publish a page
 with each measure's number, its baseline, its window and the change, and attach it the same way (`--task <id>`). Say
 whether each measure held. Do not call a measure held from a cohort younger than its window.

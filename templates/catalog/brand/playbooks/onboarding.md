@@ -32,7 +32,7 @@ finished guide, the skill still runs, but Stage 0 pre-fills from it and the ques
 
 As in the skill's **In Tico** section: `reports/brand-book.md` published with `hub file publish`, the Brand card
 proposed with `hub proposal create --kind brand_draft`, a strategy change proposed if the book changed the
-positioning, and one `hub task question` per needs-teammate item. Tell the owner in three lines.
+positioning, and one `hub task ask` per needs-teammate item. Tell the owner in three lines.
 
 ## 5. Check the routine
 

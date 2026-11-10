@@ -19,7 +19,7 @@ age; one waiting more than two business days goes first.
 
 ## 3. Partner-sourced pipeline
 
-From a CRM read or the Customer Pipeline Manager's review: each registered deal's stage, amount, owner, days quiet,
+From a CRM read or the deal owner's latest review: each registered deal's stage, amount, owner, days quiet,
 and protection expiry. Flag deals quiet past 14 days and protections expiring in 14 days. For each flagged
 deal, prepare one partner update or question, ready to use.
 

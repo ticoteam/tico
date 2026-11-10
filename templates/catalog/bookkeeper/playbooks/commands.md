@@ -64,7 +64,7 @@ approver. Use it when unsure, then send the same command without it. A kind's fi
 - `hub task show <task id>` — the task, its body and its comments.
 - `hub task comment <task id> "<text>"` — a comment on the record. Notes go here, including the close's variance note.
 - `hub task question "<question>" --on <person> --why "<why it matters>" --option "<label> -> <what happens>" --option "<label> -> <what happens>"` — one decision for a person; the task waits on them. `--on` is the approver a dry run names, or the person the task names. Two to six options. For yes or no, leave out `--option`.
-- `hub task done <task id> --note "<one line>"` — marks the task done with its one line.
+- `hub task done <task id> -m "<one line>" --version N` — marks the task done with its one line.
 - `hub doc write finance/reports/<YYYY-MM> --title "<title>" --body-file <file>` — the monthly report, in Docs.
 
 ## Common mistakes

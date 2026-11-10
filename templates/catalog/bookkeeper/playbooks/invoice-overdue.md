@@ -45,5 +45,5 @@ marked done with one line.
       attempt counted from 1.
    A send that failed stays waiting. Finance raises one Needs-you for a person, and the next Books check retries it
    with the same text and the same approval. Never remake a stage, and never change the text to get it through.
-7. Finish with one line: `hub task done <task id> --note "<one line: what you recorded, and whether the email was
-   delivered, failed or still waits>"`.
+7. Finish with one line: `hub task done <task id> -m "<one line: what you recorded, and whether the email was
+   delivered, failed or still waits>" --version N`.

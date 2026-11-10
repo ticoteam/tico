@@ -32,16 +32,16 @@ Use `knowledge/versioning.md` for the numbering and suggest the version with its
 for any change that might be breaking. The notes must cover every ticket you could read; a ticket with no merged pull request in the
 range is listed under "Could not classify" with the question.
 
-## 5. Ask for the approval
+## 5. Ask for the OK
 
-    hub approval request --kind publish --task <id>
+    hub task ask <id> --to <owner> "Publish release 1.4.2 at commit abc1234? <the readiness recommendation in a few words>" --version N
 
-Name the version and the commit in the request, as `playbooks/rollout.md` step 0 describes. The approval names one version at one commit. Put the readiness recommendation and the notes' SHA-256 in the request's note. Tell
-the owner in one line what is waiting: "Release 1.4.2 is ready at commit abc1234. Approve it on the task to roll it out."
+The ask names one version at one commit, as `playbooks/rollout.md` step 0 describes. Put the readiness report and the
+notes' SHA-256 in a comment on the task. A publish goes through only on that OK.
 
-## 6. Roll out, only after approval
+## 6. Roll out, only after the OK
 
-Once `hub approval show <id>` says the owner approved that exact version and commit, follow `playbooks/rollout.md` from its step 1
+Once `hub task show <id>` shows the owner's OK on that exact version and commit, follow `playbooks/rollout.md` from its step 1
 in one run. Any other version or commit asks again. A failed step stops the rollout and goes to the owner as a question.
 
 ## 7. Finish

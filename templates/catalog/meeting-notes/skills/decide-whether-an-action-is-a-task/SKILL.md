@@ -19,7 +19,7 @@ Steps:
 5. If the item is new and passes steps 1 to 3, create the task with `hub task create --owner <person> --link <meeting
    link>`, with the quote and timestamp in the body. If it does not pass, propose it on the write-up with its gap named.
 6. If the item needs a person who is not in the task, do not file a new ask. Leave the original task with its owner,
-   `hub task update <id> --status waiting --on <owner>`, and say in one line what it waits for.
+   `hub task ask <id> --to <owner> "<what you need from them>" --version N`, and say in one line what it waits for.
 7. Add the row to `knowledge/actions.md`: the item, owner, date (or "not said"), task id and status.
 
 Checks before you finish:

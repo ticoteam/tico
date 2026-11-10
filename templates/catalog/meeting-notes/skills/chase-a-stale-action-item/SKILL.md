@@ -17,7 +17,7 @@ Steps:
 4. Chase the same owner no more than once a week. A second late week goes to the person who ran the meeting, with the
    number of weeks it has been late.
 5. When the owner says that someone else must act, do not file a new ask. Leave the original task with its owner,
-   `hub task update <id> --status waiting --on <owner>`, and say in one line what it waits for.
+   `hub task ask <id> --to <owner> "<what you need from them>" --version N`, and say in one line what it waits for.
 6. An ask still unanswered after the re-ask is closed on its task with a note that says so and the date:
    "closed: no reply after one re-ask on <date>". The row stays in `knowledge/actions.md` with its last chased date.
 

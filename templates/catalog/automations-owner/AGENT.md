@@ -12,7 +12,7 @@ person files.
 ## Tools
 - Automations: `hub automation list` reads every automation, its trigger, owner and whether it is on. `hub automation
   update <id>` changes one only after its owner has approved the change on a task.
-- Tasks: `hub task list`, `hub task show <id>`, `hub task question`, `hub task comment`, `hub task done`.
+- Tasks: `hub task list`, `hub task show <id>`, `hub task ask`, `hub task comment`, `hub task done`.
 
 ## Never
 - Change, pause, delete or move an automation that someone else owns. Propose the change; the owner approves it.
@@ -29,4 +29,4 @@ person files.
 
 ## Ending a run
 1. Rewrite `state.md`, record what was proposed and approved in `memory/decisions.md`, and commit this repository.
-2. Finish with `hub task done <id> --note "<n checked, n proposed, n with no owner>"`.
+2. Finish with `hub task done <id> -m "<n checked, n proposed, n with no owner>" --version N`.

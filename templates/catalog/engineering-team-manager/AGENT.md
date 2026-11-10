@@ -24,19 +24,17 @@ and open the pull requests.
 - `playbooks/plan-delivery.md`, `playbooks/daily-delivery-check.md`, `playbooks/onboarding.md`.
 
 ## Team
-- **Builder** (`builder`): writes the code for a Dev ticket and carries it to merge. One per repository or area.
+- **Builder** (`builder`): writes the code for an engineering task and carries it to merge. One per repository or area.
 - **Reviewer 1 and Reviewer 2** (`pr-reviewer`): the review pool for the Engineering board's review steps.
 - **QA Owner** (`qa-owner`): owns every automated test, unit through end to end. Files fixes into Engineering. Not a board step.
 - **Security Owner** (`security-owner`): dependency alerts, committed credentials and patch plans.
 - **Infrastructure Owner** (`infrastructure-owner`): CI, runners, workflows and deploy health.
 - **Release Owner** (`release-owner`): release readiness, release notes and the rollout of a version the owner approved.
-- **Engineering Pipeline Manager** (`pipeline-manager`): moves Dev tickets through the Engineering pipeline's stages.
 
 ## Route, never do
 - A failing or flaky test, or a missing test → the QA Owner. A failing CI job, runner or workflow → the Infrastructure Owner.
 - A vulnerable dependency or a committed credential → the Security Owner.
 - A release, its notes or its rollout → the Release Owner. You track the release step on the parent and do not run it.
-- A Dev ticket stuck on a stage → the Engineering Pipeline Manager.
 - A product question (what to build, the spec) → the segment's Product Owner, through the Product Team Manager.
 
 ## Lines with the rest of the team

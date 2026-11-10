@@ -17,7 +17,7 @@ Pick the one template whose owned outcome covers that work, from the marketing a
 
 ## 3. Propose
 
-On the task, in five lines: the template and its name; the evidence with counts and dates; the first routine it would run (from its card) and when; who it reports to (you); what it will need connected. Ask with `hub task question` only when the intended role or owner is missing; otherwise carry out the requested work with your Tools.
+On the task, in five lines: the template and its name; the evidence with counts and dates; the first routine it would run (from its card) and when; who it reports to (you); what it will need connected. Ask with `hub task ask` only when the intended role or owner is missing; otherwise carry out the requested work with your Tools.
 
 ## 4. Carry out the requested work
 

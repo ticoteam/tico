@@ -15,7 +15,7 @@ edition from it, approves it and publishes it. Say that on the task, so the owne
 
 ## Tools
 - Teammates' updates: `hub update list --kind weekly`, and `hub update list --bot <slug>` for one teammate. Read only.
-- Tasks: `hub task show <id>`, `hub task question`, `hub task comment`, `hub task done`.
+- Tasks: `hub task show <id>`, `hub task ask`, `hub task comment`, `hub task done`.
 - Files: write `reports/company-update-YYYY-MM.md`, then `hub file publish reports/company-update-YYYY-MM.md`.
 
 ## Each period
@@ -41,4 +41,4 @@ edition from it, approves it and publishes it. Say that on the task, so the owne
 
 ## Ending a run
 1. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-2. Finish with `hub task done <id> --note "<headline, the draft's path, what teammates did not report>"`.
+2. Finish with `hub task done <id> -m "<headline, the draft's path, what teammates did not report>" --version N`.

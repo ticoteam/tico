@@ -42,7 +42,7 @@ proposal as `AGENT.md` "Hiring" describes; it is asked on the task, never acted 
 
 Write `reports/YYYY-MM-DD-legal-summary.md` in the shape of `knowledge/examples/legal-summary.md`, ending with
 the not-legal-advice line, then `hub file publish reports/YYYY-MM-DD-legal-summary.md`. Commit, and `hub task
-update <id> --status done --note`: the headline, the path, the sources you could not read.
+done <id> -m "..." --version N`: the headline, the path, the sources you could not read.
 
 ## When a source fails
 

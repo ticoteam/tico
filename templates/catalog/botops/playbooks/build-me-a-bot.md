@@ -72,7 +72,7 @@ All of these before the job is done:
    in the report that it was not tested.
 8. **Close what you filed.** Any task you filed for them while building ("Create the Jira Manager record", "Add
    Sam to Tico", "Paste the key") whose work you or the server finished is settled now:
-   `hub task list --requester me`, then `hub task close <id> --note "Done: <one line>"` for each.
+   `hub task list --requester me`, then `hub task close <id> -m "Done: <one line>" --version N` for each.
    Nothing you filed stays open once its condition is true.
 9. **Report.** One message, in their words:
    - what exists ("Jira Manager is live"), and what it can do now;

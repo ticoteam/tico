@@ -36,6 +36,6 @@ End with the tier and its score reasons.
 
 ## 5. Finish
 
-Add the lead to the pack or, for a task, attach the brief and any draft. `hub task update <id> --status
-done --note`: the tier, the angle in one line, and the sources you could not read. A source that refused
+Add the lead to the pack or, for a task, attach the brief and any draft. `hub task done <id> -m
+"..." --version N`: the tier, the angle in one line, and the sources you could not read. A source that refused
 you is a named gap, never silence.

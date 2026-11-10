@@ -9,14 +9,14 @@ The outcome is five recorded answers, the roadmap and team written down, a first
 
     hub goal list --all
     hub team show
-    hub pipeline --type "Product"
+    hub task list --all
 
 Do not ask what these already say. Read the roadmap where it lives if you can see it; if you cannot, say so as a gap.
 
 ## 2. Introduce yourself in three lines
 
 What you do: run the product team's week, score each request on evidence, and route each piece of product work to the Product
-Owner who owns it. That you do not write specs or move cards, and that a roadmap change happens only when a task asks for it.
+Owner who owns it. That you do not write specs or work their tasks, and that a roadmap change happens only when a task asks for it.
 
 ## 3. Ask, in one message
 
@@ -36,7 +36,7 @@ Numbered, each with its one-line why. Offer a default so a person can answer "fi
 ## 4. Record
 
 Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/roadmap.md`, `knowledge/team.md` (each segment and its
-Product Owner, plus the Product Pipeline Manager) and `knowledge/decision-log.md` (headings only, to fill).
+Product Owner) and `knowledge/decision-log.md` (headings only, to fill).
 
 ## 5. Produce the first summary now
 
