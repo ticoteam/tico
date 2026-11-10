@@ -746,8 +746,12 @@ FINISHED_KEY = "new_company_finished"  # on the onboarding record: when the fini
 
 
 def new_company(c):
-    """Whether this company's work is still only what every hub boots with: no pipeline beyond General."""
-    return not c.execute("SELECT 1 FROM pipelines WHERE id<>? LIMIT 1", (H.GENERAL_PIPELINE,)).fetchone()
+    """Whether this company's work is still only what every hub boots with: no pipeline beyond General and the presets
+    nobody changed or put a task in (pipeline_settings.from_preset: Product and Engineering, made before setup ends)."""
+    from . import pipeline_settings
+
+    kept = {H.GENERAL_PIPELINE, *pipeline_settings.from_preset(c)}
+    return all(row[0] in kept for row in c.execute("SELECT id FROM pipelines"))
 
 
 def finish_new_company(onboarding, c, who, seats, made, teams):

@@ -169,7 +169,67 @@ def check(
                 else:
                     _keeping_reads(conn, "RELEASE never_stuck_task")
         quiet = quiet + 1 if conn.total_changes == changes else 0
+    _keeping_reads(conn, "SAVEPOINT never_stuck_room")
+    try:
+        done["woken"] += _room(conn)
+    except Exception as error:
+        if failures is None or not conn.in_transaction or storage_error(error):
+            raise
+        conn.execute("ROLLBACK TO never_stuck_room")
+        failures.append(("room", error))
+    finally:
+        if conn.in_transaction:
+            conn.execute("RELEASE never_stuck_room")
     return done
+
+
+# ----------------------------------------------------------------------------- C10: room after a by-hand stage
+# Each by-hand stage holding a task that is not snoozed, with the work stage after it, when that stage has a limit.
+_ROOM = (
+    "SELECT s.id, n.id, s.owner FROM stages s JOIN stages n ON n.pipeline_id = s.pipeline_id AND n.kind='work' "
+    "AND n.retired_at IS NULL AND n.task_limit > 0 AND n.position = (SELECT MIN(x.position) FROM stages x "
+    "WHERE x.pipeline_id = s.pipeline_id AND x.kind='work' AND x.retired_at IS NULL AND x.position > s.position) "
+    "WHERE s.kind='work' AND s.by_hand=1 AND s.retired_at IS NULL AND EXISTS (SELECT 1 FROM tasks t "
+    "WHERE t.pipeline_id IS NOT NULL AND t.stage_id = s.id AND t.status='open' "
+    "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL))"
+)
+_FIRST_WAITING = (
+    "SELECT t.id FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
+    "WHERE t.pipeline_id IS NOT NULL AND t.stage_id=? AND t.status='open' "
+    "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
+    "ORDER BY v.entered_at, v.id LIMIT 1"
+)
+_FREED = "SELECT id FROM visits WHERE stage_id=? AND left_at IS NOT NULL ORDER BY left_at DESC, id DESC LIMIT 1"
+
+
+def room_key(stage_id: str, freed_by: str | None) -> str:
+    """C10's wake key: one wake per slot freed in the stage (`freed_by`, the visit whose leaving freed it), and one
+    for the room a stage has before any task ever left it."""
+    return f"room:{stage_id}:{freed_by or 'start'}"
+
+
+def _room(conn: "sqlite3.Connection") -> int:
+    """C10: when the stage after a by-hand stage (Product's Ideas, then Spec) has room, the by-hand stage's owner bot
+    (else that task's owner, when it is a bot) gets one wake, about the task that has waited longest there. Once per freed slot (`room_key`); never chased: the
+    by-hand stage has no ladder. Returns how many wakes were written."""
+    woken = 0
+    for by_hand, after, stage_owner in conn.execute(_ROOM).fetchall():
+        nxt = E.stage(conn, str(after))
+        if not nxt or not E.has_room(conn, nxt):
+            continue
+        freed = conn.execute(_FREED, (after,)).fetchone()
+        wake_key = room_key(str(after), str(freed[0]) if freed else None)
+        first = conn.execute(_FIRST_WAITING, (by_hand,)).fetchone()
+        row = E.task(conn, str(first[0])) if first else None
+        if not row or not row.get("visit"):
+            continue
+        owner: str | None = stage_owner or row.get("owner_id")
+        if not is_bot(owner) or not _reads(conn, owner, row):
+            continue
+        text = f"{nxt['name']} has room."
+        if task_wakes.add(conn, row, owner, row["visit"], text, wake_key=wake_key):
+            woken += 1
+    return woken
 
 
 def _keeping_reads(conn: "sqlite3.Connection", statement: str) -> None:

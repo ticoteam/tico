@@ -1580,9 +1580,10 @@ def test_setup_with_no_chart_starts_the_default_chart_and_its_live_bots_once(env
     assert (len(rows(api, "SELECT id FROM seats")), len(bot_ids(api))) == before
 
 
-def test_a_new_company_set_up_with_the_default_chart_on_a_fresh_database_has_general_and_its_bots(tmp_path):
+def test_a_new_company_set_up_with_the_default_chart_on_a_fresh_database_has_its_pipelines_and_its_bots(tmp_path):
     """The setup path every new company runs, below the routes: a fresh database, the roster a new install seeds, and
-    the owner completing setup with nothing picked. It ends with General as the one pipeline, the built-ins and the
+    the owner completing setup with nothing picked. It ends with General, Product and Engineering (no answer to
+    "Software is the product" is yes), the built-ins and the
     default chart's live bots made, the rest as seats, and nothing recorded as failed."""
     from backend.auth import Auth
     from backend.execution import Execution
@@ -1606,7 +1607,11 @@ def test_a_new_company_set_up_with_the_default_chart_on_a_fresh_database_has_gen
     with store.transaction() as c:
         onboarding.complete(c, Identity("human:owner", "owner", OWNER_EMAIL))
     with store.read() as c:
-        assert [tuple(r) for r in c.execute("SELECT id FROM pipelines")] == [("general",)]
+        assert [r[0] for r in c.execute("SELECT id FROM pipelines ORDER BY id")] == [
+            "engineering",
+            "general",
+            "product",
+        ]
         bots = {r[0] for r in c.execute("SELECT slug FROM bots")}
         assert {"coo", "botops", "task-manager", *LIVE_DEFAULT} <= bots
         assert c.execute("SELECT count(*) FROM seats WHERE closed_at IS NULL").fetchone()[0] > 0
