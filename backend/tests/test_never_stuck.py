@@ -53,6 +53,18 @@ def _visit(c, task_id):
     return dict(H._one(c, "SELECT * FROM visits WHERE task_id=? AND left_at IS NULL", (task_id,)))
 
 
+def _settled(c):
+    """Every wake so far has had its run, which ended: what is left queued is what a test adds. A run that never started
+    is no run, so each wake gets one that did."""
+    rows = c.execute(
+        "SELECT DISTINCT substr(m.wake_key, 1, instr(m.wake_key, ':') - 1), j.bot_id FROM jobs j "
+        "JOIN messages m ON m.id = j.message_id WHERE j.state='queued' AND m.wake_key IS NOT NULL"
+    ).fetchall()
+    for task_id, bot in rows:
+        X.ran(c, task_id, H.bot_actor(bot))
+    X.settled(c)
+
+
 def _ladder(c, task_id):
     visit = _visit(c, task_id)
     return visit["level"], visit["tries"]
@@ -127,7 +139,7 @@ def test_try_again_hands_it_back_to_the_owner_with_the_count_at_zero(c, general,
     c.execute(
         "UPDATE visits SET level='person', person_id=?, tries=3, next_try_at=NULL WHERE task_id=?", (ANA, task_id)
     )
-    X.settled(c)
+    _settled(c)
     assert _states(c, task_id) == [("person", ANA), ("person", ANA)]
     E.try_again(c, task_id, ANA)
     assert _ladder(c, task_id) == ("owner", 0) and _states(c, task_id) == [("bot", BUILDER)]
@@ -423,7 +435,7 @@ def test_an_answer_for_a_bot_with_no_turn_goes_to_whoever_has_it(c, general, lat
     X.ran(c, task_id, BUILDER)
     c.execute("UPDATE visits SET level='manager', tries=1 WHERE task_id=?", (task_id,))
     asked = E.add_requirement(c, task_id, MANAGER, "answer", ANA, "Card or invoice?", seen_version=row["version"])
-    X.settled(c)
+    _settled(c)
     A.answer(c, task_id, asked["requirement_id"], ANA, "Card")  # a change: the ladder starts over, with the builder
     assert _ladder(c, task_id) == ("owner", 0)
     assert _queued(c, task_id) == [BUILDER]
@@ -460,6 +472,48 @@ def test_a_lost_wake_is_written_again_on_the_next_pass_and_is_not_a_try(c, gener
     assert later(seconds=10) == {} and _ladder(c, task_id) == ("owner", 2)
 
 
+def _never_started(c, task_id, actor, times=1):
+    """The bot's queued wakes for a task are taken by its computer `times` times each and never start: every lease
+    fails before the run begins, and then the job fails."""
+    rows = c.execute(
+        "SELECT j.id, j.message_id FROM jobs j JOIN messages m ON m.id = j.message_id "
+        "WHERE j.state='queued' AND j.bot_id=? AND m.wake_key LIKE ?",
+        (H.actor_id(actor), task_id + ":%"),
+    ).fetchall()
+    for job_id, message_id in rows:
+        for _ in range(times):
+            run = H.new_id()
+            c.execute(
+                "INSERT INTO attempts (id, job_id, bot_id, runner_id, generation, token_hash, state, lease_until, "
+                "created_at, finished_at, message_id, task_id) VALUES (?,?,?,'r1',1,?,'failed',?,?,?,?,?)",
+                (run, job_id, H.actor_id(actor), run, H.now(), H.now(), H.now(), message_id, task_id),
+            )
+        c.execute("UPDATE jobs SET state='failed', attempt_id=? WHERE id=?", (run, job_id))
+    return len(rows)
+
+
+def test_a_run_that_never_started_is_not_a_run_and_its_wake_is_written_again_once_per_try(c, general, later):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    first = _said(c, task_id, BUILDER)
+    assert _never_started(c, task_id, BUILDER, times=4) == 1  # four leases, and none of them started
+    assert _runs_since_change(c, task_id) == 0
+    assert later(seconds=10) == {"woken": 1} and _ladder(c, task_id) == ("owner", 0)  # the same words, no try
+    assert _said(c, task_id, BUILDER) == first * 2
+    _never_started(c, task_id, BUILDER)  # the replacement never starts either: this try is spent
+    assert later(seconds=10) == {}
+    assert later(seconds=100) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)  # at its time, no sooner
+    assert _said(c, task_id, BUILDER)[-1] == "You stopped before this task was finished. Try 1 of 3."
+    # A bot that can never start still climbs the ladder to its manager bot and then a person.
+    for _ in range(40):
+        if _ladder(c, task_id)[0] == "person":
+            break
+        for bot in (BUILDER, MANAGER):
+            _never_started(c, task_id, bot)
+        later(minutes=10)
+    assert _ladder(c, task_id)[0] == "person" and _runs_since_change(c, task_id) == 0
+    assert any(line.startswith("builder stopped 3 times") for line in _said(c, task_id, MANAGER))
+
+
 def test_a_second_wake_for_one_bot_and_task_folds_into_one(c, general):
     row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
     first = task_wakes.add(c, row, BUILDER, row["visit"], "First words.", wake_key=f"{row['id']}:a")
@@ -478,7 +532,7 @@ def test_a_late_task_with_a_bots_turn_goes_to_the_manager_bot_even_when_a_person
     X.ran(c, task_id, BUILDER)
     E.add_requirement(c, task_id, ANA, "ok", "human:ben", "OK the wording")  # Ben is asked; the builder still has work
     assert _states(c, task_id)[0] == ("person", "human:ben")
-    X.settled(c)
+    _settled(c)
     assert later(hours=24).get("late") == 1 and _ladder(c, task_id)[0] == "manager"
     assert all("It waits on" not in line for line in _said(c, task_id, MANAGER))  # not a look: the manager has it
 
@@ -556,7 +610,7 @@ def test_each_rule_that_breaks_is_named(c, general, later, monkeypatch):
         return sorted({line.split(":")[0] for line in NS.rules_hold(c)})
 
     # 2: a bot's turn with no run, no wake waiting and no next try.
-    X.settled(c)
+    _settled(c)
     c.execute("UPDATE visits SET next_try_at=NULL WHERE task_id=?", (task_id,))
     assert NS.rules_hold(c) == [f"2: task {task_id} is {BUILDER}'s turn with no run, no wake and no next try"]
     assert later(seconds=1) == {} and NS.rules_hold(c) == []  # the next pass gives it a next try
@@ -567,7 +621,7 @@ def test_each_rule_that_breaks_is_named(c, general, later, monkeypatch):
         (task_id + ":%",),
     )
     assert broken() == ["7"]
-    X.settled(c)
+    _settled(c)
     # 6: a stage over its limit by forward moves.
     c.execute("UPDATE visits SET entered_how='met' WHERE task_id=?", (built,))
     c.execute("UPDATE stages SET task_limit=NULL WHERE id='eng-build'")

@@ -274,14 +274,14 @@ def _on_task(conn: "sqlite3.Connection", task: Row) -> tuple[object, ...]:
 
 
 def last_run(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | None:
-    """This bot's newest run on this task: its `state` and when it ended (`finished_at`). None when it never ran for
-    it."""
+    """This bot's newest run on this task that started: its `state` and when it ended (`finished_at`). None when it
+    never ran for it. A lease that never started is no run."""
     H = _h()
     if not H.is_bot(actor):
         return None
     found = conn.execute(
-        f"SELECT a.state, a.finished_at {_RUNS}WHERE a.bot_id=? AND {_ON_TASK} "
-        "ORDER BY a.created_at DESC, a.id DESC LIMIT 1",
+        f"SELECT a.state, a.finished_at {_RUNS}WHERE a.bot_id=? AND a.started_at IS NOT NULL AND {_ON_TASK} "
+        "ORDER BY a.rowid DESC LIMIT 1",
         (H.actor_id(actor), *_on_task(conn, task)),
     ).fetchone()
     return {"state": found[0], "finished_at": found[1]} if found else None
@@ -297,19 +297,25 @@ def _marks(task: Row) -> tuple[int, int]:
 
 def runs_since(conn: "sqlite3.Connection", task: Row) -> int:
     """How many bot runs started on this task since its visit last changed, whoever ran: the count the never-stuck
-    ladder holds to 7. "Since" is by order, not by the clock: a run whose attempt row came after the change. A run
-    belongs to the change it was claimed after."""
+    ladder holds to 7. Only a run that started counts (`started_at`): a lease that failed before it began ran nothing.
+    "Since" is by order, not by the clock: a run whose attempt row came after the change. A run belongs to the change
+    it was claimed after."""
     found = conn.execute(
-        f"SELECT COUNT(*) {_RUNS}WHERE a.rowid > ? AND {_ON_TASK}",
+        f"SELECT COUNT(*) {_RUNS}WHERE a.rowid > ? AND a.started_at IS NOT NULL AND {_ON_TASK}",
         (_marks(task)[0], *_on_task(conn, task)),
     ).fetchone()
     return int(found[0]) if found else 0
 
 
+# A job in one of these states may still start its run: its wake is not lost.
+LIVE_JOBS = ("queued", "leased", "running", "input", "stalled")
+
+
 def lost(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | None:
     """The wake about this task that `actor` was owed and never got: its newest one in this visit since the visit last
-    changed (by order), when it queued a run, its job is gone or canceled, and no run of this bot on the task has
-    taken it or a wake written after it. `id`, `body`. None when nothing was lost."""
+    changed (by order), when it queued a run and that run never started (its job is gone, or ended with no run of it
+    started), and no run of this bot on the task started on a wake written after it. `id`, `body`. None when nothing
+    was lost."""
     H = _h()
     if not H.is_bot(actor):
         return None
@@ -321,10 +327,11 @@ def lost(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | None
         "AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 ORDER BY m.rowid DESC LIMIT 1",
         (_marks(task)[1], _like(f"{task['id']}:{visit.get('id')}"), actor),
     ).fetchone()
-    if not found or not found[3] or found[4] not in (None, "canceled"):
+    if not found or not found[3] or found[4] in LIVE_JOBS:
         return None
     taken = conn.execute(
-        f"SELECT 1 {_RUNS}WHERE a.bot_id=? AND (a.job_id=? OR ({_ON_TASK} AND m.rowid > ?)) LIMIT 1",
+        f"SELECT 1 {_RUNS}WHERE a.bot_id=? AND a.started_at IS NOT NULL AND (a.job_id=? OR ({_ON_TASK} "
+        "AND m.rowid > ?)) LIMIT 1",
         (H.actor_id(actor), found[0], *_on_task(conn, task), found[2]),
     ).fetchone()
     return None if taken else {"id": str(found[0]), "body": str(found[1] or "")}

@@ -179,14 +179,16 @@ def _ladder(
         return
     epoch: str = visit.get("last_change_at") or visit["entered_at"]
     tries = int(visit.get("tries") or 0)
+    spent = False  # its wake for this try was lost twice: the try is spent
     lost = task_wakes.lost(conn, row, target)
     if lost:
-        # Its wake went missing before any run took it: the same words again, on this pass. Nothing ran, so nothing
-        # is counted (R3).
-        key = f"{row['id']}:{visit['id']}:lost:{lost['id']}"
+        # Its wake went missing, or its run never started: the same words again, on this pass. Nothing ran, so
+        # nothing is counted (R3). Once per try: when the second one is lost too, the try is spent at its time.
+        key = f"{row['id']}:{visit['id']}:lost:{H.actor_id(target)}:{level}:{tries}:{epoch}"
         if task_wakes.add(conn, row, target, visit, lost["body"], level=level, try_n=tries, wake_key=key):
             done["woken"] += 1
-        return
+            return
+        spent = True
     gap = GAPS[tries] if tries < TRIES else GAPS[0]
     due: str | None = visit.get("next_try_at")
     if not due:
@@ -199,7 +201,7 @@ def _ladder(
         return
     runs = task_wakes.runs_since(conn, row)
     cut_off = bool(last) and (last or {}).get("state") in CUT_OFF
-    if level == "owner" and tries == 0 and not runs:
+    if level == "owner" and tries == 0 and not runs and not spent:
         # No run has started since the task last changed (it changed during a run, and nothing announced it): this
         # wake starts it again and is not a try. A try is counted only after a run that started since the change
         # ended without one (R3).
@@ -208,6 +210,7 @@ def _ladder(
             conn.execute("UPDATE visits SET next_try_at=? WHERE id=?", (H.shift(at, seconds=GAPS[0]), visit["id"]))
             done["woken"] += 1
             return
+        # This change's free wake was written already and no run came of it: the try is spent, below.
     if tries < TRIES and runs < (OWNER_RUNS if level == "owner" else RUNS):
         lead = "Your last run on this task was cut off." if cut_off else "You stopped before this task was finished."
         if level == "manager" and tries == 0:
