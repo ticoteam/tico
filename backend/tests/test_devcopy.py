@@ -133,7 +133,7 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
     dest = tmp_path / "copy" / "hub.sqlite"
     removed, loose = devcopy.build(source, dest, days=30)
     devcopy.write_environment(dest, 8879, "morgan@acme.example")
-    assert removed["task_rules"] == 1  # scheduled actions never enter the copy
+    assert removed["schedules"] == 1  # scheduled actions never enter the copy
     assert source.read_bytes() == before  # the source is only read
     assert loose == [] and removed["attempts"] == 2 and removed["attempt_events"] == 2 and removed["messages"] == 2
     assert removed['alert_preferences'] == 1 and removed['personal_alerts'] == 3
@@ -268,8 +268,8 @@ def test_a_dev_copy_drops_deleted_tasks_requesters_and_gets_its_own_roadmap_secr
 
 
 def test_keep_automations_keeps_definitions_and_empties_their_queues_and_secrets(tmp_path, booted):
-    """`--keep-automations` (the redesign converter's rehearsal): routines, task rules, triggers, webhooks and
-    automations stay; their occurrences, deliveries and runs go; no trigger URL or webhook signature still works."""
+    """`--keep-automations` (the redesign converter's rehearsal): routines, triggers, webhooks and automations
+    stay; their occurrences, deliveries and runs go; no trigger URL or webhook signature still works."""
     source = source_db(tmp_path, booted)
     with closing(sqlite3.connect(source)) as c, c:
         now = H.now()
@@ -305,9 +305,9 @@ def test_keep_automations_keeps_definitions_and_empties_their_queues_and_secrets
     with closing(sqlite3.connect(dest)) as c:
         kept = {
             t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
-            for t in ("schedules", "task_rules", "triggers", "webhooks", "automations")
+            for t in ("schedules", "triggers", "webhooks", "automations")
         }
-        assert kept == {"schedules": 1, "task_rules": 1, "triggers": 1, "webhooks": 1, "automations": 1}
+        assert kept == {"schedules": 1, "triggers": 1, "webhooks": 1, "automations": 1}
         for table in ("schedule_occurrences", "trigger_deliveries", "automation_runs", "credentials", "human_tokens"):
             assert c.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0, table
         assert c.execute("SELECT secret_hash, signing_secret FROM triggers").fetchall() == [

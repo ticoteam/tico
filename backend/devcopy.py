@@ -14,7 +14,7 @@ The key files that sit beside a database (backup.KEY_FILES) are never copied, so
 opens nothing. Beside the copy go a `server.env` with TICO_REHEARSAL=1 (nothing runs on a timer, nothing leaves the
 server, and runners are refused), a fresh local sign-in token, and empty registry and attachment folders.
 
-`--keep-automations` keeps what the team set up to run (AUTOMATIONS: routines, task rules, incoming triggers,
+`--keep-automations` keeps what the team set up to run (AUTOMATIONS: routines, incoming triggers,
 outgoing webhooks and automations; wake rules are always kept) so the one-time move to automations can be rehearsed on it.
 Their queues, deliveries and runs are still emptied, and their secrets replaced: no trigger URL, webhook signature or
 header of the live install works on the copy. Rehearsal mode still holds every timer.
@@ -78,7 +78,6 @@ EMPTY = (
     "webhook_events",
     "webhook_sends",
     "webhook_attempts",  # outgoing: a copy never sends an event out
-    "task_rules",
     "schedules",
     "schedule_config",
     "schedule_occurrences",
@@ -290,7 +289,6 @@ EMPTY = (
 AUTOMATIONS = (
     "schedules",
     "schedule_config",
-    "task_rules",
     "triggers",
     "webhooks",
     "automations",
@@ -1021,7 +1019,7 @@ def main(argv=None):
     parser.add_argument(
         "--keep-automations",
         action="store_true",
-        help="keep routines, task rules, triggers, webhooks and automations (queues and secrets still go)",
+        help="keep routines, triggers, webhooks and automations (queues and secrets still go)",
     )
     parser.add_argument("--profile", help="AWS profile for an s3:// bundle")
     parser.add_argument("--region", default="us-west-2", help="AWS region for an s3:// bundle")
