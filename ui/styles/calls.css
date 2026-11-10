@@ -40,7 +40,8 @@
 .call-ring-name .tr-mark svg{display:inline;vertical-align:-1px}
 .call-ring-acts{flex:none;display:flex;align-items:center;gap:4px}
 .call-ring-dismiss{display:none}
-.call-ring-x{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;color:var(--muted)}
+.call-ring-x{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;background:transparent;color:var(--muted)}
+.call-ring-x:hover{background:var(--hover);color:var(--ink)}
 .call-ring-join{height:28px;padding:0 12px}
 .call-recorder-link{display:none}
 
@@ -49,7 +50,7 @@
   .thv-call{min-width:36px;height:36px}
   .call-card{max-width:none}
   .call-ring{top:auto;right:0;left:0;bottom:0;width:auto;max-width:none;gap:0}
-  .call-ring-card{flex-direction:column;align-items:stretch;gap:12px;padding:14px 14px max(18px,env(safe-area-inset-bottom));border-width:1px 0 0;border-radius:16px 16px 0 0;background:var(--surface2);box-shadow:0 -12px 30px rgba(0,0,0,.3)}
+  .call-ring-card{flex-direction:column;align-items:stretch;gap:12px;padding:14px 14px max(18px,env(safe-area-inset-bottom));border-width:1px 0 0;border-radius:16px 16px 0 0;background:var(--surface2);box-shadow:0 -12px 30px rgba(0,0,0,.22)}
   .call-ring-card+.call-ring-card{display:none}
   .call-ring-name b{font-size:15px}
   .call-ring-acts{gap:8px}
