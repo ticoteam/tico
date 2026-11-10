@@ -148,6 +148,9 @@ class FakeEC2:
 
     def authorize_security_group_ingress(self, **kw):
         self._rec("authorize_security_group_ingress", **kw)
+        for g in self.sgs:  # AWS refuses a rule the group already has (InvalidPermission.Duplicate)
+            if g["GroupId"] == kw["GroupId"]:
+                g.setdefault("IpPermissions", []).extend(kw["IpPermissions"])
 
     def allocate_address(self, **kw):
         self._rec("allocate_address", **kw)

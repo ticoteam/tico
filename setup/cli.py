@@ -252,9 +252,14 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
             "--name is 1 to 40 lowercase letters, digits and dashes, starting and ending with a letter or digit"
         )
     awsmod.check_name(args.name, mine.get("name", ""), domain)
-    awsmod.check_region(mine.get("aws_region", ""), args.aws_region, f"Backup storage for {domain}")
+    # Both records: the storage's own, and the server install's when there is one (its bucket is the server's).
+    for rec, what in ((mine, f"Backup storage for {domain}"), (saved, domain)):
+        awsmod.check_region(
+            rec.get("aws_region", "") if rec.get("target", "aws") == "aws" else "", args.aws_region, what
+        )
     _, iam, _, account = deps.aws_clients(args.aws_region, args.aws_profile)
-    awsmod.check_account(mine.get("aws_account_id", ""), account, f"Backup storage for {domain}")
+    for rec, what in ((mine, f"Backup storage for {domain}"), (saved, domain)):
+        awsmod.check_account(rec.get("aws_account_id", ""), account, what)
     # Before the first AWS write, beside (never in) the server's state: a retry keeps it all without the flags.
     record = {**mine, "asset_prefix": names.prefix, "name": name, "aws_region": args.aws_region}
     record["aws_account_id"] = account

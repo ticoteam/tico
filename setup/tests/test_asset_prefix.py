@@ -134,9 +134,7 @@ def test_the_default_server_names_tags_and_policies_are_todays():
     assert iam.called("create_instance_profile") == [{"InstanceProfileName": "tico-acme", "Tags": tags}]
     assert iam.called("add_role_to_instance_profile") == [{"InstanceProfileName": "tico-acme", "RoleName": "tico-acme"}]
     assert d.param_name == "/tico/acme/env" and ssm.called("put_parameter")[0]["Name"] == "/tico/acme/env"
-    assert ssm.called("add_tags_to_resource") == [
-        {"ResourceType": "Parameter", "ResourceId": "/tico/acme/env", "Tags": tags}
-    ]
+    assert ssm.called("put_parameter")[0]["Tags"] == tags and not ssm.called("add_tags_to_resource")  # tagged at birth
     text = "\n".join(p.lines())
     for want in (
         "Security group tico-acme:",
@@ -347,7 +345,7 @@ def test_hub_server_names_tags_and_policies():
     ]
     assert iam.called("create_instance_profile") == [{"InstanceProfileName": "hub-hotmic", "Tags": HUB_TAGS}]
     assert ssm.called("put_parameter")[0]["Name"] == d.param_name == "/hub/hotmic/env"
-    assert ssm.called("add_tags_to_resource")[0]["Tags"] == HUB_TAGS
+    assert ssm.called("put_parameter")[0]["Tags"] == HUB_TAGS and not ssm.called("add_tags_to_resource")
     text = "\n".join(p.lines())
     assert "Security group hub-hotmic:" in text and "IAM role hub-hotmic " in text
     assert "SSM SecureString /hub/hotmic/env" in text and "ManagedBy=hub-setup, hub-setup-name=hotmic" in text
@@ -656,7 +654,6 @@ def test_a_hub_install_sends_no_tico_in_any_aws_name_tag_path_policy_or_bucket(t
         "put_role_policy",
         "create_instance_profile",
         "put_parameter",
-        "add_tags_to_resource",
         "create_bucket",
         "put_bucket_lifecycle_configuration",
         "put_bucket_policy",
@@ -1600,3 +1597,49 @@ def test_a_role_replaced_with_the_same_tags_gets_no_write_on_a_re_run(tmp_path):
     code, out = go(argv, deps=d)
     assert code == 2 and "IAM role hub-hotmic" in out, out
     assert len(iam.called("put_role_policy")) == before and not iam.called("attach_role_policy")[1:]
+
+
+def test_backup_storage_checks_the_server_installs_account_and_region_too():
+    # Codex review 3, case 6: with no backup.json, credentials for another account and region made storage anyway.
+    saved_install(DOMAIN, "hub")  # us-east-1, ACCOUNT
+    iam, s3 = IAM(), S3()
+    d = fakes.deps()
+    d.aws_clients = lambda region, profile: (None, iam, None, "999999999999")
+    d.aws_s3 = lambda region, profile: s3
+    code, out = go(["backup-storage", "--domain", DOMAIN, "--aws-region", "us-east-1"], deps=d)
+    assert code == 2 and f"set up in AWS account {ACCOUNT}" in out, out
+    code, out = go(["backup-storage", "--domain", DOMAIN, "--aws-region", "us-west-2"], deps=d)
+    assert code == 2 and "set up in us-east-1" in out, out
+    assert not iam.calls and not s3.calls and state.load_backup(DOMAIN) == {}
+    d.aws_clients = lambda region, profile: (None, iam, None, ACCOUNT)
+    assert go(["backup-storage", "--domain", DOMAIN, "--aws-region", "us-east-1"], deps=d)[0] == 0
+    assert state.load_backup(DOMAIN)["install_id"] == INSTALL
+
+
+def test_a_security_group_left_without_its_ingress_gets_it_on_the_retry():
+    # Codex review 3, case 13: a run stopped between creating the group and opening its ports left a closed group.
+    p = aws.plan_aws(
+        domain=DOMAIN, front_door="caddy", region="us-east-1", name="hotmic", prefix="hub", install_id=INSTALL
+    )
+    ec2 = fakes.FakeEC2()
+    ec2.sgs = [{"GroupId": "sg-hub", "Tags": HUB_ID.tags("hotmic")}]
+    dep = aws.Deployer(p, ec2, IAM(), fakes.FakeSSM(), ACCOUNT, say=print, sleep=lambda s: None)
+    assert dep.ensure_sg() == "sg-hub"
+    (call,) = ec2.called("authorize_security_group_ingress")
+    assert call["GroupId"] == "sg-hub" and {(r["FromPort"], r["IpProtocol"]) for r in call["IpPermissions"]} == {
+        (80, "tcp"),
+        (443, "tcp"),
+        (443, "udp"),
+    }
+    ec2.calls.clear()
+    assert dep.ensure_sg() == "sg-hub" and not ec2.called("authorize_security_group_ingress")  # nothing missing now
+    ec2.sgs[0]["IpPermissions"] = [p for p in ec2.sgs[0]["IpPermissions"] if p["FromPort"] != 80]
+    dep.ensure_sg()
+    (call,) = ec2.called("authorize_security_group_ingress")
+    assert [(r["FromPort"], r["IpProtocol"]) for r in call["IpPermissions"]] == [(80, "tcp")]
+    # An install saved before ids keeps main's behaviour: an existing group is used as it is.
+    old = aws.plan_aws(domain=DOMAIN, front_door="caddy", region="us-east-1", name="hotmic", prefix="hub")
+    ec2 = fakes.FakeEC2()
+    ec2.sgs = [{"GroupId": "sg-hub", "Tags": HUB_TAGS}]
+    aws.Deployer(old, ec2, IAM(), fakes.FakeSSM(), ACCOUNT, say=print, sleep=lambda s: None).ensure_sg()
+    assert not ec2.called("authorize_security_group_ingress")

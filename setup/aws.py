@@ -487,7 +487,7 @@ class Deployer:
         tags = self.param_tags()
         if tags is not None and not self.n.is_ours(tags, self.p.name):
             raise not_ours("SSM parameter", self.param_name, self.n, self.p.name)
-        if tags is None:  # created, never overwritten: one made meanwhile by someone else fails here
+        if tags is None:  # created with its tags, never overwritten: one made meanwhile by someone else fails here
             self.ssm.put_parameter(
                 Name=self.param_name,
                 Value=env_text,
@@ -495,9 +495,6 @@ class Deployer:
                 Overwrite=False,
                 Tags=self.n.tags(self.p.name),
                 **tier,
-            )
-            self.ssm.add_tags_to_resource(
-                ResourceType="Parameter", ResourceId=self.param_name, Tags=self.n.tags(self.p.name)
             )
         else:
             # Tags were read just above. SSM has no conditional put, so a parameter replaced in that instant is the
@@ -720,6 +717,8 @@ class Deployer:
         if r:
             self.same("sg", r[0]["GroupId"], "Security group", n)
             self.keep("sg", r[0]["GroupId"])
+            if self.n.install_id:  # proved this install's: a run stopped before its ingress gets it now
+                self.authorize(r[0]["GroupId"], r[0].get("IpPermissions") or [])
             return r[0]["GroupId"]
         vpcs = self.ec2.describe_vpcs(Filters=[{"Name": "isDefault", "Values": ["true"]}])["Vpcs"]
         if not vpcs:
@@ -733,20 +732,53 @@ class Deployer:
             TagSpecifications=[{"ResourceType": "security-group", "Tags": self.n.tags(self.p.name, n)}],
         )["GroupId"]
         self.keep("sg", gid)
-        if self.p.ports:
-            perms = [
-                {
-                    "IpProtocol": "tcp",
-                    "FromPort": p,
-                    "ToPort": p,
-                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
-                    "Ipv6Ranges": [{"CidrIpv6": "::/0"}],
-                }
-                for p in self.p.ports
-            ]
-            perms.append({"IpProtocol": "udp", "FromPort": 443, "ToPort": 443, "IpRanges": [{"CidrIp": "0.0.0.0/0"}]})
-            self.ec2.authorize_security_group_ingress(GroupId=gid, IpPermissions=perms)
+        self.authorize(gid, [])
         return gid
+
+    def ingress(self) -> list[dict]:
+        perms = [
+            {
+                "IpProtocol": "tcp",
+                "FromPort": p,
+                "ToPort": p,
+                "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                "Ipv6Ranges": [{"CidrIpv6": "::/0"}],
+            }
+            for p in self.p.ports
+        ]
+        if perms:
+            perms.append({"IpProtocol": "udp", "FromPort": 443, "ToPort": 443, "IpRanges": [{"CidrIp": "0.0.0.0/0"}]})
+        return perms
+
+    def authorize(self, gid: str, have: list[dict]) -> None:
+        """Adds the wanted ingress the group lacks (all of it for a new group)."""
+
+        def rules(perms: list[dict]) -> set[tuple]:
+            out = set()
+            for p in perms:
+                port = (p.get("IpProtocol"), p.get("FromPort"), p.get("ToPort"))
+                out |= {(*port, r["CidrIp"]) for r in p.get("IpRanges", [])}
+                out |= {(*port, r["CidrIpv6"]) for r in p.get("Ipv6Ranges", [])}
+            return out
+
+        missing = rules(self.ingress()) - rules(have)
+        if not missing:
+            return
+        perms = []
+        for p in self.ingress():
+            v4 = [
+                r
+                for r in p.get("IpRanges", [])
+                if (p["IpProtocol"], p["FromPort"], p["ToPort"], r["CidrIp"]) in missing
+            ]
+            v6 = [
+                r
+                for r in p.get("Ipv6Ranges", [])
+                if (p["IpProtocol"], p["FromPort"], p["ToPort"], r["CidrIpv6"]) in missing
+            ]
+            if v4 or v6:
+                perms.append({**p, "IpRanges": v4, **({"Ipv6Ranges": v6} if "Ipv6Ranges" in p else {})})
+        self.ec2.authorize_security_group_ingress(GroupId=gid, IpPermissions=perms)
 
     def ensure_eip(self) -> tuple[str, str]:
         r = self.ec2.describe_addresses(Filters=self.n.filters(self.p.name))["Addresses"]
