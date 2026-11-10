@@ -758,7 +758,7 @@ class PostalMail:
         if not row or row["status"] not in ("new", "failed") or row["task_id"]:
             return  # another drain filed it first
         from . import blobs
-        from .task_review import file_added
+        from .task_reads import file_added
 
         reading = reading or {"sender": "", "summary": "", "deadline": None, "text": ""}
         rule = route_for(kind)

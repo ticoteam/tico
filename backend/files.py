@@ -1078,7 +1078,7 @@ class Files:
                 )
 
     def task_listing(self, c, who, task_id):
-        from .task_review import version_review
+        from .task_reads import version_review
 
         self.auth.task(c, who, task_id)
         out = []
@@ -1913,7 +1913,7 @@ def install_files(app, store, auth, blobs, mutate):
 
     @app.patch("/api/v2/files/{fid}/versions/{number}")
     def edit_version(request: Request, fid: str, number: int, body: M.FileVersionEdit):
-        from .task_review import edit_version as change, version_review
+        from .task_reads import edit_version as change, version_review
 
         who = request.state.identity
 

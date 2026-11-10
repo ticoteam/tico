@@ -769,7 +769,7 @@ def install_media(
     @app.post("/api/v2/tasks/{tid}/files", openapi_extra=task_file_contract())
     async def task_attach(request: Request, tid: str):
         who = request.state.identity
-        from .task_review import comment_rights, edit_version, file_added
+        from .task_reads import comment_rights, edit_version, file_added
 
         def allowed():
             with store.read() as c:
