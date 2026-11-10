@@ -635,6 +635,25 @@ def test_a_claimed_report_that_no_longer_matches_its_hash_is_refused_once_and_sa
         )
 
 
+def test_a_refusal_while_drafting_a_report_comes_back_as_a_clean_refusal(environment, hq, monkeypatch):  # noqa: F811
+    """A rule that refuses the ask (the task engine's, here faked) is the caller's 409 with its words, never an
+    uncaught error: the MCP and CLI sweeps call this route with whatever they generate."""
+    from backend.store import H
+
+    api = environment()
+    drafts_only(api)
+    headers = as_bot(api)
+
+    def refuses(c, by, payload, **_):
+        raise H.Refused("task_requirement", "Nobody answers their own ask: ask someone else")
+
+    monkeypatch.setattr(support, "ask_report", refuses)
+    r = draft(api, headers)
+    assert r.status_code == 409, r.text
+    assert r.json()["error"] == "task_requirement", r.text  # a bot's agent reads the flat shape
+    assert "Nobody answers their own ask" in r.json()["detail"], r.text
+
+
 def test_the_person_only_routes_still_refuse_a_bot(environment, hq):  # noqa: F811  (the fixture)
     api = environment()
     bot = as_bot(api)

@@ -40,7 +40,7 @@ from .auth import Identity, validate_identity
 from .models import Contract
 from .replication import rehearsal_on
 from .credentials import SEALED
-from .store import H, Problem, encode
+from .store import H, Problem, encode, refusal_problem
 
 log = logging.getLogger("tico.support")
 
@@ -1126,13 +1126,19 @@ def install(app, store, settings, census):
 
             task_privacy.guard_write(c, getattr(request.state, "privacy_source", who), request.url.path, auth)
 
-        return support.report(who, body.payload, body.task_id, check=privacy_now)
+        try:
+            return support.report(who, body.payload, body.task_id, check=privacy_now)
+        except H.Refused as exc:
+            raise refusal_problem(exc) from None
 
     @app.post("/api/v2/support/tickets/from-approval")
     def support_file_approved(request: Request, body: SupportFromApproval):
         """A bot, a person's token or the Assistant sends the report a person OK'd (docs/support.md)."""
         require_on(settings)
-        return support.file_approved(request.state.identity, body.approval)
+        try:
+            return support.file_approved(request.state.identity, body.approval)
+        except H.Refused as exc:
+            raise refusal_problem(exc) from None
 
     @app.post("/api/v2/support/tickets/refresh")
     def support_refresh(request: Request, body: SupportRefresh | None = None):
