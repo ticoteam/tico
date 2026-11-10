@@ -24,11 +24,8 @@ class AlertPreferenceRow(TypedDict):
     phone_version: str
     verified_at: str | None
     revocation_pending: int
-    stall_after: str
     call_consent: int
-    urgent_needs: int
     legal_mail: int
-    bot_stuck: int
     urgent_calls: int
     timezone: str
     quiet_start: str

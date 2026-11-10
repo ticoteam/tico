@@ -2116,9 +2116,7 @@ class BotTaskTab(Contract):
     show_count: bool = True
     conditions: list[BotTaskCondition] = Field(default_factory=list, max_length=20)
     types: list[str] = Field(default_factory=list, max_length=50)
-    states: list[Literal["open", "doing", "waiting", "review", "ready", "done", "closed", "declined"]] = Field(
-        default_factory=list, max_length=8
-    )
+    states: list[Literal["open", "done", "closed"]] = Field(default_factory=list, max_length=3)
     waiting_on: Literal["", "me", "person", "bot"] = ""
 
 
