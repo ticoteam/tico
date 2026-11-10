@@ -22,7 +22,9 @@ def enter(conn: "sqlite3.Connection", task: Row, by: str) -> None:
     Filing into a pipeline arrives with Product and the PR queue with Engineering. Until then `pipeline_settings`
     refuses to save either, and a stage that has one anyway (written before that refusal) does nothing on enter: the
     move goes through, and a stage that files waits on its Linked work done, the owner's turn ("No task filed yet")."""
-    return None
+    from . import merge_queue
+
+    merge_queue.queue(conn, task, by)  # {"queue_prs": true}: track C
 
 
 def filed_open(conn: "sqlite3.Connection", visit_id: str) -> list[str]:
@@ -46,3 +48,6 @@ def undo(conn: "sqlite3.Connection", task: Row, by: str, note: str) -> None:
         return
     for filed in filed_open(conn, visit["id"]):
         task_engine.move(conn, filed, task_engine.CLOSED, by, note, cascade=True)
+    from . import merge_queue
+
+    merge_queue.pull(conn, task, by)  # PRs queued in this visit leave the merge queue: track C

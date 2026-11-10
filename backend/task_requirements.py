@@ -289,20 +289,149 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     return _not_built(task, requirement)
 
 
+# The four GitHub kinds read saved facts only (backend/task_facts.py) and, for "PR merged", the Merge stage's effects
+# (backend/merge_queue.py). With many PRs, the first one not met, in link order, gives the line. A PR closed without
+# merging is left out while another is linked; when every one is, the owner is told.
+def _now() -> Any:
+    from . import hubdb
+
+    return hubdb
+
+
+def _prs(conn: "sqlite3.Connection", task: Row, requirement: Row) -> tuple[list[Row], Standing | None]:
+    """The PRs a GitHub kind reads, each with `ref` and `fact`, or the standing when there are none to read."""
+    from . import task_facts as F
+
+    links: list[Row] = [
+        {**link, "ref": F.pr_ref(str(link["repo"]), int(link["number"]))} for link in F.prs_of(conn, task["id"])
+    ]
+    if not links:
+        return [], Standing(requirement, NOT_MET, task.get("owner_id"), "No PR linked")
+    live = [link for link in links if not (link["fact"] and link["fact"]["state"] == "closed")]
+    if not live:
+        return [], Standing(requirement, NOT_MET, task.get("owner_id"), f"{links[0]['ref']} was closed without merging")
+    return live, None
+
+
+def _first(requirement: Row, found: list[Standing]) -> Standing:
+    """The first unmet standing of many PRs', else the first met one."""
+    return next((s for s in found if not s.met), found[0])
+
+
+def _reading(requirement: Row) -> Standing:
+    return Standing(requirement, WAITING, GITHUB, "Reading the PR from GitHub")
+
+
+def _seconds_since(ts: object) -> float | None:
+    H = _now()
+    at, now = H.parse_ts(ts), H.parse_ts(H.now())
+    return None if at is None or now is None else (now - at).total_seconds()
+
+
 def _pr_open(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
-    return _not_built(task, requirement)
+    prs, said = _prs(conn, task, requirement)
+    if said:
+        return said
+    return _first(
+        requirement,
+        [Standing(requirement, MET, line="PR open") if link["fact"] else _reading(requirement) for link in prs],
+    )
+
+
+def _checks_one(task: Row, requirement: Row, link: Row) -> Standing:
+    from . import merge_queue
+    from . import task_facts as F
+
+    fact, ref = link["fact"], link["ref"]
+    if not fact:
+        return _reading(requirement)
+    if fact["state"] == "merged":
+        return Standing(requirement, MET, line="Checks pass")
+    state = fact["checks_state"]
+    if state == "failure":
+        return Standing(
+            requirement, NOT_MET, task.get("owner_id"), f"Checks failed on {ref}: {merge_queue.failing_names(fact)}"
+        )
+    if state == "pending":
+        running = _seconds_since(fact.get("checks_started_at"))
+        if running is not None and running >= F.CHECKS_TOO_LONG_S:
+            return Standing(requirement, NOT_MET, task.get("owner_id"), "Checks still running after 2 hours")
+        return Standing(requirement, WAITING, GITHUB, "Checks running")
+    if state == "none":
+        seen = _seconds_since(fact.get("head_seen_at"))
+        if seen is None or seen < F.NO_CHECKS_AFTER_S:
+            return Standing(requirement, WAITING, GITHUB, "Waiting for checks")
+        return Standing(requirement, MET, line="No checks on this repo")  # C13
+    return Standing(requirement, MET, line="Checks pass")
 
 
 def _checks_pass(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
-    return _not_built(task, requirement)
+    prs, said = _prs(conn, task, requirement)
+    if said:
+        return said
+    found = [_checks_one(task, requirement, link) for link in prs]
+    if all(s.met for s in found):
+        return Standing(requirement, MET, line=next((s.line for s in found if s.line == "Checks pass"), found[0].line))
+    return _first(requirement, found)
+
+
+def _merged_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: Row) -> Standing:
+    from . import merge_queue
+
+    fact, ref = link["fact"], link["ref"]
+    if not fact:
+        return _reading(requirement)
+    if fact["state"] == "merged":
+        return Standing(requirement, MET, line="Merged")
+    owner = task.get("owner_id")
+    queues = merge_queue.queues_prs(task.get("stage"))
+    effect = merge_queue.newest(conn, task["visit"]["id"], ref) if queues else None
+    if effect and effect["state"] == "owed":
+        return Standing(requirement, WAITING, GITHUB, "Queuing the PR")
+    if effect and effect["state"] == "failed":
+        return Standing(requirement, NOT_MET, owner, f"GitHub refused the merge: {effect.get('last_error') or ref}")
+    if fact["queue_state"] == "removed":
+        return Standing(requirement, NOT_MET, owner, merge_queue.removed_line(fact))
+    if fact["queue_state"] in ("queued", "auto_merge") or effect:
+        return Standing(requirement, WAITING, GITHUB, "In the merge queue")
+    if queues:
+        return Standing(requirement, WAITING, GITHUB, "Queuing the PR")  # owed as soon as its head is known
+    return Standing(requirement, NOT_MET, owner, "Not merged yet")
 
 
 def _pr_merged(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
-    return _not_built(task, requirement)
+    prs, said = _prs(conn, task, requirement)
+    if said:
+        return said
+    return _first(requirement, [_merged_one(conn, task, requirement, link) for link in prs])
+
+
+def _release_one(conn: "sqlite3.Connection", requirement: Row, link: Row) -> Standing:
+    from . import task_facts as F
+
+    fact = link["fact"]
+    if not fact:
+        return _reading(requirement)
+    if fact["state"] != "merged" or not fact.get("merged_sha"):
+        return Standing(requirement, WAITING, GITHUB, "Not merged yet")
+    settings: Row = requirement.get("settings") or {}
+    repo = F.release_repo(settings, str(link["repo"]))
+    publishes = F.publishes_releases(conn, repo)
+    if publishes is None:
+        return Standing(requirement, WAITING, GITHUB, "Reading releases")
+    if not publishes:
+        return Standing(requirement, MET, line="This repo doesn't publish releases")  # C31
+    for release in reversed(F.releases(conn, repo, prereleases=bool(settings.get("prereleases")))):
+        if F.included(conn, release["id"], str(fact["merged_sha"])):
+            return Standing(requirement, MET, line=f"In {release['tag']}")
+    return Standing(requirement, WAITING, GITHUB, f"Waiting for a release of {repo}")
 
 
 def _in_release(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
-    return _not_built(task, requirement)
+    prs, said = _prs(conn, task, requirement)
+    if said:
+        return said
+    return _first(requirement, [_release_one(conn, requirement, link) for link in prs])
 
 
 KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standing]] = {
