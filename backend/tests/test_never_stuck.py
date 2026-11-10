@@ -382,6 +382,24 @@ def test_seven_runs_between_two_changes_count_every_bot_that_ran(c, general, lat
     assert later(hours=6) == {} and _queued(c, task_id) == []
 
 
+def test_a_run_is_on_the_side_of_a_change_it_came_on_whatever_the_clock_says(c, general, later):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    # Its start runs on a computer whose clock is a minute behind: the run reads as started before the visit began.
+    X.ran(c, task_id, BUILDER, at=H.shift(H.now(), minutes=-1))
+    assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)  # a try, not a free start
+    assert _said(c, task_id, BUILDER)[-1] == "You stopped before this task was finished. Try 1 of 3."
+    # A change written with the clock gone back still starts the count over, by order.
+    E.add_requirement(c, task_id, ANA, "ok", "human:ben", "OK the wording")
+    c.execute("UPDATE visits SET last_change_at=? WHERE task_id=?", (H.shift(H.now(), minutes=-5), task_id))
+    assert _runs_since_change(c, task_id) == 0
+    X.ran(c, task_id, BUILDER, at=H.shift(H.now(), minutes=-10))
+    assert _runs_since_change(c, task_id) == 1
+
+
+def _runs_since_change(c, task_id):
+    return task_wakes.runs_since(c, E.task(c, task_id))
+
+
 def test_only_whoever_has_the_turn_is_woken_when_a_task_enters_a_stage(c, general, later):
     stages = (
         {"name": "Write", "owner": BUILDER, "requirements": [{"kind": "owner_done"}]},

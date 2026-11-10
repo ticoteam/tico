@@ -94,7 +94,7 @@ def test_a_run_counts_for_the_task_it_names_and_by_its_conversation_only_when_on
     first, second = E.task(c, first["id"]), E.task(c, second["id"])
 
     def runs(row):
-        return task_wakes.runs_since(c, row, row["visit"]["entered_at"])
+        return task_wakes.runs_since(c, row)
 
     assert (runs(first), runs(second)) == (0, 1)
     assert task_wakes.last_run(c, first, BUILDER) is None

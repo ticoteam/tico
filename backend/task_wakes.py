@@ -287,50 +287,47 @@ def last_run(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | 
     return {"state": found[0], "finished_at": found[1]} if found else None
 
 
-def runs_since(conn: "sqlite3.Connection", task: Row, since: str) -> int:
-    """How many bot runs started on this task since `since` (the visit's last change), whoever ran: the count the
-    never-stuck ladder holds to 7. A run that started at the very time of the change counts: the bound is never read
-    short."""
+def _marks(task: Row) -> tuple[int, int]:
+    """Where the task's visit last changed, by order: the newest attempts row and the newest messages row there were
+    then (`visits.last_change_attempt`, `last_change_message`, written by triggers whenever `last_change_at` is). A run
+    or a wake with a larger rowid came after the change, whatever the clock said when it was written."""
+    visit: Row = task.get("visit") or {}
+    return int(visit.get("last_change_attempt") or 0), int(visit.get("last_change_message") or 0)
+
+
+def runs_since(conn: "sqlite3.Connection", task: Row) -> int:
+    """How many bot runs started on this task since its visit last changed, whoever ran: the count the never-stuck
+    ladder holds to 7. "Since" is by order, not by the clock: a run whose attempt row came after the change. A run
+    belongs to the change it was claimed after."""
     found = conn.execute(
-        f"SELECT COUNT(*) {_RUNS}WHERE {_ON_TASK} AND COALESCE(a.started_at, a.created_at) >= ?",
-        (*_on_task(conn, task), since),
+        f"SELECT COUNT(*) {_RUNS}WHERE a.rowid > ? AND {_ON_TASK}",
+        (_marks(task)[0], *_on_task(conn, task)),
     ).fetchone()
     return int(found[0]) if found else 0
 
 
-def lost(conn: "sqlite3.Connection", task: Row, actor: str | None, since: str) -> Row | None:
-    """The wake about this task that `actor` was owed and never got: its newest one in this visit since `since` (the
-    last change), when it queued a run, its job is gone or canceled, and no run of this bot has started on the task
-    since it was written. `id`, `body`. None when nothing was lost."""
+def lost(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | None:
+    """The wake about this task that `actor` was owed and never got: its newest one in this visit since the visit last
+    changed (by order), when it queued a run, its job is gone or canceled, and no run of this bot on the task has
+    taken it or a wake written after it. `id`, `body`. None when nothing was lost."""
     H = _h()
     if not H.is_bot(actor):
         return None
     visit: Row = task.get("visit") or {}
     found = conn.execute(
-        "SELECT m.id, m.body, m.created_at, json_extract(m.refs, '$.job'), "
+        "SELECT m.id, m.body, m.rowid, json_extract(m.refs, '$.job'), "
         "(SELECT j.state FROM jobs j WHERE j.id = m.id) FROM messages m "
-        "WHERE m.wake_key LIKE ? ESCAPE '\\' AND m.recipient_id=? AND m.created_at>=? "
-        "AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1",
-        (_like(f"{task['id']}:{visit.get('id')}"), actor, since),
+        "WHERE m.rowid > ? AND m.wake_key LIKE ? ESCAPE '\\' AND m.recipient_id=? "
+        "AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 ORDER BY m.rowid DESC LIMIT 1",
+        (_marks(task)[1], _like(f"{task['id']}:{visit.get('id')}"), actor),
     ).fetchone()
     if not found or not found[3] or found[4] not in (None, "canceled"):
         return None
     taken = conn.execute(
-        f"SELECT 1 {_RUNS}WHERE a.bot_id=? AND (a.job_id=? OR ({_ON_TASK} "
-        "AND COALESCE(a.started_at, a.created_at) > ?)) LIMIT 1",
+        f"SELECT 1 {_RUNS}WHERE a.bot_id=? AND (a.job_id=? OR ({_ON_TASK} AND m.rowid > ?)) LIMIT 1",
         (H.actor_id(actor), found[0], *_on_task(conn, task), found[2]),
     ).fetchone()
     return None if taken else {"id": str(found[0]), "body": str(found[1] or "")}
-
-
-def woken_since(conn: "sqlite3.Connection", task_id: str, actor: str | None, since: str) -> bool:
-    """A wake about this task was written for `actor` at or after `since`."""
-    return bool(
-        conn.execute(
-            "SELECT 1 FROM messages WHERE wake_key LIKE ? ESCAPE '\\' AND recipient_id=? AND created_at>=? LIMIT 1",
-            (_like(task_id), actor, since),
-        ).fetchone()
-    )
 
 
 def queued(conn: "sqlite3.Connection", task_id: str, actor: str | None) -> bool:

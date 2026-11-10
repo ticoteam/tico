@@ -179,7 +179,7 @@ def _ladder(
         return
     epoch: str = visit.get("last_change_at") or visit["entered_at"]
     tries = int(visit.get("tries") or 0)
-    lost = task_wakes.lost(conn, row, target, epoch)
+    lost = task_wakes.lost(conn, row, target)
     if lost:
         # Its wake went missing before any run took it: the same words again, on this pass. Nothing ran, so nothing
         # is counted (R3).
@@ -197,7 +197,7 @@ def _ladder(
         due = max(due, str(H.shift(last["finished_at"], seconds=gap)))  # the gap runs from when the bot stopped
     if at < due:
         return
-    runs = task_wakes.runs_since(conn, row, epoch)
+    runs = task_wakes.runs_since(conn, row)
     cut_off = bool(last) and (last or {}).get("state") in CUT_OFF
     if level == "owner" and tries == 0 and not runs:
         # No run has started since the task last changed (it changed during a run, and nothing announced it): this
@@ -264,7 +264,7 @@ def _to_manager(
     7 runs since the last change, a person has it instead."""
     visit = row["visit"]
     epoch: str = visit.get("last_change_at") or visit["entered_at"]
-    if task_wakes.runs_since(conn, row, epoch) >= RUNS:
+    if task_wakes.runs_since(conn, row) >= RUNS:
         _to_person(conn, row, visit.get("level") or "owner", done)
         return
     conn.execute("UPDATE visits SET level='manager', tries=0, next_try_at=? WHERE id=?", (at, visit["id"]))
@@ -339,7 +339,6 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
         head = waits[0] if waits else None
         level = fresh["visit"].get("level") or "owner"
         target = W.turn(conn, fresh, waits)
-        epoch: str = fresh["visit"].get("last_change_at") or fresh["visit"]["entered_at"]
         if target and level == "owner" and manager != target and _usable(conn, manager, seen):
             # A bot's turn: Late hands the task to the manager bot, once per visit, on the same 3 tries. Never a second
             # set, and never back down from a person.
@@ -350,7 +349,7 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
             and is_bot(manager)
             and level == "owner"
             and manager != head.who
-            and task_wakes.runs_since(conn, fresh, epoch) < RUNS
+            and task_wakes.runs_since(conn, fresh) < RUNS
         ):
             # No bot has a turn: it waits on a person, another task or the outside, and the manager bot looks once. A
             # bot that cannot run is one row for its cause in a person's list, and its tasks carry on when the cause is
