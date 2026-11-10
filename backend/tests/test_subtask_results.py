@@ -84,11 +84,14 @@ def test_private_child_results_stay_off_a_wider_parent_and_closed_parents_do_not
         assert all(
             "Private finding." not in r["body"] for r in messages if r["conversation_id"] == parent["conversation_id"]
         )
-        # The filer's wake names the private sub-task it filed, and only the filer reads it.
-        named = [
-            r for r in messages if r["conversation_id"] == parent["conversation_id"] and "Private review" in r["body"]
-        ]
-        assert named and all((r["recipient_id"], r["restricted"]) == ("bot:ops", 1) for r in named)
+        # The filer is woken, but the wake is kept in the parent's thread, which Ana reads too and the private sub-task
+        # is not hers to open: it is "A sub-task", never its title.
+        kept = [r for r in messages if r["conversation_id"] == parent["conversation_id"]]
+        assert all("Private review" not in r["body"] for r in kept), kept
+        assert any(
+            r["recipient_id"] == "bot:ops" and "The tasks this one filed have ended: A sub-task: Done" in r["body"]
+            for r in kept
+        ), kept
         late = H.task_create(
             c, "bot:ops", "Another review", "Review it.", "bot:finance", parent_id=parent["id"], lint=False
         )

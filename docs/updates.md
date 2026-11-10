@@ -505,7 +505,7 @@ bot had before is kept in the repository's history. The bot's own notes, knowled
 ### From 0.5 to 0.6: every company starts over
 
 Tico 0.6 does not carry tasks over. Every company starts on a new database. A 0.6 server refuses to start on a 0.5
-database that has tasks and changes nothing: "This database has N tasks from Tico 0.5. Tico 0.6 does not carry tasks
+database that has tasks and changes nothing: "This database has tasks from Tico 0.5. Tico 0.6 does not carry tasks
 over: every company starts on a new database. Nothing was changed. Run Tico 0.5 on this database, or set up a new
 company on 0.6."
 

@@ -151,13 +151,16 @@ def test_done_wakes_the_parents_owner_and_no_words_reach_its_requester(api):
             for bot in ("ops", "cpo")
         }
         assert not H.subtask_flows_up(c, H.task(c, child["id"]), H.task(c, row["id"]))
-    # The engine wakes the filing task's owner once when the last task it filed ends, saying how it ended.
+    # The engine wakes the filing task's owner once when the last task it filed ends, saying how it ended. The wake is
+    # kept in the parent's thread, which cpo reads too, so the sealed subtask is "A sub-task": never its title.
     assert any(
         r["task"] == row["id"]
         and r["key"].endswith(":filed:" + child["id"])
-        and r["body"].startswith("The tasks this one filed have ended: Fix the upload refusal order: Done")
+        and r["body"].startswith("The tasks this one filed have ended: A sub-task: Done")
         for r in jobs["ops"]
     ), jobs["ops"]
+    for words in (REPAIR["title"], "checked the setting first", child["id"]):
+        assert not any(words in r["body"] for r in jobs["ops"] + jobs["cpo"]), (words, jobs)
     assert not any("checked the setting first" in r["body"] for r in jobs["cpo"]), jobs["cpo"]
 
 

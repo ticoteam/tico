@@ -1,20 +1,24 @@
 """The default prefix (no --asset-prefix, or tico) makes exactly the AWS calls it made before --asset-prefix existed.
 
 One stateful fake AWS account records every call (reads too, in order, with their arguments) through a default install,
-its re-run, a runner, `setup backup-storage` and `setup destroy --dns`. golden/default_prefix_calls.json is that same
-sequence recorded on main at eb08ac89b, before --asset-prefix; regenerate it there with
-TICO_GOLDEN_WRITE=<path> pytest setup/tests/test_default_prefix_golden.py. Its "_recorded_on" names that commit and its
-setup/ tree: once main's setup/ moves on, test_the_recording_is_of_mains_setup_as_it_is_now fails until it is
-re-recorded on main."""
+its re-run, a runner, `setup backup-storage` and `setup destroy --dns`. golden/default_prefix_calls.json is that
+sequence, first recorded on main at eb08ac89b, before --asset-prefix. A change to setup/ re-records it in the same
+change, so the call diff is reviewed with the code that made it:
+
+    TICO_GOLDEN_WRITE=setup/tests/golden/default_prefix_calls.json pytest setup/tests/test_default_prefix_golden.py
+
+Its "_recorded_on" holds a digest of the setup/ code it was recorded from (setup_digest: every file under setup/ but
+its tests). test_the_recording_is_of_this_setup fails while the checkout's own setup/ differs from that digest. It
+reads only the files here, never another ref, so a change that passes it passes it once merged too."""
 
 from __future__ import annotations
 
 import gzip
+import hashlib
 import itertools
 import json
 import os
 import secrets
-import subprocess
 import uuid
 from pathlib import Path
 
@@ -493,10 +497,10 @@ def calls(chart, flag=()) -> dict[str, list]:
 @pytest.mark.parametrize("flag", [(), ("--asset-prefix", "tico")], ids=["no flag", "--asset-prefix tico"])
 def test_the_default_prefix_makes_exactly_the_calls_it_made_before_asset_prefix(chart, flag):
     if flag and os.environ.get("TICO_GOLDEN_WRITE"):
-        pytest.skip("main has no --asset-prefix")
+        pytest.skip("the no-flag run records it")
     got = calls(chart, flag)
     if os.environ.get("TICO_GOLDEN_WRITE"):
-        here = {"commit": _git("rev-parse", "HEAD"), "setup_tree": _git("rev-parse", "HEAD:setup")}
+        here = {"setup_digest": setup_digest(SETUP)}
         Path(os.environ["TICO_GOLDEN_WRITE"]).write_text(json.dumps({"_recorded_on": here, **got}, indent=1) + "\n")
         pytest.skip("written")
     want = {k: v for k, v in json.loads(GOLDEN.read_text()).items() if not k.startswith("_")}
@@ -505,44 +509,39 @@ def test_the_default_prefix_makes_exactly_the_calls_it_made_before_asset_prefix(
     assert list(got) == list(want)
 
 
-ROOT = Path(__file__).resolve().parents[2]
+SETUP = Path(__file__).resolve().parents[1]
 
 
-def _git(*args: str) -> str:
-    """git's answer in this checkout, or "" when there is no git, no repository or no such ref."""
-    try:
-        done = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True, timeout=30, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    return done.stdout.strip() if done.returncode == 0 else ""
-
-
-def drift(recorded: dict) -> tuple[list[str], list[str]]:
-    """(the main refs checked, those whose setup/ tree is not the recorded one). A ref is checked only when it holds the
-    recorded commit: a main older than the recording (a stale local branch) says nothing about it."""
-    checked, moved = [], []
-    for ref in ("main", "origin/main"):
-        if not _git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"):
+def setup_digest(root: Path) -> str:
+    """SHA-256 of the setup/ code at `root`: each file's path and content, its tests and caches left out."""
+    total = hashlib.sha256()
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        relative = path.relative_to(root).as_posix()
+        if relative.startswith("tests/") or "__pycache__" in relative.split("/") or path.suffix == ".pyc":
             continue
-        ancestor = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", recorded["commit"], ref], cwd=ROOT, capture_output=True, check=False
-        )
-        if ancestor.returncode != 0:
-            continue
-        checked.append(ref)
-        if _git("rev-parse", f"{ref}:setup") != recorded["setup_tree"]:
-            moved.append(ref)
-    return checked, moved
+        total.update(relative.encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest())
+    return total.hexdigest()
 
 
-def test_the_recording_is_of_mains_setup_as_it_is_now():
+def test_the_recording_is_of_this_setup():
     recorded = json.loads(GOLDEN.read_text())["_recorded_on"]
-    checked, moved = drift(recorded)
-    if not checked:
-        pytest.skip("no main or origin/main ref here that holds the recorded commit")
-    assert not moved, (
-        f"main's setup/ changed since {GOLDEN.name} was recorded at {recorded['commit'][:9]} ({', '.join(moved)}). "
-        "Re-record it on main (see this module's docstring) and update _recorded_on, then rebase this branch."
+    assert recorded.get("setup_digest") == setup_digest(SETUP), (
+        f"setup/ changed since {GOLDEN.name} was recorded. Re-record it in this change (see this module's docstring) "
+        "and review the call diff."
     )
-    # The check itself catches a tree that is not main's.
-    assert drift({**recorded, "setup_tree": "0" * 40})[1] == checked
+
+
+def test_the_digest_follows_the_code_and_not_its_tests(tmp_path):
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "cli.py").write_text("a = 1\n")
+    (tmp_path / "tests" / "test_cli.py").write_text("t = 1\n")
+    before = setup_digest(tmp_path)
+    (tmp_path / "tests" / "test_cli.py").write_text("t = 2\n")
+    (tmp_path / "__pycache__").mkdir()
+    (tmp_path / "__pycache__" / "cli.cpython-312.pyc").write_bytes(b"x")
+    assert setup_digest(tmp_path) == before
+    (tmp_path / "cli.py").write_text("a = 2\n")
+    assert setup_digest(tmp_path) != before
+    (tmp_path / "cli.py").write_text("a = 1\n")
+    (tmp_path / "dns.py").write_text("")
+    assert setup_digest(tmp_path) != before

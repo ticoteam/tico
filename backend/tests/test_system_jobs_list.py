@@ -81,24 +81,10 @@ def test_the_mirror_sync_makes_retires_renames_and_waits_out_a_broken_write(api,
         flow = json.loads(c.execute("SELECT flow FROM automations WHERE id=?", (aid,)).fetchone()["flow"])
     assert flow["name"] == SR.BY_KEY["goal_colours"].name
     assert sync(api)["renamed"] == []
-    # a task rule mirror whose rule is gone is retired
+    # a task rule mirror (task rules ended with 0.6) is retired
     gone = dead_mirror(api, "Old rule", "task_rule", {"kind": "task_rule", "id": "task-rule-gone"})
     assert sync(api)["retired"] == [gone]
     assert mirrors(api)[gone][2]
-    # a task rule mirror takes its rules name and switch
-    rid = "task-rule-close-after-done"
-    (aid,) = [
-        a
-        for a, (t, src, deleted, _) in mirrors(api).items()
-        if t == "tico.builtin.task_rule" and src == rid and not deleted
-    ]
-    with db(api).transaction() as c:
-        c.execute("UPDATE task_rules SET name='Close finished work', enabled=0 WHERE id=?", (rid,))
-    assert sync(api)["renamed"] == [aid]
-    with db(api).read() as c:
-        row = c.execute("SELECT name, enabled, flow FROM automations WHERE id=?", (aid,)).fetchone()
-    assert (row["name"], row["enabled"], json.loads(row["flow"])["controls"]["on"]) == ("Close finished work", 0, False)
-    assert sync(api)["renamed"] == []
     # the health monitor mirror comes back with its bot and follows its switch
     with db(api).transaction() as c:  # restored in Settings > Bots
         if H.bot(c, H.HEALTH_MONITOR):

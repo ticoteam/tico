@@ -1715,7 +1715,7 @@ def test_a_contended_screen_lock_does_not_block_the_async_server(live):
     def hold():
         with live.app.state.meeting_frames.lock:
             held.set()
-            release.wait(1)
+            release.wait(10)
 
     holder = threading.Thread(target=hold)
     holder.start()
@@ -1727,11 +1727,12 @@ def test_a_contended_screen_lock_does_not_block_the_async_server(live):
         ) as client:
             pending = asyncio.create_task(client.get(prefix + '/frame?wait=0', headers=headers()))
             await asyncio.sleep(0.02)
-            began = time.monotonic()
             try:
-                response = await asyncio.wait_for(client.get('/healthz'), 0.3)
+                # Answered while the screen lock is still held (it is held until `release`), not after it: a server
+                # blocked behind the lock could not answer before then, however fast the machine.
+                response = await asyncio.wait_for(client.get('/healthz'), 5)
                 assert response.status_code == 200
-                assert time.monotonic() - began < 0.3
+                assert not release.is_set() and holder.is_alive()  # the lock is still held
             finally:
                 release.set()
                 await pending

@@ -191,9 +191,9 @@ def test_unrelated_task_access_change_uses_the_index_at_archive_scale(api, hq):
         )
         assert 'letter_sources_source' in plan and 'SEARCH' in plan and 'SCAN' not in plan
         before = E.latest(c)
-        started = time.perf_counter()
+        started = time.process_time()  # this process's CPU: a loaded runner's waits do not count
         c.execute('UPDATE tasks SET private=1 WHERE id=?', (task['id'],))
-        elapsed = time.perf_counter() - started
+        elapsed = time.process_time() - started
         assert elapsed < 0.050, f'unrelated indexed privacy update took {elapsed:.4f}s'
         assert c.execute("SELECT count(*) FROM changes WHERE topic='letters' AND seq>?", (before,)).fetchone()[0] == 0
         print(f'5k letters / 10k conversations: indexed unrelated task update {elapsed * 1000:.3f} ms')

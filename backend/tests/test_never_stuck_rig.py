@@ -90,12 +90,17 @@ def test_shards_split_a_range() -> None:
 
 def test_one_pass_over_three_thousand_idle_tasks_with_queued_wakes_is_quick() -> None:
     """Speed: every pass looks at every open task. 30 tasks made through the engine, copied to 3,000 (perf.clone), each
-    with its wake queued and nothing due. About 0.4 s here; when wakes were read with LIKE, 2,000 tasks took 3.1 s, and
-    the time grew with the square of the tasks. Live runs are read once a pass, not once a task."""
-    out = perf.measure(30, profile=False, copies=99, queued=True)
-    assert out["tasks"] == 3000 and out["pass"] == {}
-    assert out["live_reads"] == 1
-    assert out["seconds"] < 2.0, out["top_statements"]
+    with its wake queued and nothing due. About 0.5 s of CPU here; when wakes were read with LIKE, 2,000 tasks took
+    3.1 s, and the time grew with the square of the tasks. Live runs are read once a pass, not once a task. Timed in
+    this process's CPU, the best of two passes, so other load on the machine does not count; a read made for each task
+    shows first in the count of reads, which no load moves."""
+    runs = [perf.measure(30, profile=False, copies=99, queued=True) for _ in range(2)]
+    for out in runs:
+        assert out["tasks"] == 3000 and out["pass"] == {}
+        assert out["live_reads"] == 1
+        assert out["reads"] < 60, out["top_statements"]
+    best = min(runs, key=lambda out: out["cpu_seconds"])
+    assert best["cpu_seconds"] < 2.0, (best["cpu_seconds"], best["seconds"], best["top_statements"])
 
 
 @pytest.mark.parametrize("queued", [False, True], ids=["runs-ended", "wakes-queued"])
@@ -115,12 +120,18 @@ def test_one_pass_reads_as_many_statements_over_a_thousand_idle_tasks_as_over_a_
 def test_one_pass_takes_about_twice_as_long_over_twice_the_tasks() -> None:
     """Speed: a pass's time grows with the open tasks, not with their square. Each task's runs are found from the task
     (task_wakes._runs_of), never by reading every run of its bot for each task: that took 4.6 s over 2,000 tasks and
-    148 s over 10,000. Now about 0.7 s and 1.3 s here over 2,000 and 4,000 (4.2 s over 10,000), 2% due for a try."""
-    small = perf.measure(50, profile=False, copies=39)
-    big = perf.measure(50, profile=False, copies=79)
+    148 s over 10,000. Now about 0.7 s and 1.3 s here over 2,000 and 4,000 (4.2 s over 10,000), 2% due for a try.
+    Timed in this process's CPU, not on the wall clock, so other load on the machine (a 16-way run) does not count:
+    linear is about 2x, a square 4x; under 3x passes. The best of two passes each."""
+    small = min((perf.measure(50, profile=False, copies=39) for _ in range(2)), key=lambda out: out["cpu_seconds"])
+    big = min((perf.measure(50, profile=False, copies=79) for _ in range(2)), key=lambda out: out["cpu_seconds"])
     assert (small["tasks"], big["tasks"]) == (2000, 4000)
     assert big["pass"]["woken"] > small["pass"]["woken"] > 0
-    assert big["seconds"] < 2.5 * small["seconds"], (small["seconds"], big["seconds"], big["top_statements"])
+    assert big["cpu_seconds"] < 3 * small["cpu_seconds"], (
+        small["cpu_seconds"],
+        big["cpu_seconds"],
+        big["top_statements"],
+    )
 
 
 def test_a_world_puts_the_environment_back() -> None:
