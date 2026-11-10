@@ -33,13 +33,6 @@ When you ask a bot for something in a thread and it files a task, the work moves
 quiet line, "Started task: <title>". Tap that line, or any task row in the bot's Home, to open the task's thread.
 Messages you write there go to that task's session.
 
-## Reports in the main chat
-
-The Home hears where each task got to in one quiet line: **started**, **blocked**, **done**, **declined** or
-**stuck**, with the start of the note. These lines start no run. The main session reads them the next time
-something wakes it. The same state is not reported twice in a row, and a private task is reported only where every
-reader of the Home may read it.
-
 ## Subtasks
 
 A subtask someone else files for a bot under its task continues the parent's session by default: same thread, same
@@ -47,8 +40,9 @@ worktree, same checkpoint. The bot's turns on the parent and that subtask take t
 itself is new work, so it starts its own session and runs beside the parent. A subtask whose parent belongs to
 someone else, or has different readers, also starts its own session.
 
-When a bot is blocked on a person, it files a subtask for that person under its task. When the person finishes,
-declines or closes it, the bot wakes on the parent, in the same session, and picks up where it stopped.
+When a bot needs a person's answer or OK, it asks on the task ([Asks and OKs](tasks.md#asks-and-oks)). When it needs
+real work from a person, it files a subtask for that person under its task. When the answer comes or the subtask
+ends, the bot wakes on the parent, in the same session, and picks up where it stopped.
 
 Set `subtask_session: own` to give every subtask its own session instead.
 
@@ -111,12 +105,14 @@ long DMs cheaper and on topic. An owner or an admin turns this on or off in **Au
 the topic changes** (off by default). It never happens in task threads or group threads, and there is no undo. If Tico isn't
 sure, or the check takes over 1.5 seconds, nothing changes and your message goes to the same session.
 
-Nothing closes on its own. A quiet task is never closed or asked about: a bot's quiet task is a line on its roundup.
-See [Picking work back up](tasks.md#picking-work-back-up).
+Nothing closes on its own. A bot that stops with its task not finished is woken again
+([When a bot stops early](tasks.md#when-a-bot-stops-early)).
 
 ## Task progress
 
-Tico does not check running work one task at a time. A task with no progress shows in its bot's task roundup, once per run (three times a day by default). A Dev ticket long at a working step is listed on its manager's task roundup, and again every seven days while it stays late.
+Every 10 seconds the never-stuck check asks, for each open task, what is missing, who has it and whether they are
+on it. A bot that stopped early gets 3 tries, then its manager bot, then a person
+([When a bot stops early](tasks.md#when-a-bot-stops-early)). A task past its stage's expected time is Late.
 
 Human messages still wake the bot as before ([details](hub-sql.md#what-woke-each-run-and-what-it-did)).
 
@@ -125,7 +121,7 @@ Human messages still wake the bot as before ([details](hub-sql.md#what-woke-each
 With `task_goal: on`, a bot works each task it owns as a goal: keep going until the task's title and acceptance
 criteria hold, then mark it done. On Claude Code and Codex this is the harness's native goal (`/goal`, Codex goals),
 set in the task's thread; other harnesses get it as a line in the prompt. A met goal marks the task done. A paused or
-stopped goal leaves the task open, with a **blocked** or **stuck** line in the Home.
+stopped goal leaves the task open, and the never-stuck check wakes the bot again.
 
 A `goal:on` or `goal:off` label on a task overrides the bot's setting. A person who clears or edits the goal in the
 task's thread takes it over, and Tico leaves it alone after that. Goals in chat work the same way:
@@ -212,8 +208,7 @@ An older runner can report only the failure evidence it has; historical runs are
 ## FAQ
 
 **Why didn't my Home see what I said in a task?**
-Each task has its own session. The Home sees only a one-line report when the task starts, is blocked, done,
-declined or stuck. To give the task more to go on, write in the task's thread.
+Each task has its own session. To give the task more to go on, write in the task's thread.
 
 **Can a bot work on two of my tasks at once?**
 Yes. Each task runs in its own session and worktree, side by side. Two messages on the same task take turns. On a Codex ChatGPT sign-in, the task lanes run side by side too and share the plan's usage allowance ([how it works](how-it-works.md#one-turn-per-chatgpt-login)).
