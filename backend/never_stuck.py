@@ -103,6 +103,7 @@ def check(
     at: str = now or H.now()
     done = {"snoozes_ended": 0, "moved": 0, "woken": 0, "to_manager": 0, "to_person": 0, "late": 0}
     seen: dict[str, str | None] = {}
+    live = task_wakes.live_bots(conn, at)  # a pass starts no run: read once
     # A snooze of a task that was deleted, or is not on the engine, is no task's: it is left alone.
     due = conn.execute(
         "SELECT z.task_id FROM snoozes z JOIN tasks t ON t.id = z.task_id AND t.pipeline_id IS NOT NULL "
@@ -118,7 +119,7 @@ def check(
                 E.unsnooze(conn, task_id, SYSTEM)
                 done["snoozes_ended"] += 1
             else:
-                _one(conn, task_id, at, done, seen)
+                _one(conn, task_id, at, done, seen, live)
         except Exception as error:
             # SQLite may already have ended the transaction (a full disk, an I/O error): that stops the pass.
             if failures is None or not conn.in_transaction or storage_error(error):
@@ -131,7 +132,14 @@ def check(
     return done
 
 
-def _one(conn: "sqlite3.Connection", task_id: str, at: str, done: dict[str, int], seen: dict[str, str | None]) -> None:
+def _one(
+    conn: "sqlite3.Connection",
+    task_id: str,
+    at: str,
+    done: dict[str, int],
+    seen: dict[str, str | None],
+    live: set[str],
+) -> None:
     row = E.task(conn, task_id)
     if not row or row["status"] != "open" or row.get("snooze") or row["stage"].get("by_hand"):
         return  # a move earlier in this pass took it
@@ -143,7 +151,7 @@ def _one(conn: "sqlite3.Connection", task_id: str, at: str, done: dict[str, int]
             if not E.advance(conn, task_id):
                 break
         return
-    _ladder(conn, row, waits, E.progress_mark(conn, row["visit"]["id"], standings), at, done, seen)
+    _ladder(conn, row, waits, E.progress_mark(conn, row["visit"]["id"], standings), at, done, seen, live)
     _late(conn, row, at, done, seen)
 
 
@@ -156,6 +164,7 @@ def _ladder(
     at: str,
     done: dict[str, int],
     seen: dict[str, str | None],
+    live: set[str],
 ) -> None:
     H = _h()
     visit = row["visit"]
@@ -178,10 +187,10 @@ def _ladder(
     epoch: str = visit.get("last_change_at") or visit["entered_at"]
     tries = int(visit.get("tries") or 0)
     # Before the ladder tries anyone, every bot that has a turn gets back a wake it lost (R3).
-    woken, spent_by = _recover(conn, row, target, waits, level, tries, epoch, at, done)
+    woken, spent_by = _recover(conn, row, target, waits, level, tries, epoch, at, done, live)
     if not target or target in woken:
         return
-    if task_wakes.live_run(conn, row, target, at) or task_wakes.queued(conn, row["id"], target):
+    if task_wakes.live_run(conn, row, target, at, live) or task_wakes.queued(conn, row["id"], target):
         return
     inbox = task_wakes.inbox(conn, row, target)
     if inbox and not inbox["read_at"]:
@@ -234,6 +243,7 @@ def _recover(
     epoch: str,
     at: str,
     done: dict[str, int],
+    live: set[str],
 ) -> tuple[set[str], set[str]]:
     """Write again the lost wake of every bot that has a turn and is not on it: no live run, no queued wake, no wake
     unread in its own inbox. The same words, on this pass, and nothing is counted (R3). Once per bot, level, try and
@@ -247,7 +257,7 @@ def _recover(
     woken: set[str] = set()
     spent: set[str] = set()
     for bot in sorted(W.turns(conn, row, waits)):
-        if task_wakes.live_run(conn, row, bot, at) or task_wakes.queued(conn, row["id"], bot):
+        if task_wakes.live_run(conn, row, bot, at, live) or task_wakes.queued(conn, row["id"], bot):
             continue
         inbox = task_wakes.inbox(conn, row, bot)
         if inbox and not inbox["read_at"]:
@@ -435,6 +445,7 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
     needs: dict[str, list[Row]] = {}
     someone: bool | None = None  # whether anyone can sign in: read once, when a turn names nobody
     now: str = H.now()
+    live = task_wakes.live_bots(conn, now)
     open_ids = [
         str(found[0])
         for found in conn.execute(
@@ -456,7 +467,7 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
             if wait.state == W.BOT and not (
                 visit.get("next_try_at")
                 or (visit.get("level") or "owner") != "owner"
-                or task_wakes.live_run(conn, row, wait.who, now)
+                or task_wakes.live_run(conn, row, wait.who, now, live)
                 or task_wakes.queued(conn, task_id, wait.who)
             ):
                 broken.append(f"2: task {task_id} is {wait.who}'s turn with no run, no wake and no next try")

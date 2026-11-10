@@ -270,17 +270,41 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
     return None
 
 
-def live_run(conn: "sqlite3.Connection", task: Row, actor: str | None, now: str | None = None) -> bool:
+def live_bots(conn: "sqlite3.Connection", now: str | None = None) -> set[str]:
+    """The bots (slugs) with a live run on any task: one read, on the index of active runs (one_active_attempt_per_lane).
+    The never-stuck pass reads it once and hands it to `live_run`, which then reads nothing for any other bot. A pass
+    starts no run, so the set holds for the whole pass; a run that ends during it only makes `live_run` read again."""
+    H = _h()
+    return {
+        str(found[0])
+        for found in conn.execute(
+            "SELECT DISTINCT j.bot_id FROM attempts a JOIN jobs j ON j.attempt_id = a.id "
+            "WHERE a.state IN ('leased','running') AND a.lease_until > ?",
+            (now or H.now(),),
+        ).fetchall()
+    }
+
+
+def live_run(
+    conn: "sqlite3.Connection",
+    task: Row,
+    actor: str | None,
+    now: str | None = None,
+    live: Collection[str] | None = None,
+) -> bool:
     """This bot has a run on this task whose computer still checks in. A run is live only while its lease is renewed
-    (every 90 seconds at most): one that is held, cut off or lost is over."""
+    (every 90 seconds at most): one that is held, cut off or lost is over. `live` is `live_bots` read at the same
+    `now`: a bot not in it has no live run on any task."""
     H = _h()
     if not H.is_bot(actor):
+        return False
+    if live is not None and H.actor_id(actor) not in live:
         return False
     return bool(
         conn.execute(
             "SELECT 1 FROM (SELECT m.id FROM messages m WHERE "
-            f"{_KEY} UNION SELECT id FROM messages WHERE conversation_id = ?) m "
-            "CROSS JOIN jobs j ON j.message_id = m.id JOIN attempts a ON a.id = j.attempt_id "
+            f"{_KEY} UNION SELECT id FROM messages WHERE conversation_id = ?) w "
+            "CROSS JOIN jobs j ON j.message_id = w.id JOIN attempts a ON a.id = j.attempt_id "
             "WHERE j.bot_id=? AND a.state IN ('leased', 'running') AND a.lease_until > ? LIMIT 1",
             (*_range(task["id"]), task.get("conversation_id") or "", H.actor_id(actor), now or H.now()),
         ).fetchone()
@@ -462,7 +486,7 @@ def drop(conn: "sqlite3.Connection", task_id: str, keep: str | Collection[str] |
     kept = sorted({str(H.actor_id(bot)) for bot in keeping if H.is_bot(bot)})
     cursor = conn.execute(
         "UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
-        "(SELECT id FROM messages m WHERE " + _KEY + ")"
+        f"(SELECT id FROM messages m WHERE {_KEY})"
         + (f" AND bot_id NOT IN ({','.join('?' * len(kept))})" if kept else ""),
         (*_range(task_id), *kept),
     )

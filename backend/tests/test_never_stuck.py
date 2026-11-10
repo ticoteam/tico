@@ -773,3 +773,24 @@ def test_the_heartbeat_runs_the_check_and_reports_a_task_it_could_not_check(api,
     with pytest.raises(HB.Failed, match="1 task could not be checked"):
         S.step_never_stuck(ctx)
     assert ctx.failures == [{"never_stuck": task_id, "error": "ValueError"}]
+
+
+def test_a_pass_finds_wakes_on_the_wake_key_index_and_reads_live_runs_once(c, general, later):
+    """Speed (a pass looks at every open task): each wake read finds the task's wakes on messages_wake_key, never by a
+    scan, and live runs are read once per pass, not per task, while no bot has one. 2,000 idle tasks took 3.1 s a
+    pass when wakes were read with LIKE."""
+    for title in ("Write the launch note", "Fix the footer", "Plan the offsite"):
+        X.ran(c, X.new_task(c, ANA, title, assignee=BUILDER)["id"], BUILDER)
+    statements: list[str] = []
+    c.set_trace_callback(statements.append)
+    try:
+        assert later(seconds=120) == {"woken": 3}
+        assert later(minutes=20) == {}  # the wakes are queued
+    finally:
+        c.set_trace_callback(None)
+    reads = [s for s in statements if s.lstrip().upper().startswith("SELECT") and "wake_key" in s]
+    assert reads
+    for sql in reads:
+        plan = " | ".join(str(found[-1]) for found in c.execute("EXPLAIN QUERY PLAN " + sql).fetchall())
+        assert "SCAN m" not in plan and "SCAN messages" not in plan, (sql, plan)
+    assert sum("lease_until >" in s for s in statements) == 4  # one per pass and one per rules check
