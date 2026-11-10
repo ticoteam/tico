@@ -1515,7 +1515,7 @@ def test_the_plan_goes_only_to_a_bucket_setup_recorded_making_and_its_objects_ar
     # Its own: written only where nothing is, recorded, and only then deleted; a retry of a lost response is its own.
     other = "plans/acme/" + "b" * 64
     d.put_plan(s3, other, "ours")
-    assert saved[-1]["plan_object"] == {"key": other, "etag": etag(b"ours")}
+    assert {k: saved[-1]["plan_object"][k] for k in ("key", "etag")} == {"key": other, "etag": etag(b"ours")}
     d.put_plan(s3, other, "ours")
     assert d.delete_plan(s3, other) == "" and ("hub-setup-plans-x", other) not in s3.objects
 
@@ -2142,7 +2142,7 @@ def test_the_plan_bucket_and_object_are_proved_before_each_write_and_a_lost_put_
     again = strict_dep(p, None, None, None, ids=json.loads(json.dumps(saved[-1])))
     again.ensure_plan_bucket(s3, "us-east-1")
     again.put_plan(s3, key, "ours")  # 412: its own bytes, known by the hash in the object's metadata
-    assert again.ids["plan_object"] == {"key": key, "etag": etag(b"ours")}
+    assert {k: again.ids["plan_object"][k] for k in ("key", "etag")} == {"key": key, "etag": etag(b"ours")}
     s3.objects[("hub-plans-x", key)]["ETag"] = '"replaced"'  # written over since (by someone else)
     assert again.delete_plan(s3, key) and ("hub-plans-x", key) in s3.objects
     s3.objects[("hub-plans-x", key)]["ETag"] = etag(b"ours")
@@ -2886,3 +2886,41 @@ def test_every_recorded_resource_is_read_by_its_id_and_a_gone_one_is_never_made_
         assert snap[key] == ids[key] and len(s3.called("create_bucket")) == 1 and len(iam.called("create_user")) == 1
         s3.tagsets.update(keep[0])
         iam.users.update(keep[1])
+
+
+def test_a_plan_upload_retry_never_replaces_its_recorded_version_or_adopts_an_object_that_was_already_there():
+    # Codex review 6, part 1, case 9: another writer put a version v2 with identical bytes and matching sha256 metadata;
+    # the re-run's put got 412, HEAD showed v2, and setup recorded v2 over its own v1, so cleanup then deleted the other
+    # writer's version. And an intent written by this very call made an object already at the key look like its own.
+    p = hub_plan(domain=DOMAIN, plan_bucket="hub-plans-x")
+    key = "plans/hotmic/" + hashlib.sha256(b"ours").hexdigest()
+    s3, ids = S3(), {}
+    d = strict_dep(p, None, None, None, ids=ids)
+    d.ensure_plan_bucket(s3, "us-west-2")
+    s3.put_bucket_versioning(Bucket="hub-plans-x", VersioningConfiguration={"Status": "Enabled"})
+    d.put_plan(s3, key, "ours")
+    v1 = ids["plan_object"]["version_id"]
+    meta = dict(s3.objects[("hub-plans-x", key)]["Metadata"])
+    s3.put_object(Bucket="hub-plans-x", Key=key, Body=b"ours", Metadata=meta)  # v2: the same bytes and metadata
+    with pytest.raises(MissingInput, match="refusing"):
+        strict_dep(p, None, None, None, ids=ids).put_plan(s3, key, "ours")
+    assert ids["plan_object"]["version_id"] == v1  # the recorded evidence is kept
+    assert d.delete_plan(s3, key) == "" and s3.called("delete_object")[-1]["VersionId"] == v1
+    assert s3.objects[("hub-plans-x", key)]["Metadata"] == meta  # the other writer's version stays
+
+    # An object already at the key, with this install's bytes and even its sha256 and install metadata: never adopted
+    # by an intent this call wrote, and the intent is closed (S3's 412 proves this put wrote nothing).
+    for versioned in (False, True):
+        s3, ids = S3(), {}
+        d = strict_dep(p, None, None, None, ids=ids)
+        d.ensure_plan_bucket(s3, "us-west-2")
+        if versioned:
+            s3.put_bucket_versioning(Bucket="hub-plans-x", VersioningConfiguration={"Status": "Enabled"})
+        there = {"install": INSTALL, "sha256": hashlib.sha256(b"ours").hexdigest()}
+        s3.put_object(Bucket="hub-plans-x", Key=key, Body=b"ours", Metadata=there)
+        with pytest.raises(MissingInput, match="did not record writing it"):
+            d.put_plan(s3, key, "ours")
+        assert "plan_object" not in ids and not (ids.get("intents") or {}).get("plan_object"), versioned
+        with pytest.raises(MissingInput, match="did not record writing it"):  # nor on a re-run
+            strict_dep(p, None, None, None, ids=ids).put_plan(s3, key, "ours")
+        assert d.delete_plan(s3, key) == "NotWrittenByThisInstall" and ("hub-plans-x", key) in s3.objects

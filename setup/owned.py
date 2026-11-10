@@ -592,33 +592,54 @@ class StrictDeployer(Deployer):
 
     def put_plan(self, s3, key: str, data: str) -> None:
         """The packed starter plan, for the server to copy once at first boot (remote.bootstrap_script). Plan only:
-        the env names the key and its sha256, never the plan. Journalled (key and sha256) before the put, and written
-        with that hash in its metadata: if the answer is lost, the re-run's 412 is accepted only for these bytes."""
+        the env names the key and its sha256, never the plan. Written only where no object is (IfNoneMatch), journalled
+        first (key, sha256 and a fresh nonce, also written in the object's metadata). On S3's 412 the object there is
+        this install's only when it carries that nonce, from an intent an earlier call journalled (its answer lost) or
+        this call's own retried attempt: one that was already there is never adopted, whatever its bytes or metadata.
+        A recorded write is kept as it was: the object at its key must still be that version (or, unversioned, that
+        ETag), else the re-run refuses; it is never re-recorded as another version."""
         if not key.startswith(f"plans/{self.p.name}/"):
             raise ValueError("a starter plan key is plans/<this server's name>/<sha256>")
         raw = data.encode("ascii")
         sha = hashlib.sha256(raw).hexdigest()
         where = {"Bucket": self.p.plan_bucket, "Key": key, "ExpectedBucketOwner": self.account_id}
         self.prove_plan_bucket(s3)
-        if self.plan_record().get("key") != key:
-            self.j.intend("plan_object", key=key, sha256=sha)
-        meta = {"install": self.n.install_id, "sha256": sha}
+        rec = self.plan_record()
+        intent = (self.ids.get("intents") or {}).get("plan_object") or {}
+        if rec.get("key") == key:
+            nonce = rec.get("nonce", "")
+        elif intent.get("key") == key and intent.get("sha256") == sha and intent.get("nonce"):
+            nonce = intent["nonce"]  # an earlier call's put, its answer lost: the same nonce again
+        else:
+            nonce = uuid.uuid4().hex
+            self.j.intend("plan_object", key=key, sha256=sha, nonce=nonce)
+        meta = {"install": self.n.install_id, "sha256": sha, "nonce": nonce}
+        refused = MissingInput(
+            f"s3://{self.p.plan_bucket}/{key} already exists and this install did not record writing it (or it changed "
+            "since); refusing to overwrite it or take it for this install's."
+        )
         try:  # only where no object is: one already at the key is never overwritten
             got = s3.put_object(**where, IfNoneMatch="*", Body=raw, ContentType="text/plain", Metadata=meta)
         except Exception as e:
             if error_code(e) != "PreconditionFailed":
                 raise
-            # A retry of this install's own put, known by the key it journalled or recorded and the hash it wrote in the
-            # object's metadata; anything else at the key is refused.
             got = s3.head_object(**where)
-            intent = (self.ids.get("intents") or {}).get("plan_object") or {}
-            mine = self.plan_record().get("key") == key or (intent.get("key") == key and intent.get("sha256") == sha)
-            if not mine or (got.get("Metadata") or {}).get("sha256") != sha:
-                raise MissingInput(
-                    f"s3://{self.p.plan_bucket}/{key} already exists and this install did not record writing it; "
-                    "refusing to overwrite it."
-                ) from None
-        rec = {"key": key, "etag": (got or {}).get("ETag", "")}
+            m = got.get("Metadata") or {}
+            if rec.get("key") == key:
+                same = (
+                    got.get("VersionId") == rec["version_id"]
+                    if rec.get("version_id")
+                    else got.get("ETag") == rec.get("etag")
+                )
+                if not same or m.get("sha256") != sha:
+                    raise refused from None
+                return  # this install's recorded write, still there: the record stays exactly as it was
+            if not (nonce and m.get("nonce") == nonce and m.get("sha256") == sha):
+                if (self.ids.get("intents") or {}).get("plan_object", {}).get("nonce") == nonce:
+                    self.ids["intents"].pop("plan_object")  # this put wrote nothing: its intent proves nothing
+                    self.save()
+                raise refused from None
+        rec = {"key": key, "etag": (got or {}).get("ETag", ""), "nonce": nonce}
         if (got or {}).get("VersionId"):
             rec["version_id"] = got["VersionId"]
         self.j.made("plan_object", rec)
