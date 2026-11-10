@@ -365,7 +365,7 @@ def s24_steps(org, f):
         trigger=TO_DANA,
         steps=[
             {"id": "gate", "type": "filter", "enabled": True, "rules": []},
-            {"id": "rank", "type": "decide", "enabled": False, "questions": BUCKET, "level": "low", "out": "d1"},
+            {"id": "rank", "type": "decide", "enabled": False, "questions": BUCKET, "out": "d1"},
             {"id": "draft", "type": "llm", "enabled": False, "as": CLAUDE_REF, "prompt": "Draft a reply", "out": "txt"},
             note("note", "ran"),
         ],

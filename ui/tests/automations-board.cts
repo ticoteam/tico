@@ -17,7 +17,7 @@ const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/aut
 type Action = {do: string; args: Record<string, unknown>};
 type Rule = {when: unknown[]; match: string; then: Action[]; next: string; stop?: boolean; to?: string};
 type Question = {type: string; instructions: string; criteria: Record<string, string>};
-type Step = {id: string; type: string; enabled: boolean; level: string; prompt: string; choose: Record<string, unknown>;
+type Step = {id: string; type: string; enabled: boolean; prompt: string; choose: Record<string, unknown>;
   rules: Rule[]; questions: Record<string, Question>; args: Record<string, unknown>};
 type Dest = {id: string; name: string; color: string; then: Action[]};
 type Flow = {destinations: Dest[]; steps: Step[]};
@@ -203,12 +203,11 @@ async function saveAny(page: Page) {
       await page.locator('[data-board="dest:0"]').click();
       assert.equal(await page.locator('.au-ed [data-op="bdel"]').count(), 0, 'the last destination stays');
       await page.locator('.au-ed [data-op="close"]').click();
-      // A second destination again: Sort asks once more, with a starting instruction the hub accepts, at the board's level.
+      // A second destination again: Sort asks once more, with a starting instruction the hub accepts.
       await page.locator('.au-dest-add').click();
       await page.fill('[data-b="item.name"]', 'Archive');
       const back = await save(page, writes, 'au_hook', 4);
       assert.deepEqual(back.steps.map(x => x.type), ['filter', 'decide', 'filter']);
-      assert.equal(back.steps[1]!.level, 'high');
       assert.deepEqual(back.steps[1]!.questions.to!.instructions, 'Pick where this goes.');
       assert.deepEqual(Object.keys(back.steps[1]!.questions.to!.criteria), ['ops', 'archive']);
       assert.equal(back.steps[2]!.id, 'sf');
@@ -230,7 +229,6 @@ async function saveAny(page: Page) {
       assert.equal(turn.type, 'llm');
       assert.equal(turn.prompt, 'Pick where this message goes.');
       assert.deepEqual(turn.choose, {to: ['me'], default: 'me', mode: 'draft'});
-      assert.equal((writes.at(-1)!.body as Flow).steps[1]!.level, 'medium', 'a kept decide keeps its level');
       assert.deepEqual(errors, []);
       await page.close();
     }

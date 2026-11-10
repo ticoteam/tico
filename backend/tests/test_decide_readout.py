@@ -8,8 +8,6 @@ from backend import hubdb as H
 from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
 from backend.tests.helpers.judge import QUESTIONS, FakeJudge, fake
 from backend.tests.helpers.mcp import call
-from backend.tests.helpers.judge_spend import DOWN
-from backend import judge as B
 from backend.decide_readout import readout
 
 NOW = datetime.now(timezone.utc)
@@ -280,14 +278,13 @@ def test_the_window_is_the_days_asked_and_a_route_call_reads_back(api, monkeypat
     get(api, "decisions/readout?days=0", expected=422)
     get(api, "decisions/readout?days=32", expected=422)
 
-    # A real route call on Jev, one on the fallback: both read back under their set.
+    # A real route call on Jev at the Gateway, one on Jev at the own TypeSafe key after the Gateway failed: both read
+    # back under their set.
     jev = fake(api)
     first = jev.__call__
     api.app.state.judge = lambda s, q, label=None: {**first(s, q, label), "model": "jev-1.14"}
     post(api, "decisions", {"state": {"subject": "Invoice"}, "questions": QUESTIONS, "label": "mail-triage@1"})
-    jev.fail = DOWN
-    api.app.state.judge = jev
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: FakeJudge())
+    api.app.state.judge = lambda s, q, label=None: {**FakeJudge()(s, q, label), "fallback": "unavailable"}
     post(api, "decisions", {"state": {"subject": "Invoice"}, "questions": QUESTIONS, "label": "mail-triage@1"})
     mail = {row["set"]: row for row in get(api, "decisions/readout?days=1")["sets"]}["mail-triage"]
     assert (mail["calls"], mail["jev"], mail["fallback"]) == (2, 1, 1)

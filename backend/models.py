@@ -2196,8 +2196,6 @@ class ProvidersUpdate(Contract):
     check_models: list[Annotated[str, Field(min_length=1, max_length=140)]] | None = Field(default=None, max_length=10)
     # The models choice (backend/models_preset.py): one of its four, '' for none; None keeps the saved one.
     preset: str | None = Field(default=None, max_length=40)
-    # How hard the Tico AI Gateway thinks on a decision (low, medium, high); None keeps the saved one.
-    decide_level: str | None = Field(default=None, max_length=10)
     # The model live-meeting replies run on: '' for the bot's own model; None keeps the saved one.
     meeting_model: str | None = Field(default=None, max_length=100)
 

@@ -45,7 +45,7 @@ declare function renderSettingsBots(): void;
       machine: {runner_id: 'r1', label: 'Box', owner_id: 'ana', generation: 1}, ...extra});
     const bots = [bot('seller', 'Seller', 'tico-medium-1.0'), bot('old', 'Old Hand', 'tico-retired-1.0'),
       bot('writer', 'Writer', 'tico-low-fast'), bot('banker', 'Banker', 'tico-medium-1.1')];
-    let decide = 'low', saved = null as {decide_level?: string} | null, connected = true;
+    let saved = null as Record<string, unknown> | null, connected = true;
     const PICKS = [{id: 'tico-medium-1.0', name: 'Medium', model: 'Claude Sonnet 5.5', version: '1.0', bots: 3, price: '$2.50 / $12.50 per 1M'},
       {id: 'tico-low-fast', name: 'Low · Fast', model: 'DeepSeek V4.1 Flash', version: 'auto', bots: 1, price: '$0.45 / $1.80 per 1M'}];
     let picks = PICKS;
@@ -66,15 +66,14 @@ declare function renderSettingsBots(): void;
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', owner_id: 'ana', bots: bots.map(b => b.name)}], services: []});
       if (p === '/api/v2/models') return json({...catalog, enabled_providers: ['tico']});
-      if (p === '/api/v2/providers' && req.method() === 'PUT') { saved = req.postDataJSON(); decide = saved!.decide_level || decide; return json({enabled: ['tico'], default: catalog.default, revision: 2, decide_level: decide, decide_levels: ['low', 'medium', 'high']}); }
+      if (p === '/api/v2/providers' && req.method() === 'PUT') { saved = req.postDataJSON(); return json({enabled: ['tico'], default: catalog.default, revision: 2}); }
       if (p === '/api/v2/providers') return json({enabled: ['tico'], default: catalog.default, revision: 1, auto_fallback: true,
-        decide_level: decide, decide_levels: ['low', 'medium', 'high'],
         providers: [{id: 'tico', label: 'Tico AI Gateway', gateway: true}]});
       if (p === '/api/v2/providers/gateway') return json({label: 'Tico AI Gateway', connected: true, source: 'settings', url: 'https://updates.tico.team/v1/gateway',
         default_url: 'https://updates.tico.team/v1/gateway', editable: true, preview: 'tgw…def', revision: 1, state: 'connected', working: true, message: 'Connected.',
         spent_usd: 12.4, cap_usd: 100});
       if (p === '/api/v2/gateway') return json({connection: connected ? {connected: true, state: 'connected', working: true, spent_usd: 12.4, cap_usd: 100} : {connected: false},
-        decide_level: decide, as_of: '2026-11-06',
+        as_of: '2026-11-06',
         picks, models: served.lineup, services: served.services});
       if (p === '/api/v2/usage/limits') return json({bots: {}});
       if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
@@ -250,16 +249,13 @@ declare function renderSettingsBots(): void;
     picks = PICKS;
     connected = true;
 
-    // 5. Decisions: a company level in Settings > Models > Defaults, saved with the rest.
+    // 5. Decisions are Jev's alone: Settings > Models > Defaults offers no level, and a save sends none.
     await page.evaluate(() => settingsShow('models'));
-    const level = page.locator('#set-prov [data-provider-decide]');
-    await level.waitFor();
-    assert.equal(await level.inputValue(), 'low');
-    assert.deepEqual(await level.locator('option').allInnerTexts(), ['Low', 'Medium', 'High']);
-    await level.selectOption('high');
+    await page.locator('#set-prov-save').waitFor();
+    assert.equal(await page.locator('#set-prov [data-provider-decide]').count(), 0);
     await page.locator('#set-prov-save').click();
     for (let i = 0; i < 100 && !saved; i++) await page.waitForTimeout(30);
-    assert.equal(saved!.decide_level, 'high');
+    assert.ok(saved && !('decide_level' in saved), JSON.stringify(saved));
     const options = await page.locator('[data-provider-model] option').allInnerTexts();
     assert.ok(options.some(o => o.startsWith('Medium')) && !options.some(o => /Fast/.test(o)), `the company default offers each level, no Fast (${options})`);
 

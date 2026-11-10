@@ -228,7 +228,7 @@ def s17_steps(org, f):
         DANA_REF,
         trigger=inbox_trigger(),
         steps=[
-            node("rank", "decide", questions=BUCKET, level="medium", out="d1"),
+            node("rank", "decide", questions=BUCKET, out="d1"),
             node(
                 "reply",
                 "filter",
@@ -268,15 +268,8 @@ def s17_steps(org, f):
 
 def decide_saved(f):
     decide = next(iter(steps_of(read_flow(f), "decide")), {})
-    ok = "bucket" in (decide.get("questions") or {}) and decide.get("level") == "medium" and decide.get("out") == "d1"
+    ok = "bucket" in (decide.get("questions") or {}) and decide.get("out") == "d1"
     return ok, f"decide {decide}"
-
-
-def judge_at_level(f):
-    setup(f, "auto", "mail1")
-    calls = got(f, "judge").calls
-    level = calls[0].get("level") if calls else None
-    return level == "medium", f"{len(calls)} judge call(s), first at level {level!r}, want 'medium'"
 
 
 def answer_stored(f):
@@ -287,13 +280,6 @@ def answer_stored(f):
     hit = find(outputs_of(run, "rank"), lambda d: "bucket" in d) or {}
     ans = hit.get("bucket") or {}
     return ans.get("choice") == "reply" and ans.get("confidence") == 0.8, f"bucket answer {ans}"
-
-
-def level_stored(f):
-    setup(f, "auto", "runs1")
-    run = run_for(body(f, "runs1"), "m17-a")
-    level = (outputs_of(run, "rank") if run else {}).get("level")
-    return level == "medium", f"Decide outputs level {level!r}, want 'medium'"
 
 
 def drafted_at_08(f):
@@ -322,7 +308,7 @@ def s18_steps(org, f):
         DANA_REF,
         trigger=inbox_trigger(),
         steps=[
-            node("rank", "decide", questions=BUCKET, level="medium", out="d1"),
+            node("rank", "decide", questions=BUCKET, out="d1"),
             node(
                 "fork",
                 "paths",
@@ -568,7 +554,7 @@ def s21_steps(org, f):
             "trigger": inbox_trigger(),
             "steps": [
                 node("gate", "filter", rules=[]),
-                node("rank", "decide", questions=BUCKET, level="medium", out="d1"),
+                node("rank", "decide", questions=BUCKET, out="d1"),
             ],
         },
         wave=W3,
@@ -632,13 +618,11 @@ SCENARIOS = [
     Scenario(
         17,
         "inbox-decide-questions",
-        "Inbox Decide: answers stored per question with the level; the reply rule gated on min confidence",
+        "Inbox Decide: answers stored per question; the reply rule gated on min confidence",
         s17_steps,
         [
-            Check("a Decide step on a question set is saved with level and out", W3, decide_saved),
-            Check("the judge is asked at the decide level", W3, judge_at_level),
+            Check("a Decide step on a question set is saved with its out", W3, decide_saved),
             Check("the Decide outputs hold each question's answer, with its confidence", W3, answer_stored),
-            Check("the Decide outputs carry the level it ran at", W3, level_stored),
             Check("a reply at confidence 0.8 passes min 0.7 and drafts", W3, drafted_at_08),
             Check("a reply at confidence 0.6 fails min 0.7 and does not draft", W3, not_drafted_at_06),
         ],

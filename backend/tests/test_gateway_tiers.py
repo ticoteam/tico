@@ -179,23 +179,17 @@ def test_the_decisions_level_picks_the_decision_model_and_how_long_it_may_take()
     assert J.decide_model("extreme") == "tico-decide-low" and J.decide_timeout(None) == 8
 
 
-def test_the_company_saves_a_decisions_level_and_old_settings_read_as_low(api):
+def test_there_is_no_decisions_level_to_pick(api):
+    """Every decision is Jev's (Decide Low): the providers view offers no level, and a save naming one is refused."""
     view = get(api, "providers")
-    assert view["decide_level"] == "low" and view["decide_levels"] == ["low", "medium", "high"]
+    assert "decide_level" not in view and "decide_levels" not in view
     body = {
         "enabled": view["enabled"],
         "model": view["default"]["model"],
         "expected_revision": view["revision"],
         "decide_level": "high",
     }
-    assert api.put("/api/v2/providers", json=body, headers=headers("ana-test")).status_code == 200
-    assert get(api, "providers")["decide_level"] == "high"
-    bad = api.put(
-        "/api/v2/providers",
-        json={**body, "expected_revision": get(api, "providers")["revision"], "decide_level": "extreme"},
-        headers=headers("ana-test"),
-    )
-    assert bad.status_code == 422
+    assert api.put("/api/v2/providers", json=body, headers=headers("ana-test")).status_code == 422
 
 
 def test_an_agent_reads_the_lineup_and_asks_for_a_search_in_the_gateways_shape(api, monkeypatch):
@@ -536,33 +530,27 @@ def test_every_tool_a_service_names_is_a_hub_tool():
     } <= named and named <= known, named - known
 
 
-def test_a_medium_or_high_decision_reserves_the_spend_of_the_model_that_will_run(api, monkeypatch):
+def test_a_decision_reserves_the_spend_of_jev_whatever_level_the_caller_names(api, monkeypatch):
     from backend import judge as B
 
     store = api.app.state.store
     store.settings.gateway_key, store.settings.gateway_url = "gw-synthetic", "https://hq.example/v1/gateway/decisions"
-    view = get(api, "providers")
-    body = {"enabled": view["enabled"], "model": view["default"]["model"], "decide_level": "low"}
     step = B.gateway(store.settings, store)
     seen = []
     real = B.reservation
     monkeypatch.setattr(B, "reservation", lambda s, models, *a: seen.append(list(models)) or real(s, models, *a))
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: None)
-    for level, want in (("low", "tico-decide-low"), ("high", "tico-decide-high-1.0")):
-        view = get(api, "providers")
-        put = api.put(
-            "/api/v2/providers",
-            json={**body, "decide_level": level, "expected_revision": view["revision"]},
-            headers=headers("ana-test"),
-        )
-        assert put.status_code == 200, put.text
-        assert B.step_models([step]) == [want]
-        with store.read() as c:
-            engine = B.server_engine(store, c, step)
-        store.settings.decisions_monthly_usd = 50
+    assert B.step_models([step]) == ["tico-decide-low"]
+    with store.read() as c:
+        engine = B.server_engine(store, c, step)
+    store.settings.decisions_monthly_usd = 50
+    for level in ("low", "high"):
         with pytest.raises(J.JudgeError):  # the fake host answers nothing; only the reservation matters
-            engine({"team": "Acme"}, {"q": {"type": "choice", "question": "?", "criteria": {"a": "a", "b": "b"}}})
-        assert seen[-1] == [want], seen
+            engine(
+                {"team": "Acme"},
+                {"q": {"type": "choice", "question": "?", "criteria": {"a": "a", "b": "b"}}},
+                level=level,
+            )
+        assert seen[-1] == ["tico-decide-low"], seen
 
 
 def test_a_rehearsal_server_searches_nothing_even_with_a_gateway_key(api, monkeypatch):

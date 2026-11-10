@@ -40,7 +40,6 @@ def test_only_a_known_code_is_kept_and_anything_else_is_unreadable():
 
 
 def test_the_decide_route_answers_and_audits_the_code_not_the_echoed_request(api, monkeypatch):
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: None)
     api.app.state.judge = echoing()
     ask = {"state": {"ticket": SECRET}, "questions": QUESTIONS, "label": "mail-triage@1"}
     result = api.post("/api/v2/decisions", json=ask, headers=headers())
@@ -85,7 +84,6 @@ def test_the_listening_api_answers_with_the_code_and_audits_it_not_the_echoed_po
         {"source": "x", "query": "q", "status": "ok", "items": [_post("1", SECRET + " [creator]")]},
         token=listening,
     )
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: None)
     api.app.state.judge = echoing()
     out = post(api, "listening/judge", {}, token=listening)
     assert out["judged"] == 0 and out["errors"] == [{"item_id": saved["items"][0]["id"], "error": "invalid"}]

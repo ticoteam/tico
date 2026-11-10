@@ -202,7 +202,7 @@ function auNextOut(prefix: string) {
 function auNewStep(type: string) {
   const s: AuStep = {id: auNewId(), type, enabled: true};
   if (type === 'filter') s.rules = [{when: [{field: 'message.from', op: 'contains', value: ''}], match: 'all', then: [{do: 'archive', args: {}}], stop: true}];
-  if (type === 'decide') Object.assign(s, {questions: {question: {type: 'noul', instructions: ''}}, level: 'medium', out: auNextOut('d')});
+  if (type === 'decide') Object.assign(s, {questions: {question: {type: 'noul', instructions: ''}}, out: auNextOut('d')});
   if (type === 'llm') Object.assign(s, {as: 'assistant:' + (S.me?.id || ''), prompt: '', out: auNextOut('l')});
   if (type === 'find') Object.assign(s, {source: 'mail', query: '', since: 'last_run', limit: 20});
   if (type === 'bot_turn') Object.assign(s, {bot: (S.emps || []).find(e => e.id !== AU_BOT)?.id || '', prompt: ''});
@@ -395,8 +395,7 @@ function auBoardFlow(b: AuBoard): {steps: AuStep[]; destinations: AuDest[]} {
   if (b.questions.length) {
     const d = keep(b.src.qd, 'decide'), f = keep(b.src.qf, 'filter'), old = b.src.qd?.questions || {};
     used.delete(d.out); delete d.set;
-    // A new step starts at the board's level; a kept one keeps its own, none included (the engine runs none as low).
-    d.out = outName(d, 'd'); if (!b.src.qd) d.level = 'medium';
+    d.out = outName(d, 'd');
     d.questions = Object.fromEntries(b.questions.map(q => [q.id, {...copy(old[q.id] || {}), type: 'noul', instructions: q.text}]));
     f.rules = b.questions.map(q => rule({when: [{field: `${d.out}.${q.id}`, op: 'is', value: 'yes', ...(q.min == null ? {} : {min: q.min})}],
       match: 'all', then: q.then, to: q.to, next: 'end'}));
@@ -409,7 +408,7 @@ function auBoardFlow(b: AuBoard): {steps: AuStep[]; destinations: AuDest[]} {
     const d = keep(b.src.sd, 'decide'), f = keep(b.src.sf, 'filter'), qid = b.src.sq || 'to';
     const old: AuQuestion = b.src.sd?.questions?.[qid] || {}, was: Record<string, string> = old.criteria && !Array.isArray(old.criteria) ? old.criteria : {};
     used.delete(d.out); delete d.set;
-    d.out = outName(d, 'd'); if (!b.src.sd) d.level = 'high';
+    d.out = outName(d, 'd');
     d.questions = {[qid]: {...copy(old), type: 'choice', instructions: L.prompt || auBoardAsk(b.mail),
       criteria: Object.fromEntries(L.to.map(id => [id, was[id] ?? auDestName(id, b.dests)]))}};
     // Each route keeps the Sort's minimum as stored (none stays none); a new Sort gets the board's.

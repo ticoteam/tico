@@ -825,7 +825,7 @@ def classify(app, store, snap, review=None):
     """One decision-model call: whether the email concerns legal or money matters and, for a bot's own email
     (`review`, its thread and approver's instruction), the second reviewer's verdict. Unknown asks a person: this is
     triage, not a defense against malicious mail."""
-    from .judge import ask, audit_detail, server_engine
+    from .judge import audit_detail, server_engine
     from clients.judge import JudgeError
 
     with store.read() as c:
@@ -857,7 +857,7 @@ def classify(app, store, snap, review=None):
             **({"approver_instruction": review["approver_instruction"]} if review["approver_instruction"] else {}),
         )
     try:
-        result = ask(engine, state, questions, "email.sending", "low")
+        result = engine(state, questions, "email.sending")
         answers = result.get("answers") or {}
         value = (answers.get("legal_or_money") or {}).get("value")
         verdict = (answers.get("review") or {}).get("value")

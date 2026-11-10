@@ -24,7 +24,7 @@ assert.deepEqual(plain(b.questions), [
 assert.deepEqual(plain(b.llm), {mode: 'sort', prompt: 'Pick where this goes. Unsure: Me.', to: ['me', 'legal', 'eng', 'archive'], default: 'me', min: 0.5, as: ''});
 assert.deepEqual(plain(b.dests), fx.inbox.destinations);
 
-// Written back untouched: the same steps (ids, outs, levels) and the same destinations.
+// Written back untouched: the same steps (ids, outs) and the same destinations.
 assert.deepEqual(plain(flow(b)), {steps: fx.inbox.steps, destinations: fx.inbox.destinations});
 
 // The webhook board: one rule, no questions, Sort. A draft or reply turn off mail is no board (it runs mail actions).
@@ -77,14 +77,6 @@ assert.deepEqual(plain(flow({...os, llm: {...os.llm, mode: 'reply', as: 'assista
   {to: ['legal', 'eng', 'archive', 'me'], default: 'me', mode: 'reply'});
 assert.deepEqual(plain(flow(os)), {steps: outside.steps, destinations: outside.destinations}, 'as Sort it is unchanged');
 
-// Levels as stored: a decide with none keeps none (the engine runs it as low), and a written prompt is kept.
-const nolevel = clone(fx.inbox);
-delete nolevel.steps[1].level; delete nolevel.steps[3].level;
-assert.deepEqual(plain(flow(shape(nolevel))), {steps: nolevel.steps, destinations: nolevel.destinations});
-const noWebLevel = clone(fx.webhook);
-delete noWebLevel.steps[1].level;
-assert.deepEqual(plain(flow(shape(noWebLevel))), {steps: noWebLevel.steps, destinations: noWebLevel.destinations});
-
 // Sort with one destination: a last filter with one rule and no conditions, no decide (a one-option choice is refused).
 const one = shape(fx.inbox);
 Object.assign(one.llm, {to: ['me'], default: 'me'});
@@ -97,11 +89,11 @@ assert.deepEqual(plain(flow(oneBack)), plain(oneOut));
 const lone = {...clone(fx.webhook), steps: [{id: 's1', type: 'filter', enabled: true, rules: [{when: [], match: 'all', then: [], to: 'ops', next: 'end', stop: true}]}]};
 assert.deepEqual(plain(shape(lone).rules), [], 'a lone routing filter is Sort, not a rule');
 assert.equal(shape(lone).llm.default, 'ops');
-// Back to two: a new decide (the board's level, a starting instruction) and the same filter, at the board's minimum.
+// Back to two: a new decide (a starting instruction) and the same filter, at the board's minimum.
 Object.assign(oneBack.llm, {to: ['me', 'eng']});
 const two = flow(oneBack);
 const newSort = two.steps.find((s: {type: string; questions: {to?: {instructions?: string}}}) => s.type === 'decide' && s.questions.to);
-assert.equal(newSort.level, 'high');
+assert.equal('level' in newSort, false);
 assert.equal(newSort.questions.to.instructions, 'Pick where this message goes.');
 assert.equal(flow({...shape(lone), llm: {...shape(lone).llm, to: ['ops', 'log']}}).steps[0].questions.to.instructions, 'Pick where this goes.');
 // One destination to a draft: the llm step gets the starting instruction too (a prompt is required).
@@ -214,7 +206,7 @@ const founderInbox = {
       {when: [{field: 'message.subject', op: 'matches', value: 'subpoena|lawsuit'}], match: 'all', then: [{do: 'label', args: {name: 'STARRED'}}], to: 'legal', next: 'end', stop: true},
       {when: [{field: 'message.from', op: 'contains', value: 'acme.example'}], match: 'all', then: [{do: 'label', args: {name: 'Known'}}], next: 'rule', stop: false},
       {when: [{field: 'message.subject', op: 'contains', value: 'receipt'}], match: 'all', then: [{do: 'archive', args: {}}], next: 'end', stop: true}]},
-    {id: 'ask', type: 'decide', enabled: true, out: 'q', level: 'low', questions: {
+    {id: 'ask', type: 'decide', enabled: true, out: 'q', questions: {
       only_founder: {type: 'noul', instructions: 'Is this only the founder can handle?'},
       meet: {type: 'noul', instructions: 'Is someone asking to meet?'},
       bug: {type: 'noul', instructions: 'Is it a bug report?'},
@@ -254,7 +246,7 @@ const sorting = {
     {id: 'support', name: 'Support', color: 'blue', then: [{do: 'wake_bot', args: {bot: 'bot:support'}}]},
     {id: 'archive', name: 'Archive', color: 'gray', then: [{do: 'archive', args: {}}]}],
   steps: [
-    {id: 'sd', type: 'decide', enabled: true, out: 'd2', level: 'high', questions: {to: {type: 'choice',
+    {id: 'sd', type: 'decide', enabled: true, out: 'd2', questions: {to: {type: 'choice',
       instructions: 'Where does this go? Unsure: Me.', criteria: {me: 'Me', orders: 'Orders', support: 'Support', archive: 'Archive'}}}},
     {id: 'sf', type: 'filter', enabled: true, rules: [
       {when: [{field: 'd2.to', op: 'is', value: 'me', min: 0.5}], match: 'all', then: [], to: 'me', next: 'end', stop: true},

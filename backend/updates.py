@@ -1051,7 +1051,6 @@ def writer_for(c, settings, store=None, vault=None):
         return None
     from clients import gateway as G, judge as J
     from . import gateway_connection, models_preset, providers
-    from .judge import fallback_model
 
     record = providers.load(c, settings)
     if store is not None and models_preset.spends_gateway(record) and gateway_connection.connected(c, settings):
@@ -1068,8 +1067,30 @@ def writer_for(c, settings, store=None, vault=None):
             return secret if G.chat_base(now_base) == base else ""  # moved since: the key is not this address's
 
         return J.gateway_writer(key_of, base, models_preset.pick())
-    found = fallback_model(record)
+    found = own_model(record)
     return J.llm_writer(*found) if found else None
+
+
+def own_model(record, env=None):
+    """(transport, key, model) for a draft on the company's own provider, or None when no enabled provider has a server
+    key. The default model's provider goes first; the rest follow in the order the owner enabled them. A provider the
+    server cannot call (Cursor), or whose key it does not hold, is skipped. Models pi runs through OpenRouter are asked
+    through OpenRouter with OpenRouter's id, as the runner does. Drafts only: decisions are Jev's (backend/judge.py)."""
+    import os
+
+    from clients import judge as J, openrouter
+    from . import providers
+
+    env = os.environ if env is None else env
+    default = providers.runtime_provider(record["runtime"])
+    for provider in dict.fromkeys(([default] if default else []) + record["enabled"]):
+        runtime = (providers.PROVIDER_BY_ID.get(provider) or {}).get("runtime")
+        via = provider if provider in J.LLM_KEYS else "openrouter" if runtime == providers.CATCH_ALL_RUNTIME else None
+        key = (env.get(J.LLM_KEYS[via]) or "").strip() if via else ""
+        model = record["model"] if provider == default else (providers.recommended(provider) or {}).get("id")
+        if key and model:
+            return via, key, openrouter.model_id(model) if via == "openrouter" else model
+    return None
 
 
 def drafter(c, settings, author, assistant):

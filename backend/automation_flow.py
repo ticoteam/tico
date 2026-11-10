@@ -38,7 +38,6 @@ ACTIONS = (
 )
 OPS = ("is", "is_not", ">=", "<=", "contains", "matches")
 SOURCES = ("mail", "tasks", "prs", "listening", "docs")
-LEVELS = J.DECIDE_LEVELS
 MAX_PATHS = 10  # paths in one fork
 MAX_DEPTH = 3  # forks inside forks
 MAX_STEPS = 100  # every step in the flow, nested ones included
@@ -350,7 +349,6 @@ def _check_step(step, where, seen, depth, counts, targets=frozenset()):
                 J.validate({}, step["questions"])
             except J.JudgeError as exc:
                 raise Invalid(f"{where}: {exc.detail}") from None
-        _need(step.get("level", "low") in LEVELS, where, f"level is one of {', '.join(LEVELS)}")
         _need(
             isinstance(step.get("out"), str) and NAME.fullmatch(step["out"]), where, "out names the answers, such as d1"
         )
@@ -830,9 +828,7 @@ def shape_text():
         f"{MAX_RULES} rules per filter, {MAX_CONDS} conditions per rule or path, {MAX_PATHS} paths per fork, "
         f"{MAX_DEPTH} levels of forks inside forks, {MAX_STEPS} steps, {MAX_PROMPT} characters per prompt.",
         "",
-        "Decide `level`: "
-        + ", ".join(LEVELS)
-        + " (default low). A `paths` path has `name`, `match` (all or any, default all), "
+        "Decide asks Jev, the one decision model. A `paths` path has `name`, `match` (all or any, default all), "
         "`when` and `steps`; `otherwise` takes `steps` too. A filter rule has `when`, `match`, `then` (actions), `stop`, "
         "`next` (end, rule or step) and `to` (a destination id). With `to`, or with `stop` true, `next` is end or left out.",
         "",

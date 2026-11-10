@@ -235,7 +235,7 @@ function filledTemplate(tid: string, owner: string, inbox: string): Json {
     const two = [me, archive];
     return {name, owner, enabled: false, trigger, destinations: two, steps: [
       {id: 'rules', type: 'filter', rules: []},
-      {id: 'sort', type: 'decide', level: 'high', out: 'sort', questions: {route: {type: 'choice',
+      {id: 'sort', type: 'decide', out: 'sort', questions: {route: {type: 'choice',
         instructions: 'Where does this message belong? Pick the one that fits best.', criteria: {me: 'The owner should see it', archive: 'Nothing is asked of anyone'}}}},
       {id: 'route', type: 'filter', rules: [...two.map(d => ({when: [{field: 'sort.route', op: 'is', value: d.id, min: 0.5}], to: d.id, next: 'end', stop: true})),
         {when: [], to: 'me', next: 'end', stop: true}]}]};
@@ -244,10 +244,10 @@ function filledTemplate(tid: string, owner: string, inbox: string): Json {
   const steps: Json[] = [
     {id: 'rules', type: 'filter', rules: [{when: [{field: 'message.subject', op: 'matches', value: 'subpoena|lawsuit'}], match: 'all',
       then: [{do: 'label', args: {name: 'STARRED'}}], to: 'legal', next: 'end', stop: true}]},
-    {id: 'ask', type: 'decide', level: 'low', out: 'q', questions: {bug: {type: 'noul', instructions: 'Is it a bug report?'}}},
+    {id: 'ask', type: 'decide', out: 'q', questions: {bug: {type: 'noul', instructions: 'Is it a bug report?'}}},
     {id: 'route', type: 'filter', rules: [{when: [{field: 'q.bug', op: 'is', value: 'yes', min: 0.75}], to: 'eng', next: 'end', stop: true}]}];
   if (kind === 'group') steps.push(
-    {id: 'draft', type: 'decide', level: 'high', out: 'draft', questions: {route: {type: 'choice', instructions: 'Where does this message belong?',
+    {id: 'draft', type: 'decide', out: 'draft', questions: {route: {type: 'choice', instructions: 'Where does this message belong?',
       criteria: Object.fromEntries(destinations.map(d => [d.id, d.name]))}}},
     {id: 'draft_route', type: 'filter', rules: [...to.map(d => ({when: [{field: 'draft.route', op: 'is', value: d, min: 0.5}], to: d, next: 'end', stop: true})),
       {when: [], to: 'me', next: 'end', stop: true}]});

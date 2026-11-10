@@ -14,7 +14,6 @@ way a stale bot definition is, and every change leaves an event with the before 
 import json
 
 from clients import harness_manifests as manifests
-from clients import judge as J
 
 from . import gateway_tiers, models_preset
 from .batch_work import shared_check
@@ -561,15 +560,15 @@ LONG_PROMPT = _Priced(
     },
     gateway_tiers.long_prompt_for,
 )
-# The models whose long-prompt tier is billed per request in the judge calls: each call is one request,
-# and its prompt pays the tier when over the limit. Claude Haiku 5.5 is listed for its judge calls at the long-prompt
-# rate above, approved by Chris Hawkins on 2026-11-06 (decision 2c1be08a, recorded by the Engineering Lead). Its other
-# calls are priced request by request from the runner's counts, as before.
-PER_REQUEST_LONG_TIER = frozenset({"gpt-6.1-terra", "claude-haiku-5-5"})
+# The models whose long-prompt tier is billed per request in a metered call (backend/judge.py `metered`): each call is
+# one request, and its prompt pays the tier when over the limit. Decisions are Jev's alone, so no judge call is on
+# these; a person's update draft on the company's own model can be. Claude Haiku 5.5 is not listed: its calls are
+# priced request by request from the runner's counts.
+PER_REQUEST_LONG_TIER = frozenset({"gpt-6.1-terra"})
 
 
 def per_request_long_tier(model):
-    """Whether a judge call to `model` is priced as one request (PER_REQUEST_LONG_TIER)."""
+    """Whether a metered call to `model` is priced as one request (PER_REQUEST_LONG_TIER)."""
     return str(model or "").strip().lower() in PER_REQUEST_LONG_TIER
 
 
@@ -748,8 +747,6 @@ def _record(value):
         "check_models": [str(entry) for entry in stored.get("check_models") or [] if isinstance(entry, str)],
         # The models choice (backend/models_preset.py); '' is the choice as it was before presets.
         "preset": models_preset.normalize(stored.get("preset")),
-        # How hard the Tico AI Gateway thinks on a decision (clients/judge.py DECIDE_LEVELS); Low is today's.
-        "decide_level": J.normalize_level(stored.get("decide_level")),
         # The model live-meeting replies run on (backend/live_meetings.py): None is unset (the Gateway's default
         # while the Gateway is on), '' the bot's own model, else a model id.
         "meeting_model": None if stored.get("meeting_model") is None else str(stored.get("meeting_model") or ""),
@@ -865,9 +862,6 @@ def save(c, actor, body, now, settings=None):
     preset = before["preset"] if body.get("preset") is None else models_preset.normalize(body.get("preset"))
     if body.get("preset") not in (None, "") and not preset:
         raise ProviderError("preset", "Choose one of the four models choices", 422)
-    level = body.get("decide_level")
-    if level not in (None, "") and level not in J.DECIDE_LEVELS:
-        raise ProviderError("decide_level", "Choose Low, Medium or High for decisions", 422)
     # Kept as saved (None while unset, so the Gateway's default follows the connection) unless the owner names one.
     from . import read_cache
 
@@ -893,7 +887,6 @@ def save(c, actor, body, now, settings=None):
             )
         ),
         "preset": preset,
-        "decide_level": before["decide_level"] if level is None else J.normalize_level(level),
         "meeting_model": before["meeting_model"] if body.get("meeting_model") is None else meeting,
     }
     # The Gateway's provider is never stored: it follows the connection (`with_gateway`).
@@ -926,8 +919,6 @@ def view(record):
         "check_order": check_order(record),
         "preset": record.get("preset", ""),
         "presets": list(models_preset.PRESETS),
-        "decide_level": record.get("decide_level", J.DECIDE_LEVELS[0]),
-        "decide_levels": list(J.DECIDE_LEVELS),
         "meeting_model": record["meeting_model"],
         "providers": [
             {

@@ -2309,9 +2309,9 @@ class HubServices:
         except (J.JudgeError, OSError, ValueError):
             return None
 
-    def judge(self, values, questions, label, level):
+    def judge(self, values, questions, label):
         from clients import judge as J
-        from .judge import ask, audit_detail, server_engine
+        from .judge import audit_detail, server_engine
 
         store = self.hub.store
         with store.read() as c:
@@ -2319,7 +2319,7 @@ class HubServices:
         if engine is None:  # no decision model, or the month's decision cap is reached
             return None
         J.validate(values, questions, label)
-        result = ask(engine, _trim(values), questions, label, level)
+        result = engine(_trim(values), questions, label)
         self.dirty = True
         self._write(
             lambda c: H.event(
@@ -2331,7 +2331,6 @@ class HubServices:
                     "label": label,
                     "automation": self.row["id"],
                     "run": self.run_id,
-                    "level": level,
                     **audit_detail(result),
                     "answers": J.summary(result["answers"]),
                 },
