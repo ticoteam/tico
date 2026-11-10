@@ -365,19 +365,34 @@ function dashNeedsLive(): void {
       return sameData(next, d) ? null : next;
     });
 }
-// Unread threads: the reader's own read takes its row off; a new unread message on a listed thread counts on its row.
-// A thread not listed waits for the safety read (an activity event carries no title or audience to draw it with).
+// Unread threads: the reader's own read takes its row off once Threads (threads.ts threadsReadLive) has the root quiet,
+// and sets its count while some is left (a read of one sub-thread, or up to a mark short of the newest); a root Threads
+// does not hold keeps its row until the safety read. A new unread message on a listed thread counts on its row. A
+// thread not listed waits for the safety read (an activity event carries no title or audience to draw it with).
 function dashThreadsLive(d: ThreadsEvent): void {
   const root = d.root_id || d.thread_id;
   if (!root || (d.kind !== 'read' && d.kind !== 'activity' && !d.gone)) return;
+  // Threads takes the same event after this list: its row says what the read left.
+  if (d.kind === 'read') { queueMicrotask(() => dashThreadsRead(root)); return; }
   dashCardsPatch('unread_threads', data => {
     const rows = data.threads || [], at = rows.findIndex(t => t.id === root);
     if (at < 0) return null;
-    if (d.kind === 'read' || d.gone) return {...data, threads: rows.filter((_, i) => i !== at), count: Math.max(0, (Number(data.count) || 0) - 1)};
+    if (d.gone) return {...data, threads: rows.filter((_, i) => i !== at), count: Math.max(0, (Number(data.count) || 0) - 1)};
     if (d.unread !== true) return null;
     const held = rows[at]!;
     const row = {...held, unread: (Number(held.unread) || 0) + Math.max(1, Number(d.unread_count) || 1), updated_at: new Date().toISOString()};
     return {...data, threads: [row, ...rows.filter((_, i) => i !== at)]};
+  });
+}
+function dashThreadsRead(root: string): void {
+  const rail = typeof threadsRow === 'function' ? threadsRow(root) : null;
+  if (!rail) return;
+  const left = threadUnread(rail);
+  dashCardsPatch('unread_threads', data => {
+    const rows = data.threads || [], held = rows.find(t => t.id === root);
+    if (!held) return null;
+    if (!left) return {...data, threads: rows.filter(t => t !== held), count: Math.max(0, (Number(data.count) || 0) - 1)};
+    return Number(held.unread) === left ? null : {...data, threads: rows.map(t => t === held ? {...t, unread: left} : t)};
   });
 }
 async function dashReread(state: DashState | null) {

@@ -92,7 +92,8 @@ interface ThreadsEvent {
   actor?: string | undefined;
   unread?: boolean | undefined;
   unread_count?: number | undefined;
-  read?: boolean | undefined;
+  /** The viewer's own read: the thread's read mark now. */
+  read?: { last_read_seq?: number | undefined } | undefined;
   pinned?: boolean | undefined;
   pinned_for_everyone?: boolean | undefined;
   counters?: { last_seq?: number | undefined; last_unread_seq?: number | undefined } | undefined;
@@ -355,6 +356,20 @@ function threadsAllRead(id: string) {
   if (dm && Number(THREADS.dms[dm])) { THREADS.dms = {...THREADS.dms, [dm]: 0}; if (typeof renderTree === 'function') renderTree(); }
   threadsSideRender();
 }
+// The viewer's own read (it comes only to them): that one thread's mark. The root's own read moves the row's mark
+// (threadsMarkedRead: what is past it, or new in a sub-thread, stays); a sub-thread's read cannot settle a row that sums
+// the whole subtree, which keeps its marks until the next read. A row left quiet leaves Catch up, and an open Catch up's
+// card for it goes. A 1:1 DM is not on the rail: its own read clears its count on its teammate.
+function threadsReadLive(d: ThreadsEvent) {
+  const root = d.root_id || d.thread_id;
+  if (!root) return;
+  const own = !d.thread_id || d.thread_id === root;
+  if (own) threadsMarkedRead(root, Number(d.read?.last_read_seq) || 0);
+  const row = threadsRow(root), dm = THREADS.roots[root]?.dm;
+  if (row ? threadUnread(row) || row.me?.activity : !(own && dm)) return;
+  threadsAllRead(root);
+  if (typeof catchUpGone === 'function') catchUpGone(root);
+}
 // Archive a thread from its row or its header: it leaves Threads and Catch up at once, and a short Undo puts it back.
 // The server refuses anyone who does not manage the thread.
 // An archived thread, here or in another window, leaves Catch up and its count at once; a 1:1 DM's count on its teammate
@@ -466,13 +481,7 @@ function threadsSync() {
   liveOn('threads', (d: ThreadsEvent) => {
     THREADS.gen++;
     if (d.kind === 'activity') void threadsActivity(d);
-    // The viewer's own read (it comes only to them): the root's row and its Catch up place clear; a card for it in an
-    // open Catch up goes.
-    else if (d.kind === 'read' && d.read) {
-      const root = d.root_id || d.thread_id;
-      threadsAllRead(root ?? '');
-      if (typeof catchUpGone === 'function') catchUpGone(root);
-    }
+    else if (d.kind === 'read' && d.read) threadsReadLive(d);
     else if (d.kind === 'pinned' && d.thread_id) void threadsPinned(d);
     else if (d.gone && d.thread_id) threadsGone(d.thread_id);
     else if (d.thread && !d.thread.parent_id) {

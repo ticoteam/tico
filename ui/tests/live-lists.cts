@@ -219,10 +219,21 @@ const holdNext = (match: Held['match']): Held => {
   await page.evaluate(() => { S.v2.needs = [{id: 'n1', kind: 'task', task_id: 'n1', line: 'Approve the budget'}]; S.v2.needsCount = 1; liveEmit('needs-list', S.v2.needs); });
   await pin('Needs attention').locator('li', {hasText: 'Approve the budget'}).waitFor();
   assert.equal((await pin('Needs attention').locator('.dash-big strong').textContent())?.trim(), '1');
+  // Threads holds Launch: unread to 7, read to 5.
+  await page.evaluate(() => {
+    THREADS.threads = [{id: 'th1', title: 'Launch', audience: 'company', last_seq: 7, last_unread_seq: 7, activity_seq: 7, me: {member: true, unread: 1, activity: true, last_read_seq: 5}}];
+  });
+  // Ana reads a sub-thread of Launch, then Launch to 6: what is left keeps both rows. Read to 7: off the card.
+  await emit('threads', {kind: 'read', thread_id: 'th1-sub', root_id: 'th1', read: {last_read_seq: 3}}, {kind: 'read', thread_id: 'th1', root_id: 'th1', read: {last_read_seq: 6}});
+  await settled();
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  assert.match(await pin('Unread threads').textContent() || '', /Launch/, 'a read short of the newest leaves the row');
+  assert.equal(await page.evaluate(() => THREADS.threads[0]?.['me'] && (THREADS.threads[0]['me'] as {unread: number}).unread), 1);
   // A new unread message on Hiring counts on its row (now first); Ana's read of Launch takes it off.
   await emit('threads', {kind: 'activity', thread_id: 'th2', root_id: 'th2', message_id: 'm9', unread: true, unread_count: 1, counters: {last_seq: 9, last_unread_seq: 9}},
     {kind: 'read', thread_id: 'th1', root_id: 'th1', read: {last_read_seq: 7}});
   await page.waitForFunction(() => !document.querySelector('.dash-grid')?.textContent?.includes('Launch'));
+  assert.equal(await page.evaluate(() => (THREADS.threads[0]?.['me'] as {unread: number}).unread), 0);
   assert.match(await pin('Unread threads').locator('li').first().textContent() || '', /Hiring[\s\S]*3 new/);
   // Taken off Hiring's members: the event names the thread alone, and its row goes.
   await emit('threads', {kind: 'members', thread_id: 'th2', gone: true});
