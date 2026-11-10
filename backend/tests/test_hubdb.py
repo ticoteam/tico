@@ -417,6 +417,14 @@ class Rule8Counting(HubCase):
         self.assertEqual(H.bot(self.conn, "seo")["state"], "quarantined", "a retry loop still stops")
         self.assertEqual(H.quarantine_reason(self.conn, "seo"), f"{H.QUARANTINE_TOTAL_AT} refusals today")
 
+    def test_a_person_refused_for_a_paused_bot_reads_when_it_is_back_not_how_bots_are_reviewed(self):
+        got = self.refused("target_inactive", H.task_create, self.conn, ANA, "Plan the week", "Draft it", "coach")
+        self.assertIn("until a person resumes it", got.detail)
+        self.assertNotIn("review", got.detail)
+        self.assertNotIn("refusals counts it", got.detail)
+        bot = self.refused("target_inactive", H.task_create, self.conn, SEO, "Plan the week", "Draft it", "coach")
+        self.assertIn("opens no review of you", bot.detail)
+
     def test_an_escape_quarantine_holds_until_a_human_clears_it(self):
         H.quarantine(self.conn, "cmo", "escape: the task note reaches outside the hub: secrets/mail.env")
         self.assertEqual(H.status(self.conn, "cmo")["state"], "quarantined")

@@ -458,3 +458,25 @@ def test_the_old_engines_tools_are_gone_and_a_call_by_one_says_what_to_use():
         )
         assert reply["result"]["structuredContent"]["error"] == "removed", name
     assert "bot" not in hubtools.offered_to(hubtools.BY_NAME["hub_task_unsnooze"])
+
+
+def test_task_show_text_names_people_and_bots_and_a_filed_task_by_its_title():
+    """`hub task show` names the owner, whose turn it is and who a requirement waits on from the answer's `actors`
+    (backend/names.py), never as `human:morgan`; a wait on a filed task reads as its title, with its id last."""
+    task = {
+        "id": "T1",
+        "title": "Import the Acme CRM",
+        "version": 3,
+        "owner_id": "human:morgan",
+        "stage": {"name": "To do"},
+        "pipeline": {"name": "General"},
+        "turn": {"state": "tasks", "who": "b1a8732e-0000", "line": "Check the CRM import"},
+        "to_leave": [{"requirement_id": "r1", "line": "Morgan says OK", "met": False, "who": "human:morgan"}],
+    }
+    actors = {"human:morgan": "Morgan Reed"}
+    text = hubtools.task_text(task, actors)
+    assert "owner Morgan Reed" in text and "(waits on Morgan Reed)" in text
+    assert "Turn: waits on Check the CRM import (b1a8732e-0000)" in text
+    assert "human:morgan" not in text
+    bot_turn = {**task, "turn": {"state": "bot", "who": "bot:builder", "line": "stopped early, try 2 of 3"}}
+    assert "Turn: Builder (stopped early" in hubtools.task_text(bot_turn, {"bot:builder": "Builder"})

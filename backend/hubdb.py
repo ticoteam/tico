@@ -2549,11 +2549,15 @@ def back_when(conn, slug, state):
     return f"is {state} until a person resumes it"
 
 
-def target_inactive(conn, slug, state):
-    """The refusal text for a write to a bot that is not running: when it is back, and how little it counts
-    against the sender, so the sender waits instead of retrying."""
+def target_inactive(conn, slug, state, sender=None):
+    """The refusal text for a write to a bot that is not running: when it is back, so the sender waits instead of
+    retrying. A bot sender is also told how little it counts against it; a person is never reviewed for a refusal, so
+    a person reads only when the bot is back."""
+    back = f"{actor_name(conn, bot_actor(slug))} {back_when(conn, slug, state)}."
+    if sender is not None and not is_bot(sender):
+        return f"{back} Send it again once it is back"
     return (
-        f"{actor_name(conn, bot_actor(slug))} {back_when(conn, slug, state)}. This refusal is not a repeat and opens no review of you; "
+        f"{back} This refusal is not a repeat and opens no review of you; "
         "only the day's limit of 30 refusals counts it. Send it again once it is back"
     )
 
@@ -2618,7 +2622,7 @@ def _reach(conn, actor, target, allow_planned=False, allow_held=False):
             and not (allow_held and state in HELD_STATES)
         ):
             if state in INACTIVE_STATES:
-                refuse(conn, actor, "target_inactive", target_inactive(conn, slug, state))
+                refuse(conn, actor, "target_inactive", target_inactive(conn, slug, state, actor))
             refuse(conn, actor, "reach", f"{actor_name(conn, resolved)} is {state}, not active")
     return resolved
 

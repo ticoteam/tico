@@ -1153,38 +1153,44 @@ def _why(args, field="why"):
     return {field: args[field]} if args.get(field) not in (None, "") else {}
 
 
-def _who(actor):
-    """An actor as people read it: its name when the server sends one, else its id."""
+def _who(actor, actors=None):
+    """An actor as people read it: its name when the server sends one (in the actor, or in the answer's `actors`
+    map, backend/names.py), else its id."""
     if isinstance(actor, dict):
         return str(actor.get("name") or actor.get("id") or "")
-    return str(actor or "")
+    return str((actors or {}).get(actor) or actor or "")
 
 
 def _ref(task):
     return f"#{task['number']}" if task.get("number") else str(task.get("id") or "")
 
 
-def turn_line(turn):
-    """The headline wait in one line: who has the turn and why, "Builder (stopped early, try 2 of 3)"."""
+def turn_line(turn, actors=None):
+    """The headline wait in one line: who has the turn and why, "Builder (stopped early, try 2 of 3)". A wait on a
+    task this one filed names that task, and its id last, for `hub task show`."""
     if not turn:
         return ""
-    head, line = _who(turn.get("who")) or str(turn.get("state") or ""), str(turn.get("line") or "")
+    who, line = turn.get("who"), str(turn.get("line") or "")
+    if isinstance(who, str) and who and ":" not in who:  # a task's id: the line is its title
+        return f"waits on {line or 'a filed task'} ({who})" + (f", until {turn['until']}" if turn.get("until") else "")
+    head = _who(who, actors) or str(turn.get("state") or "")
     text = f"{head} ({line})" if head and line else head or line
     return text + (f", until {turn['until']}" if turn.get("until") else "")
 
 
-def task_text(task):
+def task_text(task, actors=None):
     """`hub task show` as a bot reads it: the version; pipeline, stage and owner; whose turn it is; what it takes to
-    leave the stage, each requirement met or not with its id; the next stage; the task that filed it."""
+    leave the stage, each requirement met or not with its id; the next stage; the task that filed it. People are
+    named by `actors` (the answer's {id: name}, backend/names.py) where it names them."""
     stage = task.get("stage") or {}
     lines = [f"{_ref(task)} {task.get('title') or ''}   version {task.get('version')}"]
-    owner = _who(task.get("owner_id") or task.get("owner"))
+    owner = task.get("owner_name") or _who(task.get("owner_id") or task.get("owner"), actors)
     place = [(task.get("pipeline") or {}).get("name"), stage.get("name"), f"owner {owner}" if owner else None]
     lines.append(" · ".join(p for p in place if p))
     if task.get("status") not in (None, "open"):
         lines.append(f"Status: {task['status']}")
     if task.get("turn"):
-        lines.append("Turn: " + turn_line(task["turn"]))
+        lines.append("Turn: " + turn_line(task["turn"], actors))
     late = task.get("late")
     if late:
         lines.append(f"Late since {late.get('since')}" + (", with a person" if late.get("level") == "person" else ""))
@@ -1194,8 +1200,8 @@ def task_text(task):
         words = [f"  {'met' if item.get('met') else 'not met':<8} {item.get('line') or item.get('kind') or ''}"]
         if not item.get("met") and item.get("standing"):
             words.append(str(item["standing"]))  # how it stands: "Sent back: ...", "No task filed yet"
-        if not item.get("met") and _who(item.get("who")):
-            words.append(f"(waits on {_who(item['who'])})")
+        if not item.get("met") and _who(item.get("who"), actors):
+            words.append(f"(waits on {_who(item['who'], actors)})")
         answer = item.get("answer")
         if answer:
             words.append(f"answer: {answer.get('value')}" + (f", {answer['note']}" if answer.get("note") else ""))
@@ -1228,7 +1234,8 @@ def task_show(api, args):
     shown = api.get("tasks/" + args["id"])
     if not isinstance(shown, dict):
         return shown
-    return {**shown, "text": task_text(shown.get("task") if isinstance(shown.get("task"), dict) else shown)}
+    task = shown.get("task") if isinstance(shown.get("task"), dict) else shown
+    return {**shown, "text": task_text(task, shown.get("actors"))}
 
 
 @tool(

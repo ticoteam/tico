@@ -73,7 +73,7 @@ def _refuse(
     extra: Row = {}
     if missing:
         extra["missing"] = list(missing)
-    if then and row is not None:
+    if then and row is not None and _runs_commands(by):
         extra["next"] = _then(row, *then)
     if version is not None:
         extra["version"] = int(str(version) or 0)
@@ -91,6 +91,13 @@ def _refuse(
         refused.again = again
         raise
     raise AssertionError("refuse() always raises")  # pragma: no cover
+
+
+def _runs_commands(by: str) -> bool:
+    """Whether the caller acts through `hub` commands: a bot, or a bot acting for a person (the Assistant, BotOps).
+    A person in the app is told what is missing, never a `hub task ...` line."""
+    H = _h()
+    return bool(is_bot(by) or H.VIA.get())
 
 
 # The commands a refusal may offer, by name (`_then`).
@@ -124,7 +131,7 @@ def refusal_extra(conn: "sqlite3.Connection", viewer: str, again: Row) -> Row | 
         return None
     out: Row = {"version": int(row.get("version") or 0)}
     names = [str(name) for name in again.get("then") or () if name in THEN]
-    if names:
+    if names and _runs_commands(viewer):
         out["next"] = _then(row, *names)
     if again.get("missing") and row["status"] == "open" and row.get("visit") and row["stage"]["kind"] == "work":
         target = stage(conn, str(again["to"])) if again.get("to") else None
