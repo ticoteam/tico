@@ -18,7 +18,7 @@ each with an engineer who has access. Nothing is sent outside the team.
 2. **Write the acceptance checks**, as in `skills/write-a-delivery-plan/SKILL.md`.
 3. **Map the repositories and areas**, each with its owner from `knowledge/delivery.md`. An area with no owner is a question, not a guess.
 4. **Create the parent task** with the outcome and its checks. It stays open until every required child is done.
-5. **Split it.** Create one child per repository or area with `hub task child`, carrying the repository, the expected
+5. **Split it.** Create one child per repository or area with `hub task create --owner <builder> --parent <id> --title "..."`, carrying the repository, the expected
    behaviour, the dependencies and the checks.
 6. **Assign each child** to an engineer bot with write access to its repository, checked with `hub bot repos <slug>`. If none has it, say so on the parent.
 7. **Order the dependencies.** Name any release step the children need as its own item on the parent.
