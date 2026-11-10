@@ -60,18 +60,18 @@ def _parties_are_read_once_until_a_private_party_changes(store, builds):
     assert builds["n"] == 1, "a second request reads nothing"
 
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done' WHERE id='secret'")
+        c.execute("UPDATE tasks SET title='Renamed' WHERE id='secret'")
         c.execute(
             "INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
             "VALUES('open-plain','O','human:ana','bot:ops','open',0,?,?)",
             (H.now(), H.now()),
         )
     request(store, parties)
-    assert builds["n"] == 1, "status changes and public tasks do not move the clock"
+    assert builds["n"] == 1, "a title change and a public task do not move the clock"
 
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='bot:other' WHERE id='secret'")
-    assert parties_owner(store, "secret") == "bot:other"
+        c.execute("UPDATE tasks SET requester_id='bot:other' WHERE id='secret'")
+    assert parties_requester(store, "secret") == "bot:other"
     assert builds["n"] == 2
 
     with store.transaction() as c:
@@ -86,19 +86,19 @@ def _parties_are_read_once_until_a_private_party_changes(store, builds):
     assert set(request(store, parties)) == {"secret"}
 
 
-def parties_owner(s, tid):
-    return request(s, parties)[tid]["owner_id"]
+def parties_requester(s, tid):
+    return request(s, parties)[tid]["requester_id"]
 
 
 def _an_uncommitted_write_shares_nothing(store, builds):
     request(store, parties)
     with pytest.raises(RuntimeError):
         with store.transaction() as writer:
-            writer.execute("UPDATE tasks SET owner_id='bot:ghost' WHERE id='secret'")
+            writer.execute("UPDATE tasks SET requester_id='bot:ghost' WHERE id='secret'")
             # The writer sees its own change, and the change reaches no other reader.
-            assert parties(writer)["secret"]["owner_id"] == "bot:ghost"
+            assert parties(writer)["secret"]["requester_id"] == "bot:ghost"
             raise RuntimeError("roll back")
-    assert parties_owner(store, "secret") == "bot:other"  # the rolled-back owner never reaches a reader
+    assert parties_requester(store, "secret") == "bot:other"  # the rolled-back requester never reaches a reader
 
 
 def _access_rows_follow_only_the_access_keys(store, builds):
@@ -152,8 +152,8 @@ def _task_ids_and_room_tasks_are_read_once_until_a_task_or_room_moves(store):
     assert index_request(store) == ((ids, rooms), []), "a second request reads neither table"
 
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done' WHERE id='secret'")
-    assert index_request(store) == ((ids, rooms), []), "a status change moves nothing"
+        c.execute("UPDATE tasks SET title='Renamed' WHERE id='secret'")
+    assert index_request(store) == ((ids, rooms), []), "a title change moves nothing"
 
     with store.transaction() as c:
         c.execute(
