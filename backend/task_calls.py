@@ -320,16 +320,14 @@ def task_reassign(
 
 # ----------------------------------------------------------------------------- asks and answers
 def bring_in(conn: "sqlite3.Connection", actor: str, row: Row, who: str) -> None:
-    """Whoever an ask names must be able to read the task. On a private task that is only someone who already reads
-    it, or one person its owning bot brings in by asking them (hubdb.task_reach_refusal has the rule): they become a
-    reader of this task and nothing else. Anyone else is refused, so nobody is asked about a task they cannot open."""
-    H = _h()
-    if H.task_private_readable(conn, who, row):
-        return
-    why = H.task_reach_refusal(conn, actor, row, who)
-    if why:
-        _refuse(conn, actor, "private", str(why), row["id"])
-    H.task_reach(conn, actor, row, who)
+    """Whoever an ask names must be able to read the task already. On a private task anyone else is refused, with the
+    fix named (a person who can see it adds them under Who can see): nobody is asked about a task they cannot open,
+    and an ask makes nobody a reader (task_engine.not_shared; the engine checks it again for every ask)."""
+    from . import task_engine as E
+
+    unshared = E.not_shared(conn, row, who)
+    if unshared:
+        _refuse(conn, actor, "private", f"{unshared['cause']}. {unshared['fix']}.", row["id"])
 
 
 @_task_write()
@@ -361,7 +359,8 @@ def task_ask(
 
         from . import reach
 
-        reach.check(conn, SimpleNamespace(role="bot", actor=actor), target, "task", task_id=task_id)
+        reaches: Any = reach
+        reaches.check(conn, SimpleNamespace(role="bot", actor=actor), target, "task", task_id=task_id)
     bring_in(conn, actor, row, target)
     if is_bot(actor) and is_human(target):
         # What a bot puts in front of a person is plain: one or two short sentences, no ids or paths (rule 7).

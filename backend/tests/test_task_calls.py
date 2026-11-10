@@ -508,6 +508,29 @@ def test_an_ask_names_only_someone_who_can_read_the_task(c):
     H.task_ask(c, BUILDER, row["id"], BEN, "Which vendor do we keep?", seen_version=_version(c, row["id"]))
 
 
+def test_an_ask_on_a_private_task_makes_nobody_a_reader_and_says_how_to_share_it(c):
+    """Not even the bot that owns a private task no person is on brings a person in by asking them: the ask is refused
+    with the fix, and nothing is written. Once they are added under Who can see, the same ask goes."""
+    row = _new(c, by=HELPER, owner=BUILDER, private=True)
+    for ask in (
+        lambda: H.task_ask(c, BUILDER, row["id"], BEN, "Which vendor?", seen_version=_version(c, row["id"])),
+        lambda: E.add_requirement(
+            c, row["id"], BUILDER, "answer", BEN, "Which vendor?", seen_version=_version(c, row["id"])
+        ),
+    ):
+        with _refused("private") as refused:
+            ask()
+        assert "Who can see" in refused.value.detail
+    task = H.task(c, row["id"])
+    assert H.task_readers(task) == [] and not H.task_private_readable(c, BEN, task)
+    assert len(H.task_view(c, row["id"], BUILDER)["to_leave"]) == 1
+    asked = H.task_ask(c, BUILDER, row["id"], ANA, "Which vendor?", seen_version=_version(c, row["id"]))
+    with _refused("private"):
+        H.task_give(c, BUILDER, row["id"], asked["requirement_id"], BEN)
+    H.set_task_readers(c, BUILDER, row["id"], add=[BEN])
+    H.task_ask(c, BUILDER, row["id"], BEN, "Which vendor?", seen_version=_version(c, row["id"]))
+
+
 def test_a_bot_asks_only_a_person_in_its_reach_or_who_handed_it_the_task(c, monkeypatch):
     """By default a bot reaches its manager, its reports, its peers and its team (reach.py, mode nearby). An ask is a
     write to a person like a message is, so one outside that reach is refused and nothing is asked; the person who

@@ -229,6 +229,20 @@ def owner_for(stage_row: Row, assignee: str | None, current: str | None = None) 
     return stage_row.get("owner") or None
 
 
+def not_shared(conn: "sqlite3.Connection", row: Row, who: str) -> Row | None:
+    """Why `who` may not be asked about private task `row`, as a plain `{"who", "cause", "fix"}`, or None when they
+    may read it already. An ask never makes anyone a reader: a person who can see the task shares it first."""
+    H = _h()
+    if not H.task_private(conn, row) or H.task_private_readable(conn, who, row):
+        return None
+    name = H.actor_name(conn, who)
+    return {
+        "who": who,
+        "cause": f"{name} cannot read this private task",
+        "fix": f"Someone who can see it adds {name} under Who can see, then asks again",
+    }
+
+
 def shut_out(conn: "sqlite3.Connection", row: Row, target: Row, owner: str | None = None) -> Row | None:
     """Why private task `row` may not go into work stage `target`, as a plain `{"who", "cause", "fix"}`, or None when
     it may. The engine never adds a reader, an owner or a party to a private task (docs/pipelines-v3.md, "Private
@@ -1239,6 +1253,9 @@ def add_requirement(
     if kind == "ok" and not is_human(person):
         _refuse(conn, by, "task_requirement", "An OK is asked of a person", task_id)
     _may_name(conn, by, person, task_id)
+    unshared = not_shared(conn, row, str(person))
+    if unshared:
+        _refuse(conn, by, "private", f"{unshared['cause']}. {unshared['fix']}.", task_id, said=unshared)
     if not (line or "").strip():
         _refuse(conn, by, "task_requirement", "Say what you are asking, in one sentence", task_id)
     ts = H.now()
