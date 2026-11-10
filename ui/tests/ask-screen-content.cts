@@ -4,7 +4,9 @@ import type {Route} from 'playwright';
 //   drawn, then sends the letter's shown_hash;
 // - a letter whose proof does not load leaves Approve off; Send back still works;
 // - a file's OK reads the pinned version (GET /api/v2/files/{id}/versions/{n}) and shows it; Approve sends the OK's hash;
-// - a stage's OK (no grant) is off while its page loads, on once it is shown, and off when its page does not load.
+// - a stage's OK (no grant) is off while its page loads, on once it is shown, and off when its page does not load;
+// - a support report's OK shows the message and the version and install ID that go with it, off until they are read;
+// - an OK of a message shows every other field its content has too.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -40,8 +42,10 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
     need('r3', 'Approve the pricing notes', 12),
     need('r4', 'Approve the launch post', 13, ['page:p1']),
     need('r5', 'Approve the plan', 14, ['page:p2']),
+    need('r6', 'Send this report to Tico support?', 15),
+    need('r7', 'Approve the reply', 16),
   ];
-  const proof = gate(), page1 = gate();
+  const proof = gate(), page1 = gate(), compose = gate();
   const writes: {p: string; body: Record<string, unknown>}[] = [];
   const pdf = '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n';
   const pg = (id: string, title: string) => ({id, title, body: `${title} body.`, kind: 'doc', owner_id: 'bot:pm', updated_at: '2026-11-09T10:00:00Z'});
@@ -73,6 +77,9 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
       if (p === '/api/v2/oks/r4' || p === '/api/v2/oks/r5') return json({error: 'not_found'}, 404);
       if (p === '/api/v2/pages/p1') { await page1.p; return json({page: pg('p1', 'Launch post')}); }
       if (p === '/api/v2/pages/p2') return json({error: 'server_error'}, 500);
+      if (p === '/api/v2/oks/r6') return json({requirement_id: 'r6', subject: 'support:k1', content: {message: 'Sync stopped at 9am.', content_sha256: 'f'.repeat(64), include_ids: true}, shown_hash: '1'.repeat(64), standing: 'waiting', task_id: 't-r6'});
+      if (p === '/api/v2/support/compose') { await compose.p; return json({enabled: true, version: '0.6.0', install_id: 'inst-42', to: 'hq.tico.example'}); }
+      if (p === '/api/v2/oks/r7') return json({requirement_id: 'r7', subject: 'hq_reply:x', content: {subject: 'Re: refund', body: 'We refunded it.', to: 'jo@acme.example'}, shown_hash: '2'.repeat(64), standing: 'waiting', task_id: 't-r7'});
       if (r.method() === 'POST' && p.startsWith('/api/v2/')) {
         writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
         const m = /^\/api\/v2\/tasks\/(t-r\d)\/asks\/(r\d)\/(ok|answer)$/.exec(p);
@@ -141,6 +148,21 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
     await dialog.locator('.err').first().waitFor();
     await page.waitForTimeout(200);
     assert.equal(await approve.isDisabled(), true, 'a missing page leaves Approve off');
+
+    // r6: a support report: the message, then the ids that go with it; Approve waits for them.
+    await next('Send this report to Tico support?');
+    await page.waitForTimeout(300);
+    assert.equal(await approve.isDisabled(), true, 'Approve waits for the ids that go with it');
+    compose.open();
+    await dialog.getByText('Sync stopped at 9am.').waitFor();
+    await dialog.getByText('Install ID inst-42', {exact: false}).waitFor();
+    assert.match(await dialog.locator('.dc-doc').innerText(), /Version 0\.6\.0/);
+    await dialog.locator('[data-dc="approve"]:not([disabled])').waitFor();
+
+    // r7: a message's other fields (who it goes to) are shown with it.
+    await next('Approve the reply');
+    await dialog.getByText('We refunded it.').waitFor();
+    assert.match(await dialog.locator('.dc-doc').innerText(), /jo@acme\.example/);
 
     assert.deepEqual(errors, []);
     console.log('PASS: Approve waits for the letter proof, the file version and the stage pages; what does not load leaves it off.');
