@@ -313,15 +313,34 @@ class StrictDeployer(Deployer):
     """aws.Deployer, for an install with an id: every resource it reuses is proved first, and the ids of what it makes are
     kept (in `ids`, saved by `save`) as each is made."""
 
-    def __init__(self, plan, ec2, iam, ssm, account_id, say=print, sleep=time.sleep, ids=None, save=lambda: None):
+    def __init__(
+        self,
+        plan,
+        ec2,
+        iam,
+        ssm,
+        account_id,
+        say=print,
+        sleep=time.sleep,
+        ids=None,
+        save=lambda: None,
+        record="this install's saved state (state.json)",
+    ):
         if not plan.install_id:
             raise MissingInput("strict mode needs the install's id; refusing to touch AWS without it")
         super().__init__(plan, ec2, iam, ssm, account_id, say=say, sleep=sleep)
         self.ids = ids if ids is not None else {}
         self.save = save
+        self.record = record  # the file `ids` is saved in, named in a by-hand step
         self.j = Journal(self.ids, save, self.n, plan.name)
 
     def find_instance(self) -> dict | None:
+        """This install's server. Once its launch is recorded, that instance is read by its id and nothing else: a tag
+        listing is eventually consistent, and missing a server there must never lead to launching a second one."""
+        if self.ids.get("instance"):
+            inst = self.recorded_instance()
+            if inst is not None or self.ids.get("instance"):
+                return inst
         r = self.ec2.describe_instances(
             Filters=self.n.filters(self.p.name)
             + [{"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]}]
@@ -333,6 +352,30 @@ class StrictDeployer(Deployer):
                 "instance", i["InstanceId"], "EC2 instance", i["InstanceId"], i.get("ClientToken", ""), row_name(i)
             )
         return found[0] if found else None
+
+    def recorded_instance(self) -> dict | None:
+        """The recorded instance, read by its id: used in any state short of terminated. Terminated or unknown, it is
+        refused (never replaced by a launch), unless this install's own destroy journalled terminating it; then the
+        record is closed and None returned, so the next launch is a new server under a new ClientToken."""
+        iid = self.ids["instance"]
+        inst = described(self.ec2, "instance", iid, self.sleep)
+        state_now = ((inst or {}).get("State") or {}).get("Name", "")
+        if inst is not None and state_now not in ("shutting-down", "terminated"):
+            if not self.n.is_ours(inst.get("Tags"), self.p.name):
+                raise not_ours("EC2 instance", iid, self.n, self.p.name)
+            return inst
+        if iid in (self.ids.get("terminated") or []):
+            for k in ("instance", "instance_token", "volumes", "enis", "terminated"):
+                self.ids.pop(k, None)
+            self.save()
+            return None
+        why = f"is {state_now}" if inst is not None else "is not known to EC2 (after waiting about 30 seconds)"
+        raise MissingInput(
+            f"EC2 instance {iid}, which this install recorded launching, {why}, and setup did not terminate it; "
+            "refusing to launch another server. Check it in the EC2 console (Instances, tag "
+            f"{self.n.install_tag}={self.n.install_id}). If it is gone for good and should be replaced, remove "
+            f'"instance" and "instance_token" under "aws_ids" in {self.record} and run setup again.'
+        )
 
     def put_env(self, env_text: str, *, company_file=False) -> None:
         # The normalized team stays with the encrypted env, under the existing
@@ -763,7 +806,10 @@ class StrictDeployer(Deployer):
             args["SubnetId"] = subnet
         # Journalled before the call, and sent again on a retry: EC2 answers a repeated ClientToken with the instance it
         # already launched, so a lost answer never makes a second server.
-        token = self.j.token("instance")
+        # The token stays with the install for its life (instance_token): a launch call repeated for any reason is
+        # answered with the same server. Only this install's own destroy closes it (recorded_instance).
+        token = self.ids.get("instance_token") or self.j.token("instance")
+        self.ids["instance_token"] = token
         self.j.intend("instance", name=n, token=token)
         args["ClientToken"] = token
         for attempt in range(8):  # a new instance profile takes a few seconds to be usable
@@ -838,6 +884,36 @@ class StrictDeployer(Deployer):
             )
         if not at:
             self.ec2.associate_address(AllocationId=alloc, InstanceId=iid, AllowReassociation=False)
+
+
+NOT_FOUND = {
+    "instance": ("InvalidInstanceID.NotFound", "InvalidInstanceID.Malformed"),
+    "eip": ("InvalidAllocationID.NotFound",),
+    "sg": ("InvalidGroup.NotFound", "InvalidGroupId.Malformed"),
+}
+
+
+def described(ec2, kind: str, rid: str, sleep: Callable[[float], None] | None) -> dict | None:
+    """A recorded resource, read by its id (never by a listing). None when EC2 does not know it; with `sleep`, an unknown
+    id is read again after 1, 2, 4, 8 and 16 s first, as EC2 may not show a resource it just made."""
+    call, key, rows_key, arg = {
+        "instance": (ec2.describe_instances, "InstanceId", None, "InstanceIds"),
+        "eip": (ec2.describe_addresses, "AllocationId", "Addresses", "AllocationIds"),
+        "sg": (ec2.describe_security_groups, "GroupId", "SecurityGroups", "GroupIds"),
+    }[kind]
+    for wait in ((1, 2, 4, 8, 16) if sleep else ()) + (None,):
+        try:
+            out = call(**{arg: [rid]})
+            rows = [i for r in out["Reservations"] for i in r["Instances"]] if rows_key is None else out[rows_key]
+        except Exception as e:
+            if error_code(e) not in NOT_FOUND[kind]:
+                raise
+            rows = []
+        row = next((r for r in rows if r.get(key) == rid), None)
+        if row is not None or wait is None:
+            return row
+        sleep(wait)
+    return None
 
 
 def instance_profile(iam, name: str) -> dict | None:
@@ -966,7 +1042,19 @@ def refuse_unrecorded(ec2, iam, found: dict, names: Names, name: str, ids: dict)
         )
 
 
-def destroy(ec2, iam, ssm, found, say, sleep, names: Names, name: str, ids: dict, dns_done: bool = False) -> None:
+def destroy(
+    ec2,
+    iam,
+    ssm,
+    found,
+    say,
+    sleep,
+    names: Names,
+    name: str,
+    ids: dict,
+    dns_done: bool = False,
+    save: Callable[[], None] = lambda: None,
+) -> None:
     """Deletes what aws.discover found, each resource read again right before its delete, in order, and deleted only
     while it carries the install's tags and is the one the install recorded (ids); anything else is left alone and
     named."""
@@ -995,6 +1083,9 @@ def destroy(ec2, iam, ssm, found, say, sleep, names: Names, name: str, ids: dict
             (insts.append(i) if still("instance", i, rows, "InstanceId") else left(f"instance {i}"))
     if insts:
         refuse_foreign_attached(ec2, insts, name, names, ids)
+        # Journalled first: a later run that finds the recorded server terminated knows setup did it, and may make another.
+        ids["terminated"] = sorted({*(ids.get("terminated") or []), *insts})
+        save()
         ec2.terminate_instances(InstanceIds=insts)
         say("  waiting for the instance to terminate ...")
         ec2.get_waiter("instance_terminated").wait(InstanceIds=insts)

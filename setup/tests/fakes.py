@@ -103,6 +103,7 @@ class FakeEC2:
         self.calls, self.instances, self.sgs, self.eips = [], list(extra_instances), list(extra_sgs), []
         self.volumes = []  # {"VolumeId", "Tags", "Attachments": [{"InstanceId", "DeleteOnTermination"}]}
         self.enis = []  # {"NetworkInterfaceId", "TagSet", "Attachment": {"InstanceId", "DeleteOnTermination"}}
+        self.hidden = {}  # resource id: how many more listings miss it (hide)
 
     def _rec(self, name, **kw):
         self.calls.append((name, kw))
@@ -110,15 +111,31 @@ class FakeEC2:
     def called(self, name):
         return [kw for n, kw in self.calls if n == name]
 
+    def hide(self, rid: str, listings: int) -> None:
+        """EC2 is eventually consistent: `rid` (an instance, address or security group) is missing from the next
+        `listings` describe calls made by filter, while a describe naming its id still finds it."""
+        self.hidden[rid] = listings
+
+    def listed(self, rows: list[dict], key: str) -> list[dict]:
+        """The rows a listing (a describe by filter, no ids) shows: each hidden one is missed, one listing fewer."""
+        out = []
+        for r in rows:
+            if self.hidden.get(r.get(key), 0) > 0:
+                self.hidden[r[key]] -= 1
+                continue
+            out.append(r)
+        return out
+
     def describe_instances(self, Filters=(), InstanceIds=()):
         rows = [i for i in self.instances if not InstanceIds or i["InstanceId"] in InstanceIds]
-        return {"Reservations": [{"Instances": rows}]}
+        return {"Reservations": [{"Instances": rows if InstanceIds else self.listed(rows, "InstanceId")}]}
 
     def describe_security_groups(self, Filters):
-        return {"SecurityGroups": self.sgs}
+        return {"SecurityGroups": self.listed(self.sgs, "GroupId")}
 
     def describe_addresses(self, Filters=(), AllocationIds=()):
-        return {"Addresses": [a for a in self.eips if not AllocationIds or a["AllocationId"] in AllocationIds]}
+        rows = [a for a in self.eips if not AllocationIds or a["AllocationId"] in AllocationIds]
+        return {"Addresses": rows if AllocationIds else self.listed(rows, "AllocationId")}
 
     def describe_volumes(self, Filters):
         (ids,) = [f["Values"] for f in Filters if f["Name"] == "attachment.instance-id"]
@@ -182,25 +199,26 @@ class FakeEC2:
         if again:  # as EC2 does: a repeated ClientToken answers with the instance it already launched
             return {"Instances": [{"InstanceId": again[0]["InstanceId"]}]}
         root = (kw.get("BlockDeviceMappings") or [{}])[0].get("DeviceName", "/dev/xvda")
+        # i-1 for the first launch; a second one (a test of the second server setup must never make) gets i-2 and so on.
+        n = next(k for k in range(1, 1000) if not any(i["InstanceId"] == f"i-{k}" for i in self.instances))
+        iid, vid, nid = f"i-{n}", f"vol-{n}", f"eni-{n}"
         self.instances.append(
             {
-                "InstanceId": "i-1",
+                "InstanceId": iid,
                 "Tags": kw["TagSpecifications"][0]["Tags"],
                 "RootDeviceName": root,
-                "BlockDeviceMappings": [{"DeviceName": root, "Ebs": {"VolumeId": "vol-1"}}],
-                "NetworkInterfaces": [{"NetworkInterfaceId": "eni-1", "Attachment": {"DeviceIndex": 0}}],
+                "BlockDeviceMappings": [{"DeviceName": root, "Ebs": {"VolumeId": vid}}],
+                "NetworkInterfaces": [{"NetworkInterfaceId": nid, "Attachment": {"DeviceIndex": 0}}],
             }
         )
         if token:
             self.instances[-1]["ClientToken"] = token
         vol = [t["Tags"] for t in kw["TagSpecifications"] if t["ResourceType"] == "volume"]
-        attached = [{"InstanceId": "i-1", "DeleteOnTermination": True}]
-        self.volumes.append({"VolumeId": "vol-1", "Tags": vol[0] if vol else [], "Attachments": attached})
+        attached = [{"InstanceId": iid, "DeleteOnTermination": True}]
+        self.volumes.append({"VolumeId": vid, "Tags": vol[0] if vol else [], "Attachments": attached})
         eni = [t["Tags"] for t in kw["TagSpecifications"] if t["ResourceType"] == "network-interface"]
-        self.enis.append(
-            {"NetworkInterfaceId": "eni-1", "TagSet": eni[0] if eni else [], "Attachment": {**attached[0]}}
-        )
-        return {"Instances": [{"InstanceId": "i-1"}]}
+        self.enis.append({"NetworkInterfaceId": nid, "TagSet": eni[0] if eni else [], "Attachment": {**attached[0]}})
+        return {"Instances": [{"InstanceId": iid}]}
 
     def get_waiter(self, name):
         return FakeWaiter()

@@ -448,15 +448,20 @@ class FilteredEC2(fakes.FakeEC2):
 
     def describe_instances(self, Filters=(), InstanceIds=()):
         rows = [i for i in self.instances if not InstanceIds or i["InstanceId"] in InstanceIds]
-        return {"Reservations": [{"Instances": self._match(rows, list(Filters))}]}
+        states = [f["Values"] for f in Filters if f["Name"] == "instance-state-name"]
+        if states:  # an instance without a State is a running one
+            rows = [i for i in rows if (i.get("State") or {}).get("Name", "running") in states[0]]
+        rows = self._match(rows, list(Filters))
+        return {"Reservations": [{"Instances": rows if InstanceIds else self.listed(rows, "InstanceId")}]}
 
     def describe_security_groups(self, Filters):
-        return {"SecurityGroups": self._match(self.sgs, Filters)}
+        return {"SecurityGroups": self.listed(self._match(self.sgs, Filters), "GroupId")}
 
     def describe_addresses(self, Filters=(), AllocationIds=()):
         self.address_reads.append({"Filters": Filters, **({"AllocationIds": AllocationIds} if AllocationIds else {})})
         rows = [a for a in self.eips if not AllocationIds or a["AllocationId"] in AllocationIds]
-        return {"Addresses": self._match(rows, list(Filters))}
+        rows = self._match(rows, list(Filters))
+        return {"Addresses": rows if AllocationIds else self.listed(rows, "AllocationId")}
 
 
 class LaggingEC2(FilteredEC2):
@@ -2626,3 +2631,83 @@ def test_default_commands_read_no_new_local_file_that_can_stop_them(command):
         base = [a for a in BASE if a not in ("--non-interactive", "--domain", "tico.example.com")]
         code, out = go([*base, "--target", "aws", "--front-door", "caddy", "--name", "acme"], io=io)
         assert code == 1 and "Stopped; nothing was changed." in out and "Security group tico-acme:" in out, out
+
+
+# --- Codex's sixth review ------------------------------------------------------------------------------------------
+
+
+class NotFoundEC2(FilteredEC2):
+    """As EC2 answers a describe naming an id it does not know: InvalidInstanceID.NotFound / InvalidAllocationID.NotFound
+    / InvalidGroup.NotFound, never an empty list."""
+
+    def describe_instances(self, Filters=(), InstanceIds=()):
+        if InstanceIds and not any(i["InstanceId"] in InstanceIds for i in self.instances):
+            raise ClientError("InvalidInstanceID.NotFound")
+        return super().describe_instances(Filters, InstanceIds)
+
+    def describe_addresses(self, Filters=(), AllocationIds=()):
+        if AllocationIds and not any(a["AllocationId"] in AllocationIds for a in self.eips):
+            raise ClientError("InvalidAllocationID.NotFound")
+        return super().describe_addresses(Filters, AllocationIds)
+
+    def describe_security_groups(self, Filters=(), GroupIds=()):
+        if GroupIds:
+            rows = [g for g in self.sgs if g["GroupId"] in GroupIds]
+            if not rows:
+                raise ClientError("InvalidGroup.NotFound")
+            return {"SecurityGroups": rows}
+        return super().describe_security_groups(Filters)
+
+
+def test_a_recorded_instance_missing_from_a_listing_is_read_by_its_id_and_never_launched_again():
+    # Codex review 6, part 1, case 13: the launch's answer came back and its id was saved, the run stopped, and on the
+    # re-run EC2's tag listing (eventually consistent) did not show the instance yet: setup launched a second server with
+    # a new ClientToken and recorded it over the first. A recorded instance is now read by its id before any launch.
+    p, saved = hub_plan(domain=DOMAIN), []
+    ec2 = NotFoundEC2()
+    first = strict_dep(
+        p, ec2, IAM(), fakes.FakeSSM(), ids={}, save=lambda: saved.append(json.loads(json.dumps(first.ids)))
+    )
+    iid = first.launch("#!/bin/bash\n", "hub-hotmic", "sg-1")
+    token = ec2.called("run_instances")[0]["ClientToken"]
+    assert saved[-1]["instance"] == iid and saved[-1]["instance_token"] == token  # kept for the install's life
+    ec2.hide(iid, 99)  # every listing misses it; a describe by its id finds it
+    again = strict_dep(p, ec2, IAM(), fakes.FakeSSM(), ids=json.loads(json.dumps(saved[-1])))
+    again.preflight()
+    assert again.launch_or_reuse({"sg": "sg-1", "alloc": ""}, "#!/bin/bash\n") == (iid, False)
+    assert len(ec2.called("run_instances")) == 1 and again.ids["instance"] == iid
+    assert again.ids["instance_token"] == token
+
+    # Read by its id and found terminated, or not found at all: refused with the step to take by hand, never launched.
+    for gone in ("terminated", "shutting-down", "unknown"):
+        if gone == "unknown":
+            ec2.instances = []
+        else:
+            ec2.instances[0]["State"] = {"Name": gone}
+        slept = []
+        d = owned.StrictDeployer(
+            p, ec2, IAM(), fakes.FakeSSM(), ACCOUNT, sleep=slept.append, ids=json.loads(json.dumps(saved[-1]))
+        )
+        with pytest.raises(MissingInput) as e:
+            d.launch_or_reuse({"sg": "sg-1", "alloc": ""}, "#!/bin/bash\n")
+        said = str(e.value)
+        assert iid in said and "refusing to launch another" in said and '"instance"' in said, said
+        assert len(ec2.called("run_instances")) == 1 and d.ids["instance"] == iid, gone
+        if gone == "unknown":  # EC2 may not know a just-launched id yet: waited for, a bounded while
+            assert slept == [1, 2, 4, 8, 16]
+        else:
+            ec2.instances[0].pop("State")
+
+    # Terminated by this install's own destroy (journalled before the call): a new server, under a new ClientToken.
+    ec2 = NotFoundEC2()
+    ids = {}
+    d = strict_dep(p, ec2, IAM(), fakes.FakeSSM(), ids=ids)
+    d.launch_or_reuse({"sg": "sg-1", "alloc": ""}, "#!/bin/bash\n")
+    ec2.terminate_instances = lambda **kw: [i.update(State={"Name": "terminated"}) for i in ec2.instances]
+    owned.destroy(ec2, IAM(), fakes.FakeSSM(), {"instance": ["i-1"]}, print, lambda s: None, HUB_ID, "hotmic", ids)
+    assert ids["terminated"] == ["i-1"]
+    d = strict_dep(p, ec2, IAM(), fakes.FakeSSM(), ids=ids)
+    assert d.launch_or_reuse({"sg": "sg-1", "alloc": ""}, "#!/bin/bash\n") == ("i-2", True)
+    tokens = [kw["ClientToken"] for kw in ec2.called("run_instances")]
+    assert ids["instance"] == "i-2" and len(set(tokens)) == 2 and ids["instance_token"] == tokens[-1]
+    assert "terminated" not in ids

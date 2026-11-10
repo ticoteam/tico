@@ -395,7 +395,16 @@ def run_runner(args, io: IO, deps: Deps) -> int:
                 save_aws_runner(s, plan, label, s.aws_ids.get("instance", ""))
 
             d = owned.StrictDeployer(
-                plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep, ids=s.aws_ids, save=keep_ids
+                plan,
+                ec2,
+                iam,
+                ssm,
+                account,
+                say=io.say,
+                sleep=deps.sleep,
+                ids=s.aws_ids,
+                save=keep_ids,
+                record=str(state.home() / "runners" / f"{runner_key(s, plan.name)}.json"),
             )
             d.preflight()
         else:

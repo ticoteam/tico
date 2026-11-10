@@ -478,7 +478,16 @@ def deployer(s: Settings, plan, clients, io: IO, deps: Deps) -> awsmod.Deployer:
     if not owned.strict(s.asset_prefix):
         return awsmod.Deployer(plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep)
     return owned.StrictDeployer(
-        plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep, ids=s.aws_ids, save=lambda: _save(s)
+        plan,
+        ec2,
+        iam,
+        ssm,
+        account,
+        say=io.say,
+        sleep=deps.sleep,
+        ids=s.aws_ids,
+        save=lambda: _save(s),
+        record=str(state.home() / s.domain / "state.json"),
     )
 
 
@@ -1666,6 +1675,7 @@ def _destroy_strict(args, io: IO, deps: Deps, saved: dict) -> int:
         client, zid, sets = records
         route53.delete(client, zid, sets, names)  # first: the name never points at an address AWS may give someone else
         io.say("  DNS records deleted.")
+    ids = saved.setdefault("aws_ids", {})
     owned.destroy(
         ec2,
         iam,
@@ -1675,8 +1685,9 @@ def _destroy_strict(args, io: IO, deps: Deps, saved: dict) -> int:
         sleep=deps.sleep,
         names=names,
         name=name,
-        ids=saved.get("aws_ids") or {},
+        ids=ids,
         dns_done=records is not None,
+        save=lambda: state.save(domain, {**state.load(domain)[0], "aws_ids": ids}),
     )
     return 0
 
