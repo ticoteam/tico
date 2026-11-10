@@ -3167,7 +3167,8 @@ def prime_job_checks(c, jobs):
     snoozed = {}
     for part in H.chunks(tasks):
         for row in c.execute(
-            "SELECT * FROM snoozes WHERE task_id IN (%s) AND ended_at IS NULL ORDER BY rowid" % ",".join("?" * len(part)),
+            "SELECT * FROM snoozes WHERE task_id IN (%s) AND ended_at IS NULL ORDER BY rowid"
+            % ",".join("?" * len(part)),
             part,
         ):
             snoozed.setdefault(row["task_id"], row)
