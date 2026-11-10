@@ -88,9 +88,14 @@ def test_shards_split_a_range() -> None:
     assert shards[0] == [1, 4, 7, 10]
 
 
-def test_perf_measures_one_pass() -> None:
-    out = perf.measure(30, profile=False)
-    assert out["tasks"] == 30 and out["statements"] > 0 and out["seconds"] >= 0
+def test_one_pass_over_three_thousand_idle_tasks_with_queued_wakes_is_quick() -> None:
+    """Speed: every pass looks at every open task. 30 tasks made through the engine, copied to 3,000 (perf.clone), each
+    with its wake queued and nothing due. About 0.4 s here; when wakes were read with LIKE, 2,000 tasks took 3.1 s, and
+    the time grew with the square of the tasks. Live runs are read once a pass, not once a task."""
+    out = perf.measure(30, profile=False, copies=99, queued=True)
+    assert out["tasks"] == 3000 and out["pass"] == {}
+    assert out["live_reads"] == 1
+    assert out["seconds"] < 2.0, out["top_statements"]
 
 
 def test_a_world_puts_the_environment_back() -> None:

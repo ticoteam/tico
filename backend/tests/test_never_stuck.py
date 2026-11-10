@@ -793,4 +793,80 @@ def test_a_pass_finds_wakes_on_the_wake_key_index_and_reads_live_runs_once(c, ge
     for sql in reads:
         plan = " | ".join(str(found[-1]) for found in c.execute("EXPLAIN QUERY PLAN " + sql).fetchall())
         assert "SCAN m" not in plan and "SCAN messages" not in plan, (sql, plan)
+        # A read of the task's wakes is not by the bot's own messages either (messages_to_delivered): a bot's every
+        # message, read for each task.
+        task_wakes_read = "wake_key >=" in sql and "FROM attempts" not in sql
+        assert not task_wakes_read or "messages_wake_key" in plan, (sql, plan)
     assert sum("lease_until >" in s for s in statements) == 4  # one per pass and one per rules check
+
+
+def _private(c, title, owner, pipeline="general"):
+    made = H.task_create(c, ANA, title, "Only us.", owner, pipeline=pipeline, private=True, lint=False)
+    assert H.task_private(c, H.task(c, made["id"])) and H.task_readers(H.task(c, made["id"])) == []
+    return made["id"]
+
+
+def test_a_private_task_never_gains_a_reader_and_goes_to_a_person_who_reads_it_not_a_manager_bot_who_cannot(
+    c, general, later
+):
+    """Private tasks: same engine, and who can see them does not change. The engine never adds a reader: the manager
+    bot's look and its tries are skipped when it cannot read the task, which goes to a person who can. Health names no
+    task's title."""
+    from backend import health
+
+    stages = ({"name": "Draft", "owner": ANA, "expected_minutes": 60, "requirements": [{"kind": "owner_done"}]},)
+    X.pipeline(c, "ops", "Ops", stages, manager=MANAGER)
+    hers = _private(c, "Sort the March invoices", ANA, "ops")
+    assert H.task(c, hers)["owner_id"] == ANA
+    assert later(minutes=61) == {"late": 1}  # late, and the manager bot that cannot read it is not sent to look
+    assert later(hours=3) == {}  # her own turn already: nothing is added
+    assert H.task_readers(H.task(c, hers)) == [] and X.wakes(c, hers, MANAGER) == []
+    X.pipeline(c, "intake", "Intake", ({"name": "Triage", "requirements": [{"kind": "owner_done"}]},), manager=MANAGER)
+    nobodys = _private(c, "Sort the April invoices", ANA, "intake")  # no owner: the manager bot's turn to pick one
+    assert later(seconds=10) == {"to_person": 1} and _visit(c, nobodys)["person_id"] == ANA
+    assert H.task_readers(H.task(c, nobodys)) == [] and X.wakes(c, nobodys, MANAGER) == []
+    built = _private(c, "Draft the salary review", BUILDER)
+    for gap in (0, 120, 900, 3600):
+        if gap:
+            assert later(seconds=gap) == {"woken": 1}
+        X.ran(c, built, BUILDER)
+    assert later(seconds=120) == {"to_person": 1}  # three tries: the manager bot cannot read it, so its requester
+    assert _ladder(c, built)[0] == "person" and _visit(c, built)["person_id"] == ANA
+    assert H.task_readers(H.task(c, built)) == [] and X.wakes(c, built, MANAGER) == []
+    shared = _private(c, "Draft the bonus plan", BUILDER)
+    H.set_task_readers(c, ANA, shared, add=[MANAGER])  # a person shared it with the manager bot
+    for gap in (0, 120, 900, 3600):
+        if gap:
+            assert later(seconds=gap) == {"woken": 1}
+        X.ran(c, shared, BUILDER)
+    assert later(seconds=120) == {"to_manager": 1, "woken": 1} and _ladder(c, shared) == ("manager", 1)
+    reading = repr(health.never_stuck_reading(c))
+    assert not any(title in reading for title in ("invoices", "salary review", "bonus plan"))
+
+
+def test_a_bot_whose_ok_a_stage_needs_is_woken_beside_the_owner_and_a_lost_wake_of_it_breaks_a_rule(c, general, later):
+    """A stage needs the owner's work and the reviewer's OK: both have a turn from the start, so both are woken, the
+    reviewer once for the stage's ask (keyed by its requirement). The next pass writes a lost wake again, and a bot
+    with a turn that was never told breaks rule 2 though the owner has a next try."""
+    stages = (
+        {
+            "name": "Check",
+            "owner": BUILDER,
+            "requirements": [{"kind": "owner_done"}, {"kind": "ok", "person": REVIEWER, "line": "OK it"}],
+        },
+    )
+    X.pipeline(c, "copy", "Copy", stages, manager=MANAGER)
+    row = X.new_task(c, ANA, "Write the launch note", "copy")
+    assert _queued(c, row["id"]) == [BUILDER, REVIEWER]
+    assert _said(c, row["id"], REVIEWER) and _said(c, row["id"], REVIEWER)[-1] == "You are asked: OK it"
+    asked = c.execute("SELECT id FROM requirements WHERE stage_id='copy-check' AND kind='ok'").fetchone()[0]
+    assert [key for key, _ in X.wakes(c, row["id"], REVIEWER)] == [f"{row['id']}:{row['visit']['id']}:ask:{asked}"]
+    lose = "DELETE FROM jobs WHERE state='queued' AND bot_id='reviewer' AND message_id IN (SELECT id FROM messages "
+    lose += "WHERE wake_key LIKE ?)"
+    c.execute(lose, (row["id"] + ":%",))
+    later(seconds=10)
+    assert _queued(c, row["id"]) == [BUILDER, REVIEWER]  # a lost wake is written again
+    c.execute(lose, (row["id"] + ":%",))
+    c.execute("DELETE FROM messages WHERE recipient_id=? AND wake_key LIKE ?", (REVIEWER, row["id"] + ":%"))
+    # Never told at all (as before, when entry woke only the owner): the owner's next try does not cover it.
+    assert NS.rules_hold(c) == [f"2: task {row['id']} is {REVIEWER}'s turn with no run, no wake and no next try"]
