@@ -454,14 +454,14 @@ def lost(conn: "sqlite3.Connection", task: Row, actor: str | None, *, whole_visi
     """The wake about this task that `actor` was owed and never got: its newest one in this visit since the visit last
     changed (by order; with `whole_visit`, in the whole visit), when it queued a run and that run never started (its
     job is gone, or ended with no run of it started), and no run of this bot on the task started on a wake written
-    after it. `id`, `body`. None when nothing was lost."""
+    after it. `id`, `body`, and `refs`: what woke it, which a wake written again keeps. None when nothing was lost."""
     H = _h()
     if not H.is_bot(actor):
         return None
     visit: Row = task.get("visit") or {}
     found = conn.execute(
         "SELECT m.id, m.body, m.rowid, json_extract(m.refs, '$.job'), "
-        "(SELECT j.state FROM jobs j WHERE j.id = m.id) FROM messages m "
+        "(SELECT j.state FROM jobs j WHERE j.id = m.id), m.refs FROM messages m "
         f"WHERE {_KEY} AND m.rowid > ? AND +m.recipient_id=? "
         "AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 ORDER BY m.rowid DESC LIMIT 1",
         (*_range(f"{task['id']}:{visit.get('id')}"), 0 if whole_visit else _marks(task)[1], actor),
@@ -473,7 +473,9 @@ def lost(conn: "sqlite3.Connection", task: Row, actor: str | None, *, whole_visi
         "AND m.rowid > ?)) LIMIT 1",
         (H.actor_id(actor), found[0], *_on_task(conn, task), found[2]),
     ).fetchone()
-    return None if taken else {"id": str(found[0]), "body": str(found[1] or "")}
+    if taken:
+        return None
+    return {"id": str(found[0]), "body": str(found[1] or ""), "refs": H._json(found[5], {}) or {}}
 
 
 def inbox(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | None:

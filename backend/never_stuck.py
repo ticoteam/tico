@@ -285,7 +285,23 @@ def _recover(
                 woken.add(bot)
             continue
         key = f"{row['id']}:{visit['id']}:lost:{_slug(bot)}:{level}:{tries}:{epoch}"
-        if task_wakes.add(conn, row, bot, visit, lost["body"], level=level, try_n=tries, wake_key=key):
+        # The lost wake's references ride on (an automation's run and step, what woke it), so the run on the new one
+        # is still that work: its turn answers the automation and is charged to it.
+        refs = lost["refs"]
+        trigger = refs.get("trigger") if refs.get("trigger") != "task_turn" else None
+        if task_wakes.add(
+            conn,
+            row,
+            bot,
+            visit,
+            lost["body"],
+            level=level,
+            try_n=tries,
+            wake_key=key,
+            refs=refs,
+            trigger=trigger,
+            source=refs.get("trigger_source"),
+        ):
             done["woken"] += 1
             woken.add(bot)
         else:
