@@ -138,11 +138,10 @@ ANSWERS_SQL = "SELECT * FROM answers WHERE visit_id IN (%s) AND undone_at IS NUL
 
 
 def _by(conn: "sqlite3.Connection", sql: str, column: str, keys: list[str]) -> dict[str, list[Row]]:
-    """{key: its rows} for `sql` over many keys, a few statements in all."""
+    """{key: its rows} for `sql` over many keys, one statement however many (the keys go in as one JSON list)."""
     out: dict[str, list[Row]] = {key: [] for key in keys}
-    for start in range(0, len(keys), 500):
-        part = keys[start : start + 500]
-        for row in _rows(conn.execute(sql % ",".join("?" * len(part)), part)):
+    if keys:
+        for row in _rows(conn.execute(sql % "SELECT value FROM json_each(?)", (json.dumps(keys),))):
             out[str(row[column])].append(row)
     return out
 

@@ -162,6 +162,29 @@ def test_forward_needs_room_back_and_close_never_do_and_the_oldest_takes_a_free_
     assert E.move(c, third["id"], E.CLOSED, ANA)["status"] == "closed"  # a person need not say why
 
 
+def test_a_persons_ok_that_takes_a_bots_work_to_done_accepts_the_run_that_made_it(c, build):
+    import json
+
+    from backend import task_calls
+
+    row = X.new_task(c, ANA, "Build the importer", "eng")
+    E.fill_open_slots(c)
+    builder_run = H.turn_start(c, "bot:builder", "builder", task_id=row["id"])["id"]
+    seen = E.task(c, row["id"])["version"]
+    task_calls.task_done(c, "bot:builder", row["id"], seen_version=seen)  # the bot's own done is no verdict
+    review = E.task(c, row["id"])
+    assert review["stage"]["name"] == "Review" and review["owner_id"] == "bot:reviewer"
+    ok = c.execute("SELECT id FROM requirements WHERE stage_id=? AND kind='ok'", (review["stage_id"],)).fetchone()[0]
+    assert task_calls.task_answer(c, ANA, row["id"], ok, "ok")["status"] == "done"
+    # Ana's OK (the cause of the engine's move) accepted the run that produced the work: the builder's, not the
+    # reviewer's, which never ran on it.
+    got = [
+        (r[0], r[1], json.loads(r[2])["outcome"])
+        for r in c.execute("SELECT target, actor, detail FROM events WHERE action='turn.outcome'")
+    ]
+    assert got == [(builder_run, ANA, "accepted")]
+
+
 def test_skipping_a_stage_counts_its_requirements_as_missing(c, build):
     row = X.new_task(c, ANA, "Build the importer", "eng")
     with _refused("task_not_met"):

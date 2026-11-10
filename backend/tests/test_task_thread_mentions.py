@@ -4,7 +4,7 @@ Other threads, people's own posts and bot recipients are unchanged. Fictional pe
 following), ben (the owner, who follows).
 """
 
-from backend import question_tasks as QT, threads
+from backend import threads
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.helpers.task_news_delivery import budget_thread, delivery, rows, unread_for
@@ -74,21 +74,6 @@ def test_an_old_bot_delivery_in_a_task_thread_no_longer_counts_as_unread(api):
         )
     assert delivery(api, said["id"], "human:ana")["state"] == "pending"
     assert unread_for(api, "human:ana", thread_id) == 0
-
-
-def test_a_bot_question_task_for_a_person_who_stopped_following_still_needs_them(api):
-    with api.app.state.store.transaction() as c:  # Ben's task for ops; he stops following its thread
-        parent = H.task_create(c, "human:ben", "Budget review", "Details.", "bot:ops", lint=False)
-        c.execute(
-            "UPDATE thread_followers SET following=0 WHERE thread_id=? AND actor='human:ben'",
-            (parent["conversation_id"],),
-        )
-        asked = QT.ask_plain(
-            c, "bot:ops", "human:ben", "Is the total final? If yes, I'll send it to the board.", parent=parent
-        )
-        assert QT.is_open(asked) and H.unanswered_ask(c, parent)["id"] == asked["id"]
-        # The question is his own task, so it reaches him through Needs you, not the thread.
-        assert asked["id"] in {t["id"] for t in H.needs_you(c, "human:ben")["tasks"]}
 
 
 def test_a_bot_message_that_mentions_the_person_in_a_task_thread_reaches_them(api):

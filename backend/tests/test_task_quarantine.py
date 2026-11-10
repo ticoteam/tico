@@ -914,24 +914,6 @@ def test_a_scoped_stop_keeps_the_named_outside_action_for_review_after_clear(api
     assert job_state(api, attempt["job_id"]) == "uncertain"
 
 
-def test_a_task_hold_keeps_other_task_holds_and_clear_does_not_resume_a_paused_bot(api):
-    machine = task_bot(api, lanes=True)
-    task = new_task(api, "Check the export")
-    attempt = started(api, machine)
-    with api.app.state.store.transaction() as c:
-        from backend import task_holds
-
-        task_holds.put(c, task["id"], "snoozed", H.now(), until_at=H.shift(H.now(), days=2), reason="Waiting for data")
-    refusals(api, attempt, task)
-    with api.app.state.store.transaction() as c:
-        H.status_set(c, "human:ana", "ops", state="paused", reason="Maintenance")
-    post(api, "bots/ops/quarantine/clear", {})
-    with api.app.state.store.read() as c:
-        assert H.bot(c, "ops")["state"] == "paused"
-        assert H.task(c, task["id"])["snoozed_note"] == "Waiting for data"
-    assert holds(api) == []
-
-
 def test_a_held_task_cannot_ride_along_with_another_tasks_next_run(api):
     machine = task_bot(api, lanes=True)
     task = new_task(api, "Check the export")
@@ -1111,22 +1093,6 @@ def _held_notes(api, machine, source, n):
     with api.app.state.store.read() as c:
         assert H.note(c, pending["id"])["carried_by"] == resumed["id"]
         assert H.message(c, message["id"])["read_at"] is not None
-
-
-def test_a_held_task_does_not_use_the_bots_only_automatic_task_place(api):
-    from backend.tests.helpers.auto_tasks import set_cap
-
-    machine = task_bot(api, lanes=True)
-    task = new_task(api, "Check the export")
-    attempt = started(api, machine)
-    set_cap(api, 1)
-    other = new_task(api, "Check the archive")
-    assert claim(api, machine) is None
-    refusals(api, attempt, task)
-    post(api, f"attempts/{attempt['id']}/renew", {}, machine["token"])
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
-    assert get(api, "bots/ops")["task_flow"]["going"] == 0
-    assert started(api, machine)["task"]["id"] == other["id"]
 
 
 def fresh_work(api, token, n):

@@ -312,6 +312,24 @@ def test_a_late_task_that_waits_on_a_person_gets_one_look_from_the_manager_bot(c
     assert later(days=30) == {} and _visit(c, mine)["late_told_at"] is None  # the day is for bots only
 
 
+def test_a_persons_task_is_late_only_past_its_due_date_and_nobody_is_chased(c, general, later):
+    # A stage that expects everyone, people too, to take a minute: a person's own task still goes by its due date (C6).
+    stage = {"name": "Do", "owner": ANA, "expected_minutes": 1, "requirements": [{"kind": "owner_done"}]}
+    X.pipeline(c, "ops", "Operations", (stage,), manager=MANAGER)
+    due = (START + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    mine = X.new_task(c, ANA, "Renew the lease", "ops", assignee=ANA)["id"]
+    c.execute("UPDATE tasks SET due_at=? WHERE id=?", (due, mine))
+    undated = X.new_task(c, ANA, "Call the bank", "ops", assignee=ANA)["id"]
+    assert later(minutes=2) == {} and _visit(c, mine)["late_told_at"] is None
+    assert later(days=29, hours=23) == {}
+    assert later(hours=1) == {"late": 1}  # past its due date: the label only
+    assert _visit(c, mine)["late_told_at"] and _ladder(c, mine) == ("owner", 0)
+    assert X.wakes(c, mine, MANAGER) == [] and _queued(c, mine) == []  # nobody is woken about a person's task
+    assert later(days=30) == {}  # once
+    assert _visit(c, undated)["late_told_at"] is None  # no due date: never Late
+    assert _states(c, mine) == [("person", ANA)]
+
+
 def test_a_late_look_whose_wake_was_lost_is_written_again_once(c, general, later):
     """Being told Late is not the look: when the manager bot's wake for it goes missing, the next pass writes it again,
     with the same words, once, on the same budget and only to a manager bot that reads the task."""
@@ -762,7 +780,7 @@ def test_each_rule_that_breaks_is_named(c, general, later, monkeypatch):
     assert broken() == ["4"]
     c.execute("UPDATE task_move_guards SET open=0, task_id=NULL WHERE id=1")
     # 3: a person's turn that is not in their list exactly once.
-    monkeypatch.setattr(NS.W, "needs", lambda conn, person: [])
+    monkeypatch.setattr(NS.W, "needs_by_person", lambda conn: {})
     assert NS.rules_hold(c) == [f"3: task {mine} shows 0 times in {ANA}'s Needs you, not 1"]
     monkeypatch.undo()
     # 1: an open task that waits on nothing.
@@ -853,6 +871,18 @@ def test_a_pass_finds_wakes_on_the_wake_key_index_and_reads_live_runs_once(c, ge
     assert sum("lease_until >" in s for s in statements) == 4  # one per pass and one per rules check
 
 
+def test_the_rules_check_reads_everyones_needs_you_once(c, general, later, monkeypatch):
+    """Needs you is read for every person together, once a check: asking for each person in turn read every open task
+    again for each of them."""
+    X.new_task(c, ANA, "Call the bank", assignee=ANA)
+    X.new_task(c, ANA, "Renew the lease", assignee="human:ben")
+    reads = []
+    whole = NS.W.needs_by_person
+    monkeypatch.setattr(NS.W, "needs_by_person", lambda conn: reads.append(1) or whole(conn))
+    assert NS.rules_hold(c) == []
+    assert len(reads) == 1
+
+
 def _private(c, title, owner, pipeline="general"):
     made = H.task_create(c, ANA, title, "Only us.", owner, pipeline=pipeline, private=True, lint=False)
     assert H.task_private(c, H.task(c, made["id"])) and H.task_readers(H.task(c, made["id"])) == []
@@ -871,7 +901,7 @@ def test_a_private_task_never_gains_a_reader_and_goes_to_a_person_who_reads_it_n
     X.pipeline(c, "ops", "Ops", stages, manager=MANAGER)
     hers = _private(c, "Sort the March invoices", ANA, "ops")
     assert H.task(c, hers)["owner_id"] == ANA
-    assert later(minutes=61) == {"late": 1}  # late, and the manager bot that cannot read it is not sent to look
+    assert later(minutes=61) == {}  # her own task is never chased (no due date: never Late); no bot looks
     assert later(hours=3) == {}  # her own turn already: nothing is added
     assert H.task_readers(H.task(c, hers)) == [] and X.wakes(c, hers, MANAGER) == []
     X.pipeline(c, "intake", "Intake", ({"name": "Triage", "requirements": [{"kind": "owner_done"}]},), manager=MANAGER)
@@ -941,14 +971,14 @@ def test_the_rules_check_reads_a_persons_needs_you_once_and_finds_each_task_in_i
             reads["items"] += 1
             return super().__getitem__(key)
 
-    real = W.needs
+    real = W.needs_by_person
 
-    def needs(conn, person):
+    def needs(conn):
         reads["needs"] += 1
-        found = [Item(item) for item in real(conn, person)]
-        return found + [Item(kind="task", task_id=f"other-{n}") for n in range(5_000 - len(found))]
+        found = [Item(item) for item in real(conn)[ANA]]
+        return {ANA: found + [Item(kind="task", task_id=f"other-{n}") for n in range(5_000 - len(found))]}
 
-    monkeypatch.setattr(NS.W, "needs", needs)
+    monkeypatch.setattr(NS.W, "needs_by_person", needs)
     assert NS.rules_hold(c) == []
     assert reads["needs"] == 1
     assert reads["items"] <= 5_000 + 10 * len(tasks), reads  # each item looked at once, not once per task

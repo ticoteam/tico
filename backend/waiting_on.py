@@ -21,6 +21,7 @@ The nine states, in headline order:
     by_hand   it sits in a stage that tasks leave by hand
 """
 
+import json
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from itertools import chain
@@ -238,7 +239,7 @@ def _turn(
     Paused wait's line is the cause as a sentence: "Builder has no computer"."""
     if not who or is_human(who):
         return Wait(PERSON, who, line, requirement_id, since, ask=ask)
-    cause = task_wakes.cannot_run(conn, who, seen)
+    cause = task_wakes.cannot_run(conn, who, seen) or task_wakes.task_cause(conn, row["id"], who)
     if cause:
         return Wait(PAUSED, who, task_wakes.cause_line(conn, who, cause), requirement_id, since, ask=ask)
     return Wait(BOT, who, line, requirement_id, since, ask=ask)
@@ -252,9 +253,9 @@ _FILED_OPEN_SQL = (
 
 def _filed_open_of(conn: "sqlite3.Connection", visit_ids: list[str]) -> dict[str, list[tuple[str, str]]]:
     out: dict[str, list[tuple[str, str]]] = {visit_id: [] for visit_id in visit_ids}
-    for start in range(0, len(visit_ids), 500):
-        part = visit_ids[start : start + 500]
-        for found in conn.execute(_FILED_OPEN_SQL % ",".join("?" * len(part)), part).fetchall():
+    if visit_ids:  # one statement however many (the ids go in as one JSON list)
+        listed = (json.dumps(visit_ids),)
+        for found in conn.execute(_FILED_OPEN_SQL % "SELECT value FROM json_each(?)", listed).fetchall():
             out[str(found[0])].append((str(found[1]), str(found[2] or "")))
     return out
 
@@ -437,12 +438,12 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
     ids = sorted({str(task_id) for task_id in task_ids if task_id})
     for one_sql, many_sql, column in _TASK_READS:
         unread = [task_id for task_id in ids if ("one", one_sql, (task_id,)) not in values]
-        for start in range(0, len(unread), 500):
-            part = unread[start : start + 500]
+        if unread:  # one statement however many (the ids go in as one JSON list)
             found: dict[str, Any] = {}
-            for row in conn.execute(many_sql % ",".join("?" * len(part)), part).fetchall():
+            listed = (json.dumps(unread),)
+            for row in conn.execute(many_sql % "SELECT value FROM json_each(?)", listed).fetchall():
                 found.setdefault(str(row[column]), row)
-            read_cache.prime(conn, one_sql, {(task_id,): found.get(task_id) for task_id in part})
+            read_cache.prime(conn, one_sql, {(task_id,): found.get(task_id) for task_id in unread})
     rows = [row for row in (E.task(conn, task_id) for task_id in ids) if row]
     R.prime(conn, rows)
     visits = sorted({str(row["visit"]["id"]) for row in rows if row.get("visit")})

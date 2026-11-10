@@ -202,7 +202,16 @@ def test_healths_never_stuck_check_gives_its_numbers_as_fields(api):
     post(api, "tasks", {"title": "Book the barn", "body": "As discussed.", "owner": "ben"})
     health.record_never_stuck(api.app.state.store)
     check = next(c for c in get(api, "health")["checks"] if c["id"] == "never_stuck")
-    assert set(check["counts"]) == {"waiting_on_nothing", "retry", "manager", "person", "cant_run", "broken"}
+    assert set(check["counts"]) == set(health.NEVER_STUCK_COUNTS)
+    assert set(health.NEVER_STUCK_COUNTS) == {
+        "waiting_on_nothing",
+        "retry",
+        "manager",
+        "person",
+        "cant_run",
+        "no_one",
+        "broken",
+    }
     assert all(isinstance(n, int) for n in check["counts"].values()) and check["at"]
 
 

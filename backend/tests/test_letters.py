@@ -19,9 +19,10 @@ def _task(api, row):
         return task_asks.task_of(c, row["approval_id"])
 
 
-def approve(api, row, token="ana-test", expected=200):
-    """The person opens the letter in Tico and clicks OK on it (backend/task_asks.py)."""
-    shown = get(api, "letters/" + row["id"], token=token)["shown_hash"]
+def approve(api, row, token="ana-test", expected=200, reader=None):
+    """The person opens the letter in Tico and clicks OK on it (backend/task_asks.py). `reader` opens it instead, for
+    a person who may not read the letter and still tries its OK."""
+    shown = get(api, "letters/" + row["id"], token=reader or token)["shown_hash"]
     path = f"tasks/{_task(api, row)}/asks/{row['approval_id']}/ok"
     return post(api, path, {"shown_hash": shown}, token=token, expected=expected)
 
@@ -130,16 +131,19 @@ def test_revoke_or_never_before_approval_prevents_submission(api, hq):
 
 
 def test_an_admin_can_approve_but_an_unrelated_person_cannot(api, hq):
+    """An OK's private task is given to one person at a time (the engine never adds a reader), so each person gets a
+    letter of their own: cara, a plain member, cannot open hers or OK it; ben, an Admin, can."""
     ident, token = bot(api)
     grant(api, ident)
-    row = send(api, quote(api, token=token), token=token)
+    theirs, bens = (send(api, quote(api, token=token), token=token) for _ in range(2))
     with api.app.state.store.transaction() as c:
-        H.task_give(c, "human:ana", task_asks.task_of(c, row["approval_id"]), row["approval_id"], "human:cara")
-    approve(api, row, token="cara-test", expected=403)
-    with api.app.state.store.transaction() as c:
-        H.task_give(c, "human:ana", task_asks.task_of(c, row["approval_id"]), row["approval_id"], "human:ben")
-    approve(api, row, token="ben-test")
-    assert fetch(api, row)["status"] == "submitted"
+        H.task_give(c, "human:ana", task_asks.task_of(c, theirs["approval_id"]), theirs["approval_id"], "human:cara")
+        H.task_give(c, "human:ana", task_asks.task_of(c, bens["approval_id"]), bens["approval_id"], "human:ben")
+    get(api, "letters/" + theirs["id"], token="cara-test", expected=404)
+    approve(api, theirs, token="cara-test", expected=409, reader="ana-test")  # its preview was never hers to see
+    assert fetch(api, theirs)["status"] != "submitted"
+    approve(api, bens, token="ben-test")
+    assert fetch(api, bens)["status"] == "submitted"
 
 
 def test_company_monthly_cap_counts_accepted_spend_and_approval_cannot_bypass_it(api, hq):
@@ -800,7 +804,7 @@ def test_real_source_task_privacy_and_party_changes_patch_finished_letter_rows(a
     task = get(api, "tasks/" + task["id"], "cara-test")["task"]
     with api.app.state.store.read() as c:
         before = events.latest(c)
-    post(api, "tasks/" + task["id"], {"version": task["version"], "owner": "human:ben"}, token="cara-test")
+    post(api, "tasks/" + task["id"] + "/owner", {"version": task["version"], "owner": "human:ben"}, token="cara-test")
     with api.app.state.store.read() as c:
         ben = api.app.state.auth.settings.test_identities["ben-test"]
         restored = events.read(c, api.app.state.auth, ben, before, topics=("letters",))[0]

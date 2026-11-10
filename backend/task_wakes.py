@@ -270,6 +270,51 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
     return None
 
 
+# A bot that can run may still be held on one task: its turn asked for a worktree it has no room for (D12). The wait
+# wakes the task once the worktree is ready (backend/worktree_waits.py), so until then it is Paused, not the bot's turn.
+WORKTREE_WAITING = "is waiting for a free worktree"
+WORKTREE_RESERVED = "is waiting for its worktree to be set up"
+
+
+def task_cause(
+    conn: "sqlite3.Connection", task_id: str, actor: str | None, waits: dict[str, str] | None = None
+) -> str | None:
+    """Why this bot cannot run on this task though it can run: an open worktree wait of this task's, or None. `waits`
+    is `worktree_holds` read once for a pass over many tasks."""
+    if not _h().is_bot(actor):
+        return None
+    if waits is None:
+        from . import worktree_waits
+
+        held = _read(conn, _TASK_WAIT, (task_id,)) if cast("Any", worktree_waits)._exists(conn) else None
+        state = held[0] if held else None
+    else:
+        state = waits.get(task_id)
+    return None if state is None else WORKTREE_RESERVED if state == "reserved" else WORKTREE_WAITING
+
+
+# One task's open worktree wait ("waiting" before "reserved"), as `worktree_holds` reads them for many.
+_TASK_WAIT = "SELECT max(state) FROM worktree_waits WHERE state IN ('waiting','reserved') AND task_id=?"
+
+
+def worktree_holds(conn: "sqlite3.Connection", task_ids: Collection[str] | None = None) -> dict[str, str]:
+    """Task id -> state of its open worktree wait ("waiting" before "reserved": one still waiting for room says so).
+    Every task's with no `task_ids`. One read; none when the table was never made."""
+    from . import worktree_waits
+
+    if not cast("Any", worktree_waits)._exists(conn):
+        return {}
+    sql = "SELECT task_id, max(state) FROM worktree_waits WHERE state IN ('waiting','reserved')"
+    if task_ids is None:
+        rows = conn.execute(sql + " GROUP BY task_id").fetchall()
+    else:
+        listed = json.dumps(list(task_ids))
+        rows = conn.execute(
+            sql + " AND task_id IN (SELECT value FROM json_each(?)) GROUP BY task_id", (listed,)
+        ).fetchall()
+    return {str(task): str(state) for task, state in rows}
+
+
 class LiveBots(set[str]):
     """`live_bots`: the bots (slugs) with a live run, and for each the tasks its live runs name (`tasks`)."""
 
@@ -344,18 +389,26 @@ _RUNS = (
     "FROM attempts a LEFT JOIN jobs j ON j.id = a.job_id LEFT JOIN messages m ON m.id = COALESCE(a.message_id, "
     "j.message_id) "
 )
-_ON_TASK = (
-    "(a.task_id = ? OR (m.wake_key >= ? AND m.wake_key < ?) OR json_extract(m.refs, '$.task') = ? OR (? AND "
-    "a.task_id IS NULL AND m.wake_key IS NULL AND json_extract(m.refs, '$.task') IS NULL AND m.conversation_id = ?))"
-)
+
+
+def _on_task_sql(task: str, low: str, high: str, task_too: str, alone: str, conversation: str) -> str:
+    """`_ON_TASK` over six SQL values: `?` each for one task, or columns for many in one read (`prime`)."""
+    return (
+        f"(a.task_id = {task} OR (m.wake_key >= {low} AND m.wake_key < {high}) OR json_extract(m.refs, '$.task') = "
+        f"{task_too} OR ({alone} AND a.task_id IS NULL AND m.wake_key IS NULL AND json_extract(m.refs, '$.task') IS "
+        f"NULL AND m.conversation_id = {conversation}))"
+    )
+
+
+_ON_TASK = _on_task_sql(*"??????")
+# How many other open tasks share a task's conversation (`_on_task`).
+_SHARING = "SELECT COUNT(*) FROM tasks WHERE conversation_id=? AND status='open' AND id<>?"
 
 
 def _on_task(conn: "sqlite3.Connection", task: Row) -> tuple[object, ...]:
     """The values `_ON_TASK` takes for this task."""
     conversation = task.get("conversation_id") or ""
-    sharing = conn.execute(
-        "SELECT COUNT(*) FROM tasks WHERE conversation_id=? AND status='open' AND id<>?", (conversation, task["id"])
-    ).fetchone()
+    sharing = _read(conn, _SHARING, (conversation, task["id"]))
     alone = bool(conversation) and not (sharing and sharing[0])
     return (task["id"], *_range(task["id"]), task["id"], 1 if alone else 0, conversation)
 
@@ -366,12 +419,14 @@ def last_run(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | 
     H = _h()
     if not H.is_bot(actor):
         return None
-    found = conn.execute(
-        f"SELECT a.state, a.finished_at {_RUNS}WHERE a.bot_id=? AND a.started_at IS NOT NULL AND {_ON_TASK} "
-        "ORDER BY a.rowid DESC LIMIT 1",
-        (H.actor_id(actor), *_on_task(conn, task)),
-    ).fetchone()
+    found = _read(conn, _LAST_RUN, (H.actor_id(actor), *_on_task(conn, task)))
     return {"state": found[0], "finished_at": found[1]} if found else None
+
+
+_LAST_RUN = (
+    f"SELECT a.state, a.finished_at {_RUNS}WHERE a.bot_id=? AND a.started_at IS NOT NULL AND {_ON_TASK} "
+    "ORDER BY a.rowid DESC LIMIT 1"
+)
 
 
 def _marks(task: Row) -> tuple[int, int, int]:
@@ -399,11 +454,16 @@ def started(conn: "sqlite3.Connection", attempt: str) -> None:
 # mark. The runs read are bounded by attempt row: none older than the attempt mark or the oldest run that started
 # since the start mark, whichever is older (one number, not a list). Bound: the attempt mark, the start mark, the
 # attempt mark, then the start mark and the attempt mark.
-_STARTED_SINCE = (
-    "a.rowid > MIN(?, COALESCE((SELECT MIN(r.rowid) - 1 FROM run_starts s JOIN attempts r ON r.id = s.attempt_id "
-    "WHERE s.id > ?), ?)) AND a.started_at IS NOT NULL AND "
-    "COALESCE((SELECT s.id > ? FROM run_starts s WHERE s.attempt_id = a.id), a.rowid > ?)"
-)
+def _started_since_sql(attempt_mark: str, start_mark: str) -> str:
+    """`_STARTED_SINCE` over the two marks: `?` for one task (bound five times, as above), or columns (`prime`)."""
+    return (
+        f"a.rowid > MIN({attempt_mark}, COALESCE((SELECT MIN(r.rowid) - 1 FROM run_starts s JOIN attempts r ON "
+        f"r.id = s.attempt_id WHERE s.id > {start_mark}), {attempt_mark})) AND a.started_at IS NOT NULL AND "
+        f"COALESCE((SELECT s.id > {start_mark} FROM run_starts s WHERE s.attempt_id = a.id), a.rowid > {attempt_mark})"
+    )
+
+
+_STARTED_SINCE = _started_since_sql("?", "?")
 
 
 def runs_since(conn: "sqlite3.Connection", task: Row, *, starting: bool = False, besides: str | None = None) -> int:
@@ -424,9 +484,7 @@ def runs_since(conn: "sqlite3.Connection", task: Row, *, starting: bool = False,
     if besides:
         counted += " AND a.id <> ?"
         args.append(besides)
-    found = conn.execute(
-        f"SELECT COUNT(*) {_RUNS}WHERE {counted} AND {_ON_TASK}", (*args, *_on_task(conn, task))
-    ).fetchone()
+    found = _read(conn, f"SELECT COUNT(*) {_RUNS}WHERE {counted} AND {_ON_TASK}", (*args, *_on_task(conn, task)))
     return int(found[0]) if found else 0
 
 
@@ -537,23 +595,28 @@ def lost(conn: "sqlite3.Connection", task: Row, actor: str | None, *, whole_visi
     if not H.is_bot(actor):
         return None
     visit: Row = task.get("visit") or {}
-    found = conn.execute(
-        "SELECT m.id, m.body, m.rowid, json_extract(m.refs, '$.job'), "
-        "(SELECT j.state FROM jobs j WHERE j.id = m.id), m.refs FROM messages m "
-        f"WHERE {_KEY} AND m.rowid > ? AND +m.recipient_id=? "
-        "AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 ORDER BY m.rowid DESC LIMIT 1",
-        (*_range(f"{task['id']}:{visit.get('id')}"), 0 if whole_visit else _marks(task)[1], actor),
-    ).fetchone()
+    found = _read(
+        conn, _LOST, (*_range(f"{task['id']}:{visit.get('id')}"), 0 if whole_visit else _marks(task)[1], actor)
+    )
     if not found or not found[3] or found[4] in LIVE_JOBS:
         return None
-    taken = conn.execute(
-        f"SELECT 1 {_RUNS}WHERE a.bot_id=? AND a.started_at IS NOT NULL AND (a.job_id=? OR ({_ON_TASK} "
-        "AND m.rowid > ?)) LIMIT 1",
-        (H.actor_id(actor), found[0], *_on_task(conn, task), found[2]),
-    ).fetchone()
+    taken = _read(conn, _TAKEN, (H.actor_id(actor), found[0], *_on_task(conn, task), found[2]))
     if taken:
         return None
     return {"id": str(found[0]), "body": str(found[1] or ""), "refs": H._json(found[5], {}) or {}}
+
+
+_LOST = (
+    "SELECT m.id, m.body, m.rowid, json_extract(m.refs, '$.job'), "
+    "(SELECT j.state FROM jobs j WHERE j.id = m.id), m.refs FROM messages m "
+    "WHERE m.wake_key >= ? AND m.wake_key < ? AND m.rowid > ? AND +m.recipient_id=? "
+    "AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 ORDER BY m.rowid DESC LIMIT 1"
+)
+# A run of the bot on the task that started on that wake's job, or on a wake written after it.
+_TAKEN = (
+    f"SELECT 1 {_RUNS}WHERE a.bot_id=? AND a.started_at IS NOT NULL AND (a.job_id=? OR ({_ON_TASK} "
+    "AND m.rowid > ?)) LIMIT 1"
+)
 
 
 def inbox(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | None:
@@ -561,20 +624,27 @@ def inbox(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | Non
     its own inbox (an outside agent: its wakes queue no job). `id`, and `read_at`: None while it has not read it. An
     intact wake it has not read is on its way, as a queued one is; once read, the bot took it. None for a bot whose
     wakes queue a run, or when nothing was written for it since the change."""
-    from . import enqueue
-
     H = _h()
     if not H.is_bot(actor):
         return None
     visit: Row = task.get("visit") or {}
-    reads_inbox: str = cast("Any", enqueue).external_bot_sql("m.recipient_id")
-    found = conn.execute(
-        f"SELECT m.id, m.read_at FROM messages m WHERE {_KEY} AND m.rowid > ? "
-        "AND +m.recipient_id=? AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 "
-        f"AND json_extract(m.refs, '$.job') IS NULL AND {reads_inbox} ORDER BY m.rowid DESC LIMIT 1",
-        (*_range(f"{task['id']}:{visit.get('id')}"), _marks(task)[1], actor),
-    ).fetchone()
+    found = _read(conn, _inbox_sql(), (*_range(f"{task['id']}:{visit.get('id')}"), _marks(task)[1], actor))
     return {"id": str(found[0]), "read_at": found[1]} if found else None
+
+
+def _reads_inbox() -> str:
+    from . import enqueue
+
+    return str(cast("Any", enqueue).external_bot_sql("m.recipient_id"))
+
+
+def _inbox_sql() -> str:
+    """`inbox`'s read: the newest wake of one visit since a mark to one bot that reads its own inbox."""
+    return (
+        f"SELECT m.id, m.read_at FROM messages m WHERE {_KEY} AND m.rowid > ? AND +m.recipient_id=? "
+        "AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 "
+        f"AND json_extract(m.refs, '$.job') IS NULL AND {_reads_inbox()} ORDER BY m.rowid DESC LIMIT 1"
+    )
 
 
 def told_in_visit(conn: "sqlite3.Connection", task: Row, actor: str | None) -> str | None:
@@ -600,13 +670,13 @@ def queued(conn: "sqlite3.Connection", task_id: str, actor: str | None) -> bool:
     H = _h()
     if not H.is_bot(actor):
         return False
-    return bool(
-        conn.execute(
-            "SELECT 1 FROM messages m CROSS JOIN jobs j ON j.message_id = m.id "
-            f"WHERE {_KEY} AND j.bot_id=? AND j.state IN ('queued', 'leased') LIMIT 1",
-            (*_range(task_id), H.actor_id(actor)),
-        ).fetchone()
-    )
+    return bool(_read(conn, _QUEUED, (*_range(task_id), H.actor_id(actor))))
+
+
+_QUEUED = (
+    "SELECT 1 FROM messages m CROSS JOIN jobs j ON j.message_id = m.id "
+    "WHERE m.wake_key >= ? AND m.wake_key < ? AND j.bot_id=? AND j.state IN ('queued', 'leased') LIMIT 1"
+)
 
 
 def drop(conn: "sqlite3.Connection", task_id: str, keep: str | Collection[str] | None = None) -> int:
@@ -666,3 +736,182 @@ _KEY = "m.wake_key >= ? AND m.wake_key < ?"
 
 def _range(prefix: str) -> tuple[str, str]:
     return f"{prefix}:", f"{prefix};"
+
+
+# ----------------------------------------------------------------------------- reads for a pass over many tasks
+def _read(conn: "sqlite3.Connection", sql: str, args: tuple[object, ...]) -> Any:
+    """One row through the snapshot's read cache (`read_cache.one`): a pass over many tasks fills it first (`prime`),
+    and any write empties it, so a row read here is never older than the last write."""
+    from . import read_cache
+
+    return cast("Any", read_cache).one(conn, sql, args)
+
+
+def _listed(*columns: str) -> str:
+    """A list sent as one JSON value, as a table `k` of these columns: one read for many tasks."""
+    picked = ", ".join(f"json_extract(value, '$[{n}]')" for n in range(len(columns)))
+    return f"WITH k({', '.join(columns)}) AS MATERIALIZED (SELECT {picked} FROM json_each(?)) "
+
+
+_ON_COLUMNS = ("t", "lo", "hi", "t2", "alone", "conv")
+
+
+def _visit_id(row: Row) -> object:
+    visit: Row | None = row.get("visit")
+    return visit.get("id") if visit else None
+
+
+def prime(conn: "sqlite3.Connection", tasks: "Collection[Row]", bots: dict[str, set[str]]) -> None:
+    """Read together what `queued`, `inbox`, `lost`, `last_run`, `runs_since` and `task_cause` read for each of `tasks`
+    (`task_engine.task()` rows) and each of its bots (`bots`: task id -> actors), and keep it in the snapshot's read cache, where those
+    functions find it: a pass over every open task reads a fixed number of statements, not a few a task. Each read is
+    the one-task read over a list, so the cache holds what each one-task read returns, "nothing" included. A
+    connection with no read cache keeps nothing; a write empties it."""
+    from . import read_cache
+
+    RC: Any = read_cache
+    if not tasks or RC.cache(conn) is None:
+        return
+    H = _h()
+    rows = {str(task["id"]): task for task in tasks}
+    asked = {t: sorted(str(bot) for bot in bots.get(t, ()) if H.is_bot(bot)) for t in rows}
+    slugs = {actor: str(H.actor_id(actor)) for each in asked.values() for actor in each}
+    shares = conn.execute(
+        _listed("t", "c") + "SELECT k.t, (SELECT COUNT(*) FROM tasks WHERE conversation_id=k.c AND status='open' "
+        "AND id<>k.t) FROM k",
+        (json.dumps([[t, row.get("conversation_id") or ""] for t, row in rows.items()]),),
+    ).fetchall()
+    RC.prime(conn, _SHARING, {(rows[t].get("conversation_id") or "", t): (n,) for t, n in shares})
+    on = {t: _on_task(conn, row) for t, row in rows.items()}  # from the counts just kept
+    visits = {t: f"{t}:{_visit_id(row)}" for t, row in rows.items()}
+
+    queued = {
+        (str(found[0]), str(found[1]))
+        for found in conn.execute(
+            _listed("t", "lo", "hi") + "SELECT DISTINCT k.t, j.bot_id FROM k JOIN messages m ON m.wake_key >= k.lo "
+            "AND m.wake_key < k.hi CROSS JOIN jobs j ON j.message_id = m.id WHERE j.state IN ('queued', 'leased')",
+            (json.dumps([[t, *_range(t)] for t in rows]),),
+        ).fetchall()
+    }
+    RC.prime(
+        conn,
+        _QUEUED,
+        {(*_range(t), slugs[a]): (1,) if (t, slugs[a]) in queued else None for t in rows for a in asked[t]},
+    )
+
+    def newest(select: str, marks: dict[str, list[int]], where: str) -> dict[tuple[str, int, str], tuple[Any, ...]]:
+        """The newest wake since each mark of each task's visit, by recipient: (task, mark, recipient) -> columns."""
+        listed = [[t, *_range(visits[t]), mark] for t, each in marks.items() for mark in sorted(set(each))]
+        found = conn.execute(
+            _listed("t", "lo", "hi", "mark") + f"SELECT * FROM (SELECT k.t, k.mark, m.recipient_id, {select}, "
+            "ROW_NUMBER() OVER (PARTITION BY k.t, k.mark, m.recipient_id ORDER BY m.rowid DESC) AS n FROM k "
+            f"JOIN messages m ON m.wake_key >= k.lo AND m.wake_key < k.hi WHERE m.rowid > k.mark AND {where}) "
+            "WHERE n = 1",
+            (json.dumps(listed),),
+        ).fetchall()
+        return {(str(row[0]), int(row[1]), str(row[2])): tuple(row[3:-1]) for row in found}
+
+    quiet = "COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0"
+    mark = {t: _marks(row)[1] for t, row in rows.items()}
+    unread = newest(
+        "m.id, m.read_at",
+        {t: [mark[t]] for t in rows},
+        f"{quiet} AND json_extract(m.refs, '$.job') IS NULL AND {_reads_inbox()}",
+    )
+    RC.prime(
+        conn,
+        _inbox_sql(),
+        {(*_range(visits[t]), mark[t], a): unread.get((t, mark[t], a)) for t in rows for a in asked[t]},
+    )
+    lost = newest(
+        "m.id, m.body, m.rowid, json_extract(m.refs, '$.job'), (SELECT j.state FROM jobs j WHERE j.id = m.id), m.refs",
+        {t: [mark[t], 0] for t in rows},
+        quiet,
+    )
+    RC.prime(
+        conn,
+        _LOST,
+        {(*_range(visits[t]), m, a): lost.get((t, m, a)) for t in rows for m in {mark[t], 0} for a in asked[t]},
+    )
+    # Whether a run took each lost wake: only for one whose job ended with no run started (`lost`).
+    unsure = [
+        (t, slugs[a], found)
+        for (t, _, a), found in lost.items()
+        if a in asked[t] and found[3] and found[4] not in LIVE_JOBS
+    ]
+    taken = conn.execute(
+        _runs_on("i", "slug", "job", *_ON_COLUMNS, "rid") + "SELECT k.i, EXISTS (SELECT 1 FROM r WHERE r.bot_id=k.slug "
+        "AND r.started_at IS NOT NULL AND (r.job_id=k.job OR (r.mrid > k.rid AND r.rid IN "
+        "(SELECT o.rid FROM on_k o WHERE o.t = k.t))))FROM k",
+        (json.dumps([[i, slug, found[0], *on[t], found[2]] for i, (t, slug, found) in enumerate(unsure)]),),
+    ).fetchall()
+    took = {int(i): bool(yes) for i, yes in taken}
+    RC.prime(
+        conn,
+        _TAKEN,
+        {
+            (slug, found[0], *on[t], found[2]): (1,) if took.get(i) else None
+            for i, (t, slug, found) in enumerate(unsure)
+        },
+    )
+
+    ran = {
+        (str(found[0]), str(found[1])): (found[2], found[3])
+        for found in conn.execute(
+            _runs_on(*_ON_COLUMNS) + "SELECT t, bot_id, state, finished_at FROM (SELECT o.t, r.bot_id, r.state, "
+            "r.finished_at, ROW_NUMBER() OVER (PARTITION BY o.t, r.bot_id ORDER BY r.rid DESC) AS n FROM on_k o "
+            "JOIN r ON r.rid = o.rid WHERE r.started_at IS NOT NULL) WHERE n = 1",
+            (json.dumps([list(on[t]) for t in rows]),),
+        ).fetchall()
+    }
+    RC.prime(conn, _LAST_RUN, {(slugs[a], *on[t]): ran.get((t, slugs[a])) for t in rows for a in asked[t]})
+
+    # `_STARTED_SINCE` for each task: the oldest run it reads (`floor`) once a task, then each run on it.
+    since = {t: _marks(row) for t, row in rows.items()}
+    counts = conn.execute(
+        _runs_on("am", "sm", *_ON_COLUMNS) + ", f AS MATERIALIZED (SELECT k.t, k.am, k.sm, MIN(k.am, COALESCE("
+        "(SELECT MIN(x.rowid) - 1 FROM run_starts s JOIN attempts x ON x.id = s.attempt_id WHERE s.id > k.sm), k.am)) "
+        "AS floor FROM k) SELECT f.t, (SELECT COUNT(*) FROM on_k o JOIN r ON r.rid = o.rid WHERE o.t = f.t AND "
+        "r.rid > f.floor AND r.started_at IS NOT NULL AND COALESCE((SELECT s.id > f.sm FROM run_starts s WHERE "
+        "s.attempt_id = r.id), r.rid > f.am)) FROM f",
+        (json.dumps([[since[t][0], since[t][2], *on[t]] for t in rows]),),
+    ).fetchall()
+    RC.prime(
+        conn,
+        f"SELECT COUNT(*) {_RUNS}WHERE ({_STARTED_SINCE}) AND {_ON_TASK}",
+        {(*_since_args(since[str(t)]), *on[str(t)]): (n,) for t, n in counts},
+    )
+
+
+def _runs_on(*columns: str) -> str:
+    """`_listed` with two more tables: `r`, every run (attempt) with what puts it on a task, read once, and `on_k`,
+    each task of `k` with the runs on it (`rid`), as `_ON_TASK` places them: one lookup for each of its four ways,
+    where asking `_ON_TASK` of every run for every task reads every run once a task."""
+    return (
+        _listed(*columns)[:-1] + ", r AS MATERIALIZED (SELECT a.rowid AS rid, a.id, a.bot_id, a.state, a.finished_at, "
+        "a.started_at, a.job_id, m.rowid AS mrid, a.task_id AS at, m.wake_key AS wk, json_extract(m.refs, '$.task') "
+        f"AS rt, m.conversation_id AS mc {_RUNS}), on_k AS MATERIALIZED ("
+        "SELECT k.t, r.rid FROM k JOIN r ON r.at = k.t "
+        "UNION SELECT k.t, r.rid FROM k JOIN r ON r.wk >= k.lo AND r.wk < k.hi "
+        "UNION SELECT k.t, r.rid FROM k JOIN r ON r.rt = k.t2 "
+        "UNION SELECT k.t, r.rid FROM k JOIN r ON k.alone AND r.at IS NULL AND r.wk IS NULL AND r.rt IS NULL "
+        "AND r.mc = k.conv) "
+    )
+
+
+def prime_holds(conn: "sqlite3.Connection", task_ids: list[str]) -> None:
+    """Read the open worktree waits of these tasks in one statement (`worktree_holds`) and keep each task's in the
+    snapshot's read cache, where `task_cause` finds it."""
+    from . import read_cache, worktree_waits
+
+    RC: Any = read_cache
+    if not task_ids or RC.cache(conn) is None or not cast("Any", worktree_waits)._exists(conn):
+        return
+    holds = worktree_holds(conn, task_ids)
+    RC.prime(conn, _TASK_WAIT, {(t,): (holds.get(t),) for t in task_ids})
+
+
+def _since_args(marks: tuple[int, int, int]) -> tuple[int, ...]:
+    """The five values `_STARTED_SINCE` binds, from `_marks`."""
+    attempt_mark, _, start_mark = marks
+    return (attempt_mark, start_mark, attempt_mark, start_mark, attempt_mark)

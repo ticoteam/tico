@@ -3,7 +3,7 @@ a release), a message outside the thread's audience never reaches its person, an
 the people who can manage it."""
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend import question_tasks as QT, threads
+from backend import threads
 from backend.auth import Identity
 from backend import hubdb as H
 from backend.tests.old_asks import old_ask
@@ -239,24 +239,6 @@ def test_a_bot_post_in_a_group_dm_is_listed_as_unread_for_its_people(api):
     assert row["last_unread_seq"] == row["last_seq"]
     with api.app.state.store.read() as c:
         assert threads.unread(c, ana_viewer(api), tid)["unread"] == 1
-
-
-def test_a_dm_with_only_a_bot_is_counted_on_the_bot_not_listed(api):
-    """A bot is on the Team chart: its DM's unread shows there (sidebar `bot_dms`), and only its question is an item."""
-    setup_attempt(api, "finance")
-    with api.app.state.store.transaction() as c:
-        dm = threads.dm(c, "human:ana", ["bot:finance"], title="Finance")["id"]
-    say(api, dm, "Numbers are in.", actor="bot:finance")
-    assert needs(api, "thread_dm") == []
-    assert get(api, "threads", token="ana-test")["bot_dms"] == {"bot:finance": 1}
-    with api.app.state.store.transaction() as c:
-        QT.ask_alone(c, "bot:finance", "human:ana", "Book the Q3 accrual?")
-    # Its question is a question task on Needs you (answered there, which a plain reply is not), so the DM stays out of Inbox.
-    assert len(needs(api, "question")) == 1
-    assert get(api, "threads", token="ana-test")["attention"] == []
-    with api.app.state.store.transaction() as c:
-        threads.mark_all_read(c, ana_viewer(api), dm)
-    assert get(api, "threads", token="ana-test")["bot_dms"] == {}
 
 
 def test_a_dm_with_a_bot_and_a_person_is_listed(api):

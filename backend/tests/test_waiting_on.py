@@ -70,6 +70,26 @@ def test_a_bot_that_cannot_run_shows_paused_with_the_cause(c, general):
     assert W.headline(c, row["id"]).state == "bot"  # it carries on by itself
 
 
+def test_a_task_waiting_for_a_worktree_is_paused_and_nobody_is_woken_for_it(c, general):
+    from backend import worktree_waits
+
+    worktree_waits.ensure(c)
+    row = X.new_task(c, ANA, "Fix the login page", assignee="bot:builder")
+    other = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
+    c.execute(
+        "INSERT INTO worktree_waits VALUES('w1',?,'bot:builder','acme/web',1,NULL,'waiting',NULL,'',?,?,NULL)",
+        (row["id"], X.H.now(), X.H.now()),
+    )
+    wait = W.headline(c, row["id"])
+    assert (wait.state, wait.who, wait.line) == ("paused", "bot:builder", "builder is waiting for a free worktree")
+    assert W.turn(c, E.task(c, row["id"])) is None  # the wait wakes it once the worktree is ready, not never-stuck
+    assert W.headline(c, other["id"]).state == "bot"  # the bot itself can run: its other tasks carry on
+    c.execute("UPDATE worktree_waits SET state='reserved', link_id='l1' WHERE id='w1'")
+    assert W.headline(c, row["id"]).line == "builder is waiting for its worktree to be set up"
+    c.execute("UPDATE worktree_waits SET state='served', finished_at=updated_at WHERE id='w1'")
+    assert W.headline(c, row["id"]).state == "bot"
+
+
 def test_the_ladder_hands_the_turn_to_the_manager_bot_and_then_to_a_person(c, general):
     row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
     c.execute("UPDATE visits SET level='manager' WHERE id=?", (row["visit"]["id"],))

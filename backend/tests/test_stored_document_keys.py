@@ -7,7 +7,7 @@ install holds it, then reads it through the code that hands it out.
 import hashlib
 import json
 
-from backend import access, directory, gateway_connection, move_retry, onboarding, providers, redesign_migration
+from backend import access, directory, gateway_connection, onboarding, providers, redesign_migration
 from backend import source_outages
 from backend.store import H
 from backend.tests.helpers.api import post  # noqa: F401
@@ -132,32 +132,3 @@ def test_a_converted_wake_rule_keeps_its_times_and_its_saved_keys(api):
     }
     row = redesign_migration.wake_rules_of("a1", flow)[0]
     assert row["created_at"] == WHEN and row["updated_at"] == WHEN
-
-
-def test_a_recovery_saved_before_the_renames_still_beats_an_older_refusal(api, monkeypatch):
-    at(monkeypatch, "2026-10-27T01:00:00.000000Z")
-    task = post(api, "tasks", {"owner": "ops", "title": "Review the change", "body": "Read it."})
-    source = "github:acme/project"
-    monkeypatch.setattr(move_retry, "remembered", lambda *_: (None, {"outage": True, "at": WHEN, "since": WHEN}))
-    monkeypatch.setattr("backend.review_gate.links", lambda *_: [{"repo": "acme/project"}])
-    with api.app.state.store.transaction() as c:
-        managers(c)
-        c.execute(
-            "INSERT INTO history_events(id,subject_type,subject_id,created_at,actor_id,kind) VALUES(?,'task',?,?,?,?)",
-            (H.new_id(), task["id"], H.now(), "bot:ops", move_retry.FIELD),
-        )
-        plant(
-            c,
-            source_outages.PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32],
-            {
-                "source": source,
-                "kind": "GitHub checks access",
-                "active": False,
-                "since": WHEN,
-                "waiting": 0,
-                "until": None,
-                "updated": "2026-09-02T00:00:00.000000Z",
-            },
-        )
-        source_outages.sync(c, api.app.state.store.settings)
-        assert notices(c) == []

@@ -5,8 +5,6 @@ Synthetic fixture team only (backend/tests/test_api.py); ops is the bot, its com
 """
 
 from backend import hubdb as H
-from backend import stranded_resume as SR
-from backend.tests.helpers import stranded_resume as SRT
 from backend.tests.helpers.api import claim, post  # noqa: F401
 from backend.tests.helpers.claim_refusals import forget_claims  # noqa: F401
 from backend.tests.helpers.task_lanes import new_task, task_bot  # noqa: F401
@@ -79,28 +77,3 @@ def test_resume_with_nothing_held_reports_zero(api):
     post(api, "company/pause", {})
     resumed = post(api, "company/resume", {})
     assert resumed["changed"] is True and resumed["held"] == 0
-
-
-def test_a_held_turn_is_not_a_failed_run_and_uses_no_automatic_resume(api):
-    """T10: a stranded task left in progress gets no resume wake while the company is paused, however long the pause
-    lasts, so no automatic resume is counted; the held turn makes no attempt and records no failed run; Resume starts it."""
-    machine = SRT.online(api, "ops")
-    tid = SRT.new_task(api, "Draft the notes")
-    store = api.app.state.store
-    with store.transaction() as c:
-        SRT.strand(c, tid)
-    post(api, "company/pause", {})
-    for hours in (0, 1, 2, 3, 4):  # the sweep runs every few minutes through the pause, past the usual run times
-        with store.transaction() as c:
-            assert SR.run(c, H.shift(H.now(), hours=hours)) == {"resumed": 0, "stopped": 0}
-    with store.read() as c:
-        assert SRT.resumes(c, tid) == [], "no automatic resume is counted while paused"
-        assert SRT.wakes(c, "ops", tid) == 0
-        attempts = c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0]
-        failed = c.execute("SELECT fails FROM run_backoff WHERE bot='ops'").fetchone()
-    assert attempts == 0, "a held turn starts no run"
-    assert failed is None or failed[0] == 0, "a held turn is not a failed run"
-    post(api, "company/resume", {})
-    with store.transaction() as c:
-        assert SR.run(c, H.now()) == {"resumed": 1, "stopped": 0}
-    assert claim(api, machine) is not None, "after Resume the work starts"

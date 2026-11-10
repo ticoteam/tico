@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from backend import bot_settings as BS
-from backend import reach, task_allocator
+from backend import reach
 from backend.auth import Identity
 from backend.store import H, encode
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
@@ -209,35 +209,6 @@ def test_a_solicited_reply_and_work_on_a_shared_task_pass(api):
         headers=headers("pd-test"),
     )
     assert r.status_code == 200, r.text
-
-
-def test_a_step_flow_hand_off_a_helper_and_a_person_are_never_refused(api):
-    chart(api)
-    task(api, "pd-test", "bot:scout", title="To Scout", expected=409)
-    with api.app.state.store.transaction() as c:
-        typ = H.type_create(
-            c,
-            H.KEEPER,
-            "Copy",
-            [
-                {"name": "Draft", "status": "doing"},
-                {"name": "Edit", "status": "review", "flow": {"assign": {"pool": ["scout"]}}},
-                {"name": "Done", "status": "done"},
-            ],
-        )
-    ticket = task(api, "pd-test", "bot:product-design", title="Copy ticket", type=typ["id"], step="Draft")
-    r = api.post(
-        f"/api/v2/tasks/{ticket['id']}", json={"step": "Edit", "version": ticket["version"]}, headers=headers("pd-test")
-    )
-    assert r.status_code == 200, r.text
-    with api.app.state.store.transaction() as c:
-        assert ticket["id"] in [t for t, _ in task_allocator.allocate(c)]
-        assert H.task(c, ticket["id"])["owner_id"] == "bot:scout"
-    # The Assistant (coo) and BotOps are off the chart: anyone reaches them.
-    task(api, "pd-test", "bot:coo", title="For the Assistant")
-    assert reach.decide(ctx(api), "bot:product-design", "bot:botops").why == "helper"
-    # A person is never limited, even writing to a bot nowhere near them.
-    task(api, "ben-test", "bot:scout", title="Ben to Scout")
 
 
 def test_everyone_open_restores_reach_to_anyone(api):

@@ -118,9 +118,16 @@ def clone(world: World, times: int) -> int:
 
 
 def measure(
-    count: int = 10_000, seed: int = 1, profile: bool = True, *, copies: int = 0, queued: bool = False
+    count: int = 10_000,
+    seed: int = 1,
+    profile: bool = True,
+    *,
+    copies: int = 0,
+    queued: bool = False,
+    due: float = 0.02,
 ) -> dict[str, Any]:
-    """One pass over `count` tasks made through the engine, times 1 + `copies` (`clone`)."""
+    """One pass over `count` tasks made through the engine, times 1 + `copies` (`clone`). `due`: the share of tasks
+    whose next try is due in the pass measured."""
     from backend import never_stuck as NS
 
     rng = random.Random(seed)
@@ -133,13 +140,12 @@ def measure(
         with world.tx() as c:
             first = NS.check(c)  # sets every bot task's next try time
         world.shift(150)  # 2.5 minutes on: the tasks whose bot stopped first are due for try 1
-        due = int(count * 0.02)
         with world.tx() as c:
             # Most tasks stopped later: their next try is not due yet.
             c.execute(
                 "UPDATE visits SET next_try_at=? WHERE left_at IS NULL AND id NOT IN "
                 "(SELECT id FROM visits WHERE left_at IS NULL ORDER BY id LIMIT ?)",
-                (Wd.ts(world.at() + dt.timedelta(minutes=10)), due),
+                (Wd.ts(world.at() + dt.timedelta(minutes=10)), int(count * due)),
             )
         Wd.METER.trace = []
         before = Wd.METER.count
@@ -169,6 +175,7 @@ def measure(
             "seconds": round(seconds, 3),
             "statements": statements,
             "statements_per_task": round(statements / count, 1),
+            "reads": sum(s.lstrip().upper().startswith(("SELECT", "WITH")) for s in trace),
             "live_reads": sum("lease_until >" in s for s in trace),  # reads of live runs: once a pass, not a task
             "top_statements": shapes.most_common(12),
             "profile": top,

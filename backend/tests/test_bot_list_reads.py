@@ -5,11 +5,9 @@ import collections
 import json
 
 from backend import (
-    auto_tasks,
     agents,
     execution,
     lifecycle,
-    pipeline_stats,
     profiles,
     rooms,
     start_places,
@@ -119,7 +117,6 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
                 "temp": bool(declared.get("temp")),
                 "compact_at": compact_at_of(declared),
                 "task_model": task_models.of(declared),
-                "keep_tasks_going": auto_tasks.of(json.loads(config["config"]) or {}),
                 "turns_at_once": start_places.bot_limit(json.loads(config["config"]) or {}),
                 "task_model_warning": task_models.warning(c, settings, bot["slug"], declared, task_models.of(declared)),
                 "manages_reports": report_managers.switch_on(declared),
@@ -144,7 +141,10 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
         row["reports_to"] = ""
     if not level["read"]:
         return {k: v for k, v in row.items() if k in SEE_ONLY}
-    row["task_flow"] = auto_tasks.counts(c, bot["slug"], who)
+    from backend import bot_rows
+
+    mine = H._rows(c.execute("SELECT * FROM tasks WHERE owner_id=? AND status='open'", ("bot:" + bot["slug"],)))
+    row["task_flow"] = bot_rows.task_flow(c, {bot["slug"]: mine}, who)[bot["slug"]]
     row["draining"] = bool(c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot["slug"],)).fetchone())
     scope = execution.claim_scope(c, bot["slug"])
     row["claim_scoped"] = bool(scope)
