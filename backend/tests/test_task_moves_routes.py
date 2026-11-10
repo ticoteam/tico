@@ -148,6 +148,11 @@ def test_a_persons_mention_is_in_needs_you_until_they_reply(api):
     post(api, f"tasks/{made['id']}/comments", {"text": "@cara can you check the barn's dates?"})
     mention = [i for i in get(api, "needs-you", token="cara-test")["items"] if i["kind"] == "mention"]
     assert len(mention) == 1 and mention[0]["task"]["id"] == made["id"]
+    with api.app.state.store.read() as c:
+        (root,) = c.execute(
+            "SELECT coalesce(root_id, id) FROM conversations WHERE id=?", (mention[0]["conversation_id"],)
+        ).fetchone()
+    assert mention[0]["root_id"] == root  # the rail row a mention moves
     post(api, f"tasks/{made['id']}/comments", {"text": "Checked: both weekends are free."}, token="cara-test")
     assert not [i for i in get(api, "needs-you", token="cara-test")["items"] if i["kind"] == "mention"]
 

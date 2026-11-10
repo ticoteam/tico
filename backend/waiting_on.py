@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from itertools import chain
 from typing import TYPE_CHECKING, Any
 
-from . import hubdb_core, pipeline_rights, task_wakes
+from . import hubdb_core, pipeline_rights, read_cache, task_wakes
 from . import task_engine as E
 from . import task_requirements as R
 
@@ -244,16 +244,32 @@ def _turn(
     return Wait(BOT, who, line, requirement_id, since, ask=ask)
 
 
+_FILED_OPEN_SQL = (
+    "SELECT l.visit_id, t.id, t.title FROM links l JOIN tasks t ON t.id = l.to_task_id "
+    "WHERE l.visit_id IN (%s) AND t.status='open' ORDER BY l.created_at, l.id"
+)
+
+
+def _filed_open_of(conn: "sqlite3.Connection", visit_ids: list[str]) -> dict[str, list[tuple[str, str]]]:
+    out: dict[str, list[tuple[str, str]]] = {visit_id: [] for visit_id in visit_ids}
+    for start in range(0, len(visit_ids), 500):
+        part = visit_ids[start : start + 500]
+        for found in conn.execute(_FILED_OPEN_SQL % ",".join("?" * len(part)), part).fetchall():
+            out[str(found[0])].append((str(found[1]), str(found[2] or "")))
+    return out
+
+
 def _filed_open(conn: "sqlite3.Connection", visit_id: str) -> list[tuple[str, str]]:
     """(id, title) of the tasks filed during a visit that are still open, oldest first."""
-    return [
-        (str(found[0]), str(found[1] or ""))
-        for found in conn.execute(
-            "SELECT t.id, t.title FROM links l JOIN tasks t ON t.id = l.to_task_id "
-            "WHERE l.visit_id=? AND t.status='open' ORDER BY l.created_at, l.id",
-            (visit_id,),
-        ).fetchall()
-    ]
+    return read_cache.value(conn, ("filed_open", visit_id), lambda: _filed_open_of(conn, [visit_id])[visit_id])
+
+
+def _seen(conn: "sqlite3.Connection") -> dict[str, str | None]:
+    """ "Can this bot run" for every read in this snapshot: a page asks it of the same bots from several lists. A write
+    discards it (read_cache)."""
+    if read_cache.cache(conn) is None:
+        return {}
+    return read_cache.value(conn, ("bots_can_run",), dict[str, str | None], shared=True)
 
 
 def of(
@@ -263,7 +279,9 @@ def of(
     standings: Sequence[R.Standing] | None = None,
 ) -> list[Wait]:
     """`waiting_on` for a task already read with `task_engine.task()`. `seen` keeps "can this bot run" for one pass
-    over many tasks. `standings` saves reading them again when the caller has them."""
+    over many tasks; without it, the snapshot keeps them (`_seen`). `standings` saves reading them again when the
+    caller has them."""
+    seen = _seen(conn) if seen is None else seen
     stage = row["stage"]
     if stage["kind"] != "work":
         return []
@@ -391,9 +409,59 @@ def waiting_on(conn: "sqlite3.Connection", task_id: str) -> list[Wait]:
     return of(conn, row) if row else []
 
 
+# task_engine.task()'s reads, word for word, so `prime` can seed them.
+_TASK_READS = (
+    ("SELECT * FROM tasks WHERE id=?", "SELECT * FROM tasks WHERE id IN (%s)", "id"),
+    (
+        "SELECT * FROM visits WHERE task_id=? AND left_at IS NULL",
+        "SELECT * FROM visits WHERE task_id IN (%s) AND left_at IS NULL ORDER BY rowid",
+        "task_id",
+    ),
+    (
+        "SELECT * FROM snoozes WHERE task_id=? AND ended_at IS NULL",
+        "SELECT * FROM snoozes WHERE task_id IN (%s) AND ended_at IS NULL ORDER BY rowid",
+        "task_id",
+    ),
+)
+
+
+def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]:
+    """Read many tasks as `task_engine.task()` and `task_requirements.standings` read each one, a few statements in
+    all, for the reads of each task that follow in this snapshot: a list of waits costs what one task's does. Gives
+    the tasks it read, by id (none where nothing is kept for the snapshot)."""
+    import sqlite3
+
+    values = read_cache.cache(conn)
+    if values is None or conn.row_factory is not sqlite3.Row:
+        return {}
+    ids = sorted({str(task_id) for task_id in task_ids if task_id})
+    for one_sql, many_sql, column in _TASK_READS:
+        unread = [task_id for task_id in ids if ("one", one_sql, (task_id,)) not in values]
+        for start in range(0, len(unread), 500):
+            part = unread[start : start + 500]
+            found: dict[str, Any] = {}
+            for row in conn.execute(many_sql % ",".join("?" * len(part)), part).fetchall():
+                found.setdefault(str(row[column]), row)
+            read_cache.prime(conn, one_sql, {(task_id,): found.get(task_id) for task_id in part})
+    rows = [row for row in (E.task(conn, task_id) for task_id in ids) if row]
+    R.prime(conn, rows)
+    visits = sorted({str(row["visit"]["id"]) for row in rows if row.get("visit")})
+    unread = [visit_id for visit_id in visits if ("filed_open", visit_id) not in values]
+    for visit_id, filed in _filed_open_of(conn, unread).items():
+        values.setdefault(("filed_open", visit_id), filed)
+    return {str(row["id"]): row for row in rows}
+
+
 def waiting_on_many(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, list[Wait]]:
     """`waiting_on` for each task of a list, by task id."""
-    return {task_id: waiting_on(conn, task_id) for task_id in task_ids}
+    ids = list(task_ids)
+    read = prime(conn, ids)
+    seen = _seen(conn)  # "can this bot run", once for the whole list
+    out: dict[str, list[Wait]] = {}
+    for task_id in ids:
+        row = read[task_id] if task_id in read else E.task(conn, task_id)
+        out[task_id] = of(conn, row, seen) if row else []
+    return out
 
 
 def headline(conn: "sqlite3.Connection", task_id: str) -> Wait | None:
@@ -419,17 +487,18 @@ def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
 def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
     """Every person's Needs you (`needs`), by person, from one pass over the open tasks: each task and its waits are
     read once, whoever they are for, where asking `needs` for each person reads every task again for each. A person
-    with nothing to act on has no key."""
+    with nothing to act on has no key. "Can this bot run" is kept for the snapshot (`_seen`)."""
     out: dict[str, list[Row]] = {}
     paused: dict[str, dict[str, Row]] = {}
-    seen: dict[str, str | None] = {}
+    seen = _seen(conn)
     fixers: dict[str, str | None] = {}
     rows = conn.execute(
         "SELECT t.id FROM tasks t WHERE t.pipeline_id IS NOT NULL AND t.status='open' "
         "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id = t.id AND s.ended_at IS NULL) ORDER BY t.id"
     ).fetchall()
+    read = prime(conn, [str(found[0]) for found in rows])
     for (task_id,) in rows:
-        row = E.task(conn, task_id)
+        row = read[str(task_id)] if str(task_id) in read else E.task(conn, task_id)
         if row is None:  # the query lists only tasks on the engine
             raise LookupError(f"task {task_id} is not on the engine")
         waits = of(conn, row, seen)

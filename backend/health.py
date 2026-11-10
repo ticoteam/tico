@@ -2479,6 +2479,7 @@ def _plate_check(c, who, auth, full):
             readable = _readable(c, visible_sql, sorted({tid for item in items for tid in _plate_tasks(item)}))
             items = [item for item in items if any(tid in readable for tid in _plate_tasks(item))]
         if len(items) > NEEDS_PLATE_WARN:
+            H.prime_tasks(c, [item.get("task_id") for item in items])
             bots = {}
             for item in items:
                 asker = (H.task(c, item.get("task_id") or "") or {}).get("requester_id")

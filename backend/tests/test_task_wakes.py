@@ -533,6 +533,47 @@ def test_a_run_counts_for_the_task_it_names_and_by_its_conversation_only_when_on
     assert runs(E.task(c, first["id"])) == 1  # now the conversation is one open task's
 
 
+class _Recorder:
+    """A connection that keeps every statement it runs, to read their plans."""
+
+    def __init__(self, conn):
+        self.conn, self.seen = conn, []
+
+    def execute(self, sql, args=()):
+        self.seen.append((sql, tuple(args)))
+        return self.conn.execute(sql, args)
+
+
+def _run_plans(c, read, row):
+    """The plan of each statement `read` runs on `attempts`."""
+    rec = _Recorder(c)
+    read(rec, row)
+    return [
+        " | ".join(str(r[-1]) for r in c.execute("EXPLAIN QUERY PLAN " + sql, args))
+        for sql, args in rec.seen
+        if "FROM attempts" in sql
+    ]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="task_wakes._ON_TASK (backend/task_wakes.py:342) ORs a.task_id with terms on messages, so last_run (:364) "
+    "and lost (:532) seek attempts by bot_id alone and read every run the bot ever had; attempts_task is never used",
+)
+def test_last_run_and_lost_seek_the_tasks_runs_not_every_run_of_the_bot(c, general):
+    """A bot's runs grow forever; a task's few. last_run and lost read the task's runs through attempts_task."""
+    from backend import task_engine as E
+
+    row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    X.ran(c, row["id"], BUILDER)
+    row = E.task(c, row["id"])
+    plans = _run_plans(c, lambda conn, r: task_wakes.last_run(conn, r, BUILDER), row)
+    plans += _run_plans(c, lambda conn, r: task_wakes.lost(conn, r, BUILDER, whole_visit=True), row)
+    assert plans
+    for text in plans:
+        assert "attempts_task" in text, text
+
+
 def test_a_run_count_reads_the_runs_since_the_change_and_looks_up_each_ones_start(c, general):
     """The never-stuck pass counts runs for every task that is due: the count must not gather every start in the
     company since the task's change into a list (`LIST SUBQUERY`) or read every run there ever was (`SCAN a`). It reads
