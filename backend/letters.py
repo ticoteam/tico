@@ -38,6 +38,7 @@ SUBJECT = "letter:"  # an OK's subject for one letter: SUBJECT + its id
 MODES = {"on_their_own": 0, "ask_first": 1, "never": 2}
 FINAL = ("delivered", "returned", "failed", "cancelled", "declined")
 ACTIVE = ("submitting", "submitted", "printing", "mailed")
+ACCEPTED = ("submitted", "printing", "mailed", "delivered", "returned")  # HQ has it and it is (or was) on its way
 MAX_PDF = 5 * 1024 * 1024
 BACKOFF = (60, 300, 900, 3600, 21600)
 
@@ -429,6 +430,13 @@ def ok_given(c, grant, ctx):
     if service is None or not service.may_ok(c, grant["ok_by_id"], row):
         raise Problem("forbidden", "This letter is OK'd by an admin or a manager of its bot", 403)
     ctx.after.append(lambda: service.decided(grant["requirement_id"]))
+
+
+def not_mailed(c, row, why):
+    """The OK this letter used did not mail it: its task ends closed saying so (task_asks.not_done), never done. The OK
+    stays used, so nothing else goes out under it. Nothing happens for an OK that was not used."""
+    if row["approval_id"]:
+        task_asks.not_done(c, row["approval_id"], "Not mailed: " + why + ". Nothing else goes out under this OK.")
 
 
 def cancellable(row):
@@ -938,8 +946,8 @@ class Letters:
                         self.ask(c, row)
                         return
                     if approval:
+                        # Claimed here, before HQ is called; its task ends with HQ's answer (`update`, `not_mailed`).
                         task_asks.use(c, row["approval_id"], SUBJECT + ident, content(row), row["requested_by"])
-                        task_asks.settle(c, row["approval_id"], "Mailed the letter.")
                     c.execute(
                         "UPDATE letters SET status='submitting',submission_quote_id=quote_id,approved_hash=?,"
                         "billing='unknown',spend_released=0,charged_micros=NULL,accepted_at=NULL,"
@@ -1050,6 +1058,7 @@ class Letters:
         with self.store.transaction(durable=True) as c:
             row = c.execute("SELECT * FROM letters WHERE id=?", (ident,)).fetchone()
             if row["approval_id"]:
+                not_mailed(c, row, "Letters out refused it (" + code.replace("_", " ") + ")")
                 task_asks.withdraw(c, row["approval_id"], "The letter's quote was refused: it is quoted again")
             c.execute(
                 "UPDATE letters SET submission_quote_id=NULL,approved_hash=NULL,submitted_at=NULL,approval_id=NULL,"
@@ -1060,6 +1069,8 @@ class Letters:
 
     def abandoned(self, ident):
         with self.store.transaction(durable=True) as c:
+            row = c.execute("SELECT * FROM letters WHERE id=?", (ident,)).fetchone()
+            not_mailed(c, row, "the send was given up before Letters out took it")
             c.execute(
                 "UPDATE letters SET status='cancelled',billing='none',charged_micros=0,spend_released=1,"
                 "next_sync_at=NULL,error='',updated_at=? WHERE id=?",
@@ -1140,6 +1151,12 @@ class Letters:
                     ident,
                 ),
             )
+            if previous["approval_id"] and not previous["hq_letter_id"]:
+                # The first word that HQ has the letter: the OK's task ends with it, done only if it is on its way.
+                if status in ACCEPTED:
+                    task_asks.settle(c, previous["approval_id"], "Mailed the letter.")
+                else:
+                    not_mailed(c, previous, "Letters out says it is " + status)
             H.event(c, H.KEEPER, "letter.updated", ident, {"status": status})
 
     def cancel(self, who, ident):

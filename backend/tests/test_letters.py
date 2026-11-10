@@ -428,6 +428,63 @@ def test_abandoned_key_is_definitively_not_sent(api, hq):
     assert hq.provider_submits == 0
 
 
+def _ended(api, task_id):
+    """The status of the task an OK filed, and the words it ended with (its last history line), if it ended."""
+    with api.app.state.store.read() as c:
+        status = H.task(c, task_id)["status"]
+        note = c.execute(
+            "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND note IS NOT NULL AND note<>'' "
+            "ORDER BY rowid DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+    return status, note[0] if note else ""
+
+
+def test_the_oks_task_ends_done_only_once_hq_has_the_letter(api, hq):
+    """Accepted: done, "Mailed the letter." Unknown (a timeout): the task stays open while the claim is reconciled,
+    and ends done when HQ says it has the letter."""
+    row = send(api, quote(api))
+    task_id = _task(api, row)
+    hq.timeout = True
+    approve(api, row)
+    assert fetch(api, row)["status"] == "submitting" and _ended(api, task_id)[0] == "open"
+    due(api, row)
+    api.app.state.letters.drain()
+    assert fetch(api, row)["status"] == "submitted" and hq.provider_submits == 1
+    assert _ended(api, task_id) == ("done", "Mailed the letter.")
+
+
+@pytest.mark.parametrize("refusal", ["out_of_credit", "quote_changed"])
+def test_a_letter_hq_refused_is_never_recorded_as_mailed(api, hq, refusal):
+    """A definite refusal before HQ claimed the send: the OK's task ends closed, saying the letter was not mailed, and
+    the OK it used lets nothing else go. A new quote needs a new OK (quote_changed asks it at once)."""
+    row = send(api, quote(api))
+    task_id = _task(api, row)
+    hq.refusal = refusal
+    approve(api, row)
+    after = fetch(api, row)
+    assert hq.provider_submits == 0 and after["status"] in ("quoted", "waiting_for_ok")
+    status, note = _ended(api, task_id)
+    assert status == "closed" and note.startswith("Not mailed: "), (status, note)
+    assert asked(api, row)["used_at"]
+    if refusal == "quote_changed":
+        assert after["status"] == "waiting_for_ok" and after["approval_id"] != row["approval_id"]
+        hq.refusal = None
+        approve(api, after)
+        assert fetch(api, row)["status"] == "submitted" and hq.provider_submits == 1
+        assert _ended(api, _task(api, after)) == ("done", "Mailed the letter.")
+
+
+def test_an_abandoned_send_ends_the_oks_task_as_not_mailed(api, hq):
+    row = send(api, quote(api))
+    task_id = _task(api, row)
+    hq.abandoned.add("tico-letter:" + row["id"])
+    approve(api, row)
+    assert fetch(api, row)["status"] == "cancelled"
+    status, note = _ended(api, task_id)
+    assert status == "closed" and note.startswith("Not mailed: "), (status, note)
+
+
 @pytest.mark.parametrize("legacy", [False, True])
 def test_lost_acceptance_then_failed_keeps_company_and_bot_spend(api, hq, legacy):
     ident, token = bot(api)
