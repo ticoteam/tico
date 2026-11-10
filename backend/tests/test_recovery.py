@@ -1,6 +1,6 @@
 import json
 
-from backend.tests.helpers.migrations import restore_config  # the column back for a rerun from before 0070
+from backend.tests.helpers.migrations import forget_from, restore_config  # the column back for a rerun from before 0070
 from backend.auth import Auth
 from backend.backup import restore_snapshot, snapshot
 from backend.config import Settings
@@ -20,7 +20,7 @@ def test_store_drops_legacy_queue_trigger_and_drains_queued_self_messages(tmp_pa
         # A database as an older release left it: it never recorded migration 0052 (nor any later one, which would run
         # again after it), and still has the trigger.
         restore_config(c)
-        c.execute("DELETE FROM schema_migrations WHERE version>='0052' AND version NOT LIKE 'legacy_%'")
+        forget_from(c, "0052")
         c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
         c.execute(
             "CREATE TRIGGER queue_bot_message AFTER INSERT ON messages "

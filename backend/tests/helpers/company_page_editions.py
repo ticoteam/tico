@@ -9,7 +9,7 @@ from backend.company_page import readers
 from backend.company_page import release
 from backend.company_page import stats as ST
 from backend.store import H
-from backend.tests.helpers.api import get, post
+from backend.tests.helpers.api import get, give_ok, post, send_back
 from backend.tests.helpers.org_rules import as_bot
 
 
@@ -112,7 +112,10 @@ class Page:
         return post(self.api, f"editions/{edition['id']}/approval", {}, token=token)
 
     def decide(self, aid, token="ana-test", expected=200, decision="approved"):
-        return post(self.api, f"approvals/{aid}", {"decision": decision}, token=token, expected=expected)
+        """The person OKs the edition's OK, or (`declined`) sends it back."""
+        if decision == "declined":
+            return send_back(self.api, aid, token=token, expected=expected)
+        return give_ok(self.api, aid, token=token, expected=expected)
 
     def approved(self):
         edition = self.ask(self.draft())

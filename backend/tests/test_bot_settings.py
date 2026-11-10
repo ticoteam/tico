@@ -13,6 +13,7 @@ from backend import bot_settings as BS
 from backend import hubdb as H
 from backend.config import Settings
 from backend.store import Store
+from backend.tests.helpers.migrations import forget_from
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SETTINGS = {
@@ -140,7 +141,7 @@ def _old_shape(path):
         c.execute("CREATE TRIGGER old_reads_config AFTER UPDATE OF config ON bot_config BEGIN SELECT 1; END")
         # 0070 and every migration after it are unapplied, as on main before 0070: a later one left applied would make
         # 0070 sort before an applied migration, which a start refuses.
-        c.execute("DELETE FROM schema_migrations WHERE version>='0070' AND version NOT LIKE 'legacy_%'")
+        forget_from(c, "0070")
         rows = [
             ("full", {**SETTINGS, **ODD}),
             ("empty", {}),
@@ -186,7 +187,7 @@ def test_migration_0061_gives_a_team_that_0070_moves_into_bot_settings(tmp_path)
     people = {"people": [{"id": "ana", "team": "engineering"}], "org_groups": {"engineering": {"name": "Engineering"}}}
     with sqlite3.connect(path) as c:
         # Replay the later migrations too, so 0070 moves the team that 0061 writes into bot_settings.
-        c.execute("DELETE FROM schema_migrations WHERE version>='0061' AND version NOT LIKE 'legacy_%'")
+        forget_from(c, "0061")
         c.execute(
             "INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (json.dumps(people),),
