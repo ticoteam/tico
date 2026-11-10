@@ -13,7 +13,9 @@ from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import get, headers
 
-FORUM = "forum_post:note-1"
+# A reply to a Tico HQ ticket: a kind the generic routes take (task_asks.GENERIC). Ben, asked by default, manages the
+# bots made here (as_bot), so he may OK it.
+FORUM = "hq_reply:note-1"
 POST = {"text": "We ship on Friday."}
 
 
@@ -22,6 +24,7 @@ def as_bot(api, slug="ops"):
     token = slug + "-bot-test"
     with api.app.state.store.transaction() as c:
         X.bot(c, slug)
+        c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot=?", (slug,))
         c.execute(
             "INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
             (slug, "hermes", "x-" + slug, H.now(), "human:ana"),
@@ -398,3 +401,222 @@ def test_a_needs_you_batch_never_gives_a_bound_ok_but_sends_one_back(api):
     assert status == 200 and done["errors"] == [], (status, code, detail, done)
     assert standing(api, rid) == K.SENT_BACK
     assert use(api, rid, bot)[0] == 409
+
+
+# ----------------------------------------------------------------------------- review 2: files, revocation, kinds
+def a_file(api, bot="ops", fid=None, text_digest="d1"):
+    """A bot's published file with one version, as files.py keeps it."""
+    fid = fid or "f" + H.new_id()[:8]
+    at = H.now()
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,locator,current_version,first_activity_at,"
+            "last_activity_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (fid, bot, "bot", "cuts/" + fid + ".md", "Intro cut", "doc", "tico_blob", 1, at, at),
+        )
+        c.execute(
+            "INSERT OR IGNORE INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
+            ("b" + fid, "bot:" + bot, text_digest, 10, "intro.md", "text/markdown", at),
+        )
+        c.execute(
+            "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,repo_path,actor,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (fid, 1, "b" + fid, text_digest, 10, "intro.md", "text/markdown", "cuts/" + fid + ".md", "bot:" + bot, at),
+        )
+    return fid
+
+
+def test_a_person_or_the_assistant_never_approves_a_file_by_a_direct_review(api):
+    """Codex review 2, finding 1: POST /api/v2/file-reviews took a person's or the Assistant's verdict and counted it
+    as a person's approval with no OK at all. A person approves a file only by a bound OK; a direct review is a bot's."""
+    from backend.tests.helpers.assistant import assistant_turn
+
+    bot = as_bot(api)
+    fid = a_file(api)
+    tid = bots_task(api, bot)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (tid,))
+    _, attempt = assistant_turn(api, "ana-test")
+    for token in ("ana-test", attempt["token"]):
+        status, code, _, _ = call(api, "POST", "file-reviews", token, {"file": fid, "task": tid, "verdict": "approve"})
+        assert status == 403, (token, status, code)
+    with api.app.state.store.transaction() as c:  # a person's review row from before still counts for nothing
+        c.execute(
+            "INSERT INTO bot_file_activity(file_id,actor,action,task_id,version,digest,created_at,detail) "
+            "VALUES(?,?,'reviewed',?,1,'d1',?,?)",
+            (fid, "human:ana", tid, H.now(), '{"verdict": "approve"}'),
+        )
+    found = get(api, f"file-approvals?file={fid}", token="ana-test")
+    assert not found["approved"], found
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM ok_grants WHERE subject LIKE ?", (f"file:{fid}%",)).fetchone()
+
+
+def test_an_ok_sent_back_stays_dead_when_the_send_back_is_undone(api):
+    """Codex review 2, finding 2: OK, then send back, then undo the send back used to bring the first OK back, and the
+    bot used it with no new click. A send back (or an OK taken back) revokes the grant for good; the Assistant never
+    reaches an undo that touches an OK."""
+    from backend.tests.helpers.assistant import assistant_turn
+
+    bot = as_bot(api)
+    tid = bots_task(api, bot)
+    rid = ask(api, bot, tid)
+    assert give(api, tid, rid)[0] == 200
+    status, _, _, out = call(
+        api, "POST", f"tasks/{tid}/asks/{rid}/answer", "ben-test", {"value": "no", "note": "Wait."}
+    )
+    assert status == 200
+    with api.app.state.store.read() as c:
+        back = c.execute(
+            "SELECT id FROM answers WHERE requirement_id=? AND answer='no' ORDER BY created_at DESC LIMIT 1", (rid,)
+        ).fetchone()[0]
+        given = c.execute("SELECT answer_id FROM ok_grants WHERE requirement_id=?", (rid,)).fetchone()[0]
+    _, attempt = assistant_turn(api, "ana-test")
+    for answer_id in (back, given):  # the Assistant reaches no undo on an OK
+        assert call(api, "POST", f"answers/{answer_id}/undo", attempt["token"], {})[0] in (403, 409)
+    assert call(api, "POST", f"answers/{back}/undo", "ben-test", {})[0] == 200
+    assert standing(api, rid) != K.OK
+    status, code, _, _ = use(api, rid, bot)
+    assert (status, code) == (409, "task_ok_missing")
+    # Nor does a fresh click bring that grant back: the bot asks again.
+    status, code, _, _ = give(api, tid, rid)
+    assert status == 409
+    assert use(api, rid, bot)[0] == 409
+    # Taking the OK itself back revokes it too.
+    tid2 = bots_task(api, bot)
+    rid2 = ask(api, bot, tid2)
+    assert give(api, tid2, rid2)[0] == 200
+    with api.app.state.store.read() as c:
+        given2 = c.execute("SELECT answer_id FROM ok_grants WHERE requirement_id=?", (rid2,)).fetchone()[0]
+    assert call(api, "POST", f"answers/{given2}/undo", "ben-test", {})[0] == 200
+    assert use(api, rid2, bot)[0] == 409
+
+
+@pytest.mark.parametrize("value", [" ok ", "\tok\n", "OK", " Ok"])
+def test_the_assistant_never_answers_ok_with_space_or_case_around_it(api, value):
+    """Codex review 2, finding 3: the Assistant's guard compared the raw value, and the engine stripped it after: " ok "
+    answered a plain OK as the person. The value is normalised before the guard, and the engine refuses it too."""
+    as_bot(api)
+    ids = api.app.state.auth.settings.test_identities
+    ids["ana-assistant-confirmed"] = Identity("human:ana", "owner", "ana@acme.example", via="assistant", confirmed=True)
+    tid = bots_task(api, "ops-bot-test")
+    with api.app.state.store.transaction() as c:
+        version = H.task(c, tid)["version"]
+        rid = H.task_ask(c, "bot:ops", tid, "human:ana", "OK?", kind="ok", seen_version=version)["requirement_id"]
+    status, code, _, _ = call(
+        api, "POST", f"tasks/{tid}/asks/{rid}/answer", "ana-assistant-confirmed", {"value": value}
+    )
+    assert status in (403, 409, 422) and code != "ok", (status, code)
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM answers WHERE requirement_id=? AND answer='ok'", (rid,)).fetchone()
+    # The engine itself refuses it, whoever calls it, while the request is the Assistant's.
+    token = H.VIA.set("assistant")
+    try:
+        with api.app.state.store.transaction() as c, pytest.raises(H.Refused):
+            H.task_answer(c, "human:ana", tid, rid, value)
+    finally:
+        H.VIA.reset(token)
+
+
+def test_an_ok_of_a_file_counts_only_while_its_giver_may_still_open_the_file(api):
+    """Codex review 2, finding 4: file access was checked only when the preview opened. Taken away after, the cached
+    hash still gave the OK, the bot used it, and `hub file approved` kept counting it. The giver's access to that file
+    is checked again at the OK, at the use and when the verdict is read."""
+    bot = as_bot(api)
+    fid = a_file(api)
+
+    def asked():
+        tid = bots_task(api, bot)
+        status, code, detail, out = call(
+            api,
+            "POST",
+            f"tasks/{tid}/oks",
+            bot,
+            {
+                "to": "ben",
+                "line": "Post this cut?",
+                "subject": f"file:{fid}",
+                "content": {},
+                "version": version(api, tid),
+            },
+        )
+        assert status == 200, (status, code, detail)
+        return tid, out["requirement_id"]
+
+    def shut(open_again=False):
+        with api.app.state.store.transaction() as c:
+            if open_again:
+                c.execute("UPDATE bot_files SET task_id=NULL WHERE id=?", (fid,))
+                return
+            hidden = H.task_create(c, "human:ana", "Ana's own " + H.new_id()[:6], "Private.", "human:ana", lint=False)
+            c.execute("UPDATE tasks SET private=1 WHERE id=?", (hidden["id"],))
+            c.execute("UPDATE bot_files SET task_id=? WHERE id=?", (hidden["id"], fid))
+
+    def pinned(rid):
+        with api.app.state.store.read() as c:
+            row = K.grant(c, rid)
+        return row["subject"], row["content"]
+
+    def approved():
+        return get(api, f"file-approvals?file={fid}", token="ana-test")["approved"]
+
+    # At the OK: shown, then shut out before the click.
+    tid, rid = asked()
+    shown = get(api, f"oks/{rid}", token="ben-test")["shown_hash"]
+    shut()
+    status, _, _, _ = call(api, "POST", f"tasks/{tid}/asks/{rid}/ok", "ben-test", {"shown_hash": shown})
+    assert status in (403, 404, 409) and standing(api, rid) == K.WAITING
+    shut(open_again=True)
+    # At the use and the verdict: OK'd, then shut out.
+    tid, rid = asked()
+    assert give(api, tid, rid)[0] == 200 and approved()
+    shut()
+    assert not approved()
+    subject, content = pinned(rid)
+    assert use(api, rid, bot, content=content, subject=subject)[0] == 409
+    assert standing(api, rid) != K.USED
+
+
+# ----------------------------------------------------------------------------- review 2, finding 5: known kinds only
+def test_the_generic_routes_take_only_known_kinds_and_a_budget_raise_only_from_whom_may_give_it(api):
+    """A kind Tico has no rule for is refused when asked and when used. A budget raise is OK'd only by the person it
+    was asked of, while they are the bot's manager or the company's owner or an Admin: not by Cara, an ordinary
+    teammate it was asked of, nor by Ana, the owner, when it was asked of Ben and handed to her; and Ben's OK is
+    good only while he still manages the bot or is an Admin."""
+    bot = as_bot(api)
+    tid = bots_task(api, bot)
+    unknown = {
+        "to": "ben",
+        "line": "OK?",
+        "subject": "forum_post:note-1",
+        "content": POST,
+        "version": version(api, tid),
+    }
+    assert call(api, "POST", f"tasks/{tid}/oks", bot, unknown)[:2] == (422, "validation")
+    assert use(api, "nope", bot, POST, "forum_post:note-1")[:2] == (422, "validation")
+    raise_ = "budget_raise:launch"
+    money = {"project": "launch", "usd": "10.00"}
+    # Asked of Cara, who neither manages the bot nor runs the company.
+    tid = bots_task(api, bot)
+    rid = ask(api, bot, tid, content=money, to="cara", subject=raise_)
+    status, code, detail, _ = give(api, tid, rid, token="cara-test")
+    assert (status, code) == (409, "task_requirement") and "manager" in detail, (status, code, detail)
+    assert standing(api, rid) == K.WAITING
+    # Asked of Ben and handed to Ana: the owner's click does not count, the ask was not hers.
+    tid = bots_task(api, bot)
+    rid = ask(api, bot, tid, content=money, subject=raise_ + "-2")
+    with api.app.state.store.transaction() as c:
+        H.task_give(c, "human:ben", tid, rid, "human:ana", H.task(c, tid)["version"])
+    status, code, detail, _ = give(api, tid, rid, token="ana-test")
+    assert (status, code) == (409, "task_requirement") and "Ben" in detail, (status, code, detail)
+    # Ben's own OK, then he is neither an Admin nor the bot's manager: nothing goes.
+    from backend.tests.helpers.api import as_member
+
+    tid = bots_task(api, bot)
+    rid = ask(api, bot, tid, content=money, subject=raise_ + "-3")
+    assert give(api, tid, rid)[0] == 200
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:cara' WHERE bot='ops'")
+    as_member(api, "ben@acme.example")
+    assert use(api, rid, bot, money, raise_ + "-3")[:2] == (409, "task_ok_missing")
+    assert standing(api, rid) != K.USED

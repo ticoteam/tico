@@ -170,6 +170,10 @@ def _may_answer(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row,
     if kind == "ok":
         from . import task_asks
 
+        # The Assistant and BotOps never answer OK to an OK, bound or plain, whichever caller brings it here: the value
+        # is already stripped (answer), so " ok " is "ok".
+        if value == OK and task_asks.acting_for_people(by):
+            _refuse(conn, by, "task_requirement", task_asks.NOT_YOURS, task_id)
         # An OK bound to exact content is given only through its preview, with the hash of what was shown
         # (task_asks.give_ok). A send back stays a plain answer.
         refused = task_asks.refuses_plain_ok(conn, requirement["id"], value)
@@ -262,6 +266,10 @@ def answer(
         out["answer_id"] = newest["id"]
         return out
     answer_id = _write(conn, row, requirement_id, by, value, notes)
+    if requirement["kind"] == "ok" and value != OK:
+        from . import task_asks
+
+        task_asks.revoke(conn, requirement_id)  # a send back ends a bound OK for good (no grant: nothing)
     out = E.advance(conn, task_id)
     if out is None:
         # The task changed and stays: the never-stuck ladder starts again, before any wake this answer sends.
@@ -361,6 +369,11 @@ def undo(conn: "sqlite3.Connection", answer_id: str, by: str) -> Row:
     if not stays and not moved_by_it:
         _refuse(conn, by, "task_changed", "The task moved since. Move it back by hand.", task_id)
     conn.execute("UPDATE answers SET undone_at=? WHERE id=?", (H.now(), answer_id))
+    if answered and answered["kind"] == "ok" and found["answer"] in (OK, NO):
+        from . import task_asks
+
+        # An OK taken back is revoked for good; a send back taken back leaves its revocation where it is.
+        task_asks.revoke(conn, found["requirement_id"])
     # A wake this answer caused and no run took yet is moot.
     task_wakes.cancel(conn, f"{task_id}:{visit['id']}:answer:{answer_id}")
     H.history_event(conn, "task", task_id, by, "answer_undone", found["answer"], None, None, {"answer_id": answer_id})

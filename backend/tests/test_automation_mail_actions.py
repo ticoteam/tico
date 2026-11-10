@@ -29,6 +29,18 @@ def header(msg, name):
     return fake.FakeGmailService.header(msg, name)
 
 
+def give_ok(api, rid):
+    """The person asked OKs the pinned email from its preview, through the real routes (GET /api/v2/oks/{rid}, POST
+    /api/v2/tasks/{id}/asks/{rid}/ok): the only way an automation's send is let go (backend/task_asks.py)."""
+    from backend import task_asks
+
+    with api.app.state.store.read() as c:
+        tid = task_asks.task_of(c, rid)
+    shown = api.get(f"/api/v2/oks/{rid}", headers=headers())
+    assert shown.status_code == 200, shown.text
+    post(api, f"tasks/{tid}/asks/{rid}/ok", {"shown_hash": shown.json()["shown_hash"]})
+
+
 def approve_and_dispatch(api, computer, send_id=None):
     with api.app.state.store.read() as c:
         row = c.execute(
@@ -39,8 +51,8 @@ def approve_and_dispatch(api, computer, send_id=None):
         ).fetchone()
     assert row
     assert api.get("/api/v2/email/sends/" + row["id"], headers=headers()).status_code == 200
-    post(api, "approvals/" + row["approval_id"], {"decision": "approved"})
-    assert computer.worker.email_send_tick() == 0  # approval starts the undo window
+    give_ok(api, row["approval_id"])
+    assert computer.worker.email_send_tick() == 0  # the OK starts the undo window
     with later(3):
         count = computer.worker.email_send_tick()
         with api.app.state.store.read() as c:
@@ -216,7 +228,7 @@ def test_a_send_whose_answer_was_lost_inside_the_cli_is_not_sent_again(api, comp
     with api.app.state.store.read() as c:
         queued = c.execute("SELECT id,approval_id FROM email_sends ORDER BY rowid DESC LIMIT 1").fetchone()
     assert api.get("/api/v2/email/sends/" + queued["id"], headers=headers()).status_code == 200
-    post(api, "approvals/" + queued["approval_id"], {"decision": "approved"})
+    give_ok(api, queued["approval_id"])
     assert computer.worker.email_send_tick() == 0
     real = gm.Gmail.send_raw
 

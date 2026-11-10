@@ -374,6 +374,14 @@ def register(
             if not found:
                 raise Problem("not_found", "No such answer", 404)
             auth.task(c, who, found[0])
+            # An undo that touches a bound OK (the OK or its send back) is the person's own click: never the
+            # Assistant's, BotOps' or a token's.
+            bound = c.execute(
+                "SELECT 1 FROM answers a JOIN ok_grants g ON g.requirement_id=a.requirement_id WHERE a.id=?",
+                (answer_id,),
+            ).fetchone()
+            if bound and not task_asks.own_click(who):
+                raise Problem("ok_not_yours", task_asks.NOT_YOURS, 403)
             H.task_answer_undo(c, who.actor, answer_id)
             return answer(c, who, found[0])
 
