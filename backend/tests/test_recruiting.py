@@ -233,7 +233,7 @@ def test_marketing_and_engineering_titles_draft_from_the_template_that_is_the_jo
         ("AppSec Engineer", "security-engineer"),
         ("Build Engineer", "devops-engineer"),
         ("CI/CD Engineer", "devops-engineer"),
-        ("Release Engineer", "release-notes"),
+        ("Release Engineer", "release-owner"),
         ("Developer Relations Engineer", "developer-advocate"),
         ("DevRel", "developer-advocate"),
         ("Documentation Engineer", "docs-writer"),
