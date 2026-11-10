@@ -5880,7 +5880,15 @@ class Execution:
             else {"reserved": not row["stop_requested_at"]}
         )
         if not reserved["reserved"]:
-            raise Problem("start_wait", reserved.get("waiting", "Start reservation expired or stopped"), 409)
+            # A wait, not a refusal for good: no start_refused record, so a later start-place may grant it. The route
+            # raises the 409 after this commits, so the wait reserve wrote and the grant it let go are kept.
+            return {
+                "started": False,
+                "refused": {
+                    "code": "start_wait",
+                    "detail": reserved.get("waiting", "Start reservation expired or stopped"),
+                },
+            }
         c.execute("UPDATE attempts SET state='running',started_at=? WHERE id=?", (H.now(), aid))
         from . import task_wakes
 
