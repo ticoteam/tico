@@ -49,7 +49,10 @@ def test_self_aws_carries_full_chart_without_a_bucket_flag_and_retries_without_t
     assert saved["plan_bucket_managed"] and "company_file_data" not in saved
     assert settings.from_saved(saved, local_env).company_file_data.encode() == put["Body"]
     assert stat.S_IMODE((state.home() / DOMAIN / "env").stat().st_mode) == 0o600
-    assert s3.called("delete_object") == [{"Bucket": put["Bucket"], "Key": put["Key"]}]
+    assert s3.called("delete_object") == [
+        {"Bucket": put["Bucket"], "Key": put["Key"], "ExpectedBucketOwner": "123456789012"}
+    ]
+    assert put["ExpectedBucketOwner"] == "123456789012"
     config_names = [n for n, _ in s3.calls]
     assert config_names.index("put_bucket_lifecycle_configuration") < config_names.index("put_object")
     (acl,) = s3.called("put_public_access_block")

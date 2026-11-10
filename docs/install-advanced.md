@@ -60,7 +60,8 @@ can read only this install's plan prefix. Creating the bucket needs permission t
 public access blocking, ownership controls, encryption and lifecycle rules. A failure stops before the chart upload.
 Setup refuses an existing bucket without this install's ownership tags; the one exception is an untagged bucket whose name this install saved a claim on just before creating it (a run that stopped before tagging it). The empty bucket remains after the chart is
 deleted. With an explicit `--plan-bucket BUCKET`
-(and `--plan-bucket-region` when it differs from `--aws-region`), as Tico's hosted servers use, setup puts the packed
+(and `--plan-bucket-region` when it differs from `--aws-region`), as Tico's hosted servers use, setup first checks the
+bucket belongs to the credentials' AWS account (and every object call names that account as the expected owner), then puts the packed
 plan at `plans/<name>/<sha256>` in that bucket before launch, grants the server's role `s3:GetObject` on
 `plans/<name>/*` only, and names the key and its sha256 in the `.env`. At first boot the server copies it to
 `/opt/tico/company-file/plan.b64` (0400, the server's user), refuses to start on a sha256 mismatch, and the app reads it

@@ -1040,6 +1040,8 @@ def _aws(
                 f"Cannot prepare the private starter plan bucket ({code}). Check your AWS bucket "
                 "permissions and re-run setup; no chart was uploaded and the saved chart stays on this computer."
             ) from None
+    elif plan_s3:
+        d.verify_plan_bucket(plan_s3)  # before the env names it and before the upload
     d.put_env(env_text, company_file=bool(s.company_file_data) and not plan.plan_bucket)
     if plan_s3:
         # Before launch: the server copies it at first boot. A re-run puts it again, for pull-env.sh below.

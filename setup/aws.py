@@ -539,19 +539,36 @@ class Deployer:
             },
         )
 
+    def verify_plan_bucket(self, s3) -> None:
+        """A --plan-bucket setup did not make: it must be one this AWS account owns before anything goes into it."""
+        try:
+            s3.head_bucket(Bucket=self.p.plan_bucket, ExpectedBucketOwner=self.account_id)
+        except Exception as e:  # botocore ClientError (403: another account's), a network error
+            raise MissingInput(
+                f"The starter plan bucket {self.p.plan_bucket} is not one this AWS account owns, or cannot be read "
+                f"({error_code(e) or type(e).__name__}); refusing to upload to it. Check --plan-bucket and the "
+                "AWS credentials."
+            ) from None
+
     def put_plan(self, s3, key: str, data: str) -> None:
         """The packed starter plan, for the server to copy once at first boot (remote.bootstrap_script). Plan only:
         the env names the key and its sha256, never the plan."""
         if not key.startswith(f"plans/{self.p.name}/"):
             raise ValueError("a starter plan key is plans/<this server's name>/<sha256>")
-        s3.put_object(Bucket=self.p.plan_bucket, Key=key, Body=data.encode("ascii"), ContentType="text/plain")
+        s3.put_object(
+            Bucket=self.p.plan_bucket,
+            Key=key,
+            Body=data.encode("ascii"),
+            ContentType="text/plain",
+            ExpectedBucketOwner=self.account_id,
+        )
 
     def delete_plan(self, s3, key: str) -> str:
         """Once the server is up and its app reads its copy. Returns "" when deleted, else the error code: the server is
         already working, and the plan stays until someone deletes it or the bucket's lifecycle rule, if it has one,
         expires it."""
         try:
-            s3.delete_object(Bucket=self.p.plan_bucket, Key=key)
+            s3.delete_object(Bucket=self.p.plan_bucket, Key=key, ExpectedBucketOwner=self.account_id)
         except Exception as e:  # botocore ClientError, a network error; without importing botocore here
             return str(getattr(e, "response", {}).get("Error", {}).get("Code") or type(e).__name__)
         return ""
