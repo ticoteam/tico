@@ -109,7 +109,13 @@ def add(
         return None
     for found in waiting:  # folded into this one
         conn.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued'", (found[0],))
-    conn.execute("UPDATE messages SET wake_key=? WHERE id=?", (wake_key, message["id"]))
+    # `job` marks a wake that queued a run, so a wake whose job later went missing reads as lost (`lost`); one to a bot
+    # that reads its own inbox never had a job.
+    conn.execute(
+        "UPDATE messages SET wake_key=?, refs=CASE WHEN EXISTS (SELECT 1 FROM jobs WHERE message_id=?) "
+        "THEN json_set(COALESCE(refs, '{}'), '$.job', json('true')) ELSE refs END WHERE id=?",
+        (wake_key, message["id"], message["id"]),
+    )
     return message["id"]
 
 
@@ -222,6 +228,32 @@ def runs_since(conn: "sqlite3.Connection", task: Row, since: str) -> int:
         (_like(task["id"]), task.get("conversation_id") or "", since),
     ).fetchone()
     return int(found[0]) if found else 0
+
+
+def lost(conn: "sqlite3.Connection", task: Row, actor: str | None, since: str) -> Row | None:
+    """The wake about this task that `actor` was owed and never got: its newest one in this visit since `since` (the
+    last change), when it queued a run, its job is gone or canceled, and no run of this bot has started on the task
+    since it was written. `id`, `body`. None when nothing was lost."""
+    H = _h()
+    if not H.is_bot(actor):
+        return None
+    visit: Row = task.get("visit") or {}
+    found = conn.execute(
+        "SELECT m.id, m.body, m.created_at, json_extract(m.refs, '$.job'), "
+        "(SELECT j.state FROM jobs j WHERE j.id = m.id) FROM messages m "
+        "WHERE m.wake_key LIKE ? ESCAPE '\\' AND m.recipient_id=? AND m.created_at>=? "
+        "AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1",
+        (_like(f"{task['id']}:{visit.get('id')}"), actor, since),
+    ).fetchone()
+    if not found or not found[3] or found[4] not in (None, "canceled"):
+        return None
+    taken = conn.execute(
+        "SELECT 1 FROM attempts a JOIN jobs j ON j.id = a.job_id JOIN messages m ON m.id = j.message_id "
+        "WHERE a.bot_id=? AND (a.job_id=? OR ((m.wake_key LIKE ? ESCAPE '\\' OR m.conversation_id = ?) "
+        "AND COALESCE(a.started_at, a.created_at) > ?)) LIMIT 1",
+        (H.actor_id(actor), found[0], _like(task["id"]), task.get("conversation_id") or "", found[2]),
+    ).fetchone()
+    return None if taken else {"id": str(found[0]), "body": str(found[1] or "")}
 
 
 def woken_since(conn: "sqlite3.Connection", task_id: str, actor: str | None, since: str) -> bool:

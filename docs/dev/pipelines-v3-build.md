@@ -331,6 +331,8 @@ def queued(conn, task_id, actor) -> bool        # a wake for this task is waitin
 def live_run(conn, task, actor, now=None) -> bool      # a run on this task whose lease is still renewed
 def last_run(conn, task, actor) -> dict | None  # the bot's newest run on the task: `state`, `finished_at`
 def runs_since(conn, task, since) -> int        # bot runs started on the task since then, whoever ran
+def lost(conn, task, actor, since) -> dict | None      # its newest wake in this visit since then queued a run (refs.job),
+                                                       # the job is gone or canceled and no run of it started: id, body
 def woken_since(conn, task_id, actor, since) -> bool   # a wake about the task was written for them since then
 def drop(conn, task_id, keep=None) -> int       # cancel every wake still queued for the task, but `keep`'s (one bot
                                                 # or several)
@@ -376,9 +378,15 @@ What a pass does with one task:
 
 - Everything is met and there is room: `advance`, and on through any stage that needs nothing.
 - The progress mark differs from the one kept on the visit and nothing announced it: `task_engine.changed`. No try is
-  counted, and the bot is woken again after the first gap with "This task is not finished. Carry on."
+  counted, and while no run has started since, the bot is woken again after the first gap with "This task is not
+  finished. Carry on."
 - A bot's turn (the bot with the task's own work first, then a bot named on an OK or an answer): nothing while it has
-  a live run or a wake queued for the task. Otherwise, once `next_try_at` has passed and the gap has passed since its
+  a live run or a wake queued for the task. A lost wake is not a try: when its newest wake since the last change never
+  started a run and its job is gone (`task_wakes.lost`), the same words are written again on this pass, keyed
+  `<task>:<visit>:lost:<message id>`, and nothing is counted. A wake that never queued a run (a bot that reads its own
+  inbox) is not lost. When no run of any bot has started since the last change, the next wake is not a try either (the
+  "Carry on" below). A try is counted only after a run that started since the last change ended without one.
+  Otherwise, once `next_try_at` has passed and the gap has passed since its
   last run ended, try `n` of 3 with a wake keyed `<task>:<visit>:<level>:<n>:<last change>`. The gap after try 3 is
   2 minutes, then the task goes up: to the pipeline's manager bot, if it is a bot that can run and is not the one that
   just tried, else to a person. The manager bot's first try is sent in the same pass and says who tried. A try is

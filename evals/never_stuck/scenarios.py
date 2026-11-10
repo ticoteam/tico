@@ -322,7 +322,6 @@ CHECKS: dict[str, Scenario] = {}
 
 # Scenarios that fail on this branch because of an engine bug, by the bug's name (README.md).
 FAILING: dict[int, str] = {
-    3: "lost-wake-is-a-try",
     43: "mention-not-in-needs",
 }
 

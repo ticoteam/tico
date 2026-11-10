@@ -915,6 +915,7 @@ class Sim:
         Wd.METER.disarm()
         self.restore_all()
         start = self.world.at()
+        self.step(10)  # one pass with every bot put right: what fell due while a fault held it is seen now
         for _ in range(4000):
             if (self.world.at() - start).total_seconds() > limit_days * 86400:
                 break

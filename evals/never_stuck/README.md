@@ -35,7 +35,6 @@ fails on a known bug is a strict expected failure: when the bug is fixed the tes
 
 | Name | Seen in | What happens |
 | --- | --- | --- |
-| `lost-wake-is-a-try` | scenario 3 | A lost wake is found only after the 2-minute gap and counts as try 1 ("You stopped before this task was finished"). The spec says the next pass, and no try. |
 | `mention-not-in-needs` | scenario 43 | An @ of a person on a task puts nothing in their Needs you (C28 is not built). |
 
 A sweep tags each failure with the bug it matches, so a new one stands out as `[NEW]`; `--allow-known` makes only new

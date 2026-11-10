@@ -177,7 +177,16 @@ def _ladder(
         return
     if task_wakes.live_run(conn, row, target, at) or task_wakes.queued(conn, row["id"], target):
         return
+    epoch: str = visit.get("last_change_at") or visit["entered_at"]
     tries = int(visit.get("tries") or 0)
+    lost = task_wakes.lost(conn, row, target, epoch)
+    if lost:
+        # Its wake went missing before any run took it: the same words again, on this pass. Nothing ran, so nothing
+        # is counted (R3).
+        key = f"{row['id']}:{visit['id']}:lost:{lost['id']}"
+        if task_wakes.add(conn, row, target, visit, lost["body"], level=level, try_n=tries, wake_key=key):
+            done["woken"] += 1
+        return
     gap = GAPS[tries] if tries < TRIES else GAPS[0]
     due: str | None = visit.get("next_try_at")
     if not due:
@@ -188,17 +197,12 @@ def _ladder(
         due = max(due, str(H.shift(last["finished_at"], seconds=gap)))  # the gap runs from when the bot stopped
     if at < due:
         return
-    epoch: str = visit.get("last_change_at") or visit["entered_at"]
     runs = task_wakes.runs_since(conn, row, epoch)
     cut_off = bool(last) and (last or {}).get("state") in CUT_OFF
-    if (
-        level == "owner"
-        and tries == 0
-        and runs < OWNER_RUNS
-        and not task_wakes.woken_since(conn, row["id"], target, epoch)
-    ):
-        # Nothing has told this bot about the task as it stands now: it changed during a run, or a wake was lost.
-        # This wake starts it again and is not a try.
+    if level == "owner" and tries == 0 and not runs:
+        # No run has started since the task last changed (it changed during a run, and nothing announced it): this
+        # wake starts it again and is not a try. A try is counted only after a run that started since the change
+        # ended without one (R3).
         lead = "Your last run on this task was cut off." if cut_off else "This task is not finished. Carry on."
         if _wake(conn, row, target, lead, level, 0, epoch):
             conn.execute("UPDATE visits SET next_try_at=? WHERE id=?", (H.shift(at, seconds=GAPS[0]), visit["id"]))

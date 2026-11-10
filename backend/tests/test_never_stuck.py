@@ -413,6 +413,35 @@ def test_an_answer_for_a_bot_with_no_turn_goes_to_whoever_has_it(c, general, lat
     assert not any("Card" in line for line in _said(c, task_id, MANAGER))
 
 
+def _lose(c, task_id):
+    """Every wake still queued for the task goes missing, as a lost job does."""
+    c.execute(
+        "DELETE FROM jobs WHERE state='queued' AND message_id IN (SELECT id FROM messages WHERE wake_key LIKE ?)",
+        (task_id + ":%",),
+    )
+
+
+def test_a_lost_wake_is_written_again_on_the_next_pass_and_is_not_a_try(c, general, later):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    first = _said(c, task_id, BUILDER)
+    _lose(c, task_id)
+    assert later(seconds=10) == {"woken": 1} and _ladder(c, task_id) == ("owner", 0)  # this pass, not after a gap
+    assert _queued(c, task_id) == [BUILDER] and _said(c, task_id, BUILDER) == first * 2  # the same words
+    assert later(seconds=10) == {}  # once: it is queued again
+    X.ran(c, task_id, BUILDER)
+    assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)  # a run, then a try
+    _lose(c, task_id)  # try 1's wake goes missing too: written again, and still try 1
+    assert later(seconds=10) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    assert _said(c, task_id, BUILDER)[-1] == "You stopped before this task was finished. Try 1 of 3."
+    # A wake that never queued a run (a bot that reads its own inbox) is not lost: nothing is written again.
+    X.ran(c, task_id, BUILDER)
+    c.execute("UPDATE messages SET refs=json_remove(refs, '$.job') WHERE wake_key LIKE ?", (task_id + ":%",))
+    assert later(seconds=900).get("woken") == 1 and _ladder(c, task_id) == ("owner", 2)
+    c.execute("UPDATE messages SET refs=json_remove(refs, '$.job') WHERE wake_key LIKE ?", (task_id + ":%",))
+    _lose(c, task_id)
+    assert later(seconds=10) == {} and _ladder(c, task_id) == ("owner", 2)
+
+
 def test_a_second_wake_for_one_bot_and_task_folds_into_one(c, general):
     row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
     first = task_wakes.add(c, row, BUILDER, row["visit"], "First words.", wake_key=f"{row['id']}:a")
