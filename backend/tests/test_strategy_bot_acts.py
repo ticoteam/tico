@@ -5,16 +5,137 @@ becomes a proposal in their Needs you, and so does a change a bot offline can't 
 
 from urllib.parse import quote
 
-from backend.store import H, encode
+import pytest
+
+from backend.auth import Identity
+from backend.store import H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.goal_asks import goal_manager
 from backend.tests.helpers.strategy_bot_level import level
-from backend.tests.helpers.strategy_bot_suggests import bot_task
-from backend.tests.helpers.company import bot, with_strategy_bot
 from backend.tests.helpers.kpis import goal_with_kpi
 from backend import bot_settings as BS
 from backend import mailbox_access
+from backend import strategy_acts as SA
+from backend import strategy_bot
 
 OWNER, STRATEGY_BOT = "human:ana", "bot:goal-manager"
+
+
+def bot(api, slug):
+    """The bot itself, as an agent credential."""
+    token = slug + "-test"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
+        c.execute(
+            "INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) "
+            "VALUES(?,'hermes',?,?,'human:ana')",
+            (slug, "x-" + slug, H.now()),
+        )
+    api.app.state.store.settings.test_identities[token] = Identity("bot:" + slug, "bot", agent="hermes")
+    return token
+
+
+def with_strategy_bot(api, level=1):
+    """The Strategy Bot at `level`, as its own agent credential."""
+    goal_manager(api, level)
+    return bot(api, "goal-manager")
+
+
+def bot_task(api, slug, title):
+    """A task a bot filed for itself."""
+    with api.app.state.store.transaction() as c:
+        return H.task_create(c, "bot:" + slug, title, "Work it.", "bot:" + slug, lint=False)["id"]
+
+
+# ----------------------------------------------------------------------------- below the routes
+@pytest.fixture
+def c(company):
+    with company.transaction() as conn:
+        for slug in ("ops", "finance", "goal-manager"):
+            X.bot(conn, slug)
+        strategy_bot.set_level(conn, OWNER, 3)
+        yield conn
+
+
+def _decide(c, changes, reason="Activation is red; setup work goes first"):
+    """A decision as the route makes it, for a Strategy Bot that reads every task and may give work to every bot."""
+    action = SA.decide(
+        c, STRATEGY_BOT, reason, changes, visible="1", give=lambda owner, task_id=None: None, sees=lambda actor: True
+    )
+    return SA.entry(c, action, "1")
+
+
+def _filed(c, slug, title, by=None):
+    return H.task_create(c, by or "bot:" + slug, title, "Work it.", "bot:" + slug, lint=False)["id"]
+
+
+def test_a_decision_works_bot_tasks_through_the_task_calls_and_undo_puts_them_back(c):
+    """Each change is one task call made as the Strategy Bot at the version it read: a reorder and a reassign raise
+    the version once, a close ends the task in Closed. Undo reopens what it closed, closes what it made, and keeps a
+    person's later reassign."""
+    first = _filed(c, "ops", "Write the onboarding email")
+    second = _filed(c, "ops", "Clean up old reports")
+    stale = _filed(c, "ops", "Draft the old pricing page")
+    versions = {t: H.task(c, t)["version"] for t in (first, second, stale)}
+    made = _decide(
+        c,
+        [
+            {"do": "create", "owner": "ops", "title": "Fix the setup step that drops new accounts"},
+            {"do": "reorder", "task_id": second},
+            {"do": "reassign", "task_id": first, "owner": "finance"},
+            {"do": "close", "task_id": stale, "note": "Pricing moved to next quarter"},
+        ],
+    )
+    assert made["state"] == "done" and not made["left"] and len(made["done"]) == 4, made["left"]
+    assert H.task(c, first)["owner_id"] == "bot:finance"
+    closed = H.task(c, stale)
+    assert (closed["status"], closed["stage_id"], closed["closed_by_id"]) == ("closed", "general-closed", STRATEGY_BOT)
+    assert {t: H.task(c, t)["version"] for t in versions} == {t: v + 1 for t, v in versions.items()}
+    stamped = {
+        r[0]
+        for r in c.execute(
+            "SELECT DISTINCT subject_id FROM history_events WHERE subject_type='task' AND action_id=?", (made["id"],)
+        )
+    }
+    assert {first, second, stale} <= stamped
+    new = made["done"][0]["task_id"]
+    H.task_reassign(c, OWNER, first, "bot:ops", "Ops has the copy")
+    H.task_reassign(c, OWNER, first, "bot:finance", "Finance after all")
+    SA.undo(c, OWNER, made["id"])
+    undone = SA.entry(c, made["id"], "1")
+    assert undone["state"] == "undone"
+    back = H.task(c, stale)
+    assert (back["status"], back["stage_id"], back["closed_at"]) == ("open", "general-todo", None)
+    assert H.task(c, new)["status"] == "closed"
+    assert H.task(c, first)["owner_id"] == "bot:finance"
+    assert "its owner was changed since" in undone["undo"]["text"], undone["undo"]["text"]
+
+
+def test_undo_gives_a_task_back_to_its_bot_and_tells_both_bots_quietly(c):
+    """The reassign goes back to the bot that had it. The engine wakes whoever has the turn; Undo's own words to the
+    two bots are news, not runs."""
+    work = _filed(c, "ops", "Reconcile the vendor invoices")
+    made = _decide(c, [{"do": "reassign", "task_id": work, "owner": "finance"}])
+    SA.undo(c, OWNER, made["id"])
+    assert H.task(c, work)["owner_id"] == "bot:ops"
+    told = c.execute(
+        "SELECT recipient_id, json_extract(refs,'$.quiet') FROM messages WHERE body LIKE '%undid a decision%'"
+    ).fetchall()
+    assert {(r[0], r[1]) for r in told} == {("bot:ops", 1), ("bot:finance", 1)}
+
+
+def test_the_strategy_bot_does_not_close_a_task_a_person_asked_for_it_proposes_it(c):
+    """A bot does not close what a person asked for: the close is refused by the engine and becomes the owner's
+    proposal; the task stays open."""
+    asked = _filed(c, "ops", "Call the landlord back", by=OWNER)
+    made = _decide(c, [{"do": "close", "task_id": asked, "note": "Not needed now"}])
+    assert made["state"] == "proposed" and not made["done"], made
+    assert made["left"][0]["rule"] == "task_needs_person"
+    assert H.task(c, asked)["status"] == "open"
+
+
+# ----------------------------------------------------------------------------- through the routes
 
 
 def decide(api, token, changes, reason="Activation is red; setup work goes first", expected=200):
@@ -78,8 +199,8 @@ def test_at_level_3_one_decision_changes_bot_tasks_under_one_action_id_and_the_o
 
     # A person moves the reassigned task on after the decision: Undo keeps their change and says so.
     with api.app.state.store.transaction() as c:
-        H.task_update(c, OWNER, first, owner="bot:ops", mover=True)
-        H.task_update(c, OWNER, first, owner="bot:finance", mover=True)
+        H.task_reassign(c, OWNER, first, "bot:ops", "Ops has the copy")
+        H.task_reassign(c, OWNER, first, "bot:finance", "Finance after all")
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
     assert undone["state"] == "undone"
     assert task(api, stale)["status"] == "open" and task(api, new)["status"] == "closed"
@@ -197,38 +318,14 @@ def test_everything_on_the_owners_list_is_refused_on_the_server_and_proposed_ins
 
 def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
     """Spec test 12, Undo's edges: a later move in the queue (even one back to where the decision put it), a task it
-    made that a person took on, two changes to one task, a close on a steps-only ticket from its second open step with
-    a note, and a task whose restore is refused. Each later edit stays and is named; the rest goes back; a form holding
-    the task from before the decision or the Undo gets a version conflict."""
+    made that a person took on, two changes to one task, a close of a task with a note, and a task whose restore is
+    refused. Each later edit stays and is named; the rest goes back; a form holding the task from before the decision
+    or the Undo gets a version conflict."""
     strategy_token = with_strategy_bot(api)
     for slug in ("ops", "finance", "coo"):
         bot(api, slug)
     level(api, 3)
-    typ = post(
-        api,
-        "task-types",
-        {
-            "name": "Dev ticket",
-            "steps_only": True,
-            "bots": "work",
-            "steps": [
-                {"name": "Backlog", "status": "open"},
-                {"name": "On Deck", "status": "open"},
-                {"name": "Done", "status": "closed"},
-            ],
-        },
-    )["type"]
-    ticket = post(
-        api,
-        "tasks",
-        {
-            "owner": "ops",
-            "title": "Fix the guest message times",
-            "body": "Please.",
-            "type": typ["id"],
-            "step": "On Deck",
-        },
-    )["id"]
+    ticket = bot_task(api, "ops", "Fix the guest message times")
     with api.app.state.store.transaction() as c:
         H.task_update(c, OWNER, ticket, note="Waiting on the copy")
     moved, back, twice, refused = (
@@ -238,7 +335,7 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
     bot_task(api, "ops", "Answer the support inbox")
     bot_task(api, "coo", "Review the budget")
     with api.app.state.store.transaction() as c:
-        H.task_update(c, OWNER, refused, owner="bot:coo", mover=True)
+        H.task_reassign(c, OWNER, refused, "bot:coo", "Coo plans launches")
     start = {t: task(api, t) for t in (moved, back, twice, refused, ticket)}
     made = decide(
         api,
@@ -261,7 +358,7 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
         decided = H.task(c, back)["rank"]
         H.task_update(c, OWNER, back, rank=-60, mover=True)  # ...and away and back
         H.task_update(c, OWNER, back, rank=decided, mover=True)
-        H.task_update(c, OWNER, new, owner=OWNER, status="doing", mover=True)  # a person takes on what it made
+        H.task_reassign(c, OWNER, new, OWNER, "I will take this one")  # a person takes on what it made
         BS.write(c, 'coo', {'harness': 'dots'})
     held = task(api, ticket)["version"]
     post(api, f"strategy-bot/log/{made['id']}/undo", {}, token="ben-test", expected=403)  # an admin doesn't undo
@@ -276,15 +373,11 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
     assert '"Clean up old reports": its place in the queue was changed since by' in text
     # Two moves of one task go back to where it started, with no later edit claimed.
     assert now[twice]["rank"] == start[twice]["rank"] and '"Draft the pricing page": its' not in text.split("Not")[-1]
-    # The ticket is back in its own step, place and note.
-    assert (now[ticket]["status"], now[ticket]["step_id"], now[ticket]["note"]) == (
-        "open",
-        start[ticket]["step_id"],
-        "Waiting on the copy",
-    )
-    assert now[ticket]["step_rank"] == start[ticket]["step_rank"] and not now[ticket]["closed_at"]
+    # The closed task is open again, with its note.
+    assert (now[ticket]["status"], now[ticket]["note"]) == ("open", "Waiting on the copy")
+    assert not now[ticket]["closed_at"]
     # What a person took on stays theirs and open; a refused restore is said and the rest still went back.
-    assert (now[new]["owner_id"], now[new]["status"]) == (OWNER, "doing") and "which it made, was changed since" in text
+    assert (now[new]["owner_id"], now[new]["status"]) == (OWNER, "open") and "which it made, was changed since" in text
     assert now[refused]["owner_id"] == "bot:finance" and '"Plan the launch" could not be put back' in text
     with api.app.state.store.read() as c:
         told = {
