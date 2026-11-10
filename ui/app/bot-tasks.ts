@@ -58,11 +58,18 @@ function botTaskRowHTML(t: TaskAny): string {
 }
 // The task a Needs-you item is about: an ask's or a task's own, a stuck stretch's first.
 const botNeedTaskId = (it: NeedsEntry) => String(it.task_id || it.task_ids?.[0] || it.task?.id || '');
+// Each bot's reads against its live events (task-api.ts TaskFeed): its own tasks, and its filter tabs.
+const BOT_TASKS_FEED = new Map<string, {owned: TaskFeed; tabs: TaskFeed}>();
+function botTasksFeed(slug: string) {
+  const feed = BOT_TASKS_FEED.get(slug) || {owned: taskFeedNew(), tabs: taskFeedNew()};
+  BOT_TASKS_FEED.set(slug, feed);
+  return feed;
+}
 // Done recently needs only what changed since the window opened. A failed task load is retried, never shown as an
-// empty list.
+// empty list. What came while it was out goes over it.
 async function loadBotTasksV2(slug: string) {
   const pane = $('#t-open'); if (!pane) return;
-  const seen = BOT_TASKS_CACHE.get(slug);
+  const seen = BOT_TASKS_CACHE.get(slug), feed = botTasksFeed(slug).owned, ticket = taskFeedRead(feed);
   if (seen) botTasksRender(slug, seen.owned);   // last time's list at once; the fresh one follows
   let open: BotTaskList | null = null, ended: BotTaskList | null = null;
   // The day is the cut, so an unchanged list stays a 304.
@@ -72,14 +79,14 @@ async function loadBotTasksV2(slug: string) {
   const filtered = botTaskFilterRead(slug);
   for (const wait of [0, 600, 2000]) {
     if (wait) await new Promise(done => setTimeout(done, wait));
-    if (!$('#t-open') || BOT?.slug !== slug) return;
+    if (!$('#t-open') || BOT?.slug !== slug) { taskFeedFailed(feed, ticket); return; }
     [open, ended] = await Promise.all([
       open || v2Get(`/v2/tasks?owner=${who}&status=${V2_ACTIVE.join(',')}&snoozed=all&brief=true`),
       ended || v2Get(`/v2/tasks?owner=${who}&status=${V2_ENDED.join(',')}&snoozed=all&brief=true&updated_since=${since}`)]);
     if (open && ended) break;
   }
   await names;
-  if (!$('#t-open')) return;
+  if (!$('#t-open') || BOT?.slug !== slug) { taskFeedFailed(feed, ticket); return; }
   // A task that finished between the two reads is in both: the later copy wins.
   const byId = new Map<string, BotListTask>();
   for (const t of [...(open?.tasks || []), ...(ended?.tasks || [])]) {
@@ -88,24 +95,30 @@ async function loadBotTasksV2(slug: string) {
   }
   const owned: {tasks: BotListTask[]} | null = open && ended ? {tasks: [...byId.values()]} : null;
   if (!owned) {
+    taskFeedFailed(feed, ticket);
     if (!seen) $('#t-open').innerHTML = '<div class="err">Could not load the tasks. They will show on the next refresh.</div>';
     return;
   }
   // The open read's cursor: the ended read may be the browser's kept copy (304), its cursor older, never newer.
-  BOT_TASKS_CACHE.set(slug, {owned, cursor: open?.cursor || ''});
+  const cursor = open?.cursor || '', held = taskFeedLanded(feed, ticket, cursor);
+  if (!held) { await filtered; return; }   // a newer read is out
+  const bulk = taskRowsLive(owned.tasks, held, botOwns(slug)) === 'bulk';
+  BOT_TASKS_CACHE.set(slug, {owned, cursor});
   botTasksRender(slug, owned);
   await filtered;
+  if (bulk) void botTasksCatchUp(slug);
 }
 
 // ---- live: the stream's task events in place (refresh.ts liveTasksApply); nothing is read for one
 // The bot's own tasks: the ones it holds, open or finished (Done recently keeps the last two weeks of them).
 const botOwns = (slug: string) => (t: BotListTask) => t.owner_id === 'bot:' + slug;
-function botTasksLive(slug: string, events: LiveTaskEvent[]): void {
+function botTasksLive(slug: string, all: LiveTaskEvent[]): void {
+  const feed = botTasksFeed(slug), events = taskFeedEvents(feed.owned, all), tabbed = taskFeedEvents(feed.tabs, all);
   const seen = BOT_TASKS_CACHE.get(slug);
   if (!seen || !BOT?.loaded.has('tasks')) return;
   const moved = taskRowsLive(seen.owned.tasks, events, botOwns(slug));
   if (moved === 'bulk') { void botTasksCatchUp(slug); return; }
-  const filtered = botTaskFilterLive(slug, events);
+  const filtered = botTaskFilterLive(slug, tabbed);
   if (moved) botTasksRender(slug, seen.owned);
   else if (filtered) botTaskFilterPaint(slug);
 }
@@ -117,11 +130,12 @@ async function botTasksCatchUp(slug: string): Promise<void> {
   if (!seen || !$('#t-open') || BOT?.slug !== slug) { if (BOT?.slug === slug) void loadBotTasksV2(slug); return; }
   try {
     const out = await taskRowsCatchUp(seen.owned.tasks, seen.cursor, {owner: slug, status: [...V2_ACTIVE, ...V2_ENDED].join(','), snoozed: 'all'},
-      botOwns(slug), () => BOT_TASKS_CACHE.get(slug) === seen && BOT?.slug === slug);
+      botOwns(slug), () => BOT_TASKS_CACHE.get(slug) === seen && BOT?.slug === slug, botTasksFeed(slug).owned);
     if (!out) return;
     if (out === 'reset') { void loadBotTasksV2(slug); return; }
     seen.cursor = out.cursor;
     if (out.moved) botTasksRender(slug, seen.owned);
+    if (out.again) { void botTasksCatchUp(slug); return; }
   } catch { /* the next refresh tries again */ }
   await botTaskFilterRead(slug);
 }
@@ -192,7 +206,9 @@ function botTaskFilterLive(slug: string, events: LiveTaskEvent[]): boolean {
         const created = String(t.created_at || ''), byCreated = (x: string) => String((got.tasks.get(x) as {created_at?: string} | undefined)?.created_at || '');
         const before = tab.ids.findIndex(x => byCreated(x) < created);
         if (before >= 0 || !tab.next) { tab.ids.splice(before >= 0 ? before : tab.ids.length, 0, id); got.tasks.set(id, t); }
-        tab.count = Number(tab.count) + 1;
+        // Counted only when it is surely new to the tab: every row is held, it sorts among them, or it was just made. One
+        // that may already be on a later page leaves the count to the next read.
+        if (before >= 0 || !tab.next || (Array.isArray(d.kinds) && d.kinds.includes('insert'))) tab.count = Number(tab.count) + 1;
         moved = true;
       }
     }
@@ -329,14 +345,14 @@ async function botTaskFilterReadNow(slug: string) {
     query += (query ? '%2C' : '') + encoded;
   }
   if (query) chunks.push(query);
-  const first = chunks.shift();
-  const got = await v2Get(botTaskFilterPath(slug) + (first ? '?match_ids=' + first : ''));
-  if (!got || BOT?.slug !== slug) return;
+  const first = chunks.shift(), feed = botTasksFeed(slug).tabs, ticket = taskFeedRead(feed);
+  const got = await v2Get(botTaskFilterPath(slug) + (first ? '?match_ids=' + first : '')).catch((e: unknown) => { taskFeedFailed(feed, ticket); throw e; });
+  if (!got || BOT?.slug !== slug) { taskFeedFailed(feed, ticket); return; }
   const needs: BotFilterTab | undefined = got.tabs?.find((tab: BotFilterTab) => tab.key === 'needs');
   if (needs) for (const chunk of chunks) {
     const more = await v2Get(botTaskFilterPath(slug) + '?tab=needs&match_ids=' + chunk);
     const matched: BotFilterTab | undefined = more?.tabs?.find((tab: BotFilterTab) => tab.key === 'needs');
-    if (!matched || BOT?.slug !== slug) return;
+    if (!matched || BOT?.slug !== slug) { taskFeedFailed(feed, ticket); return; }
     needs.matched_ids = [...new Set([...(needs.matched_ids || []), ...(matched.matched_ids || [])])];
   }
   const was: Record<string, BotFilterTab> = BOT_TASK_FILTERED.get(slug)?.tabs || {};
@@ -348,8 +364,11 @@ async function botTaskFilterReadNow(slug: string) {
     while (before?.name === tab.name && tab.next && tab.ids.length < before.ids.length)
       if (!await botTaskFilterPage(slug, tab, read.tasks)) break;
   }
-  if (BOT?.slug !== slug) return;
+  const held = BOT?.slug === slug ? taskFeedLanded(feed, ticket) : null;
+  if (!held) { taskFeedFailed(feed, ticket); return; }
   BOT_TASK_FILTERED.set(slug, read);
+  // The tabs' answer is as of when the server counted them: what came while it was out goes over it.
+  botTaskFilterLive(slug, held.filter(d => !d.bulk));
   botTaskFilterPaint(slug);
   // The initial Needs you read or a live event may finish while this request is in flight.
   const latest = botNeeds(slug).map(it => String(it.id)).sort().join(',');
@@ -397,13 +416,17 @@ document.addEventListener('click', async ev => {
   else toast('Could not load more. Try again.', true);
 });
 // Needs you: the tasks the tab counts, and what else of this bot's is in the person's Needs you (a stuck stretch, an ask
-// on a task the tab does not hold), each once.
+// on a task the tab does not hold), each once. Needs you is the list the app holds now, not as it was when the tab was
+// read: an ask answered leaves at once, a new one shows. A task the tab held because it was in Needs you then, and no
+// longer is, leaves too, when the whole list is here to say so.
 function botNeedsPaint(slug: string): Set<string> {
   const host = $('#bot-needs'), filtered = BOT_TASK_FILTERED.get(slug), counted = filtered?.tabs.needs;
-  // Extra rows and their overlap count belong to the same completed filter read.
-  const extras = counted && filtered?.extras ? filtered.extras : botNeeds(slug);
-  const tasks: TaskAny[] = counted && filtered ? counted.ids.map(id => filtered.tasks.get(String(id))).filter((t): t is TaskAny => !!t) : [];
-  const held = new Set([...tasks.map(t => String(t.id)), ...(counted?.matched_ids || [])]);
+  const extras = botNeeds(slug), now = new Set(extras.map(botNeedTaskId).filter(Boolean));
+  const left = new Set(counted && filtered && needsAll() ? filtered.extras.map(botNeedTaskId).filter(id => id && !now.has(id)) : []);
+  const tasks: TaskAny[] = counted && filtered ? counted.ids.filter(id => !left.has(String(id))).map(id => filtered.tasks.get(String(id)))
+    .filter((t): t is TaskAny => !!t) : [];
+  const gone = new Set([...(counted?.ids || []), ...(counted?.matched_ids || [])].map(String).filter(id => left.has(id)));
+  const held = new Set([...tasks.map(t => String(t.id)), ...(counted?.matched_ids || []).filter(id => !left.has(String(id)))]);
   const rest = new Map<string, TaskAny>();
   for (const it of extras) {
     const id = botNeedTaskId(it);
@@ -411,7 +434,7 @@ function botNeedsPaint(slug: string): Set<string> {
   }
   const items = [...tasks, ...rest.values()];
   if (!host || BOT?.slug !== slug) return new Set();
-  botTaskCount('cnt-needs', counted ? Number(counted.count) + rest.size : Math.max(items.length, needsMeCount(slug)));
+  botTaskCount('cnt-needs', counted ? Math.max(0, Number(counted.count) - gone.size) + rest.size : Math.max(items.length, needsMeCount(slug)));
   const list = $('#t-needs');
   const more = (counted?.next ? '<button type="button" class="ghost bot-done-more" data-bot-filter-more="needs">Show more</button>' : '');
   list.innerHTML = items.length || more ? `<div class="bot-task-list">${items.map(botTaskRowHTML).join('')}</div>${more}` : '<div class="rail-empty">Nothing needs you.</div>';

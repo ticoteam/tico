@@ -982,6 +982,34 @@ impl Drove {
             yielded: false,
         }
     }
+
+    /// How a held login's turn ends when its fallback never acknowledged it: nothing ran. A start the server refused
+    /// (`refused`: `started` kept answering start_wait, or start-place said stop) stays interrupted, which the server
+    /// settles as skipped (backend/execution.py held_before_start). Any other failure ends like a turn with no fallback
+    /// ready: failed on the limit, so the bot waits out the hold. Returns the limit error to record, if any.
+    fn unacked_fallback(self, refused: bool, why: String) -> (Drove, Option<String>) {
+        if refused {
+            let ended = Drove {
+                outcome: "interrupted".into(),
+                limited: false,
+                ..self
+            };
+            return (ended, None);
+        }
+        let ended = Drove {
+            outcome: "failed".into(),
+            reply: why.clone(),
+            limited: true,
+            ..self
+        };
+        (ended, Some(why))
+    }
+}
+
+/// Whether a turn's start failed because the server will not start it, or it was stopped, before it started: the
+/// texts of START_REFUSED, `unstopped` and start-place's stop.
+fn start_refusal(e: &Fail) -> bool {
+    e.text.starts_with("Execution interrupted after stop")
 }
 
 /// Err when the turn was stopped before it acknowledged its start (a person's Stop, or its task done or closed while it
@@ -2822,6 +2850,8 @@ impl Runner {
         let mut left = None;
         // Whether a fallback host acknowledged the turn of a held login (below): until it does, nothing has run.
         let mut acked = false;
+        // Whether that fallback's start was refused (start_refusal) before it acknowledged the turn.
+        let mut start_refused = false;
         while let (Some(hop), true, Some(base)) = (pending.take(), prepared, base_env.clone()) {
             tried.push(crate::fallback::slot(&hop.runtime, &hop.model));
             uses.push(hop.runtime.clone());
@@ -3059,6 +3089,7 @@ impl Runner {
                 log(&format!("Tico runner: {bot}: {why}; ran the turn on {}{how}", hop.harness));
                 Ok(())
             }.await;
+            start_refused = matches!(&hopped, Err(e) if !acked && start_refusal(e));
             if let Err(e) = hopped {
                 if self.drain.returning(&aid) {
                     // The regular settlement below saves and hands the continuation back.
@@ -3115,13 +3146,16 @@ impl Runner {
             // Sent away from a held login, its fallback failed before it acknowledged the turn: nothing ran. It ends
             // like a turn with no fallback ready, so the server settles it unstarted and the bot waits out the hold
             // instead of the job being leased to the same fallback again and again.
+            // A start the server refused for good stays interrupted, so the server settles it as skipped.
             let why = format!("{runtime} login held (usage limit); its fallback {f} did not start on this computer");
-            let _ = self
-                .state
-                .append(&aid, "error", &json!({"error": why, "limit": true}));
-            drove.outcome = "failed".into();
-            drove.reply = why;
-            drove.limited = true;
+            let (ended, error) = std::mem::replace(&mut drove, Drove::interrupted())
+                .unacked_fallback(start_refused, why);
+            drove = ended;
+            if let Some(why) = error {
+                let _ = self
+                    .state
+                    .append(&aid, "error", &json!({"error": why, "limit": true}));
+            }
             fallback = None;
             subscription_unavailable = None;
         }
@@ -4721,6 +4755,43 @@ mod tests {
         assert_eq!(requests.len(), 5);
         assert!(requests[1].contains("started:a1") && requests[4].contains("started:a1:1"));
         assert!(runner.places.lock().unwrap().contains("a1"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_held_logins_fallback_whose_start_is_refused_stays_interrupted_so_the_server_skips_it(
+    ) {
+        // The server keeps answering start_wait (the task no longer wants this lease, backend/execution.py
+        // refuse_start), then says stop: the fallback never acknowledged the turn, and its end stays interrupted,
+        // not a failure on the login's limit that the server would queue again as a wait for quota.
+        let mut answers = Vec::new();
+        for _ in 0..START_WAIT_TRIES {
+            answers.push((200, r#"{"reserved":true}"#));
+            answers.push((
+                409,
+                r#"{"error":{"code":"start_wait","message":"The task no longer waits on this turn"}}"#,
+            ));
+        }
+        let (url, _seen) = crate::client::tests::serve(answers).await;
+        let (runner, dir) = lease_runner(&url, "fallback-refused");
+        let turn = json!({"id": "a1", "start_reservation_seconds": 180});
+        let refused = runner
+            .start_fallback(&turn, &lease_flags(), "thread1")
+            .await
+            .unwrap_err();
+        assert!(start_refusal(&refused), "{}", refused.text);
+        let (ended, error) = Drove::interrupted().unacked_fallback(true, "held".into());
+        assert_eq!(
+            (ended.outcome.as_str(), ended.limited, error),
+            ("interrupted", false, None)
+        );
+        // Any other failure before the fallback started is the hold's: failed on the limit, its error recorded.
+        assert!(!start_refusal(&Fail::runtime("no such harness here")));
+        let (ended, error) = Drove::interrupted().unacked_fallback(false, "held".into());
+        assert_eq!(
+            (ended.outcome.as_str(), ended.limited, error.as_deref()),
+            ("failed", true, Some("held"))
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

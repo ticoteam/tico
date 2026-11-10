@@ -171,7 +171,7 @@ def flush_wakes(c):
 
     sent = []
     for row in c.execute("SELECT key FROM registry_metadata WHERE key LIKE 'github-task-wake:%'").fetchall():
-        with isolated(c, "github_wake", row["key"]):
+        with isolated(c, "github_wake", row["key"], private=True):
             burst = metadata(c, row["key"])
             if burst.get("due", "") > H.now():
                 continue
@@ -1852,7 +1852,7 @@ def ship_deployed(c, settings, *, ancestry=None):
         return bool(link["pr_sha"] == commit or verified or historical)
 
     for link in candidates:
-        with isolated(c, "ship_deployed", link["task_id"]):
+        with isolated(c, "ship_deployed", link["task_id"], private=True):
             if not included(link):
                 continue
             c.execute("UPDATE task_links SET state='shipped',updated_at=? WHERE id=?", (H.now(), link["id"]))

@@ -19,10 +19,10 @@ These sit alongside `handoffs.md` and `approvals.md`.
 - **A request becomes tasks first**. When a person asks for work, file each
   distinct ask as a hub task you own before starting ("do x, y and z" is three tasks), update the
   task when they revise the ask, and work them up to three at a time, finishing each with
-  `hub task update <id> --status done --note`. Your open tasks are how the next turn, or a person,
-  picks the work back up after a failure. A one-line question you answer at once needs no task.
-  There is no daily open-tasks run per bot: BotOps sweeps every bot's stuck
-  work once a day (`hub task list --stuck`) and starts or unblocks it.
+  `hub task done <id> -m "<what was done>" --version N`. Your open tasks are how the next turn, or a
+  person, picks the work back up after a failure. A one-line question you answer at once needs no task.
+  Nobody has to sweep for stuck work: when a bot stops early, Tico wakes it again, then its manager
+  bot, then a person.
 - **Visuals in replies.** Add a visual (chart, table, diagram, mockup, screenshot, clip or recording)
   to a reply when it makes the answer clearer, never for a plain answer, and keep the text answer
   complete on its own. Attach it with `--visual <file>` and `--title <caption>` on your reply or comment.
@@ -47,12 +47,13 @@ Sending outside the team is set in Tico, never in `bot.yaml`: Settings > Bots > 
 or inbox sending policy. The modes are **On their own**, **Ask first** and **Never**.
 
 - Every email goes through Tico's send queue (`mail.sh send` or `reply`), which decides it and holds it for an undo
-  window before it goes. Under Ask first a person approves it in Tico. A send Tico holds or blocks leaves the draft and
-  the reason; do not look for another route.
+  window before it goes. Under Ask first Tico asks a person on the task to OK that exact message. A send Tico holds or
+  blocks leaves the draft and the reason; do not look for another route.
 - Other outbound acts (a DM, social post or comment to anyone outside the team) follow the same mode. With On their
   own, the standing send instructions in your AGENT.md and playbooks apply, within the requested work and your Tools.
-  Otherwise produce the send-ready draft, attach it to the task, and stop; under Ask first, ask a person to approve that
-  exact one. This holds even where an older instruction says to send as the owner.
+  Otherwise produce the send-ready draft, attach it to the task, and stop; under Ask first, ask a person for an OK on
+  that exact draft (`approvals.md`) and send only what they OK'd. This holds even where an older instruction says to
+  send as the owner.
 - Internal Slack posts to team channels and calendar invites are not outbound.
 
 ## Files and deliverables
@@ -76,57 +77,44 @@ customer-facing stays a draft until your sending policy in Tico lets you send.
 
 ## Asking people
 Deliver files with `hub task attach <id> <file> --note "..."`. The same task and name adds a version.
-To ask about a file, file a question task with it: `hub task question "<question>" --on <person> --review <file>`.
-For a comment, use `hub task comment <id> "..." --attach <file>`. Ask once per version. Read the answer in
-the wake, or with `hub task answers <id>`, and act on that answer. Never re-ask about an answered version;
-attach a new version when the work changes. Answers record who replied; the bot decides its next step.
-When a decision fits a pick or a yes/no, ask it as a structured question, one decision per task, written so it
-makes sense on its own: `hub task question "<question>" --on <person> [--option A=<file> --option B=<file>]`
-(MCP: `hub_task_question`) files it, waits on them and wakes you with the answer; then mark it done.
-The person sees one card: your question, a "why it matters" line (`--why`), each pick with what happens if they
-choose it, and your fallback. Give every pick as an option with its "what happens" line (`--option "Calls -> Booked on
-your calendar"`). Several picks they may take together: `--multi` with the ones you advise marked `--recommend Calls`;
-they tick and send, and you hear "Not this one" for each pick they leave unticked. Keep ids, file paths and error
-text out of the question, the why line and every pick; put them in the task body. Tico refuses a question that
-breaks these, and says why.
+For a comment, use `hub task comment <id> "..." --attach <file>`.
+When your task needs a person (a decision, access, a fix only they can make), ask them once, on your task:
+`hub task ask <id> --to <person> "<one sentence>" [--choices Yes,No] [--show file:<ID@N>] --version N`
+(MCP: `hub_task_ask`). `--kind ok` asks them to OK the thing you show, or send it back with notes. The task stays in
+its stage until they answer, the ask is one line in their Needs you with buttons, and their answer wakes you once on
+the task. Act on that answer, and don't ask again. Ask once per version: never re-ask about an answered version;
+attach a new version when the work changes, and ask about that. Answers record who replied; you decide the next step.
+An ask never expires and never goes ahead on its own. It ends when they answer, when you withdraw it
+(`hub task ask <id> --withdraw -m "<why>"`), or when the task moves back or closes.
+Write the sentence so it makes sense on its own: one or two plain sentences saying what you need and what happens
+after, at most 40 words, with no ids, hashes, file paths, `s3://` links or tool names (`PR #1555` is fine; a bare
+`#1555` is not); Tico refuses it otherwise. A refusal for length or for more than two sentences gives you a rewrite:
+retry once with it and put the rest in a comment. Give choices when the decision is a pick or a yes/no; they may
+always type their own answer. Put ids, file paths and error text on the task, never in the sentence or the choices.
+If a company rule covers your ask, Tico refuses it with the rule's words: act on the rule instead of asking.
 If you have a default that is reversible and internal (a rename, an archive, a draft, a setting you can set back),
-do not ask: do it, and record what you did in one line on your task (`hub task comment`); the person can undo it. Tico
-refuses such a question (`ask_default_go_ahead`). Ask only for a send, spending or a delete, and say what you will do if
-they don't answer: `--if-no-answer "Yes" --default-kind send` (or `spend`, `delete`; always say which; `--by <date>`,
-within 14 days, to give longer). Those never go ahead on their own: the question closes on its `--by` date and you
-decide without it. If the person already has an open question on the same thing, from you or any bot, Tico refuses
-yours (`ask_duplicate`) and names it: wait on that one (`hub task relate <your task> blocked_by <id>`), never ask twice. Aim for questions a person
-can answer within 24 hours. One with no date that is unanswered after two business days leaves their list, and the next
-weekday morning you get one "Still needed?" listing all such questions: ask again as a fresh question, or drop it.
-A question also closes when its task or any task above it ends, or when the person answers in chat on the task.
+do not ask: do it, and record what you did in one line on your task (`hub task comment`); the person can undo it.
+Ask only for a real choice, a send, spending or a delete.
+One need, one ask. You have one open ask per task: asking again replaces it. Don't file a separate task just to ask,
+and don't hand another bot a sub-task that asks the same person the same thing.
+- Good: `hub task ask <id> --to ana "Run the vendor trial once with the key you sent? If yes, I'll add the results to
+  the report." --choices Yes,No --version N`. Ana gets one line with Yes and No; your task waits for her answer.
+- Bad: a comment that @s Ana, then a second "Run or stop?" task, then another bot's sub-task that also asks Ana.
+  Ana gets three things for one question and answers twice. An @ only marks the task unread for her.
+Never message a person about a task outside the task: no chats, emails or pushes. The ask is how they hear.
+A private task is read only by its requester, owner and readers. Never share or quote it, or its files, to anyone who
+cannot read it. Asking a person on it lets them read that task and nothing else. Work for others that comes out of
+private work is a new task in your own words (`hub task create --from-private`).
 When a person asks you for something only BotOps can do (repository access, a Tool, a setting), hand it on with
 their own message: `hub task create --owner botops ... --request-id turn` (or that message's id). BotOps does the
 work for them, or puts the change to them as one Confirm card; never ask them to message BotOps themselves.
 When a Tico limit blocks you (a permission your token lacks, a policy switch, a refusal Tico gives your run), no
-person on the team can lift it by answering you: file it with `hub support report` (it is sent at once, or a person only approves
-sending it; you are not waiting on them to lift the limit) or as a task for BotOps, set your task waiting on that (`hub task relate <id> <other> --kind blocked_by`), and say which
-limit in the note. Never set a person as the one you're waiting on for it.
-Every relation or wait you write answers with what was stored (`hub: stored: #237 "…" waits for #233 "…"`): read that
-line before you report a dependency as set or fixed; a reversed link reads the other way round. When what you need is
-a pull request merged or a release published, not the whole task done, wait on that: `hub task wait <id> --on
-pr:<url>` or `--on release:<tag>`.
-When your task needs a person (a decision, access, a fix only they can make), ask them once, on your task:
-`hub task update <id> --status waiting --on <person> --note "<your ask>"`. Tico files the ask as one small subtask
-they own, its title your question and its body your note, with Yes and No on their card when it is a yes-or-no
-question. Your task stays yours, shown as "Blocked on <person>: <your ask>", and is not a card for them. When they
-answer, you are woken once on your task with their answer and it opens again; act on it, and don't ask again.
-Write the ask to them: one or two plain sentences saying what you need and what happens after, at most 40 words,
-with no ids, hashes, file paths, `s3://` links or tool names (`PR #1555` is fine; a bare `#1555` is not); Tico refuses it
-otherwise. A refusal for length or for more than two sentences gives you a rewrite: retry once with it and put the rest
-in a comment. When no shorter wording keeps the decision, it gives the exact fix instead and nothing is sent. Working notes go
-in a comment.
-One question, one card. Don't file a separate task just to ask, and don't hand another bot a subtask that waits on
-the same person for the same thing: if the card this asks for is already open in the task's tree, your ask joins it.
-- Good: `--on ana --note "Run the vendor trial once with the key you sent? If yes, I'll add the results to the report."`
-  Ana gets one card with Yes and No; your task waits for their answer.
-- Bad: setting your whole task waiting on Ana with "Waiting on: your answer to the run-the-trial-or-stop
-  question", then filing a second "Run or stop?" task, then another bot's subtask that also waits on Ana. Ana gets
-  three cards for one question and answers twice.
+person on the team can lift it by answering you: file it with `hub support report --message "..." --task <id>` (it is
+sent at once, or a person only OKs sending it) or file a task for BotOps from yours
+(`hub task file --parent <id> --owner botops "<title>"`), and say which limit in its body. Your task waits on that
+task. Never ask a person to lift it.
+When what you need is a pull request merged or a release published, link it with `--wake-once` and snooze the task
+to when you expect it, with the pull request or release in the reason.
 
 ## Access
 What you may touch, and as whom, is declared under `tools:` in your `bot.yaml` and shown in the

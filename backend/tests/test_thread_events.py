@@ -95,6 +95,25 @@ def test_the_threads_topic_says_what_changed_for_the_people_who_may_read_the_thr
     assert not [d for _, topic, d in read_as(api, cara, 0, ("threads",)) if d.get("thread_id") == thread["id"]]
 
 
+def test_a_member_taken_off_a_thread_is_sent_its_id_alone_and_nobody_else_is(api):
+    """Codex review 1, finding 1: a member removed from a members-only thread held its row until the rail was read again.
+    They are sent the thread's id as gone, nothing else of it; a stranger is sent nothing."""
+    thread = new_thread(api, title="Salary bands", members=("human:ben", "human:cara"), body="Bands for next year")
+    after = cursor(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM thread_members WHERE thread_id=? AND actor='human:cara'", (thread["id"],))
+    cara = [
+        d
+        for _, topic, d in read_as(api, who(api, "cara-test"), after, ("threads",))
+        if d.get("thread_id") == thread["id"]
+    ]
+    assert [(d["kind"], d.get("gone")) for d in cara] == [("members", True)]
+    assert set(cara[0]) <= {"seq", "actor", "at", "thread_id", "kind", "gone"}
+    assert "Salary" not in str(cara)
+    dan = Identity("human:dan", "human", "dan@acme.example")
+    assert not [d for _, topic, d in read_as(api, dan, after, ("threads",)) if d.get("thread_id") == thread["id"]]
+
+
 def test_a_bot_token_gets_only_the_topics_it_may_read_and_no_thread_it_is_not_in(api):
     token = as_bot(api, "ops")
     assert api.get("/api/v2/events", params={"topics": "tasks"}, headers=headers(token)).status_code == 403

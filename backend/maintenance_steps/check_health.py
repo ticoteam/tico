@@ -277,6 +277,15 @@ def _page_findings(c, ctx, notes):
         base = str(check.get("id", "")).split(":", 1)[0]
         if check.get("status") not in ("warn", "bad") or base in PAGE_LEFT_OUT:
             continue
+        summary = str(check.get("summary", ""))
+        if base == "never_stuck":
+            # Its `no_one` count (private tasks no one who reads them can move) is the owner's and Admins' on Health
+            # only: a BotOps task is read more widely, and no bot can move such a task. Only a rule break files, in
+            # words without that count.
+            breaks = int((check.get("counts") or {}).get("broken") or 0)
+            if not breaks:
+                continue
+            summary = f"{breaks} never-stuck rule {'break' if breaks == 1 else 'breaks'}."
         fixes = "; ".join(str(f.get("label", "")) for f in check.get("fixes", []) if f.get("label"))
         fix = FIX_PAGE + (f" The page offers: {fixes}." if fixes else "")
         out.append(
@@ -285,7 +294,7 @@ def _page_findings(c, ctx, notes):
                 f"page:{base}",
                 MH.SETUP,
                 str(check.get("label") or base),
-                str(check.get("summary", ""))[:1500],
+                summary[:1500],
                 fix,
                 severity=MH.BAD if check.get("status") == "bad" else MH.WARN,
             )

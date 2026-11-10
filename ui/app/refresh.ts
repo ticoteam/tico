@@ -65,6 +65,8 @@ function sameData(a: unknown, b: unknown): boolean {
 }
 /** One live task event: the task it names (task_id or id), whether it is gone or a bulk change, and the task's copy. */
 interface LiveTaskEvent {
+  /** The change's number (backend/events.py _event): a list read as of a later one already holds it. */
+  seq?: unknown;
   id?: unknown;
   task_id?: unknown;
   gone?: unknown;

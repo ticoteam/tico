@@ -24,13 +24,12 @@ DEFAULT_TEXT = "Run this scheduled routine."
 OPEN_TASKS_KEY = "open-tasks-daily"  # retired; the key finds the old rows
 SWEEP_KEY = "task-sweep"
 SWEEP_TEXT = (
-    "Sweep stuck tasks across the fleet (follow playbooks/task-sweep.md if you have it). "
-    "`hub task list --stuck` lists every bot's open work that has not moved in a day and waits on "
-    "nobody. For each: start it with `hub task run <id>` when the bot can simply do it; "
-    "fix the cause when something in the bot or Tico keeps it stuck; or tell the requester "
-    "in one line why it cannot move. Then review the open tasks you filed for humans "
+    "Look over the fleet once a day (follow playbooks/task-sweep.md if you have it). "
+    "Tico wakes a bot that stops early, then its manager bot, then a person, so you do not restart tasks. "
+    "Find what stops bots from running (`hub bot status list`) and fix the cause in the bot or Tico when you can. "
+    "Then review the open tasks you filed for people "
     "(`hub task list --requester me --status open`): close each whose condition is already true or superseded "
-    "with a one-line note, and ask once about one you cannot tell. "
+    "(`hub task close <id> -m \"why\" --version N`), and ask once, on the task, about one you cannot tell. "
     "Nothing to do: finish this task with one line."
 )
 OPEN_TASKS_TEXT = (
