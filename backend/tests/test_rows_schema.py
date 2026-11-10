@@ -114,6 +114,13 @@ TABLES = {
     rows.OkShownRow: "ok_shown",
     rows.LinkRow: "links",
     rows.EffectRow: "effects",
+    rows.PrFactRow: "pr_facts",
+    rows.ReleaseRow: "releases",
+    rows.ReleaseReadRow: "release_reads",
+    rows.ReleaseCommitRow: "release_commits",
+    rows.GithubDeliveryRow: "github_deliveries",
+    rows.RequirementPageRow: "requirement_pages",
+    rows.PageVerdictRow: "page_verdicts",
     rows.TaskMoveGuardRow: "task_move_guards",
 }
 
