@@ -226,7 +226,7 @@
  "hub_tag_update": "404 not_found",
  "hub_task_answer": "usage",
  "hub_task_ask": "usage",
- "hub_task_attach": "usage",
+ "hub_task_attach": "422 validation",
  "hub_task_cap_set": "validation",
  "hub_task_child_create": "usage",
  "hub_task_close": "usage",
