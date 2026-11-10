@@ -397,6 +397,18 @@ def steady(monkeypatch):
     monkeypatch.setattr(secrets, "token_hex", lambda k=32: f"{next(n):0{2 * k}x}"[-2 * k :])
     monkeypatch.setattr(secrets, "token_urlsafe", lambda k=32: f"tok{next(n)}")
     monkeypatch.setattr(uuid, "uuid4", lambda: uuid.UUID(int=next(n)))
+    # gzip's header is the interpreter's, not setup's: Python 3.15 made level 6 the default (XFL byte 0, was 2 at 9) and
+    # the OS byte is whatever its zlib build writes (19 for the macOS Python this was recorded with, 255 for python.org
+    # builds). The starter plan's S3 key is the sha256 of its gzip and user data inlines gzipped scripts, so pin both
+    # to the recording's: level 9 when the caller names none, OS byte 19. The compressed data itself is unchanged.
+    real_compress = gzip.compress
+
+    def compress(data, compresslevel=9, *, mtime=None):
+        out = bytearray(real_compress(data, compresslevel, mtime=mtime))
+        out[9] = 19
+        return bytes(out)
+
+    monkeypatch.setattr(gzip, "compress", compress)
     monkeypatch.setattr(verify, "run_all", lambda **kw: [verify.Check("stub", True, "ok")])
     monkeypatch.setenv("TICO_OIDC_CLIENT_SECRET", "client-SECRET-0123456789abcdef")
     monkeypatch.setenv("TICO_ENROLL_CODE", CODE)
