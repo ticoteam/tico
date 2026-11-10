@@ -2315,9 +2315,15 @@ def parser():
     s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task label")
-    s = task.add_parser("attach", help="attach a file to a task; prints the link for your note")
+    s = task.add_parser(
+        "attach",
+        help="attach a file to a task; prints the link for your note. With --req, attach a page "
+        "(page:<file id>[@<version>]) to the stage's page requirement",
+    )
     s.add_argument("id")
-    s.add_argument("file")
+    s.add_argument("file", help="a local file, or page:<file id>[@<version>] with --req")
+    s.add_argument("--req", help='the page requirement it is for, e.g. "Spec page"')
+    s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--name", help="the name people see; defaults to the file's own")
     s.add_argument("--poster", help="a PNG or JPEG preview")
     s.add_argument("--note", help="short note on this version (at most 500 characters)")

@@ -285,8 +285,64 @@ def _not_built(task: Row, requirement: Row) -> Standing:
 # The five kinds the Product and Engineering pipelines bring. Each is its own function so each lands on its own:
 # `_page` with backend/task_pages.py and Jev's verdicts (page_verdicts), the four GitHub kinds with backend/task_facts.py.
 # The lines each one says are in docs/dev/pipelines-v3-build.md ("Standings of the Product and Engineering kinds").
+# A person already decided an earlier page of this requirement on this visit that Jev was unsure of or could not check.
+ASKED_ONCE_SQL = (
+    "SELECT 1 FROM requirement_pages p JOIN page_verdicts v ON v.file_id = p.file_id AND v.version = p.version "
+    "AND v.rubric_hash = p.rubric_hash JOIN answers a ON a.visit_id = p.visit_id AND a.requirement_id = p.requirement_id "
+    "AND a.page_version = p.version AND a.undone_at IS NULL AND a.created_at >= p.created_at "
+    "WHERE p.visit_id=? AND p.requirement_id=? AND p.replaced_at IS NOT NULL AND v.verdict IN ('unsure', 'failed') "
+    "AND a.answer IN ('ok', 'no') LIMIT 1"
+)
+
+
 def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
-    return _not_built(task, requirement)
+    """A page attached to this visit (task_pages), Jev's verdict on it (page_verdicts), then the named person's OK of that
+    exact version when the requirement names one. An answer counts only for the page version it was given on. Jev
+    unsure, or unable to check, is a person's to decide, once per visit: after a person decided one such page, the next
+    one goes back to the owner, so a noisy rubric never fills a person's list."""
+    from . import page_verdicts as V
+    from . import task_facts as F
+    from . import task_pages as P
+
+    visit_id = task["visit"]["id"]
+    owner = task.get("owner_id")
+    page = P.current(conn, visit_id, requirement["id"])
+    if not page:
+        return Standing(requirement, NOT_MET, owner, "No page attached")
+    settings: Row = requirement.get("settings") or {}
+    if settings.get("at_head") and json.loads(page["heads"] or "{}") != F.heads(conn, task["id"]):
+        return Standing(requirement, NOT_MET, owner, "New commits since the review")
+    if answer and (answer.get("page_version") != page["version"] or answer["created_at"] < page["created_at"]):
+        answer = None  # given on an earlier page
+    if answer and answer["answer"] == "ok":
+        return Standing(requirement, MET, line="OK'd")
+    if answer and answer["answer"] == "no":
+        notes = (answer.get("notes") or "").strip()
+        return Standing(requirement, NOT_MET, owner, f"Sent back: {notes}" if notes else "Sent back")
+    verdict = V.get(conn, page["file_id"], page["version"], page.get("rubric_hash") or "")
+    said = (verdict or {}).get("verdict")
+    reasons = " ".join(str((verdict or {}).get("reasons") or "").split())
+    if said is None:
+        return Standing(requirement, WAITING, JEV, "Jev is checking")
+    if said == "not_met":
+        return Standing(requirement, NOT_MET, owner, f"Jev sent it back: {reasons}" if reasons else "Jev sent it back")
+    person = person_of(conn, requirement, visit_id)
+    if said in ("unsure", "failed"):
+        line = (
+            "Jev couldn't check this"
+            if said == "failed"
+            else (f"Jev is unsure: {reasons}" if reasons else "Jev is unsure")
+        )
+        if conn.execute(ASKED_ONCE_SQL, (visit_id, requirement["id"])).fetchone():
+            return Standing(requirement, NOT_MET, owner, line)
+        return Standing(requirement, WAITING, person, line)
+    if requirement.get("person_id"):
+        from . import hubdb
+
+        H: Any = hubdb
+        name = H.actor_name(conn, person) if person else "someone"
+        return Standing(requirement, WAITING, person, f"OK {name} (version {page['version']})")
+    return Standing(requirement, MET, line="Jev passed it")
 
 
 # The four GitHub kinds read saved facts only (backend/task_facts.py) and, for "PR merged", the Merge stage's effects

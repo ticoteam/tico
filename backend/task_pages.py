@@ -13,8 +13,9 @@ or `POST /api/v2/tasks/{tid}/pages` {requirement, page, version}. With no versio
 Every function takes the caller's open write transaction and never commits.
 """
 
+import json
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:
     import sqlite3
@@ -60,6 +61,59 @@ def newest_for_task(conn: "sqlite3.Connection", task_id: str, stage_id: str) -> 
     )
 
 
+def _refuse(conn: "sqlite3.Connection", by: str, rule: str, detail: str, task_id: str | None = None) -> NoReturn:
+    from . import hubdb
+
+    H: Any = hubdb
+    H.refuse(conn, by, rule, detail, task=task_id)
+    raise AssertionError("refuse() always raises")  # pragma: no cover
+
+
+def requirement_of(conn: "sqlite3.Connection", row: Row, requirement: str) -> Row | None:
+    """The page requirement of the task's open visit that `requirement` names: its id, or its name (`name_of`, any
+    case). None when there is no such page requirement."""
+    from . import task_requirements as R
+
+    wanted = str(requirement or "").strip()
+    pages = [r for r in R.for_visit(conn, row["visit"]) if r["kind"] == "page"]
+    for found in pages:
+        if found["id"] == wanted:
+            return found
+    named = [r for r in pages if R.name_of(r).casefold() == wanted.casefold()]
+    return named[0] if len(named) == 1 else None
+
+
+def release_tags(conn: "sqlite3.Connection", task_id: str) -> list[str]:
+    """The release each task this task filed went out in: for every merged PR of a filed task, the oldest saved release
+    whose history holds its merge commit (task_facts.included). Sorted, each once. What a Validate page is checked
+    against (`with_release`)."""
+    cursor = conn.execute(
+        "SELECT r.tag, MIN(r.published_at) FROM links l "
+        "JOIN task_links tl ON tl.task_id = l.to_task_id AND tl.kind = 'pr' "
+        "JOIN pr_facts f ON f.repo = tl.repo AND f.number = tl.number AND f.merged_sha IS NOT NULL "
+        "JOIN release_commits rc ON rc.commit_sha = f.merged_sha AND rc.included = 1 "
+        "JOIN releases r ON r.id = rc.release_id WHERE l.from_task_id = ? GROUP BY f.merged_sha",
+        (task_id,),
+    )
+    return sorted({str(found[0]) for found in cursor.fetchall()})
+
+
+def judged_against(conn: "sqlite3.Connection", row: Row, requirement: Row) -> tuple[str, Row]:
+    """What a page attached now is judged against: the rubric (the requirement's `rubric`, else its line, else its
+    kind's name) and the context Jev is shown beside it: `heads` (at_head), `release` (with_release)."""
+    from . import task_facts as F
+    from . import task_requirements as R
+
+    settings: Row = requirement.get("settings") or {}
+    rubric = str(settings.get("rubric") or "").strip() or R.name_of(requirement)
+    context: Row = {}
+    if settings.get("at_head"):
+        context["heads"] = F.heads(conn, row["id"])
+    if settings.get("with_release"):
+        context["release"] = release_tags(conn, row["id"])
+    return rubric, context
+
+
 def attach(
     conn: "sqlite3.Connection",
     task_id: str,
@@ -71,7 +125,85 @@ def attach(
 ) -> Row:
     """Attach a page to a page requirement of the task's open visit. `requirement` is its id or its name (`name_of`),
     `ref` a `parse_ref` page. Who may: the task's owner, whoever holds it now, or any person. Refuses
-    `task_requirement` (no such page requirement on this visit, not a page, a file the task's readers can't open, no
-    such version), `task_changed` (a bot's stale or missing `seen_version`), `task_ended`. Returns the
-    `requirement_pages` row. Track B."""
-    raise NotImplementedError("task_pages.attach: track B")
+    `task_requirement` (no such page requirement on this visit, not a page, no such version, a PR not read yet),
+    `task_changed` (a bot's stale or missing `seen_version`), `task_ended`. The route checks the caller may open the
+    file. Returns the `requirement_pages` row."""
+    from . import hubdb
+    from . import hubdb_core
+    from . import page_verdicts as V
+    from . import task_engine as E
+    from . import waiting_on as W
+
+    H: Any = hubdb
+    core: Any = hubdb_core
+    row = E.task(conn, task_id)
+    if not row:
+        _refuse(conn, by, "not-found", "No such task")
+    if row["status"] != "open":
+        _refuse(conn, by, "task_ended", f"The task is {row['stage']['name']}. Reopen it first.", task_id)
+    E.check_version(conn, by, row, seen_version)
+    if by not in (row.get("owner_id"), W.holder(conn, row)) and not core.is_human(by):
+        _refuse(
+            conn, by, "identity", "Only the task's owner, whoever has it now, or a person attaches its page", task_id
+        )
+    found = requirement_of(conn, row, requirement)
+    if found is None:
+        _refuse(conn, by, "task_requirement", f'This stage has no page requirement "{requirement}"', task_id)
+    try:
+        file_id, version = parse_ref(ref)
+    except ValueError as exc:
+        _refuse(conn, by, "task_requirement", str(exc), task_id)
+    file = _one(conn, "SELECT id, current_version, archived FROM bot_files WHERE id=?", (file_id,))
+    if not file or file["archived"]:
+        _refuse(conn, by, "task_requirement", "No such page", task_id)
+    version = version or int(file["current_version"] or 0)
+    if not _one(conn, "SELECT 1 AS one FROM bot_file_versions WHERE file_id=? AND version=?", (file_id, version)):
+        _refuse(conn, by, "task_requirement", f"That page has no version {version}", task_id)
+    rubric, context = judged_against(conn, row, found)
+    heads: dict[str, str | None] = context.get("heads") or {}
+    unread = sorted(ref_ for ref_, sha in heads.items() if not sha)
+    if unread:
+        _refuse(
+            conn, by, "task_requirement", f"Tico is still reading {unread[0]} from GitHub. Try again soon.", task_id
+        )
+    key = V.rubric_hash(rubric, context)
+    visit_id = row["visit"]["id"]
+    was = current(conn, visit_id, found["id"])
+    if was and (was["file_id"], int(was["version"]), was.get("rubric_hash")) == (file_id, version, key):
+        return was
+    now = H.now()
+    if was:
+        conn.execute("UPDATE requirement_pages SET replaced_at=? WHERE id=?", (now, was["id"]))
+    page_id = H.new_id()
+    conn.execute(
+        "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, heads, attached_by_id, "
+        "rubric_hash, judged_against, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (
+            page_id,
+            visit_id,
+            found["id"],
+            file_id,
+            version,
+            json.dumps(context.get("heads") or {}),
+            by,
+            key,
+            json.dumps({"rubric": rubric, "context": context}),
+            now,
+        ),
+    )
+    V.owe(conn, file_id, version, key)
+    E._event(  # pyright: ignore[reportPrivateUsage]
+        conn,
+        task_id,
+        by,
+        "page_attached",
+        f"page:{was['file_id']}@{was['version']}" if was else None,
+        f"page:{file_id}@{version}",
+        None,
+        {"requirement": found["id"], "file_id": file_id, "version": version},
+    )
+    if E.advance(conn, task_id) is None:
+        E.changed(conn, task_id, by)
+    made = _one(conn, "SELECT * FROM requirement_pages WHERE id=?", (page_id,))
+    assert made is not None
+    return made

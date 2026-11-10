@@ -251,6 +251,18 @@ def merge_queue_effects(ctx: Context) -> tuple[str, bool]:
     return (f"{done} merge queue calls", False) if done else ("Nothing due", True)
 
 
+def jev_verdicts(ctx: Context) -> tuple[str | None, bool]:
+    # Jev's verdicts on pages attached to page requirements (backend/page_verdicts.py): a few a beat, each model call
+    # made with no transaction held, each verdict recorded in its own short write.
+    from . import page_verdicts
+
+    at = ctx.at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    given = page_verdicts.run(ctx.store, at)
+    if not given:
+        return None, True
+    return f"Jev gave {given} verdicts", False
+
+
 # ----------------------------------------------------------------------------- the steps, in the order they run
 MINUTE, FIVE_MINUTES, TEN_MINUTES, HOUR = (
     timedelta(minutes=1),
@@ -339,6 +351,7 @@ STEPS = [
         failure="merge_queue_effects",
         capture="scheduler",
     ),
+    Step("jev_verdicts", "Jev's page verdicts", "due", None, jev_verdicts, failure="jev_verdicts", capture="scheduler"),
 ]
 BY_KEY = {step.key: step for step in STEPS}
 CONTROLLED = {step.control: step for step in STEPS if step.control}

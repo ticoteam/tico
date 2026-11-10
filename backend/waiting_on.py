@@ -303,7 +303,7 @@ def unreadable(conn: "sqlite3.Connection", row: Row, standings: Iterable[R.Stand
         if (
             named
             and named not in (R.JEV, R.GITHUB)
-            and standing.requirement["kind"] in ("ok", "answer")
+            and standing.requirement["kind"] in ("ok", "answer", "page")
             and not H.task_private_readable(conn, named, row)
         ):
             return named

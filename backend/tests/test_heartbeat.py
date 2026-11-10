@@ -42,6 +42,7 @@ ORDER = [
     "call_sweeps",
     "pr_facts",
     "merge_queue_effects",
+    "jev_verdicts",
 ]
 
 

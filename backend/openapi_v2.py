@@ -836,6 +836,14 @@ STABLE = [
         "TaskResult",
     ),
     (
+        "/api/v2/tasks/{tid}/pages",
+        "post",
+        "Tasks",
+        "attachTaskPage",
+        "Attach a page to a page requirement: Jev checks it, then a named person OKs that version; carries page",
+        "TaskResult",
+    ),
+    (
         "/api/v2/tasks/{tid}/asks/{requirement_id}/give",
         "post",
         "Tasks",
@@ -2647,10 +2655,25 @@ SCHEMAS = {
             "asked_by": "n",
             "choices": {"type": ["array", "null"], "items": {"type": "string"}},
             "shows": items({"type": "string"}),
+            # A page requirement: the page attached now, at the version an OK of it is for.
+            "page": obj({"file_id": "s", "version": "i", "ref": "s"}, required=["file_id", "version", "ref"]),
             "answer": {"oneOf": [obj({"id": "s", "value": "s", "note": "n", "by": "s", "at": "s"}), {"type": "null"}]},
             "may": items({"enum": ["done", "ok", "no", "again", "answer", "give", "undo", "withdraw", "thumbs"]})
             | {"description": "What this reader may do with it: a hint, the engine decides"},
-        }
+        },
+        required=[
+            "requirement_id",
+            "kind",
+            "line",
+            "met",
+            "standing",
+            "who",
+            "asked_by",
+            "choices",
+            "shows",
+            "answer",
+            "may",
+        ],
     ),
     "Person": obj(
         {"id": "s", "name": "s", "email": "s", "title": "s", "team": "s", "reports_to": "n", "org_parent": "s"},
