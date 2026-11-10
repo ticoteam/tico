@@ -617,48 +617,6 @@ LINT_PR_REF = re.compile(r"(?<![\w#/.-])PR #\d+(?![\w#/-]|\.\w)")
 LINT_BARE_REF = re.compile(r"(?<![&#/.-])#\d{3,}(?!\w)")
 
 
-LINT_WAIT_WORDS = 40
-
-
-def lint_waiting_note(note, person, asked=False):
-    """The note on a task a bot sets waiting on a person (`--status waiting --on <person> --note`): the person reads
-    it as what they are asked to do, so it is one plain request to them, not the bot's working notes. The problems,
-    empty when it passes. No note passes only when an open question to them on the task already asks."""
-    text, name = str(note or "").strip(), actor_id(person)
-    if not text:
-        return [] if asked else [f"say in one plain sentence what you need {name} to do (--note)"]
-    problems = []
-    # An amount ("$250000") is not a reference number, nor is a pull request named "PR #1555". Only here: a title
-    # keeps LINT_IDENT as it is.
-    unref = LINT_PR_REF.sub("PR", text)
-    m = (
-        LINT_HEX_ID.search(unref)
-        or next(
-            (
-                i
-                for i in LINT_IDENT.finditer(unref)
-                if not (i.start() and unref[i.start() - 1] in LINT_CURRENCY)
-                and not LINT_NAMED_NUMBER.fullmatch(i.group(0))
-            ),
-            None,
-        )
-        or LINT_BARE_REF.search(unref)
-    )
-    if m:
-        problems.append(f'id in the note for {name}: "{m.group(0)}" - say what it is in plain words')
-    n = len(text.split())
-    sentences = len([s for s in re.split(r"(?<=[.!?;])\s+", text) if s.strip()])
-    if n > LINT_WAIT_WORDS or sentences > 2:
-        problems.append(
-            f"the note for {name} reads as working notes ({n} words): write one plain sentence "
-            f"asking them for what you need, and keep your notes in a comment"
-        )
-    m = LINT_CODES.search(text) or LINT_JARGON.search(text)
-    if m:
-        problems.append(f'internal jargon in the note for {name}: "{m.group(0)}"')
-    return problems
-
-
 # The ask a bot puts to a person, when it sets a task waiting on them or gives them a task: what their card leads
 # with, read by someone busy. Unlike the warnings above it is always refused, whatever TICO_STYLE_LINT says: a card
 # with no plain ask costs the person more than the bot's retry costs the bot. Paths, links to stored objects and
