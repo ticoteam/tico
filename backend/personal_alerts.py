@@ -27,20 +27,18 @@ from clients.gateway import user_agent
 
 TRANSPORT = None
 MAX_RESPONSE = 32768
-KINDS = ("urgent_needs", "legal_mail", "bot_stuck")
+# What a person may be paged about. Nothing pages a person about a task (docs/pipelines-v3.md): the old "an overdue
+# task needs you" and "a bot has a stalled task" went with the old engine; their columns stay, always 0.
+KINDS = ("legal_mail",)
 TEXTS = {
-    "urgent_needs": "Tico: an overdue task needs you. Open Needs you in Tico.",
     "legal_mail": "Tico: legal mail has arrived. Open Inboxes in Tico.",
-    "bot_stuck": "Tico: a bot you manage has a stalled task. Open Health in Tico.",
     "test": "Tico: your test alert. Your company pays $1 for this accepted alert.",
 }
 CLOCK = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]")
 
 
 class Preferences(Contract):
-    urgent_needs: StrictBool | None = None
     legal_mail: StrictBool | None = None
-    bot_stuck: StrictBool | None = None
     urgent_calls: StrictBool | None = None
     timezone: str | None = Field(default=None, max_length=80)
     quiet_start: str | None = Field(default=None, max_length=5)
@@ -101,6 +99,8 @@ def prefs(c, ident):
         "stall_after": "",
         "call_consent": 0,
         **dict.fromkeys(KINDS, 0),
+        "urgent_needs": 0,
+        "bot_stuck": 0,
         "urgent_calls": 0,
         "timezone": "UTC",
         "quiet_start": "22:00",
