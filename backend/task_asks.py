@@ -57,37 +57,126 @@ STANDINGS = (WAITING, OK, SENT_BACK, WITHDRAWN, USED)
 ENDS_ASKS = ("back", "closed", "reopened")
 FROM_PREVIEW = "OK this from its preview in Tico."
 
-# What happens in the same transaction as an OK, by the subject's kind: "<module>:<function>", called as
-# fn(conn, grant, ctx). A kind that is not here has nothing to do until whoever asked uses the OK.
-ON_OK: dict[str, str] = {
-    "board": "backend.company_page.editions:board_ok",
-    "email_send": "backend.email_sending:ok_given",
-    "finance": "backend.finance.actions:ok_given",
-    "letter": "backend.letters:ok_given",
-    "proposal": "backend.proposals:ok_given",
+# Each module's step is imported by name inside a small function: lazily, so task_asks imports none of them at load
+# (they import task_asks), and by name, so the test selector (scripts/pr_checks.py) can see what depends on what.
+
+
+def _board_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -> object:
+    from .company_page import editions
+
+    module: Any = editions  # its functions are typed loosely
+    return module.board_ok(conn, grant, ctx)
+
+
+def _email_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -> object:
+    from . import email_sending
+
+    module: Any = email_sending  # its functions are typed loosely
+    return module.ok_given(conn, grant, ctx)
+
+
+def _finance_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -> object:
+    from .finance import actions
+
+    module: Any = actions  # its functions are typed loosely
+    return module.ok_given(conn, grant, ctx)
+
+
+def _letter_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -> object:
+    from . import letters
+
+    module: Any = letters  # its functions are typed loosely
+    return module.ok_given(conn, grant, ctx)
+
+
+def _proposal_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -> object:
+    from . import proposals
+
+    module: Any = proposals  # its functions are typed loosely
+    return module.ok_given(conn, grant, ctx)
+
+
+def _edition_may_ok(conn: "sqlite3.Connection", person: str, grant: Row) -> str | None:
+    from .company_page import editions
+
+    module: Any = editions  # its functions are typed loosely
+    return module.may_ok(conn, person, grant)
+
+
+def _proposal_may_ok(conn: "sqlite3.Connection", person: str, grant: Row) -> str | None:
+    from . import proposals
+
+    module: Any = proposals  # its functions are typed loosely
+    return module.may_ok(conn, person, grant)
+
+
+def _file_freeze(conn: "sqlite3.Connection", by: str, subject: str, content: object, shows: object) -> Any:
+    from . import file_reviews
+
+    module: Any = file_reviews  # its functions are typed loosely
+    return module.freeze(conn, by, subject, content, shows)
+
+
+def _file_may_see(conn: "sqlite3.Connection", auth: object, who: object, grant: Row) -> bool:
+    from . import file_reviews
+
+    module: Any = file_reviews  # its functions are typed loosely
+    return bool(module.may_see(conn, auth, who, grant))
+
+
+# What happens in the same transaction as an OK, by the subject's kind, called as fn(conn, grant, ctx). A kind that is
+# not here has nothing to do until whoever asked uses the OK.
+ON_OK: dict[str, Callable[..., object]] = {
+    "board": _board_ok,
+    "email_send": _email_ok,
+    "finance": _finance_ok,
+    "letter": _letter_ok,
+    "proposal": _proposal_ok,
 }
 
 # Subject kinds whose module asks and uses its OKs itself: a bot's generic ask (POST /api/v2/tasks/{id}/oks) and use
 # (POST /api/v2/oks/{id}/use) never name one.
 OWNED = ("email_send", "letter", "edition", "board", "proposal", "support", "webhook", "publish", "finance")
 
-# Who may OK a subject of this kind under the subject's own rule: "<module>:<function>", called as
-# fn(conn, person, grant) -> the refusal's words, or None when `person` may. Checked when the OK is given and again
-# when it is used. An OWNED kind that is not here is OK'd only by the person its module asked: giving the ask to
-# someone else never hands on the right to OK it. A module whose check needs the caller's sign-in (an inbox's
-# approvers, a letter's) checks it itself, in its ON_OK step and again before it acts: CHECKS_ITSELF.
-MAY_OK: dict[str, str] = {
-    "board": "backend.company_page.editions:may_ok",
-    "edition": "backend.company_page.editions:may_ok",
-    "proposal": "backend.proposals:may_ok",
+# Who may OK a subject of this kind under the subject's own rule, called as fn(conn, person, grant) -> the refusal's
+# words, or None when `person` may. Checked when the OK is given and again when it is used. An OWNED kind that is not
+# here is OK'd only by the person its module asked: giving the ask to someone else never hands on the right to OK it.
+# A module whose check needs the caller's sign-in (an inbox's approvers, a letter's) checks it itself, in its ON_OK
+# step and again before it acts: CHECKS_ITSELF.
+MAY_OK: dict[str, Callable[..., str | None]] = {
+    "board": _edition_may_ok,
+    "edition": _edition_may_ok,
+    "proposal": _proposal_may_ok,
 }
 CHECKS_ITSELF = ("email_send", "letter")
 
-# Subjects whose module pins what is asked about before it is shown: "<module>:<function>", called as
-# fn(conn, by, subject, content, shows) -> (subject, content, shows). A file ref that names no version, or a path,
-# becomes the exact version and digest there are when it is asked, so an OK never reaches a version nobody saw.
-FREEZE: dict[str, str] = {
-    "file": "backend.file_reviews:freeze",
+# Subjects whose module pins what is asked about before it is shown, called as fn(conn, by, subject, content, shows)
+# -> (subject, content, shows). A file ref that names no version, or a path, becomes the exact version and digest
+# there are when it is asked, so an OK never reaches a version nobody saw.
+FREEZE: dict[str, Callable[..., Any]] = {
+    "file": _file_freeze,
+}
+
+# Who may open an OK's preview beyond the task's own read check, by the subject's kind, called as
+# fn(conn, auth, who, grant) -> bool. A file's preview names the file, so it follows the file's own reader check (a
+# page's audience). An OWNED kind with none here shows its preview only to its parties: who asked, who it is asked of
+# now or was asked of, and who OK'd it. Anyone else gets "No such OK".
+SEES: dict[str, Callable[..., bool]] = {
+    "file": _file_may_see,
+}
+
+# The title of a task filed for an OK of an OWNED kind: it names the kind of act and nothing of the subject (no email
+# subject line, recipient, edition or endpoint name), since a title travels further than the task (lists, notices).
+FILED_TITLES: dict[str, str] = {
+    "email_send": "Send an email",
+    "letter": "Mail a letter",
+    "edition": "Publish an edition",
+    "board": "Approve a stats board",
+    "proposal": "Approve a change",
+    "support": "Send a report to Tico support",
+    "webhook": "Make a webhook endpoint",
+    "publish": "Publish to the roadmap",
+    "finance": "OK a Finance action",
 }
 
 
@@ -316,11 +405,7 @@ def ask_ok(
         _refuse(conn, by, "validation", "Say what the OK is for, as kind:id")
     pin = FREEZE.get(kind_of(subject))
     if pin:
-        import importlib
-
-        module, _, name = pin.partition(":")
-        frozen: Callable[..., tuple[str, object, object]] = getattr(importlib.import_module(module), name)
-        subject, content, shows = frozen(conn, by, subject, content, shows)
+        subject, content, shows = pin(conn, by, subject, content, shows)
     target = H.resolve_actor(conn, person) or person
     from . import task_requirements as R
 
@@ -344,19 +429,27 @@ def ask_ok(
     filed = task_id is None
     if filed:
         owner = by if (is_bot(by) or is_human(by)) else target
+        kind = kind_of(subject)
         made: Row = H.task_create(
             conn,
             by,
-            (title or line).strip(),
+            FILED_TITLES.get(kind) or (title or line).strip(),
             line.strip(),
             owner,
             lint=False,
+            # A task filed for an OK is private to its parties: the subject it previews is never wider than they are.
+            private=True,
             same=_never_same,  # every OK is its own: two emails may share a subject line
         )
         task_id = str(made["id"])
     row: Row | None = H.task(conn, task_id)
     if not row:
         _refuse(conn, by, "not-found", "No such task")
+    if filed and not H.task_private_readable(conn, target, row):
+        H.task_reach(conn, by, row, target)
+        reached: Row | None = H.task(conn, task_id)
+        if reached:
+            row = reached
     # Acting for `by` inside this transaction: the version is the one just read.
     asked: Row = H.task_ask(conn, by, task_id, target, line, kind="ok", shows=shows, seen_version=row.get("version"))
     requirement_id = str(asked["requirement_id"])
@@ -381,6 +474,26 @@ def show(conn: "sqlite3.Connection", person: str, requirement_id: str, content: 
             (requirement_id, person, digest, H.now()),
         )
     return digest
+
+
+def may_see(conn: "sqlite3.Connection", auth: object, who: object, requirement_id: str) -> bool:
+    """Whether `who`, who reads the OK's task, may also open its preview: the subject's own reader check (SEES), or
+    for an OWNED kind, only its parties. Other kinds show to whoever reads the task."""
+    row = grant(conn, requirement_id)
+    if not row:
+        return False
+    kind = kind_of(row["subject"])
+    check = SEES.get(kind)
+    if check:
+        return bool(check(conn, auth, who, row))
+    if kind not in OWNED:
+        return True
+    from . import task_requirements as R
+
+    actor = str(getattr(who, "actor", "") or "")
+    requirement = _requirement(conn, requirement_id)
+    now = R.person_of(conn, requirement, str(requirement.get("visit_id") or "")) if requirement else None
+    return actor in {row["asked_by_id"], row.get("asked_of_id"), row.get("ok_by_id"), now} - {None, ""}
 
 
 def preview(conn: "sqlite3.Connection", viewer: str, requirement_id: str, *, own_click: bool) -> Row:
@@ -460,11 +573,7 @@ def give_ok(
     )
     H.event(conn, person, "ok.given", requirement_id, {"subject": row["subject"], "task": task_id})
     if step:
-        import importlib
-
-        module, _, name = step.partition(":")
-        run: Callable[..., object] = getattr(importlib.import_module(module), name)
-        run(conn, grant(conn, requirement_id), ctx)
+        step(conn, grant(conn, requirement_id), ctx)
 
 
 # ----------------------------------------------------------------------------- the act
@@ -504,11 +613,7 @@ def _authority(conn: "sqlite3.Connection", person: str, row: Row) -> str | None:
     kind = kind_of(row["subject"])
     check = MAY_OK.get(kind)
     if check:
-        import importlib
-
-        module, _, name = check.partition(":")
-        rule: Callable[..., str | None] = getattr(importlib.import_module(module), name)
-        return rule(conn, person, row)
+        return check(conn, person, row)
     named = str(row.get("asked_of_id") or "")
     if kind in OWNED and kind not in CHECKS_ITSELF and named and named != person:
         return f"Only {H.actor_name(conn, named)}, who it was asked of, may OK this"

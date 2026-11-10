@@ -161,8 +161,8 @@ def test_an_onboarding_bot_leaves_no_note_or_word_on_a_task_kept_from_before(api
     ops, finance, cpo = (as_bot(api, slug) for slug in ("ops", "finance", "cpo"))
     as_member(api, "ben@acme.example")
     kept = post(api, "tasks", {"owner": "ops", "title": "Audit the queue", "body": "x"})
-    question = {"on": "human:ben", "question": "Which queue first?", "parent": kept["id"]}
-    post(api, "task-questions", question, token=ops)
+    question = {"to": "ben", "line": "Which queue first?", "version": kept["version"]}
+    post(api, f"tasks/{kept['id']}/asks", question, token=ops)
     onboarding(api, "ops", manager="coo")
     with api.app.state.store.read() as c:
         before = c.execute("SELECT count(*) FROM messages WHERE sender_id='bot:ops'").fetchone()[0]
@@ -182,7 +182,7 @@ def test_an_onboarding_bot_leaves_no_note_or_word_on_a_task_kept_from_before(api
         assert [r[0] for r in c.execute("SELECT to_actor FROM notes WHERE from_actor='bot:ops'")] == ["bot:coo"]
 
     # Nothing on the kept task either: no comment, no question put to a person.
-    for path, body in ((f"tasks/{kept['id']}/comments", {"text": "Started"}), ("task-questions", question)):
+    for path, body in ((f"tasks/{kept['id']}/comments", {"text": "Started"}), (f"tasks/{kept['id']}/asks", question)):
         said = api.post("/api/v2/" + path, json=body, headers=headers(ops))
         assert said.status_code == 409 and "still onboarding" in said.text, (path, said.text)
     with api.app.state.store.read() as c:

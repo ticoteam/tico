@@ -207,6 +207,10 @@ def register(
         """Ask a person on the task, in one sentence: a question (with choices, or a typed answer) or an OK (C19)."""
 
         def call(c, who, task_id):
+            from . import lifecycle
+
+            # An onboarding bot puts nothing to anyone but its manager and the people above it.
+            lifecycle.refuse_send(c, who, H.resolve_actor(c, body.to) or body.to, what="a question")
             made = H.task_ask(
                 c,
                 who.actor,
@@ -289,6 +293,9 @@ def register(
         who = request.state.identity
         with store.transaction() as c:
             task_id = ok_task(c, who, requirement_id)
+            if not task_asks.may_see(c, auth, who, requirement_id):
+                # The subject's own reader check: reading the task an OK is on never widens who sees what it is for.
+                raise Problem("not_found", "No such OK", 404)
             shown = task_asks.preview(c, who.actor, requirement_id, own_click=task_asks.own_click(who))
             return {**shown, "task_id": task_id}
 
@@ -322,8 +329,9 @@ def register(
             raise Problem("validation", "This kind of OK is asked where the work is, not here", 422)
 
         def call(c, who, task_id):
-            from . import task_engine
+            from . import lifecycle, task_engine
 
+            lifecycle.refuse_send(c, who, H.resolve_actor(c, body.to) or body.to, what="an ask for an OK")
             task_engine.check_version(c, who.actor, H.task(c, task_id), body.version)
             asked = task_asks.ask_ok(
                 c,

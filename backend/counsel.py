@@ -652,7 +652,7 @@ def scrub_page_task(c, tid):
         )
     )
     c.execute(
-        "UPDATE tasks SET title=?,body=?,note=?,checkpoint=NULL,resume=NULL,acceptance='[]',updated_at=? WHERE id=?",
+        "UPDATE tasks SET title=?,body=?,note=?,checkpoint=NULL,acceptance='[]',updated_at=? WHERE id=?",
         (REMOVED_PAGE, REMOVED_PAGE, REMOVED_PAGE, H.now(), tid),
     )
     # Workflow changes keep their old/new identities; free text and arbitrary notes/data cannot keep page copies.

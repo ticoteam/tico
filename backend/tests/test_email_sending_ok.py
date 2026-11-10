@@ -65,7 +65,8 @@ def test_a_held_email_asks_for_an_ok_on_a_task_of_its_own(store):
         grant = K.grant(c, rid)
         assert (grant["subject"], grant["asked_by_id"]) == ("email_send:" + queued["id"], "bot:ops")
         task = H.task(c, K.task_of(c, rid))
-        assert (task["owner_id"], task["title"]) == ("bot:ops", "Send email: Update")
+        # Private to its parties, titled for the act only: the email's subject line stays in its preview.
+        assert (task["owner_id"], task["title"], bool(task["private"])) == ("bot:ops", "Send an email", True)
         ask = H.task_view(c, task["id"], ANA)["to_leave"][-1]
         assert (ask["kind"], ask["who"], ask["shows"]) == ("ok", ANA, ["email:" + queued["id"]])
     assert _pass(store) is None

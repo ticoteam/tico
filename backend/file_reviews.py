@@ -170,6 +170,15 @@ def freeze(c, by, subject, content, shows):
     return pinned, frozen, [pinned, *refs]
 
 
+def may_see(c, auth, who, grant):
+    """Whether `who` may open a file OK's preview (task_asks.SEES): only when they may open the file itself."""
+    from .files import file_visible
+
+    fid = (grant.get("content") or {}).get("file")
+    row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone() if fid else None
+    return bool(row) and file_visible(c, auth, who, row, {})
+
+
 def _asked(c, versions):
     """The verdicts bound OKs give the versions they pinned (task_asks, subject `file:<id>@<n>`): one dict per grant,
     like an activity row's (created_at, actor, task_id, file_id, version, digest, verdict, question). An OK given from
