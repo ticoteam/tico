@@ -5803,14 +5803,15 @@ mod tests {
     async fn a_turn_past_the_hold_cap_while_another_waits_stops_at_a_safe_point_and_its_continuation_runs_next(
     ) {
         use crate::login_turns::{Class, Turn};
-        use std::os::unix::fs::PermissionsExt;
         let key = "codex:test-drive-yield";
         crate::login_turns::cap_for_test(key, Duration::ZERO);
         let (url, _seen, server) = recording_server().await;
         let (runner, dir) = runner_at(&url, "drive-yield");
         // A stand-in app-server: the turn runs until it is steered, then ends at a safe point on its own.
         let program = dir.join("codex");
-        std::fs::write(&program, r#"#!/usr/bin/env python3
+        crate::util::write_script(
+            &program,
+            r#"#!/usr/bin/env python3
 import json, os, sys
 def say(m): print(json.dumps(m), flush=True)
 for line in sys.stdin:
@@ -5828,8 +5829,8 @@ for line in sys.stdin:
         say({"method": "turn/completed", "params": {"threadId": "th1", "turn": {"id": "t1", "status": "completed"}}})
     elif "id" in msg:
         say({"id": msg["id"], "result": {}})
-"#).unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+"#,
+        );
         let steers = dir.join("steers");
         let env: crate::env::Env = [
             (
@@ -5964,7 +5965,6 @@ for line in sys.stdin:
     #[tokio::test(flavor = "multi_thread")]
     async fn a_turn_that_ignores_the_ask_to_stop_at_the_cap_is_interrupted_once_its_grace_ends() {
         use crate::login_turns::{Class, Turn};
-        use std::os::unix::fs::PermissionsExt;
         let key = "codex:test-drive-grace";
         crate::login_turns::cap_for_test(key, Duration::ZERO);
         crate::login_turns::grace_for_test(key, Duration::from_millis(300));
@@ -5972,7 +5972,9 @@ for line in sys.stdin:
         let (runner, dir) = runner_at(&url, "drive-grace");
         // A stand-in app-server whose turn takes the steer and runs on; only an interrupt ends it.
         let program = dir.join("codex");
-        std::fs::write(&program, r#"#!/usr/bin/env python3
+        crate::util::write_script(
+            &program,
+            r#"#!/usr/bin/env python3
 import json, os, sys
 def say(m): print(json.dumps(m), flush=True)
 for line in sys.stdin:
@@ -5991,8 +5993,8 @@ for line in sys.stdin:
         say({"method": "turn/completed", "params": {"threadId": "th1", "turn": {"id": "t1", "status": "interrupted"}}})
     elif "id" in msg:
         say({"id": msg["id"], "result": {}})
-"#).unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+"#,
+        );
         let interrupts = dir.join("interrupts");
         let env: crate::env::Env = [
             (
@@ -7261,15 +7263,13 @@ for line in sys.stdin:
 
     impl CodexRig {
         async fn new() -> CodexRig {
-            use std::os::unix::fs::PermissionsExt;
             let controls = RunControls;
             RUN_SESSION.with(|on| on.set(Some(true)));
             let (url, seen, server) = recording_server().await;
             let (runner, dir) = runner_at(&url, "codex-session");
             std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
             let program = dir.join("codex");
-            std::fs::write(&program, FAKE_CODEX).unwrap();
-            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::util::write_script(&program, FAKE_CODEX);
             let env: Env = [(
                 "PATH".to_string(),
                 format!(
