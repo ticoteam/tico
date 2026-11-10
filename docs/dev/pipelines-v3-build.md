@@ -128,6 +128,9 @@ def reassign(conn, task_id, owner, by, why=None, seen_version=None) -> dict
     # In a stage owned by `assignee`, the task's assignee follows.
 def snooze(conn, task_id, by, why=None, until=None, seen_version=None) -> dict
 def unsnooze(conn, task_id, by, why=None) -> dict
+def on_delete(conn, task_ids, by) -> int
+    # The delete path (task_delete.delete_tasks), before the rows go: each task's open snooze ends. Its visit,
+    # requirements and links stay for a restore; every read skips a task that is gone.
 def add_requirement(conn, task_id, by, kind, person, line, *, choices=None, shows=None, seen_version=None) -> dict
     # kind is ok or answer (C30). A bot's second one on the visit replaces its first (C15).
     # `person` is a person who is here (not left or removed) or a bot that exists. The result carries `requirement_id`.
@@ -326,7 +329,8 @@ def check(conn, now=None, failures=None) -> dict[str, int]
     # One pass, in the caller's write transaction: snoozes that ended, then every open task in a work stage that is
     # not by hand and not snoozed, oldest visit first. Returns snoozes_ended, moved, woken, to_manager, to_person, late.
     # Each task is done in its own savepoint. One that raises is rolled back and added to `failures` as
-    # (task id, error); with no list the error is raised.
+    # (task id, error), and the pass goes on to the next; with no list the error is raised. A row that names a task
+    # that was deleted (an open snooze, a visit, a queued wake, a requirement) is passed by: no read raises on it.
 def rules_hold(conn) -> list[str]
     # The seven rules that hold at all times. One sentence per break, starting with the rule's number. Empty: all hold.
 ```

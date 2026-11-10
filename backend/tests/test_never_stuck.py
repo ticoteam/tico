@@ -367,6 +367,25 @@ def test_a_task_the_check_cannot_work_out_is_left_as_it_was_and_the_rest_still_h
         NS.check(c, later_at)  # with nowhere to report it, the error is raised
 
 
+def test_a_deleted_snoozed_task_leaves_nothing_the_check_trips_on(c, general, later):
+    from backend import task_delete
+
+    task_id = X.new_task(c, ANA, "Chase the vendor", assignee=BUILDER)["id"]
+    X.ran(c, task_id, BUILDER)
+    E.snooze(c, task_id, ANA, until=H.shift(H.now(), minutes=10))
+    assert task_delete.delete_tasks(c, [task_id], apply=True, keep_work=True)["applied"]
+    assert c.execute("SELECT COUNT(*) FROM snoozes WHERE task_id=? AND ended_at IS NULL", (task_id,)).fetchone()[0] == 0
+    failures: list[tuple[str, Exception]] = []
+    assert NS.check(c, H.shift(H.now(), minutes=11), failures) == dict.fromkeys(
+        ("snoozes_ended", "moved", "woken", "to_manager", "to_person", "late"), 0
+    )
+    assert failures == []
+    # A snooze a delete left open before it ended them, and the deleted task's open visit, are no task's: every read
+    # passes them by.
+    c.execute("UPDATE snoozes SET ended_at=NULL, ended_by_id=NULL WHERE task_id=?", (task_id,))
+    assert later(minutes=11) == {} and NS.rules_hold(c) == []
+
+
 def test_each_rule_that_breaks_is_named(c, general, later, monkeypatch):
     stages = ({"name": "Build", "owner": BUILDER, "task_limit": 1, "requirements": [{"kind": "owner_done"}]},)
     X.pipeline(c, "eng", "Engineering", stages, manager=MANAGER)

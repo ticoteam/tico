@@ -1109,17 +1109,6 @@ def s52(r: Rig) -> None:
 
 
 # ----------------------------------------------------------------------------- bugs the seeded runs found
-@bug("deleted-snoozed-task", "A deleted task's snooze stays open and the check raises on it every pass")
-def b_deleted_snoozed(r: Rig) -> None:
-    from backend import task_delete
-    from backend import task_engine as E
-
-    task, sub = _filed(r)
-    version = r.row(sub)["version"]
-    until = _h().shift(r.w.now(), seconds=600)
-    r.ok(BUILDER, lambda c: E.snooze(c, sub, BUILDER, "Waiting on the vendor", until, version), "snooze the filed task")
-    r.ok(ANA, lambda c: task_delete.delete_tasks(c, [sub], apply=True, keep_work=True), "delete it")
-    r.later(minutes=11)  # the snooze's date passes
 
 
 @bug("runs-outside-ladder", "A snooze ends while another bot is asked: 8 runs without a change")
@@ -1189,6 +1178,24 @@ def c_clock_back(r: Rig) -> None:
     runs = r.ladder(task, hours=24)
     expect(r.visit(task).get("level") == "person", f"after the clock went back the ladder did not end: {runs}")
     expect(r.runs(task) <= 7, f"{r.runs(task)} runs")
+
+
+@extra("deleted-snoozed-task", "A snoozed task is deleted: its snooze ends with it and the check passes it by")
+def c_deleted_snoozed(r: Rig) -> None:
+    from backend import task_delete
+    from backend import task_engine as E
+
+    task, sub = _filed(r)
+    version = r.row(sub)["version"]
+    until = _h().shift(r.w.now(), seconds=600)
+    r.ok(BUILDER, lambda c: E.snooze(c, sub, BUILDER, "Waiting on the vendor", until, version), "snooze the filed task")
+    r.ok(ANA, lambda c: task_delete.delete_tasks(c, [sub], apply=True, keep_work=True), "delete it")
+    left = r.w.read(
+        lambda c: c.execute("SELECT COUNT(*) FROM snoozes WHERE task_id=? AND ended_at IS NULL", (sub,)).fetchone()[0]
+    )
+    expect(left == 0, "the deleted task's snooze is still open")
+    r.later(minutes=11)  # the snooze's date passes: nothing raises
+    expect(r.waits(task) == [("bot", WRITER)], f"the task that filed it waits on {r.waits(task)}")
 
 
 @extra("crash-in-check", "A crash at any point inside a never-stuck pass rolls the whole pass back")

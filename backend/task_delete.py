@@ -391,6 +391,9 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
     ensure(c)
     actor = actor or H.KEEPER
     now = H.now()
+    from . import task_engine
+
+    task_engine.on_delete(c, ids, actor)  # a deleted task's snooze ends: nothing waits for its date
     relations = {tid: TR.snapshot_rows(c, tid) for tid in ids}
     found_rows = {tid: H.task(c, tid) for tid in ids}
     for tid in ids:

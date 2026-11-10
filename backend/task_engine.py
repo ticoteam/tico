@@ -726,6 +726,22 @@ def _end_snooze(conn: "sqlite3.Connection", snoozed: Row, by: str, ts: str) -> N
     )
 
 
+def on_delete(conn: "sqlite3.Connection", task_ids: Sequence[str], by: str) -> int:
+    """The delete path (`task_delete.delete_tasks`), before the rows go: a deleted task's open snooze ends, so nothing
+    waits for its date. Its visit, requirements and links stay for a restore; every read skips a task that is gone.
+    Returns how many snoozes it ended."""
+    ids = [str(task_id) for task_id in task_ids if task_id]
+    if not ids:
+        return 0
+    cursor = conn.execute(
+        "UPDATE snoozes SET ended_at=?, ended_by_id=? WHERE ended_at IS NULL AND task_id IN ("
+        + ",".join("?" * len(ids))
+        + ")",
+        (_h().now(), str(by), *ids),
+    )
+    return cursor.rowcount
+
+
 def snooze(
     conn: "sqlite3.Connection",
     task_id: str,

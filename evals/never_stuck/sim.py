@@ -45,7 +45,6 @@ MAX_RUNS = 7  # bot runs one task may use without a change before a person is as
 # Engine bugs the rig has found, by name (see README.md). A failure that matches one is still a failure: the name only
 # groups a sweep's failures so a new bug stands out.
 KNOWN_BUGS = {
-    "deleted-snoozed-task": "a deleted task's snooze stays open, and every check pass raises not-found on it",
     "runs-outside-ladder": "the 7-run bound counts the ladder's own wakes only: other wakes on the task (unsnooze, "
     "Late, an entry, ask or answer wake to a bot without the turn, a wake queued before the last change) are runs on "
     "top of it",
@@ -55,8 +54,6 @@ LADDER = ["owner 0", "owner 1", "owner 2", "owner 3", "manager 1", "manager 2", 
 
 def known_bug(what: str) -> str | None:
     """The known engine bug a failure matches, or None for a new one."""
-    if "never-stuck check raised" in what and "not-found: No such task" in what:
-        return "deleted-snoozed-task"
     if "bot runs without a change" in what and ": " in what:
         runs = [r.split(" (", 1)[1].rstrip(")") for r in what.split(": ", 1)[1].split(", ")]
         for step in LADDER:
