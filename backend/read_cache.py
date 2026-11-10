@@ -80,7 +80,7 @@ def value(c: Any, key: Hashable, build: Callable[[], T], shared: bool = False) -
     return values[key] if shared else deepcopy(values[key])
 
 
-def one(c, statement, args=()):
+def one(c: Any, statement: str, args: Iterable[Any] = ()) -> Any:
     """One neutral stored row; never cache a mutation or an answer outside its snapshot."""
     values = cache(c) if statement.lstrip().upper().startswith("SELECT ") else None
     key = ("one", statement, tuple(args))

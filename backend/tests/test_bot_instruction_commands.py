@@ -115,7 +115,9 @@ class Server:
 
     def _answer(self, *args, **kwargs):
         self.calls.append(args)
-        task = Any(id="T1", version=1, labels=[], title="Acme task", to_leave=[{"requirement_id": "r1", "may": ["withdraw"]}])
+        task = Any(
+            id="T1", version=1, labels=[], title="Acme task", to_leave=[{"requirement_id": "r1", "may": ["withdraw"]}]
+        )
         return Any(task=task, tasks=[task], items=[])
 
     def __getattr__(self, name):
