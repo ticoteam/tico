@@ -1,231 +1,101 @@
-/* ui/app/decide.ts — the Needs you card: one item of Needs you at a time, answered with two big buttons; a modal on a
-   wide screen, the whole screen on a phone. A row that can be answered on a card opens here: a bot's question with
-   options, an approval, a yes/no ask, a bot's recommendation, a question asked outside any task, the Stale tickets
-   card. Every other row opens the full task. ‹ and › (or Catch up, from the first) walk the cards in the order the
-   list shows them. An answer, Done or a comment hands the task back to the bot; it is sent when its toast runs out
-   or the next action lands, so Undo never needs the server.
+/* ui/app/decide.ts — the ask screen (docs/pipelines-v3.md, S3): one item of Needs you at a time, over the page. A modal
+   on a wide screen, the whole screen on a phone. The top bar is "2 of 7", then 👍 👎 ‹ › ✕. The thing asked about is on
+   the left, shown in full (the page, the email, what an OK is for); the sentence asked, who asks, Notes and the buttons
+   are on the right.
+   An OK bound to what was shown: the content on screen is the preview GET /v2/oks/{id} (or the email's own preview)
+   returned, held here and never read again behind the person's back. Approve sends the hash of exactly that preview. If
+   the engine answers that it changed, the new content is read and shown with "It changed. Look again." and Approve
+   needs a new click: it is never sent again by itself.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// The shapes this file reads of the server's rows and keeps for its own cards. A field is optional where the page may
-// be sent without it; the server sends more than is named here.
-/** A question on a task, or a bot's ask (`it.ask`). */
-interface DecAsk {
-  id?: string;
-  body?: string;
-  sender_id?: string;
-  recipient_id?: string | null;
-  created_at?: string;
-  read_at?: string | null;
-  question_task?: boolean;
+/** What an item is on this screen. */
+type AskKind = 'ok' | 'question' | 'yours' | 'stuck' | 'fix' | 'mention';
+/** What an OK shows, as it was read: `hash` is the hash of exactly this content, the one Approve sends. `none` is an OK
+    with no bound grant (a stage's OK of a page): Approve is a plain answer. */
+interface AskOkView {
+  state: 'loading' | 'ready' | 'none' | 'failed';
+  hash: string | null;
+  html: string;
+  pages: import('../types/api').Page[];
+  changed: boolean;
+  error: string;
 }
-/** One row of a stale-tickets card (`it.rows`). */
-interface DecStaleRow {
-  id?: string;
-  action?: unknown;
-  [key: string]: unknown;
+/** The 👎 sheet: what was wrong, then (Make a rule) the rule drafted from it. */
+interface AskSheet {
+  step: 'why' | 'rule';
+  chip: '' | 'exist' | 'person' | 'written';
+  note: string;
+  feedbackId: string;
+  rule: string;
+  allBots: boolean;
 }
-/** A Needs you row (`S.v2.needs`): a question, an approval, a stale check, or a task that waits on the person. */
-interface DecItem {
-  kind: string;
-  id: string;
-  title?: string;
-  note?: string;
-  what?: string;
-  need?: string;
-  version?: number;
-  tier?: number;
-  steps_only?: boolean;
-  ask_missing?: boolean;
-  person_ask?: string;
-  created_at?: string;
-  updated_at?: string;
-  owner_id?: string | null;
-  requester_id?: string | null;
-  waiting_on?: string | null;
-  from_person?: string | null;
-  ask?: DecAsk | null;
-  payload?: { email_send_id?: string; content_sha256?: string } | null;
-  recommend?: { ask?: unknown; do: string } | null;
-  folded?: { id: string | number }[] | null;
-  merged?: (string | number)[] | null;
-  rows?: DecStaleRow[] | null;
-}
-/** The question on a question card (question-card.ts): one question with its options. */
-interface DecQuestion {
-  multi?: boolean;
-  options: { label: string; recommended?: boolean }[];
-}
-/** A card of the walk: a question to pick from, or an approval, a stale check or a task. */
-type DecCard = DecPick | DecOther;
-interface DecPick {
-  key: string;
-  type: 'pick';
-  it: DecItem;
-  q: DecQuestion;
-  at?: string | undefined;
-  yn?: boolean;
-}
-interface DecOther {
-  key: string;
-  type: 'approve' | 'stale' | 'task';
-  it: DecItem;
-  at?: string | undefined;
-  yn?: boolean;
-  q?: undefined;
-}
-/** A task file as tfNorm (task-files.ts) keeps it for the card. */
-type DecFile = TfFile;
-/** A task comment as the card reads it (a note, a say, an ask). */
-interface DecComment {
-  kind?: string;
-  body?: string;
-  sender_id?: string;
-  recipient_id?: string;
-  answered_by_id?: string | null;
-  refs?: { note?: unknown } | null;
-}
-/** The frozen email an approval to send shows (`email_send_id`). */
-interface DecEmail extends EmailSendPreview {
-  send: EmailSendPreviewSend;
-}
-/** What a card has read for its item: a task's files and comments, or a frozen email; `error` when that read failed. */
-interface DecData {
-  version?: number | undefined;
-  files?: DecFile[];
-  comments?: DecComment[];
-  email?: DecEmail;
-  error?: boolean;
-}
-/** One request an action sends: its path, its body, and the key it is sent under. */
-interface DecWrite {
-  path: string;
-  body: unknown;
-  key?: string;
-}
-/** What an action sends, in order, and the line its toast says. */
-interface DecWriteSet {
-  writes: DecWrite[];
-  label: string;
-}
-/** An action taken on a card: on its toast, then in the outbox until the server confirms each request. */
-interface DecPending {
-  key: string;
-  write: { writes: DecWrite[]; label?: string };
-  note?: string;
-  me?: string | undefined;
-  timer?: number;
-  sent?: number;
-  retries?: number;
-}
-/** A write kept in this browser until the server confirms it (decideSave). */
-interface DecSaved {
-  me?: string;
-  key: string;
-  writes?: DecWrite[];
-}
-/** The open card's state: the walk's order, the card on screen, what is typed or ticked, and what is still on its way. */
+/** The open screen: the walk's order, the item on screen, what each OK showed, what was answered here. */
 interface DecState {
   order: string[];
   at: string | null;
-  cards: Map<string, DecCard>;
-  pending: DecPending | null;
-  data: Map<string, DecData | null>;
-  ticks: Map<string, Set<number>>;
+  items: Map<string, NeedsEntry>;
+  ok: Map<string, AskOkView>;
+  gone: Set<string>;
+  sheet: AskSheet | null;
+  more: '' | 'snooze' | 'give' | 'back';
+  busy: boolean;
+  error: string;
+  thumbed: Set<string>;
+  barTimer: number;
+  opener: HTMLElement | null;
   off: (() => void)[];
-  fromList: boolean;
-  opener?: HTMLElement | null;
-  shown?: string | null;
-  busy?: boolean;
-  lockUntil?: number;
-  swiped?: boolean;
-  undo?: (() => void) | null;
-  toastFor?: DecPending | null;
-  toastTimer?: number;
 }
 
-let DEC: DecState | null = null;                 // the open card's state, null while it is shut
-interface DecFailure extends ApiFailure { unconfirmed?: boolean }
-const DEC_UNDO_MS = 4000;
-const DEC_MORE_AT = 10;         // cards left when the next page of Needs you is read
-// A card's comment Send is disabled until there is a comment; its hover title says so.
-const DC_SEND_WHY = 'Type a comment to send';
-// Cards answered here, out of the list until the server's list drops them (or this page closes).
-const DEC_HANDLED = new Set<string>();
-// A deep link's item (#/decide?item=<id>), opened once Needs you is drawn.
-let DECIDE_WANT = '';
+let DEC: DecState | null = null;            // the open screen, null while it is shut
+let DECIDE_WANT = '';                       // a deep link's item (#/decide?item=<id>), opened once Tasks has read
+const DEC_UNDO_MS = 10_000;
+const DEC_CHIPS: [AskSheet['chip'], string][] = [['exist', "Shouldn't exist"], ['person', 'Wrong person'], ['written', 'Badly written']];
 
-// ---- which cards, in which order (GET /v2/needs-you items)
-// A question answered in the card (question-card.js): one question with 2 to 6 options, a pick or several picks, put
-// to this person by someone else. Several questions in one ask are a task: they open the task.
-const decideQuestion = (it: DecItem) => qcardQuestion(it);
-// The plain ask a task card leads with, from the server's read alone (so a card's buttons never wait on its
-// comments): an open question to me, else the ask the bot wrote in its waiting note or its task's first paragraph.
-const decideAskText = (it: DecItem) => String((it.ask?.recipient_id === myActor() && it.ask.sender_id !== myActor() ? it.ask.body : '')
-  || it.person_ask || '').trim();
-// A yes/no ask: its first question opens with a word that asks for a yes or a no and offers no "or". Deterministic, so
-// a card's buttons never guess.
-const DEC_YES_NO = new Set(['approve', 'can', 'could', 'should', 'shall', 'may', 'do', 'does', 'did', 'is', 'are', 'was',
-  'were', 'will', 'would', 'ok', 'okay', 'send', 'publish', 'merge', 'ship', 'go', 'sign', 'confirm', 'proceed', 'accept',
-  'allow', 'agree', 'have', 'has', 'want', 'renew', 'book', 'buy', 'pay', 'launch', 'post', 'keep', 'cancel']);
-function decideYesNoAsk(text: string | null | undefined): boolean {
-  const q = String(text || '').trim().split(/(?<=[.!?])\s+/).find(s => s.endsWith('?'));
-  if (!q || /\bor\b/i.test(q)) return false;
-  return DEC_YES_NO.has(q.split(/\s+/)[0]!.replace(/[^A-Za-z]/g, '').toLowerCase());
+// ---- which items, in which order
+/** Needs you as the Tasks page read it, else as the shared refresh holds it. */
+function decideSource(): NeedsEntry[] {
+  const page = typeof TASKS_ST !== 'undefined' && TASKS_ST && !TASKS_ST.pipeline && !TASKS_ST.archive ? TASKS_ST.needs : null;
+  return page?.length ? page : needsHeld();
 }
-// Each Needs you item's key: its kind and id.
-const decideItemKey = (it: DecItem) => ({approval: 'approval:', stale: 'stale:'}[it?.kind] || 'task:') + it?.id;
-function decideCards(items: (NeedsItem | DecItem)[] | undefined): DecCard[] {
-  const me = myActor(), asks: DecCard[] = [], approvals: DecCard[] = [], waiting: DecCard[] = [], mine: DecCard[] = [], unexplained: DecCard[] = [];
-  for (const it of items as DecItem[] || []) {
-    if (it.kind === 'approval') { approvals.push({key: 'approval:' + it.id, type: 'approve', it, at: it.created_at}); continue; }
-    if (it.kind === 'stale') { approvals.push({key: 'stale:' + it.id, type: 'stale', it, at: it.created_at}); continue; }
-    if (!NEEDS_TASK_KINDS.includes(it.kind)) continue;
-    const q = it.kind === 'question' ? decideQuestion(it) : null;
-    if (q) asks.push({key: 'task:' + it.id, type: 'pick', it, q, at: it.ask!.created_at || it.created_at});
-    // A card still waiting for its bot to say what it needs goes last, as the server orders it.
-    else (it.ask_missing ? unexplained : it.owner_id === me && it.kind === 'task' && it.waiting_on !== me ? mine : waiting)
-      .push({key: 'task:' + it.id, type: 'task', it, at: (it.ask?.recipient_id === me && it.ask.created_at) || it.created_at, yn: !it.ask_missing && decideYesNoAsk(decideAskText(it))});
+/** The walk goes in the list's order: Answer, Review, Do, oldest first within each. */
+function decideOrdered(items: NeedsEntry[]): NeedsEntry[] {
+  const rank = {answer: 0, review: 1, do: 2};
+  return items.map((it, i) => ({it, i})).sort((a, b) => rank[needsGroup(a.it)] - rank[needsGroup(b.it)] || a.i - b.i).map(x => x.it);
+}
+function decideKind(it: NeedsEntry): AskKind {
+  if (it.kind === 'ask') return it.ask?.kind === 'answer' ? 'question' : 'ok';
+  if (it.kind === 'paused') return 'fix';
+  if (it.kind === 'mention') return 'mention';
+  return it.task?.turn?.state === 'paused' || it.task?.late?.level === 'person' ? 'stuck' : 'yours';
+}
+const decideRid = (it: NeedsEntry) => it.requirement_id || it.id;
+const decideLive = (st: DecState) => st.order.filter(k => !st.gone.has(k) && st.items.has(k));
+const decideCurrent = (st: DecState) => st.at && !st.gone.has(st.at) ? st.items.get(st.at) || null : null;
+function decideSync(st: DecState, items: NeedsEntry[]) {
+  const fresh = decideOrdered(items), keys = new Set(fresh.map(it => it.id));
+  const before = st.order;
+  st.items = new Map(fresh.map(it => [it.id, it]));
+  const order = before.filter(k => keys.has(k));
+  fresh.forEach((it, i) => {
+    if (order.includes(it.id)) return;
+    const prev = fresh.slice(0, i).reverse().find(x => order.includes(x.id));
+    order.splice(prev ? order.indexOf(prev.id) + 1 : 0, 0, it.id);
+  });
+  for (const k of [...st.gone]) if (!keys.has(k)) st.gone.delete(k);
+  // The item on screen left the list (answered elsewhere): the next one takes its place.
+  if (st.at && !keys.has(st.at)) {
+    const i = before.indexOf(st.at);
+    st.at = before.slice(i + 1).find(k => keys.has(k) && !st.gone.has(k))
+      || before.slice(0, Math.max(i, 0)).reverse().find(k => keys.has(k) && !st.gone.has(k)) || null;
   }
-  const old = (a: DecCard, b: DecCard) => String(a.at || '').localeCompare(String(b.at || ''));
-  // The server's tier (backend/views.py decide_tier): what holds up something due, or going ahead on its own, within
-  // two working days; then what holds up a roadmap item at Approved or Building; then the rest. Newest first within
-  // each: how old a card is never moves it up.
-  const tier = (c: DecCard) => c.it.tier ?? 2;
-  const all = [...asks, ...approvals, ...waiting, ...mine].sort((a, b) => tier(a) - tier(b) || old(b, a));
-  return [...all, ...unexplained.sort(old)];
+  st.order = order;
 }
-// Declines open whole, as do tasks that ask for no yes or no and recommend nothing.
-const decideOnCard = (c: DecCard) => c.it.kind !== 'declined' && (c.type !== 'task' || !!c.yn || !!c.it.recommend?.ask);
-function needsCards(items: NeedsItem[] | undefined): DecCard[] {
-  const folded = new Set((items as DecItem[] | undefined || []).flatMap(it => [...(it.folded || []).map(f => String(f.id)), ...(it.merged || []).map(String)]));
-  const cards = new Map<string, DecCard>();
-  for (const c of decideCards(items)) {
-    if (!decideOnCard(c) || cards.has(c.key) || (['task', 'pick'].includes(c.type)
-      && (folded.has(String(c.it.id)) || items === S.v2?.needs && needsFolded(c.it.id)))) continue;
-    cards.set(c.key, c);
-  }
-  return [...cards.values()];
-}
-// The card an item opens as, or '' when it opens as the full task.
-const decideCardKey = (it: DecItem | null | undefined): string => { const c = it && decideCards([it])[0]; return c && decideOnCard(c) ? c.key : ''; };
-// Answered here and on its way, or sent from an earlier page: out of the list and the walk.
-const decideGone = (key: string) => DEC_HANDLED.has(key) || [...DEC_OUTBOX].some(p => p.key === key);
-// The held part of the person's plate, including tasks that open whole. The server scopes it to the reader and
-// supplies the whole-list count; thread and update attention belongs to its own pages.
-function needsPlateItems(): DecItem[] {
-  if (S.me?.role === 'bot') return [];
-  const seen = new Set<string>();
-  return decideCards(S.v2?.needs).filter(c => {
-    if (seen.has(c.key) || ['task', 'pick'].includes(c.type) && needsFolded(c.it.id)) return false;
-    seen.add(c.key); return true;
-  }).map(c => c.it);
-}
-const needsQueueItems = () => needsPlateItems().filter(it => !decideGone(decideItemKey(it)));
+
+// ---- the count, and the lists that show Needs you
 function decideCount(): number {
-  const held = needsPlateItems();
-  return S.me?.role === 'bot' ? 0 : Math.max(0, (S.v2?.needsPlateCount ?? held.length)
-    - held.filter(it => decideGone(decideItemKey(it))).length);
+  if (S.me?.role === 'bot') return 0;
+  return S.v2?.needsCount ?? (S.v2?.needs || []).length;
 }
 function needsBadgePaint() {
   const n = decideCount();
@@ -233,40 +103,14 @@ function needsBadgePaint() {
     badge.hidden = !n; badge.textContent = String(n); badge.setAttribute('aria-label', `${n} need you`);
   }
 }
-// "From Ana" beside the name when the card's work traces back to another person than the one shown;
-// "You asked" when it is the viewer's own request a bot is bringing back.
-function decideFromPerson(it: DecItem, shown: string | null | undefined): string {
-  const p = it.from_person;
-  if (!p || p === shown) return '';
-  return p === myActor() ? 'You asked' : `From ${actorLabel(p)}`;
-}
-// The Needs you list's way in: Catch up in the Tasks header, only on Needs you and only when there is a card.
-function decidePaintButton() {
-  needsBadgePaint();
-  const links = (
-    /** @type {NodeListOf<HTMLElement>} */
-    document.querySelectorAll<HTMLElement>('[data-go-through]')
-  );
-  if (!links.length) return;
-  const n = S.me?.role !== 'bot' && TASKS_ST && tasksNeedsQueue(TASKS_ST)
-    ? needsCards(S.v2?.needs).filter(c => !decideGone(c.key)).length : 0;
-  let changed = false;
-  for (const b of links) { changed ||= b.hidden !== !n; b.hidden = !n; b.textContent = 'Catch up'; }
-  if (changed && TASKS_ST) tasksHeadFit(TASKS_ST);     // the header row makes room for it, or gives it back
-}
-// The lists that show Needs you draw again: an answered card leaves them at once, and comes back on Undo.
+/** Needs you changed: the badge, the Tasks page and a bot's rail draw again. */
 function needsListsRedraw() {
   needsBadgePaint();
-  if (TASKS_ST) tasksRender(TASKS_ST);
-  if (typeof BOT !== 'undefined' && BOT && $('#t-needs')) botNeedsPaint(BOT.slug);
+  if (typeof TASKS_ST !== 'undefined' && TASKS_ST) tasksNeedsLive();
+  if (typeof BOT !== 'undefined' && BOT && $('#t-needs') && typeof botNeedsPaint === 'function') botNeedsPaint(BOT.slug);
 }
 
-// ---- the dialog
-// The cards the list shows, in its order; a card the list does not show (not drawn yet, a page not read) goes in the
-// server's order.
-function decideListKeys(): string[] {
-  return [...new Set([...document.querySelectorAll<HTMLElement>('#task-body [data-need-card], #t-needs [data-need-card]')].map(el => el.dataset.needCard!))];
-}
+// ---- open and close
 function decideDialog(): HTMLDialogElement {
   let d: HTMLDialogElement | null = $('#need-card');
   if (d) return d;
@@ -274,727 +118,438 @@ function decideDialog(): HTMLDialogElement {
   d.id = 'need-card'; d.className = 'dc-dialog'; d.setAttribute('aria-label', 'Needs you');
   d.innerHTML = `<section class="decide">
     <header class="dc-head">
-      <button type="button" class="dc-icon dc-x" data-dc="close" aria-label="Close" title="Close (Esc)">✕</button>
-      <h2 class="dc-count" aria-live="polite"></h2>
-      <span class="dc-nav">${helpBubble('← → move · 1–6 pick · Y / N · R recommended · D done · S skip · C comment')}<button type="button" class="dc-icon" data-dc="prev" aria-label="Previous" title="Previous (←)"><span class="nav-icon" aria-hidden="true">chevron_left</span></button><button type="button" class="dc-icon" data-dc="next" aria-label="Next" title="Next (→)"><span class="nav-icon" aria-hidden="true">chevron_right</span></button></span>
+      <h2 class="dc-count tnum" aria-live="polite"></h2>
+      <span class="dc-nav">
+        <button type="button" class="dc-icon" data-dc="up" aria-label="Good ask" aria-pressed="false">👍</button>
+        <button type="button" class="dc-icon" data-dc="down" aria-label="Bad ask">👎</button>
+        <button type="button" class="dc-icon dc-wide" data-dc="prev" aria-label="Previous" title="Previous (←)">‹</button>
+        <button type="button" class="dc-icon dc-wide" data-dc="next" aria-label="Next" title="Next (→)">›</button>
+        <button type="button" class="dc-icon" data-dc="close" aria-label="Close" title="Close (Esc)">✕</button>
+      </span>
     </header>
-    <div class="dc-stage"></div>
-    <div class="dc-actions"></div>
-    <div class="dc-toast" role="status" hidden><span></span><button type="button" data-dc="undo">Undo</button></div>
+    <div class="dc-main"><div class="dc-thing"></div><div class="dc-side"></div></div>
+    <div class="dc-bar" role="status" hidden><span></span><button type="button" data-dc="undo">Undo</button></div>
   </section>`;
   const root: HTMLElement = $('.decide', d)!;
-  root.addEventListener('click', (ev: MouseEvent) => { if (DEC) decideClick(DEC, ev); });
-  root.addEventListener('change', (ev: Event) => {
-    const tick = eventElement(ev) as HTMLInputElement | null;
-    if (DEC && tick?.matches('[data-qc-tick]')) decideTick(DEC, Number(tick.dataset.qcTick), tick.checked);
-  });
+  root.addEventListener('click', (ev: MouseEvent) => { if (DEC) void decideClick(DEC, ev); });
   root.addEventListener('input', (ev: Event) => {
-    const box = eventElement(ev)?.closest<HTMLTextAreaElement>('.dc-note textarea');
-    if (!box) return;
-    box.style.height = 'auto'; box.style.height = Math.min(box.scrollHeight, 120) + 'px';
-    for (const b of root.querySelectorAll<HTMLButtonElement>('.dc-send, [data-dc-text]')) {
-      b.disabled = !box.value.trim();
-      if (b.matches('.dc-send')) b.title = b.disabled ? DC_SEND_WHY : 'Send comment';
-    }
+    const box = eventElement(ev) as HTMLTextAreaElement | null;
+    if (!DEC || !box?.matches('textarea')) return;
+    if (DEC.sheet && box.matches('[data-dc-note]')) DEC.sheet.note = box.value;
+    if (DEC.sheet && box.matches('[data-dc-rule]')) DEC.sheet.rule = box.value;
+    decideNeedsText(root);
   });
-  root.addEventListener('keydown', (ev: KeyboardEvent) => {
-    const field = eventElement(ev) as HTMLTextAreaElement | null;
-    if (!DEC || ev.key !== 'Enter' || ev.shiftKey || ev.isComposing || !field?.matches('.dc-note textarea') || !field.value.trim()) return;
-    const send: HTMLElement | null = $('.dc-send, [data-dc-text]', root);
-    if (send) { ev.preventDefault(); decideAct(DEC, send.dataset.dc!); }
+  root.addEventListener('change', (ev: Event) => {
+    const pick = eventElement(ev) as HTMLSelectElement | null;
+    if (DEC?.sheet && pick?.matches('[data-dc-scope]')) DEC.sheet.allBots = pick.value === 'all';
+    decideNeedsText(root);
   });
-  // Esc in the note leaves the note; otherwise it closes the card.
+  d.addEventListener('keydown', (ev: KeyboardEvent) => {
+    if (!DEC || ev.metaKey || ev.ctrlKey || ev.altKey || eventElement(ev)?.closest('input, textarea, select')) return;
+    if (ev.key === 'ArrowLeft') { ev.preventDefault(); decideStep(DEC, -1); }
+    if (ev.key === 'ArrowRight') { ev.preventDefault(); decideStep(DEC, 1); }
+  });
   d.addEventListener('cancel', ev => { ev.preventDefault(); decideStop(); });
-  // The event lands a moment after closing: a card opened again since keeps its place.
   d.addEventListener('close', () => { if (!d.open) decideStop(); });
   document.body.appendChild(d);
   return d;
 }
-// Opens the card for `key`, or the first card of the list with none. False when there is no such card.
-function decideOpen(key: string = ''): boolean {
+/** A button that needs words (Send back, Something else, Add rule) is on once there are some. */
+function decideNeedsText(root: HTMLElement) {
+  for (const b of root.querySelectorAll<HTMLButtonElement>('[data-dc-needs]')) {
+    const box = root.querySelector<HTMLTextAreaElement | HTMLSelectElement>(b.dataset.dcNeeds!);
+    b.disabled = !box?.value.trim() || !!DEC?.busy;
+  }
+}
+/** Opens the item `id`, or the first of the list with none. False when there is no such item. */
+function decideOpen(id: string = ''): boolean {
   if (S.me?.role === 'bot') return false;
   const fresh = !DEC;
-  const st: DecState = DEC || {order: [], at: null, cards: new Map(), pending: null, data: new Map(), ticks: new Map(), off: [], fromList: false};
-  decideSync(st, S.v2?.needs || []);
-  // A card the list does not show (a filter hides it, a link names it) leads the walk.
-  if (key && st.cards.has(key) && !st.order.includes(key) && !decideGone(key)) st.order.unshift(key);
-  const live = decideLive(st), to = key ? (live.includes(key) ? key : null) : live[0] || null;
+  const st: DecState = DEC || {order: [], at: null, items: new Map(), ok: new Map(), gone: new Set(), sheet: null, more: '',
+    busy: false, error: '', thumbed: new Set(), barTimer: 0, opener: document.activeElement as HTMLElement | null, off: []};
+  decideSync(st, decideSource());
+  const live = decideLive(st), to = id ? (live.includes(id) ? id : null) : live[0] || null;
   if (!to) return false;
-  if (fresh) {
-    DEC = st;
-    if (typeof liveOn === 'function') st.off.push(liveOn('needs-list', (items: NeedsItem[]) => { if (DEC === st) decideRefresh(st, items); }));
-    const keys = (ev: KeyboardEvent) => decideKey(st, ev);
-    document.addEventListener('keydown', keys);
-    st.off.push(() => document.removeEventListener('keydown', keys));
-    st.opener = document.activeElement as HTMLElement | null;
-  }
-  st.at = to;
-  if (TASKS_ST && $('#task-peek')?.open) taskPeekClose(TASKS_ST);
+  if (fresh) DEC = st;
   const d = decideDialog();
-  if (!d.open) {
-    d.showModal();
-    // A phone's Back closes the card, as it closes the task sheet.
-    if (matchMedia(PHONE).matches && !history.state?.needCard) history.pushState({...(history.state || {}), needCard: 1}, '');
-  }
-  decideRender(st, !fresh);
+  decideGo(st, to);
+  if (!d.open) d.showModal();
   return true;
 }
 const decideGoThrough = () => decideOpen('');
-// Closing sends what is waiting on its toast.
-let DEC_BACK = false;
 function decideStop() {
   const st = DEC;
   if (!st) return;
   DEC = null;
-  void decideCommit(st);
+  clearTimeout(st.barTimer);
   st.off.forEach(fn => fn());
   const d: HTMLDialogElement | null = $('#need-card');
   if (d?.open) d.close();
-  if (history.state?.needCard && !DEC_BACK) { DEC_BACK = true; history.back(); }
   needsListsRedraw();
-  // Back to where the card was opened from, or the row of the card last shown.
-  const row = st.at ? document.querySelector<HTMLElement>(`[data-need-card="${CSS.escape(st.at)}"]`) : null;
-  const to = st.opener?.isConnected ? st.opener : row?.querySelector<HTMLElement>('.tl-open') || row;
-  to?.focus?.({preventScroll: true});
+  if (st.opener?.isConnected) st.opener.focus({preventScroll: true});
 }
-window.addEventListener('popstate', () => {
-  // The card's own Back, from closing it, landed after a card opened again: that card gets its history entry back.
-  if (DEC_BACK) {
-    DEC_BACK = false;
-    if (DEC && !history.state?.needCard && matchMedia(PHONE).matches) history.pushState({...(history.state || {}), needCard: 1}, '');
-    return;
-  }
-  if (DEC && !history.state?.needCard) decideStop();
-});
-// A row answered on a card outside the Tasks list (a bot's rail): its card, not the task. Capturing, so the row's own
-// open-the-task handler never runs; a link to anything else (a bot, a person) keeps its place.
-document.addEventListener('click', ev => {
-  const row = eventElement(ev)?.closest?.<HTMLElement>('[data-need-card]');
-  if (!row || row.closest('#task-body') || ev.button || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
-  const link = eventElement(ev)?.closest('a[href]');
-  if (link && !link.matches('.ttl')) return;
-  if (!decideOpen(row.dataset.needCard)) return;
-  ev.preventDefault(); ev.stopPropagation();
-}, true);
-// A deep link to one item (an old #/decide?item=<id>): its card, or its task when it is answered whole.
+/** A deep link to one item (#/decide?item=<id>): its ask, or its task when it is not in the list. */
 async function decideWanted(id: string) {
-  if (!needsItem(id)) { await v2Refresh(); needsListsRedraw(); }
-  const it = needsItem(id);
-  if (!it || !TASKS_ST) return;
-  const key = decideCardKey(it);
-  if (!key || !decideOpen(key)) location.hash = '#/task/' + encodeURIComponent(id);
+  if (decideOpen(id)) return;
+  await v2Refresh();
+  if (!decideOpen(id)) location.hash = '#/task/' + encodeURIComponent(id);
+}
+/** The list was read again (hub-v2.ts): drop what left, add what came. The item on screen is drawn again only when it
+    went; an OK's content is never read again here. */
+function decideRefresh(st: DecState, items: NeedsItem[] | NeedsEntry[] | undefined) {
+  const before = st.at;
+  decideSync(st, needsAsEntries(items));
+  if (st.at !== before) decideRender(st); else decidePaintHead(st);
 }
 
-// The server's list changed (live, or a read after a write): drop what left, add what is new where the list has it.
-const decideLive = (st: DecState) => st.order.filter(k => !decideGone(k));
-function decideSync(st: DecState, items: NeedsItem[] | undefined) {
-  const fresh = needsCards(items), keys = new Set(fresh.map(c => c.key));
-  st.cards = new Map([...st.cards].filter(([k]) => keys.has(k)));
-  for (const c of fresh) st.cards.set(c.key, c);
-  // Answered here and gone from the server: no longer held out of the list.
-  for (const k of [...DEC_HANDLED]) if (!keys.has(k) && st.pending?.key !== k) DEC_HANDLED.delete(k);
-  const listed = decideListKeys().filter(k => keys.has(k));
-  const want = [...new Set([...listed, ...fresh.map(c => c.key)])];
-  const before = st.order;
-  let order = before.filter(k => keys.has(k));
-  if (!st.fromList && listed.length) { order = [...new Set([...listed, ...order])]; st.fromList = true; }
-  // A new card goes after the card before it in the list, else first.
-  want.forEach((k, i) => {
-    if (order.includes(k)) return;
-    const prev = want.slice(0, i).reverse().find(x => order.includes(x));
-    order.splice(prev ? order.indexOf(prev) + 1 : 0, 0, k);
-  });
-  // A card that the server dropped meanwhile (answered elsewhere): the next one in the list takes its place.
-  if (st.at && !order.includes(st.at)) {
-    const i = before.indexOf(st.at);
-    st.at = before.slice(i + 1).find(k => order.includes(k) && !decideGone(k))
-      || before.slice(0, Math.max(i, 0)).reverse().find(k => order.includes(k) && !decideGone(k)) || null;
-  }
-  st.order = order;
-}
-function decideRefresh(st: DecState, items: NeedsItem[] | undefined) {
-  const before = st.at, card = before ? st.cards.get(before) : undefined;
-  decideSync(st, items);
-  const now = before ? st.cards.get(before) : undefined;
-  if (st.at !== before) decideRender(st, true);
-  else if (card && now && JSON.stringify([now.type, now.it]) !== JSON.stringify([card.type, card.it])) {
-    // The Stale tickets card mends its rows where they stand: an answered row goes, a new one comes, focus stays.
-    if (card.type === 'stale') { decideStalePaint(st); return; }
-    decideRedraw(st);
-    // A new version: read its comments and files again. Until they land, the card shows (and Done sends) the old one.
-    if (now.it.version !== card.it.version) void decideLoad(st, now, true);
-  } else decidePaintHead(st);
-}
-// The current card changed under it (a live refresh): draw it again, buttons included, keeping what was typed.
-function decideRedraw(st: DecState) {
-  const box: HTMLTextAreaElement | null = $('.decide .dc-note textarea'), draft = box?.value || '', typing = box && document.activeElement === box;
+// ---- moving through
+function decideGo(st: DecState, id: string | null) {
+  st.at = id; st.sheet = null; st.more = ''; st.error = ''; st.busy = false;
   decideRender(st);
-  const again: HTMLTextAreaElement | null = $('.decide .dc-note textarea');
-  if (again && draft) { again.value = draft; again.dispatchEvent(new Event('input', {bubbles: true})); }
-  if (again && typing) again.focus({preventScroll: true});
 }
-// The card `dir` steps from the current one; Skip goes round to the first from the last.
-function decideStepKey(st: DecState, dir: number, round = false): string | null {
-  const live = decideLive(st), i = live.indexOf(st.at ?? '');
-  if (i < 0) return live[0] || null;
-  const j = i + dir;
-  return j >= 0 && j < live.length ? live[j]! : round && live.length > 1 ? live[(j + live.length) % live.length]! : null;
+function decideStep(st: DecState, dir: number) {
+  const live = decideLive(st), i = live.indexOf(st.at || ''), next = live[i + dir];
+  if (next) decideGo(st, next);
 }
-// After a card is answered: the next card of the list, else the one before it.
-function decideAfter(st: DecState, key: string): string | null {
-  const i = st.order.indexOf(key), live = (k: string) => !decideGone(k);
-  return st.order.slice(i + 1).find(live) || st.order.slice(0, Math.max(i, 0)).reverse().find(live) || null;
+/** After an answer: the next item, else the one before, else All caught up. */
+function decideAfter(st: DecState, id: string) {
+  st.gone.add(id);
+  const i = st.order.indexOf(id), live = (k: string) => !st.gone.has(k) && st.items.has(k);
+  decideGo(st, st.order.slice(i + 1).find(live) || st.order.slice(0, Math.max(i, 0)).reverse().find(live) || null);
 }
 
 // ---- drawing
-// A bot's name opens the bot, as its side-rail entry does. A bot this person can't see, a person or Tico itself has
-// no link.
-const decideChatHref = (actor: string | null | undefined): string => {
-  const slug = actorSlug(actor);
-  return slug && botRow(slug) ? `#/bot/${encodeURIComponent(slug)}` : '';
+const decideStageName = (id: string | null | undefined): string => {
+  for (const p of (typeof TASK_PIPELINES !== 'undefined' && TASK_PIPELINES) || []) {
+    const s = p.stages.find(x => x.id === id);
+    if (s) return s.name;
+  }
+  return '';
 };
-const decideCurrent = (st: DecState) => st.at ? st.cards.get(st.at) : null;
+/** Who asks: the asker of an ask, the bot that can't run, who @'d you, else the task's owner. */
+function decideAsker(it: NeedsEntry): string {
+  if (it.kind === 'mention') return it.from_id || '';
+  if (it.kind === 'paused') return it.bots?.[0] ? 'bot:' + it.bots[0].replace(/^bot:/, '') : '';
+  return it.ask?.asked_by || it.task?.owner_id || '';
+}
 function decidePaintHead(st: DecState) {
   const root = $('.decide');
   if (!root) return;
-  const live = decideLive(st), at = live.indexOf(st.at ?? ''), c = decideCurrent(st);
-  if (live.length - at <= DEC_MORE_AT) void needsMoreShow();     // the next page of cards, before the last one is reached
-  $('.dc-count', root)!.innerHTML = c ? `<span class="tnum">${at + 1} of ${live.length}</span>` : '';
-  const prev: HTMLButtonElement = $('[data-dc="prev"]', root), next: HTMLButtonElement = $('[data-dc="next"]', root);
-  prev.disabled = !c || at <= 0;
-  next.disabled = !c || at >= live.length - 1;
+  const live = decideLive(st), at = live.indexOf(st.at || ''), it = decideCurrent(st);
+  $('.dc-count', root)!.textContent = it ? `${at + 1} of ${live.length}` : '';
+  ($('[data-dc="prev"]', root) as HTMLButtonElement).disabled = !it || at <= 0;
+  ($('[data-dc="next"]', root) as HTMLButtonElement).disabled = !it || at >= live.length - 1;
+  const thumbs = !!it && it.kind === 'ask' && !!it.ask?.may.includes('thumbs');
+  const up = $('[data-dc="up"]', root) as HTMLButtonElement, down = $('[data-dc="down"]', root) as HTMLButtonElement;
+  up.hidden = down.hidden = !thumbs;
+  up.setAttribute('aria-pressed', String(!!it && st.thumbed.has(it.id)));
+  down.setAttribute('aria-pressed', String(!!st.sheet));
 }
-function decideRender(st: DecState, enter = false) {
+function decideRender(st: DecState) {
   const root = $('.decide');
   if (!root) return;
   decidePaintHead(st);
-  const c = decideCurrent(st), stage: HTMLElement = $('.dc-stage', root), actions: HTMLElement = $('.dc-actions', root);
-  st.shown = c?.key || null;                // every button and key acts on this card, and only once
-  st.busy = false;
-  root.classList.toggle('dc-empty', !c);
-  if (!c) {
-    stage.innerHTML = '<div class="dc-done"><h2>All caught up</h2><button type="button" class="ghost" data-dc="close">Close</button></div>';
-    actions.innerHTML = actions.dataset.html = '';
+  const it = decideCurrent(st);
+  root.classList.toggle('dc-empty', !it);
+  if (!it) {
+    $('.dc-thing', root)!.innerHTML = '';
+    $('.dc-side', root)!.innerHTML = '<div class="dc-done"><h2>All caught up</h2><button type="button" class="ghost" data-dc="close">Close</button></div>';
     return;
   }
-  const from = c.type === 'approve' ? c.it.requester_id : c.type === 'stale' ? 'keeper' : c.type === 'pick' ? c.it.ask?.sender_id
-    : (c.it.waiting_on === myActor() || c.it.kind === 'waiting') && String(c.it.owner_id).startsWith('bot:') ? c.it.owner_id
-    : c.it.requester_id || c.it.owner_id;
-  const decide = c.type !== 'task' || c.yn;
-  // Who really asks: the server's own checks read "Automatic", never the assistant's name; a question card says no "You asked".
-  // A pick's question the server asked is named by what made it (rowSource): a built-in check by its name.
-  const src = from === 'keeper' && c.type === 'pick' ? rowSource(c.it.ask) : null;
-  const keeperName = src && src.kind !== 'task_update' && src.name || KEEPER_LABEL;
-  const name = from === 'keeper' ? keeperName : actorLabel(from) || KEEPER_LABEL, chat = decideChatHref(from);
-  const origin = c.type === 'pick' ? '' : decideFromPerson(c.it, from);
-  // A bot's face and name open the bot, as the side rail does; the face is a second way in for the pointer, the name the one for keys.
-  const face = chat ? `<a class="dc-who-face" href="${esc(chat)}" tabindex="-1" aria-hidden="true">${actorFace(from, 32)}</a>`
-    : from === 'keeper' ? src?.kind === 'assistant_for' ? avatar(assistantBot(), 32) : personCircle(keeperName, 32) : actorFace(from, 32);
-  const sub = c.type === 'pick' ? qcardSub(c.it) : c.type === 'approve' ? plainActors(approvalTitle(c.it) || c.it.title || '')
-    : c.type === 'stale' ? ageShort(c.it.created_at) : decideMeta(c.it);
-  // The chip names what the card is; a task card outside the questions names what it needs (Pay, Review and send).
-  const chip = c.type === 'approve' ? 'Approval' : c.type === 'stale' ? 'Stale check'
-    : c.type === 'task' && c.it.need && c.it.need !== 'decide' ? needLabel(c.it.need) : 'Question';
-  // A card the note goes with: a comment on a task, a note with a decision, the answer to a question.
-  const note = c.type === 'stale' ? '' : `<div class="dc-note"><textarea rows="1" maxlength="4000" aria-label="${decide ? 'Note' : 'Comment'}" placeholder="${decide ? 'Add a note' : 'Add a comment'}"></textarea>
-      ${decide ? '' : `<button type="button" class="dc-send" data-dc="comment" aria-label="Send comment" title="${DC_SEND_WHY}" disabled>${ICON_SEND}</button>`}</div>`;
-  const due = decideDue(c.it);
-  stage.innerHTML = `<article class="dc-card${enter ? ' in' : ''}" data-key="${esc(c.key)}">
-    <div class="dc-who">${face}
-      <div class="dc-who-text"><div class="dc-who-name">${chat ? `<a class="dc-who-link" href="${esc(chat)}" title="${esc(`Open ${name}`)}">${esc(name)}</a>` : esc(name)}${origin ? `<span class="dc-origin"> · ${esc(origin)}</span>` : ''}</div>
-        <div class="dc-who-sub">${esc(sub)}</div></div>
-      ${due ? `<span class="tl-due${due.late ? ' late' : ''}">${esc(due.words)}</span>` : ''}
-      <span class="pill needs">${esc(chip)}</span>${fbButtonsHTML(decideFeedbackKey(c), {fixed: true})}</div>
-    <div class="dc-body"></div>${note}
-  </article>`;
+  if (decideKind(it) === 'ok' && !st.ok.has(decideRid(it))) void decideOkLoad(st, it, false);
   decidePaintBody(st);
-  fbSync();
-  actions.innerHTML = actions.dataset.html = decideActionsHTML(c);
-  const card: HTMLElement = $('.dc-card', stage);
-  if (enter) requestAnimationFrame(() => requestAnimationFrame(() => card.classList.remove('in')));
-  decideSwipe(st, card);
-  void decideLoad(st, c);
-  const next = st.cards.get(decideStepKey(st, 1)!);
-  if (next) void decideLoad(st, next);
+  decidePaintSide(st);
 }
-// What a card's 👍 / 👎 rates (ui/app/feedback.ts): the approval a bot asked for, a bot's question, or a task a bot asked
-// for. It is never an answer: it goes nowhere near the outbox, and the card stays where it is.
-function decideFeedbackKey(c: DecCard): string {
-  const it = c.it, bot = (a: string | null | undefined) => String(a || '').startsWith('bot:');
-  if (c.type === 'approve') return bot(it.requester_id) ? fbKey('approval', it.id) : '';
-  if (c.type === 'pick') return it.ask?.question_task ? fbTaskKey(it) : bot(it.ask?.sender_id) && it.ask?.id ? fbKey('message', it.ask.id) : '';
-  if (c.type === 'task') return fbTaskKey(it);
+/** The left side: the thing asked about, as it was read. Drawn again from what is held, never read again. */
+function decidePaintBody(st: DecState) {
+  const it = decideCurrent(st), host: HTMLElement | null = $('.decide .dc-thing');
+  if (!it || !host) return;
+  const kind = decideKind(it);
+  let html = '';
+  if (kind === 'ok') {
+    const v = st.ok.get(decideRid(it));
+    html = !v || v.state === 'loading' ? skelRows(4)
+      : v.state === 'failed' ? `<p class="err" role="alert">${esc(v.error)}</p>`
+      : (v.changed ? '<p class="dc-changed" role="alert">It changed. Look again.</p>' : '') + `<div class="dc-doc">${v.html}${v.pages.map((_, i) => `<div data-dc-page="${i}"></div>`).join('')}</div>`;
+  } else if (it.task) {
+    html = `<div class="dc-doc"><h3 class="dc-title">${esc(it.task.title)}${lateTagHTML(it.task)}</h3>`
+      + `<p class="dc-line">${taskMarkHTML(it.task, {space: false})} ${esc(taskLine(it.task))}</p>`
+      + (kind === 'mention' ? `<blockquote class="dc-quote">${esc(it.line)}</blockquote>` : '') + '</div>';
+  } else if (kind === 'mention') {
+    html = `<blockquote class="dc-quote">${esc(it.line)}</blockquote>`;
+  }
+  if (host.dataset.html === html && host.dataset.key === it.id) return;
+  host.dataset.html = html; host.dataset.key = it.id;
+  host.innerHTML = html;
+  const v = kind === 'ok' ? st.ok.get(decideRid(it)) : null;
+  if (v && typeof window.pageCard === 'function')
+    v.pages.forEach((p, i) => host.querySelector(`[data-dc-page="${i}"]`)?.replaceWith(window.pageCard(p, {size: 'full'})));
+}
+const decideBtn = (dc: string, label: string, main = false, extra = '') =>
+  `<button type="button" class="${main ? 'primary' : 'ghost'}" data-dc="${dc}"${extra}>${esc(label)}</button>`;
+/** The right side: the sentence, who asks, and the buttons for this kind. */
+function decidePaintSide(st: DecState) {
+  const it = decideCurrent(st), host: HTMLElement | null = $('.decide .dc-side');
+  if (!it || !host) return;
+  const kind = decideKind(it), asker = decideAsker(it);
+  const stage = decideStageName(it.task?.stage_id);
+  const head = `<h3 class="dc-q">${esc(it.line)}</h3><p class="dc-sub">${[asker ? esc(actorLabel(asker)) : '', esc(stage)].filter(Boolean).join(' · ')}</p>`;
+  const err = st.error ? `<p class="err" role="alert">${esc(st.error)}</p>` : '';
+  const busy = st.busy ? ' disabled' : '';
+  let body = '';
+  if (st.sheet) body = decideSheetHTML(st, it);
+  else if (kind === 'ok') {
+    const v = st.ok.get(decideRid(it)), may = it.ask?.may || [];
+    const ready = !!v && (v.state === 'ready' && !!v.hash || v.state === 'none');
+    body = `<label class="dc-notes"><span>Notes</span><textarea id="dc-notes" rows="3" maxlength="4000"></textarea></label>
+      <div class="dc-acts">${decideBtn('approve', 'Approve', true, !ready || !may.includes('ok') || st.busy ? ' disabled' : '')}${decideBtn('sendback', 'Send back', false, ` data-dc-needs="#dc-notes" disabled`)}</div>`;
+  } else if (kind === 'question') {
+    const choices = it.ask?.choices || [];
+    body = `<div class="dc-choices">${choices.map(c => `<button type="button" class="ghost" data-dc-choice="${esc(c)}"${busy}>${esc(c)}</button>`).join('')}</div>
+      <label class="dc-notes"><span>Something else</span><textarea id="dc-other" rows="2" maxlength="4000"></textarea></label>
+      <div class="dc-acts">${decideBtn('other', 'Send', !choices.length, ' data-dc-needs="#dc-other" disabled')}</div>`;
+  } else if (kind === 'yours') {
+    body = `<div class="dc-acts">${decideBtn('done', 'Done', true, busy)}${decideBtn('snooze', 'Snooze', false, busy)}${decideBtn('give', 'Give to…', false, busy)}</div>${decideMoreHTML(st, it)}`;
+  } else if (kind === 'stuck') {
+    body = `<div class="dc-acts">${decideBtn('again', 'Try again', true, busy)}${decideBtn('give', 'Reassign', false, busy)}${decideBtn('back', 'Move back', false, busy)}${decideBtn('close-task', 'Close', false, busy)}</div>${decideMoreHTML(st, it)}`;
+  } else {
+    body = `<div class="dc-acts">${decideBtn('open', 'Open', true)}</div>`;
+  }
+  host.innerHTML = `<div data-key="${esc(it.id)}">${head}${err}${body}</div>`;
+  decideNeedsText($('.decide')!);
+}
+/** Snooze, Give to… and Move back open their choices under the buttons. */
+function decideMoreHTML(st: DecState, it: NeedsEntry): string {
+  const busy = st.busy ? ' disabled' : '';
+  if (st.more === 'snooze')
+    return `<div class="dc-more">${decideBtn('snooze-1', 'Tomorrow', false, busy)}${decideBtn('snooze-7', 'Next week', false, busy)}</div>`;
+  if (st.more === 'give')
+    return `<div class="dc-more"><select id="dc-to" aria-label="Give to">${taskOwnerOptions('', 'Give to…')}</select>${decideBtn('give-to', 'Give', true, ' data-dc-needs="#dc-to" disabled')}</div>`;
+  if (st.more === 'back') {
+    const p = ((typeof TASK_PIPELINES !== 'undefined' && TASK_PIPELINES) || []).find(x => x.id === it.task?.pipeline_id);
+    const at = p ? p.stages.findIndex(s => s.id === it.task?.stage_id) : -1;
+    const earlier = p && at > 0 ? p.stages.slice(0, at) : [];
+    return `<div class="dc-more">${earlier.length ? earlier.map(s => `<button type="button" class="ghost" data-dc-stage="${esc(s.id || '')}"${busy}>${esc(s.name)}</button>`).join('') : '<span class="muted">No earlier stage</span>'}</div>`;
+  }
   return '';
 }
-// A card's deadline: a person's task's due date (a bot's own task's due is only when it looks again).
-const decideDue = (it: DecItem) => { const d = ['approval', 'stale'].includes(it.kind) ? null : taskDueInfo(it); return d?.kind === 'deadline' ? d : null; };
-function decidePaintBody(st: DecState) {
-  const c = decideCurrent(st), body: HTMLElement | null = $('.decide .dc-body');
-  if (!c || !body) return;
-  // Other bots' tasks waiting on the person for the same thing are named on the card.
-  const html = c.type === 'approve' ? decideApprovalHTML(st, c) : c.type === 'stale' ? decideStaleHTML(c)
-    : (c.type === 'pick' ? decidePickHTML(st, c) : decideTaskHTML(st, c)) + foldedHTML(c.it);
-  if (body.dataset.html !== html) body.innerHTML = body.dataset.html = html;
-  if (c.type === 'task' || c.type === 'pick') decideAskRead(c.it);   // an option card reads its question too
+/** The 👎 sheet: what was wrong (a chip and a few words), then Send back or Make a rule; then the rule to add. */
+function decideSheetHTML(st: DecState, it: NeedsEntry): string {
+  const sh = st.sheet!, busy = st.busy ? ' disabled' : '';
+  if (sh.step === 'rule') {
+    const bot = it.ask?.asked_by || '';
+    return `<h3 class="dc-q">New rule</h3><textarea id="dc-rule" data-dc-rule rows="3" maxlength="4000" aria-label="Rule">${esc(sh.rule)}</textarea>
+      <select data-dc-scope aria-label="For">${bot ? `<option value="bot"${sh.allBots ? '' : ' selected'}>${esc(actorLabel(bot))}</option>` : ''}<option value="all"${sh.allBots || !bot ? ' selected' : ''}>All bots</option></select>
+      <div class="dc-acts">${decideBtn('rule-add', 'Add rule', true, ' data-dc-needs="#dc-rule"')}</div>`;
+  }
+  const chips = DEC_CHIPS.map(([k, label]) => `<button type="button" class="dc-chip" data-dc-chip="${k}" aria-pressed="${sh.chip === k}"${busy}>${esc(label)}</button>`).join('');
+  const give = sh.chip === 'person';
+  return `<div class="dc-chips">${chips}</div><textarea id="dc-why" data-dc-note rows="3" maxlength="4000" aria-label="What was wrong">${esc(sh.note)}</textarea>
+    ${give ? `<select id="dc-to" aria-label="Give to">${taskOwnerOptions('', 'Give to…')}</select>` : ''}
+    <div class="dc-acts">${give ? decideBtn('why-give', 'Give to…', true, ' data-dc-needs="#dc-to" disabled')
+      : decideBtn('why-back', 'Send back', true, busy)}${feedbackRuleOn(it) ? decideBtn('why-rule', 'Make a rule', false, busy) : ''}</div>`;
 }
-// Showing a question on its card reads it, through its task (hub-v2.ts taskAsksRead).
-function decideAskRead(it: DecItem) {
-  const ask = it?.ask as NonNullable<DecItem["ask"]>;
-  if (!askToMe(ask) || ask.read_at || ask.question_task) return;   // a question task has no message to read
-  return taskAsksRead(it.id, ask.id);
-}
-function decideStalePaint(st: DecState) {
-  const c = decideCurrent(st), body: HTMLElement | null = $('.decide .dc-body'), actions: HTMLElement = $('.decide .dc-actions');
-  if (!c || !body) return;
-  const html = decideStaleHTML(c), act = decideActionsHTML(c);
-  if (body.dataset.html !== html) { tasksPatch(body, html); body.dataset.html = html; }
-  if (actions.dataset.html !== act) actions.innerHTML = actions.dataset.html = act;
-  decidePaintHead(st);
-}
-const decideTwo = (c: DecCard): boolean => c.type === 'pick' && !c.q.multi && c.q.options.length === 2;
-// Yes / No reads No, Yes like an approval: the affirmative on the right.
-const decideYesNo = (c: DecCard) => c.type === 'pick' && decideTwo(c) && c.q.options.map(o => String(o.label).toLowerCase()).join() === 'yes,no';
-const decideRecommends = (c: DecCard) => c.type === 'task' && !!c.it.recommend?.ask;
-function decideActionsHTML(c: DecCard): string {
-  const k = (key: string) => `<kbd>${key}</kbd>`;
-  // The bot said what it would do: taking that is the main button, across the row, and the card's own answers stay
-  // below it.
-  // A question card's fallback is a small line at its foot, never a recommendation (question-card.js).
-  const rec = decideRecommends(c)
-    ? `<button type="button" class="primary dc-rec" data-dc="recommend" title="${esc(c.it.recommend!.do)}">Do what you recommend${k('R')}</button>` : '';
-  if (rec) return rec + decideActionsPlain(c, k).replace(/ class="primary"/g, '');
-  return decideActionsPlain(c, k);
-}
-// A Product roadmap item finishes or comes back only by a step move (the task window hides Done for it too): its card
-// offers no Done, and a yes or no on the person's own one goes as a comment, not a status.
-const decideStepsOnly = (c: DecCard) => c.type === 'task' && (!!c.it.steps_only || pipelineStepsOnly(c.it));
-function decideActionsPlain(c: DecCard, k: (key: string) => string): string {
-  const skip = `<button type="button" data-dc="skip">Skip${k('S')}</button>`;
-  if (c.type === 'pick' && (c.q.multi || decideTwo(c))) return qcardActionsHTML(c.it, c.q, {attr: 'dc', ticked: decideTicked(DEC, c), keys: true});
-  // A pick between files has a button under each file: no Pick one row.
-  if (c.type === 'pick' && qcardReview(c.it)?.pick) return skip;
-  if (c.type === 'pick') return `${skip}<button type="button" disabled>Pick one</button>`;
-  if (c.type === 'approve') return `<button type="button" data-dc="no">Decline${k('N')}</button><button type="button" class="primary" data-dc="yes"${c.it.what === 'send' && c.it.payload?.email_send_id && !DEC?.data.get(c.it.id)?.email?.preview_complete ? ' disabled title="Load the frozen email before approving"' : ''}>Approve${k('Y')}</button>`;
-  if (c.yn) return `<button type="button" data-dc="no">No${k('N')}</button><button type="button" class="primary" data-dc="yes">Yes${k('Y')}</button>`;
-  if (c.type === 'stale') return skip + ((c.it.rows || []).some(r => r.action) ? `<button type="button" class="primary" data-stale-all="${esc(c.it.id)}">Accept all</button>` : '');
-  if (decideStepsOnly(c)) return `${skip}<a class="button primary" href="#/task/${encodeURIComponent(c.it.id)}" title="Move it to its next step in the task">Open to move it</a>`;
-  return `${skip}<button type="button" class="primary" data-dc="done">Done${k('D')}</button>`;
-}
-// An option's picture, large: the image itself when small enough, else its thumb.
-const decidePicture = (st: DecState, c: DecPick, o: unknown) => qcardPicture(st.data.get(c.it.id)?.files, o);
-function decidePickHTML(st: DecState, c: DecPick): string {
-  return qcardBodyHTML(c.it, c.q, {attr: 'dc', ticked: decideTicked(st, c), pic: (o: unknown) => decidePicture(st, c, o)})
-    + qcardFallbackHTML(c.it) + qcardDetailsHTML(c.it, c.q);
-}
-// Several picks: the ones ticked on this card, the recommended ones until the person changes them.
-function decideTicked(st: DecState | null | undefined, c: DecCard | null | undefined): Set<number> {
-  if (!st || c?.type !== 'pick' || !c.q.multi) return new Set();
-  if (!st.ticks.has(c.key)) st.ticks.set(c.key, qcardRecommended(c.q));
-  return st.ticks.get(c.key)!;
-}
-function decideTick(st: DecState, i: number, on: boolean) {
-  const c = decideCurrent(st), ticked = decideTicked(st, c);
-  if (!c?.q?.multi || !(i >= 0 && i < c.q.options.length)) return;
-  if (on) ticked.add(i); else ticked.delete(i);
-  const box: HTMLInputElement | null = $(`.decide [data-qc-tick="${i}"]`); if (box) box.checked = on;
-  qcardRetick($('.decide .dc-actions'), c.it, c.q, ticked, 'dc');
-}
-const DEC_APPROVAL_Q: Record<string, string> = {send: 'Send this email?', spend: 'Approve this spend?', publish: 'Publish this?', merge: 'Merge this?',
-  support: 'Send this to Tico support?', task_cap: 'Set this task cap?', spend_limit: 'Set this spend limit?',
-  finance: 'Approve this Finance change?', mail_alert: 'Let this bot send mail?'};
-// The exact payload, as Needs you has always shown it (needs-you.js approvalPayloadNode): every value set as text,
-// the raw JSON folded underneath.
-function decideApprovalHTML(st: DecState, c: DecCard): string {
-  const frozen = c.it.what === 'send' && c.it.payload?.email_send_id;
-  const preview = st.data.get(c.it.id);
-  return `<p class="dc-q">${esc(DEC_APPROVAL_Q[c.it.what!] || 'Approve this?')}</p>${approvalPayloadNode(c.it).outerHTML}${frozen ? preview?.error ? '<p class="err">Could not load the frozen email. Reopen this card to try again.</p>' : preview?.email ? emailSendPreviewHTML(preview.email) : '<p role="status">Loading frozen email…</p>' : ''}`;
+/** A rule is about a bot's asks. */
+const feedbackRuleOn = (it: NeedsEntry) => String(it.ask?.asked_by || '').startsWith('bot:');
+function decideBar(label: string, undo: (() => Promise<unknown>) | null) {
+  const st = DEC, bar: HTMLElement | null = $('.decide .dc-bar');
+  if (!st || !bar) return;
+  clearTimeout(st.barTimer);
+  const words: HTMLElement = $('span', bar), b: HTMLButtonElement = $('button', bar);
+  words.textContent = label;
+  b.hidden = !undo; b.disabled = false;
+  b.onclick = undo ? async () => {
+    b.disabled = true;
+    try { await undo(); bar.hidden = true; await v2Refresh(); if (DEC === st) { decideSync(st, decideSource()); decidePaintHead(st); } }
+    catch (e) { words.textContent = errorMessage(e, 'Not undone.'); }
+  } : null;
+  bar.hidden = false;
+  st.barTimer = window.setTimeout(() => { bar.hidden = true; }, DEC_UNDO_MS);
 }
 
-// The Stale tickets card: a row per task with Accept and Skip (needs-you.js staleCardRow), Accept all below.
-function decideStaleHTML(c: DecCard): string {
-  const sig = (c.it.rows || []).map(r => [r.id, r.task, r.title, r.reason, r.suggest, r.action, r.version]);
-  return `<p class="dc-q">${esc(c.it.title || 'Stale tickets')}</p><div class="dc-stale" data-stale-card="${esc(c.it.id)}" data-patch-key="stale:${esc(c.it.id)}" data-patch-sig="${staleSig(sig)}">
-    <ul class="stale-rows" aria-label="Stale ticket suggestions">${(c.it.rows || []).map(staleCardRow).join('')}</ul></div>`;
-}
-function decideMeta(it: DecItem): string {
-  const me = myActor();
-  if (it.ask_missing) return `Waiting for ${actorLabel(it.owner_id) || 'its bot'} to explain · ${ageShort(it.updated_at || it.created_at)}`;
-  if (it.waiting_on === me || it.kind === 'waiting') return `Waiting on you · ${ageShort(it.updated_at || it.created_at)}`;
-  if (it.kind === 'question') return `Question for you · ${ageShort(it.ask?.created_at || it.created_at)}`;
-  return `Assigned to you · ${ageShort(it.created_at)}`;
-}
-// What a task card leads with: the plain ask, in the words written to the person. In order, an open question to them;
-// the ask the bot wrote in its waiting note or its task's first paragraph (`person_ask`, checked by the server); on a
-// card not waiting on them, the last thing someone else said to them (not a copy of a status note: the server mirrors
-// those into the chat), then the task's request. A bot's card with none of these is waiting for that bot to explain
-// (`ask_missing`): the server has asked the bot to restate it. The owner's status note, the rest of the body and the
-// files fold under Details.
-function decideLead(st: DecState, c: DecCard) {
-  const it = c.it, data = st.data.get(it.id), me = myActor(), comments = data?.comments || [];
-  const note = String(it.note || '').trim(), text = (s: string | null | undefined) => String(s || '').trim();
-  const asked = [it.ask, ...comments.filter(m => m.kind === 'ask' && !m.answered_by_id).reverse()]
-    .find(m => m && m.recipient_id === me && m.sender_id !== me && text(m.body));
-  const said = comments.filter(m => m.kind === 'say' && m.sender_id !== me && m.recipient_id === me && !m.refs?.note
-    && text(m.body) && text(m.body) !== note).at(-1);
-  // A body that opens with the title does not say it twice; an ask taken from its first paragraph is not said twice.
-  const title = text(it.title), whole = text(taskBody(it));
-  let body = whole.startsWith(title) ? whole.slice(title.length).trim() : whole;
-  const ask = text(asked?.body) || text(it.person_ask);
-  if (ask && body.startsWith(ask)) body = body.slice(ask.length).trim();
-  // A bot's task waiting on me asks only in its note or an open question: what else it wrote is its own record.
-  const botWait = it.ask_missing || decideWaitingOnMe(it) && String(it.owner_id || '').startsWith('bot:');
-  const lead = ask || (botWait ? '' : text(said?.body) || body);
-  return {lead, rest: lead === body ? '' : body, said: said && text(said.body) !== lead ? text(said.body) : '',
-    note: note && note !== lead ? note : ''};
-}
-const decideWaitingOnMe = (it: DecItem) => it.waiting_on === myActor() || it.kind === 'waiting';
-function decideTaskHTML(st: DecState, c: DecCard): string {
-  const it = c.it, data = st.data.get(it.id);
-  const {lead, rest, said, note} = decideLead(st, c);
-  const bot = String(it.owner_id || '').startsWith('bot:') ? actorLabel(it.owner_id) : decideBot(c);
-  // No plain ask yet: the card says who it waits on to explain, and the comment box is a way to ask them.
-  const head = lead ? `<div class="dc-msg md">${safeMd(plainActors(lead))}</div>`
-    : it.ask_missing || data && decideWaitingOnMe(it)
-      ? `<p class="dc-wait">${esc(`Waiting for ${bot} to explain`)}</p>
-         <button type="button" class="ghost dc-ask" data-dc="ask">Comment to ask</button>` : '';
-  const files = (data?.files || []).filter(f => !f.archived && f.versions.length);
-  const shown = files.map(f => {
-    const v = tfVersion(f), kind = tfKind(f.name, v.mime || f.mime);
-    const src = kind === 'image' ? (Number(v.size || 0) <= TF_INLINE_IMAGE ? v.url : tfPicture(v, kind)) : null;
-    return src ? `<a class="dc-img tf-skel" href="${esc(v.url)}" target="_blank" rel="noopener" aria-label="${esc(f.name)}"><img alt="" data-tf-src="${esc(src)}"></a>`
-      : `<a class="dc-file" href="${esc(v.url)}" target="_blank" rel="noopener"><span class="tc-kind">${esc(tfGlyph(kind, f.name))}</span><span class="dc-fname">${esc(f.name)}</span><span class="muted tnum">v${v.n}</span></a>`;
-  }).join('');
-  const details = [rest ? `<div class="dc-rest md">${safeMd(plainActors(rest))}</div>` : '',
-    shown ? `<div class="dc-files">${shown}</div>` : '',
-    said ? `<div class="dc-latest"><b>Latest message</b><p>${esc(plainActors(said))}</p></div>` : '',
-    note ? `<div class="dc-latest"><b>Latest note</b><p>${esc(plainActors(note))}</p></div>` : ''].join('');
-  return `${head}<p class="dc-title"><a href="#/task/${encodeURIComponent(it.id)}" title="Open the task">${esc(plainActors(it.title || ''))}</a></p>${details
-    ? `<details class="dc-details"><summary>Details</summary>${details}</details>` : ''}`;
-}
-async function decideLoad(st: DecState, c: DecCard, again = false): Promise<void> {
-  if (c.type === 'approve' && c.it.what === 'send' && c.it.payload?.email_send_id) {
-    if (st.at !== c.key) return;
-    if (st.data.has(c.it.id) && !again) return;
-    st.data.set(c.it.id, null);
-    try {
-      const email = await get<DecEmail>(`/v2/email/sends/${encodeURIComponent(c.it.payload.email_send_id)}`, {fresh: true});
-      st.data.set(c.it.id, email.preview_complete && email.send.content_sha256 === c.it.payload!.content_sha256 ? {email} : {error: true});
-    } catch { st.data.set(c.it.id, {error: true}); }
-    if (DEC === st && st.at === c.key) {
-      decidePaintBody(st);
-      const actions: HTMLElement | null = $('.decide .dc-actions');
-      if (actions) actions.innerHTML = actions.dataset.html = decideActionsHTML(c);
+// ---- an OK: what it shows
+/** Reads what an OK is for, once, and holds it. `changed`: read again after the engine said it changed. */
+async function decideOkLoad(st: DecState, it: NeedsEntry, changed: boolean) {
+  const rid = decideRid(it);
+  const v: AskOkView = {state: 'loading', hash: null, html: '', pages: [], changed, error: ''};
+  st.ok.set(rid, v);
+  if (DEC === st && st.at === it.id) { decidePaintBody(st); decidePaintSide(st); }
+  try {
+    const shown = await okShown(rid);
+    if (shown.subject.startsWith('email_send:')) {
+      // The email's own preview is the one to show; its hash is the hash of that email, as frozen.
+      const mail = await get<EmailSendPreview & {shown_hash?: string | null}>(`/v2/email/sends/${encodeURIComponent(shown.subject.slice('email_send:'.length))}`, {fresh: true});
+      v.html = emailSendPreviewHTML(mail);
+      v.hash = mail.preview_complete ? mail.shown_hash || null : null;
+    } else {
+      v.html = decideContentHTML(shown.content);
+      v.hash = shown.shown_hash;
     }
-    return;
+    v.state = 'ready';
+  } catch (e) {
+    if (errorStatus(e) === 404) {
+      v.state = 'none';
+      await decideShowsRead(v, it.ask?.shows || []);
+    } else { v.state = 'failed'; v.error = errorMessage(e, 'It did not load.'); }
   }
-  if (!['pick', 'task'].includes(c.type) || st.data.has(c.it.id) && !again) return;
-  const id = c.it.id, version = c.it.version;
-  if (!st.data.has(id)) st.data.set(id, null);
-  const [files, comments] = await Promise.all([v2Get(`/v2/tasks/${encodeURIComponent(id)}/files`),
-    c.type === 'task' ? v2Get(`/v2/tasks/${encodeURIComponent(id)}/comments`) : null]);
-  // A read that failed records nothing: a refreshed card keeps what it shows (and Done its version); a first one
-  // shows the card's own text, at the version it was drawn with.
-  if (!files || c.type === 'task' && !comments) { if (!st.data.get(id)) st.data.set(id, {version, files: [], comments: []}); return; }
-  st.data.set(id, {version, files: Array.isArray(files?.files) ? files.files.map(tfNorm) : [], comments: comments?.comments || []});
-  if (DEC === st && st.at === c.key) decidePaintBody(st);
+  if (DEC === st && st.ok.get(rid) === v && st.at === it.id) { decidePaintBody(st); decidePaintSide(st); }
+}
+/** What an OK is for, any shape: text as Markdown, an object with a subject and a body as a message, else its fields. */
+function decideContentHTML(content: unknown): string {
+  if (content == null || content === '') return '';
+  if (typeof content === 'string') return `<div class="md">${md(content)}</div>`;
+  if (typeof content === 'object' && !Array.isArray(content)) {
+    const o = content as Record<string, unknown>;
+    const text = typeof o.body === 'string' ? o.body : typeof o.text === 'string' ? o.text : null;
+    const title = typeof o.subject === 'string' ? o.subject : typeof o.title === 'string' ? o.title : '';
+    if (text != null) return `${title ? `<h3 class="dc-title">${esc(title)}</h3>` : ''}<div class="md">${md(text)}</div>`;
+  }
+  return `<pre class="dc-raw">${esc(JSON.stringify(content, null, 2))}</pre>`;
+}
+/** A stage's OK shows what the requirement names: pages in full, an email as frozen, the rest by name. */
+async function decideShowsRead(v: AskOkView, shows: string[]) {
+  const parts: string[] = [];
+  for (const ref of shows) {
+    const [kind, ...rest] = ref.split(':'), id = rest.join(':');
+    try {
+      if (kind === 'page') { v.pages.push((await get<import('../types/api').GetPageResponse>('/v2/pages/' + encodeURIComponent(id), {fresh: true})).page); continue; }
+      if (kind === 'email') { parts.push(emailSendPreviewHTML(await get<EmailSendPreview>('/v2/email/sends/' + encodeURIComponent(id), {fresh: true}))); continue; }
+    } catch (e) { parts.push(`<p class="err">${esc(errorMessage(e, `${ref} did not load.`))}</p>`); continue; }
+    parts.push(`<p class="dc-ref"><code>${esc(ref)}</code></p>`);
+  }
+  v.html = parts.join('');
 }
 
 // ---- acting
-// Who a card's answer goes to, named in its toast: the asking bot, the approval's requester, or the task's bot.
-const decideBot = (c: DecCard) => actorLabel(c.type === 'pick' ? c.it.ask?.sender_id : c.type === 'approve' ? c.it.requester_id
-  : [c.it.owner_id, c.it.requester_id].find(a => String(a || '').startsWith('bot:')) || c.it.requester_id) || 'Tico';
-// What an action sends, as requests run in order when it commits, and what the toast says. Each request has its own
-// idempotency key from the start, so sending it again (pagehide while it is in flight) lands once.
-function decideWrite(c: DecCard, what: string, i: number | undefined, note: string): DecWriteSet {
-  const out = decideWriteBody(c, what, i, note);
-  out.writes = out.writes.map(w => ({...w, key: newRequestId()}));
-  return out;
-}
-function decideWriteBody(c: DecCard, what: string, i: number | undefined, note: string): DecWriteSet {
-  const shown = DEC?.data.get(c.it.id)?.version;
-  const id = encodeURIComponent(c.it.id), to = decideBot(c);
-  if (['pick', 'all', 'ticked'].includes(what)) {
-    // One pick, Yes to all, or the ticked picks (the rest go to the bot as "not this one"): question-card.js.
-    const q = c.q!, labels = qcardLabels(q, what, i, decideTicked(DEC, c));
-    return {writes: qcardWrites(c.it, q, labels, note), label: qcardSaid(c.it, q, labels)};
-  }
-  if (what === 'recommend') {
-    const rec = c.it.recommend!, version = shown || c.it.version;
-    return {writes: [{path: '/v2/needs-you/recommended', body: {ask: rec.ask, ...(version ? {version} : {})}},
-      ...(note ? [{path: `/v2/tasks/${id}/comments`, body: {text: note}}] : [])],
-      label: `Done what ${to} recommends · ${rec.do}`};
-  }
-  if ((what === 'yes' || what === 'no') && c.type === 'task') {
-    // A yes/no ask on a task: on the person's own task it finishes (yes) or declines (no) it with the answer as
-    // its note, as Done does; on a bot's task waiting on them the answer goes back as a comment, which wakes the bot.
-    const said = (what === 'yes' ? 'Yes.' : 'No.') + (note ? ' ' + note : '');
-    const label = `Said ${what} · sent to ${to}`;
-    if (c.it.owner_id === myActor() && !decideStepsOnly(c))
-      return {writes: [{path: `/v2/tasks/${id}`, body: {status: what === 'yes' ? 'done' : 'declined', version: shown || c.it.version || 1, note: said}}], label};
-    return {writes: [{path: `/v2/tasks/${id}/comments`, body: {text: said}}], label};
-  }
-  if (what === 'yes' || what === 'no')
-    return {writes: [{path: `/v2/approvals/${id}`, body: {decision: what === 'yes' ? 'approved' : 'declined', ...(note ? {note} : {})}}],
-      label: `${what === 'yes' ? 'Approved' : 'Declined'} · sent to ${to}`};
-  // Done goes with the version the card showed: a task that changed meanwhile is refused, not finished unseen.
-  if (what === 'done' && !decideStepsOnly(c)) return {writes: [{path: `/v2/tasks/${id}`, body: {status: 'done', version: shown || c.it.version || 1, ...(note ? {note} : {})}}], label: 'Done'};
-  return {writes: [{path: `/v2/tasks/${id}/comments`, body: {text: note}}], label: `Sent to ${to}`};
-}
-function decideAct(st: DecState, what: string, i?: number, shown: string | null | undefined = st.shown) {
-  const key = st.at ?? '', c = decideCurrent(st), root = $('.decide');
-  // A second tap while the card leaves, or a button from a card no longer current, does nothing.
-  if (!c || !root || st.busy || key !== shown || performance.now() < (st.lockUntil || 0)) return;
-  if (what === 'yes' && c.type === 'approve' && c.it.what === 'send' && c.it.payload?.email_send_id
-      && !st.data.get(c.it.id)?.email?.preview_complete) return;
-  const card: HTMLElement | null = $('.dc-card', root);
-  if (['skip', 'next', 'prev'].includes(what)) {
-    const to = decideStepKey(st, what === 'prev' ? -1 : 1, what === 'skip');
-    if (!to) return;
-    st.lockUntil = performance.now() + 350;
-    st.at = to;
-    decideLeaveCard(st, card, what === 'prev' ? 'right' : 'left');
-    return;
-  }
-  const box: HTMLTextAreaElement | null = $('.dc-note textarea', root), note = box?.value.trim() || '';
-  if (what === 'comment' && !note) { box?.focus(); return; }
-  if (what === 'ticked' && !decideTicked(st, c).size) return;
-  // Request changes on a review goes with the note that says what to change.
-  if (what === 'pick' && !note && qcardNeedsNote(c.it, c.q, qcardLabels(c.q, 'pick', i))) {
-    if (box) { box.placeholder = 'What should change?'; box.focus(); }
-    return;
-  }
-  st.lockUntil = performance.now() + 350;
-  const write = decideWrite(c, what, i, note);
-  void decideCommit(st);                       // the previous action goes now
-  DEC_HANDLED.add(key);
-  st.at = decideAfter(st, key);
-  const pending: DecPending = st.pending = {key, write, note};
-  pending.timer = setTimeout(() => { if (st.pending === pending) void decideCommit(st); }, DEC_UNDO_MS);
-  if (what === 'pick') $(`.dc-opt[data-i="${i}"]`, card!)?.classList.add('sel');
-  decideLeaveCard(st, card, what === 'no' ? 'left' : 'right');
-  needsListsRedraw();
-  decideToast(st, write.label, () => {
-    if (st.pending !== pending) return;
-    clearTimeout(pending.timer); st.pending = null;
-    DEC_HANDLED.delete(key); st.at = key;
-    decideRender(st, true);
-    needsListsRedraw();
-    const again: HTMLTextAreaElement | null = $('.decide .dc-note textarea'); if (again) { again.value = note; again.dispatchEvent(new Event('input', {bubbles: true})); }
-  });
-}
-function decideLeaveCard(st: DecState, card: HTMLElement | null, side: 'left' | 'right') {
-  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (!card || reduce) { decideRender(st, false); return; }
-  st.busy = true;
-  card.classList.add('out-' + side);
-  card.style.pointerEvents = 'none';
-  setTimeout(() => { if (DEC === st) decideRender(st, true); }, 170);
-}
-// Writes on their way: in the outbox until the server confirms each request, whether or not the card is still open.
-const DEC_OUTBOX = new Set<DecPending>();
-// The outbox is kept in this browser too, so a write the page could not confirm before it closed goes out on the
-// next load, under the same keys.
-const DEC_SAVED = 'tico.decide.outbox';
-let DEC_SIGNED_OUT = false;
-function decideSave() {
-  if (DEC_SIGNED_OUT) return;
-  try { localStorage.setItem(DEC_SAVED, JSON.stringify([...DEC_OUTBOX].map(p => ({me: p.me || S.me?.id, key: p.key, writes: p.write.writes.slice(p.sent || 0)})))); } catch {}
-}
-function decideResume() {
-  let saved: DecSaved[] = [];
-  try { saved = JSON.parse(localStorage.getItem(DEC_SAVED) || '[]'); } catch {}
-  // Only the person who took them: another person signed in to this browser never sends them.
-  if (!S.me?.id) return;
-  for (const item of Array.isArray(saved) ? saved : []) {
-    if (!item?.writes?.length || item.me !== S.me.id || [...DEC_OUTBOX].some(p => p.key === item.key)) continue;
-    const p: DecPending = {me: item.me, key: item.key, write: {writes: item.writes}, sent: 0};
-    DEC_OUTBOX.add(p);
-    void decideSend(null, p);
-  }
-}
-setTimeout(decideResume, 3000);
-// Sends the waiting action, its requests in order.
-async function decideCommit(st: DecState) {
-  const p = st.pending;
-  if (!p) return;
-  st.pending = null;
-  clearTimeout(p.timer);
-  decideToastHide(st, p);
-  p.sent = 0;
-  DEC_OUTBOX.add(p);
-  decideSave();
-  await decideSend(st, p);
-}
-// A line for the person: in the card while it is open (a page toast would sit under it), else the page's toast.
-function needsSay(text: string, err = false) {
-  const st = DEC;
-  const t: HTMLElement | null = st && $('#need-card')?.open && $('.decide .dc-toast');
-  if (!st || !t) { toast(text, err); return; }
-  clearTimeout(st.toastTimer);
-  const label: HTMLElement | null = $('span', t), btn: HTMLButtonElement | null = $('button', t);
-  if (!label || !btn) throw new Error('The Needs you card has no toast text or button');
-  label.textContent = text;
-  btn.hidden = true;
-  t.hidden = false;
-  st.undo = null; st.toastFor = null;
-  st.toastTimer = setTimeout(() => { t.hidden = true; }, DEC_UNDO_MS);
-}
-// The requests not yet confirmed, in order, each under the key it got when the action was taken.
-async function decideSend(st: DecState | null, p: DecPending) {
+const decideNote = (sel: string) => ($(sel) as HTMLTextAreaElement | null)?.value.trim() || '';
+const decideTo = () => ($('#dc-to') as HTMLSelectElement | null)?.value || '';
+/** Runs one answer for the item on screen: busy while it is on its way, then the bar and the next item. A failure stays
+    on the item with its words. */
+async function decideDo(st: DecState, it: NeedsEntry, label: string, run: () => Promise<unknown>, undo: ((r: unknown) => (() => Promise<unknown>) | null) | null = null) {
+  if (st.busy) return;
+  st.busy = true; st.error = '';
+  decidePaintSide(st);
   try {
-    for (const w of p.write.writes.slice(p.sent)) {
-      await post(w.path, w.body, w.key);
-      p.sent!++;
-      decideSave();
-    }
-    DEC_OUTBOX.delete(p);
-    decideSave();
-    if (st && !liveConnected()) liveSoon('decide-needs', () => v2Refresh().then(() => {
-      if (DEC === st) decideRefresh(st, S.v2.needs || []);
-      needsListsRedraw();
-    }), 300);
+    const r = await run();
+    if (DEC !== st) return;
+    decideBar(label, undo ? undo(r) : null);
+    decideAfter(st, it.id);
+    void v2Refresh();
   } catch (e) {
-    const err = e as DecFailure;
-    if (err.unconfirmed) {
-      // It may have landed: never act again under new keys. It stays out of the list and is sent again as it was.
-      if (!p.retries && st) needsSay('Not confirmed yet; trying again', true);
-      p.retries = (p.retries || 0) + 1;
-      setTimeout(() => { if (DEC_OUTBOX.has(p)) void decideSend(st, p); }, Math.min(60000, 5000 * 2 ** Math.min(p.retries - 1, 4)));
-      return;
-    }
-    DEC_OUTBOX.delete(p);
-    DEC_HANDLED.delete(p.key);
-    decideSave();
-    needsListsRedraw();
-    if (!st) return;                            // sent again from an earlier page: nothing on screen to put back
-    const cerr = err.body?.error;
-    const changed = err.status === 409 || !!cerr && typeof cerr === 'object' && cerr.code === 'version_conflict';
-    needsSay(changed ? 'That task changed. Look again.' : err.message, true);
-    st.data.delete(String(p.key).replace(/^task:/, ''));
-    if (DEC === st) {
-      st.at = p.key;
-      decideRender(st, true);
-      if (changed) void v2Refresh().then(() => { if (DEC === st) decideRefresh(st, S.v2.needs || []); });
-    }
+    if (DEC !== st) return;
+    st.busy = false; st.error = taskRefusedOf(e)?.detail || errorMessage(e, 'Not saved.');
+    decidePaintSide(st);
   }
 }
-// Leaving the page: what waits on its toast and what is still on its way go out with keepalive, under the same keys.
-function decideFlush() {
-  const all = [...DEC_OUTBOX];
-  if (DEC?.pending) {
-    const p = DEC.pending; clearTimeout(p.timer); DEC.pending = null;
-    p.sent = 0; all.push(p); DEC_OUTBOX.add(p); decideSave();
-  }
-  for (const p of all) for (const w of p.write.writes.slice(p.sent || 0)) {
-    fetch(API + w.path, {method: 'POST', keepalive: true, body: JSON.stringify(w.body),
-      headers: {'Content-Type': 'application/json', 'Idempotency-Key': w.key!}}).catch(() => {});
-  }
-}
-window.addEventListener('pagehide', decideFlush);
-// Signing out: what still waits goes out as on leaving the page, then none of it (a note's words included) stays in
-// this browser for whoever uses it next. The same links observability.js resets on.
-document.addEventListener('click', e => {
-  const link = eventElement(e)?.closest('a[href]');
-  if (!link || !/\/(?:logout|cdn-cgi\/access\/logout)(?:[?#]|$)/.test(String(link.getAttribute('href')))) return;
-  decideFlush();
-  DEC_SIGNED_OUT = true;
-  DEC_OUTBOX.clear();
-  try { localStorage.removeItem(DEC_SAVED); } catch {}
-}, true);
-function decideToast(st: DecState, text: string, undo: () => void) {
-  const t: HTMLElement | null = $('.decide .dc-toast');
-  if (!t) return;
-  clearTimeout(st.toastTimer);
-  const label: HTMLElement | null = $('span', t), btn: HTMLButtonElement | null = $('button', t);
-  if (!label || !btn) throw new Error('The Needs you card has no toast text or button');
-  label.textContent = text;
-  btn.hidden = false;
-  t.hidden = false;
-  st.undo = undo;
-  st.toastFor = st.pending;
-  st.toastTimer = setTimeout(() => { t.hidden = true; st.undo = null; }, DEC_UNDO_MS);
-}
-function decideToastHide(st: DecState, p: DecPending) {
-  if (st.toastFor !== p) return;
-  const t: HTMLElement | null = $('.decide .dc-toast');
-  if (t) t.hidden = true;
-  st.undo = null;
-}
-function decideClick(st: DecState, ev: Event) {
-  // A link into the app leaves the card, so what it opens isn't underneath it. On a phone, closing goes Back first.
-  const inApp = eventElement(ev)?.closest('a[href^="#/"]');
-  if (inApp) {
-    ev.preventDefault();
-    const to = inApp.getAttribute('href')!, backFirst = !!history.state?.needCard;
-    if (backFirst) window.addEventListener('popstate', () => { location.hash = to; }, {once: true});
-    decideStop();
-    if (!backFirst) location.hash = to;
+const decideUndoAnswer = (r: unknown) => { const id = (r as TaskMoved | null)?.answer_id; return id ? () => answerUndo(id) : null; };
+const decideUndoReopen = (taskId: string) => () => () => taskMove(taskId, 'reopen', null);
+/** Approve: the person's own OK of exactly what is on screen. A change since it was read is shown, never OK'd. */
+async function decideApprove(st: DecState, it: NeedsEntry) {
+  const rid = decideRid(it), v = st.ok.get(rid), taskId = it.task_id;
+  if (!v || !taskId || st.busy) return;
+  if (v.state === 'none') {
+    await decideDo(st, it, 'Approved', () => taskAnswer(taskId, rid, 'ok', it.task?.version ?? null, decideNote('#dc-notes') || undefined), decideUndoAnswer);
     return;
   }
-  const b = eventElement(ev)?.closest<HTMLButtonElement>('[data-dc]');
-  if (!b || b.disabled || st.swiped) return;
-  const what = b.dataset.dc!;
+  const hash = v.state === 'ready' ? v.hash : null;
+  if (!hash) return;
+  st.busy = true; st.error = '';
+  decidePaintSide(st);
+  try {
+    const r = await okGive(taskId, rid, hash);
+    if (DEC !== st) return;
+    decideBar('Approved', decideUndoAnswer(r));
+    decideAfter(st, it.id);
+    void v2Refresh();
+  } catch (e) {
+    if (DEC !== st) return;
+    st.busy = false;
+    const code = (e as Partial<ApiFailure> | null)?.body?.error;
+    if (code === 'task_changed') { await decideOkLoad(st, it, true); return; }     // the new content, and a new click
+    st.error = taskRefusedOf(e)?.detail || errorMessage(e, 'Not approved.');
+    decidePaintSide(st);
+  }
+}
+async function decideClick(st: DecState, ev: MouseEvent) {
+  const el = eventElement(ev), b = el?.closest<HTMLElement>('[data-dc], [data-dc-choice], [data-dc-stage], [data-dc-chip]');
+  if (!b || (b as HTMLButtonElement).disabled) return;
+  const what = b.dataset.dc || '';
   if (what === 'close') { decideStop(); return; }
-  if (what === 'ask') { const box: HTMLTextAreaElement | null = $('.decide .dc-note textarea'); box?.focus(); return; }
-  if (what === 'undo') { const undo = st.undo; st.undo = null; const bar: HTMLElement = $('.decide .dc-toast'); bar.hidden = true; undo?.(); return; }
-  decideAct(st, what, Number(b.dataset.i));
-}
-function decideKey(st: DecState, ev: KeyboardEvent) {
-  if (DEC !== st || ev.repeat || ev.metaKey || ev.ctrlKey || ev.altKey || !$('#need-card')?.open
-      || [...document.querySelectorAll('dialog[open]')].some(d => d.id !== 'need-card' && !d.contains($('#need-card')))) return;
-  if (eventElement(ev)?.matches('textarea, input:not([type=checkbox]), select, [contenteditable]')) {   // a ticked pick keeps the keys
-    if (ev.key === 'Escape') { ev.preventDefault(); (ev.target as HTMLElement).blur(); }
-    return;
+  if (what === 'prev' || what === 'next') { decideStep(st, what === 'prev' ? -1 : 1); return; }
+  if (what === 'undo') return;            // the bar's own handler
+  const it = decideCurrent(st);
+  if (!it) return;
+  // Every answer is for the item on screen, and only that one.
+  const shown = b.closest<HTMLElement>('[data-key]')?.dataset.key;
+  if (shown && shown !== it.id) return;
+  const taskId = it.task_id || it.task?.id || '', rid = decideRid(it), ver = it.task?.version ?? null;
+  if (b.dataset.dcChoice != null) { await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, b.dataset.dcChoice!, ver), decideUndoAnswer); return; }
+  if (b.dataset.dcStage) { await decideDo(st, it, 'Moved back', () => taskMove(taskId, b.dataset.dcStage!, ver)); return; }
+  if (b.dataset.dcChip != null && st.sheet) {
+    const chip = b.dataset.dcChip as AskSheet['chip'];
+    st.sheet.chip = st.sheet.chip === chip ? '' : chip;
+    decidePaintSide(st); return;
   }
-  const c = decideCurrent(st), k = ev.key.toLowerCase();
-  if (!c) return;
-  let what: string | null = null, i: number | undefined;
-  if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') what = ev.key === 'ArrowLeft' ? 'prev' : 'next';
-  else if (k === 's') what = 'skip';
-  else if (k === 'c') { const area: HTMLTextAreaElement | null = $('.decide .dc-note textarea'); if (!area) return; ev.preventDefault(); area.focus(); return; }   // every card, a multi too
-  else if (c.type === 'pick' && c.q.multi) {
-    // Several picks: a number ticks or unticks one; A says yes to all, T sends the ticked ones.
-    if (/^[1-6]$/.test(k) && Number(k) <= c.q.options.length) {
-      ev.preventDefault(); const n = Number(k) - 1; decideTick(st, n, !decideTicked(st, c).has(n)); return;
+  switch (what) {
+    case 'approve': await decideApprove(st, it); return;
+    case 'sendback': { const note = decideNote('#dc-notes'); if (note) await decideDo(st, it, 'Sent back', () => taskAnswer(taskId, rid, 'no', ver, note), decideUndoAnswer); return; }
+    case 'other': { const text = decideNote('#dc-other'); if (text) await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, text, ver), decideUndoAnswer); return; }
+    case 'done': await decideDo(st, it, 'Done', () => taskDone(taskId, ver), decideUndoReopen(taskId)); return;
+    case 'again': await decideDo(st, it, 'Tried again', () => taskTryAgain(taskId)); return;
+    case 'close-task': await decideDo(st, it, 'Closed', () => taskMove(taskId, 'closed', ver), decideUndoReopen(taskId)); return;
+    case 'snooze': case 'give': case 'back':
+      st.more = st.more === what ? '' : what; decidePaintSide(st); return;
+    case 'snooze-1': case 'snooze-7': {
+      const until = new Date(Date.now() + (what === 'snooze-1' ? 1 : 7) * 86400_000).toISOString().slice(0, 10);
+      await decideDo(st, it, 'Snoozed', () => taskSnooze(taskId, until, ver), () => () => taskUnsnooze(taskId)); return;
     }
-    if (k === 'a') what = 'all';
-    else if (k === 't') what = 'ticked';
+    case 'give-to': { const to = decideTo(); if (to) await decideDo(st, it, `Given to ${actorLabel(to)}`, () => taskReassign(taskId, to, ver)); return; }
+    case 'open': decideOpenWhere(it); return;
+    case 'up':
+      if (st.thumbed.has(it.id)) return;
+      try { await taskThumbs(taskId, rid, true); st.thumbed.add(it.id); decidePaintHead(st); }
+      catch (e) { st.error = errorMessage(e, 'Not saved.'); decidePaintSide(st); }
+      return;
+    case 'down':
+      st.sheet = st.sheet ? null : {step: 'why', chip: '', note: '', feedbackId: '', rule: '', allBots: false};
+      decidePaintHead(st); decidePaintSide(st); return;
+    case 'why-back': await decideDo(st, it, 'Sent back', () => taskThumbs(taskId, rid, false, decideWhy(st.sheet))); return;
+    case 'why-give': { const to = decideTo(); if (to) await decideDo(st, it, `Given to ${actorLabel(to)}`, () => taskGiveAsk(taskId, rid, to, ver)); return; }
+    case 'why-rule': await decideRuleDraft(st, it); return;
+    case 'rule-add': await decideRuleAdd(st, it); return;
   }
-  else if (k === 'r' && decideRecommends(c)) what = 'recommend';
-  else if ((c.type === 'approve' || c.yn) && (k === 'y' || k === 'n')) what = k === 'y' ? 'yes' : 'no';
-  else if (decideYesNo(c) && (k === 'y' || k === 'n')) { what = 'pick'; i = k === 'y' ? 0 : 1; }
-  else if (c.type === 'task' && !c.yn && k === 'd' && !decideStepsOnly(c)) what = 'done';
-  else if (c.type === 'pick' && /^[1-6]$/.test(k) && Number(k) <= c.q.options.length) { what = 'pick'; i = Number(k) - 1; }
-  if (!what) return;
-  ev.preventDefault();
-  decideAct(st, what, i);
 }
-// Swipe left for the next card, right for the one before. A sideways drag that moves the card swallows the click
-// it ends with.
-function decideSwipe(st: DecState, card: HTMLElement) {
-  let x0: number | null = null, y0 = 0, dx = 0, id: number | null = null;
-  card.addEventListener('pointerdown', ev => {
-    if (ev.button !== 0 || eventElement(ev)?.closest('textarea, a, .dc-note')) return;
-    x0 = ev.clientX; y0 = ev.clientY; dx = 0; id = ev.pointerId; st.swiped = false;
-  });
-  card.addEventListener('pointermove', ev => {
-    if (x0 === null || ev.pointerId !== id) return;
-    dx = ev.clientX - x0;
-    if (!st.swiped && Math.abs(ev.clientY - y0) > Math.abs(dx)) { x0 = null; return; }
-    if (Math.abs(dx) > 8) {
-      st.swiped = true;
-      const m = Math.max(-40, Math.min(dx, 40));
-      card.style.transition = 'none';
-      card.style.transform = `translateX(${m}px) rotate(${m / 40}deg)`;
+/** The words a 👎 sends: the chip, then what was typed. */
+function decideWhy(sh: AskSheet | null): string {
+  const chip = DEC_CHIPS.find(([k]) => k === sh?.chip)?.[1];
+  return [chip, sh?.note.trim()].filter(Boolean).join(': ');
+}
+/** Make a rule: the 👎 is saved (it sends the ask back), then Tico drafts one sentence from it to edit. */
+async function decideRuleDraft(st: DecState, it: NeedsEntry) {
+  const sh = st.sheet;
+  if (!sh || st.busy) return;
+  st.busy = true; st.error = ''; decidePaintSide(st);
+  try {
+    if (!sh.feedbackId) {
+      const r = await taskThumbs(it.task_id || '', decideRid(it), false, decideWhy(sh));
+      sh.feedbackId = String((r as {feedback_id?: string} | null)?.feedback_id || '');
+      if (!sh.feedbackId) throw new Error('The 👎 was not saved.');
     }
-  });
-  const end = (ev: PointerEvent) => {
-    if (x0 === null || ev.pointerId !== id) return;
-    x0 = null;
-    card.style.transition = ''; card.style.transform = '';
-    if (st.swiped && Math.abs(dx) > 90) decideAct(st, dx < 0 ? 'next' : 'prev');
-    setTimeout(() => { st.swiped = false; }, 0);
-  };
-  card.addEventListener('pointerup', end);
-  card.addEventListener('pointercancel', end);
+    const draft: {text?: string} = await post(`/v2/feedback/${encodeURIComponent(sh.feedbackId)}/rule-draft`, {});
+    sh.rule = draft.text || sh.note; sh.step = 'rule';
+  } catch (e) { st.error = errorMessage(e, 'No rule drafted.'); }
+  if (DEC !== st) return;
+  st.busy = false; decidePaintSide(st);
+}
+async function decideRuleAdd(st: DecState, it: NeedsEntry) {
+  const sh = st.sheet, text = decideNote('#dc-rule');
+  if (!sh?.feedbackId || !text) return;
+  await decideDo(st, it, 'Rule added', () => post(`/v2/feedback/${encodeURIComponent(sh.feedbackId)}/rule`, {text, all_bots: sh.allBots || !String(it.ask?.asked_by || '').startsWith('bot:')}));
+}
+/** Open: a mention's thread (or its task), a cause's first task. */
+function decideOpenWhere(it: NeedsEntry) {
+  decideStop();
+  if (it.kind === 'mention' && !it.task_id && it.conversation_id && typeof threadHref === 'function') { location.hash = threadHref(it.conversation_id); return; }
+  const id = it.task_id || it.task_ids?.[0] || it.task?.id;
+  if (id) taskModalOpen(id);
 }

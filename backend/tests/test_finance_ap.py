@@ -264,7 +264,7 @@ def test_a_scheduled_payment_sent_back_or_withdrawn_reopens_the_bill_and_says_so
         second = asked(c, bid)
         assert second.action_id != first.action_id
         withdraw(c, second.approval_id)
-        assert [r.status for r in FA.approvals_sweep(c, AT)] == ["withdrawn"]
+        assert [r.status for r in FA.ok_sweep(c, AT)] == ["withdrawn"]
         reopened(c, bid, "withdrawn")
 
 

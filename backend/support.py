@@ -241,12 +241,15 @@ def clean_email(value):
     return value
 
 
-def _ask_hq(method, path, *, body=None, secret="", wait=HQ_WAIT):
+def _ask_hq(method, path, *, body=None, secret="", wait=HQ_WAIT, idem=""):
     """One request to HQ, or a Problem the person can act on. Nothing from HQ's answer is logged. `wait` is longer for
-    a long poll (backend/support_access.py)."""
+    a long poll (backend/support_access.py). `idem` is sent as Idempotency-Key: the same report sent again (a retry
+    after a crash or a lost answer) is the same ticket at an HQ that keeps keys."""
     headers = {"Accept": "application/json", "User-Agent": "tico-support"}
     if secret:
         headers["X-Ticket-Secret"] = secret
+    if idem:
+        headers["Idempotency-Key"] = idem
     try:
         with httpx.Client(timeout=wait, transport=TRANSPORT, follow_redirects=False) as http:
             return http.request(method, hq_url() + path, json=body, headers=headers)
@@ -507,10 +510,12 @@ class Support:
             raise Problem("diagnostics_stale", "This preview expired. Refresh diagnostics and review again.", 409)
         return bundle
 
-    def file(self, who, body, key="", on_filed=None, source=""):
+    def file(self, who, body, key="", on_filed=None, source="", idem=""):
         """Send the ticket to HQ, then keep HQ's id and secret. Nothing is kept when HQ refuses or cannot be reached.
         `on_filed(c, ticket_id)` runs in the transaction that keeps it (an approval spent with it). `source` is who
-        filed it, as HQ's queue sorts tickets (one of SOURCES; the body's own when not given)."""
+        filed it, as HQ's queue sorts tickets (one of SOURCES; the body's own when not given). `idem` is an OK already
+        used for this report (file_approved): HQ hears it as Idempotency-Key, and the day's cap, counted when it was
+        asked, refuses nothing after the claim."""
         message, email = clean_message(body.message), clean_email(body.email)
         with self.store.read() as c:
             if key:
@@ -529,7 +534,7 @@ class Support:
             recent = c.execute(
                 "SELECT count(*) FROM support_tickets WHERE actor=? AND created_at>?", (who.actor, since)
             ).fetchone()[0]
-        if recent >= PER_DAY:
+        if recent >= PER_DAY and not idem:
             raise Problem("support_busy", "That is enough requests for today. Try again tomorrow.", 429)
         # The secret HQ answers with is sealed with the vault's key: make sure it opens (or, on a fresh install, make
         # it, as the first saved credential would) before anything goes to HQ, so no ticket is made that this server
@@ -553,12 +558,12 @@ class Support:
             payload["diagnostics"] = self.attachment(who, body.diagnostics)
         if body.kind != "support":
             payload["kind"] = sent["kind"] = body.kind
-        answer = _ask_hq("POST", "/v1/support", body=payload)
+        answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem)
         if answer.status_code == 422 and _refused_field(answer) == "fields":
             # An HQ from before source refuses it as an unknown field: the ticket goes again without it, keeping the
             # rest (BotOps' and the Health Monitor's messages start with their name, which is how such an HQ reads it).
             payload.pop("source")
-            answer = _ask_hq("POST", "/v1/support", body=payload)
+            answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem)
         if answer.status_code == 422 and {"app_version", "kind"} & set(payload) and _refused_field(answer) == "fields":
             # An HQ from before app_version or kind refuses unknown fields; the ticket still goes without them, and
             # names its kind in the message instead.
@@ -568,7 +573,7 @@ class Support:
             named = f"[{body.kind.capitalize()}] {message}"
             if body.kind != "support" and len(named) <= MAX_MESSAGE:
                 payload["message"] = named
-            answer = _ask_hq("POST", "/v1/support", body=payload)
+            answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem)
         if answer.status_code == 422 and "diagnostics" in payload:
             raise Problem(
                 "diagnostics_rejected",
@@ -623,7 +628,8 @@ class Support:
         install's default person while the team rule lets bots send without asking (`RULE`), this copy names an HQ of
         its own (`from_source`) and the privacy check `check(c)` passes. Otherwise a person OKs it first: the person
         whose token or Assistant drafted it, the task's owner when that is a person, or the install's default person.
-        Returns {ticket, sent, filed_as} when it went, else {id, approval, task_id, status: pending}."""
+        Returns {ticket, sent, filed_as, status: sent, task_id} when it went, else {id, approval, task_id,
+        requirement_id, status: pending}."""
         from . import lifecycle
 
         problems = H.lint_support(payload) if isinstance(payload, dict) else ["a report is an object"]
@@ -653,13 +659,20 @@ class Support:
                     }
             key = "approval:" + _key_of(who.actor, payload)
             ticket = self._send(Identity(H.human_actor(person), "human"), payload, "bot_report", key)
-            return {"ticket": ticket, "sent": True, "filed_as": H.human_actor(person)}
+            return {
+                "ticket": ticket,
+                "sent": True,
+                "filed_as": H.human_actor(person),
+                "status": "sent",
+                "task_id": task_id or None,
+            }
 
     def file_approved(self, who, rid):
         """Send the report a person OK'd, for whoever asked for the OK. The ticket is filed as the person who OK'd it
-        (theirs to read and answer, counted against their day) and the OK is used in the same transaction that keeps the
-        ticket: HQ refusing or out of reach uses nothing, so the call can be made again. A second call for a used OK
-        answers with the same ticket."""
+        (theirs to read and answer, counted against their day). Claim, then send: the OK is used and committed first,
+        then the report goes with Idempotency-Key `tico-support:<rid>`. HQ refusing or out of reach leaves the OK used
+        with no ticket; calling again (Maintenance does, for the Health Monitor) sends the same report under the same
+        key. A call once the ticket is kept answers with it."""
         with self.sending:
             return self._file_approved(who, rid)
 
@@ -693,29 +706,40 @@ class Support:
             source, key = "bot_report", "approval:" + rid
         else:
             source, key = "person", "draft:" + rid
-        if standing == task_asks.USED:
+
+        def kept():
             with self.store.read() as c:
-                done = c.execute(
+                return c.execute(
                     "SELECT * FROM support_tickets WHERE actor=? AND request_key=? ORDER BY created_at LIMIT 1",
                     (found["ok_by_id"], key),
                 ).fetchone()
-            if not done:
+
+        if standing == task_asks.USED:
+            done = kept()
+            if done:
+                return {"ticket": view(done), "approval": rid, "filed_as": found["ok_by_id"], "again": True}
+            if found["used_by_id"] != who.actor or not person:
                 raise Problem("approval", f"This OK was already used at {found['used_at']}.", 409)
-            return {"ticket": view(done), "approval": rid, "filed_as": found["ok_by_id"], "again": True}
-        if standing != task_asks.OK or not person:
+            # Claimed, and the send never came back (a crash, HQ out of reach): the same report goes again under the
+            # same Idempotency-Key, and HQ answers with the ticket the first send made.
+        elif standing != task_asks.OK or not person:
             state = {task_asks.WAITING: "waiting for a person", task_asks.SENT_BACK: "sent back"}.get(
-                standing, "not asked any more"
+                str(standing), "not asked any more"
             )
             raise Problem("approval", f"This report is {state}: only a report a person OK'd is sent.", 409)
+        else:
+            # Claim, then send: the OK is used (authority checked again, once) and committed before anything leaves,
+            # so nothing is refused after HQ has the report, and a crash after the send is a retry, not a second OK.
+            with self.store.transaction() as c:
+                task_asks.use(c, rid, found["subject"], payload, who.actor)
 
-        def spend(c, _ticket_id=None):
-            task_asks.use(c, rid, found["subject"], payload, who.actor)
+        def settle(c, _ticket_id=None):
             task_asks.settle(c, rid, "Sent the report to Tico support.")
 
-        ticket = self._send(person, payload, source, key, on_filed=spend)
+        ticket = self._send(person, payload, source, key, on_filed=settle, idem="tico-support:" + rid)
         return {"ticket": ticket, "approval": rid, "filed_as": person.actor, "again": False}
 
-    def _send(self, person, payload, source, key, on_filed=None):
+    def _send(self, person, payload, source, key, on_filed=None, idem=""):
         """File a report as `person`, once per `key`: a ticket kept under that key answers again."""
         with self.store.read() as c:
             done = c.execute(
@@ -733,6 +757,7 @@ class Support:
             key,
             on_filed=on_filed,
             source=source,
+            idem=idem,
         )
 
     def write(self, who, ticket_id, text, attachment=""):

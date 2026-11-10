@@ -38,7 +38,7 @@ from backend.tests.helpers.finance_fixtures import (
 )
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
 from backend.tests.helpers.finance_payments import HOURS, _checking, _debit, _lost_send, _payee, _reconcile
-from backend.tests.helpers.finance_oks import give, send_back
+from backend.tests.helpers.finance_oks import click, give, send_back, the_ok
 
 
 def _budget_and_card(store, amount=30_000, card=20_000, holder="human:eve"):
@@ -1572,7 +1572,7 @@ def test_bank_numbers_live_only_in_the_vault_through_create_approve_send(api):
         get(api, f"finance/actions/{asked['action_id']}", token="ben-test"),
         get(api, "finance/payments"),
         get(api, "finance/rules"),
-        get(api, f"approvals/{asked['approval_id']}"),
+        the_ok(api, asked["approval_id"]),
     ]
     with store.read() as c:
         assert _plaintext_anywhere(c) == [] and _sealed_rows(c) == 1
@@ -2662,7 +2662,7 @@ def test_approving_a_finance_action_commits_synced(api, monkeypatch):
         return real(c, *args, **kwargs)
 
     monkeypatch.setattr(FA, "approval_decided", watched)
-    post(api, f"approvals/{asked['approval_id']}", {"decision": "approved"}, key="approve-sync")
+    click(api, asked["approval_id"], key="approve-sync")
     assert seen == [2], seen
 
 

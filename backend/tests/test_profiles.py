@@ -226,14 +226,14 @@ def test_a_lead_is_woken_by_people_and_hears_the_rest_once_a_day(api):
         assert due == W.digest_time(job["created_at"], 9) and due > job["created_at"]
         W.tick(c, due)
         assert c.execute("SELECT held FROM jobs WHERE id=?", (job["id"],)).fetchone()[0] == 0
-        # A person's message, and a declined ticket it asked for, wake it at once.
+        # A person's message, and a task it asked for that ended (finished or closed), wake it at once.
         assert R.judge(c, "human:ana", "bot:boss", "message", {}, "Status?", None).outcome == "wake"
         # The digest itself is held news let go: the lead's batch-everything row must not hold it again.
         digest = R.judge(c, H.KEEPER, "bot:boss", "message", {"wake_digest": [job["id"]]}, "Held updates", None)
         assert (digest.outcome, digest.rule) == ("wake", "batch_digest")
         c.execute("DELETE FROM jobs")
         H.task_close(c, "bot:ops", mine["id"], "Nobody to ask.", H.task(c, mine["id"])["version"])
-        assert last_to(c, "boss")["rule"] == "profile_lead_task_declined" and jobs(c, "boss") == 1
+        assert last_to(c, "boss")["rule"] == "profile_lead_task_done" and jobs(c, "boss") == 1
         assert task["id"]
 
 
@@ -334,7 +334,7 @@ def test_the_profiles_catch_all_never_beats_a_team_or_type_rule_and_a_leads_own_
             (H.now(), H.now()),
         )
         parent = H.task_create(c, "bot:ops", "Build 1/9", "x", "bot:cpo")
-        review = H.task_create(c, "bot:ops", "QA: check it", "x", "bot:checker", parent_id=parent["id"])
+        review = H.task_create(c, "bot:ops", "Live acceptance: check it", "x", "bot:checker", parent_id=parent["id"])
         c.execute("DELETE FROM jobs")
         assert news(c, H.task(c, review["id"]))["refs"]["rule"] == "team-wake" and jobs(c, "checker") == 1
         c.execute("DELETE FROM rules")
@@ -366,11 +366,11 @@ def test_a_reviewer_may_be_handed_a_review_child_but_not_an_ordinary_task_and_st
         add_bot(c, "checker")
         put(c, "checker", P.REVIEWER)
         parent = H.task_create(c, "bot:ops", "Build 1/9", "x", "bot:cpo")
-        child = H.task_create(c, "bot:ops", "QA: check it", "x", "bot:cpo", parent_id=parent["id"])
+        child = H.task_create(c, "bot:ops", "Live acceptance: check it", "x", "bot:cpo", parent_id=parent["id"])
         plain = H.task_create(c, "bot:ops", "Fix the thing", "x", "bot:cpo")
-        H.task_update(c, "bot:ops", child["id"], owner="bot:checker")
+        H.task_update(c, "bot:ops", child["id"], owner="bot:checker", seen_version=H.task(c, child["id"])["version"])
         with pytest.raises(H.Refused) as raised:
-            H.task_update(c, "bot:ops", plain["id"], owner="bot:checker")
+            H.task_update(c, "bot:ops", plain["id"], owner="bot:checker", seen_version=plain["version"])
         assert raised.value.rule == "profile"
         assert routines.create(c, "human:ana", "checker", {"title": "Weekly sweep", "cron": "0 9 * * 1"}) is not None
 

@@ -106,32 +106,17 @@ dialog.tf-view::backdrop{background:rgba(0,0,0,.6)}
 .ask-text{font-weight:500;color:var(--ink)}
 .ask-opts{display:flex;flex-wrap:wrap;gap:6px}
 .ask-opt{display:inline-flex;flex-direction:column;align-items:flex-start;gap:1px;max-width:100%;padding:4px 10px;border:1px solid var(--line);border-radius:7px;background:var(--surface2);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
-.ask-opt:hover{border-color:var(--g5)}
-.ask-opt[aria-pressed="true"]{border-color:var(--ink);background:color-mix(in srgb,var(--ink) 8%,var(--surface2))}
-.ask-opt:disabled{opacity:.6;cursor:default}
-.ask-opt.ro,.ask-opt.ro:hover{cursor:default;background:transparent;color:var(--muted);border-color:var(--line)}
+.ask-opt.ro{cursor:default;background:transparent;color:var(--muted);border-color:var(--line)}
 .ask-l{font-weight:600}
 .ask-d{font-size:var(--t-sm);color:var(--muted)}
 .ask-pic{width:96px;height:54px;margin-bottom:3px;border-radius:4px}
-.ask-form{display:flex;flex-direction:column;gap:6px}
-.ask-other{width:100%;font-size:var(--t-sm);padding:4px 8px}
-.ask-foot{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
-.ask-send{padding:3px 12px;font-size:var(--t-base)}
-.ask-dismiss,.ask-again{font-size:var(--t-sm);color:var(--muted)}
-.ask-again{align-self:flex-start}
-.ask-status{font-size:var(--t-sm)}
-.ask.answered .ask-opts,.ask.answered .ask-form{display:none}
-.ask.answered.again .ask-opts,.ask.answered.again .ask-form{display:flex}
-.ask.again .ask-again{display:none}
+.ask.answered .ask-opts{display:none}
 .ask-answers{display:flex;flex-direction:column;gap:3px;margin:0;padding:0;list-style:none}
 .ask-answers li{display:flex;align-items:center;flex-wrap:wrap;gap:5px}
 .ask-answers b{font-weight:600}
 .ask-o{color:var(--muted)}.ask-o::before{content:"— "}
 .ask-answers time{margin-left:auto;font-size:var(--t-xs)}
 /* board covers */
-.bcard-cover{margin:-7px -9px 7px;height:96px;border-radius:7px 7px 0 0;background:var(--surface2)}
-.bcard-cover[style*="aspect-ratio"]{height:auto;max-height:140px}
-.bcard-cover.failed{display:none}
 /* pinned Tasks views in the left rail */
 .side-pins{margin-top:4px}
 .side-pins-h{margin:10px 0 2px;padding:0 10px;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}

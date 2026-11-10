@@ -206,9 +206,12 @@ ACTIONS = {
     ),
     "ask_updates": ("ask people and bots for today's updates", ("updates", "ask")),
     "sync_github": ("catch up on pull requests, merges and releases", ("github", "pr", "merge", "release")),
-    "finish_repo_waits": ("finish a task waiting for a worktree", ("repository", "worktree")),
     "tell_setup_stuck": ("tell a person about a bot stuck in setup", ("setup", "remind")),
     "check_release": ("check for a new Tico release", ("release", "update")),
+    "ask_release": (
+        "ask the Release Manager for a release at the daily release hour",
+        ("release", "schedule", "daily"),
+    ),
     "fetch_feeds": ("fetch subscribed updates", ("feeds", "updates")),
     "sync_directory": ("bring people in from the company directory", ("directory", "people")),
     "sync_meetings": ("bring in meeting notes from each person's Granola", ("meetings", "granola", "notes")),
@@ -550,6 +553,16 @@ JOBS = [
         86400,
         then=("send_heartbeat",),
         applies=_company_linked,
+    ),
+    Job(
+        "release_hour",
+        "Daily release",
+        "At each hour the release schedule names, asks the Release Manager for a release as Release now does: one "
+        "Release task, or its unfinished one. Each hour fires once.",
+        HOUSEKEEPING,
+        "At the release hours",
+        10,
+        then=("ask_release",),
     ),
     Job(
         "hosted_update",

@@ -154,7 +154,7 @@ def test_an_ok_taken_back_or_sent_back_is_not_one(c):
     _ok(c, asked)
     answer_id = K.grant(c, rid)["answer_id"]
     H.task_answer_undo(c, ANA, answer_id)
-    assert K.standing(c, rid) == K.WAITING
+    assert K.standing(c, rid) == K.WITHDRAWN  # taken back for good: a new OK needs a new ask
     with _refused("task_ok_missing"):
         K.use(c, rid, SUBJECT, EMAIL, SENDER)
     H.task_answer(c, ANA, asked["task_id"], rid, "no", "Say the amount.")
@@ -190,16 +190,20 @@ def test_an_ok_on_a_task_that_was_closed_is_not_used(c):
         K.use(c, asked["requirement_id"], SUBJECT, EMAIL, SENDER)
 
 
-def test_an_ok_given_to_another_person_is_theirs_to_give(c):
+def test_an_ok_handed_to_another_person_is_not_theirs_to_give(c):
+    """A give hands on the ask, never the right to OK it: Ben, given Ana's ask, is refused, and so is Ana, who no
+    longer holds it. It waits for a new ask."""
     asked = _ask(c)
     rid = asked["requirement_id"]
     H.task_give(c, ANA, asked["task_id"], rid, BEN)
     K.show(c, ANA, rid, EMAIL, own_click=True)
     with _refused("task_requirement"):
         K.give_ok(c, ANA, rid, K.content_hash(EMAIL), own_click=True)
-    _ok(c, asked, person=BEN)
-    assert K.grant(c, rid)["ok_by_id"] == BEN
-    K.use(c, rid, SUBJECT, EMAIL, SENDER)
+    with _refused("task_requirement"):
+        _ok(c, asked, person=BEN)
+    assert K.standing(c, rid) == K.WAITING
+    with _refused("task_ok_missing"):
+        K.use(c, rid, SUBJECT, EMAIL, SENDER)
 
 
 def test_the_stored_content_is_what_the_preview_shows(c):

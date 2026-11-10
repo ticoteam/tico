@@ -620,7 +620,7 @@ def versions_recorded(f):
     setup(f, "auto", "edit", "versions")
     vs = [v for v in rows(body(f, "versions")) if v.get("n") in (1, 2)]
     ns = sorted(v["n"] for v in vs)
-    ok = ns == [1, 2] and all(v.get("actor") and v.get("at") for v in vs)
+    ok = ns == [1, 2] and all(v.get("actor") and v.get("created_at") for v in vs)
     return ok, f"versions {ns}, each with actor and time"
 
 

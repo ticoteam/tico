@@ -199,7 +199,8 @@ def _could_read(c, visible_sql, tid, ref):
 # ----------------------------------------------------------------------------- the engine's part of a list row
 def brief(c, rows, visible_sql="1"):
     """The engine's fields of a list row (docs/dev/pipelines-v3-cutover.md, "The task as JSON", Brief), laid over each
-    row in place: `turn` (the headline wait), `late` and `snoozed`. One `H.task_waits` for every row, one read of the
+    row in place: `turn` (the headline wait; `running` when a bot's turn is a run going now), `late`, `snoozed`
+    and `pushed_past` (it entered its stage pushed past a requirement). One `H.task_waits` for every row, one read of the
     open visits and one of the open snoozes, never a read per row. A sub-task the reader may not open is "A sub-task"
     in a turn's line, as in the task's own read."""
     from dataclasses import asdict
@@ -211,14 +212,16 @@ def brief(c, rows, visible_sql="1"):
         return rows
     waits = H.task_waits(c, ids)
     marks = json.dumps(ids)
-    late = {
-        r[0]: {"since": r[1], "level": "person" if r[2] else "told"}
-        for r in c.execute(
-            "SELECT task_id, late_told_at, late_person_at FROM visits WHERE left_at IS NULL "
-            "AND late_told_at IS NOT NULL AND task_id IN (SELECT value FROM json_each(?))",
-            (marks,),
-        )
-    }
+    late, pushed = {}, set()
+    for r in c.execute(
+        "SELECT task_id, late_told_at, late_person_at, entered_how FROM visits WHERE left_at IS NULL "
+        "AND (late_told_at IS NOT NULL OR entered_how='pushed_past') AND task_id IN (SELECT value FROM json_each(?))",
+        (marks,),
+    ):
+        if r[1]:
+            late[r[0]] = {"since": r[1], "level": "person" if r[2] else "told"}
+        if r[3] == "pushed_past":
+            pushed.add(r[0])
     snoozed = {
         r[0]
         for r in c.execute(
@@ -239,14 +242,41 @@ def brief(c, rows, visible_sql="1"):
         if named
         else set()
     )
+    running = _running(c, {tid: t["who"] for tid, t in turns.items() if t and t["state"] == "bot" and t["who"]})
     for row in rows:
         turn = turns.get(row["id"])
         if turn and turn["state"] == "tasks" and turn["who"] not in shown:
-            turn["line"] = "A sub-task"
+            turn["line"], turn["who"] = "A sub-task", None  # neither its title nor its id
+        if turn:
+            turn["running"] = row["id"] in running
         row["turn"] = turn
         row["late"] = late.get(row["id"])
         row["snoozed"] = row["id"] in snoozed
+        row["pushed_past"] = row["id"] in pushed
     return rows
+
+
+def _running(c, bots):
+    """The tasks, of {task id: bot actor}, whose bot has a run on them now: its attempt is leased or running and its
+    computer still renews the lease (task_wakes.live_run, for many tasks in one read). A bot's turn that is not running
+    is waiting to try again."""
+    from .store import H
+
+    if not bots:
+        return set()
+    pairs = json.dumps([[tid, H.actor_id(bot)] for tid, bot in bots.items()])
+    return {
+        r[0]
+        for r in c.execute(
+            "SELECT DISTINCT json_extract(p.value, '$[0]') FROM json_each(?) p "
+            "JOIN tasks t ON t.id = json_extract(p.value, '$[0]') "
+            "JOIN jobs j ON j.bot_id = json_extract(p.value, '$[1]') "
+            "JOIN attempts a ON a.id = j.attempt_id AND a.state IN ('leased', 'running') AND a.lease_until > ? "
+            "JOIN messages m ON m.id = j.message_id "
+            "AND (m.conversation_id = t.conversation_id OR substr(m.wake_key, 1, length(t.id) + 1) = t.id || ':')",
+            (pairs, H.now()),
+        )
+    }
 
 
 def comment_rights(c, auth, who, task_id):

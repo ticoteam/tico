@@ -588,7 +588,8 @@ const meetSourceLabel = (s?: string): string => ({...IMPORT_SOURCES, manual: 'Ty
 // The source in words; a meeting the Recorder filed says so.
 const meetSourceName = (r: MeetRec) => r.client === 'tico-recorder' ? 'Tico Recorder' : r.source === 'tico-live' ? 'Tico live' : meetSourceLabel(r.source);
 const meetIcon = (name: string, label = '') => `<span class="nav-icon" aria-hidden="true">${name}</span>${label}`;
-const meetStatusWord = (s: string | undefined) => (typeof STATUS_WORD === 'object' && typeof s === 'string' && STATUS_WORD[s]) || s || '';
+const MEET_STATUS_WORD: Record<string, string> = {open: 'Open', done: 'Done', closed: 'Closed'};
+const meetStatusWord = (s: string | undefined) => (s && MEET_STATUS_WORD[s]) || s || '';
 // Who was there: people, then the bots attached to its live meeting and the bot it was shared with. Each is an
 // avatar; its name shows on hover, or on tap (focus) on a phone.
 function meetFaces(state: MeetState, rec: MeetRec): string {

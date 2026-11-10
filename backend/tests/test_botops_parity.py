@@ -35,8 +35,9 @@ def test_botops_files_the_task_it_waits_on_without_borrowing_human_authority(api
     assert not err, filed
     with api.app.state.store.read() as c:
         made = H.task(c, filed["task"]["id"])
-        assert (made["requester_id"], made["parent_id"]) == ("bot:botops", task["id"])
-        assert [w.state for w in H.task_waits(c, [task["id"]])[task["id"]]][:1] == ["tasks"]
+        assert made["requester_id"] == "bot:botops"
+        link = c.execute("SELECT from_task_id FROM links WHERE to_task_id=?", (made["id"],)).fetchone()
+        assert link[0] == task["id"]
     assert act(api, attempt, "PUT", "providers", {"enabled": ["openai"]}).status_code == 403
 
 
@@ -881,8 +882,11 @@ def test_a_later_run_acts_for_the_person_whose_open_task_it_cites_and_a_bot_run_
     finish(api, botops, bot_run)
 
     # A closed task lends nothing.
+    from backend import task_engine
+
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (task_id,))
+        version = c.execute("SELECT version FROM tasks WHERE id=?", (task_id,)).fetchone()[0]
+        task_engine.move(c, task_id, task_engine.CLOSED, "human:ana", "test: the task is closed", version)
     closed = _wake(api, botops)
     assert (
         act(
@@ -1125,7 +1129,12 @@ def test_only_the_daily_update_and_the_owners_automations_start_an_own_run(api, 
     from backend import automations
 
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done' WHERE owner_id='bot:botops' AND title='Tidy'")
+        from backend import task_engine
+
+        for tidy, version in c.execute(
+            "SELECT id, version FROM tasks WHERE owner_id='bot:botops' AND title='Tidy' AND status='open'"
+        ).fetchall():
+            task_engine.move(c, tidy, task_engine.CLOSED, "bot:botops", "test: the last occurrence ended", version)
         row = c.execute("SELECT * FROM automations WHERE id=?", (owners,)).fetchone()
         before = automations.flow_of(row)
         steps = [{**before["steps"][0], "prompt": "Open everything."}]

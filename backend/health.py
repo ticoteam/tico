@@ -25,7 +25,6 @@ from . import (
     providers,
     releases,
     replication,
-    roadmaps,
     runner_versions,
     setup_stuck,
     sleep_idle,
@@ -1517,7 +1516,8 @@ def holding_turns(c, attempts):
     names = {r["id"]: r["display_name"] or r["slug"] for r in c.execute("SELECT id,slug,display_name FROM bots")}
     out = []
     for a in attempts:
-        ids = sorted(attempt_tasks(c, a["id"]))
+        own = c.execute("SELECT task_id FROM attempts WHERE id=? AND task_id IS NOT NULL", (a["id"],)).fetchone()
+        ids = sorted(attempt_tasks(c, a["id"]) | ({own[0]} if own else set()))  # the run's own task, then what it read
         task = (
             c.execute(
                 f"SELECT id,title FROM tasks WHERE id IN ({','.join('?' * len(ids))}) AND NOT private "
@@ -2122,34 +2122,6 @@ def _sealed_secrets(c, settings, github):
 KEY_LOST = " The credential key, which opens every saved credential, is on this server's disk only."
 
 
-def _roadmap_suggestions(c):
-    """A public roadmap whose suggestions reach no bot, or not the bot the owner chose. It reads the one rule that
-    routes suggestions (roadmaps.suggestions_receiver), so this line and the visitor's refusal never disagree, and
-    it clears by itself once a bot is receiving them again. Without an enabled label nobody can suggest anything."""
-    if not roadmaps.settings(c)['labels']:
-        return None
-    receiver = roadmaps.settings_view(c)['suggestions_receiver']
-    fix = [_fix("Open Public roadmap", "#/settings/roadmap")]
-    if not receiver['bot']:
-        return _check(
-            "roadmap_suggestions",
-            "No bot receives roadmap suggestions",
-            "warn",
-            "Visitors who suggest a feature on your public roadmap are being turned away.",
-            fix,
-        )
-    why = {'chosen_archived': "is archived", 'chosen_inactive': "isn't active"}.get(receiver['source'])
-    if why:
-        return _check(
-            "roadmap_suggestions",
-            f"The bot chosen for roadmap suggestions {why}; suggestions now go to {receiver['name']}",
-            "warn",
-            "To clear this, make the chosen bot active again, or choose another bot or Automatic.",
-            fix,
-        )
-    return None
-
-
 def _signin(settings):
     kind = settings.proxy_kind
     if kind:
@@ -2465,7 +2437,12 @@ def _unreviewed_runs(c, who, auth):
 NEEDS_PLATE_WARN = 10  # more items than this on one person's Needs you plate is a warning
 NEEDS_PLATE_BAD = 25  # more than this is bad
 NEEDS_PLATE_ASKERS = 3  # the bots named on a plate, most items first
-NEVER_STUCK_KEY = "health:never_stuck"  # registry_metadata: the hourly never-stuck reading (record_never_stuck)
+NEVER_STUCK_COUNTS = ("waiting_on_nothing", "retry", "manager", "person", "cant_run", "no_one", "broken")
+# registry_metadata: the hourly never-stuck reading (record_never_stuck). Its numbers sit under NEVER_STUCK_KEY, which an
+# Admin's SQL reads; which tasks each counts, and the breaks' words, sit under NEVER_STUCK_TASKS_KEY, which no SQL reads
+# (backend/sql.py), since they name tasks the Admin may not read.
+NEVER_STUCK_KEY = "health:never_stuck"
+NEVER_STUCK_TASKS_KEY = "health:never_stuck:tasks"
 
 
 def _plate_people(c, auth):
@@ -2480,6 +2457,11 @@ def _plate_people(c, auth):
     return found
 
 
+def _plate_tasks(item):
+    """The tasks one Needs you item stands for: its task, or the tasks a Paused cause holds up."""
+    return [str(t) for t in ([item.get("task_id")] if item.get("task_id") else item.get("tasks") or [])]
+
+
 def _plate_check(c, who, auth, full):
     """Each person's Needs you count from the engine's read (waiting_on.needs: their asks, their own tasks' work and the
     Paused causes they fix). An administrator reads everyone's plate; anyone else reads only their own. Warn over
@@ -2488,8 +2470,13 @@ def _plate_check(c, who, auth, full):
     from . import waiting_on
 
     over = []
+    visible_sql = auth.task_sql(c, who) if full else None
     for person in _plate_people(c, auth) if full else [who]:
         items = waiting_on.needs(c, person.actor)
+        if visible_sql and person.actor != who.actor:
+            # Another person's plate counts only what the reader may read: a private task is not theirs to count.
+            readable = _readable(c, visible_sql, sorted({tid for item in items for tid in _plate_tasks(item)}))
+            items = [item for item in items if any(tid in readable for tid in _plate_tasks(item))]
         if len(items) > NEEDS_PLATE_WARN:
             bots = {}
             for item in items:
@@ -2532,61 +2519,115 @@ def _plate_check(c, who, auth, full):
 def never_stuck_reading(c):
     """What the never-stuck check finds over every open task: the seven rules' breaks (never_stuck.rules_hold) and
     where the ladder has the tasks (S15): waiting on nothing, on a retry, with a manager, reached a person, can't run.
-    It reads every open task, so it runs hourly (record_never_stuck), not on each page load."""
+    `tasks` keeps which tasks each number counts, and `broken_tasks` the tasks each break is about (never_stuck.Break,
+    tied when it was found), so someone who reads only some tasks is shown only those. A private task no person who
+    reads it can move is held, not a break: it counts under `no_one`, a number only. It reads every open task, so it
+    runs hourly (record_never_stuck), not on each page load."""
     from . import never_stuck, waiting_on
 
-    breaks = never_stuck.rules_hold(c)
-    levels = {
-        row[0]: row[1]
-        for row in c.execute(
-            "SELECT CASE WHEN v.level='owner' AND v.tries>0 THEN 'retry' ELSE v.level END, count(*) "
-            "FROM visits v JOIN tasks t ON t.id=v.task_id WHERE v.left_at IS NULL AND t.status='open' "
-            "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id=t.id AND s.ended_at IS NULL) GROUP BY 1"
-        )
-    }
+    found = never_stuck.rules_hold(c)
+    breaks = [line for line in found if not getattr(line, "held", False)]
+    tasks = {key: [] for key in NEVER_STUCK_COUNTS}
+    tasks["no_one"] = [tid for line in found if getattr(line, "held", False) for tid in getattr(line, "tasks", ())]
+    for task_id, level in c.execute(
+        "SELECT t.id, CASE WHEN v.level='owner' AND v.tries>0 THEN 'retry' ELSE v.level END "
+        "FROM visits v JOIN tasks t ON t.id=v.task_id WHERE v.left_at IS NULL AND t.status='open' "
+        "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id=t.id AND s.ended_at IS NULL)"
+    ):
+        if level in ("retry", "manager", "person"):
+            tasks[level].append(task_id)
     ids = [row[0] for row in c.execute("SELECT id FROM tasks WHERE status='open'")]
-    paused = 0
     for part in H.chunks(ids):
         waits = waiting_on.waiting_on_many(c, part)
-        paused += sum(1 for found in waits.values() if found and found[0].state == "paused")
+        tasks["cant_run"] += [tid for tid, found in waits.items() if found and found[0].state == "paused"]
+    about = [list(getattr(line, "tasks", ())) for line in breaks]
+    for line, ids in zip(breaks, about, strict=True):
+        if line.startswith("1:"):
+            tasks["waiting_on_nothing"] += ids
     return {
         "at": H.now(),
         "breaks": breaks[:DIAGNOSTIC_LIMIT],
         "broken": len(breaks),
         "waiting_on_nothing": sum(1 for line in breaks if line.startswith("1:")),
-        "retry": int(levels.get("retry") or 0),
-        "manager": int(levels.get("manager") or 0),
-        "person": int(levels.get("person") or 0),
-        "cant_run": paused,
+        "retry": len(tasks["retry"]),
+        "manager": len(tasks["manager"]),
+        "person": len(tasks["person"]),
+        "cant_run": len(tasks["cant_run"]),
+        "no_one": len(set(tasks["no_one"])),
+        "tasks": {key: sorted(set(found)) for key, found in tasks.items() if key != "broken"},
+        "broken_tasks": about,
     }
 
 
+NEVER_STUCK_TASKS_FIELDS = ("breaks", "tasks", "broken_tasks")
+
+
 def record_never_stuck(store):
-    """The hourly reading (backend/scheduler.py), kept for Health to show."""
+    """The hourly reading (backend/scheduler.py), kept for Health to show: its numbers under NEVER_STUCK_KEY, what
+    names a task under NEVER_STUCK_TASKS_KEY."""
     with store.read() as c:
         reading = never_stuck_reading(c)
+    numbers = {k: v for k, v in reading.items() if k not in NEVER_STUCK_TASKS_FIELDS}
+    named = {k: reading[k] for k in NEVER_STUCK_TASKS_FIELDS}
     with store.transaction() as c:
-        c.execute(
-            "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (NEVER_STUCK_KEY, json.dumps(reading)),
-        )
+        for key, value in ((NEVER_STUCK_KEY, numbers), (NEVER_STUCK_TASKS_KEY, named)):
+            c.execute(
+                "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, json.dumps(value)),
+            )
     return reading
 
 
-def _never_stuck_check(c):
-    """Health · Tasks (S15): the last hourly reading. Bad when any of the rules that hold at all times is broken."""
-    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (NEVER_STUCK_KEY,)).fetchone()
-    reading = json.loads(row[0]) if row else None
-    if not reading:
+def _readable(c, visible_sql, ids):
+    """Of `ids`, those a reader with `visible_sql` may read, in one statement."""
+    if not ids:
+        return set()
+    return {
+        row[0]
+        for row in c.execute(
+            f"SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND ({visible_sql})", (json.dumps(ids),)
+        )
+    }
+
+
+def _never_stuck_check(c, visible_sql=None):
+    """Health · Tasks (S15): the last hourly reading, as numbers only. Bad when any of the rules that hold at all times
+    is broken. A rule break names a task and a bot, so its words are never shown: the owner and Admins (no
+    `visible_sql`) get the company's numbers; anyone else gets the numbers over the tasks they may read."""
+
+    def stored(key):
+        row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (key,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    reading = stored(NEVER_STUCK_KEY)
+    named = stored(NEVER_STUCK_TASKS_KEY) if visible_sql else None
+    if not reading or (visible_sql and not (named and "broken_tasks" in named)):
         return _check("never_stuck", "Tasks", "unknown", "The hourly never-stuck reading has not run yet.")
+    if visible_sql:
+        listed, breaks = named["tasks"], named["broken_tasks"]
+        ids = {tid for found in listed.values() for tid in found} | {tid for found in breaks for tid in found}
+        readable = _readable(c, visible_sql, sorted(ids))
+        counts = {key: sum(1 for tid in listed.get(key, []) if tid in readable) for key in NEVER_STUCK_COUNTS}
+        # A break counts for a reader of every task it is about; one about no task is the company's alone.
+        counts["broken"] = sum(1 for found in breaks if found and all(tid in readable for tid in found))
+    else:
+        counts = {key: int(reading.get(key) or 0) for key in NEVER_STUCK_COUNTS}
     summary = (
-        f"{reading['waiting_on_nothing']} waiting on nothing, {reading['retry']} on a retry, "
-        f"{reading['manager']} with a manager, {reading['person']} reached a person, {reading['cant_run']} can't run."
+        f"{counts['waiting_on_nothing']} waiting on nothing, {counts['retry']} on a retry, "
+        f"{counts['manager']} with a manager, {counts['person']} reached a person, {counts['cant_run']} can't run."
     )
-    items = [{"text": line} for line in reading.get("breaks") or []]
-    if reading.get("broken"):
-        summary += f" {_plural(reading['broken'], 'rule break')}: " + "; ".join(i["text"] for i in items[:5])
-    return _check("never_stuck", "Tasks", "bad" if reading.get("broken") else "ok", summary, items=items)
+    if counts["no_one"]:
+        # The company's owner and Admins learn how many, never which: no one who reads them can move them.
+        them = "it" if counts["no_one"] == 1 else "them"
+        summary += f" {_plural(counts['no_one'], 'private task has', 'private tasks have')} no one to move {them}."
+    if counts["broken"]:
+        summary += f" {_plural(counts['broken'], 'rule break')}."
+    status = "bad" if counts["broken"] else "warn" if counts["no_one"] else "ok"
+    check = _check("never_stuck", "Tasks", status, summary)
+    # The same numbers as fields, so a screen reads them rather than the sentence.
+    check["counts"] = counts
+    check["at"] = reading.get("at")
+    return check
 
 
 def _prime_claims(c, settings=None):
@@ -3559,12 +3600,9 @@ def view(c, who, settings, auth, github, config):
             )
         )
 
-    # Tasks (S15): where the never-stuck ladder has them, from its hourly reading. The rule breaks name tasks, so only
-    # someone who reads the whole company sees them.
-    tasks_check = _never_stuck_check(c)
-    if not full:
-        tasks_check.pop("items", None)
-    checks.append(tasks_check)
+    # Tasks (S15): where the never-stuck ladder has them, from its hourly reading, as numbers: the company's for the
+    # owner and Admins, the tasks they may read for anyone else.
+    checks.append(_never_stuck_check(c, None if full else auth.task_sql(c, who)))
 
     checks.extend(_aged_pr_checks(c, who, auth, full, kind))
 
@@ -3621,8 +3659,6 @@ def view(c, who, settings, auth, github, config):
                 [_fix("Open Computers", "#/settings", "devices")],
             )
         )
-    if full and (suggestions := _roadmap_suggestions(c)):
-        checks.append(suggestions)
     if full:
         checks.append(_github(c, github, settings))
         if repo_create := _github_repo_create(c, github):

@@ -79,6 +79,8 @@ class Run:
     version: int | None = None
     visit: str | None = None
     lease: str = ""
+    leased: bool = False  # taken, not yet started: its start asks the engine again
+    length: int = 0
 
 
 @dataclass
@@ -182,9 +184,11 @@ def open_ids(c: sqlite3.Connection) -> list[str]:
 
 # ----------------------------------------------------------------------------- the computer
 class Computer:
-    """Runs the bots' wakes the way a runner does: a job is taken, its run holds a lease it renews every step, and it
-    ends completed, failed, interrupted (cut off) or expired (the lease lapsed). `choose(run)` picks the bot's
-    behaviour for each run; the bot acts when the run ends, with the task version it read when it started."""
+    """Runs the bots' wakes the way a runner does: a job is taken (leased), its run starts on the next step if the
+    engine still lets it (execution.held_before_start: the task may have changed since the claim), holds a lease it
+    renews every step, and ends completed, failed, interrupted (cut off) or expired (the lease lapsed). `choose(run)`
+    picks the bot's behaviour for each run; the bot acts when the run ends, with the task version it read when it
+    started."""
 
     def __init__(self, sim: "Sim") -> None:
         self.sim = sim
@@ -203,7 +207,9 @@ class Computer:
     def step(self) -> None:
         now = self.w.now()
         for run in sorted(self.runs.values(), key=lambda r: (r.started, r.attempt)):
-            if run.lease <= now:
+            if run.leased and run.lease > now:
+                self._begin(run)
+            elif run.lease <= now:
                 self._finish(run, "expired", run.lease)  # nothing renewed it: a clock jump, or a crash
             elif run.ends <= now:
                 if run.ending == "expired":
@@ -228,7 +234,8 @@ class Computer:
     def _finish(self, run: Run, state: str, at: str) -> None:
         def end(c: sqlite3.Connection) -> None:
             c.execute("UPDATE attempts SET state=?, finished_at=? WHERE id=?", (state, at, run.attempt))
-            job = "completed" if state == "completed" else "uncertain"
+            # A lease that lapsed before its run started goes back in the queue (execution.settle_unstarted).
+            job = "completed" if state == "completed" else "queued" if run.leased else "uncertain"
             c.execute("UPDATE jobs SET state=? WHERE id=?", (job, run.job))
 
         self.sim.write(end)
@@ -260,9 +267,14 @@ class Computer:
                 continue
             if self.busy(bot):
                 continue  # the bot's next run takes this wake
+            # As the claim of a job does (execution.start_claimed): the engine may hold the run and cancel its wake.
+            if not self.sim.write(lambda c, job_id=job_id: task_wakes.may_start(c, job_id)):
+                self.sim.log(f"{bot}'s wake on {self.sim.name(task)} may not start a run: canceled")
+                continue
             self._start(job_id, bot, task)
 
     def _start(self, job_id: str, bot: str, task: str) -> None:
+        """The claim: the run is leased, not started (execution.Execution.start_claimed)."""
         H = _h()
         sim = self.sim
         row = self.w.task_row(task)
@@ -285,27 +297,64 @@ class Computer:
             ends=H.shift(now, seconds=length),
             behaviour=behaviour,
             ending=ending,
-            version=int(row["version"]) if row else None,
-            visit=(row.get("visit") or {}).get("id") if row else None,
             lease=H.shift(now, seconds=LEASE_S),
+            leased=True,
+            length=length,
         )
 
-        def start(c: sqlite3.Connection) -> None:
+        def lease(c: sqlite3.Connection) -> None:
             message = c.execute("SELECT message_id FROM jobs WHERE id=?", (job_id,)).fetchone()[0]
             c.execute(
                 "INSERT INTO attempts (id, job_id, bot_id, runner_id, generation, token_hash, state, lease_until, "
-                "created_at, started_at, message_id, task_id) VALUES (?,?,?,'r1',1,?,'running',?,?,?,?,?)",
-                (attempt, job_id, bot.split(":", 1)[1], attempt, run.lease, now, now, message, task),
+                "created_at, message_id, task_id) VALUES (?,?,?,'r1',1,?,'leased',?,?,?,?)",
+                (attempt, job_id, bot.split(":", 1)[1], attempt, run.lease, now, message, task),
             )
-            c.execute("UPDATE jobs SET state='running', attempt_id=? WHERE id=?", (attempt, job_id))
+            c.execute("UPDATE jobs SET state='leased', attempt_id=? WHERE id=?", (attempt, job_id))
+
+        sim.write(lease)
+        self.runs[attempt] = run
+
+    def _begin(self, run: Run) -> None:
+        """The start of a leased run (execution.Execution.started): refused when the engine holds it now, and then the
+        run is skipped and its job canceled; else it starts and the bot reads the task."""
+        from backend import task_wakes
+
+        H = _h()
+        sim = self.sim
+        now = self.w.now()
+        held = sim.write(lambda c: not task_wakes.may_start(c, run.job, attempt=run.attempt))
+        if held:
+
+            def skip(c: sqlite3.Connection) -> None:
+                c.execute("UPDATE attempts SET state='interrupted', finished_at=? WHERE id=?", (now, run.attempt))
+                c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (run.job,))
+
+            sim.write(skip)
+            self.runs.pop(run.attempt, None)
+            sim.log(f"{run.bot}'s run on {sim.name(run.task)} may not start any more: skipped")
+            return
+        row = self.w.task_row(run.task) if run.task else None
+        run.leased = False
+        run.started = now
+        run.ends = H.shift(now, seconds=run.length)
+        run.version = int(row["version"]) if row else None
+        run.visit = (row.get("visit") or {}).get("id") if row else None
+        run.lease = H.shift(now, seconds=LEASE_S)
+
+        def start(c: sqlite3.Connection) -> None:
+            c.execute(
+                "UPDATE attempts SET state='running', started_at=?, lease_until=? WHERE id=?",
+                (now, run.lease, run.attempt),
+            )
+            task_wakes.started(c, run.attempt)
+            c.execute("UPDATE jobs SET state='running' WHERE id=?", (run.job,))
 
         sim.write(start)
-        self.runs[attempt] = run
         self.started.append(run)
         sim.stats.runs += 1
-        sim.stats.add(sim.stats.behaviours, behaviour)
+        sim.stats.add(sim.stats.behaviours, run.behaviour)
         sim.counted_run(run, row)
-        sim.log(f"{bot} starts a run on {sim.name(task)}: will {behaviour}")
+        sim.log(f"{run.bot} starts a run on {sim.name(run.task)}: will {run.behaviour}")
 
 
 # ----------------------------------------------------------------------------- one seeded run
@@ -830,7 +879,7 @@ class Sim:
         from backend import task_engine as E
         from backend import task_wakes
 
-        runs = [r for r in self.computer.runs.values() if r.task and r.ending == "completed"]
+        runs = [r for r in self.computer.runs.values() if r.task and r.ending == "completed" and not r.leased]
         if not runs:
             return
         run = self.rng.choice(sorted(runs, key=lambda r: r.attempt))

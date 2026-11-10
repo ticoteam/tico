@@ -528,7 +528,11 @@ def register(
             with automations.for_attempt(c, aid):
                 return execution.started(c, request.state.identity, aid, body)
 
-        return mutate(request, body, begin)
+        out = mutate(request, body, begin)
+        # A refused start is kept with the write (execution.refuse_start), then answered as the wait it is.
+        if isinstance(out, dict) and out.get("refused"):
+            raise Problem(out["refused"]["code"], out["refused"]["detail"], 409)
+        return out
 
     @app.post("/api/v2/attempts/{aid}/thread")
     def attempt_thread(request: Request, aid: str, body: M.AttemptThread):

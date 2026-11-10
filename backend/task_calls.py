@@ -9,8 +9,10 @@ Who may act:
 - A call that works the task (done, move, close, reassign, ask, snooze, try again): the actor can work it, the same
   rule a field edit uses, plus the pipeline's manager and owner. `mover` is the caller saying a person may move any
   task (the company's owner; a route knows).
-- An answer, a give, an undo and a thumbs: whoever the engine says the requirement is asked of. No more is checked
-  here, so a bot or a person named on an OK answers it without being on the task.
+- An answer and a thumbs up: whoever the engine says the requirement is asked of, so a bot or a person named on an OK
+  answers it without being on the task.
+- Giving an ask away or sending it back with a thumbs down: who it waits on, whoever asked it, or someone who can work
+  the task. Taking an answer back: only who gave it (`may_handle_ask`).
 
 The engine's modules are loaded when a call runs, not when this module loads: hubdb imports this module, and the
 engine's modules reach back to hubdb and the store.
@@ -134,16 +136,53 @@ def _open(conn: "sqlite3.Connection", actor: str, task_id: str, mover: bool | No
         _refuse(conn, actor, "not-found", "No such task")
     if actor != SYSTEM and not H.task_private_readable(conn, actor, row):
         _refuse(conn, actor, "not-found", "No such task")
-    if work and not can_work(conn, actor, row, mover):
+    if work:
+        _may_work(conn, actor, row, mover)
+    return row
+
+
+def _may_work(conn: "sqlite3.Connection", actor: str, row: Row, mover: bool | None = None) -> None:
+    if not can_work(conn, actor, row, mover):
         _refuse(
             conn,
             actor,
             "identity",
             "This task is worked by its owner, whoever asked for it, their managers, and its pipeline's manager. "
             "Comment on it, or file a new task.",
-            task_id,
+            row["id"],
         )
-    return row
+
+
+def _owners_done_is_work(conn: "sqlite3.Connection", actor: str, row: Row, requirement_id: str) -> None:
+    """Answering the owner's own "done" finishes the stage, and giving it away hands the task over: /done and /owner
+    by another road, so the same reader may do them, refused as those are."""
+    from . import task_requirements as R
+
+    if (R.get(conn, requirement_id) or {}).get("kind") == "owner_done":
+        _may_work(conn, actor, row)
+
+
+def may_handle_ask(
+    conn: "sqlite3.Connection",
+    actor: str,
+    row: Row,
+    requirement: Row,
+    *,
+    recipient: str | None = None,
+    answered_by: str | None = None,
+) -> bool:
+    """Who may move an ask other than by answering it. Giving it away or withdrawing it: the person it waits on now
+    (`recipient`), whoever asked it, or someone who can work the task. Taking an answer back (`answered_by`): only who
+    gave it, and the owner's own "done" only while they can still work the task. A plain reader does neither."""
+    if actor == SYSTEM:
+        return True
+    if answered_by is not None:
+        if str(actor) != str(answered_by):
+            return False
+        return requirement.get("kind") != "owner_done" or can_work(conn, actor, row)
+    if actor in (recipient, requirement.get("added_by_id")):
+        return True
+    return can_work(conn, actor, row)
 
 
 # ----------------------------------------------------------------------------- moves
@@ -389,7 +428,8 @@ def task_answer(
     result carries `answer_id`."""
     from . import answers as A
 
-    _open(conn, actor, task_id, work=False)
+    row = _open(conn, actor, task_id, work=False)
+    _owners_done_is_work(conn, actor, row, requirement_id)
     with task_effects.because(actor):
         return A.answer(conn, task_id, requirement_id, actor, value, note, seen_version=seen_version)
 
@@ -408,6 +448,7 @@ def task_give(
 
     H = _h()
     row = _open(conn, actor, task_id, work=False)
+    _owners_done_is_work(conn, actor, row, requirement_id)
     bring_in(conn, actor, row, H.resolve_actor(conn, person) or person)
     with task_effects.because(actor):
         return A.give_to(
@@ -417,7 +458,7 @@ def task_give(
 
 @_task_write("answer")
 def task_answer_undo(conn: "sqlite3.Connection", actor: str, answer_id: str) -> Row:
-    """Take an answer back: whoever gave it, or any person."""
+    """Take an answer back: only whoever gave it (may_handle_ask)."""
     from . import answers as A
 
     found = conn.execute(
@@ -524,15 +565,14 @@ def _may(
     requirement: Row = standing.requirement
     kind = requirement["kind"]
     human = is_human(viewer)
-    pipe: Row = row.get("pipeline") or {}
     owner = row.get("owner_id")
     out: list[str] = []
     asked = False
     if kind in ("ok", "answer"):
         person = R.person_of(conn, requirement, row["visit"]["id"])
         asked = viewer == person or (person is None and human)
-    if kind == "owner_done" and not standing.met and (human or viewer in (owner, pipe.get("manager_id"))):
-        out.append("done")
+    if kind == "owner_done" and not standing.met and works:
+        out += ["done", "give"]
     if kind == "ok" and not standing.met:
         if answer and answer["answer"] == "no":
             if viewer in (owner, holder):
@@ -541,13 +581,12 @@ def _may(
             out += ["ok", "no"]
     if kind == "answer" and not standing.met and asked:
         out.append("answer")
-    # Give: whoever it waits on, the owner, or any person (answers.give_to); the owner's own work is given by the owner
-    # or a person, which reassigns the task.
-    if kind in ("ok", "answer") and standing.state == R.WAITING and (human or asked or viewer == owner):
-        out.append("give")
-    if kind == "owner_done" and not standing.met and (human or viewer == owner):
-        out.append("give")
-    if answer and (human or answer["by_id"] == viewer):
+    # Give: whoever it waits on, whoever asked it, or someone who works the task (may_handle_ask); the owner's own work
+    # is given by someone who works the task, which reassigns it.
+    if kind in ("ok", "answer") and standing.state == R.WAITING:
+        if works or viewer in (standing.on, requirement.get("added_by_id")):
+            out.append("give")
+    if answer and answer["by_id"] == viewer and (kind != "owner_done" or works):
         out.append("undo")
     if requirement.get("visit_id") and (works or viewer == requirement.get("added_by_id")):
         out.append("withdraw")
@@ -564,26 +603,33 @@ def _may(
 ON_RECORD = "*"
 
 
-def _readable(conn: "sqlite3.Connection", viewer: str | None, task_id: object) -> bool:
+def _readable(conn: "sqlite3.Connection", viewer: str | None, task_id: object, visible_sql: str | None = None) -> bool:
     """Whether `viewer` may read another task this one names. With no viewer nothing is hidden (the caller is the
-    engine's own code); ON_RECORD reads only what is not private."""
+    engine's own code); ON_RECORD reads only what is not private. `visible_sql` is the reader's whole rule
+    (auth.task_sql: private audience, the bots they may read, a delegated identity's limits), the one a direct read
+    of that task uses; without it only privacy is checked."""
     H = _h()
     if viewer is None:
         return True
     other: Row | None = H.task(conn, str(task_id)) if task_id else None
     if viewer == ON_RECORD:
         return bool(other) and not H.task_private(conn, other)
-    return bool(other) and bool(H.task_private_readable(conn, viewer, other))
+    if not other or not H.task_private_readable(conn, viewer, other):
+        return False
+    if visible_sql is None:
+        return True
+    return conn.execute(f"SELECT 1 FROM tasks WHERE id=? AND ({visible_sql})", (other["id"],)).fetchone() is not None
 
 
-def hidden_filed(conn: "sqlite3.Connection", row: Row, viewer: str | None) -> list[str]:
-    """The tasks the open visit of `row` (task_engine.task's shape) filed that `viewer` may not read. Their titles are
-    not theirs to see: not in what the task waits on, not in a requirement's standing, not in a refusal."""
+def hidden_filed(conn: "sqlite3.Connection", row: Row, viewer: str | None, visible_sql: str | None = None) -> list[str]:
+    """The tasks the open visit of `row` (task_engine.task's shape) filed that `viewer` may not read (`_readable`).
+    Their titles and ids are not theirs to see: not in what the task waits on, not in a requirement's standing, not
+    in a refusal."""
     visit: Row = row.get("visit") or {}
     if row.get("status") != "open" or not visit:
         return []
     filed = [str(found[0]) for found in conn.execute("SELECT to_task_id FROM links WHERE visit_id=?", (visit["id"],))]
-    return [other for other in filed if not _readable(conn, viewer, other)]
+    return [other for other in filed if not _readable(conn, viewer, other, visible_sql)]
 
 
 def standing_line(standing: "R.Standing", hidden: list[str]) -> str:
@@ -593,7 +639,9 @@ def standing_line(standing: "R.Standing", hidden: list[str]) -> str:
     return standing.line
 
 
-def task_view(conn: "sqlite3.Connection", task_id: str, viewer: str | None = None) -> Row | None:
+def task_view(
+    conn: "sqlite3.Connection", task_id: str, viewer: str | None = None, visible_sql: str | None = None
+) -> Row | None:
     """The engine's part of a task as JSON (docs/dev/pipelines-v3-cutover.md, "The task as JSON"): where it is, whose
     turn it is, everything it needs to leave its stage, and what `viewer` may do about each. None when there is no
     such task. A read: it writes nothing, and it does not check that `viewer` may read the task (the caller did)."""
@@ -613,10 +661,10 @@ def task_view(conn: "sqlite3.Connection", task_id: str, viewer: str | None = Non
     waits = [asdict(wait) for wait in W.of(conn, row, standings=standings)] if live else []
     # A task this one filed may be private to people who can read this one: its title is not theirs to see, here or
     # in the line that says what this task waits on.
-    hidden = hidden_filed(conn, row, viewer)
+    hidden = hidden_filed(conn, row, viewer, visible_sql)
     for wait in waits:
         if wait["state"] == W.TASKS and wait["who"] in hidden:
-            wait["line"] = "A sub-task"
+            wait["line"], wait["who"] = "A sub-task", None  # neither its title nor its id
     answers = R.newest_answers(conn, visit["id"]) if live else {}
     holder = W.holder(conn, row) if live else None
     works = bool(viewer) and can_work(conn, str(viewer), row)
@@ -631,7 +679,7 @@ def task_view(conn: "sqlite3.Connection", task_id: str, viewer: str | None = Non
                 "line": R.name_of(requirement),
                 "met": standing.met,
                 "standing": standing_line(standing, hidden),
-                "who": None if standing.met else standing.on,
+                "who": None if standing.met or standing.on in hidden else standing.on,
                 "asked_by": requirement.get("added_by_id") if requirement.get("visit_id") else None,
                 "choices": requirement.get("choices"),
                 "shows": requirement.get("shows") or [],

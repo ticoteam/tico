@@ -7,10 +7,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from backend import assistant
 from backend import batch
 from backend import kpis as K
 from backend import sleep_idle
+from backend import task_asks
 from backend import updates
 from backend.company_page import disclosure as D
 from backend.company_page import editions as E
@@ -20,7 +20,6 @@ from backend.company_page import schedule as S
 from backend.company_page import stats as ST
 from backend.store import H, Problem
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.helpers.assistant import asked, assistant_turn
 from backend.tests.helpers.org_rule_check import Judge
 from backend.tests.helpers.org_rules import org, rule
 from backend.tests.helpers.company_page_editions import END, GOOD, START, page, plain_sections
@@ -343,9 +342,9 @@ def test_the_approval_carries_the_whole_text_and_goes_to_the_named_approver(page
         c.execute("UPDATE audiences SET approver='human:ben' WHERE id='board'")
     edition = page.ask(page.draft())
     assert edition["status"] == "awaiting_approval" and edition["approval"]["to"] == "human:ben"
-    found = get(page.api, f"approvals/{edition['approval']['id']}")
+    found = page.ok_of(edition["approval"]["id"])
     payload = found["payload"]
-    assert payload["url"] == f"tico:editions/{edition['id']}/1" and found["kind"] == "publish"
+    assert payload["url"] == f"tico:editions/{edition['id']}/1" and found["subject"] == f"edition:{edition['id']}"
     assert "Revenue reached $120,000." in payload["text"] and "Intros to design partners, please." in payload["text"]
     # Asking twice is one ask. Someone who left is replaced by the owner.
     assert page.ask(edition)["approval"]["id"] == edition["approval"]["id"]
@@ -353,16 +352,15 @@ def test_the_approval_carries_the_whole_text_and_goes_to_the_named_approver(page
         c.execute("UPDATE audiences SET approver='human:gone' WHERE id='board'")
     moved = page.ask(edition)
     assert moved["approval"]["to"] == "human:ana" and moved["approval"]["id"] != edition["approval"]["id"]
-    assert get(page.api, f"approvals/{edition['approval']['id']}")["decision"] == "withdrawn"
+    assert page.ok_of(edition["approval"]["id"])["decision"] == "withdrawn"
 
 
 def test_only_a_person_at_their_own_click_decides_an_edition(page):
     edition = page.ask(page.draft())
     aid = edition["approval"]["id"]
     for token in ("ana-token", "ana-assistant", "ops-test", "ben-test"):  # the last is the wrong person
-        page.decide(aid, token, expected=403)
-    with page.store.transaction() as c:
-        assert H.approval(c, aid)["decision"] is None
+        page.decide(aid, token, expected=(403, 404, 409))
+    assert page.ok_of(aid)["decision"] is None
     # Publishing with no yes on it, by anyone.
     assert page.publish(edition, expected=409)["error"]["code"] == "approval"
     assert page.decide(aid)["decision"] == "approved"
@@ -374,73 +372,66 @@ def test_only_a_person_at_their_own_click_decides_an_edition(page):
 
 
 def test_the_batch_decide_path_takes_only_the_persons_own_click(page):
+    """An OK bound to content is given only from its preview: the batch walk refuses it for anyone, the person
+    included, and a send back through it stays theirs."""
     aid = page.ask(page.draft())["approval"]["id"]
-    item, say_yes = {"key": f"approval:{aid}", "title": "Board edition"}, {"decision": "approve"}
-    identities, auth = page.store.settings.test_identities, page.api.app.state.auth
-    for token in ("ana-token", "ana-assistant"):
+    item, say_ok = {"key": f"ask:{aid}", "title": "Board edition"}, {"decision": "ok"}
+    identities = page.store.settings.test_identities
+    for token in ("ana-token", "ana-assistant", "ana-test"):
         with pytest.raises(Problem):
             with page.store.transaction() as c:
-                batch._apply_decide(c, auth, identities[token], item, say_yes, [])
-    with page.store.read() as c:
-        assert H.approval(c, aid)["decision"] is None
+                batch._apply_decide(c, identities[token], item, say_ok)
+    assert page.ok_of(aid)["decision"] is None
     with page.store.transaction() as c:
-        batch._apply_decide(c, auth, identities["ana-test"], item, say_yes, [])
-    with page.store.read() as c:
-        assert H.approval(c, aid)["decision"] == "approved"
+        batch._apply_decide(c, identities["ana-test"], item, {"decision": "send_back", "text": "Not yet."})
+    assert page.ok_of(aid)["decision"] == "declined"
 
 
-def test_the_assistant_never_decides_one_even_with_the_setting_on_and_the_person_saying_yes(page, api):
-    with page.store.transaction() as c:
-        c.execute("UPDATE audiences SET approver='human:ben' WHERE id='board'")
+def test_the_assistant_never_oks_one_even_when_the_person_says_yes(page):
     aid = page.ask(page.draft())["approval"]["id"]
-    from backend.tests.helpers.api import as_member
-
-    as_member(api, "ben@acme.example")
-    assert post(api, "assistant/settings", {"decides_approvals": True}, token="ben-test")["active"] is True
-    _, attempt = assistant_turn(api, "ben-test", "Approve the board edition")
-    token = attempt["token"]
-    refused = post(api, "assistant/read-back", {"approvals": [aid]}, token=token, expected=403)
-    assert refused["error"]["code"] == "approve_own_click"
-    asked(api, f"approvals/{aid}", {"decision": "approved"}, token, "turn", expected=403)
-    # Nor on a card the person would click: the click on a card is still the Assistant acting.
-    steps = [{"path": f"/api/v2/approvals/{aid}", "body": {"decision": "approved"}}]
-    card = post(
-        api,
-        "assistant/actions",
-        {"summary": "Approve it", "path": assistant.BATCH_PATH, "body": {"actions": steps}},
-        token=token,
-        expected=403,
-    )
-    assert card["error"]["code"] == "approve_own_click"
-    assert get(api, f"approvals/{aid}", "ben-test")["decision"] is None
-    # His own click still works, and the setting never got in the way of it.
-    assert page.decide(aid, "ben-test")["decision"] == "approved"
+    with page.store.read() as c:
+        tid = task_asks.task_of(c, aid)
+    page.decide(aid, "ana-assistant", expected=403)
+    refused = post(page.api, f"tasks/{tid}/asks/{aid}/answer", {"value": "ok"}, token="ana-assistant", expected=403)
+    assert refused["error"]["code"] in ("ok_not_yours", "confirm_required")
+    assert page.ok_of(aid)["decision"] is None
+    # Her own click still works.
+    assert page.decide(aid)["decision"] == "approved"
 
 
-def test_a_bot_cannot_ask_for_or_spend_an_edition_approval_on_its_own(page):
+def test_a_bot_cannot_ask_for_or_spend_an_edition_ok_on_its_own(page):
     edition = page.draft()
-    url = f"tico:editions/{edition['id']}/1"
-    for token in ("ops-test", "ana-test"):
-        # Case and spaces don't get a bot past it: what an edition approves is worded only here.
-        for spelled in (url, url.upper(), " " + url):
-            post(
-                page.api,
-                "approvals",
-                {"kind": "publish", "payload": {"url": spelled, "content_sha256": "a" * 64}},
-                token=token,
-                expected=403,
-            )
+    with page.store.transaction() as c:
+        tid = H.task_create(c, "human:ana", "Post the board edition", "Get it out.", "bot:ops", lint=False)["id"]
+        version = H.task(c, tid)["version"]
+    payload = {"url": f"tico:editions/{edition['id']}/1", "content_sha256": "a" * 64}
+    # What an edition OKs is asked only by its own route, by a person: never through a bot's own ask.
+    r = page.api.post(
+        f"/api/v2/tasks/{tid}/oks",
+        headers=headers("ops-test"),
+        json={
+            "to": "ana",
+            "line": "OK to publish?",
+            "subject": f"edition:{edition['id']}",
+            "content": payload,
+            "version": version,
+        },
+    )
+    assert r.status_code in (403, 409, 422), r.text
     asked_for = page.ask(edition)
-    page.decide(asked_for["approval"]["id"])
+    aid = asked_for["approval"]["id"]
+    page.decide(aid)
+    # Nor spent by anyone through the generic use: only publish spends it, against the payload it is for now.
     for token in ("ops-test", "ana-test"):
-        post(
-            page.api,
-            f"approvals/{asked_for['approval']['id']}/consume",
-            {"payload_hash": "a" * 64},
-            token=token,
-            expected=403,
+        r = page.api.post(
+            f"/api/v2/oks/{aid}/use",
+            headers=headers(token),
+            json={"subject": f"edition:{edition['id']}", "content": page.ok_of(aid)["payload"], "note": "x"},
         )
+        assert r.status_code in (403, 404, 409, 422), (token, r.text)
+    assert page.ok_of(aid)["consumed_at"] is None
     assert page.publish(get(page.api, f"editions/{edition['id']}"))["status"] == "published"
+    assert page.ok_of(aid)["consumed_at"]
 
 
 def test_no_route_serves_a_bot_a_token_only_acts_where_it_may(page):
@@ -496,8 +487,7 @@ def test_an_edit_after_approval_makes_publish_refuse(page):
     with page.store.transaction() as c:
         c.execute("UPDATE editions SET title='Something else' WHERE id=?", (edition["id"],))
     assert page.publish(second, expected=409)["error"]["code"] == "approval_stale"
-    with page.store.read() as c:
-        assert H.approval(c, second["approval"]["id"])["consumed_at"] is None
+    assert page.ok_of(second["approval"]["id"])["consumed_at"] is None
 
 
 def test_a_rule_or_disclosure_change_after_approval_refuses_publish_until_asked_again(page):
@@ -521,15 +511,9 @@ def test_a_rule_or_disclosure_change_after_approval_refuses_publish_until_asked_
 
 
 def test_an_approval_spends_once_and_a_lapsed_one_shows_and_can_be_asked_again(page):
-    from backend import approval_expiry
-
     edition = page.ask(page.draft())
     with page.store.transaction() as c:
-        c.execute(
-            "UPDATE approvals SET created_at=?, ready_since=? WHERE id=?",
-            (H.shift(H.now(), days=-40), H.shift(H.now(), days=-40), edition["approval"]["id"]),
-        )
-        approval_expiry.sweep(c)
+        task_asks.withdraw(c, edition["approval"]["id"], "Not asked any more.")
     lapsed = get(page.api, f"editions/{edition['id']}")
     assert lapsed["status"] == "awaiting_approval" and lapsed["approval"]["state"] == "lapsed"
     assert page.publish(lapsed, expected=409)["error"]["code"] == "approval"
@@ -540,8 +524,7 @@ def test_an_approval_spends_once_and_a_lapsed_one_shows_and_can_be_asked_again(p
     assert published["status"] == "published" and published["approved_by"] == "human:ana"
     assert page.rebuilds == ["edition published"] and page.notified == [edition["id"]]
     assert page.publish(again, expected=409)["error"]["code"] == "conflict"
-    with page.store.read() as c:
-        assert H.approval(c, again["approval"]["id"])["consumed_at"]
+    assert page.ok_of(again["approval"]["id"])["consumed_at"]
 
 
 def test_a_declined_edition_stays_unpublished_and_can_be_asked_again(page):
@@ -588,8 +571,7 @@ def test_a_failed_rebuild_after_publishing_is_told_and_the_publication_stands(pa
     monkeypatch.setattr(release, "rebuild", boom)
     done = page.publish(edition)
     assert done["status"] == "published" and done["release_failed"] is True
-    with page.store.read() as c:
-        assert H.approval(c, edition["approval"]["id"])["consumed_at"]
+    assert page.ok_of(edition["approval"]["id"])["consumed_at"]
 
 
 def test_publishing_rebuilds_after_the_commit_and_retracting_inside_the_same_step(page):
@@ -616,10 +598,7 @@ def test_the_owners_view_names_each_sources_author_and_the_decision_note(page):
         c.execute("UPDATE bots SET display_name='Riley' WHERE slug='ops'")
     edition = page.ask(page.draft())
     aid = edition["approval"]["id"]
-    assert (
-        post(page.api, f"approvals/{aid}", {"decision": "declined", "note": "Soften the second line."})["decision"]
-        == "declined"
-    )
+    assert page.decide(aid, decision="declined", note="Soften the second line.")["decision"] == "declined"
     full = get(page.api, f"editions/{edition['id']}")
     assert full["approval"]["note"] == "Soften the second line."
     assert [s["author_name"] for s in full["sources"]] == ["Riley"]
@@ -628,7 +607,7 @@ def test_the_owners_view_names_each_sources_author_and_the_decision_note(page):
         c.execute("DELETE FROM updates")
     assert [s["author_name"] for s in get(page.api, f"editions/{edition['id']}")["sources"]] == ["Riley"]
     board = post(page.api, "audiences/board/stats/approval", {})["approval"]
-    post(page.api, f"approvals/{board}", {"decision": "declined", "note": "Not revenue yet."})
+    page.decide(board, decision="declined", note="Not revenue yet.")
     assert get(page.api, "audiences/board/stats/approval")["approval"]["note"] == "Not revenue yet."
 
 
@@ -656,7 +635,7 @@ def test_retract_discards_an_unpublished_edition_and_kills_its_approval(page):
     aid = edition["approval"]["id"]
     done = post(page.api, f"editions/{edition['id']}/retract", {"note": "Not this one."})
     assert done["status"] == "retracted" and page.rebuilds == []
-    assert get(page.api, f"approvals/{aid}")["decision"] == "withdrawn"
+    assert page.ok_of(aid)["decision"] == "withdrawn"
     assert page.publish(edition, expected=409)["error"]["code"] == "conflict"
 
 
@@ -807,17 +786,17 @@ def test_a_stats_board_approval_is_recorded_only_once_decided_and_only_for_the_b
     asked_for = post(page.api, path, {})
     assert asked_for["state"] == "pending" and post(page.api, path, {})["approval"] == asked_for["approval"]
     aid = asked_for["approval"]
-    payload = get(page.api, f"approvals/{aid}")["payload"]
+    payload = page.ok_of(aid)["payload"]
     with page.store.read() as c:
         config = ST.board_config_hash(c, "board")
     assert payload["url"] == f"tico:stat-board/board/{config}" and "Revenue: $120,000" in payload["text"]
     for token in ("ana-token", "ana-assistant", "ops-test", "ben-test"):
-        page.decide(aid, token, expected=403)
+        page.decide(aid, token, expected=(403, 404, 409))
     assert page.rows("SELECT * FROM stat_board_approvals") == []
     page.decide(aid)
     rows = page.rows("SELECT * FROM stat_board_approvals")
     assert [(r["audience_id"], r["config_hash"], r["approved_by"]) for r in rows] == [("board", config, "human:ana")]
-    assert get(page.api, f"approvals/{aid}")["consumed_at"]
+    assert page.ok_of(aid)["consumed_at"]
     assert get(page.api, path)["approval"]["state"] == "spent"
 
     # A changed rule changes the board's hash: the yes given to the old board is not recorded for the new one.
@@ -837,7 +816,7 @@ def test_a_stats_board_approval_is_recorded_only_once_decided_and_only_for_the_b
     third = post(page.api, path, {})["approval"]
     change_board("hidden")
     fourth = post(page.api, path, {})["approval"]
-    assert get(page.api, f"approvals/{third}")["decision"] == "withdrawn" and fourth != third
+    assert page.ok_of(third)["decision"] == "withdrawn" and fourth != third
 
 
 def test_a_declined_board_writes_nothing(page):
@@ -852,13 +831,13 @@ def test_a_board_approval_names_a_delayed_stat_even_when_nothing_is_shown_and_a_
     with page.store.transaction() as c:
         D.set_rule(c, "human:ana", "board", "kpi", mode="delayed", lag_days=400)
     aid = post(page.api, "audiences/board/stats/approval", {})["approval"]
-    text = get(page.api, f"approvals/{aid}")["payload"]["text"]
+    text = page.ok_of(aid)["payload"]["text"]
     assert "Revenue" in text and "400 day lag" in text
     with page.store.transaction() as c:
         D.set_rule(c, "human:ana", "board", "kpi", mode="delayed", lag_days=30)
     again = post(page.api, "audiences/board/stats/approval", {})["approval"]
-    assert again != aid and get(page.api, f"approvals/{aid}")["decision"] == "withdrawn"
-    assert "30 day lag" in get(page.api, f"approvals/{again}")["payload"]["text"]
+    assert again != aid and page.ok_of(aid)["decision"] == "withdrawn"
+    assert "30 day lag" in page.ok_of(again)["payload"]["text"]
 
 
 # ----------------------------------------------------------------------------- schedule

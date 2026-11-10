@@ -862,17 +862,6 @@ def private_execution(c, who):
     )
 
 
-def question_party(c, who, person, parent=None, reach=None):
-    """Whether `person` may be the other party of a private task a bot's run files to put a question to them
-    (backend/media.py task_question): they must already read every private task the run carries, and the parent.
-    Being a party gives them nothing they could not read before, beyond the parent `reach` names (reach_for)."""
-    if parent and not _reads(c, person, parent, reach):
-        return False
-    return not who.attempt_id or all(
-        _reads(c, person, _task(c, tid), reach) for tid in attempt_tasks(c, who.attempt_id)
-    )
-
-
 def _reads(c, actor, row, reach=None):
     """`actor` reads `row`, counting the reader a write is about to bring in, (task id, person), as already there."""
     return H.task_private_readable(c, actor, row) or bool(row and reach and reach == (row["id"], actor))
@@ -882,7 +871,7 @@ def reach_for(c, who, person, parent):
     """(parent id, person) when a bot's hand-off to `person` under `parent`, a private task with no person on it that
     the bot owns, makes them its reader (hubdb.task_reach); None when it does not; Problem when it is refused.
 
-    The hand-offs are a subtask for them and a question to them (backend/media.py); waiting on them is hubdb's.
+    The hand-off is a subtask for them; waiting on them is hubdb's.
     Outside private work a hand-off the reach rules refuse only for what is above the task goes on as before,
     without a reader: the person gets the subtask alone. A second, different person is refused either way."""
     if not (
@@ -1356,8 +1345,6 @@ def guard_write(c, who, path, auth):
         if thread is None:
             raise Problem("not_found", "Thread not found", 404)
         return private_thread_destination(c, who, thread)
-    if path == "/api/v2/task-questions":
-        return  # a private task of its own, to a person question_party lets read the run's work (media.py)
     if path.startswith(
         ("/api/v2/files/", "/api/v2/messages", "/api/v2/conversations/", "/api/v2/chat/", "/api/v2/tasks")
     ):

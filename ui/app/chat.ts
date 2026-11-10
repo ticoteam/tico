@@ -230,7 +230,7 @@ let V2C: ChatState | null = null;                      // the live v2 chat; one 
 // "every switch is slow... bring down switching to less than 1s". Each bot's
 // last chat (its conversation and messages) and tasks stay in memory for this page load, so going
 // back to a bot paints what it showed at once while the fresh copy loads behind it.
-const CHAT_CACHE = new Map<string, ChatCacheEntry>(), BOT_TASKS_CACHE = new Map();
+const CHAT_CACHE = new Map<string, ChatCacheEntry>(), BOT_TASKS_CACHE = new Map<string, BotTasksSeen>();
 function v2ChatStop() {
   if (!V2C) return;
   V2C.liveOff?.();
@@ -1209,9 +1209,9 @@ function v2ChatApply(state: ChatState, d: ChatPage) {
   CHAT_CACHE.set(state.slug, {mode: state.mode, conv: state.conv, messages: state.messages, nextBefore: state.nextBefore,
                               execution: state.execution, live: state.live});
   v2ChatRender(state);
-  // A finished turn may have closed or created tasks: show them now.
+  // A finished turn may have closed or created tasks: what changed since the list's cursor, now.
   if (wasRunning && !state.live && BOT?.slug === state.slug) {
-    if (BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
+    if (BOT.loaded.has('tasks')) void botTasksCatchUp(BOT.slug);
   }
 }
 // Read the snapshot again: one read at a time, and one more after it when changes arrived meanwhile, so a run

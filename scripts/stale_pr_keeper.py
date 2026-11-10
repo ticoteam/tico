@@ -159,7 +159,6 @@ class Finding:
     attempt: int = 1
     tests: list = field(default_factory=list)  # [(pytest node id, worker crashed)]
     scripts: list = field(default_factory=list)  # browser UI scripts
-    scenarios: list = field(default_factory=list)  # factory sim scenarios
     log_missing: bool = False
 
 
@@ -329,18 +328,15 @@ def crashed_test(text):
 
 
 UI_SCRIPTS = re.compile(r"^\d+ of \d+ UI scripts failed: (?P<names>.+?)(?: \(all .*\))?$")
-SIM_HEADER = re.compile(r"^== (?P<scenario>\S+) seed (?P<seed>\d+)\b")
-SIM_FAIL = re.compile(r"^\s+FAIL ")
 
 
 def read_log(lines):
-    """(tests, scripts, scenarios) a job log names: pytest's short test summary (FAILED and ERROR lines, each with
-    whether an xdist worker crashed on it), the browser suite's failed UI scripts, and factory sim scenarios with a
-    FAIL line. A collection error, an INTERNALERROR, or a summary listing fewer failures than its result line counts
+    """(tests, scripts) a job log names: pytest's short test summary (FAILED and ERROR lines, each with whether an
+    xdist worker crashed on it) and the browser suite's failed UI scripts. A collection error, an INTERNALERROR, or a summary listing fewer failures than its result line counts
     is named too, never as a crash, so it is never taken for a flake. Lines are read one at a time: a log can be
     hundreds of megabytes."""
-    tests, crashes, scripts, scenarios, blockers = {}, {}, [], [], []
-    in_summary, listed, scenario = False, 0, None
+    tests, crashes, scripts, blockers = {}, {}, [], []
+    in_summary, listed = False, 0
     for raw in lines:
         line = ANSI.sub("", LOG_PREFIX.sub("", raw)).rstrip()
         if INTERNAL.match(line):
@@ -374,11 +370,6 @@ def read_log(lines):
         ui = UI_SCRIPTS.match(line)
         if ui:
             scripts += [name.strip() for name in ui.group("names").split(",") if name.strip() not in scripts]
-        header = SIM_HEADER.match(line)
-        if header:
-            scenario = f"{header.group('scenario')} seed {header.group('seed')}"
-        elif scenario and SIM_FAIL.match(line) and scenario not in scenarios:
-            scenarios.append(scenario)
     if in_summary:
         blockers.append("pytest's summary, cut off")  # the log ends inside it: later failures are unknown
     if not tests and crashes:
@@ -386,7 +377,7 @@ def read_log(lines):
         # is unknown: never a flake.
         tests = crashes
         blockers.append("no pytest summary")
-    return list(tests.items()) + [(name, False) for name in blockers if name not in tests], scripts, scenarios
+    return list(tests.items()) + [(name, False) for name in blockers if name not in tests], scripts
 
 
 def failed_jobs(jobs):
@@ -413,7 +404,7 @@ def flaky(findings, tests):
     for f in findings:
         if not any(job.fullmatch(f.job) and f.step == step for job, step in PYTEST_STEPS) or f.log_missing:
             return False
-        if not f.tests or f.scripts or f.scenarios:
+        if not f.tests or f.scripts:
             return False
         if not all(crashed or is_quarantined(test, tests) for test, crashed in f.tests):
             return False
@@ -450,7 +441,6 @@ def describe(findings, tests):
             note = " (worker crashed)" if crashed else " (quarantined)" if is_quarantined(test, tests) else ""
             names.append(f"`{_short(test)}`{note}")
         names += [f"`{_short(name)}` (UI script)" for name in f.scripts]
-        names += [f"`{_short(name)}` (factory sim)" for name in f.scenarios]
         if not names:
             names = [f"{f.step} (no test named{'; log expired' if f.log_missing else ''})"]
         shown = names[:MAX_NAMED] + ([f"{len(names) - MAX_NAMED} more"] if len(names) > MAX_NAMED else [])
@@ -671,7 +661,7 @@ def findings_for(gh, run):
             if found is None:
                 finding.log_missing = True
             else:
-                finding.tests, finding.scripts, finding.scenarios = found
+                finding.tests, finding.scripts = found
         out.append(finding)
     return out
 

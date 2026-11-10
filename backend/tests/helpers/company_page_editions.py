@@ -2,6 +2,7 @@
 
 import pytest
 from backend import kpis as K
+from backend import task_asks
 from backend import updates
 from backend.auth import Identity
 from backend.company_page import disclosure as D
@@ -9,7 +10,7 @@ from backend.company_page import readers
 from backend.company_page import release
 from backend.company_page import stats as ST
 from backend.store import H
-from backend.tests.helpers.api import get, give_ok, post, send_back
+from backend.tests.helpers.api import get, headers, post
 from backend.tests.helpers.org_rules import as_bot
 
 
@@ -111,11 +112,44 @@ class Page:
     def ask(self, edition, token="ana-test"):
         return post(self.api, f"editions/{edition['id']}/approval", {}, token=token)
 
-    def decide(self, aid, token="ana-test", expected=200, decision="approved"):
-        """The person OKs the edition's OK, or (`declined`) sends it back."""
-        if decision == "declined":
-            return send_back(self.api, aid, token=token, expected=expected)
-        return give_ok(self.api, aid, token=token, expected=expected)
+    def decide(self, aid, token="ana-test", expected=200, decision="approved", note=""):
+        """A person's answer to the OK, through the routes their own click takes: the preview (GET /oks/{rid}) and then
+        the OK bound to what it showed, or a send back with a note."""
+        with self.store.read() as c:
+            tid = task_asks.task_of(c, aid)
+        if decision == "approved":
+            shown = self.api.get(f"/api/v2/oks/{aid}", headers=headers(token))
+            shown_hash = (shown.json().get("shown_hash") if shown.status_code == 200 else None) or "0" * 64
+            r = self.api.post(
+                f"/api/v2/tasks/{tid}/asks/{aid}/ok", headers=headers(token), json={"shown_hash": shown_hash}
+            )
+        else:
+            r = self.api.post(
+                f"/api/v2/tasks/{tid}/asks/{aid}/answer",
+                headers=headers(token),
+                json={"value": "no", "note": note or "Not this."},
+            )
+        assert r.status_code in (expected if isinstance(expected, tuple) else (expected,)), (r.status_code, r.text)
+        return {**self.ok_of(aid), "response": r.json() if r.content else {}}
+
+    def ok_of(self, aid):
+        """Where an OK stands, in the old approval's words: decision (None while waiting), consumed_at, payload."""
+        with self.store.read() as c:
+            found = task_asks.grant(c, aid)
+            standing = task_asks.standing(c, aid) if found else None
+        decision = {
+            task_asks.WAITING: None,
+            task_asks.OK: "approved",
+            task_asks.USED: "approved",
+            task_asks.SENT_BACK: "declined",
+            task_asks.WITHDRAWN: "withdrawn",
+        }.get(standing)
+        return {
+            "decision": decision,
+            "consumed_at": (found or {}).get("used_at"),
+            "payload": (found or {}).get("content"),
+            "subject": (found or {}).get("subject"),
+        }
 
     def approved(self):
         edition = self.ask(self.draft())

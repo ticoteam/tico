@@ -173,9 +173,9 @@ def test_a_withdrawn_ok_ends_the_action(books):
         gone = _coder_asks(c, parent, "k-gone")
         withdraw(c, gone.approval_id)
         waiting = _coder_asks(c, parent, "k-wait", 4_000)
-        done = {r.action_id: r.status for r in FA.approvals_sweep(c, AT)}
+        done = {r.action_id: r.status for r in FA.ok_sweep(c, AT)}
         assert done == {gone.action_id: "withdrawn"}
-        assert FA.approvals_sweep(c, AT) == [] and FA.action(c, str(waiting.action_id)).status == "needs_approval"
+        assert FA.ok_sweep(c, AT) == [] and FA.action(c, str(waiting.action_id)).status == "needs_approval"
         assert H.task(c, task_asks.task_of(c, gone.approval_id))["status"] == "closed"
         fresh = _coder_asks(c, parent, "k-again")
         assert fresh.status == "needs_approval" and fresh.action_id != gone.action_id

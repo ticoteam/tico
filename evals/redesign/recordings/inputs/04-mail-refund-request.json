@@ -18,7 +18,10 @@
     "is_calendar_invite": false,
     "labels": [
       "INBOX"
-    ]
+    ],
+    "from_domain": "acme.example",
+    "category": "",
+    "known_sender": false
   },
   "note": "A refund request: money and a direct ask, so the owner decides."
 }

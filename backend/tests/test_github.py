@@ -32,6 +32,11 @@ from backend.tests.helpers.github import (
 )
 
 
+def merged(title, url):
+    """The one wake a merge gives the bot whose open task has the pull request (github._merge_wakes)."""
+    return f"{title} merged: {url}. Carry this task on: say it is done, or close it."
+
+
 def test_a_bad_signature_is_refused_and_an_unset_secret_hides_the_path(api, tmp_path):
     hook(api, "ping", {"zen": "x"}, secret="wrong", expected=403)
     assert hook(api, "ping", {"zen": "x"}) == {"ok": True}
@@ -677,7 +682,7 @@ def test_wake_once_on_a_review_a_ship_or_a_merge_that_cannot_ship(api):
     late = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on the release too', 'body': 'x', 'links': [PR]})
     _arm(api, shipping['id'])
     hook(api, 'pull_request', pr_event('closed', merged=True, merge_commit_sha='b' * 40))
-    assert _burst(api, shipping['id']) == []
+    assert _burst(api, shipping['id']) == [merged('tico#412', PR)]  # the merge's own wake; the ship waits
     # Merged in the release repository and waiting to ship: arming it now is still allowed.
     assert json.loads(_arm(api, late['id'])[0]['detail'])['wake_once']['by'] == 'human:ana'
     api.app.state.store.settings.release_commit = 'b' * 40
@@ -685,7 +690,10 @@ def test_wake_once_on_a_review_a_ship_or_a_merge_that_cannot_ship(api):
         assert shipping['id'] in G.ship_deployed(c, api.app.state.store.settings)
         assert G.ship_deployed(c, api.app.state.store.settings) == []
         assert H.task(c, shipping['id'])['status'] == shipping['status']
-    assert _burst(api, shipping['id']) == [f"Shipped: tico#412 is in the running release {'b' * 12} {PR}"]
+    assert _burst(api, shipping['id']) == [
+        merged('tico#412', PR),
+        f"Shipped: tico#412 is in the running release {'b' * 12} {PR}",
+    ]
     assert _burst(api, late['id']) == _burst(api, shipping['id'])
     # A merge anywhere else never ships, so it is the last result.
     other = 'https://github.com/ticoteam/site/pull/9'
@@ -693,7 +701,8 @@ def test_wake_once_on_a_review_a_ship_or_a_merge_that_cannot_ship(api):
     _arm(api, elsewhere['id'], url=other)
     hook(api, 'pull_request', pr_event('closed', html_url=other, merged=True, merge_commit_sha='c' * 40))
     assert _burst(api, elsewhere['id']) == [
-        f"Merged: site#9; it is not in the repository Tico releases, so no shipped wake follows {other}"
+        f"Merged: site#9; it is not in the repository Tico releases, so no shipped wake follows {other}",
+        merged('site#9', other),
     ]
     # Arming it again has nothing left to wake on, and neither has a shipped PR.
     r = api.post(
@@ -854,14 +863,6 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
             "INSERT INTO repositories(full_name,reachable,enabled,added_by,updated_at) VALUES(?,1,1,?,?)",
             ('ticoteam/tico', 'human:ana', H.now()),
         )
-    typ = post(
-        api,
-        'task-types',
-        {
-            'name': 'Dev',
-            'steps': [{'name': 'Pending Release', 'status': 'review'}, {'name': 'Post Release QA', 'status': 'review'}],
-        },
-    )['type']
     tasks = {}
     for n in range(412, 418):
         url = PR.replace('/412', f'/{n}')
@@ -873,8 +874,6 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
                 'title': f'Change {n}',
                 'body': 'x',
                 'links': [url],
-                'type': typ['id'],
-                'step': 'Pending Release',
             },
         )
         _arm(api, tasks[n]['id'], url=url)
@@ -975,7 +974,7 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
         ) == sorted(tasks[n]['id'] for n in shipped)
     for n, task in tasks.items():
         url = PR.replace('/412', f'/{n}')
-        assert _burst(api, task['id']) == (
+        assert _burst(api, task['id']) == [merged(f'tico#{n}', url)] + (
             [f"Shipped: tico#{n} is in the running release {revert[:12]} {url}"] if n in shipped else []
         ), n
         assert get(api, 'tasks/' + task['id'])['task']['stage']['id'] == task['stage']['id']
@@ -986,7 +985,10 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
     # Re-applied in a later release, the same pull request ships then.
     again = h.commit('reapply #412', [revert], h.tree(revert, ui__app__refresh_dot_js=live))
     _refresh_release(api, monkeypatch, h, again)
-    assert _burst(api, tasks[412]['id']) == [f"Shipped: tico#412 is in the running release {again[:12]} {PR}"]
+    assert _burst(api, tasks[412]['id']) == [
+        merged('tico#412', PR),
+        f"Shipped: tico#412 is in the running release {again[:12]} {PR}",
+    ]
 
 
 def test_change_kept_reads_a_merge_commit_against_main_and_ignores_cut_tests():
@@ -1084,7 +1086,7 @@ def test_a_pr_from_a_worktree_branch_registers_itself_on_both_repos_and_never_fr
     # Registered once: later events on the same PR update that link, and registering wakes nobody.
     hook(api, 'pull_request', {'action': 'synchronize', 'pull_request': _branch_pr(984, branch)})
     assert len(_prs(api, task['id'])) == 2
-    assert _burst(api, task['id']) == []
+    assert _burst(api, task['id']) == [merged('tico-services#16', 'https://github.com/ticoteam/tico-services/pull/16')]
 
 
 def test_reconcile_heals_stale_and_unregistered_prs_on_a_closed_task_nobody_reads(api, monkeypatch):
@@ -1387,7 +1389,7 @@ def test_a_queue_merge_removal_that_arrives_before_closed_does_not_wake_the_owne
     _queue(api, task['id'], 'enqueued')
     _queue(api, task['id'], 'dequeued', 'CHECKS_FAILED', merged=True)
     G.refresh_queue_removals(service)
-    assert seen == [] and _burst(api, task['id']) == []
+    assert seen == [] and _burst(api, task['id']) == [merged('tico#412', PR)]  # the merge's wake, not the removal's
 
 
 def test_a_removal_for_a_pr_github_reads_as_merged_does_not_wake_the_owner(api, monkeypatch):

@@ -9,7 +9,7 @@ first 8 characters. Do not add `--on-behalf-of` except where a command requires 
 Task filters: `hub task list` takes `--owner`, `--requester`, `--member` and `--all`. Every row and `hub task show <id>` print the task's version: pass it as `--version N` with every change to that task. People: `hub team show`, or `hub team show --person <id>`.
 
 1. **"What needs me?" / "what is waiting on me?"**: `hub needs-you show`, `hub message list` (bots' messages). Say the count, then the few that are real decisions, with links.
-2. **"Which really need me?"**: `hub needs-you show` (exact counts by kind and by the bot that asked). List EVERY ask that is a real decision, by name and with its link, after `hub task show <id>` where needed. An OK to send, spend or publish is their own tap on its preview: link it, never answer it. Then the noise groups with exact counts. Why is an item on Needs you: name the sources that put items there, with counts, from `hub needs-you show --by bot` and `hub origin show <task id>`. Record numbers are exact: never call them unverified.
+2. **"Which really need me?"**: `hub needs-you show` (the exact count per kind, and each item with its task). List EVERY ask that is a real decision, by name and with its link, after `hub task show <id>` where needed. An OK to send, spend or publish is their own tap on its preview: link it, never answer it. Then the noise groups with exact counts. Why is an item on Needs you: name the sources that put items there, with counts, from the items of `hub needs-you show --limit 100`, grouped by the bot that asked, and `hub origin show <task id>`. Record numbers are exact: never call them unverified.
 3. **"What is open?"**: `hub task list --all`, `hub task list`. "Is it moving?": `hub task show <id>`, then say what it waits on and when it last changed.
 4. **"What did bot X do today?"**: `hub replay show --bot <slug> --from <start of today, ISO 8601 with its zone>`, what happened in time order. Then `hub run list <slug> --since <same ISO>` for its runs. Say what it did, with links, and what it is waiting on.
 5. **"Is anything broken?"**: `hub health check`. Say what is wrong and its fix; each line is a finding, not a guess.
@@ -26,7 +26,7 @@ Task filters: `hub task list` takes `--owner`, `--requester`, `--member` and `--
 12a. **"Close everything" / "close all the done ones" / "close all team tasks, keep mine" (a filter: owner, "not mine").**: Build the list from the words they used, and only those: `hub task list` with `--owner`, `--requester` or `--member`. Keep mine is the default: leave out their own tasks unless they say to include them ("mine too", "everything"). Count first: say the count in one line with what it covers, then ask "Close N? Say yes." End the turn. Close only on their yes, each with `hub task close <id> -m "<why>" --version N`. Bot-owned tasks are in it when the list takes them: they asked for that. Reply: the counts, the links to anything kept, and "say undo to reopen them". A close is never a rule (`hub rules add`), a pause (`hub bot pause`) or a learned line (`hub assistant learn`). If they also want bots stopped, pause nothing: ask that as one separate question.
 13. **"Mark X done" / "close X."**: `hub task done <id> -m "<why>" --version N`, or `hub task close <id> -m "<why>" --version N`. Undo: `hub task move <id> reopen -m "<why>" --version N`.
 14. **"Reopen X."**: `hub task move <id> reopen -m "<why>" --version N`.
-15. **"Give X to Support."**: link the task and say they can reassign it there; you cannot.
+15. **"Give X to Support."**: `hub task reassign <id> <owner> -m "<why>" --version N`, the owner a bot slug or a person's id.
 16. **"Comment on X: ..."**: `hub task comment <id> "<text>"`.
 17. **"Undo that."**: `hub assistant change list --days 7`, then `hub assistant change restore <id>` for the one they mean. Do not search tasks for it. Say what came back. No change record: reverse it directly, `hub automation update <id> --enable` or `--disable` for a switch, `hub automation restore <id> <n>` for a version.
 18. **"Send back the old asks."**: `hub needs-you show` for the asks, then `hub task answer <id> <requirement> no -m "<reason>" --version N` for each one they named or that the group rule covers. Direct, no card.
@@ -41,8 +41,8 @@ Task filters: `hub task list` takes `--owner`, `--requester`, `--member` and `--
 "Leave less than N", "clear my tasks", "close stuff", "I still see N", "why so many": the queue is Needs you, not the
 tasks they own. The owned tasks are one kind of many.
 
-1. Count from Needs you only: `hub needs-you show --by kind` (total, per kind), `--by bot` for the split. Its lists stop
-   at 10 per bot, so take the ids in step 2.
+1. Count from Needs you only: `hub needs-you show` (total, per kind). Its list stops at 20 items (`--limit 100` for
+   more; the counts are of every item), so take the ids in step 2.
 2. Ids: tasks they own `hub task list --all`; asks with their name `hub needs-you show` (each names its task and
    requirement).
 3. Act in this turn, as them, on every item below. "Go" and "whatever you think" are the yes: never close some and ask
@@ -64,7 +64,7 @@ tasks they own. The owned tasks are one kind of many.
    otherwise close, but whose closing would leave a task you keep stuck, stays open, named in the same line.
 5. No command here clears these: a held message, a paused thread, a thread mention or DM, a memory tidy card, a setup
    or reconnect item. Name the ones left, and say they clear them in Tico. Never guess a command.
-6. Recount once, at the end: `hub needs-you show --by kind`. Reply in plain lines, no headings or bold (AGENT.md,
+6. Recount once, at the end: `hub needs-you show`. Reply in plain lines, no headings or bold (AGENT.md,
    Replies): the Needs you count before and after, with its split by kind; what was closed, answered and sent back, with counts and links; the
    kept items with links and reasons; what is left. Undo covers the closed tasks only ("say undo to reopen them").
    Answers and send-backs cannot be undone: say so, and give no undo line for them. Shape, with placeholders:

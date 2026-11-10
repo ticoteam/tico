@@ -537,12 +537,12 @@ def unnote(api, args):
     return api.post(f"notes/{args['id']}/cancel", {}, key=_key(args))["note"]
 
 
-FEEDBACK_SUBJECT = _s("What was rated", enum=["message", "task", "approval"])
+FEEDBACK_SUBJECT = _s("What was rated", enum=["message", "task"])
 
 
 @tool(
     "hub_feedback_give",
-    "Rate a message, task or approval a bot made, 👍 (up) or 👎 (down), with an optional reason. "
+    "Rate a message or task a bot made, 👍 (up) or 👎 (down), with an optional reason (an ask: hub_task_thumbs). "
     "Rating again replaces your earlier one. tell_bot (a 👎 only) leaves the bot a note for its next run in that "
     "conversation. People only.",
     {
@@ -563,6 +563,27 @@ def feedback_give(api, args):
 
 
 @tool(
+    "hub_task_thumbs",
+    "Was this ask worth asking: 👍 (up) or 👎 (down) on an ask a bot put to you, with an optional note saying what was "
+    "wrong. A 👎 sends an open ask back to the bot with your words. For the person asked only.",
+    {
+        "id": _s("The task id"),
+        "requirement": _s("The ask's requirement id"),
+        "up": {"type": "boolean", "description": "true for 👍, false for 👎"},
+        "note": _s("What was wrong, in a few words (at most 2000 characters)"),
+    },
+    required=("id", "requirement", "up"),
+    writes=True,
+)
+def task_thumbs(api, args):
+    body = {"up": bool(args["up"])}
+    if args.get("note"):
+        body["note"] = args["note"]
+    path = f"tasks/{quote(args['id'], safe='')}/asks/{quote(args['requirement'], safe='')}/thumbs"
+    return api.post(path, body, key=_key(args))
+
+
+@tool(
     "hub_feedback_remove",
     "Remove your feedback; a note it left that no run carried yet is taken back.",
     {"id": _s("The feedback id")},
@@ -577,7 +598,9 @@ def feedback_remove(api, args):
     "hub_feedback_markers",
     "Your own feedback on these subjects (at most 200 ids) and everyone's up/down counts, for the ones you may read.",
     {
-        "subject_type": FEEDBACK_SUBJECT,
+        "subject_type": _s(
+            "What was rated; an ask's id is <visit-id>:<requirement-id>", enum=["message", "task", "ask"]
+        ),
         "subject_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 200, "description": "Their ids"},
     },
     required=("subject_type", "subject_ids"),
@@ -1387,6 +1410,11 @@ def _own_ask(api, task_id, requirement=None):
             "maxItems": 10,
             "description": "What they look at to answer, shown with the ask",
         },
+        "subject": _s(
+            "An OK bound to what you will do, as <kind>:<id> (budget_raise:launch-video): the OK covers exactly "
+            "`content`, and you use it once with hub_ok_use just before you act"
+        ),
+        "content": {"description": "With subject: exactly what the OK covers (any JSON)"},
         "withdraw": {"type": "boolean", "description": "Take back your open ask on this task instead"},
         "requirement": _s("With withdraw: the ask's requirement id, when more than one may be withdrawn"),
         "why": _s("With withdraw: why, in a sentence"),
@@ -1404,10 +1432,38 @@ def task_ask(api, args):
     if missing:
         raise ValueError(f"An ask names who it is for and the one line they are asked: give {' and '.join(missing)}")
     body = {"to": args["to"], "line": args["line"], "version": _seen(args)}
+    if args.get("subject"):
+        if args.get("choices") or args.get("kind") == "answer" or "content" not in args:
+            raise ValueError("An OK bound to a subject is an ok with its content, never a question with choices")
+        body.update({"subject": args["subject"], "content": args["content"]})
+        if args.get("show"):
+            body["show"] = args["show"]
+        return api.post(f"tasks/{args['id']}/oks", body, key=_key(args))
     for field in ("kind", "choices", "show"):
         if args.get(field):
             body[field] = args[field]
     return api.post(f"tasks/{args['id']}/asks", body, key=_key(args))
+
+
+@tool(
+    "hub_ok_use",
+    "Use an OK you asked for with a subject (hub_task_ask `subject`), once, just before you act: Tico checks it was "
+    "given by the person's own tap, for the same subject and exactly the same content, and not used before. Refused "
+    "otherwise; then do not act.",
+    {
+        "requirement": _s("The OK's requirement id, as hub_task_ask returned it"),
+        "subject": _s("The same subject the OK was asked for"),
+        "content": {"description": "Exactly the content the OK was asked for"},
+        "note": _s("What was done, in a sentence", maxLength=300),
+    },
+    required=("requirement", "subject", "content"),
+    writes=True,
+)
+def ok_use(api, args):
+    body = {"subject": args["subject"], "content": args["content"]}
+    if args.get("note"):
+        body["note"] = args["note"]
+    return api.post(f"oks/{quote(args['requirement'], safe='')}/use", body, key=_key(args))
 
 
 @tool(
@@ -1599,7 +1655,7 @@ def _roles(api, args):
         "id": TASK_ID,
         "text": _s("The comment"),
         "public": {"type": "boolean"},
-        "approval_id": _s("Exact publish approval for a bot public reply"),
+        "ok": _s("A bot's public reply: the OK a person gave on exactly this text"),
         "attachments": {
             "type": "array",
             "items": {"type": "string"},
@@ -1629,7 +1685,9 @@ def _roles(api, args):
     writes=True,
 )
 def task_comment(api, args):
-    body = {k: args[k] for k in ("text", "attachments", "public", "approval_id", "needs_action") if k in args}
+    body = {k: args[k] for k in ("text", "attachments", "public", "needs_action") if k in args}
+    if args.get("ok"):
+        body["approval_id"] = args["ok"]
     body.update({"delivery": "goal"} if args.get("delivery") == "goal" else _delivery(args))
     local = []
     if args.get("visuals"):
@@ -1652,14 +1710,19 @@ COMMENT_ID = _s("The comment's id (`id` in the task's `comments`)")
 @tool(
     "hub_task_comment_edit",
     "Change the text of a comment you wrote on a task. It wakes nobody and is not sent again; it shows as edited.",
-    {"id": TASK_ID, "comment_id": COMMENT_ID, "text": _s("The new text"), "approval_id": _s("Exact publish approval")},
+    {
+        "id": TASK_ID,
+        "comment_id": COMMENT_ID,
+        "text": _s("The new text"),
+        "ok": _s("The OK a person gave on exactly this public text"),
+    },
     required=("id", "comment_id", "text"),
     writes=True,
 )
 def task_comment_edit(api, args):
     body = {"text": args["text"]}
-    if args.get("approval_id"):
-        body["approval_id"] = args["approval_id"]
+    if args.get("ok"):
+        body["approval_id"] = args["ok"]
     links = s3links.apply(api, body, ("text",))
     return s3links.annotate(api.post(f"tasks/{args['id']}/comments/{args['comment_id']}", body, key=_key(args)), links)
 
@@ -5741,9 +5804,9 @@ def notice_list(api, args):
 
 @tool(
     "hub_release_schedule",
-    "The team's release schedule: when the Release Manager is asked to release what is at "
-    "Pending Release (`times`, company time; `on`), who that bot is (`release_manager`) and the Technical Writer "
-    "(`technical_writer`), the next hour, the last hour's result and how many tickets are pending now. Send any of "
+    "The team's release schedule: when the Release Manager is asked to release what "
+    "waits for a release (`times`, company time; `on`), who that bot is (`release_manager`) and the Technical Writer "
+    "(`technical_writer`), the next hour, the last hour's result and how many tasks wait now. Send any of "
     "`on`, `times` (one or two HH:MM), `bot`, `writer` (a bot slug, or \"\" to find it by starter template) to "
     "change it; an owner or an admin only.",
     {
@@ -5770,10 +5833,11 @@ def release_schedule(api, args):
 
 @tool(
     "hub_release_now",
-    "Ask the Release Manager to cut a release of what is at Pending Release now, without waiting "
-    "for the daily hour (a hotfix, a midday release): ONE task listing the tickets, or a wake on its unfinished "
-    "Release task. For a person who moves Dev tickets, the Release Manager or the Head of Engineering bot. `sent` is false with a `reason` "
-    "when nothing is pending or nobody was asked. A person's note asks even with nothing at Pending Release.",
+    "Ask the Release Manager to cut a release of what waits for a release now, without waiting "
+    "for the daily hour (a hotfix, a midday release): ONE task listing the tasks, or a wake on its unfinished "
+    "release task. For a person who moves Engineering tasks, the Release Manager or the Head of Engineering bot. "
+    "`sent` is false with a `reason` when nothing waits or nobody was asked. A person's note asks even with nothing "
+    "waiting.",
     {"note": _s("Why now; goes in the Release Manager's task")},
     writes=True,
 )
@@ -6838,31 +6902,6 @@ def settings_set(api, args):
 
 
 @tool(
-    "hub_settings_ask",
-    "Ask someone who can: for a setting the person may not change (`hub_settings_set` "
-    "refused it, naming who may), on their yes to \"Shall I ask an admin?\". One person who may (`to`, else an "
-    "admin, or the owner for the owner's settings) gets the setting's Confirm card in their BotOps chat and a "
-    "request on their list; only their tap changes it, with their rights. The person is told in the chat they asked "
-    "from when it is confirmed or declined. The Assistant cites the person's words (`on_behalf_of`). Refused when "
-    "they may change it themselves, or for a person-only one.",
-    {
-        "key": _s("The setting's key"),
-        "value": {"description": "The new value, as for `hub_settings_set`"},
-        **SETTING_TARGET,
-        "to": _s("The person's id to ask; leave out for an admin who may (the owner for the owner's)"),
-        "note": _s("A line for them from the asker, shown on the request"),
-        "on_behalf_of": ASKED,
-    },
-    required=("key", "value"),
-    writes=True,
-)
-def settings_ask(api, args):
-    who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
-    body = {"value": args["value"], **_setting_query(args), **{k: args[k] for k in ("to", "note") if args.get(k)}}
-    return who.post("settings/catalog/" + quote(args["key"], safe="") + "/ask", body, key=_key(args))
-
-
-@tool(
     "hub_bot_place",
     "Put a bot on a computer, as the person who asked you: the one named (label or id), or the best one that "
     "takes it (the only computer, else the least busy that accepts it). Safe to repeat. A computer that does not take "
@@ -7368,12 +7407,12 @@ _WEBHOOK_EVENTS = {
 _WEBHOOK_FILTER = {
     "type": "object",
     "description": "Which events the endpoint gets, beyond its event names: departments, bots "
-    "(slugs) and task_types (ids or names), each a list; empty or missing means all. Applies to events about a "
+    "(slugs) and pipelines (ids or names), each a list; empty or missing means all. Applies to events about a "
     "task or a bot; the rest (a release, a health finding) always pass",
     "properties": {
         "departments": {"type": "array", "items": {"type": "string"}},
         "bots": {"type": "array", "items": {"type": "string"}},
-        "task_types": {"type": "array", "items": {"type": "string"}},
+        "pipelines": {"type": "array", "items": {"type": "string"}},
     },
 }
 _WEBHOOK_HEADERS = {
@@ -7391,9 +7430,9 @@ _WEBHOOK_HEADERS = {
 
 
 def webhook_options(fields):
-    """The CLI's flags as the tool's arguments: `--departments/--bots/--task-types` become `filter`, `--header` and
+    """The CLI's flags as the tool's arguments: `--departments/--bots/--pipelines` become `filter`, `--header` and
     `--secret-header` ("Name: value") become `headers`; `--no-filter` and `--no-headers` clear them."""
-    picked = {k: fields.pop(k) for k in ("departments", "bots", "task_types") if k in fields}
+    picked = {k: fields.pop(k) for k in ("departments", "bots", "pipelines") if k in fields}
     if picked:
         fields["filter"] = picked
     if fields.pop("no_filter", False):
@@ -7442,8 +7481,8 @@ def webhook_list(api, args):
 @tool(
     "hub_webhook_create",
     "Make an outgoing webhook endpoint: Tico posts the chosen events to an https address, signed "
-    "(Standard Webhooks). A person's call returns the signing `secret` once; save it. A bot's call files a `send` approval "
-    "and returns it as `approval`; once a person approves, repeat the same call and the endpoint is made, owned by that person.",
+    "(Standard Webhooks). A person's call returns the signing `secret` once; save it. A bot's call asks a person to OK it "
+    "and returns that ask as `approval`; once they OK it, repeat the same call and the endpoint is made, owned by that person.",
     {
         "name": _s("What it is for"),
         "url": _s("The https address Tico posts to"),
@@ -11160,8 +11199,8 @@ def task_requester_remove(api, args):
 
 @tool(
     "hub_task_publication_preview",
-    "Build the exact publish approval payload for public task edits or a public comment. "
-    "Request a publish approval with this payload, then pass its approved id to the task edit or comment.",
+    "The exact content a person must OK before a bot publishes task edits or a public comment. "
+    "Once a person OKs exactly this, pass that OK's id as `ok` to the edit or comment.",
     {
         "id": TASK_ID,
         "visibility": _s("Publication", enum=['public', 'private']),
@@ -13144,7 +13183,6 @@ ASSISTANT_TOOLS = frozenset(
         "hub_proposal_list",
         "hub_replay_show",
         "hub_rules_add",
-        "hub_settings_ask",
         "hub_settings_find",
         "hub_settings_set",
         "hub_settings_show",

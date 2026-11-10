@@ -416,11 +416,8 @@ DO = _routes(
     ("POST", rf"triggers/{_S}/(rotate|signing|recover|delete)"),
     ("POST", rf"triggers/{_S}/deliveries/.+/replay"),
     ("POST", rf"triggers/{_S}/relay(/(rotate|wake|delete))?"),
-    # Task types and tags (movers, a tag's owner), the release schedule and Release now, screening's modes and Test,
-    # the team's run budget and Tico's own jobs (an owner or an admin): each route checks the person.
-    ("POST", r"task-types"),
-    ("POST", rf"task-types/{_S}(/delete)?"),
-    ("DELETE", rf"task-types/{_S}"),
+    # Tags (a tag's owner), the release schedule and Release now, screening's modes and Test, the team's run budget
+    # and Tico's own jobs (an owner or an admin): each route checks the person.
     ("POST", r"tags"),
     ("POST", rf"tags/{_S}(/instances)?"),
     ("PATCH", r"release-schedule"),

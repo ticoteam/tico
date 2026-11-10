@@ -17,7 +17,6 @@ const tweak = (fx: AutomationsFakeSupport.AutomationsFixture) => fx.automations.
       {when: [{field: 'event', op: 'is', value: 'task.done'}], then: [{do: 'wake_bot', args: {}}], stop: true},
       {when: [{field: 'event', op: 'is', value: 'status_or_relation'}], then: [{do: 'archive', args: {}}], stop: true}]}]},
   {...base, id: 'au_job', name: 'Cleanup', builtin: true, readonly: true, can_edit: false, trigger: {type: 'event', name: 'tico.builtin.job.cleanup'}},
-  {...base, id: 'au_rule', name: 'Close stale', builtin: true, readonly: true, can_edit: false, trigger: {type: 'event', name: 'tico.builtin.task_rule'}},
   {...base, id: 'au_notice', name: 'From Tico', trigger: {type: 'event', name: 'tico.notice'}},
   {...base, id: 'au_done', name: 'Done to Slack', trigger: {type: 'event', name: 'task.done'}},
   {...base, id: 'au_custom', name: 'Deploys', trigger: {type: 'event', name: 'custom.deploy_finished'}},
@@ -32,7 +31,7 @@ const rowText = (page: Page, id: string) => page.locator(`tr.au-row[data-row="${
     {
       const {page, errors, writes} = await openAutomations(browser, {viewport: PHONE, tweak});
       await page.waitForSelector('tr.au-row[data-row="au_wakes"]');
-      const want = {au_wakes: 'Every event', au_job: 'System job', au_rule: 'Task rule', au_notice: 'Notice', au_done: 'Task finished',
+      const want = {au_wakes: 'Every event', au_job: 'System job', au_notice: 'Notice', au_done: 'Task finished',
         au_custom: 'Deploy finished'};
       for (const [id, words] of Object.entries(want)) assert.equal(await rowText(page, id), words, id);
       assert.doesNotMatch(await page.locator('.au-tbl').innerText(), RAW, 'no dotted ids in the list');

@@ -41,9 +41,14 @@ def turn(api, attempt):
 def test_each_trigger_kind_is_stamped_where_the_wake_is_made(api):
     store = api.app.state.store
     with store.transaction() as c:
-        # status_or_relation: a task handed to the bot.
+        # task_turn: a task handed to the bot is its turn (backend/task_wakes.py).
         task = H.task_create(c, H.human_actor("ana"), "Recheck the cash warning", "Before the deadline.", "bot:ops")
-        assert RT.of_message(newest(c, "ops", "New task from")) == ("status_or_relation", None)
+        wake = c.execute(
+            "SELECT id FROM messages WHERE recipient_id='bot:ops' AND json_extract(refs,'$.wake')='task_turn' "
+            "AND json_extract(refs,'$.task')=?",
+            (task["id"],),
+        ).fetchone()
+        assert RT.of_message(H.message(c, wake[0])) == ("task_turn", None)
         # comment: a bot writes on the task.
         H.task_comment(c, "bot:finance", task["id"], "The bank file is in.")
         said = newest(c, "ops", "The bank file is in.")
@@ -110,7 +115,7 @@ def test_the_claim_puts_the_wake_on_the_run(api):
     with api.app.state.store.transaction() as c:
         quiet(c)
         H.task_create(c, H.human_actor("ana"), "Close the books", "By Friday.", "bot:ops")
-    assert turn(api, claim(api, r))["trigger_kind"] == "status_or_relation"
+    assert turn(api, claim(api, r))["trigger_kind"] == "task_turn"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM attempts WHERE trigger_kind IS NULL").fetchone()[0] == 0
 
@@ -579,8 +584,8 @@ def test_the_weekly_table_adds_up_only_runs_the_reader_may_read(api):
     def readable(token, table):
         return query(api, f"SELECT count(*) FROM {table}", token)["rows"][0][0]
 
-    assert runs("ana-test") == {"person_message": 1, "status_or_relation": 3, "unknown": 1}
-    assert runs("ben-test") == {"status_or_relation": 1} and readable("ben-test", "attempts") == 1
+    assert runs("ana-test") == {"person_message": 1, "task_turn": 3, "unknown": 1}
+    assert runs("ben-test") == {"task_turn": 1} and readable("ben-test", "attempts") == 1
     # Ben's access to the shared task ends after its run: its totals leave his table with it.
     with store.transaction() as c:
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (shared["id"],))
@@ -613,7 +618,7 @@ def test_a_run_whose_inputs_came_from_a_private_task_leaves_the_weekly_table(api
     def runs(token):
         return {row["trigger"]: row["runs"] for row in weekly(api, token)}
 
-    assert runs("ben-test") == {"status_or_relation": 1, "unknown": 1}
+    assert runs("ben-test") == {"task_turn": 1, "unknown": 1}
     with store.transaction() as c:
         # Each run read a different message of the private task (a message is one run's input).
         H.task_comment(c, "human:ana", private["id"], "And the second draft.")
@@ -625,7 +630,7 @@ def test_a_run_whose_inputs_came_from_a_private_task_leaves_the_weekly_table(api
         for attempt, message in ((tainted, first), (lost, later)):
             c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (attempt["id"], message))
     assert runs("ben-test") == {}
-    assert runs("ana-test") == {"status_or_relation": 2, "unknown": 1}
+    assert runs("ana-test") == {"task_turn": 2, "unknown": 1}
 
 
 def test_a_bots_result_accepted_edited_or_overridden_gives_its_run_one_outcome(api):

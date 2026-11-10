@@ -16,6 +16,7 @@ import json
 import sys
 from pathlib import Path
 
+from . import needs_shape
 from .sources import KINDS as SOURCE_KINDS
 
 VERSION = "2.0.0"
@@ -897,6 +898,72 @@ STABLE = [
         "retirePipeline",
         "Take a pipeline out of use once it holds no open task",
         None,
+    ),
+    (
+        "/api/v2/pipelines/{pipeline_id}/log",
+        "get",
+        "Pipelines",
+        "getPipelineLog",
+        "The manager rail's Log: each push past, and each snooze a bot made with no end date, newest first",
+        "PipelineLog",
+    ),
+    (
+        "/api/v2/factories",
+        "get",
+        "Pipelines",
+        "listFactories",
+        "Company › Factories: each factory's Done count for the period, each pipeline's open count, handoffs and mark",
+        "FactoryMap",
+    ),
+    (
+        "/api/v2/factories",
+        "post",
+        "Pipelines",
+        "createFactory",
+        "Make a factory (the company's owner and Admins)",
+        "FactoryCreated",
+    ),
+    (
+        "/api/v2/preferences/{key}",
+        "get",
+        "Team",
+        "getPreference",
+        "One of your own preferences (the keys clients keep: compose.send_way, ui.rails, org.history, org.mine, "
+        "tasks.view, tasks.pins, pipeline.rail_hidden, chart.hide_strategy_bot, meetings.auto_share); null when unset",
+        "PreferenceValue",
+    ),
+    (
+        "/api/v2/preferences/{key}",
+        "post",
+        "Team",
+        "setPreference",
+        "Keep one of your own preferences; a value is at most 4 KB",
+        "PreferenceValue",
+    ),
+    (
+        "/api/v2/release-schedule",
+        "get",
+        "Pipelines",
+        "getReleaseSchedule",
+        "The daily release: on or off, its hours, the Release Manager and Technical Writer, the next hour, how many "
+        "tasks you may read wait for a release, and what you may do",
+        "ReleaseSchedule",
+    ),
+    (
+        "/api/v2/release-schedule",
+        "patch",
+        "Pipelines",
+        "updateReleaseSchedule",
+        "Turn the daily release on or off, set its hours, or name the Release Manager and Technical Writer (owner, Admins)",
+        "ReleaseSchedule",
+    ),
+    (
+        "/api/v2/release/now",
+        "post",
+        "Pipelines",
+        "releaseNow",
+        "Ask the Release Manager for a release now: one task, or the open one named, or why nothing was sent",
+        "ReleaseNowResult",
     ),
     ("/api/v2/tasks/{tid}/files", "get", "Tasks", "listTaskFiles", "Files and versions on a task", "TaskFileList"),
     (
@@ -2474,9 +2541,13 @@ SCHEMAS = {
             "description": "On the task's own read: the pipeline it is in",
         },
         stage={
-            "type": "object",
-            "description": "On the task's own read: the stage it is in, {id, name, kind (work, done, closed), by_hand}",
+            "oneOf": [
+                obj({"id": "s", "name": "s", "kind": {"enum": ["work", "done", "closed"]}, "by_hand": "b"}),
+                {"type": "null"},
+            ],
+            "description": "On the task's own read: the stage it is in",
         },
+        pushed_past={"type": "boolean", "description": "On a list row: it entered its stage pushed past a requirement"},
         waits=items(ref("TaskWait")) | {"description": "On the task's own read: every wait, headline first"},
         to_leave=items(ref("TaskRequirement"))
         | {"description": "On the task's own read: every requirement of the stage and each added to this visit"},
@@ -2535,7 +2606,13 @@ SCHEMAS = {
             "since": "n",
             "until": "n",
             "ask": "b",
-        }
+        },
+        required=["state", "who", "line", "requirement_id", "since", "until", "ask"],
+        running={
+            "type": "boolean",
+            "description": "On a list row: a bot's turn (state bot) is a run going now; false while it waits to try "
+            "again",
+        },
     ),
     "TaskRequirement": obj(
         {
@@ -2737,6 +2814,27 @@ SCHEMAS = {
             "goals": "s",
             "turns_at_once": {"type": ["integer", "null"]},
             "task_flow": ref("TaskFlow"),
+            "cant_run": {
+                "type": ["object", "null"],
+                "properties": {
+                    "cause": {"type": "string"},
+                    "fix": {
+                        "enum": [
+                            "resume",
+                            "release_quarantine",
+                            "finish_setup",
+                            "assign_computer",
+                            "release_hold",
+                            "resume_company",
+                            "unlock_cloud",
+                            "add_credit",
+                            None,
+                        ]
+                    },
+                },
+                "description": "For a caller who can read it: why the bot can't run (a sentence) and the one fix, "
+                "or null while it can run",
+            },
             "access": ref("Access"),
             "onboarding_state": "s",
             "template": "s",
@@ -3021,6 +3119,68 @@ SCHEMAS = {
             "standing": {"enum": ["waiting", "ok", "sent_back", "withdrawn", "used"]},
         }
     ),
+    "PipelineLog": obj(
+        {
+            "log": items(obj({"at": "s", "text": "s", "task_id": "s", "by": "n", "why": "s"})),
+            "learned": items(obj({"at": "s", "text": "s"})),
+        }
+    ),
+    "FactoryMap": obj(
+        {
+            "factories": items(obj({"id": "s", "name": "s", "goal": "s", "manager_id": "n", "done": "i"})),
+            "pipelines": items(
+                obj(
+                    {
+                        "id": "s",
+                        "name": "s",
+                        "factory_id": "n",
+                        "open": "i",
+                        "files_into": items({"type": "string"}),
+                        "mark": {"enum": ["cant_run", "needs_person", None]},
+                    }
+                )
+            ),
+        }
+    ),
+    "FactoryCreated": obj({"factory": obj({"id": "s", "name": "s", "goal": "s"}, required=["id", "name"])}),
+    "PreferenceValue": obj({"key": "s", "value": {"description": "Any JSON value, or null when unset"}}),
+    "ReleaseSchedule": obj(
+        {
+            "on": "b",
+            "times": items({"type": "string"}),
+            "bot": "s",
+            "writer": "s",
+            "zone": "s",
+            "release_manager": "n",
+            "technical_writer": "n",
+            "next": "n",
+            "last": {"type": ["object", "null"]},
+            "pending": {"type": "integer", "description": "Open tasks you may read waiting for a release"},
+            "can_change": "b",
+            "can_release": "b",
+        }
+    ),
+    "ReleaseNowResult": obj(
+        {
+            "sent": "b",
+            "reason": {"enum": ["no_release_manager", "already_open", None]},
+            "task": {
+                "type": ["string", "null"],
+                "description": "The task filed, or the open one when you may read it",
+            },
+            "tasks": {"type": "integer", "description": "Open tasks you may read waiting for a release"},
+        }
+    ),
+    "SupportReportResult": obj(
+        {
+            "status": {"enum": ["sent", "pending"], "description": "sent: filed now; pending: a person OKs it first"},
+            "task_id": {"type": ["string", "null"], "description": "The task the report is on, or that holds its OK"},
+            "requirement_id": {"type": "string", "description": "pending: the OK a person gives on the task"},
+            "ticket": {"type": "object", "description": "sent: the ticket as filed"},
+            "filed_as": {"type": "string", "description": "sent: the person it was filed as"},
+        },
+        required=["status", "task_id"],
+    ),
     # A task's own model (backend/task_run_models.py `of`); null when its runs use the bot's task model.
     "TaskRunChoice": obj(
         {"model": "s", "harness": "s", "runtime": "s", "reasoning_effort": "s", "set_by": "n", "set_at": "n"}
@@ -3300,6 +3460,7 @@ SCHEMAS = {
             "turn": {"oneOf": [ref("TaskWait"), {"type": "null"}]},
             "late": {"oneOf": [obj({"since": "s", "level": {"enum": ["told", "person"]}}), {"type": "null"}]},
             "snoozed": "b",
+            "pushed_past": "b",
         }
     ),
     "GranolaStatus": obj(
@@ -4145,10 +4306,28 @@ SCHEMAS = {
             "items": items(
                 {
                     "type": "object",
-                    "required": NEEDS_ITEM["required"],
+                    "required": ["id", "kind", "title", "body", "subject", "created_at", "actions"],
                     "additionalProperties": True,
                     "properties": {
-                        **NEEDS_ITEM["properties"],
+                        "id": {"type": "string", "description": "<kind>:<what it is about>"},
+                        "title": {"type": "string"},
+                        "body": {"type": ["string", "null"]},
+                        "subject": {
+                            "oneOf": [
+                                obj({"type": {"enum": ["proposal", "kpi", "strategy"]}, "id": "s"}),
+                                {"type": "null"},
+                            ],
+                            "description": "The one thing it is about; null for an ask standing for several things",
+                        },
+                        "created_at": {
+                            "type": ["number", "null"],
+                            "description": "When its task was filed; null while it is not filed yet",
+                        },
+                        "actions": items({"enum": list(needs_shape.ACTIONS)})
+                        | {
+                            "description": "The writes that settle it: "
+                            + "; ".join(f"`{k}` {v}" for k, v in needs_shape.ACTIONS.items())
+                        },
                         "kind": {"enum": ["vision", "kpi_red", "recovery", "why", "proposal", "kpi_stale"]},
                         "goal_id": {"type": "string"},
                         "options": {
@@ -6463,7 +6642,6 @@ SCHEMAS.update(
                 "words": "s",
                 "right": "s",
                 "live": "b",
-                "approval_kind": "s",
                 "fields": items(obj({"name": "s", "type": "s", "required": "b", "words": "s"})),
             },
             required=[],
@@ -7060,7 +7238,7 @@ STABLE.append(
         'draftSupportReport',
         'Draft a report to Tico support, optionally on a task: filed at once when the team allows it, '
         'otherwise a person OKs its preview first',
-        None,
+        'SupportReportResult',
     )
 )
 
@@ -11422,9 +11600,7 @@ SCHEMAS.update(
                 "call_consent": "b",
                 "preferences": obj(
                     {
-                        "urgent_needs": "b",
                         "legal_mail": "b",
-                        "bot_stuck": "b",
                         "urgent_calls": "b",
                         "timezone": "s",
                         "quiet_start": "s",

@@ -288,7 +288,7 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
   if (tab === 'slack') personSlackLoad(p);
 }
 // The human's tasks: what they own, active first, finished behind a toggle. The rows are
-// the same as a keeper bot's (v2TaskRow), opening the shared task detail.
+// the shared task row (S1), opening the shared task detail.
 /** The person whose tasks the page shows: ui/app/refresh.ts reads it on every live change. */ let PERSON_TASKS: string | null = null;
 // Shown only to whoever manages this person: the read is refused to everyone else.
 async function personAccessLoad(p: RosterPerson) {
@@ -298,31 +298,53 @@ async function personAccessLoad(p: RosterPerson) {
   card.hidden = false;
   $('#person-access-edit').onclick = () => teammateEditAccess('human', p.id, p.name || p.id, () => personAccessLoad(p));
 }
+// The person's tasks as last read and mended since: their rows, and where the catch-up resumes.
+let PERSON_LIST: {id: string; rows: TaskBriefV3[]; cursor: string} | null = null;
+// What the list holds: every task the person owns, open or finished, except a snoozed one (the server's default).
+const personOwns = (id: string) => (t: TaskBriefV3) => t.owner_id === 'human:' + id && !t.snoozed;
 async function personTasksLoad(p: RosterPerson) {
   PERSON_TASKS = p.id;
   const box = $('#person-tasks'); if (!box) return;
   const owner = 'human:' + p.id;
-  const d: {tasks?: TaskRow[]} | null = await v2Get(`/v2/tasks?owner=${encodeURIComponent(owner)}&status=all&brief=true`);
+  const read = await taskBriefsPage({owner, status: 'all'}).catch(() => null);
   if (!$('#person-tasks') || PERSON_TASKS !== p.id) return;
-  const all = d?.tasks || [];
-  const active = all.filter(t => V2_ACTIVE.includes(String(t.status)));
-  const finished = all.filter(t => !V2_ACTIVE.includes(String(t.status)));
+  PERSON_LIST = read ? {id: p.id, rows: read.tasks, cursor: read.cursor} : null;
+  personTasksDraw(p, read?.tasks || []);
+}
+function personTasksDraw(p: RosterPerson, all: TaskBriefV3[]) {
+  if (!$('#person-tasks')) return;
+  const active = all.filter(t => t.status === 'open');
+  const finished = all.filter(t => t.status !== 'open');
   const first = firstName(p.name) || p.id;
-  // A human's open task is to do, not "doing" the way a bot's is the moment it is assigned.
-  const groups = (list: TaskRow[], kinds: [string, string][]) => kinds.map(([k, label]) => {
-    const rows = list.filter(t => String(t.status) === k);
-    return rows.length ? `<div class="v2-group"><h3>${label} <span class="muted">${rows.length}</span></h3>${rows.map(t => v2TaskRow(t, '', false)).join('')}</div>` : '';
-  }).join('');
-  $('#person-tasks').innerHTML = (active.length ? groups(active, [['open', esc(needsWho({owner}))], ['doing', 'Doing'], ['waiting', 'Waiting']])
+  $('#person-tasks').innerHTML = (active.length ? `<div class="v2-group">${active.map(t => taskRowHTML(t)).join('')}</div>`
       : `<div class="empty">No active tasks. <a href="#" data-person-task-add>Give ${esc(first)} a task</a>.</div>`)
     + (finished.length ? `<details class="person-tasks-done"><summary class="muted">Finished <span class="cnt">${finished.length}</span></summary>${
-        groups(finished, [['done', 'Done'], ['declined', 'Declined'], ['closed', 'Closed']])}</details>` : '');
+        finished.map(t => taskRowHTML(t, {look: 'archive'})).join('')}</details>` : '');
   const link = $('#person-tasks [data-person-task-add]');
   if (link) link.onclick = (ev: Event) => { ev.preventDefault(); personTaskModal(p); };
 }
-function personTasksReload() {
+// The live stream's task events, each in place by personOwns (refresh.ts liveTasksApply); nothing is read for one.
+function personTasksLive(events: LiveTaskEvent[]) {
+  const list = PERSON_LIST, p = list && PERSON_TASKS === list.id && (S.people || []).find(row => row.id === list.id);
+  if (!list || !p || !$('#person-tasks')) return;
+  const moved = taskRowsLive(list.rows, events, personOwns(list.id));
+  if (moved === 'bulk') personTasksReload();
+  else if (moved) personTasksDraw(p, list.rows);
+}
+// The 2-minute refresh, a bulk change and this page's own writes: what changed since the list's cursor
+// (GET /v2/tasks?changed_after); a full read only without a cursor or when the server says it is too old.
+async function personTasksReload() {
   const p = PERSON_TASKS && (S.people || []).find(row => row.id === PERSON_TASKS);
-  if (p && $('#person-tasks')) void personTasksLoad(p);
+  if (!p || !$('#person-tasks')) return;
+  const list = PERSON_LIST;
+  if (!list || list.id !== p.id) { void personTasksLoad(p); return; }
+  try {
+    const out = await taskRowsCatchUp(list.rows, list.cursor, {owner: 'human:' + p.id, status: 'all'}, personOwns(p.id), () => PERSON_LIST === list);
+    if (!out) return;
+    if (out === 'reset') { void personTasksLoad(p); return; }
+    list.cursor = out.cursor;
+    if (out.moved) personTasksDraw(p, list.rows);
+  } catch { /* the next refresh tries again */ }
 }
 // "+ Add task" on a human's page: the give-a-task form in a modal, assigned to them, added by you.
 function personTaskModal(p: RosterPerson) {
@@ -356,7 +378,7 @@ function personTaskModal(p: RosterPerson) {
       toast(`Task for ${p.name || p.id} created`);
       d.close();
       await v2Refresh();
-      personTasksReload();
+      void personTasksReload();
     } catch (e) { msg.innerHTML = `<span class="err">${esc(errorMessage(e, ''))}</span>`; btn.disabled = false; }
   };
   if (!d.open) d.showModal();

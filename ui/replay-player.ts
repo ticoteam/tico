@@ -23,9 +23,10 @@ interface ReplayTaskCreated extends ReplayItemBase {
   owner_id?: string | null | undefined;
   status?: string | undefined;
 }
-// A status or owner change: 'task.' plus the field, from TASK_FIELDS in backend/replay.py.
+// A move or owner change: 'task.' plus the field (backend/replay.py). A status is open, done or closed; a move between
+// work stages is `task.stage`, with the stages' names.
 interface ReplayTaskChange extends ReplayItemBase {
-  kind: 'task.status' | 'task.owner';
+  kind: 'task.status' | 'task.stage' | 'task.owner';
   task: ReplayTaskRef;
   old?: string | null | undefined;
   new?: string | null | undefined;
@@ -134,11 +135,10 @@ function ticoReplayPlayer(): TicoReplayModule {
   const QUIET_MS = 1500;          // the longest a quiet stretch lasts, in real time, with Skip quiet on
   const FEED_MAX = 80;
   const DONE_MAX = 12;
-  type ReplayColumn = 'todo' | 'doing' | 'waiting' | 'done';
-  const COLUMNS: readonly (readonly [ReplayColumn, string, readonly string[]])[] = [['todo', 'To do', ['open', 'ready']], ['doing', 'Doing', ['doing']],
-                   ['waiting', 'Waiting', ['waiting', 'review', 'declined']], ['done', 'Done', ['done', 'closed']]];
-  const STATUS_WORDS: Record<string, string> = {open: 'To do', ready: 'To do', doing: 'Doing', waiting: 'Waiting', review: 'Review',
-                         declined: 'Declined', done: 'Done', closed: 'Closed'};
+  // A task's status (docs/pipelines-v3.md): open, done or closed; each is a column and its word.
+  type ReplayColumn = 'open' | 'done' | 'closed';
+  const COLUMNS: readonly (readonly [ReplayColumn, string])[] = [['open', 'Open'], ['done', 'Done'], ['closed', 'Closed']];
+  const STATUS_WORDS: Record<ReplayColumn, string> = {open: 'Open', done: 'Done', closed: 'Closed'};
   const ICON_PLAY = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/></svg>';
   const ICON_PAUSE = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor"/></svg>';
   const ENTITY: Record<string, string> = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'};
@@ -146,7 +146,7 @@ function ticoReplayPlayer(): TicoReplayModule {
   const hue = (s: unknown): number => { let h = 2166136261; for (const ch of String(s)) h = Math.imul(h ^ (ch.codePointAt(0) ?? 0), 16777619); return (h >>> 0) % 360; };
   const initials = (s: unknown): string => (String(s || '').split(/[^A-Za-z0-9]+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('') || '?').toUpperCase();
   const reduced = (): boolean => !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-  const columnOf = (status: string): ReplayColumn => COLUMNS.find(([, , ss]) => ss.includes(status))?.[0] ?? 'todo';
+  const columnOf = (status: string): ReplayColumn => status === 'done' || status === 'closed' ? status : 'open';
   const live = (state: string | undefined): 'running' | 'needs' | 'paused' | 'idle' => state === 'running' ? 'running' : ['waiting_human', 'blocked', 'crashed', 'quarantined'].includes(state ?? '') ? 'needs'
     : state === 'paused' ? 'paused' : 'idle';
 
@@ -231,7 +231,10 @@ function ticoReplayPlayer(): TicoReplayModule {
       } else if (it.kind === 'task.status') {
         if (task) { task.status = it.new || task.status; touch(task.id); }
         else if (it.task) { st.tasks.set(it.task.id, {id: it.task.id, title: it.task.title, owner: it.who, status: it.new || 'open', touched: it.ms}); touch(it.task.id); }
-        say({kind: 'line', who: it.who, html: `moved <b>${escHtml(it.task.title)}</b> to ${escHtml(STATUS_WORDS[String(it.new)] || it.new || '')}`, text: it.text, ms: it.ms}, animate);
+        say({kind: 'line', who: it.who, html: `moved <b>${escHtml(it.task.title)}</b> to ${escHtml(STATUS_WORDS[columnOf(String(it.new))])}`, text: it.text, ms: it.ms}, animate);
+      } else if (it.kind === 'task.stage') {
+        if (task) touch(task.id);
+        say({kind: 'line', who: it.who, html: `moved <b>${escHtml(it.task.title)}</b> to ${escHtml(it.new || '')}`, text: it.text, ms: it.ms}, animate);
       } else if (it.kind === 'task.owner') {
         if (task) { task.owner_id = it.new; touch(task.id); }
         say({kind: 'line', who: it.who, html: `gave <b>${escHtml(it.task.title)}</b> to ${escHtml(name(it.new))}`, ms: it.ms}, animate);
@@ -284,11 +287,10 @@ function ticoReplayPlayer(): TicoReplayModule {
     function paintBoard(animate: boolean): void {
       const before = new Map<string | undefined, DOMRect>();
       if (animate && !reduced()) for (const el of els.board.querySelectorAll<HTMLElement>('[data-rp-task]')) before.set(el.dataset.rpTask, el.getBoundingClientRect());
-      const groups: Record<ReplayColumn, ReplayTask[]> = {todo: [], doing: [], waiting: [], done: []};
+      const groups: Record<ReplayColumn, ReplayTask[]> = {open: [], done: [], closed: []};
       for (const t of st.tasks.values()) groups[columnOf(t.status)].push(t);
-      groups.done.sort((a, b) => b.touched - a.touched); groups.done = groups.done.slice(0, DONE_MAX);
-      const sortable: ReplayColumn[] = ['todo', 'doing', 'waiting'];
-      for (const k of sortable) groups[k].sort((a, b) => b.touched - a.touched);
+      for (const k of ['open', 'done', 'closed'] as const) groups[k].sort((a, b) => b.touched - a.touched);
+      groups.done = groups.done.slice(0, DONE_MAX); groups.closed = groups.closed.slice(0, DONE_MAX);
       els.board.innerHTML = COLUMNS.map(([k, label]) => `<section class="bcol" data-col="${k}"><header><h2>${label}</h2><span class="cnt tnum">${groups[k].length}</span></header>
         <div class="bcol-body">${groups[k].map(t => `<div class="bcard${st.flash.has(t.id) ? ' rp-flash' : ''}" data-rp-task="${escHtml(t.id)}">
           <div class="bcard-open"><span class="bcard-title">${escHtml(t.title)}</span></div>

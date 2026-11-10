@@ -132,7 +132,7 @@ class BatchRespond(Contract):
     kind: Literal["decide", "needs_info", "instruct", "rule", "skip", "later"]
     text: str = Field(default="", max_length=4000)
     item: int | None = Field(default=None, ge=1)  # 1-based position; the current item when omitted
-    decision: Literal["approve", "decline", "done", "close", "answer"] | None = None
+    decision: Literal["ok", "send_back", "done", "close", "answer"] | None = None
     heard: str = Field(default="", max_length=2000)  # what the person actually said, when spoken
     until: str | None = Field(default=None, max_length=40)
 
@@ -433,48 +433,27 @@ class PipelineRetire(Contract):
     settings_version: int | None = None
 
 
-# What a pick says on a person's card (ui/app/question-card.ts): `then` is its "what happens" line, under its button;
-# `recommended` pre-ticks it among several picks. A bot's pick to a person needs `then` (hubdb.lint_question).
-OptionThen = Annotated[StrictStr, Field(max_length=120)]
+class ReleaseScheduleUpdate(Contract):
+    """The team's release schedule (backend/release_schedule_routes.py); only what is sent changes. `bot` and `writer`
+    name the Release Manager and Technical Writer ("" finds them by starter template)."""
+
+    on: bool | None = None
+    times: list[Annotated[str, Field(max_length=5)]] | None = Field(default=None, max_length=2)
+    bot: str | None = Field(default=None, max_length=100)
+    writer: str | None = Field(default=None, max_length=100)
 
 
-class QuestionOption(Contract):
-    label: Annotated[StrictStr, Field(min_length=1, max_length=60)]
-    description: Annotated[StrictStr, Field(max_length=200)] = ""
-    file: Annotated[StrictStr, Field(pattern=r"^[^@]+@[1-9][0-9]*$")] | None = None
-    then: OptionThen = ""
-    recommended: StrictBool = False
+class ReleaseNow(Contract):
+    """Ask the Release Manager for a release now; `note` goes in its task."""
+
+    note: str | None = Field(default=None, max_length=1000)
 
 
-class QuestionFile(Contract):
-    """A picture or file shown with one option, sent with the question (backend/media.py task_question)."""
+class FactoryNew(Contract):
+    """A new factory (S12): a name, unique among the live ones, and what it is for."""
 
-    name: Annotated[StrictStr, Field(min_length=1, max_length=200)]
-    content_base64: Annotated[StrictStr, Field(min_length=1, max_length=14_000_000)]
-
-
-class IfNoAnswer(Contract):
-    """What the bot does if the person does not answer by `by` (backend/ask_deadlines.py). `kind` says what that step is:
-    only a `reversible` internal step goes ahead on its own; a send, a payment or a delete waits for an answer."""
-
-    do: Annotated[StrictStr, Field(min_length=1, max_length=300)]
-    kind: Literal["reversible", "send", "spend", "delete"]
-    by: Annotated[StrictStr, Field(max_length=40)] | None = None
-
-
-class QuestionChoice(Contract):
-    label: Annotated[StrictStr, Field(min_length=1, max_length=60)]
-    description: Annotated[StrictStr, Field(max_length=200)] = ""
-    file: QuestionFile | None = None
-    then: OptionThen = ""
-    recommended: StrictBool = False
-
-
-class ReviewFile(Contract):
-    """One file version a question puts under review (backend/file_reviews.py); no version means the current one."""
-
-    file: ID
-    version: Annotated[int, Field(strict=True, ge=1)] | None = None
+    name: Annotated[StrictStr, Field(min_length=1, max_length=60)]
+    goal: Annotated[StrictStr, Field(max_length=200)] = ""
 
 
 class FileReview(Contract):
@@ -488,84 +467,6 @@ class FileReview(Contract):
     task: ID
     verdict: Literal["approve", "changes"]
     note: Annotated[str, Field(max_length=4000)] = ""
-
-
-class QuestionSpend(Contract):
-    """Picking `label` also approves this spend for the asking bot, decided by the person who picks it."""
-
-    label: Annotated[StrictStr, Field(min_length=1, max_length=60)]
-    amount: Annotated[StrictStr, Field(min_length=1, max_length=40)]
-    what: Annotated[StrictStr, Field(min_length=1, max_length=200)]
-    account: Annotated[StrictStr, Field(min_length=1, max_length=80)] = "gateway"
-
-
-class TaskQuestion(Contract):
-    """One decision put to a person as its own task: created, asked and set waiting on them in one write."""
-
-    question: Annotated[StrictStr, Field(min_length=1, max_length=300)]
-    on: ID
-    # The card's one "why it matters" line, under the question.
-    why: Annotated[StrictStr, Field(max_length=200)] = ""
-    options: list[QuestionChoice] = Field(default_factory=list, max_length=6)
-    # Several picks: each a checkbox, answered with "Yes to all" or "Send ticked".
-    multi: StrictBool = False
-    title: Annotated[StrictStr, Field(min_length=1, max_length=300)] | None = None
-    body: Text | None = None
-    parent: ID | None = None
-    private: StrictBool | None = None
-    if_no_answer: IfNoAnswer | None = None
-    # One open question per topic: a second question to the same person on this topic, while the first is open, is
-    # folded into it (question_tasks.open_for). Without one, an earlier question under the same parent task with no topic.
-    topic: Annotated[StrictStr, Field(min_length=1, max_length=80)] | None = None
-    # File versions under review: shown on the card, judged by the answer (backend/file_reviews.py). With no options
-    # the options are Approve and Request changes; `pick` makes each file its own option, plus Request changes.
-    review: list[ReviewFile] = Field(default_factory=list, max_length=10)
-    pick: StrictBool = False
-    spend: QuestionSpend | None = None
-
-    @model_validator(mode="after")
-    def unique_labels(self):
-        labels = [o.label for o in self.options]
-        if len(set(labels)) != len(labels):
-            raise ValueError("Option labels must be unique")
-        if self.options and not 2 <= len(self.options) <= 6:
-            raise ValueError("A question has 2 to 6 options, or none for Yes / No")
-        if self.pick and (self.options or self.multi or not 2 <= len(self.review) <= 5):
-            raise ValueError("A pick reviews 2 to 5 files and makes its own options")
-        if self.review and self.multi:
-            raise ValueError("A review is one pick, not several")
-        return self
-
-
-class ReviewQuestion(Contract):
-    id: Annotated[StrictStr, Field(min_length=1, max_length=40)]
-    header: Annotated[StrictStr, Field(max_length=30)]
-    question: Annotated[StrictStr, Field(min_length=1, max_length=300)]
-    # The card's one "why it matters" line, under the question.
-    why: Annotated[StrictStr, Field(max_length=200)] = ""
-    options: list[QuestionOption] = Field(default_factory=list, max_length=6)
-    multi: StrictBool = False
-    other: StrictBool = True
-
-    @model_validator(mode="after")
-    def unique_labels(self):
-        labels = [o.label for o in self.options]
-        if len(set(labels)) != len(labels):
-            raise ValueError("Option labels must be unique")
-        return self
-
-
-class ReviewAsk(Contract):
-    questions: list[ReviewQuestion] = Field(min_length=1, max_length=4)
-    who: Annotated[StrictStr, Field(min_length=1, max_length=200)] | None = None
-    if_no_answer: IfNoAnswer | None = None
-
-    @model_validator(mode="after")
-    def unique_questions(self):
-        ids = [q.id for q in self.questions]
-        if len(set(ids)) != len(ids):
-            raise ValueError("Question ids must be unique")
-        return self
 
 
 class FileVersionEdit(Contract):
@@ -2468,7 +2369,6 @@ class AccessRules(Contract):
     bot_reports_direct: bool | None = None
     bots_go_ahead: bool | None = None
     support_access: bool | None = None
-    stale_review: bool | None = None
     topic_fresh: bool | None = None
     managers_manage_reports: bool | None = None
     org_rule_checks: bool | None = None
@@ -2865,7 +2765,7 @@ class SystemRoutineUpdate(Contract):
     at: str | None = Field(default=None, max_length=5)
 
 
-MaintenanceStepKey = Literal["collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream"]
+MaintenanceStepKey = Literal["collect", "clean_up", "check_health", "learn", "suggest", "update", "dream"]
 
 
 class MaintenanceStepChange(Contract):
@@ -3256,8 +3156,6 @@ class InboundTask(Contract):
     owner: ID | None = None  # human:<id>, bot:<slug> or a person's email
     title: str | None = Field(default=None, min_length=1, max_length=300)
     body: Text | None = None
-    type: ID | None = None
-    step: str | None = Field(default=None, max_length=200)
     labels: list[str] | None = Field(default=None, max_length=20)
     links: list[str] = Field(default_factory=list, max_length=20)
     due: str | None = None

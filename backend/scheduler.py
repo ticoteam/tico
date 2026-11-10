@@ -783,14 +783,28 @@ class Scheduler:
                 thread_rank.tick(self.store, stamp(at))
             except Exception as exc:
                 failures.append({"thread_rank": type(exc).__name__})
+        # The daily release hour (backend/release_hour.py): a routine on the Release Manager, once per slot. A read
+        # on every pass; the write lock only when a slot is due and has not fired.
+        with SR.recording(self.store, "release_hour", failures) as run:
+            from . import release_hour
+
+            with self.store.read() as c:
+                due = release_hour.unfired(c, at)
+            answer = None
+            if due is not None:
+                with self.store.transaction() as c:
+                    answer = release_hour.tick(c, at)
+            said = release_hour.words(answer)
+            run.did(said or "Nothing due", quiet=not said)
         if self.asks_checked is None or at - self.asks_checked >= timedelta(hours=1):
             self.asks_checked = at
             # A Finance action whose OK was given or taken back ends now (its hold released).
             with SR.recording(self.store, "finance_upkeep", failures, "finance_approvals") as run:
                 from .finance import actions as finance
 
-                with self.store.transaction() as c:
-                    ended = finance.approvals_sweep(c, stamp(at))
+                # Money actions end here, as on the OK route: the commit reaches the disk before the pass goes on.
+                with self.store.transaction(durable=True) as c:
+                    ended = finance.ok_sweep(c, stamp(at))
                 run.did(
                     SR.words_of(ended, "approved action finished", "Nothing due", "approved actions finished"),
                     quiet=not ended,
