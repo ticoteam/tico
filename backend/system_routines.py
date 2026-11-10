@@ -206,7 +206,6 @@ ACTIONS = {
     ),
     "ask_updates": ("ask people and bots for today's updates", ("updates", "ask")),
     "sync_github": ("catch up on pull requests, merges and releases", ("github", "pr", "merge", "release")),
-    "finish_repo_waits": ("finish a task waiting for a worktree", ("repository", "worktree")),
     "tell_setup_stuck": ("tell a person about a bot stuck in setup", ("setup", "remind")),
     "check_release": ("check for a new Tico release", ("release", "update")),
     "fetch_feeds": ("fetch subscribed updates", ("feeds", "updates")),

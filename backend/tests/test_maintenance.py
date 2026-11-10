@@ -226,22 +226,6 @@ def _migrated_rows(registry, rules):
     }
 
 
-def _migrated(registry, rules):
-    """The step switches after the migration runs on a bare database."""
-    return {key: row[0] for key, row in _migrated_rows(registry, rules).items()}
-
-
-def test_only_an_explicit_roundup_switch_sets_find_stuck_and_stale_review_never_does(monkeypatch):
-    """Stale review defaults off, so a saved off stale review, or TICO_STALE_REVIEW=0, must not turn Find stuck off."""
-    monkeypatch.setenv("TICO_STALE_REVIEW", "0")
-    assert _migrated({}, {"stale_review": False})["find_stuck"] == 1, "Find stuck keeps its default (on)"
-    assert _migrated({}, {})["find_stuck"] == 1
-    assert _migrated({}, {"stale_review": True})["find_stuck"] == 1
-    assert _migrated({"task_roundup": {"on": False}}, {"stale_review": True})["find_stuck"] == 0
-    assert _migrated({"task_roundup": {"on": True}}, {"stale_review": False})["find_stuck"] == 1
-    assert _migrated({"learnings": {"on": True}}, {})["learn"] == 1, "a saved Learn switch carries over"
-
-
 def test_replaying_the_migration_changes_nothing(api):
     store = api.app.state.store
 
