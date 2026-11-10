@@ -29,6 +29,8 @@ interface ModalTask extends TaskRow {
 // counters, the rail, the page cards' slot (ui/app/pages.ts) and the live edit (ui/app/task-live.ts).
 interface ModalDialog extends TfDialog {
   taskOpening?: {pending?: boolean};
+  /** Closed by a change of page (taskModalRouteClose): a task the new page opens is not cancelled by this close. */
+  routeClose?: boolean;
   liveTask?: ModalTask | null;
   returnContext?: {route: string; task: string; opener: HTMLElement | SVGElement | null} | null;
   drawSeq?: number;
@@ -102,8 +104,11 @@ function taskModal(): ModalDialog {
   d.addEventListener('click', ev => { if (ev.target === d) d.close(); });
   taskDialogWire(d);
   d.addEventListener('close', () => {
+    const routed = d.routeClose; d.routeClose = false;
     if (d.open || d.taskOpening?.pending) return;
-    TASK_MODAL_LOAD++;
+    // A close by hand cancels an opening still on its way; a change of page cancels its own (taskModalOpen checks the
+    // route), and the next task's address opening now is not undone by the old one's queued close.
+    if (!routed) TASK_MODAL_LOAD++;
     document.body.classList.remove('task-modal-open');
     const back = d.returnContext; d.returnContext = null;
     if (!back) return;
@@ -113,6 +118,13 @@ function taskModal(): ModalDialog {
   });
   document.body.appendChild(d);
   return d;
+}
+// The router's close of the task window when the page changes (ui/app/router.ts).
+function taskModalRouteClose() {
+  const d: ModalDialog | null = $('#task-modal');
+  if (!d?.open) return;
+  d.routeClose = true;
+  d.close();
 }
 let TASK_MODAL_BACK = false;
 let TASK_MODAL_LOAD = 0;
