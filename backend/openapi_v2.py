@@ -1578,7 +1578,7 @@ STABLE = [
         "post",
         "Assistant",
         "proposeAssistantAction",
-        "Propose one operation for the caller to confirm (what the assistant's `hub assistant propose` calls)",
+        "Propose one operation for the caller to confirm (what the assistant's `tico assistant propose` calls)",
         "AssistantActionResult",
     ),
     (
@@ -2082,7 +2082,7 @@ STABLE = [
         "Usage",
         "purgeAutomaticQueue",
         "Cancel queued automatic wakes and waits for the whole team (scope company) or one group and the groups under it "
-        "(scope group:<id>). Tasks stay on their current step. Messages from people, and keeper notices of a person's own "
+        "(scope group:<id>). Tasks stay on their current step. Messages from people, and Tico's notices of a person's own "
         "act, stay queued. A run that has already started finishes (owner and bot administrators)",
         "QueuePurgeResult",
     ),

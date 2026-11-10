@@ -237,7 +237,7 @@ def register(
                     elif missing is not None:
                         raise Problem(
                             "repository_missing",
-                            missing.detail.rstrip(".") + f". Then run `hub bot go-live {row['slug']}` again",
+                            missing.detail.rstrip(".") + f". Then run `tico bot go-live {row['slug']}` again",
                             409,
                         )
                     elif bot_repository(c, settings, bot):
@@ -247,7 +247,7 @@ def register(
                         raise Problem(
                             "repository_missing",
                             "It has no repository yet. Ask BotOps to build it "
-                            f"(`hub bot repo-create {row['slug']}`), then run `hub bot go-live {row['slug']}` again",
+                            f"(`tico bot repo-create {row['slug']}`), then run `tico bot go-live {row['slug']}` again",
                             409,
                         )
             done = finish_go_live(c, who, bot, body.setup)

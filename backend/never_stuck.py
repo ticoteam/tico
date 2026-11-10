@@ -233,7 +233,6 @@ def read_ahead(conn: "sqlite3.Connection", task_ids: list[str], seen: dict[str, 
     W.prime(conn, task_ids)
     tasks = [row for row in (E.task(conn, each) for each in task_ids) if row and row.get("visit")]
     visits: list[Row] = [row["visit"] for row in tasks]
-    task_wakes.prime_holds(conn, [str(row["id"]) for row in tasks])
     visit_ids = json.dumps([str(visit["id"]) for visit in visits])
     marks = E.PROGRESS_SQL.replace("SELECT v.task_id,", "SELECT v.id, v.task_id,").replace(
         "v.id=?", "v.id IN (SELECT value FROM json_each(?))"

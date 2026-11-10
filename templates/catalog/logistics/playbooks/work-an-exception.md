@@ -10,7 +10,7 @@ Done when: the case is a row in `knowledge/exceptions.md` with its next check da
 
 ## 1. Get the facts
 
-    hub task show <id>
+    tico task show <id>
 
 Order, carrier, tracking number, service, ship date, promised date, and the last scan with its time
 (export first, then the public tracking page). Check `knowledge/exceptions.md` for an open case.

@@ -22,7 +22,7 @@ a destination the post newly clears gets a row, rows already there are left alon
 
 Only Listening (and the owner) writes runs and judgments. A receiver reads and resolves only
 its own destination. The posts carry third-party names and handles, so a bot that is neither
-sees no rows (`backend/sql.py` says the same for `hub sql`).
+sees no rows (`backend/sql.py` says the same for `tico sql`).
 """
 
 import hashlib

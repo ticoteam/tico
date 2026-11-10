@@ -2,7 +2,7 @@
 
 The server names each bucket's https base in TICO_S3_VIEW_URLS (`bucket=https://base[/prefix]`, comma-separated;
 docs/files.md) and hands the mapping to signed-in clients in `GET /api/v2/config` as `s3_view_urls`. The UI renders
-with it (ui/app/markdown.ts) and the `hub` CLI and MCP tools rewrite a bot's text with it before sending, so a
+with it (ui/app/markdown.ts) and the `tico` CLI and MCP tools rewrite a bot's text with it before sending, so a
 person gets a link rather than a URI nothing opens. Pure stdlib: the server, the runner and the CLI all import it.
 """
 
@@ -19,7 +19,7 @@ URI = re.compile(r"<(s3://[^<>\n]+)>|\bs3://[^\s<>\"'`]+", re.I)
 TRAILING = ".,;:!?*_~"
 # Fenced blocks and inline code spans are quoted text: a URI there is shown as written.
 CODE = re.compile(r"(^|\n)(```|~~~)[^\n]*\n.*?(\n\2[^\n]*(?=\n|$)|$)|(`+)(?!`).+?(?<!`)\4(?!`)", re.S)
-HINT = "`hub file import s3://...` makes it a Tico file that shows inline"
+HINT = "`tico file import s3://...` makes it a Tico file that shows inline"
 
 log = logging.getLogger("tico.config")
 

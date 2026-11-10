@@ -19,6 +19,7 @@ engine's modules reach back to hubdb and the store.
 """
 
 import functools
+import json
 from collections.abc import Callable, Iterable
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, Concatenate, NoReturn, ParamSpec, TypeVar
@@ -400,16 +401,21 @@ def task_answer(
     value: str,
     note: str | None = None,
     seen_version: int | str | None = None,
+    *,
+    own_click: bool = False,
 ) -> Row:
     """Answer what is asked: `ok`, `no` with a note (send back) or `again` (look again) on an OK; the choice or the
     text on a question; `done` on the owner's own work. If that was the last thing missing the task moves on. The
-    result carries `answer_id`."""
+    result carries `answer_id`. `own_click` says the request is the person's own click in their own session
+    (task_asks.own_click): only that OKs an OK the person asked themself."""
     from . import answers as A
 
     row = _open(conn, actor, task_id, work=False)
     _owners_done_is_work(conn, actor, row, requirement_id)
     with task_effects.because(actor):
-        return A.answer(conn, task_id, requirement_id, actor, value, note, seen_version=seen_version)
+        return A.answer(
+            conn, task_id, requirement_id, actor, value, note, seen_version=seen_version, own_click=own_click
+        )
 
 
 @_task_write()
@@ -599,6 +605,90 @@ def _readable(conn: "sqlite3.Connection", viewer: str | None, task_id: object, v
     return conn.execute(f"SELECT 1 FROM tasks WHERE id=? AND ({visible_sql})", (other["id"],)).fetchone() is not None
 
 
+def _readable_rows(
+    conn: "sqlite3.Connection", viewer: str | None, task_ids: Iterable[str], visible_sql: str | None = None
+) -> dict[str, Row]:
+    """`_readable` for many tasks at once, two statements however many: {id: its row} of those `viewer` may read."""
+    H = _h()
+    ids = sorted({str(task_id) for task_id in task_ids if task_id})
+    if not ids:
+        return {}
+    listed = (json.dumps(ids),)
+    rows: dict[str, Row] = {
+        str(found["id"]): found
+        for found in H._rows(conn.execute("SELECT * FROM tasks WHERE id IN (SELECT value FROM json_each(?))", listed))
+    }
+    if viewer is None:
+        return rows
+    if viewer == ON_RECORD:
+        return {task_id: found for task_id, found in rows.items() if not H.task_private(conn, found)}
+    rows = {task_id: found for task_id, found in rows.items() if H.task_private_readable(conn, viewer, found)}
+    if visible_sql is None or not rows:
+        return rows
+    seen = {
+        str(found[0])
+        for found in conn.execute(
+            f"SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND ({visible_sql})",
+            (json.dumps(sorted(rows)),),
+        )
+    }
+    return {task_id: found for task_id, found in rows.items() if task_id in seen}
+
+
+# The links and asks a task's read names, keyed by their first column, each read once in a snapshot (or for many
+# tasks together by `prime_views`), so a list of tasks' views costs what one task's does.
+_FILED_ON_VISIT = "SELECT visit_id, to_task_id FROM links WHERE visit_id IN (%s) ORDER BY rowid"
+_FILED_BY = "SELECT to_task_id, from_task_id FROM links WHERE to_task_id IN (%s) ORDER BY rowid"
+_FILED = "SELECT from_task_id, to_task_id, kind FROM links WHERE from_task_id IN (%s) ORDER BY created_at, id"
+_DECIDED = (
+    "SELECT r.visit_id, r.id FROM requirements r WHERE r.visit_id IN (%s) AND r.by_bot=1 "
+    "AND r.withdrawn_at IS NOT NULL AND EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' "
+    "AND e.subject_id=(SELECT v.task_id FROM visits v WHERE v.id=r.visit_id) AND e.kind='requirement_withdrawn' "
+    "AND e.old=r.id AND e.note='Asked again') ORDER BY r.created_at, r.id"
+)
+
+
+def _keyed(conn: "sqlite3.Connection", sql: str, keys: list[str]) -> dict[str, list[tuple[Any, ...]]]:
+    """{key: the rest of each row} of `sql` over many keys, one statement (the keys go in as one JSON list)."""
+    out: dict[str, list[tuple[Any, ...]]] = {key: [] for key in keys}
+    if keys:
+        for found in conn.execute(sql % "SELECT value FROM json_each(?)", (json.dumps(keys),)).fetchall():
+            out[str(found[0])].append(tuple(found)[1:])
+    return out
+
+
+def _cached(conn: "sqlite3.Connection", sql: str, key: str) -> list[tuple[Any, ...]]:
+    from . import read_cache
+
+    return read_cache.value(conn, (sql, key), lambda: _keyed(conn, sql, [key])[key], shared=True)
+
+
+def prime_views(conn: "sqlite3.Connection", task_ids: Iterable[str], viewer: str | None = None) -> None:
+    """Read what `task_view` reads of each of many tasks together, a few statements in all, for the views that follow
+    in this snapshot (Needs you reads one for each ask on it). Without a read snapshot it reads nothing: each view
+    then reads for itself. A write discards it all (read_cache)."""
+    from . import read_cache
+    from . import task_engine as E
+    from . import task_relations
+    from . import waiting_on as W
+
+    TR: Any = task_relations
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+    rows = W.prime(conn, task_ids)
+    ids = sorted(rows)
+    visits = sorted({str(row["visit"]["id"]) for row in rows.values() if row.get("visit")})
+    for sql, keys in ((_FILED_ON_VISIT, visits), (_DECIDED, visits), (_FILED_BY, ids), (_FILED, ids)):
+        unread = [key for key in keys if (sql, key) not in values]
+        for key, found in _keyed(conn, sql, unread).items():
+            values.setdefault((sql, key), found)
+    E.prime_stages(conn, [str(row["pipeline_id"]) for row in rows.values() if row.get("pipeline_id")])
+    TR.prime_ancestry(conn, ids)
+    if viewer:
+        _h().prime_task_delegated(conn, ids, viewer)
+
+
 def hidden_filed(conn: "sqlite3.Connection", row: Row, viewer: str | None, visible_sql: str | None = None) -> list[str]:
     """The tasks the open visit of `row` (task_engine.task's shape) filed that `viewer` may not read (`_readable`).
     Their titles and ids are not theirs to see: not in what the task waits on, not in a requirement's standing, not
@@ -606,8 +696,11 @@ def hidden_filed(conn: "sqlite3.Connection", row: Row, viewer: str | None, visib
     visit: Row = row.get("visit") or {}
     if row.get("status") != "open" or not visit:
         return []
-    filed = [str(found[0]) for found in conn.execute("SELECT to_task_id FROM links WHERE visit_id=?", (visit["id"],))]
-    return [other for other in filed if not _readable(conn, viewer, other, visible_sql)]
+    filed = [str(found[0]) for found in _cached(conn, _FILED_ON_VISIT, str(visit["id"]))]
+    if viewer is None or not filed:
+        return []
+    readable = _readable_rows(conn, viewer, filed, visible_sql)
+    return [other for other in filed if other not in readable]
 
 
 def standing_line(standing: "R.Standing", hidden: list[str]) -> str:
@@ -615,6 +708,58 @@ def standing_line(standing: "R.Standing", hidden: list[str]) -> str:
     if hidden and standing.requirement["kind"] == "linked_done" and not standing.met:
         return "A sub-task is not finished"
     return standing.line
+
+
+def _answer_view(conn: "sqlite3.Connection", task_id: str, answer: Row, private: bool) -> Row:
+    """One answer as the task shows it. `via` is who gave it for the person, when that was the Assistant or BotOps
+    acting with the person's rights (H.VIA, kept on the answer's history row): "assistant" or "botops", else None."""
+    found = conn.execute(
+        "SELECT via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='answer' "
+        "AND json_extract(data, '$.answer_id')=? LIMIT 1",
+        (task_id, answer["id"]),
+    ).fetchone()
+    return {
+        "id": answer["id"],
+        "value": answer["answer"],
+        "note": None if private else answer.get("notes"),
+        "by": answer["by_id"],
+        "via": (found[0] if found else None) or None,
+        "at": answer["created_at"],
+    }
+
+
+def _decided(conn: "sqlite3.Connection", task_id: str, visit_id: str, viewer: str | None) -> list[Row]:
+    """A bot's asks on this visit that were answered (an OK given, a question answered) before its next ask replaced
+    them (C15, task_engine._replace_open): what was decided, so it stays on the task, met, with its answer. Nothing
+    can be done about one any more (`may` is empty)."""
+    from . import task_asks
+    from . import task_requirements as R
+
+    out: list[Row] = []
+    for (requirement_id,) in _cached(conn, _DECIDED, visit_id):
+        requirement = R.get(conn, str(requirement_id)) or {}
+        answer = R.newest_answers(conn, visit_id).get(str(requirement_id))
+        if not answer or (requirement.get("kind") == "ok" and answer["answer"] != "ok"):
+            continue  # it was still open when it was replaced: nothing was decided
+        private = requirement["kind"] == "ok" and task_asks.hidden_from(conn, viewer, requirement["id"])
+        out.append(
+            {
+                "requirement_id": requirement["id"],
+                "kind": requirement["kind"],
+                "line": task_asks.PRIVATE_LINE if private else R.name_of(requirement),
+                "met": True,
+                "replaced": True,
+                "standing": "OK'd" if requirement["kind"] == "ok" else str(answer["answer"]),
+                "who": None,
+                "asked_by": None if private else requirement.get("added_by_id"),
+                "choices": None if private else requirement.get("choices"),
+                "shows": [] if private else requirement.get("shows") or [],
+                **({"source": requirement["shows"]} if requirement.get("shows") and not private else {}),
+                "answer": _answer_view(conn, task_id, answer, private),
+                "may": [],
+            }
+        )
+    return out
 
 
 def task_view(
@@ -627,7 +772,6 @@ def task_view(
     from . import task_requirements as R
     from . import waiting_on as W
 
-    H = _h()
     row = E.task(conn, task_id)
     if not row:
         return None
@@ -673,18 +817,12 @@ def task_view(
                 # What it shows is where its words come from: a reader who may not open one of those pages reads
                 # none of the ask, its choices or its answer (files.readable_page_refs drops the whole entry).
                 **({"source": requirement["shows"]} if requirement.get("shows") and not private else {}),
-                "answer": {
-                    "id": answer["id"],
-                    "value": answer["answer"],
-                    "note": None if private else answer.get("notes"),
-                    "by": answer["by_id"],
-                    "at": answer["created_at"],
-                }
-                if answer
-                else None,
+                "answer": _answer_view(conn, task_id, answer, private) if answer else None,
                 "may": _may(conn, row, standing, answer, str(viewer), holder, works) if viewer else [],
             }
         )
+    if live:
+        to_leave.extend(_decided(conn, task_id, visit["id"], viewer))
     following = E.next_stage(conn, row) if live else None
     ready = bool(waits) and all(wait["state"] == W.ROOM for wait in waits)
     held = E.shut_out(conn, row, following) if following and ready else None
@@ -695,16 +833,15 @@ def task_view(
             wait["line"], wait["fix"] = held["cause"], held["fix"]
     # The task that filed this one, and the tasks this one filed, only as far as `viewer` may read them
     # (`_readable`): one they may not read is left out whole, its id, status and that it exists at all.
-    above = conn.execute("SELECT from_task_id FROM links WHERE to_task_id=?", (task_id,)).fetchone()
-    filed_by = above[0] if above and _readable(conn, viewer, above[0], visible_sql) else None
+    above = _cached(conn, _FILED_BY, task_id)
+    filed_by = above[0][0] if above and _readable(conn, viewer, above[0][0], visible_sql) else None
+    links = _cached(conn, _FILED, task_id)
+    children = _readable_rows(conn, viewer, [str(child_id) for child_id, _kind in links], visible_sql)
     filed: list[Row] = []
-    for child_id, kind in conn.execute(
-        "SELECT to_task_id, kind FROM links WHERE from_task_id=? ORDER BY created_at, id", (task_id,)
-    ).fetchall():
-        child: Row | None = H.task(conn, child_id)
-        if not child or not _readable(conn, viewer, child_id, visible_sql):
-            continue
-        filed.append({"id": child_id, "kind": kind, "status": child["status"], "title": child["title"]})
+    for child_id, kind in links:
+        child = children.get(str(child_id))
+        if child:
+            filed.append({"id": child_id, "kind": kind, "status": child["status"], "title": child["title"]})
     snooze: Row | None = row.get("snooze")
     late = None
     if live and visit.get("late_told_at"):

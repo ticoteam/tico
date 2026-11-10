@@ -24,7 +24,7 @@ never leaves the task where the owners can see it.
 
 ## Where pay data lives
 This repository can be read by other bots, so it holds bands and counts, never a named person's pay. Payroll and offer
-exports arrive on tasks; person-level results are written to a file, attached with `hub task attach <id> <file>` to a task
+exports arrive on tasks; person-level results are written to a file, attached with `tico task attach <id> <file>` to a task
 whose readers are the owners in `state.md`, and the local copies are deleted in the same run.
 
 ## First message: setup
@@ -34,9 +34,9 @@ If `state.md` says setup has not finished, do this before any other work:
 3. Record each answer in `state.md`, dated, and write `knowledge/philosophy.md` and the band grid.
 4. Build the bands for one role family now, or check the offers on the task, labelled "First draft, not yet reviewed".
    Publish and share nothing.
-5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with `hub automation list`, tell the
+5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with `tico automation list`, tell the
    human what it does and that they can change it or turn it off, and log it in `memory/decisions.md`. Then run
-   `hub bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
+   `tico bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within the
@@ -56,19 +56,19 @@ Always:
 - `skills/set-a-pay-range-for-a-job-post/SKILL.md`: read before you give a range for a job post.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>`.
+1. Read `state.md`, then the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/philosophy.md`, `knowledge/bands.md`, `knowledge/pay-practice.md` and the playbook.
-3. Read the team with `hub team show` for roles and levels; open roles from the hiring tasks.
+3. Read the team with `tico team show` for roles and levels; open roles from the hiring tasks.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Delete every export and person-level file from the working tree, update the bands file, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task done <id> -m "..." --version N`: the result first, then what you could not read.
+3. Finish with `tico task done <id> -m "..." --version N`: the result first, then what you could not read.
 
 ## Talking to {{app_name}}
-The philosophy and level guide come from the Librarian (`hub doc ask`). Public ranges are read with `hub doc fetch <url>`.
-Pay data arrives only as task attachments. A question for an owner is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task.
+The philosophy and level guide come from the Librarian (`tico doc ask`). Public ranges are read with `tico doc fetch <url>`.
+Pay data arrives only as task attachments. A question for an owner is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The check opens with how many offers and changes are out of band.
@@ -87,5 +87,5 @@ gap stays unexplained after level, location and tenure, or when the budget rule 
 task, the ask in the first line.
 
 ## Publishing your work
-The weekly check goes to `reports/` and is listed with `hub file publish reports/<name>.md --scope task --task <id>`; it
+The weekly check goes to `reports/` and is listed with `tico file publish reports/<name>.md --scope task --task <id>`; it
 carries counts only. Person-level results are attachments, never published.

@@ -8,11 +8,11 @@ Until then:
 - Every public route under `/public/roadmaps/{label}` answers 404 "The public roadmap is not available yet.", except
   one: `DELETE /public/roadmaps/{label}/tasks/{id}/requesters/{token}` still removes a visitor's request, so a visitor
   can always take back their contact details. Tokens are bound to one task; an unknown token gets 404.
-- The settings are kept and stay editable: `GET` and `POST /api/v2/roadmaps/settings`, `hub roadmap settings`
+- The settings are kept and stay editable: `GET` and `POST /api/v2/roadmaps/settings`, `tico roadmap settings`
   (owners and admins). An update is partial and an empty one is refused.
 - A task's requesters stay internal and work as before: `GET`/`POST /api/v2/tasks/{id}/requesters`,
   `POST .../requesters/{requester_id}` (partial update) and `POST .../requesters/{requester_id}/delete`, and
-  `hub task requesters`, `hub task requester-save`, `hub task requester-remove`. Lists are paged and never return
+  `tico task requesters`, `tico task requester-save`, `tico task requester-remove`. Lists are paged and never return
   tokens. Teammate status comes from a verified actor, never from an email claim.
 
 ## Client addresses behind a proxy

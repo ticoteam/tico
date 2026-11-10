@@ -35,4 +35,4 @@ Expected gross moves from `knowledge/baseline.md` only by the listed changes; sa
 ## 5. Write and hand over
 
 `reports/YYYY-MM-DD-payroll-changes.md` in the shape of `knowledge/examples/payroll-changes.md`.
-Publish it to the payroll task only (`hub file publish <path> --task <id> --scope task`), commit, and `hub task done <id> -m "..." --version N` with the change count, questions and missing inputs; no figures in the note.
+Publish it to the payroll task only (`tico file publish <path> --task <id> --scope task`), commit, and `tico task done <id> -m "..." --version N` with the change count, questions and missing inputs; no figures in the note.

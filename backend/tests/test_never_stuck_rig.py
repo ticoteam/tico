@@ -20,7 +20,7 @@ from evals.never_stuck import sim, world
 SELECTED_BY = (answers, never_stuck, pipeline_settings, task_engine, task_requirements, task_wakes, waiting_on, world)
 
 # Seeds that pass, and seeds that fail on a known bug (the bug each one hits).
-PASSING_SEEDS = (1, 2, 4, 8, 27)
+PASSING_SEEDS = (1, 2, 4, 8, 27, 8313)
 FAILING_SEEDS: dict[int, str] = {}
 
 
@@ -110,6 +110,17 @@ def test_one_pass_reads_as_many_statements_over_a_thousand_idle_tasks_as_over_a_
     assert small["pass"] == big["pass"] == {}
     assert big["reads"] == small["reads"], big["top_statements"]
     assert big["reads"] < 60, big["top_statements"]
+
+
+def test_one_pass_takes_about_twice_as_long_over_twice_the_tasks() -> None:
+    """Speed: a pass's time grows with the open tasks, not with their square. Each task's runs are found from the task
+    (task_wakes._runs_of), never by reading every run of its bot for each task: that took 4.6 s over 2,000 tasks and
+    148 s over 10,000. Now about 0.7 s and 1.3 s here over 2,000 and 4,000 (4.2 s over 10,000), 2% due for a try."""
+    small = perf.measure(50, profile=False, copies=39)
+    big = perf.measure(50, profile=False, copies=79)
+    assert (small["tasks"], big["tasks"]) == (2000, 4000)
+    assert big["pass"]["woken"] > small["pass"]["woken"] > 0
+    assert big["seconds"] < 2.5 * small["seconds"], (small["seconds"], big["seconds"], big["top_statements"])
 
 
 def test_a_world_puts_the_environment_back() -> None:

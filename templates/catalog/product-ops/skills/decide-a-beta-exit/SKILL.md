@@ -13,7 +13,7 @@ Steps:
    before any decision.
 3. For each criterion, write the number that shows it: how many participants used the feature, how many gave feedback,
    how many blocking defects are open. Write the number, not the impression.
-4. Chase overdue feedback once. Ask the internal owner of the beta to send one reminder with `hub task ask <id> --to <person> "<question>" --version N`, or
+4. Chase overdue feedback once. Ask the internal owner of the beta to send one reminder with `tico task ask <id> --to <person> "<question>" --version N`, or
    record the participant as not responding. Do not write to customers yourself.
 5. Choose one recommendation:
    - Extend: the new exit date, and every criterion still unmet, each with its current number.

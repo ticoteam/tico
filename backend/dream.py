@@ -64,10 +64,11 @@ with `hub_task_show` first, and pass the version the last call on it printed wit
 4. Ask. Ask only about the business: what you should do, for whom, by which rule or priority, where two
    instructions about the work disagree, or one broad question that would align you better. Never ask for
    permission, about which files to edit, how to organize your memory, or anything else about the dream itself:
-   decide those yourself. If something only {requester} can settle, ask at most 3 such questions in ONE
-   `hub_task_ask` to {requester} on this task. Number them. Each one makes sense on its own and ends with your
-   suggested answer ("Suggested: ..."). Ask big alignment questions before small either/or ones. Zero questions is
-   fine. {wait}
+   decide those yourself. If something only {requester} can settle, ask it with `hub_task_ask` to {requester} on
+   this task: one question per ask (an ask that asks two things is refused), and one ask at a time (asking again
+   replaces the open one), so wait for each answer before the next. At most 3 asks. Each one makes sense on its own
+   and ends with your suggested answer ("Suggested: ..."). Ask big alignment questions before small either/or ones.
+   Zero questions is fine. {wait}
 
 5. Apply. Fold the answers in. A broad answer may rewrite whole sections. Fix each fact where it lives, delete what
    has been replaced, turn relative dates into absolute ones, and merge duplicates.
@@ -241,7 +242,13 @@ def view(c, who, row):
     questions, summary, doing = None, None, None
     if ended:
         state = "done" if row["status"] == "done" else "stopped"
-        summary = (row.get("note") or "").strip()
+        # The summary is the note the bot finished with (`hub_task_done`): the notes of its `done` answer.
+        done = c.execute(
+            "SELECT a.notes FROM answers a JOIN visits v ON v.id=a.visit_id WHERE v.task_id=? AND a.answer='done' "
+            "AND coalesce(a.notes,'')<>'' ORDER BY a.created_at DESC, a.rowid DESC LIMIT 1",
+            (row["id"],),
+        ).fetchone()
+        summary = (done[0] if done else row.get("note") or "").strip()
         if not summary:
             said = [
                 m

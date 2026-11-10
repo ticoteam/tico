@@ -8,8 +8,8 @@ given and nothing is sent outside the stated rules.
 
 ## 1. Read the deal
 
-    hub task show <id>
-    hub meeting search "<customer>"
+    tico task show <id>
+    tico meeting search "<customer>"
 
 From discovery: the business problem, the current state, the future state the buyer described, who
 evaluates and who decides. No clear business problem means the POC is premature: say so to the Account
@@ -31,4 +31,4 @@ as scope changes with a new date.
 ## 4. Hand over
 
 Save it to `knowledge/poc/<deal>.md` and attach it. Send the plan to its recipient only when the task asks for it, a granted Tool allows it and a person has turned mail sending on in Tico; otherwise keep the draft. Access to a sandbox is a separate request
-for a human. `hub task done <id> -m "..." --version N`: the criteria, the dates, what is ready to act on.
+for a human. `tico task done <id> -m "..." --version N`: the criteria, the dates, what is ready to act on.

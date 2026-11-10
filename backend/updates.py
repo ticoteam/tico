@@ -710,7 +710,7 @@ def request_text(
         tracked = kpi_snapshot(c, bot)
         ask = [
             f"Time for your week in review ({day}). Post it with hub_update_create{post_day} "
-            "(or `hub update create --slides-file`), then carry on.",
+            "(or `tico update create --slides-file`), then carry on.",
             "",
             SLIDES_SHAPE,
             "Say it plainly: these are skimmed by swiping, so a slide is a few short lines, never a wall of text. "
@@ -742,7 +742,7 @@ def request_text(
     else:
         ask = [
             f"Time for your daily update ({day}). Post it with hub_update_create{post_day} "
-            "(or `hub update create`), in plain words, then carry on.",
+            "(or `tico update create`), in plain words, then carry on.",
             "",
             "Write three bullets in plain English and nothing else: no title, no headings or sections, "
             "no task ids or internal codes. Each bullet is one line: what you did, what you do next, or what "
@@ -931,13 +931,16 @@ def draft_facts(c, author, kind, day):
         "('done','dropped')) ORDER BY rank LIMIT 5",
         (author,),
     ).fetchall()
-    # Their decisions: the stage they moved a shared task to (Done, Closed, or another stage)...
+    # Their decisions: the stage they moved a shared task to (Done, Closed, or another stage), their own move or the
+    # engine's right after they said the stage's work is done (H.task_done answers "owner says done", then it moves)...
     decided = c.execute(
         "SELECT t.title, coalesce(s.name, e.new) AS new FROM history_events e "
         "JOIN tasks t ON e.subject_type='task' AND t.id=e.subject_id LEFT JOIN stages s ON s.id=e.new "
-        f"WHERE e.actor_id=? AND e.kind='move' AND e.old IS NOT NULL AND e.created_at>=? AND {shared_tasks_sql(hidden, 't.')} "
-        "ORDER BY e.created_at DESC LIMIT ?",
-        (author, since, DRAFT_LIST_MAX),
+        "WHERE e.kind='move' AND e.old IS NOT NULL AND e.created_at>=? AND (e.actor_id=? OR e.actor_id=? AND "
+        "(SELECT a.actor_id || ' ' || a.kind || ' ' || coalesce(a.new, '') FROM history_events a "
+        "WHERE a.subject_type='task' AND a.subject_id=e.subject_id AND a.rowid<e.rowid ORDER BY a.rowid DESC LIMIT 1)"
+        f"=? || ' answer done') AND {shared_tasks_sql(hidden, 't.')} ORDER BY e.created_at DESC LIMIT ?",
+        (since, author, H.KEEPER, author, DRAFT_LIST_MAX),
     ).fetchall()
     # ...their answers to asks on shared tasks (the engine's answers, the newest of each ask and not taken back)...
     answers = [

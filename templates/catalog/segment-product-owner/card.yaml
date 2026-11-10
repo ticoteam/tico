@@ -44,13 +44,13 @@ prerequisites:
     why: "Optional. Read-only issues linked to a problem show whether engineering already has it."
     required: false
 onboarding:
-  - ask: "Which customer segment do you own, and how is a customer counted in it? (Default: the segment named in your title, as `hub market segment tree` lists it.)"
+  - ask: "Which customer segment do you own, and how is a customer counted in it? (Default: the segment named in your title, as `tico market segment tree` lists it.)"
     why: "Every number and every ranking here is scoped to this segment."
   - ask: "What counts as activated for this segment, and over what window? How long is the retention window? (Default: 14 days to activate; retention at 30 and 90 days.)"
     why: "These are the two numbers you are judged on."
   - ask: "Where do this segment's problems arrive, and who can send the usage export each week? (Default: support tasks, call notes and the export attached to the task.)"
     why: "Sets the sources. I never ask for a login."
-  - ask: "Which goal or KPI does this segment's product outcome serve, and what is its target? (Default: the goal `hub goal list` names for it, or none, said plainly.)"
+  - ask: "Which goal or KPI does this segment's product outcome serve, and what is its target? (Default: the goal `tico goal list` names for it, or none, said plainly.)"
     why: "Each reading is compared with this target."
   - ask: "Who reads the weekly review, and who should I ask when my manager cannot answer? (Default: my manager, the Product Team Manager once one is hired, else the owner; Mondays at 08:00.)"
     why: "Sets the routine's recipients and the human escalation path."

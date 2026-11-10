@@ -1,6 +1,6 @@
 # Finance tools
 
-Seven hub tools reach Finance. Each is an MCP tool (`hub_finance_*`) and a `hub finance` command with the same
+Seven hub tools reach Finance. Each is an MCP tool (`hub_finance_*`) and a `tico finance` command with the same
 inputs. Every call runs as its caller, a person or a bot, with that caller's own Finance rights and view: a bot
 without finance.pay cannot pay, and a bot sees only what its view covers. Payroll's private lines stay private for
 everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else reads or writes the books.
@@ -9,13 +9,13 @@ everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else 
 
 | Tool | Command | Input | Output |
 |---|---|---|---|
-| `hub_finance_search` | `hub finance search` | `kind` (entry, feed, bill, invoice, contact, rule, card, account, item, project, vendor, campaign, subscription, receipt; leave it out to search all but account, vendor, campaign, subscription and receipt), `q`, filters (`status`, `contact_id`, `vendor`, `account_id`, `money_account_id`, `start`, `end`, `aging`, `contact_kind`, `active`, `rule_kind`, `month` for campaigns, `status` for receipts), `cursor`, `limit` (up to 200) | `{results, next_cursor, view_version}` |
-| `hub_finance_report` | `hub finance report <kind>` | `kind` (pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, campaigns, subscriptions, close, sales_tax, 1099), `start`, `end`, `period`, `basis`, `compare`, `top_n`, `by`; `month` for close; `year` for sales_tax and 1099 | the report, rows past `top_n` folded into "Other · n"; sales_tax and 1099 are whole or an error, and only for someone who sees everything |
-| `hub_finance_metric` | `hub finance metric <name>` | `name` (cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, unattributed, ad_spend, per_conversion, subscriptions_monthly) and its filters | `{value, as_of, ...}`; the budget metrics add `pace_month_end`, `spent_from` (books, platform or mixed: an ad budget reads its platform's daily spend in each month a healthy import covers, in place of that platform's charges), `platform` and `platform_as_of` |
-| `hub_finance_brief` | `hub finance brief` | none | `{lines, as_of, changed_since, version}`: a few short lines about the money you may see (your budgets, your team's, cash and burn where you see the company, Watch findings, unattributed spend); `as_of` is when those numbers last moved (backend/finance/brief.py) |
-| `hub_finance_act` | `hub finance act <kind>` | `kind`, `payload` (JSON), `dry_run`, `operation_id` | `{status, action_id, code, reason, result?, impact?}` |
-| `hub_finance_action` | `hub finance action <id>` | `action_id` | the action's current status |
-| `hub_finance_inbox` | `hub finance inbox` | `kind`, `cursor`, `limit` | `{items, counts, next_cursor}`: the caller's Finance work queue; with `kind`, that kind alone, paged past its first 200 |
+| `hub_finance_search` | `tico finance search` | `kind` (entry, feed, bill, invoice, contact, rule, card, account, item, project, vendor, campaign, subscription, receipt; leave it out to search all but account, vendor, campaign, subscription and receipt), `q`, filters (`status`, `contact_id`, `vendor`, `account_id`, `money_account_id`, `start`, `end`, `aging`, `contact_kind`, `active`, `rule_kind`, `month` for campaigns, `status` for receipts), `cursor`, `limit` (up to 200) | `{results, next_cursor, view_version}` |
+| `hub_finance_report` | `tico finance report <kind>` | `kind` (pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, campaigns, subscriptions, close, sales_tax, 1099), `start`, `end`, `period`, `basis`, `compare`, `top_n`, `by`; `month` for close; `year` for sales_tax and 1099 | the report, rows past `top_n` folded into "Other · n"; sales_tax and 1099 are whole or an error, and only for someone who sees everything |
+| `hub_finance_metric` | `tico finance metric <name>` | `name` (cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, unattributed, ad_spend, per_conversion, subscriptions_monthly) and its filters | `{value, as_of, ...}`; the budget metrics add `pace_month_end`, `spent_from` (books, platform or mixed: an ad budget reads its platform's daily spend in each month a healthy import covers, in place of that platform's charges), `platform` and `platform_as_of` |
+| `hub_finance_brief` | `tico finance brief` | none | `{lines, as_of, changed_since, version}`: a few short lines about the money you may see (your budgets, your team's, cash and burn where you see the company, Watch findings, unattributed spend); `as_of` is when those numbers last moved (backend/finance/brief.py) |
+| `hub_finance_act` | `tico finance act <kind>` | `kind`, `payload` (JSON), `dry_run`, `operation_id` | `{status, action_id, code, reason, result?, impact?}` |
+| `hub_finance_action` | `tico finance action <id>` | `action_id` | the action's current status |
+| `hub_finance_inbox` | `tico finance inbox` | `kind`, `cursor`, `limit` | `{items, counts, next_cursor}`: the caller's Finance work queue; with `kind`, that kind alone, paged past its first 200 |
 
 The Finance transactions list (its feed read) leaves out an `ignored` row that the bank has ended: its `provider_status`
 is then Mercury's own word, `cancelled`, `failed`, `blocked` or `reversed` (the list shows `cancelled` as "canceled" and
@@ -80,7 +80,7 @@ those rows, as before.
 
 ## Acting
 
-`hub finance act help` lists every action kind with the right it needs; `hub finance act help --payload
+`tico finance act help` lists every action kind with the right it needs; `tico finance act help --payload
 '{"kind":"bill_create"}'` gives one kind's fields. An action is committed, sent for approval (`needs_approval`),
 `denied` or `failed`, with a reason in words.
 
@@ -94,8 +94,8 @@ A vendor takes `seats` (a whole number) and `renewal_on` (`YYYY-MM-DD`; empty cl
 An internal transfer is `payment_create` with `method: "internal"`, `from_account` and `to_account` (the company's own bank accounts on one Mercury connection) and `amount` (cents), with an optional `memo`. The requester must see both accounts; otherwise the action is denied and the refusal names neither account. It takes the payment gates: over $1,000 asks the owner (§6.4 rule 2), and a company rule can ask for more. Rules on `accounts` match a transfer by its two ledger accounts. The new-recipient rule never applies, since an own account is never a new recipient. There is no budget hold: a move between our accounts is not an expense. Right before Mercury is called, the send re-checks the requester's payment right and view, the payments switch for the connection, and the gates (with their counters); a rule that now denies cancels the transfer, and one that now asks holds it until approved. Until its call is claimed, a queued transfer can be canceled with `payment_cancel` and `{"transfer_id": ...}`; once it is claimed or sent, cancel is refused and the transfer is checked in Mercury. Mercury gets it once, under its own key (POST /transfer). An unknown result is never sent again: it is looked for by its key (in the note) in Mercury's transactions, and that transaction's created time is its submit day until then the claim time stands. A refused result is not sent again either, and a finance admin is asked to check Mercury. Both legs post as one transfer with no P&L effect. A leg settles the transfer only when it is dated from the transfer's submit day through five days on, and a Mercury id the leg carries for the transfer is preferred over an older match. The transfer shows `posted` once both legs are in the feed.
 
 ```
-hub finance act categorize --payload '{"feed_id":"fd_1","account_id":"acc_6100"}' --operation-id categorize:fd_1
-hub finance action fa_123
+tico finance act categorize --payload '{"feed_id":"fd_1","account_id":"acc_6100"}' --operation-id categorize:fd_1
+tico finance action fa_123
 ```
 
 ## Statement uploads
@@ -204,14 +204,14 @@ Migration 67 backfills `frozen_by: budget` on cards the action log shows a cutof
 cards that still have an allocation; a card whose allocation is zero, or one a person froze, stays unset). An install
 that already recorded migration 67 does not re-run the backfill.
 
-`hub finance search --kind card --vendor "Acme Cloud"` answers "which of my cards works at this vendor". `card_unsave`
+`tico finance search --kind card --vendor "Acme Cloud"` answers "which of my cards works at this vendor". `card_unsave`
 records that a card was removed from a vendor's account. A save is found under the vendor's contact id, its aliases and
 its legacy names, so a save made before the vendor became a contact still unsaves; `card_save` refuses a second save
 under any of those keys. Both are gated: a bot's `card_save` or `card_unsave` waits for a finance admin.
 
 ## Card fill
 
-Card fill is not offered: `hub_finance_card_fill` is in no tool list (`hubtools.UNLISTED`) and has no `hub finance`
+Card fill is not offered: `hub_finance_card_fill` is in no tool list (`hubtools.UNLISTED`) and has no `tico finance`
 command. A call by its name still runs and returns "Card fill is not available yet"; it never takes or returns card
 details.
 

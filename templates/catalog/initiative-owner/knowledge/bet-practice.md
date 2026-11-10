@@ -1,6 +1,6 @@
 # Bet practice
 
-How one strategy bet is read, checked and reported each week. The bet itself lives on the Strategy page (`hub strategy show`).
+How one strategy bet is read, checked and reported each week. The bet itself lives on the Strategy page (`tico strategy show`).
 This file is the method for reading it, so each run does not re-derive it.
 
 ## What a bet is
@@ -10,14 +10,14 @@ This file is the method for reading it, so each run does not re-derive it.
 - The Strategy page holds the bets. A bet's status is `proposed`, `active` or `retired`. The check-in works on the active
   bet this seat owns. A proposed bet is reported as proposed, with no call on it.
 - Goals link to the bet they serve. The bet's health is the colour of its KPI-backed goals, read from `goals_by_bet` and
-  `health_by_bet` in `hub strategy show`.
+  `health_by_bet` in `tico strategy show`.
 
 ## The three kinds of wrong-if
 
 - **A KPI with a threshold.** A reading past the line trips it. The line is the threshold and the direction (above or
   below). A reading exactly on the line is not past it. Read each reading against the line yourself, with its period.
-- **A market entity.** A change on a market page the bet cites. Read the entity with `hub market show <id>` and what
-  changed, with its source, with `hub market delta`.
+- **A market entity.** A change on a market page the bet cites. Read the entity with `tico market show <id>` and what
+  changed, with its source, with `tico market delta`.
 - **A dated sentence.** A claim the record cannot check yet, with a check-by date. Before the date it is "not yet
   checkable". On or after the date, say what the record shows, and say plainly when it shows nothing.
 

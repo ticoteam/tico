@@ -1,4 +1,4 @@
-"""The hub's MCP door: same tools as the `hub` CLI, same rules, no privileged path."""
+"""The hub's MCP door: same tools as the `tico` CLI, same rules, no privileged path."""
 
 import asyncio
 import base64
@@ -295,7 +295,7 @@ def test_tools_write_through_the_same_rules_as_http(api):
     assert not err and sorted(t["id"] for t in listed["result"]) == sorted([task["task"]["id"], wordy_task])
 
     err, out = call(api, "hub_task_close", {"id": task["task"]["id"], "why": "Not needed"}, token=token)
-    assert err and out["detail"] == f"Run `hub task show {task['task']['id']}` first.", "a bot sends the version it saw"
+    assert err and out["detail"] == hubtools.version_needed(task["task"]["id"]), "a bot sends the version it saw"
     version = shown["task"]["version"]
     err, out = call(
         api, "hub_task_close", {"id": task["task"]["id"], "why": "Not needed", "version": version}, token=token
@@ -709,7 +709,7 @@ def test_a_raw_body_and_a_json_body_are_one_or_the_other():
 
 
 def test_a_query_field_named_path_reaches_the_query_string(api, door):
-    """`get(path, **query)` takes the URL path positionally, so a query field may be called `path` (`hub file approved
+    """`get(path, **query)` takes the URL path positionally, so a query field may be called `path` (`tico file approved
     <path>` asks file-approvals that way). The server answers from the query: no file has these bytes, so not approved,
     with the digest echoed back. A path it did not receive would be a 422 instead."""
     _, _, attempt = setup_attempt(api)

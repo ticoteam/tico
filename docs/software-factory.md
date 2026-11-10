@@ -30,7 +30,7 @@ rest as your release pace grows.
 The starter templates were written for a person-in-the-loop team: a reviewer drafts a review for a human to post,
 for example. Edit each bot's instructions to match its role here, or ask BotOps to do it. When reviewers
 are authorized to submit their own reviews, configure a [separate reviewer GitHub App](github-app.md#separate-identity-for-reviewers)
-and use `hub repo review` with the full reviewed head and `approve` or `changes`. Record the GitHub receipt on
+and use `tico repo review` with the full reviewed head and `approve` or `changes`. Record the GitHub receipt on
 the review task as well. Required GitHub approvals are dismissed on push, so a changed head needs a current
 approval before merge.
 
@@ -54,7 +54,7 @@ approval before merge.
    changes go straight to Head of Engineering as a task.
 2. **Prefer different models for checks.** Reviewers and QA prefer a bot of a different model company than the
    Builder. Set this per bot (its task model, or its model), or use a check model on a sub-task
-   (`hub task child <task> --check-model`).
+   (`tico task child <task> --check-model`).
 3. **Reviewers advise; the Builder decides.** The Builder answers each comment it doesn't take with a one-line
    reason on the task. There is no second round of the same review after fixes.
 4. Validation skills attach evidence (tests, screenshots) to the task; a person OKs each release from its notes and
@@ -69,15 +69,15 @@ is done it runs the checks its pull request would run on its own computer (in Ti
 `python3 scripts/pr_checks.py local --ready`, which prints a receipt line for the task) and marks the PR ready once.
 Each push to a ready PR runs CI again, so fixes go in one push.
 
-Reviews are sub-tasks: `hub task child <task> --owner <reviewer> --role review --title "Review 1: PR #N"`. The task
+Reviews are sub-tasks: `tico task child <task> --owner <reviewer> --role review --title "Review 1: PR #N"`. The task
 waits on the sub-tasks it filed until they end. A reviewer submits its review at the full PR head with
-`hub repo review` and finishes its sub-task. A push after a review needs a new review of the new head. The PR merges
+`tico repo review` and finishes its sub-task. A push after a review needs a new review of the new head. The PR merges
 through the repository's merge queue ([Merge queue](releasing.md#merge-queue)), by a bot or person with write access.
 
 ## Visual specs
 
 A spec can be a visual page. The product manager publishes it on the task it describes with
-`hub page publish <file.html> --spec --task <task>`. The page's styles are inlined at publish, so its mockups read as
+`tico page publish <file.html> --spec --task <task>`. The page's styles are inlined at publish, so its mockups read as
 Tico does. Every task filed under that task, and their own sub-tasks, gets the spec's page link and text in its body.
 A spec that is narrowed to some readers, or on a private task, gives the link only. Build instructions are in
 `templates/catalog/product-manager/skills/build-the-spec-page/SKILL.md`.

@@ -20,14 +20,23 @@ def ticket(api, owner="bot:ops", private=False, title="Build the export"):
 
 
 def run_on(api, row, bot="ops"):
-    """The bot's run, carrying `row` (its work): the attempt with the bot's token."""
+    """The bot's run on `row` (its work: the wake its filing queued): the attempt with the bot's token."""
     machine = runner(api)
     assign(api, machine, bot)
     ready(api, machine, [bot])
     attempt = claim(api, machine, bot)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], row["id"]))
+    assert attempt["task"]["id"] == row["id"]
     return attempt
+
+
+def carry(api, attempt, row):
+    """The run takes `row` on as well: a message on it is one of the run's inputs (task_privacy.attempt_tasks). Returns
+    the message id."""
+    with api.app.state.store.transaction() as c:
+        bot = c.execute("SELECT bot_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0]
+        msg = H.say(c, "human:ben", H.bot_actor(bot), "Take this one on too.", refs={"task": row["id"]})
+        c.execute("INSERT INTO attempt_inputs(attempt_id, message_id) VALUES(?,?)", (attempt["id"], msg["id"]))
+    return msg["id"]
 
 
 def ask(api, token, task_id):
@@ -58,8 +67,8 @@ def test_a_run_on_its_own_private_ticket_gets_a_permit(api):
 
 
 def test_the_bot_that_owns_the_ticket_gets_a_permit(api):
-    row = ticket(api)
     attempt = run_on(api, ticket(api, title="Other work"))  # its run carries other work; it still owns this ticket
+    row = ticket(api)
     r = ask(api, attempt["token"], row["id"])
     assert r.status_code == 200, r.text
     assert r.json()["allowed"] is True
@@ -68,8 +77,7 @@ def test_the_bot_that_owns_the_ticket_gets_a_permit(api):
 def test_a_run_carrying_the_ticket_gets_a_permit_though_another_bot_owns_it(api):
     row = ticket(api, owner="bot:ops")
     attempt = run_on(api, ticket(api, owner="bot:cpo", title="Its own work"), bot="cpo")
-    with api.app.state.store.transaction() as c:  # the run takes the ops ticket on as well
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], row["id"]))
+    carry(api, attempt, row)  # the run takes the ops ticket on as well
     r = ask(api, attempt["token"], row["id"])
     assert r.status_code == 200, r.text
     assert r.json()["allowed"] is True
@@ -100,13 +108,12 @@ def test_a_person_who_cannot_read_a_private_ticket_is_refused(api):
 def test_a_retried_key_is_asked_again_and_refused_once_the_bot_no_longer_works_the_ticket(api):
     row = ticket(api, owner="bot:ops")
     attempt = run_on(api, ticket(api, owner="bot:cpo", title="Its own work"), bot="cpo")
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], row["id"]))
+    message = carry(api, attempt, row)
     body = {"task_id": row["id"], "remote_id": f"{next(_ids):012x}", "cpus": 4, "minutes": 10}
     key = headers(attempt["token"])
     assert api.post("/api/v2/ci/permits", json=body, headers=key).status_code == 200
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET carried_by=NULL WHERE id=?", (row["id"],))
+        c.execute("DELETE FROM attempt_inputs WHERE message_id=?", (message,))
     r = api.post("/api/v2/ci/permits", json=body, headers=key)  # the same Idempotency-Key, replayed
     assert r.status_code == 403, r.text
 

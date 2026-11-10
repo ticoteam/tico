@@ -7,7 +7,7 @@ The outcome is four recorded answers, `knowledge/standards.md`, and the test com
 
 ## 1. Read before you ask
 
-    hub task show <id>
+    tico task show <id>
     gh pr list -R <repo> --state open
 
 Read what the repository already says: its README, a CONTRIBUTING file, the CI configuration and any branch rules. Do not
@@ -40,5 +40,5 @@ three lines. Do not start a build during setup.
 
 ## 6. Finish
 
-Run `hub bot setup-done` once the answers and the first result are recorded, not before. It tells {{app_name}} your setup
+Run `tico bot setup-done` once the answers and the first result are recorded, not before. It tells {{app_name}} your setup
 is done and clears your "Needs setup" mark. Until then nothing you have runs on its own.

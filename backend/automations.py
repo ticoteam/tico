@@ -3813,7 +3813,7 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/automations/{aid}/delete")
     def automations_delete_post(request: Request, aid: str, body: Empty | None = None):
-        """The same delete for clients that only POST (the hub CLI and MCP)."""
+        """The same delete for clients that only POST (the tico CLI and MCP)."""
         return delete(request, aid, body or Empty())
 
     @app.post("/api/v2/automations/{aid}/run")

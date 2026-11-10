@@ -49,10 +49,10 @@ content in `.scroll`.
 2. Write `specs/<slug>.html` in the page order above.
 3. Check it: every criterion can be tested, every mockup uses only the tokens and classes above, and there is no
    script and no outside address.
-4. Publish it on the task: `hub page publish specs/<slug>.html --spec --task <id>`.
+4. Publish it on the task: `tico page publish specs/<slug>.html --spec --task <id>`.
 5. Hand it in for an OK, showing the page:
 
-       hub task ask <id> --to <the person who OKs specs> "OK the spec for <title>?" --kind ok --show page:<page id> --version N
+       tico task ask <id> --to <the person who OKs specs> "OK the spec for <title>?" --kind ok --show page:<page id> --version N
 
    Then end the turn. Do not answer it yourself. If they send it back, read the note, revise the page, publish it
    again and ask again.

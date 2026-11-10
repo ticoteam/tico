@@ -1242,6 +1242,24 @@ def c_clock_back(r: Rig) -> None:
     expect(r.runs(task) <= 7, f"{r.runs(task)} runs")
 
 
+@extra("held-run", "A run held for a check pauses its task, says so on Needs you, and the task carries on after")
+def c_held_run(r: Rig) -> None:
+    H = _h()
+    task = r.task(ANA, "Write the launch note", assignee=BUILDER)
+    r.ran(task, BUILDER, "expired")  # it may have acted: its job is uncertain
+    found = r.w.read(lambda c: c.execute("SELECT id, job_id FROM attempts WHERE task_id=?", (task,)).fetchone())
+    attempt, job = str(found[0]), str(found[1])
+    r.raw(lambda c: H.event(c, H.KEEPER, "job.held", attempt, {"job_id": job, "tools": ["Bash"]}))
+    r.later(hours=2)
+    expect(r.waits(task) == [("paused", BUILDER)], f"the held task waits on {r.waits(task)}")
+    expect(r.queued(task, BUILDER) == 0, "a wake was written that the bot cannot take")
+    paused = [n for n in r.needs(BEN) if n["kind"] == "paused"]  # the builder's owner
+    expect([n["tasks"] for n in paused] == [[task]], f"Needs you has {paused}")
+    r.raw(lambda c: c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job,)))  # dismissed
+    r.later(seconds=10)
+    expect(r.waits(task) == [("bot", BUILDER)] and r.queued(task, BUILDER) == 1, f"after: {r.waits(task)}")
+
+
 @extra("deleted-snoozed-task", "A snoozed task is deleted: its snooze ends with it and the check passes it by")
 def c_deleted_snoozed(r: Rig) -> None:
     from backend import task_delete

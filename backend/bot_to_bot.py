@@ -9,7 +9,7 @@ there (threads.note_fits_run), which the recipient's next run starts. Nothing is
 waits for the next one (H.NOTE_WAITING_SQL), and the message stays in its room for that room's next turn.
 
 It wakes the recipient at once, as before, when (WAKES):
-- the sender flags it: `needs_action` (`hub message send --needs-action`, `hub task comment --needs-action`);
+- the sender flags it: `needs_action` (`tico message send --needs-action`, `tico task comment --needs-action`);
 - it is not a plain message: an ask, an answer, a steer;
 - it carries anything but a plain message's references (an approval, questions, a command, a batch, ...);
 - it answers the recipient's own ask, a message the recipient flagged needs-action, or one it waits on (wait_s);

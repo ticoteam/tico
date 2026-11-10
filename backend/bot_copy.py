@@ -220,7 +220,7 @@ def install(app, store, auth, mutate, settings_admin, place_now):
                 botops = c.execute("SELECT runner_id FROM assignments WHERE bot='botops'").fetchone()
                 built_on.remember(c, copy_id, who.runner_id or (botops["runner_id"] if botops else ""))
             placed = None
-            if body.computer:  # an older BotOps; today's `hub bot copy` places after the build
+            if body.computer:  # an older BotOps; today's `tico bot copy` places after the build
                 c.execute("SAVEPOINT copy_place")
                 try:
                     placed = place_now(c, who, copy_id, body.computer, False)

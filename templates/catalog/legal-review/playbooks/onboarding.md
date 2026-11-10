@@ -6,15 +6,15 @@ Inputs: the contracts attached to the task, signed agreements in the docs, the c
 the human gives.
 Outcome: five recorded answers; a written playbook of the team's positions, with blanks where none were given; a real summary of
 the first contract; a first calendar; the first routine checked.
-Done when: `state.md` says `Setup: finished`, `hub bot setup-done` has run, and the first summary and calendar are on the task.
+Done when: `state.md` says `Setup: finished`, `tico bot setup-done` has run, and the first summary and calendar are on the task.
 
 ---
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub doc search "contract"
-    hub doc search "agreement"
+    tico task show <id>
+    tico doc search "contract"
+    tico doc search "agreement"
 
 Check what you can already reach. Do not ask what these already say. If you were given no contract, that is question four, and
 the first result waits for one.
@@ -54,16 +54,16 @@ reviewed. Summaries for a human, not legal advice." Nothing is sent.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows as off, `hub automation update <id> --enable`) and
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows as off, `tico automation update <id> --enable`) and
 tell the human in one line what it does: "I will send you a contract calendar every Monday at 09:00. A human sends anything to a
 counterparty." They can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave it off,
-adjust `knowledge/` and the routine to match (`hub automation update <id>`, with `--disable` to turn it off).
+adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the routine run. Until then nothing you have runs
 on its own. Run it once the answers and the first result are recorded, not before.

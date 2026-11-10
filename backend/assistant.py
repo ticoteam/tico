@@ -199,7 +199,7 @@ def canonical(path):
 
 
 def catalogue_setting(method, path, body=None):
-    """Whether this write is one setting from the catalogue, exactly as `hub settings set` makes it (backend/settings_
+    """Whether this write is one setting from the catalogue, exactly as `tico settings set` makes it (backend/settings_
     catalog.py). Its class decides it in `require_direct_setting`. Two settings at once, or anything the catalogue does
     not list, is not one."""
     from . import settings_catalog
@@ -523,7 +523,7 @@ def instruction(c, who, ref):
 
     def refuse(detail):
         raise Problem(
-            "on_behalf_of", detail + "; if they did not clearly ask, propose it (`hub assistant propose`)", 403
+            "on_behalf_of", detail + "; if they did not clearly ask, propose it (`tico assistant propose`)", 403
         )
 
     if who.via != "assistant" or who.confirmed or not who.attempt_id or not H.is_human(who.actor):
@@ -1297,7 +1297,9 @@ def runnable(c, method, path, body):
     if method != "POST" or not m or m.group(1) == "dry-run" or not isinstance(body, dict):
         return path, body
     if body.get("version") is None:
-        raise Problem("version", "A task change carries the version you saw: run `hub task show <id>` first", 422)
+        raise Problem(
+            "version", "A task change carries the version you saw: add it (`tico task show <id>` prints it)", 422
+        )
     if m.group(2):
         return path, body
     to = "closed" if body.get("close") else _MOVES.get(str(body.get("status") or ""))
@@ -1389,7 +1391,7 @@ def create_proposal(
         if not found or found[2] == "person":
             raise Problem(
                 "operation",
-                "A setting on a card is one setting from the catalogue (`hub settings find`) "
+                "A setting on a card is one setting from the catalogue (`tico settings find`) "
                 "that is not the person's own to change in Settings",
                 422,
             )

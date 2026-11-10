@@ -17,7 +17,7 @@ Four ways to reach it, one signature (`engine(state, questions, label=None) -> r
     direct(api_key)        POST https://api.typesafe.ai/v1/systemone with a customer's own TypeSafe
                            key; the server's second choice, never set by default.
     through_hub(client)    POST /api/v2/decisions on the hub with the turn's own credential; the
-                           `hub decision ask` command, the `hub_decision_ask` MCP tool and the mail CLI use
+                           `tico decision ask` command, the `hub_decision_ask` MCP tool and the mail CLI use
                            this, so no bot ever holds the key and every call is audited.
     from_env()             whichever of the two the environment allows, or None.
 
@@ -27,7 +27,7 @@ versioned set of questions with the state fields it expects and the thresholds c
 (a set's `id@version`) is how calls are grouped in the audit, so a month of judgments can be
 read back per question set.
 
-Pure stdlib on purpose: the runner venv, the mail venv, the cloud venv and the `hub` CLI all
+Pure stdlib on purpose: the runner venv, the mail venv, the cloud venv and the `tico` CLI all
 import it.
 """
 
@@ -960,7 +960,7 @@ def through_hub(client):
                 bool(getattr(exc, "retryable", False)),
             )
         answers = check_answers(result.get("answers") if isinstance(result, dict) else None, questions)
-        # `ref` names the call for `hub decision outcome`; an older server sends none.
+        # `ref` names the call for `tico decision outcome`; an older server sends none.
         return {
             "model": str(result.get("model") or MODEL),
             "answers": answers,

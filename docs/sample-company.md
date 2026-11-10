@@ -15,7 +15,7 @@ BotOps, the Librarian and the Strategy Bot are built in as on every Tico, and fo
 
 These are real bots on the person's own subscriptions, not [demo mode](demo.md). Each first task takes a few minutes,
 puts its result on the task as one comment, and then asks the owner one Yes/No question on the task, **Approve the
-welcome note?** and so on (`hub task ask <id> --to <owner> "Approve the welcome note?" --choices Yes,No`). It is in
+welcome note?** and so on (`tico task ask <id> --to <owner> "Approve the welcome note?" --choices Yes,No`). It is in
 their **Needs you**. Yes and the bot marks the task done; No and it changes the work as asked and asks again. Nothing a
 first task does is sent, posted or published outside the company: the Support Agent and the Content Marketer only
 draft.

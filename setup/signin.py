@@ -6,6 +6,7 @@ import urllib.parse
 from dataclasses import dataclass
 
 from . import contract
+from .aws import DEFAULT_PREFIX
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,15 @@ GENERIC = Provider(
         "Copy the issuer URL, the client ID and the client secret.",
     ),
 )
+
+
+def steps(p: Provider, prefix: str = DEFAULT_PREFIX) -> tuple[str, ...]:
+    """The steps, with the client named after --asset-prefix when it is not tico, so the consent screen matches."""
+    if prefix == DEFAULT_PREFIX:
+        return p.steps
+    return tuple(
+        s.replace("Name it Tico.", f"Name it {prefix}.").replace("named Tico;", f"named {prefix};") for s in p.steps
+    )
 
 
 def redirect_uri(domain: str) -> str:

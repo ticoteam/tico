@@ -1,4 +1,4 @@
-"""`hub automation ...` and the hub_automation_* tools against the real API (clients/remotecli.py, clients/hubtools.py):
+"""`tico automation ...` and the hub_automation_* tools against the real API (clients/remotecli.py, clients/hubtools.py):
 the CLI and MCP run the same tool, so the same rights and the same payloads as the UI."""
 
 import json
@@ -89,7 +89,7 @@ def test_the_cli_discards_a_proposal_and_lists_the_question_sets_and_the_guide(a
     sets = cli(api, "ana-test", "question-sets")["sets"]
     assert sets and all("@" in s["id"] for s in sets)
     guide = cli(api, "ana-test", "guide")["text"]
-    assert "hub automation create --file -" in guide and "`send_reply`" in guide and "{{" not in guide
+    assert "tico automation create --file -" in guide and "`send_reply`" in guide and "{{" not in guide
 
 
 def test_botops_sets_an_email_inboxs_send_switch_for_its_owner_only(api, botops):

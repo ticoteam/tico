@@ -3,8 +3,8 @@
 Schedule: the first of each month at 10:00 team time (routine `monthly-controls-page`), after setup. Budget 40 minutes.
 Nothing in any system is changed. The page goes to the Operations Manager; each control owner gets one evidence request.
 
-Inputs: `knowledge/controls.md`, `knowledge/evidence-log.md`, the evidence folder (through `hub doc search` and
-`hub doc read`), `knowledge/acknowledgements.md`, `knowledge/vendor-reviews.md`, the vendor register, and last month's page.
+Inputs: `knowledge/controls.md`, `knowledge/evidence-log.md`, the evidence folder (through `tico doc search` and
+`tico doc read`), `knowledge/acknowledgements.md`, `knowledge/vendor-reviews.md`, the vendor register, and last month's page.
 
 Outcome: one page in the shape of `knowledge/examples/controls-page.md`: the controls missing evidence for a closed period
 (first), the controls due this month with owner and exact evidence, access reviews due, policy acknowledgements outstanding,
@@ -47,12 +47,12 @@ with no security review, or one older than a year.
 
 Write `reports/YYYY-MM-DD-controls.md` in the shape of `knowledge/examples/controls-page.md`, then:
 
-    hub file publish reports/YYYY-MM-DD-controls.md
+    tico file publish reports/YYYY-MM-DD-controls.md
 
 For each control owner who must act, create one task with the exact evidence, the control reference and the due date:
-`hub task create --owner <human>`. Commit, then:
+`tico task create --owner <human>`. Commit, then:
 
-    hub task done <id> -m "..." --version N
+    tico task done <id> -m "..." --version N
 
 The note holds the headline (controls missing for a closed period, controls due this month), the page path, and what could not
 be read.

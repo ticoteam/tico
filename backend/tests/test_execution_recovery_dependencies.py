@@ -122,7 +122,7 @@ def test_interrupted_fallback_waits_for_reset_only_with_positive_empty_evidence(
         with api.app.state.store.transaction() as c:
             aid = H.new_id()
             c.execute(
-                'INSERT INTO ok_grants(requirement_id,subject,asked_by_id,used_by_id,ok_at,used_at) SELECT ?1, ?2, ?4, ?4, ?5, ?6',
+                "INSERT INTO ok_grants(requirement_id,subject,asked_by_id,used_by_id,ok_at,used_at,content_hash,created_at,ok_by_id) SELECT ?1, ?2, ?4, ?4, ?5, ?6, 'sha256-of-the-act', ?5, 'human:ana'",
                 (aid, 'spend', fallback['message']['id'], 'bot:ops', H.now(), H.now()),
             )
     post(

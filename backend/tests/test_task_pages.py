@@ -1,6 +1,6 @@
 """Task page links keep both resources' read rules and invalidate the task's Pages section."""
 
-from backend import events as E, file_library
+from backend import events as E, file_library, hubdb as H
 from backend.auth import Identity
 from backend.tests.helpers.api import get, headers, post, restrict  # noqa: F401
 from backend.tests.helpers.cards import delete, page as seeded_page, patch, place, task
@@ -114,7 +114,7 @@ def test_a_bot_can_unpin_its_page_after_handing_the_task_to_a_person(api):
     fid = seeded_page(api, "ops")
     linked = post(api, "pins", {"place": "task:" + tid, "item": "page:" + fid}, attempt["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (tid,))
+        H.task_reassign(c, "bot:ops", tid, "ana", "Ana takes it.", H.task(c, tid)["version"])
     delete(api, "pins/" + linked["id"], attempt["token"])
 
 

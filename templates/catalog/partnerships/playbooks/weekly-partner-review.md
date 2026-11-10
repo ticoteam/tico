@@ -7,7 +7,7 @@ with a proposed decision, the partner pipeline, and fees due. Nothing is decided
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/rules-of-engagement.md`, `knowledge/registrations.md` and last week's review. Check each
 decision a human made since: record it with who and when.
@@ -36,5 +36,5 @@ the fee. Put the list on the task and make requested payments with the necessary
 
 ## 6. Write and hand over
 
-Write `reports/YYYY-MM-DD-partner-review.md` in the shape of `knowledge/examples/partner-review.md`, `hub file publish` it, commit, and `hub task done <id> -m "..." --version N`: registrations waiting, conflicts,
+Write `reports/YYYY-MM-DD-partner-review.md` in the shape of `knowledge/examples/partner-review.md`, `tico file publish` it, commit, and `tico task done <id> -m "..." --version N`: registrations waiting, conflicts,
 fees for review, sources not read. Always finish the task.

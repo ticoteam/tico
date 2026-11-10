@@ -1,5 +1,5 @@
 // Offline browser regression: a task's page shows its session as a chat. People's lines are bubbles under their names
-// (yours without one), the bot's reply opens to the steps behind it, a status change is a one-line marker, and while
+// (yours without one), the bot's reply opens to the steps behind it, a move to a stage is a one-line marker, and while
 // the owner's run works a "Working" line shows its newest step with Stop, which stops that run. Redraws keep an open
 // fold's steps and "Stopping…"; someone who may not read the bot's runs is told why its steps are hidden. On a person's
 // task the bot that asked it answers: your message shows the bot chat's pending line (Sent, Queued, "<Bot> is working",
@@ -32,8 +32,8 @@ async function reread(page: Page) {
 }
 
 const now = Date.now(), at = (m: number) => new Date(now - m * 60000).toISOString();
-const task = {id: 't-docs', title: 'Ship the docs refresh', owner_id: 'bot:botops', requester_id: 'human:ana', status: 'doing',
-  lane: 'company', version: 2, created_at: at(60), updated_at: at(1), conversation_id: 'r-docs'};
+const task = {id: 't-docs', title: 'Ship the docs refresh', owner_id: 'bot:botops', requester_id: 'human:ana', status: 'open',
+  pipeline_id: 'docs', stage_id: 'docs-doing', version: 2, created_at: at(60), updated_at: at(1), conversation_id: 'r-docs'};
 const comments = [
   {id: 'k1', conversation_id: 'r-docs', sender_id: 'human:ana', kind: 'say', body: 'Refresh the docs please', created_at: at(50)},
   {id: 'k2', conversation_id: 'r-docs', sender_id: 'human:ben', kind: 'say', body: 'Include the API page too.', created_at: at(40)},
@@ -42,7 +42,11 @@ const comments = [
   {id: 'k4', conversation_id: 'r-docs', sender_id: 'bot:botops', kind: 'say', body: 'Shared the preview.', created_at: at(20),
     refs: {turn_id: 'a3'}, run: {steps: 1}},
 ];
-const events = [{id: 1, task_id: 't-docs', created_at: at(35), actor: 'bot:botops', field: 'status', old: 'open', new: 'doing', note: ''}];
+// A move names the stage it went to by its id; the page reads the pipelines for its name.
+const events = [{id: 1, task_id: 't-docs', created_at: at(55), actor: 'human:ana', field: 'move', old: null, new: 'docs-todo', note: ''},
+  {id: 2, task_id: 't-docs', created_at: at(35), actor: 'bot:botops', field: 'move', old: 'docs-todo', new: 'docs-doing', note: ''}];
+const pipelines = [{id: 'docs', name: 'Docs', stages: [{id: 'docs-todo', name: 'To do', kind: 'work'}, {id: 'docs-doing', name: 'Doing', kind: 'work'},
+  {id: 'docs-done', name: 'Done', kind: 'done'}, {id: 'docs-closed', name: 'Closed', kind: 'closed'}]}];
 const execution = {job_id: 'j2', message_id: 'k2', bot: 'botops', run_id: 'a2', state: 'running', label: 'Working', text: '',
   parts: [{kind: 'progress', text: 'Checking the API page.', at: at(1)}, {kind: 'tool', text: 'Ran hub task create', at: at(1)}]};
 
@@ -67,6 +71,7 @@ async function run(viewport: Viewport, shot: string) {
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/tasks') return json({tasks: [task]});
+      if (p === '/api/v2/pipelines') return json({pipelines});
       if (p === '/api/v2/tasks/t-docs')
         return json({task, comments, events, can_comment: true, children: [], execution: !running ? {...execution, state: 'canceled', label: 'Stopped'}
           : live2 ? {...execution, parts: [...execution.parts, {kind: 'tool', text: 'Ran grep', at: at(0)}]} : execution});
@@ -94,11 +99,12 @@ async function run(viewport: Viewport, shot: string) {
     assert.ok(!(await thread.locator('.tcomment.from-me .tcomment-who').isVisible()), 'your own line needs no name');
     assert.equal(await thread.locator('.tcomment.tmsg.bot .bubble.bot', {hasText: 'Rebuilt the guide.'}).count(), 1);
 
-    // A status change is a one-line marker between the messages, in time order.
+    // A move is a one-line marker between the messages, in time order; the task's first stage is its creation, no marker.
     const order = await thread.evaluate(t => [...(t.children as HTMLCollection & Iterable<Element>)].map(x => x.textContent!.replace(/\s+/g, ' ').trim()));
     const mark = order.findIndex(x => /moved it to Doing/.test(x));
     assert.ok(mark > order.findIndex(x => /Include the API page/.test(x)) && mark < order.findIndex(x => /Rebuilt the guide/.test(x)), 'the marker sits where it happened');
     assert.equal(await thread.locator('.tcomment.tmark', {hasText: 'moved it to Doing'}).count(), 1);
+    assert.equal(await thread.locator('.tcomment.tmark', {hasText: /moved it to To do/}).count(), 0, 'its creation is no marker');
 
     // The reply opens to its steps, read once.
     const fold = thread.locator('.tcomment.bot details.run-steps[data-turn="a1"]');
@@ -459,7 +465,7 @@ async function followReach(viewport: Viewport, shot: string, theme: string) {
     await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
     const errors: string[] = [], reads: Record<string, string>[] = [], follows: unknown[] = [], posted: Record<string, unknown>[] = [], prefs: Record<string, unknown> = {};
     let followers = [{actor: 'bot:lead', notify: 'live', reason: 'owner'}, {actor: 'human:ben', notify: 'live', reason: 'requester'}];
-    const rel = {id: 't-rel', title: 'Cut the release', owner_id: 'bot:lead', requester_id: 'human:ben', status: 'doing',
+    const rel = {id: 't-rel', title: 'Cut the release', owner_id: 'bot:lead', requester_id: 'human:ben', status: 'open',
       lane: 'company', version: 1, created_at: at(30), updated_at: at(5), conversation_id: 'r-rel'};
     const said = [{id: 'r1', conversation_id: 'r-rel', sender_id: 'bot:lead', kind: 'say', body: 'Tagging after the checks.', created_at: at(20)}];
     page.on('pageerror', e => errors.push(e.message));

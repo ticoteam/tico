@@ -594,17 +594,43 @@ def card_of(c, message_id):
 
 def bot_open(c, bot, prefix):
     """Whether the bot has a standing card on a task it owns whose key starts with `prefix` ("login:"): that cause
-    already has a person."""
+    already has a person. Kept for the snapshot (read_cache), where `prime_open` reads it for many bots at once."""
     if not _present(c):
         return False
+    from . import read_cache
+
+    def read():
+        live, args = _live()
+        return tuple(
+            c.execute(
+                f"SELECT r.task_id, r.person FROM task_reconnects r WHERE r.bot=? AND r.owner=? AND r.key LIKE ? "
+                f"AND {live}",
+                (bot, _H().bot_actor(bot), prefix.replace("%", "") + "%", *args),
+            ).fetchall()
+        )
+
+    return any(_reads(c, r) for r in read_cache.value(c, ("bot_open", bot, prefix), read, shared=True))
+
+
+def prime_open(c, bots, prefix):
+    """`bot_open`'s cards for every bot in `bots` in one read, kept for the snapshot: a pass that asks each bot whether
+    it can run reads none of them again."""
+    from . import read_cache
+
+    values = read_cache.cache(c)
+    bots = [b for b in dict.fromkeys(bots) if b and ("bot_open", b, prefix) not in (values or {})]
+    if values is None or not bots or not _present(c):
+        return
     live, args = _live()
-    return any(
-        _reads(c, r)
-        for r in c.execute(
-            f"SELECT r.task_id, r.person FROM task_reconnects r WHERE r.bot=? AND r.owner=? AND r.key LIKE ? AND {live}",
-            (bot, _H().bot_actor(bot), prefix.replace("%", "") + "%", *args),
-        ).fetchall()
-    )
+    found = {b: [] for b in bots}
+    for row in c.execute(
+        f"SELECT r.bot, r.task_id, r.person FROM task_reconnects r WHERE r.bot IN (SELECT value FROM json_each(?)) "
+        f"AND r.owner='bot:' || r.bot AND r.key LIKE ? AND {live}",
+        (json.dumps(bots), prefix.replace("%", "") + "%", *args),
+    ).fetchall():
+        found[row[0]].append(row)
+    for bot, rows in found.items():
+        values[("bot_open", bot, prefix)] = tuple(rows)
 
 
 def request_of(c, task_id, key):

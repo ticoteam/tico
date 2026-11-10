@@ -1,7 +1,7 @@
 # Tico
 
 Tico is a source-available operating system for a team of humans and bots (PolyForm Perimeter 1.0.1): a FastAPI
-server in `backend/`, the one-page web UI in `ui/` (`index.html`, `app/`, `styles/`; see ui/README.md), the runner in `runner-rs/` (Python helpers in `runner_support/`), the `hub`
+server in `backend/`, the one-page web UI in `ui/` (`index.html`, `app/`, `styles/`; see ui/README.md), the runner in `runner-rs/` (Python helpers in `runner_support/`), the `tico`
 CLI and MCP tool table in `clients/`, and a Tauri desktop shell in `app/`. `README.md` says how to
 run it and `docs/how-it-works.md` describes the system.
 
@@ -84,7 +84,7 @@ reviewed work merged.
 ## Hit every surface
 The commonest defect in Tico is a change that works where it was tested and is missing everywhere else. Before
 calling a change done, walk this list and say in the PR which entries applied:
-- **Clients**: the web app at desktop and phone widths, the Tauri app, Slack, the `hub` CLI and the MCP tool table
+- **Clients**: the web app at desktop and phone widths, the Tauri app, Slack, the `tico` CLI and the MCP tool table
   (`clients/hubtools.py`), API v2 and its spec (`backend/openapi_v2.py`).
 - **Runners**: the Rust runner, on a Mac and in the Docker image.
 - **Harnesses**: every harness, through the capabilities in its `runner-rs/harnesses/*.toml`, never by comparing names.

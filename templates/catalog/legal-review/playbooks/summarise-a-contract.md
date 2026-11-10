@@ -8,7 +8,7 @@ and it says so. Nothing is sent, signed or changed.
 
 ## 1. Read everything
 
-    hub task show <id>
+    tico task show <id>
 
 Read every page: the body, schedules, order forms, terms linked by name. List each document the contract
 refers to that you were not given; that list goes at the top of the summary. Identify the kind (vendor,
@@ -50,11 +50,11 @@ then what you could not read, then the closing line in bold: **This is a summary
 advice. Have counsel review anything that matters before you sign or rely on it.** Save it as
 `reports/summaries/<counterparty>-<kind>.md` in the shape of `knowledge/examples/contract-summary.md`.
 
-    hub file publish reports/summaries/<counterparty>-<kind>.md
+    tico file publish reports/summaries/<counterparty>-<kind>.md
 
 ## 6. Finish
 
-Add the contract to `knowledge/contracts.md`. `hub task done <id> -m "..." --version N`: the five lines,
+Add the contract to `knowledge/contracts.md`. `tico task done <id> -m "..." --version N`: the five lines,
 the path, and any deadline inside 14 days first. A reply to the counterparty is a draft on the task. It goes out only when a person has turned mail sending on in Tico and the task asks for it, within the granted Tools.
 
 ## When a source fails

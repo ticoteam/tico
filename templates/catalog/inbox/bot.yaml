@@ -12,8 +12,8 @@ gateway:
   level: low
 
 # The first routine is declared but not armed (`enabled: false`). The bot arms it with
-# `hub automation update <id> --enable` when Setup starts; setup-done allows normal work.
-# `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+# `tico automation update <id> --enable` when Setup starts; setup-done allows normal work.
+# `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
 # A second or third pass a day is a routine the bot adds after a week of a brief the human reads.
 routines:
   - id: morning-mail-brief

@@ -427,6 +427,12 @@ def refused(c, identity, exc, savepoint="domain_write"):
         pass
     finally:
         H.PRIVATE_WRITE.reset(token)
+    return refusal_problem(exc)
+
+
+def refusal_problem(exc):
+    """The Problem a refusal answers with, for a write that does not go through `mutate` (it has no savepoint to undo
+    and keeps no audit of its own): a refusal is always a clean 4xx, never an uncaught error."""
     # The engine's refusals (a rule that starts with `task_`) are 409: the task is not where the caller thought, or
     # the move is not allowed now. What is missing, the commands allowed next and the task's version ride in `extra`
     # (docs/dev/pipelines-v3-cutover.md, "HTTP").
@@ -1949,8 +1955,8 @@ class Store:
                     # tasks.waiting_on, which 20261106112609_derived_waiting drops: it ran before this step.
                     c.execute("INSERT INTO cloud_migrations VALUES(59,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=60").fetchone():
-                    # Every task-to-task relationship in task_relations; tasks.parent_id and
-                    # tasks.blocked_by move into it and are dropped (hubdb migration 30 does the same).
+                    # Every task-to-task relationship in task_relations; the old tasks.parent_id and tasks.blocked_by
+                    # are dropped (hubdb migration 30 does the same).
                     from . import task_relations as _task_relations
 
                     _task_relations.migrate(c)
@@ -2246,6 +2252,12 @@ class Store:
                     # A message's runs: task_delete counts them on every delete, and topic_change
                     # and the run visibility (sql.py) look them up by message.
                     ("attempts_message", "attempts(message_id)"),
+                    # The messages that name a task in their refs: the runs on a task (task_wakes._runs_of), read
+                    # for every open task on each never-stuck pass. The query's expression word for word.
+                    (
+                        "messages_refs_task",
+                        "messages(json_extract(refs, '$.task')) WHERE json_extract(refs, '$.task') IS NOT NULL",
+                    ),
                     # Runs by when their record closed: bot hours, health, the usage reads.
                     ("attempts_settled", "attempts(settled_at)"),
                     # A bot's last settled run (the team list's latest run): one seek.

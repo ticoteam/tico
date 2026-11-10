@@ -7,7 +7,7 @@ description: Write the weekly people summary so every count carries its source a
 When to use: each time you write the weekly summary, or any count, table or headline that goes to its readers.
 
 Steps:
-1. Start from the sources, not from memory: the headcount plan, the people calendar, the roster from `hub team show`, the open
+1. Start from the sources, not from memory: the headcount plan, the people calendar, the roster from `tico team show`, the open
    people tasks, and each people bot's newest report. Write the source and its date beside each count.
 2. Mark what you could not read. A role with no source is "status unknown", never "on track". A bot you could not read is
    named, and any count that depends on it says so.

@@ -272,7 +272,7 @@ function propMenu<T extends PropMenuItem>(d: TaskDialog, anchor: HTMLElement, {l
   pop.innerHTML = `<div class="tl-menu" role="${menu ? 'menu' : 'group'}" aria-label="${esc(label)}"><div class="tl-menu-h" aria-hidden="true">${esc(label)}</div>
     ${find || entry ? `<input type="${entry ? 'text' : 'search'}" class="tl-menu-q" placeholder="${esc(entry || find)}" aria-label="${esc(entry || find)}" autocomplete="off" spellcheck="false">` : ''}
     <div class="tl-menu-list">${items.map((it, i) => `<button type="button"${menu ? ` role="${it.checked != null ? 'menuitemradio' : 'menuitem'}"` : ''}${state(it)} class="tl-mi${it.danger ? ' danger' : ''}" data-pick="${i}"${it.value != null ? ` data-prop-pick="${esc(it.value)}"` : ''} data-label="${esc(String(it.text || '').toLowerCase())}">${it.html || esc(it.text)}${it.checked ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`).join('')}</div>
-    ${items.length ? '' : `<div class="tl-menu-none">${esc(none)}</div>`}</div>`;
+    ${items.length || !none ? '' : `<div class="tl-menu-none">${esc(none)}</div>`}</div>`;
   const input = $('.tl-menu-q', pop) as HTMLInputElement | null;
   if (input) input.oninput = () => {
     const q = input.value.trim().toLowerCase();
@@ -450,7 +450,9 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       items.push({text: 'Move on', run: () => taskMoveOn(d, more, save)});
     }
     if (r.edit) items.push({text: 'Reassign…', run: () => setTimeout(() => ($('[data-prop="owner"]', d) as HTMLElement | null)?.click())});
-    if (!r.live && r.reopen) items.push({text: 'Reopen', run: () => save('stage', {move: 'reopen'})});
+    // A reopen says why (docs/pipelines-v3.md C24): the menu takes the note, and Enter reopens it.
+    if (!r.live && r.reopen) items.push({text: 'Reopen…', run: () => setTimeout(() => propMenu(d, more, {label: 'Reopen', entry: 'Why reopen it?',
+      none: '', onEntry: v => void save('stage', {move: 'reopen', why: v})}))});
     if (task.status === 'open' && (r.mover || r.party)) items.push({text: 'Close', danger: true, run: () => save('stage', {close: true})});
     // Closing counts as finished work; a task made by mistake is deleted into the trash instead.
     if (r.mover || task.requester_id === myActor()) items.push({text: 'Delete task', danger: true, run: async () => {

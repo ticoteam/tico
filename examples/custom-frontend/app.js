@@ -244,7 +244,7 @@ async function snapshot(mine) {
 }
 
 async function loadTasks() {
-  const { tasks } = await api("/api/v2/tasks?status=open,doing,waiting,review,ready&limit=100");
+  const { tasks } = await api("/api/v2/tasks?status=open&limit=100");
   const table = el("table");
   table.append(row(["Task", "Owner", "Status"], "th"));
   for (const t of tasks) table.append(row([t.title, t.owner_name || t.owner_id, t.status]));
@@ -294,7 +294,11 @@ async function saveFile(f) {
 async function loadNeeds() {
   const { items } = await api("/api/v2/needs-you");
   const list = el("ul");
-  for (const i of items) list.append(el("li", i.kind + ": " + i.title + (i.first_line && i.first_line !== i.title ? " - " + i.first_line : "")));
+  // Each item is an ask, a task of yours, a stuck stretch or a mention; `line` says what is wanted, `task` is its task.
+  for (const i of items) {
+    const title = (i.task && i.task.title) || "";
+    list.append(el("li", i.kind + ": " + [title, i.line !== title && i.line].filter(Boolean).join(" - ")));
+  }
   $("needs").replaceChildren(el("h1", "Needs you"), items.length ? list : el("p", "Nothing is waiting on you."));
 }
 

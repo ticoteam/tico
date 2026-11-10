@@ -11,17 +11,17 @@ Done when: the proposal is on the task in under 100 words; if the task asked for
 
 ## 1. Read the request
 
-    hub task show <id>
+    tico task show <id>
 
 Find the ask, the deadline and who wants it. If the ask, the audience or the date is missing, ask
-the requester once with `hub task ask <id> --to <person> "<question>" --version N` and stop.
+the requester once with `tico task ask <id> --to <person> "<question>" --version N` and stop.
 
 ## 2. Match it to an owner
 
 Use `knowledge/routing.md`, then the team's lines in `AGENT.md`: a post or article (`content`), a
 search or AI-visibility question (`seo-visibility`), a social post or what people say publicly
 (`listening`), a campaign email (`email-marketing`), a launch or positioning (`product-marketing`),
-competitor facts (`hub market report`, which the Librarian curates), reviews (`reputation`), ads (`social-ads-owner` for paid social, `search-ads-owner` for paid search, `paid-media` only when neither is on the team), an event (`events`),
+competitor facts (`tico market report`, which the Librarian curates), reviews (`reputation`), ads (`social-ads-owner` for paid social, `search-ads-owner` for paid search, `paid-media` only when neither is on the team), an event (`events`),
 press (`pr`), the community (`community`), brand and voice (`brand`), tracking and lead handoff
 (`marketing-ops`). A segment's growth goes to its segment marketing owner first, and a conversion problem to `cro-owner` before any other owner. If two owners could take it, say why one fits better. If none fits and the same
 kind of request keeps coming, propose a hire (`AGENT.md`, Hiring) instead of routing it to a human
@@ -40,6 +40,6 @@ live page is marked "draft until a person turns mail sending on in Tico".
 
 ## 5. Finish
 
-When the task asks for routing and a granted Tool allows it, run `hub task create --owner <slug>` with the brief, link it to this
+When the task asks for routing and a granted Tool allows it, run `tico task create --owner <slug>` with the brief, link it to this
 task, and log the routing in `knowledge/routing.md` if it teaches a rule. Then
-`hub task done <id> -m "..." --version N`. A no or a change is recorded and nothing is created.
+`tico task done <id> -m "..." --version N`. A no or a change is recorded and nothing is created.

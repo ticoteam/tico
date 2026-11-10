@@ -49,6 +49,6 @@ may change them at setup, and each change is dated in `knowledge/segment.md`.
 
 - 2026-11-06: Tico repo docs/growth.md, read for this template: the rule that a blank is not a zero, and the cohort and
   channel definitions that the segment figures must agree with.
-- 2026-11-06: Tico repo hubcli command help (`hub task`, `hub meeting`, `hub update`, `hub kpi`): the commands this
+- 2026-11-06: Tico repo hubcli command help (`tico task`, `tico meeting`, `tico update`, `tico kpi`): the commands this
   practice names.
 - The counting, ranking and brief thresholds above are this team's defaults. No outside benchmark is cited.

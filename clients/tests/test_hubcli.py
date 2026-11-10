@@ -1,4 +1,4 @@
-"""The `hub` CLI as a bot runs it: `scripts/hub` in a subprocess, remote-only.
+"""The `tico` CLI as a bot runs it: `scripts/hub` in a subprocess, remote-only.
 
 The command surface (docs/history/hub-v2.md §5) and the exit codes are the contract every bot's AGENT.md
 depends on: 0 fine, 2 refused or a non-retryable API error, 1 anything else. The real HTTP round
@@ -638,7 +638,7 @@ class Stub(BaseHTTPRequestHandler):
                     "error": "task_not_met",
                     "detail": "Not moved. Not met: Owner says done.",
                     "missing": ["Owner says done"],
-                    "next": ['hub task move T1 next -m "why" --version 3', 'hub task close T1 -m "why" --version 3'],
+                    "next": ['tico task move T1 next -m "why" --version 3', 'tico task close T1 -m "why" --version 3'],
                     "version": 3,
                 },
             )
@@ -706,12 +706,15 @@ class AgainstAStub(unittest.TestCase):
         posted = next(b for m, p, _, b in Stub.seen if m == "POST")
         self.assertEqual(posted, {"version": 2, "title": "Ship it", "note": "renamed"})
 
-    def test_a_change_without_a_version_says_to_show_the_task_first_and_sends_nothing(self):
+    def test_a_change_without_a_version_says_to_add_the_version_and_sends_nothing(self):
+        from clients.hubtools import version_needed
+
         for argv in (["task", "update", "T1", "--title", "x"], ["task", "done", "T1", "-m", "x"]):
             Stub.seen.clear()
             code, out = run_hub(*argv, env=self.env)
             self.assertEqual(code, 1, out)
-            self.assertEqual((out["error"], out["detail"]), ("usage", "Run `hub task show T1` first."))
+            self.assertEqual((out["error"], out["detail"]), ("usage", version_needed("T1")))
+            self.assertIn("--version N", out["detail"])
             self.assertFalse([s for s in Stub.seen if s[0] == "POST"])
 
     def test_a_refusal_prints_what_is_missing_and_the_commands_allowed_next(self):
@@ -724,8 +727,8 @@ class AgainstAStub(unittest.TestCase):
                 "Missing:",
                 "  Owner says done",
                 "You can:",
-                '  hub task move T1 next -m "why" --version 3',
-                '  hub task close T1 -m "why" --version 3',
+                '  tico task move T1 next -m "why" --version 3',
+                '  tico task close T1 -m "why" --version 3',
             ],
         )
 
@@ -797,14 +800,14 @@ class AgainstAStub(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             report = Path(tmp) / "report.md"
-            report.write_bytes(b"hub task update fails.\r\nError: refused (version)\r\n\r\n")
+            report.write_bytes(b"tico task update fails.\r\nError: refused (version)\r\n\r\n")
             argv = ("support", "report", "--file", str(report), "--no-ids", "--task", "T9")
             code, out = run_hub(*argv, env=self.env)
         self.assertEqual(code, 0, out)
         self.assertEqual((out["ok"], out["task_id"]), ("r-1", "T9"))
-        self.assertIn("hub support send --ok r-1", out["next"])
+        self.assertIn("tico support send --ok r-1", out["next"])
         posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/support/reports")
-        message = "hub task update fails.\nError: refused (version)"
+        message = "tico task update fails.\nError: refused (version)"
         self.assertEqual(
             posted,
             {
@@ -1002,7 +1005,7 @@ ONBOARDING = {
 
 
 class BotSetup(unittest.TestCase):
-    """`hub template list` and `hub bot create|check`: the three commands BotOps needs in a turn.
+    """`tico template list` and `tico bot create|check`: the three commands BotOps needs in a turn.
 
     The parsing is the real parser and the work is the real `clients/catalog.py`; only the API is
     a fake, so what these assert is which endpoints a command reads and what it writes to disk.
@@ -1103,7 +1106,7 @@ class BotSetup(unittest.TestCase):
         self.client.github = APIError("forbidden", "seo is not a bot being set up or running", 403, False)
         made = self.run_command("bot", "create", "seo", "--template", "specialist")
         self.assertIn("skipped", made["github"])
-        self.assertIn("hub bot repo-create seo --empty", made["github"]["note"])
+        self.assertIn("tico bot repo-create seo --empty", made["github"]["note"])
 
     def test_a_bot_created_without_a_slug_takes_the_one_picked_from_its_name(self):
         # The server picks it in a person's turn; the build and its repository use that slug.
@@ -1293,7 +1296,7 @@ def test_market_watch_and_briefing_commands_reach_their_routes(monkeypatch, tmp_
 
 
 def test_market_apply_sends_the_verified_date_to_an_entity_or_a_new_one_and_only_when_given(monkeypatch):
-    """`hub market apply --last-verified-at` puts the date on the existing entity, or on the new entity it creates;
+    """`tico market apply --last-verified-at` puts the date on the existing entity, or on the new entity it creates;
     without the flag the body is what it was. The date is passed through: the server refuses a bad one."""
     import pytest
     from clients import remotecli
@@ -1405,7 +1408,7 @@ def test_market_apply_refuses_a_timestamp_or_a_written_date_and_sends_nothing(mo
 
 
 def test_thread_link_slack_runs_the_mcp_tool_for_each_of_its_three_behaviours(monkeypatch):
-    """`hub thread link-slack` runs `hub_thread_link_slack` (clients/hubtools.py): a channel asks for the link, the thread
+    """`tico thread link-slack` runs `hub_thread_link_slack` (clients/hubtools.py): a channel asks for the link, the thread
     alone lists its links, and --off lists them and deletes each one."""
     from clients import remotecli
 
@@ -1443,7 +1446,7 @@ def test_thread_link_slack_runs_the_mcp_tool_for_each_of_its_three_behaviours(mo
 
 
 def test_who_can_see_runs_from_the_cli_and_its_mcp_tools(monkeypatch):
-    """`hub task create --private --reader X` sends the readers; `hub task readers list|add|remove` run the
+    """`tico task create --private --reader X` sends the readers; `tico task readers list|add|remove` run the
     hub_task_readers_* tools against /tasks/{id}/readers."""
     from clients import remotecli
 
@@ -1504,7 +1507,7 @@ def test_who_can_see_runs_from_the_cli_and_its_mcp_tools(monkeypatch):
 
 
 def test_followers_run_from_the_cli_and_its_mcp_tools(monkeypatch):
-    """`hub task create --follow` sends follow; `hub task followers|follow|unfollow` run the hub_task_* tools against
+    """`tico task create --follow` sends follow; `tico task followers|follow|unfollow` run the hub_task_* tools against
     /tasks/{id}/followers."""
     from clients import remotecli
 
@@ -1637,7 +1640,7 @@ def test_every_webhook_command_runs_against_a_remote_server(argv, monkeypatch):
 
 
 def test_hub_notice_list_is_not_the_renamed_notice_send():
-    """Only the old `hub notice <text>` becomes `message send --fyi`; the new `notice list` and its flags stay."""
+    """Only the old `tico notice <text>` becomes `message send --fyi`; the new `notice list` and its flags stay."""
     assert hubcli.rename_argv(["notice", "list"]) == (["notice", "list"], None)
     assert hubcli.rename_argv(["notice", "--help"]) == (["notice", "--help"], None)
     argv, said = hubcli.rename_argv(["notice", "Deploy done"])
@@ -1647,28 +1650,28 @@ def test_hub_notice_list_is_not_the_renamed_notice_send():
 @pytest.mark.parametrize(
     "argv, instead",
     [
-        (["question", "ask", "ops", "Which plan?"], "hub task ask"),
-        (["question", "answer", "m1", "Yes"], "hub task answer"),
-        (["ask", "ops", "Which plan?"], "hub task ask"),
-        (["answer", "m1", "Yes"], "hub task answer"),
-        (["task", "question", "Which plan?", "--on", "ana"], "hub task ask"),
+        (["question", "ask", "ops", "Which plan?"], "tico task ask"),
+        (["question", "answer", "m1", "Yes"], "tico task answer"),
+        (["ask", "ops", "Which plan?"], "tico task ask"),
+        (["answer", "m1", "Yes"], "tico task answer"),
+        (["task", "question", "Which plan?", "--on", "ana"], "tico task ask"),
         (["task", "ask-resolve", "t1", "c1"], "Needs you"),
-        (["task", "answers", "t1"], "hub task show <id>, under To leave"),
-        (["approval", "approve", "ap1"], "hub task answer"),
-        (["approval", "request", "--kind", "send"], "hub task ask"),
-        (["task", "wait", "t1", "--on", "task:t2"], "hub task file"),
-        (["task", "check-back", "t1", "--in", "2h"], "hub task snooze"),
-        (["task", "later", "t1", "--handled"], "hub task snooze"),
-        (["task", "defer", "t1", "--handled"], "hub task snooze"),
+        (["task", "answers", "t1"], "tico task show <id>, under To leave"),
+        (["approval", "approve", "ap1"], "tico task answer"),
+        (["approval", "request", "--kind", "send"], "tico task ask"),
+        (["task", "wait", "t1", "--on", "task:t2"], "tico task file"),
+        (["task", "check-back", "t1", "--in", "2h"], "tico task snooze"),
+        (["task", "later", "t1", "--handled"], "tico task snooze"),
+        (["task", "defer", "t1", "--handled"], "tico task snooze"),
         (["task", "bulk", "close"], "one task at a time"),
-        (["task", "waive-qa", "t1"], "hub task move"),
-        (["task", "types"], "hub task show"),
-        (["task", "type", "create", "--name", "Ops"], "hub task show"),
-        (["pipeline"], "hub task show"),
-        (["pipeline-manager", "eng", "ops"], "hub task show"),
-        (["requirements", "s1"], "hub task show"),
-        (["task", "stuck"], "hub task list"),
-        (["growth", "idea", "create", "--title", "Referral"], "hub task create"),
+        (["task", "waive-qa", "t1"], "tico task move"),
+        (["task", "types"], "tico task show"),
+        (["task", "type", "create", "--name", "Ops"], "tico task show"),
+        (["pipeline"], "tico task show"),
+        (["pipeline-manager", "eng", "ops"], "tico task show"),
+        (["requirements", "s1"], "tico task show"),
+        (["task", "stuck"], "tico task list"),
+        (["growth", "idea", "create", "--title", "Referral"], "tico task create"),
     ],
 )
 def test_a_removed_command_prints_one_line_naming_its_replacement(argv, instead, capsys, monkeypatch):
@@ -1678,10 +1681,10 @@ def test_a_removed_command_prints_one_line_naming_its_replacement(argv, instead,
     assert hubcli.main(argv) == 1
     out = capsys.readouterr()
     lines = out.err.strip().splitlines()
-    assert out.out == "" and len(lines) == 1 and lines[0].startswith('hub: "') and "is gone" in lines[0]
+    assert out.out == "" and len(lines) == 1 and lines[0].startswith('tico: "') and "is gone" in lines[0]
     assert instead in lines[0]
-    if instead == "hub task ask" and argv[0] in ("ask", "question"):
-        assert "hub message send" in lines[0] and "--needs-action" in lines[0]
+    if instead == "tico task ask" and argv[0] in ("ask", "question"):
+        assert "tico message send" in lines[0] and "--needs-action" in lines[0]
 
 
 def test_goal_checkin_list_with_the_list_word_is_checkin_list():
@@ -1793,7 +1796,7 @@ def test_a_plain_webhook_header_sends_no_secret_key():
 
 
 def test_file_approved_by_path_asks_with_the_path_and_digest_as_query_fields(tmp_path, monkeypatch):
-    """`hub file approved <path>` sends the path and digest as query fields, not as the client's own path argument."""
+    """`tico file approved <path>` sends the path and digest as query fields, not as the client's own path argument."""
     import hashlib
     from urllib.parse import parse_qs, urlsplit
     from clients import hubtools, remotecli, tico
@@ -2020,7 +2023,7 @@ def test_the_retired_gtm_lines_run_their_new_commands_with_a_notice(monkeypatch,
     ):
         assert hubcli.main(old) == 0
         assert ran[-1] == new
-    assert '"hub gtm show" is now "hub strategy show --section how"' in capsys.readouterr().err
+    assert '"tico gtm show" is now "tico strategy show --section how"' in capsys.readouterr().err
 
 
 def test_strategy_show_section_how_prints_the_section_or_says_nothing_is_published(monkeypatch, capsys):
@@ -2102,7 +2105,7 @@ def test_call_commands_run_the_call_tools_on_their_routes(monkeypatch):
 
 
 def test_thread_delete_runs_the_message_delete_route(monkeypatch):
-    """`hub thread delete` runs `hub_thread_delete`: DELETE on the message, with no body."""
+    """`tico thread delete` runs `hub_thread_delete`: DELETE on the message, with no body."""
     from clients import remotecli
     from unittest.mock import Mock
 
@@ -2115,7 +2118,7 @@ def test_thread_delete_runs_the_message_delete_route(monkeypatch):
 
 
 def test_thread_upload_streams_the_file_to_the_thread_message_route(monkeypatch, tmp_path):
-    """`hub thread upload` runs `hub_thread_upload`: the file is streamed (never read whole) as multipart to the thread's
+    """`tico thread upload` runs `hub_thread_upload`: the file is streamed (never read whole) as multipart to the thread's
     upload route, with the text and reply target as form fields."""
     from pathlib import Path
     from unittest.mock import Mock
@@ -2145,7 +2148,7 @@ def test_thread_upload_streams_the_file_to_the_thread_message_route(monkeypatch,
 
 
 def test_thread_slack_resume_posts_to_the_link_resume_route(monkeypatch):
-    """`hub thread slack-resume` runs `hub_thread_slack_resume`: POST on the link's resume route, as the person asking."""
+    """`tico thread slack-resume` runs `hub_thread_slack_resume`: POST on the link's resume route, as the person asking."""
     from clients import remotecli
     from unittest.mock import Mock
 
@@ -2158,7 +2161,7 @@ def test_thread_slack_resume_posts_to_the_link_resume_route(monkeypatch):
 
 
 def test_rules_withdraw_posts_an_empty_body_to_the_hold_withdraw_route(monkeypatch):
-    """`hub rules withdraw <hold-id>` runs `hub_rules_withdraw`: POST rule-holds/{id}/withdraw with an empty body."""
+    """`tico rules withdraw <hold-id>` runs `hub_rules_withdraw`: POST rule-holds/{id}/withdraw with an empty body."""
     from clients import remotecli
     from unittest.mock import Mock
 
@@ -2171,7 +2174,7 @@ def test_rules_withdraw_posts_an_empty_body_to_the_hold_withdraw_route(monkeypat
 
 
 def test_assistant_withdraw_posts_the_reason_to_the_card_route(monkeypatch):
-    """`hub assistant withdraw <id> --reason ...` runs `hub_assistant_withdraw`: POST assistant/actions/{id}/withdraw."""
+    """`tico assistant withdraw <id> --reason ...` runs `hub_assistant_withdraw`: POST assistant/actions/{id}/withdraw."""
     from clients import remotecli
     from unittest.mock import Mock
 
@@ -2184,7 +2187,7 @@ def test_assistant_withdraw_posts_the_reason_to_the_card_route(monkeypatch):
 
 
 def test_assistant_proposals_lists_the_callers_waiting_cards(monkeypatch):
-    """`hub assistant proposals` runs `hub_assistant_proposals`: GET assistant/proposals."""
+    """`tico assistant proposals` runs `hub_assistant_proposals`: GET assistant/proposals."""
     from clients import remotecli
     from unittest.mock import Mock
 
@@ -2197,7 +2200,7 @@ def test_assistant_proposals_lists_the_callers_waiting_cards(monkeypatch):
 
 
 def test_tool_index_reaches_the_tool_index_route_with_its_paging(monkeypatch):
-    """`hub tool index --limit 5 --cursor c2` runs `hub_tool_index`: GET tool-index with the page."""
+    """`tico tool index --limit 5 --cursor c2` runs `hub_tool_index`: GET tool-index with the page."""
     from clients import remotecli
     from unittest.mock import Mock
 
@@ -2212,7 +2215,7 @@ def test_tool_index_reaches_the_tool_index_route_with_its_paging(monkeypatch):
 
 
 def test_the_background_card_names_its_person_on_the_wire(monkeypatch):
-    """`hub assistant propose --for human:<id>` reaches the server as the body's `for`: remotecli.run used to drop it."""
+    """`tico assistant propose --for human:<id>` reaches the server as the body's `for`: remotecli.run used to drop it."""
     from clients import hubcli, remotecli
 
     client = mock.Mock()
@@ -2256,7 +2259,7 @@ def test_a_propose_without_for_sends_no_recipient(monkeypatch):
 
 
 def test_the_morning_message_posts_its_person_and_body_to_the_assistant(monkeypatch):
-    """`hub assistant morning --for human:<id> --body <text>` reaches the server as assistant/morning with both fields."""
+    """`tico assistant morning --for human:<id> --body <text>` reaches the server as assistant/morning with both fields."""
     from clients import hubcli, remotecli
 
     client = mock.Mock()
@@ -2280,8 +2283,8 @@ def test_the_morning_message_posts_its_person_and_body_to_the_assistant(monkeypa
     ],
 )
 def test_an_alias_runs_the_same_calls_as_the_command_it_names(alias, canonical, monkeypatch):
-    """The parser keeps the spelling typed, so dispatch renames an alias first: `hub tasks list` makes the calls of
-    `hub task list` and never reaches the "unsupported" fallback."""
+    """The parser keeps the spelling typed, so dispatch renames an alias first: `tico tasks list` makes the calls of
+    `tico task list` and never reaches the "unsupported" fallback."""
     from clients import remotecli
     from unittest.mock import MagicMock
 
@@ -2296,7 +2299,7 @@ def test_an_alias_runs_the_same_calls_as_the_command_it_names(alias, canonical, 
 
 
 def test_maintenance_status_reads_the_one_maintenance_tool(monkeypatch):
-    """`hub maintenance status` has no tool of its own: its command name is hub_maintenance_status only in the parser's
+    """`tico maintenance status` has no tool of its own: its command name is hub_maintenance_status only in the parser's
     listing (CLI_TOOL_ALIASES), so the dispatch must name the tool that exists, hub_maintenance."""
     from clients import remotecli
 
@@ -2338,3 +2341,19 @@ def test_personal_alert_cli_keeps_paid_test_identity_and_explicit_consent(monkey
     remotecli.run(args)
     assert api.calls[-1][1] == {"phone": "+14155550123", "sms_consent": True, "call_consent": True}
     assert "hub_alerts_test" not in {t["name"] for t in hubtools.listing(kind="botops")}
+
+
+def test_tico_help_is_the_teamwork_help(capsys):
+    assert hubcli.main(["help"]) == 0
+    assert "task" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("argv, word", [(["status"], "status"), (["update"], "update")])
+@pytest.mark.parametrize("bot", ["", "ops"])
+def test_a_word_that_was_the_computers_says_where_it_went_to_a_person_only(argv, word, bot, capsys, monkeypatch):
+    monkeypatch.setenv("HUB_BOT", bot)
+    monkeypatch.delenv("HUB_EMPLOYEE", raising=False)
+    monkeypatch.setattr(hubcli, "run", lambda *a: 0)
+    assert hubcli.main(argv) == 0
+    note = f"this computer's own {word} is `tico-computer {word}`"
+    assert (note in capsys.readouterr().err) == (not bot)

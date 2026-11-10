@@ -216,7 +216,7 @@ Bots are AI employees: an internal bot reads what a person in the same seat read
 - **A migrated Home** (the bot's open shared room, `audience='home'` stored): everything new (`legacy_audience`
   NULL, any sub-thread) follows Home Read. An old reader without Home Read still opens the Home's root
   (`threads.legacy_reader_only`) but sees only that history: the timeline lists only legacy messages, `last_seq`
-  and `last_message_at` are the history's, unread is 0, no sub-thread opens, and SSE, `hub sql` and the legacy
+  and `last_message_at` are the history's, unread is 0, no sub-thread opens, and SSE, `tico sql` and the legacy
   per-message check (`task_privacy.message_readable` → `threads.legacy_gate`) hide new messages from them.
 - A hidden message renders as a quiet "not shown" row in timelines and is skipped on SSE.
 - New posts can't widen anything (`H.path_mentioned`, `guard_write` keep running in the write door).
@@ -240,7 +240,7 @@ threads.AUDIENCES, threads.PRIVATE_AUDIENCES, threads.SAFE_REF_KEYS
 ```
 
 - **Python** rendering: `threads.readable` (and `Auth.conversation`, which now calls it).
-- **`hub sql`** rendering: `sql.guarded()` uses `readable_sql` for `conversations` and `message_sql` for `messages`.
+- **`tico sql`** rendering: `sql.guarded()` uses `readable_sql` for `conversations` and `message_sql` for `messages`.
 - **SSE** rendering: `events._Viewer.conversation` uses `readable_ids` (one query per batch over the changed ids).
 - One fixture (`backend/tests/test_threads_privacy.py`) runs the privacy matrix through all three and asserts
   they agree.
@@ -831,7 +831,7 @@ byte budget (512 KiB; the first card's first message always goes); a text over 4
 500. `more` counts every other new message the viewer may read (`new_count`, plus open mentions and asks already read,
 less the ones shown). `count` is every item across
 pages, at most 99 (the sidebar badge). Reading an item is `POST .../read-all`; muting it is `PUT .../follow {"notify": "muted"}`. The older
-`POST /api/v2/threads/{id}/catch-up` (`hub thread catchup`) is a different thing: a written summary of one thread.
+`POST /api/v2/threads/{id}/catch-up` (`tico thread catchup`) is a different thing: a written summary of one thread.
 
 Naming. Only a DM with one teammate and a task's thread may be unnamed (`require_name`). `threads.create`, `threads.dm` and a post that starts a thread
 (`_create_plan`) refuse a group DM (two or more others) or a members, team or company thread with an empty title:
@@ -852,9 +852,9 @@ Events. `threads` topic, kind `pinned`, `{"thread_id", "root_id", "kind": "pinne
 "pinned_for_everyone"}` (`pinned` is the receiver's own state). A reader's own pin (`thread_pins`, `ref` = actor) goes
 only to that reader; a pin for everyone (`conversations.pinned_for_everyone_at`, no `ref`) to everyone who reads it.
 
-CLI and MCP: `hub thread pin|unpin <thread>` (`hub_thread_pin`, `hub_thread_unpin`), `hub thread catch-up`
-(`hub_thread_catch_up`), `hub thread update --pin-for-everyone|--unpin-for-everyone` (`pinned_for_everyone` on
-`hub_thread_update`), `hub thread create --pin-for-members`, `hub thread dm-group --title`. BotOps runs the pin routes
+CLI and MCP: `tico thread pin|unpin <thread>` (`hub_thread_pin`, `hub_thread_unpin`), `tico thread catch-up`
+(`hub_thread_catch_up`), `tico thread update --pin-for-everyone|--unpin-for-everyone` (`pinned_for_everyone` on
+`hub_thread_update`), `tico thread create --pin-for-members`, `tico thread dm-group --title`. BotOps runs the pin routes
 as the person who asked.
 
 ## 11. Outside tracks' hooks

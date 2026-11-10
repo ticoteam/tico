@@ -36,4 +36,4 @@ never collected) with the amount and the rate's source. Disputes are prepared fo
 
 ## 5. Write and hand over
 
-Write `reports/YYYY-MM-DD-deliveries.md` in the shape of `knowledge/examples/delivery-report.md`, with these sections in order: headline; on time and in full; ready to act on (claims to file, customer updates ready); open exceptions; invoice check; sources with the export date. `hub file publish` it, commit, and `hub task done <id> -m "..." --version N` with the headline.
+Write `reports/YYYY-MM-DD-deliveries.md` in the shape of `knowledge/examples/delivery-report.md`, with these sections in order: headline; on time and in full; ready to act on (claims to file, customer updates ready); open exceptions; invoice check; sources with the export date. `tico file publish` it, commit, and `tico task done <id> -m "..." --version N` with the headline.

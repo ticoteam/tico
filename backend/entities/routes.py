@@ -1,5 +1,5 @@
 # pyright: strict
-"""The Directory's HTTP routes (`hub directory`, track 4). Each route is a call on backend/entities/store.py, which holds the
+"""The Directory's HTTP routes (`tico directory`, track 4). Each route is a call on backend/entities/store.py, which holds the
 read rule (visible.py) and the writer gate, so a route holds no SQL (the lint test keeps the entity tables to the store).
 A read answers with what the caller may see; a write names the caller as its actor, and runs through `mutate` so a retry
 with the same Idempotency-Key lands once.
@@ -180,7 +180,7 @@ def install(
         with read() as c:
             body = ES.describe_type(c, type_key)
         if body is None:
-            raise Problem("not_found", f"No entity type {type_key}; see hub directory types", 404)
+            raise Problem("not_found", f"No entity type {type_key}; see tico directory types", 404)
         return body
 
     @app.get("/api/v2/entities/find/{type_key}")
@@ -199,7 +199,7 @@ def install(
         actor = caller(request)
         with read() as c:
             if not ES.type_exists(c, type_key):
-                raise Problem("not_found", f"No entity type {type_key}; see hub directory types", 404)
+                raise Problem("not_found", f"No entity type {type_key}; see tico directory types", 404)
             try:
                 return ES.find(
                     c,

@@ -13,7 +13,7 @@ Every run (its `attempts` row) records three things, all in plain code, none ask
   reports with the result (`pushes`, see `pushed`). A push from anywhere else is not seen.
 - `outcome`: `acted` when the run wrote something: a hub write made with its own run token (`writes`), or a
   reply Tico posted for it (to a person, or an answer to a bot's ask), or a push its runner reported. A commit or pull request counts once Tico
-  sees it (`hub task link`, a task note); one that never reaches Tico cannot. Reads and bookkeeping (`BOOKKEEPING`) are not writes.
+  sees it (`tico task link`, a task note); one that never reaches Tico cannot. Reads and bookkeeping (`BOOKKEEPING`) are not writes.
   With no write it is `no_change` when its task is still open (it looked; nothing had moved) and
   `nothing_to_do` when there was no open task to act on (no task, or one already done, closed or declined).
 
@@ -40,7 +40,7 @@ What became of a run's work is written later, by whoever acts on it, never the b
 The run is the bot's latest on that task that started before the task reached Done (or, for an open task given away,
 its latest); the first of these is its outcome and later ones add nothing. A task the bot never ran on gets none.
 
-`run_weekly` in `hub sql` (backend/sql.py) adds these up per week, bot, trigger and purpose. A run whose
+`run_weekly` in `tico sql` (backend/sql.py) adds these up per week, bot, trigger and purpose. A run whose
 trigger or purpose is not known reads `unknown` for that field, and is still counted.
 """
 

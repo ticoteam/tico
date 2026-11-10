@@ -131,17 +131,23 @@ def test_revoke_or_never_before_approval_prevents_submission(api, hq):
 
 
 def test_an_admin_can_approve_but_an_unrelated_person_cannot(api, hq):
-    """An OK's private task is given to one person at a time (the engine never adds a reader), so each person gets a
-    letter of their own: cara, a plain member, cannot open hers or OK it; ben, an Admin, can."""
+    """An OK's task is private to its parties, and an ask goes only to someone who can already read it (the engine
+    never adds a reader): cara, a plain member, cannot be given it, cannot open the letter and cannot OK it; ben, an
+    Admin, is given it once Ana shares the task with him, and OKs it."""
     ident, token = bot(api)
     grant(api, ident)
     theirs, bens = (send(api, quote(api, token=token), token=token) for _ in range(2))
-    with api.app.state.store.transaction() as c:
-        H.task_give(c, "human:ana", task_asks.task_of(c, theirs["approval_id"]), theirs["approval_id"], "human:cara")
+    with pytest.raises(H.Refused, match="Cara cannot read this private task"):
+        with api.app.state.store.transaction() as c:
+            H.task_give(
+                c, "human:ana", task_asks.task_of(c, theirs["approval_id"]), theirs["approval_id"], "human:cara"
+            )
+    with api.app.state.store.transaction() as c:  # Ana, who can see it, shares it with Ben first
+        H.set_task_readers(c, "human:ana", task_asks.task_of(c, bens["approval_id"]), add=["human:ben"])
         H.task_give(c, "human:ana", task_asks.task_of(c, bens["approval_id"]), bens["approval_id"], "human:ben")
     get(api, "letters/" + theirs["id"], token="cara-test", expected=404)
-    approve(api, theirs, token="cara-test", expected=409, reader="ana-test")  # its preview was never hers to see
-    assert fetch(api, theirs)["status"] != "submitted"
+    refused = approve(api, theirs, token="cara-test", expected=404, reader="ana-test")  # not hers to read or OK
+    assert refused["error"]["code"] == "not_found" and fetch(api, theirs)["status"] != "submitted"
     approve(api, bens, token="ben-test")
     assert fetch(api, bens)["status"] == "submitted"
 

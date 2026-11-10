@@ -158,7 +158,7 @@ def test_pushed_branch_timeout_requeues_same_job_lane_and_carries_task_handoff(a
     [
         ('gh pr merge 42 --squash --body private-marker', 'merge pull request', False),
         ('npm publish --token private-marker', 'publish package', False),
-        ('hub email send recipient private-marker', 'send email', False),
+        ('tico email send recipient private-marker', 'send email', False),
         ('stripe payment_intents create --amount 100', 'payment', False),
         ('git push origin HEAD', 'used OK (email_send)', True),
     ],

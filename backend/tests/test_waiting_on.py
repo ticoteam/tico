@@ -249,8 +249,15 @@ def test_every_persons_needs_you_comes_from_one_pass_over_the_tasks(c, general, 
 
 
 def test_an_ok_that_names_a_bot_is_that_bots_turn(c, general):
-    row = X.new_task(c, ANA, "Write the launch note", assignee=ANA)
-    E.add_requirement(c, row["id"], ANA, "ok", "bot:reviewer", "OK the wording")
+    """A stage's OK may name a bot (docs/pipelines-v3.md, kind 2); an OK added to one task is asked of a person."""
+    from backend.hubdb import Refused
+
+    ok = {"kind": "ok", "person": "bot:reviewer", "line": "OK the wording"}
+    stages = ({"name": "Check", "owner": ANA, "requirements": [{"kind": "owner_done"}, ok]},)
+    X.pipeline(c, "notes", "Notes", stages)
+    row = X.new_task(c, ANA, "Write the launch note", "notes", assignee=ANA)
+    with pytest.raises(Refused, match="An OK is asked of a person"):
+        E.add_requirement(c, row["id"], ANA, "ok", "bot:reviewer", "OK the wording")
     waits = W.waiting_on(c, row["id"])
     assert [(w.state, w.who, w.ask) for w in waits] == [("person", ANA, False), ("bot", "bot:reviewer", True)]
     assert [n["kind"] for n in W.needs(c, ANA)] == ["task"]  # the reviewer's OK is not in Ana's list

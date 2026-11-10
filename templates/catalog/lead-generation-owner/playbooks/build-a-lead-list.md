@@ -21,7 +21,7 @@ Look in `knowledge/lists/` for a list on the same segment. Add to it rather than
 
 ## 3. Build the exclusions
 
-Remove: existing customers (from the CRM, where it is readable, or `hub sql "<select>"` for the team's tables), competitors,
+Remove: existing customers (from the CRM, where it is readable, or `tico sql "<select>"` for the team's tables), competitors,
 anyone on the do-not-contact list, and companies already in an open sequence (from the outbound owner's list, where readable).
 Count each exclusion, with its reason.
 
@@ -48,7 +48,7 @@ and the table of companies, each line ending with its source and date.
 
 ## 8. Hand it over
 
-    hub task create --owner outbound-sales-owner --title "Public list: <segment>, <count> companies" --body "<path to the list, the count, the rule, the window>"
+    tico task create --owner outbound-sales-owner --title "Public list: <segment>, <count> companies" --body "<path to the list, the count, the rule, the window>"
 
 The outbound owner decides what to send and to whom. Nothing is sent from this playbook.
 

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Installs Tico on this Linux server: Docker if missing, the compose bundle of one exact release, then the
-# `tico setup` wizard. Safe to run again: it upgrades or repairs and never rewrites an existing .env.
+# setup wizard (python3 -m setup). Safe to run again: it upgrades or repairs and never rewrites an existing .env.
 #
 #   curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh -o install.sh && sh install.sh
 #   sh install.sh --recommended [--owner-email you@example.com]   # the recommended setup (below)
@@ -28,7 +28,7 @@
 # --name adds another computer on the same host (a message bot needs its own): it installs into /opt/tico-runner-<slug>
 # with its own compose project, container, home volume and updater, and leaves the default runner alone.
 #
-# Everything after `--` goes to `tico setup` (python3 -m setup), so automation can answer its questions with flags
+# Everything after `--` goes to the setup wizard (python3 -m setup), so automation can answer its questions with flags
 # and environment variables (secrets only ever by environment). Exit codes: 0 done, 2 usage, 3 this computer does not
 # qualify, 4 download or checksum failed, 5 Docker or Python setup failed, 6 the wizard or the health check failed.
 # When it fails after the release is unpacked and there is a terminal, it asks whether to send the error to Tico

@@ -7,8 +7,8 @@ rights for its person are not yours.
 Inputs: the task, whose opening quotes the owner's words, and the record it points to.
 
 1. **Read what they asked.** One sentence: do they want advice, or a change made?
-2. **Look before you answer.** `hub strategy show`, `hub goal list`, `hub team show`, `hub group list`,
-   `hub doc search --market`. For a KPI, `hub kpi show <id>` gives its latest reading and its pace or target. What you cannot
+2. **Look before you answer.** `tico strategy show`, `tico goal list`, `tico team show`, `tico group list`,
+   `tico doc search --market`. For a KPI, `tico kpi show <id>` gives its latest reading and its pace or target. What you cannot
    find, say you could not find.
 3. **Advice**: 2 to 4 short lines, plain words, with links where they help (`[title](#/task/<id>)`, `[bot](#/bot/<slug>)`).
    The answer first, one line per item that matters with its number and date, then one line on anything you could not check.
@@ -23,7 +23,7 @@ Inputs: the task, whose opening quotes the owner's words, and the record it poin
 6. **Reply** (your final message, and the task's note in the same words), for a change: one sentence on what you did, one on
    what happens next. Shape: "I filed the change for the owner to confirm: the target moves from 58% to 60%, and the baseline and
    deadline stay. It is not live until they confirm." One paragraph, at most three sentences. Nothing else: no bullets or bold, ids, file names, commits, checks, trend analysis or notes about the proposal list. Do not say what you closed, recorded or committed.
-7. **Finish, last, every time**: `hub task done <id> -m "<the reply>" --version N`. A proposal whose create returned
+7. **Finish, last, every time**: `tico task done <id> -m "<the reply>" --version N`. A proposal whose create returned
    its id is filed: do not list proposals again to confirm it, and do not reopen the task.
 
 The Assistant tells the owner what you did. Do not narrate your tools, and never say something is done before you

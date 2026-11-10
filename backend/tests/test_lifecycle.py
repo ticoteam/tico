@@ -243,7 +243,7 @@ def test_a_bots_own_setup_done_keeps_the_summary_it_gave_when_ready(api):
     token = as_bot(api, "ops")
     first = post(api, "bots/ops/onboarded", {"summary": "I know the audit checklist."}, token=token)
 
-    # `hub bot setup-done` by the bot itself sends no summary: the one it gave with `hub bot ready` stays.
+    # `tico bot setup-done` by the bot itself sends no summary: the one it gave with `tico bot ready` stays.
     done = post(api, "bots/ops/onboarded", {}, token=token)
     assert done["stage"] == "onboarding" and done["ready"]["summary"] == "I know the audit checklist."
     shown = get(api, "bots/ops", token="ben-test")

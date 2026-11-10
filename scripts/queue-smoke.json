@@ -23,7 +23,7 @@
     {
       "file": "clients/tests/test_hubcli.py",
       "seconds": 29.89,
-      "reason": "The hub CLI as bots run it: exit codes are the contract"
+      "reason": "The tico CLI as bots run it: exit codes are the contract"
     },
     {
       "file": "runner_support/tests/test_redact.py",
@@ -47,6 +47,11 @@
     }
   ],
   "browser": [
+    {
+      "script": "ask-screen",
+      "seconds": 5.4,
+      "reason": "Needs you one ask at a time: an OK sends the hash of exactly what it showed"
+    },
     {
       "script": "account-status",
       "seconds": 9.429,

@@ -8,8 +8,8 @@ Nothing is sent outside the team.
 
 ## Inputs
 
-- Open parent tasks you own: `hub task list`.
-- Each parent's tree, `hub task tree <id>`, and the task links on each child.
+- Open parent tasks you own: `tico task list`.
+- Each parent's tree, `tico task tree <id>`, and the task links on each child.
 - The pull requests on each child: `gh pr view <number> -R <repo>` and `gh pr checks <number> -R <repo>`.
 - Your last check's comment on each parent, so you report movement, not a repeat.
 
@@ -18,13 +18,13 @@ Nothing is sent outside the team.
 1. **Walk the trees.** For each open parent, list its children and the pull requests linked to each.
 2. **Look for the signs that need action.** Failing checks, conflicts, requested changes, review comments with no
    reply, a branch or worktree with no activity, and a child with no activity for two working days.
-3. **Nudge the builder once, with the item and its link,** as a comment on the child task with `hub task comment`.
+3. **Nudge the builder once, with the item and its link,** as a comment on the child task with `tico task comment`.
    Do not repeat a nudge when nothing has changed since the last check.
 4. **Name what needs a decision.** A dependency across owners, a scope question or a date change goes to the
-   requester with `hub task ask <id> --to <person> "<question>" --version N`, with the options.
+   requester with `tico task ask <id> --to <person> "<question>" --version N`, with the options.
 5. **Update the parent.** Completed children, merged pull requests (merged, not released), the remaining blockers,
    and the next action for each.
-6. **Finish.** `hub task done <id> -m "..." --version N` for the check: the parents checked, and any source you could not read.
+6. **Finish.** `tico task done <id> -m "..." --version N` for the check: the parents checked, and any source you could not read.
 
 ## Output
 

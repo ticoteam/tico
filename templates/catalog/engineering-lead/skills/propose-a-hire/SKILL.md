@@ -7,7 +7,7 @@ description: Propose one engineering bot from the team templates for recurring w
 When to use: when recurring engineering work has no owner and a bot from `team_templates` in `card.yaml` could take it.
 
 Steps:
-1. Check the roster first: `hub template list` and `hub team show`. Never propose a bot that exists or is already on the team.
+1. Check the roster first: `tico template list` and `tico team show`. Never propose a bot that exists or is already on the team.
 2. Name the recurring work with its evidence: the count, the dates and the links. One occurrence is not recurring.
    Starting threshold: three occurrences in four weeks. That is a team choice, not a benchmark.
 3. Confirm that no one owns the work in `knowledge/areas.md` and that no existing bot's report covers it.
@@ -15,7 +15,7 @@ Steps:
 5. Write the five-line proposal on the task or in the summary: the template and its title; the recurring work with
    evidence; how often it happens; the template's first routine; and that it reports to you.
 6. Propose on the task. Carry out the hire only when the task asks for it and a Tool allows it:
-   `hub task create --owner botops --title "Set up <template> from the templates" --body "<why, the first routine, reports to engineering-lead>"`.
+   `tico task create --owner botops --title "Set up <template> from the templates" --body "<why, the first routine, reports to engineering-lead>"`.
    BotOps builds it. You do not build it.
 7. Record the proposal and the answer in `memory/decisions.md`. A no is not raised again for 60 days unless the evidence doubles.
 

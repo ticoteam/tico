@@ -286,7 +286,7 @@ class BotOpsStopsOnARefusal(unittest.TestCase):
             "then end the run",
             "Never hand-edit a computer",
             "remove or change a git remote",
-            "hub support file",
+            "tico support file",
             "operation_id",
             "Blocked on a Tico bug, reported as",
         ):
@@ -295,7 +295,7 @@ class BotOpsStopsOnARefusal(unittest.TestCase):
     def test_build_checks_create_names_the_refusal_and_waits_without_copying(self):
         build = self.text("playbooks/build-me-a-bot.md")
         for rule in (
-            "`hub bot create`'s exit status",
+            "`tico bot create`'s exit status",
             "`github_permission_missing`",
             "ask the person once",
             "waiting for a computer to get the repository is not a failure",

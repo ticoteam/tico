@@ -4,19 +4,23 @@ without ask ingest, their answer wakes the bot, and the commit it makes is that 
 import json
 
 from backend import bot_settings as BS
+from backend import dream as dream_module
 from backend import hubdb as H
 from backend.tests.helpers import ask_ingest as ingest
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, restrict, runner  # noqa: F401
 from backend.tests.helpers.ask_ingest import gate, plate  # noqa: F401  (the ask ingest fixture)
 
+# Two numbered questions in one ask: what dream.INSTRUCTIONS asked for before v3, which the one-decision ask rule refuses.
 QUESTIONS = (
     "1. Should weekly reports go to Ana or the team? Suggested: the team\n2. Drop the old deploy rule? Suggested: yes"
 )
+# One question, which the v3 ask rule takes (one decision per ask).
+QUESTION = "Should weekly reports go to Ana or the team?"
 
 
-def ask(api, tid, token, line=QUESTIONS, to="human:ben"):
+def ask(api, tid, token, line=QUESTION, to="human:ben"):
     """The bot asks a person on the task, with the version it was shown."""
-    version = api.get(f"/api/v2/tasks/{tid}", headers=headers(token)).json()["version"]
+    version = api.get(f"/api/v2/tasks/{tid}", headers=headers(token)).json()["task"]["version"]
     return api.post(
         f"/api/v2/tasks/{tid}/asks", json={"to": to, "line": line, "version": version}, headers=headers(token)
     )
@@ -105,7 +109,7 @@ def test_asking_answering_and_the_dreams_own_commit(api):
     assert current(api)["state"] == "dreaming"
     assert ask(api, tid, first["token"]).status_code == 200
     seen = current(api)
-    assert seen["state"] == "asking" and seen["questions"]["text"] == QUESTIONS and seen["questions"]["mine"]
+    assert seen["state"] == "asking" and seen["questions"]["text"] == QUESTION and seen["questions"]["mine"]
     assert current(api, "ana-test")["questions"]["mine"] is False
     post(
         api,
@@ -119,7 +123,7 @@ def test_asking_answering_and_the_dreams_own_commit(api):
     post(
         api,
         f"tasks/{asked['task_id']}/asks/{asked['requirement_id']}/answer",
-        {"value": "1. the team\n2. yes"},
+        {"value": "The team"},
         token="ben-test",
     )
     assert current(api)["state"] == "dreaming"
@@ -151,10 +155,38 @@ def test_asking_answering_and_the_dreams_own_commit(api):
         assert done["closed_at"][:10] in H.task(c, again["task"])["body"]
 
 
+def test_the_dream_asks_one_question_per_ask_and_waits_for_each_answer(api):
+    """The v3 ask rule takes one decision per ask, and a bot has one open ask on a task (C15): the dream's instructions
+    say both, numbered questions in one ask are refused, and each question asked in turn is taken and shown."""
+    for auto in (False, True):
+        text = dream_module.instructions("Ben", "Oct 20", auto=auto)
+        assert "one question per ask" in text and "one ask at a time" in text and "At most 3 asks" in text
+        assert "in ONE" not in text and "Number them" not in text
+    tid = dream(api)["dream"]["task"]
+    with api.app.state.store.transaction() as c:
+        try:
+            H.task_ask(c, "bot:ops", tid, "human:ben", QUESTIONS, seen_version=H.task(c, tid)["version"])
+            raise AssertionError("an ask with two questions was taken")
+        except H.Refused:
+            pass
+    for line in (QUESTION, "Drop the old deploy rule? Suggested: yes"):
+        with api.app.state.store.transaction() as c:
+            H.task_ask(c, "bot:ops", tid, "human:ben", line, seen_version=H.task(c, tid)["version"])
+        shown = current(api)["questions"]
+        assert shown["text"] == line
+        r = api.post(
+            f"/api/v2/tasks/{tid}/asks/{shown['requirement_id']}/answer",
+            json={"value": "Yes"},
+            headers=headers("ben-test"),
+        )
+        assert r.status_code == 200, r.text
+        assert current(api)["questions"] is None
+
+
 def test_someone_who_may_give_work_but_not_read_never_gets_another_persons_open_dream(api):
     tid = dream(api)["dream"]["task"]
     with api.app.state.store.transaction() as c:
-        H.task_ask(c, "bot:ops", tid, "human:ben", QUESTIONS, seen_version=H.task(c, tid)["version"])
+        H.task_ask(c, "bot:ops", tid, "human:ben", QUESTION, seen_version=H.task(c, tid)["version"])
         restrict(
             c,
             "ops",

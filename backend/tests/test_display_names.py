@@ -74,12 +74,9 @@ def test_messages_tasks_and_asks_have_display_names(api, named_data):
     assert task['turn']['who'] == 'human:ben'
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="names.ACTOR_KEYS has no 'who' or 'asked_by', so the person a task waits on (turn.who, to_leave[].who) is "
-    "not named when they are on the task no other way; the old question task's ask carried sender and recipient names",
-)
 def test_the_person_a_task_waits_on_is_named_though_they_are_not_on_the_task(api, named_data):
+    """names.LISTED_KEYS: the `who` and `asked_by` of a task's waits and requirements go into `actors`, which
+    `tico task show` prints names from."""
     task_id = named_data['task']['id']
     tasks = api.get('/api/v2/tasks', headers=headers()).json()
     assert tasks['actors']['human:ben'] == 'Ben'

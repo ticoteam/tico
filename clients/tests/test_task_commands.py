@@ -1,4 +1,4 @@
-"""The task engine's bot commands (docs/dev/pipelines-v3-cutover.md, Bot commands): each `hub task ...` line and its
+"""The task engine's bot commands (docs/dev/pipelines-v3-cutover.md, Bot commands): each `tico task ...` line and its
 MCP tool send the same request to the plan's route, with the version the bot was given; none reads the task to find
 one. A refusal says what is missing and what the bot may run next. The API is a recorder; no server runs."""
 
@@ -211,7 +211,7 @@ def test_a_relation_is_a_note_and_a_blocking_one_says_what_to_do_instead(monkeyp
     for kind in ("blocks", "blocked_by"):
         with pytest.raises(ValueError) as refused:
             hubtools.task_relate(Recorder(), {"id": "T1", "task": "T2", "kind": kind})
-        assert str(refused.value) == hubtools.BLOCKING_GONE and "hub task file --parent" in str(refused.value)
+        assert str(refused.value) == hubtools.BLOCKING_GONE and "tico task file --parent" in str(refused.value)
     monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
     cli = Recorder()
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
@@ -240,6 +240,19 @@ def test_label_reads_the_labels_but_sends_the_version_the_bot_was_shown():
     assert api.writes() == [("POST", "tasks/T1", {"version": 3, "labels": ["bug", "docs"]})]
 
 
+def test_label_as_taught_needs_no_version_and_guards_the_labels_with_the_version_it_read(monkeypatch):
+    # policies/handoffs.md teaches `tico task label <id> --add x` with no version: a label change only adds or takes
+    # off what it names, so it runs at the version it read, and a change made in between is refused (task_changed).
+    api = Recorder(task={"id": "T1", "version": 7, "labels": ["bug"]})
+    hubtools.task_label(api, {"id": "T1", "add": ["pricing-page"]})
+    assert api.writes() == [("POST", "tasks/T1", {"version": 7, "labels": ["bug", "pricing-page"]})]
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    cli = Recorder(task={"id": "T1", "version": 7, "labels": []})
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
+    assert remotecli.main(hubcli.parser().parse_args(["task", "label", "T1", "--add", "pricing-page"])) == 0
+    assert cli.writes() == [("POST", "tasks/T1", {"version": 7, "labels": ["pricing-page"]})]
+
+
 @pytest.mark.parametrize(
     "name, args",
     [
@@ -252,12 +265,11 @@ def test_label_reads_the_labels_but_sends_the_version_the_bot_was_shown():
         ("hub_task_give", {"id": "T1", "requirement": "r9", "to": "ben"}),
         ("hub_task_snooze", {"id": "T1", "why": "x"}),
         ("hub_task_update", {"id": "T1", "title": "x"}),
-        ("hub_task_label", {"id": "T1", "add": ["x"]}),
     ],
 )
-def test_without_a_version_a_change_says_to_show_the_task_first_and_sends_nothing(name, args):
+def test_without_a_version_a_change_says_to_add_the_version_and_sends_nothing(name, args):
     api = Recorder()
-    with pytest.raises(ValueError, match=r"^Run `hub task show T1` first\.$"):
+    with pytest.raises(ValueError, match=r"^Add --version N"):
         hubtools.BY_NAME[name]["fn"](api, args)
     assert api.calls == []
     # Over MCP it is the tool's own answer, not a schema error: the bot is told what to run.
@@ -266,7 +278,7 @@ def test_without_a_version_a_change_says_to_show_the_task_first_and_sends_nothin
     )
     assert reply["result"]["structuredContent"] == {
         "error": "usage",
-        "detail": "Run `hub task show T1` first.",
+        "detail": hubtools.version_needed("T1"),
         "retryable": False,
     }
 
@@ -277,7 +289,7 @@ def test_without_a_version_the_cli_prints_the_same_line_and_exits_one(monkeypatc
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: api)
     assert remotecli.main(hubcli.parser().parse_args(["task", "done", "T1", "-m", "x"])) == 1
     printed = json.loads(capsys.readouterr().out)
-    assert printed == {"error": "usage", "detail": "Run `hub task show T1` first.", "retryable": False}
+    assert printed == {"error": "usage", "detail": hubtools.version_needed("T1"), "retryable": False}
     assert api.writes() == []
 
 
@@ -364,7 +376,7 @@ REFUSAL = APIError(
     409,
     extra={
         "missing": ["Checks pass (lint, unit)"],
-        "next": ['hub task move E-214 next -m "why" --version 12', 'hub task close E-214 -m "why" --version 12'],
+        "next": ['tico task move E-214 next -m "why" --version 12', 'tico task close E-214 -m "why" --version 12'],
         "version": 12,
     },
 )
@@ -402,8 +414,8 @@ def test_the_cli_prints_a_refusal_as_lines_and_exits_two(monkeypatch, capsys):
         "Missing:",
         "  Checks pass (lint, unit)",
         "You can:",
-        '  hub task move E-214 next -m "why" --version 12',
-        '  hub task close E-214 -m "why" --version 12',
+        '  tico task move E-214 next -m "why" --version 12',
+        '  tico task close E-214 -m "why" --version 12',
     ]
 
 
@@ -411,7 +423,7 @@ def test_a_stale_version_says_which_version_the_task_has_now():
     changed = {"error": "task_changed", "detail": "Changed since you looked.", "version": 13}
     assert hubtools.refusal_text(changed, "T1").splitlines() == [
         "Changed since you looked.",
-        "It is version 13 now: run `hub task show T1` and decide again.",
+        "It is version 13 now: run `tico task show T1` and decide again.",
     ]
 
 
@@ -446,3 +458,25 @@ def test_the_old_engines_tools_are_gone_and_a_call_by_one_says_what_to_use():
         )
         assert reply["result"]["structuredContent"]["error"] == "removed", name
     assert "bot" not in hubtools.offered_to(hubtools.BY_NAME["hub_task_unsnooze"])
+
+
+def test_task_show_text_names_people_and_bots_and_a_filed_task_by_its_title():
+    """`tico task show` names the owner, whose turn it is and who a requirement waits on from the answer's `actors`
+    (backend/names.py), never as `human:morgan`; a wait on a filed task reads as its title, with its id last."""
+    task = {
+        "id": "T1",
+        "title": "Import the Acme CRM",
+        "version": 3,
+        "owner_id": "human:morgan",
+        "stage": {"name": "To do"},
+        "pipeline": {"name": "General"},
+        "turn": {"state": "tasks", "who": "b1a8732e-0000", "line": "Check the CRM import"},
+        "to_leave": [{"requirement_id": "r1", "line": "Morgan says OK", "met": False, "who": "human:morgan"}],
+    }
+    actors = {"human:morgan": "Morgan Reed"}
+    text = hubtools.task_text(task, actors)
+    assert "owner Morgan Reed" in text and "(waits on Morgan Reed)" in text
+    assert "Turn: waits on Check the CRM import (b1a8732e-0000)" in text
+    assert "human:morgan" not in text
+    bot_turn = {**task, "turn": {"state": "bot", "who": "bot:builder", "line": "stopped early, try 2 of 3"}}
+    assert "Turn: Builder (stopped early" in hubtools.task_text(bot_turn, {"bot:builder": "Builder"})

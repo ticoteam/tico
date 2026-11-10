@@ -36,6 +36,7 @@ There is no OK that expires: Late handles one nobody gives.
 import contextvars
 import hashlib
 import json
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NoReturn, cast
@@ -421,6 +422,38 @@ def task_of(conn: "sqlite3.Connection", requirement_id: str) -> str | None:
     return str(found[0]) if found else None
 
 
+# The tasks filed for an OK asked of a person (`?`): their own Assistant's turn reads these as she does, so it can send
+# one back on her word. Only a task filed for the OK: it holds nothing but the ask. Twin of `filed_for`.
+FILED_FOR_SQL = (
+    "SELECT v.task_id FROM ok_grants g JOIN requirements r ON r.id = g.requirement_id "
+    "JOIN visits v ON v.id = r.visit_id WHERE g.filed = 1 AND g.asked_of_id = ?"
+)
+
+
+def filed_for(conn: "sqlite3.Connection", person: str, task_id: object) -> bool:
+    """Whether `task_id` is a task filed for an OK asked of `person`."""
+    return bool(
+        person and conn.execute(FILED_FOR_SQL + " AND v.task_id = ? LIMIT 1", (person, str(task_id))).fetchone()
+    )
+
+
+def assistant_actor() -> str:
+    """The install's Assistant as an actor (TICO_ASSISTANT_BOT, as backend/config.py reads it)."""
+    return "bot:" + (os.environ.get("TICO_ASSISTANT_BOT", "").strip() or "coo")
+
+
+def assistant_for(person: object, carried: object) -> bool:
+    """Whether a read as `person` carried by `carried` is that person's own Assistant turn: her rights, the Assistant
+    carrying them (backend/auth.py chat_person, tico_principal)."""
+    return is_human(person) and carried == assistant_actor()
+
+
+def assistant_reads_own_ok(conn: "sqlite3.Connection", person: object, carried: object, task_id: object) -> bool:
+    """The person's own Assistant reads the task filed for an OK asked of her, as she does, so it can send it back on
+    her word (it never gives one: refuses_ok_by). Another person's Assistant, or the Assistant on its own, does not."""
+    return assistant_for(person, carried) and filed_for(conn, str(person), task_id)
+
+
 def acting_for_people(by: str) -> bool:
     """Whether this write is the Assistant's or BotOps': as itself, or acting for a person in this request (H.VIA,
     set by backend/app.py for the whole request). The engine's answer refuses them an OK (backend/answers.py)."""
@@ -440,20 +473,26 @@ def refuses_plain_ok(conn: "sqlite3.Connection", requirement_id: str, value: obj
 # The bots that act for a person (backend/assistant.py, backend/botops_act.py): they never give an OK of any kind.
 ACTS_FOR_PEOPLE = ("bot:assistant", "bot:botops")
 NOT_YOURS = "An OK is the person's own: the Assistant and BotOps never give one. Send back is fine."
+OWN_IN_TICO = "An OK is the person's own, in Tico. Send back is yours to say"
 
 
 def refuses_ok_by(conn: "sqlite3.Connection", who: object, requirement_id: str, value: object) -> str | None:
-    """For an answer route, before the engine: the refusal's words when the Assistant or BotOps (acting for a person,
-    confirmed or not, or as itself) answers `ok` to an OK requirement, bound or plain, else None. A send back, a look
-    again and a question's answer stay theirs to give."""
+    """For every answer path before the engine (the answer route, a batch decision): the refusal's words when `ok` to
+    an OK requirement, bound or plain, on anyone's ask, does not come from the person's own session: the Assistant or
+    BotOps (acting for a person, confirmed or not, or as itself), a personal token, or anything else acting for them.
+    Else None. A send back, a look again and a question's answer stay theirs to give."""
     if str(value or "").strip().casefold() != "ok":
         return None
-    acting = str(getattr(who, "via", "") or "") in ("assistant", "botops")
+    via = str(getattr(who, "via", "") or "")
     actors = {str(getattr(who, name, "") or "") for name in ("actor", "task_actor")}
-    if not acting and not (actors & set(ACTS_FOR_PEOPLE)):
+    if via in ("assistant", "botops") or actors & set(ACTS_FOR_PEOPLE):
+        words = NOT_YOURS
+    elif via or getattr(who, "via_token", False):
+        words = OWN_IN_TICO
+    else:
         return None
     found = conn.execute("SELECT kind FROM requirements WHERE id=?", (requirement_id,)).fetchone()
-    return NOT_YOURS if found and found[0] == "ok" else None
+    return words if found and found[0] == "ok" else None
 
 
 # ----------------------------------------------------------------------------- asking
@@ -499,6 +538,11 @@ def ask_ok(
         if not before:
             continue
         state = _state(conn, before)[0]
+        if state == SENT_BACK and before["asked_by_id"] == by:
+            # Asked again after a send back: the new ask replaces the old one, which would otherwise hold its task in
+            # the stage (C15). The send back stays in the task's history.
+            withdraw(conn, before["requirement_id"], "Asked again")
+            continue
         if state not in (WAITING, OK):
             continue
         if before["content_hash"] == digest and before["asked_by_id"] == by:
@@ -714,7 +758,7 @@ def give_ok(
         _refuse(conn, person, "task_requirement", refused, task_id)
     token = _GIVING.set(requirement_id)
     try:
-        answered: Row = H.task_answer(conn, person, task_id, requirement_id, "ok")
+        answered: Row = H.task_answer(conn, person, task_id, requirement_id, "ok", own_click=True)
     finally:
         _GIVING.reset(token)
     conn.execute(
@@ -851,6 +895,10 @@ def not_done(conn: "sqlite3.Connection", requirement_id: str, why: str) -> None:
     H.event(conn, SYSTEM, "ok.not_done", requirement_id, {"subject": row["subject"], "why": why[:300], "task": task_id})
     if row.get("filed") and task_id and _task_status(conn, task_id) == "open":
         H.attempt(conn, H.task_close, SYSTEM, task_id, why)
+    elif task_id:
+        # Its task goes on: its history says why the act did not happen, to the OK's parties only (the event names the
+        # requirement: private_history drops the words for anyone else). Nobody is sent a message about it.
+        H._task_event(conn, task_id, SYSTEM, "ok_not_done", None, None, why[:300], data={"requirement": requirement_id})
 
 
 def settle(conn: "sqlite3.Connection", requirement_id: str, note: str) -> None:

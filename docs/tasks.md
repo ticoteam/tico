@@ -60,14 +60,14 @@ leave the stage until it is answered, withdrawn or pushed past. There are two ki
 - **OK:** approve, or send back with notes. The notes go to the bot word for word.
 
 ```sh
-hub task ask <id> --to <person> "Which plan do new signups get?" --choices basic,pro --version N
-hub task ask <id> --to <person> --kind ok "Approve the launch post" --show page:12 --version N
-hub task ask <id> --withdraw -m "why"
+tico task ask <id> --to <person> "Which plan do new signups get?" --choices basic,pro --version N
+tico task ask <id> --to <person> --kind ok "Approve the launch post" --show page:12 --version N
+tico task ask <id> --withdraw -m "why"
 ```
 
 A bot has one ask of its own open on a task at a time: asking again replaces it. An ask never expires. A person
-answers it from Needs you. A bot named on one answers with `hub task answer <id> <requirement> ok|no|again|<answer>`,
-or gives it to someone else with `hub task give <id> <requirement> --to <person>`.
+answers it from Needs you. A bot named on one answers with `tico task answer <id> <requirement> ok|no|again|<answer>`,
+or gives it to someone else with `tico task give <id> <requirement> --to <person>`.
 
 Something that leaves the company or spends money (send this email, publish this, spend this) waits on an OK bound to
 exactly what the person was shown. The person OKs it from its preview, by their own click; an Assistant or a token
@@ -82,18 +82,18 @@ Snooze is the only hold. It sets a task aside until a date, or with no end ("On 
 or chases it, it is not Late, it holds no slot in a stage with a limit, and it leaves Needs you.
 
 ```sh
-hub task snooze <id> --until 2026-11-14 -m "vendor replies by Nov 14" --version N
-hub task unsnooze <id>
+tico task snooze <id> --until 2026-11-14 -m "vendor replies by Nov 14" --version N
+tico task unsnooze <id>
 ```
 
 A bare date is the start of that day, Pacific. A bot gives a reason and should give a date. A bot's snooze with no
 date tells the manager bot once; after three snoozes by a bot in one stage, the next goes to the manager bot. When a
-snooze ends, the owner is woken once. Finishing or closing a task ends its snooze. `hub task list --snoozed only|all`
+snooze ends, the owner is woken once. Finishing or closing a task ends its snooze. `tico task list --snoozed only|all`
 lists snoozed tasks.
 
 ## Done, closed and reopen
 
-`hub task done <id> -m "what was done"` says the work of this stage is finished. In General that makes the task Done.
+`tico task done <id> -m "what was done"` says the work of this stage is finished. In General that makes the task Done.
 Done never pushes past anything: if something is still missing, it is refused with what is missing and what you can do
 next.
 
@@ -101,9 +101,9 @@ Close takes a task out of the pipeline from any stage, with a reason from a bot.
 Closing stops work still running on the task and closes its open sub-tasks. Done does not finish sub-tasks.
 
 ```sh
-hub task done <id> -m "Sent the invoices" --version N
-hub task close <id> -m "Not needed this quarter" --version N
-hub task move <id> reopen -m "The export is wrong again" --version N
+tico task done <id> -m "Sent the invoices" --version N
+tico task close <id> -m "Not needed this quarter" --version N
+tico task move <id> reopen -m "The export is wrong again" --version N
 ```
 
 Done and Closed tasks are behind the archive button on the Tasks page. Nothing closes by itself.
@@ -129,14 +129,14 @@ a task.
 
 ## Sub-tasks
 
-A task waits on the tasks it files. File one with `hub task file --parent <id> "title"` (yours unless `--owner`), or
-`hub task create --parent <id> ...`. The parent is set when the task is filed and never changes. Sub-tasks nest at
+A task waits on the tasks it files. File one with `tico task file --parent <id> "title"` (yours unless `--owner`), or
+`tico task create --parent <id> ...`. The parent is set when the task is filed and never changes. Sub-tasks nest at
 most 5 deep. When the last one ends, the parent's owner is woken once with how each ended. Closing a parent closes its
 open sub-tasks. A deleted sub-task counts as Closed for whatever waits on it.
 
 ```sh
-hub task file --parent <id> --owner engineer "Build the service"
-hub task tree <id>
+tico task file --parent <id> --owner engineer "Build the service"
+tico task tree <id>
 ```
 
 `GET /api/v2/tasks/{id}/tree` returns the nested sub-tasks.
@@ -146,8 +146,8 @@ hub task tree <id>
 A bot can have another model look at its work without a second bot:
 
 ```sh
-hub task child <parent-id> --check-model grok --role review --title "Review PR 655" --body "https://github.com/..."
-hub task child <parent-id> --check-model codex:gpt-6.1-sol --title "Check the migration plan" --body "..."
+tico task child <parent-id> --check-model grok --role review --title "Review PR 655" --body "https://github.com/..."
+tico task child <parent-id> --check-model codex:gpt-6.1-sol --title "Check the migration plan" --body "..."
 ```
 
 `--check-model` takes a runtime or `runtime:model`. With no value it takes the company's check model (Settings >
@@ -166,9 +166,9 @@ A relation is a note between two tasks. A task never waits on one.
 | `follow_up` | the task was split off or followed up from the other |
 
 ```sh
-hub task relate <id> <other-id>                     # related
-hub task relate <id> <other-id> --kind duplicate_of
-hub task relate <id> <other-id> --remove
+tico task relate <id> <other-id>                     # related
+tico task relate <id> <other-id> --kind duplicate_of
+tico task relate <id> <other-id> --remove
 ```
 
 The API is `POST /api/v2/tasks/{id}/relations` with `{"task": "<other id>", "kind": "...", "remove": false}`. In SQL
@@ -176,7 +176,7 @@ they are the `task_relations` table ([Hub SQL](hub-sql.md)).
 
 ## Links and pull requests
 
-Attach PRs, issues and documents with `hub task link <id> <url>`, or `GET/POST /api/v2/tasks/{id}/links` and
+Attach PRs, issues and documents with `tico task link <id> <url>`, or `GET/POST /api/v2/tasks/{id}/links` and
 `DELETE /api/v2/tasks/{id}/links/{link_id}`. A PR link shows its checks, mergeability and review state. In General a
 linked PR is information: opening, merging or closing it does not move the task. `--wake-once` on a PR link wakes the
 task once when the PR's checks finish, a review approves or asks for changes, or a release ships it.
@@ -187,8 +187,8 @@ Every task has its own thread. A comment is a post there and reaches the task's 
 @mentions. A comment to a bot says how it arrives ([Steer, queue or defer](using-tico.md#steer-queue-or-defer)):
 
 ```sh
-hub task comment <id> "Use the August numbers." --steer
-hub task comment <id> "For later." --defer 4h
+tico task comment <id> "Use the August numbers." --steer
+tico task comment <id> "For later." --defer 4h
 ```
 
 A comment is talk. It is not progress: a bot that only comments has still stopped early.
@@ -196,8 +196,8 @@ A comment is talk. It is not progress: a bot that only comments has still stoppe
 ## Choosing the model a task runs on
 
 A bot's task runs on the bot's task model. A task can name its own model, effort and harness instead: **Runs on** in
-the task window, `hub task create --model <id> --effort <effort> --harness <harness>`, `hub task model <id> <model>`,
-or `hub task model <id> --clear`. `POST /api/v2/tasks/{id}/model` does the same (`{"model": null}` clears it). Whoever
+the task window, `tico task create --model <id> --effort <effort> --harness <harness>`, `tico task model <id> <model>`,
+or `tico task model <id> --clear`. `POST /api/v2/tasks/{id}/model` does the same (`{"model": null}` clears it). Whoever
 may change the bot's model may change a task's model; a bot never does. A task that changes owner loses its own model.
 
 ## Changing many tasks at once
@@ -213,7 +213,7 @@ caller may not change is skipped with the reason. One call changes at most 200 t
 Besides its owner, a task can list people or bots under a **role**, a short name the team chooses (`developer`,
 `reviewer`). A role has no meaning or rights in Tico and reaches nobody. Task create and update take
 `"roles": {"reviewer": ["human:charlie"]}` (each role named replaces its people, `[]` clears one).
-`hub task list --member me [--role reviewer]` lists the tasks you are on. In SQL they are the `task_roles` table.
+`tico task list --member me [--role reviewer]` lists the tasks you are on. In SQL they are the `task_roles` table.
 
 ## Files
 
@@ -221,9 +221,9 @@ Attach a file to the task so anyone who can read the task can open it. Uploading
 new version. Each version records who uploaded it, when, its size and type, and an optional note.
 
 ```sh
-hub task attach <id> report.md --note "Revised introduction"
-hub task comment <id> "Choose a draft" --attach draft-a.md --attach draft-b.md
-hub task comment <id> "The export" --file <file-id>@1
+tico task attach <id> report.md --note "Revised introduction"
+tico task comment <id> "Choose a draft" --attach draft-a.md --attach draft-b.md
+tico task comment <id> "The export" --file <file-id>@1
 ```
 
 `POST /api/v2/tasks/{id}/files` takes `name`, `text` or `content_base64`, and `note`. `GET /api/v2/tasks/{id}/files`
@@ -237,11 +237,11 @@ A task's **followers** are the people and bots who follow its thread, each at a 
 
 - The owner follows, at `live`. A new owner follows; the old owner stops unless they chose to follow or were
   @mentioned.
-- Filing or commenting on a task does not follow it. An @mention does. `hub task create --follow` follows the task you
+- Filing or commenting on a task does not follow it. An @mention does. `tico task create --follow` follows the task you
   file.
 - Only someone who can see the task follows it.
-- `hub task followers <id>`; `hub task follow <id> [--level live|mentions|digest|muted] [--who X]`;
-  `hub task unfollow <id> [--who X]`.
+- `tico task followers <id>`; `tico task follow <id> [--level live|mentions|digest|muted] [--who X]`;
+  `tico task unfollow <id> [--who X]`.
 - API: `GET /api/v2/tasks/{id}/followers`; `PUT` with `{"actor"?: X, "following": true|false, "notify"?: level}`.
 
 ## Company and private tasks
@@ -260,7 +260,7 @@ names everyone in it, read at each check.
 - The task's **Who can see** row shows them; × takes a reader off and + adds one.
 - Anyone who may change the task changes its readers. A bot adds only people and bots within its reach. Only a person
   adds a group.
-- `hub task create --private --reader X`; `hub task readers list|add|remove <id> [X ...]`.
+- `tico task create --private --reader X`; `tico task readers list|add|remove <id> [X ...]`.
 - API: `GET /api/v2/tasks/{id}/readers`; `POST` with `{"add": [...], "remove": [...]}`; `PUT` with
   `{"readers": [...]}`. A task lists at most 50 readers.
 - A reader reads that task only: not the task above it or its other sub-tasks.
@@ -269,12 +269,12 @@ names everyone in it, read at each check.
 
 A private task between two bots has nobody who could act on it. Its owning bot (or that bot's manager) may:
 
-- **Bring in one person**, by filing a sub-task for them under it (`hub task create --owner <person> --parent <task>`).
+- **Bring in one person**, by filing a sub-task for them under it (`tico task create --owner <person> --parent <task>`).
   They become a reader of that task only. Once a person reads it, a hand-off to someone else is refused.
-- **Hand work to another bot in a sealed sub-task**: `hub task create --owner <bot> --parent <task>`. The other bot
+- **Hand work to another bot in a sealed sub-task**: `tico task create --owner <bot> --parent <task>`. The other bot
   reads only the words written into the sub-task, never the parent. Words copied from the private work (12 or more in
   a row, or a secret-shaped value) are refused, naming the check, never the text.
-- **File a company-visible task from the private work**: `hub task create --from-private --owner <bot>
+- **File a company-visible task from the private work**: `tico task create --from-private --owner <bot>
   [--parent <task>]`. It carries only its own words, under the same checks, and the private task stays sealed.
 
 `POST /api/v2/tasks/dry-run` makes the same checks as a create and writes nothing.
@@ -286,8 +286,8 @@ can. Only plain comments change; an ask, an answer or a notice does not. Neither
 A deleted comment leaves a tombstone with its text cleared.
 
 ```sh
-hub task comment-edit <id> <comment-id> "Use the August numbers."
-hub task comment-delete <id> <comment-id>
+tico task comment-edit <id> <comment-id> "Use the August numbers."
+tico task comment-delete <id> <comment-id>
 ```
 
 ## Deleting tasks made by mistake
@@ -296,9 +296,9 @@ Closing keeps a task as history. A task made by mistake, such as a duplicate, ca
 requester, or by anyone who may move any task. Bots close tasks; they never delete one.
 
 ```sh
-hub task delete <id>
-hub task deleted              # deleted tasks you may restore, newest first
-hub task restore <id>
+tico task delete <id>
+tico task deleted              # deleted tasks you may restore, newest first
+tico task restore <id>
 ```
 
 `POST /api/v2/tasks/{id}/delete`, `GET /api/v2/deleted-tasks` and `POST /api/v2/tasks/{id}/restore` do the same.
@@ -318,28 +318,28 @@ python -m backend.manage purge-deleted-tasks /data/hub.sqlite --older-than-days 
 
 ## CLI and MCP
 
-MCP tools mirror the commands one for one (`hub task move` is `hub_task_move`). `--version` is the version you were
-last shown: `hub task show`, a list row and every wake print it. Without one a bot's command is refused: "Run `hub task
+MCP tools mirror the commands one for one (`tico task move` is `hub_task_move`). `--version` is the version you were
+last shown: `tico task show`, a list row and every wake print it. Without one a bot's command is refused: "Run `tico task
 show <id>` first."
 
 ```text
-hub task show <id>
-hub task done <id> -m "what was done" --version N
-hub task move <id> next|<stage>|done|closed|reopen -m "why" --version N
-hub task close <id> -m "why" --version N
-hub task reassign <id> <owner> -m "why" --version N
-hub task ask <id> --to <person> "line" [--kind ok] [--choices a,b] [--show page:12] --version N
-hub task ask <id> --withdraw
-hub task answer <id> <requirement> ok|no|again|<answer> [-m "note"] --version N
-hub task give <id> <requirement> --to <person> --version N
-hub task file --parent <id> [--pipeline general] [--owner X] "title"
-hub task snooze <id> [--until date] -m "why" --version N
-hub task create --owner X --title "..." [--pipeline general] [--parent <id>]
-hub task update <id> [--title] [--body] [--due] [--label] [--goal] --version N
-hub task list [--status open|done|closed] [--owner X] [--snoozed only|all]
+tico task show <id>
+tico task done <id> -m "what was done" --version N
+tico task move <id> next|<stage>|done|closed|reopen -m "why" --version N
+tico task close <id> -m "why" --version N
+tico task reassign <id> <owner> -m "why" --version N
+tico task ask <id> --to <person> "line" [--kind ok] [--choices a,b] [--show page:12] --version N
+tico task ask <id> --withdraw
+tico task answer <id> <requirement> ok|no|again|<answer> [-m "note"] --version N
+tico task give <id> <requirement> --to <person> --version N
+tico task file --parent <id> [--pipeline general] [--owner X] "title"
+tico task snooze <id> [--until date] -m "why" --version N
+tico task create --owner X --title "..." [--pipeline general] [--parent <id>]
+tico task update <id> [--title] [--body] [--due] [--label] [--goal] --version N
+tico task list [--status open|done|closed] [--owner X] [--snoozed only|all]
 ```
 
-`hub task show` prints the version; pipeline, stage and owner; whose turn it is; what the stage needs to leave, met or
+`tico task show` prints the version; pipeline, stage and owner; whose turn it is; what the stage needs to leave, met or
 not; the next stage; and the task that filed it. A refusal prints what is missing and the commands allowed next. A
 refusal never counts toward a bot's quarantine.
 

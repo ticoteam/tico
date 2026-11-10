@@ -8,9 +8,9 @@ checked.
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub market segment tree     # the segments, for the segment question
-    hub goal list               # any conversion target already set; do not ask again what it says
+    tico task show <id>
+    tico market segment tree     # the segments, for the segment question
+    tico goal list               # any conversion target already set; do not ask again what it says
 
 Look at the conversion pages as a visitor sees them: the landing page, sign-up, pricing and checkout. Do not ask what
 these already say. If you cannot see a page as a visitor, note it as a gap and raise it as a task for the owner.
@@ -32,7 +32,7 @@ Numbered, each with its one-line why. Offer a default so a person can answer "fi
 2. Where are sign-ups, trials, leads and purchases counted, and roughly how many visitors does each page get a week?
    Why: the source sets every rate, and the weekly visitor count sets how long a test takes.
 3. Which segments do these pages serve, and which one matters most this quarter? Default: every segment from
-   `hub market segment tree`, with equal weight.
+   `tico market segment tree`, with equal weight.
    Why: rates are split by segment. A rate for all visitors never describes one segment.
 4. What rate should each page reach, and what must never be tested: prices shown to existing customers, legal text,
    checkout? Default: the last 90 days as the baseline, and no target until you set one.
@@ -50,22 +50,22 @@ a visitor). Keep the segment list and the never-test list fixed from here on: a 
 ## 5. Produce the first check now
 
 Follow `playbooks/weekly-conversion-check.md` from the counts the owner named. Publish the report with
-`hub file publish reports/YYYY-MM-DD-conversion.md` and attach it to the task as a draft labelled "First draft, not yet
+`tico file publish reports/YYYY-MM-DD-conversion.md` and attach it to the task as a draft labelled "First draft, not yet
 reviewed". If the owner named no counts, the report says so in its first line and every step reads "not measured".
 Propose no change and start no test.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list`. If it shows off, arm it with
-`hub automation update <id> --enable`. Then tell the human in one line: "I will send the conversion check every Monday at
+Setting you up switched your first routine on. Check it with `tico automation list`. If it shows off, arm it with
+`tico automation update <id> --enable`. Then tell the human in one line: "I will send the conversion check every Monday at
 08:30." They can change it or turn it off at any time; nothing waits for approval.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different time or to leave
-it off, change it with `hub automation update <id>`, using `--disable` to turn it off.
+it off, change it with `tico automation update <id>`, using `--disable` to turn it off.
 
 ## 7. Finish
 
 Run this once the answers and the first check are recorded, not before. It clears your "Needs setup" mark and lets the
 routine run.
 
-    hub bot setup-done
+    tico bot setup-done

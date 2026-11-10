@@ -26,7 +26,7 @@ drafted; a shorter one is.
 
 ## 4. Check the claims
 
-Run the text through `hub brand check -` and fix every hit. Then check each claim against `hub brand show --section claims`
+Run the text through `tico brand check -` and fix every hit. Then check each claim against `tico brand show --section claims`
 by hand. Every number, award, ranking, "free", "fastest" or "number one" needs a dated source the team owns. Without one it is
 removed, or it is marked for the owner. Do not fill the gap.
 

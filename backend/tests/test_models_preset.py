@@ -265,10 +265,12 @@ def test_the_installer_choice_seeds_claude_and_chatgpt_and_an_unknown_choice_is_
         )
 
 
-def needs(api, token="ana-test"):
-    from backend.tests.helpers.api import get  # noqa: F401
-
-    return [it for it in get(api, "needs-you", token)["items"] if it["kind"] == "setup"]
+def needs(api):
+    """The company's sign-in card (models_preset.card), as a list. Needs you no longer lists setup cards since the
+    cut-over (it is the engine's list and a person's @s), so the card is read where it is made."""
+    with api.app.state.store.read() as c:
+        card = models_preset.card(c, api.app.state.store.settings)
+    return [card] if card else []
 
 
 @pytest.mark.parametrize("isolated", [True, False])
@@ -284,7 +286,7 @@ def test_one_sign_in_card_until_claude_and_chatgpt_are_signed_in_and_it_names_th
     # One card for the company, not one per bot or per computer.
     assert [c["title"] for c in cards] == [models_preset.SIGN_IN_TITLE]
     assert (models_preset.NOT_ISOLATED_LINE in cards[0]["first_line"]) is (not isolated)
-    assert cards[0]["need"] == "connect"
+    assert cards[0]["link"] == "#/settings"
     # Nothing failed while the bots waited.
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM jobs WHERE state='failed'").fetchone()[0] == 0

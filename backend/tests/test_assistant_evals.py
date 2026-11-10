@@ -574,4 +574,4 @@ def test_the_filter_close_playbook_keeps_mine_by_default_and_closes_each_on_thei
     text = (EVALS.parents[1] / "templates/catalog/assistant/playbooks/jobs.md").read_text()
     job = text[text.index("12a.") : text.index("\n13. ")]
     assert "Keep mine is the default" in job and "Close N? Say yes." in job
-    assert 'hub task close <id> -m "<why>" --version N' in job and "bulk" not in job
+    assert 'tico task close <id> -m "<why>" --version N' in job and "bulk" not in job

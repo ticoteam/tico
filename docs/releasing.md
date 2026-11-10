@@ -331,7 +331,7 @@ checkout's Git metadata. `publish` dispatches Release validation with the frozen
 event, main branch, exact run title, candidate SHA and successful conclusion, checks main still equals the frozen
 commit and tags it. Main moving at any checkpoint refuses the release. It then waits for the GitHub release to be
 published and files one task, "Release notes for vX.Y.Z", for the Technical Writer (`--writer <bot>`, default
-`docs-writer`) with the release's commit range. The command needs `gh` and a `hub` login that can create tasks.
+`docs-writer`) with the release's commit range. The command needs `gh` and a `tico` login that can create tasks.
 The command does not replace the release's publishing approval, evidence checklist or rollout.
 
 Run `publish` in the background while validation runs. A validation run that ends canceled is rerun by `publish` (same
@@ -532,7 +532,7 @@ python scripts/release_checklist.py --head <candidate> --previous vX.Y.Z > check
 python scripts/release_checklist.py --head <candidate> --previous vX.Y.Z --json > checklist.json
 ```
 
-Run in a checkout with fetched release tags, a `gh` login for the repository and a scoped `hub` login for
+Run in a checkout with fetched release tags, a `gh` login for the repository and a scoped `tico` login for
 the shared team API. No local team database is opened. Without `--previous`, it selects the earlier release
 tag using the freeze guard's rule. `--github owner/repository` overrides the checkout's origin.
 Attach the Markdown checklist to the release task; the JSON companion retains structured evidence and source
@@ -771,7 +771,7 @@ under `<prefix>/releases/app/` when a prefix is configured.
 
 A team that runs several installs can hand the whole rollout to its Release Manager bot. The owner's OK of a named
 release on its release task is the only gate: an OK the bot asked of the owner on that task
-(`hub task ask <id> --to <owner> --kind ok "Release vX.Y.Z?"`), or the owner's own message on the task naming the
+(`tico task ask <id> --to <owner> --kind ok "Release vX.Y.Z?"`), or the owner's own message on the task naming the
 version. From there the bot runs
 `playbooks/rollout.md` (`software/rollout.py` in its repository) without waiting on anyone:
 
@@ -791,10 +791,10 @@ leaves the other installs untouched, and the bot asks the owner what to do next.
 Setup, once:
 
 - **Write on the repository.** An owner or admin ticks the repository in Settings → General → Repositories and gives the bot
-  write on it: `hub bot repos <slug> --chosen <owner>/<repo>:write` (list the bot's other chosen repositories in the
+  write on it: `tico bot repos <slug> --chosen <owner>/<repo>:write` (list the bot's other chosen repositories in the
   same command; `--chosen` replaces them), or the same in the bot's settings ([Repositories](repositories.md)).
 - **An update key per install.** The owner of each install, the team's own included, runs
-  `hub service-key create --label "<team> Release Manager" --scope update` there ([Service keys](service-keys.md#update-keys)).
+  `tico service-key create --label "<team> Release Manager" --scope update` there ([Service keys](service-keys.md#update-keys)).
   Each key is stored in Tools → Credentials on the Release Manager's install, granted to the bot, with the variable
   named in its config.
 - **The list of installs.** `knowledge/rollout.json` in the bot's repository: the repository, and each install's

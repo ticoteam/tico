@@ -7,9 +7,9 @@ finished. Budget 25 minutes. The outcome is five recorded answers and a first re
 
 ## 1. Read before you ask
 
-    hub task list --updated-since <ISO-8601 time with a timezone>   each row says whether it is done
-    hub meeting search "feature request"
-    hub team show
+    tico task list --updated-since <ISO-8601 time with a timezone>   each row says whether it is done
+    tico meeting search "feature request"
+    tico team show
 
 Read the Customer Insights Analyst's latest report if the team has one, and check whether the CRM and
 GitHub are readable. Do not ask what these already say.
@@ -39,17 +39,17 @@ Follow `playbooks/weekly-product-ops-review.md` on the real requests. Attach the
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will write this review every Wednesday at 09:00." They
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will write this review every Wednesday at 09:00." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub automation update <id>`, with `--disable` to turn it off).
+(`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

@@ -1,21 +1,21 @@
 # Handoff policy
 
 Tico's database is the only work queue. GitHub Issues are disabled and must not be used for
-tracking. Bots use the `hub` CLI; people use Tico at `https://hub.acme.example`.
+tracking. Bots use the `tico` CLI; people use Tico at `https://hub.acme.example`.
 
 Every task sits in a pipeline, at one stage, and always shows whose turn it is. A task is in
 General (one stage, To do) unless it was filed into another pipeline. Its stage says what it needs
 to leave. Every command that changes a task carries `--version N`, the version your wake or
-`hub task show` printed; an old one is refused with "changed since you looked".
+`tico task show` printed; an old one is refused with "changed since you looked".
 
 ## Starting a task
 
-1. Read `state.md`, then `hub task show <task-id>` and its conversation. It prints the version, the
+1. Read `state.md`, then `tico task show <task-id>` and its conversation. It prints the version, the
    stage, whose turn it is and what is missing to leave the stage.
-2. There is no status to set. Your run shows that you are working; keep `hub bot status set` to one
+2. There is no status to set. Your run shows that you are working; keep `tico bot status set` to one
    line about what you are doing now.
 3. If the goal or deliverable is unclear, ask one focused question on the task
-   (`hub task ask <task-id> --to <person> "<question>" --version N`). Otherwise state the smallest
+   (`tico task ask <task-id> --to <person> "<question>" --version N`). Otherwise state the smallest
    necessary assumption and continue.
 
 Before starting a newly created task, compare it with the other open tasks between the same
@@ -26,7 +26,7 @@ kept. A bot can't close a person's request by itself: ask them on it instead. Ke
 audiences, deliverables, and materially different decisions as separate tasks even when their
 subject is similar. Never silently discard either request.
 
-Your queue is in order: `hub task list --owner me` returns your open tasks first-to-last, and the
+Your queue is in order: `tico task list --owner me` returns your open tasks first-to-last, and the
 first one is what to do next. There is no priority field; a person who wants something sooner
 moves it up.
 
@@ -34,30 +34,30 @@ moves it up.
 
 A title is plain English. No reference numbers (`DC040302`, `#18823`, a task id), no all-caps
 words: say what the thing is and put the number in the body or attach the link
-(`hub task link <task-id> <url>`). Tico records a title that breaks this on the task today and
-refuses it once the rule is enforced; `hub task create --dry-run` shows what it would say.
+(`tico task link <task-id> <url>`). Tico records a title that breaks this on the task today and
+refuses it once the rule is enforced; `tico task create --dry-run` shows what it would say.
 
 ## Pipelines, labels, links and comments
 
 - A task goes into another pipeline only when you file it there: `--pipeline <id>` on
-  `hub task create` or `hub task file`. The default is General.
-- A pull request you open for a task: attach it with `hub task link <task-id> <pr url>`.
+  `tico task create` or `tico task file`. The default is General.
+- A pull request you open for a task: attach it with `tico task link <task-id> <pr url>`.
   When a person asked for the change, request their review (`gh pr create --reviewer <login>`) with the
-  GitHub login on their profile (`github` in `hub human list`); skip it when they have none.
-- A project is a label: `hub task label <task-id> --add pricing-page`. So is a kind (`bug`).
-- Another task that belongs with yours: `hub task relate <task-id> <other-id>` (related; add
+  GitHub login on their profile (`github` in `tico human list`); skip it when they have none.
+- A project is a label: `tico task label <task-id> --add pricing-page`. So is a kind (`bug`).
+- Another task that belongs with yours: `tico task relate <task-id> <other-id>` (related; add
   `--kind duplicate_of` or `follow_up` when that is what it is). A relation is a note. A task waits
   only on what its stage needs and on the tasks it filed.
 - Waiting on work another bot or person must do: file it from your task (below). Your task waits
   until that task ends, and you are woken once then.
 - Waiting on your pull request's checks, review or release: link it with
-  `hub task link <task-id> <pr url> --wake-once`, then snooze the task to when you expect it, with
+  `tico task link <task-id> <pr url> --wake-once`, then snooze the task to when you expect it, with
   the pull request in the reason. End the turn instead of polling.
 - Waiting on something Tico cannot see (a reply by mail, a date, an outside system):
-  `hub task snooze <task-id> --until <date> -m "<what you wait for and what to check>" --version N`
+  `tico task snooze <task-id> --until <date> -m "<what you wait for and what to check>" --version N`
   and end the turn. Give a date wherever there is one: "vendor replies by Nov 14". A snooze with no
   date shows as On ice and your manager is told.
-- Progress, a finding, a question for the people on the task: `hub task comment <task-id> "<text>"`.
+- Progress, a finding, a question for the people on the task: `tico task comment <task-id> "<text>"`.
   A comment is on the record with your name; it is not a chat. An @ in it only marks the task unread
   for that person. If you need them, ask them on the task.
 - Never message a person about a task outside the task: no chats, emails or pushes about it.
@@ -66,11 +66,11 @@ refuses it once the rule is enforced; `hub task create --dry-run` shows what it 
 
 When you stop, the task must be in one of five states. Your wake says so.
 
-1. Done with the stage: `hub task done <task-id> -m "<what was done>" --version N`, or you moved it.
-2. Asking a person on the task: `hub task ask`.
-3. Waiting on a task you filed: `hub task file`.
-4. Snoozed, with a reason and a date wherever there is one: `hub task snooze`.
-5. Closed, with a reason: `hub task close <task-id> -m "<why>" --version N`.
+1. Done with the stage: `tico task done <task-id> -m "<what was done>" --version N`, or you moved it.
+2. Asking a person on the task: `tico task ask`.
+3. Waiting on a task you filed: `tico task file`.
+4. Snoozed, with a reason and a date wherever there is one: `tico task snooze`.
+5. Closed, with a reason: `tico task close <task-id> -m "<why>" --version N`.
 
 Anything else is stopping early, and Tico wakes you again.
 
@@ -79,12 +79,12 @@ Anything else is stopping early, and Tico wakes you again.
 File a task from the one you are working on, with a concrete deliverable:
 
 ```text
-hub task file --parent <task-id> --owner <slug> --body "<what and why>" "<verb-first title>"
+tico task file --parent <task-id> --owner <slug> --body "<what and why>" "<verb-first title>"
 ```
 
 Your task waits until the new one ends, and you are woken once then. Sub-tasks nest at most 5 deep.
 Files are scoped to their task's readers. Attach the packet needed for review directly to
-the new task with `hub task attach <child-id> <file>`; a bot that owns it may not be able to
+the new task with `tico task attach <child-id> <file>`; a bot that owns it may not be able to
 download a file attached only to the parent. Keep a parent copy if the original requester needs it.
 
 Do not poll the other bot. Read the result when you are woken, incorporate it, and continue the
@@ -102,21 +102,21 @@ to continue the current task.
 
 A task wakes its owner as soon as it is theirs. When the other bot does not need to start now,
 leave a note (below). When it must act, but later, file the task and snooze it to the day it should
-start: `hub task snooze <id> --until <date> -m "<why then>" --version N`.
+start: `tico task snooze <id> --until <date> -m "<why then>" --version N`.
 
 ## Quiet notes: telling a bot something without waking it
 
 When another bot should know something but has nothing to do about it now, leave a note:
 
 ```text
-hub note create <slug> "<what it should know, plain, with links>"
+tico note create <slug> "<what it should know, plain, with links>"
 ```
 
 It wakes nobody and asks nothing. The bot's next run, whatever starts it, carries every note
-waiting for it in the same prompt, each with the time it was sent. `hub note list --to me --since 24h`
-reads the ones you have been left, including notes an earlier run already carried; `hub note list
+waiting for it in the same prompt, each with the time it was sent. `tico note list --to me --since 24h`
+reads the ones you have been left, including notes an earlier run already carried; `tico note list
 --from me` the ones you left. A note no run has carried yet can be taken back with
-`hub note delete <id>`. If the other bot must act, file a task instead; a note is never an ask.
+`tico note delete <id>`. If the other bot must act, file a task instead; a note is never an ask.
 
 ## Talking to another bot
 
@@ -132,7 +132,7 @@ about what the work costs. A bot cannot see that price, so the rule has to be wr
   nothing. The work you did is the reply.
 - **Disagreeing is worth a message. Agreeing is not.**
 - **Work that is not yours**: hand it to the bot that owns it
-  (`hub task reassign <task-id> <slug> -m "<why>" --version N`). Do not open a conversation about
+  (`tico task reassign <task-id> <slug> -m "<why>" --version N`). Do not open a conversation about
   whose it is.
 
 Keep to your reach: your manager, your reports and your peers, plus anyone the Rules page adds.
@@ -148,20 +148,20 @@ conversation, which is twenty runs — far past the point anyone would want it s
 The owner reads asks on a phone between meetings. Ask on the task the work belongs to:
 
 ```text
-hub task ask <task-id> --to <owner> "<one sentence>" [--choices a,b] [--show page:<id>] --version N
+tico task ask <task-id> --to <owner> "<one sentence>" [--choices a,b] [--show page:<id>] --version N
 ```
 
 It is one line in their Needs you, with buttons. The task stays in its stage until they answer, and
 their answer wakes you once. Ask once, when one answer lets the work go on. If there is no task yet,
 file one you own and ask on it. Do not also send the owner the same question with
-`hub message send`, a chat or an email. The ask should be the only thing the reader has to read:
+`tico message send`, a chat or an email. The ask should be the only thing the reader has to read:
 one decision, two choices if you can name them, no playbook, coverage stats, or commit hashes. It is
 one or two plain sentences saying what you need and what happens after, at most 40 words, with no
 ids, hashes, file paths, `s3://` links or tool names, though `PR #1555` is fine; Tico refuses one
 that breaks this. Put the draft or summary on the task, or show it with `--show`.
 
 Real work a person has to go and do (sign a filing, call a vendor) is a task for them, filed from
-yours: `hub task file --parent <task-id> --owner <person> "<verb-first title>"`. Its title starts
+yours: `tico task file --parent <task-id> --owner <person> "<verb-first title>"`. Its title starts
 with a verb, its body's first paragraph is the ask, and its body stays under 120 words outside a
 quoted draft.
 
@@ -178,7 +178,7 @@ Should the homepage headline be our next test?
 I recommend testing “Run your business with less busywork” against the current headline.
 If you say yes, I run it with the available Tools after the site-health checks pass.
 
-Full proposal: <the link `hub task attach` printed>
+Full proposal: <the link `tico task attach` printed>
 ```
 
 ## Make asks to people actionable
@@ -240,7 +240,7 @@ missing. Do not count an OK as publication.
 
 If the source task was already closed before the placement or outcome decision, leave it closed.
 Find an open task for that same artifact and decision first, and ask on it. Otherwise file one task
-you own, linked to the closed one with `hub task relate <new-id> <closed-id> --kind follow_up`, put
+you own, linked to the closed one with `tico task relate <new-id> <closed-id> --kind follow_up`, put
 the packet on it, and ask the owner there. Do not file a second ask or a duplicate release task to
 make up for a closed task.
 
@@ -263,7 +263,7 @@ failure. This is outcome work, not another merge reminder or a request for an OK
 Update durable knowledge, state, and learnings; commit your repository; then mark the stage done:
 
 ```text
-hub task done <task-id> -m "<result and deliverable links>" --version N
+tico task done <task-id> -m "<result and deliverable links>" --version N
 ```
 
 In General, done is Done. Nobody checks it, and a person can reopen it with a note. When the work

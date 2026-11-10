@@ -1,4 +1,4 @@
-"""Reading the `hub` commands a text teaches and parsing them with clients/hubcli.py, shared by
+"""Reading the `tico` commands (and `hub`, its old name) a text teaches and parsing them with clients/hubcli.py, shared by
 test_assistant_template_commands and test_bot_instruction_commands so neither imports the other."""
 
 import contextlib
@@ -9,8 +9,10 @@ from itertools import product
 
 from clients import hubcli
 
-SPAN = re.compile(r"`(hub [^`]+)`")
+SPAN = re.compile(r"`((?:tico|hub) [^`]+)`")  # `tico` is the CLI; `hub` is its old name
+STARTS = ("tico ", "hub ")
 PLACEHOLDER = re.compile(r"<[^<>]+>")
+COMMENT = re.compile(r"\s+#\s.*$")
 VERSION = re.compile(r"--version N\b")  # the version the bot was shown, written as the plan writes it
 
 
@@ -19,7 +21,7 @@ def commands_in(path):
 
     A backticked span is read across the lines of its paragraph, so a command that wraps is still checked. Whitespace inside
     the span is collapsed. Fenced lines that start with `hub` are read one line at a time."""
-    found, paragraph, start, fenced = [], [], 0, False
+    found, paragraph, start, fenced, continued = [], [], 0, False, False
 
     def flush():
         if paragraph:
@@ -34,8 +36,11 @@ def commands_in(path):
             paragraph, fenced = [], not fenced
             continue
         if fenced:
-            if line.lstrip().startswith("hub "):
+            if continued:  # the line before ended in `\`: this one is the rest of its command
+                found[-1] = (found[-1][0], found[-1][1].rstrip("\\").rstrip() + " " + line.strip())
+            elif line.lstrip().startswith(STARTS):
                 found.append((number, line.strip()))
+            continued = bool(found) and (continued or line.lstrip().startswith(STARTS)) and line.rstrip().endswith("\\")
             continue
         if not line.strip():
             flush()
@@ -49,21 +54,39 @@ def commands_in(path):
 
 
 def variants(argv):
-    """Each argv with its `a|b|c` alternatives expanded, one at a time."""
-    choices = [token.split("|") if "|" in token and not token.startswith("-") else [token] for token in argv]
-    return [list(combo) for combo in product(*choices)]
+    """Each argv with its `a|b|c` (and `--approve|--changes`) alternatives expanded, one at a time."""
+
+    def split(token):
+        if "|" not in token:
+            return [token]
+        parts = token.split("|")
+        flags = [part.startswith("-") for part in parts]
+        return parts if not any(flags) or all(flags) else [token]
+
+    return [list(combo) for combo in product(*(split(token) for token in argv))]
 
 
 def argv_of(text):
-    """The argv after `hub`, with placeholders filled, or None when the line is prose rather than a command."""
+    """The argv after `tico`, with placeholders filled, or None when the line is prose rather than a command. The CLI's
+    own top-level answers (`tico --version`, and `tico help`, which clients/hubcli.py main reads as --help) print and
+    exit, so they are not parsed."""
     if "<group>" in text or "--help" in text or text.endswith("..."):
         return None
+    text = COMMENT.sub("", text)  # a shell comment after the command: `tico decision ask --list  # the shared sets`
     filled = VERSION.sub("--version 1", PLACEHOLDER.sub("1", text))
     try:
         tokens = shlex.split(filled)
     except ValueError:
         return ["\x00unbalanced quotes"]
-    argv = [t for t in tokens[1:] if not (t.startswith("[") or t.endswith("]"))]
+    argv, depth = [], 0
+    for token in tokens[1:]:  # an optional `[--paths A B ...]` is left out whole, however many words it has
+        opens = len(token) - len(token.lstrip("["))
+        closes = len(token.rstrip(".")) - len(token.rstrip(".").rstrip("]"))
+        if depth == 0 and not opens and not closes:
+            argv.append(token)
+        depth = max(0, depth + opens - closes)
+    if argv in (["--version"], ["help"]):
+        return None
     return argv or None
 
 

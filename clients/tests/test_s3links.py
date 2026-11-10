@@ -113,7 +113,7 @@ def test_the_tools_rewrite_text_before_sending_and_say_so():
     said = hubtools.BY_NAME["hub_message_send"]["fn"](api, {"to": "human:ana", "text": "See s3://other-bucket/k.md"})
     assert said["sent"]["text"] == "See s3://other-bucket/k.md"
     assert said["s3_links"]["unmapped"] == ["s3://other-bucket/k.md"]
-    assert "hub file import s3://" in said["s3_links"]["hint"]
+    assert "tico file import s3://" in said["s3_links"]["hint"]
     commented = hubtools.BY_NAME["hub_task_comment"]["fn"](
         api, {"id": "t1", "text": "`s3://acme-files/a.md` s3://acme-files/b.md"}
     )

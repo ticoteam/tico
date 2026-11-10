@@ -1,4 +1,4 @@
-"""scripts/tico hands this computer's commands to scripts/tico-computer and everything else to scripts/hub.
+"""scripts/tico is the teamwork CLI; this computer's own commands reach scripts/tico-computer only from a person.
 
 Customers' ~/.local/bin/tico is a symlink to a checkout's scripts/tico, and a scripts/tico from before tico-computer
 ends `update` with `exec "$SELF" [-e ENV] restart all`, where $SELF is the path that now holds the dispatcher. These
@@ -27,53 +27,97 @@ def stub(path, name):
 
 @pytest.fixture
 def linked(tmp_path):
-    """A checkout's scripts/ with the real dispatcher and stand-ins for both commands, and ~/.local/bin/tico to it."""
+    """A checkout's scripts/ with the real dispatcher and stand-ins for both commands, and ~/.local/bin/tico to it.
+    `run(*args, bot=...)` runs it from a person's terminal, or with the environment the runner gives a bot turn
+    (runner-rs/src/env.rs sets HUB_BOT and HUB_EMPLOYEE on every turn)."""
     scripts = tmp_path / 'checkout' / 'scripts'
     scripts.mkdir(parents=True)
     shutil.copy2(DISPATCH, scripts / 'tico')
     stub(scripts / 'tico-computer', 'computer')
-    stub(scripts / 'hub', 'hub')
+    stub(scripts / 'hub', 'teamwork')
     bin_dir = tmp_path / 'home' / '.local' / 'bin'
     bin_dir.mkdir(parents=True)
     (bin_dir / 'tico').symlink_to(scripts / 'tico')
 
-    def run(*args):
-        done = subprocess.run(
-            [str(bin_dir / 'tico'), *args],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env={'PATH': os.environ.get('PATH', os.defpath), 'HOME': str(tmp_path / 'home')},
-        )
-        assert done.returncode == 0, done.stderr
-        return done.stdout.strip()
+    def run(*args, bot=None):
+        env = {'PATH': os.environ.get('PATH', os.defpath), 'HOME': str(tmp_path / 'home')}
+        if isinstance(bot, dict):  # one variable alone
+            env.update(bot)
+        elif bot:
+            env.update({'HUB_BOT': bot, 'HUB_EMPLOYEE': bot, 'HUB_TOKEN': 't', 'HUB_API_URL': 'https://x.invalid'})
+        return subprocess.run([str(bin_dir / 'tico'), *args], capture_output=True, text=True, timeout=30, env=env)
 
     return run
 
 
-@pytest.mark.parametrize(
-    'args, ran',
-    [
-        (['install'], 'computer: install'),
-        (['restart', 'all'], 'computer: restart all'),
-        (['-e', 'acme', 'restart', 'all'], 'computer: -e acme restart all'),
-        (['--env=acme', 'status'], 'computer: --env=acme status'),
-        (['-e', 'acme', 'task', 'list'], 'computer: -e acme task list'),  # an environment is only ever the computer's
-        (['update'], 'computer: update'),
-        (['-e', 'acme', 'update'], 'computer: -e acme update'),
-        (['update', 'list'], 'hub: update list'),  # the bots' daily updates
-        (['doctor'], 'computer: doctor'),
-        (['env', 'list'], 'computer: env list'),
-        (['bot', 'create', 'ops'], 'computer: bot create ops'),
-        ([], 'computer:'),
-        (['help'], 'computer: help'),
-        (['task', 'list'], 'hub: task list'),
-        (['bot', 'list'], 'hub: bot list'),
-        (['thread', 'post', '--', '-e'], 'hub: thread post -- -e'),
-    ],
-)
-def test_computer_commands_go_to_tico_computer_and_the_rest_to_hub(linked, args, ran):
-    assert linked(*args) == ran
+TEAMWORK = [
+    [],
+    ['--help'],
+    ['-h'],
+    ['help'],
+    ['--version'],
+    ['status'],
+    ['update'],
+    ['update', 'list'],  # the bots' daily updates
+    ['bot', 'create', 'ops', '--template', 'support'],
+    ['bot', 'list'],
+    ['task', 'list'],
+    ['computer', 'list'],
+    ['setup', 'show'],
+    ['thread', 'post', '--', '-e'],
+]
+COMPUTER_WORDS = [
+    ['install'],
+    ['uninstall'],
+    ['restart', 'all'],
+    ['-e', 'acme', 'restart', 'all'],
+    ['--env=acme', 'status'],
+    ['-e', 'acme', 'task', 'list'],  # an environment is only ever the computer's
+    ['-e', 'acme', 'update'],
+    ['doctor'],
+    ['logs', 'bot'],
+    ['open'],
+    ['env', 'list'],
+    ['enroll', '--code-file', 'f'],
+    ['profile', 'list'],
+    ['screen', 'on'],
+    ['server', 'status'],
+]
+
+
+@pytest.mark.parametrize('args', TEAMWORK)
+@pytest.mark.parametrize('bot', [None, 'ops'])
+def test_every_teamwork_word_goes_to_the_teamwork_cli_for_people_and_bots(linked, args, bot):
+    done = linked(*args, bot=bot)
+    assert (done.returncode, done.stdout.strip(), done.stderr) == (0, ' '.join(['teamwork:', *args]).strip(), '')
+
+
+@pytest.mark.parametrize('args', COMPUTER_WORDS)
+def test_a_computer_word_from_a_persons_terminal_reaches_tico_computer_with_a_note(linked, args):
+    done = linked(*args)
+    assert (done.returncode, done.stdout.strip()) == (0, ' '.join(['computer:', *args]))
+    if 'restart' in args:  # the update chain of a scripts/tico from before tico-computer: silent
+        assert done.stderr == ''
+    else:
+        assert (
+            done.stderr
+            == f"tico: this computer's commands are tico-computer now: running tico-computer {' '.join(args)}\n"
+        )
+
+
+@pytest.mark.parametrize('args', COMPUTER_WORDS)
+def test_a_computer_word_in_a_bot_turn_is_refused_and_never_reaches_tico_computer(linked, args):
+    done = linked(*args, bot='ops')
+    assert done.returncode == 2 and done.stdout == ''
+    assert 'tico-computer' in done.stderr and 'a bot turn does not run it' in done.stderr
+
+
+@pytest.mark.parametrize('name', ['HUB_BOT', 'HUB_EMPLOYEE'])
+def test_either_name_for_the_bot_marks_a_bot_turn(linked, name):
+    done = linked('update', bot='ops')
+    assert done.stdout.strip() == 'teamwork: update'
+    done = linked('restart', 'all', bot={name: 'ops'})
+    assert done.returncode == 2 and done.stdout == ''
 
 
 def git(cwd, *args):
@@ -131,9 +175,9 @@ def test_an_update_by_the_old_scripts_tico_restarts_through_the_dispatcher_and_l
         'GIT_CONFIG_NOSYSTEM': '1',
     }
 
-    def update(*args):
+    def update(*args, command='tico'):
         done = subprocess.run(
-            [str(home / '.local' / 'bin' / 'tico'), *args, 'update'],
+            [str(home / '.local' / 'bin' / command), *args, 'update'],
             capture_output=True,
             text=True,
             env=env,
@@ -152,9 +196,11 @@ def test_an_update_by_the_old_scripts_tico_restarts_through_the_dispatcher_and_l
     assert link.is_symlink() and link.resolve() == (checkout / 'scripts' / 'tico-computer').resolve()
     assert 'linked ~/.local/bin/tico-computer' in out
 
-    # The next update runs the new script, which restarts with tico-computer by name.
+    # Now `tico update` is the teamwork CLI's (the bots' updates); the computer updates with tico-computer, whose
+    # new script restarts with tico-computer by name.
+    assert update() == 'hub: update\n'
     (source / 'NOTES').write_text('R0.1\n')
     git(source, 'add', '-A')
     git(source, 'commit', '-q', '-m', 'R0.1')
-    out = update()
+    out = update(command='tico-computer')
     assert 'updated ' in out and 'importers: not installed' in out and 'linked' not in out

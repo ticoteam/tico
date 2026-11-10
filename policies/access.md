@@ -23,7 +23,7 @@ Rules:
 - Messages to outsiders (`send`, `post`, `publish`) follow the bot's sending policy in Tico (Settings > Bots > <bot> > Email sending: On their own, Ask first or Never), never a line in `bot.yaml`. Every email goes through Tico's send queue, which decides it; under Ask first a person approves it in Tico. Act within the requested work and the declared Tools. Spending follows the requested budget and Tools; it does not depend on the sending policy.
 - The secret named in `env` lives in `~/tico-work/secrets/<slug>.env` on the machine that runs
   the team. If it is missing, the app shows "not connected" and the bot asks a person on its
-  task (`hub task ask`) rather than improvise.
+  task (`tico task ask`) rather than improvise.
 - A value in that file may be a 1Password reference instead of the secret itself:
   `UPFLUENCE_PASSWORD=op://vault/item/field`. The runner reads it from
   the **Acme Bots** vault at the start of the turn with a read-only service account

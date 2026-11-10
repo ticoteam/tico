@@ -17,7 +17,7 @@ published, and the task note carries the headline.
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Read last week's review, `knowledge/changes.md` and `knowledge/reviews.md`. For each change a person published, note its
 date, and read the conversion for the 28 days after it. For each reply drafted last week, note whether a person posted it.
@@ -63,14 +63,14 @@ If a store test is the better route, propose it with `playbooks/change-a-listing
 
 Write `reports/YYYY-MM-DD-app-store.md` in the shape of `knowledge/examples/app-store-review.md`. Then:
 
-    hub file publish reports/YYYY-MM-DD-app-store.md
+    tico file publish reports/YYYY-MM-DD-app-store.md
 
 Add the dated readings and the reply statuses to `knowledge/reviews.md`, add the drafted changes to `knowledge/changes.md`
 as "proposed", rewrite `state.md`, and commit this repository.
 
 ## 7. Close
 
-    hub task done <id> -m "..." --version N
+    tico task done <id> -m "..." --version N
 
 The note holds the headline, the report path, and what you could not read. Finish the task even on a quiet week.
 

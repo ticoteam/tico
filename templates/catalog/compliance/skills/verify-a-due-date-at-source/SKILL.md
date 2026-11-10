@@ -8,7 +8,7 @@ When to use: before any due date goes onto the calendar, into a filing pack, or 
 
 Steps:
 1. Take the rule from the register row, in its words, for example "the 15th day of the fourth month after year end".
-2. Open the authority's own page, on its own domain (`hub doc fetch <url>`). Do not use a summary site as the source.
+2. Open the authority's own page, on its own domain (`tico doc fetch <url>`). Do not use a summary site as the source.
 3. Read the rule in the authority's words. Note the date you read it.
 4. Work out the date with the arithmetic written out, for example "year end 31 December 2026, fourth month after, 15th day: 15 April 2027".
 5. Compare with the register row. If they agree, mark the row confirmed with the date. If they disagree, record both values with their dates. Do not pick one.

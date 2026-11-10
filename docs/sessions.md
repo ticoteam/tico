@@ -161,7 +161,7 @@ upstream: a checkout with no remote gives it a copy of its own `HEAD`.
 ## Linked sessions
 
 You can link other sessions to a task to track them: a Bot Desk or Orca thread URL, a `claude --resume <id>` or
-`codex resume <id>` command. Use **Sessions +** on the task or `hub task link <task> <value> --session`. Linked
+`codex resume <id>` command. Use **Sessions +** on the task or `tico task link <task> <value> --session`. Linked
 sessions are for tracking only. Task thread and comments always go to the owning bot's primary session.
 
 The task's ⋯ menu has **Copy session ID** for the primary session, to resume it by hand.
@@ -177,20 +177,20 @@ The task's ⋯ menu has **Copy session ID** for the primary session, to resume i
 | `goal:on`, `goal:off` | task labels | Override `task_goal` for one task. |
 | `capture_stream` | `off` (default), `on` | Keep each run's raw provider stream, both ways, for a week (owner only; see below). |
 
-Set them with `hub bot update <slug> --session task`, `--subtask-session own`, `--task-goal on` or `--capture-stream on`, or `hub_bot_update`.
+Set them with `tico bot update <slug> --session task`, `--subtask-session own`, `--task-goal on` or `--capture-stream on`, or `hub_bot_update`.
 
 ### Capturing a run for a replay test
 
 With `capture_stream: on`, the runner records every frame it sends a Claude or Codex harness and every frame it reads
 back, with the turn's secrets masked, up to about 5 MB per run (a frame that no longer fits is left out with a `skipped` record). Other harnesses
-are not captured yet. Tico keeps each capture for 7 days; turning capture off deletes the bot's captures, and a run that had a secret taken out while it was going keeps none. `hub run export <attempt> --fixture` writes it as a folder of
+are not captured yet. Tico keeps each capture for 7 days; turning capture off deletes the bot's captures, and a run that had a secret taken out while it was going keeps none. `tico run export <attempt> --fixture` writes it as a folder of
 three files: `input.json` (the message and model settings), `<provider>_transcript.ndjson` (the raw frames) and
 `output.json` (the events and result Tico recorded). A raw stream can hold customer text, so only owners turn it on,
 and only owners and engineering bots read it, for runs they can already see in the bot's run list. The MCP tool answers only whether a run was captured and its size; the CLI writes the files.
 
 ### Why a run stopped or stalled
 
-`hub run list <bot>` includes `end_reason`, `ended_at`, `last_event`, `last_event_at` and
+`tico run list <bot>` includes `end_reason`, `ended_at`, `last_event`, `last_event_at` and
 `last_heartbeat_at`. Reasons distinguish a finished run, a model error (with its reported code and message),
 a process exit (code or signal), a named timeout limit, cancellation and its actor, a lost heartbeat,
 and a runner restart. An explicit runner OOM report is identified as OOM; a kill signal or words in stderr alone do not prove an OOM kill.
@@ -200,7 +200,7 @@ It marks them `stalled` in the run list and Health, with their last event and ti
 the attempt or change its lease. Fresh activity clears it.
 
 The runner also keeps up to 200 lines / 64 KiB of scrubbed harness stderr per attempt for seven days,
-even with provider stream capture off. `hub run export <attempt> --fixture` adds `stderr.log` when present,
+even with provider stream capture off. `tico run export <attempt> --fixture` adds `stderr.log` when present,
 and works with stderr alone when no provider stream exists. Its access rules remain the same as raw stream
 exports. The MCP summary reports the stderr byte count and end reason without returning the log text.
 An older runner can report only the failure evidence it has; historical runs are not assigned a guessed cause.

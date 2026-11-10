@@ -605,7 +605,7 @@ def create_app(settings=None):
                     and H.is_human(acting.actor)
                 ):
                     # A setting's own route said no to a person it isn't theirs to change: rather than "ask an owner
-                    # or admin", who may, as `hub settings` says it.
+                    # or admin", who may, as `tico settings` says it.
                     with store.read() as c:
                         hint = raw_who_may(c, request, acting) or hint
                 return hint
@@ -621,7 +621,7 @@ def create_app(settings=None):
             and H.is_human(acting.actor)
             and "fix" not in getattr(exc, "extra", {})
         ):
-            # The person's Assistant wrote for them and the setting's route said no: who may, as `hub settings` says.
+            # The person's Assistant wrote for them and the setting's route said no: who may, as `tico settings` says.
             def assistant_who_may():
                 with store.read() as c:
                     return raw_who_may(c, request, acting)
@@ -729,7 +729,7 @@ def create_app(settings=None):
         return (
             "The " + settings.assistant_name + " does not make this on its own: it is a credential, sign-in, owner, "
             "support or deletion change, one of its own switches, or the owner turned off \u201cAssistant acts without "
-            "asking\u201d. Propose it with `hub assistant propose` (or POST /api/v2/assistant/actions) and the person "
+            "asking\u201d. Propose it with `tico assistant propose` (or POST /api/v2/assistant/actions) and the person "
             "confirms a card in " + settings.app_name + "."
         )
 
@@ -3947,7 +3947,7 @@ def create_app(settings=None):
         BotOps themselves (not through BotOps or the Assistant). Otherwise any bot that owns a person's task could
         reassign it to BotOps and borrow their rights for its next run."""
         moved = c.execute(
-            "SELECT new, actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='owner' "
+            "SELECT new, actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='reassign' "
             "ORDER BY created_at DESC, rowid DESC "
             "LIMIT 1",
             (task["id"],),
@@ -4884,7 +4884,7 @@ def create_app(settings=None):
         return service.repository_history(repository) if service and repository else None
 
     def place_now(c, who, bot, computer="", history=None):
-        """`hub bot place`: on the computer named, or the one the company's own rule picks (backend/placement.py).
+        """`tico bot place`: on the computer named, or the one the company's own rule picks (backend/placement.py).
         A new bot whose history is only on the computer that built it goes there first (`history` is not True): that
         computer publishes it to GitHub, and from then on it can move like any other."""
         settings_admin._manager(c, who, bot)
@@ -4907,7 +4907,7 @@ def create_app(settings=None):
                 "history_elsewhere",
                 f"{row['slug']}'s repository was built on {built['label']} and "
                 + ("Tico could not check GitHub's copy" if history is None else "is not on GitHub yet")
-                + f", so {wanted['label']} could not get it. Put it on {built['label']} first (`hub bot go-live {row['slug']} --computer "
+                + f", so {wanted['label']} could not get it. Put it on {built['label']} first (`tico bot go-live {row['slug']} --computer "
                 f"\"{built['label']}\"`): {built['label']} publishes it to GitHub, and then it can move",
                 409,
             )
@@ -5448,7 +5448,7 @@ def create_app(settings=None):
     finance_routes.install(app, store, auth, mutate)  # Finance: budgets, P&L, expenses, actions (backend/finance)
     from .entities import routes as entity_routes
 
-    entity_routes.install(app, store, auth, mutate)  # The Directory: `hub directory` (backend/entities/routes.py)
+    entity_routes.install(app, store, auth, mutate)  # The Directory: `tico directory` (backend/entities/routes.py)
     from . import finance_ads_routes
 
     finance_ads_routes.install(app, store, auth, mutate)  # Finance: ad spend import settings on ad tools' pages

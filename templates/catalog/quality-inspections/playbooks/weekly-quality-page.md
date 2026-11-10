@@ -47,11 +47,11 @@ the photo it needs. List each proposal under "for approval". Do not edit `knowle
 
 Write `reports/YYYY-MM-DD-quality-page.md` in the shape of `knowledge/examples/quality-page.md`. Then:
 
-    hub file publish reports/YYYY-MM-DD-quality-page.md
+    tico file publish reports/YYYY-MM-DD-quality-page.md
 
 Commit, then:
 
-    hub task done <id> -m "..." --version N
+    tico task done <id> -m "..." --version N
 
 The note holds the headline and the pass rate, the number of crews with a reliable score, and anything you could not read.
 A quiet week is one line, and the task is still finished.

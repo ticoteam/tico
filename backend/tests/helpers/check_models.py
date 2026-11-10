@@ -58,11 +58,20 @@ def parent_turn(api):
     )
     turn = claim(api, machine)
     assert turn["task"]["id"] == parent["id"] and turn["config"]["runtime"] == "claude"
+    start(api, machine, turn)  # a run files its sub-tasks once it has started
     return machine, parent, turn
 
 
-def finish(api, machine, turn, segment=None, during=None):
+def start(api, machine, turn):
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-" + turn["id"][:8]}, machine["token"])
+
+
+def finish(api, machine, turn, segment=None, during=None):
+    """Start the turn (unless it has started) and complete it; `during` runs while it is running."""
+    with api.app.state.store.read() as c:
+        state = c.execute("SELECT state FROM attempts WHERE id=?", (turn["id"],)).fetchone()
+    if state and state[0] == "leased":
+        start(api, machine, turn)
     if during:
         during()
     usage = (

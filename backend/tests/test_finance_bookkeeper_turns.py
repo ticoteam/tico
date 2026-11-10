@@ -272,12 +272,12 @@ def test_attach_files_only_a_library_file_the_bot_may_read(api):
 
 
 def test_the_bot_reads_a_file_with_hub_file_read(api):
-    """AGENT.md's bill and receipt steps read a Library file with `hub file read` (clients/hubcli.py): the tool is
-    offered to the bot, and the instructions name no command the hub does not have (`hub file get` was one)."""
+    """AGENT.md's bill and receipt steps read a Library file with `tico file read` (clients/hubcli.py): the tool is
+    offered to the bot, and the instructions name no command the hub does not have (`tico file get` was one)."""
     token = hire(api)
     names = {t["name"] for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
     agent = (Path(__file__).resolve().parents[2] / "templates" / "catalog" / "bookkeeper" / "AGENT.md").read_text()
-    assert "hub_file_read" in names and "hub file read" in agent and "hub file get" not in agent
+    assert "hub_file_read" in names and "tico file read" in agent and "tico file get" not in agent
 
 
 # ----------------------------------------------------------------------------- reconcile (Books check 6)

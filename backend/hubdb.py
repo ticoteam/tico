@@ -233,11 +233,11 @@ BOT_STATES = SV.BOT_STATES
 STATUS_STATES = SV.BOT_STATUS_STATES
 MESSAGE_KINDS = ("say", "notice", "steer")
 # Kinds old rows may still have, read as history only: nothing writes an ask or an answer in a message (a question
-# to a person is an ask on a task, `hub task ask`; to a bot, a DM flagged needs-action).
+# to a person is an ask on a task, `tico task ask`; to a bot, a DM flagged needs-action).
 OLD_MESSAGE_KINDS = ("ask", "answer")
 ASK_GONE = (
-    "asks are gone: ask a person on a task with hub task ask <task> --to <person> \"<question>\" --version N; "
-    "ask a bot with hub message send <bot> \"<question>\" --needs-action"
+    "asks are gone: ask a person on a task with tico task ask <task> --to <person> \"<question>\" --version N; "
+    "ask a bot with tico message send <bot> \"<question>\" --needs-action"
 )
 CONVERSATION_KINDS = ("chat", "ask", "task", "notice")
 CONVERSATION_SCOPES = ("direct", "personal", "shared", "task")
@@ -1632,7 +1632,7 @@ def migrate(conn, adopt_legacy=False):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS bot_file_versions_pending ON bot_file_versions(blob_id) WHERE media_state='pending'"
     )
-    # Quiet notes (`hub note`): a line left for a bot's next run, asking nothing. `carried_by` is
+    # Quiet notes (`tico note`): a line left for a bot's next run, asking nothing. `carried_by` is
     # the attempt that took it there; a canceled note never goes.
     conn.execute(
         "CREATE TABLE IF NOT EXISTS notes(id TEXT PRIMARY KEY, from_actor TEXT NOT NULL, "
@@ -2549,11 +2549,15 @@ def back_when(conn, slug, state):
     return f"is {state} until a person resumes it"
 
 
-def target_inactive(conn, slug, state):
-    """The refusal text for a write to a bot that is not running: when it is back, and how little it counts
-    against the sender, so the sender waits instead of retrying."""
+def target_inactive(conn, slug, state, sender=None):
+    """The refusal text for a write to a bot that is not running: when it is back, so the sender waits instead of
+    retrying. A bot sender is also told how little it counts against it; a person is never reviewed for a refusal, so
+    a person reads only when the bot is back."""
+    back = f"{actor_name(conn, bot_actor(slug))} {back_when(conn, slug, state)}."
+    if sender is not None and not is_bot(sender):
+        return f"{back} Send it again once it is back"
     return (
-        f"{actor_name(conn, bot_actor(slug))} {back_when(conn, slug, state)}. This refusal is not a repeat and opens no review of you; "
+        f"{back} This refusal is not a repeat and opens no review of you; "
         "only the day's limit of 30 refusals counts it. Send it again once it is back"
     )
 
@@ -2618,7 +2622,7 @@ def _reach(conn, actor, target, allow_planned=False, allow_held=False):
             and not (allow_held and state in HELD_STATES)
         ):
             if state in INACTIVE_STATES:
-                refuse(conn, actor, "target_inactive", target_inactive(conn, slug, state))
+                refuse(conn, actor, "target_inactive", target_inactive(conn, slug, state, actor))
             refuse(conn, actor, "reach", f"{actor_name(conn, resolved)} is {state}, not active")
     return resolved
 
@@ -2743,7 +2747,7 @@ def _botops_only(conn, actor, target):
         actor,
         "botops-only",
         "The Health Monitor gives its fixes to BotOps, not to a person: file it with "
-        "`hub task create --owner botops` (or hand a task to it with `hub task update <id> --owner botops`), and "
+        "`tico task create --owner botops` (or hand a task to it with `tico task update <id> --owner botops`), and "
         "BotOps decides who to ask",
     )
 
@@ -3934,8 +3938,8 @@ def task_reopen_hint(conn, actor, row):
     if row['status'] == 'closed' and is_bot(actor) and (actor != row['requester_id'] or is_human(closer)):
         return f"ask {actor_name(conn, closer)} to reopen it, or file a new task"
     if actor == row['owner_id'] or is_human(actor) or (actor == row['requester_id'] and row['status'] == 'closed'):
-        return f"reopen it with `hub task move {row['id']} reopen -m \"why\" --version N`, or file a new task"
-    return f"ask the owner to reopen it with `hub task move {row['id']} reopen`, or file a new task"
+        return f"reopen it with `tico task move {row['id']} reopen -m \"why\" --version N`, or file a new task"
+    return f"ask the owner to reopen it with `tico task move {row['id']} reopen`, or file a new task"
 
 
 def _number_free(conn, actor, number):
@@ -4195,9 +4199,7 @@ def _label_writer(conn, actor, row, labels, approval_id=None):
                 conn,
                 actor,
                 "label",
-                f"approval {approval_id} does not cover this change: a publish approval is used once, must be "
-                f"approved, and must match `hub task publication-preview {row['id']}` with a --label for each "
-                f"label the task keeps; request a new one, or ask a person on the {teams} teams",
+                f"{approval_id} is no OK of exactly this change; a person on the {teams} teams changes it",
                 task=row["id"],
             )
         return True
@@ -4206,9 +4208,7 @@ def _label_writer(conn, actor, row, labels, approval_id=None):
         public,
         teams,
         (
-            f"it needs an approved publish approval: get the payload with `hub task publication-preview {row['id']}` and "
-            f"a --label for each label the task keeps, request the approval, then retry with its id (--approval-id), or "
-            f"ask a person on the {teams} teams"
+            f"the public roadmap is not open to bots yet: a person on the {teams} teams changes it"
             if settings["bot_public_approval"]
             else f"a person on the {teams} teams changes it"
         ),
@@ -4258,9 +4258,8 @@ def _create_labels(conn, actor, keys):
         public,
         teams,
         (
-            f"it needs an approved publish approval, which is for a task that exists: create the task without "
-            f"{'it' if len(public) == 1 else 'them'}, then add {'it' if len(public) == 1 else 'them'} on the task with the "
-            f"approval (`hub task publication-preview <id>`, then --approval-id), or ask a person on the {teams} teams"
+            f"the public roadmap is not open to bots yet: create the task without {'it' if len(public) == 1 else 'them'}, "
+            f"and a person on the {teams} teams adds {'it' if len(public) == 1 else 'them'}"
             if settings["bot_public_approval"]
             else f"a person on the {teams} teams adds {'it' if len(public) == 1 else 'them'}"
         ),
@@ -6012,7 +6011,7 @@ def task_update(
             actor,
             "close",
             f"{actor_name(conn, closer)} closed this task, so it stays closed. Add anything new as a comment "
-            "(hub task comment).",
+            "(tico task comment).",
         )
     if number is not None and number == row.get("number"):
         number = None  # sent back unchanged
@@ -6178,6 +6177,8 @@ def person_name(conn, person):
 def actor_name(conn, actor):
     """What a person reads for an actor: a bot's display name (else its slug), or a person's name. A bot made since ids
     has a UUID id, which means nothing to a person, so it is never written into text a person reads."""
+    if actor == KEEPER:
+        return "Tico"  # Tico itself (hubdb_core.KEEPER): never shown as the id it is stored under
     key = actor_id(actor)
     if not str(actor).startswith("human:"):
         row = bot(conn, key)
@@ -6191,13 +6192,41 @@ def _task_party(conn, actor, row):
     lent its rights to for now, or a party to a task above it."""
     if task_participant(conn, actor, row):
         return True
-    if _one(
-        conn,
-        "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires_at>? LIMIT 1",
-        (row["id"], actor, now()),
-    ):
+    if task_delegated(conn, row["id"], actor):
         return True
     return task_ancestor_party(conn, actor, row)
+
+
+_DELEGATED_SQL = (
+    "SELECT DISTINCT task_id FROM task_delegations WHERE delegate=? AND expires_at>? "
+    "AND task_id IN (SELECT value FROM json_each(?))"
+)
+
+
+def task_delegated(conn, task_id, actor):
+    """Whether the task lends `actor` its rights for now (task_delegations), once a snapshot (or for many tasks
+    together by `prime_task_delegated`); a write reads it again (read_cache)."""
+    from . import read_cache
+
+    def build():
+        return bool(conn.execute(_DELEGATED_SQL, (actor, now(), json.dumps([task_id]))).fetchone())
+
+    return read_cache.value(conn, ("task_delegated", task_id, actor), build, shared=True)
+
+
+def prime_task_delegated(conn, task_ids, actor):
+    """`task_delegated` of many tasks for one actor, one statement, for the checks that follow in this snapshot."""
+    from . import read_cache
+
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+    unread = sorted({str(t) for t in task_ids if t and ("task_delegated", str(t), actor) not in values})
+    if not unread:
+        return
+    lent = {str(r[0]) for r in conn.execute(_DELEGATED_SQL, (actor, now(), json.dumps(unread)))}
+    for task_id in unread:
+        values.setdefault(("task_delegated", task_id, actor), task_id in lent)
 
 
 def _work_said(stopped, canceled):

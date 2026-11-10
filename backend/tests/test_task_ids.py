@@ -27,8 +27,10 @@ def test_a_unique_prefix_reaches_the_task_and_listings_show_it(api):
     assert task["short_id"] == task["id"][:8]
     assert get(api, "tasks/" + task["short_id"])["task"]["id"] == task["id"]
     assert task["short_id"] in [t["short_id"] for t in get(api, "tasks")["tasks"]]
-    mine = post(api, "tasks/" + task["id"][:12], {"version": task["version"], "note": "on it", "status": "doing"})
-    assert mine["id"] == task["id"] and mine["status"] == "doing"
+    mine = post(api, "tasks/" + task["id"][:12], {"version": task["version"], "note": "on it"})
+    assert mine["id"] == task["id"] and mine["note"] == "on it"
+    done = post(api, "tasks/" + task["id"][:12] + "/done", {"note": "Done.", "version": mine["version"]})
+    assert done["id"] == task["id"] and done["status"] == "done"
     comment = post(api, f"tasks/{task['short_id']}/comments", {"text": "progress"})
     assert comment["comment"]["id"]
     post(api, f"tasks/{task['short_id']}/links", {"url": "https://example.com/x"})

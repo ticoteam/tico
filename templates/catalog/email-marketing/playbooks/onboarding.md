@@ -11,7 +11,7 @@ Done when: `state.md` holds five dated answers, the draft is attached and labell
 
 ## 1. Read before you ask
 
-    hub task show <id>
+    tico task show <id>
 
 Check what you can already reach: a read-only mailbox in your access, past campaigns attached to the
 task. Do not ask what these already say. If you cannot see past results, that is answer three.
@@ -43,17 +43,17 @@ reviewed". Nothing is sent.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will draft your next email every Tuesday at 09:00 and a human sends it." They
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will draft your next email every Tuesday at 09:00 and a human sends it." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub automation update <id>`, with `--disable` to turn it off).
+(`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

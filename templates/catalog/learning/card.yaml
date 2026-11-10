@@ -27,7 +27,7 @@ never:
   - "Answer a policy question itself; the Librarian cites the handbook"
 prerequisites:
   - tool: hub
-    why: "The roster and roles (`hub team show`) decide who needs which training; completion exports arrive on tasks."
+    why: "The roster and roles (`tico team show`) decide who needs which training; completion exports arrive on tasks."
     required: true
   - tool: docs
     why: "Optional. The level guide and required-training policy, read through the Librarian, anchor each plan and the tracker."

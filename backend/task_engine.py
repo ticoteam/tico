@@ -15,7 +15,7 @@ Names and signatures are in docs/dev/pipelines-v3-build.md.
 
 import hashlib
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from . import hubdb_core, stage_effects, task_effects
@@ -73,7 +73,7 @@ def _refuse(
     extra: Row = {}
     if missing:
         extra["missing"] = list(missing)
-    if then and row is not None:
+    if then and row is not None and _runs_commands(by):
         extra["next"] = _then(row, *then)
     if version is not None:
         extra["version"] = int(str(version) or 0)
@@ -93,6 +93,13 @@ def _refuse(
     raise AssertionError("refuse() always raises")  # pragma: no cover
 
 
+def _runs_commands(by: str) -> bool:
+    """Whether the caller acts through `hub` commands: a bot, or a bot acting for a person (the Assistant, BotOps).
+    A person in the app is told what is missing, never a `tico task ...` line."""
+    H = _h()
+    return bool(is_bot(by) or H.VIA.get())
+
+
 # The commands a refusal may offer, by name (`_then`).
 THEN = ("push", "back", "ask", "file", "snooze", "close", "show")
 
@@ -102,13 +109,13 @@ def _then(row: Row, *which: str) -> list[str]:
     `snooze`, `close`, `show` (THEN)."""
     ident, version = row["id"], row.get("version")
     said = {
-        "push": f'hub task move {ident} next -m "why" --version {version}',
-        "back": f'hub task move {ident} <earlier stage> -m "why" --version {version}',
-        "ask": f'hub task ask {ident} --to <person> "one sentence" --version {version}',
-        "file": f'hub task file --parent {ident} "title"',
-        "snooze": f'hub task snooze {ident} -m "why" --version {version}',
-        "close": f'hub task close {ident} -m "why" --version {version}',
-        "show": f"hub task show {ident}",
+        "push": f'tico task move {ident} next -m "why" --version {version}',
+        "back": f'tico task move {ident} <earlier stage> -m "why" --version {version}',
+        "ask": f'tico task ask {ident} --to <person> "one sentence" --version {version}',
+        "file": f'tico task file --parent {ident} "title"',
+        "snooze": f'tico task snooze {ident} -m "why" --version {version}',
+        "close": f'tico task close {ident} -m "why" --version {version}',
+        "show": f"tico task show {ident}",
     }
     return [said[name] for name in which]
 
@@ -124,7 +131,7 @@ def refusal_extra(conn: "sqlite3.Connection", viewer: str, again: Row) -> Row | 
         return None
     out: Row = {"version": int(row.get("version") or 0)}
     names = [str(name) for name in again.get("then") or () if name in THEN]
-    if names:
+    if names and _runs_commands(viewer):
         out["next"] = _then(row, *names)
     if again.get("missing") and row["status"] == "open" and row.get("visit") and row["stage"]["kind"] == "work":
         target = stage(conn, str(again["to"])) if again.get("to") else None
@@ -145,15 +152,39 @@ def pipeline(conn: "sqlite3.Connection", pipeline_id: str) -> Row | None:
     return _h()._one(conn, "SELECT * FROM pipelines WHERE id=?", (pipeline_id,))
 
 
+_STAGES_SQL = (
+    "SELECT * FROM stages WHERE pipeline_id IN (%s) AND retired_at IS NULL "
+    "ORDER BY CASE kind WHEN 'work' THEN 0 WHEN 'done' THEN 1 ELSE 2 END, position, id"
+)
+
+
+def _stages_of(conn: "sqlite3.Connection", pipeline_ids: list[str]) -> dict[str, list[Row]]:
+    out: dict[str, list[Row]] = {pipeline_id: [] for pipeline_id in pipeline_ids}
+    if pipeline_ids:  # one statement however many (the ids go in as one JSON list)
+        listed = (json.dumps(pipeline_ids),)
+        for found in _h()._rows(conn.execute(_STAGES_SQL % "SELECT value FROM json_each(?)", listed)):
+            out[str(found["pipeline_id"])].append(found)
+    return out
+
+
 def stages(conn: "sqlite3.Connection", pipeline_id: str) -> list[Row]:
-    """A pipeline's stages in order: its work stages, then Done, then Closed."""
-    return _h()._rows(
-        conn.execute(
-            "SELECT * FROM stages WHERE pipeline_id=? AND retired_at IS NULL "
-            "ORDER BY CASE kind WHEN 'work' THEN 0 WHEN 'done' THEN 1 ELSE 2 END, position, id",
-            (pipeline_id,),
-        )
-    )
+    """A pipeline's stages in order: its work stages, then Done, then Closed. Read once in a snapshot (or for many
+    pipelines together by `prime_stages`); a write reads them again (read_cache)."""
+    from . import read_cache
+
+    return read_cache.value(conn, ("stages", pipeline_id), lambda: _stages_of(conn, [pipeline_id])[pipeline_id])
+
+
+def prime_stages(conn: "sqlite3.Connection", pipeline_ids: Iterable[str]) -> None:
+    """Read the stages of many pipelines together, for the `stages` reads that follow in this snapshot."""
+    from . import read_cache
+
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+    unread = sorted({str(p) for p in pipeline_ids if p and ("stages", str(p)) not in values})
+    for pipeline_id, found in _stages_of(conn, unread).items():
+        values.setdefault(("stages", pipeline_id), found)
 
 
 def stage(conn: "sqlite3.Connection", stage_id: str) -> Row | None:
@@ -513,6 +544,8 @@ def enter(
             (H.new_id(), parent, task_id, _part(above, "visit").get("id"), link, ts),
         )
     _event(conn, task_id, by, "move", None, first["id"], None, {"move": "new", "owner": owner, "parent": parent})
+    if above:
+        _drop_stale(conn, str(parent))  # the parent waits on it now: its owner's queued wake for the parent goes
     _owned(conn, row, _task(conn, task_id), by)
     entered = _task(conn, task_id)
     stage_effects.enter(conn, entered, by)
@@ -1171,10 +1204,9 @@ def restore(conn: "sqlite3.Connection", task_id: str, by: str, was: Row) -> Row:
     status = str(was.get("status") or "open")
     assignee = was.get("assignee_id") or was.get("owner_id")
     if status == "open":
-        # Judged with the owner it had: coming back to that owner makes nobody a new owner or reader of it.
-        target = _restore_stage(
-            conn, by, {**row, "assignee_id": assignee, "owner_id": was.get("owner_id")}, work, was.get("stage_id")
-        )
+        # Judged with the owner it had: the restored row holds none yet, and its own owner coming back is no new reader.
+        placed = {**row, "owner_id": was.get("owner_id"), "assignee_id": assignee}
+        target = _restore_stage(conn, by, placed, work, was.get("stage_id"))
     else:
         target = next((s for s in order if s["kind"] == status), None)
     if not pipe or not target:
@@ -1305,7 +1337,8 @@ def add_requirement(
     seen_version: int | str | None = None,
 ) -> Row:
     """Add an OK or an answer from a named person to this task, for this visit (C30). The task does not leave the stage
-    until it is answered, withdrawn or pushed past. A bot has one open per task: asking again replaces it (C15)."""
+    until it is answered, withdrawn or pushed past. A bot has one open per task: asking again replaces it (C15,
+    `_replace_open`)."""
     H = _h()
     row = task(conn, task_id)
     if not row:
@@ -1317,7 +1350,9 @@ def add_requirement(
         _refuse(conn, by, "task_requirement", "Only an OK or an answer can be added to one task", task_id)
     if not (is_human(person) or is_bot(person)):
         _refuse(conn, by, "task_requirement", "Name who it is for", task_id)
-    if person == by:
+    if person == by and not is_human(by):
+        # A bot never satisfies its own request. A person may ask themself: their own click is what answers it (an OK
+        # of their own ask is refused unless it is that click, answers._may_answer).
         _refuse(conn, by, "task_requirement", "Nobody answers their own ask: ask someone else", task_id)
     if kind == "ok" and not is_human(person):
         _refuse(conn, by, "task_requirement", "An OK is asked of a person", task_id)
@@ -1330,11 +1365,7 @@ def add_requirement(
     ts = H.now()
     visit = row["visit"]
     if is_bot(by):
-        conn.execute(
-            "UPDATE requirements SET withdrawn_at=? WHERE visit_id=? AND added_by_id=? AND by_bot=1 "
-            "AND withdrawn_at IS NULL",
-            (ts, visit["id"], str(by)),
-        )
+        _replace_open(conn, task_id, visit["id"], by, ts)
     requirement_id = H.new_id()
     conn.execute(
         "INSERT INTO requirements (id, visit_id, kind, who_oks, person_id, added_by_id, by_bot, line, shows, choices, "
@@ -1362,6 +1393,31 @@ def add_requirement(
     # has one.
     task_wakes.ask(conn, out, R.get(conn, requirement_id))
     return out
+
+
+def _replace_open(conn: "sqlite3.Connection", task_id: str, visit_id: str, by: str, ts: str) -> None:
+    """C15: a bot has one ask of its own on a visit (the index requirements_one_per_bot): asking again replaces it.
+    What was answered stays on record (its answer, and the task's `decided`, task_calls), and an OK that was used stays
+    used. An OK bound to exact content that was given and not used yet is never dropped by a new ask, nor made good for
+    anything else: the bot uses it or withdraws it first."""
+    from . import task_asks
+
+    rows = conn.execute(
+        "SELECT id FROM requirements WHERE visit_id=? AND added_by_id=? AND by_bot=1 AND withdrawn_at IS NULL",
+        (visit_id, str(by)),
+    ).fetchall()
+    for (old,) in rows:
+        if task_asks.standing(conn, str(old)) == task_asks.OK:
+            _refuse(
+                conn,
+                by,
+                "task_requirement",
+                "Your earlier OK on this task was given and not used yet: use it, or withdraw it, then ask again",
+                task_id,
+            )
+    for (old,) in rows:
+        conn.execute("UPDATE requirements SET withdrawn_at=? WHERE id=?", (ts, old))
+        _event(conn, task_id, by, "requirement_withdrawn", old, None, "Asked again")
 
 
 def withdraw_requirement(

@@ -1143,7 +1143,7 @@ def operation_issues(c, who, auth):
                 since=entry["since"],
                 needs_person=mine and quiet >= NEEDS_YOU_MINUTES,
                 action=f"Wake {entry['label']} and check that {auth.settings.app_name} runs there: "
-                "`tico status` says what stopped, `tico restart` starts it again.",
+                "`tico-computer status` says what stopped, `tico-computer restart` starts it again.",
             )
         else:
             # A computer offline for a moment (asleep, a restart) clears itself when it reconnects.
@@ -1806,7 +1806,7 @@ def checkout_issue(add, row, busy=0):
             severity="warning",
             action="Tico repairs these links on the next update. No local work needs a decision."
             if str(checkout["blocked"]).startswith("only flattened Tico links:")
-            else "On that computer: commit or stash the changes (or run pip install and scripts/tico update "
+            else "On that computer: commit or stash the changes (or run pip install and scripts/tico-computer update "
             "for a dependency change); the runner then updates itself.",
         )
     elif behind:
@@ -2048,7 +2048,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
     person may read is listed. Each item has `kind` (task, ask, paused, mention), `id`, `line`, `since` and the brief
     `task`; an ask also has the fields of its requirement in `to_leave` (`ask`). `count_only` leaves out the brief
     task and the ask's fields: a count needs neither. `task_view` is the callers' and not read here."""
-    from . import strategy_merge, waiting_on
+    from . import strategy_merge, teammate_access, waiting_on
 
     if not H.is_human(who.actor):
         return []
@@ -2095,6 +2095,8 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
                 **({"merged": merged[it["task_id"]]} if it["task_id"] in merged else {}),
             }
         )
+    # A person the reader may not see is named only to someone in the same conversation (teammate_access.Known).
+    known = teammate_access.Known(c, who, auth)  # reads nothing until it is asked
     for m in mentions:
         if m.get("task_id") and m["task_id"] not in readable:
             continue
@@ -2107,7 +2109,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
                 "conversation_id": m["conversation_id"],
                 "root_id": m["root_id"],  # the thread a rail row stands for: a sub-thread's mention moves its root's
                 "task_id": m.get("task_id"),
-                "from_id": m["sender_id"],
+                "from_id": known.name(m["sender_id"], m["conversation_id"]),
                 "line": _clip(first[0] if first else "", 160),
                 "since": m["created_at"],
                 "task": briefs.get(m.get("task_id")),
@@ -2116,6 +2118,10 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
     if not count_only:
         # An ask carries its requirement as the task's own read gives it (`to_leave`), with what this person may do.
         views = {}
+        from . import task_calls
+
+        # Every ask's task read together: the list costs what one task's view does.
+        task_calls.prime_views(c, {item["task_id"] for item in items if item["kind"] == "ask"}, who.actor)
         for item in items:
             if item["kind"] != "ask":
                 continue
@@ -2282,7 +2288,7 @@ def fleet_snapshot(c, auth, identity, task_view):
     bot_list = H.bots(c)
     allowed = {row["id"] for row in bot_list if access.get(row["id"], auth.FULL)["write"]}
     task_rows = [
-        dict(t) for t in c.execute(f"SELECT {privacy.STATUS_TASK_COLUMNS} FROM tasks WHERE {privacy.STATUS_TASKS_SQL}")
+        dict(t) for t in c.execute(f"SELECT {privacy.STATUS_TASK_SELECT} FROM tasks WHERE {privacy.STATUS_TASKS_SQL}")
     ]
     bot_tasks = {}
     for task in task_rows:
@@ -3211,14 +3217,21 @@ def install_views(app, store, auth, mutate, task_view):
             read = CL.read_ids(c, who.actor)
             products = [{**row, "unread": row["id"] not in read} for row in CL.products(c, store.settings)]
             entries = []
-            # Newest readable bot-owned done tasks with a long enough note. Filter with task_sql in one pass
-            # (not auth.task per candidate); 120 is the activity cap beside product updates.
+            # Newest readable bot-owned done tasks with a long enough note: what the owner said when it said done (its
+            # standing answer to the stage's "owner says done"), else the task's last note. Filter with task_sql in
+            # one pass (not auth.task per candidate); 120 is the activity cap beside product updates.
+            said = (
+                "COALESCE((SELECT a.notes FROM answers a JOIN visits v ON v.id=a.visit_id "
+                "JOIN requirements r ON r.id=a.requirement_id WHERE v.task_id=tasks.id AND r.kind='owner_done' "
+                "AND a.answer='done' AND a.undone_at IS NULL AND length(a.notes)>=20 "
+                "ORDER BY a.created_at DESC LIMIT 1), note)"
+            )
             activity = (
                 [
                     dict(r)
                     for r in c.execute(
-                        "SELECT id,title,owner_id,note,done_at,updated_at FROM tasks WHERE status='done' AND substr(owner_id,1,4)='bot:' "
-                        f"AND length(note)>=20 AND ({auth.task_sql(c, who)}) "
+                        f"SELECT id,title,owner_id,{said} AS note,done_at,updated_at FROM tasks WHERE status='done' "
+                        f"AND substr(owner_id,1,4)='bot:' AND length({said})>=20 AND ({auth.task_sql(c, who)}) "
                         "ORDER BY COALESCE(NULLIF(done_at,''),updated_at) DESC LIMIT 120"
                     )
                 ]
@@ -3404,7 +3417,7 @@ def install_views(app, store, auth, mutate, task_view):
                 "path": "canonical cloud history",
                 "note": (
                     "Provider session files stay on the assigned Mac; the hub keeps the "
-                    "conversation, which the bot reads with `hub conversation show`."
+                    "conversation, which the bot reads with `tico conversation show`."
                 ),
                 "runs": [{"run": turn["id"], "issue": None} for turn, _ in rows],
                 "turns": turns,
@@ -3483,7 +3496,7 @@ def install_views(app, store, auth, mutate, task_view):
     @app.get("/api/v2/needs-you/summary")
     def needs_summary_route(request: Request, limit: int = NEEDS_SUMMARY_ITEMS):
         """What the Needs you list holds: the total, per kind and per bot, with each bot's newest `limit` items (at
-        most 10). `hub needs-you show` over MCP. A person only: the list is theirs."""
+        most 10). `tico needs-you show` over MCP. A person only: the list is theirs."""
         who = request.state.identity
         human_only(who)
         with store.read_transaction() as c:

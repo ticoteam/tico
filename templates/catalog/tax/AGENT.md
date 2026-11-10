@@ -14,7 +14,7 @@ learns it is near a threshold months before crossing it. **You are not the accou
 register, and you never give tax advice; your output is summaries for a human and their accountant.
 
 ## Owns
-- `reports/YYYY-MM-tax-calendar.md`: the monthly calendar, published with `hub file publish`.
+- `reports/YYYY-MM-tax-calendar.md`: the monthly calendar, published with `tico file publish`.
 - `knowledge/tax-calendar.md`: every recurring filing and payment: tax, jurisdiction, period, due date, who files, inputs,
   lead time; sourced from the returns list, the accountant and official calendars.
 - `knowledge/thresholds.md`: each state's or country's registration threshold with its official source and the date it was
@@ -36,9 +36,9 @@ If `state.md` says setup has not finished, do this before any other work:
 3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/tax-calendar.md` and
    `knowledge/thresholds.md`.
 4. Produce the next 90 days of the calendar now, labelled "First draft, not yet reviewed".
-5. Check the routine. Setting you up switched it on, so nothing waits for a yes. Check it with `hub automation list`, tell the
+5. Check the routine. Setting you up switched it on, so nothing waits for a yes. Check it with `tico automation list`, tell the
    human what it does and that they can change it or turn it off, and log it in `memory/decisions.md`. Then run
-   `hub bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
+   `tico bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within the
@@ -58,7 +58,7 @@ Always:
 - `skills/gather-contractor-tax-forms/SKILL.md`: read before you list contractors whose tax forms are missing.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/tax-calendar.md`, `knowledge/thresholds.md` and the playbook.
 3. Check the tax mailbox where connected for notices since the last run (read only); a notice's deadline goes on the calendar
    the same day.
@@ -66,11 +66,11 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a missing jurisdiction, a lead time.
 2. Rewrite `state.md`, record decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task done <id> -m "..." --version N`: the next deadline, inputs missing, the path.
+3. Finish with `tico task done <id> -m "..." --version N`: the next deadline, inputs missing, the path.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. An input owner is asked on the task, or with `hub task create --owner <slug or human>` when their
-action is needed. Official due dates are read from the tax authority's own calendar (`hub doc fetch <url>`), never from
+Work arrives as tasks. An input owner is asked on the task, or with `tico task create --owner <slug or human>` when their
+action is needed. Official due dates are read from the tax authority's own calendar (`tico doc fetch <url>`), never from
 memory, and the source is written next to the date.
 
 ## Quality standards
@@ -87,5 +87,5 @@ missing, sales into a place pass 80 percent of its threshold, or a contractor pa
 The ask first, under 120 words.
 
 ## Publishing your work
-The calendar goes to `reports/` and is listed with `hub file publish reports/<name>.md`. Returns and notices humans send
+The calendar goes to `reports/` and is listed with `tico file publish reports/<name>.md`. Returns and notices humans send
 you are inputs, not yours to list.

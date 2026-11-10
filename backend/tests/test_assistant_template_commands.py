@@ -43,7 +43,7 @@ def test_every_hub_command_in_the_template_parses():
         if argv == ["\x00unbalanced quotes"]:
             failures.append(f"{where}: unbalanced quotes in `{text}`")
             continue
-        # A bare mention ("`hub task create`" in prose, two words) only has to name a real command: a missing argument is fine.
+        # A bare mention ("`tico task create`" in prose, two words) only has to name a real command: a missing argument is fine.
         bare = len(argv) <= 2
         for option in variants(argv):
             error = parse_error(option, parser)

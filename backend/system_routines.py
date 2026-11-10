@@ -113,7 +113,7 @@ TRIGGERS = {
     "directory": ("a company directory is connected", ("directory",)),
 }
 ACTIONS = {
-    "ask_kpi_keeper": ("ask a KPI's keeper for a reading when it goes out of date", ("kpi", "ask", "remind", "goal")),
+    "ask_kpi_keeper": ("ask a KPI's owner for a reading when it goes out of date", ("kpi", "ask", "remind", "goal")),
     "ask_goal_owner": ("ask a goal's owner when a KPI goes off track", ("kpi", "goal", "ask", "remind")),
     "check_health": ("check Tico's health", ("health", "check")),
     "check_invariants": (
@@ -414,7 +414,7 @@ JOBS = [
     Job(
         "kpi_asks",
         "KPI stale asks",
-        "Asks a KPI's keeper for a reading when it goes out of date, and a goal's owner when a KPI goes off track.",
+        "Asks a KPI's owner for a reading when it goes out of date, and a goal's owner when a KPI goes off track.",
         CHECKS,
         "Hourly",
         3600,

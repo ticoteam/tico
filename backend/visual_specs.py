@@ -1,5 +1,5 @@
 # pyright: strict
-"""Visual specs: a product manager's spec is a Tico page filed on the task it describes (`hub page publish --spec
+"""Visual specs: a product manager's spec is a Tico page filed on the task it describes (`tico page publish --spec
 --task <id>`). The styles are inlined into the stored HTML when it is published (inline_styles), so the page reads the
 same wherever it is opened. Tasks filed under that task, and their own sub-tasks, get the spec's link and its text in
 their body (child_body). A spec stage with a person's OK comes with the Product pipeline."""

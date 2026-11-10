@@ -182,9 +182,11 @@ def test_a_plain_ok_answer_never_gives_a_bound_ok_whoever_sends_it(api):
     )
     tid = bots_task(api, bot)
     rid = ask(api, bot, tid)
-    for token in ("ben-test", "ben-token"):
-        status, _, detail, _ = call(api, "POST", f"tasks/{tid}/asks/{rid}/answer", token, {"value": "ok"})
-        assert status == 409 and K.FROM_PREVIEW in detail
+    status, _, detail, _ = call(api, "POST", f"tasks/{tid}/asks/{rid}/answer", "ben-test", {"value": "ok"})
+    assert status == 409 and K.FROM_PREVIEW in detail
+    # A token never gives an OK at all, so it is refused before the preview is even asked for.
+    status, _, detail, _ = call(api, "POST", f"tasks/{tid}/asks/{rid}/answer", "ben-token", {"value": "ok"})
+    assert status == 403 and K.OWN_IN_TICO in detail
     with api.app.state.store.transaction() as c:
         try:
             H.task_answer(c, "human:ben", tid, rid, "ok")
@@ -267,9 +269,45 @@ def test_the_assistant_and_botops_never_answer_ok_to_an_ok_even_a_plain_one(api)
     assert status == 200
 
 
-# ----------------------------------------------------------------------------- the generic use (hub ok use)
+def test_a_personal_token_never_gives_an_ok_on_anyones_ask_but_sends_back_and_her_own_click_oks(api):
+    """A plain OK asked of Ana, by a bot and by Ben. Her personal token is refused `ok` at the answer route and in a
+    batch decision, with the same words; its send back goes through; her own signed-in click OKs."""
+    as_bot(api)
+    ids = api.app.state.auth.settings.test_identities
+    ids["ana-token"] = Identity("human:ana", "owner", "ana@acme.example", via_token=True)
+    tid = bots_task(api, "ops-bot-test")
+    asks = []
+    with api.app.state.store.transaction() as c:
+        for by in ("bot:ops", "human:ben"):
+            version = H.task(c, tid)["version"]
+            asked = H.task_ask(c, by, tid, "human:ana", "OK?", kind="ok", seen_version=version)
+            asks.append(asked["requirement_id"])
+    for rid in asks:
+        status, code, detail, _ = call(api, "POST", f"tasks/{tid}/asks/{rid}/answer", "ana-token", {"value": "ok"})
+        assert (status, code) == (403, "ok_not_yours"), (rid, status, code)
+        assert detail == K.OWN_IN_TICO, detail
+    with api.app.state.store.transaction() as c:
+        from backend import batch
+
+        item = {"key": "ask:" + asks[0], "title": "OK?"}
+        with pytest.raises(Exception) as refused:
+            batch._apply_decide(c, ids["ana-token"], item, {"decision": "ok"})
+        assert getattr(refused.value, "detail", "") == K.OWN_IN_TICO, refused.value
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM answers WHERE requirement_id IN (?, ?)", tuple(asks)).fetchone()
+    status, _, _, _ = call(
+        api, "POST", f"tasks/{tid}/asks/{asks[0]}/answer", "ana-token", {"value": "no", "note": "Not now."}
+    )
+    assert status == 200
+    status, _, detail, _ = call(api, "POST", f"tasks/{tid}/asks/{asks[1]}/answer", "ana-test", {"value": "ok"})
+    assert status == 200, detail
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT answer FROM answers WHERE requirement_id=?", (asks[1],)).fetchone()[0] == "ok"
+
+
+# ----------------------------------------------------------------------------- the generic use (tico ok use)
 def test_the_generic_use_lets_only_the_asker_act_once_on_exactly_what_was_okd(api):
-    """`hub ok use <rid> --for KIND:ID --content JSON` (POST /api/v2/oks/{rid}/use), as the Video Producer uses a
+    """`tico ok use <rid> --for KIND:ID --content JSON` (POST /api/v2/oks/{rid}/use), as the Video Producer uses a
     `budget_raise:<slug>` OK: refused for an OK that does not exist, still waits, is for other content or another
     subject, or is used by anyone but the bot that asked; used once; and an OK whose task was closed lets nothing go."""
     bot, other = as_bot(api), as_bot(api, "video")
@@ -522,7 +560,7 @@ def test_the_assistant_never_answers_ok_with_space_or_case_around_it(api, value)
 
 def test_an_ok_of_a_file_counts_only_while_its_giver_may_still_open_the_file(api):
     """Codex review 2, finding 4: file access was checked only when the preview opened. Taken away after, the cached
-    hash still gave the OK, the bot used it, and `hub file approved` kept counting it. The giver's access to that file
+    hash still gave the OK, the bot used it, and `tico file approved` kept counting it. The giver's access to that file
     is checked again at the OK, at the use and when the verdict is read."""
     bot = as_bot(api)
     fid = a_file(api)

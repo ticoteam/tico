@@ -31,7 +31,7 @@ never:
   - "Create a bot, or assign work to a human, unless the task asks for it and a granted Tool allows it"
 prerequisites:
   - tool: hub
-    why: "The people bots' tasks, reports and the roster (`hub team show`) are what the summary and the calendar are built from."
+    why: "The people bots' tasks, reports and the roster (`tico team show`) are what the summary and the calendar are built from."
     required: true
   - tool: docs
     why: "Optional. The handbook and current policies, read through the Librarian, are the base for every policy draft."

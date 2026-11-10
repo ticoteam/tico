@@ -9,7 +9,7 @@ When to use: before you offer any times to a candidate, or when a booked intervi
 Steps:
 1. Read `knowledge/interviewer-rules.md` (hours, daily maximum, buffer, days off) and the loop in `knowledge/loops/<role>.md`
    (rounds, length, panel).
-2. Read each panel member's calendar for the window (default: the next five working days): `hub calendar list --calendar <email>`.
+2. Read each panel member's calendar for the window (default: the next five working days): `tico calendar list --calendar <email>`.
    If one calendar cannot be read, that person has no known free time. Say so, and do not offer slots that depend on them.
 3. Remove every busy block, the buffer before and after each one, and every time outside the interviewer rules.
 4. For a loop with several rounds, prefer rounds back to back on one day, with a short break between them. Keep to at most

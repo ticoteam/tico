@@ -12,7 +12,7 @@ gateway:
   level: low
 
 # The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
-# (Start setup, go-live). `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
 routines:
   - id: tomorrows-dispatch-plan
     title: Tomorrow's dispatch plan

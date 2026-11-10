@@ -16,11 +16,11 @@ Done when: the first line answers the question, every decision carries its meeti
 
 Then search meetings from the last 90 days:
 
-    hub meeting search "<topic>" --since <90 days ago>
+    tico meeting search "<topic>" --since <90 days ago>
 
 ## 2. Read the passage, not the summary
 
-Open the transcript at the hit (`hub meeting read <id>`) and read the passage around it. A
+Open the transcript at the hit (`tico meeting read <id>`) and read the passage around it. A
 decision counts only if it was confirmed. If the discussion never concluded, say "discussed on <date>,
 not decided".
 
@@ -28,7 +28,7 @@ not decided".
 
 First line: the decision, or "no decision found". Then who confirmed it and when, with meeting title,
 date and timestamp. If two meetings disagree, give both with dates and say which is later; do not
-choose. If a human is asking about an open action item, check `hub task list --owner <person>` and
+choose. If a human is asking about an open action item, check `tico task list --owner <person>` and
 say whether it exists and its status.
 
 ## 4. Keep the log honest

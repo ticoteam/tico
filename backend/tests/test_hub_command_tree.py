@@ -66,7 +66,7 @@ def test_every_read_only_path_the_runner_trusts_parses_to_one_command():
         for word in argv:
             if word.startswith("-"):
                 break
-            assert word in (subcommands(p) or {}), f"hub {path} does not parse"
+            assert word in (subcommands(p) or {}), f"tico {path} does not parse"
             p = subcommands(p)[word]
         if subcommands(p) is not None:
             groups.append(path)

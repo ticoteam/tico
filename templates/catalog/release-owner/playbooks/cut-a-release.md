@@ -8,7 +8,7 @@ that exact version.
 
 ## 1. Read the task
 
-    hub task show <id>
+    tico task show <id>
 
 List the tasks it names. Leave out any task you cannot open, and never ask for its name. The notes cover the tasks you can read.
 
@@ -33,18 +33,18 @@ range is listed under "Could not classify" with the question.
 
 ## 5. Ask for the OK
 
-    hub task ask <id> --to <owner> "Publish release 1.4.2 at commit abc1234? <the readiness recommendation in a few words>" --kind ok --version N
+    tico task ask <id> --to <owner> "Publish release 1.4.2 at commit abc1234? <the readiness recommendation in a few words>" --kind ok --version N
 
 The ask names one version at one commit, as `playbooks/rollout.md` step 0 describes. Put the readiness report and the
 notes' SHA-256 in a comment on the task. A publish goes through only on that OK.
 
 ## 6. Roll out, only after the OK
 
-Once `hub task show <id>` shows the owner's OK on that exact version and commit, follow `playbooks/rollout.md` from its step 1
+Once `tico task show <id>` shows the owner's OK on that exact version and commit, follow `playbooks/rollout.md` from its step 1
 in one run. Any other version or commit asks again. A failed step stops the rollout and goes to the owner as a question.
 
 ## 7. Finish
 
 Update `knowledge/versioning.md` with the release, its date and commit, and record the release in `state.md`. The task gets one
 comment: the version and commit, the release link, the notes' path, the readiness outcome, and per install before and after with
-its outcome. Then `hub task done <id> -m "..." --version N`, with the version in the first line.
+its outcome. Then `tico task done <id> -m "..." --version N`, with the version in the first line.

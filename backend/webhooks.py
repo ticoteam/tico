@@ -578,7 +578,7 @@ def check_usable(c, actor, endpoint_id, name=None):
     Raises Problem with the reason in plain words."""
     hook = c.execute("SELECT * FROM webhooks WHERE id=? AND deleted_at IS NULL", (endpoint_id,)).fetchone()
     if not hook:
-        raise Problem("webhook", f"No webhook endpoint {endpoint_id}: see hub webhook list", 422)
+        raise Problem("webhook", f"No webhook endpoint {endpoint_id}: see tico webhook list", 422)
     try:
         _actor_may_use(c, actor, hook, name)
     except Refused as exc:
@@ -1322,7 +1322,7 @@ def auto_disable(c, now=None):
                 H.KEEPER,
                 f"Webhook {hook['name']} was turned off",
                 f"Every attempt to reach it failed for {DISABLE_DAYS} days, so Tico stopped sending. "
-                f"Fix the address, then turn it on in Tools › Webhooks or `hub webhook enable {hook['id']}`; "
+                f"Fix the address, then turn it on in Tools › Webhooks or `tico webhook enable {hook['id']}`; "
                 f"Tico then offers to send again what it held back.",
                 hook["created_by"],
                 lint=False,

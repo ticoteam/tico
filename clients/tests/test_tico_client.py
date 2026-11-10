@@ -79,7 +79,7 @@ class Retries(unittest.TestCase):
             "error": "task_not_met",
             "detail": "Not moved. Not met: Owner says done.",
             "missing": ["Owner says done"],
-            "next": ['hub task close T1 -m "why" --version 3'],
+            "next": ['tico task close T1 -m "why" --version 3'],
             "version": 3,
         }
         client = self.client([(409, refusal)])

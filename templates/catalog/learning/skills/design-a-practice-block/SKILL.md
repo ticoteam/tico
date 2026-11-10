@@ -7,7 +7,7 @@ description: Design the practice for one skill in a role plan as a block of name
 When to use: for each skill in a role plan, or for a course a team wants to add to a plan, before the plan goes on a task.
 
 Steps:
-1. Name the skill and the level expectation it serves, from the level guide (`hub doc ask`). If there is no guide, use the skill
+1. Name the skill and the level expectation it serves, from the level guide (`tico doc ask`). If there is no guide, use the skill
    the requester named and say so.
 2. Name one piece of real work in the next quarter that stretches the skill, by type (run a customer review, lead a small
    release, review a design). Do not assign it to a person.

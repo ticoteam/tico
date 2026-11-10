@@ -2,7 +2,7 @@
 """Preflight: is an employee ready to be flipped from `planned` to `active`?
 
 Read-only. Checks the registry entry, the repo, bot.yaml (older: employee.yaml), AGENT.md, the routines (the
-seed `hub bot create` turns into the bot's first routines in the hub), the secrets the `tools:`
+seed `tico bot create` turns into the bot's first routines in the hub), the secrets the `tools:`
 block (older: `access:`) declares, and the runtime binary. One line per check, prefixed PASS / WARN / FAIL, then a
 summary. Exit 1 if anything FAILed.
 
@@ -138,7 +138,7 @@ def check_instructions(r, d):
 
 
 def check_schedules(r, d, m):
-    """The manifest's `routines:` (older: `schedules:`), validated as `hub bot create` validates them before seeding
+    """The manifest's `routines:` (older: `schedules:`), validated as `tico bot create` validates them before seeding
     the hub. Once a bot exists, its routines are the hub's rows, not this file (docs/routines.md)."""
     scheds = routines_of(m) or []
     if not scheds:
@@ -158,7 +158,7 @@ def check_schedules(r, d, m):
     try:
         rows = validate_schedules(scheds, read_file)
     except (ValueError, OSError, UnicodeError) as exc:
-        r.fail(f"routines: `hub bot create` would refuse to seed these routines: {exc}")
+        r.fail(f"routines: `tico bot create` would refuse to seed these routines: {exc}")
         return
     for row in rows:
         where = row["title"]

@@ -19,14 +19,14 @@ Read the source bot's `skills/` folder in its repository. If they named a skill 
 
 ## 2. Copy it
 
-    hub skill copy <skill> --from <source bot> --to <bot> [<bot> ...]
+    tico skill copy <skill> --from <source bot> --to <bot> [<bot> ...]
 
 It answers a status for each target:
 
 - **`copied`**: committed to that bot's repository.
 - **`unchanged`**: it already had exactly this skill.
 - **`exists`**: it has a different skill with that name. Tell them so and ask whether to replace it; only on a yes,
-  `hub skill copy <skill> --from <source> --to <bot> --replace`.
+  `tico skill copy <skill> --from <source> --to <bot> --replace`.
 - **`dirty`**: that bot's repository has uncommitted changes in the skill's folder. Leave it, and say so.
 - **`no_repository`**: that bot's repository is not on this computer; say so in one line.
 

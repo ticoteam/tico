@@ -172,7 +172,7 @@ your own, and anyone's below you.
 **How do I add a routine?**
 **Automations → + New**: pick a Schedule (a cron in a time zone), an Event, a Webhook or Before a
 due date (a task N days before a date that repeats), then add a Bot turn step with the bot and the text it is told each time. A bot can set up
-its own with `hub automation create`. Details: [Routines](routines.md).
+its own with `tico automation create`. Details: [Routines](routines.md).
 
 **How do I change what a bot does?**
 Open **Bot → Instructions**, describe the change in **Request instruction changes**, and choose
@@ -205,8 +205,8 @@ lowest on the chart. A bot that manages others is asked once each of its direct 
 skipped, or 90 minutes after it was first held for them, whichever comes first. A report asked again after a failed
 run does not restart that wait. Its request carries its direct reports' updates
 and names anyone who had none. It writes its own update from its work and theirs. Its card does not list the updates
-it was written from; `hub update show` lists them as `inputs`, and you see only the ones you may read.
-**Redo** of a past day can include the managers above (`hub update redo --bot X --with-managers`).
+it was written from; `tico update show` lists them as `inputs`, and you see only the ones you may read.
+**Redo** of a past day can include the managers above (`tico update redo --bot X --with-managers`).
 
 **Your update.** Once your reports are in, your update is drafted and posts at once as yours. Tico writes the draft with one call to your company's own model, and that call gets only what
 everyone in the company can already see: your tasks that are not private and your goals; the status changes you made and the
@@ -227,7 +227,7 @@ to you); **Whole org** shows the whole chart, and
 **List** shows every update newest first. Only your direct reports' updates count on the **Updates** badge and
 carry a dot in the chart; updates further down are marked read as you see them, but never alert. People's updates are
 open to everyone on the team (not to external agents); a bot's are open to anyone who may read that bot. Bots read them with
-`hub update list` (`--scope direct` for just their direct reports).
+`tico update list` (`--scope direct` for just their direct reports).
 
 ## Steer, queue or defer
 
@@ -277,8 +277,8 @@ the same way with `GET` and `POST /api/v2/preferences/compose.send_way` (`{"valu
 `defer:<30m|1h|4h|24h|2d|7d|never>`). The CLI and API take the same words:
 
 ```bash
-hub chat send content "Skip the charts." --steer
-hub task comment <task-id> "Billing first." --defer 4h
+tico chat send content "Skip the charts." --steer
+tico task comment <task-id> "Billing first." --defer 4h
 ```
 
 `POST /api/v2/chat/<bot>` and `POST /api/v2/tasks/<id>/comments` take `delivery` (`steer`,
@@ -299,9 +299,9 @@ A **deferred message** gives a bot context without starting a run. It waits for 
 [personal token or external agent](connect-an-agent.md) for the CLI:
 
 ```bash
-hub note create content "Use the revised tone guide for the next draft." --defer 4h
-hub note list --to content --waiting
-hub note delete <note-id>
+tico note create content "Use the revised tone guide for the next draft." --defer 4h
+tico note list --to content --waiting
+tico note delete <note-id>
 ```
 
 `--text-file notes.txt` can replace the message text. Deferred messages (still `note` in the CLI and API) are only for
@@ -330,7 +330,7 @@ POST /api/v2/notes/<note-id>/cancel    {}
 **Where do files go?**
 Files you attach to a task or a message are stored privately by your team's Tico server and the bot downloads them
 for that thread (up to ten files of 10 MB). A file a bot produces for you is attached to the
-task the same way (`hub task attach`) and linked from its note; open it from the task or the link
+task the same way (`tico task attach`) and linked from its note; open it from the task or the link
 while signed in. Other files a bot publishes are listed on its page under Files ([Files](files.md)); a bot's own
 record stays in its repo's `reports/`. Meeting transcripts come from the tools that made them ([Meetings](meetings.md)).
 
@@ -357,14 +357,14 @@ It starts when you add another computer in **Settings → Computers**. Without a
 computer clones the original repository using your own git access; a local checkout can be reused.
 Health names the repository and clone command if that fails. You can also ask BotOps to fix it.
 The branch picker opens the original or a person's branch. New tasks and messages to the original go to your active branch.
-Branches share instructions and repository lessons; `hub bot copy` creates an independent bot. See [Branches](creating-bots.md#branches).
+Branches share instructions and repository lessons; `tico bot copy` creates an independent bot. See [Branches](creating-bots.md#branches).
 
 ## Tags and release checklists
 
 Tags give related tasks a shared label, metadata and a Markdown checklist. A chip can show
 `release · Oct 2`; its key, such as `release-2026-10-02`, identifies that particular release.
 Click a tag chip to open its notes and tasks. The task filter uses tags. Existing label strings,
-`hub task label` and `--label` continue to use the same keys. Unknown keys create plain tags.
+`tico task label` and `--label` continue to use the same keys. Unknown keys create plain tags.
 
 Open **Settings > Tasks**, under **Task tags**, to create tags or templates. A template holds a reusable checklist and
 metadata defaults. Open it and choose a key under **Make a tag** to copy those defaults into a new
@@ -388,11 +388,11 @@ cat > release-checklist.md <<'CHECKLIST'
 - [ ] Smoke checks after deploy
 - [ ] Tell the team
 CHECKLIST
-hub tag create release-checklist --label release --template --markdown-file release-checklist.md
-hub tag create release-2026-10-02 --from-template release-checklist --metadata '{"date":"2026-10-02"}'
-hub task label <task-id> --add release-2026-10-02
-hub tag show release-2026-10-02
-hub tag update release-2026-10-02 --version 1 --markdown-file release-checklist.md
+tico tag create release-checklist --label release --template --markdown-file release-checklist.md
+tico tag create release-2026-10-02 --from-template release-checklist --metadata '{"date":"2026-10-02"}'
+tico task label <task-id> --add release-2026-10-02
+tico tag show release-2026-10-02
+tico tag update release-2026-10-02 --version 1 --markdown-file release-checklist.md
 ```
 
 The release bot can own an instance, gather the tasks going out, record checklist results and

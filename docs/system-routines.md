@@ -78,7 +78,7 @@ When the Gateway did not answer, a line under the pill says what ran instead and
 [Task Manager](task-manager.md) only for a department that has something. Its run record reads "3 departments, 7 items"
 or "Nothing to do". The default preset runs hourly on weekdays between 08:00 and 18:00 in the team's time zone; a weekend
 or evening tick does not run. It finds nothing while the Task Manager bot is paused. Details, the checks and the
-`hub task-manager` commands are on [Task Manager](task-manager.md).
+`tico task-manager` commands are on [Task Manager](task-manager.md).
 
 ## The jobs
 

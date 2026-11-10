@@ -29,13 +29,27 @@ def actor(who):
     return (who.actor, other) if other and other != who.actor else who.actor
 
 
+def principals_read(c, principals, row):
+    """Whether every one of `principals` (one actor, or a person and whom they act as) reads the task row. The
+    person's own Assistant also reads the task filed for an OK asked of her (task_asks.assistant_reads_own_ok)."""
+    principals = principals if isinstance(principals, tuple) else (principals,)
+    if all(H.task_private_readable(c, a, row) for a in principals):
+        return True
+    if not row or len(principals) != 2:
+        return False
+    from .task_asks import assistant_for, assistant_reads_own_ok
+
+    return (
+        assistant_for(*principals)
+        and H.task_private_readable(c, principals[0], row)
+        and assistant_reads_own_ok(c, principals[0], principals[1], dict(row)["id"])
+    )
+
+
 def task_readable(c, who, row):
     if snapshot(c) and row:
         row = _task(c, row["id"])
-    principals = actor(who)
-    return all(
-        H.task_private_readable(c, a, row) for a in (principals if isinstance(principals, tuple) else (principals,))
-    )
+    return principals_read(c, actor(who), row)
 
 
 def reference_strings(value):
@@ -444,7 +458,7 @@ def readable(c, actor, ids, who=None):
     rows = _task_rows(c, set(ids))
 
     def reads(row):
-        return all(H.task_private_readable(c, a, row) for a in principals)
+        return principals_read(c, principals, row)
 
     return all(row is not None and reads(row) for row in rows.values())
 
@@ -908,7 +922,7 @@ def reach_for(c, who, person, parent):
 # subtask under it for another bot, which reads that subtask and nothing above it: not the parent, its other subtasks
 # or the run's other work, only the words the filer writes. A private task with a person on it stays that person's to
 # widen: the refusal names them and the route to them.
-SEALED_ROUTE = "ask them with `hub task ask`, or have them file the subtask"
+SEALED_ROUTE = "ask them with `tico task ask`, or have them file the subtask"
 COPIED_WORDS = 12
 
 
@@ -1069,7 +1083,7 @@ def sealed_words(kept, title, body):
 FROM_PRIVATE = True
 COMPANY_REFUSAL = (
     "Private task work cannot create company-visible tasks: its owning bot may file one from private "
-    "work, in its own words (`hub task create --from-private`)"
+    "work, in its own words (`tico task create --from-private`)"
 )
 FILE_ID = re.compile(r"\bfile-[0-9a-f]{24}\b")
 
@@ -1092,7 +1106,7 @@ def from_private(c, who, owner, parent):
     if private_meetings(c, meeting_sources(c).attempt(who.attempt_id)):
         raise Problem("privacy", "Private meeting work cannot create company-visible tasks", 403)
     if not H.is_bot(owner or ""):
-        raise Problem("privacy", "A task from private work is for a bot: ask a person with `hub task ask`", 403)
+        raise Problem("privacy", "A task from private work is for a bot: ask a person with `tico task ask`", 403)
     if parent and not H.task_private(c, parent):
         raise Problem(
             "privacy", "File a task from private work under the private task it comes from, or with no parent", 403
@@ -1497,7 +1511,16 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, reach=Non
 # A long-lived bot's finished company tasks are most of its rows and change nothing.
 STATUS_TASKS_SQL = "(status IN (%s) OR private IS NOT 0)" % ",".join("'%s'" % s for s in H.ACTIVE_STATUSES)
 # The columns `status` reads of them: never the bodies, which were megabytes a status page on a real install.
-STATUS_TASK_COLUMNS = "id,owner_id,requester_id,status,private,readers"
+STATUS_TASK_COLUMNS = "id,owner_id,requester_id,status,private,readers,askers"
+# Who has an ask open on the task's current visit that names a person and is not answered yet (hubdb.status_counts):
+# a bot's ask counts toward its needs_human only where the reader may read the task.
+_ASKERS = (
+    "(SELECT json_group_array(r.added_by_id) FROM visits v JOIN requirements r ON r.visit_id = v.id "
+    "WHERE v.task_id = tasks.id AND v.left_at IS NULL AND r.withdrawn_at IS NULL AND r.person_id LIKE 'human:%' "
+    "AND NOT EXISTS (SELECT 1 FROM answers a WHERE a.requirement_id = r.id AND a.visit_id = v.id "
+    "AND a.undone_at IS NULL AND a.answer NOT IN ('give', 'again'))) AS askers"
+)
+STATUS_TASK_SELECT = STATUS_TASK_COLUMNS.replace(",askers", "," + _ASKERS)
 
 
 def status_tasks_sql(match):
@@ -1506,10 +1529,10 @@ def status_tasks_sql(match):
     to test status and privacy columns stored past the bodies; a busy team's page spent most of a second there."""
     live = "status IN (%s)" % ",".join("'%s'" % s for s in H.ACTIVE_STATUSES)
     return (
-        f"SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE owner_id{match} AND {live} "
-        f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE requester_id{match} AND {live} "
+        f"SELECT {STATUS_TASK_SELECT} FROM tasks WHERE owner_id{match} AND {live} "
+        f"UNION SELECT {STATUS_TASK_SELECT} FROM tasks WHERE requester_id{match} AND {live} "
         # `+` keeps the few private tasks on their own index (tasks_private_status), not the owner's every task.
-        f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks INDEXED BY tasks_private_status WHERE private IS NOT 0 "
+        f"UNION SELECT {STATUS_TASK_SELECT} FROM tasks INDEXED BY tasks_private_status WHERE private IS NOT 0 "
         f"AND (+owner_id{match} OR +requester_id{match})"
     )
 
@@ -1564,11 +1587,12 @@ def status(c, who, row, *, tasks=None):
             t["owner_id"] == "bot:" + row["bot"] and t["status"] in H.ACTIVE_STATUSES for t in tasks
         )
     if "needs_human" in row:
-        # One per readable open task the bot filed for a person (hubdb.status_counts).
+        # One per readable open task the bot filed for a person, and one per unanswered ask it put to a person on a
+        # readable open task (hubdb.status_counts).
         bot = "bot:" + row["bot"]
         row["needs_human"] = sum(
             t["status"] in H.ACTIVE_STATUSES and t["requester_id"] == bot and H.is_human(t["owner_id"]) for t in tasks
-        )
+        ) + sum(json.loads(t.get("askers") or "[]").count(bot) for t in tasks if t["status"] == "open")
     return row
 
 

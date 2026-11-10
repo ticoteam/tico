@@ -760,6 +760,12 @@ class Letters:
         person = self.approver(c, row)
         if not person:
             raise Problem("no_approver", "Nobody can OK this letter: the company has no owner on the team", 409)
+        # The OK goes on the letter's task only when whoever asked works that task. A letter made from a file on
+        # someone else's task (its provenance) is the asker's own work: its OK gets a task of its own.
+        on = H.task(c, row["task_id"]) if row["task_id"] else None
+        from .task_calls import can_work
+
+        task_id = on["id"] if on and can_work(c, row["requested_by"], on) else None
         asked = task_asks.ask_ok(
             c,
             row["requested_by"],
@@ -768,7 +774,7 @@ class Letters:
             shows=["letter:" + row["id"]],
             subject=SUBJECT + row["id"],
             content=content(row),
-            task_id=row["task_id"] or None,
+            task_id=task_id,
             title="Mail a letter to " + str(json.loads(row["recipient"]).get("name") or "a recipient"),
         )
         c.execute(

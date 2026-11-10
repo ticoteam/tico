@@ -40,7 +40,7 @@ write, which Tico never puts in an ordinary run token. To allow it for one repos
    (**Organization settings → GitHub Apps → Configure**) and accept the updated permissions.
 2. An Owner or admin ticks **Run workflows** on that bot's chosen write grant, or on the repository's row under
    **All repos in use** with write (Settings → bot → Repositories), or runs
-   `hub bot repos <bot> --chosen owner/repo:write+actions`. See [Repositories](repositories.md).
+   `tico bot repos <bot> --chosen owner/repo:write+actions`. See [Repositories](repositories.md).
 
 The bot then gets a separate token for those repositories, with its write permissions plus Actions: write. Its other
 repositories keep their own tokens, since GitHub permissions apply to a whole token. Tico asks GitHub for the
@@ -61,7 +61,7 @@ write, which Tico never puts in an ordinary run token. To allow it for one repos
    **Read and write** and save, then accept the updated permissions on the installation, as above.
 2. An Owner or admin ticks **Edit workflow files** on that bot's chosen write grant, or on the repository's row under
    **All repos in use** with write (Settings → bot → Repositories), or runs
-   `hub bot repos <bot> --chosen owner/repo:write+edit` (`:write+actions+edit` to also run workflows). See
+   `tico bot repos <bot> --chosen owner/repo:write+edit` (`:write+actions+edit` to also run workflows). See
    [Repositories](repositories.md).
 
 The bot then gets a separate token for those repositories, with its write permissions plus Workflows: write. A grant
@@ -232,7 +232,7 @@ repository access to themselves.
 An authorized review bot posts its findings with:
 
 ```sh
-hub repo review Acme/product 7 --head <full-reviewed-commit-sha> --verdict approve --body-file review.txt
+tico repo review Acme/product 7 --head <full-reviewed-commit-sha> --verdict approve --body-file review.txt
 ```
 
 Use `--verdict changes` for blocking findings. The server appends the final line
@@ -291,8 +291,8 @@ Tick the team's repositories in Settings → General → Repositories, then choo
 
 With administration allowed, the owner can create `<org>/bot-<slug>` privately from a template:
 
-    hub bot repo-create botops            # from ticoteam/botops
-    hub bot repo-create sales --template <org>/bot-template
+    tico bot repo-create botops            # from ticoteam/botops
+    tico bot repo-create sales --template <org>/bot-template
 
 The BotOps bot (`bot:botops`) may make the same call when the connected app permits repository creation.
 To delegate this to an engineering bot or another selected bot, an Owner or admin enables
@@ -319,7 +319,7 @@ one-step fix:
 3. Back in Tico, select **Check again** (`POST /api/v2/github/app/check-permissions`). Tico also notices on
    its own: through the installation webhook, or within a few minutes.
 
-When BotOps builds a bot without that permission, `hub bot create` (and `hub bot repo-create`) stops with
+When BotOps builds a bot without that permission, `tico bot create` (and `tico bot repo-create`) stops with
 `github_permission_missing` and a non-zero exit: a person must act. The bot stays planned with its files on
 the computer that built it, and the owner gets one Needs-you task for that bot (repeating the command never
 adds a second) with two fixes: create `<org>/bot-<slug>` as an empty private repository (the link opens
@@ -334,8 +334,8 @@ An Owner can create an exact product repository without the `bot-` prefix (in a 
 name, and private/empty settings, then select **Create repository**. The API also exposes this flow to the Hub CLI, for the Owner and
 for a bot with **Create product repositories** ([below](#bots-that-create-product-repositories)):
 
-    hub repo product-create tico-recorder
-    hub repo product-create tico-recorder --confirm <org>/tico-recorder     # a bot's turn: no terminal
+    tico repo product-create tico-recorder
+    tico repo product-create tico-recorder --confirm <org>/tico-recorder     # a bot's turn: no terminal
 
 The command prints the same preview and requires the exact `org/name` before it writes: typed at a terminal,
 or given as `--confirm`, which must match the preview exactly. Both flows
@@ -430,7 +430,7 @@ a template copy. `--empty` (API `{"slug": ..., "empty": true}`, no template) cre
 `<org>/bot-<slug>` with nothing in it (`POST /orgs/<org>/repos`, `auto_init` false). Then, from the
 bot's checkout:
 
-    hub bot repo-create <slug> --empty
+    tico bot repo-create <slug> --empty
 
 Then set the bot's repository (Settings, Bots) to `<org>/bot-<slug>`; a bare `bot-<slug>` there also
 works and means the connected organization (an existing `emp-<slug>` repository keeps its name). Nobody pushes by hand: a run's token
@@ -445,7 +445,7 @@ Settings, Bots says the same); fix the cause and the next run publishes.
 ## Where the key lives
 
 The Team Owner can delete a repository in the connected organization or personal account with
-`hub api DELETE github/repos/<owner>/<repo>`, or ask BotOps to do it with the Owner's rights.
+`tico api DELETE github/repos/<owner>/<repo>`, or ask BotOps to do it with the Owner's rights.
 This runs directly and uses a repository-scoped GitHub App token with Administration (write).
 The App must have access to that repository and the installation must accept Administration permission.
 Tico records the exact repository in its history. Success returns `deleted: true`; a 404 under a
@@ -548,7 +548,7 @@ check would: the owner gets the head's one `pr_checks_done`, at most once per he
 The grouping survives server restarts and keeps at most 50 distinct notice items per burst.
 Wake rules for `pr_checks_done` and `pr_review` (in the **What wakes** automations on the Automations page) change what these do.
 
-A bot waiting on one result can arm a one-shot wake on a PR link: `hub task link <task> <pr url> --wake-once`
+A bot waiting on one result can arm a one-shot wake on a PR link: `tico task link <task> <pr url> --wake-once`
 (`wake_once: true` on `POST /api/v2/tasks/{id}/links` or `hub_task_link`; `--no-wake-once` disarms it). The
 owner then hears once, in the task's conversation (the head's `pr_checks_done`, so a link armed for it
 is never woken twice for one head), at the first of: every check suite, check run and status

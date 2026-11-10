@@ -117,7 +117,7 @@ The DM is a personal thread (`scope: personal`, `room_key: assistant`) owned by 
 Everyone, the owner and administrators included, has the Assistant.
 The team owner and administrators cannot read anyone else's, and no other route reaches the assistant: the ordinary
 chat routes still refuse it (`403`). Every new team gets the assistant, BotOps, the [Librarian](librarian.md) and the [Strategy Bot](goals-and-kpis.md#the-strategy-bot) built in (all required in setup, active once a computer is enrolled),
-and none can be archived or deleted by anyone: the owner included, through Settings, the API, `hub` or BotOps
+and none can be archived or deleted by anyone: the owner included, through Settings, the API, `tico` or BotOps
 (`409 system_bot`); pausing and renaming stay allowed, and Settings > Bots shows them as **Built-in**. A team
 that set the assistant aside before it was built in keeps it archived on update, and the Assistant page says the Assistant is off
 instead of failing. The owner gets **Turn on** there and in **Settings > General**: one click restores the
@@ -137,7 +137,7 @@ Org rules are checked before a message is written, as for any chat: a held messa
 
 ## It acts as you, never more
 
-During your DM run the assistant's `hub` tools and the Tico MCP tools are **your own**: the server maps the run's
+During your DM run the assistant's `tico` commands and the Tico MCP tools are **your own**: the server maps the run's
 credential to you (`Auth.assistant_principal`), so every check is the one that applies to you. Only a run that your own
 message started, in your own Assistant DM, acts for you; its other work (Slack routing, meeting deliveries, routines)
 stays the assistant's own. Every write it makes is recorded as yours **via assistant**: the audit `events` carry `"via":
@@ -150,7 +150,7 @@ many tasks, comments and links, answering bots' asks, direct and confirm setting
 changes, rules, groups and reports, and tasks and messages for other people. Your own rights are the ceiling. The route
 runs its own checks as you, so what you could not do yourself it cannot do for you (`403` from the route). The record
 shows you as the actor, `via` assistant, and the audit event's `delegation` names the message (`{"for": "human:<you>",
-"cited": "<message id>", "run": "asked"}`). A bulk change (`hub task bulk`) records each task the same way.
+"cited": "<message id>", "run": "asked"}`). A change to many tasks at once records each task the same way.
 
 **Never on your words.** These stay a Confirm card, or your own tap in Tico or Settings, whatever you ask
 (`NEVER` in backend/assistant.py lists the routes): a personal token, service key, stored credential or its grants,
@@ -159,7 +159,7 @@ transfer; an OK on a task, which is your own click on its preview; the Assistant
 that sets
 the Assistant (`assistant_direct`); a Tico support report or ticket; deleting a person, the
 company's server connection or its storage. A write whose body carries a secret is refused from chat too: a secret goes
-in Credentials (`hub credential request`). A person-only setting stays person-only, with the reason and the link.
+in Credentials (`tico credential request`). A person-only setting stays person-only, with the reason and the link.
 
 **The citation is checked.** The message must be yours, typed in your own Assistant DM (not written by a bot or the
 Assistant, not in another thread), and no more than 30 minutes old when the write is made. A run whose message is not
@@ -174,7 +174,7 @@ including what you ask for in your DM. An assistant run's credential works only 
 
 **OKs are yours alone.** The Assistant answers asks on your words, but it never gives an OK: an OK on something that
 leaves the company or spends money is your own click on its preview ([Asks and OKs](tasks.md#asks-and-oks)). A walk
-through Needs you (`hub needs-you commit`) answers, sends back, finishes and closes; an OK bound to a preview is
+through Needs you (`tico needs-you commit`) answers, sends back, finishes and closes; an OK bound to a preview is
 refused there too.
 
 ## Routines from chat
@@ -196,9 +196,9 @@ restoring it through chat requires a card.
 
 `POST /api/v2/automations` from an Assistant turn, with a Message trigger and `enabled: false` (or omitted), returns
 the saved off routine plus `action`, `message_id` and `needs_confirm: true`. The action is a PATCH of the reviewed flow
-with `enabled: true`. If direct writes are disabled, `hub assistant propose` can instead hold a POST on its card;
+with `enabled: true`. If direct writes are disabled, `tico assistant propose` can instead hold a POST on its card;
 confirmation creates and enables that routine. Existing routines use a PATCH proposal. The same API and card apply
-to web, phone and desktop; the `hub` CLI and MCP tools return the pending action, never confirm it for the Assistant.
+to web, phone and desktop; the `tico` CLI and MCP tools return the pending action, never confirm it for the Assistant.
 
 ## Where you stand, and the morning message
 
@@ -209,7 +209,7 @@ do we
 stand?" or "what should I do next?" any time, or it runs for you as the morning message.
 
 The **morning message** is the Assistant's one routine (the routine id is still `daily-sweep`, now titled "Morning message").
-Once a day it sends each person at most one message in their Assistant DM, with `hub assistant morning --for human:<id>
+Once a day it sends each person at most one message in their Assistant DM, with `tico assistant morning --for human:<id>
 --body`. A quiet day gets no message. A second send on the same company day is refused (`409 already_sent_today`), and the
 Assistant does not retry. The message never closes, answers or proposes anything: it has no Confirm card. Stalled
 Marketing
@@ -220,9 +220,9 @@ now?"). Say "that's enough" or "later" and it stops offering in that chat. It ne
 
 ## Undo
 
-Every change your Assistant makes for you is listed with the words it acted on: `hub assistant change list [--days N]`
+Every change your Assistant makes for you is listed with the words it acted on: `tico assistant change list [--days N]`
 (last 30 days by default; `GET /api/v2/assistant/changes`). Each row has an `id`, what it did, the words it acted on,
-the object it touched and whether it can still be undone (`undoable`, or `why_not`). `hub assistant change restore <id>`
+the object it touched and whether it can still be undone (`undoable`, or `why_not`). `tico assistant change restore <id>`
 takes one back as you, through the task calls: a task it finished or closed is reopened, one it moved goes back to
 the stage it left, one it handed off goes back to its old owner, an automation it changed goes back to its old version,
 a rule it added is retired,
@@ -232,14 +232,14 @@ restore your own changes (another person's is `404`).
 
 ## Why is this here
 
-`hub origin show <ref>` (`GET /api/v2/origins/{ref}`) says why a task or a bot's message is on your list.
+`tico origin show <ref>` (`GET /api/v2/origins/{ref}`) says why a task or a bot's message is on your list.
 The ref is a task id (or its first eight characters) or a message id. The answer names who made it, its
 cause (the automation that opened it, the org rule that asked for it, the parent task it came from, or the bot that filed
 it), how many items that cause made in the last seven days and how many are still open, and up to three commands that
 would stop the source: turn an automation off, retire a rule, close what a bot filed, pause the bot, or file a task for
-BotOps to fix the bot's source. Each command is a `hub` line you can run as it is. A ref you cannot read is `404`.
+BotOps to fix the bot's source. Each command is a `tico` line you can run as it is. A ref you cannot read is `404`.
 
-`hub needs-you show [--kind task|ask|paused|mention]` (`GET /api/v2/needs-you/summary`) gives the same count as
+`tico needs-you show [--kind task|ask|paused|mention]` (`GET /api/v2/needs-you/summary`) gives the same count as
 Needs you, split by kind and by the bot that put each item there, with this week's and older counts. Use it first when
 the list looks too long: the numbers come from the same query as the list ([Needs you](tasks.md#needs-you)).
 
@@ -259,7 +259,7 @@ the path must be plain (`/api/v2/...` without `//`, `..`, `%` or `\`), and exact
 error's detail are kept of the result, never the answer's body.
 
 **What is never done from chat is proposed, and only your click runs it:** anything
-the "Never on your words" list above names, and everything while the owner's switch is off. The assistant calls `hub assistant propose` (`hub_assistant_propose`, `POST /api/v2/assistant/actions`)
+the "Never on your words" list above names, and everything while the owner's switch is off. The assistant calls `tico assistant propose` (`hub_assistant_propose`, `POST /api/v2/assistant/actions`)
 with the exact API operation. That leaves a **pending action** and a Confirm / Cancel card in your DM. The server
 refuses these operations when the assistant tries them itself without your cited words (`403 confirm_required`). **Confirm** runs the recorded
 operation through the same routes with *your* credential, once (a claim makes a second click a `409`), and
@@ -274,19 +274,19 @@ the Assistant may never make on your words (the list above, or a rule that sets 
 when the card is made.
 
 **The Assistant's own background run** (a routine of its own) may put a card in your own Assistant DM with
-`hub assistant propose --for human:<id>`. Only the Assistant bot may do this, for that person, at most five cards a day
+`tico assistant propose --for human:<id>`. Only the Assistant bot may do this, for that person, at most five cards a day
 per person. The card is yours: it runs only on your tap, as you, and says the Assistant
 proposed it. Any other bot, or a person naming someone else, gets `403`.
 
-The same run may send you **one morning message a day**: `hub assistant morning --for human:<id> --body "<text>"` (`POST
+The same run may send you **one morning message a day**: `tico assistant morning --for human:<id> --body "<text>"` (`POST
 /api/v2/assistant/morning`, `hub_assistant_morning`). It is a plain message in your own Assistant DM, from the
 Assistant, with no card and nothing to confirm: what you can do today to move your goals. The server allows one per
 person per company day (the company's clock, not UTC); a second that day is `409 already_sent_today` and says when the
 next can go. Only the Assistant bot may send it, for an active person; other callers get `403`, and a person who is
 gone or signed out gets `404`.
 
-Any teammate, person or bot, can withdraw a Confirm card that still waits (`hub assistant withdraw <id>`, `POST
-/api/v2/assistant/actions/{aid}/withdraw`, or `hub_assistant_withdraw`; `hub assistant proposals` lists the waiting cards
+Any teammate, person or bot, can withdraw a Confirm card that still waits (`tico assistant withdraw <id>`, `POST
+/api/v2/assistant/actions/{aid}/withdraw`, or `hub_assistant_withdraw`; `tico assistant proposals` lists the waiting cards
 with their ids). The card is marked withdrawn and never runs, and the owner's DM says who withdrew it, with the reason if
 one was given. Only the card's owner can confirm it, and the owner can still Cancel it.
 
@@ -302,7 +302,7 @@ does not stop the rest, and the result lists every step's status (`result.items`
 (`403`; a confirm run carries a credential made at click time, bound to the stored method and path, valid for two minutes and then failed), a personal API token cannot either, another human sees `404`, and an unconfirmed proposal expires after
 24 hours.
 
-Use `hub_assistant_read` and `hub_assistant_send` (CLI: `hub assistant read|send`) with your personal token.
+Use `hub_assistant_read` and `hub_assistant_send` (CLI: `tico assistant read|send`) with your personal token.
 `hub_message_send` also accepts `assistant`; it uses your own DM. Other humans' DMs remain private,
 and Confirm and Cancel still require your own click in Tico.
 
@@ -348,7 +348,7 @@ own session, not a personal token.
 | `GET /api/v2/needs-you/summary?limit=` | `{"actor", "total", "this_week", "by_kind", "by_bot": [{"bot", "count", ...}], "bots_left"}`: the Needs you list's own count, split. |
 | `GET /api/v2/origins/{ref}` | `{"ref", "kind", "id", "title", "created_at", "made_by", "task", "cause", "siblings", "stop": [{"how", "command", "note"}]}`: why an item is on your list. |
 | `GET /api/v2/assistant/learned` | `{"personal": [entry], "company": null}`; for the owner, once the Strategy Bot is on, `"company": {"vision", "description", "priorities": [{"id", "title", "status"}], "entries": [entry]}`. An entry is `{"id", "layer", "text", "created", "updated", "taught_in_chat"}`. Not yet in the stable contract. |
-| `POST /api/v2/assistant/learned` `{"text", "layer"}` | Saves one line (`layer` is `personal`, the default, or `company`: the owner only, on their own or in their own Assistant DM; `403` for anyone else and any other Assistant). `{"entry"}`; the same line again returns the one already there; `409 too_many` past 100. What the bot's `hub assistant learn` calls. |
+| `POST /api/v2/assistant/learned` `{"text", "layer"}` | Saves one line (`layer` is `personal`, the default, or `company`: the owner only, on their own or in their own Assistant DM; `403` for anyone else and any other Assistant). `{"entry"}`; the same line again returns the one already there; `409 too_many` past 100. What the bot's `tico assistant learn` calls. |
 | `PATCH /api/v2/assistant/learned/{id}` `{"text"}`, `DELETE /api/v2/assistant/learned/{id}` | Your own click only (`403` for a bot's turn); someone else's entry is `404`. |
 
 Names come with ids (`sender_name`, `owner_name`, and an `actors` map), as elsewhere in v2. A custom frontend (see

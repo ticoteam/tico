@@ -56,7 +56,7 @@ def test_the_sample_is_a_company_file_of_five_bots_each_with_a_goal_and_short_st
         for task in row["tasks"]:
             assert set(task) == {"title", "approve", "body"} and len(task["body"]) < 1200
             # Nothing leaves the company: no approval to send, spend or publish, no mail, no publishing.
-            assert not re.search(r"approval request|mail send|support send|file publish|hub message", task["body"])
+            assert not re.search(r"approval request|mail send|support send|file publish|tico message", task["body"])
     # A made-up company that names none of the test fixtures' people or companies.
     assert not re.search(r"\b(ana|ben|cara|acme|globex)\b", sample_company.FILE.read_text(), re.I)
 
@@ -120,7 +120,7 @@ def test_the_owner_starts_the_sample_company_and_every_bot_has_its_model_goal_an
         assert task["requester_id"] == "human:owner" and task["status"] == "open"
         assert task["goal_id"] == goals[task["owner_id"]]["id"]
         # Each ends by asking the owner one Yes/No question on the task, which the owner sees in Needs you.
-        ask = r'hub task ask <id> --to owner "Approve [^"]+\?" --choices Yes,No --version N'
+        ask = r'tico task ask <id> --to owner "Approve [^"]+\?" --choices Yes,No --version N'
         assert re.search(ask, task["body"]), task["body"]
 
 

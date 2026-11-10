@@ -65,7 +65,7 @@ the receiver's own first.
 A bot's write is checked on:
 
 - creating a task for someone else (`POST /api/v2/tasks`, MCP and CLI included), unless they share the parent task;
-- handing a task to someone (`POST /api/v2/tasks/{id}/owner`, `hub task reassign`);
+- handing a task to someone (`POST /api/v2/tasks/{id}/owner`, `tico task reassign`);
 - chat: a message (`POST /api/v2/messages`, bot to bot included: the one it is sent to first, then everyone else it was
   delivered to, its @mentions and a DM's members, in the same write), a note (`POST /api/v2/notes`), and a thread post
   or new thread or DM (`/api/v2/threads...`): the one it is addressed to, those it @mentions who can read the thread, a

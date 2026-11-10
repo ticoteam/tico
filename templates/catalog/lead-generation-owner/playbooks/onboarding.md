@@ -7,9 +7,9 @@ The outcome is five recorded answers, a first lead report attached to the task a
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub market segment tree     # the segments, for the segment question
-    hub goal list               # any lead target already set; do not ask again what it says
+    tico task show <id>
+    tico market segment tree     # the segments, for the segment question
+    tico goal list               # any lead target already set; do not ask again what it says
 
 Look at what you can already reach: the CRM where it is connected, and the lead export a person attached. Do not ask what
 these already say. If you cannot read the leads, that is answer two, and a task for the owner if they want it connected.
@@ -48,22 +48,22 @@ segment list fixed from here on: a change to either is a proposal for the owner.
 ## 5. Produce the first report now
 
 Follow `playbooks/weekly-lead-report.md` from the counts the owner named. Publish the report with
-`hub file publish reports/YYYY-MM-DD-leads.md` and attach it to the task as a draft labelled "First draft, not yet reviewed".
+`tico file publish reports/YYYY-MM-DD-leads.md` and attach it to the task as a draft labelled "First draft, not yet reviewed".
 If the owner named no counts, the report says so in its first line and every count reads "not measured". Hand off nothing
 and send nothing.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list`. If it shows off, arm it with
-`hub automation update <id> --enable`. Then tell the human in one line: "I will send the lead report every Monday at 09:00."
+Setting you up switched your first routine on. Check it with `tico automation list`. If it shows off, arm it with
+`tico automation update <id> --enable`. Then tell the human in one line: "I will send the lead report every Monday at 09:00."
 They can change it or turn it off at any time; nothing waits for approval.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different time or to leave it
-off, change it with `hub automation update <id>`, using `--disable` to turn it off.
+off, change it with `tico automation update <id>`, using `--disable` to turn it off.
 
 ## 7. Finish
 
 Run this once the answers and the first report are recorded, not before. It clears your "Needs setup" mark and lets the
 routine run.
 
-    hub bot setup-done
+    tico bot setup-done

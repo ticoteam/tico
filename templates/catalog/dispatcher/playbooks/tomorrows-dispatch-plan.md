@@ -43,5 +43,5 @@ not as done.
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-dispatch.md` in the shape of `knowledge/examples/dispatch-plan.md`, publish it with
-`hub file publish reports/YYYY-MM-DD-dispatch.md`, commit, and `hub task done <id> -m "..." --version N` with the
+`tico file publish reports/YYYY-MM-DD-dispatch.md`, commit, and `tico task done <id> -m "..." --version N` with the
 headline.

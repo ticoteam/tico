@@ -161,7 +161,7 @@ def task_goal_objective(task, objective):
     """What a task's native goal holds the bot to: the task's own objective, then saying its work is done."""
     tail = (
         f"\nThen say task {task['id']} is done with a summary "
-        f"(hub task done {task['id']} -m \"what was done\" --version <the version you were shown>)."
+        f"(tico task done {task['id']} -m \"what was done\" --version <the version you were shown>)."
     )
     return objective[: TASK_GOAL_CHARS - len(tail)].rstrip() + tail
 

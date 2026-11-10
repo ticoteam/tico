@@ -1,7 +1,7 @@
 //! Computer-owned task worktrees (runner_support/worktrees.py): the heartbeat's report of each worktree the server
 //! tracks here, an attached checkout's local proof (`tasks/.checkout-state/<sha256(link)>.json`, the Python
 //! marker format), and the cleanup and restore actions a heartbeat reply asks for. Never removes a tree before
-//! preserving its history. Adding and setting up a worktree inside a turn stay in the hub CLI (`hub worktree
+//! preserving its history. Adding and setting up a worktree inside a turn stay in the tico CLI (`hub worktree
 //! add`), which takes the same task lock (`tasks/.locks/<sha[:2]>`) and writes the same markers; a worktree
 //! the server reserved for a waiting task (backend/worktree_waits.py) is checked out and set up here, while
 //! its bot is idle (`prepare`).
@@ -209,7 +209,7 @@ pub async fn git(path: &Path, env: &Env, args: &[&str], check: bool) -> R<Out> {
     Ok(done)
 }
 
-/// The task lock the hub CLI takes too: one worktree step at a time per task path on this computer.
+/// The task lock the tico CLI takes too: one worktree step at a time per task path on this computer.
 pub struct TaskLock(#[allow(dead_code)] crate::lock::FileLock);
 
 pub async fn locked(workspace: &Path, task: &str) -> R<TaskLock> {
@@ -229,7 +229,7 @@ pub async fn locked(workspace: &Path, task: &str) -> R<TaskLock> {
     Ok(TaskLock(file))
 }
 
-/// The task locks of every path in `tasks` if each is free now, else None (disk_clean.rs): a hub CLI step or
+/// The task locks of every path in `tasks` if each is free now, else None (disk_clean.rs): a tico CLI step or
 /// worktree action running on any of them keeps the folder as it is. Paths sharing a lock file take it once.
 pub fn try_locked(workspace: &Path, tasks: &[String]) -> Option<Vec<TaskLock>> {
     let mut names = HashSet::new();
@@ -1355,7 +1355,7 @@ async fn run_registered_setup(
 }
 
 /// Check out and set up a worktree the server reserved for a waiting task (backend/worktree_waits.py,
-/// worktrees.prepare), as `hub task worktree add` does inside a turn, with the same records and proof: the bot
+/// worktrees.prepare), as `tico task worktree add` does inside a turn, with the same records and proof: the bot
 /// is idle, and the server wakes its task once this reports the worktree present. `repo` is the repository
 /// row (`full_name`, `machine_git`, `setup_command`, `default_branch`). Returns the checkout proof.
 pub async fn prepare(

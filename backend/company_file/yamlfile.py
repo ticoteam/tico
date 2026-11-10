@@ -22,7 +22,7 @@ FORMATS = (FORMAT, STRATEGY_FORMAT)
 HEADER = (
     "# tico.company.yaml",
     "# Made with Tico setup at https://tico.team/setup",
-    "# Format %s. Import in Tico's first-run setup or with tico setup --company-file.",
+    "# Format %s. Import in Tico's first-run setup or with python3 -m setup --company-file.",
     "# No passwords, keys or credentials are stored here; tools are connected on your own install.",
 )
 NOT_SET = "# not set yet: which number, and by when?"

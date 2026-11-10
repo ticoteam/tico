@@ -120,7 +120,7 @@ def test_a_manager_losing_source_access_gets_gone_and_an_unrelated_person_gets_n
         token='ben-test',
     )
     row = send(api, quote(api, token=token, task_id=task['id']), token)
-    approve(api, row)
+    approve(api, row, 'cara-test')  # the bot's OK is asked of its manager, Cara: hers to click
     delivered(api, row)
     assert not fetch(api, row, 'cara-test')['redacted']
     before = cursor(api)

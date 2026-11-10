@@ -1,4 +1,4 @@
-"""Decisions as a Tico tool: `POST /api/v2/decisions`, the door behind `hub_decision_ask` and `hub decision ask`
+"""Decisions as a Tico tool: `POST /api/v2/decisions`, the door behind `hub_decision_ask` and `tico decision ask`
 (the route, the `judge.call` audit events and this module keep their old name, `judge`).
 
 The server asks its providers in this order, each failure falling through to the next (fail open), with the same keys
@@ -29,7 +29,7 @@ off. Each of them gets its model from `server_engine`, so Jev's one short try an
 sender's, and the market ask (`market.ask` events) has its own count under the same caps.
 
 Each answer carries `ref`, its `judge.call` event's id. The caller that then acts on the answer writes what it did with
-`POST /api/v2/decisions/outcome` ({ref, verdict, action}, `hub decision outcome`, `hub_decision_outcome`): one
+`POST /api/v2/decisions/outcome` ({ref, verdict, action}, `tico decision outcome`, `hub_decision_outcome`): one
 `decision.outcome` event per call, target the ref, with the call's label, so a month of a set's answers can be read
 against what was done with them. Only the caller that asked records it, and a second write for the same ref returns the
 first. Short words only, never the state. Decisions Tico makes on the server (stale suggestions, listening, live
@@ -68,7 +68,7 @@ DAILY_CALLS = {role: getattr(Settings, "decisions_daily_calls_" + role) for role
 # provider answers, so a caller never waits through several long attempts only to receive a 503.
 JEV_TIMEOUT = 8
 # The most one chain of providers takes, all of them together: each is asked with what is left (`J.within`), so the
-# server answers before its slowest caller stops waiting (`J.HUB_WAIT`, 45 s: `hub decision ask`, the MCP tools, `J.from_env`).
+# server answers before its slowest caller stops waiting (`J.HUB_WAIT`, 45 s: `tico decision ask`, the MCP tools, `J.from_env`).
 CHAIN_SECONDS = 25
 # The same when the Gateway answers decisions with a language model (Decisions level Medium or High: 30 s for its own try).
 SLOW_CHAIN_SECONDS = J.GATEWAY_SLOW_TIMEOUT + 5

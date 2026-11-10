@@ -13,13 +13,13 @@ Steps:
 2. Name the owner from the transcript label. If the owner is unclear, write "owner unclear" and ask the human who ran the
    meeting. Never assign the item to whoever spoke last or to whoever is most senior.
 3. Take the due date only when someone said one. Otherwise write "not said". Do not turn "soon" or "next week" into a date.
-4. Search for an existing task: `hub task list --owner <person>`, then look for the item's words among the open tasks. If
-   one exists, link it, and add the meeting as its source with `hub task comment`. Do not create a second task for the
+4. Search for an existing task: `tico task list --owner <person>`, then look for the item's words among the open tasks. If
+   one exists, link it, and add the meeting as its source with `tico task comment`. Do not create a second task for the
    same need.
-5. If the item is new and passes steps 1 to 3, create the task with `hub task create --owner <person> --link <meeting
+5. If the item is new and passes steps 1 to 3, create the task with `tico task create --owner <person> --link <meeting
    link>`, with the quote and timestamp in the body. If it does not pass, propose it on the write-up with its gap named.
 6. If the item needs a person who is not in the task, do not file a new ask. Leave the original task with its owner,
-   `hub task ask <id> --to <owner> "<what you need from them>" --version N`, and say in one line what it waits for.
+   `tico task ask <id> --to <owner> "<what you need from them>" --version N`, and say in one line what it waits for.
 7. Add the row to `knowledge/actions.md`: the item, owner, date (or "not said"), task id and status.
 
 Checks before you finish:

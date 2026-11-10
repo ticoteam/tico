@@ -1,25 +1,25 @@
 import type * as PageSupport from './support/page.cts';
 import type * as Routes from './support/routes.cts';
-// A bot's task rail is one Tasks section with four tabs, each with its count: Needs you (what this bot needs from the
-// person: a question it asked on another bot's task, even a finished one, a task of its own
-// waiting on them, a question outside any task), Doing (Open/Doing tasks it holds, newest first), Blocked (each saying
-// what it waits on) and Done recently (the last 14 days), and Assigned to others, a filter tab the server counts for
-// the person looking. The org tree's number is the Needs you rows, and stays so when the list moves. The Tasks header's
-// pencil edits the sidebar and there is no board icon; a bot with one tab shows its list without a tab bar. Fixtures
-// only, no network.
+// A bot's task rail is one Tasks section with tabs, each with its count: Needs you (what this bot needs from the person:
+// its asks of them on its own tasks or another bot's, and the task it gave them), Doing (the open tasks it holds, newest
+// first), Blocked (open tasks of its own whose turn is someone else's, each saying what it waits on in its row's line),
+// Done recently (the last 14 days), and Assigned to others, a filter tab the server counts for the person looking. The
+// org tree's number is the Needs you rows, and stays so when the list moves. A Needs you row opens its card over the
+// rail. The Tasks header's pencil edits the sidebar and there is no board icon; a bot with one tab shows its list
+// without a tab bar. Fixtures only, no network (Needs you items and tasks as the v3 hub sends them).
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as Routes.Api;
-type Task = {id: string; title: string; body: string; owner_id: string; requester_id: string; status: string; lane: string; rank: null;
-  labels: string[]; tags: string[]; links: string[]; parts: {total: number; done: number}; version: number; created_at: string; updated_at: string;
-  waiting_on?: string; note?: string; ask?: Record<string, unknown>; done_at?: string; type_id?: string};
+type Turn = {state: string; who: string | null; line: string; ask?: boolean; requirement_id?: string | null; since?: string | null; until?: null};
+type Task = {id: string; title: string; owner_id: string; requester_id: string; status: 'open' | 'done' | 'closed'; pipeline_id: string;
+  stage_id: string; labels: string[]; version: number; created_at: string; updated_at: string; turn: Turn | null; done_at?: string};
 type Layout = {builtin?: string; name: string; show_count?: boolean; conditions?: {field: string; value: string | string[]}[]};
 declare const S: {v2: {needs: unknown[]}};
 declare const BOT: {slug: string};
 declare const BOT_DONE: Map<string, {rows: {id: string}[]}>;
-declare const BOT_TASK_FILTERED: Map<string, {tabs: {needs: {count: number; matched_ids: string[]}}}>;
+declare const BOT_TASK_FILTERED: Map<string, {tabs: {needs: {count: number; ids: string[]; matched_ids: string[]}}}>;
 declare const needCountsSeen: string[];
 declare const needCountObserver: MutationObserver;
 declare function botTaskTabs(): unknown;
@@ -41,34 +41,46 @@ declare const window: Window & typeof globalThis & {
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
 const bots = ['lead', 'qa', 'senior'].map(name => ({name, display_name: {lead: 'Head of Engineering', qa: 'QA Engineer',
   senior: 'Senior Engineer'}[name], org_parent: '', host: 'keeper', status: 'active', can_chat: true, users: [{id: 'ana', name: 'Ana'}], schedules: []}));
-const task = (id: string, title: string, over: Partial<Task> = {}): Task => ({id, title, body: 'Details.', owner_id: 'bot:lead', requester_id: 'human:ana', status: 'doing',
-  lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created_at: ago(600), updated_at: ago(60), ...over});
+const bot = (who: string, line: string): Turn => ({state: 'bot', who, line});
+const asks = (rid: string, line: string): Turn => ({state: 'person', who: 'human:ana', line, ask: true, requirement_id: rid, since: ago(30)});
+const task = (id: string, title: string, over: Partial<Task> = {}): Task => ({id, title, owner_id: 'bot:lead', requester_id: 'human:ana', status: 'open',
+  pipeline_id: 'general', stage_id: 'general-todo', labels: [], version: 1, created_at: ago(600), updated_at: ago(60),
+  turn: bot('bot:lead', 'Head of Engineering to do it'), ...over});
 const T = {
   own: task('t-own', 'Ship the release notes'),
-  forAna: task('t-ana', 'Pick the release day', {owner_id: 'human:ana', requester_id: 'bot:lead', status: 'open'}),
-  waits: task('t-waits', 'Turn on the screen default', {status: 'waiting', waiting_on: 'human:ana', note: 'Waiting on Ana for the bucket keys.', created_at: ago(480)}),
-  onQa: task('t-on-qa', 'Merge the export fix', {status: 'waiting', waiting_on: 'bot:qa', created_at: ago(300)}),
-  vendor: task('t-vendor', 'Renew the domain', {status: 'waiting', note: "Waiting for the vendor's invoice.\nThen pay it.", created_at: ago(200)}),
-  roadmap: task('t-roadmap', 'Plan the import page', {status: 'open', type_id: 'roadmap', created_at: ago(30)}),
-  doneNow: task('t-done-now', 'Send the weekly summary', {status: 'done', done_at: ago(2 * 1440), created_at: ago(3 * 1440)}),
-  doneOld: task('t-done-old', 'Close the old mailbox', {status: 'done', done_at: ago(20 * 1440), created_at: ago(21 * 1440)}),
-  asked: task('t-asked', 'Support access fixes', {owner_id: 'bot:senior', requester_id: 'bot:lead', status: 'done',
-    ask: {id: 'q-1', body: 'Should full access refuse credential changes?', sender_id: 'bot:lead', recipient_id: 'human:ana', created_at: ago(30)}}),
-  qa: task('t-qa', 'Run the release check', {owner_id: 'bot:qa', requester_id: 'bot:lead', status: 'doing'}),
+  // A task it gave Ana: her turn, no ask.
+  forAna: task('t-ana', 'Pick the release day', {owner_id: 'human:ana', requester_id: 'bot:lead',
+    turn: {state: 'person', who: 'human:ana', line: 'Ana to do it'}}),
+  // Its own tasks with an ask of Ana: a question, and an OK.
+  waits: task('t-waits', 'Turn on the screen default', {turn: asks('r-waits', 'Which bucket holds the keys?'), created_at: ago(480)}),
+  announce: task('t-announce', 'Send the announcement', {turn: asks('r-announce', 'OK the announcement'), created_at: ago(400)}),
+  friday: task('t-friday', 'Plan the weekly summary', {turn: asks('r-friday', 'Is Friday fine for the summary?'), created_at: ago(350)}),
+  // Blocked: waiting on another bot's task, and on something outside Tico.
+  onQa: task('t-on-qa', 'Merge the export fix', {turn: {state: 'tasks', who: 'bot:qa', line: 'Waits on QA Engineer'}, created_at: ago(300)}),
+  vendor: task('t-vendor', 'Renew the domain', {turn: {state: 'by_hand', who: null, line: "Waiting for the vendor's invoice."}, created_at: ago(200)}),
+  roadmap: task('t-roadmap', 'Plan the import page', {created_at: ago(30)}),
+  doneNow: task('t-done-now', 'Send the weekly summary', {status: 'done', turn: null, done_at: ago(2 * 1440), created_at: ago(3 * 1440)}),
+  doneOld: task('t-done-old', 'Close the old mailbox', {status: 'done', turn: null, done_at: ago(20 * 1440), created_at: ago(21 * 1440)}),
+  // Its ask of Ana on another bot's task.
+  asked: task('t-asked', 'Support access fixes', {owner_id: 'bot:senior', requester_id: 'bot:lead', turn: asks('r-asked', 'Should full access refuse credential changes?')}),
+  qa: task('t-qa', 'Run the release check', {owner_id: 'bot:qa', requester_id: 'bot:lead', turn: bot('bot:qa', 'QA Engineer working')}),
 };
-// A question to Ana outside any task is a question task now: its card is keyed by the task id.
-const LOOSE = {kind: 'question', id: 'm-loose', title: 'Is Friday fine for the summary?', first_line: 'Is Friday fine for the summary?',
-  body: 'Is Friday fine for the summary?', requester_id: 'bot:lead', owner_id: 'human:ana', origin_actor: 'bot:lead', created_at: ago(20),
-  ask: {id: 'm-loose', sender_id: 'bot:lead', recipient_id: 'human:ana', body: 'Is Friday fine for the summary?', created_at: ago(20), question_task: true,
-    refs: {questions: [{id: 'friday', question: 'Is Friday fine for the summary?', options: [{label: 'Yes'}, {label: 'No'}]}]}}};
-const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...T.waits, kind: 'waiting'}, LOOSE,
-  {kind: 'approval', id: 'approval-1', what: 'send', requested_by: 'bot:lead', requester_id: 'bot:lead', title: 'Approve the announcement', created_at: ago(10)},
-  {...task('t-qa-ana', 'Approve the test plan', {owner_id: 'human:ana', requester_id: 'bot:qa', status: 'open'}), kind: 'task'}];
+// Needs you as the hub sends it: an ask (with who asked) or a task of hers, each with its task.
+type Need = {kind: 'ask' | 'task'; id: string; task_id: string; requirement_id: string | null; line: string; since: string; task: Task;
+  ask?: {requirement_id: string; kind: 'answer' | 'ok'; line: string; met: boolean; who: string; asked_by: string; choices: string[] | null; shows: []; answer: null; may: string[]}};
+const askNeed = (t: Task, kind: 'answer' | 'ok' = 'answer', choices: string[] | null = ['Yes', 'No']): Need => ({kind: 'ask', id: t.turn!.requirement_id!,
+  task_id: t.id, requirement_id: t.turn!.requirement_id!, line: t.turn!.line, since: ago(30), task: t, ask: {requirement_id: t.turn!.requirement_id!, kind,
+  line: t.turn!.line, met: false, who: 'human:ana', asked_by: 'bot:lead', choices: kind === 'ok' ? null : choices, shows: [], answer: null,
+  may: kind === 'ok' ? ['ok', 'no'] : ['answer']}});
+const taskNeed = (t: Task): Need => ({kind: 'task', id: t.id, task_id: t.id, requirement_id: null, line: t.turn!.line, since: ago(30), task: t});
+const NEEDS: Need[] = [askNeed(T.asked), taskNeed(T.forAna), askNeed(T.waits), askNeed(T.friday), askNeed(T.announce, 'ok'),
+  taskNeed(task('t-qa-ana', 'Approve the test plan', {owner_id: 'human:ana', requester_id: 'bot:qa', turn: {state: 'person', who: 'human:ana', line: 'Ana to do it'}}))];
+const needsOf = (bot: string) => NEEDS.filter(n => n.task.requester_id === bot || n.ask?.asked_by === bot);
 
 // Head of Engineering keeps Done recently beside the new defaults (a layout saved before them).
 const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'active', name: 'Doing'}, {builtin: 'blocked', name: 'Blocked'},
   {builtin: 'done', name: 'Done recently'}, {name: 'Assigned to others', show_count: true, conditions: [{field: 'asked_by', value: 'this_bot'},
-    {field: 'assigned_to', value: 'others'}, {field: 'status', value: ['open', 'doing', 'waiting']}]}];
+    {field: 'assigned_to', value: 'others'}, {field: 'status', value: ['open']}]}];
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
@@ -76,7 +88,7 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     const page = await browser.newPage({viewport: {width: 1280, height: 900}, serviceWorkers: 'block'});
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
-    let needs = NEEDS, filterExtras: {id: string}[] | null = null, releaseFilterRead: Promise<void> | null = null;
+    let needs: Need[] = NEEDS, filterExtras: Need[] | null = null, releaseFilterRead: Promise<void> | null = null;
     const filterURLs: string[] = [];
     await page.route('**/*', async route => {
       const url = new URL(route.request().url()), p = url.pathname, q = url.searchParams;
@@ -94,7 +106,10 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
       if (p === '/api/employees') return json(bots);
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
       if (p === '/api/v2/status') return json({bots: bots.map(b => ({bot: b.name, state: 'idle'}))});
-      if (p === '/api/v2/needs-you') return json({items: needs, went_away: null});
+      if (p === '/api/v2/needs-you') return json({actor: 'human:ana', items: needs, count: needs.length, version: 'v' + needs.length, next: null});
+      if (p === '/api/v2/pipelines') return json({pipelines: [{id: 'general', name: 'General', stages: [{id: 'general-todo', name: 'To do'}]}]});
+      // An OK with nothing bound to it has no preview; its card shows the ask's own line.
+      if (p.startsWith('/api/v2/oks/')) return route.fulfill({status: 404, contentType: 'application/json', body: JSON.stringify({error: 'not_found'})});
       if (p === '/api/v2/goals') return json({goals: [], chain: [], reports: [], company: []});
       if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
       if (p === '/api/v2/tasks') {
@@ -103,7 +118,6 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
         const st = q.get('status'), since = q.get('updated_since');
         const fits = (t: Task) => (!st || st === 'all' || st.split(',').includes(t.status)) && (!since || t.updated_at >= since);
         if (q.get('owner') === 'lead') return json({tasks: all.filter(t => t.owner_id === 'bot:lead' && fits(t))});
-        if (q.get('requester') === 'lead') return json({tasks: all.filter(t => t.requester_id === 'bot:lead' && t.status !== 'done')});
         return json({tasks: []});
       }
       // The built-in tabs and Assigned to others, which Ana may change on Head of Engineering only.
@@ -114,26 +128,29 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
       }
       // What the server counts for Ana: what Head of Engineering asked of anyone but her and itself, still open.
       if (p === '/api/v2/bots/lead/task-tabs/tasks') {
+        const requested = (q.get('match_ids') || '').split(',');
         if (filterExtras) {
           filterURLs.push(url.href);
           if (releaseFilterRead) await releaseFilterRead;
-          const requested = (q.get('match_ids') || '').split(',');
-          return json({bot: 'lead', tabs: [{key: 'needs', name: 'Needs you', count: filterExtras.length,
-            ids: [], next: null, matched_ids: filterExtras.filter(it => requested.includes(it.id)).map(it => it.id)}], tasks: []});
+          const extras = filterExtras.map(it => it.task);
+          return json({bot: 'lead', tabs: [{key: 'needs', name: 'Needs you', count: extras.length, ids: extras.map(t => t.id), next: null,
+            matched_ids: extras.filter(t => requested.includes(t.id)).map(t => t.id)}], tasks: extras});
         }
-        const others = Object.values(T).filter(t => t.requester_id === 'bot:lead' && !['human:ana', 'bot:lead'].includes(t.owner_id)
-          && ['open', 'doing', 'waiting'].includes(t.status));
-        const owned = Object.values(T).filter(t => t.owner_id === 'bot:lead');
+        const all = Object.values(T), open = (t: Task) => t.status === 'open';
+        const newest = (a: Task, b: Task) => b.created_at.localeCompare(a.created_at);
+        const owned = all.filter(t => t.owner_id === 'bot:lead');
+        const rule = LAYOUT[0]!.conditions?.[0];
+        const needRows = rule?.field === 'status'
+          ? all.filter(t => (t.owner_id === 'bot:lead' || t.requester_id === 'bot:lead') && (rule.value as string[]).includes(t.status))
+          : needsOf('bot:lead').filter(n => needs.includes(n)).map(n => n.task);
         const groups = [
-          {key: 'needs', name: 'Needs you', rows: (LAYOUT[0]!.conditions?.[0]?.field === 'status'
-            ? Object.values(T).filter(t => (t.owner_id === 'bot:lead' || t.requester_id === 'bot:lead') && LAYOUT[0]!.conditions![0]!.value.includes(t.status))
-            : Object.values(T).filter(t => (t.owner_id === 'bot:lead' || t.requester_id === 'bot:lead')
-              && ((t.owner_id === 'human:ana' && ['open', 'doing', 'waiting'].includes(t.status)) || (t.status === 'waiting' && t.waiting_on === 'human:ana'))))},
-          {key: 'active', name: 'Doing', rows: owned.filter(t => ['open', 'doing'].includes(t.status)).sort((a,b) => b.created_at.localeCompare(a.created_at))},
-          {key: 'blocked', name: 'Blocked', rows: owned.filter(t => t.status === 'waiting' && t.waiting_on !== 'human:ana').sort((a,b) => b.created_at.localeCompare(a.created_at))},
-          {key: 'c4', name: 'Assigned to others', rows: others},
+          {key: 'needs', name: 'Needs you', rows: needRows},
+          {key: 'active', name: 'Doing', rows: owned.filter(open).sort(newest)},
+          {key: 'blocked', name: 'Blocked', rows: owned.filter(t => open(t) && !!t.turn && !['bot:lead', 'human:ana'].includes(String(t.turn.who))).sort(newest)},
+          {key: 'c4', name: 'Assigned to others', rows: all.filter(t => open(t) && t.requester_id === 'bot:lead' && !['human:ana', 'bot:lead'].includes(t.owner_id))},
         ];
-        return json({bot: 'lead', tabs: groups.map(({key, name, rows}) => ({key, name, count: rows.length, ids: rows.map(t => t.id), next: null})), tasks: Object.values(T)});
+        return json({bot: 'lead', tabs: groups.map(({key, name, rows}) => ({key, name, count: rows.length, ids: rows.map(t => t.id), next: null,
+          ...(key === 'needs' ? {matched_ids: rows.filter(t => requested.includes(t.id)).map(t => t.id)} : {})})), tasks: all});
       }
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -141,24 +158,24 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     });
     await page.goto('https://tico-ui.test/#/bot/lead/tasks');
     const rail = page.locator('#pane-tasks');
-    const titles = async (list: string) => (await rail.locator(`${list} .trow .ttl`).allInnerTexts()).map(s => s.trim());
+    const titles = async (list: string) => (await rail.locator(`${list} .tk-row .tk-title`).allInnerTexts()).map(s => s.trim());
     const tab = (key: string) => rail.locator(`#bot-tab-t-${key}`);
-    await rail.locator('#t-needs .trow').first().waitFor();
+    await rail.locator('#t-needs .tk-row').first().waitFor();
 
     // One Tasks section with its tabs and their counts, before Updates and Files; no folded section after it.
     const order = await rail.evaluate(el => [...(el.querySelectorAll(':scope>.bot-w>.rail-sec') as unknown as Element[])].map(c => c.id));
     assert.deepEqual(order, ['bot-tasks', 'bot-latest', 'bot-files'], JSON.stringify(order));
     assert.equal(await rail.locator('#bot-assigned').count(), 0);
     assert.equal(await rail.locator('#bot-tasks .rail-h').innerText().then(s => s.trim().toLowerCase()), 'tasks');
-    await page.waitForFunction(() => document.querySelector('#cnt-c4')?.textContent.trim() === '1'
+    await page.waitForFunction(() => document.querySelector('#cnt-c4')?.textContent.trim() === '2'
       && document.querySelector('#cnt-needs')?.textContent.trim() === '5');
     const tabs = (await rail.locator('[data-bot-task-tab]').allInnerTexts()).map(s => s.replace(/\s+/g, ' ').trim());
-    assert.deepEqual(tabs, ['Needs you 5', 'Doing 2', 'Blocked 2', 'Done recently 1', 'Assigned to others 1'], JSON.stringify(tabs));
+    assert.deepEqual(tabs, ['Needs you 5', 'Doing 7', 'Blocked 2', 'Done recently 1', 'Assigned to others 2'], JSON.stringify(tabs));
     assert.equal(await tab('needs').getAttribute('aria-selected'), 'true', 'Needs you leads while it has rows');
 
-    // Needs you keeps matching waits, questions and approvals; ordinary assigned tasks obey its conditions.
-    const rows = await rail.locator('#t-needs .trow .ttl').allInnerTexts();
-    assert.deepEqual(rows.map(r => r.trim()).sort(), ['Is Friday fine for the summary?', 'Approve the announcement',
+    // Needs you holds its asks of Ana (on its own tasks and another bot's) and the task it gave her; QA Engineer's is not here.
+    const rows = await titles('#t-needs');
+    assert.deepEqual(rows.slice().sort(), ['Plan the weekly summary', 'Send the announcement',
       'Support access fixes', 'Turn on the screen default', 'Pick the release day'].sort(), JSON.stringify(rows));
     assert.equal(await rail.locator('#bot-active').isHidden(), true, 'one tab at a time');
     const badge = page.locator('#tree a[href="#/bot/lead"] .cnt.needs');
@@ -168,10 +185,10 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     assert.ok(!(await titles('#t-open')).includes('Pick the release day'));
     assert.ok(!(await titles('#t-blocked')).includes('Pick the release day'));
     assert.ok(!(await titles('#t-c4')).includes('Pick the release day'));
-    // An approval or a question opens its Needs you card over the rail; nothing unfolds in the rail.
+    // An OK or a question opens its Needs you card over the rail; nothing unfolds in the rail.
     assert.equal(await rail.locator('#t-needs details').count(), 0);
-    await rail.locator('#t-needs .trow', {hasText: 'Approve the announcement'}).locator('.ttl').click();
-    await page.locator('#need-card .dc-card[data-key="approval:approval-1"]').waitFor();
+    await rail.locator('#t-needs .tk-row', {hasText: 'Send the announcement'}).click();
+    await page.locator('#need-card [data-key="r-announce"] .dc-q', {hasText: 'OK the announcement'}).waitFor();
     assert.equal(await page.evaluate(() => location.hash), '#/bot/lead/tasks', 'the rail stays where it was');
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#need-card')?.open);
@@ -185,21 +202,23 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     assert.equal(await dialog.locator('[data-cond-value="0"]').inputValue(), 'you');
     await dialog.locator('[data-cond-field]').selectOption('status');
     assert.ok((await dialog.innerText()).includes('The org chart number still counts everything Head of Engineering needs from you, not this tab.'));
+    // Done tasks only: its two done tasks, and its five Needs you items, which the rule does not hold, still show.
     await dialog.locator('[data-cond-value="0"][value="open"]').uncheck();
-    await dialog.locator('[data-cond-value="0"][value="waiting"]').uncheck();
+    await dialog.locator('[data-cond-value="0"][value="done"]').check();
     await dialog.getByRole('button', {name: 'Save'}).click();
     await rail.locator('#bot-sidebar-done').click();
-    await page.waitForFunction(() => document.querySelector('#cnt-needs')?.textContent.trim() === '5'
-      && document.querySelector('#t-needs')?.textContent.includes('Ship the release notes'));
-    assert.ok(!(await titles('#t-needs')).includes('Pick the release day'));
+    await page.waitForFunction(() => document.querySelector('#cnt-needs')?.textContent.trim() === '7'
+      && document.querySelector('#t-needs')?.textContent.includes('Send the weekly summary'));
+    assert.ok((await titles('#t-needs')).includes('Pick the release day'), 'what needs Ana from it stays in the tab');
     assert.equal((await badge.innerText()).trim(), '5', 'editing a tab does not change fixed attention');
     // Pick a different count, then Reset visibly restores the single Needs: You condition.
     await rail.locator('#bot-sidebar-edit').click();
     await tab('needs').click(); await dialog.waitFor();
+    // Open and done: ten open tasks it holds or asked for (its Needs you items among them, counted once) and two done.
     await dialog.locator('[data-cond-value="0"][value="open"]').check();
     await dialog.getByRole('button', {name: 'Save'}).click();
     await rail.locator('#bot-sidebar-done').click();
-    await page.waitForFunction(() => document.querySelector('#cnt-needs')?.textContent.trim() === '7');
+    await page.waitForFunction(() => document.querySelector('#cnt-needs')?.textContent.trim() === '12');
     assert.equal((await badge.innerText()).trim(), '5');
     await rail.locator('#bot-sidebar-edit').click();
     await tab('needs').click(); await dialog.waitFor();
@@ -212,26 +231,28 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     await page.waitForFunction(() => document.querySelector('#cnt-needs')?.textContent.trim() === '5');
 
 
-    // Doing defaults to Open/Doing; waiting tasks have their own tabs.
+    // Doing is the open tasks it holds, newest first.
     await tab('active').click();
-    assert.deepEqual(await titles('#t-open'), ['Plan the import page', 'Ship the release notes']);
+    assert.deepEqual(await titles('#t-open'), ['Plan the import page', 'Renew the domain', 'Merge the export fix', 'Plan the weekly summary',
+      'Send the announcement', 'Turn on the screen default', 'Ship the release notes']);
     assert.equal(await rail.locator('#bot-needs').isHidden(), true);
 
-    // Blocked: each row says what it waits on, from whom it names or else its note's first line.
+    // Blocked: its open tasks whose turn is someone else's (not its own, not Ana's); each row's line says what it waits on.
     await tab('blocked').click();
     assert.deepEqual(await titles('#t-blocked'), ['Renew the domain', 'Merge the export fix']);
-    assert.deepEqual((await rail.locator('#t-blocked .trow-waits').allInnerTexts()).map(s => s.trim()),
-      ["Waiting for the vendor's invoice.", 'Waits on QA Engineer']);
+    const tips = await rail.locator('#t-blocked .tk-row').evaluateAll(els => els.map(el => (el as HTMLElement).dataset.tip || ''));
+    assert.match(tips[0]!, /Waiting for the vendor's invoice\.$/, tips[0]);
+    assert.match(tips[1]!, /^QA Engineer · Waits on QA Engineer$/, tips[1]);
 
     // Done recently: finished in the last 14 days; the one from three weeks ago is not listed. It is drawn only once its
     // tab opens, 50 rows at a time (paging, at the end).
-    assert.equal(await rail.locator('#t-done .trow').count(), 0, 'Done is drawn when its tab opens');
+    assert.equal(await rail.locator('#t-done .tk-row').count(), 0, 'Done is drawn when its tab opens');
     await tab('done').click();
     assert.deepEqual(await titles('#t-done'), ['Send the weekly summary']);
 
     // Assigned to others keeps what it asked of another bot; its task for Ana is in Needs you, not here.
     await tab('c4').click();
-    assert.deepEqual(await titles('#t-c4'), ['Run the release check']);
+    assert.deepEqual(await titles('#t-c4'), ['Support access fixes', 'Run the release check']);
 
     // A redraw keeps the picked tab while Needs you has rows, and leaves the rail scrolled where it was.
     await tab('done').click();
@@ -246,45 +267,44 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     assert.equal(await rail.locator('#bot-needs').isHidden(), true);
     await page.evaluate(() => { const r = document.querySelector<HTMLElement>('#pane-tasks')!; r.style.height = r.style.overflowY = ''; r.scrollTop = 0; });
 
-    // A half-typed answer on the card of the question outside any task survives a redraw of the rail, and the picked
-    // tab stays.
+    // A half-typed answer on a question's card survives a redraw of the rail, and the picked tab stays.
     await tab('needs').click();
-    await rail.locator('#t-needs [data-need-card="task:m-loose"] .ttl').click();
-    await page.locator('#need-card .dc-note textarea').fill('Friday works');
+    await rail.locator('#t-needs .tk-row', {hasText: 'Plan the weekly summary'}).click();
+    await page.locator('#need-card [data-key="r-friday"] #dc-other').fill('Friday works');
     await page.evaluate(() => botNeedsChanged('lead'));
-    assert.equal(await page.locator('#need-card .dc-note textarea').inputValue(), 'Friday works');
+    assert.equal(await page.locator('#need-card #dc-other').inputValue(), 'Friday works');
     assert.equal(await tab('needs').getAttribute('aria-selected'), 'true');
     await page.locator('#need-card [data-dc="close"]').click();
     await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#need-card')?.open);
 
-    // A supplemental question matching a later task-filter page is counted once, even before that page loads.
+    // An ask whose task the server counted on a later page is counted once, even before that page loads.
     await page.evaluate(() => {
       const tab = BOT_TASK_FILTERED.get('lead')!.tabs.needs;
-      tab.count = 3; tab.matched_ids = ['t-asked'];
+      tab.ids = tab.ids.filter(id => id !== 't-asked'); tab.matched_ids = ['t-asked'];
       botNeedsPaint('lead');
     });
     assert.equal((await tab('needs').locator('.cnt').innerText()).trim(), '5');
     await page.evaluate(() => botTaskFilterRead('lead'));
     // The question answered elsewhere leaves Needs you: the tab's count and the tree's number move together.
-    needs = needs.filter(it => !['t-asked', 'm-loose', 'approval-1'].includes(it.id));
+    needs = needs.filter(it => !['r-asked', 'r-friday', 'r-announce'].includes(it.id));
     await page.evaluate(async () => { await v2Refresh(); renderTree(); });
     await page.waitForFunction(() => document.querySelector('#cnt-needs')?.textContent.trim() === '2');
     assert.equal((await badge.innerText()).trim(), '2');
-    assert.equal(await rail.locator('#t-needs .trow').count(), 2);
+    assert.equal(await rail.locator('#t-needs .tk-row').count(), 2);
 
     // Nothing needs Ana: the tab says so, and the tree's number goes.
     needs = [];
-    T.waits.status = T.forAna.status = 'done';
+    for (const t of [T.waits, T.forAna]) { t.status = 'done'; t.turn = null; t.done_at = ago(1); }
     await page.evaluate(async () => { await v2Refresh(); await loadBotTasksV2('lead'); renderTree(); });
     await page.waitForFunction(() => document.querySelector('#cnt-needs')?.textContent.trim() === '0');
     assert.equal(await page.locator('#tree a[href="#/bot/lead"] .cnt.needs').count(), 0);
     assert.equal((await rail.locator('#t-needs').innerText()).trim(), 'Nothing needs you.');
-    assert.deepEqual((await rail.locator('#t-c4 .trow .ttl').allTextContents()).map(s => s.trim()), ['Run the release check']);
+    assert.deepEqual(await titles('#t-c4'), ['Support access fixes', 'Run the release check']);
 
     // Many supplemental questions keep requests bounded and deduplicate beyond the first chunk.
     // A question arriving during the read must not be added twice to that read's total.
-    filterExtras = Array.from({length: 240}, (_, i) => ({...T.asked, kind: 'question',
-      id: 'question-' + String(i).padStart(36, '0')}));
+    const extra = (id: string): Need => { const t = {...T.asked, id: 'task-' + id}; return {...askNeed(t), id, requirement_id: id, task_id: t.id}; };
+    filterExtras = Array.from({length: 240}, (_, i) => extra('question-' + String(i).padStart(36, '0')));
     await page.evaluate(items => {
       S.v2.needs = items; window.needCountsSeen = [];
       window.needCountObserver = new MutationObserver(() => needCountsSeen.push(document.querySelector<HTMLElement>('#cnt-needs')!.textContent!.trim()));
@@ -295,7 +315,7 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     const requested = page.waitForRequest(r => r.url().includes('/task-tabs/tasks?match_ids='));
     const reading = page.evaluate(() => botTaskFilterRead('lead'));
     await requested;
-    const late = {...T.asked, kind: 'question', id: 'question-late'};
+    const late = extra('question-late');
     filterExtras.push(late);
     await page.evaluate(item => { S.v2.needs.push(item); }, late);
     releaseFilterRead = null; release();
@@ -305,18 +325,18 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     assert.equal((await tab('needs').locator('.cnt').innerText()).trim(), '241', 'late question is already in the task total');
     await page.evaluate(() => botTaskFilterRead('lead'));
     assert.equal((await tab('needs').locator('.cnt').innerText()).trim(), '241');
-    assert.equal(await rail.locator('#t-needs .trow').count(), 241, 'the next read includes the new question once');
+    assert.equal(await rail.locator('#t-needs .tk-row').count(), 241, 'the next read includes the new question once');
     assert.ok(!(await page.evaluate(() => { needCountObserver.disconnect(); return needCountsSeen; })).includes('242'), 'no transient double count');
     filterExtras = null;
 
     // Done recently pages 50 rows at a time.
     await tab('done').click();
     await page.evaluate(() => { const d = BOT_DONE.get('lead')!, row = d.rows[0]!; d.rows = Array.from({length: 120}, (_, i) => ({...row, id: 'many-' + i})); botDonePaint('lead'); });
-    assert.equal(await rail.locator('#t-done .trow').count(), 50);
+    assert.equal(await rail.locator('#t-done .tk-row').count(), 50);
     await rail.getByRole('button', {name: 'Show 50 more'}).click();
-    assert.equal(await rail.locator('#t-done .trow').count(), 100);
+    assert.equal(await rail.locator('#t-done .tk-row').count(), 100);
     await rail.getByRole('button', {name: 'Show 20 more'}).click();
-    assert.equal(await rail.locator('#t-done .trow').count(), 120);
+    assert.equal(await rail.locator('#t-done .tk-row').count(), 120);
     assert.equal(await rail.locator('.bot-done-more').count(), 0);
 
     // The Tasks header has no board icon; the sidebar's one edit icon is for whoever may change this bot's
@@ -326,7 +346,7 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
       await page.evaluate(() => { location.hash = '#/bot/qa'; });
       await page.waitForFunction(() => BOT?.slug === 'qa');
       await page.evaluate(() => { location.hash = '#/bot/lead/tasks'; });
-      await rail.locator('#t-open .trow').first().waitFor({state: 'attached'});
+      await rail.locator('#t-open .tk-row').first().waitFor({state: 'attached'});
     };
     await rail.locator('#bot-sidebar-edit:not([hidden])').waitFor();
     assert.equal(await rail.locator('#bot-tasks-settings').count(), 0);
@@ -337,7 +357,7 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     assert.equal(await rail.locator('.bot-task-tabs').isHidden(), true, 'no tab bar over a single list');
     assert.equal(await rail.locator('#bot-active').isVisible(), true);
     for (const key of ['needs', 'blocked', 'done']) assert.equal(await rail.locator(`#bot-${key}`).isHidden(), true, key);
-    assert.equal(await rail.locator('#t-open .trow').count(), 2);
+    assert.equal(await rail.locator('#t-open .tk-row').count(), 6);
     await page.evaluate(() => { window.botTaskTabs = window.fourTabs; });
     await reopen();
     assert.equal(await rail.locator('.bot-task-tabs').isVisible(), true);

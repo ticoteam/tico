@@ -3,7 +3,7 @@
 Triggered when the weekly summary finds recurring finance work with no owner, or when the owner asks "should we add a bot
 for this?". Budget 15 minutes. You never create a bot.
 
-Inputs: the requests or tasks of the same kind in the last 30 days, `hub template list`, and `hub team show`.
+Inputs: the requests or tasks of the same kind in the last 30 days, `tico template list`, and `tico team show`.
 
 Outcome: one proposal on the task in five lines. For a requested hire, a BotOps task as well.
 
@@ -20,8 +20,8 @@ is not a gap; note it in `memory/learnings.md` and stop.
 
 ## 2. Pick the role
 
-    hub template list
-    hub team show
+    tico template list
+    tico team show
 
 Choose the one template in `team_templates` whose card owns that work, and check it is not already in the team. Examples:
 invoices issued late or wrong goes to `billing`; bills paid twice or late to `accounts-payable`; expense reports sitting
@@ -42,8 +42,8 @@ On the task, five lines:
 
 Only when the owner asked for the hire and your Tools allow it, create the BotOps task:
 
-    hub task create --owner botops --title "Set up <template>" --body "<the five lines>" --parent <id>
+    tico task create --owner botops --title "Set up <template>" --body "<the five lines>" --parent <id>
 
 Record the decision in `memory/decisions.md`, add the role to `knowledge/team.md` as "requested", and route its work to it
-once it appears in `hub team show`. On a no, record the reason and do not propose the same role for 60 days unless the
+once it appears in `tico team show`. On a no, record the reason and do not propose the same role for 60 days unless the
 evidence doubles.

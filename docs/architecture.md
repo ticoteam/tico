@@ -59,7 +59,7 @@ installed on a computer when a bot there needs one; the server does not need to 
 4. The runner asks the server for a scoped GitHub token if needed and starts the harness inside
    the bot's repository.
 5. The harness talks to the model provider directly, using the login on that computer, and uses tools
-   (`hub` commands, git, shell) to do the work.
+   (`tico` commands, git, shell) to do the work.
 6. The runner streams progress and the reply back to the server. A bot that needs a person asks on the task and its
    run ends; the answer wakes it again. The bot commits what it learned to its repository.
 7. The server records the result. What needs a person is in their Needs you.

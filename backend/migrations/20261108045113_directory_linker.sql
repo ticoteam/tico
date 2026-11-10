@@ -1,7 +1,7 @@
 -- The linker's tables and indexes (track 6b, spec §7.1). It stands alone: the entity tables come from the directory
 -- tables migration, and message_revisions and messages from the threads schema.
 --
--- entity_lookups is the run trace (step 1): the entities a bot's attempt read through `hub directory get` or `rules`.
+-- entity_lookups is the run trace (step 1): the entities a bot's attempt read through `tico directory get` or `rules`.
 -- The runner's tool events keep a command's path, never its arguments, so the ids are recorded here, once per attempt
 -- and entity.
 CREATE TABLE IF NOT EXISTS entity_lookups (

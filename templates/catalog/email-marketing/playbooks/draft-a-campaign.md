@@ -11,7 +11,7 @@ Done when: the folder holds the draft, the plain-text version and the checklist 
 
 ## 1. Read the brief and the record
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/voice.md`, `knowledge/segments.md`, `knowledge/results.md` and
 `knowledge/do-not-email.md`. Note what this audience was promised when they signed up.
@@ -43,5 +43,5 @@ sender's to check. You cannot verify these and never mark one done. Run `skills/
 
 ## 5. Hand over
 
-Commit, then `hub task done <id> -m "..." --version N`: the email in one line, the folder, the gaps
+Commit, then `tico task done <id> -m "..." --version N`: the email in one line, the folder, the gaps
 to fill and the checklist items open. Send or schedule the email with the exact text, audience and sender only when the task asks for it, a granted Tool allows it, and a person has turned mail sending on in Tico. Otherwise keep the draft.
