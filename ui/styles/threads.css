@@ -1,5 +1,5 @@
 /* ui/styles/threads.css — Threads: the sidebar rows, the Threads page, one thread's flat timeline and its bots' status, the
-   composer under it, and the New thread / Members dialogs. Markup: ui/app/threads.ts, thread-view.js, threads-page.js. */
+   composer under it, and the Members and settings dialogs. Markup: ui/app/threads.ts, thread-view.js, threads-page.js. */
 
 /* a thread's mark where it has no avatar (a Home or a DM shows a face) */
 .th-mark{width:18px;height:18px;font-size:17px}
@@ -220,8 +220,7 @@ a.src-name:hover{color:var(--ink);text-decoration:underline}
 .thv-blank .thv-scroll{display:none}
 .th-earlier-open{margin-top:6px}
 
-/* New thread and Members */
-.thd-members{display:flex;flex-direction:column;gap:6px}
+/* Members and settings */
 .thd-lbl{color:var(--muted);font-size:var(--t-sm);font-weight:600}
 .thd-picks{display:flex;flex-direction:column;max-height:240px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:4px}
 .thd-pick{display:flex;align-items:center;gap:var(--s2);padding:5px 8px;border-radius:6px;cursor:pointer}
