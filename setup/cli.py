@@ -124,12 +124,6 @@ def parser() -> argparse.ArgumentParser:
         "itself (/opt/tico, containers) stay",
     )
     p.add_argument(
-        "--replace-dns",
-        action="store_true",
-        help="run: let setup point an existing Route 53 record for the domain at this server. Without it a record "
-        "setup did not make is refused before anything is created",
-    )
-    p.add_argument(
         "--confirm-dns",
         metavar="NAME",
         default="",

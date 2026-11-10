@@ -80,7 +80,6 @@ def plan(
     zone_id: str,
     records: list[Record],
     owned: list[dict],
-    replace: set[str] = frozenset(),
     allowed: set[str] = frozenset(),
     *,
     preflight=False,
@@ -91,7 +90,7 @@ def plan(
     A record set exactly equal to one in `owned` (what this install recorded creating, or journalled before a CREATE whose
     answer was lost) is this install's: kept when it already holds the wanted values, else deleted exactly as read in the
     same batch as the CREATE (Route 53 refuses the whole batch if it changed since, and one made meanwhile makes the
-    CREATE fail). So is anything at a name in `replace` (--replace-dns). Any other record set holding exactly a wanted
+    CREATE fail). Any other record set holding exactly a wanted
     record is left alone and does not become this install's; anything else at the name is someone else's: a conflict. A
     CNAME shares its name with nothing; an A or AAAA holding only `allowed` (this server's addresses) may stay beside
     the wanted record. preflight: the wanted values may be placeholders, so one holding only `allowed` is not a conflict
@@ -118,7 +117,7 @@ def plan(
                 if key(rs) in mine_keys:
                     kept.append(rs)
                 continue
-            if key(rs) in mine_keys or want in replace:
+            if key(rs) in mine_keys:
                 changes.append({"Action": "DELETE", "ResourceRecordSet": rs})
                 continue
             fits = simple(rs) and rs["Type"] != "CNAME" and not cname and vals

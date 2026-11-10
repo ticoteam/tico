@@ -59,7 +59,7 @@ SECRET_FIELDS = (
     "company_file_data",
 )
 # This run's only, never saved: a re-run without the flag must not inherit permission to repoint a record.
-TRANSIENT_FIELDS = ("runner_given", "replace_dns", "confirm_dns")
+TRANSIENT_FIELDS = ("runner_given", "confirm_dns")
 # Saved only when set (strict mode), each with its unset value.
 STRICT_FIELDS = {
     "asset_prefix": DEFAULT_PREFIX,
@@ -114,7 +114,6 @@ class Settings:
     # whose answer has not come back yet: re-runs and destroy act only on a record set equal to one of them.
     dns_records: list = field(default_factory=list)
     dns_pending: list = field(default_factory=list)
-    replace_dns: bool = False  # --replace-dns, this run only: an existing Route 53 record may be pointed at this server
     confirm_dns: str = ""  # --confirm-dns, this run only: a pending record set at this name, found in the zone, is ours
     front_door: str = "caddy"
     updater: bool = True

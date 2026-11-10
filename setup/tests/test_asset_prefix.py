@@ -942,33 +942,49 @@ def test_a_profile_setup_made_without_its_role_gets_it_on_a_rerun():
     ]
 
 
-def test_a_route53_record_setup_did_not_make_is_refused_unless_replace_dns(tmp_path):
+def test_a_route53_record_setup_did_not_make_is_refused_and_changed_by_hand(tmp_path):
+    # Codex review 5, case 10: strict mode has no exceptions. --replace-dns (which deleted a foreign record) is gone; setup
+    # prints the exact change for a person to make, and acts again only once the name is free or this install's.
     d, ec2, iam, ssm, s3, log = hub_world()
     r53 = d.route53_client("")._inner
     production = {"Name": f"{DOMAIN}.", "Type": "A", "TTL": 60, "ResourceRecords": [{"Value": "198.51.100.50"}]}
-    r53.records = [production]
+    r53.records = [dict(production)]
     argv = hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic")
     code, out = go(argv, deps=d)
     assert code == 2 and f"Route 53 already has A {DOMAIN} -> 198.51.100.50" in out, out
-    assert "--replace-dns" in out and [n for n, _ in log if not n.startswith(READS)] == []
+    assert "by hand" in out and "--replace-dns" not in out and [n for n, _ in log if not n.startswith(READS)] == []
     assert r53.records == [production]
-    code, out = go([*argv, "--replace-dns"], deps=d)
+    with pytest.raises(SystemExit):  # no such flag any more
+        go([*argv, "--replace-dns"], deps=d)
+    assert r53.records == [production]
+    r53.records = []  # the person removed it by hand
+    code, out = go(argv, deps=d)
     assert code == 0, out
     assert [r["ResourceRecords"] for r in r53.records] == [[{"Value": "203.0.113.9"}]]
     saved = state.load(DOMAIN)[0]
     assert saved["dns_records"] == r53.records and saved["dns_zone_id"] == "Z1" and saved.get("dns_pending", []) == []
-    # Re-runs of this install keep working without the flag while the record is exactly the one it made.
-    assert go(argv, deps=d)[0] == 0
-    # Codex review 3, case 2: a record repointed (at production, say) is no longer the one it made: refused, untouched.
+    assert go(argv, deps=d)[0] == 0  # re-runs keep working while the record is exactly the one it made
+    # Codex review 3, case 2: a record repointed (at production, say) is no longer the one it made: refused, untouched,
+    # with the exact change to make by hand.
     r53.records[0]["ResourceRecords"] = [{"Value": "198.51.100.77"}]
     before = len(r53.called("change_resource_record_sets"))
     code, out = go(argv, deps=d)
     assert code == 2 and f"Route 53 already has A {DOMAIN} -> 198.51.100.77" in out, out
+    assert f"A {DOMAIN} -> 203.0.113.9" in out and "by hand" in out, out
     assert r53.records[0]["ResourceRecords"] == [{"Value": "198.51.100.77"}]
     assert len(r53.called("change_resource_record_sets")) == before
-    assert go([*argv, "--replace-dns"], deps=d)[0] == 0 and r53.records[0]["ResourceRecords"] == [
-        {"Value": "203.0.113.9"}
-    ]
+
+
+def test_strict_mode_uploads_the_plan_only_to_a_bucket_it_recorded_making(tmp_path):
+    # Codex review 5, case 10: an install tag on a --plan-bucket is not proof that setup made it. Strict mode refuses a
+    # --plan-bucket before any AWS write; leave it out and setup makes (and records) its own.
+    d, ec2, iam, ssm, s3, log = hub_world()
+    s3.tagsets["prod-assets"] = PRODUCTION
+    code, out = go(
+        hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic", "--plan-bucket", "prod-assets"), deps=d
+    )
+    assert code == 2 and "--plan-bucket" in out and "prod-assets" in out, out
+    assert [n for n, _ in log if not n.startswith(READS)] == []
 
 
 def test_an_alias_or_cname_at_the_hostname_is_refused_too(tmp_path):
@@ -1253,17 +1269,6 @@ def test_a_record_made_between_the_read_and_the_write_is_never_overwritten():
     assert r53.records == [production]
 
 
-def test_replace_dns_turns_a_cname_into_the_servers_address_in_one_batch(tmp_path):
-    d, ec2, iam, ssm, s3, log = hub_world()
-    r53 = d.route53_client("")._inner
-    r53.records = [{"Name": f"{DOMAIN}.", "Type": "CNAME", "TTL": 60, "ResourceRecords": [{"Value": "app.example."}]}]
-    code, out = go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic", "--replace-dns"), deps=d)
-    assert code == 0, out
-    assert [(r["Type"], r["ResourceRecords"]) for r in r53.records] == [("A", [{"Value": "203.0.113.9"}])]
-    (batch,) = r53.called("change_resource_record_sets")
-    assert [c["Action"] for c in batch["ChangeBatch"]["Changes"]] == ["DELETE", "CREATE"]
-
-
 def test_a_matching_record_setup_did_not_make_is_left_alone_and_never_deleted(tmp_path):
     d, ec2, iam, ssm, s3, log = hub_world()
     r53 = d.route53_client("")._inner
@@ -1279,22 +1284,6 @@ def test_a_matching_record_setup_did_not_make_is_left_alone_and_never_deleted(tm
     code, out = go(["destroy", "--domain", DOMAIN, "--dns", "--yes"], deps=d)
     assert code == 0 and f"Left alone: A {DOMAIN} -> 203.0.113.9 is not the record this install made" in out, out
     assert r53.records == [manual] and not r53.called("change_resource_record_sets")
-
-
-def test_replace_dns_covers_only_the_requested_hostname_not_the_runner_one():
-    r53 = FakeRoute53(ZONE)
-    runner = f"runner.{DOMAIN}"
-    theirs = {"Name": f"{runner}.", "Type": "CNAME", "TTL": 60, "ResourceRecords": [{"Value": "other.example."}]}
-    r53.records = [
-        {"Name": f"{DOMAIN}.", "Type": "CNAME", "TTL": 60, "ResourceRecords": [{"Value": "old.example."}]},
-        theirs,
-    ]
-    s = Settings(domain=DOMAIN, replace_dns=True)
-    records = dns.plan_records(DOMAIN, "cloudflared", tunnel_id="t1", runner_host=runner)
-    changes, created, found, kept = route53.plan(r53, "Z1", records, [], wizard.replace(s))
-    assert found == [theirs] and wizard.replace(s) == {DOMAIN}
-    with pytest.raises(MissingInput, match="--replace-dns covers only the server's own hostname"):
-        wizard.refuse_dns(s, found)
 
 
 def test_another_servers_runner_role_in_another_region_is_never_reused(monkeypatch):
@@ -1407,39 +1396,41 @@ def test_a_new_hub_installs_buckets_end_in_its_install_id_and_an_existing_name_i
         assert not s3.called("create_bucket") and not [n for n, _ in iam.calls if not n.startswith(READS)]
 
 
-def test_an_explicit_plan_bucket_must_be_tagged_for_this_install_and_its_objects_are_never_overwritten():
-    # Codex review 3, case 8: owned by the account is not enough when the account holds production's buckets, and an
-    # object at the plan's key was overwritten, then deleted.
+def test_the_plan_goes_only_to_a_bucket_setup_recorded_making_and_its_objects_are_never_overwritten():
+    # Codex review 3, case 8 and review 5, case 10: owned by the account, or tagged for this install, is not enough when
+    # the account holds production's buckets; an object at the plan's key was overwritten, then deleted.
     install, saved = "0123456789abcdef", []
     p = aws.plan_aws(
         domain="a.example",
         front_door="caddy",
         region="us-east-1",
         name="acme",
-        plan_bucket="prod-assets",
+        plan_bucket="hub-setup-plans-x",
         prefix="hub",
         install_id=install,
     )
     d = strict_dep(p, None, None, None, ids={}, save=lambda: saved.append(dict(d.ids)))
     s3 = S3()
-    s3.tagsets["prod-assets"] = PRODUCTION
-    with pytest.raises(MissingInput, match=f"Tag it hub-setup-install={install}"):
+    s3.tagsets["hub-setup-plans-x"] = d.n.tags("acme")  # tagged for this install, but setup never recorded making it
+    with pytest.raises(MissingInput, match="--plan-bucket hub-setup-plans-x"):
         d.verify_plan_bucket(s3)
-    s3.tagsets["prod-assets"] = PRODUCTION + [{"Key": "hub-setup-install", "Value": install}]
-    d.verify_plan_bucket(s3)
     key = "plans/acme/" + "a" * 64
+    with pytest.raises(MissingInput):
+        d.put_plan(s3, key, "ours")
+    assert not s3.called("put_object") and not s3.called("delete_object")
+    d.ids["plan_bucket"] = "hub-setup-plans-x"  # the one it recorded making
     theirs = {"Body": b"production's", "Metadata": {}, "ETag": '"theirs"'}
-    s3.objects[("prod-assets", key)] = theirs
+    s3.objects[("hub-setup-plans-x", key)] = theirs
     with pytest.raises(MissingInput, match="did not record writing it"):
         d.put_plan(s3, key, "ours")
-    assert s3.objects[("prod-assets", key)] == theirs and d.delete_plan(s3, key)
-    assert s3.objects[("prod-assets", key)] == theirs and not s3.called("delete_object")
+    assert s3.objects[("hub-setup-plans-x", key)] == theirs and d.delete_plan(s3, key)
+    assert s3.objects[("hub-setup-plans-x", key)] == theirs and not s3.called("delete_object")
     # Its own: written only where nothing is, recorded, and only then deleted; a retry of a lost response is its own.
     other = "plans/acme/" + "b" * 64
     d.put_plan(s3, other, "ours")
     assert saved[-1]["plan_object"] == {"key": other, "etag": '"etag1"'}
     d.put_plan(s3, other, "ours")
-    assert d.delete_plan(s3, other) == "" and ("prod-assets", other) not in s3.objects
+    assert d.delete_plan(s3, other) == "" and ("hub-setup-plans-x", other) not in s3.objects
 
 
 def test_a_create_whose_answer_was_lost_is_known_for_its_own_on_the_retry_and_destroyed(tmp_path):

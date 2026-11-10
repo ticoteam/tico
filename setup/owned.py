@@ -409,7 +409,6 @@ class StrictDeployer(Deployer):
         except MissingInput:
             raise SystemExit("The starter plan bucket was not created by this setup; refusing to reuse it.") from None
         made(self.j, "plan_bucket", s3, owned, region, proof, "--name")
-        self.plan_managed = True
         # S3 bucket settings have no conditional writes: the bucket is read again (its tags, and the name this install
         # recorded making) right before each one.
         self.prove_plan_bucket(s3)
@@ -450,33 +449,20 @@ class StrictDeployer(Deployer):
         )
 
     def verify_plan_bucket(self, s3) -> None:
-        """A --plan-bucket setup did not make: it must be one this AWS account owns before anything goes into it."""
-        code = self._s3_call(s3.head_bucket, Bucket=self.p.plan_bucket)  # 403: another account's
-        if code:
-            raise MissingInput(
-                f"The starter plan bucket {self.p.plan_bucket} is not one this AWS account owns, or cannot be read "
-                f"({code}); refusing to upload to it. Check --plan-bucket and the AWS credentials."
-            )
-        # Owned by the account is not enough: the account holds others' buckets too. Only one tagged for this install
-        # takes its plan.
-        self.plan_managed = False
-        self.prove_plan_bucket(s3)
+        """A --plan-bucket: never written in strict mode. An install tag on a bucket proves only that someone tagged it,
+        not that setup made it; the plan goes only into a bucket this install recorded making."""
+        raise MissingInput(
+            f"--plan-bucket {self.p.plan_bucket}: with --asset-prefix, setup uploads the starter plan only to a bucket it "
+            "made and recorded itself; refusing to write to one it did not make. Leave --plan-bucket out."
+        )
 
     def prove_plan_bucket(self, s3) -> None:
-        """Read now, right before a write: setup's own plan bucket carries this install's tags and is the one it recorded
-        making; a --plan-bucket carries this install's id tag."""
+        """Read now, right before a write: the plan bucket carries this install's tags and is the one it recorded
+        making."""
         n, owned = self.n, {"Bucket": self.p.plan_bucket, "ExpectedBucketOwner": self.account_id}
-        tags = bucket_tags(s3, owned)
-        if getattr(self, "plan_managed", None) is True:
-            if n.is_ours(tags, self.p.name) and recorded(self.ids, "plan_bucket", self.p.plan_bucket):
-                return
-            raise not_ours("S3 bucket", self.p.plan_bucket, n, self.p.name, "--name")
-        if {t["Key"]: t["Value"] for t in tags}.get(n.install_tag) != n.install_id:
-            raise MissingInput(
-                f"The starter plan bucket {self.p.plan_bucket} is not tagged for this install; refusing to upload "
-                f"to it. Tag it {n.install_tag}={n.install_id} (this install's id, kept for the re-run) and run "
-                "setup again, or leave --plan-bucket out."
-            )
+        if n.is_ours(bucket_tags(s3, owned), self.p.name) and recorded(self.ids, "plan_bucket", self.p.plan_bucket):
+            return
+        raise not_ours("S3 bucket", self.p.plan_bucket, n, self.p.name, "--name")
 
     def plan_record(self) -> dict:
         """What this install recorded writing to the plan bucket: {"key", "etag"} (and "version_id" when versioned)."""

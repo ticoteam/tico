@@ -51,8 +51,9 @@ first write it reads the names it will take (settings parameter, role, instance 
 one that something else holds stops the run with its name; pick another `--name` or `--asset-prefix`. Likewise an
 existing Route 53 record for the domain that points elsewhere is left alone and named, unless it is exactly the record
 set this install created (zone, name, type, TTL and values, saved with the install; a CREATE is saved before it is sent,
-so one whose answer was lost is still known) or you pass `--replace-dns` (which covers the domain's own record only,
-never a runner hostname beside it). A record this install made that someone has since changed is no longer its own.
+so one whose answer was lost is still known, and is adopted only once you confirm it with `--confirm-dns NAME`). Setup
+never changes a record it did not make: it prints the exact change to make by hand in the Route 53 console, then acts
+once the name is free. A record this install made that someone has since changed is no longer its own.
 Setup only creates a record where none is; it replaces one in a single batch that fails if the record changed since it
 was read. A record that already points at the server is left as it is and does not become setup's. (An install saved
 before install ids upserts its records as before.)
@@ -66,8 +67,8 @@ that already exists, and refuses an existing bucket without this install's tags.
 deleted. With an explicit `--plan-bucket BUCKET`
 (and `--plan-bucket-region` when it differs from `--aws-region`), as Tico's hosted servers use, setup first checks the
 bucket belongs to the credentials' AWS account (and every object call names that account as the expected owner); under
-another `--asset-prefix` the bucket must also carry this install's id tag (setup names it, and keeps the id for the
-re-run). It then puts the packed plan at `plans/<name>/<sha256>` in that bucket before launch, only where no object is
+another `--asset-prefix` an explicit `--plan-bucket` is refused before anything is created: the plan goes only into
+the bucket setup made and recorded itself. It then puts the packed plan at `plans/<name>/<sha256>` in that bucket before launch, only where no object is
 (an install from before install ids puts it as before), and later deletes only the object it recorded writing; grants the server's role `s3:GetObject` on
 `plans/<name>/*` only, and names the key and its sha256 in the `.env`. At first boot the server copies it to
 `/opt/tico/company-file/plan.b64` (0400, the server's user), refuses to start on a sha256 mismatch, and the app reads it

@@ -758,8 +758,8 @@ def settle_pending(s: Settings, client, zid: str) -> None:
 def _route53_strict(io: IO, s: Settings, client, zid: str, records) -> bool:
     ours = {r.value for r in records} | {s.server_ip} - {""}
     settle_pending(s, client, zid)
-    changes, created, found, kept = route53.plan(client, zid, records, owned_dns(s, zid), replace(s), ours)
-    refuse_dns(s, found)
+    changes, created, found, kept = route53.plan(client, zid, records, owned_dns(s, zid), ours)
+    refuse_dns(found, records, ours)
     # Journalled before the call: if its answer is lost, the retry finds exactly these and knows them for its own.
     s.dns_zone_id, s.dns_pending = zid, created
     save_dns(s)
@@ -791,25 +791,31 @@ def owned_dns(s: Settings, zone_id: str) -> list[dict]:
     return s.dns_records if s.dns_zone_id == zone_id else []
 
 
-def replace(s: Settings) -> set[str]:
-    """--replace-dns: the requested hostname only (never a runner hostname beside it)."""
-    return {s.dns().lower()} if s.replace_dns else set()
-
-
-def refuse_dns(s: Settings, found: list[dict]) -> None:
-    """A Route 53 record this install did not make is never replaced, unless --replace-dns names it."""
+def refuse_dns(found: list[dict], records, ours: set[str]) -> None:
+    """A Route 53 record this install did not make is never changed: setup says exactly what a person would change, and
+    acts again only once the name is free or this install's."""
     if found:
-        here = any(rs["Name"].rstrip(".").lower() == s.dns().lower() for rs in found)
+        want = sorted(
+            {
+                f"{r.type} {r.name.rstrip('.')} -> "
+                + (r.value if r.type not in ("A", "AAAA") or r.value in ours else _address(r.type, ours))
+                for r in records
+            }
+        )
         raise MissingInput(
             "Route 53 already has "
             + "; ".join(route53.describe(rs) for rs in found)
-            + ", which this setup did not make; refusing to replace it. "
-            + (
-                "Pass --replace-dns to point it at this server, or set up another --domain."
-                if here
-                else "--replace-dns covers only the server's own hostname; remove that record or pick another name."
-            )
+            + ", which this setup did not make; refusing to change it. If it should point here, change it by hand in "
+            "the Route 53 console to "
+            + "; ".join(want)
+            + " (or delete it) and run setup again; otherwise set up another --domain."
         )
+
+
+def _address(kind: str, ours: set[str]) -> str:
+    """This server's address of that kind, once known (the Elastic IP after a first run), for a by-hand change."""
+    found = sorted(a for a in ours if (":" in a) == (kind == "AAAA"))
+    return ", ".join(found) or "this server's address"
 
 
 def dns_preflight(s: Settings, deps: Deps, zone: dnsmod.Zone | None, records, ours: set[str]) -> None:
@@ -820,7 +826,7 @@ def dns_preflight(s: Settings, deps: Deps, zone: dnsmod.Zone | None, records, ou
     if problem or status != "authoritative":
         return  # setup writes nothing there (ensure_dns says to add the record by hand)
     settle_pending(s, client, zid)  # before the first AWS write: an unresolved CREATE stops the run here
-    refuse_dns(s, route53.plan(client, zid, records, owned_dns(s, zid), replace(s), ours, preflight=True)[2])
+    refuse_dns(route53.plan(client, zid, records, owned_dns(s, zid), ours, preflight=True)[2], records, ours)
 
 
 def _r53_client(profile: str, single_attempt: bool = False):
@@ -1083,7 +1089,6 @@ def _strict_start(args, s: Settings, saved: dict, dry: bool) -> None:
 def _strict_preflight(io: IO, args, s: Settings, deps: Deps, zone, records, kept: bool) -> None:
     """Strict mode, reads only (and the install's own state file) before the first AWS write: every name the install
     takes is free or already provably its own, and its account is recorded."""
-    s.replace_dns = bool(getattr(args, "replace_dns", False))
     s.confirm_dns = getattr(args, "confirm_dns", "") or ""
     if not kept:  # before the first AWS write: a retry after a failure from here keeps the prefix and install id
         state.save(s.domain, s.public())
@@ -1094,6 +1099,8 @@ def _strict_preflight(io: IO, args, s: Settings, deps: Deps, zone, records, kept
         owned.check_account(s.aws_account_id, clients[3], s.domain)
         plan = aws_plan(s)
         managed = plan.plan_bucket and s.plan_bucket_managed
+        if plan.plan_bucket and not managed:  # a --plan-bucket: refused before the first AWS write
+            deployer(s, plan, clients, io, deps).verify_plan_bucket(None)
         deployer(s, plan, clients, io, deps).preflight(
             deps.aws_s3(s.plan_bucket_region or s.aws_region, s.aws_profile) if managed else None
         )
