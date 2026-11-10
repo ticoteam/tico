@@ -113,7 +113,7 @@ COMMANDS = [
         ("POST", "tasks/T1/asks/r9/answer", {"value": "no", "version": 3, "note": "Wrong totals"}),
     ),
     (
-        ["task", "give", "T1", "r9", "ben", "--version", "3"],
+        ["task", "give", "T1", "r9", "--to", "ben", "--version", "3"],
         ("hub_task_give", {"id": "T1", "requirement": "r9", "to": "ben", "version": 3}),
         ("POST", "tasks/T1/asks/r9/give", {"to": "ben", "version": 3}),
     ),
@@ -172,6 +172,66 @@ def test_each_command_and_its_tool_send_the_plans_request_with_the_version_given
     assert cli.writes() == mcp.writes() == [request_]
     reads = [path for method, path, _ in mcp.calls if method == "GET"]
     assert "tasks/T1" not in reads or tool[0] == "hub_task_label", "no tool reads the task for a version"
+
+
+@pytest.mark.parametrize(
+    "name, args",
+    [
+        ("hub_task_reassign", {"id": "T1", "owner": "ana", "version": 3}),
+        ("hub_task_done", {"id": "T1", "version": 3}),
+        ("hub_task_move", {"id": "T1", "to": "next", "why": "x", "version": 3}),
+        ("hub_task_close", {"id": "T1", "why": "x", "version": 3}),
+        ("hub_task_answer", {"id": "T1", "requirement": "r9", "value": "ok", "version": 3}),
+    ],
+)
+def test_the_assistant_cites_the_persons_message_on_a_change_they_asked_for(name, args):
+    seen = []
+
+    class Assistant(Recorder):
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            seen.append((method, path, delegate))
+            return {"task": {"id": "T1"}}
+
+    hubtools.BY_NAME[name]["fn"](Assistant(), {**args, "on_behalf_of": "turn"})
+    assert [delegate for method, _, delegate in seen if method != "GET"] == ["turn"]
+    assert "on_behalf_of" in hubtools.BY_NAME[name]["inputSchema"]["properties"]
+    words = ["task", name.removeprefix("hub_task_"), *{"hub_task_reassign": ["T1", "ana"]}.get(name, ["T1"])]
+    if name == "hub_task_move":
+        words.append("next")
+    if name == "hub_task_answer":
+        words += ["r9", "ok"]
+    assert hubcli.parser().parse_args([*words, "--on-behalf-of", "turn"]).on_behalf_of == "turn"
+
+
+def test_a_relation_is_a_note_and_a_blocking_one_says_what_to_do_instead(monkeypatch, capsys):
+    api = Recorder()
+    hubtools.task_relate(api, {"id": "T1", "task": "T2", "kind": "duplicate_of"})
+    assert api.writes() == [("POST", "tasks/T1/relations", {"task": "T2", "kind": "duplicate_of", "remove": False})]
+    assert "enum" not in hubtools.BY_NAME["hub_task_relate"]["inputSchema"]["properties"]["kind"]
+    for kind in ("blocks", "blocked_by"):
+        with pytest.raises(ValueError) as refused:
+            hubtools.task_relate(Recorder(), {"id": "T1", "task": "T2", "kind": kind})
+        assert str(refused.value) == hubtools.BLOCKING_GONE and "hub task file --parent" in str(refused.value)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    cli = Recorder()
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
+    assert remotecli.main(hubcli.parser().parse_args(["task", "relate", "T1", "T2", "--kind", "blocks"])) == 1
+    assert json.loads(capsys.readouterr().out)["detail"] == hubtools.BLOCKING_GONE and cli.writes() == []
+
+
+def test_give_takes_the_person_as_to_or_as_a_third_word_and_needs_one(monkeypatch, capsys):
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    sent = []
+    for words in (["--to", "ben"], ["ben"]):
+        cli = Recorder()
+        monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
+        remotecli.run(hubcli.parser().parse_args(["task", "give", "T1", "r9", *words, "--version", "3"]))
+        sent.append(cli.writes())
+    assert sent[0] == sent[1] == [("POST", "tasks/T1/asks/r9/give", {"to": "ben", "version": 3})]
+    cli = Recorder()
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
+    assert remotecli.main(hubcli.parser().parse_args(["task", "give", "T1", "r9", "--version", "3"])) == 1
+    assert json.loads(capsys.readouterr().out)["detail"] == "Say who it goes to: --to <person>" and not cli.writes()
 
 
 def test_label_reads_the_labels_but_sends_the_version_the_bot_was_shown():
@@ -378,6 +438,7 @@ def test_the_old_engines_tools_are_gone_and_a_call_by_one_says_what_to_use():
         "hub_approval_approve",
         "hub_pipeline_manager",
         "hub_requirements",
+        "hub_task_answers",
     ):
         assert name not in hubtools.BY_NAME
         reply = hubtools.Protocol(Recorder(), kind="bot").handle(

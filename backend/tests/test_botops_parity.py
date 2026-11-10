@@ -1188,8 +1188,11 @@ def test_a_reopened_task_and_a_request_past_the_cap_lend_nothing(api, botops):
     _age(api, ana["message"]["id"], 10)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), days=-10), task_id))
-        H.task_update(c, "bot:botops", task_id, status="done", note="Done.")
-        H.task_update(c, "bot:botops", task_id, status="open", note="Again.")
+        # A bot's change carries the version it was shown (docs/dev/pipelines-v3-cutover.md, Version).
+        done = H.task_update(
+            c, "bot:botops", task_id, status="done", note="Done.", seen_version=H.task(c, task_id)["version"]
+        )
+        H.task_update(c, "bot:botops", task_id, status="open", note="Again.", seen_version=done["version"])
     later = _wake(api, botops)
     refused = act(api, later, "GET", "credentials", ref=task_id)
     assert refused.status_code == 403 and "send no on_behalf_of" in refused.text

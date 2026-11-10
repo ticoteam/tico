@@ -1327,6 +1327,7 @@ RENAMED_TOOLS = {
     "hub_question_answer": "hub_task_answer",
     "hub_task_question": "hub_task_ask",
     "hub_task_ask_resolve": "hub_task_answer",
+    "hub_task_answers": "hub_task_show (To leave)",
     "hub_approval_": "hub_task_ask (asking) or hub_task_answer (answering)",
     "hub_task_wait": "hub_task_file or hub_task_snooze",
     "hub_task_check_back": "hub_task_snooze",

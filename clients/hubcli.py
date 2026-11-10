@@ -83,7 +83,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub task ask <id> --withdraw [--requirement R] [-m "why"]   take your open ask back
     hub task answer <id> <requirement> ok|no|again|<answer> [-m "note"] --version N
                                            a bot named on an OK or a question answers it (no needs a note)
-    hub task give <id> <requirement> <person> --version N   hand what you are asked to another person
+    hub task give <id> <requirement> --to <person> --version N   hand what you are asked to another person
     hub task file --parent <id> [--pipeline general] [--owner X] "title" [--body "..."]
                                            a task this one waits on; yours unless --owner
     hub task snooze <id> [--until DATE] -m "why" --version N
@@ -2056,6 +2056,7 @@ def parser():
     s.add_argument("owner", help="a bot slug, a person id, or me")
     s.add_argument("-m", "--why", help="why, in one plain sentence")
     s.add_argument("--version", type=int, help=version_help)
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task reassign")
     s = task.add_parser(
         "ask", help="ask a person on this task, in one line; it waits for their answer, which wakes you once"
@@ -2084,7 +2085,8 @@ def parser():
     s = task.add_parser("give", help="give what you are asked on a task to another person")
     s.add_argument("id")
     s.add_argument("requirement", help="the requirement's id, from hub task show")
-    s.add_argument("to", help="the person it goes to: their id")
+    s.add_argument("to_person", nargs="?", metavar="PERSON", help=argparse.SUPPRESS)  # the older form of --to
+    s.add_argument("--to", help="the person it goes to: their id (required)")
     s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task give")
@@ -2258,9 +2260,8 @@ def parser():
     s.add_argument(
         "--kind",
         default="related",
-        choices=["blocks", "blocked_by", "related", "duplicate_of", "follow_up"],
-        help="blocks / blocked_by; related (default); duplicate_of; follow_up: it was split off or followed up "
-        "from task. A relation is a note: a task waits only on the tasks it filed",
+        help="related (default); duplicate_of; follow_up: it was split off or followed up from task. A relation is a "
+        "note: a task waits only on its requirements and the tasks it filed",
     )
     s.add_argument("--remove", action="store_true", help="take it off instead")
     s.set_defaults(fn="task relate")
@@ -2278,9 +2279,6 @@ def parser():
     s.add_argument("--poster", help="a PNG or JPEG preview")
     s.add_argument("--note", help="short note on this version (at most 500 characters)")
     s.set_defaults(fn="task attach")
-    s = task.add_parser("answers", help="list the task's structured answers, oldest first")
-    s.add_argument("id")
-    s.set_defaults(fn="task answers")
     s = task.add_parser("context", help="readable page and meeting references for a task")
     s.add_argument("id")
     s.set_defaults(fn="task context")
@@ -5224,6 +5222,7 @@ REMOVED = [
     (("answer",), ANSWER_INSTEAD),
     (("task", "question"), ASK_INSTEAD),
     (("task", "ask-resolve"), ANSWER_INSTEAD),
+    (("task", "answers"), "the answers are on the task: hub task show <id>, under To leave"),
     (("approval", "request"), ASK_INSTEAD),
     (("approval",), ANSWER_INSTEAD),
     (("approvals",), ANSWER_INSTEAD),

@@ -828,13 +828,16 @@ def run(args, who=None):
             "reassign",
             "ask",
             "answer",
-            "give",
             "file",
             "snooze",
             "unsnooze",
             "update",
         ):
             # The engine's commands (docs/pipelines-v3.md S16): each sends the version the bot passed, never one read now.
+            return unwrap(via_tool(client, args))
+        if sub == "give":  # `--to <person>`, or the person as a third word
+            args.to = args.to or args.to_person
+            del args.to_person
             return unwrap(via_tool(client, args))
         if sub == "label":
             split = lambda values: [x.strip() for one in values or [] for x in one.split(",") if x.strip()]
@@ -874,8 +877,6 @@ def run(args, who=None):
             links = s3links.apply(client, body, ("text",))
             result = s3links.annotate(post(f"tasks/{args.id}/comments", body, delegate=asked), links)
             return {**result, "visuals_local": local} if local and isinstance(result, dict) else result
-        if sub == "answers":
-            return client.get(f"tasks/{args.id}/answers")
         if sub == "comment-edit":
             body = {"text": args.text}
             if getattr(args, "approval_id", None):
@@ -902,7 +903,7 @@ def run(args, who=None):
                 delegate=asked,
             )
         if sub == "relate":
-            return post(f"tasks/{args.id}/relations", {"task": args.task, "kind": args.kind, "remove": args.remove})
+            return via_tool(client, args)  # the tool says what to do instead of blocks and blocked_by
         if sub == "attach":
             path = Path(args.file)
             body = {"name": args.name or path.name}
