@@ -8,7 +8,9 @@ import pytest
 
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post
+from backend.tests.helpers.company import with_strategy_bot
 from backend.tests.helpers.org_rules import rule
+from backend.tests.helpers.strategy_bot_level import level
 from backend.tests.test_org_rule_check import (  # noqa: F401 - fixtures
     COLOR,
     LAUNCH,
@@ -465,3 +467,61 @@ def test_a_warned_answer_with_no_note_carries_the_line_without_editing_the_task(
     [answer] = sql(api, "SELECT notes FROM answers WHERE requirement_id=?", (asked["requirement_id"],))
     assert answer["notes"].startswith("Warning:")
     assert row(api, task["id"])["note"] == before["note"]
+
+
+def strategy_rule(api, if_broken="block"):
+    return rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["goal-manager"]}, "if_broken": if_broken})
+
+
+def test_the_strategy_bots_merged_ask_a_rule_covers_is_refused_and_files_nothing(ruled):
+    api, _ = ruled
+    token = with_strategy_bot(api)
+    level(api, 2)
+    strategy_rule(api)
+    tasks = []
+    for title in ("Ship the pricing page", "Plan the launch"):
+        task = task_for_ops(api, title)
+        bots_ask(api, task, "Which pricing page goes live first?")
+        tasks.append(task["id"])
+    before = sql(api, "SELECT count(*) AS n FROM tasks")[0]["n"]
+    r = api.post(
+        "/api/v2/strategy-bot/merge",
+        json={
+            "person": "human:ana",
+            "title": "Colors",
+            "question": "May I say our favorite color is red?",
+            "tasks": tasks,
+        },
+        headers=headers(token),
+    )
+    assert r.status_code == 409 and r.json()["error"] == "task_rule", r.text
+    assert sql(api, "SELECT count(*) AS n FROM tasks")[0]["n"] == before
+    assert not sql(api, "SELECT 1 FROM strategy_merges")
+
+
+def test_a_strategy_bot_decision_that_breaks_a_rule_is_held_and_changes_nothing(ruled):
+    api, _ = ruled
+    token = with_strategy_bot(api)
+    level(api, 3)
+    strategy_rule(api)
+    before = sql(api, "SELECT count(*) AS n FROM tasks")[0]["n"]
+    change = {"do": "create", "owner": "ops", "title": "Repaint the site", "body": "Our favorite color is red."}
+    r = api.post(
+        "/api/v2/strategy-bot/decisions",
+        json={"reason": "The brand needs it.", "changes": [change]},
+        headers=headers(token),
+    )
+    assert r.status_code == 200 and r.json()["held"], r.text
+    assert sql(api, "SELECT count(*) AS n FROM tasks")[0]["n"] == before
+
+
+def test_a_warned_strategy_bot_decision_carries_the_line_on_what_it_writes(ruled):
+    api, _ = ruled
+    token = with_strategy_bot(api)
+    level(api, 3)
+    strategy_rule(api, "warn")
+    change = {"do": "create", "owner": "ops", "title": "Repaint the site", "body": "Our favorite color is red."}
+    made = post(api, "strategy-bot/decisions", {"reason": "The brand.", "changes": [change]}, token=token)
+    assert made["rule_warning"] and len(made["done"]) == 1, made
+    body = sql(api, "SELECT body FROM tasks WHERE id=?", (made["done"][0]["task_id"],))[0]["body"]
+    assert body.startswith("Warning:"), body

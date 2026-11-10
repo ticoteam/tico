@@ -41,6 +41,8 @@ org_rule_check.OPERATIONS.setdefault("task_withdraw_ask", "an ask taken back")
 org_rule_check.OPERATIONS.setdefault("task_ask_answer", "an answer on a task")
 org_rule_check.OPERATIONS.setdefault("task_ok_ask", "an ask for an OK")
 org_rule_check.OPERATIONS.setdefault("task_ok_use", "an OK used")
+org_rule_check.OPERATIONS.setdefault("strategy_merge", "an ask merged for a person")
+org_rule_check.OPERATIONS.setdefault("strategy_decision", "a decision made alone")
 
 
 def said_text(row, said, hands_over=False, hide_task=False):
@@ -242,6 +244,22 @@ class TaskRules:
                 raise Problem("task_changed", CHANGED, 409, retryable=True)
         else:
             obj_now = audience_now = None
+        self._refused(c, who, verdict, ask)
+        # The reviewer reads the write without a private task's words; the hold keeps what was judged for Send
+        # anyway's recheck alone (`judged`).
+        payload = said_text(row, said, hands_over, hide_task=bool(row and H.task_private(c, row)))
+        judged = said_text(row, said, hands_over)
+        gate = org_rule_check.apply(
+            c, verdict, payload, replay, obj_now=obj_now, audience_now=audience_now, judged=judged
+        )
+        if gate and gate.get("moved"):
+            raise Problem("task_changed", CHANGED, 409, retryable=True)
+        return gate
+
+    @staticmethod
+    def _refused(c, who, verdict, ask):
+        """What stops a write before the gate: a cause here (`LOCAL`) refuses a bot's ask and makes any write wait out
+        a busy check; a bot's ask a rule covers is refused with the rule's words."""
         cause = local_cause(verdict)
         bot_ask = ask and H.is_bot(str(verdict.get("author") or ""))
         if bot_ask and cause:
@@ -252,13 +270,40 @@ class TaskRules:
             rules = covering(verdict)
             if rules:
                 H.refuse(c, who.actor, COVERS, not_asked(rules[0]))
-        # The reviewer reads the write without a private task's words; the hold keeps what was judged for Send
-        # anyway's recheck alone (`judged`).
-        payload = said_text(row, said, hands_over, hide_task=bool(row and H.task_private(c, row)))
-        judged = said_text(row, said, hands_over)
-        gate = org_rule_check.apply(
-            c, verdict, payload, replay, obj_now=obj_now, audience_now=audience_now, judged=judged
-        )
+
+    # A task write that is not one route's move on one task (the Strategy Bot's merged ask and its decisions,
+    # backend/goal_routes.py): the same contract, checked outside the write and applied inside it, with the audience
+    # the caller names (`reach(c)`, actors) read again inside. Its hold has no Send anyway replayer: the writer edits
+    # and sends again.
+    def check_words(self, who, operation, said, reach, context=None):
+        """The verdict for a write of `said` ((label, text) pairs) reaching `reach(c)`, outside the write, or None.
+        Fails closed like `check`."""
+        try:
+            if not org_rule_check.author_of(who, self.auth.settings.assistant_bot):
+                return None
+            text = said_text(None, said)
+            if not text:
+                return None
+            with self.store.read() as c:
+                if not org_rule_check.in_force(c):
+                    return None
+            return held_locally(self.rule_check(who, operation, text, reach, context=context, track_route=True))
+        except Exception:
+            LOG.exception("Task rule check failed")
+            return org_rule_check.refused(Problem("rule_check", FAILED, 503, retryable=True))
+
+    def apply_words(self, c, who, verdict, said, reach, ask=False):
+        """`check_words`'s verdict inside the write: a refusal, a 409 when the audience moved since the check, or the
+        gate (`org_rule_check.apply`)."""
+        if not verdict:
+            return None
+        if "refused" in verdict:
+            raise verdict["refused"]
+        audience_now = reach(c) if "applied" not in verdict else None
+        if audience_now is not None and not org_rule_check.holds(verdict) and stale(verdict, None, audience_now):
+            raise Problem("task_changed", CHANGED, 409, retryable=True)
+        self._refused(c, who, verdict, ask)
+        gate = org_rule_check.apply(c, verdict, said_text(None, said), None, audience_now=audience_now)
         if gate and gate.get("moved"):
             raise Problem("task_changed", CHANGED, 409, retryable=True)
         return gate
