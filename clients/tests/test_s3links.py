@@ -118,10 +118,8 @@ def test_the_tools_rewrite_text_before_sending_and_say_so():
         api, {"id": "t1", "text": "`s3://acme-files/a.md` s3://acme-files/b.md"}
     )
     assert commented["sent"]["text"] == "`s3://acme-files/a.md` " + VIEW + "/b.md"
-    updated = hubtools.BY_NAME["hub_task_update"]["fn"](
-        api, {"id": "t1", "status": "done", "note": "s3://acme-files/r.pdf"}
-    )
-    assert updated["sent"]["note"] == VIEW + "/r.pdf"
+    done = hubtools.BY_NAME["hub_task_done"]["fn"](api, {"id": "t1", "note": "s3://acme-files/r.pdf", "version": 3})
+    assert done["sent"]["note"] == VIEW + "/r.pdf"
     chat = hubtools.BY_NAME["hub_chat_send"]["fn"](api, {"to": "finance", "text": "s3://acme-files/c.png"})
     assert chat["sent"]["text"] == VIEW + "/c.png"
     # Text without a bucket URI costs no config read and comes back as it always did.
@@ -156,7 +154,7 @@ def test_a_server_without_the_mapping_leaves_text_alone_with_the_hint():
         ),
         (["task", "comment", "t1", "s3://acme-files/d.md and s3://other-bucket/e.md"], "text"),
         (
-            ["task", "update", "t1", "--status", "done", "--note", "s3://acme-files/d.md and s3://other-bucket/e.md"],
+            ["task", "done", "t1", "-m", "s3://acme-files/d.md and s3://other-bucket/e.md", "--version", "3"],
             "note",
         ),
     ],

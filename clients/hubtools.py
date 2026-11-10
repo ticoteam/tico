@@ -47,11 +47,7 @@ def release_version():
 
 SERVER_INFO = {"name": "tico", "title": "Tico", "version": release_version()}
 ASK_WAIT_MAX = 300
-TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
-# Bots cannot set ready; a task is closed through its separate requester action.
-TASK_UPDATE_STATUSES = tuple(status for status in TASK_STATUSES if status not in ("ready", "closed"))
-# task_cap and spend_limit: proposals (backend/proposals.py).
-APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support", "task_cap", "spend_limit")
+STATUSES = ("open", "done", "closed")  # a task's status; what it waits on is its `turn`, never a status
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")  # what a person or bot sets by hand
 GOAL_FILTERS = GOAL_STATUSES + ("gray",)  # gray is the automatic "no data"
 PROPOSAL_KINDS = (
@@ -95,7 +91,6 @@ CLI_TOOL_ALIASES = {
     "hub_market_size_accept": ("hub_market_size_decide",),
     "hub_market_size_reject": ("hub_market_size_decide",),
     "hub_market_size_params": ("hub_market_size_decide",),
-    "hub_task_defer": ("hub_task_later",),  # `hub task defer` is the older name of `hub task later`
 }
 
 
@@ -916,15 +911,15 @@ def tag_update(api, args):
     "ask, the body is under 120 words, and its first paragraph is the ask: one or two plain sentences on what you "
     "need and what happens after, at most 40 words, with no ids, hashes, file paths, s3:// links or tool names "
     "(\"PR #1555\" is fine; refused otherwise), e.g. \"Approve the video tool trial for Thursday? If yes, I'll send "
-    "the invite.\" Details go below (a ticket on a custom type's board is exempt; asks stay on General). "
+    "the invite.\" Details go below. It starts in the first stage of its pipeline (General when none is named). "
     "`dry_run` reports the checks a create would fail and writes nothing. A person’s asking criteria can refuse "
-    "the write as ask_refused, with the reason and fix; no task is created. Post progress as an update.",
+    "the write as ask_refused, with the reason and fix; no task is created. To ask a person something on your own "
+    "task, use hub_task_ask.",
     {
         "owner": _s("Who does it: a bot slug, a person id, or `me`"),
-        "title": _s(
-            "Task title: General takes plain words, no reference numbers or all-caps; custom types keep board references"
-        ),
+        "title": _s("Task title: plain words, no reference numbers or all-caps"),
         "body": _s("The details", default=""),
+        "pipeline": _s("The pipeline's id; default general"),
         "visibility": _s(
             "People only: roadmap visibility at creation; public needs public_title. A bot is refused; "
             "it creates the task, then requests a publication",
@@ -932,8 +927,6 @@ def tag_update(api, args):
         ),
         "public_title": _s("People only (a bot is refused): public title; the internal title is never published"),
         "public_summary": _s("People only (a bot is refused): public summary; the internal body is never published"),
-        "check_back_at": _s("When to check progress: ISO timestamp or duration such as 45m; defaults automatically"),
-        "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
         "due": _s("ISO-8601 date-time with timezone"),
         "private": {
             "type": "boolean",
@@ -954,16 +947,14 @@ def tag_update(api, args):
             "or none",
         },
         "parent": _s(
-            "Parent task id (or 8-character short id), when this is one part of a bigger task. Blocked on a "
-            "person's approval or input? File it for them with this task as parent"
+            "The task that files it (its id, or 8-character short id): the parent waits until this one ends. "
+            "Set once, never changed"
         ),
         "request_id": _s(
             "A person's message this task carries: BotOps continuing its own chat, or another bot handing BotOps "
             "a person's request (their message id, or `turn` for the one that started this run). BotOps then acts "
             "with that person's rights, or puts it to them as a Confirm card"
         ),
-        "type": _s("Task type id or name; defaults to General"),
-        "step": _s("Step id or name within the type; sets its status"),
         "number": {
             "type": "integer",
             "minimum": 1,
@@ -973,25 +964,6 @@ def tag_update(api, args):
             "type": "array",
             "items": {"type": "string"},
             "description": "Labels: a project name, a kind (bug, front-end). Lower-case words.",
-        },
-        "change_paths": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Changed paths for the QA creation rule",
-        },
-        "qa": {"type": "boolean", "description": "Explicit QA override; false means no QA"},
-        "qa_not_checkable_live": {"type": "boolean", "description": "Rendered result needs candidate QA"},
-        "blocker": {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["repo", "status", "endpoint"],
-            "properties": {
-                "repo": {"type": "string"},
-                "status": {"type": "integer", "minimum": 100, "maximum": 599},
-                "endpoint": {"type": "string"},
-            },
-            "description": "What refused, on a task to DevOps or a person: repo, HTTP status, endpoint (e.g. "
-            "ticoteam/tico, 403, workflow_dispatch). An open ask about the same three joins this task; the reply says so",
         },
         "top": {
             "type": "boolean",
@@ -1004,18 +976,6 @@ def tag_update(api, args):
             "description": "URLs to attach: a pull request, an issue, a document",
         },
         "goal_id": _s("The goal this task serves (hub_goal_list); optional"),
-        "next_run": {
-            "type": "boolean",
-            "default": False,
-            "description": "The older name for delivery defer: a deferred task",
-        },
-        "delivery": {
-            "type": "string",
-            "enum": ["queue", "defer"],
-            "description": "For a bot owner: queue wakes it (the default); defer is a deferred task that wakes "
-            "nobody, which its next run carries, and starts a run by defer_for (24h)",
-        },
-        "defer_for": DEFER_FOR,
         "roles": {
             "type": "object",
             "additionalProperties": {"type": "array", "items": {"type": "string"}},
@@ -1040,16 +1000,13 @@ def task_create(api, args):
         "due": args.get("due"),
         "goal_id": args.get("goal_id") or None,
     }
-    if args.get("parent"):
-        body["relations"] = [{"task": args["parent"], "kind": "parent"}]
     for field in (
+        "pipeline",
+        "parent",
         "labels",
         "top",
         "links",
-        "next_run",
         "request_id",
-        "type",
-        "step",
         "number",
         "check_model",
         "check_role",
@@ -1060,17 +1017,11 @@ def task_create(api, args):
         "model",
         "effort",
         "harness",
-        "check_back_at",
-        "check_back_note",
         "readers",
         "follow",
     ):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
-    for field in ("qa", "change_paths", "qa_not_checkable_live", "blocker"):
-        if args.get(field) is not None:
-            body[field] = args[field]
-    body.update(_delivery(args))
     if args.get("private") is not None:
         body["private"] = args["private"]
     roles = _roles(api, args)
@@ -1145,47 +1096,106 @@ def task_worktree_attach(api, args):
     return command(api, 'attach', args['path'], args.get('task'))
 
 
-@tool(
-    "hub_requirements",
-    "The rules a pipeline stage sets (its requirements, with their kind, reviewer and version). Read-only.",
-    {"stage_id": _s("The pipeline stage (a task step id)")},
-    required=("stage_id",),
-)
-def requirements(api, args):
-    return api.get("pipeline-stages/" + args["stage_id"] + "/requirements")
+# The task engine's commands (docs/pipelines-v3.md S16, docs/dev/pipelines-v3-cutover.md "Bot commands"). Every change
+# carries the version the caller was shown: hub_task_show, a list row and every wake print it. The tools are stateless:
+# none reads the task to find a version just before it writes, because a version read then would check nothing.
+VERSION = {
+    "type": "integer",
+    "minimum": 0,
+    "description": "The task's version you were last shown (hub_task_show, a list row or your wake: \"version 12\"). "
+    "Changed since: refused as task_changed with the version it has now; read the task again and decide again",
+}
+WHY = _s("Why, in one plain sentence. A bot always says why")
 
 
-@tool(
-    "hub_requirement_attach",
-    "Attach evidence to a requirement of the ticket's current stage: a company file (source file, with file_id and "
-    "optionally file_version), an uploaded blob (source blob, with blob_id) or a link (source link, with url). The "
-    "requirement's reviewer must be able to read the ticket. Returns the attachment with its digest and work version.",
-    {
-        "task_id": TASK_ID,
-        "requirement_id": _s("The stage requirement to attach to"),
-        "source": {"type": "string", "enum": ["file", "blob", "link"]},
-        "file_id": _s("A company file (source file)"),
-        "file_version": {"type": "integer", "minimum": 1, "description": "The file version; left out, the current one"},
-        "blob_id": _s("An uploaded blob (source blob)"),
-        "url": _s("An http or https address (source link)"),
-    },
-    required=("task_id", "requirement_id", "source"),
-    writes=True,
-)
-def requirement_attach(api, args):
-    body = {k: args[k] for k in ("source", "file_id", "file_version", "blob_id", "url") if args.get(k) is not None}
-    path = f"tasks/{args['task_id']}/requirements/{args['requirement_id']}/attachments"
-    return api.post(path, body, key=_key(args))
+def _seen(args):
+    """The version the caller was shown, as it was given. Without one the caller is told to read the task first."""
+    version = args.get("version")
+    if version in (None, ""):
+        raise ValueError(f"Run `hub task show {args.get('id') or '<id>'}` first.")
+    return version
+
+
+def _why(args, field="why"):
+    return {field: args[field]} if args.get(field) not in (None, "") else {}
+
+
+def _who(actor):
+    """An actor as people read it: its name when the server sends one, else its id."""
+    if isinstance(actor, dict):
+        return str(actor.get("name") or actor.get("id") or "")
+    return str(actor or "")
+
+
+def _ref(task):
+    return f"#{task['number']}" if task.get("number") else str(task.get("id") or "")
+
+
+def turn_line(turn):
+    """The headline wait in one line: who has the turn and why, "Builder (stopped early, try 2 of 3)"."""
+    if not turn:
+        return ""
+    head, line = _who(turn.get("who")) or str(turn.get("state") or ""), str(turn.get("line") or "")
+    text = f"{head} ({line})" if head and line else head or line
+    return text + (f", until {turn['until']}" if turn.get("until") else "")
+
+
+def task_text(task):
+    """`hub task show` as a bot reads it: the version; pipeline, stage and owner; whose turn it is; what it takes to
+    leave the stage, each requirement met or not with its id; the next stage; the task that filed it."""
+    stage = task.get("stage") or {}
+    lines = [f"{_ref(task)} {task.get('title') or ''}   version {task.get('version')}"]
+    owner = _who(task.get("owner_id") or task.get("owner"))
+    place = [(task.get("pipeline") or {}).get("name"), stage.get("name"), f"owner {owner}" if owner else None]
+    lines.append(" · ".join(p for p in place if p))
+    if task.get("status") not in (None, "open"):
+        lines.append(f"Status: {task['status']}")
+    if task.get("turn"):
+        lines.append("Turn: " + turn_line(task["turn"]))
+    late = task.get("late")
+    if late:
+        lines.append(f"Late since {late.get('since')}" + (", with a person" if late.get("level") == "person" else ""))
+    to_leave = task.get("to_leave") or []
+    lines.append(f"To leave {stage.get('name') or 'this stage'}:" + ("" if to_leave else " nothing"))
+    for item in to_leave:
+        words = [f"  {'met' if item.get('met') else 'not met':<8} {item.get('line') or item.get('kind') or ''}"]
+        if not item.get("met") and item.get("standing"):
+            words.append(str(item["standing"]))  # how it stands: "Sent back: ...", "No task filed yet"
+        if not item.get("met") and _who(item.get("who")):
+            words.append(f"(waits on {_who(item['who'])})")
+        answer = item.get("answer")
+        if answer:
+            words.append(f"answer: {answer.get('value')}" + (f", {answer['note']}" if answer.get("note") else ""))
+        if item.get("choices"):
+            words.append("choices: " + ", ".join(str(c) for c in item["choices"]))
+        words.append(f"id {item.get('requirement_id')}")
+        if item.get("may"):
+            words.append("you may: " + ", ".join(item["may"]))
+        lines.append("  ".join(words))
+    following = task.get("next")
+    lines.append("Next: " + ((following or {}).get("name") or "none"))
+    if task.get("filed_by"):
+        lines.append(f"Filed by: {task['filed_by']}")
+    for filed in task.get("filed") or []:
+        title = filed.get("title") or "(not yours to read)"
+        lines.append(f"Filed: {filed.get('id')} {title} ({filed.get('status')})")
+    return "\n".join(lines)
 
 
 @tool(
     "hub_task_show",
-    "One task with its history and conversation. For several tasks, hub_task_show_many reads them in one call.",
+    "One task: its version; pipeline, stage and owner; whose turn it is; what it takes to leave the stage (each "
+    "requirement, met or not, with its id and what you may do with it); the next stage; the task that filed it. "
+    "`text` says it in lines. Send its version with every change you make to the task. For several tasks, "
+    "hub_task_show_many reads them in one call.",
     {"id": TASK_ID},
     required=("id",),
 )
 def task_show(api, args):
-    return api.get("tasks/" + args["id"])
+    shown = api.get("tasks/" + args["id"])
+    if not isinstance(shown, dict):
+        return shown
+    return {**shown, "text": task_text(shown.get("task") if isinstance(shown.get("task"), dict) else shown)}
 
 
 @tool(
@@ -1213,141 +1223,280 @@ def task_run(api, args):
 
 
 @tool(
-    "hub_task_check_back",
-    "Set when to follow up unfinished bot-owned or bot-requested work. "
-    "Use a time conservatively longer than the expected work. Inspect the actual result or handoff when woken; "
-    "repair missing assignments before waiting again. Human-only tasks are excluded. A human snooze takes precedence.",
+    "hub_task_done",
+    "Say the work of this stage is finished, with what was done. It never pushes past anything: while something else "
+    "is missing it is refused with what is missing and the commands you may run instead. In the last stage the task "
+    "is Done.",
     {
         "id": TASK_ID,
-        "at": _s("ISO date-time with timezone or duration such as 45m or 2h"),
-        "note": _s("The result or handoff to inspect, at most 500 characters"),
+        "note": _s("What was done, in a few plain sentences"),
+        "version": VERSION,
+        "on_behalf_of": ASKED,
     },
-    required=("id", "at"),
+    required=("id",),
     writes=True,
 )
-def task_check_back(api, args):
-    return api.post(f"tasks/{args['id']}/check-back", {"at": args["at"], "note": args.get("note")}, key=_key(args))
+def task_done(api, args):
+    body = {"version": _seen(args), **_why(args, "note")}
+    links = s3links.apply(api, body, ("note",))
+    return s3links.annotate(_asked(api, args).post(f"tasks/{args['id']}/done", body, key=_key(args)), links)
+
+
+@tool(
+    "hub_task_move",
+    "Move a task: `next` (forward; with a why, past what is not met), back to an earlier stage by its name or id, "
+    "`done`, `closed` or `reopen`. Forward with something not met and no why is refused with what is missing and "
+    "the commands you may run. A bot says why for every move but forward; reopen needs a why from everyone. A bot "
+    "does not reopen what a person closed.",
+    {
+        "id": TASK_ID,
+        "to": _s("next, done, closed, reopen, or a stage's name or id"),
+        "why": WHY,
+        "version": VERSION,
+        "on_behalf_of": ASKED,
+    },
+    required=("id", "to"),
+    writes=True,
+)
+def task_move(api, args):
+    body = {"to": args["to"], "version": _seen(args), **_why(args)}
+    links = s3links.apply(api, body, ("why",))
+    return s3links.annotate(_asked(api, args).post(f"tasks/{args['id']}/move", body, key=_key(args)), links)
+
+
+@tool(
+    "hub_task_close",
+    "Close a task, with why: it is never refused for what is missing, and its open sub-tasks close with it. A bot "
+    "cannot close a task a person asked for: it asks that person instead (hub_task_ask). BotOps closes with the "
+    "rights of the person who asked it.",
+    {"id": TASK_ID, "why": WHY, "version": VERSION, "on_behalf_of": ASKED},
+    required=("id",),
+    writes=True,
+)
+def task_close(api, args):
+    body = {"to": "closed", "version": _seen(args), **_why(args)}
+    path = f"tasks/{args['id']}/move"
+    links = s3links.apply(api, body, ("why",))
+    if args.get("on_behalf_of"):
+        return s3links.annotate(_asked(api, args).post(path, body, key=_key(args)), links)
+    requester = _as_person(api)
+    if requester is not api:
+        try:
+            return s3links.annotate(requester.post(path, body, key=_key(args)), links)
+        except Exception as exc:
+            if getattr(exc, "code", None) != "on_behalf_of":
+                raise
+            # Fleet work has no person's request behind it: BotOps closes with its own rights.
+    return s3links.annotate(api.post(path, body, key=_key(args)), links)
+
+
+@tool(
+    "hub_task_reassign",
+    "Give the task to another bot or person for this stage. It raises the version and starts the tries again; the "
+    "old owner's queued wakes for it are dropped.",
+    {"id": TASK_ID, "owner": _s("The new owner: a bot slug, a person id, or `me`"), "why": WHY, "version": VERSION},
+    required=("id", "owner"),
+    writes=True,
+)
+def task_reassign(api, args):
+    version = _seen(args)
+    body = {"owner": _target(api, args["owner"]), "version": version, **_why(args)}
+    return api.post(f"tasks/{args['id']}/owner", body, key=_key(args))
 
 
 @tool(
     "hub_task_snooze",
-    "Set a task aside until a date: it leaves the board, task lists and Needs you, and nothing "
-    "wakes its bot about it (no Due reminder; a person's comment still does) until "
-    "then, when it is back and its owner bot is woken once. Its requester, owner, anyone on it by role, or a mover. "
-    "Snoozing again moves the date. `note` says what to check when the snooze ends: it comes back in the wake "
-    "(at most 500 characters).",
+    "Set a task aside in its stage, with why: no wakes, no Late, and it leaves Needs you until its date or until "
+    "someone unsnoozes it; its owner is then woken once. Give a date wherever there is one (\"vendor replies by Nov "
+    "14\"); with none it is On ice and the manager bot is told. A bot's fourth snooze in one stage goes to the manager "
+    "bot instead. Any move ends a snooze.",
     {
         "id": TASK_ID,
         "until": _s("An ISO-8601 date (the start of that day, Pacific) or date-time with a zone"),
-        "note": _s("What to check when the snooze ends, in a sentence or two"),
-    },
-    required=("id", "until"),
-    writes=True,
-)
-def task_snooze(api, args):
-    return api.post(f"tasks/{args['id']}/snooze", {"until": args["until"], "note": args.get("note")}, key=_key(args))
-
-
-@tool(
-    "hub_task_waive_qa",
-    "A person waives a Dev ticket's current In QA step for one exact pull request head, with a "
-    "reason: the ticket's owner or a manager. Recorded in its history as a waiver, never as a QA pass; refused unless "
-    "the head is the open pull request's current head with every hosted check passed and Review 1 and Review 2 "
-    "each approving it. CI, Review 1, Review 2 and release approval cannot be waived, and a bot cannot waive QA.",
-    {
-        "id": TASK_ID,
-        "head": _s("The pull request's current head: the full 40-character commit sha"),
-        "reason": _s("Why QA is waived, in plain words"),
-    },
-    required=("id", "head", "reason"),
-    writes=True,
-)
-def task_waive_qa(api, args):
-    return api.post(f"tasks/{args['id']}/qa-waiver", {"head": args["head"], "reason": args["reason"]}, key=_key(args))
-
-
-@tool(
-    "hub_task_later",
-    "A deferred task carried into this run that you will not do now: say when it is "
-    "picked up again, and it gets one run of its own then. Exactly one of `after` (when that task is done or closed), "
-    "`at` (a time), `next_run` (with your next run), or `handled` (this run is done with it for now). With none, "
-    "and without working it, your next run is handed it again. The task's own bot, or a person.",
-    {
-        "id": TASK_ID,
-        "after": _s("A task id or number: pick it up when that task is done or closed"),
-        "at": _s("An ISO-8601 date-time with a zone, or a date (the start of that day, Pacific)"),
-        "next_run": {"type": "boolean", "description": "Pick it up with your next run, whatever starts it"},
-        "handled": {"type": "boolean", "description": "This run is done with it for now; nothing to resume"},
+        "why": WHY,
+        "version": VERSION,
     },
     required=("id",),
     writes=True,
 )
-def task_later(api, args):
-    return api.post(
-        f"tasks/{args['id']}/later",
-        {
-            "after": args.get("after"),
-            "at": args.get("at"),
-            "next_run": bool(args.get("next_run")),
-            "handled": bool(args.get("handled")),
-        },
-        key=_key(args),
-    )
+def task_snooze(api, args):
+    body = {"version": _seen(args), **_why(args, "until"), **_why(args)}
+    return api.post(f"tasks/{args['id']}/snooze", body, key=_key(args))
 
 
 @tool(
     "hub_task_unsnooze",
-    "Bring a snoozed task back now, before its date; its owner bot is woken once.",
-    {"id": TASK_ID},
+    "A person brings a snoozed task back now; its owner is woken once.",
+    {"id": TASK_ID, "why": _s("Why, in a sentence; optional")},
     required=("id",),
     writes=True,
 )
 def task_unsnooze(api, args):
-    return api.post(f"tasks/{args['id']}/unsnooze", {}, key=_key(args))
+    return api.post(f"tasks/{args['id']}/unsnooze", _why(args), key=_key(args))
+
+
+def _own_ask(api, task_id, requirement=None):
+    """The requirement id of the ask to withdraw: the one named, else the one ask on the task the caller may withdraw.
+    The read finds which ask; the withdraw carries no version."""
+    if requirement:
+        return requirement
+    shown = api.get("tasks/" + task_id)
+    task = shown.get("task", shown) if isinstance(shown, dict) else {}
+    mine = [r for r in task.get("to_leave") or [] if "withdraw" in (r.get("may") or [])]
+    if len(mine) == 1:
+        return mine[0]["requirement_id"]
+    if not mine:
+        raise ValueError(f"No ask of yours to withdraw on {task_id}")
+    raise ValueError(
+        f"{len(mine)} asks on {task_id} may be withdrawn: name one with --requirement "
+        + ", ".join(r["requirement_id"] for r in mine)
+    )
+
+
+@tool(
+    "hub_task_ask",
+    "Ask a person on this task, in one sentence: a question (with choices, or a typed answer) or an OK. The task "
+    "stays in its stage until they answer, it is one line in their Needs you, and their answer wakes you once. "
+    "Asking again in this stage replaces your earlier ask. A rule they set may refuse it with the rule's words: act on "
+    "the rule instead. `withdraw` takes your open ask back.",
+    {
+        "id": TASK_ID,
+        "to": _s("The person you ask: their id"),
+        "line": _s("The one sentence they are asked, readable on its own", maxLength=300),
+        "kind": {
+            "type": "string",
+            "enum": ["answer", "ok"],
+            "description": "answer (the default): a question; ok: they approve it or send it back with a note",
+        },
+        "choices": {
+            "type": "array",
+            "items": {"type": "string", "maxLength": 60},
+            "minItems": 2,
+            "maxItems": 6,
+            "description": "The answers to pick from; they may also type their own",
+        },
+        "show": {
+            "type": "array",
+            "items": _s("page:<id>, file:<id>@<version> or a link"),
+            "maxItems": 10,
+            "description": "What they look at to answer, shown with the ask",
+        },
+        "withdraw": {"type": "boolean", "description": "Take back your open ask on this task instead"},
+        "requirement": _s("With withdraw: the ask's requirement id, when more than one may be withdrawn"),
+        "why": _s("With withdraw: why, in a sentence"),
+        "version": VERSION,
+    },
+    required=("id",),
+    writes=True,
+)
+def task_ask(api, args):
+    if args.get("withdraw"):
+        requirement = _own_ask(api, args["id"], args.get("requirement"))
+        path = f"tasks/{args['id']}/asks/{quote(requirement, safe='')}"
+        return api.call("DELETE", path, _why(args), key=_key(args))
+    missing = [name for name in ("to", "line") if not args.get(name)]
+    if missing:
+        raise ValueError(f"An ask names who it is for and the one line they are asked: give {' and '.join(missing)}")
+    body = {"to": args["to"], "line": args["line"], "version": _seen(args)}
+    for field in ("kind", "choices", "show"):
+        if args.get(field):
+            body[field] = args[field]
+    return api.post(f"tasks/{args['id']}/asks", body, key=_key(args))
+
+
+@tool(
+    "hub_task_answer",
+    "Answer what you are asked on a task (a bot named on an OK or a question): ok, no (send it back, with a note), "
+    "again (look again), or your answer. The requirement id is in hub_task_show's To leave.",
+    {
+        "id": TASK_ID,
+        "requirement": _s("The requirement's id"),
+        "value": _s("ok, no, again, or your answer: one of its choices or your own words"),
+        "note": _s("What they read with it, word for word; required with no"),
+        "version": VERSION,
+        "on_behalf_of": ASKED,
+    },
+    required=("id", "requirement", "value"),
+    writes=True,
+)
+def task_answer(api, args):
+    body = {"value": args["value"], "version": _seen(args), **_why(args, "note")}
+    path = f"tasks/{args['id']}/asks/{quote(args['requirement'], safe='')}/answer"
+    return _asked(api, args).post(path, body, key=_key(args))
+
+
+@tool(
+    "hub_task_give",
+    "Give what you are asked on a task to another person: the ask leaves your list and goes to theirs. The "
+    "requirement id is in hub_task_show's To leave.",
+    {
+        "id": TASK_ID,
+        "requirement": _s("The requirement's id"),
+        "to": _s("The person it goes to: their id"),
+        "version": VERSION,
+        "on_behalf_of": ASKED,
+    },
+    required=("id", "requirement", "to"),
+    writes=True,
+)
+def task_give(api, args):
+    body = {"to": args["to"], "version": _seen(args)}
+    path = f"tasks/{args['id']}/asks/{quote(args['requirement'], safe='')}/give"
+    return _asked(api, args).post(path, body, key=_key(args))
+
+
+@tool(
+    "hub_task_file",
+    "File a task from the task you work on: that task waits until this one ends, and its owner is woken once then. "
+    "Yours by default, in General unless you name a pipeline. Sub-tasks nest at most 5 deep.",
+    {
+        "parent": TASK_ID,
+        "title": _s("What the new task is for, in plain words"),
+        "body": _s("The details", default=""),
+        "owner": _s("Who does it: a bot slug, a person id, or `me` (the default)"),
+        "pipeline": _s("The pipeline's id; default general"),
+        "due": _s("ISO-8601 date-time with timezone"),
+        "labels": {"type": "array", "items": {"type": "string"}, "description": "Lower-case labels"},
+        "private": {"type": "boolean", "description": "Only its requester, owner and readers see it"},
+    },
+    required=("parent", "title"),
+    writes=True,
+)
+def task_file(api, args):
+    fields = ("parent", "title", "body", "pipeline", "due", "labels", "private", "operation_id")
+    return task_create(api, {**{k: args[k] for k in fields if k in args}, "owner": args.get("owner") or "me"})
 
 
 @tool(
     "hub_task_list",
-    "Tasks you may see, filtered; each has its full `id` and an 8-character `short_id` that every task tool accepts. Your own come back in queue order: the "
-    "first is what to do next. `all` also returns every bot you may see (the board: `{tasks, bots}`). `stuck` is "
-    "BotOps's sweep: every bot's open work that has not moved in a day and waits on nobody (no human owes an "
-    "answer, no open blocker, no run queued).",
+    "Tasks you may see, filtered; each has its full `id`, an 8-character `short_id` that every task tool accepts, its "
+    "`version` (send it with a change), its `stage_id` and its `turn` (whose turn it is, and the line why). Your own "
+    "come back in queue order: the first is what to do next. `all` also returns every bot you may see (`{tasks, "
+    "bots}`).",
     {
         "owner": _s("Owner: a bot slug, a human id, or `me`"),
         "requester": _s("Requester: a bot slug, a human id, or `me`"),
         "q": _s("Title words or #N"),
         "status": {
             "type": "array",
-            "items": {"type": "string", "enum": list(TASK_STATUSES)},
+            "items": {"type": "string", "enum": list(STATUSES)},
             "description": "Only these statuses",
         },
-        "lane": {"type": "string", "enum": ["company", "product"]},
         "label": _s("Only tasks carrying this label"),
-        "type": _s("Only tasks of this type (id or name)"),
-        "step": _s("Only tasks in this step (id or name; with `type`, that type's step)"),
         "sort": {
             "type": "string",
-            "enum": ["queue", "finished", "step"],
-            "description": "queue (default), finished (most recently done first) or step (a board's columns in order)",
+            "enum": ["queue", "finished"],
+            "description": "queue (default) or finished (most recently ended first)",
         },
         "number": {"type": "integer", "minimum": 1, "maximum": 999999999, "description": "Only this task number"},
         "updated_since": _s("Only tasks changed after this ISO-8601 time with a timezone"),
         "member": _s("Only tasks this person or bot is on in some role (`me`, a human id or a bot slug)"),
         "role": _s("With member: only tasks they are on in this role"),
-        "brief": {"type": "boolean", "description": "Leave out each task's body and acceptance criteria"},
+        "brief": {"type": "boolean", "description": "Leave out each task's body"},
         "all": {
             "type": "boolean",
             "default": False,
-            "description": "The board: every task and every bot you may see, as `{tasks, bots}`",
-        },
-        "stuck": {
-            "type": "boolean",
-            "default": False,
-            "description": "Only open work untouched for `hours` that waits on nobody (BotOps's sweep)",
-        },
-        "hours": {
-            "type": "integer",
-            "description": "With `stuck`: untouched for at least this many hours (default 24)",
+            "description": "Every task and every bot you may see, as `{tasks, bots}`",
         },
         "snoozed": {
             "type": "string",
@@ -1357,13 +1506,7 @@ def task_unsnooze(api, args):
     },
 )
 def task_list(api, args):
-    if args.get("stuck"):
-        return api.get("tasks/stuck", hours=args.get("hours") or 24)["tasks"]
-    more = {
-        name: args[name]
-        for name in ("type", "step", "sort", "number", "updated_since", "snoozed", "q")
-        if args.get(name)
-    }
+    more = {name: args[name] for name in ("sort", "number", "updated_since", "snoozed", "q") if args.get(name)}
     if args.get("member"):
         more["member"] = _target(api, args["member"])
         if args.get("role"):
@@ -1375,410 +1518,44 @@ def task_list(api, args):
         owner=_target(api, args.get("owner")) if args.get("owner") else None,
         requester=_target(api, args.get("requester")) if args.get("requester") else None,
         status=",".join(args["status"]) if args.get("status") else None,
-        lane=args.get("lane") or None,
         label=args.get("label") or None,
         **more,
     )["tasks"]
     return {"tasks": rows, "bots": api.get("bots")} if args.get("all") else rows
 
 
-@tool(
-    "hub_task_question",
-    "Put one decision to a person as a task they own, in one call: a pick between 2 to 6 options (an option may "
-    "carry an image or file) or, with no options, Yes / No. Asked from a run on one of your tasks it is that task's "
-    "subtask and your task is blocked on it; their answer closes it and you hear it once. Never to a bot: ask a bot "
-    "in a DM. One decision, readable on its own. Each option says what happens if picked (`then`); several picks "
-    "(`multi`) mark the ones you recommend; no ids, paths, tool names or error output outside `body`, or it is refused "
-    "with what to fix, as the person's asking criteria may (ask_refused). One open question per topic: asked again "
-    "while your earlier one on the same topic (same `topic`, else the same parent) is open, it updates that one "
-    "(`folded: true`). Refused before anything is written: a question whose default is reversible and internal "
-    "(ask_default_go_ahead: just do it and note it on your task), and one an open question to the same person "
-    "already covers (ask_duplicate: wait on that one).",
-    {
-        "question": _s("The question, readable with no other context", maxLength=300),
-        "on": _s("The person who decides: their id"),
-        "why": _s("One plain line on why it matters, shown under the question", maxLength=200),
-        "multi": {
-            "type": "boolean",
-            "description": "Several picks: the person ticks the ones they want (Yes to all, "
-            "or Send ticked); each unticked one comes back to you as \"not this one\". Mark recommended ones",
-        },
-        "options": {
-            "type": "array",
-            "minItems": 2,
-            "maxItems": 6,
-            "description": "The choices; omit for Yes / No",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["label", "then"],
-                "properties": {
-                    "label": _s("A short label", maxLength=60),
-                    "then": _s(
-                        "What happens if it is picked, in a few plain words (\"engineering starts building\")",
-                        maxLength=120,
-                    ),
-                    "recommended": {
-                        "type": "boolean",
-                        "description": "You recommend it: pre-ticked among several picks (multi needs at least one)",
-                    },
-                    "description": _s("One line more about it", maxLength=200),
-                    "path": _s("A local image or file shown with this option (on the computer that runs you)"),
-                },
-            },
-        },
-        "title": _s("Task title; defaults to the question"),
-        "body": _s("What the decision is for; defaults to the question"),
-        "parent": _s("Parent task id, when this decision is part of a bigger task"),
-        "topic": _s(
-            "A short key for what this decides, e.g. backup-model: your open question to them with the same key, "
-            "under any task, is updated rather than a second one opened",
-            maxLength=80,
-        ),
-        "private": {
-            "type": "boolean",
-            "description": "Only you and the person may read it; they must already "
-            "read the private task you are working on, and the parent",
-        },
-        "if_no_answer": {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["do", "kind"],
-            "description": "What you do if they don't answer: do: \"Yes\" (an option) or a plain sentence. A reversible, "
-            "internal step is not asked (refused as ask_default_go_ahead: do it and note it on your task). A default "
-            "for a send, spending or a delete waits for an answer. Unanswered asks expire after 14 days",
-            "properties": {
-                "do": _s("What you will do: one of the options, or one plain sentence", maxLength=300),
-                "kind": {
-                    "type": "string",
-                    "enum": ["reversible", "send", "spend", "delete"],
-                    "description": "What that step is: reversible and internal, or a send, spending money or a delete",
-                },
-                "by": _s("ISO-8601 date-time with timezone: go ahead then instead of after the team's days"),
-            },
-        },
-        "review": {
-            "type": "array",
-            "maxItems": 10,
-            "items": _s("FILE or FILE@N, or a local path (published first)"),
-            "description": "File versions they review, shown on the card: with no options, Approve / Request "
-            "changes. The answer says what was judged of each exact version (`reviewed`); hub_file_approved "
-            "checks one later",
-        },
-        "pick": {
-            "type": "boolean",
-            "description": "Each reviewed file (2 to 5) is its own option, plus Request changes",
-        },
-        "spend": {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["label", "amount", "what"],
-            "description": "Picking `label` also approves this spend: the answer's `spend_approval` is consumed once",
-            "properties": {
-                "label": _s("The option that approves it", maxLength=60),
-                "amount": _s("The amount, e.g. 12.50", maxLength=40),
-                "what": _s("What it pays for", maxLength=200),
-                "account": _s("The account it comes from (default gateway)", maxLength=80),
-            },
-        },
-    },
-    required=("question", "on"),
-    writes=True,
-)
-def task_question(api, args):
-    options = [dict(o) for o in args.get("options") or []]
-    recommend = {str(x).strip() for x in args.get("recommend") or []}
-    for item in args.get("option") or []:  # the CLI's --option "LABEL[=FILE] -> WHAT HAPPENS", repeatable
-        head, _, then = str(item).partition("->")
-        label, _, path = head.partition("=")
-        options.append(
-            {
-                "label": label.strip(),
-                **({"then": then.strip()} if then.strip() else {}),
-                **({"recommended": True} if label.strip() in recommend else {}),
-                **({"path": path.strip()} if path.strip() else {}),
-            }
-        )
-    if options and not 2 <= len(options) <= 6:
-        raise ValueError("A question has 2 to 6 options, or none for Yes / No")
-    if any(o.get("path") for o in options) and not hasattr(api, "post_multipart"):
-        raise ValueError("Option files are read on the computer that runs you: use hub task question there")
-    for option in options:
-        path = option.pop("path", None)
-        if path:  # read before anything is sent: one write or none
-            from . import bot_files as BF
-
-            local, _ = BF.local_file(BF.checkout_root(), path)
-            option["file"] = {"name": Path(path).name, "content_base64": base64.b64encode(local.read_bytes()).decode()}
-    body = {"question": args["question"], "on": args["on"], "options": options}
-    for field in ("title", "body", "parent", "private", "topic", "why", "multi"):
-        if args.get(field) is not None:
-            body[field] = args[field]
-    default = args.get("if_no_answer")
-    if isinstance(default, str):  # the CLI's --if-no-answer "..." --default-kind K [--by D]
-        if not args.get("default_kind"):
-            # Stated, never assumed: a forgotten kind on "send the reply to the vendor" would otherwise go ahead.
-            raise ValueError(
-                "Say what kind of step --if-no-answer is: --default-kind reversible, send, spend or delete"
-            )
-        default = {"do": default, "kind": args["default_kind"], **({"by": args["by"]} if args.get("by") else {})}
-    if default:
-        body["if_no_answer"] = default
-    if args.get("review"):
-        body["review"] = [_review_ref(api, value, args, index) for index, value in enumerate(args["review"])]
-    if args.get("pick"):
-        body["pick"] = True
-    spend = args.get("spend")
-    if isinstance(spend, str):  # the CLI's --spend "LABEL=AMOUNT:WHAT"
-        label, _, rest = spend.partition("=")
-        amount, _, what = rest.partition(":")
-        if not (label.strip() and amount.strip() and what.strip()):
-            raise ValueError('--spend is "LABEL=AMOUNT:WHAT", e.g. "Approve=12.50:render the final cut"')
-        spend = {"label": label.strip(), "amount": amount.strip(), "what": what.strip()}
-    if spend:
-        body["spend"] = {**spend, **({"account": args["spend_account"]} if args.get("spend_account") else {})}
-    return api.post("task-questions", body, key=_key(args))
-
-
 FILE_REF = re.compile(r"[^/@\s]+(?:@[1-9][0-9]*)?")
-
-
-def _review_ref(api, value, args, index):
-    """{file, version} for one --review: FILE[@N] as given, or a path in this checkout published first (as
-    `hub file publish` does), so the version under review is the bytes on disk now."""
-    text = str(value).strip()
-    if FILE_REF.fullmatch(text) and not os.path.exists(text):
-        fid, _, number = text.partition("@")
-        return {"file": fid, **({"version": int(number)} if number else {})}
-    if not hasattr(api, "post_multipart"):
-        raise ValueError("A path is read on the computer that runs you: use hub task question there, or give FILE@N")
-    made = files_publish_path(
-        api,
-        {
-            "path": text,
-            **({"task": args["parent"]} if args.get("parent") else {}),
-            "operation_id": _key(args, f":review:{index}"),
-        },
-    )
-    if made.get("refused"):
-        raise ValueError(made.get("detail") or f"{text} could not be published")
-    return {"file": made["file"]["id"], "version": made["file"]["version"]}
-
-
-# hub_task_update and hub_task_done: the note stays on the task and chat hears only the title and status (the API's
-# `quiet`). `quiet` is still accepted as the older name.
-BRIEF = {"type": "boolean", "description": "Keep the note on the task; chat receives only its title and status"}
-BRIEF_OLD = {"type": "boolean", "description": "Older name for brief"}
 
 
 @tool(
     "hub_task_update",
-    "Move a task you own: status, note, owner, due, labels, title, who is on it by role, or what blocks it. "
-    "Finish with `status: done` and a concise result note; the requester closes. To reopen your done task, set doing "
-    "or open; open requires a note and holds automatic starts for 60 minutes unless a comment, new link or finished "
-    "blocker changes it. The requester closes with hub_task_close.",
+    "Edit a task's fields: title, body, due, labels, privacy, goal, with a note. Where it is and who has it change "
+    "by hub_task_done, hub_task_move, hub_task_close and hub_task_reassign, never here.",
     {
         "id": TASK_ID,
+        "title": _s("A new title; it is checked as a new task's title would be"),
+        "body": _s("A new body"),
+        "due": _s("ISO-8601 date-time with timezone"),
+        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
         "private": {
             "type": "boolean",
             "description": "Tighten visibility; only the direct human requester can publish",
         },
-        "visibility": _s("Roadmap publication", enum=["public", "private"]),
-        "public_title": _s("Public title, separate from internal title"),
-        "public_summary": _s("Public summary, separate from internal body"),
-        "approval_id": _s("Exact publish approval for bot public edits"),
-        "size": {"type": "number", "minimum": 0},
-        "title": _s("A new title; it is checked as a new task's title would be"),
-        "status": {"type": "string", "enum": list(TASK_UPDATE_STATUSES)},
-        "type": _s("Task type id or name"),
-        "step": _s("Step id or name within the task type; sets status. An empty string clears it"),
-        "step_rank": {"type": "number", "description": "Its place within its step, lower first"},
-        "number": {"type": "integer", "minimum": 1, "description": "Movers: the number of a task that has none"},
-        "note": _s("What changed, or the result"),
-        "brief": BRIEF,
-        "quiet": BRIEF_OLD,
-        "owner": _s("Hand the task to this bot or person"),
-        "check_back_at": _s("When to check progress: ISO timestamp or duration such as 45m; defaults automatically"),
-        "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
-        "due": _s("ISO-8601 date-time with timezone"),
-        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
-        "waiting_on": _s(
-            "With status waiting: the person you need (their id). The note is your question to them, under the same "
-            "rules as hub_task_create's body (its first paragraph). It becomes a question task for them under this one; "
-            "this task stays yours, blocked on it, and reopens with their answer. Not a bot: message a bot in a DM, or "
-            "link its task with hub_task_relate"
-        ),
-        "roles": {
-            "type": "object",
-            "additionalProperties": {"type": "array", "items": {"type": "string"}},
-            "description": "Who is on it by role, {role: [people or bots]}: a named role's people are replaced, [] clears "
-            "it, an unnamed role stays. Roles are short names the team picks (developer, reviewer, qa); one person may hold several",
-        },
         "goal_id": _s("The goal this task serves; an empty string takes it off"),
-        "verdict": _s(
-            "A review or QA subtask's verdict; the task that asked for it is woken with it",
-            enum=["approve", "changes", "pass", "fail"],
-        ),
-        "verdict_head": _s("The pull request head (commit sha, 7 to 40 hex characters) the verdict judged"),
+        "note": _s("What changed, in a sentence"),
+        "version": VERSION,
         "on_behalf_of": ASKED,
     },
     required=("id",),
     writes=True,
 )
 def task_update(api, args):
-    current = api.get("tasks/" + args["id"])["task"]
-    body = {
-        "version": current["version"],
-        "note": args.get("note"),
-        "status": args.get("status"),
-        "owner": args.get("owner"),
-        "due": args.get("due"),
-        "goal_id": args.get("goal_id"),
-    }
-    if args.get("brief") or args.get("quiet"):  # `quiet`: brief's older name
-        body["quiet"] = True
-    if args.get("labels") is not None:
-        body["labels"] = args["labels"]
-    for field in (
-        "title",
-        "type",
-        "step",
-        "step_rank",
-        "number",
-        "visibility",
-        "public_title",
-        "public_summary",
-        "approval_id",
-        "size",
-        "verdict",
-        "verdict_head",
-        "check_back_at",
-        "check_back_note",
-    ):
+    body = {"version": _seen(args)}
+    for field in ("title", "body", "due", "labels", "private", "goal_id", "note"):
         if args.get(field) is not None:
             body[field] = args[field]
-    if args.get("private") is not None:
-        body["private"] = args["private"]
-    if args.get("waiting_on") is not None:
-        body["waiting_on"] = args["waiting_on"]
-    roles = _roles(api, args)
-    if roles:
-        body["roles"] = roles
     links = s3links.apply(api, body, ("note",))
     return s3links.annotate(_asked(api, args).post("tasks/" + args["id"], body, key=_key(args)), links)
-
-
-@tool(
-    "hub_task_done",
-    "Finish a task you own with its result. A review or QA subtask adds its verdict and the pull "
-    "request head it judged, and the task that asked for it is woken with both (the same as hub_task_update with "
-    "status done). Its open subtasks close with it, recursively.",
-    {
-        "id": TASK_ID,
-        "note": _s("The result, in a few plain sentences"),
-        "verdict": _s(
-            "approve or changes for a review, pass or fail for QA", enum=["approve", "changes", "pass", "fail"]
-        ),
-        "verdict_head": _s("The pull request head (commit sha, 7 to 40 hex characters) the verdict judged"),
-        "brief": BRIEF,
-        "quiet": BRIEF_OLD,
-        "on_behalf_of": ASKED,
-    },
-    required=("id",),
-    writes=True,
-)
-def task_done(api, args):
-    return task_update(api, {**args, "status": "done"})
-
-
-# hub_task_bulk's filter: what hub_task_list filters by, plus ids. `not_owner` is the CLI's --where-not-owner.
-TASK_BULK_FILTER = (
-    "owner",
-    "not_owner",
-    "requester",
-    "status",
-    "lane",
-    "label",
-    "type",
-    "step",
-    "number",
-    "updated_since",
-    "member",
-    "role",
-    "snoozed",
-    "ids",
-)
-
-
-@tool(
-    "hub_task_bulk",
-    "Change every task a filter selects: step, status, owner, tags or close, as hub_task_update or hub_task_close "
-    "would, with your rights (refused ones are skipped, with why). Filter: hub_task_list's plus `ids` and "
-    "`exclude_owner`; at least one. Over 200 is refused. Run `dry_run` first: it skips the org rule check and the "
-    "handoff check, so a task either would hold counts as changed there and is skipped for real.",
-    {
-        "filter": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "owner": _s("Bot slug, human id or `me`"),
-                "exclude_owner": _s("All but this owner's (slug, human id or `me`)"),
-                "requester": _s("Bot slug, human id or `me`"),
-                "status": {"type": "array", "items": {"type": "string", "enum": list(TASK_STATUSES)}},
-                "lane": {"type": "string", "enum": ["company", "product"]},
-                "label": _s("Tag"),
-                "type": _s("Type id or name"),
-                "step": _s("Step id or name (of `type`, if given)"),
-                "number": {"type": "integer", "minimum": 1, "maximum": 999999999},
-                "updated_since": _s("Changed after this ISO-8601 time, with zone"),
-                "member": _s("On the task in any role"),
-                "role": _s("With member: in this role"),
-                "snoozed": {"type": "string", "enum": ["hide", "only", "all"]},
-                "ids": {"type": "array", "items": {"type": "string"}, "maxItems": 100, "description": "Ids or numbers"},
-            },
-        },
-        "action": {"type": "string", "enum": ["step", "status", "owner", "tags", "close"]},
-        "step": _s("Action step: the step id or name"),
-        "status": {"type": "string", "enum": [s for s in TASK_STATUSES if s != "closed"]},
-        "owner": _s("Action owner: the new bot or person"),
-        "add": {"type": "array", "items": {"type": "string"}, "description": "Action tags: add"},
-        "remove": {"type": "array", "items": {"type": "string"}, "description": "Action tags: remove"},
-        "note": _s("Why; noted on each change"),
-        "dry_run": {
-            "type": "boolean",
-            "default": False,
-            "description": "Count only. Does not count rule or handoff holds: a task one would hold shows as changed here",
-        },
-    },
-    required=("filter", "action"),
-    writes=True,
-)
-def task_bulk(api, args):
-    where = dict(args.get("filter") or {})
-    for name in TASK_BULK_FILTER:  # the CLI's --where-owner, --where-step, ...
-        if args.get("where_" + name) not in (None, []):
-            where[name] = args["where_" + name]
-    if "not_owner" in where:
-        # The alias names the same filter as exclude_owner: two different owners would not say which one leaves out.
-        alias = where.pop("not_owner")
-        if where.get("exclude_owner") not in (None, "", alias):
-            raise ValueError("not_owner and exclude_owner name the same filter: give one owner to leave out")
-        where["exclude_owner"] = alias
-    for name in ("owner", "exclude_owner", "requester", "member"):
-        if where.get(name):
-            where[name] = _target(api, where[name])
-    if isinstance(where.get("status"), list):
-        where["status"] = ",".join(where["status"])
-    action = args["action"]
-    body = {"filter": where, "action": action, "dry_run": bool(args.get("dry_run"))}
-    if action in ("step", "status", "owner"):
-        value = args.get(action) if args.get(action) is not None else args.get("value")
-        body[action] = _target(api, value) if action == "owner" and value else value
-    if action == "tags":
-        body["add"], body["remove"] = list(args.get("add") or []), list(args.get("remove") or [])
-    if args.get("note"):
-        body["note"] = args["note"]
-    return api.post("task-bulk", body, key=_key(args))
 
 
 def _roles(api, args):
@@ -1793,110 +1570,6 @@ def _roles(api, args):
         name, _, people = str(item).partition("=")
         out[name.strip().lower()] = [_target(api, p.strip()) for p in people.split(",") if p.strip()]
     return out
-
-
-# Task types sit above the stable status contract; old bots can keep setting status.
-TASK_STEPS = {
-    "type": "array",
-    "items": {
-        "type": "object",
-        "properties": {
-            "id": _s("Keep this id when editing an existing step"),
-            "name": _s("Step name"),
-            "public_name": _s("Public step name"),
-            "position": {"type": "integer"},
-            "status": {"type": "string", "enum": list(TASK_STATUSES)},
-        },
-        "required": ["name", "status"],
-        "additionalProperties": False,
-    },
-}
-NUMBERED = {"type": "boolean", "description": "Give each task created on or moved onto the type the team's next number"}
-STEPS_ONLY = {
-    "type": "boolean",
-    "description": "Its tasks change status only by moving to a step: closing, declining, "
-    "reopening or finishing one is refused",
-}
-
-
-@tool(
-    "hub_task_types",
-    "Task types and their steps, in order. Status remains the task contract.",
-    {"id": _s("One type id or name; omit for all types")},
-)
-def task_types(api, args):
-    return api.get("task-types/" + args["id"])["type"] if args.get("id") else api.get("task-types")["types"]
-
-
-TYPE_BOTS = {
-    "type": "string",
-    "enum": ["parties", "read", "work"],
-    "description": "What every bot may do with the type's tasks: parties (only the bots on each task), "
-    "read (read and comment on all of them) or work (also change them)",
-}
-
-
-@tool(
-    "hub_task_type_create",
-    "Create a task type and its steps (movers only).",
-    {
-        "name": _s("Type name"),
-        "steps": TASK_STEPS,
-        "bots": TYPE_BOTS,
-        "numbered": NUMBERED,
-        "steps_only": STEPS_ONLY,
-        "default_visibility": _s("New tasks only", enum=["public", "private"]),
-    },
-    required=("name",),
-    writes=True,
-)
-def task_type_create(api, args):
-    body = {
-        "name": args["name"],
-        "steps": args.get("steps") or [],
-        "numbered": bool(args.get("numbered")),
-        "steps_only": bool(args.get("steps_only")),
-    }
-    if args.get("bots"):
-        body["bots"] = args["bots"]
-    if args.get("default_visibility"):
-        body["default_visibility"] = args["default_visibility"]
-    return _as_person(api).post("task-types", body, key=_key(args))
-
-
-@tool(
-    "hub_task_type_update",
-    "Edit a task type (movers only). Steps replace the full list; keep retained ids. "
-    "A step with tasks cannot be removed.",
-    {
-        "id": _s("Type id or name"),
-        "name": _s("Type name"),
-        "steps": TASK_STEPS,
-        "bots": TYPE_BOTS,
-        "numbered": NUMBERED,
-        "steps_only": STEPS_ONLY,
-        "default_visibility": _s("New tasks only", enum=["public", "private"]),
-    },
-    required=("id",),
-    writes=True,
-)
-def task_type_update(api, args):
-    return _as_person(api).post(
-        "task-types/" + args["id"],
-        {k: args[k] for k in ("name", "steps", "bots", "numbered", "steps_only", "default_visibility") if k in args},
-        key=_key(args),
-    )
-
-
-@tool(
-    "hub_task_type_delete",
-    "Delete an unused task type (movers only). General stays built in.",
-    {"id": _s("Type id or name")},
-    required=("id",),
-    writes=True,
-)
-def task_type_delete(api, args):
-    return _as_person(api).post("task-types/" + args["id"] + "/delete", {}, key=_key(args))
 
 
 @tool(
@@ -2021,20 +1694,20 @@ def task_restore(api, args):
 @tool(
     "hub_task_label",
     "Add or remove labels on a task. A project is a label; so is a kind (bug, front-end). A bot "
-    "changes labels on a task it owns, asked for or whose type it manages; a public roadmap label also needs an "
-    "approved publish approval (hub_task_publication_preview with the labels the task keeps), and goal:on/goal:off "
-    "need a person.",
+    "changes labels on a task it owns or asked for; goal:on/goal:off need a person. It is a field edit: it carries "
+    "the version you were shown, and a task that changed since is refused.",
     {
         "id": TASK_ID,
         "add": {"type": "array", "items": {"type": "string"}, "description": "Labels to add"},
         "remove": {"type": "array", "items": {"type": "string"}, "description": "Labels to remove"},
-        "approval_id": _s("Exact publish approval for a public roadmap label"),
+        "version": VERSION,
         "on_behalf_of": ASKED,
     },
     required=("id",),
     writes=True,
 )
 def task_label(api, args):
+    version = _seen(args)  # the labels are read to add to them; the version sent is the one the caller saw
     current = api.get("tasks/" + args["id"])["task"]
     labels = [x for x in current.get("labels") or []]
     drop = {str(x).strip().lower() for x in args.get("remove") or []}
@@ -2043,16 +1716,12 @@ def task_label(api, args):
         x = str(x).strip().lower()
         if x and x not in labels:
             labels.append(x)
-    body = {"version": current["version"], "labels": labels}
-    if args.get("approval_id"):
-        body["approval_id"] = args["approval_id"]
-    return _asked(api, args).post("tasks/" + args["id"], body, key=_key(args))
+    return _asked(api, args).post("tasks/" + args["id"], {"version": version, "labels": labels}, key=_key(args))
 
 
 @tool(
     "hub_task_link",
-    "Attach a link to a task: the pull request you opened (this is what moves a "
-    "product task to In review and on to Shipped), an issue, a document, a page. `kind: session` links "
+    "Attach a link to a task: the pull request you opened, an issue, a document, a page. `kind: session` links "
     "another session working the task (a thread URL, a resume command); it is tracked only, task chat "
     "goes to the owning bot.",
     {
@@ -2150,17 +1819,16 @@ def task_follow(api, args):
 
 @tool(
     "hub_task_relate",
-    "Relate another task to this one, read as `id kind task`: parent (task is its "
-    "parent; moves it and its subtree), blocks, blocked_by (it waits on task; several are allowed), "
-    "related (they belong together, the default), duplicate_of, follow_up (it was split off or followed "
-    "up from task). `remove` takes the relation off. The reply's `readback` says what was stored, both ends "
-    "(\"#237 waits for #233\" / \"#233 blocks #237\"): check it before reporting the link as fixed.",
+    "Relate another task to this one, read as `id kind task`: blocks, blocked_by, related (they belong together, "
+    "the default), duplicate_of, follow_up (it was split off or followed up from task). A relation is a note: a task "
+    "waits only on the tasks it filed (hub_task_file), and its parent is set when it is filed. `remove` takes the "
+    "relation off. The reply's `readback` says what was stored, both ends: check it before reporting the link as fixed.",
     {
         "id": TASK_ID,
         "task": {**TASK_ID, "description": "The other task: its id or 8+ leading characters"},
         "kind": {
             "type": "string",
-            "enum": ["parent", "blocks", "blocked_by", "related", "duplicate_of", "follow_up"],
+            "enum": ["blocks", "blocked_by", "related", "duplicate_of", "follow_up"],
             "default": "related",
         },
         "remove": {"type": "boolean", "default": False},
@@ -2172,30 +1840,6 @@ def task_relate(api, args):
     return api.post(
         f"tasks/{args['id']}/relations",
         {"task": args["task"], "kind": args.get("kind") or "related", "remove": bool(args.get("remove"))},
-        key=_key(args),
-    )
-
-
-@tool(
-    "hub_task_wait",
-    "Make a task wait on another task (task:<id>, blocked_by), a pull request merging (pr:<url>, "
-    "or pr:<task> for the one pull request linked on that task) or a release being published (release:<tag>). The "
-    "owner gets one wake when it happens; the task waited on keeps its own step. `note` (pr: and release: only) comes "
-    "back in that wake: what to check. The reply's `readback` says what was "
-    "stored: check it before reporting the wait as set. `remove` takes it off.",
-    {
-        "id": TASK_ID,
-        "on": _s("task:<id>, pr:<url|task> or release:<tag>"),
-        "remove": {"type": "boolean", "default": False},
-        "note": _s("What to check when the pull request or release wait fires, in a sentence or two"),
-    },
-    required=("id", "on"),
-    writes=True,
-)
-def task_wait(api, args):
-    return api.post(
-        f"tasks/{args['id']}/waits",
-        {"on": args["on"], "remove": bool(args.get("remove")), "note": args.get("note")},
         key=_key(args),
     )
 
@@ -5071,33 +4715,11 @@ def _file_target(api, target, command):
 
 
 @tool(
-    "hub_approval_list",
-    "The approvals addressed to you, newest first. `status` pending (the default: exactly the "
-    "set Needs you counts), approved or declined. `from` is the actor that asked; `before` and `since` a date "
-    "(YYYY-MM-DD). Pages of up to 100 rows: `limit` and `offset`; `next` is the offset of the next page, null on the "
-    "last. Each row: id, status, from_actor, summary, message_id, task_id, created, link (the task it came with, "
-    "else the thread of its message; null if neither). Only approvals you can open are listed.",
-    {
-        "status": {"type": "string", "enum": ["pending", "approved", "declined"], "description": "Default pending"},
-        "from": _s("Only the ones this actor asked for"),
-        "before": _s("Only those asked before this date (YYYY-MM-DD)"),
-        "since": _s("Only those asked on or after this date (YYYY-MM-DD)"),
-        "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Rows per page, default 20"},
-        "offset": {"type": "integer", "minimum": 0, "description": "Start at this row, default 0"},
-    },
-)
-def approval_list(api, args):
-    query = {"status": args.get("status", "pending"), "limit": args.get("limit", 20), "offset": args.get("offset", 0)}
-    query.update({k: args[k] for k in ("from", "before", "since") if args.get(k)})
-    return api.get("approvals", **query)
-
-
-@tool(
     "hub_file_approved",
     "Whether this exact file version is approved: `approved` true only when the newest verdict "
-    "on that version, with the same bytes, approved it. By default only a person's verdict counts (an answer to "
-    "hub_task_question with review); `by` bot:SLUG or any also reads bots' hub_file_review. A later Request changes "
-    "undoes it; another version is never approved by it. Also who, when, and on which task and question.",
+    "on that version, with the same bytes, approved it. By default only a person's verdict counts; `by` bot:SLUG or "
+    "any also reads bots' hub_file_review. A later Request changes undoes it; another version is never approved by "
+    "it. Also who, when, and on which task.",
     {
         "target": _s(
             "FILE or FILE@N (the current version without @N), or on your computer a path in your checkout "
@@ -5446,50 +5068,6 @@ def docs_history(api, args):
 )
 def docs_links(api, args):
     return api.get("linked-docs")
-
-
-@tool(
-    "hub_task_close",
-    "A human may close a task they can edit (its requester or owner, a party to a task above it, "
-    "the person it waits on, or a person who moves tasks). A bot closes work it requested; a comment or work delegation does not grant acceptance authority. "
-    "BotOps uses the requester's rights. Close accepts or cancels a task; report completed work with hub_task_update status done. "
-    "Its open subtasks close with it, recursively; one you may not close refuses the whole action.",
-    {
-        "id": TASK_ID,
-        "note": _s("Why it is closed"),
-        "wake": {
-            "type": "boolean",
-            "default": True,
-            "description": "false: its bots read the close on their next run instead of being woken for it",
-        },
-        "quiet": {"type": "boolean", "description": "Older name for wake: false"},
-        "on_behalf_of": ASKED,
-    },
-    required=("id",),
-    writes=True,
-)
-def task_close(api, args):
-    current = None
-    if args.get("on_behalf_of"):
-        api = _asked(api, args)
-    elif kind_of(api.get("me")) == "botops":
-        requester = _as_person(api)
-        try:
-            current = requester.get("tasks/" + args["id"])["task"]
-            api = requester
-        except Exception as exc:
-            if getattr(exc, "code", None) != "on_behalf_of":
-                raise
-            # Fleet work has no human request; BotOps keeps its own task-closing rights.
-    current = current or api.get("tasks/" + args["id"])["task"]
-    body = {
-        "version": current["version"],
-        "note": args.get("note"),
-        "close": True,
-        "quiet": args.get("wake") is False or bool(args.get("quiet")),
-    }
-    links = s3links.apply(api, body, ("note",))
-    return s3links.annotate(api.post("tasks/" + args["id"], body, key=_key(args)), links)
 
 
 @tool(
@@ -9171,96 +8749,6 @@ def audit(api, args):
     return _as_person(api).get("audit", **query)
 
 
-# ----------------------------------------------------------------------------- approvals
-@tool(
-    "hub_approval_request",
-    "Ask a person for a yes or no on one exact action. Only a person "
-    "decides; an approval is spent once. If the owner already told you in Tico to send a "
-    "specific email, do not request another approval: `mail send --approve <their-message-id>` "
-    "(that message's id). A decided send approval id works as --approve too.",
-    {
-        "kind": {"type": "string", "enum": list(APPROVAL_KINDS)},
-        "payload": {
-            "type": "object",
-            "description": "The exact action, as the approvals policy describes. "
-            "Email approvals come from mail send or POST /email/sends with frozen MIME; kind=send here is refused. When the owner "
-            "already said send; use mail send --approve <their-message-id>. A "
-            "proposal the hub applies on approval: task_cap {sender, receiver, per_day}, spend_limit "
-            "{bot | pool: company|group:<id>, per_30m_usd, daily_usd, weekly_usd, monthly_usd}.",
-        },
-        "task_id": _s("The task this action belongs to"),
-        "supersedes_approval": _s(
-            "Your older undecided approval this replaces (a re-cut, a redraft); it is withdrawn. "
-            "One on the same task for the same url, recipient and subject, PR or spend is replaced anyway"
-        ),
-    },
-    required=("kind", "payload"),
-    writes=True,
-)
-def approval_request(api, args):
-    return api.post(
-        "approvals",
-        {
-            "kind": args["kind"],
-            "payload": args["payload"],
-            "task_id": args.get("task_id"),
-            "supersedes_approval": args.get("supersedes_approval"),
-        },
-        key=_key(args),
-    )
-
-
-@tool("hub_approval_show", "One approval and its decision.", {"id": _s("Approval id")}, required=("id",))
-def approval_show(api, args):
-    return api.get("approvals/" + args["id"])
-
-
-@tool(
-    "hub_approval_approve",
-    "Approve an approval addressed to you (a send, spend, publish or merge). The Assistant "
-    "approves only when its person turned on \"My assistant can decide approvals for me\" and asked for it in their "
-    "chat, citing that message (on_behalf_of); otherwise the refusal says the one sentence to tell them.",
-    {"id": _s("Approval id"), "note": _s("Optional, a few words the requesting bot reads"), "on_behalf_of": ASKED},
-    required=("id",),
-    writes=True,
-)
-def approval_approve(api, args):
-    return _asked(api, args).post(
-        "approvals/" + args["id"], {"decision": "approved", "note": args.get("note") or ""}, key=_key(args)
-    )
-
-
-@tool(
-    "hub_approval_read_back",
-    "Assistant only, before approving for the person: post in their chat the list of "
-    "approvals you are about to approve, as your reply, then end the turn. The server writes the whole message from "
-    "the approvals; only the ones listed may then be approved, on the person's plain yes to it.",
-    {
-        "ids": {"type": "array", "items": {"type": "string"}, "description": "The approval ids, up to 100"},
-        "note": _s("Optional, one plain line shown above the list: the real decision you found, by name"),
-    },
-    required=("ids",),
-    writes=True,
-)
-def approval_read_back(api, args):
-    return api.post("assistant/read-back", {"approvals": args["ids"], "note": args.get("note") or ""}, key=_key(args))
-
-
-@tool(
-    "hub_approval_decline",
-    "Decline an approval addressed to you (a send, spend, publish or merge), with a short reason "
-    "the requesting bot reads. A declined item can be asked for again. The Assistant declines what its person asked it to "
-    "in their chat, citing that message (on_behalf_of).",
-    {"id": _s("Approval id"), "note": _s("Why, in a few words: the requesting bot reads it"), "on_behalf_of": ASKED},
-    required=("id",),
-    writes=True,
-)
-def approval_decline(api, args):
-    return _asked(api, args).post(
-        "approvals/" + args["id"], {"decision": "declined", "note": args.get("note") or ""}, key=_key(args)
-    )
-
-
 # ----------------------------------------------------------------------------- status, activity
 @tool(
     "hub_bot_status_set",
@@ -9714,81 +9202,6 @@ def status_history(api, args):
 )
 def turns(api, args):
     return api.get(f"bots/{args['bot']}/turns", since=args.get("since"))
-
-
-@tool(
-    "hub_pipeline",
-    "A task type's pipeline and the fleet's queues in one read, counted as the Tasks board counts (only tickets "
-    "you may read; closed and finished ones never count). Defaults: the engineering board, snoozed tickets included, "
-    "failures since 24h. For \"where is work stuck and on whom\", use it instead of paging hub_task_list or hub_sql. "
-    "Fields:\n"
-    "- steps[]: working steps in board order: id, name, status.\n"
-    "- steps[].count / snoozed: tickets in the step now / of them, snoozed.\n"
-    "- steps[].oldest_hours / median_hours / oldest: time since tickets entered the step; `oldest` is that ticket's number (or id).\n"
-    "- steps[].ids / ids_more: up to 50 ticket numbers (or ids), in board order / how many more.\n"
-    "- steps[].by_owner: tickets per owner.\n"
-    "- steps[].waits_on: tickets waiting on a bot, a person, something external (GitHub, a release) or nothing (the owner acts).\n"
-    "- steps[].waits_on_actor: tickets per actor waited on: an open child's or blocker's owner, an asked person, or `person` for an approval.\n"
-    "- steps[].prs: open pull requests linked to the step's tickets, and the oldest one's age in hours.\n"
-    "- no_step: live tickets of the type with no step (absent when none).\n"
-    "- total / truncated: tickets counted / true above 5,000 live ones.\n"
-    "- queues.<bot>.running / stalled: runs out now / of those, silent 5+ minutes.\n"
-    "- queues.<bot>.queued / oldest_queued_hours: jobs handed out when a turn is free / the oldest one's wait.\n"
-    "- queues.<bot>.held: jobs a wake preset holds until its release.\n"
-    "- queues.<bot>.quarantine_held: jobs held after repeated refusals; resume after cooldown or quarantine clear.\n"
-    "- queues.<bot>.dead / dead_ids: queued jobs behind an interrupted run nobody reviewed; they never run until that run is resumed or dismissed, and are never counted as queued.\n"
-    "- queues.<bot>.uncertain: interrupted runs waiting for that review.\n"
-    "- queues.<bot>.decisions[]: stopped runs with a resume or dismiss decision, held or decided since `since`, newest first (20 at most): job, run, current (false once a later try ran), state (held, canceled, queued, completed...; null when not current), decision, by, by_kind (botops, person, tico, bot), at, note (null when the run's conversation cannot be opened), label (\"Canceled: dismissed by BotOps at 09:50Z, <note>\"; \"Resumed by ...\" when not current).\n"
-    "- failures.total / by_cause / by_bot: failed, interrupted or expired runs since `since`; causes quota, capacity, restart, timeout, crash, stopped, each with n, first and last time.\n"
-    "- failures.truncated / complete_after: true when the window held more failures than one read counts / whole counts only for failures after this time (null when not truncated).\n"
-    "- exceptions[] (engineering manager only; absent for anyone else): key (subject:kind), kind (stuck, run, pool, slots, backlog, outage, refusal, merge), cause, since; ticket (id, number, title, step, owner) for a ticket, check (id, title, owner) when the open check below it stands, bot, step or tickets for the others, pr and head on a failed merge. One row per subject and kind, oldest first.",
-    {
-        "type": _s("Task type id or name; default the engineering board"),
-        "owner": _s("Only tickets this person or bot owns"),
-        "label": _s("Only tickets with this label"),
-        "updated_since": _s("Only tickets changed after this: ISO date-time or a window like `7d`"),
-        "snoozed": _s("all (default), hide or only", enum=["all", "hide", "only"]),
-        "bot": _s("Queues and failures for this bot only"),
-        "since": _s("Failure window: `24h` (default), up to `7d`, or an ISO date-time"),
-    },
-)
-def pipeline(api, args):
-    return api.get(
-        "pipeline",
-        **{k: args[k] for k in ("type", "owner", "label", "updated_since", "snoozed", "bot", "since") if args.get(k)},
-    )
-
-
-def _pipeline_id(api, ref):
-    """A pipeline's id from its id or its name (the task types are its pipelines)."""
-    types = api.get("task-types")["types"]
-    named = [t for t in types if t["id"] == ref] or [t for t in types if str(t.get("name", "")).lower() == ref.lower()]
-    if not named:
-        raise ValueError(f"No pipeline named {ref!r}")
-    if len(named) > 1:
-        raise ValueError(f"{ref!r} names more than one pipeline: use its id")
-    return named[0]["id"]
-
-
-@tool(
-    "hub_pipeline_manager",
-    "Set or clear a pipeline's manager bot: the bot that runs the pipeline's manager pass and judges its stuck tasks. "
-    "Give `bot` to set it or `clear` to clear it, not both. Only the pipeline's owner and admins may; the bot must be "
-    "active (an archived, paused or planned bot is refused, and the manager stays as it was).",
-    {
-        "pipeline": _s("The pipeline: its id or its name"),
-        "bot": _s("The bot to manage the pipeline: its id or slug (an active bot)"),
-        "clear": {"type": "boolean", "description": "Clear the manager instead of setting one"},
-    },
-    required=("pipeline",),
-    writes=True,
-)
-def pipeline_manager(api, args):
-    if bool(args.get("bot")) == bool(args.get("clear")):
-        raise ValueError("Name the bot to set as the manager, or clear the manager; not both and not neither")
-    pipeline_id = _pipeline_id(api, args["pipeline"])
-    value = "" if args.get("clear") else args["bot"]
-    return api.patch("pipelines/" + pipeline_id + "/settings", {"manager_id": value}, key=_key(args))
 
 
 @tool(
@@ -11470,26 +10883,28 @@ def batch_abandon(api, args):
 
 @tool(
     "hub_needs_you_show",
-    "What is on the person's Needs you, counted as the board counts it: the total, the number "
-    "per kind (task, question, approval, ...), and per bot: how many it put there, how many are from this week and how "
-    "many are older than 3 days, with its newest items (title, age, and `done_but_open` for a finished task that still "
-    "holds an open ask). Use it to see the pile and where it comes from, before closing or stopping anything.",
+    "What is on the person's Needs you: the total, the number per kind (task: a task of theirs; ask: an OK or a "
+    "question with their name; paused: a bot that cannot run until they fix it; mention: an @ of them by a person), "
+    "and the items, oldest first, each with its task. Use it to see the pile before closing or stopping anything.",
     {
-        "by": _s("bot (the default) or kind: what the answer is about; both come back"),
+        "kind": {"type": "string", "enum": ["task", "ask", "paused", "mention"], "description": "Only this kind"},
         "limit": {
             "type": "integer",
             "minimum": 0,
-            "maximum": 10,
-            "description": "The newest items listed under each bot (default 5, at most 10)",
+            "maximum": 100,
+            "description": "The items listed (default 20); the counts are of every item",
         },
     },
 )
 def needs_you_show(api, args):
-    by = args.get("by") or "bot"
-    view = api.get("needs-you/summary", limit=args.get("limit") or 5)
-    if by == "kind":
-        return {k: view[k] for k in ("actor", "total", "this_week", "by_kind")}
-    return view
+    view = api.get("needs-you")
+    items = view if isinstance(view, list) else (view or {}).get("items") or []
+    by_kind = {}
+    for item in items:
+        by_kind[item.get("kind")] = by_kind.get(item.get("kind"), 0) + 1
+    shown = [item for item in items if not args.get("kind") or item.get("kind") == args["kind"]]
+    limit = 20 if args.get("limit") is None else args["limit"]
+    return {"total": len(items), "by_kind": by_kind, "items": shown[:limit], "more": max(0, len(shown) - limit)}
 
 
 @tool(
@@ -13390,13 +12805,14 @@ ASSISTANT_WRITES = {
     "hub_task_create",
     "hub_task_update",
     "hub_task_done",
+    "hub_task_move",
+    "hub_task_reassign",
     "hub_task_comment",
     "hub_task_label",
     "hub_task_close",
     "hub_task_link",
-    "hub_approval_decline",
-    "hub_approval_approve",
-    "hub_approval_read_back",
+    "hub_task_answer",
+    "hub_task_give",
     "hub_update_mark_read",
     "hub_changelog_mark_read",
     "hub_assistant_propose",
@@ -13528,7 +12944,6 @@ AUDIENCE = {
     # The Assistant bot's own background run (a routine, kind `bot`) proposes a card for its person too; the server admits
     # only the Assistant bot, and only with `for` naming an active person (backend/app.py propose).
     "hub_assistant_propose": ("assistant", "bot"),
-    "hub_approval_read_back": ("assistant",),
     # The morning message: the server admits only the Assistant bot's background run, once a company day per person
     # (backend/assistant.py morning). The Assistant's routine calls it, so its listing carries it too.
     "hub_assistant_morning": ("assistant", "bot"),
@@ -13541,8 +12956,8 @@ AUDIENCE = {
     "hub_rules_check": BOTS,
     "hub_rules_appeal": BOTS,
     "hub_rules_withdraw": PEOPLE + BOTS,
-    "hub_approval_decline": HUMANS_AND_ASSISTANT,  # only a person decides an approval
-    "hub_approval_approve": HUMANS_AND_ASSISTANT,  # ... or their own Assistant, when they let it
+    # A bot does not unsnooze (docs/dev/pipelines-v3-cutover.md, Bot commands): a person brings a task back.
+    "hub_task_unsnooze": HUMANS_AND_ASSISTANT,
     "hub_assistant_read": PEOPLE,
     "hub_assistant_send": PEOPLE,
     "hub_needs_you_show": HUMANS_AND_ASSISTANT,  # views.human_only: a person's own list
@@ -13669,11 +13084,6 @@ ASSISTANT_HIDDEN = frozenset(
 # proposals. The gate is unchanged: the CLI still reaches every route the gate admits; this only sizes the MCP listing.
 ASSISTANT_TOOLS = frozenset(
     {
-        "hub_approval_approve",
-        "hub_approval_decline",
-        "hub_approval_read_back",
-        "hub_approval_request",
-        "hub_approval_show",
         "hub_assistant_learn",
         "hub_assistant_proposals",
         "hub_assistant_propose",
@@ -13711,11 +13121,14 @@ ASSISTANT_TOOLS = frozenset(
         "hub_settings_set",
         "hub_settings_show",
         "hub_strategy_show",
+        "hub_task_answer",
+        "hub_task_ask",
         "hub_task_close",
         "hub_task_comment",
         "hub_task_create",
+        "hub_task_done",
         "hub_task_list",
-        "hub_task_question",
+        "hub_task_move",
         "hub_task_show",
         "hub_task_update",
         "hub_team_show",
@@ -13725,7 +13138,6 @@ ASSISTANT_TOOLS = frozenset(
         "hub_bot_pause",
         "hub_bot_resume",
         "hub_rules_retire",
-        "hub_task_bulk",
         # Admin jobs 42-49: groups, bot owners and access, routines, budgets, inbox audience, Pending meetings.
         "hub_automation_create",
         "hub_bot_access",
@@ -13783,7 +13195,6 @@ RENAMED_TOOLS = {
     "hub_ack": "hub_message_mark_read",
     "hub_history": "hub_conversation_show",
     "hub_board": "hub_task_list",
-    "hub_task_stuck": "hub_task_list",
     "hub_goals": "hub_goal_list",
     "hub_goal_auto": "hub_goal_status",
     "hub_kpi_add": "hub_kpi_create",
@@ -13821,20 +13232,41 @@ RENAMED_TOOLS = {
     "hub_rule_update": "hub_automation_update",
     "hub_rule_delete": "hub_automation_update",
 }
-# Tools taken away with asks (Tico 0.5): a call by one of these names is answered with its replacement, in one line.
-ASK_GONE = "ask a person with hub_task_question; ask a bot with hub_message_send and needs_action"
-ANSWER_GONE = "a question to a person is a question task, answered in Tico (Needs you); a bot's question is a DM"
+# Tools taken away (asks in Tico 0.5, the old task engine in 0.6): a call by one of these names is answered with what
+# to use instead, in one line, so a bot told an old name does not loop on it.
+ASK_GONE = "ask a person on your task with hub_task_ask; ask a bot with hub_message_send and needs_action"
+ANSWER_GONE = "a person answers in Needs you; a bot named on an ask answers with hub_task_answer"
+WAIT_GONE = (
+    "a task waits only on a person it asks (hub_task_ask) or a task it files (hub_task_file); else hub_task_snooze"
+)
+STAGE_GONE = "a task moves with hub_task_done and hub_task_move; hub_task_show says what it takes to leave its stage"
+PIPELINE_GONE = "a pipeline's settings are a person's, on its page; hub_task_show says where a task is"
 REMOVED_TOOLS = {
     "hub_question_ask": ASK_GONE,
     "hub_ask": ASK_GONE,
-    "hub_task_ask": ASK_GONE,
+    "hub_task_question": ASK_GONE,
     "hub_question_answer": ANSWER_GONE,
     "hub_answer": ANSWER_GONE,
     "hub_task_ask_resolve": ANSWER_GONE,
+    **{f"hub_approval_{verb}": ANSWER_GONE for verb in ("approve", "decline", "read_back", "show", "list")},
+    "hub_approval_request": ASK_GONE,
+    **{name: WAIT_GONE for name in ("hub_task_wait", "hub_task_check_back", "hub_task_later", "hub_task_defer")},
+    "hub_task_bulk": "a person changes many tasks at once on the Tasks page; a bot changes one task at a time",
+    "hub_task_waive_qa": STAGE_GONE,
+    "hub_task_stuck": "Tico's own check finds a task that is stuck; hub_task_list lists tasks",
+    **{name: STAGE_GONE for name in ("hub_requirements", "hub_requirement_attach")},
+    **{
+        name: PIPELINE_GONE
+        for name in (
+            "hub_pipeline",
+            "hub_pipeline_manager",
+            "hub_task_types",
+            "hub_task_type_create",
+            "hub_task_type_update",
+            "hub_task_type_delete",
+        )
+    },
 }
-# Older names a call still runs under, unlisted. `hub_task_defer` says when a carried task is picked up again (a
-# hold, not a delivery): `defer` is the delivery word now (backend/delivery.py).
-CALL_ALIASES = {"hub_task_defer": "hub_task_later"}
 RENAMED_PREFIXES = (
     ("hub_docs_", "hub_doc_"),
     ("hub_files_", "hub_file_"),
@@ -13860,14 +13292,34 @@ def renamed_to(name):
     return None
 
 
+# What a task engine refusal carries beside its rule and detail (docs/dev/pipelines-v3-cutover.md, HTTP): what is
+# missing and the commands allowed next, or the version the task has now. A bot reads them to act instead of retrying.
+REFUSAL_FIELDS = ("missing", "next", "version")
+
+
 def error_payload(exc):
     """The shape the `hub` CLI prints for an API refusal or failure, so both clients read alike."""
+    extra = getattr(exc, "extra", None) or {}
     return {
         "error": getattr(exc, "code", type(exc).__name__),
         "detail": getattr(exc, "detail", str(exc)),
         "retryable": bool(getattr(exc, "retryable", False)),
         "operation_id": getattr(exc, "operation_id", None),
+        **{k: extra[k] for k in REFUSAL_FIELDS if extra.get(k) not in (None, [])},
     }
+
+
+def refusal_text(payload, task_id=None):
+    """A refusal as a bot reads it in a terminal: the one line, what is missing, and the commands allowed next."""
+    lines = [str(payload.get("detail") or payload.get("error") or "Refused")]
+    if payload.get("missing"):
+        lines += ["Missing:", *(f"  {m}" for m in payload["missing"])]
+    if payload.get("next"):
+        lines += ["You can:", *(f"  {n}" for n in payload["next"])]
+    if payload.get("error") == "task_changed" and payload.get("version") is not None:
+        task = task_id or "<id>"
+        lines.append(f"It is version {payload['version']} now: run `hub task show {task}` and decide again.")
+    return "\n".join(lines)
 
 
 def argument_error(value, schema, path="arguments"):
@@ -13986,7 +13438,6 @@ class Protocol:
                 if source == "market":
                     args["market"] = True
                 name = "hub_doc_search"
-        name = CALL_ALIASES.get(name, name)
         entry = BY_NAME.get(name)
         if not entry and name in REMOVED_TOOLS:
             return self._tool_error(

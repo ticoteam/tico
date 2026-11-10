@@ -71,9 +71,30 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub feedback reasons                   your five latest distinct reasons
     hub feedback rule-draft <id>           a one-sentence rule drafted from your 👎; stores nothing
     hub feedback rule <id> "<text>" [--all-bots]   your 👎 as an org rule: active if you manage the bot, else suggested
+    hub task show <id>                     the version; pipeline · stage · owner; Turn; To leave (each requirement,
+                                           met or not, with its id); Next; Filed by. --json: the task as JSON
+    hub task done <id> -m "what was done" --version N
+                                           the work of this stage is finished; never pushes past what is missing
+    hub task move <id> next|<stage>|done|closed|reopen -m "why" --version N
+                                           next with -m pushes past what is not met; back to a stage by its name
+    hub task close <id> -m "why" --version N   never refused for what is missing; its open sub-tasks close with it
+    hub task ask <id> --to <person> "line" [--choices a,b] [--show page:12] [--kind ok] --version N
+                                           ask a person on this task; it waits for their answer, which wakes you once
+    hub task ask <id> --withdraw [--requirement R] [-m "why"]   take your open ask back
+    hub task answer <id> <requirement> ok|no|again|<answer> [-m "note"] --version N
+                                           a bot named on an OK or a question answers it (no needs a note)
+    hub task give <id> <requirement> <person> --version N   hand what you are asked to another person
+    hub task file --parent <id> [--pipeline general] [--owner X] "title" [--body "..."]
+                                           a task this one waits on; yours unless --owner
+    hub task snooze <id> [--until DATE] -m "why" --version N
+                                           set it aside in its stage until DATE; with no date it is On ice
+    hub task reassign <id> <owner> [-m "why"] --version N   give it to another bot or person for this stage
+    hub task unsnooze <id> [-m "why"]      a person brings a snoozed task back now
+        --version N is the version you were last shown: hub task show, a list row and every wake print it. A task
+        that changed since is refused; read it again. A refusal prints what is missing and the commands you may run.
     hub task create --owner <bot|human> --title "..." [--body "..."|--body-file f] [--due D] [--parent ID]
-                    [--goal ID] [--model M [--effort E] [--harness H]] [--dry-run] the checks a create would fail,
-                    nothing written
+                    [--pipeline ID] [--goal ID] [--model M [--effort E] [--harness H]]
+                    [--dry-run]                the checks a create would fail, nothing written
                     [--private [--reader X ...]]  private: only its requester, owner and readers (people, bots,
                                            group:<id>) see it
     hub task readers list|add|remove <id> [X ...]   who can see a private task besides its requester and owner
@@ -82,21 +103,6 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            someone else who sees it, when you may change the task
     hub task model <id> [<model>] [--effort E] [--harness H] [--clear]
                                            the model this task's runs use; --clear puts it back on the bot's task model
-                    [--defer [24h|2d|never]]  for a bot: a deferred task, no wake; its next run carries it, and
-                                           one starts by the time given (24h when none; --next-run is the old name)
-                                           blocked on a person? --owner <person> --parent <your task>
-                                           for a person, the body's first paragraph is the ask (as --note below)
-    hub task update <id> --status waiting --on <person> --note "<plain ask>"
-                                           ask a person on your task: one small subtask for them, yours stays blocked
-    hub task question "<question>" --on <person> [--why "<why it matters>"]
-                    [--option "A -> what happens" --option "B=<file> -> what happens"] [--multi --recommend A]
-                                           one decision as a task they own, under your task; none for Yes / No.
-                                           Their answer closes it. Never to a bot: DM a bot instead.
-                                           Every option says what happens (->); several picks (--multi) mark
-                                           the recommended ones; no ids, paths or errors above --body
-                    [--if-no-answer "Yes" --default-kind reversible|send|spend|delete] [--by D]
-                                           what you do if they don't answer: a reversible step goes ahead
-                                           after the team's days (3); asks expire after 14 days
     hub task comment <id> "<text>" [--steer | --queue | --defer [30m|4h|2d|never] | --goal]   on the record
                                            with your name; reaches the task's followers and whoever you @mention.
                                            --steer (the default) goes into each bot's running turn, --queue right
@@ -118,30 +124,16 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                                        read, or change (owners and admins)
     hub task deleted                                   deleted tasks you may restore
     hub task restore <id>                              put a deleted task back
-    hub task update <id> --status doing|waiting|done|declined [--note "..."] [--goal ID|--goal ""]
-                    [--title "..."]        rename it: checked as a new task's title would be
-                    [--on PERSON]          with --status waiting: files the person a question task under it
-                                           (their Needs you); --note is your ask, one or two plain sentences:
-                                           "Approve the video tool trial on Thursday? If yes, I'll send the invite."
-                                           --on "" withdraws it. Not a bot: DM it, or hub task wait on its task
-    hub task close <id> [--note "..."]
-    hub task wait <id> --on task:<id>|pr:<url>|release:<tag> [--note "..."]
-                                           wait on a task, a PR merging or a release; one wake when it happens
-    hub task snooze <id> --until DATE [--note "..."]
-                                           set it aside until DATE: off the lists and quiet until then
-    hub task later <id> --after ID|--at DATE|--next-run|--handled
-                                           a deferred task this run carried and will not do now: when to pick it up
-                                           (`hub task defer` is the old name)
-    hub task unsnooze <id>                 bring a snoozed task back now
-    hub task waive-qa <id> --head SHA --reason "..."
-                                           a person waives a Dev ticket's In QA step for that exact head; a waiver,
-                                           never a QA pass (CI and both reviews on that head stay required)
+    hub task update <id> [--title "..."] [--body "..."] [--due D] [--label L ...] [--goal ID|--goal ""]
+                    [--private|--company] [-m "what changed"] --version N
+                                           field edits only; where it is and who has it change by done, move, close
+                                           and reassign
     hub task attach <id> <file> [--name "..."]
                                            store a deliverable with the task; prints the link
-    hub task list [--owner me|X] [--requester me] [--status open|doing|waiting|done] [--member me|X [--role R]]
-                  [--all]                  the board: every task and every bot you may see, {tasks, bots}
-                  [--stuck [--hours N]]    BotOps's sweep: open work untouched for a day that waits on nobody
-    hub task show <id>                     <id> is the full id or its first 8+ characters (short_id in the list)
+    hub task list [--owner me|X] [--requester me] [--status open|done|closed] [--member me|X [--role R]]
+                  [--all]                  every task and every bot you may see, {tasks, bots}
+                                           each row has its version, stage and Turn line; <id> is the full id or
+                                           its first 8+ characters (short_id)
     hub file publish <path> [--title T] [--task ID] [--scope task|bot]
                                            list a file from this checkout on your page (reports/x.md);
                                            publishing it again adds a version (docs/files.md)
@@ -355,19 +347,6 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            draft
     hub lens show <run-id>                 one run: answers, result, changes
     hub lens runs [--lens ID]              runs, newest first, with their summaries
-    hub approval request --kind send|spend|publish|merge|support|task_cap|spend_limit --payload-file f.json [--task ID] [--supersedes ID]
-                                           if the owner already said send in Tico, skip this and
-                                           `mail send --approve <their-message-id>`
-    hub approval show <id>
-    hub approval list [--status pending|approved|declined] [--from ACTOR] [--before DATE] [--since DATE] [--limit N] [--offset N]
-                                           pending is what Needs you counts; the rows you may open, newest first
-    hub approval read-back <id>... [--note "..."]
-                                           the Assistant: the list it will approve, as its reply; the person's yes runs it
-    hub approval approve <id> [--note "..."] [--on-behalf-of turn]
-                                           a person approves one addressed to them (the Assistant: when they let it
-                                           decide approvals and asked)
-    hub approval decline <id> [--note "why"] [--on-behalf-of turn]
-                                           a person declines one addressed to them (the Assistant: when they asked)
     hub listening save --file run.json     Listening: one sweep and the posts it saw (status ok|blocked|
                                            rate_limited|error; a post already saved is kept as it was)
     hub listening decide [--limit 20] [--item ID]
@@ -503,8 +482,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub brief [--since ISO]                alerts, who needs the person, what bots said since --since
     hub mcp stats [--days N] [--via LABEL] per-tool timing and answer size of assistants' calls
     hub needs-you start|next|respond|commit|abandon   a person's walk through what needs them (backend/batch.py)
-    hub needs-you show [--by bot|kind] [--limit N]    what needs you, counted as the board counts it, per kind and
-                                                      per bot, with each bot's newest items
+    hub needs-you show [--kind task|ask|paused|mention] [--limit N]   what needs you: the count per kind and the
+                                                      items, oldest first
     hub calendar list [--calendar EMAIL]
                                            appointments visible on a company calendar
     hub calendar schedule --title "..." --start ISO --end ISO [--calendar EMAIL]
@@ -714,12 +693,8 @@ from pathlib import Path
 if __package__ in (None, ""):  # run as a script: python clients/hubcli.py
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# Mirrors of the server's vocabulary (backend/hubdb.py), so a typo is refused by the parser
-# before a request is made. The server is the authority when they disagree.
-TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
-TASK_UPDATE_STATUSES = tuple(status for status in TASK_STATUSES if status != "closed")
-# task_cap and spend_limit: proposals (backend/proposals.py).
-APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support", "task_cap", "spend_limit")
+# Mirrors of the server's vocabulary, so a typo is refused by the parser before a request is made. The server is the
+# authority when they disagree.
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")  # set by hand; gray is only ever automatic
 # The Assistant, acting on a task the person asked it to in their own Assistant chat (backend/assistant.py `instruction`).
 ASKED = (
@@ -732,10 +707,9 @@ class CliError(Exception):
     """Anything the arguments or the environment got wrong: exit 1."""
 
 
-def task_update_status(value):
-    if value == "closed":
-        raise argparse.ArgumentTypeError("use `hub task close <id>` to close a task")
-    return value
+def choice_list(value):
+    """`--choices a,b`: the answers a person picks from, in order."""
+    return [choice.strip() for choice in value.split(",") if choice.strip()]
 
 
 GO_LIVE_HELP = """When the computer does not have the bot's repository yet, go-live keeps the placement and answers
@@ -787,20 +761,20 @@ def owner_from_registry(name):
     return None
 
 
-def task_problems(actor, owner, title, body, type=None):
+def task_problems(actor, owner, title, body, pipeline=None):
     """(resolved owner, the problems the server's `task_create` would refuse on, the writing
     warnings it would accept with), writing none.
 
     The owner's kind comes from the registry files; the lint (`lint_human_item`) is hubdb's own
     function run here. Reach against live state, the
-    duplicate check and whether a named type exists are the hub's to decide at the real create.
-    A type other than General is a custom type, whose tasks neither lint shapes.
+    duplicate check and whether a named pipeline exists are the hub's to decide at the real create.
+    The lints shape asks in General only, not another pipeline's tasks.
     """
     from backend import hubdb as H
 
     problems, warnings = [], []
     title, body = str(title or "").strip(), str(body or "")
-    general = str(type or "").strip().lower() in ("", H.GENERAL_TYPE)
+    general = str(pipeline or "").strip().lower() in ("", "general")
     target = owner_from_registry(owner)
     # Not in the registry is no refusal here: a template name (`--owner marketing-lead`) still reaches the one live bot
     # built from that template on the server, which this client cannot see. cmd_task_dry_run says so.
@@ -838,7 +812,7 @@ def cmd_task_dry_run(args, who):
     slug = (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE") or "").strip()
     actor = H.bot_actor(slug) if slug else None
     body = body_of(args)
-    owner, problems, warnings = task_problems(actor, args.owner, args.title, body, getattr(args, "type", None))
+    owner, problems, warnings = task_problems(actor, args.owner, args.title, body, getattr(args, "pipeline", None))
     if problems:
         print("\n".join(f"- {p}" for p in problems + [f"{w} (warning)" for w in warnings]))
         return 1
@@ -2031,29 +2005,12 @@ def parser():
     s.add_argument("--body", default="")
     s.add_argument("--body-file", dest="body_file")
     s.add_argument("--due")
-    s.add_argument("--check-back-at", help="ISO timestamp or duration such as 45m")
-    s.add_argument("--check-back-note", help="what result to inspect")
-    s.add_argument("--parent", help="file it as a subtask of this task")
+    s.add_argument("--parent", help="the task that files it: it waits until this one ends")
+    s.add_argument("--pipeline", help="the pipeline's id; default general")
     s.add_argument("--label", action="append", help="a label (repeat, or comma-separate); a project is a label")
-    s.add_argument(
-        "--change-path", dest="change_paths", action="append", help="changed path for automatic QA classification"
-    )
-    s.add_argument("--qa", choices=["yes", "no"], help="explicit QA override")
-    s.add_argument("--qa-not-checkable-live", action="store_true", default=None)
-    s.add_argument(
-        "--blocker",
-        nargs=3,
-        metavar=("REPO", "STATUS", "ENDPOINT"),
-        help="what refused, for a task to DevOps or a person: e.g. ticoteam/tico 403 workflow_dispatch. "
-        "An open ask about the same three joins this task instead of a second ask",
-    )
     s.add_argument("--top", action="store_true", help="put it at the top of the owner's queue")
     s.add_argument("--link", action="append", help="a URL to attach (a pull request, an issue, a document)")
     s.add_argument("--goal", help="the goal this task serves (hub goal list); optional")
-    ways = delivery_flags(s, steer=False)
-    # The older words for --defer, kept: a deferred task with the default deadline.
-    ways.add_argument("--next-run", dest="next_run", action="store_true", help="the older name for --defer")
-    ways.add_argument("--quiet", dest="next_run", action="store_true", help=argparse.SUPPRESS)
     s.add_argument(
         "--dry-run", dest="dry_run", action="store_true", help="print the checks a create would fail and write nothing"
     )
@@ -2063,9 +2020,7 @@ def parser():
         help="the person's message this carries: handing BotOps something a person asked you for, their "
         "message id or `turn` (BotOps acts with their rights, or puts it to them as a Confirm card)",
     )
-    s.add_argument("--type", help="task type id or name; defaults to General")
-    s.add_argument("--step", help="step id or name in the type")
-    s.add_argument("--number", type=int, help="movers: keep an imported ticket's number")
+    s.add_argument("--number", type=int, help="keep an imported task's number")
     s.add_argument(
         "--model",
         help="the model this bot-owned task's runs use, from `hub bot model`'s list; leave out "
@@ -2074,121 +2029,76 @@ def parser():
     s.add_argument("--effort", help="the reasoning effort that model takes")
     s.add_argument("--harness", help="the harness that runs that model")
     s.set_defaults(fn="task create")
-    types = task.add_parser("type", help="manage task types (movers only)").add_subparsers(dest="type_sub")
-    bots_help = (
-        "what every bot may do with the type's tasks: parties (only the bots on each task), "
-        "read (read and comment on all of them) or work (also change them)"
-    )
-    steps_only_help = (
-        "its tasks change status only by moving to a step, never by closing, declining, reopening or finishing"
-    )
-    s = types.add_parser("create")
-    s.add_argument("--default-visibility", dest="default_visibility", choices=["public", "private"])
-    s.add_argument("--name", required=True)
-    s.add_argument("--steps-file", dest="steps_file")
-    s.add_argument("--bots", choices=["parties", "read", "work"], help=bots_help)
-    s.add_argument("--numbered", action="store_true", default=None, help="number each task on the type")
-    s.add_argument("--steps-only", dest="steps_only", action="store_true", default=None, help=steps_only_help)
-    s.set_defaults(fn="task type create")
-    s = types.add_parser("update")
-    s.add_argument("--default-visibility", dest="default_visibility", choices=["public", "private"])
+    version_help = "the version you were last shown: hub task show, a list row and every wake print it"
+    s = task.add_parser("done", help="the work of this stage is finished; never pushes past what is missing")
     s.add_argument("id")
-    s.add_argument("--name")
-    s.add_argument("--steps-file", dest="steps_file")
-    s.add_argument("--bots", choices=["parties", "read", "work"], help=bots_help)
-    s.add_argument(
-        "--numbered",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="number each task created on or moved onto the type",
+    s.add_argument("-m", "--note", help="what was done, in a few plain sentences")
+    s.add_argument("--version", type=int, help=version_help)
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
+    s.set_defaults(fn="task done")
+    s = task.add_parser(
+        "move", help="move a task: next (with -m, past what is not met), back to a stage, done, closed or reopen"
     )
-    s.add_argument(
-        "--steps-only", dest="steps_only", action=argparse.BooleanOptionalAction, default=None, help=steps_only_help
-    )
-    s.set_defaults(fn="task type update")
-    s = types.add_parser("delete")
     s.add_argument("id")
-    s.set_defaults(fn="task type delete")
-    s = task.add_parser("types", help="list or manage task types and steps")
-    s.add_argument("id", nargs="?", help="type id or name")
-    s.add_argument("--name", help="create a type, or rename the selected type")
-    s.add_argument("--steps-file", dest="steps_file", help="JSON array of steps; keep ids when editing")
-    s.add_argument("--delete", action="store_true", help="delete an unused type")
-    s.set_defaults(fn="task types")
+    s.add_argument("to", help="next, done, closed, reopen, or a stage's name or id")
+    s.add_argument("-m", "--why", help="why, in one plain sentence; a bot always says why")
+    s.add_argument("--version", type=int, help=version_help)
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
+    s.set_defaults(fn="task move")
+    s = task.add_parser("close", help="close a task with why; its open sub-tasks close with it")
+    s.add_argument("id")
+    s.add_argument("-m", "--why", help="why it is closed")
+    s.add_argument("--version", type=int, help=version_help)
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
+    s.set_defaults(fn="task close")
+    s = task.add_parser("reassign", help="give the task to another bot or person for this stage")
+    s.add_argument("id")
+    s.add_argument("owner", help="a bot slug, a person id, or me")
+    s.add_argument("-m", "--why", help="why, in one plain sentence")
+    s.add_argument("--version", type=int, help=version_help)
+    s.set_defaults(fn="task reassign")
     s = task.add_parser(
-        "question", help="put one decision to a person as a task they own: a pick or Yes / No; their answer closes it"
+        "ask", help="ask a person on this task, in one line; it waits for their answer, which wakes you once"
     )
-    s.add_argument("question")
-    s.add_argument("--on", required=True, help="the person who decides")
+    s.add_argument("id")
+    s.add_argument("line", nargs="?", help="the one sentence they are asked, readable on its own")
+    s.add_argument("--to", help="the person you ask: their id")
     s.add_argument(
-        "--option",
-        action="append",
-        help="\"LABEL -> WHAT HAPPENS\" or \"LABEL=FILE -> WHAT HAPPENS\" (an image shows with it); repeat, 2 to 6; "
-        "none for Yes / No. The what-happens line is required",
+        "--kind", choices=["answer", "ok"], help="answer (the default): a question; ok: approve or send back"
     )
-    s.add_argument("--why", help="one plain line on why it matters, shown under the question")
-    s.add_argument(
-        "--multi",
-        action="store_true",
-        default=None,
-        help="several picks: the person ticks the ones they want; unticked ones come back as \"not this one\"",
-    )
-    s.add_argument("--recommend", action="append", metavar="LABEL", help="an option you recommend (pre-ticked); repeat")
-    s.add_argument("--title")
-    s.add_argument("--body")
-    s.add_argument("--parent")
-    s.add_argument(
-        "--topic",
-        help="a short key for what this decides (backup-model): your open question to them "
-        "on it is updated instead of a second one opened",
-    )
-    s.add_argument("--private", action="store_true", default=None, help="only you and the person may read it")
-    s.add_argument(
-        "--if-no-answer",
-        dest="if_no_answer",
-        help="what you will do if they don't answer: an option (\"Yes\") or one plain sentence. Only for a step that "
-        "sends, spends or deletes: a reversible, internal default is refused (ask_default_go_ahead), so just do it and "
-        "note it on your task",
-    )
-    s.add_argument(
-        "--default-kind",
-        dest="default_kind",
-        choices=["reversible", "send", "spend", "delete"],
-        help="what that step is, required with --if-no-answer; a reversible (internal, undoable) step is not asked: "
-        "do it and say so in one line on your task. A send, spending or a delete waits for an answer",
-    )
-    s.add_argument("--by", help="ISO-8601 date-time: go ahead then, instead of after the team's days (default 3)")
-    s.add_argument(
-        "--review",
-        action="append",
-        metavar="PATH|FILE[@N]",
-        help="a file version for them to review, shown on the card: a path here (published first, as "
-        "hub file publish does) or a file id; repeat. Without --option: Approve / Request changes",
-    )
-    s.add_argument(
-        "--pick",
-        action="store_true",
-        default=None,
-        help="each --review file is its own option (2 to 5), plus Request changes",
-    )
-    s.add_argument(
-        "--spend",
-        metavar="LABEL=AMOUNT:WHAT",
-        help="picking LABEL also approves spending AMOUNT on WHAT: a spend approval you consume once",
-    )
-    s.add_argument("--spend-account", dest="spend_account", help="the account --spend comes from (default gateway)")
-    s.set_defaults(fn="task question")
-    s = task.add_parser(
-        "update",
-        description="Move your task; to reopen, set doing or open; the requester closes. "
-        "Putting it back to open requires a note. Automatic starts wait 60 minutes unless it gets "
-        "a comment, a new link or a blocker finishes.",
-    )
-    s.add_argument("--visibility", choices=['public', 'private'])
-    s.add_argument("--public-title", dest="public_title")
-    s.add_argument("--public-summary", dest="public_summary")
-    s.add_argument("--approval-id", dest="approval_id")
-    s.add_argument("--size", type=float)
+    s.add_argument("--choices", type=choice_list, help="the answers to pick from, a,b")
+    s.add_argument("--show", action="append", metavar="REF", help="what they look at: page:12, file:ID@N; repeat")
+    s.add_argument("--withdraw", action="store_true", default=None, help="take back your open ask instead")
+    s.add_argument("--requirement", help="with --withdraw: the ask's requirement id, when several may be withdrawn")
+    s.add_argument("-m", "--why", help="with --withdraw: why")
+    s.add_argument("--version", type=int, help=version_help)
+    s.set_defaults(fn="task ask")
+    s = task.add_parser("answer", help="answer what you are asked on a task: ok, no, again or your answer")
+    s.add_argument("id")
+    s.add_argument("requirement", help="the requirement's id, from hub task show")
+    s.add_argument("value", help="ok, no (send back, with -m), again (look again), or your answer")
+    s.add_argument("-m", "--note", help="what they read with it; required with no")
+    s.add_argument("--version", type=int, help=version_help)
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
+    s.set_defaults(fn="task answer")
+    s = task.add_parser("give", help="give what you are asked on a task to another person")
+    s.add_argument("id")
+    s.add_argument("requirement", help="the requirement's id, from hub task show")
+    s.add_argument("to", help="the person it goes to: their id")
+    s.add_argument("--version", type=int, help=version_help)
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
+    s.set_defaults(fn="task give")
+    s = task.add_parser("file", help="file a task this one waits on; yours unless --owner")
+    s.add_argument("title")
+    s.add_argument("--parent", required=True, help="the task you work on: it waits until this one ends")
+    s.add_argument("--pipeline", help="the pipeline's id; default general")
+    s.add_argument("--owner", help="who does it; default you")
+    s.add_argument("--body", default="")
+    s.add_argument("--due")
+    s.add_argument("--label", dest="labels", action="append", help="a label; repeat for more")
+    s.add_argument("--private", action="store_true", default=None, help="only its requester, owner and readers see it")
+    s.set_defaults(fn="task file")
+    s = task.add_parser("update", help="edit a task's fields: title, body, due, labels, privacy, goal; with --version")
     visibility = s.add_mutually_exclusive_group()
     visibility.add_argument("--private", dest="private", action="store_true", default=None)
     visibility.add_argument(
@@ -2196,56 +2106,14 @@ def parser():
     )
     s.add_argument("id")
     s.add_argument("--title", help="a new title, checked as a new task's title would be")
-    s.add_argument("--status", choices=list(TASK_UPDATE_STATUSES), type=task_update_status)
-    s.add_argument("--note")
-    s.add_argument("--owner")
+    s.add_argument("--body")
     s.add_argument("--due")
-    s.add_argument(
-        "--on",
-        dest="waiting_on",
-        help="with --status waiting: the person you need. It files them a question task under this one, "
-        "and this task opens again with their answer. --note is your question: one or two plain "
-        "sentences saying what you need and what happens after, at most 40 words, with no ids, hashes, "
-        "file paths or tool names (\"PR #1555\" is fine). Not a bot: ask a bot in a DM (hub message "
-        "send <slug> ... --needs-action), or wait on its task (hub task wait <id> --on task:<its task>)",
-    )
-    s.add_argument("--goal", help='the goal this task serves; "" takes it off')
-    s.add_argument(
-        "--brief", action="store_true", help="keep the note on the task; chat hears only the title and status"
-    )
-    s.add_argument("--quiet", dest="brief", action="store_true", help=argparse.SUPPRESS)  # brief's older name
-    s.add_argument("--type", help="task type id or name")
-    s.add_argument("--step", help="step id or name; sets status; an empty string clears it")
-    s.add_argument("--step-rank", dest="step_rank", type=float, help="its place within its step, lower first")
-    s.add_argument("--number", type=int, help="movers: the number of a task that has none")
-    s.add_argument(
-        "--role",
-        action="append",
-        help="who is on it by role, NAME=person,person (repeat for more roles; NAME= clears one)",
-    )
-    s.add_argument(
-        "--verdict",
-        choices=["approve", "changes", "pass", "fail"],
-        help="a review or QA subtask's verdict; the task that asked for it is woken with it",
-    )
-    s.add_argument("--head", dest="verdict_head", help="the pull request head (commit sha) the verdict judged")
+    s.add_argument("--label", dest="labels", action="append", help="replace the labels with these; repeat for more")
+    s.add_argument("--goal", dest="goal_id", help='the goal this task serves; "" takes it off')
+    s.add_argument("-m", "--note", help="what changed, in a sentence")
+    s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task update")
-    s = task.add_parser(
-        "done",
-        help="finish a task you own with its result; a review or QA subtask adds its --verdict "
-        "and the --head it judged",
-    )
-    s.add_argument("id")
-    s.add_argument("--note", help="the result, in a few plain sentences")
-    s.add_argument("--verdict", choices=["approve", "changes", "pass", "fail"])
-    s.add_argument("--head", dest="verdict_head", help="the pull request head (commit sha) the verdict judged")
-    s.add_argument(
-        "--brief", action="store_true", help="keep the note on the task; chat hears only the title and status"
-    )
-    s.add_argument("--quiet", dest="brief", action="store_true", help=argparse.SUPPRESS)  # brief's older name
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task done")
     s = task.add_parser("comment", help="leave a comment on a task, on the record with your name")
     s.add_argument("--public", action="store_true", default=None)
     s.add_argument("--approval-id", dest="approval_id")
@@ -2390,89 +2258,19 @@ def parser():
     s.add_argument(
         "--kind",
         default="related",
-        choices=["parent", "blocks", "blocked_by", "related", "duplicate_of", "follow_up"],
-        help="parent: task is its parent; blocks / blocked_by; related (default); duplicate_of; "
-        "follow_up: it was split off or followed up from task",
+        choices=["blocks", "blocked_by", "related", "duplicate_of", "follow_up"],
+        help="blocks / blocked_by; related (default); duplicate_of; follow_up: it was split off or followed up "
+        "from task. A relation is a note: a task waits only on the tasks it filed",
     )
     s.add_argument("--remove", action="store_true", help="take it off instead")
     s.set_defaults(fn="task relate")
-    s = task.add_parser(
-        "wait",
-        help="make a task wait on another task, a pull request merging or a release being "
-        "published; prints what was stored",
-    )
-    s.add_argument("id")
-    s.add_argument(
-        "--on",
-        dest="wait_on",
-        required=True,
-        help="task:<id> (blocked_by), pr:<url> or pr:<task> (until that pull request merges), "
-        "release:<tag> (until that release is published). The task it waits on keeps its own step.",
-    )
-    s.add_argument(
-        "--note", help="what to check when the pr: or release: wait fires, in the wake; one or two sentences"
-    )
-    s.add_argument("--remove", action="store_true", help="take the wait off instead")
-    s.set_defaults(fn="task wait")
     s = task.add_parser("label", help="add or remove labels on a task")
     s.add_argument("id")
     s.add_argument("--add", action="append")
     s.add_argument("--remove", action="append")
-    s.add_argument("--approval-id", dest="approval_id", help="an approved publish approval, for a public roadmap label")
+    s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task label")
-    s = task.add_parser("close")
-    s.add_argument("id")
-    s.add_argument("--note")
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task close")
-    s = task.add_parser(
-        "bulk",
-        help="one change to every task a filter selects (at most 200): step, status, owner, "
-        "tags or close; --dry-run counts first. Each task changes as its own update would",
-    )
-    s.add_argument("action", choices=["step", "status", "owner", "tags", "close"])
-    s.add_argument("value", nargs="?", help="the step, status or owner to set (none for tags or close)")
-    s.add_argument("--add", action="append", help="with tags: a tag to add; repeat for more")
-    s.add_argument("--remove", action="append", help="with tags: a tag to take off; repeat for more")
-    s.add_argument("--note", help="what changed, or why; goes with each task's change")
-    s.add_argument(
-        "--dry-run",
-        dest="dry_run",
-        action="store_true",
-        help="count what would change, but not rule or handoff holds (the real run skips those); change nothing",
-    )
-    for name, word in (
-        ("owner", "owner (a bot slug, a human id or me)"),
-        ("requester", "requester"),
-        ("label", "tag"),
-        ("type", "type (id or name)"),
-        ("step", "step (id or name)"),
-        ("updated-since", "changed after this ISO-8601 time"),
-        ("member", "person or bot on it by role"),
-        ("role", "role, with --where-member"),
-    ):
-        s.add_argument("--where-" + name, dest="where_" + name.replace("-", "_"), help="only tasks with this " + word)
-    s.add_argument(
-        "--where-status",
-        dest="where_status",
-        action="append",
-        choices=list(TASK_STATUSES),
-        help="only tasks with this status; repeat for more",
-    )
-    s.add_argument(
-        "--where-not-owner",
-        dest="where_not_owner",
-        metavar="OWNER",
-        help="only tasks owned by anyone else: a bot slug, a human id or me (the rest of the filter still applies)",
-    )
-    s.add_argument("--where-lane", dest="where_lane", choices=["company", "product"])
-    s.add_argument("--where-number", dest="where_number", type=int, help="only this task number")
-    s.add_argument("--where-snoozed", dest="where_snoozed", choices=["hide", "only", "all"])
-    s.add_argument(
-        "--where-id", dest="where_ids", action="append", help="only this task (id or number); repeat for more"
-    )
-    s.set_defaults(fn="task bulk")
     s = task.add_parser("attach", help="attach a file to a task; prints the link for your note")
     s.add_argument("id")
     s.add_argument("file")
@@ -2480,21 +2278,6 @@ def parser():
     s.add_argument("--poster", help="a PNG or JPEG preview")
     s.add_argument("--note", help="short note on this version (at most 500 characters)")
     s.set_defaults(fn="task attach")
-    # Pipeline requirements (backend/pipeline_requirements.py, backend/requirement_attachments.py): the MCP tools of the
-    # same names (clients/hubtools.py) run through the same commands.
-    s = sub.add_parser("requirements", help="the requirements a pipeline stage sets: kind, reviewer, version")
-    s.add_argument("stage_id", help="the pipeline stage (a task step id)")
-    s.set_defaults(fn="requirements")
-    requirement = sub.add_parser("requirement", help="evidence on a requirement of a ticket").add_subparsers(dest="sub")
-    s = requirement.add_parser("attach", help="attach a company file, an uploaded blob or a link to a requirement")
-    s.add_argument("task_id", help="the ticket, at the requirement's stage")
-    s.add_argument("requirement_id")
-    s.add_argument("--source", required=True, choices=["file", "blob", "link"])
-    s.add_argument("--file-id", help="a company file (source file)")
-    s.add_argument("--file-version", type=int, help="the file version; left out, the current one")
-    s.add_argument("--blob-id", help="an uploaded blob (source blob)")
-    s.add_argument("--url", help="an http or https address (source link)")
-    s.set_defaults(fn="requirement attach")
     s = task.add_parser("answers", help="list the task's structured answers, oldest first")
     s.add_argument("id")
     s.set_defaults(fn="task answers")
@@ -2510,28 +2293,15 @@ def parser():
     s.add_argument("--q", help="title words or #N")
     s.add_argument("--owner")
     s.add_argument("--requester")
-    s.add_argument("--status", action="append", choices=list(TASK_STATUSES))
-    s.add_argument("--lane", choices=["company", "product"])
+    s.add_argument("--status", action="append", choices=["open", "done", "closed"])
     s.add_argument("--label")
-    s.add_argument("--type", help="only tasks of this type (id or name)")
-    s.add_argument("--step", help="only tasks in this step (id or name)")
-    s.add_argument(
-        "--sort", choices=["queue", "finished", "step"], help="step: in step order, then each one's place in it"
-    )
+    s.add_argument("--sort", choices=["queue", "finished"], help="finished: most recently ended first")
     s.add_argument("--number", type=int, help="only this task number")
     s.add_argument("--updated-since", help="only tasks changed after this ISO-8601 time with a timezone")
     s.add_argument("--member", help="only tasks this person or bot is on in some role (me, a human id, a bot slug)")
     s.add_argument("--role", help="with --member: only tasks they are on in this role")
-    s.add_argument("--brief", action="store_true", help="leave out bodies and acceptance criteria")
-    s.add_argument(
-        "--all", action="store_true", help="the board: every task and every bot you may see, as {tasks, bots}"
-    )
-    s.add_argument(
-        "--stuck",
-        action="store_true",
-        help="only open work untouched for --hours that waits on nobody (BotOps's sweep)",
-    )
-    s.add_argument("--hours", type=int, default=24, help="with --stuck: untouched for at least this many hours")
+    s.add_argument("--brief", action="store_true", help="leave out bodies")
+    s.add_argument("--all", action="store_true", help="every task and every bot you may see, as {tasks, bots}")
     s.add_argument(
         "--snoozed",
         choices=["only", "all"],
@@ -2539,9 +2309,12 @@ def parser():
     )
     s.set_defaults(fn="task list")
     s = task.add_parser(
-        "show", help="one task with its history and conversation; several ids: their fields in one read"
+        "show",
+        help="one task: its version, stage, owner, turn, what it takes to leave the stage, next; several ids: their "
+        "fields in one read",
     )
     s.add_argument("id", nargs="+")
+    s.add_argument("--json", action="store_true", help="the task as JSON instead of its lines")
     s.set_defaults(fn="task show")
     s = task.add_parser("run", help="start a bot's task now, as the task")
     s.add_argument("id")
@@ -2559,53 +2332,19 @@ def parser():
         "--clear", action="store_true", help="clear the task's own model: its runs use the bot's task model again"
     )
     s.set_defaults(fn="task model")
-    s = task.add_parser("check-back", help="schedule the next follow-up on bot work")
-    s.add_argument("id")
-    timing = s.add_mutually_exclusive_group(required=True)
-    timing.add_argument("--at", help="ISO date-time with timezone")
-    timing.add_argument("--in", dest="in_duration", help="duration such as 45m or 2h")
-    s.add_argument("--for", dest="check_back_note", help="the result or handoff to inspect")
-    s.set_defaults(fn="task check-back")
     s = task.add_parser(
         "snooze",
-        help="set a task aside until a date: off the lists and Needs you until then, when its owner bot is woken once",
+        help="set a task aside in its stage, with why: off Needs you and quiet until DATE; with no date it is On ice",
     )
     s.add_argument("id")
-    s.add_argument(
-        "--until", required=True, help="ISO-8601 date (the start of that day, Pacific) or date-time with a zone"
-    )
-    s.add_argument(
-        "--note",
-        help="what to check when the snooze ends, in the owner's wake: what you are waiting for and "
-        "where to look (at most 500 characters)",
-    )
+    s.add_argument("--until", help="ISO-8601 date (the start of that day, Pacific) or date-time with a zone")
+    s.add_argument("-m", "--why", help='why, and what you wait for ("vendor replies by Nov 14")')
+    s.add_argument("--version", type=int, help=version_help)
     s.set_defaults(fn="task snooze")
-    # `defer` is its older name: a date makes it a snooze-like hold, not a delivery (backend/delivery.py).
-    s = task.add_parser(
-        "later",
-        aliases=["defer"],
-        help="a deferred task carried into this run that you will not do now: say when it is "
-        "picked up again (it gets one run of its own then); with none, your next run is handed it again",
-    )
+    s = task.add_parser("unsnooze", help="a person brings a snoozed task back now; its owner is woken once")
     s.add_argument("id")
-    when = s.add_mutually_exclusive_group(required=True)
-    when.add_argument("--after", help="when this task is done or closed (an id or number)")
-    when.add_argument("--at", help="at this time: ISO-8601 date-time with a zone, or a date (start of day, Pacific)")
-    when.add_argument("--next-run", action="store_true", help="with your next run, whatever starts it")
-    when.add_argument("--handled", action="store_true", help="this run is done with it for now (nothing to resume)")
-    s.set_defaults(fn="task later")
-    s = task.add_parser("unsnooze", help="bring a snoozed task back now; its owner bot is woken once")
-    s.add_argument("id")
+    s.add_argument("-m", "--why")
     s.set_defaults(fn="task unsnooze")
-    s = task.add_parser(
-        "waive-qa",
-        help="a person waives a Dev ticket's current In QA step for one exact pull "
-        "request head, with a reason; recorded as a waiver, never as a QA pass",
-    )
-    s.add_argument("id")
-    s.add_argument("--head", required=True, help="the pull request's current head: the full 40-character sha")
-    s.add_argument("--reason", required=True, help="why QA is waived, in plain words")
-    s.set_defaults(fn="task waive-qa")
 
     replay = sub.add_parser("replay", help="what happened in a window, as you may see it").add_subparsers(dest="sub")
     s = replay.add_parser("show", help="what happened in a window, in time order, as you may see it (JSON)")
@@ -3974,51 +3713,6 @@ def parser():
     s.add_argument("--writer", help="the Technical Writer's bot slug; empty finds it by starter template")
     s.set_defaults(fn="release schedule")
 
-    appr = sub.add_parser("approval", aliases=["approvals"]).add_subparsers(dest="sub")
-    s = appr.add_parser(
-        "request", help="ask for a yes; if the owner already said send, mail send --approve <their message id>"
-    )
-    s.add_argument("--kind", required=True, choices=list(APPROVAL_KINDS))
-    s.add_argument("--payload-file", dest="payload_file")
-    s.add_argument("--payload")
-    s.add_argument("--task")
-    s.add_argument(
-        "--supersedes", metavar="APPROVAL_ID", help="your older undecided approval this replaces; it is withdrawn"
-    )
-    s.set_defaults(fn="approval request")
-    s = appr.add_parser("show")
-    s.add_argument("id")
-    s.set_defaults(fn="approval show")
-    s = appr.add_parser(
-        "list", help="the approvals addressed to you: pending (what Needs you counts), or approved or declined"
-    )
-    s.add_argument("--status", choices=["pending", "approved", "declined"], default="pending")
-    s.add_argument("--from", dest="from_actor", metavar="ACTOR", help="only the ones this actor asked for")
-    s.add_argument("--before", metavar="DATE", help="only those asked before this date (YYYY-MM-DD)")
-    s.add_argument("--since", metavar="DATE", help="only those asked on or after this date (YYYY-MM-DD)")
-    s.add_argument("--limit", type=int, default=20)
-    s.add_argument("--offset", type=int, default=0)
-    s.set_defaults(fn="approval list")
-    s = appr.add_parser("read-back", help="the Assistant: list in the person's chat the approvals it will approve")
-    s.add_argument("ids", nargs="+")
-    s.add_argument(
-        "--note",
-        metavar="TEXT",
-        default="",
-        help="one plain line shown above the list: the real decision you found, by name",
-    )
-    s.set_defaults(fn="approval read-back")
-    s = appr.add_parser("approve", help="approve an approval addressed to you")
-    s.add_argument("id")
-    s.add_argument("--note", default="")
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="approval approve")
-    s = appr.add_parser("decline", help="decline an approval addressed to you, with a reason")
-    s.add_argument("id")
-    s.add_argument("--note", default="")
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="approval decline")
-
     webhook = sub.add_parser(
         "webhook", help="outgoing webhooks: Tico posts events to an address you choose (Tools › Webhooks)"
     ).add_subparsers(dest="sub")
@@ -4146,30 +3840,6 @@ def parser():
     s.add_argument("--type", help="an event name (default custom.example)")
     s.set_defaults(fn="webhook example")
 
-    s = sub.add_parser(
-        "pipeline",
-        help="a task type's steps (count, age, owners, whom they wait on, open PRs), each bot's "
-        "running, queued, held and dead jobs, failed runs by cause, and the engineering manager's exceptions",
-    )
-    s.add_argument("--type", help="task type id or name; default the engineering board")
-    s.add_argument("--owner")
-    s.add_argument("--label")
-    s.add_argument("--updated-since", help="ISO date-time or a window like 7d")
-    s.add_argument("--snoozed", choices=["all", "hide", "only"], help="default all")
-    s.add_argument("--bot", help="queues and failures for this bot only")
-    s.add_argument("--since", help="failure window: 24h (default), up to 7d, or an ISO date-time")
-    s.set_defaults(fn="pipeline")
-    # Owners and admins of the pipeline; the bot must be active (archived, paused and planned bots are refused).
-    # A top-level command, not a `pipeline` subcommand: `pipeline` stays a leaf (the MCP tool test counts commands).
-    s = sub.add_parser(
-        "pipeline-manager",
-        help="set a pipeline's manager bot, or clear it with --clear: the bot that runs its manager pass and judges "
-        "stuck tasks; an active bot only",
-    )
-    s.add_argument("pipeline", help="the pipeline: its id or its name")
-    s.add_argument("bot", nargs="?", help="the bot to manage the pipeline: its id or slug")
-    s.add_argument("--clear", action="store_true", help="clear the pipeline's manager instead of setting one")
-    s.set_defaults(fn="pipeline-manager")
     s = sub.add_parser("brief", help="alerts, who needs the person, what bots said since --since")
     s.add_argument("--since", help="an ISO date-time; default the last 12 hours")
     s.set_defaults(fn="brief")
@@ -4209,11 +3879,9 @@ def parser():
     s = bt.add_parser("abandon", help="drop the batch without applying anything")
     s.add_argument("batch")
     s.set_defaults(fn="needs-you abandon")
-    s = bt.add_parser("show", help="what needs you, counted as the board counts it: per kind and per bot")
-    s.add_argument(
-        "--by", choices=["bot", "kind"], default="bot", help="print the counts per bot (default) or per kind"
-    )
-    s.add_argument("--limit", type=int, help="the newest items listed under each bot (default 5, at most 10)")
+    s = bt.add_parser("show", help="what needs you: the count per kind and the items, oldest first")
+    s.add_argument("--kind", choices=["task", "ask", "paused", "mention"], help="only this kind")
+    s.add_argument("--limit", type=int, help="the items listed (default 20); the counts are of every item")
     s.set_defaults(fn="needs-you show")
 
     runs = sub.add_parser("run", help="a bot's runs").add_subparsers(dest="sub")
@@ -5478,7 +5146,6 @@ RENAMED = [
     (("notes",), ("note", "list"), (), None),
     (("unnote",), ("note", "delete"), (), None),
     (("board",), ("task", "list"), ("--all",), None),
-    (("task", "stuck"), ("task", "list"), ("--stuck",), None),
     (("goals",), ("goal", "list"), (), None),
     (("goal", "auto"), ("goal", "status"), (), _goal_auto),
     (("goal", "checkins"), ("goal", "checkin-list"), (), None),
@@ -5530,131 +5197,53 @@ RENAMED = [
 ]
 RENAMED.sort(key=lambda rule: -len(rule[0]))
 
-# Commands taken away with asks (Tico 0.5): each prints one line naming what to use instead and exits 1. The longest
-# old spelling that matches wins.
+# Commands taken away (asks in Tico 0.5, the old task engine in 0.6): each prints one line naming what to use instead
+# and exits 1, so a bot told an old command does not loop on it. The longest old spelling that matches wins.
 ASK_INSTEAD = (
-    'ask a person with: hub task question "<question>" --on <person>; '
+    'ask a person on your task with: hub task ask <id> --to <person> "<one line>" --version N; '
     'ask a bot with: hub message send <bot> "<question>" --needs-action'
 )
-ANSWER_INSTEAD = "a question to a person is a question task: answer it in Tico (Needs you); a bot's question is a DM"
+ANSWER_INSTEAD = (
+    "a person answers in Needs you; a bot named on an ask answers with: "
+    "hub task answer <id> <requirement> ok|no|<answer> --version N"
+)
+WAIT_INSTEAD = (
+    "a task waits only on a person it asks (hub task ask) or a task it files (hub task file --parent <id>); "
+    'else hub task snooze <id> --until DATE -m "why" --version N'
+)
+MOVE_INSTEAD = (
+    'move a task with: hub task done <id> -m "what was done" --version N, or hub task move <id> next|<stage> '
+    '-m "why" --version N; hub task show <id> says what it takes to leave its stage'
+)
+PIPELINE_INSTEAD = "a pipeline's settings are a person's, on its page; hub task show <id> says where a task is"
 REMOVED = [
     (("question", "ask"), ASK_INSTEAD),
     (("question", "answer"), ANSWER_INSTEAD),
     (("question",), ASK_INSTEAD),
     (("ask",), ASK_INSTEAD),
     (("answer",), ANSWER_INSTEAD),
-    (("task", "ask"), ASK_INSTEAD),
+    (("task", "question"), ASK_INSTEAD),
     (("task", "ask-resolve"), ANSWER_INSTEAD),
+    (("approval", "request"), ASK_INSTEAD),
+    (("approval",), ANSWER_INSTEAD),
+    (("approvals",), ANSWER_INSTEAD),
+    (("task", "wait"), WAIT_INSTEAD),
+    (("task", "check-back"), WAIT_INSTEAD),
+    (("task", "later"), WAIT_INSTEAD),
+    (("task", "defer"), WAIT_INSTEAD),
+    (("task", "stuck"), "Tico's own check finds a task that is stuck; hub task list lists tasks"),
+    (("task", "bulk"), "a person changes many tasks at once on the Tasks page; a bot changes one task at a time"),
+    (("task", "waive-qa"), MOVE_INSTEAD),
+    (("requirements",), MOVE_INSTEAD),
+    (("requirement",), MOVE_INSTEAD),
+    (("task", "type"), PIPELINE_INSTEAD),
+    (("task", "types"), PIPELINE_INSTEAD),
+    (("pipeline",), PIPELINE_INSTEAD),
+    (("pipeline-manager",), PIPELINE_INSTEAD),
+    (("growth", "idea"), 'a growth idea is a task: hub task create --owner <bot> --title "..." --label channel:<slug>'),
 ]
 REMOVED.sort(key=lambda rule: -len(rule[0]))
 NOTICE_COMMANDS = ("list",)  # the subcommands `hub notice` has now
-
-
-MARKETING_TYPE = (
-    "idea"  # the marketing task type's id (backend/marketing_tasks.py TYPE_ID); its name is a team's to set
-)
-# The old status words of the growth idea lines, and the step each one is now (backend/marketing_tasks.py).
-LEGACY_IDEA_STEP = {"idea": "On deck", "testing": "Live", "scaling": "Working", "won": "Succeeded", "lost": "Failed"}
-
-
-def legacy_idea_step(word):
-    """The step a legacy status word names: the new step name for an old one, else the word capitalized (Paused)."""
-    return LEGACY_IDEA_STEP.get(word.lower(), word.capitalize())
-
-
-LEGACY_IDEA_FLAGS = (
-    "--title",
-    "--hypothesis",
-    "--prediction",
-    "--bet",
-    "--kpi",
-    "--segment",
-    "--source-kind",
-    "--source-ref",
-    "--i",
-    "--c",
-    "--e",
-    "--follow-up-of",
-    "--assignee",
-    "--body",
-    "--status",
-    "--q",
-    "--limit",
-    "--result",
-    "--learning",
-    "--bet-effect",
-    "--confidence",
-)
-
-
-def legacy_idea(argv):
-    """The old `hub growth idea create|list|verdict` lines as the task commands they are now, run in order, with the
-    notice to print; None for any other line. Ideas are tasks of the idea type (id, not name: a team's own Marketing type
-    does not change where they go): a channel is its label, a verdict moves the task to its step with what it found as
-    the note. The ICE scores, segments and the idea's source have no task field and are read and dropped; the bet and
-    the KPI stay as lines in the body."""
-    if argv[:2] != ["growth", "idea"] or argv[2:3] not in (["create"], ["list"], ["verdict"]):
-        return None
-    p = argparse.ArgumentParser(prog="hub growth idea", allow_abbrev=False)
-    p.add_argument("verb")
-    p.add_argument("id", nargs="?")
-    p.add_argument("--channel", action="append")
-    for flag in LEGACY_IDEA_FLAGS:
-        p.add_argument(flag)
-    old, _ = p.parse_known_args(argv[2:])
-    json_out = ["--json"] if "--json" in argv else []
-    if old.verb == "create":
-        # A task needs a body, so an idea given only a title uses the title as its body.
-        body = (
-            "\n".join(
-                line
-                for line in (
-                    f"Hypothesis: {old.hypothesis}" if old.hypothesis else "",
-                    f"Prediction: {old.prediction}" if old.prediction else "",
-                    f"Bet: {old.bet}" if old.bet else "",
-                    f"KPI: {old.kpi}" if old.kpi else "",
-                    old.body or "",
-                )
-                if line
-            )
-            or old.title
-            or ""
-        )
-        line = [
-            "task",
-            "create",
-            "--type",
-            MARKETING_TYPE,
-            "--owner",
-            old.assignee or "me",
-            "--title",
-            old.title or "",
-            "--body",
-            body,
-        ]
-        for channel in old.channel or []:
-            line += ["--label", f"channel:{channel}"]
-        return f'"hub growth idea create" is now "hub task create --type {MARKETING_TYPE}"', [line + json_out]
-    if old.verb == "list":
-        line = ["task", "list", "--type", MARKETING_TYPE]
-        if old.status:
-            line += ["--step", legacy_idea_step(old.status)]
-        if old.channel:
-            line += ["--label", f"channel:{old.channel[0]}"]
-        return f'"hub growth idea list" is now "hub task list --type {MARKETING_TYPE}"', [line + json_out]
-    if not old.status:
-        p.error("verdict needs --status won|lost|inconclusive|dropped|paused")
-    if not old.id:
-        p.error("verdict needs the idea's task id")
-    update = ["task", "update", old.id, "--step", legacy_idea_step(old.status)]
-    found = "\n".join(
-        f"{label}: {value}" for label, value in (("Result", old.result), ("Learning", old.learning)) if value
-    )
-    if not found and old.status == "paused":
-        found = "Test paused"  # a pause needs a note; with no result or learning, the note says only that
-    if found:
-        update += ["--note", found]  # the verdict's words are the note of every outcome
-    return ('"hub growth idea verdict" is now "hub task update --step --note"', [update + json_out])
 
 
 def parse(p, argv):
@@ -5727,15 +5316,6 @@ def split_human(argv):
 
 def main(argv):
     argv, who = split_human(argv)
-    old = legacy_idea(argv)
-    if old:
-        notice, lines = old
-        print(f"hub: {notice}; the old name stops working in the next release", file=sys.stderr)
-        for line in lines:
-            code = run(line, who)
-            if code:
-                return code
-        return 0
     gone = removed_notice(argv)
     if gone:
         print(gone, file=sys.stderr)

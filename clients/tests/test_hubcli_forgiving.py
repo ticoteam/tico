@@ -97,8 +97,9 @@ def test_a_bad_flag_value_lists_its_choices(capsys):
     code, err = parse_failure(capsys, ["task", "list", "--status", "todo"])
     assert code == 2
     listed = err.split("choose from", 1)[1]  # quoted on newer Pythons, bare on older ones: match the names only
-    for status in ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined"):
+    for status in ("open", "done", "closed"):
         assert status in listed
+    assert "doing" not in listed and "waiting" not in listed
 
 
 def test_an_unknown_flag_suggests_the_closest_flag_of_that_command(capsys):
@@ -127,7 +128,6 @@ def _leaves(p, skip_aliases):
     "words, command",
     [
         (["tasks", "list"], "task list"),
-        (["approvals", "show", "x"], "approval show"),
         (["automations", "list"], "automation list"),
         (["bots", "status", "list"], "bot status list"),
         (["rule", "list"], "rules list"),
