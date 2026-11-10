@@ -31,7 +31,13 @@ def test_nested_sub_tasks_wake_only_the_task_that_filed_them_once_each(api):
     with api.app.state.store.transaction() as c:
         reviews = [
             H.task_create(
-                c, "bot:ops", f"Review the import ({who})", "Review it.", "bot:" + who, parent_id=build["id"], lint=False
+                c,
+                "bot:ops",
+                f"Review the import ({who})",
+                "Review it.",
+                "bot:" + who,
+                parent_id=build["id"],
+                lint=False,
             )
             for who in ("finance", "cpo")
         ]
@@ -79,9 +85,13 @@ def test_private_child_results_stay_off_a_wider_parent_and_closed_parents_do_not
             "Private finding." not in r["body"] for r in messages if r["conversation_id"] == parent["conversation_id"]
         )
         # The filer's wake names the private sub-task it filed, and only the filer reads it.
-        named = [r for r in messages if r["conversation_id"] == parent["conversation_id"] and "Private review" in r["body"]]
+        named = [
+            r for r in messages if r["conversation_id"] == parent["conversation_id"] and "Private review" in r["body"]
+        ]
         assert named and all((r["recipient_id"], r["restricted"]) == ("bot:ops", 1) for r in named)
-        late = H.task_create(c, "bot:ops", "Another review", "Review it.", "bot:finance", parent_id=parent["id"], lint=False)
+        late = H.task_create(
+            c, "bot:ops", "Another review", "Review it.", "bot:finance", parent_id=parent["id"], lint=False
+        )
         H.task_close(c, "human:ana", parent["id"], "Not needed.", H.task(c, parent["id"])["version"])
         assert H.task(c, late["id"])["status"] == "closed", "a closed parent closes its open sub-tasks"
         H.task_move(c, "human:ana", late["id"], H.TASK_REOPEN, "Reopened by hand", H.task(c, late["id"])["version"])

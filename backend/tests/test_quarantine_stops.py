@@ -207,7 +207,17 @@ def test_a_quarantine_stopped_turn_that_used_up_an_approval_is_held(api):
         c.execute(
             "INSERT INTO ok_grants(requirement_id,subject,asked_by_id,content_hash,created_at,ok_by_id,ok_at,used_by_id,"
             "used_at) VALUES(?,?,?,?,?,?,?,?,?)",
-            ('quarantine-send', 'email_send:quarantine', 'bot:ops', 'h', H.now(), 'human:ana', H.now(), 'bot:ops', H.now()),
+            (
+                'quarantine-send',
+                'email_send:quarantine',
+                'bot:ops',
+                'h',
+                H.now(),
+                'human:ana',
+                H.now(),
+                'bot:ops',
+                H.now(),
+            ),
         )
     quarantine(api)
     post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
