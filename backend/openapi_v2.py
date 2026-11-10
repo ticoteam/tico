@@ -9233,6 +9233,16 @@ SCHEMAS.update(
         "ThreadBrowse": obj(
             {"threads": items({"allOf": [ref("ThreadView"), obj({"member_count": "i"})]}), "next_cursor": "n"}
         ),
+        "ThreadMatch": obj(
+            {
+                "threads": items(ref("ThreadView")),
+                "dm": {
+                    "type": ["string", "null"],
+                    "description": "The viewer's open DM with the one person or bot named, or null",
+                },
+            },
+            required=["threads", "dm"],
+        ),
         "ThreadCatchUp": obj(
             {
                 "items": items(
@@ -9443,6 +9453,16 @@ STABLE.extend(
             "Company and team threads the viewer may read and is not in, newest activity first; `q` matches the title. "
             "Following one puts it in the rail",
             "ThreadBrowse",
+        ),
+        (
+            "/api/v2/threads/match",
+            "get",
+            "Threads",
+            "matchThreads",
+            "New message: the open threads the viewer may read whose members, the viewer left out, are exactly the "
+            "`actor` teammates (human:<id>, bot:<slug>, group:<id>), newest activity first, at most 5; `dm` is the "
+            "viewer's open DM with the one person or bot named, or null",
+            "ThreadMatch",
         ),
         (
             "/api/v2/threads/archived",
