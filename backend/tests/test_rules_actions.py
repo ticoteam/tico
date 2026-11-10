@@ -105,3 +105,58 @@ def test_a_rule_never_changes_a_private_task_its_writer_cannot_read(c):
     found = carry(c, row, R.ACTION, {"action": "close", "note": "Not needed"}, by=BEN)
     assert (found.outcome, found.rule) == (R.WAKE, R.FAIL_OPEN)
     assert H.task(c, row["id"])["status"] == "open"
+
+
+def no_task(c, decision_by=ANA, room="room-1", body="Can someone check the Acme invoice?"):
+    """An ask rule's decision on a message to cpo that names no task, in thread `room`."""
+    decision = R.Decision(R.ASK, "rule_x", None, {}, decision_by)
+    return R.carry_out(c, decision, H.KEEPER, "bot:cpo", "notice", {}, body, {"id": room} if room else None)
+
+
+def rule_tasks(c):
+    return c.execute(
+        "SELECT t.id, t.owner_id, t.status, t.title, t.body FROM events e JOIN tasks t ON t.id=e.target "
+        "WHERE e.action='rule.ask' ORDER BY e.rowid"
+    ).fetchall()
+
+
+def test_an_ask_with_no_task_files_one_open_task_for_the_bots_operator_per_thread(c):
+    c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='cpo'")
+    assert no_task(c).outcome == R.NOTE
+    assert no_task(c).outcome == R.NOTE  # the same rule in the same thread: the open task stands
+    [made] = rule_tasks(c)
+    assert (made["owner_id"], made["status"]) == (BEN, "open")
+    assert "rule_x" in made["body"] and "Acme invoice" in made["body"]
+    no_task(c, room="room-2")  # another thread is another task
+    assert len(rule_tasks(c)) == 2
+    H.task_done(c, BEN, made["id"], "Checked")
+    no_task(c)  # the first one ended: the rule may file again
+    assert len(rule_tasks(c)) == 3
+
+
+def test_an_ask_with_no_task_and_no_operator_files_it_for_the_rules_maker(c):
+    c.execute("UPDATE bot_config SET owner_id='nobody' WHERE bot='cpo'")
+    assert no_task(c, decision_by=ANA).outcome == R.NOTE
+    assert [r["owner_id"] for r in rule_tasks(c)] == [ANA]
+    found = no_task(c, decision_by="bot:ops", room="room-3")  # nobody to own it: the bot is woken instead
+    assert (found.outcome, found.rule) == (R.WAKE, R.FAIL_OPEN)
+
+
+def test_a_move_gives_the_rules_reason_for_a_reopen_a_close_or_a_move_back_and_none_forward(c):
+    from backend.tests.helpers import engine as X
+
+    row = task(c)
+    H.task_done(c, ANA, row["id"], "Shipped")
+    carry(c, H.task(c, row["id"]), R.ACTION, {"action": "move", "stage": "To do", "note": "Customer reopened it"})
+    assert H.task(c, row["id"])["status"] == "open", "a done task moved to a work stage is reopened, with the reason"
+    X.pipeline(c, "launch", "Launch", [{"name": "Draft"}, {"name": "Review"}])
+    two = H.task_create(c, ANA, "Launch note", "Write it", "bot:cpo", lint=False, pipeline="launch")
+    found = carry(c, two, R.ACTION, {"action": "move", "stage": "Review"})  # forward: never pushed past
+    assert H.task(c, two["id"])["stage_id"] == "launch-review", found
+    carry(c, H.task(c, two["id"]), R.ACTION, {"action": "move", "stage": "Draft", "note": "Needs a rewrite"})
+    assert H.task(c, two["id"])["stage_id"] == "launch-draft", "a move back gives the reason"
+    last = c.execute(
+        "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='move' ORDER BY rowid DESC",
+        (two["id"],),
+    ).fetchone()
+    assert last[0] == "Rule rule_x: Needs a rewrite"
