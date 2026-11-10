@@ -246,7 +246,6 @@ CONVERSATION_SCOPES = ("direct", "personal", "shared", "task")
 TASK_STATUSES = ("open", "done", "closed")
 ACTIVE_STATUSES = ("open",)  # not yet finished
 TASK_ENDED = {"done": "marked done", "closed": "closed"}
-# tasks_due_active (TASKS_DUE_INDEX) is built from ACTIVE_STATUSES, word for word with TASKS_DUE_SQL.
 # The numbered start-up step that seeded the old General type's steps (PIPELINES_SCHEMA) reads this list, as it was.
 STEP_STATUSES = ("open", "doing", "review", "ready", "done", "closed")
 # The product lane is retired. Old rows may still say 'product' (so it is
@@ -1711,7 +1710,7 @@ def migrate(conn, adopt_legacy=False):
         "lane,COALESCE(closed_at,done_at,updated_at,created_at) DESC,id DESC) "
         "WHERE status IN ('done','closed')"
     )
-    conn.execute(TASKS_DUE_INDEX)  # the scheduler's due-date reminder pass
+    conn.execute("DROP INDEX IF EXISTS tasks_due_active")  # the due-date reminder pass it served is gone
     # A task's history and the Tasks page's stats read history_events through the indexes its migration made
     # (backend/migrations/0064_history_events.py).
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_occurrences'").fetchone():
@@ -7771,31 +7770,6 @@ def tasks(
         )
     hydrate_task_tags(conn, rows)
     return rows
-
-
-# The due-date reminder pass (backend/scheduler.py) reads only the columns it uses, through tasks_due_active: its
-# predicate is this query's status list and due test, word for word, or SQLite will not use it and scans every task.
-TASKS_DUE_SQL = (
-    f"SELECT id,title,owner_id,due_at,conversation_id FROM tasks WHERE status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) "
-    "AND due_at IS NOT NULL AND due_at!='' AND substr(due_at,1,10)<=? AND owner_id LIKE 'bot:%' "
-    "AND NOT " + SNOOZED % "tasks" + " "
-    "AND NOT EXISTS (SELECT 1 FROM task_reminders r WHERE r.task_id=tasks.id AND r.due_at=tasks.due_at) "
-    "ORDER BY created_at,id"
-)
-TASKS_DUE_INDEX = (
-    "CREATE INDEX IF NOT EXISTS tasks_due_active ON tasks(substr(due_at,1,10)) "
-    f"WHERE status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) AND due_at IS NOT NULL AND due_at!=''"
-)
-
-
-def tasks_due_for_bots(conn, through):
-    """Live tasks a bot owns whose due date may have arrived by `through` (a "YYYY-MM-DD").
-
-    Due dates are text in more than one shape (an offset, a bare date, an old local time), so this
-    is a day-level bound with a day of slack; the caller compares the exact instant. No row cap:
-    the reminder pass needs every one of them, however many tasks the hub holds.
-    """
-    return _rows(conn.execute(TASKS_DUE_SQL, (through,)))
 
 
 def task_flow(
