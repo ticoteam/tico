@@ -1,5 +1,8 @@
 # Pipelines: approval checklist
 
+This checklist covers the pipeline engine before 0.6.0. For the 0.6.0 engine, see
+[Pipelines v3: validation](pipelines-v3-validation.md).
+
 What has to be true before the pipeline engine (stages, requirements, judges, review mode, managers, flow map) is approved
 for customers. Each item has a way to check it. Nothing here is a feature flag: a pipeline with no stage requirements behaves
 as it did before, so rolling back a stage is retiring its requirement rows.
