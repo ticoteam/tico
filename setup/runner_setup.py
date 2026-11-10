@@ -182,13 +182,14 @@ def runner_prefix(s: Settings, label: str, given: str | None) -> str:
     Only this server's runner counts as its own: a runner of the same name kept for another server, in any region (its
     IAM role and profile are global), is refused when the names would be the same AWS resources."""
     name = s.aws_name or f"runner-{awsmod.slug(label)}"
-    same = [r for r in state.load_runners() if r.get("target") == "aws" and r.get("name") == name]
+    runners = [state.record(r) for r in state.load_runners()]
+    same = [r for r in runners if r.get("target") == "aws" and r.get("name") == name]
     mine = next(
         (r for r in same if r.get("server_url") == s.server_url and r.get("aws_region") == s.aws_region),
         next((r for r in same if r.get("server_url") == s.server_url), None),
     )
     host = urllib.parse.urlsplit(s.server_url).hostname or ""
-    prefix = awsmod.asset_prefix(given, mine or (state.load(host)[0] if host else {}))
+    prefix = awsmod.asset_prefix(given, mine or (state.record(state.load(host)[0]) if host else {}))
     other = next(
         (
             r
@@ -211,7 +212,7 @@ def own_record(s: Settings, name: str) -> dict:
     return next(
         (
             r
-            for r in state.load_runners(s.server_url)
+            for r in map(state.record, state.load_runners(s.server_url))
             if r.get("target") == "aws" and r.get("name") == name and r.get("aws_region") == s.aws_region
         ),
         {},

@@ -240,8 +240,8 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
     if not args.domain or not args.aws_region:
         raise MissingInput("backup-storage needs --domain and --aws-region")
     domain = args.domain.lower()
-    saved, _ = state.load(domain)
-    mine = state.load_backup(domain)  # an earlier strict-mode backup-storage for this domain
+    saved = state.record(state.load(domain)[0])
+    mine = state.record(state.load_backup(domain))  # an earlier strict-mode backup-storage for this domain
     prefix = awsmod.asset_prefix(args.asset_prefix, saved or mine)
     owned.check_mode(
         domain, getattr(args, "name", None) or awsmod.saved_name(saved) or awsmod.slug(domain), prefix, saved

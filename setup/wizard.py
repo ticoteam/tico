@@ -872,6 +872,7 @@ def run(args, io: IO, deps: Deps) -> int:
         if not asked.domain or asked.domain.startswith("<"):
             return asked
         found, found_env = state.load(asked.domain)
+        found = state.record(found)
         if not found or not (strict or owned.strict(found.get("asset_prefix", ""))):
             return asked  # a default-prefix install's prompted domain keeps today's behaviour
         saved = found

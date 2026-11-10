@@ -2595,3 +2595,34 @@ def test_an_elastic_ip_is_released_only_when_a_fresh_read_shows_it_associated_wi
         ids=HUB_IDS,
     )
     assert deleted(ec2, iam, ssm)["eips"] == ["eip-hub"]
+
+
+def _malformed(path, text="[1, 2]"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+@pytest.mark.parametrize("command", ["backup-storage", "runner", "prompted domain"])
+def test_default_commands_read_no_new_local_file_that_can_stop_them(command):
+    # Codex review 5, part 2, low 2: backup-storage, runner and a prompted domain read local records main never read; a
+    # record of the wrong shape (valid JSON, not an object) stopped them. Without --asset-prefix they run as on main.
+    home = state.home()
+    _malformed(home / "tico.example.com" / "backup.json")
+    _malformed(home / "tico.example.com" / "state.json")
+    _malformed(home / "runners" / "runner-build-1.json")
+    if command == "backup-storage":
+        s3, iam = S3(), IAM()
+        d = fakes.deps()
+        d.aws_clients = lambda region, profile: (None, iam, None, ACCOUNT)
+        d.aws_s3 = lambda region, profile: s3
+        code, out = go(["backup-storage", "--domain", "tico.example.com", "--aws-region", "us-east-1"], deps=d)
+        assert code == 0 and s3.called("create_bucket")[0]["Bucket"] == "tico-backup-tico-example-com-123456789012", out
+    elif command == "runner":
+        runner = ["runner", "--dry-run", "--non-interactive", "--cloud", "aws", "--label", "build-1"]
+        code, out = go([*runner, "--server-url", "https://tico.example.com"])
+        assert code == 0 and "Security group tico-runner-build-1:" in out, out
+    else:
+        io = StopAtPlan(interactive=True, answers=["tico.example.com"])  # the domain, asked
+        base = [a for a in BASE if a not in ("--non-interactive", "--domain", "tico.example.com")]
+        code, out = go([*base, "--target", "aws", "--front-door", "caddy", "--name", "acme"], io=io)
+        assert code == 1 and "Stopped; nothing was changed." in out and "Security group tico-acme:" in out, out
