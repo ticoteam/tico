@@ -23,19 +23,15 @@ from clients.tico import APIError
 
 BODY = "A long reply about the launch plan and its checks. " * 110  # about 5.5 KB a message
 CHAT_PAGE = {"limit": 50, "max_bytes": 163840}  # the web app's chat page (ui/app/chat.ts)
+# Fields the answer adds after the page is cut (backend/task_privacy.py page): each message's `source`
+# (teammate_access.Known) and the display names beside its ids (backend/names.py). `max_bytes` counts the rest.
+ADDED_AFTER_PAGE = {"source", "sender_name", "recipient_name"}
 
 
 def read(api, cid, token="ana-test", **query):
     r = api.get(f"/api/v2/conversations/{cid}/messages", params=query, headers=headers(token))
     assert r.status_code == 200, r.text
     return r.json()
-
-
-NAMES = ("sender_name", "recipient_name", "source")
-
-
-def stored(message):
-    return {k: v for k, v in message.items() if k not in NAMES}
 
 
 def message_ids(c, cid):
@@ -136,9 +132,10 @@ def test_a_chat_pages_back_by_limit_and_by_bytes_and_every_message_is_read_once(
         query = {**CHAT_PAGE, **({"before": cursor} if cursor else {})}
         page = read(api, cid, **query)
         pages += 1
-        # The cap counts the stored message (task_privacy.page); the route adds the names the reader may see after
-        # it (sender_name, recipient_name, source: about 100 bytes a message), so those are left out here.
-        sizes = [len(json.dumps(stored(m), default=str).encode()) for m in page["messages"]]
+        sizes = [
+            len(json.dumps({k: v for k, v in m.items() if k not in ADDED_AFTER_PAGE}, default=str).encode())
+            for m in page["messages"]
+        ]
         assert len(page["messages"]) == 1 or sum(sizes) <= CHAT_PAGE["max_bytes"], sizes
         seen = [m["id"] for m in page["messages"]] + seen
         if not page["has_more"]:
