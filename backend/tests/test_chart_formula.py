@@ -119,36 +119,49 @@ def test_a_seat_row_has_the_company_file_employee_shape_and_a_live_flag():
 
 
 # ---------------------------------------------------------------------------------------------- live seats
-def test_the_live_seats_are_the_first_product_owner_qa_and_the_finance_owner():
-    assert live_ids(F.build(HOTMIC)) == {
-        "creators-product-owner",
-        "qa-owner",
-        "bookkeeper",
-    }
+SOFTWARE_LIVE = {"product-manager", "engineering-manager", "builder", "reviewer-1", "reviewer-2", "release-manager"}
 
 
-def test_only_the_first_segments_product_owner_is_live():
+def test_the_live_seats_are_the_six_pipeline_roles_and_the_finance_owner():
+    # D2: a software company's Product and Engineering pipelines start with every stage owner live. QA is a seat, not a
+    # stage owner, so it starts open (D4).
+    assert live_ids(F.build(HOTMIC)) == SOFTWARE_LIVE | {"bookkeeper"}
+
+
+def test_segment_product_owners_report_to_the_product_manager_and_start_open():
     inputs = {"segments": ["Creators", "Fans", "Teachers"], "channels": [], "initiatives": [], "industry": []}
     owners = [seat for seat in F.build(inputs)["employees"] if seat["id"].endswith("-product-owner")]
-    assert [(seat["id"], seat["live"]) for seat in owners] == [
-        ("creators-product-owner", True),
-        ("fans-product-owner", False),
-        ("teachers-product-owner", False),
+    assert [(seat["id"], seat["reports_to"], seat["live"]) for seat in owners] == [
+        ("creators-product-owner", "product-manager", False),
+        ("fans-product-owner", "product-manager", False),
+        ("teachers-product-owner", "product-manager", False),
     ]
 
 
-def test_a_chart_with_no_segment_has_one_product_owner_which_is_live_and_no_segment_seats():
+def test_a_chart_with_no_segment_has_the_product_manager_and_no_segment_seats():
     result = F.build({"segments": [], "channels": [], "initiatives": [], "industry": []})
-    product_owners = [seat for seat in result["employees"] if seat["template"] == "segment-product-owner"]
-    assert [(seat["id"], seat["title"], seat["live"]) for seat in product_owners] == [
-        ("product-owner", "Product Owner", True)
+    product = [seat for seat in result["employees"] if seat["team"] == "Product"]
+    assert [(seat["id"], seat["title"], seat["template"], seat["live"]) for seat in product] == [
+        ("product-manager", "Product Manager", "product-manager", True)
     ]
     assert "segment-marketing-owner" not in {seat["template"] for seat in result["employees"]}
-    assert live_ids(result) == {
-        "product-owner",
-        "qa-owner",
-        "bookkeeper",
-    }
+    assert live_ids(result) == SOFTWARE_LIVE | {"bookkeeper"}
+
+
+def test_the_six_pipeline_seats_use_the_templates_the_pipelines_find_them_by():
+    from backend import pipeline_seats
+
+    seats = {seat["id"]: seat for seat in F.build(HOTMIC)["employees"]}
+    for role, chart_id in pipeline_seats.CHART_IDS.items():
+        assert seats[chart_id]["template"] == pipeline_seats.TEMPLATES[role], role
+    assert seats["release-manager"]["title"] == "Release Manager"
+    assert seats["qa-owner"]["live"] is False
+    managers = {seat["id"]: seat["reports_to"] for seat in seats.values() if seat["team"] == "Engineering"}
+    assert managers.pop("engineering-manager") is None
+    assert set(managers.values()) == {"engineering-manager"}
+    assert seats["product-manager"]["reports_to"] is None
+    gone = {"product-team-manager", "engineering-team-manager", "product-owner", "release-owner"}
+    assert not gone & set(seats)
 
 
 def test_a_live_seat_taken_off_the_chart_is_gone_and_nothing_is_uncovered_by_it():
@@ -170,15 +183,15 @@ def test_the_finance_owner_is_the_bookkeeper_under_the_corporate_team_manager():
 def test_the_fixed_seats_keep_the_ids_the_formula_gives_them():
     ids = {seat["id"] for seat in F.build(HOTMIC)["employees"]}
     assert {
-        "product-team-manager",
-        "engineering-team-manager",
+        "product-manager",
+        "engineering-manager",
         "growth-team-manager",
         "success-team-manager",
         "corporate-team-manager",
         "legal-owner",
         "bookkeeper",
         "partnerships-owner",
-        "release-owner",
+        "release-manager",
         "qa-owner",
     } <= ids
 
@@ -407,9 +420,9 @@ def test_a_removed_owner_leaves_its_things_uncovered_and_is_not_in_the_chart():
 
 
 def test_a_removed_manager_leaves_its_team_uncovered_and_its_reports_move_up_the_line():
-    result = F.build(HOTMIC, ["engineering-team-manager"])
+    result = F.build(HOTMIC, ["engineering-manager"])
     assert result["uncovered"] == ["Engineering"]
-    assert all(seat["reports_to"] != "engineering-team-manager" for seat in result["employees"])
+    assert all(seat["reports_to"] != "engineering-manager" for seat in result["employees"])
     assert by_title(result, "Builder")["reports_to"] is None
 
 
@@ -419,7 +432,7 @@ def test_a_removed_marketing_owner_leaves_only_its_segment_uncovered():
 
 @pytest.mark.parametrize(
     "seat, name",
-    [("security-owner", "Security"), ("infrastructure-owner", "Infrastructure"), ("release-owner", "Release")],
+    [("security-owner", "Security"), ("infrastructure-owner", "Infrastructure"), ("release-manager", "Release")],
 )
 def test_a_removed_factory_owner_leaves_its_area_uncovered(seat, name):
     assert F.build(HOTMIC, [seat])["uncovered"] == [name]
@@ -500,7 +513,7 @@ def test_a_blank_draft_is_the_default_channels_and_no_segment_or_bet_seats():
     assert inputs["segments"] == [] and inputs["initiatives"] == []
     assert inputs["channels"] == list(F.DEFAULT_CHANNELS)
     result = F.build(inputs)
-    assert len(result["employees"]) == 25
+    assert len(result["employees"]) == 24
     assert result["uncovered"] == []
 
 
@@ -536,7 +549,7 @@ def test_the_read_back_gives_each_seat_its_manager():
     managers = {bot["title"]: D.manager_of(draft, bot) for bot in draft["bots"]}
     assert managers["Partnerships Owner"] == "corporate-team-manager"
     assert managers["Finance Owner"] == "corporate-team-manager"
-    assert managers["Creators Product Owner"] == "product-team-manager"
+    assert managers["Creators Product Owner"] == "product-manager"
 
 
 @needs_cards
