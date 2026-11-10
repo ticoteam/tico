@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 from .. import health, hosted_updates, invariants, maintenance_limits, providers, replication
 from .. import maintenance_health as MH
 from .. import run_triggers as RT
+from .. import sources as SRC
 from ..store import H
 
 log = logging.getLogger("tico.maintenance.check_health")
@@ -549,7 +550,8 @@ def _task_create(c, title, body):
     """The BotOps task for a setup signature. Filing it wakes BotOps once, as any task for a bot does."""
     try:
         c.execute("SAVEPOINT check_health_task")
-        made = H.task_create(c, H.KEEPER, f"Health: {title}"[:200], body, H.bot_actor(BOTOPS), lint=False)
+        with SRC.writing_as("check-health"):  # the task shows it came from the Health check (sources.filers)
+            made = H.task_create(c, H.KEEPER, f"Health: {title}"[:200], body, H.bot_actor(BOTOPS), lint=False)
         c.execute("RELEASE check_health_task")
         return made
     except Exception:  # noqa: BLE001 - a refusal to file one task must not undo the check's record

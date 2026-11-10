@@ -102,8 +102,8 @@ function taskPropsHTML(t: PropTask): string {
   // Owner and who asked. A private task's reassignment rule is the Owner label's tooltip, not a line on screen.
   rows.push(row('owner', 'Owner', actorFace(t.owner_id, 16) + txt(actorLabel(t.owner_id)), {edit: r.edit, words: actorLabel(t.owner_id),
     title: t.private ? 'Reassigning grants the new assignee access and removes the previous assignee’s access unless they requested the task.' : ''}));
-  const asker = taskRequester(t);
-  rows.push(row('asker', 'Asked by', asker ? actorFace(asker, 16) + txt(actorLabel(asker)) : txt('Unknown'), {words: actorLabel(asker) || 'Unknown', empty: !asker}));
+  const asker = taskAsker(t), askerLabel = taskAskerLabel(t);
+  rows.push(row('asker', 'Asked by', asker ? (taskFiledByBuiltin(t) ? '' : actorFace(asker, 16)) + txt(askerLabel) : txt('Unknown'), {words: askerLabel || 'Unknown', empty: !asker}));
   if (t.roles && Object.keys(t.roles).length) rows.push(taskPeopleRowHTML(t, r));
   // Private: the box only; Who can see, below it, says who does
   rows.push(`<div class="prop" data-prop-row="private"><span class="prop-k">Private</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Private" data-task-private ${t.private ? 'checked' : ''} ${r.party && (!t.private || myActor() === t.requester_id) ? '' : 'disabled'}></label></span></div>`);

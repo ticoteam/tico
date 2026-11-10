@@ -1602,6 +1602,8 @@ def create_app(settings=None):
         if routine:
             value.update(routine_id=routine["schedule_id"])
         value["origin_actor"] = H.task_origin(c, row)
+        if filed := SRC.filers(c, [row["id"]]).get(row["id"]):
+            value["filer"] = filed
         if who is not None and visible_sql != "1":
             value["from_person"] = views.person_origin(c, row, visible_sql, who.actor)
         from . import task_reads
@@ -1714,6 +1716,7 @@ def create_app(settings=None):
             origin = (H._json(event["detail"], {}) or {}).get("bot")
             origins[event["target"]] = origin if H.is_bot(origin) else None
 
+        filed = SRC.filers(c, ids)
         summaries = H.children_summaries(c, ids, visible_sql)
         # The rows each row's from_person reads, read for the whole page first; each row is still decided one at a
         # time by the same code below.
@@ -1740,6 +1743,8 @@ def create_app(settings=None):
             )
             if row["id"] in routines_by_task:
                 value["routine_id"] = routines_by_task[row["id"]]
+            if row["id"] in filed:
+                value["filer"] = filed[row["id"]]
             result.append(value)
         from .files import readable_page_refs
 

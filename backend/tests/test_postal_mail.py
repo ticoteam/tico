@@ -13,6 +13,7 @@ import pytest
 
 from backend import hubdb as H
 from backend import postal_mail as P
+from backend import sources as SRC
 from backend.tests.helpers.api import get, post, put  # noqa: F401
 from backend.tests.helpers.api import headers
 from backend.tests.helpers.api import setup_attempt
@@ -316,6 +317,8 @@ def test_legal_mail_routes_to_chosen_bot_privately_and_notifies_owner_then_reset
         assert scan(api, row) == scan(api, row, token) == 200
         with api.app.state.store.read() as c:
             assert H.task_private_readable(c, "human:ana", made)
+            # Filed on Ana's rights, shown as Postal mail's (backend/sources.py filers).
+            assert SRC.filers(c, [row["task_id"]]) == {row["task_id"]: "postal-mail"}
             notice = c.execute(
                 "SELECT body FROM messages WHERE recipient_id='human:ana' "
                 "AND json_extract(refs,'$.task')=? AND body LIKE 'Legal mail:%'",
