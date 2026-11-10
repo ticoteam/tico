@@ -394,12 +394,12 @@ def _command_findings(s, base, names, out, line_start):
         old, new, fixable, removed = hit
         start, end = words[0][1], words[len(old) - 1][2]
         if removed:
-            target = "hub " + " ".join(new) + " (the flags differ: hub automation create --file)"
+            target = "tico " + " ".join(new) + " (the flags differ: tico automation create --file)"
         else:
-            target = "hub " + " ".join(new)
+            target = "tico " + " ".join(new)
         out.append(
             Finding(
-                old="hub " + " ".join(old),
+                old="tico " + " ".join(old),
                 new=target,
                 kind="removed" if removed else "command",
                 fixable=fixable and shell,
@@ -566,13 +566,13 @@ def command(target, fix_it, workspace, names=None):
     if not folder.is_dir():
         if not workspace:
             print(
-                f"hub bot check-names: {target} is not a folder, and HUB_WORKSPACE is not set to find a bot by slug",
+                f"tico bot check-names: {target} is not a folder, and HUB_WORKSPACE is not set to find a bot by slug",
                 file=sys.stderr,
             )
             return 1
         folder = manifest.repo_dir(Path(workspace), target)
     if not folder.is_dir():
-        print(f"hub bot check-names: no checkout at {folder}", file=sys.stderr)
+        print(f"tico bot check-names: no checkout at {folder}", file=sys.stderr)
         return 1
     names = names or load_names()
     findings = scan(folder, names)

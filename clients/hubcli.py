@@ -818,7 +818,7 @@ def cmd_task_dry_run(args, who):
 
     if not os.environ.get("HUB_API_URL"):
         raise CliError(
-            "HUB_API_URL is not set: `hub` talks to the Tico API and runs inside a "
+            "HUB_API_URL is not set: `tico` talks to the Tico API and runs inside a "
             "bot turn, where the runner sets HUB_API_URL, HUB_TOKEN and HUB_BOT"
         )
     if who:
@@ -992,10 +992,14 @@ def command_paths(p, prefix=()):
     return paths
 
 
+# The CLI's name in its usage, errors and notices. `hub` (scripts/hub) is its old name, the same CLI.
+PROG = "tico"
+
+
 def did_you_mean(words, names):
     """A one-line hint naming the closest of `names` (commands that exist), or "" when none is close."""
     close = difflib.get_close_matches(" ".join(words), names, n=2, cutoff=0.5)
-    return f" Did you mean: {', '.join('hub ' + name for name in close)}?" if close else ""
+    return f" Did you mean: {', '.join(PROG + ' ' + name for name in close)}?" if close else ""
 
 
 def typed_words(argv):
@@ -1071,7 +1075,7 @@ class HubParser(argparse.ArgumentParser):
             if words:
                 node.print_usage(sys.stderr)
                 self.exit(2, f"{node.prog}: error: {message}{hint}\n")
-        elif "invalid choice" in message and self.prog != "hub":  # a bad word under a command, e.g. `task lst`
+        elif "invalid choice" in message and self.prog != PROG:  # a bad word under a command, e.g. `task lst`
             bad = message.split("invalid choice: '", 1)[-1].split("'", 1)[0]
             under = self.prog.split()[1:]
             names = [" ".join(under + list(path)) for path in command_paths(self)]
@@ -1081,7 +1085,11 @@ class HubParser(argparse.ArgumentParser):
 
 
 def parser():
-    p = HubParser(prog="hub", description="the company hub: messages, tasks, status")
+    p = HubParser(
+        prog=PROG,
+        description="Tico: tasks, messages, bots and the rest of your team's work",
+        epilog="This computer's own commands: tico-computer help",
+    )
     p.add_argument("--version", action=_Version, help="print the Tico version")
     sub = p.add_subparsers(dest="cmd")
 
@@ -5235,22 +5243,22 @@ RENAMED.sort(key=lambda rule: -len(rule[0]))
 # Commands taken away (asks in Tico 0.5, the old task engine in 0.6): each prints one line naming what to use instead
 # and exits 1, so a bot told an old command does not loop on it. The longest old spelling that matches wins.
 ASK_INSTEAD = (
-    'ask a person on your task with: hub task ask <id> --to <person> "<one line>" --version N; '
-    'ask a bot with: hub message send <bot> "<question>" --needs-action'
+    'ask a person on your task with: tico task ask <id> --to <person> "<one line>" --version N; '
+    'ask a bot with: tico message send <bot> "<question>" --needs-action'
 )
 ANSWER_INSTEAD = (
     "a person answers in Needs you; a bot named on an ask answers with: "
-    "hub task answer <id> <requirement> ok|no|<answer> --version N"
+    "tico task answer <id> <requirement> ok|no|<answer> --version N"
 )
 WAIT_INSTEAD = (
-    "a task waits only on a person it asks (hub task ask) or a task it files (hub task file --parent <id>); "
-    'else hub task snooze <id> --until DATE -m "why" --version N'
+    "a task waits only on a person it asks (tico task ask) or a task it files (tico task file --parent <id>); "
+    'else tico task snooze <id> --until DATE -m "why" --version N'
 )
 MOVE_INSTEAD = (
-    'move a task with: hub task done <id> -m "what was done" --version N, or hub task move <id> next|<stage> '
-    '-m "why" --version N; hub task show <id> says what it takes to leave its stage'
+    'move a task with: tico task done <id> -m "what was done" --version N, or tico task move <id> next|<stage> '
+    '-m "why" --version N; tico task show <id> says what it takes to leave its stage'
 )
-PIPELINE_INSTEAD = "a pipeline's settings are a person's, on its page; hub task show <id> says where a task is"
+PIPELINE_INSTEAD = "a pipeline's settings are a person's, on its page; tico task show <id> says where a task is"
 REMOVED = [
     (("question", "ask"), ASK_INSTEAD),
     (("question", "answer"), ANSWER_INSTEAD),
@@ -5259,7 +5267,7 @@ REMOVED = [
     (("answer",), ANSWER_INSTEAD),
     (("task", "question"), ASK_INSTEAD),
     (("task", "ask-resolve"), ANSWER_INSTEAD),
-    (("task", "answers"), "the answers are on the task: hub task show <id>, under To leave"),
+    (("task", "answers"), "the answers are on the task: tico task show <id>, under To leave"),
     (("approval", "request"), ASK_INSTEAD),
     (("approval",), ANSWER_INSTEAD),
     (("approvals",), ANSWER_INSTEAD),
@@ -5267,7 +5275,7 @@ REMOVED = [
     (("task", "check-back"), WAIT_INSTEAD),
     (("task", "later"), WAIT_INSTEAD),
     (("task", "defer"), WAIT_INSTEAD),
-    (("task", "stuck"), "Tico's own check finds a task that is stuck; hub task list lists tasks"),
+    (("task", "stuck"), "Tico's own check finds a task that is stuck; tico task list lists tasks"),
     (("task", "bulk"), "a person changes many tasks at once on the Tasks page; a bot changes one task at a time"),
     (("task", "waive-qa"), MOVE_INSTEAD),
     (("requirements",), MOVE_INSTEAD),
@@ -5276,7 +5284,7 @@ REMOVED = [
     (("task", "types"), PIPELINE_INSTEAD),
     (("pipeline",), PIPELINE_INSTEAD),
     (("pipeline-manager",), PIPELINE_INSTEAD),
-    (("growth", "idea"), 'a growth idea is a task: hub task create --owner <bot> --title "..." --label channel:<slug>'),
+    (("growth", "idea"), 'a growth idea is a task: tico task create --owner <bot> --title "..." --label channel:<slug>'),
 ]
 REMOVED.sort(key=lambda rule: -len(rule[0]))
 NOTICE_COMMANDS = ("list",)  # the subcommands `hub notice` has now
@@ -5298,7 +5306,7 @@ def removed_notice(argv):
     """The one line for a command that is gone (REMOVED), or None."""
     for old, instead in REMOVED:
         if tuple(argv[: len(old)]) == old:
-            return f'hub: "{" ".join(old)}" is gone; {instead}'
+            return f'{PROG}: "{" ".join(old)}" is gone; {instead}'
     return None
 
 
@@ -5311,16 +5319,16 @@ def rename_argv(argv):
         and argv[1] not in ("create", "list", "delete")
         and not argv[1].startswith("-")
     ):
-        return ["note", "create"] + argv[1:], '"hub note <bot> <text>" is now "hub note create <bot> <text>"'
+        return ["note", "create"] + argv[1:], '"tico note <bot> <text>" is now "tico note create <bot> <text>"'
     if argv[:1] == ["notice"] and len(argv) > 1 and (argv[1] in NOTICE_COMMANDS or argv[1].startswith("-")):
-        return argv, None  # `hub notice list` is new; only `hub notice <text>` is the old send
-    if argv[:2] in (["org", "order"], ["org", "reports-to"]):  # `hub org` alone is the old `hub team show`
+        return argv, None  # `tico notice list` is new; only `tico notice <text>` is the old send
+    if argv[:2] in (["org", "order"], ["org", "reports-to"]):  # `tico org` alone is the old `tico team show`
         return argv, None
     for old, new, tail, rewrite in RENAMED:
         if tuple(argv[: len(old)]) == old:
             rest = argv[len(old) :]
             rest = (rewrite(rest) if rewrite else rest) + list(tail)
-            return list(new) + rest, f'"hub {" ".join(old)}" is now "hub {" ".join(new)}"'
+            return list(new) + rest, f'"{PROG} {" ".join(old)}" is now "{PROG} {" ".join(new)}"'
     return argv, None
 
 
@@ -5368,7 +5376,7 @@ def main(argv):
         return 1
     argv, renamed = rename_argv(argv)
     if renamed:
-        print(f"hub: {renamed}; the old name stops working in the next release", file=sys.stderr)
+        print(f"{PROG}: {renamed}; the old name stops working in the next release", file=sys.stderr)
     return run(argv, who)
 
 
@@ -5418,10 +5426,10 @@ def run(argv, who):
             credential = runner_credential(os.environ.get("HUB_RUNNER_CONFIG")) if local else None
             if not credential:
                 raise CliError(
-                    "HUB_API_URL is not set: `hub` talks to the Tico API and runs inside a "
+                    "HUB_API_URL is not set: `tico` talks to the Tico API and runs inside a "
                     "bot turn, where the runner sets HUB_API_URL, HUB_TOKEN and HUB_BOT"
                     + (
-                        f"; outside a turn `hub {args.fn}` needs this Mac's runner credential (scripts/setup-runner.sh)"
+                        f"; outside a turn `tico {args.fn}` needs this Mac's runner credential (scripts/setup-runner.sh)"
                         if local
                         else ""
                     )

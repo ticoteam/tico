@@ -1356,7 +1356,7 @@ def github_repository(client, slug, path):
             return {"skipped": exc.detail}
         if exc.code in ("forbidden", "not_found"):
             # A bot the server has not registered stays on this computer, as before.
-            return {"skipped": exc.detail, "note": f"register the bot, then hub bot repo-create {slug} --empty"}
+            return {"skipped": exc.detail, "note": f"register the bot, then tico bot repo-create {slug} --empty"}
         if exc.code == "github_repo_exists":
             return {"repository": path.name, "existing": True, "note": exc.detail}
         if exc.code == "github_permission_missing":
@@ -1902,11 +1902,11 @@ def main(args, who=None):
             return 0 if isinstance(result, dict) and result.get("approved") else 1
         if isinstance(result, dict) and result.get("readback"):  # what a relation write stored, direction and all
             for line in result["readback"]:
-                print("hub: stored: " + str(line), file=sys.stderr)
+                print("tico: stored: " + str(line), file=sys.stderr)
         if isinstance(result, dict) and result.get("warning"):  # saved, but a person should know why it waits
-            print("hub: " + str(result["warning"]), file=sys.stderr)
+            print("tico: " + str(result["warning"]), file=sys.stderr)
         if isinstance(result, dict) and result.get("held"):  # a bot's message to a bot waits for its next run
-            print("hub: " + str(result["held"]), file=sys.stderr)
+            print("tico: " + str(result["held"]), file=sys.stderr)
         return 0
     except APIError as exc:
         if exc.code == "worktree_limit" and isinstance(exc.extra.get("wait"), dict):

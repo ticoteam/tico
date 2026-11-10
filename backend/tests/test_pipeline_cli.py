@@ -1,5 +1,5 @@
-"""`hub requirements`, `hub requirement attach`, `hub pipeline` and `hub pipeline-manager` are gone in Pipelines v3
-(docs/pipelines-v3.md): a task moves with `hub task done` and `hub task move`, and a pipeline's settings are a
+"""`tico requirements`, `tico requirement attach`, `tico pipeline` and `tico pipeline-manager` are gone in Pipelines v3
+(docs/pipelines-v3.md): a task moves with `tico task done` and `tico task move`, and a pipeline's settings are a
 person's, on its page. A bot taught one of the old lines is told in one line what to use, on the CLI and over MCP."""
 
 import pytest
@@ -25,8 +25,8 @@ class Recorder:
 @pytest.mark.parametrize(
     "line, says",
     [
-        (["requirements", "stage-42"], "hub task done"),
-        (["requirement", "attach", "task-7", "req-3", "--source", "link"], "hub task move"),
+        (["requirements", "stage-42"], "tico task done"),
+        (["requirement", "attach", "task-7", "req-3", "--source", "link"], "tico task move"),
         (["pipeline", "--type", "Ops"], "on its page"),
         (["pipeline-manager", "Product", "cpo"], "on its page"),
         (["pipeline-manager", "product-roadmap", "--clear"], "on its page"),
@@ -34,7 +34,7 @@ class Recorder:
 )
 def test_an_old_pipeline_command_says_in_one_line_what_to_use(line, says):
     notice = hubcli.removed_notice(line)
-    assert notice and notice.startswith(f'hub: "{line[0]}" is gone; ') and says in notice
+    assert notice and notice.startswith(f'tico: "{line[0]}" is gone; ') and says in notice
     assert "\n" not in notice
 
 

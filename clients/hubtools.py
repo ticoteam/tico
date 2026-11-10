@@ -8642,7 +8642,7 @@ def support_report(api, args):
         "ok": ok,
         "task_id": row.get("task_id"),
         "status": row.get("status") or "pending",
-        "next": f"A person must OK it in Needs you. Then send it: hub support send --ok {ok} (hub_support_send). "
+        "next": f"A person must OK it in Needs you. Then send it: tico support send --ok {ok} (hub_support_send). "
         "Until then nothing is sent.",
     }
 
