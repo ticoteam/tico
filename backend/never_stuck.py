@@ -48,6 +48,10 @@ SYSTEM: str = E.SYSTEM
 # once the first gap has passed.
 GAPS = (E.FIRST_TRY_S, 900, 3600)
 TRIES = len(GAPS)
+# Bot runs one visit may start between two changes: the owner's start and 3 tries, then the manager bot's 3 tries.
+# Every run on the task counts, whoever it was for and whatever woke it (R1).
+OWNER_RUNS = 1 + TRIES
+RUNS = 1 + 2 * TRIES
 HOPS = 20  # stages one task is taken through in one pass, at most
 LATE_PERSON = 3  # times a stage's expected time before a late task lands in a person's list (C5)
 CUT_OFF = ("expired", "failed", "interrupted")
@@ -162,48 +166,66 @@ def _ladder(
         # check looks again after the first gap.
         E.changed(conn, row["id"], SYSTEM)
         return
-    bots = sorted((wait for wait in waits if wait.state == W.BOT), key=lambda wait: wait.ask)
-    if not bots or level == "person":
+    # Whoever has the task's own work, before a bot that was only asked for an OK or an answer; the manager bot at
+    # level manager.
+    target = W.turn(conn, row, waits)
+    if not target:
         return
     manager: str | None = _part(row, "pipeline").get("manager_id")
-    target = bots[0].who  # whoever has the task's own work, before a bot that was only asked for an OK or an answer
-    if level == "manager":
-        if not _usable(conn, manager, seen):
-            _to_person(conn, row, level, done)
-            return
-        target = manager
+    if level == "manager" and not _usable(conn, manager, seen):
+        _to_person(conn, row, level, done)
+        return
     if task_wakes.live_run(conn, row, target, at) or task_wakes.queued(conn, row["id"], target):
         return
+    epoch: str = visit.get("last_change_at") or visit["entered_at"]
     tries = int(visit.get("tries") or 0)
+    lost = task_wakes.lost(conn, row, target, epoch)
+    if lost:
+        # Its wake went missing before any run took it: the same words again, on this pass. Nothing ran, so nothing
+        # is counted (R3).
+        key = f"{row['id']}:{visit['id']}:lost:{lost['id']}"
+        if task_wakes.add(conn, row, target, visit, lost["body"], level=level, try_n=tries, wake_key=key):
+            done["woken"] += 1
+        return
     gap = GAPS[tries] if tries < TRIES else GAPS[0]
     due: str | None = visit.get("next_try_at")
     if not due:
         conn.execute("UPDATE visits SET next_try_at=? WHERE id=?", (H.shift(at, seconds=gap), visit["id"]))
         return
     last = task_wakes.last_run(conn, row, target)
-    if last and last.get("finished_at"):
+    if last and last.get("finished_at") and not _snoozed_since(conn, visit, str(last["finished_at"])):
         due = max(due, str(H.shift(last["finished_at"], seconds=gap)))  # the gap runs from when the bot stopped
     if at < due:
         return
-    epoch: str = visit.get("last_change_at") or visit["entered_at"]
+    runs = task_wakes.runs_since(conn, row, epoch)
     cut_off = bool(last) and (last or {}).get("state") in CUT_OFF
-    if level == "owner" and tries == 0 and not task_wakes.woken_since(conn, row["id"], target, epoch):
-        # Nothing has told this bot about the task as it stands now: it changed during a run, or a wake was lost.
-        # This wake starts it again and is not a try.
+    if level == "owner" and tries == 0 and not runs:
+        # No run has started since the task last changed (it changed during a run, and nothing announced it): this
+        # wake starts it again and is not a try. A try is counted only after a run that started since the change
+        # ended without one (R3).
         lead = "Your last run on this task was cut off." if cut_off else "This task is not finished. Carry on."
         if _wake(conn, row, target, lead, level, 0, epoch):
             conn.execute("UPDATE visits SET next_try_at=? WHERE id=?", (H.shift(at, seconds=GAPS[0]), visit["id"]))
             done["woken"] += 1
             return
-    if tries < TRIES:
+    if tries < TRIES and runs < (OWNER_RUNS if level == "owner" else RUNS):
         lead = "Your last run on this task was cut off." if cut_off else "You stopped before this task was finished."
         if level == "manager" and tries == 0:
             lead = f"{_name(conn, row.get('owner_id'))} could not take this task further. {MANAGER_HAS_IT}"
         _try(conn, row, target, level, tries + 1, f"{lead} Try {tries + 1} of {TRIES}.", at, epoch, done)
-    elif level == "owner" and manager != target and _usable(conn, manager, seen):
+    elif level == "owner" and manager != target and _usable(conn, manager, seen) and runs < RUNS:
         _to_manager(conn, row, manager, f"{_name(conn, target)} stopped {TRIES} times without finishing it.", at, done)
     else:
         _to_person(conn, row, level, done)
+
+
+def _snoozed_since(conn: "sqlite3.Connection", visit: Row, since: str) -> bool:
+    """A snooze of this visit ended after `since`: the task was set aside after the bot stopped, so its next try is due
+    at once, with no gap."""
+    found = conn.execute(
+        "SELECT 1 FROM snoozes WHERE visit_id=? AND ended_at IS NOT NULL AND ended_at > ? LIMIT 1", (visit["id"], since)
+    ).fetchone()
+    return found is not None
 
 
 def _wake(conn: "sqlite3.Connection", row: Row, target: str | None, lead: str, level: str, n: int, epoch: str) -> bool:
@@ -237,15 +259,20 @@ def _to_manager(
     conn: "sqlite3.Connection", row: Row, manager: str | None, why: str, at: str, done: dict[str, int]
 ) -> None:
     """Hand the task to the pipeline's manager bot, told who tried and what is missing: its first of 3 tries. A wake
-    still queued for anyone else is canceled: it would start a run about a turn that is over. A live run goes on."""
+    still queued for a bot that has no turn now is canceled: it would start a run about a turn that is over. A bot
+    named on an OK or an answer that still waits keeps its wake (R2). A live run goes on. When the visit has used its
+    7 runs since the last change, a person has it instead."""
     visit = row["visit"]
+    epoch: str = visit.get("last_change_at") or visit["entered_at"]
+    if task_wakes.runs_since(conn, row, epoch) >= RUNS:
+        _to_person(conn, row, visit.get("level") or "owner", done)
+        return
     conn.execute("UPDATE visits SET level='manager', tries=0, next_try_at=? WHERE id=?", (at, visit["id"]))
-    task_wakes.drop(conn, row["id"], keep=manager)
+    handed = E.task(conn, row["id"]) or row
+    task_wakes.drop(conn, row["id"], keep=W.turns(conn, handed) | {str(manager)})
     _event(conn, row["id"], "ladder", visit.get("level") or "owner", "manager", {"why": why})
     done["to_manager"] += 1
-    handed = E.task(conn, row["id"]) or row
     lead = f"{why} {MANAGER_HAS_IT} Try 1 of {TRIES}."
-    epoch: str = visit.get("last_change_at") or visit["entered_at"]
     _try(conn, handed, manager, "manager", 1, lead, at, epoch, done)
 
 
@@ -311,12 +338,23 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
         waits = W.of(conn, fresh, seen)
         head = waits[0] if waits else None
         level = fresh["visit"].get("level") or "owner"
-        if head and head.state == W.BOT and level == "owner" and manager != head.who and _usable(conn, manager, seen):
-            # Late hands the task to the manager bot, once per visit, on the same 3 tries.
-            _to_manager(conn, fresh, manager, f"{said} {_name(conn, head.who)} has it.", at, done)
-        elif head and head.state != W.PAUSED and is_bot(manager) and level == "owner" and manager != head.who:
-            # It waits on a person, another task or the outside: the manager bot looks once. A bot that cannot run is
-            # one row for its cause in a person's list, and its tasks carry on when the cause is fixed.
+        target = W.turn(conn, fresh, waits)
+        epoch: str = fresh["visit"].get("last_change_at") or fresh["visit"]["entered_at"]
+        if target and level == "owner" and manager != target and _usable(conn, manager, seen):
+            # A bot's turn: Late hands the task to the manager bot, once per visit, on the same 3 tries. Never a second
+            # set, and never back down from a person.
+            _to_manager(conn, fresh, manager, f"{said} {_name(conn, target)} has it.", at, done)
+        elif (
+            head
+            and not W.turns(conn, fresh, waits)
+            and is_bot(manager)
+            and level == "owner"
+            and manager != head.who
+            and task_wakes.runs_since(conn, fresh, epoch) < RUNS
+        ):
+            # No bot has a turn: it waits on a person, another task or the outside, and the manager bot looks once. A
+            # bot that cannot run is one row for its cause in a person's list, and its tasks carry on when the cause is
+            # fixed: nothing is sent for it.
             lead = (
                 f"{said} It waits on: {head.line}. Look once: push past with a reason where that is allowed, "
                 "reassign it, snooze it or close it."

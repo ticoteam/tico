@@ -22,9 +22,9 @@ START = datetime(2030, 1, 7, 9, 0, tzinfo=timezone.utc)
 
 
 @pytest.fixture
-def c(api, time_machine):
+def c(company, time_machine):
     time_machine.move_to(START, tick=False)
-    with api.app.state.store.transaction() as conn:
+    with company.transaction() as conn:
         yield conn
 
 
@@ -208,9 +208,9 @@ def test_nothing_is_sent_while_the_bot_runs_and_a_run_that_was_cut_off_is_a_try(
 
 def test_a_bot_that_cannot_run_is_not_woken_and_its_tasks_show_one_row_for_the_cause(c, general, later):
     first = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    X.ran(c, first, BUILDER)  # before the next task is made: making one settles every wake still queued
     second = X.new_task(c, ANA, "Fix the footer", assignee=BUILDER)["id"]
-    for task_id in (first, second):
-        X.ran(c, task_id, BUILDER)
+    X.ran(c, second, BUILDER)
     c.execute("UPDATE bots SET state='paused' WHERE id='builder'")
     assert later(days=5) == {"late": 2}  # nobody is woken, and the tasks do not land in a list one by one
     assert _ladder(c, first) == ("owner", 0)
@@ -313,30 +313,156 @@ def test_a_bot_named_for_an_ok_is_on_the_same_ladder(c, general, later):
     assert [(n["kind"], n["task_id"]) for n in W.needs(c, ANA)] == [("task", task_id)]
 
 
-def test_a_snooze_that_ends_wakes_the_owner_once_and_snoozed_time_is_not_late(c, general, later):
+def test_a_snooze_is_not_a_change_its_end_is_due_at_once_and_snoozed_time_is_not_late(c, general, later):
     task_id = X.new_task(c, ANA, "Chase the vendor", assignee=BUILDER)["id"]
-    X.ran(c, task_id, BUILDER)
+    X.ran(c, task_id, BUILDER)  # its start: it stopped early
+    mark = _visit(c, task_id)["progress_mark"]
     E.snooze(c, task_id, ANA, until=H.shift(H.now(), days=10))
     assert later(days=9) == {}  # set aside: no wake, no try, not late
-    assert later(days=1) == {"snoozes_ended": 1}
-    assert _said(c, task_id, BUILDER)[-1] == "The snooze on this task ended."
+    assert later(days=1) == {"snoozes_ended": 1}  # no wake is written when it ends
+    assert len(X.wakes(c, task_id, BUILDER)) == 1 and _ladder(c, task_id) == ("owner", 0)
+    assert _visit(c, task_id)["progress_mark"] in (None, mark)  # setting it aside was no change
     assert _states(c, task_id) == [("bot", BUILDER)]
+    # Due at once: the next pass wakes the builder, as its next try. The gap since its run is not waited out again.
+    assert later(seconds=10) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    assert _said(c, task_id, BUILDER)[-1] == "You stopped before this task was finished. Try 1 of 3."
     assert later(hours=23) == {}  # ten days went by snoozed: it has been in the stage an hour short of a day
     assert later(hours=2) == {"late": 1, "to_manager": 1, "woken": 1}
 
 
-def test_a_bots_fourth_snooze_in_a_stage_goes_to_the_manager_bot(c, general, later):
+def test_a_bots_fourth_snooze_in_a_stage_goes_to_the_manager_bot_on_the_same_count(c, general, later):
     task_id = X.new_task(c, ANA, "Chase the vendor", assignee=BUILDER)["id"]
-    X.ran(c, task_id, BUILDER)
-    for _ in range(E.BOT_SNOOZES):
+    X.ran(c, task_id, BUILDER)  # its start
+    for n in range(1, E.BOT_SNOOZES + 1):
         E.snooze(c, task_id, BUILDER, "The vendor is away", seen_version=E.task(c, task_id)["version"])
+        assert later(seconds=10) == {} and _queued(c, task_id) == []  # nothing wakes for a snoozed task
         E.unsnooze(c, task_id, ANA)
-    assert BUILDER in _queued(c, task_id)  # the last unsnooze wake has had no run yet
+        assert later(seconds=10) == {"woken": 1} and _ladder(c, task_id) == ("owner", n)  # its next try, at once
+        if n < E.BOT_SNOOZES:
+            X.ran(c, task_id, BUILDER)
+    # Its third try is still queued. Ana asks the reviewer for an OK: the reviewer's wake is queued too.
+    E.add_requirement(c, task_id, ANA, "ok", REVIEWER, "OK the reply")
+    assert _queued(c, task_id) == [BUILDER, REVIEWER]
     out = E.snooze(c, task_id, BUILDER, "The vendor is away", seen_version=E.task(c, task_id)["version"])
     assert out["note"] and not out.get("snooze")
-    assert BUILDER not in _queued(c, task_id)  # handed to the manager bot: the builder's wake is taken back
+    # Handed to the manager bot: the builder's wake is taken back, the reviewer's stays: its OK still waits on it.
+    assert _queued(c, task_id) == [REVIEWER]
     assert later(seconds=10) == {"woken": 1} and _ladder(c, task_id) == ("manager", 1)
     assert _said(c, task_id, MANAGER)[-1].startswith("builder could not take this task further. It is yours now")
+    assert _queued(c, task_id) == [MANAGER, REVIEWER]
+
+
+def _runs(c, task_id, since):
+    return c.execute("SELECT COUNT(*) FROM attempts WHERE task_id=? AND started_at >= ?", (task_id, since)).fetchone()[
+        0
+    ]
+
+
+def _run_down(c, task_id, later, bots=(BUILDER, REVIEWER, MANAGER)):
+    """Every queued wake about the task has its run, which stops early, and the clock goes on, until a person has it."""
+    for _ in range(60):
+        if _ladder(c, task_id)[0] == "person":
+            return
+        for bot in bots:
+            X.ran(c, task_id, bot)
+        later(minutes=10)
+    raise AssertionError("the ladder never reached a person")
+
+
+def test_seven_runs_between_two_changes_count_every_bot_that_ran(c, general, later):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    later(seconds=10)
+    # Ana asks the reviewer for an OK: a change, so the count starts over, and the reviewer is on the same count.
+    since = H.now()
+    E.add_requirement(c, task_id, ANA, "ok", REVIEWER, "OK the wording")
+    assert sorted(_queued(c, task_id)) == [BUILDER, REVIEWER]  # the builder's start is still its turn
+    later(seconds=10)
+    _run_down(c, task_id, later)
+    assert _runs(c, task_id, since) == 7  # the builder's start and 3 tries were 4 with the reviewer's run in them
+    assert later(hours=6) == {} and _queued(c, task_id) == []
+
+
+def test_only_whoever_has_the_turn_is_woken_when_a_task_enters_a_stage(c, general, later):
+    stages = (
+        {"name": "Write", "owner": BUILDER, "requirements": [{"kind": "owner_done"}]},
+        {"name": "Check", "owner": BUILDER, "requirements": [{"kind": "ok", "person": REVIEWER, "line": "OK it"}]},
+    )
+    X.pipeline(c, "copy", "Copy", stages, manager=MANAGER)
+    row = X.new_task(c, ANA, "Write the launch note", "copy")
+    done = c.execute("SELECT id FROM requirements WHERE stage_id='copy-write'").fetchone()[0]
+    A.answer(c, row["id"], done, BUILDER, "done", seen_version=row["version"])
+    moved = E.task(c, row["id"])
+    assert moved["stage"]["name"] == "Check"
+    # In Check the builder has nothing of its own to do: only the reviewer's OK is missing, so only it is woken.
+    assert [key.split(":")[1] for key, _ in X.wakes(c, row["id"], BUILDER)] == [row["visit"]["id"]]  # Write only
+    assert _queued(c, row["id"]) == [REVIEWER]
+    assert _said(c, row["id"], REVIEWER)[-1] == "You are asked: OK it"
+
+
+def test_an_answer_for_a_bot_with_no_turn_goes_to_whoever_has_it(c, general, later):
+    row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    task_id = row["id"]
+    X.ran(c, task_id, BUILDER)
+    c.execute("UPDATE visits SET level='manager', tries=1 WHERE task_id=?", (task_id,))
+    asked = E.add_requirement(c, task_id, MANAGER, "answer", ANA, "Card or invoice?", seen_version=row["version"])
+    X.settled(c)
+    A.answer(c, task_id, asked["requirement_id"], ANA, "Card")  # a change: the ladder starts over, with the builder
+    assert _ladder(c, task_id) == ("owner", 0)
+    assert _queued(c, task_id) == [BUILDER]
+    assert _said(c, task_id, BUILDER)[-1] == 'Ana answered "Card or invoice?", asked by manager: Card'
+    assert not any("Card" in line for line in _said(c, task_id, MANAGER))
+
+
+def _lose(c, task_id):
+    """Every wake still queued for the task goes missing, as a lost job does."""
+    c.execute(
+        "DELETE FROM jobs WHERE state='queued' AND message_id IN (SELECT id FROM messages WHERE wake_key LIKE ?)",
+        (task_id + ":%",),
+    )
+
+
+def test_a_lost_wake_is_written_again_on_the_next_pass_and_is_not_a_try(c, general, later):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    first = _said(c, task_id, BUILDER)
+    _lose(c, task_id)
+    assert later(seconds=10) == {"woken": 1} and _ladder(c, task_id) == ("owner", 0)  # this pass, not after a gap
+    assert _queued(c, task_id) == [BUILDER] and _said(c, task_id, BUILDER) == first * 2  # the same words
+    assert later(seconds=10) == {}  # once: it is queued again
+    X.ran(c, task_id, BUILDER)
+    assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)  # a run, then a try
+    _lose(c, task_id)  # try 1's wake goes missing too: written again, and still try 1
+    assert later(seconds=10) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    assert _said(c, task_id, BUILDER)[-1] == "You stopped before this task was finished. Try 1 of 3."
+    # A wake that never queued a run (a bot that reads its own inbox) is not lost: nothing is written again.
+    X.ran(c, task_id, BUILDER)
+    c.execute("UPDATE messages SET refs=json_remove(refs, '$.job') WHERE wake_key LIKE ?", (task_id + ":%",))
+    assert later(seconds=900).get("woken") == 1 and _ladder(c, task_id) == ("owner", 2)
+    c.execute("UPDATE messages SET refs=json_remove(refs, '$.job') WHERE wake_key LIKE ?", (task_id + ":%",))
+    _lose(c, task_id)
+    assert later(seconds=10) == {} and _ladder(c, task_id) == ("owner", 2)
+
+
+def test_a_second_wake_for_one_bot_and_task_folds_into_one(c, general):
+    row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    first = task_wakes.add(c, row, BUILDER, row["visit"], "First words.", wake_key=f"{row['id']}:a")
+    second = task_wakes.add(c, row, BUILDER, row["visit"], "Second words.", wake_key=f"{row['id']}:b")
+    assert first and second and _queued(c, row["id"]) == [BUILDER]  # one run starts
+    body = c.execute("SELECT body FROM messages WHERE id=?", (second,)).fetchone()[0]
+    assert body.index("First words.") < body.index("Second words.")  # nothing said is lost, in order
+    assert task_wakes.add(c, row, BUILDER, row["visit"], "Again.", wake_key=f"{row['id']}:b") is None
+    quiet = task_wakes.add(c, row, BUILDER, row["visit"], "A note.", wake_key=f"{row['id']}:c", quiet=True)
+    assert quiet and _queued(c, row["id"]) == [BUILDER]  # a quiet note folds nothing and starts nothing
+
+
+def test_a_late_task_with_a_bots_turn_goes_to_the_manager_bot_even_when_a_person_is_asked_too(c, general, later):
+    row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    task_id = row["id"]
+    X.ran(c, task_id, BUILDER)
+    E.add_requirement(c, task_id, ANA, "ok", "human:ben", "OK the wording")  # Ben is asked; the builder still has work
+    assert _states(c, task_id)[0] == ("person", "human:ben")
+    X.settled(c)
+    assert later(hours=24).get("late") == 1 and _ladder(c, task_id)[0] == "manager"
+    assert all("It waits on" not in line for line in _said(c, task_id, MANAGER))  # not a look: the manager has it
 
 
 def test_a_task_with_everything_met_moves_on_the_next_pass_and_takes_a_free_slot(c, general, later, time_machine):

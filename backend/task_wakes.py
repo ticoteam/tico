@@ -3,9 +3,11 @@
 
 A wake is a row in `messages` with a `wake_key`: `<task id>:<visit id>:<level>:<try>`. The key is unique, so writing the
 same wake twice is one wake. It is written in the same transaction as the move that causes it. The body says what is
-missing and the five ways a run may end.
+missing and the five ways a run may end. A bot has at most one wake queued per task: a second one carries the first's
+words before its own, and the first is canceled, so one run starts and nothing said is lost.
 """
 
+from collections.abc import Collection
 from typing import TYPE_CHECKING, Any, cast
 
 from . import run_triggers
@@ -56,6 +58,11 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "") -> str:
     return "\n".join(lines)
 
 
+# What a wake's refs hold that is the engine's or the run's own, never carried from a folded wake to the one it folds
+# into.
+ENGINE_REFS = ("task", "wake", "visit", "level", "try", "version", "quiet", "job", "trigger", "source", "purpose")
+
+
 def add(
     conn: "sqlite3.Connection",
     task: Row,
@@ -72,9 +79,11 @@ def add(
     source: str | None = None,
 ) -> str | None:
     """Wake `target` about `task`, once per key. Returns the message id, or None when this wake was already written or
-    there is nobody to tell. `refs` are a caller's own facts for the run it starts (an automation's run and step, the
-    other work to reconcile with); they never replace the engine's. `trigger` and `source` say what the run is for,
-    where the caller knows better than "work a task"."""
+    there is nobody to tell. A wake still queued for `target` about this task is folded into this one: its words come
+    first, what its caller attached comes along, and it is canceled. A quiet note starts no run and folds nothing.
+    `refs` are a caller's own facts for the run it starts (an automation's run and step, the other work to reconcile
+    with); they never replace the engine's. `trigger` and `source` say what the run is for, where the caller knows
+    better than "work a task"."""
     H = _h()
     if not target:
         return None
@@ -83,11 +92,28 @@ def add(
         return None
     if not H._actor_exists(conn, target) or not H.task_private_readable(conn, target, task):
         return None
+    waiting: list[Any] = []
+    carried: Row = {}
+    if not quiet and H.is_bot(target):
+        waiting = conn.execute(
+            "SELECT j.id, m.body, m.refs FROM jobs j JOIN messages m ON m.id = j.message_id WHERE j.bot_id=? "
+            "AND j.state='queued' AND m.wake_key LIKE ? ESCAPE '\\' ORDER BY m.created_at, m.rowid",
+            (H.actor_id(target), _like(task["id"])),
+        ).fetchall()
+        if waiting:
+            text = "\n\n".join([*(str(found[1] or "") for found in waiting), text])
+            for found in waiting:
+                # What the folded wake's caller attached (a new task's automation run, the work to reconcile with)
+                # rides on: the run that starts is still that work. The engine's own facts are this wake's.
+                was: Row = H._json(found[2], {}) or {}
+                trigger = trigger or (was.get("trigger") if was.get("trigger") != "task_turn" else None)
+                source = source or was.get("source")
+                carried.update({name: value for name, value in was.items() if name not in ENGINE_REFS})
     own: Row = {"task": task["id"], "wake": "task_turn", "visit": visit["id"], "level": level, "try": try_n}
     own["version"] = task.get("version")
     if quiet:
         own["quiet"] = True
-    stamped: Row = RT.stamp({**(refs or {}), **own}, trigger or "task_turn", source)
+    stamped: Row = RT.stamp({**carried, **(refs or {}), **own}, trigger or "task_turn", source)
     message = H._write_message(
         conn,
         H.KEEPER,
@@ -101,7 +127,15 @@ def add(
     )
     if not message:
         return None
-    conn.execute("UPDATE messages SET wake_key=? WHERE id=?", (wake_key, message["id"]))
+    for found in waiting:  # folded into this one
+        conn.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued'", (found[0],))
+    # `job` marks a wake that queued a run, so a wake whose job later went missing reads as lost (`lost`); one to a bot
+    # that reads its own inbox never had a job.
+    conn.execute(
+        "UPDATE messages SET wake_key=?, refs=CASE WHEN EXISTS (SELECT 1 FROM jobs WHERE message_id=?) "
+        "THEN json_set(COALESCE(refs, '{}'), '$.job', json('true')) ELSE refs END WHERE id=?",
+        (wake_key, message["id"], message["id"]),
+    )
     return message["id"]
 
 
@@ -204,6 +238,44 @@ def last_run(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | 
     return {"state": found[0], "finished_at": found[1]} if found else None
 
 
+def runs_since(conn: "sqlite3.Connection", task: Row, since: str) -> int:
+    """How many bot runs started on this task since `since` (the visit's last change), whoever ran: the count the
+    never-stuck ladder holds to 7. A run that started at the very time of the change counts: the bound is never read
+    short."""
+    found = conn.execute(
+        "SELECT COUNT(*) FROM attempts a JOIN jobs j ON j.id = a.job_id JOIN messages m ON m.id = j.message_id "
+        "WHERE (m.wake_key LIKE ? ESCAPE '\\' OR m.conversation_id = ?) AND COALESCE(a.started_at, a.created_at) >= ?",
+        (_like(task["id"]), task.get("conversation_id") or "", since),
+    ).fetchone()
+    return int(found[0]) if found else 0
+
+
+def lost(conn: "sqlite3.Connection", task: Row, actor: str | None, since: str) -> Row | None:
+    """The wake about this task that `actor` was owed and never got: its newest one in this visit since `since` (the
+    last change), when it queued a run, its job is gone or canceled, and no run of this bot has started on the task
+    since it was written. `id`, `body`. None when nothing was lost."""
+    H = _h()
+    if not H.is_bot(actor):
+        return None
+    visit: Row = task.get("visit") or {}
+    found = conn.execute(
+        "SELECT m.id, m.body, m.created_at, json_extract(m.refs, '$.job'), "
+        "(SELECT j.state FROM jobs j WHERE j.id = m.id) FROM messages m "
+        "WHERE m.wake_key LIKE ? ESCAPE '\\' AND m.recipient_id=? AND m.created_at>=? "
+        "AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1",
+        (_like(f"{task['id']}:{visit.get('id')}"), actor, since),
+    ).fetchone()
+    if not found or not found[3] or found[4] not in (None, "canceled"):
+        return None
+    taken = conn.execute(
+        "SELECT 1 FROM attempts a JOIN jobs j ON j.id = a.job_id JOIN messages m ON m.id = j.message_id "
+        "WHERE a.bot_id=? AND (a.job_id=? OR ((m.wake_key LIKE ? ESCAPE '\\' OR m.conversation_id = ?) "
+        "AND COALESCE(a.started_at, a.created_at) > ?)) LIMIT 1",
+        (H.actor_id(actor), found[0], _like(task["id"]), task.get("conversation_id") or "", found[2]),
+    ).fetchone()
+    return None if taken else {"id": str(found[0]), "body": str(found[1] or "")}
+
+
 def woken_since(conn: "sqlite3.Connection", task_id: str, actor: str | None, since: str) -> bool:
     """A wake about this task was written for `actor` at or after `since`."""
     return bool(
@@ -228,15 +300,18 @@ def queued(conn: "sqlite3.Connection", task_id: str, actor: str | None) -> bool:
     )
 
 
-def drop(conn: "sqlite3.Connection", task_id: str, keep: str | None = None) -> int:
-    """Cancel every wake still queued for this task, whoever it is for: the turn they were about is over. With `keep`,
-    that bot's wakes stay queued. A run that already took its wake is left alone. Returns how many."""
+def drop(conn: "sqlite3.Connection", task_id: str, keep: str | Collection[str] | None = None) -> int:
+    """Cancel every wake still queued for this task, whoever it is for: the turn they were about is over. With `keep`
+    (a bot, or several), those bots' wakes stay queued. A run that already took its wake is left alone. Returns how
+    many."""
     H = _h()
-    kept = H.actor_id(keep) if H.is_bot(keep) else None
+    keeping = [keep] if isinstance(keep, str) else list(keep or ())
+    kept = sorted({str(H.actor_id(bot)) for bot in keeping if H.is_bot(bot)})
     cursor = conn.execute(
-        "UPDATE jobs SET state='canceled' WHERE state='queued' AND bot_id IS NOT ? AND message_id IN "
-        "(SELECT id FROM messages WHERE wake_key LIKE ? ESCAPE '\\')",
-        (kept, _like(task_id)),
+        "UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
+        "(SELECT id FROM messages WHERE wake_key LIKE ? ESCAPE '\\')"
+        + (f" AND bot_id NOT IN ({','.join('?' * len(kept))})" if kept else ""),
+        (_like(task_id), *kept),
     )
     return cursor.rowcount
 

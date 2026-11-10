@@ -287,6 +287,22 @@ def _event(
     return str(_h()._task_event(conn, task_id, by, kind, old, new, note or "", data=data))
 
 
+def _turn_of(conn: "sqlite3.Connection", row: Row) -> tuple[str | None, str]:
+    """The one bot to wake about an open task now, as the never-stuck ladder picks it (`waiting_on.turn`), and the
+    lead its wake starts with when it is not the owner: a stage with nobody set wakes the manager bot to pick someone
+    (C25); a bot named on an OK is told what it is asked. None when it is nobody's turn, or a person's."""
+    from . import waiting_on as W
+
+    if row["status"] != "open" or row.get("snooze") or row["stage"].get("by_hand"):
+        return None, ""
+    waits = W.of(conn, row)
+    target = W.turn(conn, row, waits, paused=True)
+    if target and not row.get("owner_id") and target == _part(row, "pipeline").get("manager_id"):
+        return target, "This task has no owner. Pick one and reassign it."
+    asked = next((w for w in waits if w.who == target and w.ask), None) if target != row.get("owner_id") else None
+    return target, f"You are asked: {asked.line}" if asked else ""
+
+
 def _wake_turn(
     conn: "sqlite3.Connection",
     row: Row,
@@ -296,29 +312,37 @@ def _wake_turn(
     trigger: str | None = None,
     source: str | None = None,
 ) -> str | None:
-    """Tell whoever has the turn in a stage the task just entered, once per visit. A person is not told: their list is a
-    read. A stage with nobody set wakes the pipeline's manager bot to pick someone (C25). `refs`, `trigger` and
-    `source` are a new task's own (task_engine.enter)."""
-    if row["stage"]["kind"] != "work" or row.get("snooze") or row["stage"].get("by_hand"):
+    """Tell whoever has the turn in a stage the task just entered, once per visit: one bot, the one the ladder would
+    wake. A person is not told: their list is a read. A bot named on an OK while the owner has work of its own is the
+    ladder's to wake after that, on the same count. `lead` opens the wake when the turn's own lead says nothing;
+    `refs`, `trigger` and `source` are a new task's own (`enter`)."""
+    if row["stage"]["kind"] != "work":
         return None
-    owner = row.get("owner_id")
-    if is_bot(owner):
-        return task_wakes.add(
-            conn,
-            row,
-            owner,
-            row["visit"],
-            task_wakes.body(conn, row, lead),
-            refs=refs,
-            trigger=trigger,
-            source=source,
-        )
-    if not owner:
-        manager = _part(row, "pipeline").get("manager_id")
-        if is_bot(manager):
-            lead = lead or "This task has no owner. Pick one and reassign it."
-            return task_wakes.add(conn, row, manager, row["visit"], task_wakes.body(conn, row, lead))
-    return None
+    target, turn_lead = _turn_of(conn, row)
+    if not target:
+        return None
+    return task_wakes.add(
+        conn,
+        row,
+        target,
+        row["visit"],
+        task_wakes.body(conn, row, turn_lead or lead),
+        refs=refs,
+        trigger=trigger,
+        source=source,
+    )
+
+
+def _drop_stale(conn: "sqlite3.Connection", task_id: str) -> int:
+    """The turn may have gone to someone else: cancel the wakes still queued for a bot that has no turn on the task
+    now, and keep those of a bot that still has one, a bot named on an OK or an answer included (R2). A snoozed or
+    ended task, or one at level `person`, keeps none."""
+    from . import waiting_on as W
+
+    row = task(conn, task_id)
+    if not row or row["status"] != "open" or row.get("snooze"):
+        return task_wakes.drop(conn, task_id)
+    return task_wakes.drop(conn, task_id, keep=W.turns(conn, row))
 
 
 # ----------------------------------------------------------------------------- new
@@ -661,12 +685,13 @@ def _ended(conn: "sqlite3.Connection", row: Row, by: str) -> None:
         f"{title or 'A task'}: {'Done' if status == 'done' else 'Closed'}" for title, status in filed
     )
     _reset_ladder(conn, above["visit"], _h().now(), by)
-    owner = above.get("owner_id")
-    if is_bot(owner) and not above.get("snooze"):
+    above = _task(conn, above["id"])
+    target, _ = _turn_of(conn, above)
+    if target:
         task_wakes.add(
             conn,
             above,
-            owner,
+            target,
             above["visit"],
             task_wakes.body(conn, above, lead),
             wake_key=f"{above['id']}:{above['visit']['id']}:filed:{row['id']}",
@@ -748,8 +773,9 @@ def reassign(
     seen_version: int | str | None = None,
 ) -> Row:
     """Change who owns the task for this visit. Same writer, so it is logged and raises the version. It resets the
-    tries, drops the old owner's queued wakes for the task and wakes the new owner. In a stage owned by "the task's
-    assignee", the assignee changes with it."""
+    tries, drops the old owner's queued wakes for the task (a bot that still has a turn, named on an OK, keeps its
+    own) and wakes the new owner when the turn is theirs. In a stage owned by "the task's assignee", the assignee
+    changes with it."""
     H = _h()
     row = task(conn, task_id)
     if not row:
@@ -765,16 +791,15 @@ def reassign(
     fields: Row = {"owner_id": owner, "version": int(row.get("version") or 0) + 1, "updated_at": ts}
     if row["stage"].get("owner") == "assignee":
         fields["assignee_id"] = owner
-    task_wakes.drop(conn, task_id)
     _write(conn, task_id, **fields)
-    _reset_ladder(conn, row["visit"], ts, by)
+    _reset_ladder(conn, row["visit"], ts, by)  # the old owner's wakes go with its turn
     revision = _event(conn, task_id, by, "reassign", row.get("owner_id"), owner, why, {"stage": row["stage_id"]})
     moved = _task(conn, task_id)
     # What follows the owner: its private default, sessions, worktree, followers, place in the new owner's queue
     # (backend/task_effects.py). Before the wake, so a task that just became private wakes only who may read it.
     task_effects.reassigned(conn, row, moved, by, why, revision)
     moved = _task(conn, task_id)
-    if is_bot(owner) and not moved.get("snooze") and not moved["stage"].get("by_hand"):
+    if is_bot(owner) and _turn_of(conn, moved)[0] == owner:
         task_wakes.add(
             conn,
             moved,
@@ -788,10 +813,11 @@ def reassign(
 
 def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence[R.Standing] | None = None) -> str:
     """What the never-stuck check compares to tell a task that changed from one that did not: the answers, added
-    requirements, filed tasks and snoozes of this visit, and where each requirement stands (so a PR that opened or a
-    check that finished is a change). A comment is not a change, and neither is the task's version: it says the row
-    changed since someone looked, and a field edit (a new title, a label) raises it. A move and a reassign start the
-    ladder again themselves. `standings` saves reading them again when the caller has them."""
+    requirements and filed tasks of this visit, and where each requirement stands (so a PR that opened or a check that
+    finished is a change). A comment is not a change. Nor is a snooze or its end: setting a task aside earns no more
+    runs. Nor is the task's version: it says the row changed since someone looked, and a field edit (a new title, a
+    label) raises it. A move and a reassign start the ladder again themselves. `standings` saves reading them again
+    when the caller has them."""
     found = conn.execute(
         "SELECT v.task_id, "
         "(SELECT COUNT(*) FROM answers a WHERE a.visit_id = v.id), "
@@ -800,9 +826,7 @@ def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence
         "(SELECT COUNT(*) FROM requirements r WHERE r.visit_id = v.id AND r.withdrawn_at IS NOT NULL), "
         "(SELECT COUNT(*) FROM links l WHERE l.visit_id = v.id), "
         "(SELECT COUNT(*) FROM links l LEFT JOIN tasks c ON c.id = l.to_task_id "
-        " WHERE l.visit_id = v.id AND COALESCE(c.status, 'closed') <> 'open'), "
-        "(SELECT COUNT(*) FROM snoozes z WHERE z.task_id = v.task_id AND z.visit_id = v.id), "
-        "(SELECT COUNT(*) FROM snoozes z WHERE z.task_id = v.task_id AND z.visit_id = v.id AND z.ended_at IS NOT NULL) "
+        " WHERE l.visit_id = v.id AND COALESCE(c.status, 'closed') <> 'open') "
         "FROM visits v WHERE v.id=?",
         (visit_id,),
     ).fetchone()
@@ -818,7 +842,8 @@ def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence
 def _reset_ladder(conn: "sqlite3.Connection", visit: Row, ts: str, by: str) -> None:
     """The task changed: start the never-stuck ladder again. The owner has it, no tries are counted, and the check
     looks again after the first gap. Call it after the change is written, so the mark it keeps includes the change. A
-    task that Late brought to a person stays with that person until a person acts."""
+    task that Late brought to a person stays with that person until a person acts. Wakes still queued for a bot that
+    has no turn now are canceled (`_drop_stale`)."""
     mark = progress_mark(conn, visit["id"])
     look = _h().shift(ts, seconds=FIRST_TRY_S)
     if visit.get("level") == "person" and visit.get("late_person_at") and not is_human(by):
@@ -826,12 +851,13 @@ def _reset_ladder(conn: "sqlite3.Connection", visit: Row, ts: str, by: str) -> N
             "UPDATE visits SET progress_mark=?, last_change_at=?, next_try_at=? WHERE id=?",
             (mark, ts, look, visit["id"]),
         )
-        return
-    conn.execute(
-        "UPDATE visits SET tries=0, level='owner', person_id=NULL, next_try_at=?, last_change_at=?, progress_mark=? "
-        "WHERE id=?",
-        (look, ts, mark, visit["id"]),
-    )
+    else:
+        conn.execute(
+            "UPDATE visits SET tries=0, level='owner', person_id=NULL, next_try_at=?, last_change_at=?, progress_mark=? "
+            "WHERE id=?",
+            (look, ts, mark, visit["id"]),
+        )
+    _drop_stale(conn, visit["task_id"])
 
 
 def changed(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
@@ -865,13 +891,13 @@ def try_again(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None
     _reset_ladder(conn, visit, ts, by)
     _event(conn, task_id, by, "try_again", visit.get("level"), "owner", why)
     out = _task(conn, task_id)
-    owner = out.get("owner_id") or _part(out, "pipeline").get("manager_id")
-    if is_bot(owner) and not out.get("snooze") and not out["stage"].get("by_hand"):
+    target, _ = _turn_of(conn, out)
+    if target:
         lead = "Try this task again." + (f" {why}" if why else "")
         task_wakes.add(
             conn,
             out,
-            owner,
+            target,
             out["visit"],
             task_wakes.body(conn, out, lead),
             wake_key=f"{task_id}:{visit['id']}:again:{ts}",
@@ -967,8 +993,9 @@ def snooze(
     seen_version: int | str | None = None,
 ) -> Row:
     """Set a task aside until a date, or with no end. A bot gives a reason. While snoozed nothing wakes for it, it is not
-    Late, it holds no slot and it leaves Needs you. A bot's fourth snooze in one stage is not taken: the manager bot gets
-    the task instead, and the result's `note` says so."""
+    Late, it holds no slot and it leaves Needs you. A snooze is not a change: the ladder's count and level are kept,
+    so setting a task aside earns no runs. A bot's fourth snooze in one stage is not taken: the manager bot gets the
+    task instead, and the result's `note` says so."""
     H = _h()
     row = task(conn, task_id)
     if not row:
@@ -981,11 +1008,11 @@ def snooze(
     visit = row["visit"]
     if is_bot(by) and int(visit.get("bot_snoozes") or 0) >= BOT_SNOOZES:
         conn.execute(
-            "UPDATE visits SET level='manager', tries=0, next_try_at=?, last_change_at=? WHERE id=? AND level='owner'",
-            (ts, ts, visit["id"]),
+            "UPDATE visits SET level='manager', tries=0, next_try_at=? WHERE id=? AND level='owner'", (ts, visit["id"])
         )
-        # The manager bot has it now: what was still queued for anyone else would start runs it did not ask for.
-        task_wakes.drop(conn, task_id, keep=_part(row, "pipeline").get("manager_id"))
+        # The manager bot has it now: what was still queued for a bot with no turn would start runs nobody asked for.
+        # A bot named on an OK or an answer that still waits keeps its wake.
+        _drop_stale(conn, task_id)
         _event(conn, task_id, by, "snooze_refused", None, None, why, {"snoozes": visit.get("bot_snoozes")})
         out = _task(conn, task_id)
         out["note"] = f"Snoozed {BOT_SNOOZES} times in this stage. The manager has it now."
@@ -998,8 +1025,7 @@ def snooze(
     )
     if is_bot(by):
         conn.execute("UPDATE visits SET bot_snoozes = bot_snoozes + 1 WHERE id=?", (visit["id"],))
-    task_wakes.drop(conn, task_id)
-    _reset_ladder(conn, visit, ts, by)
+    task_wakes.drop(conn, task_id)  # nothing wakes for a snoozed task
     _event(conn, task_id, by, "snooze", None, until, why)
     out = _task(conn, task_id)
     if not until and is_bot(by):
@@ -1008,7 +1034,10 @@ def snooze(
 
 
 def unsnooze(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None = None) -> Row:
-    """End a task's snooze. The owner is woken once. It can leave the stage one over its limit."""
+    """End a task's snooze. Its end is not a change either: no wake is written here, and the ladder's count and level
+    are as they were. The task is due at once, and the never-stuck check wakes whoever has the turn on its next pass,
+    as the next try (at level `person` nobody is woken: it is back in that person's Needs you). It can leave the stage
+    one over its limit."""
     H = _h()
     row = task(conn, task_id)
     if not row:
@@ -1017,20 +1046,9 @@ def unsnooze(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None 
         return row
     ts = H.now()
     _end_snooze(conn, row["snooze"], by, ts)
-    _reset_ladder(conn, row["visit"], ts, by)
+    conn.execute("UPDATE visits SET next_try_at=? WHERE id=?", (ts, row["visit"]["id"]))
     _event(conn, task_id, by, "unsnooze", row["snooze"].get("until_at"), None, why)
-    out = _task(conn, task_id)
-    owner = out.get("owner_id")
-    if is_bot(owner) and out["stage"]["kind"] == "work" and not out["stage"].get("by_hand"):
-        task_wakes.add(
-            conn,
-            out,
-            owner,
-            out["visit"],
-            task_wakes.body(conn, out, "The snooze on this task ended."),
-            wake_key=f"{task_id}:{out['visit']['id']}:unsnooze:{row['snooze']['id']}",
-        )
-    return out
+    return _task(conn, task_id)
 
 
 # ----------------------------------------------------------------------------- a requirement on one task

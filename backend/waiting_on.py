@@ -260,6 +260,45 @@ def of(
     return sorted(out, key=lambda wait: _ORDER[wait.state])
 
 
+def turns(conn: "sqlite3.Connection", row: Row, waits: Sequence[Wait] | None = None) -> set[str]:
+    """The bots whose turn it is on this task: each bot it waits on (Paused ones too: their wake waits until they can
+    run), and the pipeline's manager bot while the ladder has the task at its level. Empty at level `person`: nothing
+    runs until a person acts."""
+    visit: Row = row.get("visit") or {}
+    level = visit.get("level") or "owner"
+    if level == "person" or row["stage"]["kind"] != "work":
+        return set()
+    found = of(conn, row) if waits is None else waits
+    out = {str(wait.who) for wait in found if wait.state in (BOT, PAUSED) and wait.who}
+    pipe: Row = row.get("pipeline") or {}
+    manager: str | None = pipe.get("manager_id")
+    if level == "manager" and is_bot(manager) and out:
+        out.add(str(manager))
+    return out
+
+
+def turn(
+    conn: "sqlite3.Connection", row: Row, waits: Sequence[Wait] | None = None, *, paused: bool = False
+) -> str | None:
+    """The one bot to wake about this task now, as the never-stuck ladder picks it: the bot with the task's own work,
+    before a bot that was only asked for an OK or an answer; the manager bot at level `manager`; nobody at level
+    `person`. With `paused`, a bot that cannot run yet is picked when no other can: its wake waits for it."""
+    visit: Row = row.get("visit") or {}
+    level = visit.get("level") or "owner"
+    if level == "person" or row["stage"]["kind"] != "work":
+        return None
+    found = of(conn, row) if waits is None else waits
+    states = (BOT, PAUSED) if paused else (BOT,)
+    bots = sorted((w for w in found if w.state in states and w.who), key=lambda w: (w.state != BOT, w.ask))
+    if not bots:
+        return None
+    pipe: Row = row.get("pipeline") or {}
+    manager: str | None = pipe.get("manager_id")
+    if level == "manager" and is_bot(manager):
+        return str(manager)
+    return bots[0].who
+
+
 def waiting_on(conn: "sqlite3.Connection", task_id: str) -> list[Wait]:
     """What the task waits on, headline first. Never empty for an open task; empty for a Done or Closed one, and for a
     task that is not on the engine."""

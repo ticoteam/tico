@@ -42,26 +42,16 @@ RUN_CAP_S = 3600  # a run is cut off at 60 minutes
 MAX_RUNS = 7  # bot runs one task may use without a change before a person is asked (docs/pipelines-v3.md)
 
 
-# Engine bugs the rig has found, by name (see README.md). A failure that matches one is still a failure: the name only
-# groups a sweep's failures so a new bug stands out.
-KNOWN_BUGS = {
-    "runs-outside-ladder": "the 7-run bound counts the ladder's own wakes only: other wakes on the task (unsnooze, "
-    "Late, an entry, ask or answer wake to a bot without the turn, a wake queued before the last change) are runs on "
-    "top of it",
-}
-LADDER = ["owner 0", "owner 1", "owner 2", "owner 3", "manager 1", "manager 2", "manager 3"]
+# Engine bugs the rig has found and that are still open, by name (see README.md), each with a test that tells its
+# failures apart. A failure that matches one is still a failure: the name only groups a sweep's failures so a new bug
+# stands out. None is open: every failure is new.
+KNOWN_BUGS: dict[str, str] = {}
+MATCHES: dict[str, Callable[[str], bool]] = {}
 
 
 def known_bug(what: str) -> str | None:
     """The known engine bug a failure matches, or None for a new one."""
-    if "bot runs without a change" in what and ": " in what:
-        runs = [r.split(" (", 1)[1].rstrip(")") for r in what.split(": ", 1)[1].split(", ")]
-        for step in LADDER:
-            if step in runs:
-                runs.remove(step)
-        if runs:
-            return "runs-outside-ladder"
-    return None
+    return next((name for name, test in MATCHES.items() if name in KNOWN_BUGS and test(what)), None)
 
 
 class RigFailure(AssertionError):
@@ -142,11 +132,13 @@ def wake_kind(c: sqlite3.Connection, job_id: str) -> str:
 
 
 def fingerprint(c: sqlite3.Connection) -> dict[str, tuple[Any, ...]]:
-    """For each task on the engine, what counts as a change (docs/pipelines-v3.md, C4): its visit and version, the
-    answers, added requirements, filed tasks and snoozes of its open visit. Read by the rig itself, not through the
-    engine's own progress mark. The last part says a person has it now (the ladder or Late got to a person)."""
+    """For each task on the engine, what counts as a change (docs/pipelines-v3.md, C4, as R1 settles it): its visit,
+    status and owner (a move, a reassign), the answers, added requirements and filed tasks of its open visit. Not a
+    snooze or its end (setting a task aside earns no runs), and not the task's version (a field edit raises it). Read
+    by the rig itself, not through the engine's own progress mark. The last part says a person has it now (the ladder
+    or Late got to a person)."""
     rows = c.execute(
-        "SELECT t.id, v.id, t.version, t.status, t.owner_id, "
+        "SELECT t.id, v.id, t.status, t.owner_id, "
         "(SELECT COUNT(*) FROM answers a WHERE a.visit_id = v.id), "
         "(SELECT COUNT(*) FROM answers a WHERE a.visit_id = v.id AND a.undone_at IS NOT NULL), "
         "(SELECT COUNT(*) FROM requirements r WHERE r.visit_id = v.id), "
@@ -154,8 +146,6 @@ def fingerprint(c: sqlite3.Connection) -> dict[str, tuple[Any, ...]]:
         "(SELECT COUNT(*) FROM links l WHERE l.visit_id = v.id), "
         "(SELECT COUNT(*) FROM links l LEFT JOIN tasks k ON k.id = l.to_task_id "
         " WHERE l.visit_id = v.id AND COALESCE(k.status, 'gone') <> 'open'), "
-        "(SELECT COUNT(*) FROM snoozes z WHERE z.visit_id = v.id), "
-        "(SELECT COUNT(*) FROM snoozes z WHERE z.visit_id = v.id AND z.ended_at IS NOT NULL), "
         "v.level = 'person' "
         "FROM tasks t LEFT JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL WHERE t.pipeline_id IS NOT NULL"
     ).fetchall()
@@ -925,6 +915,7 @@ class Sim:
         Wd.METER.disarm()
         self.restore_all()
         start = self.world.at()
+        self.step(10)  # one pass with every bot put right: what fell due while a fault held it is seen now
         for _ in range(4000):
             if (self.world.at() - start).total_seconds() > limit_days * 86400:
                 break
@@ -962,7 +953,8 @@ class Sim:
                     times.append(H.shift(r[0], seconds=3601))
 
         self.world.read(due)
-        later = sorted(t for t in times if t > now)
+        # Due now counts: a snooze that ended this pass leaves its task due at once, for the next pass (R1).
+        later = sorted(t for t in times if t >= now)
         if not later:
             return None
         gap = (Wd.parse(later[0]) - Wd.parse(now)).total_seconds()

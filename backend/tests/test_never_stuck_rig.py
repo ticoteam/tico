@@ -20,8 +20,8 @@ from evals.never_stuck import sim, world
 SELECTED_BY = (answers, never_stuck, pipeline_settings, task_engine, task_requirements, task_wakes, waiting_on, world)
 
 # Seeds that pass, and seeds that fail on a known bug (the bug each one hits).
-PASSING_SEEDS = (1, 2, 4, 8)
-FAILING_SEEDS = {27: "runs-outside-ladder"}
+PASSING_SEEDS = (1, 2, 4, 8, 27)
+FAILING_SEEDS: dict[int, str] = {}
 
 
 def _scenario_cases() -> list[object]:
