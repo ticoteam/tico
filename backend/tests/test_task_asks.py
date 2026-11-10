@@ -11,7 +11,7 @@ from backend.tests.helpers import engine as X
 
 ANA, BEN = "human:ana", "human:ben"
 SENDER, OTHER = "bot:sender", "bot:other"
-SUBJECT = "email_send:e1"
+SUBJECT = "hq_reply:TK-1"
 EMAIL = {"to": ["pat@example.com"], "subject": "Your invoice", "body_sha256": "a" * 64}
 
 
@@ -108,7 +108,7 @@ def test_the_ok_is_used_once_by_whoever_asked_for_exactly_that_content(c):
     with _refused("identity"):
         K.use(c, rid, SUBJECT, EMAIL, OTHER)  # the wrong bot
     with _refused("identity"):
-        K.use(c, rid, "email_send:e2", EMAIL, SENDER)  # another email
+        K.use(c, rid, "hq_reply:TK-2", EMAIL, SENDER)  # another email
     with _refused("task_ok_changed"):
         K.use(c, rid, SUBJECT, {**EMAIL, "to": ["someone@else.example"]}, SENDER)
     K.check(c, rid, SUBJECT, EMAIL, SENDER)

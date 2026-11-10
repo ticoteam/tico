@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from backend import email_sending as S
+from backend import task_asks
 from backend.store import H
 from backend.tests.helpers.api import headers, post as api_post, runner, setup_attempt  # noqa: F401
 from backend.tests.helpers.email_sending import (
@@ -105,7 +106,7 @@ def test_never_blocks_an_approved_send_at_dispatch(inbox):
         assert row["state"] == "blocked" and "never" in json.loads(row["decision"])["reasons"]
 
 
-def test_a_tico_approval_without_bcc_releases_the_frozen_send_and_is_consumed(inbox):
+def test_an_ok_from_the_preview_releases_the_frozen_send_and_is_used(inbox):
     policy(inbox, undo_seconds=0, pacing_seconds=0)
     queued = queue(inbox, actor="bot:ops")
     assert queued["state"] == "waiting_approval"
@@ -118,7 +119,7 @@ def test_a_tico_approval_without_bcc_releases_the_frozen_send_and_is_consumed(in
     )
     assert permitted["send"]["id"] == queued["id"]
     with inbox.app.state.store.read() as c:
-        assert H.approval(c, queued["approval_id"])["consumed_at"]
+        assert task_asks.standing(c, queued["approval_id"]) == task_asks.USED
 
 
 def test_an_approval_id_tico_does_not_know_neither_approves_nor_blocks(inbox):
@@ -260,11 +261,7 @@ def test_bounces_suppress_only_attempted_recipients_and_admin_can_restore(inbox)
 def test_named_approvers_and_private_inbox_boundaries(inbox):
     policy(inbox, who_can_ok="named_people", approvers=["cara"])
     queued = queue(inbox)
-    response = inbox.post(
-        "/api/v2/approvals/" + queued["approval_id"], json={"decision": "approved"}, headers=headers()
-    )
-    assert response.status_code == 403
-
+    approved(inbox, queued, expected=409)  # asked of Cara, not Ana
     approved(inbox, queued, token="cara-test")
     response = inbox.get("/api/v2/email/sends", params={"mailbox": BOX}, headers=headers("cara-test"))
     assert response.status_code == 403
@@ -402,36 +399,18 @@ def test_a_bot_at_ask_first_cannot_send_without_approval(inbox):
         )
 
 
-@pytest.mark.parametrize("second_review", [False, True])
-def test_a_bot_managers_message_approves_the_exact_send_but_not_the_second_review(inbox, second_review):
-    policy(inbox, undo_seconds=0, pacing_seconds=0, ask_lint=False, second_review=second_review)
+def test_a_bot_managers_message_approves_nothing(inbox):
+    """Only an OK on the frozen email's preview lets it go: "Send it" in a chat is not one."""
+    policy(inbox, undo_seconds=0, pacing_seconds=0, ask_lint=False, second_review=False)
     queued = queue(inbox, actor="bot:ops")
-    assert queued["state"] == "waiting_approval"
     assert inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers()).json()["preview_complete"]
     note = api_post(inbox, "chat/ops", {"text": "Send it " + queued["id"]})
     with inbox.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), seconds=1), note["id"]))
+        c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (note["id"], queued["id"]))
+        row = c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+        assert not S.approved(c, inbox.app.state.auth, row, S.effective(c, BOX, "ops"))
     machine = runner(inbox)
-    if second_review:
-        # Only a person's card on the frozen email lifts the second reviewer's ask: the message is refused, the card kept.
-        refused = inbox.post(
-            "/api/v2/email/sends/" + queued["id"] + "/approve", json={"approval_id": note["id"]}, headers=headers()
-        )
-        assert refused.status_code == 409 and "approves it in Tico" in refused.text
-        with inbox.app.state.store.transaction() as c:
-            c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (note["id"], queued["id"]))
-            row = c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
-            assert S.approved(c, inbox.app.state.auth, row, S.effective(c, BOX, "ops")) == "message"
-            assert S.decision(c, inbox.app.state.auth, row)["outcome"] == "ask"
-            c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (queued["approval_id"], queued["id"]))
-        assert claim(inbox, machine["token"]) is None
-        approved(inbox, queued)
-        assert claim(inbox, machine["token"]) is None  # this pass reconciles the card
-        assert claim(inbox, machine["token"])["id"] == queued["id"]
-        return
-    post(inbox, "email/sends/" + queued["id"] + "/approve", {"approval_id": note["id"]})
-    assert claim(inbox, machine["token"]) is None  # this pass reconciles the approval
-    assert claim(inbox, machine["token"])["id"] == queued["id"]
+    assert claim(inbox, machine["token"]) is None and claim(inbox, machine["token"]) is None
 
 
 def test_never_refuses_and_names_the_setting(inbox):

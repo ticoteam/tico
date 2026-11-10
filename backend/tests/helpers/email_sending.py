@@ -123,6 +123,18 @@ def claim(api, token):
     return post(api, "connectors/email/sends/claim", {"mailbox": BOX}, token=token)["send"]
 
 
-def approved(api, queued, token="ana-test"):
-    assert api.get("/api/v2/email/sends/" + queued["id"], headers=headers(token)).status_code == 200
-    post(api, "approvals/" + queued["approval_id"], {"decision": "approved"}, token=token)
+def approved(api, queued, token="ana-test", expected=200):
+    """The person opens the frozen email in Tico and clicks OK on its preview (backend/task_asks.py)."""
+    from backend import task_asks
+
+    preview = api.get("/api/v2/email/sends/" + queued["id"], headers=headers(token))
+    assert preview.status_code == 200
+    with api.app.state.store.read() as c:
+        task = task_asks.task_of(c, queued["approval_id"])
+    return post(
+        api,
+        f"tasks/{task}/asks/{queued['approval_id']}/ok",
+        {"shown_hash": preview.json()["shown_hash"]},
+        token=token,
+        expected=expected,
+    )

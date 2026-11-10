@@ -61,6 +61,7 @@ FROM_PREVIEW = "OK this from its preview in Tico."
 # fn(conn, grant, ctx). A kind that is not here has nothing to do until whoever asked uses the OK.
 ON_OK: dict[str, str] = {
     "board": "backend.company_page.editions:board_ok",
+    "email_send": "backend.email_sending:ok_given",
     "letter": "backend.letters:ok_given",
     "proposal": "backend.proposals:ok_given",
     "task_cap": "backend.proposals:ok_given",
@@ -390,28 +391,42 @@ def give_ok(
 
 
 # ----------------------------------------------------------------------------- the act
-def check(conn: "sqlite3.Connection", requirement_id: str, subject: str, content: object, by: str) -> Row:
-    """What `use` checks, writing nothing: the grant, when the act may go ahead now. Otherwise H.Refused."""
-    row = grant(conn, requirement_id)
+def _problem(
+    conn: "sqlite3.Connection", row: Row | None, subject: str, content: object, by: str
+) -> tuple[str, str, str | None] | None:
+    """(rule, words, task id) of why the act may not go ahead on this grant now, or None when it may."""
     if not row:
-        _refuse(conn, by, "not-found", "No such OK")
-    if by != row["asked_by_id"]:
-        _refuse(conn, by, "identity", "Only whoever asked for this OK may use it")
+        return ("not-found", "No such OK", None)
     state, _requirement, visit = _state(conn, row)
     task_id = str(visit["task_id"]) if visit else None
+    if by != row["asked_by_id"]:
+        return ("identity", "Only whoever asked for this OK may use it", task_id)
     if state == USED:
-        _refuse(conn, by, "consumed", f"This OK was already used at {row['used_at']}", task_id)
+        return ("consumed", f"This OK was already used at {row['used_at']}", task_id)
     if row["subject"] != subject:
-        _refuse(conn, by, "identity", "This OK is for something else", task_id)
+        return ("identity", "This OK is for something else", task_id)
     if content_hash(content) != row["content_hash"]:
-        _refuse(conn, by, "task_ok_changed", "It changed after it was asked about: ask for a new OK", task_id)
+        return ("task_ok_changed", "It changed after it was asked about: ask for a new OK", task_id)
     if state != OK:
-        words = {
-            WAITING: "It waits for an OK",
-            SENT_BACK: "It was sent back",
-            WITHDRAWN: "It is not asked any more",
-        }[state]
-        _refuse(conn, by, "task_ok_missing", f"{words}: nothing is done without one", task_id)
+        words = {WAITING: "It waits for an OK", SENT_BACK: "It was sent back", WITHDRAWN: "It is not asked any more"}
+        return ("task_ok_missing", f"{words[state]}: nothing is done without one", task_id)
+    return None
+
+
+def passes(conn: "sqlite3.Connection", requirement_id: str, subject: str, content: object, by: str) -> bool:
+    """Whether `use` would pass now. A read for code that decides on every pass (the email queue): it records no
+    refusal."""
+    return _problem(conn, grant(conn, requirement_id), subject, content, by) is None
+
+
+def check(conn: "sqlite3.Connection", requirement_id: str, subject: str, content: object, by: str) -> Row:
+    """What `use` checks, writing nothing but the refusal: the grant, when the act may go ahead now. Otherwise
+    H.Refused."""
+    row = grant(conn, requirement_id)
+    problem = _problem(conn, row, subject, content, by)
+    if problem or not row:
+        rule, words, task_id = problem or ("not-found", "No such OK", None)
+        _refuse(conn, by, rule, words, task_id)
     return row
 
 
