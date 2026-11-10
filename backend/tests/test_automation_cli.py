@@ -68,7 +68,9 @@ def test_botops_acts_with_the_askers_rights(api, botops):
     err, made = mcp(api, "hub_automation_create", flow, attempt["token"])
     assert not err and made["can_edit"], made
     err, listed = mcp(api, "hub_automation_list", {}, attempt["token"])
-    assert not err and [a["id"] for a in listed["automations"] if not a["builtin"]] == [made["id"]]
+    # BotOps' own daily "Sweep stuck tasks" (routines.ensure_task_sweep) is listed beside it.
+    mine = [a["id"] for a in listed["automations"] if not a["builtin"] and a["name"] != "Sweep stuck tasks"]
+    assert not err and mine == [made["id"]]
     finish(api, botops, attempt)
     member = turn(api, botops, person="cara-test", text="Pause the ops automation")
     err, refused = mcp(api, "hub_automation_update", {"id": made["id"], "enabled": False}, member["token"])
