@@ -536,6 +536,28 @@ def test_link_events_hide_tasks_and_remove_rows_when_task_read_access_is_revoked
         assert 'meeting_links' not in sent[0][2] and rid not in json.dumps(sent)
 
 
+def test_a_reader_taken_off_a_private_task_is_sent_its_id_alone_and_a_stranger_nothing(api):
+    """Codex review 1, finding 1: a reader removed from an already-private task held its row until a poll. They are sent
+    the task's id as gone, nothing else of it; someone who could never open it is sent nothing."""
+    from backend.tests.helpers.meeting_task_links import task
+
+    t = task(api, title="Review the salary bands", owner="human:ben", requester="human:ben", private=True)
+    store, auth = api.app.state.store, api.app.state.auth
+    cara, dan = Identity("human:cara", "human", "cara@acme.example"), Identity("human:dan", "human", "dan@acme.example")
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET readers=? WHERE id=?", (json.dumps(["human:cara"]), t["id"]))
+    with store.read() as c:
+        cursor = E.latest(c)
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET readers=NULL WHERE id=?", (t["id"],))
+    with store.read() as c:
+        sent = [d for _, topic, d in E.read(c, auth, cara, cursor, topics=("tasks",), task_views=_task_views)[0]]
+        assert [d["id"] for d in sent] == [t["id"]] and sent[0]["gone"] is True
+        assert set(sent[0]) <= {"seq", "actor", "at", "id", "kind", "kinds", "gone"}
+        assert "salary" not in json.dumps(sent)
+        assert E.read(c, auth, dan, cursor, topics=("tasks",), task_views=_task_views)[0] == []
+
+
 def test_one_read_sends_its_byte_budget_and_the_rest_comes_on_the_next_read(api, monkeypatch):
     """A busy team's backlog is sent in bounded reads, each one's events in order, none lost or repeated."""
     auth, store = api.app.state.auth, api.app.state.store

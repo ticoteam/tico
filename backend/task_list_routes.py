@@ -112,8 +112,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
 
             if changed_after is not None:
                 found = reads.changed(c, changed_after, visible_sql)
-                ids = reads.around(c, found[0]) if found else []
-                if found is None or len(ids) > reads.CAP:
+                changed_ids = reads.around(c, found[0]) if found else []
+                if found is None or len(changed_ids) > reads.CAP:
                     return {
                         "tasks": [],
                         "gone": [],
@@ -124,8 +124,12 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 was, cursor = found
                 # A waiting-on (or ids) selection already in the filters keeps only the changed tasks it holds.
                 chosen = set(filters.pop("ids")) if "ids" in filters else None
-                ids = [tid for tid in ids if chosen is None or tid in chosen]
-                rows = visible_tasks(c, who, owner, requester, limit=len(ids), ids=ids, **filters)[0] if ids else []
+                changed_ids = [tid for tid in changed_ids if chosen is None or tid in chosen]
+                rows = (
+                    visible_tasks(c, who, owner, requester, limit=len(changed_ids), ids=changed_ids, **filters)[0]
+                    if changed_ids
+                    else []
+                )
                 gone = reads.gone(c, visible_sql, was, {row["id"] for row in rows})
                 result = {"tasks": rows, "gone": gone, "cursor": cursor, "next_offset": None}
             else:

@@ -30,7 +30,6 @@ backend/access.py
 backend/access_routes.py
 backend/account_routes.py
 backend/agents.py
-backend/answers_routes.py
 backend/api_tools.py
 backend/app.py
 backend/app_delivery.py
@@ -90,7 +89,6 @@ backend/census.py
 backend/changelog.py
 backend/chat_goals.py
 backend/chat_goals_schema.py
-backend/check_independence.py
 backend/check_models.py
 backend/claim_holds.py
 backend/claim_loads.py
@@ -227,7 +225,6 @@ backend/hosting_enrollment.py
 backend/hubdb.py
 backend/hubdb_core.py
 backend/hubdb_text.py
-backend/idea_triage.py
 backend/idempotency_messages.py
 backend/identity_proxy.py
 backend/imports.py
@@ -422,7 +419,6 @@ backend/quarantine_display.py
 backend/quarantine_stops.py
 backend/queue_purge.py
 backend/queue_refusals.py
-backend/quiet_work.py
 backend/reach.py
 backend/read_cache.py
 backend/read_deps.py

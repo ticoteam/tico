@@ -47,7 +47,7 @@ def test_output_is_capped_with_a_note_and_json_keeps_its_shape():
 
 
 def test_the_catalog_names_aliases_and_pass_throughs():
-    assert C.canonical("recording.ready") == "meeting.ready" and C.canonical("release_published") is None
+    assert C.canonical("recording.ready") == "meeting.ready" and C.canonical("release_published") == "release.published"
     assert C.canonical("task.done") == "task.done" and C.canonical("webhook.shop") == "webhook.shop"
     assert C.canonical("custom.order-paid") == "custom.order-paid" and C.canonical("nope") is None
     assert C.canonical("finance.budget.cutoff") == "finance.budget.cutoff"
@@ -56,6 +56,7 @@ def test_the_catalog_names_aliases_and_pass_throughs():
     assert C.matches("task.done", "task.done") and not C.matches("task.done", "task.done2")
     groups = {e["group"] for e in C.listing()}
     assert groups == {
+        "release",
         "task",
         "bot",
         "meeting",

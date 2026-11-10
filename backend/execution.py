@@ -2794,7 +2794,7 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
     `followed` is the bot's followed config; `busy` the taken (bot, lane) pairs; `live` the (bot, task) pairs with a
     turn out (live_tasks); `runner` the computer's row, whose company subscription signs a check's runtime in."""
     message = H.message(c, job["message_id"])
-    if not job_message_readable(c, job["bot_id"], message):
+    if not message or not job_message_readable(c, job["bot_id"], message):
         return "unreadable"
     # The bot's budget and back-off are the bot's own state: an error reading them is shared_check's, and the whole
     # bot is passed over. The checks below depend on this job, so an error in them holds this job alone.
@@ -4808,8 +4808,10 @@ class Execution:
         msg = H.message(c, row["message_id"])
         from . import threads
 
-        if not job_message_readable(c, row["bot_id"], msg) or not threads.still_addressed(
-            c, msg, "bot:" + row["bot_id"]
+        if (
+            not msg
+            or not job_message_readable(c, row["bot_id"], msg)
+            or not threads.still_addressed(c, msg, "bot:" + row["bot_id"])
         ):
             c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))
             threads.moot_delivery(c, msg, "bot:" + row["bot_id"])
@@ -4900,8 +4902,9 @@ class Execution:
             row["bot_id"],
             trigger="task" if task else msg["kind"],
             message_id=msg["id"],
-            # A carrier's run is about the task of the message it carries (task_wakes.message_task): counted for it.
-            task_id=task["id"] if task else task_wakes.message_task(c, msg["id"]),
+            # The task may_start admitted the run for (task_wakes.message_task): a carrier's run is the carried
+            # message's task's, even in another task's conversation, so it is counted for that task.
+            task_id=task_wakes.message_task(c, msg["id"]) or (task["id"] if task else None),
             trigger_kind=woke,
             trigger_source=source,
             purpose=run_triggers.purpose_of(msg, row["bot_id"], woke),
@@ -5879,7 +5882,15 @@ class Execution:
             else {"reserved": not row["stop_requested_at"]}
         )
         if not reserved["reserved"]:
-            raise Problem("start_wait", reserved.get("waiting", "Start reservation expired or stopped"), 409)
+            # A wait, not a refusal for good: no start_refused record, so a later start-place may grant it. The route
+            # raises the 409 after this commits, so the wait reserve wrote and the grant it let go are kept.
+            return {
+                "started": False,
+                "refused": {
+                    "code": "start_wait",
+                    "detail": reserved.get("waiting", "Start reservation expired or stopped"),
+                },
+            }
         c.execute("UPDATE attempts SET state='running',started_at=? WHERE id=?", (H.now(), aid))
         from . import task_wakes
 

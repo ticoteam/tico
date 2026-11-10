@@ -670,11 +670,42 @@ def _record_line(item, r, line):
     return f"- {line}" + (f": \"{text}\"" if text and r["kind"] == "decide" else "")
 
 
-def commit(c, who, batch_id, send):
+# What each response's words are, as the org rule check reads them (backend/task_rule_gate.py): the operation.
+SAID = {
+    "ok": "task_ask_answer",
+    "send_back": "task_ask_answer",
+    "answer": "task_ask_answer",
+    "done": "task_done",
+    "close": "task_move",
+}
+
+
+def said(c, who, batch_id):
+    """Each response with words of the person's own, for the rule check before commit: ((key, i), task id or None,
+    the bot it reaches, operation, text). The words reach the bot (a decision's note, an answer, an instruction or a
+    rule, by message or as a comment on the task) and the task's people."""
+    batch = _load(c, who.actor, batch_id)
+    out = []
+    for item in _items(batch):
+        task = _task_of_key(c, item["key"])
+        for i, r in enumerate(_responses(batch).get(item["key"], [])):
+            if not str(r.get("text") or "").strip() or r["kind"] in ("skip", "later"):
+                continue
+            operation = SAID.get(r.get("decision"), "task_move") if r["kind"] == "decide" else "batch_note"
+            out.append(
+                ((item["key"], i), task["id"] if task else None, group_of(item, who.actor), operation, r["text"])
+            )
+    return out
+
+
+def commit(c, who, batch_id, send, rules=None):
     """Apply every response. Decisions and snoozes here; then one message to each bot the items
     came from, in the person's chat with it: what was decided, and the questions, instructions and
     rules it must act on, whose reply comes back on those items. One item's failure is recorded,
-    not fatal: each decision runs in its own savepoint, so a refused one leaves nothing half done."""
+    not fatal: each decision runs in its own savepoint, so a refused one leaves nothing half done.
+    `rules(c, key, i, r)`: the org rule check's verdict on a response's words (`said`), applied before any of its
+    item's responses is: (r, None) to go with r (its text with a warning line when warned), (r, line) when held, a
+    Problem when the check refuses it. Gated first, so one response's write does not make the next one's check stale."""
     batch = _load(c, who.actor, batch_id)
     if batch["state"] != "open":
         raise Problem("state", f"This batch is {batch['state']}", 409)
@@ -685,7 +716,18 @@ def commit(c, who, batch_id, send):
     for n, key in enumerate(order, 1):
         item = items[key]
         to = group_of(item, who.actor)
-        for r in responses.get(key, []):
+        gated = []
+        for i, r in enumerate(responses.get(key, [])):
+            try:
+                r, held = rules(c, key, i, r) if rules else (r, None)
+            except Problem as e:
+                errors.append(f"{item['title']}: {e.detail}")
+                continue
+            if held:
+                errors.append(f"{item['title']}: {held}")
+                continue
+            gated.append(r)
+        for r in gated:
             try:
                 line = None
                 if r["kind"] == "decide":

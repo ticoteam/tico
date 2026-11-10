@@ -95,7 +95,7 @@ def notice(c, settings):
     """`releases.notice()` with `scheduled`, for the config and Health. `messages` also holds the notices Tico Team sent
     through the Gateway relay, each once even when `/v1/latest` carries it too (backend/tico_notices.py); `message`
     is the first of them, which the banner shows."""
-    out = releases.notice()
+    out = releases.offered(c, releases.notice())
     shown = tico_notices.banner(c, out.get("message"))
     return {**out, "message": shown[0] if shown else None, "messages": shown, "scheduled": scheduled(c, settings)}
 
@@ -279,6 +279,11 @@ def advance(store, now):
             return "done"
         if _status().get("state") in UNDER_WAY:  # another update (the owner's) is under way: it finishes first
             return state
+        with store.read() as c:
+            why = releases.held(c, target, current)
+        if why:  # 0.6 starts fresh: never tried, and HQ is told why at the next check-in
+            _finish(store, request_id, "failed", why)
+            return "done"
         with store.transaction() as c:
             record = load(c)
             if record.get("request_id") != request_id or record.get("state") != "waiting":

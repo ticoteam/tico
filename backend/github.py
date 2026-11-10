@@ -166,38 +166,38 @@ def fire_once(detail, item):
 def flush_wakes(c):
     """Send each due PR burst independently; keep a failed or blocked notice for retry. A burst is up to three
     messages: its grouped items, its review notes, and one `pr_checks_done` per head that finished."""
+    from . import task_engine as E
     from .repositories import metadata
 
     sent = []
     for row in c.execute("SELECT key FROM registry_metadata WHERE key LIKE 'github-task-wake:%'").fetchall():
-        with isolated(c, "github_wake", row["key"]):
+        with isolated(c, "github_wake", row["key"], private=True):
             burst = metadata(c, row["key"])
             if burst.get("due", "") > H.now():
                 continue
             task = H.task(c, row["key"].split(":", 1)[1])
             live = bool(task and task["status"] == "open")
-            if live:
+            if live and task:
+                # Through the engine: one keyed wake per part of the burst, a run only on the owner bot's turn.
+                at = H.now()
                 if burst.get("items"):
-                    H._wake(
+                    E.tell_owner(
                         c,
-                        task,
-                        task["owner_id"],
+                        task["id"],
                         "\n".join(burst["items"]),
-                        {"wake_batch": burst["batch"]} if burst.get("batch") else None,
+                        f"github:{at}:items",
+                        refs={"wake_batch": burst["batch"]} if burst.get("batch") else None,
                         trigger="pr_checks",
                     )
-                if burst.get("notes"):
-                    H._wake(
-                        c, task, task["owner_id"], "\n".join(burst["notes"]), {"wake": "pr_review"}, trigger="pr_checks"
-                    )
+                if burst.get("notes"):  # reviews that are not a person's: a note for the next run
+                    E.tell_owner(c, task["id"], "\n".join(burst["notes"]), f"github:{at}:notes", wake=False)
                 for done in burst.get("done", []):
-                    H._wake(
+                    E.tell_owner(
                         c,
-                        task,
-                        task["owner_id"],
+                        task["id"],
                         done["item"],
-                        {
-                            "wake": "pr_checks_done",
+                        f"github:checks:{done['head']}:{done['result']}:{at}",
+                        refs={
                             "pr_head": done["head"],
                             "pr_result": done["result"],
                             **({"pr_armed": True} if done.get("armed") else {}),
@@ -205,7 +205,7 @@ def flush_wakes(c):
                         trigger="pr_checks",
                     )
             c.execute("DELETE FROM registry_metadata WHERE key=?", (row["key"],))
-            if live:
+            if live and task:
                 sent.append(task["id"])
     return sent
 
@@ -608,7 +608,9 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             detail["merged_wake"] = True
         c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
         if merge_wake:
-            merged.append(link)
+            # One wake per merge per task: an armed link's last result rides on the merge's own wake.
+            merged.append({**link, "no_ship": wake_once})
+            wake_once = False
         current = c.execute("SELECT * FROM task_links WHERE id=?", (link["id"],)).fetchone()
         changed = [
             field for field in ("state", "repo", "number", "branch", "checks") if current[field] != link.get(field)
@@ -668,15 +670,31 @@ def _merge_wakes(c, links, url):
         if pr_key in woke:
             continue
         save_metadata(c, key, {"prs": [*woke, pr_key]})
-        queue_wake(c, row, f"{link['title']} merged: {url}. Carry this task on: say it is done, or close it.")
+        said = f"{link['title']} merged: {url}. Carry this task on: say it is done, or close it."
+        if link.get("no_ship"):
+            said += " It is not in the repository Tico releases, so no shipped wake follows."
+        queue_wake(c, row, said)
 
 
 def release(c, payload, release_repo=""):
     """A release published: nothing waits on it in General (In a release is a requirement of the Engineering pipeline,
-    which comes later). Recorded for the webhook's answer only."""
+    which comes later). A release of the server's release repository, not a draft or a prerelease (a tag with a
+    suffix), is `release.published` for the automations and outgoing webhooks, once: `github-release:<repo>@<tag>`
+    records it, so GitHub redelivering the webhook fires nothing. The payload names the release, never a task."""
+    from .repositories import metadata, save_metadata
+
     rel = payload.get("release") or {}
     tag = str(rel.get("tag_name") or "")
-    action = "published" if payload.get("action") == "published" and not rel.get("draft") else payload.get("action")
+    repo = str((payload.get("repository") or {}).get("full_name") or "")
+    published = payload.get("action") == "published" and not rel.get("draft")
+    action = "published" if published else payload.get("action")
+    if published and tag and "-" not in tag and repo and repo.lower() == str(release_repo or "").lower():
+        target = f"{repo}@{tag}"
+        key = "github-release:" + target.lower()
+        if not metadata(c, key):
+            save_metadata(c, key, {"at": H.now()})
+            facts = {"release": tag, "repository": repo, "url": str(rel.get("html_url") or "")}
+            H.hook(c, "release.published", target, lambda: facts, H.KEEPER, revision=0)
     return {"release": tag, "action": action, "woken": []}
 
 
@@ -1834,7 +1852,7 @@ def ship_deployed(c, settings, *, ancestry=None):
         return bool(link["pr_sha"] == commit or verified or historical)
 
     for link in candidates:
-        with isolated(c, "ship_deployed", link["task_id"]):
+        with isolated(c, "ship_deployed", link["task_id"], private=True):
             if not included(link):
                 continue
             c.execute("UPDATE task_links SET state='shipped',updated_at=? WHERE id=?", (H.now(), link["id"]))

@@ -22,6 +22,7 @@ from backend.names import SUPPORT_ACTOR, SUPPORT_NAME
 from backend.store import H, Problem
 from backend.tests.helpers.api import claim, get, headers, post, setup_attempt  # noqa: F401
 from backend.tests.helpers.org_rules import as_bot, edit, org, rule  # noqa: F401
+from backend.tests.helpers.org_rule_check import LAUNCH, hand_over
 from backend import bot_settings as BS
 
 
@@ -1460,7 +1461,7 @@ def test_a_review_tasks_holds_page_by_cursor_within_a_byte_budget(ruled, monkeyp
     assert get(api, f"rule-holds?task={task_id}", token="cara-test")["holds"] == []
 
 
-def test_the_cache_splits_on_context_and_a_partial_check_stays_unchecked(ruled, monkeypatch):
+def test_the_cache_splits_on_context_and_rules_past_one_call_are_judged_in_more_calls(ruled, monkeypatch):
     api, judge = ruled
     color_rule(api)
     store, ops = api.app.state.store, Identity("bot:ops", "bot")
@@ -1472,8 +1473,9 @@ def test_the_cache_splits_on_context_and_a_partial_check_stays_unchecked(ruled, 
     monkeypatch.setattr(J, "MAX_QUESTIONS", 1)
     rule(api, {"kind": "internal", "text": "Never share the launch date.", "who": {"bots": ["ops"]}})
     first = K.preflight(store, judge, ops, "message", "Lunch at noon.", ["human:ana"])
+    assert len(judge.calls) == 4 and "unchecked_rules" not in first and first["outcome"] == "pass"
     again = K.preflight(store, judge, ops, "message", "Lunch at noon.", ["human:ana"])
-    assert first["unchecked_rules"] and again["cached"] and again["unchecked_rules"] == first["unchecked_rules"]
+    assert again["cached"] and "unchecked_rules" not in again and len(judge.calls) == 4
 
 
 def test_rule_checks_and_ask_ingest_count_their_own_daily_calls(ruled):
@@ -1490,19 +1492,6 @@ def test_rule_checks_and_ask_ingest_count_their_own_daily_calls(ruled):
 
 
 # ---- Send anyway: privacy, snapshot, full inputs, a new Warn ------------------------------------------------------
-
-
-def hand_over(api):
-    """An automation of ops that assigns its run's task to Ana."""
-    step = {"id": "a", "type": "action", "do": "assign", "args": {"owner": "ana"}}
-    return post(
-        api,
-        "automations",
-        {"name": "Hand", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"}, "steps": [step]},
-    )["id"]
-
-
-LAUNCH = "Never share the launch date."
 
 
 def started_turn(api):

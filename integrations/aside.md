@@ -66,7 +66,7 @@ refused it. The REPL stops after 120 s; a `task` after 900 s (`ASIDE_TASK_TIMEOU
   `.hover`, `.tap`, `.evaluate`, `.evaluateHandle`, `.route`, `.goto`, `page.keyboard`,
   `page.mouse` and the `task` command. `can: [read, act]` allows them.
 - Messages to outsiders stay drafts until a person who manages it turns mail sending on in Tico. With sending on, a bot acts
-  within the requested work, its Instructions and granted Tools; no per-action approval is required.
+  within the requested work, its Instructions and granted Tools; no OK is needed for each action.
   See `policies/approvals.md` and `policies/shared-rules.md`.
 - Logins are never a bot's job. The owner signs in once in Aside; a login page, a captcha or a
   challenge means stop and say so.

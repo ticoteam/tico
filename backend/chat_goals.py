@@ -247,7 +247,13 @@ def task_goal_ended(c, goal, task_id, status, note):
 
         wanted = current_task_goal(c, goal["bot"], row)
         if goal["set_by"] == H.KEEPER and wanted and goal["objective"] == task_goal_objective(row, wanted["objective"]):
-            # The bot's own word, inside the transaction that read the task: the version it just read.
+            # The bot's own word, inside the transaction that read the task: the version it just read. With a company
+            # rule in force the note is the fixed "Goal met.": the harness's words were never checked against the
+            # rules, and no check can run inside this write (backend/task_rule_gate.py).
+            from . import org_rule_check
+
+            if org_rule_check.in_force(c):
+                note = ""
             H.attempt(c, H.task_done, row["owner_id"], task_id, (note or "Goal met.")[:4000], row["version"])
 
 

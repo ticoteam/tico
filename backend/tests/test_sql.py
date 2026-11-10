@@ -42,6 +42,17 @@ REJECTED = (
 )
 
 
+def firsts(bodies):
+    return [body.split("\n")[0] for body in bodies]
+
+
+def fixture_owner(c, tid, sql, args=()):
+    """A fixture's direct change to a task's owner, past the engine's guard (tasks_move_only), as test data only."""
+    c.execute("UPDATE task_move_guards SET open=1, task_id=? WHERE id=1", (tid,))
+    c.execute(sql, args)
+    c.execute("UPDATE task_move_guards SET open=0, task_id=NULL WHERE id=1")
+
+
 def error(api, sql, token="ana-test"):
     return query(api, sql, token, expected=422)["error"]["detail"]
 
@@ -252,7 +263,7 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
     assert tasks == sorted(world[k]["id"] for k in ("private", "coo_task", "finance_task"))
     assert "inbox" in column(api, "SELECT slug FROM bots")
     bodies = column(api, "SELECT body FROM messages")
-    assert "Ana private context." in bodies and "New task from human:ana: Sort the inbox" in bodies
+    assert "Ana private context." in bodies and "Sort the inbox is in To do (General)." in firsts(bodies)
     assert "Ben private context." not in bodies
     personal = column(api, "SELECT id FROM conversations WHERE scope='personal'")
     assert world["ana_room"] in personal and world["steven_room"] not in personal
@@ -294,10 +305,8 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "redesign_cutover",
         "release-history",
         "repositories-access-migrated",
-        "roadmap_ready_to_ship_step",
         "roadmaps_copies_cleared_by_field",
         "roadmaps_explicit_public_text",
-        "stale_review_repair",
         "strategy-bot",
         "task_session_default",
         "threads-migration",
@@ -316,10 +325,11 @@ def test_a_person_sees_the_company_but_not_private_bots_or_other_rooms(api, worl
         b for b in column(api, "SELECT bot FROM bot_status") if b != "inbox"
     )
     # Their own room, and the own rooms of the public tasks; not Ana's room or its "Started task" line.
-    assert column(api, "SELECT body FROM messages", ben) == [
+    # A task's first line in its own room says where it stands (the rest is the bot's brief).
+    assert firsts(column(api, "SELECT body FROM messages", ben)) == [
         "Ben private context.",
-        "New task from human:ana: Close the books",
-        "New task from human:ana: Summarize the week",
+        "Close the books is in To do (General).",
+        "Summarize the week is in To do (General).",
     ]
     assert column(api, "SELECT id FROM conversations", ben) == sorted(
         [world["steven_room"], world["coo_task"]["conversation_id"], world["finance_task"]["conversation_id"]]
@@ -345,11 +355,11 @@ def test_a_bot_reads_ordinary_tasks_but_only_its_granted_rooms_and_no_private_da
     assert query(api, "SELECT 1", token)["rows"] == [[1]]
     bodies = column(api, "SELECT body FROM messages", token)
     # Its granted room, and the own rooms of the ordinary tasks it may read.
-    assert bodies == [
+    assert firsts(bodies) == [
         "Ana private context.",
-        "New task from human:ana: Close the books",
-        "New task from human:ana: Summarize the week",
+        "Close the books is in To do (General).",
         "Started task: Summarize the week",
+        "Summarize the week is in To do (General).",
     ]
     assert column(api, "SELECT id FROM conversations", token) == sorted(
         [world["ana_room"], world["coo_task"]["conversation_id"], world["finance_task"]["conversation_id"]]
@@ -687,7 +697,12 @@ def test_direct_messages_reuse_room_checks_and_match_recursive_privacy(api, worl
 
     # A fresh request must rebuild decisions after a task becomes private.
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET private=1,owner_id='bot:finance',requester_id='human:ben' WHERE id=?", (public,))
+        fixture_owner(
+            c,
+            public,
+            "UPDATE tasks SET private=1,owner_id='bot:finance',requester_id='human:ben' WHERE id=?",
+            (public,),
+        )
     with store.read() as c:
         assert not ReadIndex(c, who).message('progress-after-revocation', room, json.dumps({'task': public}), None)
 
@@ -785,7 +800,7 @@ def test_direct_run_messages_keep_denied_attempt_provenance(api, world, source):
             )
             c.execute('INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)', (aid, msg['id']))
         elif source == 'carried':
-            c.execute('UPDATE tasks SET carried_by=? WHERE id=?', (aid, hidden['id']))
+            c.execute('UPDATE attempts SET task_id=? WHERE id=?', (hidden['id'], aid))
         else:
             H.event(c, H.KEEPER, 'task.next-run.carried', aid, {'tasks': [hidden['id']]})
     with store.read() as c:
@@ -947,7 +962,7 @@ def test_bot_replies_whose_run_names_a_denied_task_stay_out_of_full_scans(api, w
             )
             c.execute('INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)', (aid, msg['id']))
         elif source == 'carried':
-            c.execute('UPDATE tasks SET carried_by=? WHERE id=?', (aid, hidden['id']))
+            c.execute('UPDATE attempts SET task_id=? WHERE id=?', (hidden['id'], aid))
         else:
             H.event(c, H.KEEPER, 'task.next-run.carried', aid, {'bot': 'ops', 'tasks': [hidden['id']]})
     for token in callers:
@@ -976,13 +991,13 @@ def test_carried_private_tasks_and_unknown_plain_rooms_stay_hidden(api, world):
 
     # The job message stays readable; only the carried task hides this run.
     with store.transaction() as c:
-        c.execute('UPDATE tasks SET carried_by=? WHERE id=?', (aid, hidden['id']))
+        c.execute('UPDATE attempts SET task_id=? WHERE id=?', (hidden['id'], aid))
     assert rows('attempts', aid) == []
     with store.transaction() as c:
-        c.execute('UPDATE tasks SET carried_by=NULL WHERE id=?', (hidden['id'],))
+        c.execute('UPDATE attempts SET task_id=NULL WHERE id=?', (aid,))
     assert rows('attempts', aid) == [[aid]]
 
-    # Retained next-run provenance survives independently of tasks.carried_by.
+    # Retained next-run provenance survives independently of attempts.task_id.
     with store.transaction() as c:
         event = H.event(c, H.KEEPER, 'task.next-run.carried', aid, {'bot': 'ops', 'tasks': [hidden['id']]})
     assert rows('attempts', aid) == []
@@ -1162,7 +1177,9 @@ def test_materialized_visibility_matches_the_predicate_and_never_survives_a_requ
     for who in callers:
         compare(who)
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='bot:finance',requester_id='human:ben',private=1 WHERE id='tree-5'")
+        fixture_owner(
+            c, 'tree-5', "UPDATE tasks SET owner_id='bot:finance',requester_id='human:ben',private=1 WHERE id='tree-5'"
+        )
         c.execute(
             "UPDATE bot_config SET access=? WHERE bot='ops'",
             (
@@ -1633,3 +1650,23 @@ def test_sql_opens_on_a_new_database_for_the_owner_and_a_member(company):
                 assert S.run(conn, 'SELECT count(*) FROM tasks', [], 10, 20)['rows'] == [[0]]
             finally:
                 conn.close()
+
+
+def test_task_waits_reads_the_engines_waits_over_the_callers_own_tasks(api, world):
+    """`task_waits` is what each open task waits on, as the engine reads it (H.task_waits), one row per wait with the
+    headline first; a task the caller may not read has no row."""
+    as_member(api, "ben@acme.example")
+    ids = [world[k]["id"] for k in ("private", "coo_task", "finance_task")]
+    with api.app.state.store.read() as c:
+        expected = {tid: [w.state for w in waits] for tid, waits in H.task_waits(c, ids).items()}
+    rows = query(api, "SELECT task_id, position, state, waiting_on, line FROM task_waits ORDER BY task_id, position")
+    got = {}
+    for tid, position, state, _who, line in rows["rows"]:
+        got.setdefault(tid, []).append(state)
+        assert isinstance(line, str)
+    assert {tid: got.get(tid) for tid in ids} == expected
+    assert all(expected.values())
+    ben = column(api, "SELECT DISTINCT task_id FROM task_waits", "ben-test")
+    assert ben == sorted(world[k]["id"] for k in ("coo_task", "finance_task"))
+    # Built only for a statement that names it.
+    assert query(api, "SELECT count(*) FROM tasks", "ben-test")["rows"] == [[2]]

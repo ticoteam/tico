@@ -2603,7 +2603,7 @@ def _never_stuck_check(c, visible_sql=None):
     named = stored(NEVER_STUCK_TASKS_KEY) if visible_sql else None
     if not reading or (visible_sql and not (named and "broken_tasks" in named)):
         return _check("never_stuck", "Tasks", "unknown", "The hourly never-stuck reading has not run yet.")
-    if visible_sql:
+    if visible_sql and named:
         listed, breaks = named["tasks"], named["broken_tasks"]
         ids = {tid for found in listed.values() for tid in found} | {tid for found in breaks for tid in found}
         readable = _readable(c, visible_sql, sorted(ids))
@@ -2839,6 +2839,16 @@ def view(c, who, settings, auth, github, config):
                     "info",
                     f"{_v(notice.get('latest'))} is out. You are on {_v(releases.version())}. "
                     "Tico updates this server.",
+                    [_fix("What is new", "#/changelog")],
+                )
+            )
+        elif notice.get("held"):  # 0.6 starts fresh: not offered while this company has tasks (releases.offered)
+            checks.append(
+                _check(
+                    "version",
+                    "Version",
+                    "info",
+                    f"{_v(notice.get('latest'))} is out. {notice['held']}.",
                     [_fix("What is new", "#/changelog")],
                 )
             )

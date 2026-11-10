@@ -63,11 +63,6 @@ TABLE = (
 NAME = re.compile(r"(\d{4}|\d{14})_[a-z0-9_]+\.(sql|py)")
 LEGACY_USER = re.compile(r"legacy_user_version_(\d+)")
 LEGACY_CLOUD = re.compile(r"legacy_cloud_(\d+)")
-# A shipped file whose work no longer applies. It is recorded as applied, with its checksum, and never imported or
-# run: each imports a module that is gone.
-# - resend_system_asks imported ask_routing; 20261106131713_asks_to_question_tasks moved every open ask.
-# - blocked_reason_recompute (task_holds) and factory_output_stage (pipeline_setup) worked on the old task engine's
-#   tables, which the Pipelines v3 cut-over deletes.
 # The Pipelines v3 cut-over. A database that has tasks and has not had it was made by Tico 0.5: this release does not
 # open it (preflight), so nothing in it is changed and it still runs on 0.5.
 CUTOVER = "20261110054000_pipelines_v3_cutover"
@@ -75,6 +70,12 @@ OLD_TASKS = (
     "This database has tasks from Tico 0.5. Tico 0.6 does not carry tasks over: every company starts on a new "
     "database. Nothing was changed. Run Tico 0.5 on this database, or set up a new company on 0.6."
 )
+# A shipped file whose work no longer applies. It is recorded as applied, with its checksum, and never imported or
+# run: each imports a module that is gone. Its file may be emptied to a stub, so a database that ran the old body is
+# not held to its checksum (_verify).
+# - resend_system_asks imported ask_routing; 20261106131713_asks_to_question_tasks moved every open ask.
+# - blocked_reason_recompute (task_holds) and factory_output_stage (pipeline_setup) worked on the old task engine's
+#   tables, which the Pipelines v3 cut-over deletes; their files are stubs now.
 SUPERSEDED = {
     "20261105034511_resend_system_asks",
     "20261107140000_blocked_reason_recompute",
@@ -165,7 +166,7 @@ def _verify(recorded, known):
     for version, checksum in recorded:
         if version in by_version:
             current = by_version[version].checksum
-            if checksum != current:
+            if checksum != current and version not in SUPERSEDED:  # a retired file never runs: its bytes are moot
                 raise MigrationError(
                     f"Migration {version} was applied to this database with checksum {checksum[:12]}, but its file now "
                     f"has {current[:12]}. An applied migration is never edited: make the change in a new file."

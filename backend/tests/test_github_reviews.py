@@ -332,14 +332,14 @@ def test_github_rate_limiting_a_review_403_files_no_task(api, gh, tmp_path, monk
     assert filed == [f"GitHub refused cmo's review on {REPO} (403)"]
 
 
-def test_github_refusing_a_review_403_goes_to_the_tickets_type_manager_without_devops(api, gh, tmp_path, monkeypatch):
+def test_github_refusing_a_review_403_goes_to_the_tasks_pipeline_manager_without_devops(api, gh, tmp_path, monkeypatch):
     from backend import hubdb as H
+    from backend.tests.helpers import engine as X
 
     settings, seen = configured(api, gh, tmp_path, monkeypatch)
     with api.app_state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": "In Progress", "status": "doing"}])
-        c.execute("UPDATE task_types SET manager='cpo' WHERE id=?", (typ["id"],))
-        ticket = H.task_create(c, H.KEEPER, "Build the thing", "x", "bot:cfo", type=typ["id"], lint=False)
+        X.pipeline(c, "dev", "Dev work", [{"name": "In Progress"}], manager="bot:cpo")
+        ticket = X.new_task(c, H.KEEPER, "Build the thing", pipeline_id="dev", assignee="bot:cfo")
         c.execute(
             "INSERT INTO task_links(id, task_id, kind, url, created_at) VALUES('l1', ?, 'pr', ?, ?)",
             (ticket["id"], f"https://github.com/{REPO}/pull/7", H.now()),

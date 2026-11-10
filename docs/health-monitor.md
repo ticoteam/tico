@@ -104,7 +104,7 @@ The team rule `health_monitor_reports` (on by default; in Settings > General > H
 tickets without asking anyone. When it is off, each report is an OK asked of the owner on a task, bound to exactly that
 message: they read it first, and it is sent with `hub support send --approval <id>` once OK'd. An OK sent back or
 withdrawn clears the report, so the next report of that problem asks again. `TICO_SUPPORT=off` turns reporting off with the rest of support.
-A copy run from source (version `dev`: a checkout, a test, the factory simulation) files nothing unless
+A copy run from source (version `dev`: a checkout, a test, the never-stuck rig) files nothing unless
 `TICO_HQ_URL` is set; Maintenance's run details say `source_copy`.
 
 ## On the Tico team's side

@@ -2053,7 +2053,9 @@ def create_app(settings=None):
     @app.post("/api/v2/system/update/check")
     def system_update_check(request: Request):
         updater_only(request.state.identity, "checks for updates")
-        return releases.check_now()
+        found = releases.check_now()
+        with store.read() as c:
+            return releases.offered(c, found)
 
     # The updater restarts this process, so the outcome is written by whichever process first
     # sees a final state after a start; a marker row keeps it to one event per update.
@@ -4337,11 +4339,7 @@ def create_app(settings=None):
         found = carried(c, task, requester)
         if not found or not found.get("lends") or not open_task(task):
             return None
-        if c.execute(
-            "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' AND old IN (?,?,?) "
-            "LIMIT 1",
-            (task["id"], *botops_act.TERMINAL),
-        ).fetchone():
+        if botops_act.reopened_by(c, task["id"]):
             return None  # finished once: the request it carried was done, whoever reopened it
         msg = H.message(c, found.get("message_id") or "")
         if not msg or msg.get("deleted_at") or msg["sender_id"] != found.get("person") or week_old(msg["created_at"]):
@@ -4782,6 +4780,10 @@ def create_app(settings=None):
         """A delegated identity that has not been confirmed: BotOps acting for a person, before their click."""
         return who.via == "botops" and not who.confirmed
 
+    # The task-write rule check, also for task writes outside the v3 routes (backend/goal_routes.py).
+    task_rules = app.state.task_rules = task_rule_gate.TaskRules(
+        auth, rule_check, rule_task_audience, rule_target, store
+    )
     # After delegated_identity: a change BotOps makes for a person is made as them.
     task_moves_routes.register(
         app,
@@ -4790,7 +4792,7 @@ def create_app(settings=None):
         handoff_preflight,
         mover,
         mutate,
-        task_rule_gate.TaskRules(auth, rule_check, rule_task_audience, rule_target, store),
+        task_rules,
         store,
         task_view,
     )

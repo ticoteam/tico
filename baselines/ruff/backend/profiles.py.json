@@ -1,5 +1,0 @@
-{
-  "backend/profiles.py": {
-    "F401": 2
-  }
-}

@@ -45,6 +45,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Computers | The computers that run bots: what each one runs at once. |
 | Conversations | Chats with bots: send, list, and stream replies. |
 | Tasks | Work assigned to people and bots. |
+| Pipelines | The stages a task goes through and what it takes to leave each one. |
 | Updates | Daily and weekly updates bots post to people. |
 | Changelog | Product announcements and the signed-in person's read state ([guide](updates.md)). |
 | Needs you | What is waiting on the signed-in person: questions, tasks, approvals. |
@@ -63,7 +64,8 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Events | The catalog of named events ([guide](routines.md)). |
 | Finance | Budgets, the P&L, expenses, bills, invoices, contacts, reports and the work inbox, as far as the caller sees; Finance actions, committed or sent to one person for approval. |
 | Automations | A trigger and a tree of steps (filter, decide, llm, find, bot_turn, paths, action), saved as versions; one permission rule for UI, CLI and MCP. |
-| Roadmaps | Company roadmap settings, internal requesters, and anonymous publication ([guide](roadmaps.md)). |
+| Roadmaps | Company roadmap settings and internal requesters ([guide](roadmaps.md)). |
+| Support | Reports to Tico support ([guide](support.md)). |
 | Rules | Org rules: what teammates follow (internal) and what someone outside requires (external), with their due dates and sources. |
 | Strategy | The team's strategy: a draft the owner edits, numbered published versions, and the bets goals serve. |
 | Inbound | Shared company inbound email and SMS for people and agents; reads never consume messages. |

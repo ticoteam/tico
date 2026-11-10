@@ -1,15 +1,27 @@
+# pyright: strict
 """A person's or a bot's own preferences: GET and POST /api/v2/preferences/{key}. Each actor reads and writes only its
 own. The server checks the values of the keys it acts on: the web's Send way, meetings' auto share and hiding the
 Strategy Bot from one's own chart."""
 
 import json
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import Request
 
 from . import models as M
-from . import strategy_bot, views
-from . import task_privacy as privacy
-from .store import H, Problem, encode
+from . import strategy_bot as strategy_bot_module
+from . import task_privacy
+from . import views as views_module
+from .store import H as hubdb, Problem, encode
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
+H: Any = hubdb
+strategy_bot: Any = strategy_bot_module
+views: Any = views_module
+privacy: Any = task_privacy
 
 # The defers the web's Send can keep (preference compose.send_way): the durations its menu offers (ui/app/pill.ts).
 SEND_WAY_DEFERS = frozenset("defer:" + f for f in ("30m", "1h", "4h", "24h", "2d", "7d", "never"))
@@ -34,14 +46,14 @@ KEYS = frozenset(
 MAX_BYTES = 4096
 
 
-def known(key):
+def known(key: str) -> None:
     if key.startswith("assistant."):
         raise Problem("forbidden", "Your Assistant's settings are set in Settings > General", 403)
     if key not in KEYS:
         raise Problem("key", "No such preference", 422)
 
 
-def check(who, key, value):
+def check(who: Any, key: str, value: object) -> None:
     """Refuse a key or a value the server does not keep."""
     known(key)
     if len(encode(value).encode()) > MAX_BYTES:
@@ -62,11 +74,11 @@ def check(who, key, value):
             raise Problem("validation", strategy_bot.HIDE_PREF + " is a boolean", 422)
 
 
-def register(app, auth, mutate, store):
+def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any) -> None:
     @app.get("/api/v2/preferences/{key}")
-    def preference(request: Request, key: str):
+    def preference(request: Request, key: str) -> dict[str, Any]:
         """One of the caller's own preferences; null when it has none."""
-        who = request.state.identity
+        who: Any = request.state.identity
         auth.domain(who)
         known(key)
         with store.read() as c:
@@ -74,32 +86,34 @@ def register(app, auth, mutate, store):
             return {"key": key, "value": json.loads(row[0]) if row else None}
 
     @app.post("/api/v2/preferences/{key}")
-    def set_preference(request: Request, key: str, body: M.Preference):
+    def set_preference(request: Request, key: str, body: M.Preference) -> Any:
         """Keep one of the caller's own preferences."""
-        who = request.state.identity
+        who: Any = request.state.identity
+        # The model's bare dict | list (its OpenAPI shape) reads as partially unknown: any JSON value is kept.
+        value: Any = cast(Any, body).value
         auth.domain(who)
-        check(who, key, body.value)
+        check(who, key, value)
         if not request.headers.get("idempotency-key"):
             # An unchanged value (a page re-saving what it read) answers from a read: no writer wait.
             with store.read() as c:
                 same = c.execute(
                     "SELECT 1 FROM preferences WHERE actor=? AND key=? AND value=?",
-                    (who.actor, key, encode(body.value)),
+                    (who.actor, key, encode(value)),
                 ).fetchone()
                 if same:
                     privacy.guard_write(c, getattr(request.state, "privacy_source", who), request.url.path, auth)
             if same:
-                return {"key": key, "value": body.value}
+                return {"key": key, "value": value}
 
-        def work(c):
+        def work(c: Any) -> dict[str, Any]:
             at = H.now()
             c.execute(
                 "INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) "
                 "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-                (who.actor, key, encode(body.value), at),
+                (who.actor, key, encode(value), at),
             )
             if key == strategy_bot.HIDE_PREF:
-                strategy_bot.mirror_hide(c, who.actor, encode(body.value), at)
-            return {"key": key, "value": body.value}
+                strategy_bot.mirror_hide(c, who.actor, encode(value), at)
+            return {"key": key, "value": value}
 
         return mutate(request, body, work)

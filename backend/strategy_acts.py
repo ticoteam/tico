@@ -865,11 +865,11 @@ def _restore(c, actor, task, item, since, note):
         # A decision only closes a task, so its status goes back by reopening it. Reopened, it goes to its stage's
         # owner, which may not be the owner it had.
         H.task_move(c, writer, task["id"], H.TASK_REOPEN, why, mover=True)
-    if H.task(c, task["id"])["owner_id"] != before["owner_id"]:
+    if (H.task(c, task["id"]) or {}).get("owner_id") != before["owner_id"]:
         H.task_reassign(c, writer, task["id"], before["owner_id"], why, mover=True)
     fields = {}
     # A new owner (or a reopen) puts it at the end of their queue: the place it had goes back too.
-    if H.task(c, task["id"])["rank"] != before["rank"]:
+    if (H.task(c, task["id"]) or {}).get("rank") != before["rank"]:
         fields["rank"] = before["rank"]
     if "note" in back:
         fields["note"] = before.get("note") or ""

@@ -39,8 +39,8 @@ aliases: [ph]               # optional: other names `hub tool show <name>` resol
 ```
 
 `writes` means: `never` — no bot writes, there is no path for it; `approval` — a write needs a
-Tico approval (`policies/approvals.md`) or an explicit per-bot grant from the owner named on the
-page; `allowed` — a bot whose `tools:` carries the verb may write within the page's rules.
+person's OK on the task (`policies/approvals.md`) or an explicit per-bot grant from the owner named
+on the page; `allowed` — a bot whose `tools:` carries the verb may write within the page's rules.
 
 Sections: **What it is** · **What data it has** · **How a bot uses it** (exact commands) ·
 **Rules** · **Recipes** · **Gotchas**. Plain sentences, present tense, no history (that goes in
