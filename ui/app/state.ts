@@ -218,17 +218,25 @@ function stateOf(slug: string | undefined): string {
   if (!e || e.status === 'planned') return 'planned';
   if (e.status === 'paused') return 'paused';
   const live = S.v2?.status?.[slug ?? ''];
-  if (live) return live.state === 'running' ? 'running' : ['waiting_human', 'blocked', 'crashed', 'quarantined'].includes(live.state) ? 'needs' : 'idle';
+  if (live) return live.state === 'running' ? 'running' : ['crashed', 'quarantined'].includes(live.state) ? 'needs' : 'idle';
   if (S.status?.active?.some(a => a.employee === slug)) return 'running';
   return 'idle';
 }
 const openCount = (slug: string): number => S.v2?.status?.[slug]?.open_tasks || 0;
-// What needs you from that bot, grouped the way the Needs you list groups it (companyNeedActor). The org tree's
-// number is a fixed attention count matching the default Needs you tab, independent of edits to that tab.
-function botNeeds(slug: string) {
-  return (S.v2?.needs || []).filter(it => (['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it)
-    && companyNeedActor(it, it) === 'bot:' + slug)
-    || (it.kind === 'approval' && (it.requested_by_id || it.requester_id) === 'bot:' + slug));
+// The bot one Needs-you item goes with (backend views.needs_actor): the bot that asked, for an ask; the bot that asked
+// for the task, for a task; the first bot that cannot run, for a stuck stretch. A mention is a person's.
+function needsBotOf(it: NeedsEntry): string | null {
+  const me = S.me?.id ? `human:${S.me.id}` : '', task = it.task;
+  const ask = it.ask as {asked_by?: string | null} | null | undefined;
+  const options = it.kind === 'paused' ? (it.bots || []).slice(0, 1)
+    : it.kind === 'ask' ? [ask?.asked_by, task?.owner_id, task?.requester_id]
+      : it.kind === 'task' ? [task?.requester_id] : [];
+  return options.find((a): a is string => typeof a === 'string' && a.startsWith('bot:') && a !== me) || null;
+}
+// What needs you from that bot. The org tree's number is a fixed attention count matching the default Needs you tab,
+// independent of edits to that tab.
+function botNeeds(slug: string): NeedsEntry[] {
+  return (S.v2?.needs || [] as unknown as NeedsEntry[]).filter(it => needsBotOf(it as unknown as NeedsEntry) === 'bot:' + slug) as unknown as NeedsEntry[];
 }
 // While only some pages are held, the counts are the server's over the whole list (its `bots`).
 const needsBotsWhole = (): Record<string, number> | null => S.v2?.needsNext && S.v2.needsBots ? S.v2.needsBots : null;
@@ -239,9 +247,8 @@ function needsMeCounts(): Map<string, number> {
   if (whole) return new Map(Object.entries(whole));
   const counts = new Map<string, number>();
   for (const it of S.v2?.needs || []) {
-    const actor = ['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it) ? companyNeedActor(it, it)
-      : it.kind === 'approval' ? it.requested_by_id || it.requester_id : null;
-    if (typeof actor === 'string' && actor.startsWith('bot:')) counts.set(actor, (counts.get(actor) || 0) + 1);
+    const actor = needsBotOf(it as unknown as NeedsEntry);
+    if (actor) counts.set(actor, (counts.get(actor) || 0) + 1);
   }
   return counts;
 }
