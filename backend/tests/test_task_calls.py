@@ -112,6 +112,9 @@ def test_done_from_the_owner_finishes_the_task_and_what_a_move_causes_happens_on
         (row["id"] + ":%",),
     ).fetchall()
     assert [(t[0], t[1].splitlines()[0]) for t in told] == [(HELPER, "Finished: Write the launch note")]
+    # The bot that asked for it reads it on its next run: nothing wakes a bot about a Done task (never-stuck rule 7).
+    queued = "SELECT 1 FROM jobs j JOIN messages m ON m.id = j.message_id WHERE m.wake_key LIKE '%:result'"
+    assert c.execute(queued).fetchall() == []
     assert H.task_done(c, BUILDER, row["id"], "Again.", _version(c, row["id"]))["status"] == "done"  # already done
     assert len(c.execute("SELECT 1 FROM messages WHERE wake_key LIKE '%:result'").fetchall()) == 1
 
