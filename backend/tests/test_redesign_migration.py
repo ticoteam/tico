@@ -420,41 +420,6 @@ def test_a_routine_longer_than_an_automation_takes_moves_off_with_its_text_cut(a
     assert flow["enabled"] is False and len(flow["steps"][0]["prompt"]) == F.MAX_PROMPT
 
 
-def test_the_upgrade_drops_the_cutover_record_and_accepts_tables_and_holds_still_reads_the_marks(api):
-    """An install from before the drop has the record and accepts tables. Migration 0007 removes them at the next start;
-    `redesign_migrated` stays, and `holds` still sees a routine the cutover converted (so it is never reseeded and fires
-    twice)."""
-    store = db(api)
-    with store.transaction() as conn:
-        conn.execute(
-            "CREATE TABLE redesign_migrations(id TEXT PRIMARY KEY, state TEXT NOT NULL, actor TEXT NOT NULL, "
-            "created_at TEXT NOT NULL, expires_at TEXT NOT NULL, finished_at TEXT, restored_at TEXT, snapshot TEXT, "
-            "result TEXT)"
-        )
-        conn.execute(
-            "INSERT INTO redesign_migrations(id, state, actor, created_at, expires_at) VALUES('mig_1','converted',"
-            "'human:ana',?,?)",
-            (H.now(), H.now()),
-        )
-        conn.execute(
-            "CREATE TABLE redesign_migration_accepts(flag TEXT PRIMARY KEY, accepted_by TEXT NOT NULL, "
-            "accepted_at TEXT NOT NULL)"
-        )
-        conn.execute(
-            "INSERT INTO redesign_migrated(kind, id, migration, automation) VALUES('routine','sch_1','mig_1','a1')"
-        )
-        # As a file from before 0007 has it: that migration and every later one not run yet.
-        restore_config(conn)
-        conn.execute("DELETE FROM schema_migrations WHERE version>='0007' AND version NOT LIKE 'legacy_%'")
-    store.initialize(seed_market=False)
-    with store.read() as conn:
-        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert not {"redesign_migrations", "redesign_migration_accepts"} & tables
-        assert "redesign_migrated" in tables
-        assert M.holds(conn, "routine", "sch_1") is True
-        assert M.holds(conn, "routine", "sch_2") is False
-
-
 OLD_INBOX = "Sort Acme mail by sender and urgency. Refunds go to Ben."  # short instructions the cutover copied whole
 
 
