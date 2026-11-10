@@ -6,6 +6,8 @@ import type {Page} from 'playwright';
 // - Followers: each name with its level when not live; Follow / Following for you, × for others.
 // - A task filed under a private parent is private (the create form sends it); a parent the reader cannot open is
 //   named only "a private task", never its title or id, and is not a link.
+// - A parent is fixed when the task is filed: Part of links to it and offers nothing to add, change or take off; the
+//   Related menu offers only the relations the server writes.
 // - A bot's "Create private tasks by default" and update subscriptions save from its settings.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -33,6 +35,8 @@ const fixtures = () => [
   // Filed from private work: the server sends the parent with nothing of it but "a private task" (task_relations.py).
   task('t-13', 'Pick the photos', 'spec', {owner_id: 'bot:writer',
     relations: {parent: [{id: null, title: 'a private task', status: null, owner_id: null, direction: 'out', private: true}]}}),
+  task('t-14', 'Proof the copy', 'spec', {owner_id: 'bot:writer',
+    relations: {parent: [{id: 't-12', title: 'Write the copy', status: 'open', owner_id: 'bot:writer', direction: 'out'}]}}),
 ];
 const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => ({name, display_name, host: 'keeper', status: 'active',
   state: 'active', can_chat: true, private_tasks_default: name === 'pm', update_subscriptions: name === 'pm' ? ['templates'] : []}));
@@ -119,6 +123,21 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
     await page.evaluate(() => { location.hash = '#/task/t-12'; });
     await page.locator('#task-modal[open][data-task="t-12"] [data-prop-row="readers"]', {hasText: 'Public'}).waitFor();
     assert.equal(await win.locator('[data-prop-row="readers"] [data-prop="readers"]').count(), 0);
+    // No parent: nothing to add one with (backend/task_relations.py relate refuses a parent).
+    assert.equal(await win.locator('[data-prop-row="parent"] [data-prop="parent"]').count(), 0, 'no Add parent');
+    assert.match(await win.locator('[data-prop-row="parent"]').innerText(), /None/);
+
+    // A parent the reader can open: a link to it, nothing to change or take off.
+    await page.evaluate(() => { location.hash = '#/task/t-14'; });
+    const up = page.locator('#task-modal[open][data-task="t-14"] [data-prop-row="parent"]');
+    await up.waitFor();
+    assert.equal(await up.locator('[data-open-task="t-12"]').count(), 1, 'links to the parent');
+    assert.equal(await up.locator('[data-prop-clear="parent"], [data-prop="parent"]').count(), 0, 'no change or remove');
+    // The Related menu: only what relate writes.
+    await page.locator('#task-modal[open][data-task="t-14"] [data-related-add]').click();
+    const kinds = await page.locator('#task-modal .prop-pop [data-prop-pick]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset['propPick']));
+    assert.deepEqual(kinds, ['related', 'duplicate_of', 'follow_up']);
+    await page.keyboard.press('Escape');
 
     // A parent the reader cannot open: "a private task", no link, nothing of it in the window.
     await page.evaluate(() => { location.hash = '#/task/t-13'; });

@@ -129,17 +129,16 @@ function taskPropsHTML(t: PropTask): string {
     || (r.links ? '' : '<span class="prop-v ro empty"><span class="prop-txt">None</span></span>')}${r.links
     ? (chips ? `<button type="button" class="prop-add" data-prop="tags" aria-haspopup="menu" aria-label="Add a tag" title="Add a tag">${TL_ICON.plus}</button>`
       : `<button type="button" class="prop-v empty" data-prop="tags" aria-haspopup="menu" aria-label="Tags: none, add a tag"><span class="prop-txt">Add tags</span></button>`) : ''}</span></span></div>`);
-  // Part of: the parent's title is a link to it, × takes the task out; empty, a picker finds one. Blockers and
-  // other relations are in the Related section.
+  // Part of: the parent's title is a link to it. A parent is fixed when the task is filed (backend/task_relations.py).
+  // Other relations are in the Related section.
   const parent = taskParent(t);
   if (parent && !parent.id) {
     // A private parent this reader cannot open (a task filed from private work): named only as "a private task".
     rows.push(row('parent', 'Part of', txt(parent.title), {words: parent.title}));
   } else if (parent) {
     rows.push(`<div class="prop" data-prop-row="parent"><span class="prop-k" aria-hidden="true">Part of</span><span class="prop-vwrap">`
-      + `<button type="button" class="prop-v prop-link" data-open-task="${esc(parent.id)}" aria-label="Part of: ${esc(parent.title)}. Open it"><span class="prop-txt">${esc(parent.title)}</span></button>`
-      + (r.links ? `<button type="button" class="prop-x" data-prop-clear="parent" aria-label="Clear Part of" title="Clear">${TL_ICON.x}</button>` : '') + '</span></div>');
-  } else rows.push(row('parent', 'Part of', txt(r.links ? 'Add parent' : 'None'), {edit: r.links, empty: true, words: 'none'}));
+      + `<button type="button" class="prop-v prop-link" data-open-task="${esc(parent.id)}" aria-label="Part of: ${esc(parent.title)}. Open it"><span class="prop-txt">${esc(parent.title)}</span></button></span></div>`);
+  } else rows.push(row('parent', 'Part of', txt('None'), {empty: true, words: 'none'}));
   return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
 }
 // A refused save's reason stays under the properties until that property saves (several: one line each, named).
@@ -309,7 +308,7 @@ type PropCandidate = Pick<TaskBriefV3, 'id' | 'title' | 'owner_id' | 'status'>;
 let PROP_TASKS: {at: number; rows: PropCandidate[]} | null = null;
 async function taskPropCandidates(t: PropTask & {children?: unknown[]}): Promise<PropCandidate[]> {
   if (!PROP_TASKS || Date.now() - PROP_TASKS.at > 60000) PROP_TASKS = {at: Date.now(), rows: await taskBriefs({status: 'open', limit: 500})};
-  // Not the task itself, nor one of its own subtasks (that would make a loop).
+  // Not the task itself, nor one of its own subtasks.
   const bar = new Set([String(t.id), ...(t.children || []).map(c => String((c as {id?: unknown}).id))]);
   return PROP_TASKS.rows.filter(x => !bar.has(String(x.id))).sort((a, b) => String(a.title).localeCompare(String(b.title)));
 }
@@ -347,9 +346,7 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     }
     const clear = eventElement(ev)?.closest<HTMLElement>('[data-prop-clear]');
     if (clear) {
-      const key = clear.dataset.propClear ?? '';
-      if (key === 'parent') { d.focusProp = key; void taskRelate(d, task, {task: taskParentId(task), kind: 'parent', remove: true}); }
-      else void save(key, {due: ''});
+      void save(clear.dataset.propClear ?? '', {due: ''});
       return;
     }
     const b = eventElement(ev)?.closest<HTMLElement>('[data-prop]'); if (!b) return;
@@ -410,14 +407,6 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       // built from the newest copy when it saves, so two quick tags both stay
       const add = (tag: string): void => { tag = String(tag).trim().toLowerCase(); if (tag && !have.has(tag)) void save('tags', cur => (cur.labels || []).includes(tag) ? null : {labels: [...(cur.labels || []), tag]}); };
       propMenu(d, b, {label: 'Add a tag', entry: 'Tag', none: 'Type a tag, then Enter', onEntry: add});
-    } else if (key === 'parent') {
-      const rows = await taskPropCandidates(task);
-      if (!b.isConnected) return;
-      propMenu(d, b, {label: 'Part of', find: 'Find a task', none: 'No open tasks', items: rows.map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner_id)}`,
-        html: `<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner_id))}</span>`,
-        checked: taskParentId(task) === String(x.id)})), onPick: it => {
-          if (String(it.value) !== taskParentId(task)) { d.focusProp = key; void taskRelate(d, task, {task: it.value, kind: 'parent'}); }
-        }});
     }
   };
   const publication = $('[data-task-public]', box);
