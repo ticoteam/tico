@@ -130,9 +130,9 @@ def add(
     parts: list[Row] = []
     if not quiet and H.is_bot(target):
         waiting = conn.execute(
-            "SELECT j.id, m.body, m.refs, m.wake_key FROM jobs j JOIN messages m ON m.id = j.message_id "
-            "WHERE j.bot_id=? AND j.state='queued' AND m.wake_key LIKE ? ESCAPE '\\' ORDER BY m.created_at, m.rowid",
-            (H.actor_id(target), _like(task["id"])),
+            "SELECT j.id, m.body, m.refs, m.wake_key FROM messages m CROSS JOIN jobs j ON j.message_id = m.id "
+            f"WHERE {_KEY} AND j.bot_id=? AND j.state='queued' ORDER BY m.created_at, m.rowid",
+            (*_range(task["id"]), H.actor_id(target)),
         ).fetchall()
         for found in waiting:
             # What the folded wake's caller attached (a new task's automation run, the work to reconcile with) rides
@@ -278,10 +278,11 @@ def live_run(conn: "sqlite3.Connection", task: Row, actor: str | None, now: str 
         return False
     return bool(
         conn.execute(
-            "SELECT 1 FROM jobs j JOIN attempts a ON a.id = j.attempt_id JOIN messages m ON m.id = j.message_id "
-            "WHERE j.bot_id=? AND a.state IN ('leased', 'running') AND a.lease_until > ? "
-            "AND (m.wake_key LIKE ? ESCAPE '\\' OR m.conversation_id = ?) LIMIT 1",
-            (H.actor_id(actor), now or H.now(), _like(task["id"]), task.get("conversation_id") or ""),
+            "SELECT 1 FROM (SELECT m.id FROM messages m WHERE "
+            f"{_KEY} UNION SELECT id FROM messages WHERE conversation_id = ?) m "
+            "CROSS JOIN jobs j ON j.message_id = m.id JOIN attempts a ON a.id = j.attempt_id "
+            "WHERE j.bot_id=? AND a.state IN ('leased', 'running') AND a.lease_until > ? LIMIT 1",
+            (*_range(task["id"]), task.get("conversation_id") or "", H.actor_id(actor), now or H.now()),
         ).fetchone()
     )
 
@@ -294,7 +295,7 @@ _RUNS = (
     "j.message_id) "
 )
 _ON_TASK = (
-    "(a.task_id = ? OR m.wake_key LIKE ? ESCAPE '\\' OR json_extract(m.refs, '$.task') = ? OR (? AND "
+    "(a.task_id = ? OR (m.wake_key >= ? AND m.wake_key < ?) OR json_extract(m.refs, '$.task') = ? OR (? AND "
     "a.task_id IS NULL AND m.wake_key IS NULL AND json_extract(m.refs, '$.task') IS NULL AND m.conversation_id = ?))"
 )
 
@@ -306,7 +307,7 @@ def _on_task(conn: "sqlite3.Connection", task: Row) -> tuple[object, ...]:
         "SELECT COUNT(*) FROM tasks WHERE conversation_id=? AND status='open' AND id<>?", (conversation, task["id"])
     ).fetchone()
     alone = bool(conversation) and not (sharing and sharing[0])
-    return (task["id"], _like(task["id"]), task["id"], 1 if alone else 0, conversation)
+    return (task["id"], *_range(task["id"]), task["id"], 1 if alone else 0, conversation)
 
 
 def last_run(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | None:
@@ -403,9 +404,9 @@ def lost(conn: "sqlite3.Connection", task: Row, actor: str | None, *, whole_visi
     found = conn.execute(
         "SELECT m.id, m.body, m.rowid, json_extract(m.refs, '$.job'), "
         "(SELECT j.state FROM jobs j WHERE j.id = m.id) FROM messages m "
-        "WHERE m.rowid > ? AND m.wake_key LIKE ? ESCAPE '\\' AND m.recipient_id=? "
+        f"WHERE {_KEY} AND m.rowid > ? AND m.recipient_id=? "
         "AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 ORDER BY m.rowid DESC LIMIT 1",
-        (0 if whole_visit else _marks(task)[1], _like(f"{task['id']}:{visit.get('id')}"), actor),
+        (*_range(f"{task['id']}:{visit.get('id')}"), 0 if whole_visit else _marks(task)[1], actor),
     ).fetchone()
     if not found or not found[3] or found[4] in LIVE_JOBS:
         return None
@@ -430,10 +431,10 @@ def inbox(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | Non
     visit: Row = task.get("visit") or {}
     reads_inbox: str = cast("Any", enqueue).external_bot_sql("m.recipient_id")
     found = conn.execute(
-        "SELECT m.id, m.read_at FROM messages m WHERE m.rowid > ? AND m.wake_key LIKE ? ESCAPE '\\' "
+        f"SELECT m.id, m.read_at FROM messages m WHERE {_KEY} AND m.rowid > ? "
         "AND m.recipient_id=? AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 "
         f"AND json_extract(m.refs, '$.job') IS NULL AND {reads_inbox} ORDER BY m.rowid DESC LIMIT 1",
-        (_marks(task)[1], _like(f"{task['id']}:{visit.get('id')}"), actor),
+        (*_range(f"{task['id']}:{visit.get('id')}"), _marks(task)[1], actor),
     ).fetchone()
     return {"id": str(found[0]), "read_at": found[1]} if found else None
 
@@ -445,9 +446,9 @@ def queued(conn: "sqlite3.Connection", task_id: str, actor: str | None) -> bool:
         return False
     return bool(
         conn.execute(
-            "SELECT 1 FROM jobs j JOIN messages m ON m.id = j.message_id "
-            "WHERE j.bot_id=? AND j.state IN ('queued', 'leased') AND m.wake_key LIKE ? ESCAPE '\\' LIMIT 1",
-            (H.actor_id(actor), _like(task_id)),
+            "SELECT 1 FROM messages m CROSS JOIN jobs j ON j.message_id = m.id "
+            f"WHERE {_KEY} AND j.bot_id=? AND j.state IN ('queued', 'leased') LIMIT 1",
+            (*_range(task_id), H.actor_id(actor)),
         ).fetchone()
     )
 
@@ -461,9 +462,9 @@ def drop(conn: "sqlite3.Connection", task_id: str, keep: str | Collection[str] |
     kept = sorted({str(H.actor_id(bot)) for bot in keeping if H.is_bot(bot)})
     cursor = conn.execute(
         "UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
-        "(SELECT id FROM messages WHERE wake_key LIKE ? ESCAPE '\\')"
+        "(SELECT id FROM messages m WHERE " + _KEY + ")"
         + (f" AND bot_id NOT IN ({','.join('?' * len(kept))})" if kept else ""),
-        (_like(task_id), *kept),
+        (*_range(task_id), *kept),
     )
     return cursor.rowcount
 
@@ -484,9 +485,9 @@ def cancel(conn: "sqlite3.Connection", wake_key: str) -> int:
     how many jobs it canceled."""
     H = _h()
     rows = conn.execute(
-        "SELECT j.id, m.id, m.wake_key, m.refs, m.body FROM jobs j JOIN messages m ON m.id = j.message_id "
-        "WHERE j.state='queued' AND m.wake_key LIKE ? ESCAPE '\\'",
-        (_like(wake_key.split(":", 1)[0]),),
+        "SELECT j.id, m.id, m.wake_key, m.refs, m.body FROM messages m CROSS JOIN jobs j ON j.message_id = m.id "
+        f"WHERE {_KEY} AND j.state='queued'",
+        _range(wake_key.split(":", 1)[0]),
     ).fetchall()
     for job_id, message_id, own_key, raw, body in rows:
         refs: Row = H._json(raw, {}) or {}
@@ -502,6 +503,10 @@ def cancel(conn: "sqlite3.Connection", wake_key: str) -> int:
     return 0
 
 
-def _like(task_id: str) -> str:
-    escaped = str(task_id).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return escaped + ":%"
+# A wake key's prefix read as a range on the wake-key index (`messages_wake_key`): every key that starts `<prefix>:`
+# sorts at or after it and before `<prefix>;`. A LIKE cannot use the index, so each read scanned every job of the bot.
+_KEY = "m.wake_key >= ? AND m.wake_key < ?"
+
+
+def _range(prefix: str) -> tuple[str, str]:
+    return f"{prefix}:", f"{prefix};"
