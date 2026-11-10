@@ -826,7 +826,8 @@ ASKED = "rule.ask"
 def carry_out(conn, decision, actor, target, kind, refs, body, conv):
     """What `ask` and `action` decisions do, before the message is written; the decision to write it under.
 
-    `ask`: an ask on the task for its person (`_ask`), then the message waits as a note. `action`: the row's action
+    `ask`: an ask on the task for its person, or with no task a task for one (`_ask`), then the message waits as a
+    note. `action`: the row's action
     runs as Tico, then the message waits as a note; an action that fails (a task call refused, say) opens the message
     instead (`fail_open`), so a rule never costs the bot work it was meant to do. Anything else is returned as it is."""
     if decision.outcome not in (ASK, ACTION):
@@ -840,7 +841,7 @@ def carry_out(conn, decision, actor, target, kind, refs, body, conv):
         row = H.task(conn, tid) if tid else None
         with TTR.from_action(decision.rule):
             if decision.outcome == ASK:
-                _ask(conn, decision, row, actor, body)
+                _ask(conn, decision, row, actor, body, target, conv)
             else:
                 _act(
                     conn,
@@ -859,12 +860,51 @@ def carry_out(conn, decision, actor, target, kind, refs, body, conv):
         _CARRYING.reset(token)
 
 
-def _ask(conn, decision, row, actor, body):
+def _operator(conn, bot):
+    """The person a bot works for (usage_limits.recipients), or None."""
+    from . import usage_limits
+
+    person = usage_limits.recipients(conn, H.actor_id(bot)) if H.is_bot(bot) else None
+    return H.human_actor(person["id"]) if person else None
+
+
+def _ask_without_task(conn, decision, actor, body, target, conv):
+    """A message no task is about: one open task owned by the person responsible, the bot's operator, else the rule's
+    maker when that is a person, so it is in their Needs you. While the one this rule filed for this thread (or, with
+    no thread, this bot) is open, nothing more. Raises when nobody can own it, so the message wakes the bot."""
+    about = f"thread:{conv['id']}" if conv and conv.get("id") else f"bot:{H.actor_id(target)}"
+    if conn.execute(
+        "SELECT 1 FROM events e JOIN tasks t ON t.id=e.target WHERE e.action=? AND json_extract(e.detail,'$.rule')=? "
+        "AND json_extract(e.detail,'$.about')=? AND t.status='open' LIMIT 1",
+        (ASKED, decision.rule, about),
+    ).fetchone():
+        return
+    who = _operator(conn, target) or (decision.by if H.is_human(decision.by) else None)
+    if not who:
+        raise ValueError("no person to ask")
+    sender = "Tico" if actor == H.KEEPER else H.actor_id(actor)
+    text = str(body or "").strip()[:1500]
+    heading = " ".join(text.split())[:80] or f"a message to {H.actor_id(target)}"
+    made = H.task_create(
+        conn,
+        H.KEEPER,
+        f"A rule needs you: {heading}"[:300],
+        f"The rule {decision.rule} asked for a person on a message to {H.actor_id(target)}.\n\nFrom {sender}: {text}",
+        who,
+        lint=False,
+        deduplicate=False,
+        private=True,  # the message was for the bot: only the person it falls to reads it
+    )
+    H.event(conn, H.KEEPER, ASKED, made["id"], {"rule": decision.rule, "about": about})
+
+
+def _ask(conn, decision, row, actor, body, target=None, conv=None):
     """An ask on the message's task (H.task_ask), for its requester when that is a person, else the owner bot's
-    operator; while one this rule added still waits, nothing more. Raises when nobody can be asked or the ask is
-    refused (the person may not read a private task), so the message wakes the bot instead of waiting for no one."""
+    operator; while one this rule added still waits, nothing more. With no task, a task for a person
+    (`_ask_without_task`). Raises when nobody can be asked or the ask is refused (the person may not read a private
+    task), so the message wakes the bot instead of waiting for no one."""
     if not row:
-        raise ValueError("an ask rule needs a task")
+        return _ask_without_task(conn, decision, actor, body, target, conv)
     asked = {
         r[0]
         for r in conn.execute(
@@ -876,12 +916,7 @@ def _ask(conn, decision, row, actor, body):
     waits = H.task_waits(conn, [row["id"]]).get(row["id"]) or []
     if any(w.requirement_id in asked for w in waits):
         return
-    who = row["requester_id"] if H.is_human(row["requester_id"]) else None
-    if not who and H.is_bot(row["owner_id"]):
-        from . import usage_limits
-
-        person = usage_limits.recipients(conn, H.actor_id(row["owner_id"]))
-        who = H.human_actor(person["id"]) if person else None
+    who = (row["requester_id"] if H.is_human(row["requester_id"]) else None) or _operator(conn, row["owner_id"])
     if not who:
         raise ValueError("no person to ask")
     sender = "Tico" if actor == H.KEEPER else H.actor_id(actor)
