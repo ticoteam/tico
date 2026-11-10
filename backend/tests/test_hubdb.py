@@ -417,6 +417,9 @@ class Rule8Counting(HubCase):
         self.assertEqual(H.bot(self.conn, "seo")["state"], "quarantined", "a retry loop still stops")
         self.assertEqual(H.quarantine_reason(self.conn, "seo"), f"{H.QUARANTINE_TOTAL_AT} refusals today")
 
+    def test_tico_itself_is_named_tico_never_by_the_id_it_is_stored_under(self):
+        self.assertEqual(H.actor_name(self.conn, H.KEEPER), "Tico")
+
     def test_a_person_refused_for_a_paused_bot_reads_when_it_is_back_not_how_bots_are_reviewed(self):
         got = self.refused("target_inactive", H.task_create, self.conn, ANA, "Plan the week", "Draft it", "coach")
         self.assertIn("until a person resumes it", got.detail)

@@ -4722,7 +4722,7 @@ class Execution:
         for old in obsolete:
             if not prepared:
                 selected = None
-            suppress_notice(c, old, old['task_id'], 'Task finished or acted on before keeper notice delivery')
+            suppress_notice(c, old, old['task_id'], 'Task finished or acted on before Tico\'s notice was delivered')
         company = org_turns.observe(c, self.store.settings, detailed=False)
         if company['at_stop']:
             return {'attempt': None, 'waiting': org_turns.REASON}

@@ -6182,6 +6182,8 @@ def person_name(conn, person):
 def actor_name(conn, actor):
     """What a person reads for an actor: a bot's display name (else its slug), or a person's name. A bot made since ids
     has a UUID id, which means nothing to a person, so it is never written into text a person reads."""
+    if actor == KEEPER:
+        return "Tico"  # Tico itself (hubdb_core.KEEPER): never shown as the id it is stored under
     key = actor_id(actor)
     if not str(actor).startswith("human:"):
         row = bot(conn, key)
