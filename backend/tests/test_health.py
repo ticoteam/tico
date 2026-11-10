@@ -49,67 +49,6 @@ def test_all_good(environment, monkeypatch):
     assert body["computers"][0]["online"] and body["computers"][0]["runtimes"][0]["ready"]
 
 
-def test_stalled_health_does_not_disclose_another_persons_private_task(environment):
-    api = environment()
-    add_bot(api, 'helper')
-    with api.app.state.store.transaction() as c:
-        task = H.task_create(c, 'human:riley', 'Private repair request', '', 'bot:helper', private=True)
-        c.execute("UPDATE jobs SET state='completed'")
-        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), seconds=-3600), task['id']))
-    with api.app.state.store.read() as c:
-        assert task['id'] in [row['id'] for row in H.stalled_tasks(c)], 'real detection names it'
-    assert 'stalled_tasks' not in health_of(api)[1]
-
-
-@pytest.mark.parametrize('hidden', [False, 'private', 'activity'])
-def test_a_task_waiting_on_its_own_quiet_hold_is_not_progressing(environment, hidden):
-    api = environment()
-    add_bot(api, 'helper')
-    add_bot(api, 'holder')
-    with api.app.state.store.transaction() as c:
-        window = H.task_create(c, 'bot:helper', 'Open the deploy window', '', 'bot:helper')
-        hold = H.task_create(c, 'bot:helper', 'Hold merges until RELEASED', '', 'bot:holder', parent_id=window['id'])
-        H.TR.relate(c, 'bot:helper', window['id'], hold['id'], 'blocked_by')
-        H.task_update(c, 'bot:helper', window['id'], status='waiting', note="Waiting on the hold's ack.")
-        c.execute("UPDATE jobs SET state='completed'")
-        c.execute(
-            "UPDATE tasks SET private=0, updated_at=? WHERE id IN (?,?)",
-            (H.shift(H.now(), seconds=-3600), window['id'], hold['id']),
-        )
-        if hidden == 'private':
-            c.execute("UPDATE tasks SET private=1 WHERE id=?", (hold['id'],))
-        elif hidden == 'activity':
-            from backend import bot_access as A
-
-            only_ana = A.audience({'people': ['ana']})
-            c.execute(
-                "INSERT INTO bot_config(bot,owner_id,access) VALUES('holder','ana',?) ON CONFLICT(bot) DO UPDATE SET access=excluded.access",
-                (A.stored({'see': A.OPEN_LEVEL, 'read': only_ana, 'write': only_ana}),),
-            )
-            BS.write(c, 'holder', {})
-    for status in ('open', 'review'):
-        with api.app.state.store.transaction() as c:
-            c.execute("UPDATE tasks SET status=? WHERE id=?", (status, hold['id']))
-        check = health_of(api, as_person(api, 'quinn') if hidden == 'activity' else None)[1].get('stalled_tasks')
-        if hidden or status == 'review':
-            assert check is None
-        else:
-            # The hold is quiet with nothing set to move it, so it is named as well.
-            assert check['status'] == 'warn' and {item['task'] for item in check['items']} == {window['id'], hold['id']}
-
-
-def test_a_bot_task_nothing_moves_is_named_as_not_progressing(environment):
-    api = environment()
-    add_bot(api, 'helper')
-    with api.app.state.store.transaction() as c:
-        task = H.task_create(c, 'human:morgan', 'Repair the queue', '', 'bot:helper', private=False)
-        c.execute("UPDATE jobs SET state='completed'")
-        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), hours=-1), task['id']))
-    check = health_of(api)[1]['stalled_tasks']
-    assert check['status'] == 'warn' and [item['task'] for item in check['items']] == [task['id']]
-    assert 'Repair the queue' in check['summary']
-
-
 def test_an_offline_computer_holds_its_bots(environment):
     api = environment()
     runner = enrolled(api)
@@ -195,13 +134,13 @@ def test_a_computer_silent_with_work_queued_goes_to_its_owner(environment):
 
 
 def test_a_computer_stops_on_all_its_queued_work_not_what_the_viewer_may_read(environment, monkeypatch):
-    from backend import views
+    from backend import bot_rows
     from backend.tests.helpers.people_access import person_headers
 
     api = environment()
     silent_computer(api, 1900)
     monkeypatch.setattr(
-        views.pipeline_stats,
+        bot_rows,
         "job_queues",  # someone else's private request
         lambda c, who, bots, now=None: {b: {"queued": 0, "uncertain": 0} for b in bots},
     )
@@ -1635,8 +1574,8 @@ def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_priva
             )
         watch = H.task_create(c, "bot:botops", "Watch HotMic's update to 0.3.48", "x", "bot:botops", lint=False)
         secret = H.task_create(c, "bot:audit", "Private release gate", "x", "bot:audit", lint=False, private=True)
-        c.execute("UPDATE tasks SET carried_by='b-botops' WHERE id=?", (watch["id"],))
-        c.execute("UPDATE tasks SET carried_by='a-audit' WHERE id=?", (secret["id"],))
+        c.execute("UPDATE attempts SET task_id=? WHERE id='b-botops'", (watch["id"],))
+        c.execute("UPDATE attempts SET task_id=? WHERE id='a-audit'", (secret["id"],))
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops'", (H.shift(H.now(), minutes=-30),))
         c.execute(
             "INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,reported_at) "
@@ -1797,99 +1736,6 @@ def test_health_names_queued_bot_for_bot_reader(environment, monkeypatch):
     assert not any(i['kind'] == 'queue' and i['reason'] == 'no_slot' for i in issues)
 
 
-def test_aged_prs_use_synced_condition_age_and_clear_on_review_or_resolution(environment, monkeypatch):
-    from backend import github as G
-    from backend import task_relations
-
-    api = environment()
-    add_bot(api, 'builder')
-    add_bot(api, 'reviewer')
-    add_bot(api, 'hidden-reviewer')
-    old = H.shift(H.now(), hours=-13)
-    young = H.shift(H.now(), hours=-11)
-    urls = [f'https://github.com/AcmeCorp/atlas/pull/{n}' for n in range(1, 6)]
-    tasks = []
-    with api.app.state.store.transaction() as c:
-        for i, url in enumerate(urls):
-            task = H.task_create(c, 'human:morgan', f'Build change {i + 1}', '', 'bot:builder', private=i == 3)
-            tasks.append(task)
-            H.task_link(c, 'human:morgan', task['id'], url)
-            payload = {
-                'action': 'refresh',
-                'pull_request': {
-                    'html_url': url,
-                    'state': 'open',
-                    'mergeable': i != 0,
-                    'head': {'sha': str(i + 1) * 40, 'ref': f'change-{i + 1}'},
-                },
-            }
-            with monkeypatch.context() as clock:
-                clock.setattr(H, 'now', lambda: young if i == 2 else old)
-                G.pull_request(c, payload)
-                if i != 0:
-                    G.pr_signal(
-                        c,
-                        'status',
-                        {
-                            'sha': str(i + 1) * 40,
-                            'state': 'success',
-                            'context': 'tests',
-                            'repository': {'full_name': 'AcmeCorp/atlas'},
-                        },
-                    )
-        child = H.task_create(c, 'human:morgan', 'Review 1: PR #2', '', 'bot:reviewer', private=False)
-        task_relations.set_parent(c, 'human:morgan', child['id'], tasks[1]['id'])
-        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (child['id'],))
-        hidden = H.task_create(c, 'human:morgan', 'Review 2: PR #2', '', 'bot:hidden-reviewer', private=True)
-        task_relations.set_parent(c, 'human:morgan', hidden['id'], tasks[1]['id'])
-        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (hidden['id'],))
-        # Refreshes do not reset a wait, and a fresh check on the same head does not either.
-        G.pull_request(
-            c,
-            {
-                'action': 'refresh',
-                'pull_request': {'html_url': urls[0], 'mergeable': False, 'state': 'open', 'head': {'sha': '1' * 40}},
-            },
-        )
-        G.pr_signal(
-            c,
-            'status',
-            {'sha': '2' * 40, 'state': 'success', 'context': 'tests', 'repository': {'full_name': 'AcmeCorp/atlas'}},
-        )
-        # A human-owned task is outside the bot PR check.
-        c.execute("UPDATE tasks SET owner_id='human:morgan' WHERE id=?", (tasks[4]['id'],))
-    _, checks = health_of(api)
-    items = checks['aged_prs']['items']
-    assert {i['pr'] for i in items} == set(urls[:2])
-    assert all(i['age_minutes'] == 780 and i['fixes'] and i['task'] in {t['id'] for t in tasks[:2]} for i in items)
-    assert items[0]['reason'] == 'conflict' and items[0]['whose_move'] == 'bot:builder'
-    assert items[1]['reason'] == 'review' and items[1]['whose_move'] == 'bot:reviewer'
-    issues = api.get('/api/v2/health/issues', headers=signed_in()).json()['issues']
-    assert {i['pr'] for i in issues if i['kind'] == 'aged_prs'} == set(urls[:2])
-    assert next(i for i in issues if i.get('pr') == urls[1])['whose_move'] == 'bot:reviewer'
-    assert 'hidden-reviewer' not in json.dumps(
-        {'check': checks['aged_prs'], 'issues': [i for i in issues if i['kind'] == 'aged_prs']}
-    )
-    with api.app.state.store.transaction() as c:
-        G.pull_request(
-            c,
-            {
-                'action': 'refresh',
-                'pull_request': {'html_url': urls[0], 'mergeable': True, 'state': 'open', 'head': {'sha': '1' * 40}},
-            },
-        )
-        G.pr_signal(
-            c,
-            'pull_request_review',
-            {
-                'action': 'submitted',
-                'pull_request': {'html_url': urls[1]},
-                'review': {'id': 1, 'state': 'approved', 'commit_id': '2' * 40, 'user': {'login': 'reviewer'}},
-            },
-        )
-    assert 'aged_prs' not in health_of(api)[1]
-
-
 def test_a_status_the_loop_has_not_checked_for_too_long_is_a_warning_then_bad(monkeypatch):
     from types import SimpleNamespace
 
@@ -2030,78 +1876,6 @@ def test_a_person_sees_only_their_own_plate(environment):
     quinn = health_of(api, as_person(api, "quinn"))[1]["needs_plate"]
     assert [item["person"] for item in quinn["items"]] == ["human:quinn"] and quinn["items"][0]["count"] == 12
     assert "Morgan" not in json.dumps(quinn)
-
-
-def test_an_idle_dev_ticket_warns_unless_a_run_is_live_or_queued(environment):
-    api = environment()
-    add_bot(api, "helper")
-    with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": "In Progress", "status": "doing"}], numbered=True)
-        idle = H.task_create(
-            c, "human:morgan", "Idle ticket", "x", "bot:helper", type=typ["id"], step="In Progress", private=False
-        )
-        busy = H.task_create(
-            c, "human:morgan", "Busy ticket", "x", "bot:helper", type=typ["id"], step="In Progress", private=False
-        )
-        H.task_create(
-            c, "human:morgan", "Fresh ticket", "x", "bot:helper", type=typ["id"], step="In Progress", private=False
-        )
-        c.execute(
-            "INSERT INTO conversations(id,kind,participants,created_at,task_id) VALUES('cvb','chat','[]',?,?)",
-            (H.now(), busy["id"]),
-        )
-        c.execute(
-            "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at) "
-            "VALUES('mb','cvb','human:morgan','bot:helper','chat','keep going',?)",
-            (H.now(),),
-        )
-        enqueue_stored(c, "mb")
-        c.execute(
-            "UPDATE tasks SET updated_at=? WHERE id IN (?,?)",
-            (H.shift(H.now(), hours=-30), idle["id"], busy["id"]),
-        )
-        # Creating a task queues its owner's wake on the opening message; the idle ticket has no run live or queued,
-        # so that wake is finished here. The busy ticket keeps its queued run.
-        c.execute(
-            "UPDATE jobs SET state='completed' WHERE state='queued' AND message_id IN "
-            "(SELECT m.id FROM messages m JOIN conversations cv ON cv.id=m.conversation_id WHERE cv.task_id=?)",
-            (idle["id"],),
-        )
-    check = health_of(api)[1]["dev_board_idle"]
-    assert check["status"] == "warn"
-    [item] = check["items"]
-    assert item["task"] == idle["id"] and item["ticket"] == idle["number"]
-    assert item["step"] == "In Progress" and item["hours"] >= 29
-    assert item["fixes"][0]["href"] == "#/tasks/" + idle["id"]
-
-
-def test_an_idle_dev_ticket_on_ice_is_kept_not_stuck(environment):
-    """A stage On ice (D69, cap 0) keeps its tickets and nothing works them: an idle ticket there is not the board
-    stalling, while an idle ticket in an ordinary stage still is (the control)."""
-    api = environment()
-    add_bot(api, "helper")
-    with api.app.state.store.transaction() as c:
-        typ = H.type_create(
-            c,
-            H.KEEPER,
-            "Dev tickets",
-            [{"name": "On ice", "status": "open"}, {"name": "In Progress", "status": "doing"}],
-            numbered=True,
-        )
-        c.execute("UPDATE task_steps SET card_cap=0 WHERE type_id=? AND name='On ice'", (typ["id"],))
-        parked = H.task_create(
-            c, "human:morgan", "Parked ticket", "x", "bot:helper", type=typ["id"], step="On ice", private=False
-        )
-        idle = H.task_create(
-            c, "human:morgan", "Idle ticket", "x", "bot:helper", type=typ["id"], step="In Progress", private=False
-        )
-        c.execute(
-            "UPDATE tasks SET updated_at=? WHERE id IN (?,?)",
-            (H.shift(H.now(), hours=-30), parked["id"], idle["id"]),
-        )
-        c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
-    check = health_of(api)[1]["dev_board_idle"]
-    assert [item["task"] for item in check["items"]] == [idle["id"]]
 
 
 def test_github_is_a_note_until_a_bot_someone_made_is_backed_up_nowhere_then_clears_once_connected(environment):

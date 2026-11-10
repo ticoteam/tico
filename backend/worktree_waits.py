@@ -27,7 +27,7 @@ from . import hubdb as H
 from .store import Problem, readiness_document
 
 OPEN = ('waiting', 'reserved')
-CLOSED_TASK = ('done', 'closed', 'declined')
+CLOSED_TASK = ('done', 'closed')
 SWEEP_EVERY = 60  # seconds between the scheduler's sweeps while anything waits
 _last = {'at': 0.0}
 log = logging.getLogger('tico.worktree_waits')

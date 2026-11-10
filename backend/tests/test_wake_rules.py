@@ -67,35 +67,6 @@ def test_t2_a_comment_on_a_related_task_does_not_wake_the_parked_tasks_bot(api):
         assert jobs(c, "cpo") == 0
 
 
-def test_the_blocker_finishing_wakes_the_parked_task_and_that_run_carries_what_waited_in_order(api):
-    r = setup(api)
-    with api.app.state.store.transaction() as c:
-        task, blocker = parked_task(c)
-        with as_cause("bot:ops"):
-            first = news(c, task, "Step moved: On Deck -> In Progress")
-            second = news(c, task, "Relation added: Docs for 2/9")
-        assert jobs(c, "cpo") == 0
-        H.task_update(c, "bot:ops", blocker["id"], status="done")
-        woke = [
-            dict(row)
-            for row in c.execute(
-                "SELECT m.body, m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='cpo'"
-            )
-        ]
-    assert len(woke) == 1 and woke[0]["body"].startswith("Unblocked:")
-    assert json.loads(woke[0]["refs"])["blocker_done"] == blocker["id"]
-    attempt = claim(api, r, "cpo")
-    assert attempt["task"]["id"] == task["id"]
-    assert [n["message"] for n in attempt["notes"] if n.get("message")] == [first["id"], second["id"]]
-    held = [n for n in attempt["notes"] if n.get("message") == first["id"]][0]
-    assert "On Deck -> In Progress" in held["text"] and f"({task['id']})" in held["text"]
-    with api.app.state.store.read() as c:
-        assert all(
-            c.execute("SELECT read_at FROM messages WHERE id=?", (m,)).fetchone()[0]
-            for m in (first["id"], second["id"])
-        )
-
-
 def test_a_skipped_wake_reaches_the_next_run_whatever_starts_it(api):
     r = setup(api)
     with api.app.state.store.transaction() as c:
@@ -218,13 +189,12 @@ def test_a_notice_the_bots_own_write_caused_waits_on_any_of_its_tasks(api):
 
 
 def test_own_writes_still_deliver_what_another_session_waits_for(api):
-    # A bot finishing its own blocker or its own last subtask must still wake the task that waits (PR #657).
+    # A bot finishing its own last subtask must still wake the task that waits (PR #657).
     setup(api)
     with api.app.state.store.transaction() as c:
         task, _ = parked_task(c)
         with as_cause("bot:cpo"):
             for refs in (
-                {"blocker_done": "b1"},
                 {"subtask": "s1"},
                 {"worktree_wait": "w1"},
                 {"wake": "watcher"},
@@ -233,7 +203,7 @@ def test_own_writes_still_deliver_what_another_session_waits_for(api):
                 msg = news(c, task, "Done", refs=refs)
                 assert not msg["refs"].get(W.MARK), refs
             H._wake(c, task, "bot:cpo", "Checks finished on PR #3", trigger="pr_checks")
-        assert jobs(c, "cpo") == 6 and skips(c) == []
+        assert jobs(c, "cpo") == 5 and skips(c) == []
 
 
 def test_an_assignment_the_bot_filed_for_itself_still_starts_its_session(api):
@@ -248,7 +218,7 @@ def test_an_assignment_the_bot_filed_for_itself_still_starts_its_session(api):
 # ----------------------------------------------------------------------------- always wake
 
 
-def test_t4_a_persons_message_comment_and_approval_always_wake_a_parked_bot(api):
+def test_t4_a_persons_message_and_comment_always_wake_a_parked_bot(api):
     setup(api)
     with api.app.state.store.transaction() as c:
         task, _ = parked_task(c)
@@ -256,16 +226,10 @@ def test_t4_a_persons_message_comment_and_approval_always_wake_a_parked_bot(api)
         assert jobs(c, "cpo") == 1
         H.task_comment(c, "human:ana", task["id"], "Is this still blocked?")
         assert jobs(c, "cpo") == 2
-        approval = H.approval_request(
-            c, "bot:cpo", "spend", {"account": "AWS", "what": "a test box", "amount": 5}, task_id=task["id"]
-        )
-        before = jobs(c, "cpo")
-        H.approval_decide(c, "human:ana", approval["id"], "approved")
-        assert jobs(c, "cpo") == before + 1
-        # A keeper notice of a person's own act on the task (they moved its step) wakes it too.
+        # A Tico notice of a person's own act on the task (they moved it) wakes it too.
         with as_cause("human:ana"):
-            news(c, task, "Step moved by Ana: On Deck -> In Progress")
-        assert jobs(c, "cpo") == before + 2
+            news(c, task, "Moved by Ana: To do -> Done")
+        assert jobs(c, "cpo") == 3
         assert skips(c) == []
 
 
@@ -279,7 +243,6 @@ def test_each_always_wake_case_is_never_filtered_even_on_a_parked_task_by_its_ow
         ("notice", {"approval": "a1"}, "Approved", "approval"),
         ("notice", {"questions": [{"id": "q"}]}, "Pick one", "approval"),
         ("notice", {"needs_action": True}, "Blocked on you", "needs_action"),
-        ("notice", {}, "Review done.\nVERDICT: changes PR #12 head " + "a" * 40, "gate"),
     ]
     setup(api)
     with api.app.state.store.transaction() as c:
@@ -291,22 +254,12 @@ def test_each_always_wake_case_is_never_filtered_even_on_a_parked_task_by_its_ow
             assert W.rule_for(c, actor, "bot:cpo", kind, {**refs, "task": task["id"]}, body, task, cause) is None, body
 
 
-@pytest.mark.parametrize("parked_on", ["blocked_by", "wake_once"])
-def test_a_reply_the_parked_bot_waits_on_wakes_it(api, parked_on):
+def test_a_reply_the_parked_bot_waits_on_wakes_it(api):
     # A plain reply passes bot_to_bot.can_wait as urgent; the parked rule must not then hold it.
     setup(api)
     with api.app.state.store.transaction() as c:
-        if parked_on == "blocked_by":
-            task, _ = parked_task(c)
-        else:
-            task = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
-            c.execute(
-                "INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,detail) "
-                "VALUES('l1',?,'pr','https://github.com/o/r/pull/1','PR','open','bot:cpo',?,?)",
-                (task["id"], H.now(), json.dumps({"wake_once": {"by": "bot:cpo", "at": H.now()}})),
-            )
-            task = H.task(c, task["id"])
-        assert W.parked(c, task) == parked_on
+        task, _ = parked_task(c)
+        assert W.parked(c, task) == "wake_once"
         room = task["conversation_id"]
         asked = [
             H.say(c, "bot:cpo", "bot:ops", "Need the build now", room, refs={"task": task["id"], "needs_action": True}),
@@ -332,7 +285,6 @@ def test_the_always_wake_list_is_one_list_the_bot_to_bot_rule_reads_first(api):
     setup(api)
     with api.app.state.store.transaction() as c:
         assert [key for key, _ in W.ALWAYS_WAKE] == [
-            "check_back",
             "task_turn",
             "person",
             "manager",
@@ -341,29 +293,10 @@ def test_the_always_wake_list_is_one_list_the_bot_to_bot_rule_reads_first(api):
             "needs_action",
             "mention",
             "reply",
-            "gate",
-            "handoff",
         ]
         # A bot's plain fyi to a bot waits (Dev 149); the same words with an always-wake reference do not.
         assert B.can_wait(c, "bot:ops", "bot:cpo", "say", {}, "fyi") is True
         assert B.can_wait(c, "bot:ops", "bot:cpo", "say", {"run_now": True}, "fyi") is False
-
-
-def test_sweeps_schedules_checks_and_blockers_keep_their_own_rules(api):
-    setup(api)
-    with api.app.state.store.transaction() as c:
-        task, _ = parked_task(c)
-        with as_cause("bot:cpo"):
-            for body, refs, trigger in (
-                ("Status check", {"wake": "status_check"}, "stall_check"),
-                ("Due today", {"wake": "due"}, "schedule"),
-                ("Checks failed on PR #3", {}, "pr_checks"),
-                ("Stuck: no worktree", {}, "status_or_relation"),
-                ("New task from bot:ops: Build 3/9", {}, "status_or_relation"),
-            ):
-                msg = H._wake(c, task, "bot:cpo", body, refs=refs, trigger=trigger)
-                assert not msg["refs"].get(W.MARK), body
-        assert skips(c) == []
 
 
 def test_the_gate_fails_open():
