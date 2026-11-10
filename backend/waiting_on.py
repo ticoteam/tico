@@ -21,7 +21,7 @@ The nine states, in headline order:
     by_hand   it sits in a stage that tasks leave by hand
 """
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -75,20 +75,32 @@ def person_for(conn: "sqlite3.Connection", row: Row) -> str | None:
     """The person a task falls to when no bot can take it further: the one the ladder already chose, else the task's
     owner where that is a person, else the pipeline's owner or manager where that is a person, else the owner of its
     manager bot, else the owner of the bot that has the task, else whoever asked for it, else the company owner, else
-    the person who has been here longest. Anyone on the way who left, was removed or cannot sign in is skipped. None
-    only when nobody can sign in."""
+    the person who has been here longest. Anyone on the way who left, was removed or cannot sign in is skipped, and on
+    a private task anyone who cannot read it. None only when nobody can sign in, or nobody who can reads it."""
+    H = task_wakes._h()
+    if not H.task_private(conn, row):
+        return next(_people_for(conn, row), None)
+    # A private task falls only to a person who may read it already: the engine never adds a reader. None when no
+    # person on the way reads it (never_stuck: held, and counted in Health without naming it).
+    return next((found for found in _people_for(conn, row) if H.task_private_readable(conn, found, row)), None)
+
+
+def _people_for(conn: "sqlite3.Connection", row: Row) -> Iterator[str]:
+    """`person_for`'s people in order, each one that can act; read lazily, so the first one costs only its own read."""
     visit: Row = row.get("visit") or {}
     pipe: Row = row.get("pipeline") or {}
     for found in (visit.get("person_id"), row.get("owner_id"), pipe.get("owner_id"), pipe.get("manager_id")):
         if R.active_person(conn, found):
-            return found
+            yield found
     for bot in (pipe.get("manager_id"), row.get("owner_id")):
         owner = _bot_owner(conn, bot)
         if owner:
-            return owner
+            yield owner
     if R.active_person(conn, row.get("requester_id")):
-        return row["requester_id"]
-    return company_person(conn)
+        yield row["requester_id"]
+    fallback = company_person(conn)
+    if fallback:
+        yield fallback
 
 
 def company_person(conn: "sqlite3.Connection") -> str | None:

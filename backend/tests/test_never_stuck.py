@@ -924,3 +924,67 @@ def test_the_rules_check_reads_a_persons_needs_you_once_and_finds_each_task_in_i
     assert NS.rules_hold(c) == []
     assert reads["needs"] == 1
     assert reads["items"] <= 5_000 + 10 * len(tasks), reads  # each item looked at once, not once per task
+
+
+def test_a_private_task_no_person_can_read_goes_to_no_one_and_health_counts_it_without_naming_it(
+    c, general, time_machine, monkeypatch
+):
+    """A bot asked for it, a bot has it, and no person reads it. When the ladder runs out it goes to no person: nobody
+    is made a reader, it is in nobody's Needs you, no bot is woken again, and the rules check reports it held for that
+    cause. Health tells the company's owner and Admins only how many, never which."""
+    from backend import health
+
+    def step(**delta):
+        time_machine.shift(timedelta(**delta))
+        return {key: n for key, n in NS.check(c).items() if n}
+
+    reads = H.task_private_readable
+
+    def bots_only(conn, actor, row):  # as when the person every bot reports to is not here: no person reads it
+        return not H.is_human(actor) and reads(conn, actor, row)
+
+    monkeypatch.setattr(H, "task_private_readable", bots_only)
+    made = H.task_create(c, REVIEWER, "Draft the salary review", "Only us.", BUILDER, private=True, lint=False)
+    task_id = made["id"]
+    assert H.task_readers(H.task(c, task_id)) == [] and not NS._reads(c, ANA, E.task(c, task_id))
+    for gap in (0, 120, 900, 3600):
+        if gap:
+            assert step(seconds=gap) == {"woken": 1}
+        X.ran(c, task_id, BUILDER)
+    assert step(seconds=120) == {"to_person": 1}  # three tries; the manager bot cannot read it
+    visit = _visit(c, task_id)
+    assert visit["level"] == "person" and visit["person_id"] is None
+    assert H.task_readers(H.task(c, task_id)) == [] and X.wakes(c, task_id, MANAGER) == []
+    assert all(n.get("task_id") != task_id for n in W.needs(c, ANA))  # its title is in nobody's list
+    assert _states(c, task_id)[0] == ("person", None)
+    assert "woken" not in step(days=30) and _queued(c, task_id) == []  # no bot is woken again
+    broken = NS.rules_hold(c)
+    assert broken == [f"3: private task {task_id} has no one who reads it to move it"]
+    assert getattr(broken[0], "held", False)  # held for a cause, not a broken rule
+    health.record_never_stuck(_Store(c))
+    check = health._never_stuck_check(c)
+    assert check["counts"]["no_one"] == 1 and check["counts"]["broken"] == 0 and check["status"] == "warn"
+    assert "1 private task has no one to move it." in check["summary"] and "salary" not in repr(check)
+
+
+class _Store:
+    """One open connection as a store, for a reading recorded inside a test's transaction."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def read(self):
+        return _Here(self.conn)
+
+    transaction = read
+
+
+class _Here:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def __enter__(self):
+        return self.conn
+
+    def __exit__(self, *exc):
+        return False

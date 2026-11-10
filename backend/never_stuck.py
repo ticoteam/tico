@@ -368,16 +368,20 @@ def _to_person(conn: "sqlite3.Connection", row: Row, level: str, done: dict[str,
 
 def _person(conn: "sqlite3.Connection", row: Row) -> str | None:
     """The person a task falls to (`waiting_on.person_for`). On a private task, one who may read it already: the one the
-    ladder chose, its owner where that is a person, else whoever asked for it. Nobody is made a reader."""
+    ladder chose, its owner where that is a person, else whoever asked for it, else a person on its reader list. Nobody
+    is made a reader: with no such person, None."""
     H = _h()
-    chosen = W.person_for(conn, row)
+    chosen = W.person_for(conn, row)  # on a private task, only a person who reads it
     if not H.task_private(conn, row):
         return chosen
     visit = _part(row, "visit")
-    for person in (visit.get("person_id"), row.get("owner_id"), row.get("requester_id"), chosen):
+    readers = [actor for actor in H.task_readers(row) if H.is_human(actor)]
+    for person in (visit.get("person_id"), row.get("owner_id"), row.get("requester_id"), chosen, *readers):
         if R.active_person(conn, person) and _reads(conn, person, row):
             return person
-    return chosen
+    # Nobody who reads it can act. It goes to no person and takes no bot turns; Health counts it for the company's
+    # owner and Admins without naming it, and the rules check reports it held for that cause.
+    return None
 
 
 # ----------------------------------------------------------------------------- late
@@ -502,10 +506,12 @@ class Break(str):
     only the breaks of tasks they may read is shown them by these ids, never by reading the words."""
 
     tasks: tuple[str, ...]
+    held: bool
 
-    def __new__(cls, text: str, tasks: Iterable[object] = ()) -> "Break":
+    def __new__(cls, text: str, tasks: Iterable[object] = (), held: bool = False) -> "Break":
         made = super().__new__(cls, text)
         made.tasks = tuple(str(task) for task in tasks if task)
+        made.held = held  # not a broken rule: the task is held for a cause a person must fix (no one reads it)
         return made
 
 
@@ -553,13 +559,20 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
                 broken.append(
                     Break(f"2: task {task_id} is {wait.who}'s turn with no run, no wake and no next try", [task_id])
                 )
+        private = H.task_private(conn, row)
         if any(wait.state == W.PERSON and not wait.who for wait in waits):
             if someone is None:
                 someone = W.company_person(conn) is not None
-            if someone:
+            if private and someone:
+                # No person who reads it can act: held for that cause, never handed to someone who cannot read it.
+                said = f"3: private task {task_id} has no one who reads it to move it"
+                broken.append(Break(said, [task_id], held=True))
+            elif someone:
                 broken.append(Break(f"3: task {task_id} is a person's turn that names nobody", [task_id]))
         people = {wait.who for wait in waits if wait.state == W.PERSON and wait.who}
         for person in sorted(people):
+            if private and not _reads(conn, person, row):
+                broken.append(Break(f"3: task {task_id} is {person}'s turn and they cannot read it", [task_id]))
             if person not in needs:
                 needs[person] = {}
                 for item in W.needs(conn, person):

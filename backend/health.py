@@ -2437,7 +2437,7 @@ def _unreviewed_runs(c, who, auth):
 NEEDS_PLATE_WARN = 10  # more items than this on one person's Needs you plate is a warning
 NEEDS_PLATE_BAD = 25  # more than this is bad
 NEEDS_PLATE_ASKERS = 3  # the bots named on a plate, most items first
-NEVER_STUCK_COUNTS = ("waiting_on_nothing", "retry", "manager", "person", "cant_run", "broken")
+NEVER_STUCK_COUNTS = ("waiting_on_nothing", "retry", "manager", "person", "cant_run", "no_one", "broken")
 # registry_metadata: the hourly never-stuck reading (record_never_stuck). Its numbers sit under NEVER_STUCK_KEY, which an
 # Admin's SQL reads; which tasks each counts, and the breaks' words, sit under NEVER_STUCK_TASKS_KEY, which no SQL reads
 # (backend/sql.py), since they name tasks the Admin may not read.
@@ -2520,12 +2520,15 @@ def never_stuck_reading(c):
     """What the never-stuck check finds over every open task: the seven rules' breaks (never_stuck.rules_hold) and
     where the ladder has the tasks (S15): waiting on nothing, on a retry, with a manager, reached a person, can't run.
     `tasks` keeps which tasks each number counts, and `broken_tasks` the tasks each break is about (never_stuck.Break,
-    tied when it was found), so someone who reads only some tasks is shown only those. It reads every open task, so it
+    tied when it was found), so someone who reads only some tasks is shown only those. A private task no person who
+    reads it can move is held, not a break: it counts under `no_one`, a number only. It reads every open task, so it
     runs hourly (record_never_stuck), not on each page load."""
     from . import never_stuck, waiting_on
 
-    breaks = never_stuck.rules_hold(c)
+    found = never_stuck.rules_hold(c)
+    breaks = [line for line in found if not getattr(line, "held", False)]
     tasks = {key: [] for key in NEVER_STUCK_COUNTS}
+    tasks["no_one"] = [tid for line in found if getattr(line, "held", False) for tid in getattr(line, "tasks", ())]
     for task_id, level in c.execute(
         "SELECT t.id, CASE WHEN v.level='owner' AND v.tries>0 THEN 'retry' ELSE v.level END "
         "FROM visits v JOIN tasks t ON t.id=v.task_id WHERE v.left_at IS NULL AND t.status='open' "
@@ -2550,6 +2553,7 @@ def never_stuck_reading(c):
         "manager": len(tasks["manager"]),
         "person": len(tasks["person"]),
         "cant_run": len(tasks["cant_run"]),
+        "no_one": len(set(tasks["no_one"])),
         "tasks": {key: sorted(set(found)) for key, found in tasks.items() if key != "broken"},
         "broken_tasks": about,
     }
@@ -2612,9 +2616,14 @@ def _never_stuck_check(c, visible_sql=None):
         f"{counts['waiting_on_nothing']} waiting on nothing, {counts['retry']} on a retry, "
         f"{counts['manager']} with a manager, {counts['person']} reached a person, {counts['cant_run']} can't run."
     )
+    if counts["no_one"]:
+        # The company's owner and Admins learn how many, never which: no one who reads them can move them.
+        them = "it" if counts["no_one"] == 1 else "them"
+        summary += f" {_plural(counts['no_one'], 'private task has', 'private tasks have')} no one to move {them}."
     if counts["broken"]:
         summary += f" {_plural(counts['broken'], 'rule break')}."
-    check = _check("never_stuck", "Tasks", "bad" if counts["broken"] else "ok", summary)
+    status = "bad" if counts["broken"] else "warn" if counts["no_one"] else "ok"
+    check = _check("never_stuck", "Tasks", status, summary)
     # The same numbers as fields, so a screen reads them rather than the sentence.
     check["counts"] = counts
     check["at"] = reading.get("at")
