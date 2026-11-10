@@ -292,6 +292,13 @@ class TaskMove(Contract):
     on_behalf_of: ID | None = None
 
 
+class TaskQueue(Contract):
+    """Queue a task's PRs again after GitHub took them out of the merge queue (merge_queue.requeue)."""
+
+    version: Version | None = None
+    on_behalf_of: ID | None = None
+
+
 class TaskOwner(Contract):
     """Give the task to another owner for this stage (H.task_reassign)."""
 

@@ -19,8 +19,9 @@ short ones around reads made with no transaction held.
 """
 
 import json
+import logging
 import time
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 if TYPE_CHECKING:
     import sqlite3
@@ -36,6 +37,7 @@ CHECKS_TOO_LONG_S = 7200  # checks still running after 2 hours: the owner's turn
 REREAD_S = 300  # a PR a task waits on is read again when its fact is older than this
 REREAD_BATCH = 50  # at most this many PRs per re-read call
 DELIVERY_DAYS = 7  # how long a webhook delivery id is kept for de-dup
+LOG = logging.getLogger("tico.task_facts")
 
 
 class GitHub(Protocol):
@@ -204,17 +206,356 @@ def heads(conn: "sqlite3.Connection", task_id: str) -> dict[str, str | None]:
     return out
 
 
+def linked_tasks(conn: "sqlite3.Connection", repo: str, number: int) -> list[str]:
+    """The open tasks on the engine that link this PR, oldest link first."""
+    return [
+        str(found[0])
+        for found in conn.execute(
+            "SELECT l.task_id FROM task_links l JOIN tasks t ON t.id = l.task_id WHERE l.kind='pr' "
+            "AND lower(l.repo)=lower(?) AND l.number=? AND t.status='open' AND t.pipeline_id IS NOT NULL "
+            "GROUP BY l.task_id ORDER BY MIN(l.created_at), l.task_id",
+            (repo, int(number)),
+        ).fetchall()
+    ]
+
+
+def _nudge(conn: "sqlite3.Connection", task_ids: list[str]) -> None:
+    """A fact came in: move each task on if it now has all it needs (`task_engine.advance`). Each in a savepoint, so
+    one that cannot move leaves the others and the saved fact as they are; the never-stuck check tries it again."""
+    from . import task_engine
+
+    for task_id in task_ids:
+        conn.execute("SAVEPOINT nudge")
+        try:
+            task_engine.advance(conn, task_id)
+        except Exception as exc:  # noqa: BLE001 - the fact stands; the next never-stuck pass moves the task
+            conn.execute("ROLLBACK TO nudge")
+            LOG.warning("Moving %s on after a GitHub fact failed: %s", task_id, exc)
+        conn.execute("RELEASE nudge")
+
+
+def save_and_settle(conn: "sqlite3.Connection", repo: str, number: int, fact: Row, version: int) -> int:
+    """`save_pr`, then what a changed fact causes: a queue removal's one wake, the Merge stage's own reactions
+    (merge_queue.fact_changed) and a nudge of every open task that links the PR. 1 when the fact was saved, else 0."""
+    from . import merge_queue
+
+    before = pr(conn, repo, number)
+    if not save_pr(conn, repo, number, fact, version):
+        return 0
+    after = pr(conn, repo, number)
+    if not after:
+        return 0
+    if after["queue_state"] == "removed" and (not before or before.get("removed_at") != after["removed_at"]):
+        merge_queue.removed(conn, after)
+    tasks = linked_tasks(conn, repo, number)
+    merge_queue.fact_changed(conn, tasks, after, before)
+    _nudge(conn, tasks)
+    return 1
+
+
+# ----------------------------------------------------------------------------- webhooks
+REMOVAL_WORDS = {
+    "ci_failure": "Checks failed in the merge queue",
+    "failed_checks": "Checks failed in the merge queue",
+    "ci_timeout": "Checks timed out in the merge queue",
+    "merge_conflict": "It conflicts with its base branch",
+    "manual": "Taken out by hand",
+    "queue_cleared": "The merge queue was cleared",
+    "roll_back": "The merge queue rolled back",
+    "branch_protections": "Branch protection blocked it",
+    "git_tree_invalid": "GitHub could not build the merge",
+    "invalid_merge_commit": "GitHub could not build the merge",
+}
+MERGED_REASONS = ("merge", "merged", "already_merged")
+
+
+def removal_words(reason: object) -> str:
+    """GitHub's reason a PR left the merge queue (or lost its auto-merge), as a sentence."""
+    text = str(reason or "").strip()
+    key = text.lower().replace(" ", "_")
+    if key in REMOVAL_WORDS:
+        return REMOVAL_WORDS[key]
+    if not text:
+        return "GitHub gave no reason"
+    words = text.replace("_", " ")
+    return words[:1].upper() + words[1:].lower() if words.isupper() else words[:1].upper() + words[1:]
+
+
+def check_state(status: object, conclusion: object) -> str:
+    """A check run's or status's state as a fact keeps it: pending, success or failure."""
+    if str(status or "completed") not in ("completed", "success", "failure", "error"):
+        return "pending"
+    result = str(conclusion or status or "")
+    if result in ("success", "neutral", "skipped"):
+        return "success"
+    if result in ("pending", "queued", "in_progress", "requested", "waiting", ""):
+        return "pending"
+    return "failure"
+
+
+def _pr_fact_of(payload: Row) -> tuple[Row, bool]:
+    """A `pull_request` webhook as a fact, and whether it took the PR out of the merge queue (or its auto-merge off)
+    for a reason other than a merge. That removal is not saved from the webhook: its failing check is not in it, so the
+    PR is read in full on the next pass (`refresh`), and the one wake carries the check."""
+    found: Row = payload.get("pull_request") or {}
+    action = str(payload.get("action") or "")
+    merged = bool(found.get("merged") or found.get("merged_at"))
+    fact: Row = {
+        "state": "merged" if merged else "closed" if found.get("state") == "closed" else "open",
+        "draft": bool(found.get("draft")),
+        "head_sha": _obj(found.get("head")).get("sha"),
+    }
+    if merged:
+        fact.update(merged_sha=found.get("merge_commit_sha"), merged_at=found.get("merged_at"), queue_state="none")
+    elif action == "enqueued":
+        fact["queue_state"] = "queued"
+    elif action == "auto_merge_enabled":
+        fact["queue_state"] = "auto_merge"
+    elif action in ("dequeued", "auto_merge_disabled"):
+        if str(payload.get("reason") or "").lower() in MERGED_REASONS:
+            fact["queue_state"] = "none"
+        else:
+            return fact, True
+    return fact, False
+
+
+def _obj(value: Any) -> Row:
+    """A JSON object from a webhook payload, or {} when it is missing or not an object."""
+    return cast(Row, value) if isinstance(value, dict) else {}
+
+
+def webhook(conn: "sqlite3.Connection", event: str, payload: Row, app_slug: str | None = None) -> list[str]:
+    """Save what a GitHub webhook says as facts, in the webhook's transaction (backend/github.py dropped a repeated
+    delivery first: `seen_delivery`). Only PRs a task links are kept. A check run or status changes that one check in
+    the fact of each open PR whose newest commit it is on. A published release is saved. Returns the refs of the PRs
+    whose fact changed."""
+    repo = str(_obj(payload.get("repository")).get("full_name") or "")
+    if not repo:
+        return []
+    version = version_now()
+    out: list[str] = []
+    if event == "pull_request":
+        number = int(_obj(payload.get("pull_request")).get("number") or payload.get("number") or 0)
+        if (
+            not number
+            or not conn.execute(
+                "SELECT 1 FROM task_links WHERE kind='pr' AND lower(repo)=lower(?) AND number=? LIMIT 1", (repo, number)
+            ).fetchone()
+        ):
+            return []
+        fact, removal = _pr_fact_of(payload)
+        if save_and_settle(conn, repo, number, fact, version):
+            out.append(pr_ref(repo, number))
+        if removal:
+            conn.execute("UPDATE pr_facts SET read_at='' WHERE repo=? AND number=?", (repo, number))
+    elif event in ("check_run", "status"):
+        if event == "check_run":
+            run: Row = payload.get("check_run") or {}
+            sha = str(run.get("head_sha") or "")
+            slug = str(_obj(run.get("app")).get("slug") or "")
+            check: Row = {
+                "name": str(run.get("name") or "Checks")[:200],
+                "app": slug,
+                "state": check_state(run.get("status"), run.get("conclusion")),
+                "url": run.get("html_url") or run.get("details_url") or "",
+                "tico": bool(app_slug) and slug == app_slug,
+            }
+        else:
+            sha = str(payload.get("sha") or "")
+            check = {
+                "name": str(payload.get("context") or "Checks")[:200],
+                "app": "status",
+                "state": check_state(payload.get("state"), payload.get("state")),
+                "url": payload.get("target_url") or "",
+                "tico": False,
+            }
+        for number in [
+            int(found[0])
+            for found in conn.execute(
+                "SELECT number FROM pr_facts WHERE repo=? AND head_sha=? AND state='open'", (repo, sha)
+            ).fetchall()
+        ]:
+            old: list[Row] = (pr(conn, repo, number) or {}).get("checks") or []
+            checks = [c for c in old if c.get("name") != check["name"]] + [check]
+            if save_and_settle(conn, repo, number, {"checks": checks}, version):
+                out.append(pr_ref(repo, number))
+    elif event == "release":
+        release: Row = payload.get("release") or {}
+        if payload.get("action") in ("published", "released", "prereleased") and not release.get("draft"):
+            if release.get("tag_name"):
+                save_release(
+                    conn,
+                    repo,
+                    {
+                        "tag": release["tag_name"],
+                        "commit_sha": None,
+                        "prerelease": bool(release.get("prerelease")),
+                        "published_at": release.get("published_at"),
+                    },
+                    version,
+                )
+    return out
+
+
+# The kinds that read a PR fact. A page reads one only when it is for the newest commit (`at_head`).
+PR_KINDS = ("pr_open", "checks_pass", "pr_merged", "in_release")
+# The open tasks on the engine, with their open visit, whose stage or visit reads PR facts, or whose stage queues PRs.
+_WAITING_TASKS = (
+    "SELECT t.id FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
+    "JOIN stages s ON s.id = t.stage_id WHERE t.status='open' AND t.pipeline_id IS NOT NULL AND ("
+    "COALESCE(json_extract(CASE WHEN json_valid(s.on_enter) THEN s.on_enter END, '$.queue_prs'), 0) "
+    "OR EXISTS (SELECT 1 FROM requirements r WHERE (r.stage_id = t.stage_id OR r.visit_id = v.id) "
+    "AND r.withdrawn_at IS NULL AND (r.kind IN ('pr_open', 'checks_pass', 'pr_merged', 'in_release') "
+    "OR r.kind = 'page' AND COALESCE(json_extract(CASE WHEN json_valid(r.settings) THEN r.settings END, "
+    "'$.at_head'), 0))))"
+)
+
+
 def due_reads(conn: "sqlite3.Connection", now: str, limit: int = REREAD_BATCH) -> list[tuple[str, int]]:
     """The PRs an open task waits on whose fact is missing or older than REREAD_S, oldest read first, at most `limit`.
-    Track C."""
-    raise NotImplementedError("task_facts.due_reads: track C")
+    A merged or closed PR is final for what a task waits on, so it is not read again (a webhook still brings a reopen).
+    """
+    cutoff = _h().shift(now, seconds=-REREAD_S)
+    found = conn.execute(
+        "SELECT MIN(l.repo), l.number, MIN(COALESCE(f.read_at, '')) AS seen FROM task_links l "
+        f"JOIN ({_WAITING_TASKS}) w ON w.id = l.task_id "
+        "LEFT JOIN pr_facts f ON f.repo = l.repo AND f.number = l.number "
+        "WHERE l.kind='pr' AND l.repo IS NOT NULL AND l.repo <> '' AND l.number IS NOT NULL "
+        "AND (f.id IS NULL OR f.state='open' AND f.read_at < ?) "
+        "GROUP BY lower(l.repo), l.number ORDER BY seen, lower(l.repo), l.number LIMIT ?",
+        (cutoff, limit),
+    ).fetchall()
+    return [(str(repo), int(number)) for repo, number, _ in found]
+
+
+def read_pr(github: GitHub, repo: str, number: int) -> Row | None:
+    """What GitHub says of one PR now, with the checks at its head while it is open: a `save_pr` fact. None when the PR
+    is gone. Raises when GitHub could not be asked."""
+    found = github.read_pr(repo, number)
+    if found is None:
+        return None
+    fact = dict(found)
+    if fact.get("state") == "open" and fact.get("head_sha"):
+        fact["checks"] = github.read_checks(repo, str(fact["head_sha"]))
+    return fact
 
 
 def refresh(store: Any, github: GitHub, now: str | None = None) -> int:
     """The 5-minute re-read: each of `due_reads` read through `github` with no transaction held, then saved with the
-    version taken before its read. Also re-reads the releases of every release repo an open task waits on. Returns how
-    many facts changed. Track C."""
-    raise NotImplementedError("task_facts.refresh: track C")
+    version taken before its read. Also re-reads the releases of every release repo an open task waits on, and asks
+    GitHub whether each waiting merge is in each newer release. A call GitHub fails is logged and left for the next
+    pass: the fact stays as it was, so what waits on it keeps waiting on GitHub. Returns how many facts changed."""
+    H = _h()
+    at: str = now or H.now()
+    with store.transaction() as conn:
+        conn.execute("DELETE FROM github_deliveries WHERE received_at < ?", (H.shift(at, days=-DELIVERY_DAYS),))
+    with store.read() as conn:
+        due = due_reads(conn, at)
+    changed = 0
+    for repo, number in due:
+        version = version_now()
+        try:
+            fact = read_pr(github, repo, number)
+        except Exception as exc:  # noqa: BLE001 - GitHub down or refusing: the fact waits for the next pass
+            LOG.warning("Reading %s from GitHub failed: %s", pr_ref(repo, number), exc)
+            continue
+        if fact is None:
+            continue
+        with store.transaction() as conn:
+            changed += save_and_settle(conn, repo, number, fact, version)
+    changed += _refresh_releases(store, github, at)
+    return changed
+
+
+def _release_waits(conn: "sqlite3.Connection") -> list[Row]:
+    """Each merged PR an open task's In a release waits on: {task, repo (the release repo), sha, at, prereleases}."""
+    out: list[Row] = []
+    for task_id, settings in conn.execute(
+        "SELECT t.id, r.settings FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
+        "JOIN requirements r ON (r.stage_id = t.stage_id OR r.visit_id = v.id) AND r.withdrawn_at IS NULL "
+        "AND r.kind='in_release' WHERE t.status='open' AND t.pipeline_id IS NOT NULL"
+    ).fetchall():
+        try:
+            setting: Row = json.loads(settings or "{}") or {}
+        except ValueError:
+            setting = {}
+        for link in prs_of(conn, str(task_id)):
+            fact = link["fact"]
+            if fact and fact["state"] == "merged" and fact.get("merged_sha"):
+                out.append(
+                    {
+                        "task": str(task_id),
+                        "repo": release_repo(setting, str(link["repo"])),
+                        "sha": str(fact["merged_sha"]),
+                        "at": fact.get("merged_at"),
+                        "prereleases": bool(setting.get("prereleases")),
+                    }
+                )
+    return out
+
+
+def release_repo(settings: Row, pr_repo: str) -> str:
+    """The repo whose releases In a release reads: the requirement's `release_repo` setting, else the PR's own repo."""
+    return str(settings.get("release_repo") or "").strip() or pr_repo
+
+
+def _refresh_releases(store: Any, github: GitHub, now: str) -> int:
+    H = _h()
+    with store.read() as conn:
+        waits = _release_waits(conn)
+        cutoff = H.shift(now, seconds=-REREAD_S)
+        stale = sorted(
+            {
+                w["repo"].lower()
+                for w in waits
+                if not conn.execute(
+                    "SELECT 1 FROM release_reads WHERE repo=? AND read_at >= ?", (w["repo"], cutoff)
+                ).fetchone()
+            }
+        )
+    changed = 0
+    for repo in stale:
+        version = version_now()
+        try:
+            found = github.read_releases(repo)
+        except Exception as exc:  # noqa: BLE001 - read again on the next pass
+            LOG.warning("Reading the releases of %s failed: %s", repo, exc)
+            continue
+        with store.transaction() as conn:
+            for release in found:
+                changed += save_release(conn, repo, release, version)
+            saw_releases(conn, repo, version)
+    asked = 0
+    for wait in waits:
+        with store.read() as conn:
+            merged = H.parse_ts(wait["at"])
+            unread = [
+                r
+                for r in reversed(releases(conn, wait["repo"], prereleases=wait["prereleases"]))
+                if included(conn, r["id"], wait["sha"]) is None
+                and not (merged and (H.parse_ts(r["published_at"]) or merged) < merged)
+            ]
+            known = any(
+                included(conn, r["id"], wait["sha"])
+                for r in releases(conn, wait["repo"], prereleases=wait["prereleases"])
+            )
+        for release in [] if known else unread:  # oldest first; the first that holds it is the one that counts
+            if asked >= REREAD_BATCH:
+                return changed
+            asked += 1
+            try:
+                inside = github.contains(wait["repo"], str(release["commit_sha"] or release["tag"]), wait["sha"])
+            except Exception as exc:  # noqa: BLE001 - asked again on the next pass
+                LOG.warning("Comparing %s with %s failed: %s", wait["sha"], release["tag"], exc)
+                break
+            with store.transaction() as conn:
+                save_included(conn, release["id"], wait["sha"], inside)
+                changed += 1
+                if inside:
+                    _nudge(conn, [wait["task"]])
+            if inside:
+                break
+    return changed
 
 
 # ----------------------------------------------------------------------------- releases
@@ -235,7 +576,7 @@ def save_release(conn: "sqlite3.Connection", repo: str, release: Row, version: i
     )
     if old:
         conn.execute(
-            "UPDATE releases SET commit_sha=?, prerelease=?, published_at=?, fact_version=?, read_at=? WHERE id=?",
+            "UPDATE releases SET commit_sha=COALESCE(?, commit_sha), prerelease=?, published_at=?, fact_version=?, read_at=? WHERE id=?",
             (*values, old["id"]),
         )
     else:
@@ -257,10 +598,12 @@ def saw_releases(conn: "sqlite3.Connection", repo: str, version: int) -> None:
 
 
 def releases(conn: "sqlite3.Connection", repo: str, *, prereleases: bool = False) -> list[Row]:
-    """A repo's saved releases that count, newest first: a pre-release only when `prereleases` (D3)."""
+    """A repo's saved releases that count, newest first: a pre-release (marked so, or a dash in its tag) only when
+    `prereleases` (D3)."""
     return _rows(
         conn,
-        "SELECT * FROM releases WHERE repo=? AND (? OR prerelease=0) ORDER BY published_at DESC, id",
+        "SELECT * FROM releases WHERE repo=? AND (? OR prerelease=0 AND instr(tag, '-')=0) "
+        "ORDER BY published_at DESC, id",
         (repo, 1 if prereleases else 0),
     )
 

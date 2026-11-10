@@ -128,6 +128,16 @@ COMMANDS = [
         ("POST", "tasks/T1/unsnooze", {"why": "Back now"}),
     ),
     (
+        ["task", "queue", "T1", "--version", "3"],
+        ("hub_task_queue", {"id": "T1", "version": 3}),
+        ("POST", "tasks/T1/queue", {"version": 3}),
+    ),
+    (
+        ["task", "unlink", "T1", "L7"],
+        ("hub_task_unlink", {"id": "T1", "link": "L7"}),
+        ("DELETE", "tasks/T1/links/L7", {}),
+    ),
+    (
         ["task", "update", "T1", "--title", "Ship the notes", "--due", "2026-11-14T17:00:00Z", "--version", "3"],
         ("tico_task_update", {"id": "T1", "title": "Ship the notes", "due": "2026-11-14T17:00:00Z", "version": 3}),
         ("POST", "tasks/T1", {"version": 3, "title": "Ship the notes", "due": "2026-11-14T17:00:00Z"}),
@@ -480,3 +490,16 @@ def test_task_show_text_names_people_and_bots_and_a_filed_task_by_its_title():
     assert "human:morgan" not in text
     bot_turn = {**task, "turn": {"state": "bot", "who": "bot:builder", "line": "stopped early, try 2 of 3"}}
     assert "Turn: Builder (stopped early" in hubtools.task_text(bot_turn, {"bot:builder": "Builder"})
+
+
+def test_unlink_finds_the_link_by_its_url_and_says_so_when_there_is_none():
+    class Links(Recorder):
+        def get(self, path, **query):
+            self.calls.append(("GET", path, query))
+            return {"links": [{"id": "L1", "url": "https://github.com/acme/app/pull/1"}, {"id": "L2", "url": "x"}]}
+
+    api = Links()
+    hubtools.BY_NAME["hub_task_unlink"]["fn"](api, {"id": "T1", "link": "https://github.com/Acme/app/pull/1/"})
+    assert api.writes() == [("DELETE", "tasks/T1/links/L1", {})]
+    with pytest.raises(ValueError, match="No link to https://github.com/acme/app/pull/9"):
+        hubtools.BY_NAME["hub_task_unlink"]["fn"](Links(), {"id": "T1", "link": "https://github.com/acme/app/pull/9"})

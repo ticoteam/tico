@@ -836,6 +836,8 @@ def run(args, who=None):
             "snooze",
             "unsnooze",
             "update",
+            "queue",
+            "unlink",
         ):
             # The engine's commands (docs/pipelines-v3.md S16): each sends the version the bot passed, never one read now.
             return unwrap(via_tool(client, args))

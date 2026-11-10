@@ -40,7 +40,7 @@ def test_the_migration_runs_twice_and_gives_effects_their_pr():
 
 def test_each_new_kind_says_it_is_not_built_yet_and_every_kind_has_its_settings():
     task = {"owner_id": "bot:builder", "visit": {"id": "v"}}
-    for kind in ("page", "pr_open", "checks_pass", "pr_merged", "in_release"):
+    for kind in ("page",):  # the GitHub kinds are built: backend/tests/test_github_facts_merge_queue.py
         found = R.KINDS[kind](None, task, {"kind": kind, "line": ""}, None)
         assert (found.state, found.on, found.line) == (
             R.NOT_MET,
