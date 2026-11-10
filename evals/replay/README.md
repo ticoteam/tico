@@ -15,7 +15,7 @@ Each case gets a verdict:
 - **win**: the reverse;
 - **mixed**: some numbers better and some worse; **same**: nothing changed.
 
-Numbers, lower is better: person steps, jargon, duplicates, settings detours, runs. Minutes are shown, not judged.
+Numbers, lower is better: person steps (their messages, the bot's asks to them and the tasks filed for them), jargon, duplicates, settings detours, runs. Minutes are shown, not judged.
 
 ## Cases are private
 
@@ -30,13 +30,14 @@ folder) and are passed with `--cases`. `cases/example.yaml` is made up and shows
 
 2. **A person reviews each draft**: cut names, customers, links and figures the replay does not need (what is cut from
    the original transcript is cut from the baseline too), write the `done` checks and `limits`, add `person` answers
-   for the questions the bot is likely to ask (answered in order, on the task or on a task it files for them), and set `reviewed_by` to their name. `prompt.exact: false` means the bot's
+   for the asks the bot is likely to put to them (answered in order, on the task or on a task it files for them: a
+   choice by its label, an OK as `ok`, or words starting "no" to send it back), and set `reviewed_by` to their name. `prompt.exact: false` means the bot's
    instructions changed after the task ran; the baseline is then the old run on an older prompt.
 3. `run.py --check` lists any case that cannot run: unsigned, or still holding a common key or token shape, a password,
    an email address or a phone number. The check is a backstop: a token with no telling shape passes it, so the
    person's read is what keeps a case clean.
 
-`done` checks: `status: [done, review]`, `file_attached: <regex>`, `reply_matches: <regex>`, `reply_not_matches: <regex>`.
+`done` checks: `status: [done]` (a task ends `done` or `closed`), `file_attached: <regex>`, `reply_matches: <regex>`, `reply_not_matches: <regex>`.
 
 ## Running it (release preparation)
 
