@@ -471,10 +471,11 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
 
 
 def message_task(conn: "sqlite3.Connection", message_id: str | None, carried: bool = True) -> str | None:
-    """The task a run on this message is about: the task its wake key names, else the one its refs or its conversation
-    name, else, for the keeper's carrier of another message (threads._carrier: `refs.carries`, no task of its own), the
-    task of the message it carries. The claim (`may_start`, the attempt's `task_id`), the start and the count of runs
-    all read the task this way, so a carrier is held and counted as the message it carries."""
+    """The task a run on this message is about: the task its wake key names, else the one its refs name, else, for the
+    keeper's carrier of another message (threads._carrier: `refs.carries`, no task of its own), the task of the message
+    it carries, else the task its conversation is. The carried message comes before the conversation: a carrier in task
+    A's chat of a post about task B is B's run. The claim (`may_start`, the attempt's `task_id`), the start and the
+    count of runs all read the task this way, so a carrier is held and counted as the message it carries."""
     H = _h()
     found = conn.execute(
         "SELECT m.wake_key, m.refs, m.sender_id, c.task_id FROM messages m "
@@ -486,12 +487,11 @@ def message_task(conn: "sqlite3.Connection", message_id: str | None, carried: bo
     if found[0]:
         return str(found[0]).split(":", 1)[0]
     refs: Row = H._json(found[1], {}) or {}
-    named = H.message_task_id({"refs": refs}, {"task_id": found[3]})
-    if named:
-        return str(named)
-    if carried and found[2] == H.KEEPER and refs.get("carries"):
-        return message_task(conn, str(refs["carries"]), carried=False)
-    return None
+    named = H.message_task_id({"refs": refs})
+    if not named and carried and found[2] == H.KEEPER and refs.get("carries"):
+        named = message_task(conn, str(refs["carries"]), carried=False)
+    named = named or H.message_task_id({}, {"task_id": found[3]})
+    return str(named) if named else None
 
 
 def _may_start(conn: "sqlite3.Connection", task: Row, bot: str, kind: str, attempt: str | None) -> bool:

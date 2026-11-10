@@ -269,6 +269,65 @@ def test_a_carriers_run_is_about_the_task_of_the_message_it_carries_and_counts_f
         assert task_wakes.runs_since(c, E.task(c, tid)) == before + 1
 
 
+def _carrier_in(c, conversation_id, about, bot, by):
+    """A bot's post in task A's conversation that names task B, and the keeper's carrier of it to `bot`."""
+    from backend.enqueue import enqueue
+
+    post_id, carrier = H.new_id(), H.new_id()
+    c.execute(
+        "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, created_at) "
+        "VALUES (?,?,?,?,'say','The footer task needs a look.',?,?)",
+        (post_id, conversation_id, by, bot, H._dump({"task": about}), H.now()),
+    )
+    refs = H._dump({"carries": post_id, "wake": "thread", "reason": "mention", "from": by})
+    c.execute(
+        "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, created_at) "
+        "VALUES (?,?,?,?,'notice','The footer task needs a look.',?,?)",
+        (carrier, conversation_id, H.KEEPER, bot, refs, H.now()),
+    )
+    enqueue(c, {"id": carrier, "sender_id": H.KEEPER, "recipient_id": bot, "refs": refs, "created_at": H.now()})
+    return carrier
+
+
+def test_a_carrier_in_one_tasks_chat_of_a_post_about_another_is_held_and_counted_by_the_other(api):
+    """A carrier sits in task A's conversation and carries a bot's post about task B. Its run is B's: claimed with six
+    runs on B, it is B's seventh and A's count does not move; claimed again at B's seven, it is refused and nothing is
+    leased."""
+    from backend import task_engine as E
+    from backend.tests.helpers.api import assign, claim, post, ready, runner
+
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    a = post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Draft it."})["id"]
+    b = post(api, "tasks", {"owner": "ops", "title": "Add the footer", "body": "Draft it."})["id"]
+    with api.app.state.store.transaction() as c:
+        X.bot(c, "reviewer", computer=False)
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
+        row_b = E.task(c, b)
+        for n in range(task_wakes.RUNS - 1):
+            task_wakes.add(c, row_b, "bot:ops", row_b["visit"], "Carry on.", wake_key=f"{b}:more:{n}")
+            X.ran(c, b, "bot:ops", runner=machine["runner_id"])
+        conv_a = E.task(c, a)["conversation_id"]
+        carried = _carrier_in(c, conv_a, b, "bot:ops", REVIEWER)
+        assert task_wakes.message_task(c, carried) == b  # the carried post's task, before A's conversation
+        before_a = task_wakes.runs_since(c, E.task(c, a))
+    aid = claim(api, machine)["id"]
+    post(api, f"attempts/{aid}/started", {"thread_id": "t-" + aid}, machine["token"])
+    post(api, f"attempts/{aid}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
+    with api.app.state.store.transaction() as c:
+        assert tuple(c.execute("SELECT job_id, task_id FROM attempts WHERE id=?", (aid,)).fetchone()) == (carried, b)
+        assert task_wakes.runs_since(c, E.task(c, b)) == task_wakes.RUNS  # B is charged
+        assert task_wakes.runs_since(c, E.task(c, a)) == before_a  # A is not
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
+        held = _carrier_in(c, conv_a, b, "bot:ops", REVIEWER)
+    assert claim(api, machine) is None  # nothing leased
+    with api.app.state.store.read() as c:
+        assert _state(c, held) == "canceled"  # B is at its 7: refused
+        assert c.execute("SELECT COUNT(*) FROM attempts WHERE job_id=?", (held,)).fetchone()[0] == 0
+        assert task_wakes.runs_since(c, E.task(c, a)) == before_a
+
+
 def test_a_run_whose_task_changed_between_its_claim_and_its_start_never_starts(api):
     """The claim let the run through; then, before its computer started it, the task was snoozed, closed, handed to a
     person or given another owner. The start asks the engine again (task_wakes.may_start, its own lease not counted):

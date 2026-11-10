@@ -4900,8 +4900,9 @@ class Execution:
             row["bot_id"],
             trigger="task" if task else msg["kind"],
             message_id=msg["id"],
-            # A carrier's run is about the task of the message it carries (task_wakes.message_task): counted for it.
-            task_id=task["id"] if task else task_wakes.message_task(c, msg["id"]),
+            # The task may_start admitted the run for (task_wakes.message_task): a carrier's run is the carried
+            # message's task's, even in another task's conversation, so it is counted for that task.
+            task_id=task_wakes.message_task(c, msg["id"]) or (task["id"] if task else None),
             trigger_kind=woke,
             trigger_source=source,
             purpose=run_triggers.purpose_of(msg, row["bot_id"], woke),
