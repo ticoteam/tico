@@ -500,6 +500,39 @@ def test_a_letter_hq_refused_is_never_recorded_as_mailed(api, hq, refusal):
         assert _ended(api, _task(api, after)) == ("done", "Mailed the letter.")
 
 
+@pytest.mark.parametrize(("later", "ends"), [("mailed", "done"), ("failed", "closed")])
+def test_a_letter_hq_takes_as_submitting_ends_its_task_on_hqs_first_decided_word(api, hq, monkeypatch, later, ends):
+    """HQ names the letter but says only `submitting`: undecided, the task stays open. Its next word decides it, though
+    the letter's HQ id is already recorded: done once mailed, closed "Not mailed" once failed."""
+
+    def answer(key, base, path="", **kwargs):
+        result = hq(key, base, path, **kwargs)
+        if isinstance(result, dict) and result.get("letter_id"):
+            result = {**result, "status": "submitting" if not path else later}
+        return result
+
+    monkeypatch.setattr(G, "letters", answer)
+    row = send(api, quote(api))
+    task_id = _task(api, row)
+    approve(api, row)
+    after = fetch(api, row)
+    assert after["status"] == "submitting" and after["hq_letter_id"] and _ended(api, task_id)[0] == "open"
+    due(api, row)
+    api.app.state.letters.drain()
+    assert fetch(api, row)["status"] == later and hq.provider_submits == 1
+    status, note = _ended(api, task_id)
+    if ends == "done":
+        assert (status, note) == ("done", "Mailed the letter.")
+    else:
+        assert (status, note) == (
+            "closed",
+            "Not mailed: Letters out could not mail it. Nothing else goes out under this OK.",
+        )
+    due(api, row)
+    api.app.state.letters.drain()
+    assert _ended(api, task_id) == (status, note)
+
+
 def test_an_abandoned_send_ends_the_oks_task_as_not_mailed(api, hq):
     row = send(api, quote(api))
     task_id = _task(api, row)

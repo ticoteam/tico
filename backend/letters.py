@@ -39,6 +39,12 @@ MODES = {"on_their_own": 0, "ask_first": 1, "never": 2}
 FINAL = ("delivered", "returned", "failed", "cancelled", "declined")
 ACTIVE = ("submitting", "submitted", "printing", "mailed")
 ACCEPTED = ("submitted", "printing", "mailed", "delivered", "returned")  # HQ has it and it is (or was) on its way
+UNDECIDED = ("submitting", "needs_review")  # claimed, and HQ has not said yet whether it takes the letter
+NOT_MAILED = {
+    "failed": "Letters out could not mail it",
+    "cancelled": "it was cancelled before it was mailed",
+    "declined": "Letters out declined it",
+}
 MAX_PDF = 5 * 1024 * 1024
 BACKOFF = (60, 300, 900, 3600, 21600)
 
@@ -1151,12 +1157,13 @@ class Letters:
                     ident,
                 ),
             )
-            if previous["approval_id"] and not previous["hq_letter_id"]:
-                # The first word that HQ has the letter: the OK's task ends with it, done only if it is on its way.
+            if previous["approval_id"] and previous["status"] in UNDECIDED and status not in UNDECIDED:
+                # The first decided word from HQ, whether or not it named the letter before: the OK's task ends with
+                # it, done only if the letter is on its way. Both leave a task that already ended as it is.
                 if status in ACCEPTED:
                     task_asks.settle(c, previous["approval_id"], "Mailed the letter.")
                 else:
-                    not_mailed(c, previous, "Letters out says it is " + status)
+                    not_mailed(c, previous, NOT_MAILED[status])
             H.event(c, H.KEEPER, "letter.updated", ident, {"status": status})
 
     def cancel(self, who, ident):
