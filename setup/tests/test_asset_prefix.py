@@ -411,8 +411,9 @@ class FilteredEC2(fakes.FakeEC2):
             if all({t["Key"]: t["Value"] for t in r.get("Tags", [])}.get(k) in v for k, v in want.items())
         ]
 
-    def describe_instances(self, Filters):
-        return {"Reservations": [{"Instances": self._match(self.instances, Filters)}]}
+    def describe_instances(self, Filters=(), InstanceIds=()):
+        rows = [i for i in self.instances if not InstanceIds or i["InstanceId"] in InstanceIds]
+        return {"Reservations": [{"Instances": self._match(rows, list(Filters))}]}
 
     def describe_security_groups(self, Filters):
         return {"SecurityGroups": self._match(self.sgs, Filters)}
@@ -2201,3 +2202,30 @@ def test_a_strict_install_stays_strict_when_its_state_is_lost_or_corrupt_or_the_
     assert code != 0 and "made with --asset-prefix hub" in out, out
     assert all(kw["Name"].startswith("/hub/") for kw in ssm.called("put_parameter"))
     assert go(hub_args(tmp_path, "--name", "hotmic"), deps=d)[0] == 0  # its state intact: strict without the flag
+
+
+def test_state_is_bound_to_its_install_and_a_remote_shell_proves_its_server_first(tmp_path):
+    # Codex review 5, case 2: a whole state.json copied beneath another domain repointed the original server, and
+    # owner-link trusted an edited instance id. State is bound to its domain and install; before any remote shell, the
+    # instance is read and must carry the install's id tag, be the recorded instance, in the recorded account.
+    d, ec2, iam, ssm, s3, log = hub_world()
+    assert go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)[0] == 0
+    good = state.load(DOMAIN)[0]
+    copy = "copy.hotmicapp.com"
+    state.save(copy, dict(good))
+    writes = lambda: [n for n, _ in log if not n.startswith(READS)]  # noqa: E731
+    before = len(writes())
+    again = hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic")
+    again[again.index(DOMAIN)] = copy
+    for argv in (again, ["destroy", "--domain", copy, "--yes"], ["doctor", "--domain", copy, "--non-interactive"]):
+        code, out = go(argv, deps=d)
+        assert code != 0 and f"saved for {DOMAIN}" in out, (argv, out)
+    assert len(writes()) == before
+    ec2.instances.append({"InstanceId": "i-prod", "Tags": PRODUCTION, "State": {"Name": "running"}})
+    for edit in ({"aws_instance_id": "i-prod"}, {"aws_account_id": "999999999999"}):
+        state.save(DOMAIN, {**good, "auth": "owner-link", **edit})
+        for argv in (["owner-link", "--domain", DOMAIN], ["doctor", "--domain", DOMAIN, "--non-interactive"]):
+            code, out = go(argv, deps=d)
+            assert code != 0 and not ssm.called("send_command")[len(ssm.called("send_command")) :], out
+            assert "refusing" in out, (edit, argv, out)
+        assert len(writes()) == before, writes()[before:]

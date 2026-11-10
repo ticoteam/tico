@@ -110,8 +110,9 @@ class FakeEC2:
     def called(self, name):
         return [kw for n, kw in self.calls if n == name]
 
-    def describe_instances(self, Filters):
-        return {"Reservations": [{"Instances": self.instances}]}
+    def describe_instances(self, Filters=(), InstanceIds=()):
+        rows = [i for i in self.instances if not InstanceIds or i["InstanceId"] in InstanceIds]
+        return {"Reservations": [{"Instances": rows}]}
 
     def describe_security_groups(self, Filters):
         return {"SecurityGroups": self.sgs}
