@@ -49,9 +49,11 @@ SYSTEM: str = E.SYSTEM
 GAPS = (E.FIRST_TRY_S, 900, 3600)
 TRIES = len(GAPS)
 # Bot runs one visit may start between two changes: the owner's start and 3 tries, then the manager bot's 3 tries.
-# Every run on the task counts, whoever it was for and whatever woke it (R1).
+# Every run on the task counts, whoever it was for and whatever woke it (R1). The ladder holds to them, and the claim
+# of a job asks `task_wakes.may_start`, which holds the 7 at the moment a run starts.
 OWNER_RUNS = 1 + TRIES
-RUNS = 1 + 2 * TRIES
+RUNS = task_wakes.RUNS
+assert RUNS == 1 + 2 * TRIES
 HOPS = 20  # stages one task is taken through in one pass, at most
 LATE_PERSON = 3  # times a stage's expected time before a late task lands in a person's list (C5)
 CUT_OFF = ("expired", "failed", "interrupted")
@@ -101,6 +103,7 @@ def check(
     at: str = now or H.now()
     done = {"snoozes_ended": 0, "moved": 0, "woken": 0, "to_manager": 0, "to_person": 0, "late": 0}
     seen: dict[str, str | None] = {}
+    live = task_wakes.live_bots(conn, at)  # a pass starts no run: read once
     # A snooze of a task that was deleted, or is not on the engine, is no task's: it is left alone.
     due = conn.execute(
         "SELECT z.task_id FROM snoozes z JOIN tasks t ON t.id = z.task_id AND t.pipeline_id IS NOT NULL "
@@ -116,7 +119,7 @@ def check(
                 E.unsnooze(conn, task_id, SYSTEM)
                 done["snoozes_ended"] += 1
             else:
-                _one(conn, task_id, at, done, seen)
+                _one(conn, task_id, at, done, seen, live)
         except Exception as error:
             # SQLite may already have ended the transaction (a full disk, an I/O error): that stops the pass.
             if failures is None or not conn.in_transaction or storage_error(error):
@@ -129,7 +132,14 @@ def check(
     return done
 
 
-def _one(conn: "sqlite3.Connection", task_id: str, at: str, done: dict[str, int], seen: dict[str, str | None]) -> None:
+def _one(
+    conn: "sqlite3.Connection",
+    task_id: str,
+    at: str,
+    done: dict[str, int],
+    seen: dict[str, str | None],
+    live: set[str],
+) -> None:
     row = E.task(conn, task_id)
     if not row or row["status"] != "open" or row.get("snooze") or row["stage"].get("by_hand"):
         return  # a move earlier in this pass took it
@@ -141,7 +151,7 @@ def _one(conn: "sqlite3.Connection", task_id: str, at: str, done: dict[str, int]
             if not E.advance(conn, task_id):
                 break
         return
-    _ladder(conn, row, waits, E.progress_mark(conn, row["visit"]["id"], standings), at, done, seen)
+    _ladder(conn, row, waits, E.progress_mark(conn, row["visit"]["id"], standings), at, done, seen, live)
     _late(conn, row, at, done, seen)
 
 
@@ -154,6 +164,7 @@ def _ladder(
     at: str,
     done: dict[str, int],
     seen: dict[str, str | None],
+    live: set[str],
 ) -> None:
     H = _h()
     visit = row["visit"]
@@ -169,45 +180,48 @@ def _ladder(
     # Whoever has the task's own work, before a bot that was only asked for an OK or an answer; the manager bot at
     # level manager.
     target = W.turn(conn, row, waits)
-    if not target:
-        return
     manager: str | None = _part(row, "pipeline").get("manager_id")
-    if level == "manager" and not _usable(conn, manager, seen):
+    if target and level == "manager" and not _usable(conn, manager, seen):
         _to_person(conn, row, level, done)
-        return
-    if task_wakes.live_run(conn, row, target, at) or task_wakes.queued(conn, row["id"], target):
         return
     epoch: str = visit.get("last_change_at") or visit["entered_at"]
     tries = int(visit.get("tries") or 0)
-    lost = task_wakes.lost(conn, row, target, epoch)
-    if lost:
-        # Its wake went missing before any run took it: the same words again, on this pass. Nothing ran, so nothing
-        # is counted (R3).
-        key = f"{row['id']}:{visit['id']}:lost:{lost['id']}"
-        if task_wakes.add(conn, row, target, visit, lost["body"], level=level, try_n=tries, wake_key=key):
-            done["woken"] += 1
+    # Before the ladder tries anyone, every bot that has a turn gets back a wake it lost (R3).
+    woken, spent_by = _recover(conn, row, target, waits, level, tries, epoch, at, done, live)
+    if not target or target in woken:
         return
+    if task_wakes.live_run(conn, row, target, at, live) or task_wakes.queued(conn, row["id"], target):
+        return
+    inbox = task_wakes.inbox(conn, row, target)
+    if inbox and not inbox["read_at"]:
+        # A bot that reads its own inbox has not read its wake yet: it is on its way, as a queued one is. Nothing more
+        # is written; if it never reads, Late takes the task on.
+        return
+    read: str | None = inbox["read_at"] if inbox else None  # it took its wake then, and nothing ran on the engine
+    spent = target in spent_by  # its wake for this try was lost twice: the try is spent
     gap = GAPS[tries] if tries < TRIES else GAPS[0]
     due: str | None = visit.get("next_try_at")
     if not due:
         conn.execute("UPDATE visits SET next_try_at=? WHERE id=?", (H.shift(at, seconds=gap), visit["id"]))
         return
     last = task_wakes.last_run(conn, row, target)
-    if last and last.get("finished_at") and not _snoozed_since(conn, visit, str(last["finished_at"])):
-        due = max(due, str(H.shift(last["finished_at"], seconds=gap)))  # the gap runs from when the bot stopped
+    stopped: str | None = (last or {}).get("finished_at") or read
+    if stopped and not _snoozed_since(conn, visit, stopped):
+        due = max(due, str(H.shift(stopped, seconds=gap)))  # the gap runs from when the bot stopped, or read its wake
     if at < due:
         return
-    runs = task_wakes.runs_since(conn, row, epoch)
+    runs = task_wakes.runs_since(conn, row)
     cut_off = bool(last) and (last or {}).get("state") in CUT_OFF
-    if level == "owner" and tries == 0 and not runs:
-        # No run has started since the task last changed (it changed during a run, and nothing announced it): this
-        # wake starts it again and is not a try. A try is counted only after a run that started since the change
-        # ended without one (R3).
+    if level == "owner" and tries == 0 and not runs and not read and not spent:
+        # Nothing has taken a wake since the task last changed (it changed during a run, and nothing announced it):
+        # this wake starts it again and is not a try. A try is counted only after a run that started since the change
+        # ended without one, or a wake the bot read in its own inbox (R3). The count of runs stays what really ran.
         lead = "Your last run on this task was cut off." if cut_off else "This task is not finished. Carry on."
         if _wake(conn, row, target, lead, level, 0, epoch):
             conn.execute("UPDATE visits SET next_try_at=? WHERE id=?", (H.shift(at, seconds=GAPS[0]), visit["id"]))
             done["woken"] += 1
             return
+        # This change's free wake was written already and no run came of it: the try is spent, below.
     if tries < TRIES and runs < (OWNER_RUNS if level == "owner" else RUNS):
         lead = "Your last run on this task was cut off." if cut_off else "You stopped before this task was finished."
         if level == "manager" and tries == 0:
@@ -217,6 +231,56 @@ def _ladder(
         _to_manager(conn, row, manager, f"{_name(conn, target)} stopped {TRIES} times without finishing it.", at, done)
     else:
         _to_person(conn, row, level, done)
+
+
+def _recover(
+    conn: "sqlite3.Connection",
+    row: Row,
+    target: str | None,
+    waits: list[W.Wait],
+    level: str,
+    tries: int,
+    epoch: str,
+    at: str,
+    done: dict[str, int],
+    live: set[str],
+) -> tuple[set[str], set[str]]:
+    """Write again the lost wake of every bot that has a turn and is not on it: no live run, no queued wake, no wake
+    unread in its own inbox. The same words, on this pass, and nothing is counted (R3). Once per bot, level, try and
+    change: when that one is lost too, the bot's try is spent. A bot named on an ask that was never woken for it (the
+    ask came while a person had the task) gets that wake now. Returns the bots woken, and those whose try is spent.
+
+    For the bot the ladder tries (`target`) a wake is lost only since the last change: after a change the ladder wakes
+    it anyway. Any other bot (one named on an OK or an answer) is woken by nothing else, so its newest wake in the
+    whole visit counts: it gets a turn back only when the task leaves a person or a snooze ends."""
+    visit = row["visit"]
+    woken: set[str] = set()
+    spent: set[str] = set()
+    for bot in sorted(W.turns(conn, row, waits)):
+        if task_wakes.live_run(conn, row, bot, at, live) or task_wakes.queued(conn, row["id"], bot):
+            continue
+        inbox = task_wakes.inbox(conn, row, bot)
+        if inbox and not inbox["read_at"]:
+            continue
+        lost = task_wakes.lost(conn, row, bot, whole_visit=bot != target)
+        if not lost:
+            asks = [w.requirement_id for w in waits if w.who == bot and w.ask and w.requirement_id]
+            if any([task_wakes.ask(conn, row, R.get(conn, rid)) for rid in asks]):
+                done["woken"] += 1
+                woken.add(bot)
+            continue
+        key = f"{row['id']}:{visit['id']}:lost:{_slug(bot)}:{level}:{tries}:{epoch}"
+        if task_wakes.add(conn, row, bot, visit, lost["body"], level=level, try_n=tries, wake_key=key):
+            done["woken"] += 1
+            woken.add(bot)
+        else:
+            spent.add(bot)
+    return woken, spent
+
+
+def _slug(actor: str) -> str:
+    """A bot's id without "bot:", as a wake key holds it."""
+    return str(_h().actor_id(actor))
 
 
 def _snoozed_since(conn: "sqlite3.Connection", visit: Row, since: str) -> bool:
@@ -264,7 +328,7 @@ def _to_manager(
     7 runs since the last change, a person has it instead."""
     visit = row["visit"]
     epoch: str = visit.get("last_change_at") or visit["entered_at"]
-    if task_wakes.runs_since(conn, row, epoch) >= RUNS:
+    if task_wakes.runs_since(conn, row) >= RUNS:
         _to_person(conn, row, visit.get("level") or "owner", done)
         return
     conn.execute("UPDATE visits SET level='manager', tries=0, next_try_at=? WHERE id=?", (at, visit["id"]))
@@ -339,7 +403,6 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
         head = waits[0] if waits else None
         level = fresh["visit"].get("level") or "owner"
         target = W.turn(conn, fresh, waits)
-        epoch: str = fresh["visit"].get("last_change_at") or fresh["visit"]["entered_at"]
         if target and level == "owner" and manager != target and _usable(conn, manager, seen):
             # A bot's turn: Late hands the task to the manager bot, once per visit, on the same 3 tries. Never a second
             # set, and never back down from a person.
@@ -350,7 +413,7 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
             and is_bot(manager)
             and level == "owner"
             and manager != head.who
-            and task_wakes.runs_since(conn, fresh, epoch) < RUNS
+            and task_wakes.runs_since(conn, fresh) < RUNS
         ):
             # No bot has a turn: it waits on a person, another task or the outside, and the manager bot looks once. A
             # bot that cannot run is one row for its cause in a person's list, and its tasks carry on when the cause is
@@ -382,6 +445,7 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
     needs: dict[str, list[Row]] = {}
     someone: bool | None = None  # whether anyone can sign in: read once, when a turn names nobody
     now: str = H.now()
+    live = task_wakes.live_bots(conn, now)
     open_ids = [
         str(found[0])
         for found in conn.execute(
@@ -403,7 +467,7 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
             if wait.state == W.BOT and not (
                 visit.get("next_try_at")
                 or (visit.get("level") or "owner") != "owner"
-                or task_wakes.live_run(conn, row, wait.who, now)
+                or task_wakes.live_run(conn, row, wait.who, now, live)
                 or task_wakes.queued(conn, task_id, wait.who)
             ):
                 broken.append(f"2: task {task_id} is {wait.who}'s turn with no run, no wake and no next try")

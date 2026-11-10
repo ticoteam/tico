@@ -207,7 +207,10 @@ def test_archiving_the_original_closes_a_parked_branch_setup_reminder(api):
     post(api, 'bots/cpo/archive', {'expected_revision': revision(api, 'cpo')})
     with api.app.state.store.read() as c:
         assert H.task(c, reminder['id'])['status'] == 'done'
-        assert 'was archived' in H.task(c, reminder['id'])['note']
+        notes = c.execute(
+            'SELECT a.notes FROM answers a JOIN visits v ON v.id=a.visit_id WHERE v.task_id=?', (reminder['id'],)
+        ).fetchall()
+        assert any('was archived' in (n[0] or '') for n in notes), notes
 
 
 def test_name_only_roster_marks_branches_without_exposing_the_original(api):

@@ -33,8 +33,8 @@ def test_one_answer_to_the_merged_item_answers_every_original(c):
     item = made["task"]["id"]
     assert SM.hidden(c, ANA) == {ask_one, ask_two}
     asked = H.task_view(c, item, ANA)["to_leave"][-1]
-    H.task_answer(c, ANA, item, asked["requirement_id"], "Europe")
-    assert SM.on_answer(c, ANA, item, "Europe") == "Answered; passed to 2 bot(s)."
+    H.task_answer(c, ANA, item, asked["requirement_id"], "Europe")  # passes it on (answers.answer calls on_answer)
+    assert SM.on_answer(c, ANA, item, "Europe") is None  # nothing is left to pass on
     for task, ask in ((one, ask_one), (two, ask_two)):
         found = next(r for r in H.task_view(c, task, ANA)["to_leave"] if r["requirement_id"] == ask)
         assert (found["met"], found["answer"]["value"], found["answer"]["by"]) == (True, "Europe", ANA)
