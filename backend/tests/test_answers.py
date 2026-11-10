@@ -600,7 +600,8 @@ def test_an_ok_bound_to_exact_content_is_never_a_plain_answer_only_given_from_it
     with pytest.raises(H.Refused, match="task_requirement: " + K.FROM_PREVIEW):
         H.task_answer(c, ANA, task_id, rid, "ok")  # a plain ok, even from the person it is asked of
     for other in ("bot:builder", "bot:coo"):
-        with _refused("task_requirement"):
+        # The task filed for it is private to its parties: a bot not asked does not even find it.
+        with _refused("task_requirement|not-found"):
             H.task_answer(c, other, task_id, rid, "ok", seen_version=E.task(c, task_id)["version"])
     row = E.task(c, task_id)
     assert K.standing(c, rid) == K.WAITING and rid not in R.newest_answers(c, row["visit"]["id"])

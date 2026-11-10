@@ -426,10 +426,9 @@ def ok_given(c, grant, ctx):
         raise Problem("state", "This letter is not waiting for an OK", 409)
     app = getattr(ctx, "app", None)
     service = getattr(getattr(app, "state", None), "letters", None)
-    if service is not None:
-        if not service.may_ok(c, grant["ok_by_id"], row):
-            raise Problem("forbidden", "This letter is OK'd by an admin or a manager of its bot", 403)
-        ctx.after.append(lambda: service.decided(grant["requirement_id"]))
+    if service is None or not service.may_ok(c, grant["ok_by_id"], row):
+        raise Problem("forbidden", "This letter is OK'd by an admin or a manager of its bot", 403)
+    ctx.after.append(lambda: service.decided(grant["requirement_id"]))
 
 
 def cancellable(row):

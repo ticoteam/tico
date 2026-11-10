@@ -9,11 +9,10 @@ import pytest
 
 from backend import bot_settings as BS
 from backend import hubdb as H
-from backend import question_tasks as QT
+from backend import task_asks
 from backend.tests.helpers.api import assign, get, headers, post, runner, setup_attempt  # noqa: F401
 from backend.tests.helpers.assistant import assistant_turn, say
 from backend.tests.helpers.automation_access import flow
-from backend.tests.helpers.batch import approval_for_ana
 
 
 def turn(api, text="Please do it"):
@@ -122,22 +121,36 @@ def test_one_assistant_turn_makes_every_write_the_person_could_make_with_no_card
     current = call(api, token, "GET", f"tasks/{task}")["task"]
     call(api, token, "POST", f"tasks/{task}", {"version": current["version"], "owner": "bot:ops"})
 
-    # A turn declines an approval.
-    finance = setup_attempt(api, "finance")[2]["token"]
-    approval = approval_for_ana(api, token=finance)["id"]
-    call(api, turn(api, "No, do not spend it"), "POST", f"approvals/{approval}", {"decision": "declined", "note": ""})
+    # A turn sends back an OK a bot asked of her (a send back is hers to say through the Assistant; an OK never is).
+    setup_attempt(api, "finance")
+    with api.app.state.store.transaction() as c:
+        okd = task_asks.ask_ok(
+            c,
+            "bot:finance",
+            "human:ana",
+            "Raise the ads budget?",
+            shows=[],
+            subject="budget_raise:ads",
+            content={"amount": 1200},
+        )
+    call(
+        api,
+        turn(api, "No, do not spend it"),
+        "POST",
+        f"tasks/{okd['task_id']}/asks/{okd['requirement_id']}/answer",
+        {"value": "no", "note": "Not this month."},
+    )
 
     # A turn answers a question the bot asked.
     with api.app.state.store.transaction() as c:
-        # Under a shared task: a standalone question task is private to the bot and her, out of her Assistant's reach.
         tool = H.task_create(c, "human:ana", "Pick the outbound tool", "x", "bot:finance", lint=False)
-        asked = QT.ask_plain(c, "bot:finance", "human:ana", "Close or Apollo?", parent=tool)
+        asked = H.task_ask(c, "bot:finance", tool["id"], "human:ana", "Close or Apollo?", seen_version=tool["version"])
     call(
         api,
         turn(api, "Apollo"),
         "POST",
-        f"tasks/{asked['id']}/answers",
-        {"target": {"task": asked["id"]}, "answers": {}, "other": "Apollo"},
+        f"tasks/{tool['id']}/asks/{asked['requirement_id']}/answer",
+        {"value": "Apollo"},
     )
 
     # A turn sets a direct setting and a confirm setting.
@@ -188,19 +201,6 @@ def test_one_assistant_turn_makes_every_write_the_person_could_make_with_no_card
         "messages",
         {"to": "ops", "text": "Is it paid?", "kind": "say", "needs_action": True, "wait_s": 0},
     )
-
-
-def test_a_turn_approves_after_a_read_back_and_a_plain_yes_with_the_setting_on(api):
-    approval = approval_for_ana(api)["id"]
-    post(api, "assistant/settings", {"decides_approvals": True}, token="ana-test")
-    runner, first = assistant_turn(api, "ana-test", "Go ahead with the ads")
-    call(api, first["token"], "POST", "assistant/read-back", {"approvals": [approval]})
-    # The first run ends, then the next turn is the same runner's: its yes is a new message and the next job.
-    post(api, f"attempts/{first['id']}/started", {"thread_id": "first-run"}, token=runner["token"])
-    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0}, token=runner["token"])
-    say(api, "Yes", "ana-test")
-    yes = post(api, "jobs/claim", {}, token=runner["token"])["attempt"]["token"]
-    call(api, yes, "POST", f"approvals/{approval}", {"decision": "approved", "note": ""})
 
 
 def test_the_person_alone_decides_these_on_the_turn(api):

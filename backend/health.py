@@ -9,6 +9,7 @@ counts plus which computers are up and the day's failed runs, so it can check th
 
 import json
 import os
+import re
 import shlex
 from datetime import datetime, timezone
 
@@ -2438,6 +2439,7 @@ NEEDS_PLATE_WARN = 10  # more items than this on one person's Needs you plate is
 NEEDS_PLATE_BAD = 25  # more than this is bad
 NEEDS_PLATE_ASKERS = 3  # the bots named on a plate, most items first
 NEVER_STUCK_COUNTS = ("waiting_on_nothing", "retry", "manager", "person", "cant_run", "broken")
+BROKEN_TASK = re.compile(r"\btask (\S+)")  # the task a rule break names (never_stuck.rules_hold)
 NEVER_STUCK_KEY = "health:never_stuck"  # registry_metadata: the hourly never-stuck reading (record_never_stuck)
 
 
@@ -2453,6 +2455,11 @@ def _plate_people(c, auth):
     return found
 
 
+def _plate_tasks(item):
+    """The tasks one Needs you item stands for: its task, or the tasks a Paused cause holds up."""
+    return [str(t) for t in ([item.get("task_id")] if item.get("task_id") else item.get("tasks") or [])]
+
+
 def _plate_check(c, who, auth, full):
     """Each person's Needs you count from the engine's read (waiting_on.needs: their asks, their own tasks' work and the
     Paused causes they fix). An administrator reads everyone's plate; anyone else reads only their own. Warn over
@@ -2461,8 +2468,13 @@ def _plate_check(c, who, auth, full):
     from . import waiting_on
 
     over = []
+    visible_sql = auth.task_sql(c, who) if full else None
     for person in _plate_people(c, auth) if full else [who]:
         items = waiting_on.needs(c, person.actor)
+        if visible_sql and person.actor != who.actor:
+            # Another person's plate counts only what the reader may read: a private task is not theirs to count.
+            readable = _readable(c, visible_sql, sorted({tid for item in items for tid in _plate_tasks(item)}))
+            items = [item for item in items if any(tid in readable for tid in _plate_tasks(item))]
         if len(items) > NEEDS_PLATE_WARN:
             bots = {}
             for item in items:
@@ -2505,32 +2517,39 @@ def _plate_check(c, who, auth, full):
 def never_stuck_reading(c):
     """What the never-stuck check finds over every open task: the seven rules' breaks (never_stuck.rules_hold) and
     where the ladder has the tasks (S15): waiting on nothing, on a retry, with a manager, reached a person, can't run.
-    It reads every open task, so it runs hourly (record_never_stuck), not on each page load."""
+    `tasks` keeps which tasks each number counts, so someone who reads only some tasks is shown only those. It reads
+    every open task, so it runs hourly (record_never_stuck), not on each page load."""
     from . import never_stuck, waiting_on
 
     breaks = never_stuck.rules_hold(c)
-    levels = {
-        row[0]: row[1]
-        for row in c.execute(
-            "SELECT CASE WHEN v.level='owner' AND v.tries>0 THEN 'retry' ELSE v.level END, count(*) "
-            "FROM visits v JOIN tasks t ON t.id=v.task_id WHERE v.left_at IS NULL AND t.status='open' "
-            "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id=t.id AND s.ended_at IS NULL) GROUP BY 1"
-        )
-    }
+    tasks = {key: [] for key in NEVER_STUCK_COUNTS}
+    for task_id, level in c.execute(
+        "SELECT t.id, CASE WHEN v.level='owner' AND v.tries>0 THEN 'retry' ELSE v.level END "
+        "FROM visits v JOIN tasks t ON t.id=v.task_id WHERE v.left_at IS NULL AND t.status='open' "
+        "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id=t.id AND s.ended_at IS NULL)"
+    ):
+        if level in ("retry", "manager", "person"):
+            tasks[level].append(task_id)
     ids = [row[0] for row in c.execute("SELECT id FROM tasks WHERE status='open'")]
-    paused = 0
     for part in H.chunks(ids):
         waits = waiting_on.waiting_on_many(c, part)
-        paused += sum(1 for found in waits.values() if found and found[0].state == "paused")
+        tasks["cant_run"] += [tid for tid, found in waits.items() if found and found[0].state == "paused"]
+    for line in breaks:
+        named = BROKEN_TASK.search(line)
+        if named:
+            tasks["broken"].append(named.group(1))
+            if line.startswith("1:"):
+                tasks["waiting_on_nothing"].append(named.group(1))
     return {
         "at": H.now(),
         "breaks": breaks[:DIAGNOSTIC_LIMIT],
         "broken": len(breaks),
         "waiting_on_nothing": sum(1 for line in breaks if line.startswith("1:")),
-        "retry": int(levels.get("retry") or 0),
-        "manager": int(levels.get("manager") or 0),
-        "person": int(levels.get("person") or 0),
-        "cant_run": paused,
+        "retry": len(tasks["retry"]),
+        "manager": len(tasks["manager"]),
+        "person": len(tasks["person"]),
+        "cant_run": len(tasks["cant_run"]),
+        "tasks": {key: sorted(set(found)) for key, found in tasks.items()},
     }
 
 
@@ -2546,22 +2565,41 @@ def record_never_stuck(store):
     return reading
 
 
-def _never_stuck_check(c):
-    """Health · Tasks (S15): the last hourly reading. Bad when any of the rules that hold at all times is broken."""
+def _readable(c, visible_sql, ids):
+    """Of `ids`, those a reader with `visible_sql` may read, in one statement."""
+    if not ids:
+        return set()
+    return {
+        row[0]
+        for row in c.execute(
+            f"SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND ({visible_sql})", (json.dumps(ids),)
+        )
+    }
+
+
+def _never_stuck_check(c, visible_sql=None):
+    """Health · Tasks (S15): the last hourly reading, as numbers only. Bad when any of the rules that hold at all times
+    is broken. A rule break names a task and a bot, so its words are never shown: the owner and Admins (no
+    `visible_sql`) get the company's numbers; anyone else gets the numbers over the tasks they may read."""
     row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (NEVER_STUCK_KEY,)).fetchone()
     reading = json.loads(row[0]) if row else None
-    if not reading:
+    if not reading or (visible_sql and "tasks" not in reading):
         return _check("never_stuck", "Tasks", "unknown", "The hourly never-stuck reading has not run yet.")
+    if visible_sql:
+        listed = reading["tasks"]
+        readable = _readable(c, visible_sql, sorted({tid for found in listed.values() for tid in found}))
+        counts = {key: sum(1 for tid in listed.get(key, []) if tid in readable) for key in NEVER_STUCK_COUNTS}
+    else:
+        counts = {key: int(reading.get(key) or 0) for key in NEVER_STUCK_COUNTS}
     summary = (
-        f"{reading['waiting_on_nothing']} waiting on nothing, {reading['retry']} on a retry, "
-        f"{reading['manager']} with a manager, {reading['person']} reached a person, {reading['cant_run']} can't run."
+        f"{counts['waiting_on_nothing']} waiting on nothing, {counts['retry']} on a retry, "
+        f"{counts['manager']} with a manager, {counts['person']} reached a person, {counts['cant_run']} can't run."
     )
-    items = [{"text": line} for line in reading.get("breaks") or []]
-    if reading.get("broken"):
-        summary += f" {_plural(reading['broken'], 'rule break')}: " + "; ".join(i["text"] for i in items[:5])
-    check = _check("never_stuck", "Tasks", "bad" if reading.get("broken") else "ok", summary, items=items)
+    if counts["broken"]:
+        summary += f" {_plural(counts['broken'], 'rule break')}."
+    check = _check("never_stuck", "Tasks", "bad" if counts["broken"] else "ok", summary)
     # The same numbers as fields, so a screen reads them rather than the sentence.
-    check["counts"] = {key: int(reading.get(key) or 0) for key in NEVER_STUCK_COUNTS}
+    check["counts"] = counts
     check["at"] = reading.get("at")
     return check
 
@@ -3536,12 +3574,9 @@ def view(c, who, settings, auth, github, config):
             )
         )
 
-    # Tasks (S15): where the never-stuck ladder has them, from its hourly reading. The rule breaks name tasks, so only
-    # someone who reads the whole company sees them.
-    tasks_check = _never_stuck_check(c)
-    if not full:
-        tasks_check.pop("items", None)
-    checks.append(tasks_check)
+    # Tasks (S15): where the never-stuck ladder has them, from its hourly reading, as numbers: the company's for the
+    # owner and Admins, the tasks they may read for anyone else.
+    checks.append(_never_stuck_check(c, None if full else auth.task_sql(c, who)))
 
     checks.extend(_aged_pr_checks(c, who, auth, full, kind))
 

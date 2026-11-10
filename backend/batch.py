@@ -16,6 +16,7 @@ OKs. It is the whole list, or one bot's part of it (`scope`). "Who needs me" sta
 person, and commit says who is next: the bots come to the person one at a time, most important first.
 """
 
+import contextlib
 import json
 import re
 
@@ -569,6 +570,19 @@ def _brief(person, done, act):
     return "\n\n".join(parts)
 
 
+@contextlib.contextmanager
+def _savepoint(c, name):
+    """A write that may fail without taking the batch with it: on an error, only what it wrote is rolled back."""
+    c.execute(f"SAVEPOINT {name}")
+    try:
+        yield
+    except BaseException:
+        c.execute(f"ROLLBACK TO {name}")
+        c.execute(f"RELEASE {name}")
+        raise
+    c.execute(f"RELEASE {name}")
+
+
 def _comment_instead(c, who, to, lines, detail):
     """A bot the person may not message still sees what it must act on: each line becomes a
     comment on its task. Notes with no task are a failure, said."""
@@ -579,9 +593,10 @@ def _comment_instead(c, who, to, lines, detail):
             errors.append(f"{H.actor_name(c, to)} could not be told ({detail}): {line.splitlines()[0]}")
             continue
         try:
-            H.task_comment(c, who.actor, task["id"], line.split("\n", 1)[-1])
+            with _savepoint(c, "batch_comment"):
+                H.task_comment(c, who.actor, task["id"], line.split("\n", 1)[-1])
             applied.append(f"Commented on {line.splitlines()[0]} (could not message {H.actor_name(c, to)})")
-        except Exception as e:  # a refusal is a line in the record, not an abort
+        except Exception as e:  # a refusal is a line in the record, not an abort; its half-write is rolled back
             errors.append(f"{line.splitlines()[0]}: {_clip(str(e), 200)}")
     return applied, errors
 
@@ -605,7 +620,8 @@ def _deliver(c, who, batch_id, outbox, record, send):
                     # Each private record stays on its task, never copied to a bot room.
                     if task:
                         try:
-                            H.task_comment(c, who.actor, task["id"], line)
+                            with _savepoint(c, "batch_record"):
+                                H.task_comment(c, who.actor, task["id"], line)
                             applied.append("Recorded on its private task")
                         except Exception as e:
                             errors.append(_clip(str(e), 200))

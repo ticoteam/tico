@@ -236,6 +236,10 @@ def queue_email(
             raise Refused("The email send policy refused this invoice email: " + str(queued["decision"]["reasons"]))
     except Problem as exc:
         raise Refused(str(exc)) from exc
+    # The send's OK (task_asks, `email_send:<id>`): the queue claims it before the provider is called, and nothing
+    # sends a Finance email without one.
+    if not queued.get("approval_id"):
+        raise Refused("Finance's email was not held for a person's OK")
     return str(queued["approval_id"])
 
 

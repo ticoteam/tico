@@ -129,3 +129,19 @@ def test_a_batch_belongs_to_a_person_and_later_keeps_an_item_out_for_a_day(c):
     B.respond(c, ANA.actor, batch["id"], "later")
     B.commit(c, ANA, batch["id"], _sent([]))
     assert _start(c)["total"] == 0
+
+
+def test_a_comment_that_fails_halfway_leaves_nothing_of_itself_and_the_batch_goes_on(c, monkeypatch):
+    """A bot the person may not message gets its lines as task comments; one that writes and then fails is rolled back to
+    before it, so the batch's commit never carries half a comment."""
+    task = _work(c)
+    before = c.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+
+    def half(conn, actor, task_id, text):
+        H.event(conn, actor, "comment.half", task_id, {})
+        raise RuntimeError("the comment failed after writing")
+
+    monkeypatch.setattr(H, "task_comment", half)
+    applied, errors = B._comment_instead(c, ANA, FINANCE, [(f"task:{task['id']}", "Run the ads\nGo.")], "test")
+    assert applied == [] and "failed after writing" in errors[0]
+    assert c.execute("SELECT COUNT(*) FROM events").fetchone()[0] == before

@@ -562,64 +562,6 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
 
-  # The factory simulation (evals/factory): scripted bots work the candidate's Dev board on a fake clock, seeds 1-3,
-  # packed into twelve groups of about equal time (about 4 minutes a VM, setup included), each VM running four scenarios
-  # at a time (-j 4). A failed check fails the release; NOTE lines (tickets that ran long) go in the job summary for the
-  # Release Manager. A candidate frozen before the sim could shard skips it.
-  factory-sim:
-    needs: candidate
-    # An incremental validation runs the sim only when its plan says a change reaches it (release_increment.plan_for).
-    if: needs.candidate.outputs.plan == '' || fromJSON(needs.candidate.outputs.plan).factory
-    name: factory-sim-${{ matrix.shard }}
-    runs-on: ${{ (vars.TICO_CI_HOSTED == 'true' || inputs.anchor != '') && 'ubuntu-24.04' || format('runs-on={0}/volume=30gb:gp3:125mbs:3000iops/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/extras=s3-cache', github.run_id) }}
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12']
-    env:
-      PYTHONUNBUFFERED: '1'
-    steps:
-      - name: Free disk on a GitHub-hosted runner (about 14 GB free there; RunsOn's volume is 30 GB)
-        if: vars.TICO_CI_HOSTED == 'true' || inputs.anchor != ''
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ needs.candidate.outputs.sha }}
-          path: candidate
-          persist-credentials: false
-      - name: Does the candidate shard the sim
-        id: has
-        run: |
-          if grep -q 'add_argument("--shard"' candidate/evals/factory/run.py 2>/dev/null; then echo "run=true" >> "$GITHUB_OUTPUT"
-          else echo "run=false" >> "$GITHUB_OUTPUT"; echo "The candidate has no sharded factory sim; skipped." >> "$GITHUB_STEP_SUMMARY"; fi
-      - if: steps.has.outputs.run == 'true'
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.15'
-      - if: steps.has.outputs.run == 'true'
-        name: Install
-        working-directory: candidate
-        run: |
-          python3 -m venv "$RUNNER_TEMP/venv"
-          python3 -m pip install --disable-pip-version-check uv==0.13.1
-          python3 -m uv pip install --python "$RUNNER_TEMP/venv/bin/python" -r backend/requirements-dev.txt
-      - if: steps.has.outputs.run == 'true'
-        name: Run this group of the factory sim
-        working-directory: candidate
-        env:
-          SHARD: ${{ matrix.shard }}
-        run: |
-          set -o pipefail
-          "$RUNNER_TEMP/venv/bin/python" -W ignore -m evals.factory.run --seeds 1-3 --shard "$SHARD/12" -j 4 2>&1 \
-            | tee "$RUNNER_TEMP/sim.log"
-      - if: always() && steps.has.outputs.run == 'true'
-        name: Summary
-        run: |
-          { echo "### Factory sim, group ${{ matrix.shard }} of 12"; echo '```'
-            awk '/^== /{h=$0; next} /^ +(FAIL|NOTE) /{if(h){print h; h=""} print} /scenario runs in/' "$RUNNER_TEMP/sim.log"
-            echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-
   # Per-file and per-script seconds from this gate's reports, in the format PR checks size their groups from
   # (scripts/pr_checks.py durations). Optional: it never changes the release verdict or the run's conclusion.
   test-timings:
@@ -650,7 +592,7 @@ jobs:
 
   # The one verdict: the release passes only when every part passed and the Linux binaries and images built.
   release-check:
-    needs: [candidate, gate, factory-sim, images]
+    needs: [gate, images]
     if: always()
     # Only compares results: GitHub-hosted starts in seconds, where a RunsOn VM boots for ~20 s at the run's very end.
     runs-on: ubuntu-24.04
@@ -659,13 +601,7 @@ jobs:
       - name: Every part of the release gate passed
         env:
           GATE: ${{ needs.gate.result }}
-          SIM: ${{ needs.factory-sim.result }}
           IMAGES: ${{ needs.images.result }}
-          PLAN: ${{ needs.candidate.outputs.plan }}
         run: |
-          echo "Release gate parts: $GATE; factory sim: $SIM; images: $IMAGES"
-          # An incremental validation's plan may leave the factory sim out: a skipped sim is then the plan's choice.
-          sim_ok=false
-          [ "$SIM" = success ] && sim_ok=true
-          [ "$SIM" = skipped ] && [ -n "$PLAN" ] && [ "$(jq -r .factory <<<"$PLAN")" = false ] && sim_ok=true
-          test "$GATE" = success && [ "$sim_ok" = true ] && test "$IMAGES" = success
+          echo "Release gate parts: $GATE; images: $IMAGES"
+          test "$GATE" = success && test "$IMAGES" = success

@@ -128,7 +128,41 @@ def test_the_release_schedule_reads_and_changes_and_release_now_answers_why_noth
     r = api.patch("/api/v2/release-schedule", json={"on": False}, headers=headers("cara-test"))
     assert r.status_code == 403, r.text
     answer = post(api, "release/now", {"note": "Hotfix for the login loop"})
-    assert answer["sent"] is False and answer["reason"] in ("no_release_manager", "nothing_pending")
+    assert answer == {"sent": False, "reason": "no_release_manager", "task": None, "tasks": 0}
+
+
+def test_release_now_files_one_task_for_the_release_manager_naming_only_what_its_requester_may_read(api):
+    """A release moves every task waiting for one, but what the release task says, and what a reader is shown waiting,
+    is only what they may read: a private task is counted, never named."""
+    stages = [
+        {"id": "build", "name": "Build", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+        {"id": "ship", "name": "Ship", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+    ]
+    post(api, "pipelines/delivery", {"name": "Delivery", "stages": stages})
+    # "In a release" is saved from phase 3 (pipeline_settings.PHASE): the stage is given one as it would be then.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE requirements SET kind='in_release' WHERE stage_id='ship'")
+    patched = api.patch("/api/v2/release-schedule", json={"bot": "ops"}, headers=headers())
+    assert patched.status_code == 200 and patched.json()["release_manager"] == "ops", patched.text
+    shown = post(api, "tasks", {"title": "Saved carts", "body": "x", "owner": "ben", "pipeline": "delivery"})
+    hidden = post(
+        api,
+        "tasks",
+        {"title": "Quiet acquisition", "body": "x", "owner": "ben", "pipeline": "delivery", "private": True},
+    )
+    for made in (shown, hidden):
+        post(api, f"tasks/{made['id']}/done", {}, token="ben-test")
+    assert api.get("/api/v2/tasks/" + hidden["id"], headers=headers("cara-test")).status_code == 404
+    assert get(api, "release-schedule")["pending"] == 2
+    assert get(api, "release-schedule", token="cara-test")["pending"] == 1
+    answer = post(api, "release/now", {"note": "Before the weekend"}, token="cara-test")
+    assert answer["sent"] is True and answer["tasks"] == 2 and answer["reason"] is None
+    filed = get(api, "tasks/" + answer["task"], token="cara-test")["task"]
+    assert filed["owner_id"] == "bot:ops"
+    assert shown["id"] in filed["body"] and hidden["id"] not in filed["body"] and "and 1 more" in filed["body"]
+    assert hidden["id"] not in filed["title"]
+    again = post(api, "release/now", {}, token="cara-test")
+    assert again["sent"] is False and again["reason"] == "already_open" and again["task"] == answer["task"]
 
 
 def test_healths_never_stuck_check_gives_its_numbers_as_fields(api):
@@ -149,3 +183,117 @@ def test_a_bots_page_says_why_it_cant_run_and_the_fix(api):
         c.execute("UPDATE bots SET state='paused' WHERE id='ops'")
     seen = get(api, "bots/ops")["cant_run"]
     assert seen["fix"] == "resume" and seen["cause"].endswith("is paused")
+
+
+def test_waiting_on_narrows_the_changes_since_a_cursor(api):
+    cursor = get(api, "tasks")["cursor"]
+    bens = post(api, "tasks", {"title": "Book the barn", "body": "As discussed.", "owner": "ben"})
+    post(api, "tasks", {"title": "Order the cake", "body": "As discussed.", "owner": "cara"})
+    seen = get(api, f"tasks?waiting_on=ben&changed_after={cursor}")
+    assert [t["id"] for t in seen["tasks"]] == [bens["id"]]
+
+
+def test_a_pipelines_mark_counts_only_the_tasks_the_reader_may_read(api):
+    product(api)
+    hidden = post(
+        api,
+        "tasks",
+        {"title": "Quiet acquisition", "body": "As discussed.", "owner": "ben", "pipeline": "product", "private": True},
+    )
+    assert api.get("/api/v2/tasks/" + hidden["id"], headers=headers("cara-test")).status_code == 404
+    mine = {p["id"]: p for p in get(api, "factories")["pipelines"]}["product"]
+    assert mine["open"] == 1 and mine["mark"] == "needs_person"
+    theirs = {p["id"]: p for p in get(api, "factories", token="cara-test")["pipelines"]}["product"]
+    assert theirs["open"] == 0 and theirs["mark"] is None
+
+
+def test_only_the_screens_preferences_are_kept_and_each_is_small(api):
+    for key in ("ui.rails", "org.history", "org.mine", "tasks.view", "tasks.pins", "pipeline.rail_hidden"):
+        assert post(api, "preferences/" + key, {"value": {"at": 1}})["value"] == {"at": 1}
+    for key in ("onboarding.progress", "librarian.market_setup", "changelog.read", "anything.else"):
+        r = api.post(f"/api/v2/preferences/{key}", json={"value": {"skipped": 1}}, headers=headers())
+        assert r.status_code == 422, (key, r.text)
+        assert api.get(f"/api/v2/preferences/{key}", headers=headers()).status_code == 422
+    r = api.post("/api/v2/preferences/org.history", json={"value": {"items": ["x" * 5000]}}, headers=headers())
+    assert r.status_code == 422, r.text
+
+
+def test_a_sub_task_the_reader_may_not_open_is_named_by_neither_title_nor_id(api):
+    # A bot's task waits on what it filed (waiting_on.py): here, a sub-task private to ben.
+    parent = post(api, "tasks", {"title": "Plan the launch", "body": "x", "owner": "ops"})
+    child = post(
+        api,
+        "tasks",
+        {"title": "Quiet acquisition", "body": "x", "owner": "ben", "parent": parent["id"], "private": True},
+    )
+    assert api.get("/api/v2/tasks/" + child["id"], headers=headers("cara-test")).status_code == 404
+    mine = get(api, "tasks/" + parent["id"])["task"]
+    assert mine["turn"]["state"] == "tasks" and mine["turn"]["who"] == child["id"]
+    row = next(t for t in get(api, "tasks?brief=true", token="cara-test")["tasks"] if t["id"] == parent["id"])
+    full = get(api, "tasks/" + parent["id"], token="cara-test")["task"]
+    for turn in (row["turn"], full["turn"], *full["waits"]):
+        assert turn["line"] == "A sub-task" and turn["who"] is None, turn
+    for req in full["to_leave"]:
+        assert req["who"] != child["id"] and "Quiet acquisition" not in (req["standing"] or ""), req
+
+
+def _never_stuck(api, token):
+    return next(c for c in get(api, "health", token=token)["checks"] if c["id"] == "never_stuck")
+
+
+def test_health_counts_tasks_without_naming_them_and_a_member_counts_only_what_they_read(api):
+    import json
+
+    from backend import health
+
+    seen = post(api, "tasks", {"title": "Book the barn", "body": "x", "owner": "ops"})
+    hidden = post(api, "tasks", {"title": "Quiet acquisition", "body": "x", "owner": "ops", "private": True})
+    assert api.get("/api/v2/tasks/" + hidden["id"], headers=headers("cara-test")).status_code == 404
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE visits SET level='person' WHERE left_at IS NULL AND task_id IN (?,?)", (seen["id"], hidden["id"])
+        )
+    reading = health.record_never_stuck(api.app.state.store)
+    assert reading["person"] == 2
+    # A broken rule names its task and a bot: an Admin sees how many, never which.
+    reading["breaks"], reading["broken"] = [f"2: task {hidden['id']} is bot:ops's turn with no run"], 1
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (json.dumps(reading), health.NEVER_STUCK_KEY))
+    admin = _never_stuck(api, "ben-test")
+    assert admin["counts"]["person"] == 2 and admin["counts"]["broken"] == 1 and admin["status"] == "bad"
+    assert hidden["id"] not in json.dumps(admin) and "bot:ops" not in json.dumps(admin)
+    member = _never_stuck(api, "cara-test")
+    assert member["counts"]["person"] == 1 and member["counts"]["broken"] == 0
+    assert hidden["id"] not in json.dumps(member)
+
+
+def test_an_admins_needs_you_plates_count_only_what_the_admin_may_read(api):
+    for n in range(12):
+        post(api, "tasks", {"title": f"Private errand {n}", "body": "x", "owner": "cara", "private": True})
+    own = next((c for c in get(api, "health", token="cara-test")["checks"] if c["id"] == "needs_plate"), None)
+    assert own and own["items"][0]["count"] >= 12
+    admin = next((c for c in get(api, "health", token="ben-test")["checks"] if c["id"] == "needs_plate"), None)
+    assert admin is None or all(item["person"] != "human:cara" for item in admin.get("items", []))
+
+
+def test_the_screens_reads_are_in_the_served_document_and_answer_as_it_says(api):
+    from backend.tests.helpers.openapi_v2 import conforms
+
+    product(api)
+    document = api.get("/api/v2/openapi.json", headers=headers()).json()
+    by_id = {op["operationId"]: op for ops in document["paths"].values() for op in ops.values()}
+
+    def call(operation, method, path, **kw):
+        response = getattr(api, method)(path, headers=headers(), **kw)
+        assert response.status_code == 200, (path, response.text)
+        schema = by_id[operation]["responses"]["200"]["content"]["application/json"]["schema"]
+        assert conforms(response.json(), schema, document) is None, (operation, response.text[:300])
+
+    call("getPreference", "get", "/api/v2/preferences/ui.rails")
+    call("setPreference", "post", "/api/v2/preferences/ui.rails", json={"value": {"at": 1}})
+    call("getReleaseSchedule", "get", "/api/v2/release-schedule")
+    call("updateReleaseSchedule", "patch", "/api/v2/release-schedule", json={"on": True})
+    call("releaseNow", "post", "/api/v2/release/now", json={})
+    call("listFactories", "get", "/api/v2/factories")
+    call("createFactory", "post", "/api/v2/factories", json={"name": "Growth"})
+    call("getPipelineLog", "get", "/api/v2/pipelines/product/log")

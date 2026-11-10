@@ -27,8 +27,8 @@ def _since(period):
     return at.isoformat().replace("+00:00", "Z")
 
 
-def _marks(c, pipeline_ids):
-    """Each pipeline's mark: CANT_RUN when an open task in it waits on a bot that can't run, else NEEDS_PERSON when one
+def _marks(c, pipeline_ids, visible_sql):
+    """Each pipeline's mark over the open tasks the reader may read: CANT_RUN when one in it waits on a bot that can't run, else NEEDS_PERSON when one
     waits on a person, else None. Snoozed tasks are set aside and count for neither. Every task's waits are read the
     one way every screen reads them (waiting_on.py)."""
     from . import waiting_on as W
@@ -36,7 +36,8 @@ def _marks(c, pipeline_ids):
     marks = dict.fromkeys(pipeline_ids)
     rows = c.execute(
         "SELECT t.id, t.pipeline_id FROM tasks t WHERE t.status='open' AND t.pipeline_id IS NOT NULL "
-        "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id=t.id AND s.ended_at IS NULL)"
+        "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id=t.id AND s.ended_at IS NULL) "
+        f"AND t.id IN (SELECT id FROM tasks WHERE {visible_sql})"
     ).fetchall()
     pipeline_of = {r[0]: r[1] for r in rows if r[1] in marks}
     for tid, waits in W.waiting_on_many(c, list(pipeline_of)).items():
@@ -91,7 +92,7 @@ def factories(c, visible_sql, period):
         target = (H._json(on_enter, {}) or {}).get("file_into")
         if isinstance(target, str) and target and target not in files_into.setdefault(pid, []):
             files_into[pid].append(target)
-    marks = _marks(c, [p["id"] for p in pipes])
+    marks = _marks(c, [p["id"] for p in pipes], visible_sql)
     for pipe in pipes:
         pipe["open"] = counts.get(pipe["id"], 0)
         pipe["files_into"] = files_into.get(pipe["id"], [])
