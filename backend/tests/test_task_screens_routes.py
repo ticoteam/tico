@@ -237,6 +237,27 @@ def test_a_sub_task_the_reader_may_not_open_is_named_by_neither_title_nor_id(api
         assert req["who"] != child["id"] and "Quiet acquisition" not in (req["standing"] or ""), req
 
 
+def test_a_sub_task_of_a_bot_the_reader_may_not_read_is_named_nowhere_on_its_parent(api):
+    """Codex review 2, 7: the child is not private, but its owner, the inbox bot, is read only by Ana. Cara may not
+    read it, so its parent's full read names it nowhere: not its title, not its id. (`filed` is core's, review 2, 6.)"""
+    import json
+
+    from backend.tests.helpers.api import restrict, unrelated_task_managers
+
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c, "inbox")
+        restrict(c, "inbox", see={"everyone": True}, read={"people": ["ana"]}, write={"people": ["ana"]})
+    parent = post(api, "tasks", {"title": "Plan the launch", "body": "x", "owner": "ops"})
+    child = post(api, "tasks", {"title": "Sort the press list", "body": "x", "owner": "inbox", "parent": parent["id"]})
+    assert api.get("/api/v2/tasks/" + child["id"], headers=headers("cara-test")).status_code in (403, 404)
+    assert get(api, "tasks/" + parent["id"])["task"]["turn"]["who"] == child["id"]
+    full = get(api, "tasks/" + parent["id"], token="cara-test")
+    full["task"].pop("filed", None)
+    said = json.dumps(full)
+    assert child["id"] not in said and "Sort the press list" not in said, said
+    assert full["task"]["turn"]["line"] == "A sub-task" and full["task"]["turn"]["who"] is None
+
+
 def _never_stuck(api, token):
     return next(c for c in get(api, "health", token=token)["checks"] if c["id"] == "never_stuck")
 

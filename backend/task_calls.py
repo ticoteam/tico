@@ -605,26 +605,33 @@ def _may(
 ON_RECORD = "*"
 
 
-def _readable(conn: "sqlite3.Connection", viewer: str | None, task_id: object) -> bool:
+def _readable(conn: "sqlite3.Connection", viewer: str | None, task_id: object, visible_sql: str | None = None) -> bool:
     """Whether `viewer` may read another task this one names. With no viewer nothing is hidden (the caller is the
-    engine's own code); ON_RECORD reads only what is not private."""
+    engine's own code); ON_RECORD reads only what is not private. `visible_sql` is the reader's whole rule
+    (auth.task_sql: private audience, the bots they may read, a delegated identity's limits), the one a direct read
+    of that task uses; without it only privacy is checked."""
     H = _h()
     if viewer is None:
         return True
     other: Row | None = H.task(conn, str(task_id)) if task_id else None
     if viewer == ON_RECORD:
         return bool(other) and not H.task_private(conn, other)
-    return bool(other) and bool(H.task_private_readable(conn, viewer, other))
+    if not other or not H.task_private_readable(conn, viewer, other):
+        return False
+    if visible_sql is None:
+        return True
+    return conn.execute(f"SELECT 1 FROM tasks WHERE id=? AND ({visible_sql})", (other["id"],)).fetchone() is not None
 
 
-def hidden_filed(conn: "sqlite3.Connection", row: Row, viewer: str | None) -> list[str]:
-    """The tasks the open visit of `row` (task_engine.task's shape) filed that `viewer` may not read. Their titles are
-    not theirs to see: not in what the task waits on, not in a requirement's standing, not in a refusal."""
+def hidden_filed(conn: "sqlite3.Connection", row: Row, viewer: str | None, visible_sql: str | None = None) -> list[str]:
+    """The tasks the open visit of `row` (task_engine.task's shape) filed that `viewer` may not read (`_readable`).
+    Their titles and ids are not theirs to see: not in what the task waits on, not in a requirement's standing, not
+    in a refusal."""
     visit: Row = row.get("visit") or {}
     if row.get("status") != "open" or not visit:
         return []
     filed = [str(found[0]) for found in conn.execute("SELECT to_task_id FROM links WHERE visit_id=?", (visit["id"],))]
-    return [other for other in filed if not _readable(conn, viewer, other)]
+    return [other for other in filed if not _readable(conn, viewer, other, visible_sql)]
 
 
 def standing_line(standing: "R.Standing", hidden: list[str]) -> str:
@@ -634,7 +641,9 @@ def standing_line(standing: "R.Standing", hidden: list[str]) -> str:
     return standing.line
 
 
-def task_view(conn: "sqlite3.Connection", task_id: str, viewer: str | None = None) -> Row | None:
+def task_view(
+    conn: "sqlite3.Connection", task_id: str, viewer: str | None = None, visible_sql: str | None = None
+) -> Row | None:
     """The engine's part of a task as JSON (docs/dev/pipelines-v3-cutover.md, "The task as JSON"): where it is, whose
     turn it is, everything it needs to leave its stage, and what `viewer` may do about each. None when there is no
     such task. A read: it writes nothing, and it does not check that `viewer` may read the task (the caller did)."""
@@ -654,7 +663,7 @@ def task_view(conn: "sqlite3.Connection", task_id: str, viewer: str | None = Non
     waits = [asdict(wait) for wait in W.of(conn, row, standings=standings)] if live else []
     # A task this one filed may be private to people who can read this one: its title is not theirs to see, here or
     # in the line that says what this task waits on.
-    hidden = hidden_filed(conn, row, viewer)
+    hidden = hidden_filed(conn, row, viewer, visible_sql)
     for wait in waits:
         if wait["state"] == W.TASKS and wait["who"] in hidden:
             wait["line"], wait["who"] = "A sub-task", None  # neither its title nor its id
