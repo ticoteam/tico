@@ -1568,15 +1568,15 @@ def is_stale(row, today):
 
 
 def _free_owner_title(conn, actor, owner):
-    """A title this run can still open. A live task of the same title, even one marked done,
-    blocks another ask with that title, so the next pass gets its own."""
+    """A title this run can still open. An open task of the same title blocks another ask with that title (the
+    duplicate rule), so the next pass gets its own."""
     base = "Review market insights that need a person"
-    marks = ",".join("?" * len(H.LIVE_STATUSES))
+    marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     for n in range(1, 40):
         title = base if n == 1 else f"Review market insights that need a person, pass {n}"
         if not conn.execute(
             f"SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status IN ({marks})",
-            (actor, owner, title, *H.LIVE_STATUSES),
+            (actor, owner, title, *H.ACTIVE_STATUSES),
         ).fetchone():
             return title
     return base + ", pass 40"
