@@ -22,7 +22,6 @@ from . import (
     inbox_isolation,
     model_login,
     models_preset,
-    pipeline_stats,
     providers,
     releases,
     replication,
@@ -854,6 +853,15 @@ def _claimable(c, settings, runner_id, slug, limits, **kw):
         return None
 
 
+def queue_counts(c, bots, now=None):
+    """Each bot's queue split over every job (backend/bot_rows.py `job_queues` for a reader), with the oldest queued,
+    dead and quarantine-held job's time, so the queued count Health shows a bot is the one its page shows an operator
+    who may read all of that bot's jobs."""
+    from .bot_rows import queue_job_rows, tally_queues
+
+    return tally_queues(bots, queue_job_rows(c, bots), now, None)
+
+
 def _waiting(c, online_ids, settings=None, limits=None, loads=None):
     """Active bots whose computer is offline (or that have none while work is queued), with the
     work stuck behind them, and bots whose queued work is old even though their computer is up.
@@ -865,12 +873,12 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
 
     cutoff = H.shift(H.now(), minutes=-QUEUE_MINUTES)
     person_cutoff = H.shift(H.now(), minutes=-PERSON_QUEUE_MINUTES)
-    # Each bot's queue is shown as Pipeline splits it (pipeline_stats.queue_counts), so the counts match `hub pipeline`:
+    # Each bot's queue is split as its page splits it (queue_counts), so the counts match the bot's page:
     # `queued` can start, `dead` waits behind an interrupted run nobody reviewed, `quarantine_held` waits for refusal
     # cooldown, and `held` waits on purpose
-    # (backend/wake_presets.py). Which bots are looked at is every job the claim reads, held ones never: Pipeline counts a
-    # held job behind an interrupted run as dead, and work held on purpose is not stuck.
-    split = pipeline_stats.queue_counts(c, [r["id"] for r in c.execute("SELECT id FROM bots")])
+    # (backend/wake_presets.py). Which bots are looked at is every job the claim reads, held ones never: a held job
+    # behind an interrupted run counts as dead, and work held on purpose is not stuck.
+    split = queue_counts(c, [r["id"] for r in c.execute("SELECT id FROM bots")])
     queued = {
         r["bot_id"]: (r["n"], r["oldest"])
         for r in c.execute(
