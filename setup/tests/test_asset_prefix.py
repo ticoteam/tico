@@ -4,6 +4,7 @@ name, tag, path, policy or bucket says tico, names on the server itself (/opt/ti
 in strict mode (setup/owned.py): it acts only on what it proves is this install's."""
 
 import gzip
+import hashlib
 import json
 import re
 
@@ -22,12 +23,20 @@ from setup.tests.helpers.wizard import BASE, go, secret_env  # noqa: F401 (secre
 ACCOUNT = "123456789012"
 
 
+def etag(body: bytes) -> str:
+    """As S3 gives a single-part upload: the MD5 of its bytes, whatever its metadata or when it was written."""
+    return f'"{hashlib.md5(body).hexdigest()}"'
+
+
 class S3:
     """Every S3 call, recorded; a bucket exists once it is created. Objects too, as S3 keeps them: a put with
-    IfNoneMatch="*" fails where one exists (S3's conditional write), and each put gets a new ETag."""
+    IfNoneMatch="*" fails where one exists (S3's conditional write); an ETag is a function of the bytes alone, so the same
+    bytes written again keep it; in a bucket with versioning on, each put is a new VersionId and a delete naming one
+    removes only that version; a delete with IfMatch fails unless the current ETag is that one."""
 
     def __init__(self):
         self.calls, self.tagsets, self.objects, self.puts = [], {}, {}, 0
+        self.versioned, self.versions = set(), {}  # versions: (bucket, key) -> older versions still kept
 
     def _rec(self, name, kw):
         self.calls.append((name, kw))
@@ -55,19 +64,43 @@ class S3:
         if kw.get("IfNoneMatch") == "*" and at in self.objects:
             raise ClientError("PreconditionFailed")
         self.puts += 1
-        self.objects[at] = {"Body": kw["Body"], "Metadata": kw.get("Metadata", {}), "ETag": f'"etag{self.puts}"'}
-        return {"ETag": self.objects[at]["ETag"]}
+        obj = {"Body": kw["Body"], "Metadata": kw.get("Metadata", {}), "ETag": etag(kw["Body"])}
+        if kw["Bucket"] in self.versioned:
+            obj["VersionId"] = f"v{self.puts}"
+            if at in self.objects:
+                self.versions.setdefault(at, []).append(self.objects[at])
+        self.objects[at] = obj
+        return {k: obj[k] for k in ("ETag", "VersionId") if k in obj}
+
+    def put_bucket_versioning(self, **kw):
+        self._rec("put_bucket_versioning", kw)
+        if kw["VersioningConfiguration"]["Status"] == "Enabled":
+            self.versioned.add(kw["Bucket"])
 
     def head_object(self, **kw):
         self._rec("head_object", kw)
-        if (kw["Bucket"], kw["Key"]) not in self.objects:
+        at = (kw["Bucket"], kw["Key"])
+        rows = [self.objects[at]] if at in self.objects else []
+        rows += self.versions.get(at, [])
+        o = next((r for r in rows if not kw.get("VersionId") or r.get("VersionId") == kw["VersionId"]), None)
+        if o is None:
             raise ClientError("404")
-        o = self.objects[(kw["Bucket"], kw["Key"])]
-        return {"ETag": o["ETag"], "Metadata": o["Metadata"]}
+        return {k: o[k] for k in ("ETag", "Metadata", "VersionId") if k in o}
 
     def delete_object(self, **kw):
         self._rec("delete_object", kw)
-        self.objects.pop((kw["Bucket"], kw["Key"]), None)
+        at = (kw["Bucket"], kw["Key"])
+        if kw.get("IfMatch") and (at not in self.objects or self.objects[at]["ETag"] != kw["IfMatch"]):
+            raise ClientError("PreconditionFailed")
+        if kw.get("VersionId"):
+            if (self.objects.get(at) or {}).get("VersionId") == kw["VersionId"]:
+                self.objects.pop(at)
+                if self.versions.get(at):
+                    self.objects[at] = self.versions[at].pop()
+            else:
+                self.versions[at] = [v for v in self.versions.get(at, []) if v.get("VersionId") != kw["VersionId"]]
+            return
+        self.objects.pop(at, None)
 
     def __getattr__(self, name):
         return lambda **kw: self._rec(name, kw)
@@ -1474,7 +1507,7 @@ def test_the_plan_goes_only_to_a_bucket_setup_recorded_making_and_its_objects_ar
     # Its own: written only where nothing is, recorded, and only then deleted; a retry of a lost response is its own.
     other = "plans/acme/" + "b" * 64
     d.put_plan(s3, other, "ours")
-    assert saved[-1]["plan_object"] == {"key": other, "etag": '"etag1"'}
+    assert saved[-1]["plan_object"] == {"key": other, "etag": etag(b"ours")}
     d.put_plan(s3, other, "ours")
     assert d.delete_plan(s3, other) == "" and ("hub-setup-plans-x", other) not in s3.objects
 
@@ -2101,10 +2134,10 @@ def test_the_plan_bucket_and_object_are_proved_before_each_write_and_a_lost_put_
     again = strict_dep(p, None, None, None, ids=json.loads(json.dumps(saved[-1])))
     again.ensure_plan_bucket(s3, "us-east-1")
     again.put_plan(s3, key, "ours")  # 412: its own bytes, known by the hash in the object's metadata
-    assert again.ids["plan_object"] == {"key": key, "etag": '"etag1"'}
+    assert again.ids["plan_object"] == {"key": key, "etag": etag(b"ours")}
     s3.objects[("hub-plans-x", key)]["ETag"] = '"replaced"'  # written over since (by someone else)
     assert again.delete_plan(s3, key) and ("hub-plans-x", key) in s3.objects
-    s3.objects[("hub-plans-x", key)]["ETag"] = '"etag1"'
+    s3.objects[("hub-plans-x", key)]["ETag"] = etag(b"ours")
     s3.tagsets["hub-plans-x"] = PRODUCTION
     assert again.delete_plan(s3, key) and ("hub-plans-x", key) in s3.objects
     with pytest.raises(MissingInput, match="hub-plans-x"):
@@ -2477,3 +2510,37 @@ def test_only_an_access_key_this_install_recorded_making_is_ever_deleted():
         assert [c["AccessKeyId"] for c in iam.called("delete_access_key")] == [gone]
         new = values["LITESTREAM_ACCESS_KEY_ID"]
         assert ids["backup_keys"] == [k for k in recorded_keys if k != gone] + [new]
+
+
+def test_the_plan_object_is_deleted_only_by_its_recorded_version_or_a_delete_conditional_on_its_etag():
+    # Codex review 5, case 9: the plan object was read (HEAD), then deleted unconditionally, so one replaced in between
+    # was deleted; and the fake's new ETag per put hid that the same bytes written again keep their ETag. In a bucket
+    # with versioning on, exactly the recorded version is deleted; with it off, the delete carries IfMatch.
+    p = hub_plan(domain=DOMAIN, plan_bucket="hub-plans-x")
+    key = "plans/hotmic/" + "c" * 64
+    for versioned, body in ((False, b"someone else's"), (True, b"ours")):
+        s3 = S3()
+        d = strict_dep(p, None, None, None, ids={})
+        d.ensure_plan_bucket(s3, "us-west-2")
+        if versioned:
+            s3.put_bucket_versioning(Bucket="hub-plans-x", VersioningConfiguration={"Status": "Enabled"})
+        d.put_plan(s3, key, "ours")
+        assert d.ids["plan_object"]["etag"] == etag(b"ours")
+        assert ("version_id" in d.ids["plan_object"]) == versioned
+        real = s3.delete_object
+
+        def replaced_first(s3=s3, real=real, body=body, **kw):
+            # Written over in the instant before the delete arrives (versioned: the same bytes, so the same ETag).
+            s3.delete_object = real
+            s3.put_object(Bucket="hub-plans-x", Key=key, Body=body, Metadata={"owner": "production"})
+            real(**kw)
+
+        s3.delete_object = replaced_first
+        result = d.delete_plan(s3, key)
+        now = s3.objects.get(("hub-plans-x", key))
+        assert now is not None and now["Metadata"] == {"owner": "production"}, (versioned, result)
+        if versioned:
+            assert result == "" and s3.called("delete_object")[-1]["VersionId"] == d.ids["plan_object"]["version_id"]
+            assert not s3.versions.get(("hub-plans-x", key))  # this install's own version is gone
+        else:
+            assert result == "ChangedSinceWritten" and s3.called("delete_object")[-1]["IfMatch"] == etag(b"ours")

@@ -523,8 +523,9 @@ class StrictDeployer(Deployer):
     def delete_plan(self, s3, key: str) -> str:
         """Once the server is up and its app reads its copy. Returns "" when deleted, else the error code: the server is
         already working, and the plan stays until someone deletes it or the bucket's lifecycle rule, if it has one,
-        expires it. Only the object this install recorded writing, unchanged since (its ETag), is ever deleted; in a
-        versioned bucket, exactly the version it wrote."""
+        expires it. Only the object this install recorded writing is ever deleted, and never by a read followed by a
+        plain delete: in a versioned bucket exactly the version it wrote (VersionId); otherwise a delete S3 carries out
+        only while the object's ETag is still the recorded one (IfMatch)."""
         rec = self.plan_record()
         if rec.get("key") != key or not rec.get("etag"):
             return "NotWrittenByThisInstall"
@@ -532,15 +533,9 @@ class StrictDeployer(Deployer):
             self.prove_plan_bucket(s3)
         except MissingInput:
             return "NotThisInstallsBucket"
-        version = {"VersionId": rec["version_id"]} if rec.get("version_id") else {}
-        where = {"Bucket": self.p.plan_bucket, "Key": key, **version}
-        try:
-            now = s3.head_object(**where, ExpectedBucketOwner=self.account_id)
-        except Exception as e:  # noqa: BLE001  botocore ClientError or a network error, without importing botocore
-            return str(error_code(e) or type(e).__name__)
-        if now.get("ETag") != rec["etag"]:
-            return "ChangedSinceWritten"
-        return self._s3_call(s3.delete_object, **where)
+        cond = {"VersionId": rec["version_id"]} if rec.get("version_id") else {"IfMatch": rec["etag"]}
+        code = self._s3_call(s3.delete_object, Bucket=self.p.plan_bucket, Key=key, **cond)
+        return "ChangedSinceWritten" if code == "PreconditionFailed" and not rec.get("version_id") else code
 
     def _s3_call(self, call, **kw) -> str:
         """ "" when the call, made with this account as the expected bucket owner, worked; else its error code."""
