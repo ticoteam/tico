@@ -86,6 +86,39 @@ const CALL_READ_EVERY: Duration = Duration::from_secs(5);
 const CALL_PRESENCE_EVERY: Duration = Duration::from_secs(10);
 /// How long giving a call back waits for the last words to be transcribed and shared.
 const CALL_LAST_WORDS: Duration = Duration::from_secs(120);
+/// A release Tico did not take is tried this many times in all, a little later each time.
+const RELEASE_TRIES: u32 = 5;
+/// A call's source to give back (`Recorder::release_call`).
+#[derive(Clone, Debug)]
+struct Release {
+    destination: String,
+    call: String,
+    /// The recording whose last words go to the call's meeting first.
+    id: Option<String>,
+    tries: u32,
+    after: Instant,
+}
+/// Waits for a stopped call recording's last audio and words, shares them, then ends its meeting here so nothing
+/// more goes there.
+fn share_last_words(tico: &Tico, store: &Store, id: &str) -> anyhow::Result<()> {
+    wait_stopped(store, id)?;
+    let deadline = Instant::now() + CALL_LAST_WORDS;
+    while Instant::now() < deadline
+        && store
+            .get(id)?
+            .chunks
+            .iter()
+            .any(|chunk| ["pending", "running"].contains(&chunk.status.as_str()))
+    {
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    let shared = tico.push_live(store, id);
+    store.update_context(id, |context| {
+        context.live_state = "ended".into();
+        Ok(())
+    })?;
+    shared
+}
 /// Drafting reads streamed text too, so it can follow speech closely; one model call per
 /// interval at most.
 pub const DRAFT_INTERVAL: Duration = Duration::from_secs(10);
@@ -437,6 +470,9 @@ pub struct Recorder {
     pub visible: bool,
     /// When the default Tico was last asked what speech it can handle, and which Tico it was.
     services_at: Option<(Instant, String)>,
+    /// Call sources waiting to be given back, and the one being given back now.
+    releases: std::collections::VecDeque<Release>,
+    releasing: Option<Release>,
     /// A call link waiting for sign-in to its org: (org address, call id).
     pending_call: Option<(String, String)>,
     /// The call being claimed now: (connection id, call id).
@@ -573,6 +609,8 @@ impl Recorder {
             visible: true,
             services_at: None,
             pending_call: None,
+            releases: Default::default(),
+            releasing: None,
             claiming: None,
             call_read_at: Instant::now(),
             call_presence_at: Instant::now(),
@@ -946,32 +984,44 @@ impl Recorder {
             Claim::Failed(error) => self.error = error,
         }
     }
-    /// Gives the call's source back, in the background. With the recording `id`, it first waits for that
-    /// recording's last audio and words and shares them, then ends its meeting here so nothing more goes there.
-    fn release_call(&mut self, destination: &str, call: &str, id: Option<String>) {
+    /// Gives the call's source back. Releases queue up and go one at a time in the background; a failed one is
+    /// tried again a little later, up to `RELEASE_TRIES` times. With the recording `id`, its last audio and words
+    /// are waited for and shared first, then its meeting is ended here so nothing more goes there.
+    pub fn release_call(&mut self, destination: &str, call: &str, id: Option<String>) {
+        self.releases.push_back(Release {
+            destination: destination.to_owned(),
+            call: call.to_owned(),
+            id,
+            tries: 0,
+            after: Instant::now(),
+        });
+        self.next_release();
+    }
+    fn next_release(&mut self) {
+        if self.releasing.is_some() || self.background.contains("call-release") {
+            return;
+        }
+        let Some(at) = self
+            .releases
+            .iter()
+            .position(|release| release.after <= Instant::now())
+        else {
+            return;
+        };
+        let release = self.releases.remove(at).expect("a queued release");
         let (config, connect, store) = (self.config.clone(), self.tico_for, self.store.clone());
-        let (destination, call) = (destination.to_owned(), call.to_owned());
+        let (destination, call, id) = (
+            release.destination.clone(),
+            release.call.clone(),
+            release.id.clone(),
+        );
+        self.releasing = Some(release);
         self.job_for("call-release", None, move || {
             let tico = connect(&config, &destination)?;
-            if let Some(id) = &id {
-                wait_stopped(&store, id)?;
-                let deadline = Instant::now() + CALL_LAST_WORDS;
-                while Instant::now() < deadline
-                    && store
-                        .get(id)?
-                        .chunks
-                        .iter()
-                        .any(|chunk| ["pending", "running"].contains(&chunk.status.as_str()))
-                {
-                    std::thread::sleep(Duration::from_millis(250));
-                }
-                if let Err(error) = tico.push_live(&store, id) {
-                    eprintln!("Call's last words not shared: {error:#}");
-                }
-                store.update_context(id, |context| {
-                    context.live_state = "ended".into();
-                    Ok(())
-                })?;
+            if let Some(id) = &id
+                && let Err(error) = share_last_words(&tico, &store, id)
+            {
+                eprintln!("Call's last words not shared: {error:#}");
             }
             tico.release_call(&call)?;
             Ok(json!({}))
@@ -1490,9 +1540,19 @@ impl Recorder {
                     continue;
                 }
                 "call-release" => {
-                    if let Err(error) = reply.result {
+                    if let (Err(error), Some(mut release)) = (reply.result, self.releasing.take()) {
                         eprintln!("Call source not given back: {error}");
+                        release.tries += 1;
+                        if release.tries < RELEASE_TRIES {
+                            // Its last words went already (or never will); only the release is tried again.
+                            release.id = None;
+                            release.after =
+                                Instant::now() + Duration::from_secs(release.tries.into());
+                            self.releases.push_back(release);
+                        }
                     }
+                    self.releasing = None;
+                    self.next_release();
                     continue;
                 }
                 _ => {}
@@ -1814,6 +1874,7 @@ impl Recorder {
         self.sync_presence();
         self.sync_saved();
         self.watch_call();
+        self.next_release();
         self.watch_inputs();
         let outside = self.outside_state();
         if outside != self.outside {

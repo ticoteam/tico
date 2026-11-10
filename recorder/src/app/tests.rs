@@ -2002,3 +2002,34 @@ fn a_call_whose_meeting_already_has_transcript_is_given_back_and_not_recorded() 
     assert!(app.status_view()["recording"].is_null());
     assert!(app.store.list().unwrap().is_empty(), "nothing recorded");
 }
+
+#[test]
+fn every_release_reaches_tico_and_a_refused_one_is_tried_again() {
+    static REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let tico = FakeTico::start(|method, path| {
+        // The first release of the second call fails once.
+        if method == "DELETE"
+            && path.contains("aaaaaaaa")
+            && !REFUSED.swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return (503, json!({"error":{"code":"unavailable"}}));
+        }
+        (200, json!({}))
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = call_app(directory.path(), &tico);
+    let second = "aaaaaaaa-6a4e-4c39-9d43-6a1f0e3c2b10";
+    // Two given back at once: neither is dropped while the other runs.
+    app.release_call("acme", CALL, None);
+    app.release_call("acme", second, None);
+    let deadline = Instant::now() + Duration::from_secs(6);
+    let both = |tico: &FakeTico| {
+        tico.asked(&format!("DELETE {}", claim_path())) == 1
+            && tico.asked(&format!("DELETE /api/v2/calls/{second}/recorder")) == 2
+    };
+    while !both(&tico) && Instant::now() < deadline {
+        app.tick();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(both(&tico), "{:?}", tico.seen());
+}
