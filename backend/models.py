@@ -983,19 +983,6 @@ class MarketPage(Contract):
     body: str = Field(min_length=1, max_length=100_000)
 
 
-class AssistantSettings(Contract):
-    """A person's own Assistant settings (Settings > General)."""
-
-    decides_approvals: StrictBool
-
-
-class AssistantReadBack(Contract):
-    """The approvals the Assistant is about to approve for the person, read back in their chat first."""
-
-    approvals: Annotated[list[Annotated[str, Field(min_length=1, max_length=64)]], Field(min_length=1, max_length=100)]
-    note: Annotated[str, Field(max_length=300)] = ""
-
-
 class StatusUpdate(Contract):
     state: str | None = None
     focus: str = Field(default="", max_length=2000)

@@ -732,10 +732,6 @@ def create_app(settings=None):
         with store.read() as c:
             return team_rules.load(c)["assistant_direct"]
 
-    def assistant_decides(actor):
-        with store.read() as c:
-            return assistant_mod.decides(c, actor)
-
     def assistant_confirm_hint():
         """What a write the person's Assistant may not make on its own is refused with (`confirm_required`)."""
         return (
@@ -990,7 +986,6 @@ def create_app(settings=None):
                     if streamed
                     else 14_500_000
                     if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path)
-                    or request.url.path == "/api/v2/task-questions"
                     else MAX_REPORT_BYTES
                     if memory_report
                     else 27_000_000
@@ -1058,33 +1053,22 @@ def create_app(settings=None):
                     header = request.headers.get(botops_act.HEADER)
                     asked = header or "turn"
                     raw = getattr(request, "_body", b"")
-                    # Approving on the person's words: only when they let their Assistant decide approvals (and the
-                    # team allows it); otherwise the one sentence it tells them about the setting.
-                    approves = request.state.identity.via == "assistant" and assistant_mod.approving(
-                        request.method, request.url.path, raw
-                    )
-                    state = assistant_decides(request.state.identity.actor) if approves else None
-                    if approves and not state["active"]:
-                        raise Problem("approve_setting_off", assistant_mod.approve_hint(settings, state), 403)
                     # A setting from the catalogue is refused here only when only the person may change it (class `person`,
                     # `require_direct_setting`).
                     setting = (
-                        not approves
-                        and request.state.identity.via == "assistant"
+                        request.state.identity.via == "assistant"
                         and assistant_mod.catalogue_setting(request.method, request.url.path, raw)
                     )
                     # The owner's yes to a goal read-back in their own Assistant chat (backend/goal_read_back.py): the
                     # goal, measure and suggestion routes save exactly what it read back, or nothing (`not_agreed`).
                     goal_yes = (
-                        not approves
-                        and goal_read_back.strategy_turn(request.state.identity)
+                        goal_read_back.strategy_turn(request.state.identity)
                         and goal_read_back.saving(request.method, request.url.path)
                     )
                     # The owner's "no" to a suggestion in their chat (backend/goal_read_back.py `turns_down`): admitted on
                     # their cited turn, and not on the autonomous-action setting, which only gates the other writes.
                     goal_no = (
-                        not approves
-                        and asked
+                        asked
                         and request.state.identity.via == "assistant"
                         and goal_read_back.turns_down(request.method, request.url.path)
                     )
@@ -1094,10 +1078,10 @@ def create_app(settings=None):
                             "read-back, citing it (`--on-behalf-of turn`)"
                         )
                     # Every write the turn makes is admitted on its cited words, except what the Assistant may not do as the
-                    # person (`admits_on_turn`); an approve is admitted only on its read-back and the person's yes (`approves`).
+                    # person (`admits_on_turn`).
                     # A settings route's write that is not exactly one catalogue setting, and a change to an automation that
                     # sends outside, are cards whatever the rest of the turn may do (backend/assistant.py).
-                    on_turn = request.state.identity.via == "assistant" and not approves
+                    on_turn = request.state.identity.via == "assistant"
                     unmatched = on_turn and assistant_mod.settings_route_unmatched(
                         request.method, request.url.path, raw
                     )
@@ -1107,14 +1091,9 @@ def create_app(settings=None):
                     admitted = (
                         request.state.identity.via == "assistant"
                         and assistant_direct()
-                        and (
-                            approves
-                            or (
-                                not unmatched
-                                and not outside
-                                and assistant_mod.admits_on_turn(request.method, request.url.path, raw)
-                            )
-                        )
+                        and not unmatched
+                        and not outside
+                        and assistant_mod.admits_on_turn(request.method, request.url.path, raw)
                     )
                     if not goal_yes and not goal_no and not admitted:
                         raise Problem("confirm_required", assistant_confirm_hint(), 403)
@@ -1163,28 +1142,9 @@ def create_app(settings=None):
                                 assistant_mod.require_direct_setting(
                                     c, request.method, request.url.path, raw, trial, settings.public_url
                                 )
-                            if approves:
-                                # Recorded on the approval: decided by the Assistant for the person, their words quoted.
-                                # The bot whose turn it is: the person's Assistant.
-                                acting = request.state.identity.task_actor or "bot:" + settings.assistant_bot
-                                record = {
-                                    **record,
-                                    "assistant": acting,
-                                    **assistant_mod.approval_words(
-                                        c,
-                                        request.state.identity,
-                                        record["cited"],
-                                        H.actor_id(acting),
-                                        assistant_mod.approval_id(request.url.path),
-                                    ),
-                                }
                             return record
 
                     delegation_reset = H.DELEGATION.set(await asyncio.to_thread(cited))
-                    if approves:
-                        # The person's yes to the read-back confirms this approval, as their tap on a Confirm card does: the
-                        # identity says so (`confirmed`), which support.require_person reads for a report. Nothing else changes.
-                        request.state.identity = replace(request.state.identity, confirmed=True)
             early = None
             caller = getattr(request.state, "identity", None)
             if caller:
@@ -5345,7 +5305,7 @@ def create_app(settings=None):
     install_archives(app, store)
     from .media import install_media
 
-    install_media(app, store, auth, mutate, send, task_create, None, rule_check, chat_upload_checks, chat_upload_write)
+    install_media(app, store, auth, mutate, send, task_create, chat_upload_checks, chat_upload_write)
     from .downloads import install_downloads
 
     install_downloads(app, store)
