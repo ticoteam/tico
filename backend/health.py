@@ -2484,7 +2484,7 @@ def _plate_check(c, who, auth, full):
     """Each person's Needs you count from the engine's read (waiting_on.needs: their asks, their own tasks' work and the
     Paused causes they fix). An administrator reads everyone's plate; anyone else reads only their own. Warn over
     NEEDS_PLATE_WARN items, bad over NEEDS_PLATE_BAD. Only the plates over the warning are listed, each with the bots
-    owning most of its tasks."""
+    that asked for most of its tasks."""
     from . import waiting_on
 
     over = []
@@ -2493,9 +2493,9 @@ def _plate_check(c, who, auth, full):
         if len(items) > NEEDS_PLATE_WARN:
             bots = {}
             for item in items:
-                owner = (H.task(c, item.get("task_id") or "") or {}).get("owner_id")
-                if H.is_bot(owner):
-                    bots[owner] = bots.get(owner, 0) + 1
+                asker = (H.task(c, item.get("task_id") or "") or {}).get("requester_id")
+                if H.is_bot(asker):
+                    bots[asker] = bots.get(asker, 0) + 1
             over.append((len(items), person.actor, bots))
     if not over:
         return None
@@ -2504,7 +2504,7 @@ def _plate_check(c, who, auth, full):
         askers = sorted(bots.items(), key=lambda kv: (-kv[1], kv[0]))[:NEEDS_PLATE_ASKERS]
         asked = [{"bot": bot, "name": H.actor_name(c, bot), "count": n} for bot, n in askers]
         name = H.actor_name(c, actor)
-        most = ", most on tasks of " + ", ".join(f"{a['name']} ({a['count']})" for a in asked) if asked else ""
+        most = ", most asked by " + ", ".join(f"{a['name']} ({a['count']})" for a in asked) if asked else ""
         rows.append(
             {
                 "person": actor,
