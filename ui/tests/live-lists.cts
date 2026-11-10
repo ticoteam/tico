@@ -268,14 +268,17 @@ const holdNext = (match: Held['match']): Held => {
   // A bot's page, first read: the PM's open tasks are read, one is removed while the answer is on its way.
   put(task('t23', 'Write the launch post', 'spec', {owner_id: 'bot:pm'}));
   put(task('t24', 'Plan the launch call', 'spec', {owner_id: 'bot:pm'}));
+  put(task('t25', 'Price the launch bundle', 'spec', {owner_id: 'bot:pm', private: true}));
   slow = holdNext((p, q) => p === '/api/v2/tasks' && q.get('owner') === 'pm' && q.get('status') === 'open');
   await page.evaluate(() => { location.hash = '#/bot/pm/tasks'; });
   await slow.seen;
-  await emit('tasks', gone('t23', 14));
+  // One deleted, and Ana taken off another's readers (its id alone, backend/events.py _tasks), while the read is out.
+  await emit('tasks', gone('t23', 14), {seq: 15, id: 't25', kind: 'update', kinds: ['update'], gone: true});
   await settled();
   slow.go();
   await page.locator('#t-open', {hasText: 'Plan the launch call'}).waitFor({timeout: t(8000)});
   assert.doesNotMatch(await text('#t-open'), /Write the launch post/, "a bot's task removed while the first read was out stays removed");
+  assert.doesNotMatch(await text('#t-open'), /Price the launch bundle/, 'a task Ana lost while the first read was out stays off');
   // My dashboard read again on coming back: a task of Ana's finished while the read is out stays off My tasks.
   await page.evaluate(() => { location.hash = '#/person/sam'; });
   await page.locator('#person-tasks', {hasText: 'Book the bus'}).waitFor();
