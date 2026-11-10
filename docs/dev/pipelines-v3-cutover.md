@@ -221,9 +221,11 @@ hub task show <id>
 hub task done <id> -m "what was done" --version N
 hub task move <id> next|<stage> -m "why" --version N
 hub task close <id> -m "why" --version N
+hub task reassign <id> <owner> -m "why" --version N
 hub task ask <id> --to <person> "line" [--choices a,b] [--show page:12] --version N
 hub task ask <id> --withdraw
 hub task answer <id> <requirement> ok|no|<answer> [-m "note"] --version N      (a bot named on an OK or a question)
+hub task give <id> <requirement> --to <person> --version N
 hub task file --parent <id> [--pipeline general] "title"
 hub task snooze <id> [--until date] -m "why" --version N
 hub task create, list, comment, label, link, follow        (kept; no --status, --step, --type)
