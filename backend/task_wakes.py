@@ -168,21 +168,30 @@ def add(
     return message["id"]
 
 
-def ask(conn: "sqlite3.Connection", task: Row, requirement: Row | None) -> str | None:
-    """Wake the bot an ask added to this task names (an OK or an answer), once per ask, keyed
-    `<task>:<visit>:ask:<requirement>`: only while that bot has a turn on the task (`waiting_on.turns`), so never while
-    a person has it or it is snoozed. The never-stuck check calls this again for a bot that has a turn and was never
-    woken for its ask: the ask it got while a person had the task reaches it once a person acts."""
+def ask(conn: "sqlite3.Connection", task: Row, requirement: Row | None, who: str | None = None) -> str | None:
+    """Wake the bot an ask on this task names (an OK or an answer), once per ask and visit, keyed
+    `<task>:<visit>:ask:<requirement>`: an ask added to the visit, or one the task's stage has (it holds for every
+    visit of the stage). Only while that bot has a turn on the task (`waiting_on.turns`), so never while a person has
+    it or it is snoozed. `who` is the bot the task waits on for it, when the requirement names nobody itself. A task
+    entering a stage wakes each bot a stage's ask names beside the bot with the turn (task_engine._wake_turn); the
+    never-stuck check calls this again for a bot that has a turn and was never woken for its ask: the ask it got while
+    a person had the task reaches it once a person acts."""
     from . import waiting_on as W
 
     H = _h()
     visit: Row = task.get("visit") or {}
-    if not requirement or requirement.get("visit_id") != visit.get("id") or requirement.get("withdrawn_at"):
+    if not requirement or requirement.get("withdrawn_at"):
         return None
-    bot = requirement.get("person_id")
+    staged = requirement.get("stage_id")
+    if (staged or requirement.get("visit_id")) != (task["stage"]["id"] if staged else visit.get("id")):
+        return None
+    bot = requirement.get("person_id") or who
     if not H.is_bot(bot) or task.get("status") != "open" or task.get("snooze") or bot not in W.turns(conn, task):
         return None
-    lead = f"{H.actor_name(conn, requirement.get('added_by_id'))} asks you: {requirement.get('line') or ''}"
+    line = requirement.get("line") or ""
+    lead = (
+        f"You are asked: {line}" if staged else f"{H.actor_name(conn, requirement.get('added_by_id'))} asks you: {line}"
+    )
     return add(
         conn, task, bot, visit, body(conn, task, lead), wake_key=f"{task['id']}:{visit['id']}:ask:{requirement['id']}"
     )
@@ -482,6 +491,24 @@ def inbox(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | Non
         (*_range(f"{task['id']}:{visit.get('id')}"), _marks(task)[1], actor),
     ).fetchone()
     return {"id": str(found[0]), "read_at": found[1]} if found else None
+
+
+def told_in_visit(conn: "sqlite3.Connection", task: Row, actor: str | None) -> str | None:
+    """Whether this bot was told about the task's open visit: "told" when it got a wake that queued a run or sits in
+    its own inbox, "lost" when its newest such wake never ran (the never-stuck check writes it again, once per level,
+    try and change), None when it got none at all."""
+    H = _h()
+    if not H.is_bot(actor):
+        return None
+    visit: Row = task.get("visit") or {}
+    found = conn.execute(
+        f"SELECT 1 FROM messages m WHERE {_KEY} AND m.recipient_id=? "
+        "AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 LIMIT 1",
+        (*_range(f"{task['id']}:{visit.get('id')}"), actor),
+    ).fetchone()
+    if not found:
+        return None
+    return "lost" if lost(conn, task, actor, whole_visit=True) else "told"
 
 
 def queued(conn: "sqlite3.Connection", task_id: str, actor: str | None) -> bool:

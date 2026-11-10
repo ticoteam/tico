@@ -279,7 +279,7 @@ def _recover(
         lost = task_wakes.lost(conn, row, bot, whole_visit=bot != target)
         if not lost:
             asks = [w.requirement_id for w in waits if w.who == bot and w.ask and w.requirement_id]
-            if any([task_wakes.ask(conn, row, R.get(conn, rid)) for rid in asks]):
+            if any([task_wakes.ask(conn, row, R.get(conn, rid), bot) for rid in asks]):
                 done["woken"] += 1
                 woken.add(bot)
             continue
@@ -491,12 +491,19 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
         if row.get("snooze"):
             continue
         visit = row["visit"]
+        ladder = W.turn(conn, row, waits)  # the one bot a next try is for
         for wait in waits:
             if wait.state == W.BOT and not (
-                visit.get("next_try_at")
-                or (visit.get("level") or "owner") != "owner"
+                (visit.get("level") or "owner") != "owner"
                 or task_wakes.live_run(conn, row, wait.who, now, live)
                 or task_wakes.queued(conn, task_id, wait.who)
+                or (
+                    bool(visit.get("next_try_at"))
+                    if wait.who == ladder
+                    # Any other bot with a turn (an OK or an answer it is named on) was told in this visit: its wake
+                    # ran, or it was lost and is written again on the ladder's next try.
+                    else _told(task_wakes.told_in_visit(conn, row, wait.who), visit)
+                )
             ):
                 broken.append(f"2: task {task_id} is {wait.who}'s turn with no run, no wake and no next try")
         if any(wait.state == W.PERSON and not wait.who for wait in waits):
@@ -520,6 +527,10 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
     broken += _rule_6(conn)
     broken += _rule_7(conn)
     return broken
+
+
+def _told(told: str | None, visit: Row) -> bool:
+    return told == "told" or told == "lost" and bool(visit.get("next_try_at"))
 
 
 def _lines(conn: "sqlite3.Connection", sql: str, text: str) -> list[str]:

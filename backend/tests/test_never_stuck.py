@@ -838,3 +838,31 @@ def test_a_private_task_never_gains_a_reader_and_goes_to_a_person_who_reads_it_n
     assert later(seconds=120) == {"to_manager": 1, "woken": 1} and _ladder(c, shared) == ("manager", 1)
     reading = repr(health.never_stuck_reading(c))
     assert not any(title in reading for title in ("invoices", "salary review", "bonus plan"))
+
+
+def test_a_bot_whose_ok_a_stage_needs_is_woken_beside_the_owner_and_a_lost_wake_of_it_breaks_a_rule(c, general, later):
+    """A stage needs the owner's work and the reviewer's OK: both have a turn from the start, so both are woken, the
+    reviewer once for the stage's ask (keyed by its requirement). The next pass writes a lost wake again, and a bot
+    with a turn that was never told breaks rule 2 though the owner has a next try."""
+    stages = (
+        {
+            "name": "Check",
+            "owner": BUILDER,
+            "requirements": [{"kind": "owner_done"}, {"kind": "ok", "person": REVIEWER, "line": "OK it"}],
+        },
+    )
+    X.pipeline(c, "copy", "Copy", stages, manager=MANAGER)
+    row = X.new_task(c, ANA, "Write the launch note", "copy")
+    assert _queued(c, row["id"]) == [BUILDER, REVIEWER]
+    assert _said(c, row["id"], REVIEWER) and _said(c, row["id"], REVIEWER)[-1] == "You are asked: OK it"
+    asked = c.execute("SELECT id FROM requirements WHERE stage_id='copy-check' AND kind='ok'").fetchone()[0]
+    assert [key for key, _ in X.wakes(c, row["id"], REVIEWER)] == [f"{row['id']}:{row['visit']['id']}:ask:{asked}"]
+    lose = "DELETE FROM jobs WHERE state='queued' AND bot_id='reviewer' AND message_id IN (SELECT id FROM messages "
+    lose += "WHERE wake_key LIKE ?)"
+    c.execute(lose, (row["id"] + ":%",))
+    later(seconds=10)
+    assert _queued(c, row["id"]) == [BUILDER, REVIEWER]  # a lost wake is written again
+    c.execute(lose, (row["id"] + ":%",))
+    c.execute("DELETE FROM messages WHERE recipient_id=? AND wake_key LIKE ?", (REVIEWER, row["id"] + ":%"))
+    # Never told at all (as before, when entry woke only the owner): the owner's next try does not cover it.
+    assert NS.rules_hold(c) == [f"2: task {row['id']} is {REVIEWER}'s turn with no run, no wake and no next try"]

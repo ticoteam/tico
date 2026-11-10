@@ -359,16 +359,18 @@ def _wake_turn(
     trigger: str | None = None,
     source: str | None = None,
 ) -> str | None:
-    """Tell whoever has the turn in a stage the task just entered, once per visit: one bot, the one the ladder would
-    wake. A person is not told: their list is a read. A bot named on an OK while the owner has work of its own is the
-    ladder's to wake after that, on the same count. `lead` opens the wake when the turn's own lead says nothing;
-    `refs`, `trigger` and `source` are a new task's own (`enter`)."""
+    """Tell whoever has the turn in a stage the task just entered, once per visit: the bot the ladder would wake, and
+    each other bot an OK or an answer names while it has a turn too (its ask's one wake: task_wakes.ask). A person is
+    not told: their list is a read. After that the ladder tries only its own bot. `lead` opens the wake when the turn's
+    own lead says nothing; `refs`, `trigger` and `source` are a new task's own (`enter`)."""
+    from . import waiting_on as W
+
     if row["stage"]["kind"] != "work":
         return None
     target, turn_lead = _turn_of(conn, row)
     if not target:
         return None
-    return task_wakes.add(
+    out = task_wakes.add(
         conn,
         row,
         target,
@@ -378,6 +380,10 @@ def _wake_turn(
         trigger=trigger,
         source=source,
     )
+    for wait in W.of(conn, row):
+        if wait.state in (W.BOT, W.PAUSED) and wait.ask and wait.requirement_id and wait.who != target:
+            task_wakes.ask(conn, row, R.get(conn, wait.requirement_id), wait.who)
+    return out
 
 
 def _drop_stale(conn: "sqlite3.Connection", task_id: str) -> int:
