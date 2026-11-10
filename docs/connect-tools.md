@@ -279,7 +279,7 @@ destination. Bots named are only those you may see.
 
 `GET /api/v2/tool-index?limit=&cursor=` answers `{rows: [{id, kind, name, detail, way, status: {tone, text}, who,
 who_total, needs_you, href}], counts, next}`, at most 500 rows and 192 KB a page; follow `next` with `cursor`. CLI:
-`tico tool index` (`tico tools index`); MCP: `hub_tool_index` (BotOps reads it with the rights of the person who asked).
+`tico tool index`; MCP: `hub_tool_index` (BotOps reads it with the rights of the person who asked).
 
 ### API tools
 

@@ -65,7 +65,7 @@ talking to it, makes it look. `pair` and `install` set that schedule up for you:
 `tico-sync`, that runs the Tico sync skill. You do not write a prompt or a job. Next section.
 
 The profile uses the shared tool list (`clients/hubtools.py`); its bot credential controls which tools and records it can access. With a Tico checkout on the computer the
-`hub` CLI works too, with `HUB_API_URL` and `HUB_TOKEN`.
+`tico` CLI works too, with `HUB_API_URL` and `HUB_TOKEN`.
 
 ## Keep it in sync
 

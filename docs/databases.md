@@ -395,7 +395,7 @@ process, so restart the server after a change.
 
 **Deploying to the runners.** A runner needs three things and no query files:
 
-1. The Tico release (`hub`, `clients/dbquery.py`), which is what the runner already runs.
+1. The Tico release (`tico db`, `clients/dbquery.py`), which is what the runner already runs.
 2. Each bot's repository with its `bot.yaml` `tools:` entries declaring the databases.
 3. A stored Credential for each `DB_<NAME>_URL`, granted to that bot and delivered for its run.
    Keep values out of git and out of the config repository.

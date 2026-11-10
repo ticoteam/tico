@@ -331,7 +331,7 @@ checkout's Git metadata. `publish` dispatches Release validation with the frozen
 event, main branch, exact run title, candidate SHA and successful conclusion, checks main still equals the frozen
 commit and tags it. Main moving at any checkpoint refuses the release. It then waits for the GitHub release to be
 published and files one task, "Release notes for vX.Y.Z", for the Technical Writer (`--writer <bot>`, default
-`docs-writer`) with the release's commit range. The command needs `gh` and a `hub` login that can create tasks.
+`docs-writer`) with the release's commit range. The command needs `gh` and a `tico` login that can create tasks.
 The command does not replace the release's publishing approval, evidence checklist or rollout.
 
 Run `publish` in the background while validation runs. A validation run that ends canceled is rerun by `publish` (same
@@ -532,7 +532,7 @@ python scripts/release_checklist.py --head <candidate> --previous vX.Y.Z > check
 python scripts/release_checklist.py --head <candidate> --previous vX.Y.Z --json > checklist.json
 ```
 
-Run in a checkout with fetched release tags, a `gh` login for the repository and a scoped `hub` login for
+Run in a checkout with fetched release tags, a `gh` login for the repository and a scoped `tico` login for
 the shared team API. No local team database is opened. Without `--previous`, it selects the earlier release
 tag using the freeze guard's rule. `--github owner/repository` overrides the checkout's origin.
 Attach the Markdown checklist to the release task; the JSON companion retains structured evidence and source

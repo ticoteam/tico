@@ -35,7 +35,7 @@ The Credential's variable-name field becomes an environment variable only for a 
 
 An API tool's keys (Tools) are delivered one of two ways. **Proxy**, the default for a new tool with a known service:
 the key never leaves the server. In its place the run gets a proxy token in the key's variable and the proxy's address
-in `TICO_TOOL_<ID>_URL`; it calls `$TICO_TOOL_<ID>_URL/<path>` with the token where the key goes (or `tico tools call`),
+in `TICO_TOOL_<ID>_URL`; it calls `$TICO_TOOL_<ID>_URL/<path>` with the token where the key goes (or `tico tool call`),
 and `/api/v2/tool-proxy/<id>/<path>` checks the token, picks the key by the caller's level (a Read caller gets the read
 key; with no read key it may only make GET, HEAD and OPTIONS calls), sends the call on with the vendor's auth, scrubs
 the key out of the answer and logs one row (path and query keys, never values or bodies) on the tool's Activity. A token

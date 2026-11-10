@@ -354,7 +354,7 @@ from active KPIs; a KPI's detail panel offers **Restore KPI** to return it to ac
 - The Strategy Bot reads every goal and KPI, writes readings and the automatic colours, records check-ins, and proposes. It
   cannot set a colour by hand, edit a goal, create or link a KPI, change a definition or a target, or archive a KPI.
 
-## `hub` and the API
+## `tico` and the API
 
 ```
 tico goal list [--owner X] [--all]              tico kpi list [--goal ID] [--owner X] [--unlinked] [--bot SLUG] [--archived]

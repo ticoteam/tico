@@ -1,7 +1,7 @@
 # Tico
 
 Tico is a source-available operating system for a team of humans and bots (PolyForm Perimeter 1.0.1): a FastAPI
-server in `backend/`, the one-page web UI in `ui/` (`index.html`, `app/`, `styles/`; see ui/README.md), the runner in `runner-rs/` (Python helpers in `runner_support/`), the `hub`
+server in `backend/`, the one-page web UI in `ui/` (`index.html`, `app/`, `styles/`; see ui/README.md), the runner in `runner-rs/` (Python helpers in `runner_support/`), the `tico`
 CLI and MCP tool table in `clients/`, and a Tauri desktop shell in `app/`. `README.md` says how to
 run it and `docs/how-it-works.md` describes the system.
 

@@ -243,7 +243,7 @@ team's own provider key); no runner or agent turn is involved. Its prompt and an
 the same fields; it never invents a number (a price, count or share appears only when a page or the owner states it).
 The summary and sections are written only where empty, each section starting
 `_Unconfirmed: drafted from acme.example._`; bets are added `proposed` with the suggested wrong-if as a text test
-due in 90 days. Nothing is published. There is no `hub` or MCP verb for it: it is a browser setup step.
+due in 90 days. Nothing is published. There is no `tico` or MCP verb for it: it is a browser setup step.
 
 Finishing setup links each group it makes to the bet it clearly serves (`bet_id`), and with a website files the
 Librarian's market task ([Onboarding](onboarding.md#what-create-does)).
@@ -298,7 +298,7 @@ Librarian applies it to the entity.
   `tico strategy summary`.
 - Never the draft.
 
-## `hub` and the API
+## `tico` and the API
 
 ```
 tico strategy show                       the published version: bets, goals_by_bet, health_by_bet (the draft too, for the owner)

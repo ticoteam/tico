@@ -20,7 +20,7 @@ summary then covers only the samples that finished.
 
 1. Copies the template to a sandbox with the placeholders filled (company Acme, assistant "Tico Assistant"). The card
    and the reports are left out, as the runner leaves them.
-2. Puts a fake `hub` first on `PATH` (unless `--surface mcp`), and attaches the fake hub MCP server (unless `--surface cli`). It parses each call with the repo's real parser, so a command the CLI does not have
+2. Puts a fake `tico` (and `hub`, its old name) first on `PATH` (unless `--surface mcp`), and attaches the fake hub MCP server (unless `--surface cli`). It parses each call with the repo's real parser, so a command the CLI does not have
    fails the sample. It logs every call and answers from the case's `hub:` entries; a call with no entry gets a generic
    reply. `--on-behalf-of` is ignored when answers are matched, so an answer does not depend on whether the template
    cites the turn itself.
@@ -52,8 +52,8 @@ summary then covers only the samples that finished.
 
 Production gives the Assistant the hub two ways: the hub as an MCP server (`clients/hubmcp.py`, the tool listing for its
 kind, here `assistant`, about 200 tools that Claude Code defers behind tool search) and the `tico` CLI on PATH. `--surface`
-picks which the run has: `both` (the default, production) attaches the MCP server and keeps `hub` on PATH; `mcp` attaches
-the server and takes `hub` off PATH; `cli` is the old harness with no MCP server. An MCP `tools/call` is turned into the
+picks which the run has: `both` (the default, production) attaches the MCP server and keeps `tico` on PATH; `mcp` attaches
+the server and takes `tico` off PATH; `cli` is the old harness with no MCP server. An MCP `tools/call` is turned into the
 same canonical line the CLI logs (the typed command words, then the id, then `--key value` per argument), so one set of
 regexes checks either surface. The summary reports the calls and the invalid calls per surface, and an MCP call the
 tool's input schema rejects counts as invalid, as a CLI call the parser rejects does.
@@ -95,7 +95,7 @@ command lands, so it is checked against the real parser.
 Calls that did not work are visible: each logged call carries its `exit` and a short `out`. A `must` regex matches
 only calls that worked (exit 0), unless the case sets `must_allow_failed: true`; `must_not` still sees every attempt. The
 judge sees a failed call marked FAILED. Inherited `HUB_*` and `TICO_*` variables never reach the run. On `--surface mcp`
-a `hub` stub on PATH exits 127 and logs the attempt as an invalid call.
+a `tico` stub on PATH exits 127 and logs the attempt as an invalid call.
 
 Known limit: the call log (`EVAL_LOG`) is a file the model could write to with Bash. Treat a run whose log looks forged as
 void; the harness does not guard against it.

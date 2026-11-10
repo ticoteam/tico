@@ -16,7 +16,7 @@ the caller and not by prompt text.
   (`~/.config/tico/runner.json`) and queries as the human who registered the computer, so a
   script or an agent on Ana's Mac needs no browser session. From any other computer, a
   personal API token (Settings, Computers, API tokens; any human, unless the owner limits it to admins) makes
-  `hub` you: `export HUB_API_URL=https://hub.acme.example HUB_TOKEN=tico_pt_...` and no
+  `tico` you: `export HUB_API_URL=https://hub.acme.example HUB_TOKEN=tico_pt_...` and no
   `HUB_BOT` ([How Tico works](how-it-works.md), "Calling the API from a script").
 - **`POST /api/v2/sql`** with `{"sql": "...", "params": [...] | {...}, "max_rows": N}` →
   `{"columns": [...], "rows": [[...]], "row_count": N, "truncated": bool, "ms": N}`. Errors are

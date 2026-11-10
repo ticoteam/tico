@@ -421,7 +421,7 @@ The assistant is every human's private [Assistant](assistant.md) (its own page, 
 background: it routes Slack messages to the bot that owns them, takes meetings and tasks nobody was named for, reviews
 BotOps' refused writes, and runs its own routines.
 
-None can be archived or deleted by anyone, the owner included, through Settings, the API, `hub` or BotOps itself:
+None can be archived or deleted by anyone, the owner included, through Settings, the API, `tico` or BotOps itself:
 the archive route answers `409 system_bot`. Pausing, renaming and editing their instructions stay allowed. Settings >
 Bots lists them as **Built-in**, with no Archive or Delete control. Like every bot they start open to everyone; their
 **Access** can be narrowed in Settings > Bots ([permissions](permissions.md)), and the owner keeps full access to them

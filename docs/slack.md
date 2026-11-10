@@ -35,7 +35,7 @@ list in Tico's database, not a file:
 - **In the app.** Tools > Slack channels (an owner or an admin): the channel (`#customer_success` or its id),
   the bots that read it, whether bots may post (on unless you turn it off), and a note. A channel listed by name gets
   its id from Slack once Tico is in it.
-- **With `hub`.** `tico slack channel add '#customer_success' --reader support`, `tico slack channel list`,
+- **With `tico`.** `tico slack channel add '#customer_success' --reader support`, `tico slack channel list`,
   `tico slack channel remove '#customer_success' [--reader BOT]`.
 - **By asking BotOps.** "Let the support bot read #customer_success": BotOps adds it as the person who asked,
   so a member is told who to ask. The MCP tools are `hub_slack_channel_add`, `_list`, `_remove` and `_import`.

@@ -9,7 +9,7 @@ A webhook is one program posting a small message to another over HTTP. Tico does
 
 Incoming webhooks are a built-in row on Automations (**Incoming webhooks**), outgoing ones are on Tools (**Add tool → Outgoing webhook**,
 then a row each), and Through Tico Gateway is the **Webhooks** fold of the Tico Gateway card in Settings → Models. Everything there
-is also in `hub` and in the `hub_*` tools for bots and agents ([the table at the end](#the-commands)).
+is also in `tico` and in the `hub_*` tools for bots and agents ([the table at the end](#the-commands)).
 
 Step by step:
 [GitHub](webhooks-github.md), [Stripe](webhooks-stripe.md), [Zapier, Make and n8n](webhooks-zapier-make-n8n.md).
@@ -505,7 +505,7 @@ They are built in. `tico notice list` shows the notices. See also
 
 ## The commands
 
-| What | `hub` | Tool for bots and agents |
+| What | `tico` | Tool for bots and agents |
 |---|---|---|
 | List event names | `tico event-types [--group G]` | `hub_event_types` |
 | Incoming: list, add, show, change | `tico trigger list`, `create`, `show`, `update` | `hub_trigger_list`, `hub_trigger_create`, `hub_trigger_show`, `hub_trigger_update` |

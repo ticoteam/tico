@@ -764,7 +764,7 @@ def run_sample(case, sample, args, outdir):
     path = os.environ["PATH"]
     bindir = work / "bin"
     bindir.mkdir(parents=True)
-    # The shadow `tico` (and `tico`, its old name) comes first on PATH: the fake CLI on cli and both, a stub that refuses
+    # The shadow `tico` (and `hub`, its old name) comes first on PATH: the fake CLI on cli and both, a stub that refuses
     # on mcp (no CLI in that run).
     for name in ("tico", "hub"):
         (bindir / name).write_text(STUB_HUB if args.surface == "mcp" else FAKE_HUB)

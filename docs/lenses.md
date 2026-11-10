@@ -68,7 +68,7 @@ the code `empty`.
   draft as you; publishing stays your click. The Strategy Bot suggests a lens when a bet trips and in its weekly note, and
   never runs one unasked.
 
-## `hub` and the API
+## `tico` and the API
 
 ```
 tico lens list [--market]                           the lenses, with their questions

@@ -199,7 +199,7 @@ state (`backend/judge.py`); the decisions themselves are versioned files in `que
 
 **Bot ids** — a bot has a stable id and a renameable slug. A bot made before ids keeps its slug as its id; a bot made now
 gets a UUIDv7 id. Everything that names a bot stores the id (`bot:<id>` actors, task owners, automations, the org
-chart, assignments, runner readiness), and every API path, MCP tool and `hub` command that names a bot takes the id
+chart, assignments, runner readiness), and every API path, MCP tool and `tico` command that names a bot takes the id
 or the slug. A rename (`slug` on `POST /api/v2/bots/<bot>/definition`, `tico bot update <bot> --new-slug S`, the Slug
 field in the bot's settings) changes only the label: the old slug stops naming a UUID bot and may be taken by
 another, and no slug may equal another bot's id. Built-in bots keep their slug. **Folders**: a bot made now gets
@@ -292,7 +292,7 @@ that only read) and consumed no approval, is resumed once, each with a note in t
 record (`job.auto_reconcile` in the event log). A run whose lease lapsed (its computer dropped) counts shell calls as
 reads too when it wrote nothing to Tico and the computer judged each whole line read-only: every part of it (between
 `|`, `;`, `&&`, `||` and newlines) is setup such as `cd` or `export`, a program that only reads (`grep`, `cat`, `wc`)
-or a `hub` read (`tico task list`, `tico needs-you show`), with no outside action, no output to a file and no `$(...)`,
+or a `tico` read (`tico task list`, `tico needs-you show`), with no outside action, no output to a file and no `$(...)`,
 backtick or heredoc. `curl -X POST ... && tico task list` is held, and so is any line from a computer too old to judge
 it. When such a
 run that answered a person's message is held instead, that person gets one notice in the chat: it stopped, and when
@@ -694,7 +694,7 @@ made or revoked is an `events` row (`token.create`, `token.revoke`).
 | `ui/` | the web interface (`index.html`, `app/` scripts, `styles/`, feature scripts, browser tests; see `ui/README.md`) |
 | `app/` | the native macOS shell around hub.acme.example |
 | `infra/` | the EC2 stack, release packaging, deploy and restore scripts |
-| `scripts/` | `tico` (operate the runner), `hub` (the bots' CLI), setup, publishing and maintenance |
+| `scripts/` | `tico` (the teamwork CLI bots and people use), `tico-computer` (operate this computer), `hub` (`tico`'s old name), setup, publishing and maintenance |
 | `docs/` | team knowledge |
 | `policies/` | rules every bot follows: approvals, access, handoffs, writing, shared rules |
 | `registry/` | bootstrap data: humans, sign-in access, mail rules, Slack channels; `employees.yaml` seeds a new database only |

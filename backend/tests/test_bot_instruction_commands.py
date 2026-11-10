@@ -58,6 +58,34 @@ def cases():
     return out
 
 
+def doc_cases():
+    """(where, line, text, argv) for each command quoted in docs/ (not docs/history, the record of what was). Docs write
+    commands in tables and lists (`goal list` / `kpi list` in one span), so they are held only to names the CLI has."""
+    out = []
+    for path in sorted((ROOT / "docs").rglob("*.md")):
+        where = str(path.relative_to(ROOT))
+        if where.startswith("docs/history/"):
+            continue
+        for number, text in commands_in(path):
+            argv = argv_of(text)
+            if argv and argv != ["\x00unbalanced quotes"]:
+                out.append((where, number, text, argv))
+    return out
+
+
+def test_no_doc_teaches_a_command_the_cli_took_away_or_renamed():
+    found = doc_cases()
+    assert len(found) > 500  # guard the guard
+    failures = []
+    for where, number, text, argv in found:
+        gone = hubcli.removed_notice(argv)
+        if gone:
+            failures.append(f"{where}:{number}: `{text}` is taught, but {gone}")
+        elif hubcli.rename_argv(argv)[1]:
+            failures.append(f"{where}:{number}: `{text}` is taught by its old name: {hubcli.rename_argv(argv)[1]}")
+    assert not failures, "\n".join(failures)
+
+
 def mention(argv):
     """A command named in prose (`tico task create`, `tico meeting read <id> --offset`): it names the command and maybe a
     flag, not a whole line to run."""

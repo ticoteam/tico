@@ -117,7 +117,7 @@ The DM is a personal thread (`scope: personal`, `room_key: assistant`) owned by 
 Everyone, the owner and administrators included, has the Assistant.
 The team owner and administrators cannot read anyone else's, and no other route reaches the assistant: the ordinary
 chat routes still refuse it (`403`). Every new team gets the assistant, BotOps, the [Librarian](librarian.md) and the [Strategy Bot](goals-and-kpis.md#the-strategy-bot) built in (all required in setup, active once a computer is enrolled),
-and none can be archived or deleted by anyone: the owner included, through Settings, the API, `hub` or BotOps
+and none can be archived or deleted by anyone: the owner included, through Settings, the API, `tico` or BotOps
 (`409 system_bot`); pausing and renaming stay allowed, and Settings > Bots shows them as **Built-in**. A team
 that set the assistant aside before it was built in keeps it archived on update, and the Assistant page says the Assistant is off
 instead of failing. The owner gets **Turn on** there and in **Settings > General**: one click restores the
@@ -137,7 +137,7 @@ Org rules are checked before a message is written, as for any chat: a held messa
 
 ## It acts as you, never more
 
-During your DM run the assistant's `hub` tools and the Tico MCP tools are **your own**: the server maps the run's
+During your DM run the assistant's `tico` commands and the Tico MCP tools are **your own**: the server maps the run's
 credential to you (`Auth.assistant_principal`), so every check is the one that applies to you. Only a run that your own
 message started, in your own Assistant DM, acts for you; its other work (Slack routing, meeting deliveries, routines)
 stays the assistant's own. Every write it makes is recorded as yours **via assistant**: the audit `events` carry `"via":
@@ -150,7 +150,7 @@ many tasks, comments and links, answering bots' asks, direct and confirm setting
 changes, rules, groups and reports, and tasks and messages for other people. Your own rights are the ceiling. The route
 runs its own checks as you, so what you could not do yourself it cannot do for you (`403` from the route). The record
 shows you as the actor, `via` assistant, and the audit event's `delegation` names the message (`{"for": "human:<you>",
-"cited": "<message id>", "run": "asked"}`). A bulk change (`tico task bulk`) records each task the same way.
+"cited": "<message id>", "run": "asked"}`). A change to many tasks at once records each task the same way.
 
 **Never on your words.** These stay a Confirm card, or your own tap in Tico or Settings, whatever you ask
 (`NEVER` in backend/assistant.py lists the routes): a personal token, service key, stored credential or its grants,
@@ -237,7 +237,7 @@ The ref is a task id (or its first eight characters) or a message id. The answer
 cause (the automation that opened it, the org rule that asked for it, the parent task it came from, or the bot that filed
 it), how many items that cause made in the last seven days and how many are still open, and up to three commands that
 would stop the source: turn an automation off, retire a rule, close what a bot filed, pause the bot, or file a task for
-BotOps to fix the bot's source. Each command is a `hub` line you can run as it is. A ref you cannot read is `404`.
+BotOps to fix the bot's source. Each command is a `tico` line you can run as it is. A ref you cannot read is `404`.
 
 `tico needs-you show [--kind task|ask|paused|mention]` (`GET /api/v2/needs-you/summary`) gives the same count as
 Needs you, split by kind and by the bot that put each item there, with this week's and older counts. Use it first when

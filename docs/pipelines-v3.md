@@ -637,7 +637,7 @@ refuses everything else.
 
 ### The picture in words
 
-- **What happens (hints)** comes in from four places: a person or bot acts (app, hub CLI, MCP); a GitHub webhook (may be
+- **What happens (hints)** comes in from four places: a person or bot acts (app, tico CLI, MCP); a GitHub webhook (may be
   lost, late or doubled); a Jev verdict, a run ending, a release published; the Heartbeat (every 10 s, no matter what).
 - **The task engine** holds three parts: `move()`, the only writer of stage, owner, status; the never-stuck check, which
   looks at state, wakes, and calls `move()`; and facts, saved copies of the outside: PRs, checks, releases, Jev verdicts,

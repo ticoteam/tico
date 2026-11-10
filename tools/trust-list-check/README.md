@@ -10,7 +10,7 @@ cargo run --locked --manifest-path tools/trust-list-check/Cargo.toml -- --repo .
 cargo run --locked --manifest-path tools/trust-list-check/Cargo.toml -- --repo . --ref origin/main --apply
 ```
 
-Requires Rust 1.92+, Git, curl, and (only for `--apply`) the normal authenticated `hub` CLI. No extra API key,
+Requires Rust 1.92+, Git, curl, and (only for `--apply`) the normal authenticated `tico` CLI. No extra API key,
 local Hub database, or GitHub Issues permission is used. The default is a read-only JSON report. Finding
 stale dependencies is a successful check, not a failed check. Network, parse and cloud failures return
 nonzero and say **incomplete**, so they cannot masquerade as an all-current result.
