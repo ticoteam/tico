@@ -1129,6 +1129,9 @@ class Refused(Exception):
         # What the caller needs to act on it, sent out beside the rule and the detail: for the task engine's refusals
         # what is missing, the commands allowed next and the task's version (store.refused).
         self.extra = {}
+        # The detail and extra as kept on record (the audit, a stored response), when they are not what the caller is
+        # told: {"detail", "extra"}. A refusal said to someone who may read a private task it names keeps it off.
+        self.stored = None
 
 
 # ----------------------------------------------------------------------------- basics
@@ -1496,10 +1499,14 @@ def migrate(conn, adopt_legacy=False):
     Each migration is one transaction with its version bump, so a failure leaves the file at
     the version it had; every statement is also safe to run twice (IF NOT EXISTS, guarded
     ADD COLUMN), so a file that has the change but an older version simply catches up.
-    `adopt_legacy` is for `manage.migrate_legacy`, whose source has no version record."""
+    `adopt_legacy` is for `manage.migrate_legacy`, whose source has no version record.
+    A database made by Tico 0.5 (it has tasks and has not had the cut-over) is refused before anything is written."""
+    from . import migrations
+
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version == 0 and not adopt_legacy:
         _refuse_foreign(conn)
+    migrations.refuse_old_tasks(conn)
     if version < len(MIGRATIONS):
         # A file from before the bridge (the legacy import; preflight refuses one otherwise) runs the numbered steps
         # below on its old shape, and they name today's columns, so it takes the cleanup's column renames first. A file
@@ -1535,8 +1542,6 @@ def migrate(conn, adopt_legacy=False):
     # The migration files (backend/migrations) run next, before every CREATE, ALTER and add_column below and in the
     # module schema code: those name the current columns, so a rename must land first or they would add an empty
     # column beside the old one.
-    from . import migrations
-
     migrations.apply(conn)
     # conversations.scope, owner_id and room_key (cloud room scopes) and their two room indexes are migration 0047's.
     # Deleted tasks wait here until restored or purged (backend/task_delete.py).
@@ -1946,20 +1951,22 @@ def writing_refusal(rule, detail):
 
 
 def refuse(
-    conn, actor, rule, detail="", severity="normal", context=None, task=None, scope=None, extra=None
+    conn, actor, rule, detail="", severity="normal", context=None, task=None, scope=None, extra=None, stored=None
 ) -> NoReturn:
     """Record a refusal, escalate it (rule 8), and raise. Never returns. `context` is what a person
     reviewing the refusal reads; a private task write keeps only what was refused. `task` is the task
     a `label` refusal was about, which _escalate counts it by. `extra` goes out with the refusal, unrecorded: what the
-    caller needs to act on it (`Refused.extra`)."""
+    caller needs to act on it (`Refused.extra`). `stored` is {"detail", "extra"} as kept on record, when the caller
+    is told more than may be kept (`Refused.stored`)."""
     if CLOSE_PROBE.get():
         probed = Refused(rule, detail, severity, task)
         probed.extra = dict(extra or {})
+        probed.stored = stored
         raise probed
     from . import task_quarantine
 
     scope = scope or task_quarantine.source(conn, actor, task or REFUSAL_TASK.get() or (context or {}).get("task"))
-    recorded = "Private task write refused" if PRIVATE_WRITE.get() else detail
+    recorded = "Private task write refused" if PRIVATE_WRITE.get() else (stored or {}).get("detail", detail)
     if context and PRIVATE_WRITE.get():
         # A private task's refusal keeps only what was refused.
         context = {"what": context.get("what")}
@@ -1995,6 +2002,7 @@ def refuse(
     refused = Refused(rule, detail, severity, task)
     refused.scope = scope  # survives the domain-write rollback (store.refused)
     refused.extra = dict(extra or {})
+    refused.stored = stored
     raise refused
 
 

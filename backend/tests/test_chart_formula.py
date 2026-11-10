@@ -2,7 +2,7 @@
 the rules the golden cannot show, the rows read back through the company file reader, and the contract additions the
 formula reads: a strategy's channels and a bet's name and segment, in draft.py and yamlfile.py.
 
-The tests that read a chart back need its templates in roles.json: the team managers, pipeline managers and new owners
+The tests that read a chart back need its templates in roles.json: the team managers and new owners
 of the org-v2 template track. Until those cards are on the branch they are skipped and the skip names the cards missing.
 """
 
@@ -79,18 +79,18 @@ def test_the_golden_fixture_is_a_test_fixture_not_part_of_the_install_bundle():
     assert not (Path(F.__file__).parent / "chart_formula_golden.json").exists()
 
 
-def test_hotmic_is_the_spec_chart_with_thirty_six_seats_and_nothing_uncovered():
+def test_hotmic_is_the_spec_chart_with_twenty_nine_seats_and_nothing_uncovered():
     result = F.build(HOTMIC)
     counts = Counter(seat["team"] for seat in result["employees"])
     assert counts == {
-        "Product": 4,
-        "Engineering": 9,
-        "Growth": 13,
-        "Success": 5,
+        "Product": 3,
+        "Engineering": 8,
+        "Growth": 10,
+        "Success": 3,
         "Corporate": 4,
         "Other": 1,
     }
-    assert len(result["employees"]) == 36
+    assert len(result["employees"]) == 29
     assert result["uncovered"] == []
 
 
@@ -119,10 +119,8 @@ def test_a_seat_row_has_the_company_file_employee_shape_and_a_live_flag():
 
 
 # ---------------------------------------------------------------------------------------------- live seats
-def test_the_live_seats_are_the_two_pipeline_managers_the_first_product_owner_qa_and_the_finance_owner():
+def test_the_live_seats_are_the_first_product_owner_qa_and_the_finance_owner():
     assert live_ids(F.build(HOTMIC)) == {
-        "product-pipeline-manager",
-        "engineering-pipeline-manager",
         "creators-product-owner",
         "qa-owner",
         "bookkeeper",
@@ -147,8 +145,6 @@ def test_a_chart_with_no_segment_has_one_product_owner_which_is_live_and_no_segm
     ]
     assert "segment-marketing-owner" not in {seat["template"] for seat in result["employees"]}
     assert live_ids(result) == {
-        "product-pipeline-manager",
-        "engineering-pipeline-manager",
         "product-owner",
         "qa-owner",
         "bookkeeper",
@@ -175,16 +171,9 @@ def test_the_fixed_seats_keep_the_ids_the_formula_gives_them():
     ids = {seat["id"] for seat in F.build(HOTMIC)["employees"]}
     assert {
         "product-team-manager",
-        "product-pipeline-manager",
         "engineering-team-manager",
-        "engineering-pipeline-manager",
         "growth-team-manager",
-        "growth-experiments-pipeline-manager",
-        "lead-pipeline-manager",
-        "opportunity-pipeline-manager",
         "success-team-manager",
-        "customer-pipeline-manager",
-        "success-experiments-pipeline-manager",
         "corporate-team-manager",
         "legal-owner",
         "bookkeeper",
@@ -511,7 +500,7 @@ def test_a_blank_draft_is_the_default_channels_and_no_segment_or_bet_seats():
     assert inputs["segments"] == [] and inputs["initiatives"] == []
     assert inputs["channels"] == list(F.DEFAULT_CHANNELS)
     result = F.build(inputs)
-    assert len(result["employees"]) == 32
+    assert len(result["employees"]) == 25
     assert result["uncovered"] == []
 
 

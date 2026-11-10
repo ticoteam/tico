@@ -265,12 +265,11 @@ def test_a_task_event_names_its_owner_and_requester_as_the_api_does_with_real_va
 
 
 def test_task_changes_are_published_with_their_own_names_and_a_retried_write_sends_nothing_twice(api, net):
-    made = make(api, events=["task.done", "task.state_changed", "task.assigned"])
+    made = make(api, events=["task.done", "task.assigned"])
     task = _post(api, "tasks", {"owner": "ops", "title": "Ship it", "body": "Ship it."})
-    doing = _post(api, f"tasks/{task['id']}", {"version": task["version"], "status": "doing"})
-    _post(api, f"tasks/{task['id']}", {"version": doing["version"], "status": "done", "note": "Shipped."})
+    _post(api, f"tasks/{task['id']}/done", {"note": "Shipped."})
     kinds = [s["type"] for s in sends(api, made["id"])]
-    assert kinds.count("task.state_changed") == 1 and kinds.count("task.done") == 1
+    assert kinds.count("task.done") == 1
     first = publish(api, "task.done", task["id"], {"id": task["id"], "title": "Ship it"}, "bot:ops", revision="r1")
     second = publish(api, "task.done", task["id"], {"id": task["id"], "title": "Ship it"}, "bot:ops", revision="r1")
     assert (first, second) == (1, 0)
@@ -279,28 +278,12 @@ def test_task_changes_are_published_with_their_own_names_and_a_retried_write_sen
 def test_catalog_examples_have_the_top_level_keys_their_producers_send(api, net):
     from backend import event_catalog as catalog
 
-    made = make(api, events=["task.*", "approval.*"])
+    made = make(api, events=["task.*"])
     task = _post(api, "tasks", {"owner": "ops", "title": "Ship it", "body": "Ship it."})
     _post(api, f"tasks/{task['id']}/comments", {"text": "Soon."})
-    doing = _post(api, f"tasks/{task['id']}", {"version": task["version"], "status": "doing"})
-    _post(api, f"tasks/{task['id']}", {"version": doing["version"], "status": "done", "note": "Shipped."})
-    with api.app.state.store.transaction() as c:
-        approval = H.approval_request(
-            c,
-            "bot:ops",
-            "send",
-            {"to": "x@acme.example", "cc": "", "subject": "Hi", "body_sha256": "a" * 64, "mailbox": "ops"},
-        )
-        H.approval_decide(c, "human:ana", approval["id"], "approved")
+    _post(api, f"tasks/{task['id']}/done", {"note": "Shipped."})
     sent = {s["type"]: json.loads(s["body"])["data"] for s in sends(api, made["id"])}
-    assert {
-        "task.created",
-        "task.commented",
-        "task.state_changed",
-        "task.done",
-        "approval.requested",
-        "approval.decided",
-    } <= set(sent)
+    assert {"task.created", "task.commented", "task.done"} <= set(sent)
     for name, data in sent.items():
         assert set(data) == set(catalog.EVENTS[name].example), name
 
@@ -334,11 +317,13 @@ def test_a_bot_asks_a_person_approves_and_the_person_owns_the_endpoint(api, net)
     again = post(api, "webhooks", body, token=bot, key="another")
     assert again["approval"]["id"] == asked["approval"]["id"]
     assert get(api, "webhooks")["items"] == []
-    post(api, f"approvals/{asked['approval']['id']}", {"decision": "approved"})
+    rid, task = asked["approval"]["id"], asked["approval"]["task_id"]
+    shown = get(api, f"oks/{rid}")["shown_hash"]  # Ana opens what it would make, and OKs it
+    post(api, f"tasks/{task}/asks/{rid}/ok", {"shown_hash": shown})
     made = post(api, "webhooks", body, token=bot)["webhook"]
     assert made["created_by"] == "human:ana" and made["requested_by"] == "bot:ops" and made["url"].endswith("/…")
     assert [h["id"] for h in get(api, "webhooks")["items"]] == [made["id"]]
-    again = post(api, "webhooks", body, token=bot, key="third")  # the approval was spent: a new ask
+    again = post(api, "webhooks", body, token=bot, key="third")  # the OK was used: a new ask
     assert again["approval"]["id"] != asked["approval"]["id"]
     post(api, f"webhooks/{made['id']}/rotate", {}, token=bot, expected=403)  # a bot manages none
     post(api, f"webhooks/{made['id']}/send", {"type": "custom.x"}, token=bot, expected=403)  # switch off
@@ -468,22 +453,6 @@ def test_the_hourly_cleanup_keeps_a_month_of_sends_and_two_hundred_attempts(api,
         assert c.execute("SELECT count(*) FROM webhook_events").fetchone()[0] == 1
         assert c.execute("SELECT count(*) FROM webhook_attempts").fetchone()[0] == 200
         assert c.execute("SELECT min(n) FROM webhook_attempts").fetchone()[0] == 51  # the newest 200 stay
-
-
-def test_the_other_events_are_published_where_they_happen(api, net):
-    made = make(api, events=["approval.*", "needs_you.*", "bot.*"])
-    with api.app.state.store.transaction() as c:
-        approval = H.approval_request(
-            c,
-            "bot:ops",
-            "send",
-            {"to": "x@acme.example", "cc": "", "subject": "Hi", "body_sha256": "a" * 64, "mailbox": "ops"},
-        )
-        H.approval_decide(c, "human:ana", approval["id"], "approved")
-    kinds = {s["type"] for s in sends(api, made["id"])}
-    assert {"approval.requested", "approval.decided"} <= kinds
-    body = json.loads(next(s for s in sends(api, made["id"]) if s["type"] == "approval.decided")["body"])
-    assert body["data"]["decision"] == "approved" and "payload" not in body["data"]
 
 
 def test_an_endpoint_cannot_subscribe_to_events_only_rules_see(api):

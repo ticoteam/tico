@@ -1,12 +1,12 @@
 """Finance: Tico's own books for the previous full month and this month to date, four monthly budgets (one near its
 limit), six invoices, bills and finance rules. The Bookkeeper's books view is granted six days before the build, and its
-first rule proposal is approved by Ana two days before it.
+first rule proposal, made four days before it, waits for Ana's OK.
 
 The books are dated from the build's own moment (`b.now`): the previous full month, then this month up to the build, so
 the app's default month always has numbers. Nothing is dated after the build (`Calendar.at` stops at it). Every entry
 goes through the Finance actions the app runs (`FA.act`) with an explicit `at`, and Gateway usage is posted the way
 Gateway usage is (`FA.post_entry`, source "usage"). Finance's own clock is never read. The hub's clock is set to the day
-of each hub stamp (tasks, approvals) with `_hub_clock`. Nothing reaches a bank, a payment processor or a mailbox:
+of each hub stamp (tasks, asks) with `_hub_clock`. Nothing reaches a bank, a payment processor or a mailbox:
 invoices are sent by hand and the book has no bank feed.
 """
 
@@ -14,6 +14,7 @@ import contextlib
 from datetime import date, datetime, timedelta, timezone
 
 from .. import bookkeeper, hubdb
+from ..demo_seed import say_done
 from ..finance import actions as FA
 from ..finance import reads as RD
 
@@ -322,8 +323,8 @@ CONTENT = {
             "on": ("prev", 1),
         },
     ],
-    # The Bookkeeper's first rule proposal. A bot's rule needs a person's approval, so it waits in Ana's queue until she
-    # approves it. The proposal is made four days before the build and approved two days before it.
+    # The Bookkeeper's first rule proposal. A bot's rule needs a person's OK, so it waits for Ana. It is made four days
+    # before the build.
     "proposal": {
         "kind": "posting",
         "name": "Freight bills go to 5400",
@@ -340,8 +341,6 @@ CONTENT = {
             {"input": {"kind": "bill", "counterparty": "Lumen Assembly Co.", "amount": 864000}, "expect": "none"},
         ],
         "proposed": ("ago", 4),
-        "approved": ("ago", 2),
-        "note": "Yes. Keelson's freight bills go to Freight in.",
     },
     # The Bookkeeper's books view: Ana grants it on Finance's Access page six days before the build, and marks the
     # Bookkeeper's ask done. The Bookkeeper's entries follow it, since it can only post to accounts it can see.
@@ -397,7 +396,7 @@ class Calendar:
 
 @contextlib.contextmanager
 def _hub_clock(b, days):
-    """The hub's clock set to `days` before the build for the writes inside: the tasks and approvals they stamp."""
+    """The hub's clock set to `days` before the build for the writes inside: the tasks and asks they stamp."""
     before = b.clock.at
     b.at(days=days)
     try:
@@ -690,7 +689,7 @@ def _bookkeeper_view(c, cal):
         "view-bookkeeper",
         view["granted"],
     )
-    hubdb.task_update(c, OWNER, ask, status="done", note=view["note"])
+    say_done(c, OWNER, ask, view["note"])
 
 
 def _rules_and_tasks(c, cal):
@@ -704,8 +703,8 @@ def _rules_and_tasks(c, cal):
 
 
 def _propose_rule(c, cal, rule):
-    """The Bookkeeper's proposal: a bot's rule waits for a person's approval, so it lands in Ana's queue."""
-    res = _act(
+    """The Bookkeeper's proposal: a bot's rule waits for a person's OK, so it lands in Ana's Needs you."""
+    _act(
         c,
         cal,
         rule["by"],
@@ -715,18 +714,6 @@ def _propose_rule(c, cal, rule):
         rule["proposed"],
         expect="needs_approval",
     )
-    if not res.approval_id:
-        raise AssertionError("finance demo: the rule proposal has no approval")
-    return res.approval_id
-
-
-def _approve_rule(c, cal, approval_id, rule):
-    """Ana's decision as the decide route makes it: the hub records it, then Finance acts on it in the same transaction,
-    dated to the decision."""
-    hubdb.approval_decide(c, OWNER, approval_id, "approved", rule["note"])
-    done = FA.approval_decided(c, approval_id, at=cal.at(rule["approved"]))
-    if done is None or done.status != "committed":
-        raise AssertionError(f"finance demo: the rule approval did not commit: {done and done.status}")
 
 
 def seed(b):
@@ -738,6 +725,4 @@ def seed(b):
     b.write(lambda c: _billing(c, cal))
     b.write(lambda c: _rules_and_tasks(c, cal))
     with _hub_clock(b, days=4):
-        approval_id = b.write(lambda c: _propose_rule(c, cal, CONTENT["proposal"]))
-    with _hub_clock(b, days=2):
-        b.write(lambda c: _approve_rule(c, cal, approval_id, CONTENT["proposal"]))
+        b.write(lambda c: _propose_rule(c, cal, CONTENT["proposal"]))

@@ -1,6 +1,6 @@
 """A demo built at a moment other than the one the section tests use keeps its invariants. Each build is the expensive
 part (~45 s in the gate), so each moment is built once and every invariant that depends on the build's moment is read
-from it: no task left stuck, nothing dated after the build, every message body kept, the market dated to the build's
+from it: every rule of the task engine holds, nothing dated after the build, every message body kept, the market dated to the build's
 year, and (for the mid-month build) Finance's default month and the early-morning Learnings nights."""
 
 import sqlite3
@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import time_machine
 from fastapi.testclient import TestClient
 
-from backend import demo
+from backend import demo, hubdb, never_stuck
 from backend.app import create_app
 from backend.tests.helpers import demo_finance as finance
 
@@ -23,8 +23,9 @@ MACHINE = datetime(2026, 11, 6, 18, 30, tzinfo=timezone.utc)
 # one, the fix f5a873860 case), a Pacific evening, the Sunday to Monday edge of a growth window, and the night after
 # spring-forward. It is months before MACHINE.
 LONG_AFTER = datetime(2026, 3, 9, 2, 0, tzinfo=timezone.utc)
-# Columns that hold a future time by design: a schedule's next run, a message's expiry, and a task's due date.
-FUTURE_BY_DESIGN = {"next_due_at", "expires_at", "due_at", "check_back_at"}
+# Columns that hold a future time by design: a schedule's next run, a message's expiry, a task's due date and the end
+# of a snooze.
+FUTURE_BY_DESIGN = {"next_due_at", "expires_at", "due_at", "until_at"}
 
 
 def signed_in(settings):
@@ -49,12 +50,7 @@ def nothing_is_dated_after(settings, moment, label, run_on_the_machines_clock=Fa
                     continue
                 count = db.execute(
                     f'SELECT count(*) FROM "{table}" WHERE typeof("{column}")=\'text\' AND "{column}" > ? '
-                    f'AND "{column}" LIKE \'20__-__-__T%\''
-                    + (
-                        " AND NOT (subject_type='task' AND kind IN ('check_back_at','check_back_explicit'))"
-                        if table == "history_events" and column in ("old", "new")
-                        else ""
-                    ),
+                    f'AND "{column}" LIKE \'20__-__-__T%\'',
                     (cut,),
                 ).fetchone()[0]
                 if count:
@@ -72,8 +68,10 @@ def every_message_body_is_kept(settings, label):
     assert total == 11 and removed == 0, f"{label}: {removed} of {total} inbound message bodies were removed"
 
 
-def no_task_is_stuck(api, label):
-    assert api.get("/api/v2/tasks/stuck").json()["tasks"] == [], f"{label}: a task is left stuck"
+def every_rule_of_the_task_engine_holds(settings, label):
+    """Every task has its pipeline, its stage and one open visit, and every open one waits on someone."""
+    with closing(hubdb.connect(settings.db_path)) as c:
+        assert never_stuck.rules_hold(c) == [], f"{label}: a rule of the task engine is broken"
 
 
 def the_market_is_dated_to_the_year(api, year, label):
@@ -99,7 +97,7 @@ def test_a_demo_built_early_in_the_day_in_another_year_keeps_its_invariants(tmp_
         nothing_is_dated_after(settings, EARLY, label)
         every_message_body_is_kept(settings, label)
         with signed_in(settings) as api:
-            no_task_is_stuck(api, label)
+            every_rule_of_the_task_engine_holds(settings, label)
             the_market_is_dated_to_the_year(api, 2027, label)
             nights = [night["night"] for night in api.get("/api/v2/learnings").json()["nights"]]
             assert len(nights) == 6 and "2027-01-15" not in nights, f"{label}: a night that has not finished is seeded"
@@ -122,5 +120,5 @@ def test_a_demo_built_long_after_its_dates_keeps_its_invariants(tmp_path):
     nothing_is_dated_after(settings, LONG_AFTER, label, run_on_the_machines_clock=True)
     every_message_body_is_kept(settings, label)
     with time_machine.travel(LONG_AFTER, tick=False), signed_in(settings) as api:
-        no_task_is_stuck(api, label)
+        every_rule_of_the_task_engine_holds(settings, label)
         the_market_is_dated_to_the_year(api, LONG_AFTER.year, label)

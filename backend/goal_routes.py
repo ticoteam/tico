@@ -640,8 +640,8 @@ def install(app, store, auth, mutate, settings):
             open_counts = {
                 r[0]: r[1]
                 for r in c.execute(
-                    "SELECT goal_id, count(*) FROM tasks WHERE goal_id IS NOT NULL AND status IN "
-                    f"('open','doing','waiting') AND {readable} GROUP BY goal_id"
+                    "SELECT goal_id, count(*) FROM tasks WHERE goal_id IS NOT NULL AND status='open' "
+                    f"AND {readable} GROUP BY goal_id"
                 )
             }
             by_goal = K.goal_views(c, [r["id"] for r in rows], include_archived=True)
@@ -661,8 +661,8 @@ def install(app, store, auth, mutate, settings):
             unaligned = {
                 r["owner_id"]: r["n"]
                 for r in c.execute(
-                    "SELECT owner_id, count(*) AS n FROM tasks WHERE goal_id IS NULL AND status IN "
-                    f"('open','doing','waiting') AND {readable} GROUP BY owner_id"
+                    "SELECT owner_id, count(*) AS n FROM tasks WHERE goal_id IS NULL AND status='open' "
+                    f"AND {readable} GROUP BY owner_id"
                 )
             }
             unaligned = {owner: n for owner, n in unaligned.items() if owner not in hidden}

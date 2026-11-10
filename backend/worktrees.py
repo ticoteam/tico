@@ -14,14 +14,13 @@ from fastapi import Request
 from pydantic import Field
 from clients import git_repository, sessions
 
-from . import hubdb as H, repositories as R, runner_wire, task_relations as TR, worktree_waits as waits
+from . import hubdb as H, repositories as R, runner_wire, worktree_waits as waits
 from .auth import validate_identity
 from .live_privacy import ROOM_PREFIX
 from .models import Contract
-from .roadmap_flow import READY_FROM
 from .store import Problem, readiness_document
 
-CLOSED = ('done', 'closed', 'declined')
+CLOSED = ('done', 'closed')
 PR_FINISHED = ('merged', 'closed', 'shipped')
 RESTORE_PROGRESS = (
     'attached_pending',
@@ -305,52 +304,64 @@ def live_turn_cache(c, computer):
 
 
 def start_refusal(c, task):
-    """Why no new worktree starts for this task now, or '': a coding step cannot run on a finished task, one not
-    started (On Deck, or any task still `open`) or one blocked by a task whose code is not merged yet (`unmerged`). A
-    task being worked (`doing`), or one at a review or waiting while its fix-forward or a review fix runs, gets one; so
-    does reassigned work."""
+    """Why no new worktree starts for this task now, or '': a finished task gets none. An open task is being worked,
+    or will be on its owner's next turn, and gets one."""
     if task['status'] in CLOSED:
         return f"This task is {task['status']}: a finished task gets no new worktree."
-    if task['status'] == 'open':
-        return 'This task has not started: move it to In Progress first.'
-    for row in TR.live_blockers(c, task['id'], H.ACTIVE_STATUSES):
-        if why := unmerged(c, row):
-            name = (f"#{row['number']} " if row.get('number') else '') + (row.get('title') or row['id'])
-            return f'This task is blocked by {name}, {why}: it gets a worktree once that code is merged.'
     return ''
 
 
-def unmerged(c, blocker):
-    """Why an open blocker's code is not on main yet, in plain words, or '' when it is: a worktree builds from source,
-    so a blocker counts once it is merged, not once it ships. Merged means a ready status, its type's Pending Release
-    step or a later one, or a merged pull request with none still open (one closed unmerged was abandoned). The cutoff
-    is the Pending Release step itself: a step with a ready status may come before work that still changes code."""
-    if blocker['status'] == 'ready':
-        return ''
-    step = c.execute('SELECT name,position FROM task_steps WHERE id=?', (blocker.get('step_id'),)).fetchone()
-    release = (
-        c.execute(
-            'SELECT min(position) FROM task_steps WHERE type_id=? AND lower(trim(name))=?',
-            (blocker.get('type_id'), READY_FROM),
-        ).fetchone()[0]
-        if step
+def unlinked_pushes(c, task_id):
+    """The task's worktrees whose branch carries pushed commits of the task's own and no pull request link on that
+    repository (a link whose branch GitHub has not reported yet counts): work that would be left with nothing to
+    review, merge or release, so its tree is held. Pushed is the push webhook's head, or a committed head the computer
+    reports nothing unpushed on; the background pass's look at the branch on GitHub (github.reconcile_worktree_prs)
+    settles both, so a missed webhook still counts and a branch only moved to newer main does not. A branch that pass
+    can read and has not read since its last known head counts too, `unchecked`: a push whose webhook was missed and
+    that no computer has reported is on GitHub only. A head the tree started at, or one on the repository's default
+    branch, is no work of the task's. Each is {link_id, repo, branch, unchecked}."""
+    # The GitHub App's table exists only once its module has set up the store; without it no branch is readable.
+    app = (
+        c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
+        if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='github_app'").fetchone()
         else None
     )
-    if release is not None and step['position'] >= release:
-        return ''
-    prs = c.execute(
-        "SELECT number,url,coalesce(state,'open') AS state FROM task_links WHERE task_id=? AND kind='pr' "
-        "ORDER BY created_at,rowid",
-        (blocker['id'],),
-    ).fetchall()
-    waiting = [pr for pr in prs if pr['state'] not in ('merged', 'closed')]
-    if not waiting and any(pr['state'] == 'merged' for pr in prs):
-        return ''
-    where = f"still at {step['name']}" if step else f"still {blocker['status']}"
-    if not waiting:
-        return f'{where} with no merged pull request'
-    names = ', '.join(f"#{pr['number']}" if pr['number'] else pr['url'] for pr in waiting)
-    return f"{where} with pull request {names} not merged yet"
+    out = []
+    for w in H._rows(
+        c.execute(
+            "SELECT id,repo,branch,detail FROM task_links WHERE task_id=? AND kind='worktree' "
+            "AND coalesce(state,'unknown')<>'removed' AND repo IS NOT NULL AND branch IS NOT NULL",
+            (task_id,),
+        )
+    ):
+        detail = H._json(w["detail"], {}) or {}
+        remote = detail.get("remote") or {}
+        heads = {detail.get("pushed"), detail.get("last_commit") if detail.get("ahead") == 0 else None}
+        heads -= {None, "", detail.get("expected_head"), *(remote.get("heads") or [])}
+        work = remote.get("ahead") or any(
+            not c.execute(
+                "SELECT 1 FROM main_pushes WHERE sha=? AND lower(repo)=lower(?)", (head, w["repo"])
+            ).fetchone()
+            for head in heads
+        )
+        readable = (
+            app
+            and re.match(r"^tico/[0-9a-f]{8}-", w["branch"])
+            and w["repo"].lower().startswith(str(app[0] or "").lower() + "/")
+            and c.execute(
+                "SELECT 1 FROM repositories WHERE lower(full_name)=lower(?) AND reachable=1", (w["repo"],)
+            ).fetchone()
+        )
+        unchecked = bool(readable) and not (
+            remote.get("at") and set(H.worktree_heads(detail)) <= set(remote.get("heads") or [])
+        )
+        if (work or unchecked) and not c.execute(
+            "SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=lower(?) "
+            "AND (branch=? OR branch IS NULL)",
+            (task_id, w["repo"], w["branch"]),
+        ).fetchone():
+            out.append({"link_id": w["id"], "repo": w["repo"], "branch": w["branch"], "unchecked": not work})
+    return out
 
 
 def released_event(c, row, detail):
@@ -463,7 +474,7 @@ def inventory(c, computer):
             # join seeks bots' slug key; the expression form scanned every bot for each worktree link kept.
             f"LEFT JOIN bots b ON b.id=substr({owner},5) AND substr({owner},1,4)='bot:' "
             "WHERE l.kind='worktree' AND l.computer_id=? AND (coalesce(l.state,'unknown')<>'removed' "
-            "OR (t.status NOT IN ('done','closed','declined') AND b.state='active'))",
+            "OR (t.status NOT IN ('done','closed') AND b.state='active'))",
             (computer,),
         )
     ]
@@ -536,7 +547,7 @@ def holdings(c, owner):
         elif (
             prs
             and all(s in PR_FINISHED for s in states)
-            and (row['status'] != 'doing' or allocation_has_pr(row, detail, prs))
+            and (row['status'] != 'open' or allocation_has_pr(row, detail, prs))
         ):
             clear = 'merged' if any(s in ('merged', 'shipped') for s in states) else 'closed'
             why = 'pull request ' + clear
@@ -872,7 +883,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
             and (row['state'] == 'present' or row['state'] == 'pending' and not detail.get('restore_on_reopen'))
         )
         # Its own branch's commits with no pull request linked are nobody's yet: the tree stays and says why.
-        unlinked = released and any(m['link_id'] == row['id'] for m in H.unlinked_pushes(c, row['task_id']))
+        unlinked = released and any(m['link_id'] == row['id'] for m in unlinked_pushes(c, row['task_id']))
         held = (
             f"held: commits on {row['branch']} with no pull request linked"
             if unlinked
@@ -887,7 +898,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
             detail['held'] = held
         else:
             detail.pop('held', None)
-        if released and row['task_status'] == 'doing' and not allocation_has_pr(row, detail, pr_links):
+        if released and row['task_status'] == 'open' and not allocation_has_pr(row, detail, pr_links):
             released = False
         reason = (
             'task finished'
