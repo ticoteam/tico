@@ -1,21 +1,21 @@
 # Close out a marketing task
 
-When: a test has ended or been stopped, and the task and its numbers show what happened. The task is Live or Working. The
-weekly meeting finds these; the owner may also ask. The outcome is the task on one step, Succeeded, Failed, Inconclusive or
-Dropped, with a comment saying what we learned.
+When: a test has ended or been stopped, and the task and its numbers show what happened. The task is labelled
+`idea:live` or `idea:working`. The weekly meeting finds these; the owner may also ask. The outcome is the task ended with
+one result, Succeeded, Failed, Inconclusive or Dropped, and a comment saying what we learned.
 
 ---
 
 ## 1. Read the task
 
-    hub task show <id>                the task, its steps and its comments
+    hub task show <id>                the task, its version and its comments
     hub growth numbers                the channel's numbers over the test
     hub kpi show <kpi id>             a KPI the test was meant to move
 
 A reading is a fact. Use the reading that covers the test's period; a partial period is not a value to judge. Every number
 you write must be one you read, with its source.
 
-## 2. Choose the step
+## 2. Choose the result
 
 - **Succeeded**: the change moved the numbers the way it was meant to, by enough to keep. The comment says by how much and over
   which weeks.
@@ -32,19 +32,20 @@ The learning is a claim about customers, not about the test. "Price shoppers chu
 
     hub task comment <id> "<the numbers, their source, the window, and the learning>"
 
-## 4. Move the task
+## 4. End the task
 
-    hub task update <id> --step Succeeded
+    hub task done <id> -m "Succeeded: <the learning in one line>" --version N
+    hub task close <id> -m "<Failed|Inconclusive|Dropped>: <the learning in one line>" --version N
 
-Use Failed, Inconclusive or Dropped in place of Succeeded as the evidence gives it.
+Succeeded is done; the other three are closed, with the result first in the note.
 
 ## 5. Follow up
 
-If the learning suggests a next test, file it as a new Marketing task (`playbooks/propose-ideas.md`) and link it to this
+If the learning suggests a next test, file it as a new idea (`playbooks/propose-ideas.md`) and link it to this
 one: `hub task relate <new id> <this id> --kind follow_up`. Do not start it here; the weekly meeting picks it.
 
 ## Quality
 
-- The owner may change a step. Say in the comment what would change your mind when the evidence is close.
-- If the numbers and the test disagree, the step is Inconclusive and the comment says why.
-- Never choose a step the evidence does not support, even when the owner would like one.
+- The owner may change the result. Say in the comment what would change your mind when the evidence is close.
+- If the numbers and the test disagree, the result is Inconclusive and the comment says why.
+- Never choose a result the evidence does not support, even when the owner would like one.

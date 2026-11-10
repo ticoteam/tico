@@ -1,8 +1,8 @@
 # Propose marketing ideas
 
-When: the setup task "Propose the first growth ideas", the weekly meeting when fewer than three ideas are On deck, or the
-owner asks. Budget 45 minutes. The outcome is three to eight Marketing tasks at step On deck, each with a channel label and
-a source. Nothing is started here; the weekly meeting moves an idea to In development.
+When: the setup task "Propose the first growth ideas", the weekly meeting when fewer than three ideas are on deck, or the
+owner asks. Budget 45 minutes. The outcome is three to eight tasks labelled `idea:on-deck`, each with a channel label and a
+source. Nothing is started here; the weekly meeting moves an idea into development.
 
 ---
 
@@ -15,8 +15,7 @@ a source. Nothing is started here; the weekly meeting moves an idea to In develo
     hub growth channel list        the channels, their stage and owner
 
 Then the market: `hub market show <competitor>` for each competitor, and `hub listening runs --since <30 days ago>` for the
-recent matches. Then look at what was closed: `hub task list --type idea --step Failed` and
-`hub task list --type idea --step Inconclusive`, one list each.
+recent matches. Then look at what failed or was inconclusive: the dated learnings in `memory/learnings.md`.
 
 ## 2. Look at what did not work first
 
@@ -34,13 +33,13 @@ Every idea has all of these, or you do not file it:
 
 No score, prediction or bet is needed, and an idea does not link to a bet.
 
-    hub task create --owner marketing-lead --type idea --label channel:<slug> \
+    hub task create --owner marketing-lead --label idea:on-deck --label channel:<slug> \
       --title "Price calculator on the pricing page" \
       --body "Changes: show the saving against a typical cleaner on the pricing page. Signal: <match id, link or task id>."
 
 A follow-up is filed the same way, then linked to the closed task: `hub task relate <new id> <closed id> --kind follow_up`.
 
-Before you file, scan the board for a duplicate: `hub task list --type idea`. Add to an existing idea with
+Before you file, scan for a duplicate: `hub task list --label idea:on-deck`. Add to an existing idea with
 `hub task comment <id> "..."` instead of filing a copy.
 
 File three to eight. More than eight is a list, not a proposal.

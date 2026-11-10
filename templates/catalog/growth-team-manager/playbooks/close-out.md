@@ -1,21 +1,22 @@
 # Close out a growth experiment
 
-When: a test has ended or been stopped, and the card and its numbers show what happened. The card is in Measuring, or in
-Running when its test was stopped. The weekly meeting finds these; the owner may also ask. The outcome is the card in Kept
-or Dropped, with a comment saying what we learned and, for Dropped, whether it failed, was inconclusive or was stopped.
+When: a test has ended or been stopped, and the task and its numbers show what happened. The task is labelled
+`growth:measuring`, or `growth:running` when its test was stopped. The weekly meeting finds these; the owner may also ask.
+The outcome is the task done (Kept) or closed (Dropped), with a comment saying what we learned and, for Dropped, whether it
+failed, was inconclusive or was stopped.
 
 ---
 
 ## 1. Read the task
 
-    hub task show <id>                the task, its steps and its comments
+    hub task show <id>                the task, its version and its comments
     hub growth numbers                the channel's numbers over the test
     hub kpi show <kpi id>             a KPI the test was meant to move
 
 A reading is a fact. Use the reading that covers the test's period; a partial period is not a value to judge. Every number
 you write must be one you read, with its source.
 
-## 2. Choose the stage
+## 2. Choose the result
 
 - **Kept**: the change moved the numbers the way it was meant to, by enough to keep. The comment says by how much and over
   which weeks.
@@ -33,11 +34,12 @@ The learning is a claim about customers, not about the test. "Price shoppers chu
 
     hub task comment <id> "<the numbers, their source, the window, and the learning>"
 
-## 4. Move the card
+## 4. End the task
 
-    hub task update <id> --step Kept
+    hub task done <id> -m "Kept: <the learning in one line>" --version N
+    hub task close <id> -m "Dropped, <failed|inconclusive|stopped>: <the learning in one line>" --version N
 
-Use Dropped in place of Kept as the evidence gives it.
+Use the one the evidence gives.
 
 ## 5. Follow up
 
@@ -46,6 +48,6 @@ one: `hub task relate <new id> <this id> --kind follow_up`. Do not start it here
 
 ## Quality
 
-- The owner may change a stage. Say in the comment what would change your mind when the evidence is close.
+- The owner may change the result. Say in the comment what would change your mind when the evidence is close.
 - If the numbers and the test disagree, it is Dropped as Inconclusive and the comment says why.
-- Never choose a stage the evidence does not support, even when the owner would like one.
+- Never choose a result the evidence does not support, even when the owner would like one.

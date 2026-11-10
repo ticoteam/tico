@@ -51,11 +51,11 @@ shown in full. A guardrail breach goes to the page owner as a question in the sa
 ## 6. Read any test that reached its planned end
 
 Follow `skills/read-a-test-without-peeking/SKILL.md`. Record the read-out in the test's file as won, lost or inconclusive,
-and set the Marketing task's outcome:
+and comment the outcome on the idea task, with one line on what the test showed:
 
-    hub task update <id> --step <Succeeded|Failed|Inconclusive>
+    hub task comment <id> "<Succeeded|Failed|Inconclusive>: <what the test showed>"
 
-Add one line to the task's note on what the test showed.
+The Growth Team Manager closes it out.
 
 ## 7. Draft one proposal
 

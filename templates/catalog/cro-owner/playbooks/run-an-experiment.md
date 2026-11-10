@@ -3,7 +3,7 @@
 Use when a proposal in `knowledge/proposals/` is ready to test, or when a task asks for a test. Budget 60 minutes for the
 brief. The test itself runs for its planned weeks.
 
-Outcome: a brief in `knowledge/experiments/<slug>.md` that the page owner can approve, and a Marketing task for it, with
+Outcome: a brief in `knowledge/experiments/<slug>.md` that the page owner can approve, and an idea task for it, with
 the test's status tracked until its read-out.
 
 Done when the brief has every field below, the page owner has approved or declined it in a task, and the file states
@@ -37,28 +37,28 @@ Write these fields into `knowledge/experiments/<slug>.md`:
 
 ## 4. Hand it to the page owner
 
-Open the Marketing task, owned by `growth-team-manager`, with the brief's path in the body. The Growth Team Manager (`growth-team-manager`) picks it at the Monday growth meeting:
+Open the idea task, owned by `growth-team-manager`, with the brief's path in the body. The Growth Team Manager (`growth-team-manager`) picks it at the Monday growth meeting:
 
-    hub task create --owner growth-team-manager --type idea --label channel:<slug> --title "..." --body "..."
+    hub task create --owner growth-team-manager --label growth:ideas --label channel:<slug> --title "..." --body "..."
 
 Once it is picked, ask the page owner whether to start it:
 
-    hub task ask <id> --to <owner> "Start the test as briefed?" --version N --option "Start it -> the owner starts it in the testing tool and the status moves to running" --option "Change the brief -> I revise the sample and the run time"
+    hub task ask <id> --to <owner> "Start the test as briefed? If yes, you start it in the testing tool; if not, I revise the sample and the run time." --choices "Start it,Change the brief" --version N
 
 Never start or stop a test yourself unless the task asks for it and a granted Tool allows it.
 
 ## 5. While it runs
 
 Each Monday, read the count in each arm, the sample ratio check and the guardrails. Do not show the primary metric's rate or
-difference before the planned end. When the test is picked and the owner confirms it has started, move the task:
+difference before the planned end. When the owner confirms it has started, say so on the task:
 
-    hub task update <id> --step Live
+    hub task comment <id> "Started <date> in <testing tool>; planned end <date>."
 
 ## 6. At the planned end
 
-Follow `playbooks/weekly-conversion-check.md` step 6 and `skills/read-a-test-without-peeking/SKILL.md`. Set the outcome with
-`hub task update <id> --step <Succeeded|Failed|Inconclusive>`. A test stopped early is `Dropped`, with the reason in its
-note.
+Follow `playbooks/weekly-conversion-check.md` step 6 and `skills/read-a-test-without-peeking/SKILL.md`. Comment the
+outcome on the idea task, first word Succeeded, Failed or Inconclusive, or Dropped with the reason for a test stopped
+early. The Growth Team Manager closes it out.
 
 ## 7. Learn
 
