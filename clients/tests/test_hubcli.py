@@ -698,7 +698,7 @@ class AgainstAStub(unittest.TestCase):
             Stub.seen.clear()
             code, out = run_hub(*argv, env=self.env)
             self.assertEqual(code, 1, out)
-            self.assertEqual(out["_stdout"].strip(), "Run `hub task show T1` first.")
+            self.assertEqual((out["error"], out["detail"]), ("usage", "Run `hub task show T1` first."))
             self.assertFalse([s for s in Stub.seen if s[0] == "POST"])
 
     def test_a_refusal_prints_what_is_missing_and_the_commands_allowed_next(self):

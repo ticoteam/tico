@@ -146,7 +146,7 @@ COMMANDS = [
             {
                 "owner": "ana",
                 "title": "Sign the FCC filing",
-                "body": "",
+                "body": "Sign the FCC filing",
                 "due": None,
                 "goal_id": None,
                 "pipeline": "general",
@@ -216,7 +216,8 @@ def test_without_a_version_the_cli_prints_the_same_line_and_exits_one(monkeypatc
     api = Recorder()
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: api)
     assert remotecli.main(hubcli.parser().parse_args(["task", "done", "T1", "-m", "x"])) == 1
-    assert capsys.readouterr().out == "Run `hub task show T1` first.\n"
+    printed = json.loads(capsys.readouterr().out)
+    assert printed == {"error": "usage", "detail": "Run `hub task show T1` first.", "retryable": False}
     assert api.writes() == []
 
 

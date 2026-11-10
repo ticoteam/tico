@@ -1452,7 +1452,7 @@ def task_give(api, args):
     {
         "parent": TASK_ID,
         "title": _s("What the new task is for, in plain words"),
-        "body": _s("The details", default=""),
+        "body": _s("The details; default the title"),
         "owner": _s("Who does it: a bot slug, a person id, or `me` (the default)"),
         "pipeline": _s("The pipeline's id; default general"),
         "due": _s("ISO-8601 date-time with timezone"),
@@ -1463,8 +1463,12 @@ def task_give(api, args):
     writes=True,
 )
 def task_file(api, args):
-    fields = ("parent", "title", "body", "pipeline", "due", "labels", "private", "operation_id")
-    return task_create(api, {**{k: args[k] for k in fields if k in args}, "owner": args.get("owner") or "me"})
+    fields = ("parent", "title", "pipeline", "due", "labels", "private", "operation_id")
+    # A task has a body: with none given, its title is its body, as for a sub-task made with hub_task_child_create.
+    body = args.get("body") or args["title"]
+    return task_create(
+        api, {**{k: args[k] for k in fields if k in args}, "body": body, "owner": args.get("owner") or "me"}
+    )
 
 
 @tool(

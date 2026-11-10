@@ -1928,5 +1928,6 @@ def main(args, who=None):
     except ValueError as exc:
         if args.cmd != "task":
             raise
-        print(str(exc))  # what the command needs first, in its own words: "Run `hub task show <id>` first."
+        # What the command needs first, in its own words ("Run `hub task show <id>` first."), as the MCP tool says it.
+        print(json.dumps({"error": "usage", "detail": str(exc), "retryable": False}, indent=2))
         return 1

@@ -17,35 +17,26 @@ from backend.tests.helpers.botops_parity import _wake, act, bot_id, everything, 
 
 
 @pytest.mark.parametrize("requester", ["bot:finance"])
-def test_botops_records_its_own_blocker_without_borrowing_human_authority(api, botops, requester):
+def test_botops_files_the_task_it_waits_on_without_borrowing_human_authority(api, botops, requester):
+    """A bot's request lends BotOps nothing: the task it files to wait on is its own, filed with its own rights."""
     from backend.tests.helpers.mcp import call as mcp
 
     with api.app.state.store.transaction() as c:
         task = H.task_create(
             c, requester, "Diagnose the missing mail registry", "Find its approved source.", "bot:botops"
         )
-        blocker = H.task_create(
-            c, 'bot:botops', "Find the approved registry source", "Identify the source.", "bot:finance"
-        )
     attempt = claim(api, botops, "botops")
-    err, result = mcp(
-        api, "hub_task_relate", {"id": task["id"], "task": blocker["id"], "kind": "blocked_by"}, attempt["token"]
-    )
-    assert not err, result
-    err, result = mcp(
+    err, filed = mcp(
         api,
-        "hub_task_update",
-        {"id": task["id"], "status": "waiting", "note": "The authorized registry source is missing.", "quiet": True},
+        "hub_task_file",
+        {"parent": task["id"], "title": "Find the approved registry source", "owner": "finance"},
         attempt["token"],
     )
-    assert not err, result
+    assert not err, filed
     with api.app.state.store.read() as c:
-        assert H.task(c, task["id"])["status"] == "waiting"
-        note = c.execute(
-            "SELECT actor FROM events WHERE action='task.update' AND target=? ORDER BY rowid DESC LIMIT 1",
-            (task["id"],),
-        ).fetchone()
-        assert note["actor"] == "bot:botops"
+        made = H.task(c, filed["task"]["id"])
+        assert (made["requester_id"], made["parent_id"]) == ("bot:botops", task["id"])
+        assert [w.state for w in H.task_waits(c, [task["id"]])[task["id"]]][:1] == ["tasks"]
     assert act(api, attempt, "PUT", "providers", {"enabled": ["openai"]}).status_code == 403
 
 
@@ -756,22 +747,25 @@ def test_delegated_botops_revalidates_its_credential_under_the_write_lock(api, b
 
 
 def test_botops_closing_its_own_task_for_the_person_keeps_their_close_and_its_own_words(api, botops):
-    """The close is the person's (closed_by), the closing note is BotOps' own report."""
+    """The close is the person's (closed_by); its why, BotOps' own report, is the move's note."""
     ana = turn(api, botops, person="ana-test", text="Clean up the QA bot")
     task = post(api, "tasks", {"owner": "botops", "title": "Clean up the QA bot", "body": "Clean it."})
     closed = act(
         api,
         ana,
         "POST",
-        f"tasks/{task['id']}",
-        {"version": task["version"], "close": True, "note": "Cleanup complete; folder kept."},
+        f"tasks/{task['id']}/move",
+        {"to": "closed", "version": task["version"], "why": "Cleanup complete; folder kept."},
     )
     assert closed.status_code == 200, closed.text
     with api.app.state.store.read() as c:
         row = c.execute("SELECT closed_by_id FROM tasks WHERE id=?", (task["id"],)).fetchone()
-        note = c.execute("SELECT sender_id FROM messages WHERE body='Cleanup complete; folder kept.'").fetchall()
+        moved = c.execute(
+            "SELECT note FROM history_events WHERE subject_id=? AND kind='move' ORDER BY rowid DESC LIMIT 1",
+            (task["id"],),
+        ).fetchone()
     assert row["closed_by_id"] == "human:ana"
-    assert note and {r["sender_id"] for r in note} == {"bot:botops"}
+    assert moved and moved["note"] == "Cleanup complete; folder kept."
 
 
 @pytest.mark.parametrize('legacy_anchor', [True])
@@ -1190,12 +1184,12 @@ def test_a_reopened_task_and_a_request_past_the_cap_lend_nothing(api, botops):
     task_id = (task.json().get("task") or task.json())["id"]
     finish(api, botops, ana)
     finish(api, botops, claim(api, botops, "botops"))  # the task's own "new task" notice
-    # Done after ten days (within the cap); BotOps moving it back to doing revives nothing.
+    # Done after ten days (within the cap); BotOps reopening it revives nothing.
     _age(api, ana["message"]["id"], 10)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), days=-10), task_id))
         H.task_update(c, "bot:botops", task_id, status="done", note="Done.")
-        H.task_update(c, "bot:botops", task_id, status="doing", note="Again.")
+        H.task_update(c, "bot:botops", task_id, status="open", note="Again.")
     later = _wake(api, botops)
     refused = act(api, later, "GET", "credentials", ref=task_id)
     assert refused.status_code == 403 and "send no on_behalf_of" in refused.text

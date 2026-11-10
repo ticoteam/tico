@@ -2093,7 +2093,7 @@ def parser():
     s.add_argument("--parent", required=True, help="the task you work on: it waits until this one ends")
     s.add_argument("--pipeline", help="the pipeline's id; default general")
     s.add_argument("--owner", help="who does it; default you")
-    s.add_argument("--body", default="")
+    s.add_argument("--body", help="the details; default the title")
     s.add_argument("--due")
     s.add_argument("--label", dest="labels", action="append", help="a label; repeat for more")
     s.add_argument("--private", action="store_true", default=None, help="only its requester, owner and readers see it")
