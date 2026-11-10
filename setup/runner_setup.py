@@ -168,12 +168,53 @@ def _aws_plan(s: Settings, label: str) -> awsmod.AwsPlan:
     )
 
 
-def runner_prefix(s: Settings, label: str, given: str | None) -> str:
-    """The runner's own saved one, else the server's it joins (set up from this computer), else --asset-prefix or tico."""
-    name = _aws_plan(s, label).name
-    mine = next((r for r in state.load_runners() if r.get("target") == "aws" and r.get("name") == name), None)
+def runner_key(s: Settings, name: str) -> str:
+    """The file its record is saved in: one per server, region and name, so another server's runner is never overwritten."""
     host = urllib.parse.urlsplit(s.server_url).hostname or ""
-    return awsmod.asset_prefix(given, mine or (state.load(host)[0] if host else {}))
+    return f"{name}--{awsmod.slug(host)}--{s.aws_region}"
+
+
+def runner_prefix(s: Settings, label: str, given: str | None) -> str:
+    """The runner's own saved one, else the server's it joins (set up from this computer), else --asset-prefix or tico.
+    Only this server's runner counts as its own: a runner of the same name and region kept for another server is
+    refused when the names would be the same AWS resources."""
+    name = _aws_plan(s, label).name
+    same = [
+        r
+        for r in state.load_runners()
+        if r.get("target") == "aws" and r.get("name") == name and r.get("aws_region") == s.aws_region
+    ]
+    mine = next((r for r in same if r.get("server_url") == s.server_url), None)
+    host = urllib.parse.urlsplit(s.server_url).hostname or ""
+    prefix = awsmod.asset_prefix(given, mine or (state.load(host)[0] if host else {}))
+    other = next(
+        (
+            r
+            for r in same
+            if r.get("server_url") != s.server_url and (r.get("asset_prefix") or awsmod.DEFAULT_PREFIX) == prefix
+        ),
+        None,
+    )
+    if other:
+        raise MissingInput(
+            f"{awsmod.Names(prefix).resource(name)} in {s.aws_region} is already the runner of {other['server_url']}, "
+            "set up from this computer; refusing to reuse or change it. Pick another --name or --label."
+        )
+    return prefix
+
+
+def save_aws_runner(s: Settings, plan: awsmod.AwsPlan, label: str, iid: str) -> None:
+    data = {
+        "server_url": s.server_url,
+        "label": label,
+        "target": "aws",
+        "aws_region": s.aws_region,
+        "aws_profile": s.aws_profile,
+        "instance_id": iid,
+        "name": plan.name,
+        "asset_prefix": s.asset_prefix,
+    }
+    state.save_runner(runner_key(s, plan.name), data, replaces=plan.name)
 
 
 def run_runner(args, io: IO, deps: Deps) -> int:
@@ -312,19 +353,7 @@ def run_runner(args, io: IO, deps: Deps) -> int:
             screen=screen,
         )
         iid, _ = d.launch_or_reuse(prep, script)
-        state.save_runner(
-            plan.name,
-            {
-                "server_url": s.server_url,
-                "label": label,
-                "target": "aws",
-                "aws_region": s.aws_region,
-                "aws_profile": s.aws_profile,
-                "instance_id": iid,
-                "name": plan.name,
-                "asset_prefix": s.asset_prefix,
-            },
-        )
+        save_aws_runner(s, plan, label, iid)
         if existing:
             # SSM may still be registering after EC2 reports running. Wait before replay,
             # then let cloud-init finish before recovering an incomplete boot.
@@ -346,19 +375,7 @@ def run_runner(args, io: IO, deps: Deps) -> int:
             io.say("The box did not report ready in time. Log: /var/log/tico-setup.log (via SSM Session Manager).")
             return 1
         shell = remote.SSMShell(ssm, iid, deps.sleep)
-        state.save_runner(
-            plan.name,
-            {
-                "server_url": s.server_url,
-                "label": label,
-                "target": "aws",
-                "aws_region": s.aws_region,
-                "aws_profile": s.aws_profile,
-                "instance_id": iid,
-                "name": plan.name,
-                "asset_prefix": s.asset_prefix,
-            },
-        )
+        save_aws_runner(s, plan, label, iid)
     else:
         script = bootstrap_script(
             os_family="ubuntu",

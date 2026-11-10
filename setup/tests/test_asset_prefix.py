@@ -766,3 +766,41 @@ def test_an_untagged_backup_bucket_is_refused_and_a_new_one_is_tagged_first():
     s3, _, _ = created_backup()
     writes = [n for n, _ in s3.calls if n not in ("head_bucket", "get_bucket_tagging")]
     assert writes[:2] == ["create_bucket", "put_bucket_tagging"]
+
+
+def test_a_runner_takes_its_own_servers_prefix_not_another_servers_runner_of_the_same_name(monkeypatch):
+    monkeypatch.setenv("TICO_ENROLL_CODE", "one-time-code")
+    monkeypatch.setattr(runner_setup, "_verify", lambda *a: 0)
+    old = {"server_url": "https://a.example", "label": "b1", "target": "aws", "aws_region": "us-west-2"}
+    old |= {"aws_profile": "", "instance_id": "i-a", "name": "runner-b1"}  # from before the flag: tico
+    state.save_runner("runner-b1", old)
+    state.save(DOMAIN, {"domain": DOMAIN, "aws_name": "hotmic", "asset_prefix": "hub"})
+    d, ec2, iam, ssm, s3, log = hub_world()
+    argv = ["runner", "--non-interactive", "--cloud", "aws", "--server-url", f"https://{DOMAIN}", "--label", "b1"]
+    argv += ["--aws-region", "us-west-2"]
+    code, out = go([*argv, "--dry-run"], deps=d)
+    assert code == 0 and "Security group hub-runner-b1:" in out, out
+    assert go([*argv, "--yes"], deps=d)[0] == 0
+    assert ssm.called("put_parameter")[0]["Name"] == "/hub/runner-b1/env"
+    runners = {r["server_url"]: r for r in state.load_runners()}
+    assert runners["https://a.example"] == old and runners[f"https://{DOMAIN}"]["asset_prefix"] == "hub"
+    # Another tico server's runner b1 in that region would be a.example's runner: refused before any AWS call.
+    state.save("c.example.com", {"domain": "c.example.com"})
+    before = len(log)
+    argv[argv.index(f"https://{DOMAIN}")] = "https://c.example.com"
+    code, out = go([*argv, "--yes"], deps=d)
+    assert code == 2 and "tico-runner-b1 in us-west-2 is already the runner of https://a.example" in out, out
+    assert len(log) == before
+
+
+def test_a_runner_saved_by_name_alone_is_moved_to_its_server_scoped_record(monkeypatch):
+    monkeypatch.setenv("TICO_ENROLL_CODE", "one-time-code")
+    monkeypatch.setattr(runner_setup, "_verify", lambda *a: 0)
+    old = {"server_url": "https://other.example", "label": "b1", "target": "aws", "aws_region": "us-west-2"}
+    state.save_runner("runner-b1", {**old, "aws_profile": "", "instance_id": "i-1", "name": "runner-b1"})
+    d, ec2, iam, ssm, s3, log = hub_world()
+    argv = ["runner", "--non-interactive", "--yes", "--cloud", "aws", "--server-url", "https://other.example"]
+    assert go([*argv, "--label", "b1", "--aws-region", "us-west-2"], deps=d)[0] == 0
+    assert [r["server_url"] for r in state.load_runners()] == ["https://other.example"]
+    assert not (state.home() / "runners" / "runner-b1.json").exists()
+    assert ssm.called("put_parameter")[0]["Name"] == "/tico/runner-b1/env"  # saved before the flag: tico

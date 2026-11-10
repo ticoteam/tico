@@ -57,8 +57,18 @@ def known_domains() -> list[str]:
         return []
 
 
-def save_runner(name: str, data: dict) -> None:
+def save_runner(name: str, data: dict, replaces: str = "") -> None:
+    """`replaces`: the file an earlier version saved this same runner under, removed once it is saved under `name`."""
     write_private(home() / "runners" / f"{name}.json", json.dumps(data, indent=2, sort_keys=True))
+    old = home() / "runners" / f"{replaces}.json"
+    if not replaces or replaces == name:
+        return
+    try:
+        d = json.loads(old.read_text())
+    except (OSError, ValueError):
+        return
+    if all(d.get(k) == data.get(k) for k in ("server_url", "target", "name", "aws_region")):
+        old.unlink()
 
 
 def load_runners(server_url: str = "") -> list[dict]:
