@@ -521,8 +521,10 @@ def _may(
         out.append("undo")
     if requirement.get("visit_id") and (works or viewer == requirement.get("added_by_id")):
         out.append("withdraw")
-    # A thumb rates a bot's ask: one a bot added, or a stage's on a task a bot owns (answers.ask_of).
-    if kind in ("ok", "answer") and human and (requirement.get("by_bot") or is_bot(owner)):
+    # A thumb rates a bot's ask, as answers._ask reads it: one added to the task is its author's, a stage's is the
+    # owner's.
+    asker = requirement.get("added_by_id") if requirement.get("visit_id") else owner
+    if kind in ("ok", "answer") and human and is_bot(asker):
         out.append("thumbs")
     return out
 

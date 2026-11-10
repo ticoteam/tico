@@ -197,6 +197,20 @@ def test_a_thumbs_down_that_lets_the_task_finish_is_the_persons_move(c):
     assert [u[0] for u in updates] == [ANA]  # what the move causes is Ana's, not Tico's
 
 
+def test_a_thumb_is_offered_only_on_a_bots_ask(c):
+    row = _new(c, by=BEN)
+    theirs = H.task_ask(c, BEN, row["id"], ANA, "Which venue do we book?", seen_version=_version(c, row["id"]))
+    ask = next(r for r in H.task_view(c, row["id"], ANA)["to_leave"] if r["requirement_id"] == theirs["requirement_id"])
+    assert "thumbs" not in ask["may"]  # a person's ask on a bot's task
+    with _refused("Only a bot's ask takes a thumb"):
+        H.task_thumbs(c, ANA, row["id"], theirs["requirement_id"], True)
+    stage_ok = X.requirement(c, "general-todo", "ok", person=ANA, line="OK the venue")
+    mine = _new(c, owner=BEN, title="Book the venue")
+    on_bot = next(r for r in H.task_view(c, row["id"], ANA)["to_leave"] if r["requirement_id"] == stage_ok)
+    on_person = next(r for r in H.task_view(c, mine["id"], ANA)["to_leave"] if r["requirement_id"] == stage_ok)
+    assert "thumbs" in on_bot["may"] and "thumbs" not in on_person["may"]  # a stage's ask is the owner bot's
+
+
 def test_a_bots_ask_to_a_person_is_plain_words(c):
     row = _new(c)
     with _refused("lint"):
