@@ -130,7 +130,9 @@ class FakeEC2:
         rows = [i for i in self.instances if not InstanceIds or i["InstanceId"] in InstanceIds]
         return {"Reservations": [{"Instances": rows if InstanceIds else self.listed(rows, "InstanceId")}]}
 
-    def describe_security_groups(self, Filters):
+    def describe_security_groups(self, Filters=(), GroupIds=()):
+        if GroupIds:
+            return {"SecurityGroups": [g for g in self.sgs if g["GroupId"] in GroupIds]}
         return {"SecurityGroups": self.listed(self.sgs, "GroupId")}
 
     def describe_addresses(self, Filters=(), AllocationIds=()):
@@ -161,8 +163,11 @@ class FakeEC2:
 
     def create_security_group(self, **kw):
         self._rec("create_security_group", **kw)
-        self.sgs.append({"GroupId": "sg-1", "GroupName": kw["GroupName"], "Tags": kw["TagSpecifications"][0]["Tags"]})
-        return {"GroupId": "sg-1"}
+        n = next(k for k in range(1, 1000) if not any(g["GroupId"] == f"sg-{k}" for g in self.sgs))
+        self.sgs.append(
+            {"GroupId": f"sg-{n}", "GroupName": kw["GroupName"], "Tags": kw["TagSpecifications"][0]["Tags"]}
+        )
+        return {"GroupId": f"sg-{n}"}
 
     def authorize_security_group_ingress(self, **kw):
         self._rec("authorize_security_group_ingress", **kw)

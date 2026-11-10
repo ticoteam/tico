@@ -339,6 +339,8 @@ def _backup_storage_strict(args, io: IO, deps: Deps, domain: str, saved: dict, m
         names=names,
         ids=ids,
         save=save,
+        record=f"{state.home() / domain / 'backup.json'}"
+        + (f" (and in {state.home() / domain / 'state.json'})" if saved else ""),
     )
 
 

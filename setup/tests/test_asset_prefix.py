@@ -454,7 +454,9 @@ class FilteredEC2(fakes.FakeEC2):
         rows = self._match(rows, list(Filters))
         return {"Reservations": [{"Instances": rows if InstanceIds else self.listed(rows, "InstanceId")}]}
 
-    def describe_security_groups(self, Filters):
+    def describe_security_groups(self, Filters=(), GroupIds=()):
+        if GroupIds:
+            return {"SecurityGroups": [g for g in self.sgs if g["GroupId"] in GroupIds]}
         return {"SecurityGroups": self.listed(self._match(self.sgs, Filters), "GroupId")}
 
     def describe_addresses(self, Filters=(), AllocationIds=()):
@@ -2699,14 +2701,14 @@ def test_a_recorded_instance_missing_from_a_listing_is_read_by_its_id_and_never_
             ec2.instances[0].pop("State")
 
     # Terminated by this install's own destroy (journalled before the call): a new server, under a new ClientToken.
-    ec2 = NotFoundEC2()
+    ec2, iam, ssm = NotFoundEC2(), IAM(), fakes.FakeSSM()
     ids = {}
-    d = strict_dep(p, ec2, IAM(), fakes.FakeSSM(), ids=ids)
+    d = strict_dep(p, ec2, iam, ssm, ids=ids)
     d.launch_or_reuse({"sg": "sg-1", "alloc": ""}, "#!/bin/bash\n")
     ec2.terminate_instances = lambda **kw: [i.update(State={"Name": "terminated"}) for i in ec2.instances]
-    owned.destroy(ec2, IAM(), fakes.FakeSSM(), {"instance": ["i-1"]}, print, lambda s: None, HUB_ID, "hotmic", ids)
+    owned.destroy(ec2, iam, ssm, {"instance": ["i-1"]}, print, lambda s: None, HUB_ID, "hotmic", ids)
     assert ids["deleted"] == {"instance": ["i-1"]}
-    d = strict_dep(p, ec2, IAM(), fakes.FakeSSM(), ids=ids)
+    d = strict_dep(p, ec2, iam, ssm, ids=ids)
     assert d.launch_or_reuse({"sg": "sg-1", "alloc": ""}, "#!/bin/bash\n") == ("i-2", True)
     tokens = [kw["ClientToken"] for kw in ec2.called("run_instances")]
     assert ids["instance"] == "i-2" and len(set(tokens)) == 2 and ids["instance_token"] == tokens[-1]
@@ -2806,3 +2808,81 @@ def test_an_elastic_ip_intent_whose_call_provably_made_nothing_is_closed_and_any
             in said
         ), said
         assert 'remove "eip" under "intents" under "aws_ids" in S.json' in said, said
+
+
+def test_every_recorded_resource_is_read_by_its_id_and_a_gone_one_is_never_made_again_or_overwritten(tmp_path):
+    # Codex review 6, the rule of cases 11 and 13 for every recorded resource: a security group missing from a listing
+    # was created again and its id recorded over the first; a recorded IAM role, instance profile, SSM parameter, backup
+    # user or bucket found gone was made again. Each recorded one is read by its id (or name, for IAM, SSM and S3) and,
+    # gone, refused with the step, unless this install's own destroy journalled deleting it.
+    p = hub_plan(domain=DOMAIN)
+    ec2, iam, ssm, ids = NotFoundEC2(), IAM(), fakes.FakeSSM(), {}
+    d = strict_dep(p, ec2, iam, ssm, ids=ids)
+    d.put_env("A=1\n")
+    d.launch_or_reuse(d.prepare(), "#!/bin/bash\n")
+    made = {k: ids[k] for k in ("sg", "role", "profile", "param", "instance")}
+    ec2.hide(made["sg"], 99)  # every listing misses it
+    again = strict_dep(p, ec2, iam, ssm, ids=ids)
+    again.preflight()
+    assert again.ensure_sg() == made["sg"] and len(ec2.called("create_security_group")) == 1
+
+    def world():
+        return (ec2.sgs, ec2.eips, ec2.instances, sorted(iam.roles), sorted(iam.profiles), sorted(ssm.params))
+
+    def gone(remove, key, what):
+        snap = json.loads(json.dumps(ids))
+        undo = remove()
+        before = json.dumps(world(), sort_keys=True)
+        for step in ("preflight", "run"):
+            d = owned.StrictDeployer(
+                p, ec2, iam, ssm, ACCOUNT, sleep=lambda s: None, ids=json.loads(json.dumps(snap)), record="S.json"
+            )
+            with pytest.raises(MissingInput) as e:
+                if step == "preflight":
+                    d.preflight()
+                else:  # the step that would make it again
+                    {"sg": d.prepare, "param": lambda: d.put_env("A=1\n")}.get(key, d.ensure_role)()
+            said = str(e.value)
+            assert what in said and f'"{key}" under "aws_ids" in S.json' in said, (key, step, said)
+            assert d.ids[key] == snap[key], key  # never overwritten
+        assert json.dumps(world(), sort_keys=True) == before, key  # nothing made again
+        undo()
+
+    sgs, roles, profiles, params = list(ec2.sgs), dict(iam.roles), dict(iam.profiles), dict(ssm.params)
+    gone(lambda: (ec2.sgs.clear(), lambda: ec2.sgs.extend(sgs))[1], "sg", "Security group")
+    gone(lambda: (ssm.params.clear(), lambda: ssm.params.update(params))[1], "param", "SSM parameter")
+    gone(lambda: (iam.profiles.clear(), lambda: iam.profiles.update(profiles))[1], "profile", "IAM instance profile")
+    gone(lambda: (iam.roles.clear(), lambda: iam.roles.update(roles))[1], "role", "IAM role")
+
+    # Deleted by this install's own destroy (journalled first): a re-run makes each anew, and records the new ids.
+    ec2.hidden = {}
+    found = aws.discover(ec2, iam, ssm, "hotmic", HUB_ID)
+    stop = ec2.terminate_instances  # frees the address, as EC2 does
+    ec2.terminate_instances = lambda **kw: (
+        [stop(**kw)] + [i.update(State={"Name": "terminated"}) for i in ec2.instances]
+    )
+    ec2.release_address = lambda **kw: ec2.eips.clear()
+    ec2.delete_security_group = lambda **kw: ec2.sgs.clear()
+    owned.destroy(ec2, iam, ssm, found, print, lambda s: None, HUB_ID, "hotmic", ids)
+    assert set(ids["deleted"]) >= {"instance", "eip", "sg", "role", "profile", "param"}, ids["deleted"]
+    d = strict_dep(p, ec2, iam, ssm, ids=ids)
+    d.preflight()
+    d.put_env("A=1\n")
+    d.launch_or_reuse(d.prepare(), "#!/bin/bash\n")
+    assert ids["instance"] == "i-2" and all(ids.get(k) for k in made), ids
+
+    # S3 and the backup user: a recorded bucket or user found gone is refused, never created again.
+    s3, iam = S3(), IAM()
+    kw = dict(domain=DOMAIN, region="us-west-2", account_id=ACCOUNT, name="hotmic", names=HUB_ID)
+    ids = {}
+    owned.create_s3(s3, iam, ids=ids, **kw)
+    for key, remove in (("backup_bucket", lambda: s3.tagsets.clear()), ("backup_user", lambda: iam.users.clear())):
+        snap = json.loads(json.dumps(ids))
+        keep = (dict(s3.tagsets), dict(iam.users))
+        remove()
+        with pytest.raises(MissingInput) as e:
+            owned.create_s3(s3, iam, ids=snap, record="S.json", sleep=lambda s: None, **kw)
+        assert f'"{key}" under "aws_ids" in S.json' in str(e.value), (key, str(e.value))
+        assert snap[key] == ids[key] and len(s3.called("create_bucket")) == 1 and len(iam.called("create_user")) == 1
+        s3.tagsets.update(keep[0])
+        iam.users.update(keep[1])

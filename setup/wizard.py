@@ -450,6 +450,7 @@ def _strict_backup(io: IO, s: Settings, deps: Deps, iam, account: str) -> dict:
         names=awsmod.Names(s.asset_prefix, s.install_id),
         ids=s.aws_ids,
         save=lambda: _save(s),
+        record=str(state.home() / s.domain / "state.json"),
     )
 
 

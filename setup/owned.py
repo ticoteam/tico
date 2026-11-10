@@ -198,6 +198,7 @@ def made(j: Journal, kind: str, s3, owned: dict, region: str, proof: str, pick: 
     if proof == "ours":
         j.adopt(kind, owned["Bucket"], "S3 bucket", owned["Bucket"])
         return
+    j.missing(kind, "S3 bucket", owned["Bucket"])  # setup never deletes a bucket: a recorded one gone is refused
     j.intend(kind, name=owned["Bucket"])
     ensure_bucket(s3, owned, region, j.n, j.name, proof, pick)
     j.made(kind, owned["Bucket"])
@@ -261,8 +262,25 @@ def by_hand(what: str) -> str:
 class Journal:
     """The ids of what an install makes, and its create intents, saved (by `save`) the moment each changes."""
 
-    def __init__(self, ids: dict, save: Callable[[], None], names: Names, name: str):
-        self.ids, self.save, self.n, self.name = ids, save, names, name
+    def __init__(
+        self, ids: dict, save: Callable[[], None], names: Names, name: str, record: str = "this install's state.json"
+    ):
+        self.ids, self.save, self.n, self.name, self.record = ids, save, names, name, record
+
+    def missing(self, kind: str, what: str, resource: str, exists: Callable[[], bool] | None = None) -> None:
+        """Before `kind` is made anew because none is found: a recorded one is never replaced. Gone, it is refused with
+        the step to take, unless this install's own destroy journalled deleting it (the record is then closed).
+        `exists`: a re-read that waits out the service's lag, for a resource only slow to show."""
+        if not self.ids.get(kind) or (exists is not None and exists()):
+            return
+        if close_deleted(self.ids, kind):
+            self.save()
+            return
+        raise MissingInput(
+            f"{what} {resource} ({self.ids[kind]}), which this install recorded making, no longer exists, and setup "
+            "did not delete it; refusing to make another. Check it in the AWS console. If it is gone for good and "
+            f'should be replaced, remove "{kind}" under "aws_ids" in {self.record} and run setup again.'
+        )
 
     def intend(self, kind: str, **what: str) -> None:
         """Before a create call: if its answer is lost, the retry knows the resource it made for this install's (by
@@ -275,7 +293,14 @@ class Journal:
         return ((self.ids.get("intents") or {}).get(kind) or {}).get("token", "") or uuid.uuid4().hex
 
     def made(self, kind: str, value: str) -> None:
-        """From the create call's own answer."""
+        """From the create call's own answer. A recorded id is never overwritten by another (`missing` closes one that
+        setup deleted first); the plan object's record is not an id, but what was last written."""
+        had = self.ids.get(kind)
+        if value and had and had != value and kind != "plan_object":
+            raise MissingInput(
+                f"This install recorded {kind} {had}, and AWS has now answered a create with {value}; refusing to "
+                f'record over it. Check both in the AWS console, and "{kind}" under "aws_ids" in {self.record}.'
+            )
         if value:
             self.ids[kind] = value
             (self.ids.get("intents") or {}).pop(kind, None)
@@ -332,7 +357,7 @@ class StrictDeployer(Deployer):
         self.ids = ids if ids is not None else {}
         self.save = save
         self.record = record  # the file `ids` is saved in, named in a by-hand step
-        self.j = Journal(self.ids, save, self.n, plan.name)
+        self.j = Journal(self.ids, save, self.n, plan.name, record)
 
     def find_instance(self) -> dict | None:
         """This install's server. Once its launch is recorded, that instance is read by its id and nothing else: a tag
@@ -396,6 +421,7 @@ class StrictDeployer(Deployer):
         if tags is not None:
             self.j.adopt("param", self.param_name, "SSM parameter", self.param_name)
         if tags is None:  # created with its tags, never overwritten: one made meanwhile by someone else fails here
+            self.j.missing("param", "SSM parameter", self.param_name, lambda: self.param_tags(wait=True) is not None)
             self.j.intend("param", name=self.param_name)
             self.ssm.put_parameter(
                 Name=self.param_name,
@@ -411,12 +437,29 @@ class StrictDeployer(Deployer):
             # one residual window; it is never re-tagged here, so a replacement keeps its own tags.
             self.ssm.put_parameter(Name=self.param_name, Value=env_text, Type="SecureString", Overwrite=True, **tier)
 
-    def param_tags(self) -> list[dict] | None:
-        """The settings parameter's tags; None when there is no such parameter."""
+    def param_tags(self, wait: bool = False) -> list[dict] | None:
+        """The settings parameter's tags; None when there is no such parameter (`wait`: only after 1..16 s more)."""
+        read = lambda: self.ssm.list_tags_for_resource(ResourceType="Parameter", ResourceId=self.param_name)["TagList"]
         try:
-            return self.ssm.list_tags_for_resource(ResourceType="Parameter", ResourceId=self.param_name)["TagList"]
+            return settled(read, self.sleep, self.ssm.exceptions.InvalidResourceId, 6 if wait else 1)
         except self.ssm.exceptions.InvalidResourceId:
             return None
+
+    def role_exists(self, n: str) -> bool:
+        """Read again while IAM may still be catching up (1..16 s)."""
+        try:
+            settled(lambda: self.iam.get_role(RoleName=n), self.sleep, self.iam.exceptions.NoSuchEntityException)
+            return True
+        except self.iam.exceptions.NoSuchEntityException:
+            return False
+
+    def profile_exists(self, n: str) -> bool:
+        read = lambda: self.iam.get_instance_profile(InstanceProfileName=n)
+        try:
+            settled(read, self.sleep, self.iam.exceptions.NoSuchEntityException)
+            return True
+        except self.iam.exceptions.NoSuchEntityException:
+            return False
 
     def role_tags(self) -> list[dict] | None:
         try:
@@ -427,23 +470,35 @@ class StrictDeployer(Deployer):
     def preflight(self, s3=None) -> None:
         """Reads only, before setup's first write: every fixed name this install takes is free or already its own.
         Something else of that name is refused here, so nothing is created, changed or tagged first."""
+        # Each recorded resource is read by its id (EC2) or its name (IAM, SSM, S3) and, gone, refused here, before any
+        # write, unless this install's own destroy deleted it.
         tags = self.param_tags()
         if tags is not None and not self.n.is_ours(tags, self.p.name):
             raise not_ours("SSM parameter", self.param_name, self.n, self.p.name)
         if tags is not None:
             self.j.adopt("param", self.param_name, "SSM parameter", self.param_name)
+        else:
+            self.j.missing("param", "SSM parameter", self.param_name, lambda: self.param_tags(wait=True) is not None)
         tags = self.role_tags()
         if tags is not None and not self.n.is_ours(tags, self.p.name):
             raise not_ours("IAM role", self.n.resource(self.p.name), self.n, self.p.name)
         n = self.n.resource(self.p.name)
         if tags is not None:
             self.prove_role(n)
-        self.prove_profile(instance_profile(self.iam, n))
+        else:
+            self.j.missing("role", "IAM role", n, lambda: self.role_exists(n))
+        prof = instance_profile(self.iam, n)
+        self.prove_profile(prof)
+        if prof is None:
+            self.j.missing("profile", "IAM instance profile", n, lambda: self.profile_exists(n))
         self.find_instance()  # also refuses an instance that is not the recorded one
         flt = self.n.filters(self.p.name)
-        for g in self.ec2.describe_security_groups(Filters=flt)["SecurityGroups"]:
-            if self.n.is_ours(g.get("Tags"), self.p.name):
-                self.j.adopt("sg", g["GroupId"], "Security group", g["GroupId"], name=row_name(g))
+        if self.ids.get("sg"):  # recorded: read by its id, never looked for in a listing
+            self.recorded_row("sg")
+        else:
+            for g in self.ec2.describe_security_groups(Filters=flt)["SecurityGroups"]:
+                if self.n.is_ours(g.get("Tags"), self.p.name):
+                    self.j.adopt("sg", g["GroupId"], "Security group", g["GroupId"], name=row_name(g))
         if self.ids.get("eip"):  # recorded: read by its id, never looked for in a listing
             self.recorded_row("eip")
         else:
@@ -605,6 +660,7 @@ class StrictDeployer(Deployer):
         # boundary, tagged ManagedBy=<prefix>-setup, refuses a role that would get them afterwards.
         boundary = {"PermissionsBoundary": self.p.boundary} if self.p.boundary else {}
         if self.role_tags() is None:
+            self.j.missing("role", "IAM role", n, lambda: self.role_exists(n))
             self.j.intend("role", name=n)
         try:
             made = self.iam.create_role(
@@ -637,6 +693,7 @@ class StrictDeployer(Deployer):
         self.prove_role(n)
         self.iam.put_role_policy(RoleName=n, PolicyName=self.n.role_policy, PolicyDocument=json.dumps(pol))
         if instance_profile(self.iam, n) is None:
+            self.j.missing("profile", "IAM instance profile", n, lambda: self.profile_exists(n))
             self.j.intend("profile", name=n)
         try:
             made = self.iam.create_instance_profile(InstanceProfileName=n, Tags=self.n.tags(self.p.name))
@@ -678,6 +735,11 @@ class StrictDeployer(Deployer):
 
     def ensure_sg(self) -> str:
         n = self.n.resource(self.p.name)
+        if self.ids.get("sg"):  # recorded: read by its id, never looked for in a listing or made again
+            g = self.recorded_row("sg")
+            if g is not None:
+                self.authorize(g["GroupId"], g.get("IpPermissions") or [])
+                return g["GroupId"]
         r = self.ec2.describe_security_groups(Filters=self.n.filters(self.p.name))["SecurityGroups"]
         r = [g for g in r if self.n.is_ours(g.get("Tags"), self.p.name)]
         if r:
@@ -1174,6 +1236,7 @@ def destroy(
                 ec2.release_address(AllocationId=a)
     for g in found.get("security-group", []):
         if still("sg", g, ec2.describe_security_groups(Filters=flt)["SecurityGroups"], "GroupId"):
+            deleting(ids, "sg", g, save)
             _delete_sg(ec2, g, sleep)
         else:
             left(f"security group {g}")
@@ -1197,6 +1260,7 @@ def destroy(
                     left(f"IAM instance profile {n}", f"was replaced while its role was removed; the role {n} stays")
                     continue
             if prof:
+                deleting(ids, "profile", prof.get("InstanceProfileId", ""), save)
                 iam.delete_instance_profile(InstanceProfileName=n)
         except iam.exceptions.NoSuchEntityException:
             pass
@@ -1214,6 +1278,8 @@ def destroy(
             if not (names.is_ours(role.get("Tags"), name) and recorded(ids, "role", role.get("RoleId", ""), name=n)):
                 left(f"IAM role {n}")
                 break
+            if kw.keys() == {"RoleName"}:  # the role itself
+                deleting(ids, "role", role.get("RoleId", ""), save)
             try:
                 call(**kw)
             except iam.exceptions.NoSuchEntityException:  # an interrupted install: the policy was never put or attached
@@ -1224,6 +1290,7 @@ def destroy(
         except ssm.exceptions.InvalidResourceId:
             continue
         if names.is_ours(tags, name) and recorded(ids, "param", p, name=p):
+            deleting(ids, "param", p, save)
             ssm.delete_parameter(Name=p)
         else:
             left(f"SSM parameter {p}")
@@ -1243,6 +1310,7 @@ def create_s3(
     ids: dict | None = None,
     save: Callable[[], None] = lambda: None,
     sleep: Callable[[float], None] = time.sleep,
+    record: str = "this install's state.json",
 ) -> dict[str, str]:
     """Returns the .env values. `ids`/`save`: the journal of what it makes (bucket, the backup user's UserId), saved as each
     is made. Safe to re-run: an existing bucket is kept and a fresh key replaces the oldest.
@@ -1263,7 +1331,13 @@ def create_s3(
         user_exists = True
     except iam.exceptions.NoSuchEntityException:
         user_id, user_exists = "", False
-    j = Journal(ids if ids is not None else {}, save, names, name)
+    j = Journal(ids if ids is not None else {}, save, names, name, record)
+    if not user_exists and j.ids.get("backup_user"):  # recorded: only slow to show (IAM lag), or gone and refused
+        try:
+            read = lambda: ((iam.get_user(UserName=user) or {}).get("User") or {}).get("UserId", "")
+            user_id, user_exists = settled(read, sleep, iam.exceptions.NoSuchEntityException), True
+        except iam.exceptions.NoSuchEntityException:
+            j.missing("backup_user", "IAM user", user)
     if user_exists and not names.is_ours(iam.list_user_tags(UserName=user).get("Tags"), name):
         raise not_ours("IAM user", user, names, name)
     if user_exists:
