@@ -49,14 +49,18 @@ The rig is the same in every phase. It grows with each phase's scenarios.
   pre-releases go only to the new Tico Team.
 - **Rig scenarios for this phase pass:** 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 36, 37, 39, 42, 43, 45, 46, 47, 48 and
   49. How to check: each scenario is a named case in the rig, green in CI.
+  - Scenario 9 here covers refusals about requirements, caps and rules. Its room refusals join in phase 2, with limits.
+  - Scenario 10 here covers On ice and the manager bot being told once. The manager's rail joins in phase 2.
 
 ## Phase 2: Product
 
 - **The rig passes its page, limit, by-hand and handoff scenarios.** How to check: these scenarios are green in CI.
   - Page: 14, 16 and 27.
-  - Limit: 11.
+  - Limit: 11, and the room refusals of 9.
   - By hand: 20.
-  - Handoff and links: 23, 24 (closing the open Engineering task), 25, 26, 38 and 52.
+  - Handoff and links: 23, 24 (closing the open filed task), 25, 26, 38 and 52. In this phase the filed task is a
+    General task, as in the real idea below. Phase 3 runs 23, 24 and 26 again with Engineering tasks.
+  - The manager's rail: the rest of 10.
   - Also needing a pipeline of more than one stage: 18, 21, 22 and 41.
 - **One real idea goes from Ideas to Done on the new Tico Team, with In development filing a General task for the
   Builder.** How to check: the Product task's history shows Ideas, Spec, In development, Validate and Done. In
@@ -66,8 +70,8 @@ The rig is the same in every phase. It grows with each phase's scenarios.
 ## Phase 3: Engineering
 
 - **The rig passes with a fake GitHub that loses, delays and repeats webhooks and drops PRs from the queue.** How to
-  check: the rig's fake GitHub runs all four faults, and these scenarios are green in CI: 15, 17, 19, 24 (one whose PR
-  merged stays open), 28, 29, 30, 31, 32, 33, 34, 35, 40, 44, 50 and 51.
+  check: the rig's fake GitHub runs all four faults, and these scenarios are green in CI: 15, 17, 19, 23, 24 (with
+  Engineering tasks; one whose PR merged stays open), 26, 28, 29, 30, 31, 32, 33, 34, 35, 40, 44, 50 and 51.
 - **One real PR goes through Merge and Release.** How to check: an Engineering task on the new Tico Team shows PR merged
   met in Merge and In a release met in Release, then Done. The PR's merge commit is in the history of the published
   release.
@@ -80,8 +84,8 @@ The rig is the same in every phase. It grows with each phase's scenarios.
   merged, released, checked in production. How to check: each task's history shows every stage in order and ends Done. A
   hand fix is a bug: it gets fixed and the count starts again at zero.
 - **Every ask is in Needs you.** Every time a person is asked, it is in Needs you with the thing shown and buttons that
-  work. How to check: for each of the 10 tasks, the spec OK and the review page OK were answered from Needs you, with
-  the page on the screen.
+  work. How to check: every ask made during the 10 tasks, the spec OK and the review page OK among them, was answered
+  from Needs you, with the thing it is about on the screen.
 - **"Waiting on nothing" on Health reads 0 the whole time.** How to check: Health › Tasks shows 0 waiting on nothing at
   every hourly check during the 10 tasks.
 - **Then the other orgs are rebuilt from scratch on 0.6.x.** How to check: each one runs 0.6.x, set up fresh, with no

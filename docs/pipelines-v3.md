@@ -730,9 +730,9 @@ def move(task, to, by, why=None, seen_version=None):
     if by.is_bot and seen_version is None:  refuse("say which version you saw")
     if seen_version is not None and t.version != seen_version:
         refuse("changed since you looked")
-    kind = forward | back | closed | reopen | reassign
-    if kind != forward:
-        require(why)                                 # never held by requirements or room
+    kind = forward | back | closed | reopen          # reassign: same function, same visit (below)
+    if kind != forward:                              # never held by requirements or room
+        if by.is_bot or kind == reopen:  require(why)    # a person only has to say why on reopen (C24)
     else:
         for r in unmet(t):                           # the stage's, ones added to this task, any stage skipped
             if not why:              refuse("not met: " + r)
@@ -752,6 +752,10 @@ def move(task, to, by, why=None, seen_version=None):
     COMMIT
     fill_open_slots(); push to screens
 ```
+
+Reassign goes through the same function and the same guard, and keeps the visit. It changes the owner, raises the
+version, resets the tries and drops the old owner's queued wakes. The on-enter action does not run again, and
+requirements added to the task stay.
 
 ### The check
 
@@ -907,8 +911,7 @@ The phone view is in [S17](#s17-on-a-phone). What changed since the version you 
 
 **The other kinds:**
 
-- **An email to approve:** heading "Send this email to Dana about her replacement?". The email itself: "To:
-  customer@shop.example", "Subject: Your replacement order", "Hi Dana, your replacement ships Monday…". A "Notes" box.
+- **An email to approve:** heading "Send this email to Dana about her replacement?". The email itself: "To: Dana", "Subject: Your replacement order", "Hi Dana, your replacement ships Monday…". A "Notes" box.
   Buttons "Approve" (main) and "Send back".
 - **A question:** heading "Which plan do new signups get?". Buttons "Free", "Pro trial", "Ask at signup". A box
   "Something else".
