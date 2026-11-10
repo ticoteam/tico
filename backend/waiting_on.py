@@ -289,6 +289,35 @@ def _turn(
     return Wait(BOT, who, line, requirement_id, since, ask=ask, about=about)
 
 
+def unreadable(conn: "sqlite3.Connection", row: Row, standings: Iterable[R.Standing]) -> str | None:
+    """Who an OK or an answer this private task waits on names, when they may not open it: a stage edited to ask them,
+    or the task's readers narrowed since. Nobody is made a reader, and they are told nothing: the ask falls to the
+    task's person (`person_for`), and the never-stuck check hands the task to that person at once."""
+    from . import hubdb
+
+    H: Any = hubdb
+    if not H.task_private(conn, row):
+        return None
+    for standing in standings:
+        named = standing.on if standing.state == R.WAITING and not standing.met else None
+        if (
+            named
+            and named not in (R.JEV, R.GITHUB)
+            and standing.requirement["kind"] in ("ok", "answer")
+            and not H.task_private_readable(conn, named, row)
+        ):
+            return named
+    return None
+
+
+def _share_line(conn: "sqlite3.Connection", who: str, verb: str = "Add") -> str:
+    """What the person who has a private task does for someone it asks who may not open it (`unreadable`)."""
+    from . import hubdb
+
+    H: Any = hubdb
+    return f"{verb} {H.actor_name(conn, who)} under Who can see"
+
+
 _FILED_OPEN_SQL = (
     "SELECT l.visit_id, t.id, t.title FROM links l JOIN tasks t ON t.id = l.to_task_id "
     "WHERE l.visit_id IN (%s) AND t.status='open' ORDER BY l.created_at, l.id"
@@ -350,6 +379,7 @@ def of(
     )
     filed: list[tuple[str, str]] | None = None
     on_tasks: set[str] = set()
+    shut = unreadable(conn, row, unmet)  # asked, and may not open it
     for standing in unmet:
         requirement = standing.requirement
         since = requirement["created_at"] if requirement.get("visit_id") else entered
@@ -368,6 +398,10 @@ def of(
             # An OK or an answer waits on whoever it names: a person, or a bot that was named to approve. One that names
             # nobody, or a person who left (`person_of` skips them), is the task's person's.
             named = standing.on or person_for(conn, row)
+            if shut and named and E.not_shared(conn, row, named):
+                # Someone who may not open it: the task's person shares it first. Work of theirs, not an ask.
+                out.append(Wait(PERSON, person_for(conn, row), _share_line(conn, named), requirement["id"], since))
+                continue
             out.append(_turn(conn, row, named, line, requirement["id"], since, True, seen))
         elif by_hand or asked:
             continue  # in a by-hand stage nobody is chased for what is not met
@@ -406,6 +440,8 @@ def of(
         # first thing it says is why.
         late = visit.get("late_person_at")
         line = f"Late in {stage['name']}" if late else f"Stuck in {stage['name']}"
+        if shut:
+            line = f"{line}: {_share_line(conn, shut, 'add')}"
         since = late or visit.get("last_change_at") or entered
         out.insert(0, Wait(PERSON, person_for(conn, row), line, None, since))
     return sorted(out, key=lambda wait: _ORDER[wait.state])

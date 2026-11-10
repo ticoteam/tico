@@ -294,6 +294,12 @@ def _one(
             if not E.advance(conn, task_id):
                 break
         return
+    level: str = row["visit"].get("level") or "owner"
+    if level != "person" and W.unreadable(conn, row, standings):
+        # It waits on someone who may not open it (a stage edited to ask them, its readers narrowed): nothing they can
+        # do and no time to wait out. A person who reads it has it now, told whom to add under Who can see.
+        _to_person(conn, row, level, done)
+        return
     _ladder(conn, row, waits, E.progress_mark(conn, row["visit"]["id"], standings), at, done, seen, live)
     _late(conn, row, at, done, seen)
 
