@@ -84,7 +84,9 @@ def register(app, auth, mover, mutate, store, task_filters, task_idents, task_vi
         elif body.action == "move":
             if body.to == "done" and row["status"] == "done":
                 return False
-            H.task_move(c, who.actor, row["id"], body.to, body.why, None, mover=moves)
+            # A move to where the task already is changes nothing (the engine leaves it as it is).
+            after = H.task_move(c, who.actor, row["id"], body.to, body.why, None, mover=moves)
+            return not after or after.get("version") != row.get("version")
         elif body.action == "owner":
             target = auth.target(c, who, body.owner, need="write")
             if target == row["owner_id"]:
