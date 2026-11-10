@@ -61,14 +61,14 @@ def task(api, token, owner, title="Draft the launch note", expected=200, **extra
 
 
 def wait_on_cara(c, task_id):
-    """The task's bot waits on Cara: a question task for her under it, so she is one it waits on (derived)."""
-    H.task_update(
+    """Ben, who handed the task over, asks Cara on it: she is one it waits on, and so one it is shared with."""
+    H.task_ask(
         c,
-        "bot:product-design",
+        "human:ben",
         task_id,
-        status="waiting",
-        waiting_on="human:cara",
-        note="Can you check the launch note? I'll send it after.",
+        "human:cara",
+        "Can you check the launch note before it goes out?",
+        seen_version=H.task(c, task_id)["version"],
     )
 
 
@@ -184,7 +184,7 @@ def test_a_solicited_reply_and_work_on_a_shared_task_pass(api):
     message(api, "pd-test", "human:ben", "Status?", expected=409)
     asked = message(api, "ben-test", "product-design", "How is the launch note going?")
     message(api, "pd-test", "human:ben", "Draft is up.", in_reply_to=asked["id"])  # a direct reply to Ben's message
-    # Cara is on Ben's task as the one it waits on: product-design may hand it to her, and give her nothing else.
+    # Cara is on Ben's task as one it waits on; that does not open her to product-design off the task.
     shared = task(api, "ben-test", "bot:product-design", title="Launch note")
     with api.app.state.store.transaction() as c:
         wait_on_cara(c, shared["id"])
@@ -197,18 +197,47 @@ def test_a_solicited_reply_and_work_on_a_shared_task_pass(api):
     task(api, "pd-test", "human:cara", title="Something new for Cara", expected=409)
     # Waiting on Cara no longer opens her to a bot that is not next to her: it takes it to its manager.
     r = api.post(
-        f"/api/v2/tasks/{shared['id']}",
+        f"/api/v2/tasks/{shared['id']}/owner",
         json={"owner": "human:cara", "version": shared["version"]},
         headers=headers("pd-test"),
     )
     assert r.status_code == 409, r.text
+    assert r.json()["error"]["code"] == "reach_closed", r.text
     # Ben handed it the task, so a hand-back to Ben passes.
     r = api.post(
-        f"/api/v2/tasks/{shared['id']}",
+        f"/api/v2/tasks/{shared['id']}/owner",
         json={"owner": "human:ben", "version": shared["version"]},
         headers=headers("pd-test"),
     )
     assert r.status_code == 200, r.text
+
+
+def test_a_stage_hand_off_a_helper_and_a_person_are_never_refused(api):
+    from backend.tests.helpers import engine as X
+
+    chart(api)
+    task(api, "pd-test", "bot:scout", title="To Scout", expected=409)
+    with api.app.state.store.transaction() as c:
+        X.pipeline(
+            c,
+            "copy",
+            "Copy",
+            (
+                {"name": "Draft", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+                {"name": "Edit", "owner": "bot:scout", "requirements": [{"kind": "owner_done"}]},
+            ),
+        )
+    copy = task(api, "pd-test", "bot:product-design", title="Copy task", pipeline="copy")
+    # The pipeline's next stage is Scout's: the engine hands it on, whoever moved it.
+    r = api.post(f"/api/v2/tasks/{copy['id']}/done", json={"version": copy["version"]}, headers=headers("pd-test"))
+    assert r.status_code == 200, r.text
+    with api.app.state.store.read() as c:
+        assert (H.task(c, copy["id"])["stage_id"], H.task(c, copy["id"])["owner_id"]) == ("copy-edit", "bot:scout")
+    # The Assistant (coo) and BotOps are off the chart: anyone reaches them.
+    task(api, "pd-test", "bot:coo", title="For the Assistant")
+    assert reach.decide(ctx(api), "bot:product-design", "bot:botops").why == "helper"
+    # A person is never limited, even writing to a bot nowhere near them.
+    task(api, "ben-test", "bot:scout", title="Ben to Scout")
 
 
 def test_everyone_open_restores_reach_to_anyone(api):
@@ -528,20 +557,23 @@ def test_a_bot_two_levels_down_is_refused_a_person_whatever_it_shares_with_them(
         headers=headers("ben-test"),
     )
     assert other.status_code == 200, other.text
-    with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:ops", child["id"], status="waiting", waiting_on="human:ben", note="Question for Ben?")
+    with pytest.raises(reach.Refused) as asked_ben:  # an ask of Ben on the task is a write to him, and refused
+        with api.app.state.store.transaction() as c:
+            H.task_ask(c, "bot:ops", child["id"], "human:ben", "Question for Ben?", seen_version=child["version"])
+    assert asked_ben.value.code == "reach_closed"
     for title in ("Straight to Ben",):
         task(api, "ops-test", "human:ben", title=title, expected=409)
     refused = message(api, "ops-test", "human:ben", "A question.", expected=409, refs={"task": [child["id"]]})
     assert refused["error"]["code"] == "reach_closed" and refused["error"]["via"] == "bot:product-design"
     assert "Send it to product-design, who can pass it on." in refused["error"]["detail"]
-    # An ask that becomes a question task owned by Ben is checked the same way.
+    # Handing Ben the task is checked the same way.
     r = api.post(
-        f"/api/v2/tasks/{child['id']}",
+        f"/api/v2/tasks/{child['id']}/owner",
         json={"owner": "human:ben", "version": child["version"]},
         headers=headers("ops-test"),
     )
     assert r.status_code == 409, r.text
+    assert r.json()["error"]["code"] == "reach_closed", r.text
     # Bot to bot is as before.
     task(api, "ops-test", "bot:product-design", title="To its manager")
     assert asked["id"]
@@ -556,7 +588,7 @@ def test_a_bot_two_levels_down_may_answer_a_person_who_came_to_it_or_handed_it_t
     message(api, "ops-test", "human:ben", "One more thing.", conversation_id=room)  # the conversation Ben opened
     handed = task(api, "ben-test", "bot:ops", title="Ben's own task for ops")
     message(api, "ops-test", "human:ben", "A question on it.", refs={"task": [handed["id"]]})
-    # Ben handed it the task, so a question task for Ben on it passes; a new task for Ben does not.
+    # Ben handed it the task, so a message to Ben on it passes; a new task for Ben does not.
     task(api, "ops-test", "human:ben", title="Unrelated", expected=409)
 
 

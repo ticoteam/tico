@@ -4,15 +4,9 @@ The migrations rename columns, not the keys inside JSON documents. Each test her
 install holds it, then reads it through the code that hands it out.
 """
 
-import hashlib
 import json
 
 from backend import access, directory, gateway_connection, onboarding, providers, redesign_migration
-from backend import source_outages
-from backend.store import H
-from backend.tests.helpers.api import post  # noqa: F401
-from backend.tests.helpers.login_holds import at
-from backend.tests.helpers.source_outages import managers, notices
 
 WHEN = "2026-09-01T10:00:00.000000Z"
 
