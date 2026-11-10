@@ -327,7 +327,9 @@ FRESH_WORDS = "0.6 starts fresh: this company's tasks would not carry over"
 def crosses_fresh_start(current, target):
     """Whether moving from `current` to `target` crosses FRESH_START (an rc of 0.6 included)."""
     have, want = parse(current), parse(str(target or "").strip().lstrip("v"))
-    return bool(have and want) and have[:3] < FRESH_START <= want[:3]
+    if not (have and want):
+        return False
+    return have[:3] < FRESH_START <= want[:3]
 
 
 def held(c, target, current=None):
