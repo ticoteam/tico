@@ -399,6 +399,24 @@ def test_a_private_sub_tasks_title_is_not_shown_to_someone_who_reads_only_its_pa
     assert "Salary" in json.dumps(H.task_view(c, parent["id"]))  # the engine's own read hides nothing
 
 
+def test_a_task_names_the_tasks_it_filed_and_the_one_that_filed_it_only_to_who_may_read_them(c):
+    """Nobody who may not read a private task learns its title, its id, its status or that it exists: the parent's
+    `filed` leaves it out whole, and the child's `filed_by` says nothing of a private parent."""
+    parent = _new(c, by=BEN, owner=BUILDER, title="Plan the offsite")
+    child = _new(c, by=BUILDER, owner=HELPER, title="Salary numbers for the offsite", parent_id=parent["id"])
+    shown = _new(c, by=BUILDER, owner=HELPER, title="Book the venue", parent_id=parent["id"])
+    c.execute("UPDATE tasks SET private=1, readers=? WHERE id=?", (json.dumps([ANA]), child["id"]))
+    ben = H.task_view(c, parent["id"], BEN)
+    assert [f["id"] for f in ben["filed"]] == [shown["id"]]
+    assert child["id"] not in json.dumps(ben)
+    assert [f["id"] for f in H.task_view(c, parent["id"], ANA)["filed"]] == [child["id"], shown["id"]]
+    # A private parent (Ben asked for it, so he still reads it), a public child: Cara reads only the child and is
+    # not told which task filed it.
+    c.execute("UPDATE tasks SET private=1, readers=? WHERE id=?", (json.dumps([ANA]), parent["id"]))
+    assert H.task_view(c, shown["id"], "human:cara")["filed_by"] is None
+    assert H.task_view(c, shown["id"], ANA)["filed_by"] == parent["id"]
+
+
 def _offsite(company):
     """A public task Ben asked for, with a private sub-task Ana reads and Ben does not. Its stage waits on it."""
     with company.transaction() as c:

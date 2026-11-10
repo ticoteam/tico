@@ -696,18 +696,18 @@ def task_view(
             }
         )
     following = E.next_stage(conn, row) if live else None
+    # The task that filed this one, and the tasks this one filed, only as far as `viewer` may read them
+    # (`_readable`): one they may not read is left out whole, its id, status and that it exists at all.
     above = conn.execute("SELECT from_task_id FROM links WHERE to_task_id=?", (task_id,)).fetchone()
+    filed_by = above[0] if above and _readable(conn, viewer, above[0], visible_sql) else None
     filed: list[Row] = []
     for child_id, kind in conn.execute(
         "SELECT to_task_id, kind FROM links WHERE from_task_id=? ORDER BY created_at, id", (task_id,)
     ).fetchall():
         child: Row | None = H.task(conn, child_id)
-        if not child:
+        if not child or not _readable(conn, viewer, child_id, visible_sql):
             continue
-        shown = viewer is None or H.task_private_readable(conn, viewer, child)
-        filed.append(
-            {"id": child_id, "kind": kind, "status": child["status"], "title": child["title"] if shown else None}
-        )
+        filed.append({"id": child_id, "kind": kind, "status": child["status"], "title": child["title"]})
     snooze: Row | None = row.get("snooze")
     late = None
     if live and visit.get("late_told_at"):
@@ -733,6 +733,6 @@ def task_view(
         "snooze": {"until": snooze.get("until_at"), "by": snooze.get("by_id"), "why": snooze.get("why")}
         if snooze
         else None,
-        "filed_by": above[0] if above else None,
+        "filed_by": filed_by,
         "filed": filed,
     }
