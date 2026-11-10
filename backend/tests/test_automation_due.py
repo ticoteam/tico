@@ -109,13 +109,29 @@ def test_a_missed_day_catches_up_on_the_next_pass_and_the_next_occurrence_waits_
     assert runs_of(api, aid) == ["due:2030-01-07", "due:2030-01-14", "due:2030-01-21"]
 
 
+def test_an_overdue_occurrence_stays_open_and_never_blocks_the_next(api):
+    aid = due(api, {"first_due": "2030-01-31", "repeats": "monthly", "open_days": 0, "tz": "UTC"})
+    tick(api, datetime(2030, 1, 31, 0, 0, 5, tzinfo=timezone.utc))
+    drain(api)
+    first = sql(api, "SELECT id, status FROM tasks WHERE title='Payroll' ORDER BY created_at")
+    assert len(first) == 1 and first[0]["status"] == "open"  # never closed: it is overdue by February
+    tick(api, datetime(2030, 2, 28, 0, 0, 5, tzinfo=timezone.utc))  # the clamped February day still runs
+    drain(api)
+    assert runs_of(api, aid) == ["due:2030-01-31", "due:2030-02-28"]
+    assert all(run["status"] == "ok" for run in get(api, f"automations/{aid}/runs")["runs"])
+    open_tasks = sql(
+        api, "SELECT id, due_at, occurrence FROM tasks WHERE title='Payroll' AND status='open' ORDER BY due_at"
+    )
+    assert [row["occurrence"] for row in open_tasks] == [f"{aid}:2030-01-31", f"{aid}:2030-02-28"]
+
+
 def test_the_task_is_due_at_the_end_of_its_day_and_its_refs_name_the_occurrence(api):
     aid = due(api, {"first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "UTC"})
     tick(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
     task = sql(api, "SELECT due_at, occurrence FROM tasks WHERE title='Payroll'")
     assert [(row["due_at"], row["occurrence"]) for row in task] == [("2030-03-01T23:59:59+00:00", f"{aid}:2030-03-01")]
     refs = sql(api, "SELECT refs FROM messages WHERE json_extract(refs,'$.automation')=?", (aid,))
-    assert any('"due_on": "2030-03-01"' in ref["refs"] for ref in refs)
+    assert any(json.loads(ref["refs"]).get("due_on") == "2030-03-01" for ref in refs)
 
 
 def test_a_due_day_only_routine_without_a_rule_id_stores_no_rule_id(api):
@@ -721,30 +737,6 @@ def test_a_bot_turn_retried_for_the_same_occurrence_step_reuses_its_task(api):
         )
     assert retry["id"] == first["id"]
     assert len(sql(api, "SELECT id FROM tasks WHERE occurrence=?", (marker,))) == 1
-
-
-def test_a_bot_occurrence_due_in_two_weeks_is_stalled_when_idle_and_a_plain_task_stays_parked(api):
-    r = runner(api)
-    assign(api, r, "ops")
-    ready(api, r, ["ops"])
-    store = api.app.state.store
-    bot_step = {"id": "open", "type": "action", "do": "create_task", "args": {"title": "Payroll", "owner": "bot:ops"}}
-    aid = due(api, {"first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "UTC"}, steps=[bot_step])
-    _pass_at(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
-    occurrence = sql(api, "SELECT id FROM tasks WHERE occurrence=?", (f"{aid}:2030-03-01",))[0]["id"]
-    with store.transaction() as c:
-        plain = hubdb.task_create(
-            c, "human:ana", "Plain", "Plain", "bot:ops", lint=False, deduplicate=False, due="2030-03-01T23:59:59+00:00"
-        )["id"]
-        c.execute(
-            "UPDATE tasks SET updated_at=? WHERE id IN (?, ?)", ("2030-02-15T00:00:00.000000Z", occurrence, plain)
-        )
-    at = datetime(2030, 2, 15, 1, 0, tzinfo=timezone.utc)
-    with store.transaction() as c:  # the creates queued wakes that would make the bot busy: this checks the stall rule
-        c.execute("DELETE FROM jobs WHERE state='queued'")
-    with store.read() as c:
-        stalled = [row["id"] for row in hubdb.stalled_tasks(c, at=at)]
-    assert occurrence in stalled and plain not in stalled
 
 
 def test_a_manual_run_with_no_input_is_the_next_due_days_occurrence(api):

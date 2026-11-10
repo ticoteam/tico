@@ -5,6 +5,7 @@ Synthetic fixture team only (backend/tests/test_api.py); ops is the bot, its com
 """
 
 from backend import hubdb as H
+from backend import never_stuck as NS
 from backend.tests.helpers.api import claim, post  # noqa: F401
 from backend.tests.helpers.claim_refusals import forget_claims  # noqa: F401
 from backend.tests.helpers.task_lanes import new_task, task_bot  # noqa: F401
@@ -77,3 +78,41 @@ def test_resume_with_nothing_held_reports_zero(api):
     post(api, "company/pause", {})
     resumed = post(api, "company/resume", {})
     assert resumed["changed"] is True and resumed["held"] == 0
+
+
+def test_a_held_turn_is_not_a_failed_run_and_the_never_stuck_check_wakes_no_one_while_paused(api):
+    """T10: a task whose bot is held by the pause gets no wake from the never-stuck check, however long the pause lasts:
+    no try is counted, no run starts and none is recorded as failed. After Resume the next pass wakes the bot."""
+    machine = task_bot(api, lanes=True)
+    tid = new_task(api, "Draft the notes")["id"]
+    run = claim(api, machine)  # its first wake has had its run, which stopped without saying done
+    post(api, f"attempts/{run['id']}/started", {"thread_id": "first"}, machine["token"])
+    post(
+        api,
+        f"attempts/{run['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "Started."},
+        machine["token"],
+    )
+    post(api, "company/pause", {})
+    store = api.app.state.store
+    with store.read() as c:
+        before = c.execute("SELECT count(*) FROM messages WHERE wake_key LIKE ?", (tid + ":%",)).fetchone()[0]
+    for hours in (0, 1, 2, 3, 4, 30):  # the check runs every few seconds through the pause, past the expected time
+        with store.transaction() as c:
+            done = NS.check(c, H.shift(H.now(), hours=hours))
+            assert not done.get("woken") and not done.get("to_manager"), done
+    with store.read() as c:
+        wakes = c.execute("SELECT count(*) FROM messages WHERE wake_key LIKE ?", (tid + ":%",)).fetchone()[0]
+        tries = c.execute("SELECT tries FROM visits WHERE task_id=? AND left_at IS NULL", (tid,)).fetchone()[0]
+        attempts = c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0]
+        failed = c.execute("SELECT fails FROM run_backoff WHERE bot='ops'").fetchone()
+        waits = H.task_view(c, tid)["waits"]
+    assert wakes == before, "no wake is written while paused"
+    assert tries == 0, "no try is counted while paused"
+    assert attempts == 1, "a held turn starts no run"
+    assert failed is None or failed[0] == 0, "a held turn is not a failed run"
+    assert waits[0]["state"] == "paused", waits
+    post(api, "company/resume", {})
+    with store.transaction() as c:
+        assert NS.check(c, H.shift(H.now(), hours=31))["woken"] == 1, "after Resume the next pass wakes the bot"
+    assert claim(api, machine) is not None, "and the work starts"

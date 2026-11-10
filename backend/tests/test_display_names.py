@@ -15,7 +15,7 @@ def named_data(api):
         c.execute("UPDATE humans SET name='Ana' WHERE id='ana'")
         c.execute("UPDATE bots SET display_name='Operations' WHERE slug='ops'")
         task = H.task_create(c, 'human:ana', 'Review the plan', 'Please review the plan.', 'bot:ops')
-        # An old ask in a task's thread, read as history.
+        # An old ask in a task's thread, read as history, and the bot's ask on the task to a person.
         ask = old_ask(
             c,
             'bot:ops',
@@ -23,6 +23,10 @@ def named_data(api):
             '@ana Please choose a review date.',
             conversation_id=task['conversation_id'],
             refs={'task': task['id']},
+        )
+        c.execute("UPDATE humans SET name='Ben' WHERE id='ben'")
+        question = H.task_ask(
+            c, 'bot:ops', task['id'], 'human:ben', 'Which review date?', seen_version=H.task(c, task['id'])['version']
         )
         notice = H.notice(c, 'bot:ops', 'human:ana', 'New task from bot:ops: Review the plan')
         meetings.snapshot(
@@ -38,7 +42,7 @@ def named_data(api):
             conn=c,
         )
     doc = post(api, 'docs', {'title': 'Review plan', 'body': 'Please review the plan.'})['doc']
-    return {'task': task, 'ask': ask, 'notice': notice, 'doc': doc}
+    return {'task': task, 'ask': ask, 'question': question, 'notice': notice, 'doc': doc}
 
 
 def test_all_api_routes_keep_the_app_route_class(api):
@@ -48,7 +52,7 @@ def test_all_api_routes_keep_the_app_route_class(api):
             assert isinstance(route, api.app.router.route_class), route.path
 
 
-def test_messages_and_tasks_have_display_names(api, named_data):
+def test_messages_tasks_and_asks_have_display_names(api, named_data):
     result = api.get('/api/v2/messages', headers=headers())
     assert result.status_code == 200
     inbox = result.json()
@@ -67,6 +71,22 @@ def test_messages_and_tasks_have_display_names(api, named_data):
     task = next(t for t in tasks['tasks'] if t['id'] == named_data['task']['id'])
     assert task['owner_name'] == 'Operations' and task['requester_name'] == 'Ana'
     assert tasks['actors']['bot:ops'] == 'Operations' and tasks['actors']['human:ana'] == 'Ana'
+    assert task['turn']['who'] == 'human:ben'
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="names.ACTOR_KEYS has no 'who' or 'asked_by', so the person a task waits on (turn.who, to_leave[].who) is "
+    "not named when they are on the task no other way; the old question task's ask carried sender and recipient names",
+)
+def test_the_person_a_task_waits_on_is_named_though_they_are_not_on_the_task(api, named_data):
+    task_id = named_data['task']['id']
+    tasks = api.get('/api/v2/tasks', headers=headers()).json()
+    assert tasks['actors']['human:ben'] == 'Ben'
+    full = api.get(f'/api/v2/tasks/{task_id}', headers=headers()).json()
+    ask = next(r for r in full['task']['to_leave'] if r['requirement_id'] == named_data['question']['requirement_id'])
+    assert (ask['who'], ask['asked_by']) == ('human:ben', 'bot:ops')
+    assert full['actors']['human:ben'] == 'Ben'
 
 
 def test_a_task_the_server_filed_reads_new_task_without_from(api):
