@@ -39,8 +39,8 @@ account that only lets setup create IAM roles under a permissions boundary, pass
 token) limited to the backup bucket, in `LITESTREAM_ACCESS_KEY_ID` and `LITESTREAM_SECRET_ACCESS_KEY`.
 
 `--asset-prefix PREFIX` puts another word in place of `tico` in every AWS name, tag and path setup makes (1 to 10
-lowercase letters, digits and dashes, starting with a letter; not the starts AWS keeps: `aws`, `ssm`, `sthree`, `sg`, two
-dashes in a row). With `--asset-prefix hub --name acme`: tags
+lowercase letters, digits and dashes, starting with a letter; not the starts AWS keeps: `aws`, `ssm`, `sthree`, `sg`, `sg-`,
+two dashes in a row). With `--asset-prefix hub --name acme`: tags
 `ManagedBy=hub-setup` and `hub-setup-name=acme`, resources `hub-acme`, settings `/hub/acme/env`, backup bucket
 `hub-backup-<domain>-<account>` with user `hub-backup-acme`. It is saved with the install the first time; later runs,
 `runner`, `doctor`, `destroy` and `backup-storage` read it and refuse a different one. Names on the server itself

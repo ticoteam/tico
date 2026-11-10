@@ -50,7 +50,7 @@ DEFAULT_PREFIX = "tico"
 # --asset-prefix: up to 10, so <prefix>-backup-<40-character name> still fits IAM's 64 and the backup bucket S3's 63.
 PREFIX_RE = re.compile(r"[a-z](?:[a-z0-9-]{0,8}[a-z0-9])?")
 # Starts AWS keeps for itself: SSM parameter names (aws, ssm), S3 buckets (xn--, sthree-), security groups (sg-).
-PREFIX_RESERVED = re.compile(r"aws|ssm|sthree|sg$|.*--")
+PREFIX_RESERVED = re.compile(r"aws|ssm|sthree|sg$|sg-|.*--")
 
 
 @dataclass(frozen=True)
@@ -150,7 +150,7 @@ def asset_prefix(given: str | None, saved: dict | None) -> str:
         )
     if given and PREFIX_RESERVED.match(given):
         raise MissingInput(
-            f"--asset-prefix {given} would make names AWS refuses: it cannot start with aws, ssm or sthree, be sg, or "
+            f"--asset-prefix {given} would make names AWS refuses: it cannot start with aws, ssm, sthree or sg-, be sg, or "
             "have two dashes in a row"
         )
     if not saved:

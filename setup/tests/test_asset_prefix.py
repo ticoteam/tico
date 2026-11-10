@@ -303,7 +303,7 @@ def test_the_prefix_is_checked_and_a_saved_one_wins():
     for bad in ("Hub", "2hub", "hub-", "-hub", "hub_x", "abcdefghijk", "h.b"):
         with pytest.raises(MissingInput, match="1 to 10 lowercase"):
             aws.asset_prefix(bad, {})
-    for reserved in ("aws", "awsx", "ssm-a", "sthree", "sg", "xn--a", "a--b"):
+    for reserved in ("aws", "awsx", "ssm-a", "sthree", "sg", "sg-x", "sg-hub", "xn--a", "a--b"):
         with pytest.raises(MissingInput, match="would make names AWS refuses"):
             aws.asset_prefix(reserved, {})
     assert aws.asset_prefix("sgx", {}) == "sgx" and aws.asset_prefix("my-co", {}) == "my-co"
