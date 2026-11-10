@@ -274,12 +274,15 @@ def not_shared(conn: "sqlite3.Connection", row: Row, who: str) -> Row | None:
     }
 
 
-def shut_out(conn: "sqlite3.Connection", row: Row, target: Row, owner: str | None = None) -> Row | None:
+def shut_out(
+    conn: "sqlite3.Connection", row: Row, target: Row, owner: str | None = None, *, new: bool = False
+) -> Row | None:
     """Why private task `row` may not go into work stage `target`, as a plain `{"who", "cause", "fix"}`, or None when
     it may. The engine never adds a reader, an owner or a party to a private task (docs/pipelines-v3.md, "Private
     tasks. Same engine. Who can see them doesn't change."), so the task stops before a stage whose owner, or someone the
     stage asks, cannot read it, and waits until a person who can see it shares it. `owner` is who would own it there
-    (`owner_for`). A task the new owner keeps private by default is judged as it will be: private."""
+    (`owner_for`). A task the new owner keeps private by default is judged as it will be: private. `new`: the task is
+    being made (`enter`), so whoever makes it is told to add the reader as they do."""
     H = _h()
     if target["kind"] != "work":
         return None
@@ -311,7 +314,7 @@ def shut_out(conn: "sqlite3.Connection", row: Row, target: Row, owner: str | Non
         fix = f"Make it private and add {name} under Who can see"
     else:
         cause = f"{name} {how} {target['name']} and cannot read this private task"
-        fix = f"Someone who can see it adds {name} under Who can see"
+        fix = f"Add {name} under Who can see" if new else f"Someone who can see it adds {name} under Who can see"
     return {"who": who, "cause": cause, "fix": fix}
 
 
@@ -525,8 +528,13 @@ def enter(
             _refuse(conn, by, "not-found", "No such task to file under", task_id)
         if depth(conn, parent) >= MAX_DEPTH:
             _refuse(conn, by, "task_too_deep", f"Sub-tasks nest at most {MAX_DEPTH} deep", task_id)
-    ts = H.now()
     owner = owner_for(first, assignee)
+    # The rule a move into a stage keeps keeps a new task out of its first stage too: a private task never goes where
+    # its owner, or someone the stage asks, cannot read it, for nobody could take it on from there.
+    held = shut_out(conn, row, first, owner, new=True)
+    if held:
+        _refuse(conn, by, "task_not_shared", f"{held['cause']}. {held['fix']} as you create it.", task_id, said=held)
+    ts = H.now()
     _write(
         conn,
         task_id,

@@ -5392,6 +5392,8 @@ def task_create(
     rule_due_id=None,
     public_warning="",
     follow=False,
+    readers=(),
+    readers_check=None,
 ):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is linted (rule 7).
 
@@ -5416,6 +5418,8 @@ def task_create(
     (`_reuse_occurrence`), never a second one.
     `wake_refs`, `trigger` and `trigger_source` go on the owner bot's wake: what the run it starts is for.
     `follow` makes the filer a follower of the task (backend/task_followers.py); the owner follows anyway.
+    `readers` are who else sees a private task (`set_task_readers`, `readers_check(task_id, added)` its check), set
+    before it enters its first stage: the engine lets a private task in only where whoever has it there reads it.
     """
     _writer(conn, actor)
     # Public text is only ever what someone wrote as public text; the internal title and body never stand in.
@@ -5642,6 +5646,15 @@ def task_create(
             _task_event(conn, row["id"], actor, "parent_id", None, parent["id"], "")
             _task_event(conn, parent["id"], actor, "subtask", None, row["id"], "")
         _set_task_tags(conn, actor, row["id"], labels)
+        if readers:
+            set_task_readers(
+                conn,
+                actor,
+                row["id"],
+                add=readers,
+                mover=mover,
+                check=(lambda added: readers_check(row["id"], added)) if readers_check else None,
+            )
         if dedicated:
             conn.execute("UPDATE conversations SET task_id=? WHERE id=?", (row["id"], conv["id"]))
         if number is not None:

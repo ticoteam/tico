@@ -3439,6 +3439,10 @@ def create_app(settings=None):
             from_private=bool(kept),
             same=same,
             follow=body.follow,
+            # Who else sees it, before it enters its first stage and before a meeting's audience is checked against
+            # everyone who will.
+            readers=body.readers or (),
+            readers_check=lambda task_id, added: privacy.require_readers(c, who, task_id, added, shared=parent_id),
         )
         c.execute("UPDATE tasks SET acceptance=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         if run_model:
@@ -3565,16 +3569,6 @@ def create_app(settings=None):
         for other, kind in others:
             changed = TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
             readback += TR.readback(c, row["id"], other, kind, changed=changed)
-        if body.readers:
-            # Who else sees it, before a meeting's audience is checked against everyone who will.
-            H.set_task_readers(
-                c,
-                who.actor,
-                row["id"],
-                add=body.readers,
-                mover=mover(c, who) or None,
-                check=lambda added: privacy.require_readers(c, who, row["id"], added, shared=parent_id),
-            )
         if body.live_meeting_id:
             meeting_audience.check(
                 c,

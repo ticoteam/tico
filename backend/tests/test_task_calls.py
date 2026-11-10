@@ -806,6 +806,24 @@ def test_a_move_into_a_stage_whose_asked_bot_could_not_read_the_private_task_is_
     assert not c.execute("SELECT 1 FROM history_events WHERE subject_id=? AND kind='reader'", (row["id"],)).fetchone()
 
 
+def test_a_private_task_is_not_made_into_a_first_stage_that_asks_someone_who_cannot_read_it(c):
+    """Codex review 5: creation keeps the rule a move keeps (task_engine.shut_out). A first stage that waits on Ben's OK
+    takes a private task only when Ben may read it: else the task would wait on him, out of his Needs you, with
+    nobody's turn and no deadline. Refused as a move is, and nothing is left behind; made with Ben under Who can see,
+    it goes in."""
+    stages = ({"name": "Approve", "owner": "assignee", "requirements": [{"kind": "ok", "person": BEN, "line": "OK"}]},)
+    X.pipeline(c, "payroll", "Payroll", stages, manager=MANAGER)
+    before = [c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("tasks", "conversations", "messages")]
+    with _refused("task_not_shared") as refused:
+        _new(c, pipeline="payroll", private=True, title="Salary bands")
+    assert "Ben" in refused.value.extra["cause"] and refused.value.extra["fix"] == "Add Ben under Who can see"
+    after = [c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("tasks", "conversations", "messages")]
+    assert after == before
+    made = E.task(c, _new(c, pipeline="payroll", private=True, title="Salary bands", readers=[BEN])["id"])
+    assert made["stage"]["name"] == "Approve" and H.task_readers(made) == [BEN]
+    assert _new(c, pipeline="payroll", title="Office hours")["status"] == "open"  # a company task: Ben reads it
+
+
 def test_a_private_task_waits_before_a_stage_whose_owner_cannot_read_it_until_someone_who_can_shares_it(c):
     """Everything is met, and the next stage's owner cannot read the private task: the engine does not move it (that
     would make the owner a party), says why and what fixes it, and wakes nobody there. Once a person who reads it

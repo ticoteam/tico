@@ -431,3 +431,19 @@ def test_a_closed_sub_task_the_reader_may_not_open_says_neither_its_title_nor_wh
     assert "Quiet acquisition" not in said and "Salary freeze" not in said and child["id"] not in said, said
     assert "A sub-task was closed" in json.dumps([full["waits"], row["turn"], needs])
 
+
+def test_a_private_task_goes_into_a_first_stage_that_asks_ben_only_with_ben_under_who_can_see(api):
+    """Codex review 5, through the route: the readers a create names are set before the task enters its first stage,
+    so the stage's sharing rule sees them."""
+    ask = {"kind": "ok", "person_id": "human:ben", "line": "OK"}
+    post(
+        api,
+        "pipelines/payroll",
+        {"name": "Payroll", "stages": [{"id": "ok", "name": "Approve", "requirements": [ask]}]},
+    )
+    task = {"title": "Salary bands", "body": "x", "owner": "ops", "pipeline": "payroll", "private": True}
+    r = api.post("/api/v2/tasks", json=task, headers=headers())
+    assert r.status_code in (409, 422) and "task_not_shared" in r.text, r.text
+    made = post(api, "tasks", {**task, "readers": ["ben"]})
+    assert made["stage_id"] == "ok" and made["readers"] == ["human:ben"]
+    assert get(api, "tasks/" + made["id"], token="ben-test")["task"]["id"] == made["id"]
