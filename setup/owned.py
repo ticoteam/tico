@@ -302,6 +302,10 @@ class StrictDeployer(Deployer):
         except MissingInput:
             raise SystemExit("The starter plan bucket was not created by this setup; refusing to reuse it.") from None
         made(self.j, "plan_bucket", s3, owned, region, proof, "--name")
+        self.plan_managed = True
+        # S3 bucket settings have no conditional writes: the bucket is read again (its tags, and the name this install
+        # recorded making) right before each one.
+        self.prove_plan_bucket(s3)
         s3.put_public_access_block(
             **owned,
             PublicAccessBlockConfiguration={
@@ -311,15 +315,18 @@ class StrictDeployer(Deployer):
                 "RestrictPublicBuckets": True,
             },
         )
+        self.prove_plan_bucket(s3)
         s3.put_bucket_ownership_controls(
             **owned, OwnershipControls={"Rules": [{"ObjectOwnership": "BucketOwnerEnforced"}]}
         )
+        self.prove_plan_bucket(s3)
         s3.put_bucket_encryption(
             **owned,
             ServerSideEncryptionConfiguration={
                 "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]
             },
         )
+        self.prove_plan_bucket(s3)
         s3.put_bucket_lifecycle_configuration(
             **owned,
             LifecycleConfiguration={
@@ -345,41 +352,84 @@ class StrictDeployer(Deployer):
             )
         # Owned by the account is not enough: the account holds others' buckets too. Only one tagged for this install
         # takes its plan.
+        self.plan_managed = False
+        self.prove_plan_bucket(s3)
+
+    def prove_plan_bucket(self, s3) -> None:
+        """Read now, right before a write: setup's own plan bucket carries this install's tags and is the one it recorded
+        making; a --plan-bucket carries this install's id tag."""
         n, owned = self.n, {"Bucket": self.p.plan_bucket, "ExpectedBucketOwner": self.account_id}
-        tags = {t["Key"]: t["Value"] for t in bucket_tags(s3, owned)}
-        if tags.get(n.install_tag) != n.install_id:
+        tags = bucket_tags(s3, owned)
+        if getattr(self, "plan_managed", None) is True:
+            if n.is_ours(tags, self.p.name) and recorded(self.ids, "plan_bucket", self.p.plan_bucket):
+                return
+            raise not_ours("S3 bucket", self.p.plan_bucket, n, self.p.name, "--name")
+        if {t["Key"]: t["Value"] for t in tags}.get(n.install_tag) != n.install_id:
             raise MissingInput(
                 f"The starter plan bucket {self.p.plan_bucket} is not tagged for this install; refusing to upload "
                 f"to it. Tag it {n.install_tag}={n.install_id} (this install's id, kept for the re-run) and run "
                 "setup again, or leave --plan-bucket out."
             )
 
+    def plan_record(self) -> dict:
+        """What this install recorded writing to the plan bucket: {"key", "etag"} (and "version_id" when versioned)."""
+        rec = self.ids.get("plan_object") or {}
+        return rec if isinstance(rec, dict) else {"key": rec}
+
     def put_plan(self, s3, key: str, data: str) -> None:
         """The packed starter plan, for the server to copy once at first boot (remote.bootstrap_script). Plan only:
-        the env names the key and its sha256, never the plan."""
+        the env names the key and its sha256, never the plan. Journalled (key and sha256) before the put, and written
+        with that hash in its metadata: if the answer is lost, the re-run's 412 is accepted only for these bytes."""
         if not key.startswith(f"plans/{self.p.name}/"):
             raise ValueError("a starter plan key is plans/<this server's name>/<sha256>")
-        body = {"Body": data.encode("ascii"), "ContentType": "text/plain", "ExpectedBucketOwner": self.account_id}
+        raw = data.encode("ascii")
+        sha = hashlib.sha256(raw).hexdigest()
+        where = {"Bucket": self.p.plan_bucket, "Key": key, "ExpectedBucketOwner": self.account_id}
+        self.prove_plan_bucket(s3)
+        if self.plan_record().get("key") != key:
+            self.j.intend("plan_object", key=key, sha256=sha)
+        meta = {"install": self.n.install_id, "sha256": sha}
         try:  # only where no object is: one already at the key is never overwritten
-            s3.put_object(Bucket=self.p.plan_bucket, Key=key, IfNoneMatch="*", **body)
+            got = s3.put_object(**where, IfNoneMatch="*", Body=raw, ContentType="text/plain", Metadata=meta)
         except Exception as e:
             if error_code(e) != "PreconditionFailed":
                 raise
-            # A retry of this install's own put (the key is the plan's sha256), or something else's: then refused.
-            if self.ids.get("plan_object") != key:
+            # A retry of this install's own put, known by the key it journalled or recorded and the hash it wrote in the
+            # object's metadata; anything else at the key is refused.
+            got = s3.head_object(**where)
+            intent = (self.ids.get("intents") or {}).get("plan_object") or {}
+            mine = self.plan_record().get("key") == key or (intent.get("key") == key and intent.get("sha256") == sha)
+            if not mine or (got.get("Metadata") or {}).get("sha256") != sha:
                 raise MissingInput(
                     f"s3://{self.p.plan_bucket}/{key} already exists and this install did not record writing it; "
                     "refusing to overwrite it."
                 ) from None
-        self.j.made("plan_object", key)
+        rec = {"key": key, "etag": (got or {}).get("ETag", "")}
+        if (got or {}).get("VersionId"):
+            rec["version_id"] = got["VersionId"]
+        self.j.made("plan_object", rec)
 
     def delete_plan(self, s3, key: str) -> str:
         """Once the server is up and its app reads its copy. Returns "" when deleted, else the error code: the server is
         already working, and the plan stays until someone deletes it or the bucket's lifecycle rule, if it has one,
-        expires it."""
-        if self.ids.get("plan_object") != key:
-            return "NotWrittenByThisInstall"  # only the object this install recorded writing is ever deleted
-        return self._s3_call(s3.delete_object, Bucket=self.p.plan_bucket, Key=key)
+        expires it. Only the object this install recorded writing, unchanged since (its ETag), is ever deleted; in a
+        versioned bucket, exactly the version it wrote."""
+        rec = self.plan_record()
+        if rec.get("key") != key or not rec.get("etag"):
+            return "NotWrittenByThisInstall"
+        try:
+            self.prove_plan_bucket(s3)
+        except MissingInput:
+            return "NotThisInstallsBucket"
+        version = {"VersionId": rec["version_id"]} if rec.get("version_id") else {}
+        where = {"Bucket": self.p.plan_bucket, "Key": key, **version}
+        try:
+            now = s3.head_object(**where, ExpectedBucketOwner=self.account_id)
+        except Exception as e:  # noqa: BLE001  botocore ClientError or a network error, without importing botocore
+            return str(error_code(e) or type(e).__name__)
+        if now.get("ETag") != rec["etag"]:
+            return "ChangedSinceWritten"
+        return self._s3_call(s3.delete_object, **where)
 
     def _s3_call(self, call, **kw) -> str:
         """ "" when the call, made with this account as the expected bucket owner, worked; else its error code."""

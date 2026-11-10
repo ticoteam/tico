@@ -23,10 +23,11 @@ ACCOUNT = "123456789012"
 
 
 class S3:
-    """Every S3 call, recorded; a bucket exists once it is created."""
+    """Every S3 call, recorded; a bucket exists once it is created. Objects too, as S3 keeps them: a put with
+    IfNoneMatch="*" fails where one exists (S3's conditional write), and each put gets a new ETag."""
 
     def __init__(self):
-        self.calls, self.tagsets = [], {}
+        self.calls, self.tagsets, self.objects, self.puts = [], {}, {}, 0
 
     def _rec(self, name, kw):
         self.calls.append((name, kw))
@@ -47,6 +48,26 @@ class S3:
     def get_bucket_tagging(self, **kw):
         self._rec("get_bucket_tagging", kw)
         return {"TagSet": self.tagsets[kw["Bucket"]]}
+
+    def put_object(self, **kw):
+        self._rec("put_object", kw)
+        at = (kw["Bucket"], kw["Key"])
+        if kw.get("IfNoneMatch") == "*" and at in self.objects:
+            raise ClientError("PreconditionFailed")
+        self.puts += 1
+        self.objects[at] = {"Body": kw["Body"], "Metadata": kw.get("Metadata", {}), "ETag": f'"etag{self.puts}"'}
+        return {"ETag": self.objects[at]["ETag"]}
+
+    def head_object(self, **kw):
+        self._rec("head_object", kw)
+        if (kw["Bucket"], kw["Key"]) not in self.objects:
+            raise ClientError("404")
+        o = self.objects[(kw["Bucket"], kw["Key"])]
+        return {"ETag": o["ETag"], "Metadata": o["Metadata"]}
+
+    def delete_object(self, **kw):
+        self._rec("delete_object", kw)
+        self.objects.pop((kw["Bucket"], kw["Key"]), None)
 
     def __getattr__(self, name):
         return lambda **kw: self._rec(name, kw)
@@ -1383,24 +1404,6 @@ def test_a_new_hub_installs_buckets_end_in_its_install_id_and_an_existing_name_i
         assert not s3.called("create_bucket") and not [n for n, _ in iam.calls if not n.startswith(READS)]
 
 
-class ObjectS3(S3):
-    """Objects too: a put with IfNoneMatch="*" fails where one exists, as S3's conditional write does."""
-
-    def __init__(self):
-        super().__init__()
-        self.objects = {}
-
-    def put_object(self, **kw):
-        self._rec("put_object", kw)
-        if kw.get("IfNoneMatch") == "*" and (kw["Bucket"], kw["Key"]) in self.objects:
-            raise ClientError("PreconditionFailed")
-        self.objects[(kw["Bucket"], kw["Key"])] = kw["Body"]
-
-    def delete_object(self, **kw):
-        self._rec("delete_object", kw)
-        self.objects.pop((kw["Bucket"], kw["Key"]), None)
-
-
 def test_an_explicit_plan_bucket_must_be_tagged_for_this_install_and_its_objects_are_never_overwritten():
     # Codex review 3, case 8: owned by the account is not enough when the account holds production's buckets, and an
     # object at the plan's key was overwritten, then deleted.
@@ -1415,22 +1418,23 @@ def test_an_explicit_plan_bucket_must_be_tagged_for_this_install_and_its_objects
         install_id=install,
     )
     d = strict_dep(p, None, None, None, ids={}, save=lambda: saved.append(dict(d.ids)))
-    s3 = ObjectS3()
+    s3 = S3()
     s3.tagsets["prod-assets"] = PRODUCTION
     with pytest.raises(MissingInput, match=f"Tag it hub-setup-install={install}"):
         d.verify_plan_bucket(s3)
     s3.tagsets["prod-assets"] = PRODUCTION + [{"Key": "hub-setup-install", "Value": install}]
     d.verify_plan_bucket(s3)
     key = "plans/acme/" + "a" * 64
-    s3.objects[("prod-assets", key)] = b"production's"
+    theirs = {"Body": b"production's", "Metadata": {}, "ETag": '"theirs"'}
+    s3.objects[("prod-assets", key)] = theirs
     with pytest.raises(MissingInput, match="did not record writing it"):
         d.put_plan(s3, key, "ours")
-    assert s3.objects[("prod-assets", key)] == b"production's" and d.delete_plan(s3, key)
-    assert s3.objects[("prod-assets", key)] == b"production's" and not s3.called("delete_object")
+    assert s3.objects[("prod-assets", key)] == theirs and d.delete_plan(s3, key)
+    assert s3.objects[("prod-assets", key)] == theirs and not s3.called("delete_object")
     # Its own: written only where nothing is, recorded, and only then deleted; a retry of a lost response is its own.
     other = "plans/acme/" + "b" * 64
     d.put_plan(s3, other, "ours")
-    assert saved[-1]["plan_object"] == other
+    assert saved[-1]["plan_object"] == {"key": other, "etag": '"etag1"'}
     d.put_plan(s3, other, "ours")
     assert d.delete_plan(s3, other) == "" and ("prod-assets", other) not in s3.objects
 
@@ -1968,3 +1972,71 @@ def test_an_instance_profile_role_or_backup_user_is_read_again_right_before_each
                 s3, iam, domain=DOMAIN, region="us-west-2", account_id=ACCOUNT, name="acme", names=HUB, ids={}
             )
         assert not iam.called("delete_access_key") and not iam.called("create_access_key")
+
+
+def test_the_plan_bucket_and_object_are_proved_before_each_write_and_a_lost_put_is_known_by_its_hash():
+    # Codex review 4: the plan bucket was proved once, then configured, written to and deleted from without a fresh
+    # read; a lost put_object answer left the re-run refusing its own object; delete_plan deleted whatever was at the
+    # key. Now: the bucket (tags and recorded name, or the explicit install tag) is read before each write; the put is
+    # journalled (key and sha256) first and carries the hash in its metadata, so a 412 on the re-run is accepted only for
+    # this install's own bytes; and the delete happens only while the object's ETag is the one recorded.
+    install = "0123456789abcdef"
+    names = aws.Names("hub", install)
+    p = aws.plan_aws(
+        domain="a.example",
+        front_door="caddy",
+        region="us-east-1",
+        name="acme",
+        prefix="hub",
+        install_id=install,
+        plan_bucket="hub-plans-x",
+    )
+    ours = names.tags("acme")
+    for write in ("put_public_access_block", "put_bucket_ownership_controls", "put_bucket_encryption"):
+        s3 = S3()
+        real_hook = getattr(s3, write)
+
+        def retag(*, s3=s3, real_hook=real_hook, **kw):
+            real_hook(**kw)
+            s3.tagsets["hub-plans-x"] = PRODUCTION  # deleted and made again by someone else, in this account
+
+        setattr(s3, write, retag)
+        d = strict_dep(p, None, None, None, ids={})
+        with pytest.raises(MissingInput, match="hub-plans-x"):
+            d.ensure_plan_bucket(s3, "us-east-1")
+        assert not s3.called("put_bucket_lifecycle_configuration"), write
+    s3, saved = S3(), []
+    d = strict_dep(p, None, None, None, ids={}, save=lambda: saved.append(json.loads(json.dumps(d.ids))))
+    d.ensure_plan_bucket(s3, "us-east-1")
+    key = "plans/acme/" + "c" * 64
+    real_put = s3.put_object
+
+    def lost(**kw):
+        real_put(**kw)
+        raise ConnectionError("read timeout")
+
+    s3.put_object = lost
+    with pytest.raises(ConnectionError):
+        d.put_plan(s3, key, "ours")
+    assert saved[-1]["intents"]["plan_object"]["key"] == key  # journalled before the put
+    s3.put_object = real_put
+    again = strict_dep(p, None, None, None, ids=json.loads(json.dumps(saved[-1])))
+    again.ensure_plan_bucket(s3, "us-east-1")
+    again.put_plan(s3, key, "ours")  # 412: its own bytes, known by the hash in the object's metadata
+    assert again.ids["plan_object"] == {"key": key, "etag": '"etag1"'}
+    s3.objects[("hub-plans-x", key)]["ETag"] = '"replaced"'  # written over since (by someone else)
+    assert again.delete_plan(s3, key) and ("hub-plans-x", key) in s3.objects
+    s3.objects[("hub-plans-x", key)]["ETag"] = '"etag1"'
+    s3.tagsets["hub-plans-x"] = PRODUCTION
+    assert again.delete_plan(s3, key) and ("hub-plans-x", key) in s3.objects
+    with pytest.raises(MissingInput, match="hub-plans-x"):
+        again.put_plan(s3, key, "ours")
+    s3.tagsets["hub-plans-x"] = ours
+    assert again.delete_plan(s3, key) == "" and ("hub-plans-x", key) not in s3.objects
+    other = "plans/acme/" + "d" * 64  # someone else's bytes at a key this install journalled
+    third = strict_dep(
+        p, None, None, None, ids={**again.ids, "intents": {"plan_object": {"key": other, "sha256": "e" * 64}}}
+    )
+    s3.objects[("hub-plans-x", other)] = {"Body": b"x", "Metadata": {"sha256": "f" * 64}, "ETag": '"x"'}
+    with pytest.raises(MissingInput, match="did not record writing it"):
+        third.put_plan(s3, other, "ours")
