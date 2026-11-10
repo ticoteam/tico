@@ -1,6 +1,5 @@
 """A paused task picks back up from its checkpoint."""
 
-from backend.store import H
 from backend.tests.helpers.api import post, get, runner, assign, ready, claim  # noqa: F401
 
 
@@ -46,23 +45,3 @@ def test_once_a_task_session_takes_in_another_private_task_it_never_checkpoints_
     turn("Budget figures: 40k.")  # the session still holds the private task
     shown = get(api, "tasks/" + task["id"])["task"]
     assert shown["checkpoint"] == "Sections 1-2 done." and shown["checkpoint_blocked"] == 1
-
-
-def idle(api, title, days=8):
-    task = post(api, "tasks", {"owner": "ops", "title": title, "body": "Someday."})
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), days=-days), task["id"]))
-    return task
-
-
-def asks(api, task_id):
-    """The question tasks put under a task (question tasks are its children now, not comments)."""
-    with api.app.state.store.read() as c:
-        return [
-            row[0]
-            for row in c.execute(
-                "SELECT t.id FROM tasks t JOIN task_relations r ON r.from_task=t.id AND r.kind='parent' "
-                "WHERE r.to_task=? AND t.questions IS NOT NULL",
-                (task_id,),
-            )
-        ]

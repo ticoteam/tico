@@ -413,6 +413,11 @@ def _problems(conn: "sqlite3.Connection", record: Row) -> list[str]:
     existing = task_engine.pipeline(conn, pid) if pid else None
     if existing and existing.get("retired_at"):
         problems.append("This pipeline is retired.")
+    if record["private"]:
+        # docs/pipelines-v3.md lists `pipelines.private` and an editor switch but says nothing of who may then see the
+        # pipeline or its tasks, and nothing reads it: a private pipeline would promise privacy it does not give. Who
+        # reads a task is the task's own privacy (Who can see), whatever pipeline it is in.
+        problems.append("A pipeline can't be private yet. Make its tasks private instead, and choose who can see each.")
     name = record["name"]
     if not name:
         problems.append("A pipeline needs a name.")

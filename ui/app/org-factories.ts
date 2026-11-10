@@ -3,8 +3,8 @@
    under it one Pipeline Manager card per pipeline. A card's name opens its bot; its chip opens the pipeline, by the route
    the Factories map uses. Pipelines outside every factory share one box after them. The cards come from the pipeline and
    factory setup, so none of them moves, folds or opens an edit menu. The read is the one Company › Factories reads
-   (overview-factories.ts ofRead: GET /api/v2/factories and GET /api/v2/pipelines), which leaves out a private pipeline
-   for anyone who may not see it.
+   (overview-factories.ts ofRead: GET /api/v2/factories and GET /api/v2/pipelines). A pipeline can't be private yet
+   (pipeline_settings refuses it): everyone on the team reads every pipeline.
    The bots this section draws are not on the people chart too: orgSetupLift takes them out of it, and their reports
    hang where they stood.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */

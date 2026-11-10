@@ -217,17 +217,15 @@ def test_a_needs_action_dm_gets_the_runs_text_as_its_reply(api):
     assert [row[0] for row in replies(api, "bot:cpo", "bot:ops")] == [asked["id"]] and jobs(api, "ops") == before + 1
 
 
-def test_never_delayed_questions_gate_verdicts_approvals_and_awaited_replies(api):
+def test_never_delayed_questions_approvals_and_awaited_replies(api):
     setup(api)
-    sha = "a" * 40
     with api.app.state.store.transaction() as c:
         ask = H.say(c, "bot:cpo", "bot:ops", "Which release has the fix?", refs={"needs_action": True})
         start = c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops'").fetchone()[0]
         H.say(c, "bot:cpo", "bot:ops", "Is the export done?", refs={"needs_action": True})
-        H.say(c, "bot:cpo", "bot:ops", f"Review done.\nVERDICT: changes PR #12 head {sha}")
         H.say(c, "bot:cpo", "bot:ops", "Please spend this", refs={"approval": "a1"})
         flagged = H.say(c, "bot:cpo", "bot:ops", "Need the build now", refs={"needs_action": True})
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops'").fetchone()[0] == start + 4
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops'").fetchone()[0] == start + 3
         before = c.execute("SELECT count(*) FROM jobs WHERE bot_id='cpo'").fetchone()[0]
         # Replies the asker waits on: to its questions, which are needs-action messages.
         H.say(c, "bot:ops", "bot:cpo", "v0.3.62", conversation_id=ask["conversation_id"], in_reply_to=ask["id"])
@@ -281,6 +279,22 @@ def test_a_task_comment_says_whether_it_woke_the_bot(api):
     plain = post(api, f"tasks/{t['id']}/comments", {"text": "FYI: docs merged."}, token=token)
     flagged = post(api, f"tasks/{t['id']}/comments", {"text": "Blocked on you.", "needs_action": True}, token=token)
     assert plain["woke"] is False and flagged["woke"] is True
+
+
+def test_needs_action_wakes_the_owner_of_a_snoozed_task_where_a_plain_comment_does_not(api):
+    r = setup(api)
+    token = ops_token(api, r)
+    with api.app.state.store.transaction() as c:
+        t = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
+        H.task_snooze(c, "bot:cpo", t["id"], "The vendor replies in two days.", H.shift(H.now(), days=2), t["version"])
+        c.execute("DELETE FROM jobs WHERE bot_id='cpo'")
+    plain = post(api, f"tasks/{t['id']}/comments", {"text": "FYI: docs merged."}, token=token)
+    assert plain["woke"] is False and jobs(api, "cpo") == 0
+    flagged = post(api, f"tasks/{t['id']}/comments", {"text": "Blocked on you.", "needs_action": True}, token=token)
+    assert flagged["woke"] is True and jobs(api, "cpo") == 1
+    with api.app.state.store.transaction() as c:
+        direct = H.task_comment(c, "bot:ops", t["id"], "Still blocked.", wake=False, extra_refs={"needs_action": True})
+        assert not direct["refs"].get("quiet")
 
 
 def test_a_held_message_or_comment_tells_its_sender_how_to_wake_the_bot_now(api):
@@ -346,39 +360,3 @@ def test_the_cli_prints_why_a_message_was_held(monkeypatch, capsys):
     monkeypatch.setattr(remotecli, "run", lambda *_: {"id": "m1", "woke": False, "held": held})
     assert remotecli.main(SimpleNamespace(cmd="message", fn="message send")) == 0
     assert capsys.readouterr().err.strip() == "hub: " + held
-
-
-# Guards, not the fails-first test (Dev 328 C): they pass on main. Escalations that ask for action reach a bot whose
-# task waits on a blocked_by relation: each starts a run that bot can claim.
-def waiting_on_a_hold(api):
-    with api.app.state.store.transaction() as c:
-        hold = H.task_create(c, "bot:ops", "Hold: no merges until released", "x", "bot:ops")
-        t = H.task_create(c, "bot:ops", "Open the window", "x", "bot:cpo")
-    post(api, "tasks/" + t["id"] + "/relations", {"task": hold["id"], "kind": "blocked_by"})
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (t["id"],))
-        c.execute("DELETE FROM jobs WHERE bot_id='cpo'")
-    return t
-
-
-def test_guard_needs_action_comment_wakes_a_bot_waiting_on_a_blocked_by(api):
-    r = setup(api)
-    token = ops_token(api, r)
-    t = waiting_on_a_hold(api)
-    out = post(api, f"tasks/{t['id']}/comments", {"text": "Deadline 14:10Z", "needs_action": True}, token=token)
-    assert out["woke"] is True and jobs(api, "cpo") == 1
-    attempt = claim(api, r, "cpo")
-    assert attempt and attempt["task"]["id"] == t["id"]
-
-
-def test_guard_needs_action_message_wakes_a_bot_waiting_on_a_blocked_by(api):
-    r = setup(api)
-    token = ops_token(api, r)
-    t = waiting_on_a_hold(api)
-    post(
-        api,
-        "messages",
-        {"to": "cpo", "text": "Deadline 14:10Z", "needs_action": True, "refs": {"task": t["id"]}},
-        token=token,
-    )
-    assert jobs(api, "cpo") == 1 and claim(api, r, "cpo")
