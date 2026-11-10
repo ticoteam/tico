@@ -298,8 +298,9 @@ async function personAccessLoad(p: RosterPerson) {
   card.hidden = false;
   $('#person-access-edit').onclick = () => teammateEditAccess('human', p.id, p.name || p.id, () => personAccessLoad(p));
 }
-// The person's tasks as last read and mended since: their rows, and where the catch-up resumes.
-let PERSON_LIST: {id: string; rows: TaskBriefV3[]; cursor: string} | null = null;
+// The person's tasks as last read and mended since: their rows, where the catch-up resumes, and how far the pages go
+// (task-api.ts taskPageNext: More reads on).
+let PERSON_LIST: ({id: string; rows: TaskBriefV3[]; cursor: string; paging: Promise<unknown> | null} & TaskPaging<TaskBriefV3>) | null = null;
 // Its reads against its live events (task-api.ts TaskFeed): a read that lands late undoes no newer event.
 let PERSON_FEED = taskFeedNew();
 // What the list holds: every task the person owns, open or finished, except a snoozed one (the server's default).
@@ -314,7 +315,7 @@ async function personTasksLoad(p: RosterPerson) {
   if (!$('#person-tasks') || PERSON_TASKS !== p.id || PERSON_FEED !== feed) return;
   const held = read ? taskFeedLanded(feed, ticket, read.cursor) : (taskFeedFailed(feed, ticket), null);
   if (read && !held) return;   // a newer read is out
-  PERSON_LIST = read ? {id: p.id, rows: read.tasks, cursor: read.cursor} : null;
+  PERSON_LIST = read ? {id: p.id, rows: read.tasks, cursor: read.cursor, more: read.more && !!read.tasks.length, edge: read.tasks.at(-1) ?? null, paging: null} : null;
   // What came while the read was out goes over it: a task removed meanwhile stays removed.
   const bulk = read && held ? taskRowsLive(read.tasks, held, personOwns(p.id)) === 'bulk' : false;
   personTasksDraw(p, read?.tasks || []);
@@ -329,8 +330,27 @@ function personTasksDraw(p: RosterPerson, all: TaskBriefV3[]) {
       : `<div class="empty">No active tasks. <a href="#" data-person-task-add>Give ${esc(first)} a task</a>.</div>`)
     + (finished.length ? `<details class="person-tasks-done"><summary class="muted">Finished <span class="cnt">${finished.length}</span></summary>${
         finished.map(t => taskRowHTML(t, {look: 'archive'})).join('')}</details>` : '');
+  const list = PERSON_LIST?.id === p.id ? PERSON_LIST : null;
+  if (list?.more) $('#person-tasks').insertAdjacentHTML('beforeend', `<div class="tl-more" id="person-task-more"><button type="button" class="ghost"${list.paging ? ' disabled' : ''}>More</button></div>`);
   const link = $('#person-tasks [data-person-task-add]');
   if (link) link.onclick = (ev: Event) => { ev.preventDefault(); personTaskModal(p); };
+  const more = $('#person-task-more button');
+  if (more && list) more.onclick = () => void personTasksMore(p, list);
+}
+// More: the next page after the last row the server gave, in the list's own order; what came meanwhile goes over it.
+async function personTasksMore(p: RosterPerson, list: NonNullable<typeof PERSON_LIST>) {
+  if (list.paging) return;
+  const still = () => PERSON_LIST === list && PERSON_TASKS === list.id && !!$('#person-tasks');
+  list.paging = taskPageNext(list, list.rows, {owner: 'human:' + p.id, status: 'all', sort: 'queue'}, PERSON_FEED, personOwns(p.id), taskQueueOrder, still);
+  personTasksDraw(p, list.rows);
+  let held: Awaited<ReturnType<typeof taskPageNext>> = null;
+  try { held = await (list.paging as ReturnType<typeof taskPageNext>); }
+  catch (e) { toast(errorMessage(e, 'More did not load.'), true); }
+  finally { list.paging = null; }
+  if (!still()) return;
+  const bulk = Array.isArray(held) && taskRowsLive(list.rows, held, personOwns(p.id), taskQueueOrder) === 'bulk';
+  personTasksDraw(p, list.rows);
+  if (bulk) void personTasksReload();
 }
 // The live stream's task events, each in place by personOwns (refresh.ts liveTasksApply); nothing is read for one.
 function personTasksLive(events: LiveTaskEvent[]) {

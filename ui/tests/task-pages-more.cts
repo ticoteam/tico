@@ -1,0 +1,70 @@
+// Offline browser check that the lists past the Tasks page read past their first page too (task-api.ts taskPageNext):
+// - a person's page holds the tasks they own 500 at a time: More reads on from where the server's last row was, so a task
+//   removed live meanwhile skips nothing, and nothing is read again for a live event;
+// - the task window's Related picker shows a first page of open tasks; when the server holds more, what is typed in its
+//   find box is searched there (GET /api/v2/tasks?q=), and the task found is the one related.
+const {chromium}: typeof import('playwright') = require('playwright');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const {open, task} = require('./tasks-page.cts') as import('./tasks-page.cts').Api;
+type Route = import('playwright').Route;
+declare function liveEmit(topic: string, data: unknown): void;
+
+(async () => {
+  const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
+  try {
+    // Sam owns 520 tasks, oldest first; 260 more open tasks are Ana's.
+    const at = (i: number) => new Date(Date.UTC(2026, 9, 1, 0, i)).toISOString();
+    const tasks = [
+      ...Array.from({length: 520}, (_, i) => task(`s-${i + 1}`, `Chore ${i + 1}`, 'spec', {owner_id: 'human:sam', created_at: at(i)})),
+      ...Array.from({length: 260}, (_, i) => task(`t-${i + 1}`, `Errand ${i + 1}`, 'spec', {owner_id: 'human:ana', created_at: at(1000 + i), relations: {}})),
+    ];
+    const related: unknown[] = [];
+    const {page, errors, reads} = await open(browser, {hash: '#/tasks', tasks, needs: [], beforeGoto: (pg: import('playwright').Page) =>
+      pg.route('**/api/v2/tasks/*/relations', (route: Route) => {
+        related.push({p: new URL(route.request().url()).pathname, body: route.request().postDataJSON()});
+        return route.fulfill({contentType: 'application/json', body: JSON.stringify({task: tasks[520]})});
+      })});
+
+    // ---- a person's page
+    await page.evaluate(() => { location.hash = '#/person/sam'; });
+    const box = page.locator('#person-tasks');
+    await box.locator('.tk-row, .v2-row, [data-open-task], a').first().waitFor();
+    await page.locator('#person-task-more button').waitFor();
+    const count = () => page.evaluate(() => (document.querySelector('#person-tasks')!.textContent!.match(/Chore \d+/g) || []).length);
+    assert.equal(await count(), 500);
+    const before = reads.length;
+    // Chore 3 is taken away live: off the list in place, nothing read.
+    tasks.splice(tasks.findIndex(t => t.id === 's-3'), 1);
+    await page.evaluate(() => liveEmit('tasks', {id: 's-3', kind: 'delete', kinds: ['delete'], gone: true}));
+    await page.waitForFunction(() => !/Chore 3\b/.test(document.querySelector('#person-tasks')!.textContent!));
+    await page.waitForTimeout(300);
+    assert.equal(reads.length, before, 'no list read for a live event');
+    await page.locator('#person-task-more button').click();
+    await page.waitForFunction(() => !document.querySelector('#person-task-more'));
+    const more = reads.slice(before).find(u => u.searchParams.get('owner') === 'human:sam')!;
+    assert.equal(more.searchParams.get('offset'), '499', 'reads on after the 499 rows held up to the last one the server gave');
+    assert.equal(await count(), 519);
+    assert.match(await box.innerText(), /Chore 520/);
+
+    // ---- the Related picker
+    await page.evaluate(() => { location.hash = '#/task/t-1'; });
+    await page.locator('#task-modal[open][data-task="t-1"] [data-related-add]').click();
+    await page.locator('#task-modal .prop-pop [data-prop-pick="related"]').click();
+    const find = page.locator('#task-modal .prop-pop .tl-menu-q');
+    await find.waitFor();
+    assert.ok(await page.locator('#task-modal .prop-pop .tl-mi').count() <= 200, 'a first page');
+    const typed = reads.length;
+    await find.fill('Errand 250');
+    const hit = page.locator('#task-modal .prop-pop [data-prop-pick="t-250"]');
+    await hit.waitFor();
+    const searched = reads.slice(typed).find(u => u.searchParams.get('q'))!;
+    assert.equal(searched.searchParams.get('q'), 'Errand 250');
+    assert.equal(searched.searchParams.get('status'), 'open');
+    await hit.click();
+    await page.waitForTimeout(200);
+    assert.deepEqual(related.at(-1), {p: '/api/v2/tasks/t-1/relations', body: {task: 't-250', kind: 'related'}});
+
+    assert.deepEqual(errors, []);
+    console.log('PASS: a person\'s tasks read on with More; the Related picker searches the server past its first page.');
+  } finally { await browser.close(); }
+})().catch(error => { console.error(error); process.exitCode = 1; });

@@ -258,8 +258,11 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
     if (p === '/api/v2/tasks' && method === 'GET') {
       reads.push(url);
       const q = url.searchParams, status = q.get('status'), snoozed = q.get('snoozed') || 'hide', ids = q.get('ids')?.split(',');
-      const rows = tasks.filter(x => (!status || x.status === status) && (!ids || ids.includes(x.id))
-        && (ids || snoozed === 'all' || (snoozed === 'only' ? !!x.snoozed : !x.snoozed)) && (!q.get('pipeline') || x.pipeline_id === q.get('pipeline')));
+      // `q` as backend/hubdb.py tasks reads it: every word in the title.
+      const words = (q.get('q') || '').toLowerCase().split(/\s+/).filter(Boolean), owner = q.get('owner');
+      const rows = tasks.filter(x => (!status || status === 'all' || x.status === status) && (!ids || ids.includes(x.id))
+        && (ids || snoozed === 'all' || (snoozed === 'only' ? !!x.snoozed : !x.snoozed)) && (!q.get('pipeline') || x.pipeline_id === q.get('pipeline'))
+        && (!owner || x.owner_id === owner) && words.every(w => x.title.toLowerCase().includes(w)));
       // In the server's order (backend/hubdb.py visible_tasks), then a page as backend/task_list_routes.py cuts it:
       // `limit` rows from `offset`, and where the next page starts.
       const finished = (t: Task) => String(t['done_at'] ?? t['closed_at'] ?? t.updated_at ?? t.created_at ?? '');

@@ -279,19 +279,15 @@ function tasksMore(state: TasksPageState, rest = false): Promise<void> {
   if (state.paging) return state.paging;
   const run = async () => {
     while (state.more && state.edge && TASKS_ST === state && !state.loading) {
-      const query = tasksQuery(state), edge = state.edge, order = tasksOrder(state), view = tasksViewKey(state);
+      const query = tasksQuery(state), view = tasksViewKey(state);
       if (!query) return;
-      const offset = state.tasks.filter(t => order(t, edge) <= 0).length;
-      const ticket = taskFeedRead(state.feed);
-      let page: Awaited<ReturnType<typeof taskBriefsPage>>;
-      try { page = await taskBriefsPage({...tasksPageQuery(state, query, rest), offset}); }
-      catch (e) { taskFeedFailed(state.feed, ticket); state.stalled = true; if (TASKS_ST === state) toast(errorMessage(e, 'More did not load.'), true); return; }
-      if (TASKS_ST !== state || state.loading || tasksViewKey(state) !== view) { taskFeedFailed(state.feed, ticket); return; }
-      const held = taskFeedLanded(state.feed, ticket, page.cursor);
+      let held: Awaited<ReturnType<typeof taskPageNext>>;
+      try {
+        held = await taskPageNext(state, state.tasks, tasksPageQuery(state, query, rest), state.feed, row => tasksViewHas(state, row), tasksOrder(state),
+          () => TASKS_ST === state && !state.loading && tasksViewKey(state) === view);
+      } catch (e) { state.stalled = true; if (TASKS_ST === state) toast(errorMessage(e, 'More did not load.'), true); return; }
+      if (held === 'left') return;
       if (!held) { state.stalled = true; return; }   // a newer read is out; More stays
-      for (const t of page.tasks) taskRowsPut(state.tasks, t, String(t.id), row => tasksViewHas(state, row), order);
-      state.more = page.more && !!page.tasks.length;
-      state.edge = page.tasks.at(-1) ?? null;
       if (held.length) tasksEventsPut(state, held);
       if (!rest) return;
     }

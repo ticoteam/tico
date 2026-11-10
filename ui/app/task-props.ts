@@ -46,6 +46,8 @@ interface PropMenuOptions<T extends PropMenuItem> {
   none?: string;
   onPick?: (it: T) => unknown;
   onEntry?: (v: string) => unknown;
+  /** The items for what is typed in the find box, from the server, in place of filtering the ones shown. */
+  search?: (q: string) => Promise<T[]>;
 }
 // A "…" menu entry: a label and what it does.
 interface PropMenuAction { text: string; danger?: boolean; run: () => unknown; }
@@ -231,7 +233,7 @@ function taskPropsMsgPaint(d: TaskDialog): void {
 }
 
 // ---- one small menu for every row (and the "…" menu): arrow keys, Home/End, Enter, Esc; an optional find box
-function propMenu<T extends PropMenuItem>(d: TaskDialog, anchor: HTMLElement, {label, items = [], find = '', entry = '', none = 'Nothing to pick', onPick, onEntry}: PropMenuOptions<T>): PropPop | undefined {
+function propMenu<T extends PropMenuItem>(d: TaskDialog, anchor: HTMLElement, {label, items = [], find = '', entry = '', none = 'Nothing to pick', onPick, onEntry, search}: PropMenuOptions<T>): PropPop | undefined {
   let pop: PropPop | null = $('.prop-pop', d);
   if (pop?.matches(':popover-open')) { const same = pop.anchor === anchor; pop.hidePopover(); if (same) return; }
   if (pop?.anchor && pop.anchor !== anchor) pop.anchor.setAttribute('aria-expanded', 'false');   // only one menu, only one expanded
@@ -268,13 +270,23 @@ function propMenu<T extends PropMenuItem>(d: TaskDialog, anchor: HTMLElement, {l
   // A menu with a find box is a group of plain buttons (a role=menu holds only menu items); either way ↑/↓ move.
   const menu = !(find || entry);
   const state = (it: PropMenuItem): string => it.checked == null ? '' : menu ? ` aria-checked="${it.checked ? 'true' : 'false'}"` : it.checked ? ' aria-current="true"' : '';
+  const list = (rows: T[]) => `<div class="tl-menu-list">${rows.map((it, i) => `<button type="button"${menu ? ` role="${it.checked != null ? 'menuitemradio' : 'menuitem'}"` : ''}${state(it)} class="tl-mi${it.danger ? ' danger' : ''}" data-pick="${i}"${it.value != null ? ` data-prop-pick="${esc(it.value)}"` : ''} data-label="${esc(String(it.text || '').toLowerCase())}">${it.html || esc(it.text)}${it.checked ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`).join('')}</div>
+    ${rows.length || !none ? '' : `<div class="tl-menu-none">${esc(none)}</div>`}`;
   pop.innerHTML = `<div class="tl-menu" role="${menu ? 'menu' : 'group'}" aria-label="${esc(label)}"><div class="tl-menu-h" aria-hidden="true">${esc(label)}</div>
     ${find || entry ? `<input type="${entry ? 'text' : 'search'}" class="tl-menu-q" placeholder="${esc(entry || find)}" aria-label="${esc(entry || find)}" autocomplete="off" spellcheck="false">` : ''}
-    <div class="tl-menu-list">${items.map((it, i) => `<button type="button"${menu ? ` role="${it.checked != null ? 'menuitemradio' : 'menuitem'}"` : ''}${state(it)} class="tl-mi${it.danger ? ' danger' : ''}" data-pick="${i}"${it.value != null ? ` data-prop-pick="${esc(it.value)}"` : ''} data-label="${esc(String(it.text || '').toLowerCase())}">${it.html || esc(it.text)}${it.checked ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`).join('')}</div>
-    ${items.length || !none ? '' : `<div class="tl-menu-none">${esc(none)}</div>`}</div>`;
-  const input = $('.tl-menu-q', pop) as HTMLInputElement | null;
+    <div class="tl-menu-rows">${list(items)}</div></div>`;
+  const input = $('.tl-menu-q', pop) as HTMLInputElement | null, first = items;
+  let asked = 0, timer = 0;
   if (input) input.oninput = () => {
     const q = input.value.trim().toLowerCase();
+    if (search) {
+      // The server finds them (it holds more than the menu shows); the last thing typed wins.
+      clearTimeout(timer);
+      const n = ++asked, show = (rows: T[]) => { if (n !== asked || !pop.isConnected) return; items = rows; $('.tl-menu-rows', pop)!.innerHTML = list(rows); };
+      if (!q) { show(first); return; }
+      timer = window.setTimeout(() => void search(input.value.trim()).then(show, () => show([])), 200);
+      return;
+    }
     for (const b of pop.querySelectorAll<HTMLElement>('.tl-mi')) b.hidden = !!q && !b.dataset.label!.includes(q);
   };
   pop.onclick = ev => {
@@ -303,14 +315,24 @@ function taskMenuSettled(d: TaskDialog) {
 }
 
 // ---- the pickers
-// Open tasks to pick from: a short-lived copy (a minute; a sent comment clears it).
+// Open tasks to pick from: the first page as a short-lived copy (a minute; a sent comment clears it). `more`: the server
+// holds more open tasks than that page, so what is typed in the find box is searched there (GET /v2/tasks?q=).
 type PropCandidate = Pick<TaskBriefV3, 'id' | 'title' | 'owner_id' | 'status'>;
-let PROP_TASKS: {at: number; rows: PropCandidate[]} | null = null;
-async function taskPropCandidates(t: PropTask & {children?: unknown[]}): Promise<PropCandidate[]> {
-  if (!PROP_TASKS || Date.now() - PROP_TASKS.at > 60000) PROP_TASKS = {at: Date.now(), rows: await taskBriefs({status: 'open', limit: 500})};
+let PROP_TASKS: {at: number; rows: PropCandidate[]; more: boolean} | null = null;
+const PROP_TASKS_PAGE = 200;
+async function taskPropCandidates(t: PropTask & {children?: unknown[]}, q = ''): Promise<{rows: PropCandidate[]; more: boolean}> {
+  let read: {rows: PropCandidate[]; more: boolean};
+  if (q) { const page = await taskBriefsPage({status: 'open', q, limit: PROP_TASKS_PAGE}); read = {rows: page.tasks, more: page.more}; }
+  else {
+    if (!PROP_TASKS || Date.now() - PROP_TASKS.at > 60000) {
+      const page = await taskBriefsPage({status: 'open', limit: PROP_TASKS_PAGE});
+      PROP_TASKS = {at: Date.now(), rows: page.tasks, more: page.more};
+    }
+    read = PROP_TASKS;
+  }
   // Not the task itself, nor one of its own subtasks.
   const bar = new Set([String(t.id), ...(t.children || []).map(c => String((c as {id?: unknown}).id))]);
-  return PROP_TASKS.rows.filter(x => !bar.has(String(x.id))).sort((a, b) => String(a.title).localeCompare(String(b.title)));
+  return {rows: read.rows.filter(x => !bar.has(String(x.id))).sort((a, b) => String(a.title).localeCompare(String(b.title))), more: read.more};
 }
 // The stages a task may move back to: the earlier ones of its pipeline.
 function taskEarlierStages(t: PropTask): {id: string; name: string}[] {

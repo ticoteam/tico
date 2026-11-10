@@ -78,7 +78,7 @@ const decideLive = (st: DecState) => st.order.filter(k => !st.gone.has(k) && st.
 const decideCurrent = (st: DecState) => st.at && !st.gone.has(st.at) ? st.items.get(st.at) || null : null;
 function decideSync(st: DecState, items: NeedsEntry[]) {
   const fresh = decideOrdered(items), keys = new Set(fresh.map(it => it.id));
-  const before = st.order;
+  const before = st.order, was = st.at ? st.items.get(st.at) : undefined;
   st.items = new Map(fresh.map(it => [it.id, it]));
   const order = before.filter(k => keys.has(k));
   fresh.forEach((it, i) => {
@@ -87,10 +87,13 @@ function decideSync(st: DecState, items: NeedsEntry[]) {
     order.splice(prev ? order.indexOf(prev.id) + 1 : 0, 0, it.id);
   });
   for (const k of [...st.gone]) if (!keys.has(k)) st.gone.delete(k);
-  // The item on screen left the list (answered elsewhere): the next one takes its place.
+  // The item on screen left the list (answered elsewhere): the same ask asked again (a letter quoted again) takes its
+  // place, else the next one.
   if (st.at && !keys.has(st.at)) {
-    const i = before.indexOf(st.at);
-    st.at = before.slice(i + 1).find(k => keys.has(k) && !st.gone.has(k))
+    const i = before.indexOf(st.at), shows = (it?: NeedsEntry) => (it?.ask?.shows || []).join('\n');
+    const again = was?.kind === 'ask' ? fresh.find(it => it.kind === 'ask' && !before.includes(it.id) && !st.gone.has(it.id)
+      && (it.task_id === was.task_id || !!shows(was) && shows(it) === shows(was))) : undefined;
+    st.at = again?.id || before.slice(i + 1).find(k => keys.has(k) && !st.gone.has(k))
       || before.slice(0, Math.max(i, 0)).reverse().find(k => keys.has(k) && !st.gone.has(k)) || null;
   }
   st.order = order;
@@ -397,6 +400,9 @@ async function decideOkLoad(st: DecState, it: NeedsEntry, changed: boolean) {
     } else if (kind === 'file') {
       v.html = await decideFileHTML(v, shown.content);
       v.hash = shown.shown_hash;
+    } else if (kind === 'support') {
+      v.html = await decideSupportHTML(shown.content);
+      v.hash = shown.shown_hash;
     } else {
       v.html = decideContentHTML(shown.content);
       v.hash = shown.shown_hash;
@@ -458,17 +464,36 @@ async function decideFileHTML(v: AskOkView, content: unknown): Promise<string> {
   v.urls.push(url);
   return head + (image ? `<img class="dc-media" src="${esc(url)}" alt="${esc(name)}">` : `<iframe class="dc-proof" src="${esc(url)}" title="${esc(name)}"></iframe>`) + link;
 }
-/** What an OK is for, any shape: text as Markdown, an object with a subject and a body as a message, else its fields. */
+/** What an OK is for, any shape: text as Markdown; an object with a subject and a body as a message, then every other
+    field it has (the hash covers them all); else its fields. */
 function decideContentHTML(content: unknown): string {
   if (content == null || content === '') return '';
   if (typeof content === 'string') return `<div class="md">${md(content)}</div>`;
   if (typeof content === 'object' && !Array.isArray(content)) {
     const o = content as Record<string, unknown>;
-    const text = typeof o.body === 'string' ? o.body : typeof o.text === 'string' ? o.text : null;
-    const title = typeof o.subject === 'string' ? o.subject : typeof o.title === 'string' ? o.title : '';
-    if (text != null) return `${title ? `<h3 class="dc-title">${esc(title)}</h3>` : ''}<div class="md">${md(text)}</div>`;
+    const textKey = typeof o.body === 'string' ? 'body' : typeof o.text === 'string' ? 'text' : '';
+    const titleKey = typeof o.subject === 'string' ? 'subject' : typeof o.title === 'string' ? 'title' : '';
+    if (textKey) {
+      const rest = Object.fromEntries(Object.entries(o).filter(([k]) => k !== textKey && k !== titleKey));
+      return `${titleKey ? `<h3 class="dc-title">${esc(String(o[titleKey]))}</h3>` : ''}<div class="md">${md(String(o[textKey]))}</div>`
+        + (Object.keys(rest).length ? `<pre class="dc-raw">${esc(JSON.stringify(rest, null, 2))}</pre>` : '');
+    }
   }
   return `<pre class="dc-raw">${esc(JSON.stringify(content, null, 2))}</pre>`;
+}
+/** A report to Tico support (backend/support.py ask_report): the message exactly as it goes, and, unless the person
+    left them out, the version and install ID that go with it (GET /api/v2/support/compose, what the send adds). The
+    message's own hash (`content_sha256`) is checked against it by the server, so it is not shown. */
+async function decideSupportHTML(content: unknown): Promise<string> {
+  const c = (content && typeof content === 'object' ? content : {}) as {message?: unknown; include_ids?: unknown};
+  if (typeof c.message !== 'string') throw new Error('The report did not load.');
+  let ids = '';
+  if (c.include_ids !== false) {
+    const d = await get<{version?: string; install_id?: string; to?: string}>('/v2/support/compose', {fresh: true});
+    ids = [d.version ? `Version ${d.version}` : '', d.install_id ? `Install ID ${d.install_id}` : ''].filter(Boolean).map(x => esc(x)).join(' · ');
+    if (d.to) ids += `${ids ? ' · ' : ''}To ${esc(d.to)}`;
+  }
+  return `<pre class="dc-raw">${esc(c.message)}</pre>${ids ? `<p class="dc-line">${ids}</p>` : ''}`;
 }
 /** A stage's OK shows what the requirement names: pages in full, an email as frozen, a file at its version, the rest by
     name. One that does not load leaves Approve off (`missing`). */
@@ -534,6 +559,8 @@ async function decideApprove(st: DecState, it: NeedsEntry) {
     if (code === 'task_changed') { await decideOkLoad(st, it, true); return; }     // the new content, and a new click
     st.error = taskRefusedOf(e)?.detail || errorMessage(e, 'Not approved.');
     decidePaintSide(st);
+    if (code === 'task_requirement') void v2Refresh();     // not asked any more: an ask that took its place comes in
+
   }
 }
 async function decideClick(st: DecState, ev: MouseEvent) {
