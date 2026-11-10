@@ -2128,17 +2128,6 @@ class BotManagesReports(Contract):
     expected_revision: int = Field(ge=1)
 
 
-class BotKeepTasksGoing(Contract):
-    keep_tasks_going: int | None = Field(
-        None,
-        ge=0,
-        le=1000,
-        strict=True,
-        description="Automatic assigned-task starts: null is unlimited (default), 0 is off, N caps active work. Reviews have no cap.",
-    )
-    expected_revision: int
-
-
 class BotTaskChoice(Contract):
     """What a bot's tasks run on. Each part is optional on its own: no model is the bot's own model, so this can set
     only the task effort or only the task context length (backend/task_models.py)."""
