@@ -1523,7 +1523,7 @@ def test_a_live_seat_whose_template_Tico_lacks_is_refused_in_the_preview(environ
 
 
 # ------------------------------------------------------------------ the default chart, on every way a company starts
-LIVE_DEFAULT = ("product-pipeline-manager", "engineering-pipeline-manager", "product-owner", "qa-owner")
+LIVE_DEFAULT = ("product-owner", "qa-owner")
 
 
 def default_chart_text():
@@ -1571,6 +1571,39 @@ def test_setup_with_no_chart_starts_the_default_chart_and_its_live_bots_once(env
     again = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
     assert again.status_code == 200, again.text
     assert (len(rows(api, "SELECT id FROM seats")), len(bot_ids(api))) == before
+
+
+def test_a_new_company_set_up_with_the_default_chart_on_a_fresh_database_has_general_and_its_bots(tmp_path):
+    """The setup path every new company runs, below the routes: a fresh database, the roster a new install seeds, and
+    the owner completing setup with nothing picked. It ends with General as the one pipeline, the built-ins and the
+    default chart's live bots made, the rest as seats, and nothing recorded as failed."""
+    from backend.auth import Auth
+    from backend.execution import Execution
+    from backend.onboarding import Onboarding
+    from backend.providers import MODEL_BY_ID
+    from backend.settings_admin import SettingsAdmin
+    from backend.store import Store
+
+    store = Store(settings_for(tmp_path))
+    store.initialize()
+    with store.transaction() as c:
+        H.sync_registry(c, SEED, PEOPLE)
+        c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO NOTHING", (encode(PEOPLE),))
+        for slug, config in SEED.items():
+            c.execute("INSERT INTO bot_config(bot,owner_id,repo) VALUES(?,?,?)", (slug, "owner", "bot-" + slug))
+            BS.write(c, slug, config)
+    auth = Auth(store)
+    execution = Execution(store, auth)
+    admin = SettingsAdmin(store, auth, execution, MODEL_BY_ID, lambda *args, **kwargs: None)
+    onboarding = Onboarding(store, auth, admin, execution, MODEL_BY_ID)
+    with store.transaction() as c:
+        onboarding.complete(c, Identity("human:owner", "owner", OWNER_EMAIL))
+    with store.read() as c:
+        assert [tuple(r) for r in c.execute("SELECT id FROM pipelines")] == [("general",)]
+        bots = {r[0] for r in c.execute("SELECT slug FROM bots")}
+        assert {"coo", "botops", "task-manager", *LIVE_DEFAULT} <= bots
+        assert c.execute("SELECT count(*) FROM seats WHERE closed_at IS NULL").fetchone()[0] > 0
+        assert not c.execute("SELECT action FROM events WHERE action LIKE '%failed%'").fetchall()
 
 
 def test_setup_leaves_a_company_whose_work_is_already_set_up_alone(environment):
