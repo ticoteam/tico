@@ -75,3 +75,16 @@ def fleet(api, attempts=100, trees=50):
                     (f"pr-{i}", tid, f"https://github.com/Acme/product/pull/{i}", now),
                 )
     return computer
+
+
+def on_engine(c, task_id, owner="bot:ops"):
+    """Put one synthetic task into General's first stage, as `H.task_create` would, so the engine can move or reassign
+    it (`task_engine.enter`). Its owner's wake is settled: the test's own queue stays as it was."""
+    from backend import task_engine as E
+
+    before = {r[0] for r in c.execute("SELECT id FROM jobs WHERE state='queued'")}
+    row = E.enter(c, task_id, "general", "human:ana", assignee=owner)
+    for (job,) in c.execute("SELECT id FROM jobs WHERE state='queued'").fetchall():
+        if job not in before:
+            c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job,))
+    return row

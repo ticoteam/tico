@@ -49,11 +49,9 @@ def test_a_held_run_whose_review_task_was_closed_reopens_it_on_the_next_sweep(ap
     backdate(api, first['id'], 60)
     with api.app.state.store.transaction() as c:
         if how == 'closed':
-            H.task_close(
-                c, H.KEEPER, first['id'], 'Closed by the stall check: BotOps cannot diagnose itself.', quiet=True
-            )
+            H.task_close(c, H.KEEPER, first['id'], 'Closed by the stall check: BotOps cannot diagnose itself.')
         else:
-            H.task_update(c, H.bot_actor(H.FLEET_MAINTAINER), first['id'], status='done', note='Looked.')
+            H.task_done(c, H.bot_actor(H.FLEET_MAINTAINER), first['id'], 'Looked.', H.task(c, first['id'])['version'])
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     [second] = reviews(api)
     assert second['id'] == first['id'] and second['status'] == 'open'
@@ -71,17 +69,19 @@ def test_a_held_run_whose_review_task_was_closed_reopens_it_on_the_next_sweep(ap
         },
     )
     with api.app.state.store.transaction() as c:
-        H.task_close(c, H.KEEPER, second['id'], 'Settled.', quiet=True)
+        if H.task(c, second['id'])['status'] == 'open':  # the dismissal may already have finished it
+            H.task_close(c, H.KEEPER, second['id'], 'Settled.')
     backdate(api, second['id'], 60)
+    [ended] = [r['status'] for r in reviews(api)]
     sweep(api)
-    assert [r['status'] for r in reviews(api)] == ['closed']
+    assert ended in ('closed', 'done') and [r['status'] for r in reviews(api)] == [ended]
 
 
 def test_a_review_closed_soon_after_it_was_filed_reopens_on_the_next_sweep(api):
     machine, message, attempt = held(api)
     [first] = reviews(api)
     with api.app.state.store.transaction() as c:
-        H.task_update(c, H.bot_actor(H.FLEET_MAINTAINER), first['id'], status='done', note='Looked.')
+        H.task_done(c, H.bot_actor(H.FLEET_MAINTAINER), first['id'], 'Looked.', H.task(c, first['id'])['version'])
     sweep(api)
     assert [(r['id'], r['status']) for r in reviews(api)] == [(first['id'], 'open')]
 
@@ -125,7 +125,7 @@ def test_a_review_closed_while_its_runs_are_held_is_opened_again_naming_each_of_
     second = held_again(api, machine)
     [review] = reviews(api)
     with api.app.state.store.transaction() as c:
-        H.task_close(c, H.KEEPER, review['id'], 'Closed by the stall check: BotOps cannot diagnose itself.', quiet=True)
+        H.task_close(c, H.KEEPER, review['id'], 'Closed by the stall check: BotOps cannot diagnose itself.')
     backdate(api, review['id'], 60)
     sweep(api)
     [again] = [r for r in reviews(api) if r['status'] == 'open']
@@ -579,7 +579,7 @@ def test_a_held_run_on_a_finished_task_is_dismissed(api):
     machine, attempt, task_id = held_on_task(api)
     aged(api, attempt['id'])
     with api.app.state.store.transaction() as c:
-        H.task_update(c, H.KEEPER, task_id, status='done', quiet=True, note='Finished by hand.')
+        H.task_done(c, H.KEEPER, task_id, 'Finished by hand.')
     assert [d['state'] for d in sweep(api)] == ['canceled']
     [decision] = decision_of(api, attempt['job_id'])
     assert decision['decision'] == 'dismiss' and 'already done' in decision['note']

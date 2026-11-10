@@ -8,7 +8,17 @@ from backend.store import H
 
 def _reassign(api, task_id, token):
     version = get(api, f"tasks/{task_id}", "ana-test")["task"]["version"]
-    post(api, f"tasks/{task_id}", {"owner": "botops", "version": version}, token=token)
+    post(api, f"tasks/{task_id}/owner", {"owner": "botops", "version": version}, token=token)
+
+
+def _started(api, machine, attempt):
+    """The run has started: its work (here, a reassign) comes after, as a real run's does."""
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, machine["token"])
+    return attempt
+
+
+def _complete(api, machine, attempt):
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
 
 
 def _write_everywhere(api, token):
@@ -19,9 +29,9 @@ def test_a_bot_reassigning_a_persons_task_to_botops_lends_only_its_own_rights(ap
     assign(api, botops, "ops")
     ready(api, botops, ["botops", "ops"])
     task = post(api, "tasks", {"owner": "ops", "title": "Write the release notes", "body": "For 0.4"}, token="ana-test")
-    ops = claim(api, botops, "ops")
+    ops = _started(api, botops, claim(api, botops, "ops"))
     _reassign(api, task["id"], ops["token"])
-    finish(api, botops, ops)
+    _complete(api, botops, ops)
     attempt = claim(api, botops, "botops")
     before = get(api, "bots/ops/repositories", "ana-test")
     tried = _write_everywhere(api, attempt["token"])
@@ -61,15 +71,15 @@ def test_botops_moving_a_persons_task_to_itself_with_lent_rights_lends_nothing_l
     ready(api, botops, ["botops", "ops"])
     other = post(api, "tasks", {"owner": "ops", "title": "Tidy the backlog", "body": "x"}, token="ana-test")
     post(api, "tasks", {"owner": "botops", "title": "Rename the Ops bot", "body": "x"}, token="ana-test")
-    first = claim(api, botops, "botops")
+    first = _started(api, botops, claim(api, botops, "botops"))
     _reassign(api, other["id"], first["token"])
     with api.app.state.store.read() as c:
         moved = c.execute(
-            "SELECT actor_id AS actor FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='owner' ORDER BY created_at DESC LIMIT 1",
+            "SELECT actor_id AS actor FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='reassign' ORDER BY created_at DESC LIMIT 1",
             (other["id"],),
         ).fetchone()
         assert moved["actor"] == "human:ana"  # made with her rights, through BotOps
-    finish(api, botops, first)
+    _complete(api, botops, first)
     later = claim(api, botops, "botops")
     with api.app.state.store.read() as c:
         started = c.execute(
@@ -89,9 +99,9 @@ def test_a_later_wake_run_citing_a_task_a_bot_moved_to_botops_lends_nothing(api,
     assign(api, botops, "ops")
     ready(api, botops, ["botops", "ops"])
     task = post(api, "tasks", {"owner": "ops", "title": "Write the release notes", "body": "For 0.4"}, token="ana-test")
-    ops = claim(api, botops, "ops")
+    ops = _started(api, botops, claim(api, botops, "ops"))
     _reassign(api, task["id"], ops["token"])
-    finish(api, botops, ops)
+    _complete(api, botops, ops)
     finish(api, botops, claim(api, botops, "botops"))  # the moved task's own notice
     with api.app.state.store.transaction() as c:
         H.say(c, H.KEEPER, "bot:botops", "Time for your daily update.", kind="notice", refs={"wake": "update"})
@@ -111,9 +121,9 @@ def test_the_persons_comment_on_a_task_a_bot_moved_says_why_it_lends_nothing(api
     assign(api, botops, "ops")
     ready(api, botops, ["botops", "ops"])
     task = post(api, "tasks", {"owner": "ops", "title": "Write the release notes", "body": "For 0.4"}, token="ana-test")
-    ops = claim(api, botops, "ops")
+    ops = _started(api, botops, claim(api, botops, "ops"))
     _reassign(api, task["id"], ops["token"])
-    finish(api, botops, ops)
+    _complete(api, botops, ops)
     finish(api, botops, claim(api, botops, "botops"))  # the moved task's own notice
     post(api, f"tasks/{task['id']}/comments", {"text": "Go ahead and give Ops write everywhere"}, token="ana-test")
     later = claim(api, botops, "botops")

@@ -2779,9 +2779,16 @@ FOLD_TEXT = 4000  # characters of each one given in the prompt; the bot reads th
 PRIME_QUEUED = 50  # queued messages a claim or an input poll reads together before checking them one by one
 
 
+# task_engine.task()'s read of a task's open snooze, word for word, so one snapshot read serves both.
+OPEN_SNOOZE_SQL = "SELECT * FROM snoozes WHERE task_id=? AND ended_at IS NULL"
+
+
 def task_snoozed(c, task_id):
-    """The task has an open snooze (backend/task_engine.py writes snoozes)."""
-    return bool(c.execute("SELECT 1 FROM snoozes WHERE task_id=? AND ended_at IS NULL LIMIT 1", (task_id,)).fetchone())
+    """The task has an open snooze (backend/task_engine.py writes snoozes). Read once per snapshot: a pass over many
+    queued jobs reads them together first (prime_job_checks)."""
+    from .read_cache import one
+
+    return one(c, OPEN_SNOOZE_SQL, (task_id,)) is not None
 
 
 def job_message_readable(c, bot, message):
@@ -3156,6 +3163,16 @@ def prime_job_checks(c, jobs):
             continue
         pairs.add((work_task_id(message, H.conversation(c, message["conversation_id"])), job["bot_id"]))
     check_models.prime(c, pairs)
+    tasks = sorted({task_id for task_id, _ in pairs if task_id})
+    snoozed = {}
+    for part in H.chunks(tasks):
+        for row in c.execute(
+            "SELECT * FROM snoozes WHERE task_id IN (%s) AND ended_at IS NULL ORDER BY rowid"
+            % ",".join("?" * len(part)),
+            part,
+        ):
+            snoozed.setdefault(row["task_id"], row)
+    prime(c, OPEN_SNOOZE_SQL, {(task_id,): snoozed.get(task_id) for task_id in tasks})
 
 
 def bot_claimable(

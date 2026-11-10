@@ -427,6 +427,12 @@ def refused(c, identity, exc, savepoint="domain_write"):
         pass
     finally:
         H.PRIVATE_WRITE.reset(token)
+    return refusal_problem(exc)
+
+
+def refusal_problem(exc):
+    """The Problem a refusal answers with, for a write that does not go through `mutate` (it has no savepoint to undo
+    and keeps no audit of its own): a refusal is always a clean 4xx, never an uncaught error."""
     # The engine's refusals (a rule that starts with `task_`) are 409: the task is not where the caller thought, or
     # the move is not allowed now. What is missing, the commands allowed next and the task's version ride in `extra`
     # (docs/dev/pipelines-v3-cutover.md, "HTTP").

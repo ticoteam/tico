@@ -485,8 +485,8 @@ def test_each_kind_of_sparse_evidence_alone_holds_the_run(api, evidence):
     else:
         with api.app.state.store.transaction() as c:
             c.execute(
-                'INSERT INTO ok_grants(requirement_id,subject,asked_by_id,used_by_id,ok_at,used_at) SELECT ?1, ?2, ?4, ?4, ?5, ?6',
-                (H.new_id(), 'spend', attempt['message']['id'], 'bot:finance', H.now(), H.shift(H.now(), seconds=1)),
+                "INSERT INTO ok_grants(requirement_id,subject,asked_by_id,used_by_id,ok_at,used_at,content_hash,created_at,ok_by_id) SELECT ?1, ?2, ?4, ?4, ?5, ?6, 'sha256-of-the-act', ?5, 'human:ana'",
+                (H.new_id(), 'spend', attempt['message']['id'], 'bot:finance', H.now(), H.now()),  # used during the run
             )
     post(api, f"attempts/{attempt['id']}/complete", body, machine['token'])
     assert job_state(api, attempt['job_id']) == 'uncertain'
@@ -1029,7 +1029,7 @@ def test_a_run_that_only_read_but_consumed_an_approval_is_held(api):
     with api.app.state.store.transaction() as c:
         started = c.execute("SELECT started_at FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
         c.execute(
-            "INSERT INTO ok_grants(requirement_id,subject,asked_by_id,used_by_id,ok_at,used_at) SELECT ?1, ?2, ?4, ?4, ?5, ?6",
+            "INSERT INTO ok_grants(requirement_id,subject,asked_by_id,used_by_id,ok_at,used_at,content_hash,created_at,ok_by_id) SELECT ?1, ?2, ?4, ?4, ?5, ?6, 'sha256-of-the-act', ?5, 'human:ana'",
             (H.new_id(), 'spend', message['id'], 'bot:ops', started, started),
         )
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
@@ -1606,7 +1606,8 @@ def test_a_finished_turn_dismissed_because_its_task_closed_still_ends_completed_
     machine, message, attempt = finished_then_lapsed(api, task=True)
     task = message['task']
     assert task['conversation_id'] == message['conversation_id']  # the task's own room, not the chat
-    post(api, 'tasks/' + task['id'], {'version': attempt['task']['version'], 'close': True, 'quiet': True})
+    # Closed with a reason through the move call; nobody is told (v3 sends no messages about tasks).
+    post(api, f"tasks/{task['id']}/move", {'to': 'closed', 'why': 'Not needed now.'})
     aged(api, attempt['id'])
     assert [d['state'] for d in sweep(api)] == ['canceled']
     done = hand_in(api, machine, attempt)
@@ -2421,7 +2422,13 @@ def test_a_busy_bots_stopped_run_records_dependency_until_task_and_lane_free(api
     post(api, f"attempts/{other['id']}/started", {'thread_id': 'busy'}, machine['token'])
 
     def counts():
-        return get(api, 'pipeline')['queues']['ops'], get(api, 'bots/ops')['queued']
+        # The bot's one queue count (backend/bot_rows.py job_queues): what its page and the bot list both show.
+        from backend import bot_rows
+
+        who = api.app.state.store.settings.test_identities['ana-test']
+        with api.app.state.store.read_transaction() as c:
+            queue = bot_rows.job_queues(c, who, ['ops'])['ops']
+        return queue, get(api, 'bots/ops')['queued']
 
     queue, page = counts()
     assert (queue['uncertain'], queue['dead'], queue['queued']) == (1, 1, 0) and page == 0  # dead is never queued
@@ -2807,7 +2814,7 @@ def test_restart_run_that_consumed_its_own_approval_is_held(api):
     with api.app.state.store.transaction() as c:
         started = c.execute("SELECT started_at FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
         c.execute(
-            "INSERT INTO ok_grants(requirement_id,subject,asked_by_id,used_by_id,ok_at,used_at) SELECT ?1, ?2, ?4, ?4, ?5, ?6",
+            "INSERT INTO ok_grants(requirement_id,subject,asked_by_id,used_by_id,ok_at,used_at,content_hash,created_at,ok_by_id) SELECT ?1, ?2, ?4, ?4, ?5, ?6, 'sha256-of-the-act', ?5, 'human:ana'",
             (H.new_id(), 'spend', message['id'], 'bot:ops', started, started),
         )
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
@@ -2900,7 +2907,7 @@ def test_a_clean_stop_run_that_consumed_an_approval_is_still_held(api):
     with api.app.state.store.transaction() as c:
         started = c.execute("SELECT started_at FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
         c.execute(
-            "INSERT INTO ok_grants(requirement_id,subject,asked_by_id,used_by_id,ok_at,used_at) SELECT ?1, ?2, ?4, ?4, ?5, ?6",
+            "INSERT INTO ok_grants(requirement_id,subject,asked_by_id,used_by_id,ok_at,used_at,content_hash,created_at,ok_by_id) SELECT ?1, ?2, ?4, ?4, ?5, ?6, 'sha256-of-the-act', ?5, 'human:ana'",
             (H.new_id(), 'spend', message['id'], 'bot:ops', started, started),
         )
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'

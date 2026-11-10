@@ -2,6 +2,8 @@
 setup tasks, no Daily release with no Release Manager to ask, no two automations of one name, no BotOps task for GitHub
 or for the AI provider it has not chosen, and a new database's start says nothing about moving routines."""
 
+import pytest
+
 from backend import redesign_migration
 from backend import system_routines as SR
 from backend.maintenance_steps import check_health
@@ -53,9 +55,12 @@ def test_a_company_that_makes_no_software_gets_no_product_or_engineering_seats_b
     assert setup == [], setup
 
 
-def test_a_software_company_still_gets_its_product_and_qa_owners(environment):
+@pytest.mark.parametrize("software", ["yes", ""])
+def test_a_software_company_and_one_that_did_not_say_still_get_their_product_and_qa_owners(environment, software):
+    """Only a "no" leaves the software seats out: a blank answer is unknown, and unknown keeps the default chart
+    (company_import.default_chart), the one the site's file gives a company that picked nothing."""
     api = environment()
-    _set_up(api, software="yes")
+    _set_up(api, software=software)
     titles = {row["title"] for row in rows(api, "SELECT title FROM tasks WHERE title LIKE 'Set up % template'")}
     assert titles == {
         "Set up Product Owner from the segment-product-owner template",

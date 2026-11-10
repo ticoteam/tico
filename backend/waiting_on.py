@@ -345,15 +345,18 @@ def of(
         ahead = E.next_stage(conn, row)
         full = bool(ahead) and not E.has_room(conn, ahead)
         name = ahead["name"] if ahead else "the next stage"
-        out.append(
-            Wait(
-                ROOM,
-                ahead["id"] if ahead else None,
-                f"No room in {name}" if full else f"Moving to {name}",
-                None,
-                entered,
-            )
-        )
+        line = f"No room in {name}" if full else f"Moving to {name}"
+        held = E.shut_out(conn, row, ahead) if ahead and not full else None
+        if held:
+            # The next stage's owner, or someone it asks, cannot read this private task: it waits until someone who
+            # can see it shares it (the engine never adds a reader). Who that is, and why.
+            from . import hubdb
+
+            H: Any = hubdb
+            sharer = person_for(conn, row)
+            by = str(H.actor_name(conn, sharer)) if sharer else "someone who can see it"
+            line = f"Waits on {by} to share it: {held['cause']}"
+        out.append(Wait(ROOM, ahead["id"] if ahead else None, line, None, entered))
     if visit.get("level") == "person" and not by_hand:
         # The ladder or Late brought the task to a person. It is in their list whatever else it waits on, and the
         # first thing it says is why.
@@ -446,6 +449,13 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
             read_cache.prime(conn, one_sql, {(task_id,): found.get(task_id) for task_id in unread})
     rows = [row for row in (E.task(conn, task_id) for task_id in ids) if row]
     R.prime(conn, rows)
+    task_wakes.prime_holds(conn, ids)  # each task's worktree wait, for a bot's turn that may be Paused on it
+    # "Can this bot run" for each bot whose turn a task may be: its owner, or its pipeline's manager.
+    bots: list[str] = []
+    for row in rows:
+        pipeline: dict[str, Any] = row.get("pipeline") or {}
+        bots += [str(a) for a in (row.get("owner_id"), pipeline.get("manager_id")) if a]
+    task_wakes.prime_bots(conn, bots)
     visits = sorted({str(row["visit"]["id"]) for row in rows if row.get("visit")})
     unread = [visit_id for visit_id in visits if ("filed_open", visit_id) not in values]
     for visit_id, filed in _filed_open_of(conn, unread).items():

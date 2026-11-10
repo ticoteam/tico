@@ -241,7 +241,13 @@ def view(c, who, row):
     questions, summary, doing = None, None, None
     if ended:
         state = "done" if row["status"] == "done" else "stopped"
-        summary = (row.get("note") or "").strip()
+        # The summary is the note the bot finished with (`hub_task_done`): the notes of its `done` answer.
+        done = c.execute(
+            "SELECT a.notes FROM answers a JOIN visits v ON v.id=a.visit_id WHERE v.task_id=? AND a.answer='done' "
+            "AND coalesce(a.notes,'')<>'' ORDER BY a.created_at DESC, a.rowid DESC LIMIT 1",
+            (row["id"],),
+        ).fetchone()
+        summary = (done[0] if done else row.get("note") or "").strip()
         if not summary:
             said = [
                 m

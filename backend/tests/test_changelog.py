@@ -54,14 +54,14 @@ def test_read_state_is_personal_and_only_acknowledges_shown_updates(api, monkeyp
         private = H.task_create(
             c, "human:ana", "Review the private packet", "Private packet", "bot:ops", private=True, lint=False
         )
-        H.task_done(c, "bot:ops", private["id"], "Private outcome only for the requester.", private["version"])
+        H.task_done(c, "human:ana", private["id"], "Private outcome only for the requester.")
         for i in range(125):
             task = H.task_create(
                 c, "human:ana", "Check the public packet %s" % i, "Public packet", "bot:ops", lint=False
             )
-            H.task_done(c, "bot:ops", task["id"], "Public work completed and reported to the team.", task["version"])
+            H.task_done(c, "human:ana", task["id"], "Public work completed and reported to the team.")
     listing = api.get("/api/v2/changelog", headers=headers("ben-test")).json()
-    # The owner's done note is the activity entry, and a task Ben may read shows it.
+    # The done note is the activity entry, and a task Ben may read shows it.
     assert any(r["bullets"] == ["Public work completed and reported to the team."] for r in listing["entries"])
     assert len([r for r in listing["entries"] if r["kind"] == "product"]) == 2
     assert private["id"] not in str(listing) and "Private outcome" not in str(listing)

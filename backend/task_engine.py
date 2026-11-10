@@ -1302,7 +1302,8 @@ def add_requirement(
     seen_version: int | str | None = None,
 ) -> Row:
     """Add an OK or an answer from a named person to this task, for this visit (C30). The task does not leave the stage
-    until it is answered, withdrawn or pushed past. A bot has one open per task: asking again replaces it (C15)."""
+    until it is answered, withdrawn or pushed past. A bot has one open per task: asking again replaces it (C15,
+    `_replace_open`)."""
     H = _h()
     row = task(conn, task_id)
     if not row:
@@ -1314,7 +1315,9 @@ def add_requirement(
         _refuse(conn, by, "task_requirement", "Only an OK or an answer can be added to one task", task_id)
     if not (is_human(person) or is_bot(person)):
         _refuse(conn, by, "task_requirement", "Name who it is for", task_id)
-    if person == by:
+    if person == by and not is_human(by):
+        # A bot never satisfies its own request. A person may ask themself: their own click is what answers it (an OK
+        # of their own ask is refused unless it is that click, answers._may_answer).
         _refuse(conn, by, "task_requirement", "Nobody answers their own ask: ask someone else", task_id)
     if kind == "ok" and not is_human(person):
         _refuse(conn, by, "task_requirement", "An OK is asked of a person", task_id)
@@ -1327,11 +1330,7 @@ def add_requirement(
     ts = H.now()
     visit = row["visit"]
     if is_bot(by):
-        conn.execute(
-            "UPDATE requirements SET withdrawn_at=? WHERE visit_id=? AND added_by_id=? AND by_bot=1 "
-            "AND withdrawn_at IS NULL",
-            (ts, visit["id"], str(by)),
-        )
+        _replace_open(conn, task_id, visit["id"], by, ts)
     requirement_id = H.new_id()
     conn.execute(
         "INSERT INTO requirements (id, visit_id, kind, who_oks, person_id, added_by_id, by_bot, line, shows, choices, "
@@ -1359,6 +1358,31 @@ def add_requirement(
     # has one.
     task_wakes.ask(conn, out, R.get(conn, requirement_id))
     return out
+
+
+def _replace_open(conn: "sqlite3.Connection", task_id: str, visit_id: str, by: str, ts: str) -> None:
+    """C15: a bot has one ask of its own on a visit (the index requirements_one_per_bot): asking again replaces it.
+    What was answered stays on record (its answer, and the task's `decided`, task_calls), and an OK that was used stays
+    used. An OK bound to exact content that was given and not used yet is never dropped by a new ask, nor made good for
+    anything else: the bot uses it or withdraws it first."""
+    from . import task_asks
+
+    rows = conn.execute(
+        "SELECT id FROM requirements WHERE visit_id=? AND added_by_id=? AND by_bot=1 AND withdrawn_at IS NULL",
+        (visit_id, str(by)),
+    ).fetchall()
+    for (old,) in rows:
+        if task_asks.standing(conn, str(old)) == task_asks.OK:
+            _refuse(
+                conn,
+                by,
+                "task_requirement",
+                "Your earlier OK on this task was given and not used yet: use it, or withdraw it, then ask again",
+                task_id,
+            )
+    for (old,) in rows:
+        conn.execute("UPDATE requirements SET withdrawn_at=? WHERE id=?", (ts, old))
+        _event(conn, task_id, by, "requirement_withdrawn", old, None, "Asked again")
 
 
 def withdraw_requirement(
