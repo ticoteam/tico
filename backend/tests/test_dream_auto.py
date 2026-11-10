@@ -23,7 +23,7 @@ from backend.scheduler import Scheduler
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401  (fixtures)
 from backend.tests.helpers.ask_ingest import gate, plate  # noqa: F401  (the ask ingest fixture)
 
-QUESTIONS = "1. Should weekly reports go to Ana or the team? Suggested: the team"
+QUESTIONS = "Should weekly reports go to Ana or the team?"
 LEARNINGS = "memory/learnings.md"
 
 
@@ -98,7 +98,7 @@ def close(api, bot):
         owner = owner_of(c, bot)
         row = dream._open(c, [owner])
         assert row is not None, "there is an open dream to close"
-        H.task_update(c, owner, row["id"], status="done", note="Merged the release rules.")
+        H.task_done(c, owner, row["id"], "Merged the release rules.", seen_version=row["version"])
 
 
 def five_due(api):
@@ -392,8 +392,7 @@ def test_a_dream_refused_only_by_wake_limits_retries_on_a_later_run_that_day(api
     remember(api, "ops", 10, when=H.parse_ts(first_at) - timedelta(hours=1))
     previous = H.shift(first_at, days=-1)
     with store.transaction() as c:
-        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key NOT IN ('find_stuck','dream')")
-        M.save_step(c, "human:ana", {"key": "find_stuck", "frequency": "run"})
+        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key NOT IN ('collect','dream')")
         M.save_step(c, "human:ana", {"key": "dream", "max_bots": 1})
         c.execute("UPDATE maintenance_steps SET last_started_at=?,cursor_at=? WHERE key='dream'", (previous, previous))
 
@@ -404,7 +403,7 @@ def test_a_dream_refused_only_by_wake_limits_retries_on_a_later_run_that_day(api
                     L.record(write, bot)
         return {"status": "ran"}
 
-    monkeypatch.setitem(M.LIVE, "find_stuck", earlier_wakes)
+    monkeypatch.setitem(M.LIVE, "collect", earlier_wakes)  # a step that runs before Dream
     with settings(store, test_identities={}):
         first, _ = M.run_now(store, auth, "human:ana", wait=True)
         row = steps_by_key(first)["dream"]

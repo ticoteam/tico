@@ -769,8 +769,7 @@ def install_media(
     @app.post("/api/v2/tasks/{tid}/files", openapi_extra=task_file_contract())
     async def task_attach(request: Request, tid: str):
         who = request.state.identity
-        from .files import edit_file_version as edit_version
-        from .files import file_added
+        from .files import edit_file_version, file_added
         from .task_reads import comment_rights
 
         def allowed():
@@ -872,7 +871,7 @@ def install_media(
             )
             c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, item["id"]))
             if body.note is not None:
-                edit_version(c, auth, who, tid, fid, number, M.FileVersionEdit(note=body.note))
+                edit_file_version(c, auth, who, tid, fid, number, M.FileVersionEdit(note=body.note))
             c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), tid))
             # The task's own activity says a file was added, as it says a link was.
             preview = register(c, who, **poster)["id"] if poster else None

@@ -119,7 +119,7 @@ def test_botops_never_runs_a_confirm_setting_when_no_card_can_be_made():
 
 
 def test_nothing_is_not_a_value_and_the_team_icon_is_an_upload():
-    for key in ("release.times", "bot.definition", "release.bot"):
+    for key in ("screening.webhook", "bot.definition", "repos.new_bot_default"):
         with pytest.raises(Problem) as refused:
             settings_catalog.parse(ENTRY(key), None)
         assert refused.value.status == 422, key
@@ -141,11 +141,11 @@ def ENTRY(key):  # noqa: N802
 
 
 def test_a_member_changes_a_direct_setting_through_botops_and_the_reply_names_the_value(api, botops):
-    ana = turn(api, botops, person="ana-test", text="Set the release to 09:30")
-    err, done = mcp(api, "hub_settings_set", {"key": "release.times", "value": "09:30"}, ana["token"])
-    assert not err and done["value"] == ["09:30"], done
-    err, shown = mcp(api, "hub_settings_show", {"key": "release.times"}, ana["token"])
-    assert not err and shown["value"] == ["09:30"] and shown["you_may"] is True, shown
+    ana = turn(api, botops, person="ana-test", text="Hold webhooks that look risky")
+    err, done = mcp(api, "hub_settings_set", {"key": "screening.webhook", "value": "hold"}, ana["token"])
+    assert not err and done["value"] == "hold", done
+    err, shown = mcp(api, "hub_settings_show", {"key": "screening.webhook"}, ana["token"])
+    assert not err and shown["value"] == "hold" and shown["you_may"] is True, shown
     finish(api, botops, ana)
 
 
@@ -182,10 +182,10 @@ def test_a_person_only_setting_gets_the_reason_and_the_cards_link(api, botops):
 
 
 def test_someone_without_the_rights_is_told_who_can(api, botops):
-    cara = turn(api, botops, person="cara-test", text="Set the release to 09:30")
-    err, refused = mcp(api, "hub_settings_set", {"key": "release.times", "value": "09:30"}, cara["token"])
+    cara = turn(api, botops, person="cara-test", text="Let the bots sleep eight hours")
+    err, refused = mcp(api, "hub_settings_set", {"key": "sleep.hours", "value": "8"}, cara["token"])
     assert err and "owner or an admin" in str(refused), refused
-    err, shown = mcp(api, "hub_settings_show", {"key": "release.times"}, cara["token"])
+    err, shown = mcp(api, "hub_settings_show", {"key": "sleep.hours"}, cara["token"])
     assert not err and shown["you_may"] is False and "admin" in shown["setting"]["who_may"], shown
 
 

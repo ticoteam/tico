@@ -12,9 +12,10 @@ HTML = (
 )
 
 
-def publish_spec(api, task_id, bot="cpo", who="ana-test", data=HTML, spec="true"):
-    """Publishes the spec page on the task, as its owner bot on a new turn."""
-    attempt = turn(api, bot, who)[1]
+def publish_spec(api, task_id, bot="cpo", who="ana-test", data=HTML, spec="true", attempt=None):
+    """Publishes the spec page on the task, as its owner bot on a new turn (or on `attempt`, a turn already
+    claimed: a bot goes on a computer once per test)."""
+    attempt = attempt or turn(api, bot, who)[1]
     return api.post(
         "/api/v2/pages",
         params={"name": "exports.html", "task": task_id, "spec": spec},
@@ -44,8 +45,9 @@ def test_styles_are_inlined_before_the_head_closes_and_the_page_keeps_its_markup
 
 
 def test_a_spec_goes_on_a_task(api):
-    assert publish_spec(api, "").status_code == 422
-    assert publish_spec(api, "not-a-task").status_code == 422
+    attempt = turn(api, "cpo", "ana-test")[1]
+    assert publish_spec(api, "", attempt=attempt).status_code == 422
+    assert publish_spec(api, "not-a-task", attempt=attempt).status_code == 422
 
 
 def test_the_published_spec_is_stored_with_its_styles_as_the_tasks_spec(api):

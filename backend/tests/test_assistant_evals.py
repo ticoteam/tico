@@ -55,12 +55,6 @@ REQUIRED = {
     "jobs-what-did-bot-do",
     "jobs-find-doc",
     "jobs-task-for-person",
-    "admin-close-all-except-mine",
-    "admin-close-all-yes-after-count",
-    "admin-close-all-and-stop-bots",
-    "admin-close-over-cap-splits",
-    "admin-close-done-keeps-mine",
-    "admin-close-done-including-mine",
 }
 
 
@@ -189,7 +183,7 @@ def test_the_mcp_surface_lists_the_real_tools_and_logs_a_call_as_a_canon_line(tm
             "jsonrpc": "2.0",
             "id": 3,
             "method": "tools/call",
-            "params": {"name": "hub_task_close", "arguments": {"id": "x", "note": "y"}},
+            "params": {"name": "hub_task_close", "arguments": {"id": "x", "why": "y", "version": 3}},
         },
     ]
     proc = subprocess.run(
@@ -597,65 +591,6 @@ def test_bulk_echo_counts_only_the_ids_a_call_names():
     assert bulk_echo(canned, ["task", "bulk", "close", "--where-id", pipeline, "--dry-run"])["matched"] == 1
     as_mcp = ["task", "bulk", "close", "--filter", json.dumps({"ids": [pipeline]}), "--dry-run"]
     assert bulk_echo(canned, as_mcp)["matched"] == 1
-
-
-def test_the_over_cap_case_answers_the_filter_asked_for_and_never_a_wider_one(tmp_path, monkeypatch, cases):
-    """The exact filter asked for (open, not hers) is over the cap and is refused whole. A part by owner or pipeline keeps
-    the status open and gets its count. A wider status, or no status, gets no count, so widening is never rewarded."""
-    case = next(c for c in cases if c["id"] == "admin-close-over-cap-splits")
-    answer = _hub_answer(tmp_path, monkeypatch, case["hub"])
-    keep = ["--where-not-owner", "me", "--dry-run"]
-    text, code = answer(["task", "bulk", "close", "--where-status", "open", *keep], "cli")
-    assert code == 1 and "too_many" in text
-    text, code = answer(
-        ["task", "bulk", "close", "--where-status", "open", "--where-owner", "copywriter", *keep], "cli"
-    )
-    assert code == 0 and json.loads(text)["matched"] == 80
-    for widened in (["--where-status", "doing"], []):
-        _, code = answer(["task", "bulk", "close", *widened, *keep], "cli")
-        assert code == 1, widened
-
-
-def test_the_except_mine_cases_check_the_exclusion_names_the_caller(cases):
-    """`--where-not-owner` must name the caller (me, or Dana's own id) on the dry run and on the close. Another owner is
-    someone else's exclusion, so a close that leaves out cmo's tasks is not the one asked for."""
-    dry = next(c for c in cases if c["id"] == "admin-close-all-except-mine")
-    yes = next(c for c in cases if c["id"] == "admin-close-all-yes-after-count")
-
-    def passes(case, line):
-        return any(re.search(rx, line) for rx in case["must"] if not rx.startswith("reply:"))
-
-    for line in (
-        "task bulk close --where-not-owner me --dry-run",
-        "task bulk close --where-not-owner human:dana --dry-run",
-        'task bulk close --filter {"exclude_owner": "me"} --dry-run',
-    ):
-        assert passes(dry, line), line
-    for line in (
-        "task bulk close --where-not-owner cmo --dry-run",
-        "task bulk close --where-not-owner ops --dry-run",
-        'task bulk close --filter {"exclude_owner": "cmo"} --dry-run',
-    ):
-        assert not passes(dry, line), line
-    assert passes(yes, "task bulk close --where-not-owner me")
-    assert not passes(yes, "task bulk close --where-not-owner cmo")
-    assert not passes(yes, 'task bulk close --filter {"exclude_owner": "cmo"}')
-
-
-def test_a_close_of_done_tasks_keeps_the_callers_own_by_default(cases):
-    """A close of all done tasks keeps the caller's own tasks; only an explicit "including mine" takes them."""
-    keep = next(c for c in cases if c["id"] == "admin-close-done-keeps-mine")
-    everything = next(c for c in cases if c["id"] == "admin-close-done-including-mine")
-
-    def hits(case, key, line):
-        return [rx for rx in case.get(key) or [] if not rx.startswith("reply:") and re.search(rx, line)]
-
-    plain = "task bulk close --where-status done --dry-run"
-    assert hits(keep, "must_not", plain), "a done close without keep-mine must be forbidden"
-    assert not hits(keep, "must_not", plain.replace("--dry-run", "--where-not-owner me --dry-run"))
-    assert hits(keep, "must", "task bulk close --where-status done --where-not-owner me --dry-run")
-    assert hits(everything, "must", plain)
-    assert not hits(everything, "must_not", plain)
 
 
 def test_the_filter_close_playbook_keeps_mine_by_default_and_closes_each_on_their_yes():

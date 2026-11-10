@@ -319,7 +319,7 @@ def test_a_private_idea_is_marked_only_for_a_reader_who_may_see_it(api):
             "labels": ["growth:ideas", "channel:email"],
         },
     )["id"]
-    label(api, tid, ["growth:running", "channel:email"], token="cara-test")
+    label(api, tid, ["growth:running", "channel:email"])  # labels are a mover's: Ana, who asked for it
     assert tid in marked(api, "cara-test")
     get(api, "tasks/" + tid, "fay-test", expected=404)
     for token in ("ana-test", "ben-test", "cara-test", "fay-test"):

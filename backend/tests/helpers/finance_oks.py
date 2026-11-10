@@ -6,6 +6,7 @@ from unittest import mock
 
 from backend import hubdb as H
 from backend import task_asks
+from backend.tests.helpers.api import headers, post
 
 
 def give(c, person, requirement_id):
@@ -27,3 +28,20 @@ def send_back(c, person, requirement_id):
 def withdraw(c, requirement_id, why="Withdrawn."):
     """The OK is taken back: nobody needs it any more."""
     task_asks.withdraw(c, str(requirement_id), why)
+
+
+def the_ok(api, requirement_id):
+    """The OK's grant: who asked, its subject (`finance:<action id>`), its content and who gave it."""
+    with api.app.state.store.read() as c:
+        return task_asks.grant(c, str(requirement_id))
+
+
+def click(api, requirement_id, token="ana-test", **kw):
+    """The person opens the OK's preview (GET /api/v2/oks/{id}) and clicks OK on it, through the routes."""
+    shown = api.get(f"/api/v2/oks/{requirement_id}", headers=headers(token))
+    assert shown.status_code == 200, shown.text
+    with api.app.state.store.read() as c:
+        task = task_asks.task_of(c, str(requirement_id))
+    return post(
+        api, f"tasks/{task}/asks/{requirement_id}/ok", {"shown_hash": shown.json()["shown_hash"]}, token=token, **kw
+    )

@@ -418,6 +418,32 @@ def test_undo_of_a_send_back_cancels_the_wake_no_run_took(c, build):
     assert W.headline(c, row["id"]).who == ANA
 
 
+def _waiting_for(c, task_id, bot):
+    """The bodies of the wakes still queued for a bot about a task."""
+    rows = c.execute(
+        "SELECT m.body FROM jobs j JOIN messages m ON m.id = j.message_id WHERE j.state='queued' AND j.bot_id=? "
+        "AND m.wake_key LIKE ?",
+        (H.actor_id(bot), task_id + ":%"),
+    ).fetchall()
+    return [str(found[0]) for found in rows]
+
+
+def test_undo_of_one_answer_takes_only_its_words_out_of_the_wake_they_were_folded_into(c, general):
+    row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
+    X.settled(c)  # its start ran: the builder still has work
+    colour = E.add_requirement(c, row["id"], ANA, "answer", BEN, "Which colour?")
+    font = E.add_requirement(c, row["id"], ANA, "answer", BEN, "Which font?")
+    blue = A.answer(c, row["id"], colour["requirement_id"], BEN, "Blue")
+    serif = A.answer(c, row["id"], font["requirement_id"], BEN, "Serif")
+    [both] = _waiting_for(c, row["id"], "bot:builder")  # one run starts, with both answers in order
+    assert both.index('Ben answered "Which colour?": Blue') < both.index('Ben answered "Which font?": Serif')
+    A.undo(c, serif["answer_id"], BEN)
+    [rest] = _waiting_for(c, row["id"], "bot:builder")  # the wake stays, with the first answer's words
+    assert 'Ben answered "Which colour?": Blue' in rest and "Serif" not in rest
+    A.undo(c, blue["answer_id"], BEN)
+    assert _waiting_for(c, row["id"], "bot:builder") == []  # nothing is left of it
+
+
 # ----------------------------------------------------------------------------- thumbs
 def test_thumbs_up_goes_on_the_bots_record_and_rating_again_replaces_it(c, general):
     row = X.new_task(c, ANA, "Archive the newsletters", assignee="bot:builder")
@@ -555,3 +581,61 @@ def test_a_thumb_on_an_ask_shows_in_the_feedback_routes_to_whoever_reads_its_tas
     gone = api.delete("/api/v2/feedback/" + rated["feedback_id"], headers=headers("ana-test"))
     assert gone.status_code == 200, gone.text
     assert listed("ana-test") == []
+
+
+def test_an_ok_bound_to_exact_content_is_never_a_plain_answer_only_given_from_its_preview(c, general):
+    """Through the task call everything answers by (H.task_answer): a plain ok on a bound OK is refused for the person
+    it is asked of, for a bot, and for the Assistant (its own actor, or the person's when it acts for them: below the
+    routes that is the person's name). Nothing is met and the task does not move. The OK route gives it."""
+    from backend import task_asks as K
+
+    X.bot(c, "coo")
+    email = {"to": ["pat@example.com"], "subject": "Your invoice", "body_sha256": "a" * 64}
+    asked = K.ask_ok(
+        c, "bot:builder", ANA, "Send this email?", shows=["email:e1"], subject="hq_reply:TK-1", content=email
+    )
+    task_id, rid = asked["task_id"], asked["requirement_id"]
+    X.say_done(c, E.task(c, task_id))  # the owner's own work is done: the OK is all the task waits for
+    stage = E.task(c, task_id)["stage_id"]
+    with pytest.raises(H.Refused, match="task_requirement: " + K.FROM_PREVIEW):
+        H.task_answer(c, ANA, task_id, rid, "ok")  # a plain ok, even from the person it is asked of
+    for other in ("bot:builder", "bot:coo"):
+        with _refused("task_requirement"):
+            H.task_answer(c, other, task_id, rid, "ok", seen_version=E.task(c, task_id)["version"])
+    row = E.task(c, task_id)
+    assert K.standing(c, rid) == K.WAITING and rid not in R.newest_answers(c, row["visit"]["id"])
+    assert (row["status"], row["stage_id"]) == ("open", stage)
+    shown = K.show(c, ANA, rid, email, own_click=True)
+    K.give_ok(c, ANA, rid, shown, own_click=True)  # the OK route, with the hash of what she was shown
+    assert R.newest_answers(c, row["visit"]["id"])[rid]["answer"] == "ok"
+    assert E.task(c, task_id)["status"] == "done"  # and the task moves on
+
+
+def test_an_ok_bound_to_nothing_is_a_plain_answer(c, general):
+    row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
+    plain = E.add_requirement(c, row["id"], ANA, "ok", ANA, "OK the wording")
+    out = H.task_answer(c, ANA, row["id"], plain["requirement_id"], "ok")
+    assert R.newest_answers(c, out["visit"]["id"])[plain["requirement_id"]]["answer"] == "ok"
+
+
+def test_an_answer_on_an_item_the_strategy_bot_merged_answers_every_original(c, general, monkeypatch):
+    from backend import strategy_bot, strategy_suggest
+    from backend import strategy_merge as SM
+
+    monkeypatch.setattr(strategy_suggest, "suggests", lambda conn: True)
+    X.bot(c, strategy_bot.SLUG)
+    originals = []
+    for bot, title in (("bot:builder", "Plan the sales launch"), ("bot:reviewer", "Plan the support launch")):
+        task = H.task_create(c, ANA, title, "Plan it.", bot, lint=False)
+        asked = H.task_ask(c, bot, task["id"], ANA, "Which region goes first?", seen_version=task["version"])
+        originals.append((task["id"], asked["requirement_id"]))
+    question = "Which region goes first?"
+    made = SM.merge(c, SM.STRATEGY_BOT, ANA, question, question, [t for t, _ in originals])
+    item = made["task"]["id"]
+    asked = H.task_view(c, item, ANA)["to_leave"][-1]
+    out = H.task_answer(c, ANA, item, asked["requirement_id"], "Europe")  # her one answer, and nothing else called
+    for task_id, rid in originals:
+        found = next(r for r in H.task_view(c, task_id, ANA)["to_leave"] if r["requirement_id"] == rid)
+        assert (found["met"], found["answer"]["value"], found["answer"]["by"]) == (True, "Europe", ANA)
+    assert out["status"] == "done" and H.task(c, item)["status"] == "done"
+    assert [o["state"] for o in SM.originals(c, item)] == ["answered", "answered"]
