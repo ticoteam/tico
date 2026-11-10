@@ -615,12 +615,12 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub slack channel remove <channel> [--reader BOT]   take the channel off the list, or only that reader off it
     hub slack channel import               store the channels of the old registry/slack-channels.yaml, once
     hub support file "<message>"           tell the Tico team about a gap or fault (a Confirm card first)
-    hub support report --message "..." | --file report.md [--no-ids]
+    hub support report --message "..." | --file report.md [--no-ids] [--task <id>]
                                            send a Tico bug report to the Tico team: at once when the team lets bots send
-                                           without asking, else drafted for a person to approve in Needs you (the
-                                           version and install ID go with it unless --no-ids). Prints its id or ticket
-    hub support send --approval <id>       send the report once a person approved it, filed as them; again is the
-                                           same ticket, never a second one
+                                           without asking, else a person is asked for an OK on the task (the version
+                                           and install ID go with it unless --no-ids). Prints the OK id or the ticket
+    hub support send --ok <id>             send the report once a person OK'd it, filed as them; again is the same
+                                           ticket, never a second one
     hub health findings                    what Check health found on this install, each problem with its report
     hub health report <key>                report a finding as a Tico bug, one ticket per problem
     hub finance search [--kind entry|feed|bill|invoice|contact|rule|card|account] [--q words] [--status S] [--vendor V]
@@ -4759,7 +4759,7 @@ def parser():
     s.add_argument("message")
     s.set_defaults(fn="support file")
     s = support.add_parser(
-        "report", help="send a Tico bug report (a person approves it first, unless the team lets bots send)"
+        "report", help="send a Tico bug report (a person OKs it first, unless the team lets bots send)"
     )
     text = s.add_mutually_exclusive_group(required=True)
     text.add_argument("--message", help="the whole report: what failed, since when, the exact error, what you tried")
@@ -4767,9 +4767,10 @@ def parser():
     s.add_argument(
         "--no-ids", dest="no_ids", action="store_true", help="send only the message: not the version and install ID"
     )
+    s.add_argument("--task", help="the task the report belongs to; the OK is asked on it")
     s.set_defaults(fn="support report")
-    s = support.add_parser("send", help="send a report a person approved; filed as the person who approved it")
-    s.add_argument("--approval", required=True, help="the approval id `support report` printed")
+    s = support.add_parser("send", help="send a report a person OK'd; filed as the person who OK'd it")
+    s.add_argument("--ok", required=True, help="the OK id `support report` printed")
     s.set_defaults(fn="support send")
     fin = sub.add_parser(
         "finance", help="the books, as you: search, reports, metrics, actions, your work queue (docs/finance-tools.md)"
