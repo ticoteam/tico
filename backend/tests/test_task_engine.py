@@ -26,8 +26,8 @@ BUILD = (
 
 
 @pytest.fixture
-def c(api):
-    with api.app.state.store.transaction() as conn:
+def c(company):
+    with company.transaction() as conn:
         yield conn
 
 

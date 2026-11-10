@@ -19,8 +19,8 @@ ANA, BEN, CARA = X.ANA, "human:ben", "human:cara"
 
 
 @pytest.fixture
-def c(api):
-    with api.app.state.store.transaction() as conn:
+def c(company):
+    with company.transaction() as conn:
         for slug in ("builder", "reviewer", "manager"):
             X.bot(conn, slug)
         yield conn
