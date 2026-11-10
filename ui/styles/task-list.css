@@ -71,6 +71,8 @@
 /* ---- the chips row, only while filters are on (or the finished views have no room in the header) */
 .tl-bar{display:flex;align-items:center;gap:8px;min-height:32px;padding:0 0 6px}
 .tl-bar[hidden]{display:none}
+.tl-more{display:flex;justify-content:center;padding:12px}
+.tl-more[hidden]{display:none}
 .tl-filters{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
 .tl-chipset{display:contents}
 .tl-chip{display:inline-flex;align-items:stretch;height:24px;border:1px solid var(--line);border-radius:6px;background:var(--surface);font-size:var(--t-sm);overflow:hidden;max-width:100%}

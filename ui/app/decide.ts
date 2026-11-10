@@ -3,7 +3,8 @@
    the left, shown in full (the page, the email, what an OK is for); the sentence asked, who asks, Notes and the buttons
    are on the right.
    An OK bound to what was shown: the content on screen is the preview GET /v2/oks/{id} (or the email's own preview)
-   returned, held here and never read again behind the person's back. Approve sends the hash of exactly that preview. If
+   returned, held here and never read again behind the person's back. A letter shows its proof and a file its pinned
+   version, read here before Approve is on; what does not load leaves Approve off. Approve sends the hash of exactly that preview. If
    the engine answers that it changed, the new content is read and shown with "It changed. Look again." and Approve
    needs a new click: it is never sent again by itself.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -12,7 +13,8 @@
 /** What an item is on this screen. */
 type AskKind = 'ok' | 'question' | 'yours' | 'stuck' | 'fix' | 'mention';
 /** What an OK shows, as it was read: `hash` is the hash of exactly this content, the one Approve sends. `none` is an OK
-    with no bound grant (a stage's OK of a page): Approve is a plain answer. */
+    with no bound grant (a stage's OK of a page): Approve is a plain answer. `missing`: a part of what it shows did not
+    load, so Approve stays off. `urls`: the object URLs of bytes read for it (a proof, a file), let go with it. */
 interface AskOkView {
   state: 'loading' | 'ready' | 'none' | 'failed';
   hash: string | null;
@@ -20,6 +22,8 @@ interface AskOkView {
   pages: import('../types/api').Page[];
   changed: boolean;
   error: string;
+  missing: boolean;
+  urls: string[];
 }
 /** The 👎 sheet: what was wrong, then (Make a rule) the rule drafted from it. */
 interface AskSheet {
@@ -182,6 +186,7 @@ function decideStop() {
   if (!st) return;
   DEC = null;
   clearTimeout(st.barTimer);
+  for (const v of st.ok.values()) decideOkLet(v);
   st.off.forEach(fn => fn());
   const d: HTMLDialogElement | null = $('#need-card');
   if (d?.open) d.close();
@@ -300,7 +305,7 @@ function decidePaintSide(st: DecState) {
   if (st.sheet) body = decideSheetHTML(st, it);
   else if (kind === 'ok') {
     const v = st.ok.get(decideRid(it)), may = it.ask?.may || [];
-    const ready = !!v && (v.state === 'ready' && !!v.hash || v.state === 'none');
+    const ready = !!v && !v.missing && (v.state === 'ready' && !!v.hash || v.state === 'none');
     body = `<label class="dc-notes"><span>Notes</span><textarea id="dc-notes" rows="3" maxlength="4000"></textarea></label>
       <div class="dc-acts">${decideBtn('approve', 'Approve', true, !ready || !may.includes('ok') || st.busy ? ' disabled' : '')}${decideBtn('sendback', 'Send back', false, ` data-dc-needs="#dc-notes" disabled`)}</div>`;
   } else if (kind === 'question') {
@@ -371,28 +376,87 @@ function decideBar(label: string, undo: (() => Promise<unknown>) | null) {
 /** Reads what an OK is for, once, and holds it. `changed`: read again after the engine said it changed. */
 async function decideOkLoad(st: DecState, it: NeedsEntry, changed: boolean) {
   const rid = decideRid(it);
-  const v: AskOkView = {state: 'loading', hash: null, html: '', pages: [], changed, error: ''};
+  const v: AskOkView = {state: 'loading', hash: null, html: '', pages: [], changed, error: '', missing: false, urls: []};
+  const before = st.ok.get(rid);
+  if (before) decideOkLet(before);
   st.ok.set(rid, v);
   if (DEC === st && st.at === it.id) { decidePaintBody(st); decidePaintSide(st); }
   try {
-    const shown = await okShown(rid);
-    if (shown.subject.startsWith('email_send:')) {
+    // No grant (404): a stage's OK, which shows what its requirement names.
+    const shown = await okShown(rid).catch((e: unknown) => { if (errorStatus(e) === 404) return null; throw e; });
+    const [kind, ...rest] = (shown?.subject ?? '').split(':'), ref = rest.join(':');
+    if (!shown) {
+      await decideShowsRead(v, it.ask?.shows || []);
+    } else if (kind === 'email_send') {
       // The email's own preview is the one to show; its hash is the hash of that email, as frozen.
-      const mail = await get<EmailSendPreview & {shown_hash?: string | null}>(`/v2/email/sends/${encodeURIComponent(shown.subject.slice('email_send:'.length))}`, {fresh: true});
+      const mail = await get<EmailSendPreview & {shown_hash?: string | null}>(`/v2/email/sends/${encodeURIComponent(ref)}`, {fresh: true});
       v.html = emailSendPreviewHTML(mail);
       v.hash = mail.preview_complete ? mail.shown_hash || null : null;
+    } else if (kind === 'letter') {
+      await decideLetterRead(v, ref, rid);
+    } else if (kind === 'file') {
+      v.html = await decideFileHTML(v, shown.content);
+      v.hash = shown.shown_hash;
     } else {
       v.html = decideContentHTML(shown.content);
       v.hash = shown.shown_hash;
     }
-    v.state = 'ready';
-  } catch (e) {
-    if (errorStatus(e) === 404) {
-      v.state = 'none';
-      await decideShowsRead(v, it.ask?.shows || []);
-    } else { v.state = 'failed'; v.error = errorMessage(e, 'It did not load.'); }
-  }
+    v.state = shown ? 'ready' : 'none';
+  } catch (e) { v.state = 'failed'; v.error = errorMessage(e, 'It did not load.'); }
   if (DEC === st && st.ok.get(rid) === v && st.at === it.id) { decidePaintBody(st); decidePaintSide(st); }
+}
+/** Lets go of the bytes an OK's view held. */
+function decideOkLet(v: AskOkView) {
+  for (const url of v.urls.splice(0)) URL.revokeObjectURL(url);
+}
+/** A letter waiting for an OK, as its own preview gives it (GET /api/v2/letters/{id}): the proof and the hash of it. */
+interface DecideLetter {
+  approval_id?: string | null; status?: string; proof?: string | null; shown_hash?: string | null;
+  recipient?: Record<string, unknown>; mail_class?: string | null; page_count?: number | null; total_micros?: number | null;
+}
+/** A letter's OK: the letter's own preview (its proof and the hash it is bound to, from one read), and the proof's bytes,
+    read and drawn before Approve is on. */
+async function decideLetterRead(v: AskOkView, id: string, rid: string) {
+  const l = await get<DecideLetter>(`/v2/letters/${encodeURIComponent(id)}`, {fresh: true});
+  if (l.approval_id !== rid || !l.shown_hash || !/^\/api\/v2\/files\/[A-Za-z0-9_-]+$/.test(String(l.proof || ''))) throw new Error('The proof did not load.');
+  const r = await fetch(String(l.proof), {credentials: 'same-origin', cache: 'no-store'});
+  if (!r.ok) throw new Error('The proof did not load.');
+  const url = URL.createObjectURL(new Blob([await r.arrayBuffer()], {type: 'application/pdf'}));
+  v.urls.push(url);
+  const to = Object.values(l.recipient || {}).filter(x => typeof x === 'string' && x.trim()).map(x => esc(String(x)));
+  const terms = [l.mail_class ? String(l.mail_class).replace(/_/g, ' ') : '', l.page_count ? `${l.page_count} ${l.page_count === 1 ? 'page' : 'pages'}` : '',
+    l.total_micros != null ? `$${(l.total_micros / 1e6).toFixed(2)}` : ''].filter(Boolean);
+  v.html = `<p class="dc-addr">${to.join('<br>')}</p><p class="dc-line">${esc(terms.join(' · '))}</p>`
+    + `<iframe class="dc-proof" src="${esc(url)}" title="Proof"></iframe><a href="${esc(url)}" target="_blank" rel="noopener">Proof PDF</a>`;
+  v.hash = l.shown_hash;
+}
+// A file version shown in place up to this size; a bigger one, or one of another type, opens from its link.
+const DEC_FILE_INLINE = 20 * 1024 * 1024;
+/** A file at the version an OK pinned (`{file, version, name}`, backend/file_reviews.py freeze): its bytes read from that
+    exact version (GET /api/v2/files/{id}/versions/{n}) and drawn, or a link that opens exactly that version. */
+async function decideFileHTML(v: AskOkView, content: unknown): Promise<string> {
+  const c = (content && typeof content === 'object' ? content : {}) as {file?: unknown; version?: unknown; name?: unknown};
+  const fid = typeof c.file === 'string' ? c.file : '', version = Number(c.version);
+  if (!fid || !Number.isInteger(version) || version < 1) throw new Error('The file did not load.');
+  const src = `${API}/v2/files/${encodeURIComponent(fid)}/versions/${version}`, name = String(c.name || fid);
+  const r = await fetch(src, {credentials: 'same-origin', cache: 'no-store'});
+  if (!r.ok) { void r.body?.cancel(); throw new Error('The file did not load.'); }
+  const type = (r.headers.get('content-type') || '').split(';')[0]!.trim().toLowerCase(), size = Number(r.headers.get('content-length') || 0);
+  const text = /^text\/|\/(json|markdown|x-markdown|csv|xml|yaml)$/.test(type), image = type.startsWith('image/') && type !== 'image/svg+xml';
+  const head = `<h3 class="dc-title">${esc(name)}</h3>`, link = `<a href="${esc(src)}" target="_blank" rel="noopener">${esc(name)}</a>`;
+  if (size > DEC_FILE_INLINE || !(text || image || type === 'application/pdf')) {
+    void r.body?.cancel();
+    const media = type.startsWith('video/') ? `<video class="dc-media" controls preload="metadata" src="${esc(src)}"></video>`
+      : type.startsWith('audio/') ? `<audio controls preload="metadata" src="${esc(src)}"></audio>` : '';
+    return head + media + link;
+  }
+  if (text) {
+    const body = await r.text();
+    return head + (/markdown/.test(type) ? `<div class="md">${md(body)}</div>` : `<pre class="dc-raw">${esc(body)}</pre>`);
+  }
+  const url = URL.createObjectURL(new Blob([await r.arrayBuffer()], {type}));
+  v.urls.push(url);
+  return head + (image ? `<img class="dc-media" src="${esc(url)}" alt="${esc(name)}">` : `<iframe class="dc-proof" src="${esc(url)}" title="${esc(name)}"></iframe>`) + link;
 }
 /** What an OK is for, any shape: text as Markdown, an object with a subject and a body as a message, else its fields. */
 function decideContentHTML(content: unknown): string {
@@ -406,15 +470,17 @@ function decideContentHTML(content: unknown): string {
   }
   return `<pre class="dc-raw">${esc(JSON.stringify(content, null, 2))}</pre>`;
 }
-/** A stage's OK shows what the requirement names: pages in full, an email as frozen, the rest by name. */
+/** A stage's OK shows what the requirement names: pages in full, an email as frozen, a file at its version, the rest by
+    name. One that does not load leaves Approve off (`missing`). */
 async function decideShowsRead(v: AskOkView, shows: string[]) {
   const parts: string[] = [];
   for (const ref of shows) {
-    const [kind, ...rest] = ref.split(':'), id = rest.join(':');
+    const [kind, ...rest] = ref.split(':'), id = rest.join(':'), pinned = /^([^@]+)@(\d+)$/.exec(id);
     try {
       if (kind === 'page') { v.pages.push((await get<import('../types/api').GetPageResponse>('/v2/pages/' + encodeURIComponent(id), {fresh: true})).page); continue; }
       if (kind === 'email') { parts.push(emailSendPreviewHTML(await get<EmailSendPreview>('/v2/email/sends/' + encodeURIComponent(id), {fresh: true}))); continue; }
-    } catch (e) { parts.push(`<p class="err">${esc(errorMessage(e, `${ref} did not load.`))}</p>`); continue; }
+      if (kind === 'file' && pinned) { parts.push(await decideFileHTML(v, {file: pinned[1], version: Number(pinned[2])})); continue; }
+    } catch (e) { v.missing = true; parts.push(`<p class="err">${esc(errorMessage(e, `${ref} did not load.`))}</p>`); continue; }
     parts.push(`<p class="dc-ref"><code>${esc(ref)}</code></p>`);
   }
   v.html = parts.join('');

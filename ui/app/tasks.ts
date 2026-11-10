@@ -30,7 +30,6 @@ const taskFinished = (t: Partial<Pick<TaskRow, 'status'>> | null | undefined) =>
 // task's own side: its parent, what it blocks, what it duplicates or follows up; `in` the other; related is `both`.
 const taskRels = (t: PartialTaskRow | null | undefined, kind: string, direction?: string) => ((t?.relations || {})[kind] || []).filter(r => !direction || r.direction === direction);
 const taskParent = (t: TaskRow | null | undefined) => taskRels(t, 'parent', 'out')[0] || null;
-const taskParentId = (t: TaskRow | null | undefined): string => { const parent = taskParent(t); return parent?.id ? String(parent.id) : ''; };
 function clipLine(s: string | null | undefined, n: number) {
   s = String(s || '').replace(/\s+/g, ' ').trim();
   return s.length > n ? s.slice(0, n - 1) + '…' : s;

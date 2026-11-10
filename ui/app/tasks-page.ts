@@ -32,6 +32,14 @@ interface TasksPageState {
   cursor: string;
   /** A live change came while a read was on its way: catch up once it lands. */
   behind: boolean;
+  /** The server holds more of the view than `tasks` (a pipeline over 500 open tasks, an archive over 200). */
+  more: boolean;
+  /** The last row the server gave: the next page starts after the rows held up to it. */
+  edge: TaskBriefV3 | null;
+  /** The next page's read, while it is out. */
+  paging: Promise<void> | null;
+  /** A page read failed or was overtaken: a search reads on only when More is pressed. */
+  stalled: boolean;
   abort: AbortController;
   /** The popover menu's anchor and the filter whose values it shows (task-list-menus.ts). */
   menuAnchor?: HTMLElement | null | undefined;
@@ -72,7 +80,7 @@ function tasksURLWrite(state: TasksPageState) {
 function pageTasks(openId = '') {
   tasksLeave();
   const state: TasksPageState = {...tasksViewFromURL(), q: '', filters: {}, needs: S.v2.needs ? [...S.v2.needs] as NeedsEntry[] : [],
-    tasks: [], pipelines: TASK_PIPELINES || [], loading: true, kept: false, failed: '', feed: taskFeedNew(), cursor: '', behind: false, abort: new AbortController()};
+    tasks: [], pipelines: TASK_PIPELINES || [], loading: true, kept: false, failed: '', feed: taskFeedNew(), cursor: '', behind: false, more: false, edge: null, paging: null, stalled: false, abort: new AbortController()};
   tasksKept(state);
   TASKS_ST = state;
   const main = $('#main');
@@ -98,6 +106,7 @@ function pageTasks(openId = '') {
         <div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="task-chips"></span></div>
       </div>
       <div id="task-body" role="region" aria-label="Tasks"></div>
+      <div class="tl-more" id="task-more" hidden><button type="button" class="ghost">More</button></div>
     </div><aside class="tl-rail" id="task-rail" hidden></aside></div>
     <div id="task-filter-pop" class="tl-pop" popover></div>`;
   const signal = state.abort.signal;
@@ -115,6 +124,7 @@ function pageTasks(openId = '') {
     if (want) tasksShow(state, {archive: want});
   };
   $('#task-play').onclick = () => decideGoThrough();
+  $('#task-more button').onclick = () => { state.stalled = false; void tasksMore(state, !!state.q.trim() || taskFiltersOn(state.filters)); };
   $('#task-new').onclick = () => openTaskCreate('', {pipeline: state.pipeline || null});
   const search = $('#task-q');
   search.oninput = () => {
@@ -181,6 +191,7 @@ function tasksShow(state: TasksPageState, change: Partial<Pick<TasksPageState, '
   tasksMenuClose();
   tasksURLWrite(state);
   state.tasks = [];
+  state.more = false; state.edge = null; state.stalled = false;
   state.loading = true;
   tasksKept(state);
   tasksRender(state);
@@ -209,6 +220,10 @@ function tasksQuery(state: TasksPageState): TaskBriefQuery | null {
   if (state.pipeline) return {status: 'open', snoozed: 'hide', ...of};
   return null;
 }
+/** A page of the view: Done and Closed most recent first, the rest in queue order; the archive 200 at a time, a
+ * pipeline 500 (the server's most), and 500 when reading the rest. */
+const tasksPageQuery = (state: TasksPageState, query: TaskBriefQuery, rest = false): TaskBriefQuery =>
+  ({...query, sort: state.archive && state.archive !== 'snoozed' ? 'finished' : 'queue', limit: state.archive && !rest ? 200 : 500});
 /** The view's order, as its read asks for it: Done and Closed most recent first, the rest in queue order. */
 const tasksOrder = (state: TasksPageState): TaskRowOrder => state.archive && state.archive !== 'snoozed' ? taskFinishedOrder : taskQueueOrder;
 /** Whether a task, as the viewer reads it now, belongs in the view: tasksQuery's filters, client-side. */
@@ -228,8 +243,7 @@ async function tasksLoad(state: TasksPageState): Promise<void> {
     const query = tasksQuery(state);
     const [pipelines, rows] = await Promise.all([
       tasksPipelinesRead().catch(() => state.pipelines),
-      query ? taskBriefsPage({...query, sort: state.archive && state.archive !== 'snoozed' ? 'finished' : 'queue', limit: state.archive ? 200 : 500})
-        : needsYou(),
+      query ? taskBriefsPage(tasksPageQuery(state, query)) : needsYou(),
     ]);
     // Kept for the next visit even when the page was left before it landed.
     S.lastRead.tasks = {view: tasksViewKey(state), needs: Array.isArray(rows) ? rows : [],
@@ -239,8 +253,12 @@ async function tasksLoad(state: TasksPageState): Promise<void> {
     if (!held) return;
     state.pipelines = pipelines;
     if (state.pipeline && !pipelines.some(p => p.id === state.pipeline)) { state.pipeline = ''; tasksURLWrite(state); }
-    if (Array.isArray(rows)) { state.needs = rows; state.cursor = ''; }
-    else { state.tasks = rows.tasks.filter(t => !state.pipeline || t.pipeline_id === state.pipeline); state.cursor = rows.cursor; }
+    state.stalled = false;
+    if (Array.isArray(rows)) { state.needs = rows; state.cursor = ''; state.more = false; state.edge = null; }
+    else {
+      state.tasks = rows.tasks.filter(t => !state.pipeline || t.pipeline_id === state.pipeline); state.cursor = rows.cursor;
+      state.more = rows.more; state.edge = rows.tasks.at(-1) ?? null;
+    }
     state.failed = '';
   } catch (e) {
     if (TASKS_ST !== state || ticket !== state.feed.ticket) return;
@@ -252,6 +270,35 @@ async function tasksLoad(state: TasksPageState): Promise<void> {
   if (held?.length) tasksEventsPut(state, held);
   tasksRender(state);
   if (state.behind) void tasksCatchUp(state);
+}
+/** The view's next page, or with `rest` every page left (a search or a filter reads them all first, so it finds every
+ * task). It starts after the rows held that sort at or before the last row read, so a task put in or taken out live
+ * since moves it with them; a row read twice goes in once. Nothing is re-read: the rows held stay, and the events that
+ * came meanwhile go over the page as over any read. */
+function tasksMore(state: TasksPageState, rest = false): Promise<void> {
+  if (state.paging) return state.paging;
+  const run = async () => {
+    while (state.more && state.edge && TASKS_ST === state && !state.loading) {
+      const query = tasksQuery(state), edge = state.edge, order = tasksOrder(state), view = tasksViewKey(state);
+      if (!query) return;
+      const offset = state.tasks.filter(t => order(t, edge) <= 0).length;
+      const ticket = taskFeedRead(state.feed);
+      let page: Awaited<ReturnType<typeof taskBriefsPage>>;
+      try { page = await taskBriefsPage({...tasksPageQuery(state, query, rest), offset}); }
+      catch (e) { taskFeedFailed(state.feed, ticket); state.stalled = true; if (TASKS_ST === state) toast(errorMessage(e, 'More did not load.'), true); return; }
+      if (TASKS_ST !== state || state.loading || tasksViewKey(state) !== view) { taskFeedFailed(state.feed, ticket); return; }
+      const held = taskFeedLanded(state.feed, ticket, page.cursor);
+      if (!held) { state.stalled = true; return; }   // a newer read is out; More stays
+      for (const t of page.tasks) taskRowsPut(state.tasks, t, String(t.id), row => tasksViewHas(state, row), order);
+      state.more = page.more && !!page.tasks.length;
+      state.edge = page.tasks.at(-1) ?? null;
+      if (held.length) tasksEventsPut(state, held);
+      if (!rest) return;
+    }
+  };
+  state.paging = run().finally(() => { state.paging = null; tasksRender(state); });
+  tasksRender(state);
+  return state.paging;
 }
 /** Catch up from the cursor: the changed rows that still match go in, the rest come out. A full read only when the
  * server says the cursor is too old (`reset`). You follows Needs you's own version (hub-v2.ts), already mended. */
@@ -343,6 +390,14 @@ function tasksRender(state: TasksPageState | null) {
   if (!body || !state || TASKS_ST !== state) return;
   tasksHeadPaint(state);
   needsBadgePaint();
+  // A search or a filter over part of the view reads the rest first; More reads the next page.
+  const narrowed = !!state.q.trim() || taskFiltersOn(state.filters);
+  if (narrowed && state.more && !state.paging && !state.stalled && !state.loading && !state.failed) void tasksMore(state, true);
+  const more = $('#task-more');
+  if (more) {
+    more.hidden = !state.more || (narrowed && !state.stalled) || !!state.failed || state.loading;
+    ($('button', more) as HTMLButtonElement).disabled = !!state.paging;
+  }
   body.dataset.view = state.archive ? 'archive' : state.pipeline ? 'pipeline' : 'you';
   const p = state.archive ? null : tasksPipeline(state), hooks = TASK_PAGE_HOOKS.pipeline;
   if (p && hooks?.rail) { const rail = $('#task-rail'); rail.hidden = false; hooks.rail(rail, p); } else tasksRailOff();

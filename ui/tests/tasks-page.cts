@@ -7,7 +7,9 @@
 //  - the view button lists You and every pipeline still in use (a retired one is not offered); picking one puts it in
 //    the address and reads its open tasks, snoozed ones left out;
 //  - the archive: Snoozed, Done and Closed each read their own tasks, and a row opens the task in its window; a
-//    pipeline's archive reads and keeps that pipeline's tasks only, a live task of another pipeline left out.
+//    pipeline's archive reads and keeps that pipeline's tasks only, a live task of another pipeline left out;
+//  - a pipeline over one page (500 open tasks) or an archive over 200: More reads the next page from where the rows held
+//    end (a task taken out live moves it back by one); a search or a filter reads the rest first, so it finds them all.
 // Pipelines themselves (list and columns, the rail, the editor) are pipeline-view-unit.cts and pipeline-drag.cts; the
 // ask screen is ask-screen.cts.
 import type {Browser, Page, Route} from 'playwright';
@@ -155,7 +157,7 @@ export interface WindowMarks {
 }
 declare var TASKS_ST: Globals['TASKS_ST'];
 declare function tasksTaskPut(state: unknown, t: unknown): boolean;
-declare function tasksLiveApply(events: {id: string; task: unknown}[]): void;
+declare function tasksLiveApply(events: {id: string; task?: unknown; gone?: boolean}[]): void;
 
 const NOW = Date.now();
 const at = (minutes: number) => new Date(NOW - minutes * 60000).toISOString();
@@ -186,7 +188,7 @@ function task(id: string, title: string, at_: string, over: Partial<Task> = {}):
 function brief(t: Task) {
   return {id: t.id, title: t.title, number: t.number ?? null, status: t.status ?? 'open', pipeline_id: t.pipeline_id ?? null, stage_id: t.stage_id ?? null,
     owner_id: t.owner_id ?? null, requester_id: t.requester_id ?? null, assignee_id: t.assignee_id ?? null, due_at: t.due_at ?? null,
-    late: t.late ?? null, snoozed: !!t.snoozed, turn: t.turn ?? null, version: t.version};
+    late: t.late ?? null, snoozed: !!t.snoozed, turn: t.turn ?? null, version: t.version, created_at: t.created_at, updated_at: t.updated_at};
 }
 const ask = (rid: string, kind: 'ok' | 'answer', line: string, choices: string[] | null = null): Requirement => ({requirement_id: rid, kind, line,
   who: 'human:ana', asked_by: 'bot:pm', choices, may: kind === 'ok' ? ['ok', 'no', 'thumbs'] : ['answer', 'thumbs'], met: false, shows: [],
@@ -250,7 +252,7 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     if (p === '/api/v2/pipelines') return json({pipelines: PIPELINES});
     const onePipeline = p.match(/^\/api\/v2\/pipelines\/([^/]+)$/);
-    if (onePipeline && method === 'GET') return json(PIPELINES.find(x => x.id === onePipeline[1]) || {});
+    if (onePipeline && method === 'GET') return json({pipeline: PIPELINES.find(x => x.id === onePipeline[1]) || {}});
     if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
     if (p === '/api/v2/tasks/labels') return json({labels: [], tags: []});
     if (p === '/api/v2/tasks' && method === 'GET') {
@@ -258,7 +260,13 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
       const q = url.searchParams, status = q.get('status'), snoozed = q.get('snoozed') || 'hide', ids = q.get('ids')?.split(',');
       const rows = tasks.filter(x => (!status || x.status === status) && (!ids || ids.includes(x.id))
         && (ids || snoozed === 'all' || (snoozed === 'only' ? !!x.snoozed : !x.snoozed)) && (!q.get('pipeline') || x.pipeline_id === q.get('pipeline')));
-      return json({tasks: q.get('brief') ? rows.map(brief) : rows, next_offset: null, cursor: 'c1'});
+      // In the server's order (backend/hubdb.py visible_tasks), then a page as backend/task_list_routes.py cuts it:
+      // `limit` rows from `offset`, and where the next page starts.
+      const finished = (t: Task) => String(t['done_at'] ?? t['closed_at'] ?? t.updated_at ?? t.created_at ?? '');
+      rows.sort(q.get('sort') === 'finished' ? (a, b) => finished(b).localeCompare(finished(a)) || b.id.localeCompare(a.id)
+        : (a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')) || a.id.localeCompare(b.id));
+      const limit = Number(q.get('limit') || 500), offset = Number(q.get('offset') || 0), page = rows.slice(offset, offset + limit);
+      return json({tasks: q.get('brief') ? page.map(brief) : page, next_offset: offset + limit < rows.length ? offset + limit : null, cursor: 'c1'});
     }
     if (p === '/api/v2/tasks' && method === 'POST') {
       const body = req.postDataJSON() as Posted['body']; posts.push({p, body});
@@ -422,6 +430,54 @@ async function pipelineArchive(browser: Browser) {
   console.log("a pipeline's archive: that pipeline's tasks only, read and live: ok");
 }
 
+async function pages(browser: Browser) {
+  // Operations holds 520 open tasks; Done holds 205.
+  const n = (i: number) => String(i).padStart(3, '0');
+  const tasks = [...fixtures(), ...Array.from({length: 520}, (_, i) => task(`p-${n(i)}`, `Errand ${n(i)}`, 'todo', {number: 1000 + i})),
+    ...Array.from({length: 205}, (_, i) => task(`d-${n(i)}`, `Finished ${n(i)}`, 'done', {number: 2000 + i}))]
+    .filter(t => t.id !== 't-3');
+  const more = (page: Page) => page.locator('#task-more button');
+  const held = (page: Page) => page.evaluate(() => TASKS_ST.tasks.length);
+  {
+    const {page, errors, reads} = await open(browser, {tasks, needs: [], hash: '#/tasks?pipeline=ops'});
+    await page.waitForFunction(() => !TASKS_ST.loading);
+    assert.equal(await held(page), 500, 'one page');
+    await more(page).waitFor();
+    // A task taken out live: the next page starts one earlier, so nothing is skipped.
+    await page.evaluate(() => tasksLiveApply([{id: 'p-001', gone: true}]));
+    await more(page).click();
+    await more(page).waitFor({state: 'hidden'});
+    assert.equal(reads.at(-1)!.searchParams.get('offset'), '499');
+    assert.equal(await held(page), 519, 'every open task but the one taken out');
+    assert.equal(new Set(await page.evaluate(() => TASKS_ST.tasks.map(t => t.id))).size, 519, 'none twice');
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  {
+    // A search finds a task past the first page: the rest is read first.
+    const {page, errors} = await open(browser, {tasks, needs: [], hash: '#/tasks?pipeline=ops'});
+    await page.waitForFunction(() => !TASKS_ST.loading);
+    await page.locator('#task-q').fill('Errand 515');
+    await page.locator('#task-body [data-task="p-515"]').waitFor();
+    assert.equal(await held(page), 520);
+    assert.equal(await more(page).isVisible(), false);
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  {
+    const {page, errors, reads} = await open(browser, {tasks, needs: [], hash: '#/tasks?archive=done'});
+    await page.waitForFunction(() => TASKS_ST.archive === 'done' && !TASKS_ST.loading);
+    assert.equal(await held(page), 200);
+    await more(page).click();
+    await more(page).waitFor({state: 'hidden'});
+    assert.equal(reads.at(-1)!.searchParams.get('offset'), '200');
+    assert.equal(await held(page), 206, 'the archive in full');
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  console.log('a list over one page: More reads the next from where the rows end; search reads the rest first: ok');
+}
+
 const api = {open, fixtures, task, brief, needsOf, PIPELINES};
 export type Api = typeof api;
 export type Opened = Awaited<ReturnType<typeof open>>;
@@ -429,6 +485,6 @@ module.exports = api;
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    for (const run of [you, views, archive, pipelineArchive]) await run(browser);
+    for (const run of [you, views, archive, pipelineArchive, pages]) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

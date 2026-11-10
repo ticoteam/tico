@@ -26,6 +26,9 @@
 .dc-quote{margin:12px 0 0;padding:8px 12px;border-left:3px solid var(--line);color:var(--ink)}
 .dc-changed{margin:0 0 12px;padding:8px 12px;border-radius:8px;background:var(--wait-bg,var(--surface2));color:var(--wait-ink,var(--ink));font-weight:600}
 .dc-ref{margin:0;color:var(--muted)}
+.dc-proof{width:100%;height:min(70vh,900px);border:1px solid var(--line);border-radius:6px;background:var(--surface2)}
+.dc-media{max-width:100%;height:auto}
+.dc-addr{margin:0}
 .dc-notes{display:flex;flex-direction:column;gap:4px;font-size:var(--t-sm);color:var(--muted)}
 .dc-side textarea,.dc-side select{width:100%;box-sizing:border-box;font:inherit}
 .dc-side textarea{resize:vertical;min-height:64px}

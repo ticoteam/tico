@@ -478,8 +478,9 @@ function taskRunModelBind(d: ModalDialog, task: ModalTask) {
     } catch (e) { toast(errorMessage(e, ''), true); apply.disabled = same(); }
   };
 }
-const TASK_REL_ADD: [string, string][] = [['related', 'Related'], ['blocked_by', 'Blocked by'], ['blocks', 'Blocks'], ['duplicate_of', 'Duplicate of'], ['follow_up', 'Follow-up of']];
-const TASK_REL_GROUPS: [string, string, string][] = [['blocks', 'in', 'Blocked by'], ['blocks', 'out', 'Blocks'], ['related', 'both', 'Related'], ['duplicate_of', 'out', 'Duplicate of'],
+// The relations backend/task_relations.py relate writes (a parent is fixed when the task is filed).
+const TASK_REL_ADD: [string, string][] = [['related', 'Related'], ['duplicate_of', 'Duplicate of'], ['follow_up', 'Follow-up of']];
+const TASK_REL_GROUPS: [string, string, string][] = [['related', 'both', 'Related'], ['duplicate_of', 'out', 'Duplicate of'],
   ['duplicate_of', 'in', 'Duplicated by'], ['follow_up', 'out', 'Follow-up of'], ['follow_up', 'in', 'Follow-ups']];
 // One relation added or taken off (POST /v2/tasks/{id}/relations), then the task redrawn. `on` is the task whose
 // endpoint takes it, when that is the other end.
