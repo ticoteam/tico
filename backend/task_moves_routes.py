@@ -240,9 +240,11 @@ def register(
         stage is answered here too."""
 
         def call(c, who, task_id):
-            done = H.task_answer(
-                c, who.actor, task_id, requirement_on(c, task_id, requirement_id), body.value, body.note, body.version
-            )
+            asked = requirement_on(c, task_id, requirement_id)
+            refused = task_asks.refuses_ok_by(c, who, asked, body.value)
+            if refused:
+                raise Problem("ok_not_yours", refused, 403)
+            done = H.task_answer(c, who.actor, task_id, asked, body.value, body.note, body.version)
             # An answer on the Strategy Bot's merged item goes to each original it stands for.
             strategy_merge.on_answer(c, who.actor, task_id, body.value)
             return {"answer_id": done.get("answer_id")}

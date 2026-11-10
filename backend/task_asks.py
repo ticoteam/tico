@@ -263,6 +263,25 @@ def refuses_plain_ok(conn: "sqlite3.Connection", requirement_id: str, value: obj
     return FROM_PREVIEW if found else None
 
 
+# The bots that act for a person (backend/assistant.py, backend/botops_act.py): they never give an OK of any kind.
+ACTS_FOR_PEOPLE = ("bot:assistant", "bot:botops")
+NOT_YOURS = "An OK is the person's own: the Assistant and BotOps never give one. Send back is fine."
+
+
+def refuses_ok_by(conn: "sqlite3.Connection", who: object, requirement_id: str, value: object) -> str | None:
+    """For an answer route, before the engine: the refusal's words when the Assistant or BotOps (acting for a person,
+    confirmed or not, or as itself) answers `ok` to an OK requirement, bound or plain, else None. A send back, a look
+    again and a question's answer stay theirs to give."""
+    if value != "ok":
+        return None
+    acting = str(getattr(who, "via", "") or "") in ("assistant", "botops")
+    actors = {str(getattr(who, name, "") or "") for name in ("actor", "task_actor")}
+    if not acting and not (actors & set(ACTS_FOR_PEOPLE)):
+        return None
+    found = conn.execute("SELECT kind FROM requirements WHERE id=?", (requirement_id,)).fetchone()
+    return NOT_YOURS if found and found[0] == "ok" else None
+
+
 # ----------------------------------------------------------------------------- asking
 def _never_same(conn: object, task_id: object) -> bool:
     return False
