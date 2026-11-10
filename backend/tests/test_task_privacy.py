@@ -115,33 +115,20 @@ def test_private_defaults_reassignment_and_human_publication(api):
     post(api, 'tasks/' + created['id'], {'version': created['version'], 'private': False}, token=cpo, expected=422)
 
 
-def test_private_parent_has_no_ancestry_bypass_and_requires_detachment(api):
+def test_a_private_parent_gives_no_ancestry_bypass_and_its_sub_task_stays_private(api):
     parent = post(api, 'tasks', {'owner': 'ben', 'title': 'Review the packet', 'body': 'Review it.', 'private': True})
     child = post(
         api,
         'tasks',
-        {
-            'owner': 'priya',
-            'title': 'Check the packet',
-            'body': 'Check it.',
-            'relations': [{'task': parent['id'], 'kind': 'parent'}],
-        },
+        {'owner': 'priya', 'title': 'Check the packet', 'body': 'Check it.', 'parent': parent['id']},
         token='ben-test',
     )
     assert child['private'] and child['requester_id'] == 'human:ben'
     get(api, 'tasks/' + child['id'], expected=404)
     detail = get(api, 'tasks/' + parent['id'])
     assert not detail['children'] and detail['task']['parts']['total'] == 0
+    # Its parent never changes, so a sub-task of a private task stays private.
     post(api, 'tasks/' + child['id'], {'version': child['version'], 'private': False}, token='ben-test', expected=422)
-    detached = post(
-        api,
-        'tasks/' + child['id'] + '/relations',
-        {'task': parent['id'], 'kind': 'parent', 'remove': True},
-        token='ben-test',
-    )
-    assert 'parent' not in detached['relations']
-    published = post(api, 'tasks/' + child['id'], {'version': detached['version'], 'private': False}, token='ben-test')
-    assert not published['private']
 
 
 def test_cached_comment_response_cannot_bypass_reassignment(api):
@@ -153,7 +140,7 @@ def test_cached_comment_response_cannot_bypass_reassignment(api):
     first = api.post(url, json={'text': 'Sensitive response.'}, headers=replay_headers)
     assert first.status_code == 200, first.text
     task = get(api, 'tasks/' + task['id'])['task']
-    post(api, 'tasks/' + task['id'], {'version': task['version'], 'owner': 'priya'})
+    post(api, 'tasks/' + task['id'] + '/owner', {'version': task['version'], 'owner': 'priya', 'why': 'Priya reviews'})
     response = api.post(url, json={'text': 'Sensitive response.'}, headers=replay_headers)
     assert response.status_code == 404 and 'Sensitive response.' not in response.text
 
@@ -168,7 +155,7 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
             'owner': 'ben',
             'title': 'Review related work',
             'body': 'Related content.',
-            'relations': [{'task': task['id'], 'kind': 'parent'}],
+            'parent': task['id'],
         },
     )
     routine = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review scheduled work', 'body': 'Scheduled content.'})
@@ -216,16 +203,11 @@ def test_private_dependency_and_refusal_audit_never_copy_sensitive_content(api):
         api, 'tasks', {'owner': 'cpo', 'title': 'Review sensitive evidence', 'body': 'Review it.', 'private': True}
     )
     public = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review release timing', 'body': 'Review it.'})
+    # A task waits on no relation: blocked_by is no kind of one.
     post(api, 'tasks/' + public['id'] + '/relations', {'task': private['id'], 'kind': 'blocked_by'}, expected=422)
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,?,'now')",
-            (private['id'], public['id'], 'blocks'),
-        )
-        H._unblock(c, H.task(c, private['id']))
-        assert TR.blocker_ids(c, public['id']) == [private['id']]
         with pytest.raises(H.Refused) as exc:
-            H.task_update(c, 'bot:cpo', private['id'], body='Read SECRET-PACKET', status='ready')
+            H.task_move(c, 'bot:cpo', private['id'], 'next', 'Read SECRET-PACKET', 0)
         assert exc.value.private
         audit = c.execute("SELECT detail FROM events WHERE action='refused'").fetchall()
         assert all('SECRET-PACKET' not in row[0] for row in audit)

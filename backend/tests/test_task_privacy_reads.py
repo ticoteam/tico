@@ -204,7 +204,7 @@ def test_uploader_file_access_and_cached_comment_are_revoked(api):
     key = "private-comment-retry"
     post(api, f"tasks/{row['id']}/comments", {"text": "Private cached comment"}, "ben-test", key=key)
     current = get(api, "tasks/" + row["id"])["task"]
-    post(api, "tasks/" + row["id"], {"version": current["version"], "owner": "cara"})
+    post(api, "tasks/" + row["id"] + "/owner", {"version": current["version"], "owner": "cara", "why": "Cara has it"})
     for ident in (fid, bid):
         for suffix in ("", "/meta", "/poster", "/thumb", "/versions/1"):
             response = api.get("/api/v2/files/" + ident + suffix, headers=headers("ben-test"))
@@ -298,7 +298,7 @@ def test_live_events_stop_when_private_owner_loses_access(api):
     before, cursor = seen(start)
     assert "First packet note" in before and row["id"] in before
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='human:cara' WHERE id=?", (row["id"],))
+        H.task_reassign(c, H.KEEPER, row["id"], "human:cara", "Moved for the test")
     post(api, "tasks/" + row["id"] + "/comments", {"text": "Second packet note"})
     after, _ = seen(cursor)
     assert "Second packet note" not in after and row["id"] not in after and "Sensitive" not in after
@@ -322,7 +322,7 @@ def test_context_search_and_fleet_do_not_disclose_revoked_sources(api):
         who = Identity("human:ben", "human", email="ben@acme.example")
         before = views.fleet_snapshot(c, api.app.state.auth, who, lambda row, **k: row)
         assert row["id"] in {t["id"] for t in before["tasks"]}
-        c.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (row["id"],))
+        H.task_reassign(c, H.KEEPER, row["id"], "human:ana", "Moved for the test")
         after = views.fleet_snapshot(c, api.app.state.auth, who, lambda row, **k: row)
         assert row["id"] not in {t["id"] for t in after["tasks"]}
     result = get(api, "context/search?q=Sensitive&source=docs", "ben-test")
@@ -396,7 +396,7 @@ def test_deleted_comment_receipt_is_canonical_empty_and_currently_authorized(api
         for forged in ({**receipt, "body": "Withdrawn private comment"}, {**receipt, "extra": "Private words"}):
             with pytest.raises(Problem):
                 task_privacy.require_payload(c, who, forged)
-        c.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (row["id"],))
+        H.task_reassign(c, H.KEEPER, row["id"], "human:ana", "Moved for the test")
         with pytest.raises(Problem):
             task_privacy.require_payload(c, who, receipt)
 
@@ -509,7 +509,7 @@ def test_sql_audit_keeps_no_literals_and_provenance_uses_the_result_snapshot(api
         )
         try:
             with api.app.state.store.transaction() as write:
-                write.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (row["id"],))
+                H.task_reassign(write, H.KEEPER, row["id"], "human:ana", "Moved for the test")
             # An in-flight read has one coherent snapshot; the next request sees revocation.
             assert SQL.run(conn, f"SELECT id FROM tasks WHERE id='{row['id']}'", [], 500, 5)["rows"] == [[row["id"]]]
             with pytest.raises(Problem):
