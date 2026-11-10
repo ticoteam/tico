@@ -289,8 +289,11 @@ module goes in `migrations.SUPERSEDED`, and the runner skips a superseded file *
 The never-stuck check's `rules_hold` gains: no task without a pipeline, a stage and one open visit.
 
 The trash: delete takes the task off as today and closes its open snooze. Restore, in order: insert the bare row
-(`status = 'open'`, no pipeline, no stage), restore its conversation and backlinks, then `enter()` it in the first
-stage of its pipeline with a fresh visit and a history note. Old asks and wakes are not replayed.
+(`status = 'open'`, no pipeline, no stage), restore its conversation and backlinks, then `task_engine.restore` places
+it with a fresh visit and a history note: an open task in the stage it was in while that stage is still in its
+pipeline, has room and may take it (`shut_out`), else in the first stage; a done or closed one as it ended. A private
+task neither stage may take is refused (`task_not_shared`) and stays in the trash. Old asks and wakes are not
+replayed.
 
 ## What is deleted
 

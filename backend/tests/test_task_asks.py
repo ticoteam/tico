@@ -142,6 +142,7 @@ def test_a_plain_answer_is_not_a_bound_ok(c):
     rid = asked["requirement_id"]
     assert K.refuses_plain_ok(c, rid, "ok") == K.FROM_PREVIEW
     assert K.refuses_plain_ok(c, rid, "no") is None
+    H.set_task_readers(c, SENDER, asked["task_id"], add=[BEN])  # the task is private: an ask makes nobody a reader
     other = H.task_ask(
         c, SENDER, asked["task_id"], BEN, "Is Friday fine?", seen_version=H.task(c, asked["task_id"])["version"]
     )
@@ -195,6 +196,7 @@ def test_an_ok_handed_to_another_person_is_not_theirs_to_give(c):
     longer holds it. It waits for a new ask."""
     asked = _ask(c)
     rid = asked["requirement_id"]
+    H.set_task_readers(c, ANA, asked["task_id"], add=[BEN])  # the task is private: a give makes nobody a reader
     H.task_give(c, ANA, asked["task_id"], rid, BEN)
     K.show(c, ANA, rid, EMAIL, own_click=True)
     with _refused("task_requirement"):

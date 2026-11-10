@@ -1170,7 +1170,7 @@ def c_runs_outside_ladder(r: Rig) -> None:
     version = r.row(task)["version"]
     r.ok(
         WRITER,
-        lambda c: E.add_requirement(c, task, WRITER, "ok", REVIEWER, "Is the copy right?", seen_version=version),
+        lambda c: E.add_requirement(c, task, WRITER, "answer", REVIEWER, "Is the copy right?", seen_version=version),
         "ask the reviewer",
     )
     r.ran(task, REVIEWER)  # the reviewer's ask wake: it stops without answering

@@ -368,7 +368,7 @@ def test_a_requirement_added_to_one_task_holds_it_until_answered_withdrawn_or_th
     open_ones = R.on_visit(c, row["visit"]["id"])
     assert [r["id"] for r in open_ones] == [second["requirement_id"]]  # a bot's second replaces its first
     assert first["version"] == row["version"]  # asking is not a move
-    mine = E.add_requirement(c, row["id"], ANA, "ok", "human:ana", "OK the retry plan")
+    mine = E.add_requirement(c, row["id"], ANA, "ok", "human:ben", "OK the retry plan")
     assert len(R.on_visit(c, row["visit"]["id"])) == 2  # a person has no such limit
     X.say_done(c, row)
     assert E.advance(c, row["id"]) is None  # the stage's own requirement is met: the task still waits
@@ -376,7 +376,7 @@ def test_a_requirement_added_to_one_task_holds_it_until_answered_withdrawn_or_th
     assert E.advance(c, row["id"]) is None
     moved = E.withdraw_requirement(c, mine["requirement_id"], ANA)
     assert moved["stage"]["name"] == "Review"
-    asked = E.add_requirement(c, row["id"], ANA, "ok", ANA, "OK the importer's limits")
+    asked = E.add_requirement(c, row["id"], ANA, "ok", "human:ben", "OK the importer's limits")
     E.move(c, row["id"], "Build", ANA)
     assert R.get(c, asked["requirement_id"])["withdrawn_at"]  # moving back ends it: nothing is left behind
 
