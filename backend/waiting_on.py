@@ -21,10 +21,11 @@ The nine states, in headline order:
     by_hand   it sits in a stage that tasks leave by hand
 """
 
+import json
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from itertools import chain
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from . import hubdb_core, pipeline_rights, task_wakes
 from . import task_engine as E
@@ -234,14 +235,32 @@ def _turn(
 
 def _filed_open(conn: "sqlite3.Connection", visit_id: str) -> list[tuple[str, str]]:
     """(id, title) of the tasks filed during a visit that are still open, oldest first."""
-    return [
-        (str(found[0]), str(found[1] or ""))
-        for found in conn.execute(
-            "SELECT t.id, t.title FROM links l JOIN tasks t ON t.id = l.to_task_id "
-            "WHERE l.visit_id=? AND t.status='open' ORDER BY l.created_at, l.id",
-            (visit_id,),
-        ).fetchall()
-    ]
+    from . import read_cache
+
+    found = cast("Any", read_cache).rows(conn, FILED_OPEN, (visit_id,))  # a pass reads them for many (`prime`)
+    return [(str(each[0]), str(each[1] or "")) for each in found]
+
+
+FILED_OPEN = (
+    "SELECT t.id, t.title FROM links l JOIN tasks t ON t.id = l.to_task_id "
+    "WHERE l.visit_id=? AND t.status='open' ORDER BY l.created_at, l.id"
+)
+
+
+def prime(conn: "sqlite3.Connection", visits: list[Row]) -> None:
+    """Read together the tasks filed during each of these visits that are still open (`_filed_open`), in one
+    statement, and keep them in the snapshot's read cache. A connection with no read cache keeps nothing."""
+    from . import read_cache
+
+    RC: Any = read_cache
+    if not visits or RC.cache(conn) is None:
+        return
+    ids = sorted({str(visit["id"]) for visit in visits})
+    found: dict[tuple[str], list[tuple[str, str]]] = {(each,): [] for each in ids}
+    listed = FILED_OPEN.replace("l.visit_id=?", "l.visit_id IN (SELECT value FROM json_each(?))")
+    for each in conn.execute(listed.replace("SELECT t.id,", "SELECT l.visit_id, t.id,"), (json.dumps(ids),)):
+        found[(str(each[0]),)].append((each[1], each[2]))
+    RC.prime_rows(conn, FILED_OPEN, found)
 
 
 def of(

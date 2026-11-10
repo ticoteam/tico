@@ -16,7 +16,7 @@ Names and signatures are in docs/dev/pipelines-v3-build.md.
 import hashlib
 import json
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from . import hubdb_core, stage_effects, task_effects
 from . import task_requirements as R
@@ -950,6 +950,19 @@ def reassign(
     return moved
 
 
+PROGRESS_SQL = (
+    "SELECT v.task_id, "
+    "(SELECT COUNT(*) FROM answers a WHERE a.visit_id = v.id), "
+    "(SELECT COUNT(*) FROM answers a WHERE a.visit_id = v.id AND a.undone_at IS NOT NULL), "
+    "(SELECT COUNT(*) FROM requirements r WHERE r.visit_id = v.id), "
+    "(SELECT COUNT(*) FROM requirements r WHERE r.visit_id = v.id AND r.withdrawn_at IS NOT NULL), "
+    "(SELECT COUNT(*) FROM links l WHERE l.visit_id = v.id), "
+    "(SELECT COUNT(*) FROM links l LEFT JOIN tasks c ON c.id = l.to_task_id "
+    " WHERE l.visit_id = v.id AND COALESCE(c.status, 'closed') <> 'open') "
+    "FROM visits v WHERE v.id=?"
+)
+
+
 def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence[R.Standing] | None = None) -> str:
     """What the never-stuck check compares to tell a task that changed from one that did not: the answers, added
     requirements and filed tasks of this visit, and where each requirement stands (so a PR that opened or a check that
@@ -957,18 +970,9 @@ def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence
     runs. Nor is the task's version: it says the row changed since someone looked, and a field edit (a new title, a
     label) raises it. A move and a reassign start the ladder again themselves. `standings` saves reading them again
     when the caller has them."""
-    found = conn.execute(
-        "SELECT v.task_id, "
-        "(SELECT COUNT(*) FROM answers a WHERE a.visit_id = v.id), "
-        "(SELECT COUNT(*) FROM answers a WHERE a.visit_id = v.id AND a.undone_at IS NOT NULL), "
-        "(SELECT COUNT(*) FROM requirements r WHERE r.visit_id = v.id), "
-        "(SELECT COUNT(*) FROM requirements r WHERE r.visit_id = v.id AND r.withdrawn_at IS NOT NULL), "
-        "(SELECT COUNT(*) FROM links l WHERE l.visit_id = v.id), "
-        "(SELECT COUNT(*) FROM links l LEFT JOIN tasks c ON c.id = l.to_task_id "
-        " WHERE l.visit_id = v.id AND COALESCE(c.status, 'closed') <> 'open') "
-        "FROM visits v WHERE v.id=?",
-        (visit_id,),
-    ).fetchone()
+    from . import read_cache
+
+    found = cast("Any", read_cache).one(conn, PROGRESS_SQL, (visit_id,))  # a pass reads them for many (never_stuck)
     if not found:
         return ""
     if standings is None:

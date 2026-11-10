@@ -98,6 +98,20 @@ def test_one_pass_over_three_thousand_idle_tasks_with_queued_wakes_is_quick() ->
     assert out["seconds"] < 2.0, out["top_statements"]
 
 
+@pytest.mark.parametrize("queued", [False, True], ids=["runs-ended", "wakes-queued"])
+def test_one_pass_reads_as_many_statements_over_a_thousand_idle_tasks_as_over_a_hundred(queued: bool) -> None:
+    """Cost: a pass reads what it needs for every open task together, in a fixed number of statements, not a few
+    statements a task (it read 20 a task here when the runs had ended, 13 with the wakes queued; now 48 a
+    pass). 25 tasks made through the engine, copied to 100 and to 1,000, none due
+    for a try: each bot's run ended and its next try is later, or its wake is still queued."""
+    small = perf.measure(25, profile=False, copies=3, queued=queued, due=0)
+    big = perf.measure(25, profile=False, copies=39, queued=queued, due=0)
+    assert (small["tasks"], big["tasks"]) == (100, 1000)
+    assert small["pass"] == big["pass"] == {}
+    assert big["reads"] == small["reads"], big["top_statements"]
+    assert big["reads"] < 60, big["top_statements"]
+
+
 def test_a_world_puts_the_environment_back() -> None:
     before = {name: os.environ.get(name) for name in world.OFFLINE}
     with world.World(1):

@@ -27,7 +27,7 @@ Names and signatures are in docs/dev/pipelines-v3-build.md.
 
 from collections.abc import Callable, Iterable
 from datetime import timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from . import batch_work, hubdb_core, task_wakes
 from . import task_engine as E
@@ -57,6 +57,7 @@ TRIES = len(GAPS)
 OWNER_RUNS = 1 + TRIES
 RUNS = task_wakes.RUNS
 assert RUNS == 1 + 2 * TRIES
+QUIET = 8  # tasks in a row that changed nothing before the pass reads ahead again (`check`)
 HOPS = 20  # stages one task is taken through in one pass, at most
 LATE_PERSON = 3  # times a stage's expected time before a late task lands in a person's list (C5)
 CUT_OFF = ("expired", "failed", "interrupted")
@@ -128,24 +129,157 @@ def check(
     ).fetchall()
     todo = [(str(found[0]), True) for found in due]
     todo += [(str(found[0]), False) for found in conn.execute(_OPEN).fetchall()]
-    for task_id, wake_up in todo:
-        conn.execute("SAVEPOINT never_stuck_task")
+    ahead: Ahead | None = None
+    quiet = 0  # tasks in a row that changed nothing
+    for n, (task_id, wake_up) in enumerate(todo):
+        read: tuple[Row, list[R.Standing], list[W.Wait]] | None = None
+        if not wake_up:
+            # Every task still to do is read together. A task that changed something (a move may make room in a
+            # stage, a wake is a new row) makes what was read old. The tasks after it are read one at a time until
+            # QUIET in a row changed nothing, then read ahead again, twice as many as went by quietly: a pass where
+            # most tasks change something reads no more than one task at a time would.
+            if ahead is None or ahead.changes != conn.total_changes or task_id not in ahead.asked:
+                rest = [each for each, woke in todo[n:] if not woke]
+                if ahead is None:
+                    ahead = read_ahead(conn, rest, seen)
+                elif quiet >= QUIET:
+                    ahead = read_ahead(conn, rest[: 2 * quiet], seen)
+            if ahead and ahead.changes == conn.total_changes:
+                read = ahead.found.get(task_id)
+        changes = conn.total_changes
+        _keeping_reads(conn, "SAVEPOINT never_stuck_task")
+        rolled_back = False
         try:
             if wake_up:
                 E.unsnooze(conn, task_id, SYSTEM)
                 done["snoozes_ended"] += 1
             else:
-                _one(conn, task_id, at, done, seen, live)
+                _one(conn, task_id, at, done, seen, live, read)
         except Exception as error:
             # SQLite may already have ended the transaction (a full disk, an I/O error): that stops the pass.
             if failures is None or not conn.in_transaction or storage_error(error):
                 raise
             conn.execute("ROLLBACK TO never_stuck_task")
+            rolled_back = True
             failures.append((task_id, error))
         finally:
             if conn.in_transaction:
-                conn.execute("RELEASE never_stuck_task")
+                if rolled_back:
+                    conn.execute("RELEASE never_stuck_task")
+                else:
+                    _keeping_reads(conn, "RELEASE never_stuck_task")
+        quiet = quiet + 1 if conn.total_changes == changes else 0
     return done
+
+
+def _keeping_reads(conn: "sqlite3.Connection", statement: str) -> None:
+    """SAVEPOINT or RELEASE inside the pass's transaction: neither changes a row nor starts a snapshot, but a pooled
+    connection empties its read cache on both (store._pooled). What the pass read ahead stays: the cache is set aside
+    while the statement runs. A ROLLBACK TO empties it as it should."""
+    kept: dict[Any, Any] | None = getattr(conn, "read_cache", None)
+    if kept is None or not conn.in_transaction:
+        conn.execute(statement)
+        return
+    setattr(conn, "read_cache", {})  # noqa: B010 - the pooled connection's own attribute
+    try:
+        conn.execute(statement)
+    finally:
+        setattr(conn, "read_cache", kept)  # noqa: B010
+
+
+class Ahead:
+    """What a pass read ahead for many tasks (`read_ahead`, the ids `asked`): for each task id its row
+    (`task_engine.task`), standings and waits. It holds while nothing was written since (`changes`, the connection's
+    total changes then)."""
+
+    def __init__(self, changes: int, asked: list[str]) -> None:
+        self.changes = changes
+        self.asked = set(asked)
+        self.found: dict[str, tuple[Row, list[R.Standing], list[W.Wait]]] = {}
+
+
+# The one-task reads `task_engine.task` makes (through the read cache, `hubdb._one`), read for many in `read_ahead`.
+_TASK_READS = (
+    ("SELECT * FROM tasks WHERE id=?", "id"),
+    ("SELECT * FROM visits WHERE task_id=? AND left_at IS NULL", "task_id"),
+    ("SELECT * FROM snoozes WHERE task_id=? AND ended_at IS NULL", "task_id"),
+)
+_PART_READS = (("SELECT * FROM stages WHERE id=?", "stage_id"), ("SELECT * FROM pipelines WHERE id=?", "pipeline_id"))
+_SNOOZE_ENDED = "SELECT MAX(ended_at) FROM snoozes WHERE visit_id=? AND ended_at IS NOT NULL"
+
+
+def read_ahead(conn: "sqlite3.Connection", task_ids: list[str], seen: dict[str, str | None]) -> Ahead:
+    """Read what the pass needs for every one of these tasks in a fixed number of statements, however many tasks there
+    are: each one-task read the check makes is made once for the list and kept in the snapshot's read cache
+    (`read_cache`), where the one-task read finds it. Then each task's row, standings and waits are worked out from it.
+    A connection with no read cache reads each task as before."""
+    import json
+
+    from . import read_cache
+
+    RC: Any = read_cache
+    ahead = Ahead(conn.total_changes, task_ids)
+    if not task_ids or RC.cache(conn) is None:
+        return ahead
+    listed = json.dumps(task_ids)
+    found: dict[str, Any] = {}
+    for sql, column in _TASK_READS:
+        rows: dict[tuple[str], Any] = {(each,): None for each in task_ids}
+        for row in conn.execute(sql.replace(f"{column}=?", f"{column} IN (SELECT value FROM json_each(?))"), (listed,)):
+            if rows[(str(row[column]),)] is None:
+                rows[(str(row[column]),)] = row
+        RC.prime(conn, sql, rows)
+        if column == "id":
+            found = {key[0]: row for key, row in rows.items() if row is not None}
+    for sql, column in _PART_READS:
+        ids = sorted({str(row[column]) for row in found.values() if row[column]})
+        listed_parts = sql.replace("id=?", "id IN (SELECT value FROM json_each(?))")
+        parts = {(str(row["id"]),): row for row in conn.execute(listed_parts, (json.dumps(ids),))}
+        RC.prime(conn, sql, {(each,): parts.get((each,)) for each in ids})
+    tasks = [row for row in (E.task(conn, each) for each in task_ids) if row and row.get("visit")]
+    visits: list[Row] = [row["visit"] for row in tasks]
+    R.prime(conn, visits)
+    W.prime(conn, visits)
+    task_wakes.prime_holds(conn, [str(row["id"]) for row in tasks])
+    visit_ids = json.dumps([str(visit["id"]) for visit in visits])
+    marks = E.PROGRESS_SQL.replace("SELECT v.task_id,", "SELECT v.id, v.task_id,").replace(
+        "v.id=?", "v.id IN (SELECT value FROM json_each(?))"
+    )
+    RC.prime(conn, E.PROGRESS_SQL, {(str(row[0]),): tuple(row[1:]) for row in conn.execute(marks, (visit_ids,))})
+    ended = {
+        str(row[0]): row[1]
+        for row in conn.execute(
+            "SELECT visit_id, MAX(ended_at) FROM snoozes WHERE visit_id IN (SELECT value FROM json_each(?)) "
+            "AND ended_at IS NOT NULL GROUP BY visit_id",
+            (visit_ids,),
+        )
+    }
+    RC.prime(conn, _SNOOZE_ENDED, {(str(visit["id"]),): (ended.get(str(visit["id"])),) for visit in visits})
+    # Whose wakes and runs the pass asks about: the bots with a turn on each task, and its pipeline's manager bot.
+    bots: dict[str, set[str]] = {}
+    # A task the check cannot work out is left to `_one`, which reports it: what was worked out before it still holds
+    # (the savepoint undoes anything its read wrote), and the tasks from it on are read one at a time.
+    _keeping_reads(conn, "SAVEPOINT never_stuck_ahead")
+    for n, row in enumerate(tasks):
+        task_id = str(row["id"])
+        try:
+            standings = R.standings(conn, row)
+            waits = W.of(conn, row, seen, standings)
+            turns = W.turns(conn, row, waits)
+        except Exception as error:
+            if not conn.in_transaction or storage_error(error):
+                raise
+            conn.execute("ROLLBACK TO never_stuck_ahead")
+            conn.execute("RELEASE never_stuck_ahead")
+            ahead.changes = conn.total_changes
+            ahead.asked -= {str(each["id"]) for each in tasks[n:]}
+            return ahead
+        ahead.found[task_id] = (row, standings, waits)
+        manager = _part(row, "pipeline").get("manager_id")
+        bots[task_id] = turns | ({str(manager)} if is_bot(manager) else set())
+    _keeping_reads(conn, "RELEASE never_stuck_ahead")
+    task_wakes.prime(conn, tasks, bots)
+    return ahead
 
 
 def _one(
@@ -155,12 +289,13 @@ def _one(
     done: dict[str, int],
     seen: dict[str, str | None],
     live: set[str],
+    ahead: "tuple[Row, list[R.Standing], list[W.Wait]] | None" = None,
 ) -> None:
-    row = E.task(conn, task_id)
+    row = ahead[0] if ahead else E.task(conn, task_id)
     if not row or row["status"] != "open" or row.get("snooze") or row["stage"].get("by_hand"):
         return  # a move earlier in this pass took it
-    standings = R.standings(conn, row)
-    waits = W.of(conn, row, seen, standings)
+    standings = ahead[1] if ahead else R.standings(conn, row)
+    waits = ahead[2] if ahead else W.of(conn, row, seen, standings)
     if W.all_met(waits) and E.advance(conn, task_id):
         done["moved"] += 1
         for _ in range(HOPS):  # stages that need nothing are passed in the same step
@@ -319,10 +454,10 @@ def _slug(actor: str) -> str:
 def _snoozed_since(conn: "sqlite3.Connection", visit: Row, since: str) -> bool:
     """A snooze of this visit ended after `since`: the task was set aside after the bot stopped, so its next try is due
     at once, with no gap."""
-    found = conn.execute(
-        "SELECT 1 FROM snoozes WHERE visit_id=? AND ended_at IS NOT NULL AND ended_at > ? LIMIT 1", (visit["id"], since)
-    ).fetchone()
-    return found is not None
+    from . import read_cache
+
+    found = cast("Any", read_cache).one(conn, _SNOOZE_ENDED, (visit["id"],))  # read for many ahead
+    return bool(found and found[0] and str(found[0]) > since)
 
 
 def _wake(conn: "sqlite3.Connection", row: Row, target: str | None, lead: str, level: str, n: int, epoch: str) -> bool:
@@ -549,7 +684,7 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
     H = _h()
     broken: list[str] = []
     seen: dict[str, str | None] = {}
-    needs: dict[str, dict[str, list[Row]]] = {}  # each person's Needs you, read once and indexed by task
+    needs: dict[str, dict[str, list[Row]]] | None = None  # everyone's Needs you, read once and indexed by task
     someone: bool | None = None  # whether anyone can sign in: read once, when a turn names nobody
     now: str = H.now()
     live = task_wakes.live_bots(conn, now)
@@ -601,11 +736,12 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
         for person in sorted(people):
             if private and not _reads(conn, person, row):
                 broken.append(Break(f"3: task {task_id} is {person}'s turn and they cannot read it", [task_id]))
-            if person not in needs:
-                needs[person] = {}
-                for item in W.needs(conn, person):
-                    needs[person].setdefault(str(item.get("task_id")), []).append(item)
-            listed = needs[person].get(task_id, [])
+            if needs is None:
+                needs = {}
+                for who, items in W.needs_by_person(conn).items():
+                    for item in items:
+                        needs.setdefault(who, {}).setdefault(str(item.get("task_id")), []).append(item)
+            listed = needs.get(person, {}).get(task_id, [])
             mine = [wait for wait in waits if wait.state == W.PERSON and wait.who == person]
             asks = [wait.requirement_id for wait in mine if wait.ask]
             want = len(asks) + (1 if any(not wait.ask for wait in mine) else 0)

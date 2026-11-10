@@ -21,7 +21,7 @@ A requirement never waits on a person who left, was removed or cannot sign in (`
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     import sqlite3
@@ -67,14 +67,19 @@ def active_person(conn: "sqlite3.Connection", actor: object) -> bool:
     text = str(actor or "")
     if not text.startswith("human:") or not text[len("human:") :]:
         return False
-    found = conn.execute(
+    from . import read_cache
+
+    found = cast(
+        "Any", read_cache
+    ).one(  # once a person in a snapshot, not once a task
+        conn,
         "SELECT 1 FROM humans h WHERE h.id=? AND NOT EXISTS (SELECT 1 FROM registry_metadata m, "
         "json_each(CASE WHEN json_valid(m.value) THEN m.value ELSE '{}' END, '$.people') p "
         "WHERE m.key='people' AND json_extract(p.value, '$.id') = h.id "
         "AND (json_extract(p.value, '$.hidden') OR json_extract(p.value, '$.directory_left') "
         "OR json_extract(p.value, '$.sign_in') = 0))",
         (text[len("human:") :],),
-    ).fetchone()
+    )
     return found is not None
 
 
@@ -119,30 +124,52 @@ def _loaded(row: Row) -> Row:
     return row
 
 
+def _read(conn: "sqlite3.Connection", sql: str, args: tuple[object, ...]) -> list[Row]:
+    """Rows through the snapshot's read cache (`read_cache.rows`), which a pass over many tasks fills first (`prime`);
+    any write empties it. Each caller gets its own dicts."""
+    from . import read_cache
+
+    RC: Any = read_cache
+    if RC.cache(conn) is None:
+        return _rows(conn.execute(sql, args))
+    return [dict(row) for row in RC.rows(conn, sql, args)]
+
+
+_ON_STAGE = "SELECT * FROM requirements WHERE stage_id=? AND withdrawn_at IS NULL ORDER BY position, created_at, id"
+_ON_VISIT = "SELECT * FROM requirements WHERE visit_id=? AND withdrawn_at IS NULL ORDER BY created_at, id"
+_ANSWERS = "SELECT * FROM answers WHERE visit_id=? AND undone_at IS NULL ORDER BY created_at, id"
+
+
 def on_stage(conn: "sqlite3.Connection", stage_id: str) -> list[Row]:
     """A stage's requirements, in order."""
-    return [
-        _loaded(r)
-        for r in _rows(
-            conn.execute(
-                "SELECT * FROM requirements WHERE stage_id=? AND withdrawn_at IS NULL ORDER BY position, created_at, id",
-                (stage_id,),
-            )
-        )
-    ]
+    return [_loaded(r) for r in _read(conn, _ON_STAGE, (stage_id,))]
 
 
 def on_visit(conn: "sqlite3.Connection", visit_id: str) -> list[Row]:
     """The requirements added to one visit, oldest first."""
-    return [
-        _loaded(r)
-        for r in _rows(
-            conn.execute(
-                "SELECT * FROM requirements WHERE visit_id=? AND withdrawn_at IS NULL ORDER BY created_at, id",
-                (visit_id,),
-            )
-        )
-    ]
+    return [_loaded(r) for r in _read(conn, _ON_VISIT, (visit_id,))]
+
+
+def prime(conn: "sqlite3.Connection", visits: list[Row]) -> None:
+    """Read together, for these open visits, what `standings` reads for each (the stage's requirements, the visit's
+    own, its answers), in three statements, and keep it in the snapshot's read cache, where `on_stage`, `on_visit` and
+    `newest_answers` find it. Each is the one-visit read over a list, in the same order. A connection with no read cache
+    keeps nothing."""
+    from . import read_cache
+
+    RC: Any = read_cache
+    if not visits or RC.cache(conn) is None:
+        return
+    for sql, column, ids in (
+        (_ON_STAGE, "stage_id", sorted({str(v["stage_id"]) for v in visits})),
+        (_ON_VISIT, "visit_id", sorted({str(v["id"]) for v in visits})),
+        (_ANSWERS, "visit_id", sorted({str(v["id"]) for v in visits})),
+    ):
+        listed = sql.replace(f"{column}=?", f"{column} IN (SELECT value FROM json_each(?))")
+        found: dict[tuple[str], list[Any]] = {(each,): [] for each in ids}
+        for row in conn.execute(listed, (json.dumps(ids),)).fetchall():
+            found[(str(row[column]),)].append(row)
+        RC.prime_rows(conn, sql, found)
 
 
 def for_visit(conn: "sqlite3.Connection", visit: Row) -> list[Row]:
@@ -158,12 +185,7 @@ def get(conn: "sqlite3.Connection", requirement_id: str) -> Row | None:
 def newest_answers(conn: "sqlite3.Connection", visit_id: str) -> dict[str, Row]:
     """{requirement id: its newest answer on this visit that is not undone}."""
     out: dict[str, Row] = {}
-    for row in _rows(
-        conn.execute(
-            "SELECT * FROM answers WHERE visit_id=? AND undone_at IS NULL ORDER BY created_at, id",
-            (visit_id,),
-        )
-    ):
+    for row in _read(conn, _ANSWERS, (visit_id,)):
         out[row["requirement_id"]] = row
     return out
 

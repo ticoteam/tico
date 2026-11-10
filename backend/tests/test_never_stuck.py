@@ -776,7 +776,7 @@ def test_each_rule_that_breaks_is_named(c, general, later, monkeypatch):
     assert broken() == ["4"]
     c.execute("UPDATE task_move_guards SET open=0, task_id=NULL WHERE id=1")
     # 3: a person's turn that is not in their list exactly once.
-    monkeypatch.setattr(NS.W, "needs", lambda conn, person: [])
+    monkeypatch.setattr(NS.W, "needs_by_person", lambda conn: {})
     assert NS.rules_hold(c) == [f"3: task {mine} shows 0 times in {ANA}'s Needs you, not 1"]
     monkeypatch.undo()
     # 1: an open task that waits on nothing.
@@ -867,6 +867,18 @@ def test_a_pass_finds_wakes_on_the_wake_key_index_and_reads_live_runs_once(c, ge
     assert sum("lease_until >" in s for s in statements) == 4  # one per pass and one per rules check
 
 
+def test_the_rules_check_reads_everyones_needs_you_once(c, general, later, monkeypatch):
+    """Needs you is read for every person together, once a check: asking for each person in turn read every open task
+    again for each of them."""
+    X.new_task(c, ANA, "Call the bank", assignee=ANA)
+    X.new_task(c, ANA, "Renew the lease", assignee="human:ben")
+    reads = []
+    whole = NS.W.needs_by_person
+    monkeypatch.setattr(NS.W, "needs_by_person", lambda conn: reads.append(1) or whole(conn))
+    assert NS.rules_hold(c) == []
+    assert len(reads) == 1
+
+
 def _private(c, title, owner, pipeline="general"):
     made = H.task_create(c, ANA, title, "Only us.", owner, pipeline=pipeline, private=True, lint=False)
     assert H.task_private(c, H.task(c, made["id"])) and H.task_readers(H.task(c, made["id"])) == []
@@ -955,14 +967,14 @@ def test_the_rules_check_reads_a_persons_needs_you_once_and_finds_each_task_in_i
             reads["items"] += 1
             return super().__getitem__(key)
 
-    real = W.needs
+    real = W.needs_by_person
 
-    def needs(conn, person):
+    def needs(conn):
         reads["needs"] += 1
-        found = [Item(item) for item in real(conn, person)]
-        return found + [Item(kind="task", task_id=f"other-{n}") for n in range(5_000 - len(found))]
+        found = [Item(item) for item in real(conn)[ANA]]
+        return {ANA: found + [Item(kind="task", task_id=f"other-{n}") for n in range(5_000 - len(found))]}
 
-    monkeypatch.setattr(NS.W, "needs", needs)
+    monkeypatch.setattr(NS.W, "needs_by_person", needs)
     assert NS.rules_hold(c) == []
     assert reads["needs"] == 1
     assert reads["items"] <= 5_000 + 10 * len(tasks), reads  # each item looked at once, not once per task
