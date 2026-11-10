@@ -68,7 +68,9 @@ interface RoadmapTags {
   tags?: { key: string; label?: string | null; is_template?: boolean }[];
 }
 
-const roadmapTask = (t: PropTask): boolean => pipelineType(t)?.role === 'product-roadmap';
+// A roadmap task is one in the Product pipeline (D31); its id is the preset's until the pipelines list says otherwise.
+let ROADMAP_PRODUCT_ID = 'product';
+const roadmapTask = (t: PropTask): boolean => t.pipeline_id === ROADMAP_PRODUCT_ID;
 const REQUEST_SOURCE: Record<string, string> = {manual: 'Added by hand', public_form: 'Public roadmap', inbox: 'Email', meeting: 'Meeting'};
 const ROADMAP_SORTS = [['requester_count', 'Requests'], ['external_requesters', 'External'], ['important', 'Important'], ['organization', 'Organization'], ['size', 'Size']];
 
@@ -188,8 +190,11 @@ function roadmapCommentsBind(state: TaskChatState) {
 let ROADMAP_RANKING: RoadmapRankingState | null = null;
 function roadmapRankingRefresh() { if (S.route === '#/roadmap' && ROADMAP_RANKING) void roadmapRankingLoad(ROADMAP_RANKING); }
 // The public roadmap reads the Product pipeline (D31).
-const roadmapPipeline = () => pipelinesAll().then(list => list.find(p => !p.retired_at && (p.preset === 'product' || p.id === 'product')))
-  .catch(() => undefined);
+const roadmapPipeline = () => pipelinesAll().then(list => {
+  const product = list.find(p => !p.retired_at && (p.preset === 'product' || p.id === 'product'));
+  if (product) ROADMAP_PRODUCT_ID = product.id;
+  return product;
+}).catch(() => undefined);
 function pageRoadmap() {
   const state: RoadmapRankingState = ROADMAP_RANKING = {sort: 'requester_count', direction: 'desc', offset: 0, previous: [], next: null, seq: 0};
   $('#main').innerHTML = `<div class="roadmap-page"><header class="meeting-head"><h1 data-roadmap-title></h1><button class="primary" type="button" data-roadmap-new>New task</button></header>

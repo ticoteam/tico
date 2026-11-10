@@ -4,7 +4,7 @@
    server decides every right; this file only hides what the viewer can't use. The reader's page itself is not drawn
    here: the tab and Preview show what the server renders.
    Reads and writes: /api/v2/company-page, /api/v2/audiences, /api/v2/editions, /api/v2/readers (backend/company_page).
-   An approval decision goes through /api/v2/approvals like every other one.
+   An approval is an OK ask on a task: Approve shows exactly what is asked (okShown) and gives the OK on that (okGive).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -19,7 +19,8 @@ interface CpAudience {
   id: string; name: string; kind?: string; enabled?: boolean | number; built_in?: boolean; approver?: string | null; cadence?: string | null;
   due_rule?: string | CpDueRule | null; next_due?: string | null; sources?: CpAudSource[];
 }
-interface CpApproval { id: string; state?: string; to?: string; to_name?: string; note?: string }
+/** An OK ask as the Company page reads it (backend/company_page/editions.py _ok_view): `id` is the requirement's. */
+interface CpApproval { id: string; task_id?: string | null; state?: string; to?: string; to_name?: string; note?: string }
 interface CpCheckDetail { names?: string[]; numbers?: string[]; links?: string[]; broken?: string[]; rules?: {id: string; text?: string}[]; reason?: string }
 interface CpCheck { kind: string; outcome?: string; version?: number; detail?: CpCheckDetail }
 interface CpItem { body: string; ask_id?: string | null }
@@ -182,6 +183,35 @@ function cpDialog(title: string, body: string, save: string, onSave: ((form: HTM
   return dlg;
 }
 const cpConfirm = (title: string, line: string, label: string, work: () => Promise<unknown>, opts: {danger?: boolean} = {danger: true}) => cpDialog(title, `<p class="cp-line">${esc(line)}</p>`, label, async () => { await work(); }, opts);
+// Approve: the person reads exactly what the OK is for (okShown) and the OK carries the hash of what was on screen. If
+// it changed meanwhile (409) the new content is shown and needs a new click; nothing is retried.
+const cpOkText = (content: unknown) => typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+function cpOkDialog(a: CpApproval, done: () => Promise<void>) {
+  let shown: OkShown | null = null;
+  const dlg = cpDialog('Approve?', '<pre class="cp-ok" data-ok-content></pre>', 'Approve', async () => {
+    if (!shown) return false;
+    try { await okGive(a.task_id || shown.task_id, a.id, shown.shown_hash); }
+    catch (e) {
+      if (errorStatus(e) !== 409) throw e;
+      await show();
+      throw new Error('It changed since you opened it. This is the new text: approve again if it is right.');
+    }
+    await done();
+  });
+  const box = cpFind(dlg, '[data-ok-content]'), go = dlg.querySelector<HTMLButtonElement>('[type=submit]');
+  async function show() {
+    shown = null;
+    box.textContent = '';
+    if (go) go.disabled = true;
+    const read = await okShown(a.id);
+    box.textContent = cpOkText(read.content);
+    shown = read;
+    if (go) go.disabled = false;
+  }
+  show().catch(e => { box.textContent = errorMessage(e, ''); });
+}
+// Decline: the ask's "no", with the note.
+const cpOkDecline = (a: CpApproval, note: string) => taskAnswer(cpNeed(a.task_id, 'task'), a.id, 'no', null, note || undefined);
 
 // ----------------------------------------------------------------- the page
 const cpNewState = (): CpState => ({err: {}, pick: {}, groups: {}, audiences: null, disclosure: {}, editions: null, editionsNext: null, readers: null, readersNext: null,
@@ -301,8 +331,8 @@ function cpClick(ev: Event) {
   if (d.cpStatRemove) return cpStatRemove(d.cpStatRemove);
   if (d.cpStatMove) return void cpStatMove(d.cpStatMove, Number(d.dir));
   if ('cpStatsRequest' in d) return void cpStatsRequest();
-  if (d.cpStatsApprove) return void cpStatsDecide(d.cpStatsApprove, 'approved');
-  if (d.cpStatsDecline) return void cpStatsDecide(d.cpStatsDecline, 'declined');
+  if (d.cpStatsApprove) return void cpStatsDecide('approved');
+  if (d.cpStatsDecline) return void cpStatsDecide('declined');
   if ('cpLogo' in d) return cpFind(b.parentElement ?? b, '[data-cp-logo-file]').click();
   if ('cpLogoRemove' in d) return cpLogoRemove();
   if ('cpAddReader' in d) return cpAddReader();
@@ -666,10 +696,13 @@ function cpEdAct(dlg: HTMLDialogElement, e: CpEdition, act: string | undefined) 
   if (act === 'request') return void cpEdRun(dlg, e, () => post(api + '/approval', {}), 'Approval requested');
   // A failed draft runs again on the same row: same audience, source and period.
   if (act === 'redraft') return void cpEdRun(dlg, e, () => post('/v2/editions', {audience_id: e.audience_id, author: e.author?.id, period_start: e.period_start, period_end: e.period_end}), 'Drafted');
-  // The person's own click on the text above, through the approvals API. No token or Assistant decides this one.
-  if (act === 'approve') return void cpEdRun(dlg, e, () => post(`/v2/approvals/${cpId(cpNeed(e.approval, 'approval').id)}`, {decision: 'approved'}), 'Approved');
+  // The person's own click on the text it shows. No token or Assistant decides this one.
+  if (act === 'approve') return void cpOkDialog(cpNeed(e.approval, 'approval'), async () => {
+    toast('Approved', false, null, {host: dlg});
+    await cpEdRefresh(dlg, e.id);
+  });
   if (act === 'decline') return void cpDialog('Decline?', '<label>Note<textarea name="note" rows="2" maxlength="2000"></textarea></label>', 'Decline', async form => {
-    await post(`/v2/approvals/${cpId(cpNeed(e.approval, 'approval').id)}`, {decision: 'declined', note: form.note.value.trim()});
+    await cpOkDecline(cpNeed(e.approval, 'approval'), form.note.value.trim());
     toast('Declined', false, null, {host: dlg});
     await cpEdRefresh(dlg, e.id);
   }, {danger: true});
@@ -1007,8 +1040,12 @@ async function cpStatsRequest() {
   catch (e) { toast(errorMessage(e, ''), true); }
   await cpReload('stats');
 }
-async function cpStatsDecide(approvalId: string, decision: string) {
-  try { await post(`/v2/approvals/${cpId(approvalId)}`, {decision}); toast(decision === 'approved' ? 'Approved' : 'Declined'); }
+// The open audience's board approval: Approve shows the board as asked; Decline sends it back.
+async function cpStatsDecide(decision: 'approved' | 'declined') {
+  const id = cpOpen().pick.stats, a = id ? cpOpen().projection[id]?.approval : null;
+  if (!a) return;
+  if (decision === 'approved') return void cpOkDialog(a, async () => { toast('Approved'); await cpReload('stats'); });
+  try { await cpOkDecline(a, ''); toast('Declined'); }
   catch (e) { toast(errorMessage(e, ''), true); }
   await cpReload('stats');
 }

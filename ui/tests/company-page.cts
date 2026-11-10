@@ -3,7 +3,8 @@ import type * as Routes from './support/routes.cts';
 // The Company page (ui/app/company-page.ts) against a fake hub: Acme (acme.example). Company's Share tab shows owners and admins
 // the page in a sandboxed frame, a share panel and Manage; a member has no tab and no way in by address. The section: Transparency warns before Open and says what stops being visible before
 // anything is taken away, and sends nothing on Cancel. The queue puts a held edition first with its reason. Approve shows
-// only to the person an approval is addressed to and goes through the approvals API. Override needs a note. Text from a
+// only to the person an approval is addressed to, shows exactly what is asked and gives the OK on that text; a text
+// that changed meanwhile is shown again and needs a second click. Override needs a note. Text from a
 // bot's update is escaped. A held stat says why. Removing a reader says emails can't be recalled. With no sign-in
 // provider, Private and adding readers are off. A part that fails shows Retry while the others draw, and a 403 is the
 // permission line. Every way an approval can stand reads plainly and offers the way on; approve and publish are two steps.
@@ -50,7 +51,7 @@ interface ScheduleProblem {audience_id: string; name: string; problem: string}
 interface HubOpts {noDomain?: boolean; noSlug?: boolean; noEmail?: boolean; scheduleProblems?: ScheduleProblem[]; releaseFails?: boolean; tightened?: number; privateOn?: boolean; noEditions?: boolean; noAudiences?: boolean; fail?: string[]; denied?: boolean}
 // The request body the fake hub reads; only the fields it uses.
 interface Payload {
-  slug?: string; rules?: RuleIn[]; audience_id?: string; author?: string; note?: string; decision?: string;
+  slug?: string; rules?: RuleIn[]; audience_id?: string; author?: string; note?: string; shown_hash?: string; value?: string;
   audience_ids?: string[]; email?: string; name?: string | null;
   source_kind?: string; ref_id?: string; chart?: string; position?: number;
 }
@@ -60,6 +61,8 @@ interface Hub {
   editions: Edition[]; audiences: Audience[]; previews: string[]; stats: Stat[]; readers: Reader[]; invites: unknown[];
   rules: Record<string, Rule[]>; fail: Set<string>; writes: Write[]; reads: string[];
   denied?: boolean; disclosureDelay?: number;
+  /** What each OK ask is for now (GET /api/v2/oks/{rid}); its hash is 'h:' + the text. */
+  okText: Record<string, string>;
 }
 type PersonId = keyof typeof ME;
 interface OpenOpts {viewer?: PersonId; viewport?: {width: number; height: number}; hash?: string; theme?: string; hubOpts?: HubOpts; ready?: boolean}
@@ -85,7 +88,7 @@ const ed = (id: string, status: string, audience_id: string, title: string | nul
 const EDITIONS = () => [
   ed('e-pub', 'published', 'a-board', 'September update', {period_start: '2026-09-01', period_end: '2026-09-30', published_at: '2026-10-08', seen_by: [{reader_id: 'r1', email: 'rita@acme.example', name: null, viewed_at: '2026-10-09'}], seen_count: 1}),
   ed('e-ready', 'ready', 'a-pub', 'October, public'),
-  ed('e-mine', 'awaiting_approval', 'a-board', 'October, board', {approval: {id: 'ap-1', state: 'pending', to: 'human:ana', to_name: 'Ana Silva'}}),
+  ed('e-mine', 'awaiting_approval', 'a-board', 'October, board', {approval: {id: 'ap-1', task_id: 't-ap1', state: 'pending', to: 'human:ana', to_name: 'Ana Silva'}}),
   ed('e-other', 'awaiting_approval', 'a-inv', 'October, investors', {approval: {id: 'ap-2', state: 'pending', to: 'human:cara', to_name: 'Cara Lee'}}),
   ed('e-held', 'held', 'a-inv', 'Held <img src=x onerror="window.__pwned=1">', {last_check: {outcome: 'held', reasons: ['leak']}, checks_current: true,
     sections: [{key: 'highlights', items: [{body: 'Closed <script>window.__pwned=1</script> Northwind.', ask_id: null}]}],
@@ -120,7 +123,7 @@ function fakeHub(opts: HubOpts): Hub {
     invites: [{id: 'i1', state: 'open', created_at: '2026-10-20', expires_at: '2026-12-20'}, {id: 'i2', state: 'used', created_at: '2026-10-01', expires_at: '2026-11-01', used_at: '2026-10-02'}, {id: 'i3', state: 'revoked', created_at: '2026-09-01', expires_at: '2026-10-01', revoked_at: '2026-09-02'}],
     rules: {'a-board': [{data_class: 'revenue', ref_id: '', mode: 'show', lag_days: 0, rounding: null}, {data_class: 'cash_runway', ref_id: '', mode: 'delayed', lag_days: 45, rounding: null}],
       'a-inv': [{data_class: 'revenue', ref_id: '', mode: 'rounded', lag_days: 0, rounding: 'sig:2 quarterly'}, {data_class: 'customers', ref_id: '', mode: 'show', lag_days: 0, rounding: null}], 'a-pub': []},
-    fail: new Set(opts.fail || []), writes: [], reads: []};
+    fail: new Set(opts.fail || []), writes: [], reads: [], okText: {}};
   return hub;
 }
 function answer(hub: Hub, method: string, p: string, url: URL, payload: Payload): Reply | null {
@@ -159,7 +162,16 @@ function answer(hub: Hub, method: string, p: string, url: URL, payload: Payload)
   if ((m = /^\/api\/v2\/editions\/([^/]+)$/.exec(p)) && method === 'PATCH') { Object.assign(hub.editions.find(x => x.id === m![1])!, payload); return [200, {}]; }
   if ((m = /^\/api\/v2\/editions\/([^/]+)\/retract$/.exec(p))) { Object.assign(hub.editions.find(x => x.id === m![1])!, {status: 'retracted', retraction_note: payload.note}); return [200, {}]; }
   if ((m = /^\/api\/v2\/editions\/([^/]+)\/override$/.exec(p))) { Object.assign(hub.editions.find(x => x.id === m![1])!, {status: 'ready', override_note: payload.note}); return [200, {}]; }
-  if ((m = /^\/api\/v2\/approvals\/([^/]+)$/.exec(p))) { const e = hub.editions.find(x => x.approval?.id === m![1]); if (e) { e.approval!.state = payload.decision!; e.approval!.note = payload.note || ''; } return [200, {}]; }
+  if ((m = /^\/api\/v2\/oks\/([^/]+)$/.exec(p))) {
+    const text = hub.okText[m[1]!] ?? 'October, board';
+    return [200, {content: text, requirement_id: m[1], shown_hash: 'h:' + text, standing: 'waiting', subject: 'edition', task_id: 't-ap1'}];
+  }
+  if ((m = /^\/api\/v2\/tasks\/([^/]+)\/asks\/([^/]+)\/(ok|answer)$/.exec(p))) {
+    const e = hub.editions.find(x => x.approval?.id === m![2]);
+    if (m[3] === 'ok' && payload.shown_hash !== 'h:' + (hub.okText[m[2]!] ?? 'October, board')) return [409, {error: 'task_ok_changed', detail: 'It changed.', missing: [], next: []}];
+    if (e) Object.assign(e.approval!, m[3] === 'ok' ? {state: 'approved', note: ''} : {state: 'declined', note: payload.note || ''});
+    return [200, {task: {id: m[1]}}];
+  }
   if (p === '/api/v2/company-page/stats' && method === 'GET') return [200, {stats: hub.stats, next_offset: null, available: AVAILABLE}];
   if (p === '/api/v2/company-page/stats') { const row = {id: 's9', label: 'Pipeline', data_class: 'kpi', position: 3, ...payload} as Stat; hub.stats.push(row); return [200, row]; }
   if (p === '/api/v2/readers' && method === 'GET') return [200, {readers: hub.readers, next: null, sign_in: hub.signIn, email_available: hub.emailAvailable}];
@@ -407,9 +419,19 @@ async function shotPart(page: Page, id: string, name: string) {
     await dlg.locator('.cp-read').waitFor();
     assert.match(await dlg.locator('.cp-read').innerText(), /Revenue grew 12% in October/);
     await shot(page, 'edition-approve-1280');
+    hub.okText['ap-1'] = 'October, board: revenue up 12%';
     await dlg.locator('[data-act="approve"]').click();
+    const ok = page.locator('dialog.cp-dlg[aria-label="Approve?"]');
+    await ok.locator('[data-ok-content]', {hasText: 'revenue up 12%'}).waitFor();
+    // The text changes while it is open: the OK on the old text is refused, the new text shows, and a new click is needed.
+    hub.okText['ap-1'] = 'October, board: revenue up 15%';
+    await ok.locator('button[type=submit]').click();
+    await ok.locator('[data-ok-content]', {hasText: 'revenue up 15%'}).waitFor();
+    assert.match(await ok.locator('[data-error]').innerText(), /changed/);
+    assert.deepEqual(hub.writes.filter(w => w[1].endsWith('/ok')).map(w => w[2]), [{shown_hash: 'h:October, board: revenue up 12%'}]);
+    await ok.locator('button[type=submit]').click();
     await dlg.locator('[data-act="publish"]').waitFor();
-    assert.deepEqual(hub.writes.at(-1), ['POST', '/api/v2/approvals/ap-1', {decision: 'approved'}]);
+    assert.deepEqual(hub.writes.at(-1), ['POST', '/api/v2/tasks/t-ap1/asks/ap-1/ok', {shown_hash: 'h:October, board: revenue up 15%'}]);
     assert.equal(await dlg.locator('[data-act="approve"]').count(), 0);
     assert.match(await dlg.locator('[data-ed-body]').innerText(), /Approved by Ana Silva\. Publish is next/);
     // Publishing is its own step, and says what it does at this page's level.

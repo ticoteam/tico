@@ -66,12 +66,12 @@ function server(): State {
       {delivery: 'd2', sent_id: 'gh-2', received_at: AGO(4), bytes: 2300, tasks: 1, outcome: 'accepted', reason: '', type: 'push', via: 'direct', rules: 1, stored: true},
       {delivery: 'd1', sent_id: '', received_at: AGO(70), bytes: 120, tasks: 0, outcome: 'refused', reason: 'bad signature', type: '', via: 'gateway', rules: 0, stored: true}],
     _tico: [], orders: []},
-    hooks: [{id: 'wh1', name: 'Zapier', url: 'https://hooks.zapier.com/a/b', host: 'hooks.zapier.com', events: ['task.*', 'approval.decided'], enabled: false,
+    hooks: [{id: 'wh1', name: 'Zapier', url: 'https://hooks.zapier.com/a/b', host: 'hooks.zapier.com', events: ['task.*', 'bot.run_failed'], enabled: false,
       paused_reason: 'Failing for 3 days', rate_per_hour: 600, allow_http: false, created_by: 'human:ana', revision: 2, can_change: true, old_secret_until: null,
       last_7_days: {delivered: 40, failed: 3, pending: 0}, filter: {departments: ['engineering'], bots: ['bot:eng'], pipelines: []},
       headers: [{name: 'x-api-key', secret: true, set: true}, {name: 'x-team', secret: false, value: 'acme'}]}],
     sends: {wh1: [{id: 's2', webhook_id: 'wh1', type: 'task.done', subject: 't-9', state: 'failed', attempts: 5, last_status: 500, last_error: 'HTTP 500', created_at: AGO(30)},
-      {id: 's1', webhook_id: 'wh1', type: 'approval.decided', subject: 'a-1', state: 'delivered', attempts: 1, last_status: 200, last_error: '', created_at: AGO(90)}]},
+      {id: 's1', webhook_id: 'wh1', type: 'bot.run_failed', subject: 'a-1', state: 'delivered', attempts: 1, last_status: 200, last_error: '', created_at: AGO(90)}]},
     relay: {key: 'none', relays: 0, cursor: 0, last_pull: null, last_error: '', pending: 0, oldest: null, deleting: 0, active: false},
     hosted: false,
     role: 'owner',
@@ -284,18 +284,18 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       await make.locator('[name=name]').fill('Make.com');
       await make.locator('[name=url]').fill('https://hook.make.com/abc');
       for (const e of CATALOG.filter(x => x.outbound === false)) assert.equal(await make.locator(`[data-ev-name="${e.name}"]`).count(), 0, e.name + ' is for automations only');
-      assert.equal(await make.locator('[data-ev-name="release.published"]').count(), 1);
+      assert.equal(await make.locator('[data-ev-name="strategy.published"]').count(), 1);
       await make.locator('[data-ev-all]').uncheck();
       assert.equal(await make.locator('.wh-ev-groups input:checked').count(), 0, 'unchecking All clears the boxes');
       await make.locator('[data-ev-group="task"] [data-ev-head]').check();
-      await make.locator('[data-ev-name="approval.decided"]').check();
+      await make.locator('[data-ev-name="bot.run_failed"]').check();
       assert.equal(await make.locator('[data-ev-group="task"] [data-ev-name]:checked').count(), CATALOG.filter(e => e.group === 'task').length);
       if (shots) { await settled(page); await make.screenshot({path: path.join(shots, 'outgoing-new-desktop.png')}); }
       await make.locator('button[type=submit]').click();
       await make.waitFor({state: 'detached'});
       await pane.locator('[data-wh-secret="secret"]').waitFor();
       const created = state.posts.find(x => x.path === '/api/v2/webhooks')!;
-      assert.deepEqual(created.body.events, ['task.*', 'approval.decided']);
+      assert.deepEqual(created.body.events, ['task.*', 'bot.run_failed']);
       assert.equal(await pane.locator('[data-wh-secret="secret"] code').innerText(), 'whsec_b3V0Z29pbmc=');
       await pane.locator('[data-wh-back]').click();
       await pane.locator('[data-wh-hook="wh1"]').click();

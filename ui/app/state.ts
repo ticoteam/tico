@@ -235,8 +235,10 @@ function needsBotOf(it: NeedsEntry): string | null {
 }
 // What needs you from that bot. The org tree's number is a fixed attention count matching the default Needs you tab,
 // independent of edits to that tab.
+// S.v2.needs holds the Needs-you items as the server sends them (hub-v2.ts needsTake).
+const needsEntries = (): NeedsEntry[] => (S.v2?.needs || []) as unknown as NeedsEntry[];
 function botNeeds(slug: string): NeedsEntry[] {
-  return (S.v2?.needs || [] as unknown as NeedsEntry[]).filter(it => needsBotOf(it as unknown as NeedsEntry) === 'bot:' + slug) as unknown as NeedsEntry[];
+  return needsEntries().filter(it => needsBotOf(it) === 'bot:' + slug);
 }
 // While only some pages are held, the counts are the server's over the whole list (its `bots`).
 const needsBotsWhole = (): Record<string, number> | null => S.v2?.needsNext && S.v2.needsBots ? S.v2.needsBots : null;
@@ -246,8 +248,8 @@ function needsMeCounts(): Map<string, number> {
   const whole = needsBotsWhole();
   if (whole) return new Map(Object.entries(whole));
   const counts = new Map<string, number>();
-  for (const it of S.v2?.needs || []) {
-    const actor = needsBotOf(it as unknown as NeedsEntry);
+  for (const it of needsEntries()) {
+    const actor = needsBotOf(it);
     if (actor) counts.set(actor, (counts.get(actor) || 0) + 1);
   }
   return counts;
