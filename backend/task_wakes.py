@@ -58,9 +58,22 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "") -> str:
     return "\n".join(lines)
 
 
-# What a wake's refs hold that is the engine's or the run's own, never carried from a folded wake to the one it folds
-# into.
-ENGINE_REFS = ("task", "wake", "visit", "level", "try", "version", "quiet", "job", "trigger", "source", "purpose")
+# What a wake's refs hold that is the engine's or the run's own. A caller's refs never set one, and a folded wake never
+# carries one into the wake it folds into.
+ENGINE_REFS = (
+    "task",
+    "wake",
+    "visit",
+    "level",
+    "try",
+    "version",
+    "quiet",
+    "job",
+    "trigger",
+    "trigger_source",
+    "source",
+    "purpose",
+)
 
 
 def add(
@@ -80,10 +93,11 @@ def add(
 ) -> str | None:
     """Wake `target` about `task`, once per key. Returns the message id, or None when this wake was already written or
     there is nobody to tell. A wake still queued for `target` about this task is folded into this one: its words come
-    first, what its caller attached comes along, and it is canceled. A quiet note starts no run and folds nothing.
-    `refs` are a caller's own facts for the run it starts (an automation's run and step, the other work to reconcile
-    with); they never replace the engine's. `trigger` and `source` say what the run is for, where the caller knows
-    better than "work a task"."""
+    first, what its caller attached comes along, and it is canceled once this one has queued its run. A quiet note
+    starts no run and folds nothing. `refs` are a caller's own facts for the run it starts (an automation's run and
+    step, the other work to reconcile with): any of them that is the engine's (`ENGINE_REFS`) is dropped, so `quiet`
+    and `job` come only from the engine's own state. `trigger` and `source` say what the run is for, where the caller
+    knows better than "work a task"."""
     H = _h()
     if not target:
         return None
@@ -107,13 +121,14 @@ def add(
                 # rides on: the run that starts is still that work. The engine's own facts are this wake's.
                 was: Row = H._json(found[2], {}) or {}
                 trigger = trigger or (was.get("trigger") if was.get("trigger") != "task_turn" else None)
-                source = source or was.get("source")
+                source = source or was.get("trigger_source")
                 carried.update({name: value for name, value in was.items() if name not in ENGINE_REFS})
     own: Row = {"task": task["id"], "wake": "task_turn", "visit": visit["id"], "level": level, "try": try_n}
     own["version"] = task.get("version")
     if quiet:
         own["quiet"] = True
-    stamped: Row = RT.stamp({**carried, **(refs or {}), **own}, trigger or "task_turn", source)
+    theirs: Row = {name: value for name, value in (refs or {}).items() if name not in ENGINE_REFS}
+    stamped: Row = RT.stamp({**carried, **theirs, **own}, trigger or "task_turn", source)
     message = H._write_message(
         conn,
         H.KEEPER,
@@ -127,15 +142,19 @@ def add(
     )
     if not message:
         return None
-    for found in waiting:  # folded into this one
-        conn.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued'", (found[0],))
     # `job` marks a wake that queued a run, so a wake whose job later went missing reads as lost (`lost`); one to a bot
     # that reads its own inbox never had a job.
-    conn.execute(
-        "UPDATE messages SET wake_key=?, refs=CASE WHEN EXISTS (SELECT 1 FROM jobs WHERE message_id=?) "
-        "THEN json_set(COALESCE(refs, '{}'), '$.job', json('true')) ELSE refs END WHERE id=?",
-        (wake_key, message["id"], message["id"]),
-    )
+    job = conn.execute("SELECT 1 FROM jobs WHERE message_id=?", (message["id"],)).fetchone() is not None
+    if job:
+        conn.execute(
+            "UPDATE messages SET wake_key=?, refs=json_set(COALESCE(refs, '{}'), '$.job', json('true')) WHERE id=?",
+            (wake_key, message["id"]),
+        )
+        for found in waiting:  # folded into this one
+            conn.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued'", (found[0],))
+    else:
+        # It queued no run (a rule held it): the wakes it would have folded stay queued, so the bot is still woken.
+        conn.execute("UPDATE messages SET wake_key=? WHERE id=?", (wake_key, message["id"]))
     return message["id"]
 
 
