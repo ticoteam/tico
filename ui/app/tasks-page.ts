@@ -249,7 +249,7 @@ function tasksRender(state: TasksPageState | null) {
   const body = $('#task-body');
   if (!body || !state || TASKS_ST !== state) return;
   tasksHeadPaint(state);
-  decidePaintButton();
+  needsBadgePaint();
   body.dataset.view = state.archive ? 'archive' : state.pipeline ? 'pipeline' : 'you';
   const p = state.archive ? null : tasksPipeline(state), hooks = TASK_PAGE_HOOKS.pipeline;
   if (p && hooks?.rail) { const rail = $('#task-rail'); rail.hidden = false; hooks.rail(rail, p); } else tasksRailOff();

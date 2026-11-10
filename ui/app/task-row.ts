@@ -13,7 +13,8 @@ function taskMark(t: TaskAny | null | undefined): TaskMarkKind {
   const state = t.turn?.state;
   if (state === 'person') return 'person';
   if (state === 'paused') return 'cant';
-  if (state === 'bot') return 'working';
+  // The spinner only while a run is going (`turn.running`); a bot's turn between runs has no mark.
+  if (state === 'bot' && (t.turn as {running?: boolean} | null)?.running) return 'working';
   return '';
 }
 const TASK_MARK_TIP: Record<string, string> = {working: 'Working', person: 'Needs a person', cant: "Can't run"};
@@ -117,8 +118,8 @@ function taskFilterMatch(t: TaskAny, q: string, f: TaskFilters = {}): boolean {
     if (f.due === 'overdue' && due >= Date.now()) return false;
     if (f.due === 'week' && due > Date.now() + 7 * 86400_000) return false;
   }
-  // Pushed past: the full task's requirements say so; a list row cannot, so it matches only on a full read.
-  if (f.pushed && !('to_leave' in t && (t.to_leave || []).some(r => /pushed past/i.test(r.standing)))) return false;
+  // Pushed past: a list row says so (`pushed_past`); a full task by its requirements.
+  if (f.pushed && !((t as {pushed_past?: boolean}).pushed_past || 'to_leave' in t && (t.to_leave || []).some(r => /pushed past/i.test(r.standing)))) return false;
   return true;
 }
 /** How a pipeline is drawn on the Tasks page (task-pipelines.ts sets it as it loads). The page (tasks-page.ts) owns the
