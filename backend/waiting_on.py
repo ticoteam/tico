@@ -23,6 +23,7 @@ The nine states, in headline order:
 
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from typing import TYPE_CHECKING, Any
 
 from . import hubdb_core, pipeline_rights, task_wakes
@@ -76,13 +77,30 @@ def person_for(conn: "sqlite3.Connection", row: Row) -> str | None:
     owner where that is a person, else the pipeline's owner or manager where that is a person, else the owner of its
     manager bot, else the owner of the bot that has the task, else whoever asked for it, else the company owner, else
     the person who has been here longest. Anyone on the way who left, was removed or cannot sign in is skipped, and on
-    a private task anyone who cannot read it. None only when nobody can sign in, or nobody who can reads it."""
+    a private task anyone who cannot read it. A private task then falls to a person on its reader list, a group's by
+    its members now (`H.reader_actors`). None only when nobody can sign in, or nobody who can reads it. The never-stuck
+    check hands a task to this same person (never_stuck._person)."""
     H = task_wakes._h()
     if not H.task_private(conn, row):
         return next(_people_for(conn, row), None)
     # A private task falls only to a person who may read it already: the engine never adds a reader. None when no
     # person on the way reads it (never_stuck: held, and counted in Health without naming it).
-    return next((found for found in _people_for(conn, row) if H.task_private_readable(conn, found, row)), None)
+    found = (
+        who for who in chain(_people_for(conn, row), _readers(conn, row)) if H.task_private_readable(conn, who, row)
+    )
+    return next(found, None)
+
+
+def _readers(conn: "sqlite3.Connection", row: Row) -> Iterator[str]:
+    """The people on a private task's reader list who can act, each group by its members now, in a stable order. Read
+    only once the ladder's own people are passed over."""
+    H = task_wakes._h()
+    if "readers" not in row:
+        found = conn.execute("SELECT readers FROM tasks WHERE id=?", (row["id"],)).fetchone()
+        row = {**row, "readers": found[0] if found else None}
+    for person in sorted(who for who in H.reader_actors(conn, row) if is_human(who)):
+        if R.active_person(conn, person):
+            yield str(person)
 
 
 def _people_for(conn: "sqlite3.Connection", row: Row) -> Iterator[str]:

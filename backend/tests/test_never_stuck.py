@@ -950,24 +950,36 @@ def test_the_rules_check_reads_a_persons_needs_you_once_and_finds_each_task_in_i
     assert reads["items"] <= 5_000 + 10 * len(tasks), reads  # each item looked at once, not once per task
 
 
+def _company_where_only_a_group_reads(c):
+    """A real company shape: every bot reports to Bo, who can no longer sign in. Ana owns the company and is above
+    nobody's bots; Cy is in the Ops group. Neither reads a private task of the bots' until `group:ops` is on its reader
+    list, and then Cy does, through the group only."""
+    from backend import access as Access
+    from backend.views import roster
+
+    for slug, name in (("bo", "Bo"), ("cy", "Cy")):
+        c.execute("INSERT INTO humans(id,name,email) VALUES(?,?,?)", (slug, name, f"{slug}@acme.example"))
+    whole = roster(c)
+    people = [*whole["people"], {"id": "bo", "name": "Bo"}, {"id": "cy", "name": "Cy", "team": "ops"}]
+    Access.save_roster(c, {**whole, "people": people, "org_groups": {"ops": {"name": "Ops"}}})
+    c.execute("UPDATE bot_config SET reports_to='human:bo'")
+    X.no_sign_in(c, "human:bo")
+
+
 def test_a_private_task_no_person_can_read_goes_to_no_one_and_health_counts_it_without_naming_it(
-    c, general, time_machine, monkeypatch
+    c, general, time_machine
 ):
-    """A bot asked for it, a bot has it, and no person reads it. When the ladder runs out it goes to no person: nobody
-    is made a reader, it is in nobody's Needs you, no bot is woken again, and the rules check reports it held for that
-    cause. Health tells the company's owner and Admins only how many, never which."""
+    """A bot asked for it, a bot has it, and no person who can act reads it (the bots' person, Bo, cannot sign in).
+    When the ladder runs out it goes to no person: nobody is made a reader, it is in nobody's Needs you, no bot is woken
+    again, and the rules check reports it held for that cause. Health tells the company's owner and Admins only how
+    many, never which. Once the Ops group, Cy's, is on its reader list, the next pass names Cy's turn."""
     from backend import health
 
     def step(**delta):
         time_machine.shift(timedelta(**delta))
         return {key: n for key, n in NS.check(c).items() if n}
 
-    reads = H.task_private_readable
-
-    def bots_only(conn, actor, row):  # as when the person every bot reports to is not here: no person reads it
-        return not H.is_human(actor) and reads(conn, actor, row)
-
-    monkeypatch.setattr(H, "task_private_readable", bots_only)
+    _company_where_only_a_group_reads(c)
     made = H.task_create(c, REVIEWER, "Draft the salary review", "Only us.", BUILDER, private=True, lint=False)
     task_id = made["id"]
     assert H.task_readers(H.task(c, task_id)) == [] and not NS._reads(c, ANA, E.task(c, task_id))
@@ -975,7 +987,7 @@ def test_a_private_task_no_person_can_read_goes_to_no_one_and_health_counts_it_w
         if gap:
             assert step(seconds=gap) == {"woken": 1}
         X.ran(c, task_id, BUILDER)
-    assert step(seconds=120) == {"to_person": 1}  # three tries; the manager bot cannot read it
+    assert step(seconds=120) == {"to_person": 1}  # three tries; the manager bot cannot run it to a person
     visit = _visit(c, task_id)
     assert visit["level"] == "person" and visit["person_id"] is None
     assert H.task_readers(H.task(c, task_id)) == [] and X.wakes(c, task_id, MANAGER) == []
@@ -989,6 +1001,17 @@ def test_a_private_task_no_person_can_read_goes_to_no_one_and_health_counts_it_w
     check = health._never_stuck_check(c)
     assert check["counts"]["no_one"] == 1 and check["counts"]["broken"] == 0 and check["status"] == "warn"
     assert "1 private task has no one to move it." in check["summary"] and "salary" not in repr(check)
+    # A person who reads it only through a group: found through the group's members, on the next pass.
+    c.execute("UPDATE tasks SET readers=? WHERE id=?", (H._dump(["group:ops"]), task_id))
+    cy = "human:cy"
+    assert NS._reads(c, cy, E.task(c, task_id)) and not NS._reads(c, ANA, E.task(c, task_id))
+    assert W.person_for(c, E.task(c, task_id)) == cy and NS._person(c, E.task(c, task_id)) == cy
+    step(minutes=10)
+    assert _states(c, task_id)[0] == ("person", cy)
+    assert any(n.get("task_id") == task_id for n in W.needs(c, cy))
+    assert all(n.get("task_id") != task_id for n in W.needs(c, ANA))
+    assert NS.rules_hold(c) == []
+    assert H.task_readers(H.task(c, task_id)) == ["group:ops"]  # nobody was added
 
 
 class _Store:

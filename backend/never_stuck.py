@@ -367,21 +367,11 @@ def _to_person(conn: "sqlite3.Connection", row: Row, level: str, done: dict[str,
 
 
 def _person(conn: "sqlite3.Connection", row: Row) -> str | None:
-    """The person a task falls to (`waiting_on.person_for`). On a private task, one who may read it already: the one the
-    ladder chose, its owner where that is a person, else whoever asked for it, else a person on its reader list. Nobody
-    is made a reader: with no such person, None."""
-    H = _h()
-    chosen = W.person_for(conn, row)  # on a private task, only a person who reads it
-    if not H.task_private(conn, row):
-        return chosen
-    visit = _part(row, "visit")
-    readers = [actor for actor in H.task_readers(row) if H.is_human(actor)]
-    for person in (visit.get("person_id"), row.get("owner_id"), row.get("requester_id"), chosen, *readers):
-        if R.active_person(conn, person) and _reads(conn, person, row):
-            return person
-    # Nobody who reads it can act. It goes to no person and takes no bot turns; Health counts it for the company's
-    # owner and Admins without naming it, and the rules check reports it held for that cause.
-    return None
+    """The person a task falls to: `waiting_on.person_for`, the one selection the turn read and this check share. On a
+    private task, one who may read it already (its reader list's groups by their members); nobody is made a reader.
+    With no such person, None: it goes to no person and takes no bot turns; Health counts it for the company's owner
+    and Admins without naming it, and the rules check reports it held for that cause."""
+    return W.person_for(conn, row)
 
 
 # ----------------------------------------------------------------------------- late
