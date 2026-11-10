@@ -65,7 +65,8 @@ def test_a_held_email_asks_for_an_ok_on_a_task_of_its_own(store):
         grant = K.grant(c, rid)
         assert (grant["subject"], grant["asked_by_id"]) == ("email_send:" + queued["id"], "bot:ops")
         task = H.task(c, K.task_of(c, rid))
-        assert (task["owner_id"], task["title"]) == ("bot:ops", "Send email: Update")
+        # Private to its parties, titled for the act only: the email's subject line stays in its preview.
+        assert (task["owner_id"], task["title"], bool(task["private"])) == ("bot:ops", "Send an email", True)
         ask = H.task_view(c, task["id"], ANA)["to_leave"][-1]
         assert (ask["kind"], ask["who"], ask["shows"]) == ("ok", ANA, ["email:" + queued["id"]])
     assert _pass(store) is None
@@ -85,7 +86,10 @@ def test_the_ok_from_the_preview_sends_it_once_and_finishes_its_task(store):
         assert found["approved"]
         S._permit(c, row, found)
         assert K.standing(c, queued["approval_id"]) == K.USED
-        assert H.task(c, K.task_of(c, queued["approval_id"]))["status"] == "done"
+        task_id = K.task_of(c, queued["approval_id"])
+        assert H.task(c, task_id)["status"] == "open"  # claimed: done only once the provider took it
+        S._finish(c, row, "sent", "msg-1")
+        assert H.task(c, task_id)["status"] == "done"
         with pytest.raises(H.Refused, match="consumed"):
             K.use(c, queued["approval_id"], "email_send:" + queued["id"], S.content(row), "bot:ops")
 

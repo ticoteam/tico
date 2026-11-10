@@ -17,7 +17,6 @@ from backend.tests.helpers.api import as_member, get, headers, post, setup_attem
 from backend.tests.helpers.assistant import assistant_turn, say
 from backend.tests.helpers.automation_access import flow
 from backend.store import Problem
-from backend.tests.helpers.batch import approval_for_ana
 
 
 def set_rule(api, **rules):
@@ -152,26 +151,36 @@ def test_a_run_that_is_not_the_persons_own_chat_lends_nothing(api):
         assert refused.value.code == "on_behalf_of"
 
 
-def test_a_batch_commit_never_approves_on_an_assistant_walk(api):
-    _, _, finance = setup_attempt(api, "finance")
-    approval = approval_for_ana(api, token=finance["token"])
+def test_a_batch_commit_never_oks_on_an_assistant_walk(api):
+    with api.app.state.store.transaction() as c:
+        made = H.task_create(c, "human:ana", "Run the LinkedIn ads", "Q4.", "bot:finance", lint=False)
+        asked = H.task_ask(
+            c, "bot:finance", made["id"], "human:ana", "Spend $1,200?", kind="ok", seen_version=made["version"]
+        )
+    tid, rid = made["id"], asked["requirement_id"]
+
+    def found():
+        with api.app.state.store.read() as c:
+            view = H.task_view(c, tid, "human:ana")
+        return next(r for r in view["to_leave"] if r["requirement_id"] == rid)
+
     bid = post(api, "batch", {})["id"]
     r, attempt = assistant_turn(api, "ana-test")
     token = attempt["token"]
     post(
         api,
         f"batch/{bid}/respond",
-        {"kind": "decide", "decision": "approve", "text": "Go ahead", "heard": "go ahead"},
+        {"kind": "decide", "decision": "ok", "text": "Go ahead", "heard": "go ahead"},
         token=token,
     )
     done = post(api, f"batch/{bid}/commit", {}, token=token)
-    assert any("Approving is the person's own decision" in str(err) for err in done["errors"]), done["errors"]
-    assert not get(api, "approvals/" + approval["id"]).get("decision")
-    # A decline is the Assistant's to make on a walk: a fresh batch (the committed one is closed).
+    assert done["errors"] and "own" in str(done["errors"]), done["errors"]
+    assert not found()["met"] and found()["answer"] is None
+    # A send back is the Assistant's to make on a walk: a fresh batch (the committed one is closed).
     bid = post(api, "batch", {}, token=token)["id"]
-    post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "decline", "text": "No"}, token=token)
+    post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "send_back", "text": "No"}, token=token)
     post(api, f"batch/{bid}/commit", {}, token=token)
-    assert get(api, "approvals/" + approval["id"])["decision"] == "declined"
+    assert (found()["met"], found()["answer"]["value"]) == (False, "no")
 
 
 def test_admits_on_turn_refuses_what_the_person_alone_decides():

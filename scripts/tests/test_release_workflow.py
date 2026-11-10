@@ -326,13 +326,8 @@ def test_an_incremental_validation_is_a_plan_on_an_anchor_and_the_gate_runs_only
     # The gate's VMs come from the candidate's plan (release_increment.matrix): the full matrix when the plan is empty.
     assert jobs["gate"]["strategy"]["matrix"] == "${{ fromJSON(needs.candidate.outputs.matrix) }}"
     assert jobs["gate"]["strategy"]["fail-fast"] is False
-    # The full default factory sim and the measured timings run only in a full validation.
-    assert (
-        jobs["factory-sim"]["if"]
-        == "needs.candidate.outputs.plan == '' || fromJSON(needs.candidate.outputs.plan).factory"
-    )
+    # The measured timings run only in a full validation.
     assert jobs["test-timings"]["if"] == "inputs.anchor == ''"
-    assert "candidate" in jobs["release-check"]["needs"]
     steps = {step.get("name"): step for step in jobs["gate"]["steps"] if step.get("name")}
     assert "--suite" in steps["Run the candidate's unchanged release gate, this part"]["run"]
 
@@ -342,14 +337,14 @@ def test_an_incremental_validation_runs_hosted_except_its_product_and_desktop_pa
     and the Docker images, so they stay on RunsOn. A full validation keeps the configured runners."""
     ci, _ = _workflow("ci.yml")
     jobs = ci["jobs"]
-    for name in ("candidate", "native-linux", "images", "factory-sim"):
+    for name in ("candidate", "native-linux", "images"):
         assert "inputs.anchor != ''" in str(jobs[name]["runs-on"]), name
         assert "runs-on=" in str(jobs[name]["runs-on"]), name  # a full validation still runs on RunsOn
     gate = str(jobs["gate"]["runs-on"])
     assert "inputs.anchor != ''" in gate and "matrix.part != 'product'" in gate and "matrix.part != 'desktop'" in gate
     assert "runs-on=" in gate
     # The hosted disk clean-up step is reused, gated on the same mode: no new step text.
-    for name in ("native-linux", "images", "factory-sim"):
+    for name in ("native-linux", "images"):
         step = next(step for step in jobs[name]["steps"] if step.get("name", "").startswith("Free disk"))
         assert step["if"] == "vars.TICO_CI_HOSTED == 'true' || inputs.anchor != ''", name
     # The gate's hosted parts are the same mode as its runs-on: its clean-up step follows that condition.

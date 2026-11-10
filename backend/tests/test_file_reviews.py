@@ -1,10 +1,11 @@
 """Whether a person approved an exact file version (backend/file_reviews.py, `hub file approved`): an OK on an ask
-that shows the version approves it, a send back asks for changes, a newer verdict decides, and an answer taken back
-counts for nothing. On a store with no app."""
+bound to the version pinned when it was asked approves it, a send back asks for changes, a newer verdict decides, and an
+answer taken back, a plain answer, a closed task or a giver who left counts for nothing. On a store with no app."""
 
 import pytest
 
 from backend import file_reviews as F
+from backend import task_asks
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers import engine as X
@@ -49,34 +50,53 @@ def _version(c, fid, number, digest, path="cuts/intro.md", at=None):
     return (fid, number, digest)
 
 
-def _ask(c, shows, by=VIDEO):
+def _ask(c, subject, by=VIDEO):
+    """A bound OK of a file, asked as a bot's POST /api/v2/tasks/{id}/oks asks it: the version is pinned now."""
     task = H.task_create(c, ANA, "Cut the intro", "Make the intro cut.", VIDEO, lint=False)
-    asked = H.task_ask(
-        c, by, task["id"], ANA, "Is this cut ready to post?", kind="ok", shows=shows, seen_version=task["version"]
+    asked = task_asks.ask_ok(
+        c, by, ANA, "Is this cut ready to post?", shows=[subject], subject=subject, content={}, task_id=task["id"]
     )
     return task["id"], asked["requirement_id"]
+
+
+def _ok(c, rid, person=ANA):
+    """Her own click on the preview she opened (GET /api/v2/oks/{rid}, then the OK route)."""
+    shown = task_asks.preview(c, person, rid, own_click=True)["shown_hash"]
+    task_asks.give_ok(c, person, rid, shown, own_click=True)
 
 
 def _verdict(c, *versions, by="human"):
     return F._verdict(c, Identity(ANA, "owner"), list(versions), by=by)
 
 
-def test_an_ok_on_an_ask_that_shows_a_version_approves_that_version_only(c):
+def test_an_ok_from_its_preview_approves_the_pinned_version_only(c):
     fid = _file(c)
     one = _version(c, fid, 1, "d1")
-    task, rid = _ask(c, [f"file:{fid}@1"])
+    task, rid = _ask(c, f"file:{fid}@1")
     assert not _verdict(c, one)["approved"]
-    H.task_answer(c, ANA, task, rid, "ok")
+    _ok(c, rid)
     found = _verdict(c, one)
     assert (found["approved"], found["by"], found["task"], found["question"]) == (True, ANA, task, rid)
     two = _version(c, fid, 2, "d2")
     assert not _verdict(c, two)["approved"]  # a new version is a new review
 
 
+def test_a_plain_ok_on_an_ask_that_only_shows_the_file_approves_nothing(c):
+    """Codex finding 1: an ordinary answer, a token's say, is no file approval."""
+    fid = _file(c)
+    one = _version(c, fid, 1, "d1")
+    task = H.task_create(c, ANA, "Cut the intro", "Make the intro cut.", VIDEO, lint=False)
+    asked = H.task_ask(
+        c, VIDEO, task["id"], ANA, "Ready?", kind="ok", shows=[f"file:{fid}@1"], seen_version=task["version"]
+    )
+    H.task_answer(c, ANA, task["id"], asked["requirement_id"], "ok")
+    assert _verdict(c, one)["verdict"] is None
+
+
 def test_a_send_back_asks_for_changes_and_an_answer_taken_back_counts_for_nothing(c):
     fid = _file(c)
     one = _version(c, fid, 1, "d1")
-    task, rid = _ask(c, [f"file:{fid}@1"])
+    task, rid = _ask(c, f"file:{fid}@1")
     sent_back = H.task_answer(c, ANA, task, rid, "no", "Trim the opening.")
     found = _verdict(c, one)
     assert (found["approved"], found["verdict"]) == (False, "changes")
@@ -84,37 +104,46 @@ def test_a_send_back_asks_for_changes_and_an_answer_taken_back_counts_for_nothin
     assert _verdict(c, one)["verdict"] is None
 
 
-def test_a_path_ref_names_the_version_that_was_newest_when_the_person_answered(c):
+@pytest.mark.parametrize("ref", ["file:f1", "file:cuts/intro.md"])
+def test_a_ref_with_no_version_is_pinned_when_asked_and_a_later_version_is_never_approved(c, ref):
+    """Codex finding 2: Ana opens version 1; the bot publishes version 2 before she clicks. Her OK is version 1's."""
     fid = _file(c)
     one = _version(c, fid, 1, "d1", at=H.shift(H.now(), seconds=-60))
+    task, rid = _ask(c, ref)
+    with_grant = task_asks.grant(c, rid)
+    assert with_grant["subject"] == f"file:{fid}@1" and with_grant["content"]["digest"] == "d1"
     two = _version(c, fid, 2, "d2", at=H.shift(H.now(), seconds=-30))
-    task, rid = _ask(c, ["file:cuts/intro.md"])
-    H.task_answer(c, ANA, task, rid, "ok")
-    assert _verdict(c, two)["approved"] and not _verdict(c, one)["approved"]
+    _ok(c, rid)
+    assert _verdict(c, one)["approved"] and not _verdict(c, two)["approved"]
 
 
 def test_a_path_ref_is_the_asking_bots_own_file(c):
     fid = _file(c)
-    one = _version(c, fid, 1, "d1", at=H.shift(H.now(), seconds=-30))
-    task = H.task_create(c, ANA, "Review the cut", "Look at the cut.", "bot:editor", lint=False)
-    asked = H.task_ask(
-        c,
-        "bot:editor",
-        task["id"],
-        ANA,
-        "Is the cut ready?",
-        kind="ok",
-        shows=["file:cuts/intro.md"],
-        seen_version=task["version"],
-    )
-    H.task_answer(c, ANA, task["id"], asked["requirement_id"], "ok")
+    _version(c, fid, 1, "d1", at=H.shift(H.now(), seconds=-30))
+    with pytest.raises(H.Refused):
+        _ask(c, "file:cuts/intro.md", by="bot:editor")
+
+
+def test_an_ok_on_a_closed_task_or_from_someone_who_left_approves_nothing(c):
+    fid = _file(c)
+    one = _version(c, fid, 1, "d1")
+    task, rid = _ask(c, f"file:{fid}@1")
+    _ok(c, rid)
+    assert _verdict(c, one)["approved"]
+    c.execute("SAVEPOINT gone")
+    X.left(c, ANA)
+    assert _verdict(c, one)["verdict"] is None
+    c.execute("ROLLBACK TO gone")
+    c.execute("RELEASE gone")
+    assert _verdict(c, one)["approved"]
+    H.task_close(c, ANA, task, "Not needed.")
     assert _verdict(c, one)["verdict"] is None
 
 
 def test_only_the_verdicts_by_names_count(c):
     fid = _file(c)
     one = _version(c, fid, 1, "d1")
-    task, rid = _ask(c, [f"file:{fid}@1"])
-    H.task_answer(c, ANA, task, rid, "ok")
+    _, rid = _ask(c, f"file:{fid}@1")
+    _ok(c, rid)
     assert _verdict(c, one, by="any")["approved"]
     assert _verdict(c, one, by="bot:editor")["verdict"] is None

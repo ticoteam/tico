@@ -649,7 +649,7 @@ def ok_given(c, grant, ctx):
     row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
     if not row or row["state"] not in ACTIVE:
         raise Problem("state", "This email is no longer waiting to send", 409)
-    if auth is not None and not can_ok(
+    if auth is None or not can_ok(
         c, auth, grant["ok_by_id"], row["mailbox"], row["bot"], effective(c, row["mailbox"], row["bot"])
     ):
         raise Problem("forbidden", "This send follows its inbox's approval rule", 403)
@@ -884,11 +884,11 @@ def _lease(c, auth, mailbox, runner_id, *, permit=False, lease=True):
     ).fetchall():
         if stale["provider_attempted_at"]:
             c.execute(
-                "UPDATE email_sends SET state='unknown',detail='The connector did not confirm delivery',"
-                "finished_at=?,raw='' WHERE id=?",
-                (now, stale["id"]),
+                "UPDATE email_sends SET state='unknown',detail=?,finished_at=?,raw='' WHERE id=?",
+                (UNCONFIRMED, now, stale["id"]),
             )
             settle_automation(c, stale, "unknown")
+            _outcome(c, stale, "unknown", UNCONFIRMED)
         else:
             c.execute(
                 "UPDATE email_sends SET state='pending',runner_id=NULL,claimed_at=NULL,lease_id='' WHERE id=?",
@@ -978,9 +978,28 @@ def _permit(c, row, found):
     it go is used in this same write, so it lets nothing else go."""
     c.execute("UPDATE email_sends SET provider_attempted_at=?,decision=? WHERE id=?", (H.now(), dump(found), row["id"]))
     if found["approved"]:
+        # Claimed here, before the provider is called; its task ends with the provider's answer (`_finish`).
         task_asks.use(c, row["approval_id"], SUBJECT + row["id"], content(row), row["actor"])
-        task_asks.settle(c, row["approval_id"], "Sent the email.")
     H.event(c, row["actor"], "email.dispatch", row["id"], {"mailbox": row["mailbox"]})
+
+
+UNCONFIRMED = "The connector did not confirm delivery"
+
+
+def _outcome(c, row, status, detail=""):
+    """What the provider's answer means beyond the send: the OK's task ends done only when the email went, closed
+    with what happened otherwise (the OK stays used: nothing else goes under it), and a Finance email reports to its
+    invoice (finance/delivery.py `outcome`)."""
+    rid = row["approval_id"]
+    if rid and status == "sent":
+        task_asks.settle(c, rid, "Sent the email.")
+    elif rid:
+        words = "Not sent: " + (detail or "the mail service refused it") if status == "failed" else UNCONFIRMED
+        task_asks.not_done(c, rid, words[:300] + ". Nothing else goes out under this OK.")
+    if row["via"] == "finance":
+        from .finance import delivery as finance_delivery
+
+        finance_delivery.outcome(c, dict(row), status, detail)
 
 
 def _finish(c, row, status, message="", detail=""):
@@ -990,6 +1009,7 @@ def _finish(c, row, status, message="", detail=""):
     )
     H.event(c, row["actor"], "email." + status, row["id"], {"mailbox": row["mailbox"], "provider_message_id": message})
     settle_automation(c, row, status, detail, message)
+    _outcome(c, row, status, detail)
 
 
 def server_sends(c, mailbox):

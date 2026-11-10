@@ -132,7 +132,7 @@ class BatchRespond(Contract):
     kind: Literal["decide", "needs_info", "instruct", "rule", "skip", "later"]
     text: str = Field(default="", max_length=4000)
     item: int | None = Field(default=None, ge=1)  # 1-based position; the current item when omitted
-    decision: Literal["approve", "decline", "done", "close", "answer"] | None = None
+    decision: Literal["ok", "send_back", "done", "close", "answer"] | None = None
     heard: str = Field(default="", max_length=2000)  # what the person actually said, when spoken
     until: str | None = Field(default=None, max_length=40)
 

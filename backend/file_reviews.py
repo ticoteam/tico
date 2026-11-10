@@ -1,9 +1,9 @@
 """File reviews: whether a person approved an exact file version (`hub file approved`, docs/files.md).
 
-A bot asks a person for an OK on a task and shows the file (`hub task ask <id> --to <person> "line" --show
-file:<id>@<version>`, or `--show file:<path in its checkout>`). The person's OK on that ask approves the version it
-shows, and a send back asks for changes on it (`_asked`): a `file:<id>@<n>` ref names its version, and a bare
-`file:<id>` or `file:<path>` ref names the version that was newest when the person answered. A bot may review another
+A bot asks a person for a bound OK of the file (POST /api/v2/tasks/{id}/oks with subject `file:<id>@<version>`,
+`file:<id>` or `file:<path in its checkout>`). The version and its digest are pinned when it asks (`freeze`), and the
+person's OK from its preview approves exactly that version; a send back asks for changes on it (`_asked`). A plain
+answer on an ask that only shows a file approves nothing. A bot may review another
 bot's file too (`hub file review`), recorded in the file's activity log (action `reviewed`). By default only a
 person's verdict counts (`--by human`); `--by bot:SLUG` or `--by any` reads those. The newest verdict on that version
 decides, and a version never inherits another's: a new version is a new review.
@@ -132,57 +132,89 @@ def _counts(actor, by):
     return actor == by
 
 
+VERSIONED = re.compile(r"(?P<fid>[^@]+)@v?(?P<number>[0-9]+)")
+
+
+def freeze(c, by, subject, content, shows):
+    """What an OK of a file is about, pinned when it is asked (task_asks.FREEZE): `file:<id>@<n>`, `file:<id>` (its
+    current version now) or `file:<path>` (the asking bot's own file there, its newest version now) becomes
+    `file:<id>@<n>` with that version's digest. The OK binds to that pair, so a version published after the ask is
+    never the one approved. Whatever content the bot sent is replaced by what is pinned."""
+    ref = subject.split(":", 1)[1].strip()
+    exact = VERSIONED.fullmatch(ref)
+    fid = exact["fid"] if exact else ref
+    row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+    if row:
+        number = int(exact["number"]) if exact else row["current_version"]
+        v = c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)).fetchone()
+    elif not exact and H.is_bot(by):
+        v = c.execute(
+            "SELECT v.* FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE f.bot_id=? AND v.repo_path=? "
+            "AND NOT f.archived ORDER BY v.created_at DESC, v.version DESC LIMIT 1",
+            (H.actor_id(by), ref),
+        ).fetchone()
+        row = c.execute("SELECT * FROM bot_files WHERE id=?", (v["file_id"],)).fetchone() if v else None
+    else:
+        v = None
+    if not row or not v or row["archived"]:
+        H.refuse(c, by, "not-found", f"No file version {ref} to ask about", task=None)
+    pinned = f"file:{row['id']}@{v['version']}"
+    frozen = {
+        "file": row["id"],
+        "version": v["version"],
+        "digest": v["source_digest"] or v["digest"],
+        "name": v["name"],
+        "path": v["repo_path"],
+    }
+    refs = [str(x) for x in (shows or []) if str(x) != subject]
+    return pinned, frozen, [pinned, *refs]
+
+
+def may_see(c, auth, who, grant):
+    """Whether `who` may open a file OK's preview (task_asks.SEES): only when they may open the file itself."""
+    from .files import file_visible
+
+    fid = (grant.get("content") or {}).get("file")
+    row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone() if fid else None
+    return bool(row) and file_visible(c, auth, who, row, {})
+
+
 def _asked(c, versions):
-    """The verdicts OKs and send backs give the versions their asks show: one dict per answer and version, like an
-    activity row's (created_at, actor, task_id, file_id, version, digest, verdict, question). An answer taken back
-    gives none."""
+    """The verdicts bound OKs give the versions they pinned (task_asks, subject `file:<id>@<n>`): one dict per grant,
+    like an activity row's (created_at, actor, task_id, file_id, version, digest, verdict, question). An OK given from
+    its preview, by a giver who may still give it, approves; a send back asks for changes. A plain answer on an ask
+    that only shows a file, an OK withdrawn or on a task closed or moved back, or one for other bytes gives none."""
+    from . import task_asks
+
     out = []
     for fid, number, digest in versions:
-        meta = c.execute(
-            "SELECT f.bot_id, v.repo_path FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
-            "WHERE f.id=? AND v.version=?",
-            (fid, number),
-        ).fetchone()
-        refs = [f"file:{fid}@{number}", f"file:{fid}@v{number}", f"file:{fid}"]
-        if meta and meta["repo_path"]:
-            refs.append("file:" + meta["repo_path"])
-        marks = ",".join("?" for _ in refs)
-        for r in c.execute(
-            "SELECT DISTINCT r.id AS requirement_id, r.added_by_id, vi.task_id, a.by_id, a.answer, a.created_at, "
-            "j.value AS ref FROM requirements r JOIN visits vi ON vi.id=r.visit_id "
-            "JOIN answers a ON a.requirement_id=r.id AND a.visit_id=r.visit_id "
-            f"JOIN json_each(CASE WHEN json_valid(r.shows) THEN r.shows ELSE '[]' END) j "
-            f"WHERE r.kind='ok' AND a.undone_at IS NULL AND a.answer IN ('ok','no') AND j.value IN ({marks})",
-            refs,
+        for found in c.execute(
+            "SELECT requirement_id FROM ok_grants WHERE subject=? ORDER BY created_at DESC",
+            (f"file:{fid}@{number}",),
         ).fetchall():
-            if r["ref"] not in refs[:2]:
-                # A ref without a version names the newest one when the person answered; a path is the asking bot's.
-                if r["ref"] != f"file:{fid}" and (not meta or H.bot_actor(meta["bot_id"]) != r["added_by_id"]):
+            row = task_asks.grant(c, found[0])
+            if not row or (row["content"] or {}).get("digest") != digest:
+                continue
+            state, requirement, visit = task_asks._state(c, row)
+            if state in (task_asks.OK, task_asks.USED):
+                if not row["ok_by_id"] or task_asks._authority(c, row["ok_by_id"], row):
                     continue
-                newest = c.execute(
-                    "SELECT v.file_id, v.version FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id "
-                    "WHERE v.created_at<=? AND (v.file_id=? OR (? AND f.bot_id=? AND v.repo_path=?)) "
-                    "ORDER BY v.created_at DESC, v.version DESC LIMIT 1",
-                    (
-                        r["created_at"],
-                        fid,
-                        int(r["ref"] != f"file:{fid}"),
-                        meta["bot_id"] if meta else "",
-                        meta["repo_path"] if meta else "",
-                    ),
-                ).fetchone()
-                if not newest or (newest["file_id"], newest["version"]) != (fid, number):
-                    continue
+                actor, at, verdict = row["ok_by_id"], row["ok_at"], "approve"
+            elif state == task_asks.SENT_BACK and requirement and visit:
+                answer = task_asks._newest_answer(c, visit["id"], requirement["id"]) or {}
+                actor, at, verdict = answer.get("by_id"), answer.get("created_at"), "changes"
+            else:
+                continue
             out.append(
                 {
-                    "created_at": r["created_at"],
-                    "actor": r["by_id"],
-                    "task_id": r["task_id"],
+                    "created_at": at,
+                    "actor": actor,
+                    "task_id": task_asks.task_of(c, row["requirement_id"]),
                     "file_id": fid,
                     "version": number,
                     "digest": digest,
-                    "verdict": "approve" if r["answer"] == "ok" else "changes",
-                    "question": r["requirement_id"],
+                    "verdict": verdict,
+                    "question": row["requirement_id"],
                 }
             )
     return out

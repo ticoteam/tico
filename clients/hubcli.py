@@ -3891,7 +3891,7 @@ def parser():
     s.add_argument("batch")
     s.add_argument("kind", choices=["decide", "needs_info", "instruct", "rule", "skip", "later"])
     s.add_argument("--text", default="")
-    s.add_argument("--decision", choices=["approve", "decline", "done", "close", "answer"])
+    s.add_argument("--decision", choices=["ok", "send_back", "done", "close", "answer"])
     s.add_argument("--item", type=int, help="another item's number")
     s.add_argument("--until", help="with later: an ISO date-time")
     s.set_defaults(fn="needs-you respond")

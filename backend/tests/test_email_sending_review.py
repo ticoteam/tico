@@ -627,7 +627,10 @@ def test_approver_must_load_authorized_frozen_preview_and_download_exact_attachm
     assert inbox.get(path, headers=headers("ben-test")).status_code == 403
     response = inbox.get(path, headers=headers("cara-test"))
     assert response.content == b"proof" and S.digest(response.content) == file["sha256"]
-    api_post(inbox, "approvals/" + queued["approval_id"], {"decision": "approved"}, token="cara-test")
+    ok = {"shown_hash": preview["shown_hash"]}
+    api_post(inbox, f"tasks/{task}/asks/{queued['approval_id']}/ok", ok, token="cara-test")
+    with inbox.app.state.store.read() as c:
+        assert task_asks.standing(c, queued["approval_id"]) == task_asks.OK
 
 
 @pytest.mark.parametrize("state", ["canceled", "blocked", "failed", "declined"])
