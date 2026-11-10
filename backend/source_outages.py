@@ -59,11 +59,17 @@ def observe(c, source, kind, *, waiting=0, until=None, active=True, since=None):
         f"{kind}: {'waiting' if active else 'available again'}. Since {record['since'][:16].replace('T', ' ')} UTC; "
         f"{int(waiting)} turns waiting. Expected return: {expected}."
     )
-    # A board can name its own Engineering manager. Never assume the company's bot slug.
+    # The Engineering pipeline names its own manager. Never assume the company's bot slug.
+    from . import pipeline_rights
+
     managers = {
-        r[0] for r in c.execute("SELECT manager FROM task_types WHERE role='engineering' AND manager IS NOT NULL")
+        r[0]
+        for r in c.execute(
+            "SELECT manager_id FROM pipelines WHERE preset='engineering' AND retired_at IS NULL "
+            "AND manager_id IS NOT NULL AND manager_id<>''"
+        )
     }
-    recipients = {H.bot_actor(x) for x in managers if x}
+    recipients = {pipeline_rights.canonical(c, x) for x in managers}
     for target in sorted(recipients):
         bot = H.bot(c, H.actor_id(target))
         if not bot or bot['state'] in ('planned', 'archived'):
@@ -89,12 +95,12 @@ def observe(c, source, kind, *, waiting=0, until=None, active=True, since=None):
 
 
 def sync(c, settings):
-    """Observe persisted login holds, remembered GitHub reads and the computer's busy brake each scheduler tick.
+    """Observe persisted login holds and the computer's busy brake each scheduler tick.
 
     A reset permits one probe; it does not claim the source recovered. A successful turn removes the login hold,
     which ends the incident. Expired reset times are never presented as future availability.
     """
-    from . import execution, login_holds, move_retry, performance
+    from . import execution, login_holds, performance
 
     seen = set()
     queued = [
@@ -134,41 +140,6 @@ def sync(c, settings):
         )
         observe(c, source, kind, waiting=count, until=hold.get('until'), since=hold.get('since'))
         seen.add(PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32])
-    github = {}
-    # Read the latest remembered move per ticket; stale moves neither count waiters nor keep an incident open.
-    cutoff = H.shift(H.now(), seconds=-int(move_retry.RETRY_FOR.total_seconds()))
-    for (task_id,) in c.execute(
-        "SELECT DISTINCT subject_id FROM history_events WHERE subject_type='task' AND kind=? AND created_at>=?",
-        (move_retry.FIELD, cutoff),
-    ).fetchall():
-        row = H.task(c, task_id)
-        found = move_retry.remembered(c, dict(row), H.parse_ts(H.now()))
-        if not found or not found[1].get('outage') or found[1].get('local'):
-            continue
-        detail = found[1]
-        from .review_gate import links
-
-        for link in links(c, dict(row)):
-            # All checks for the same repository share access; PR numbers never split an incident.
-            source = 'github:' + (link.get('repo') or (link.get('url') or '').split('/pull/')[0]).lower()
-            saved = c.execute(
-                'SELECT value FROM registry_metadata WHERE key=?',
-                (PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32],),
-            ).fetchone()
-            proof = H._json(saved[0], {}) if saved else {}
-            if proof and not proof.get('active') and (detail.get('at') or '') <= proof.get('updated', ''):
-                continue  # A successful read supersedes this old refusal, even if the ticket has not moved.
-            entry = github.setdefault(source, {'tasks': set(), 'since': detail.get('since')})
-            entry['tasks'].add(row['id'])
-    for source, entry in github.items():
-        observe(c, source, 'GitHub checks access', waiting=len(entry['tasks']), since=entry['since'])
-        seen.add(PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32])
-    # A move's expiry, close or cancellation is not evidence that GitHub's access recovered.
-    for key, raw in c.execute('SELECT key,value FROM registry_metadata WHERE key LIKE ?', (PREFIX + '%',)).fetchall():
-        value = H._json(raw, {}) or {}
-        if value.get('active') and value.get('source', '').startswith('github:') and key not in seen:
-            observe(c, value['source'], value['kind'], waiting=0)
-            seen.add(key)
     for (runner_id,) in c.execute('SELECT id FROM runners').fetchall():
         if performance.load_status(c, runner_id, now=H.parse_ts(H.now()).timestamp())['overloaded']:
             source = 'computer:' + runner_id
@@ -176,7 +147,7 @@ def sync(c, settings):
             seen.add(PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32])
     for key, raw in c.execute('SELECT key,value FROM registry_metadata WHERE key LIKE ?', (PREFIX + '%',)).fetchall():
         value = H._json(raw, {}) or {}
-        if value.get('active') and key not in seen and not value.get('source', '').startswith('github:'):
+        if value.get('active') and key not in seen:
             # The digest is already the durable identity; finish through the same transition writer without hashing twice.
             _finish(c, key, value)
 
@@ -207,25 +178,3 @@ def batch_waiters(c, bot):
     for jobs in groups.values():
         if len(jobs) > 1:
             wake_presets._release(c, bot, jobs)
-
-
-def github_recoveries(c, prs, snapshots):
-    """Repositories whose complete read can clear an open access outage, without taking a writer."""
-    repos = {}
-    for pr in prs:
-        if pr.get('repo'):
-            repos.setdefault(pr['repo'].lower(), []).append(snapshots.get(pr['id']))
-    restored = []
-    for repo, results in repos.items():
-        if results and all(r and not r.get('error') and r.get('head_sha') for r in results):
-            key = PREFIX + hashlib.sha256(('github:' + repo).encode()).hexdigest()[:32]
-            saved = c.execute('SELECT value FROM registry_metadata WHERE key=?', (key,)).fetchone()
-            if saved and (H._json(saved[0], {}) or {}).get('active'):
-                restored.append(repo)
-    return restored
-
-
-def github_read(c, prs, snapshots):
-    """Only a complete successful head/checks read confirms access recovery; stale moves prove nothing."""
-    for repo in github_recoveries(c, prs, snapshots):
-        observe(c, 'github:' + repo, 'GitHub checks access', active=False)
