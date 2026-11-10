@@ -2131,13 +2131,15 @@ fn a_refused_line_on_a_call_reads_the_meeting_instead_of_retrying() {
     store
         .transcription_result(&claimed, "Ship it on Friday", "", json!({"fixture":true}))
         .unwrap();
-    let mut config = settings::Settings::default();
-    config.destinations = vec![Destination {
-        id: "acme".into(),
-        name: "Acme".into(),
-        base_url: tico.url.clone(),
-        actor: "human:1".into(),
-    }];
+    let config = settings::Settings {
+        destinations: vec![Destination {
+            id: "acme".into(),
+            name: "Acme".into(),
+            base_url: tico.url.clone(),
+            actor: "human:1".into(),
+        }],
+        ..Default::default()
+    };
     let remote = local_tico(&config, "acme").unwrap();
     remote.push_live(&store, &record.id).unwrap();
     assert_eq!(tico.asked("POST /api/v2/live-meetings/live-1/chunks"), 1);
@@ -2210,4 +2212,98 @@ fn a_call_from_an_org_just_signed_in_to_records_only_on_record() {
         .expect("recording after Record")
         .to_owned();
     assert_eq!(app.store.context(&id).unwrap().call_id, CALL);
+}
+
+#[test]
+fn capture_that_ends_by_itself_keeps_the_call_in_tico_and_gives_the_source_back() {
+    let tico = FakeTico::start(|method, path| source_answer(method, path, "live"));
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = call_app(directory.path(), &tico);
+    // No inputs: capture ends at once, as a lost device would end it.
+    app.start_capture = |store, id, _, _| {
+        tico_recorder_native::engine::RecordingHandle::with_sources(
+            store.clone(),
+            id.into(),
+            || Ok((vec![], String::new())),
+        )
+    };
+    app.accept_claim(
+        "acme",
+        CALL,
+        Claim::Source {
+            meeting_id: "live-1".into(),
+            title: "Pricing call".into(),
+        },
+    );
+    let id = app.meeting.clone().unwrap();
+    settle(&mut app, |_| {
+        tico.asked(&format!("DELETE {}", claim_path())) == 1
+    });
+    assert_eq!(tico.asked(&format!("DELETE {}", claim_path())), 1);
+    assert!(sent_to(&app.store.get(&id).unwrap().deliveries, "acme"));
+}
+
+#[test]
+fn quitting_mid_call_gives_the_source_back_and_keeps_the_call_in_tico() {
+    let tico = FakeTico::start(|method, path| source_answer(method, path, "live"));
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = call_app(directory.path(), &tico);
+    app.accept_claim(
+        "acme",
+        CALL,
+        Claim::Source {
+            meeting_id: "live-1".into(),
+            title: "Pricing call".into(),
+        },
+    );
+    let id = app.meeting.clone().unwrap();
+    app.shutdown();
+    // Given back before quit returns (the background release may also get there: Tico takes it as one).
+    assert!(tico.asked(&format!("DELETE {}", claim_path())) >= 1);
+    assert!(sent_to(&app.store.get(&id).unwrap().deliveries, "acme"));
+}
+
+#[test]
+fn a_call_still_live_at_launch_is_watched_until_its_call_ends() {
+    static ENDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let tico = FakeTico::start(|method, path| {
+        let ended = ENDED.load(std::sync::atomic::Ordering::SeqCst);
+        source_answer(method, path, if ended { "ended" } else { "live" })
+    });
+    let directory = tempfile::tempdir().unwrap();
+    // Left by a Recorder that crashed mid-call.
+    let store = Store::open(directory.path()).unwrap();
+    let record = store.create("Pricing call").unwrap();
+    store
+        .update_context(&record.id, |context| {
+            context.live_destination = "acme".into();
+            context.live_id = "live-1".into();
+            context.live_state = "live".into();
+            context.call_id = CALL.into();
+            Ok(())
+        })
+        .unwrap();
+    drop(store);
+    let mut app = call_app(directory.path(), &tico);
+    let read = || tico.asked("GET /api/v2/live-meetings/live-1");
+    settle(&mut app, |_| read() >= 1);
+    assert!(read() >= 1);
+    assert!(!sent_to(
+        &app.store.get(&record.id).unwrap().deliveries,
+        "acme"
+    ));
+    assert_eq!(full_view(&mut app)["meeting"]["data"], Value::Null);
+    ENDED.store(true, std::sync::atomic::Ordering::SeqCst);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while !sent_to(&app.store.get(&record.id).unwrap().deliveries, "acme")
+        && Instant::now() < deadline
+    {
+        app.tick();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(sent_to(
+        &app.store.get(&record.id).unwrap().deliveries,
+        "acme"
+    ));
+    assert_eq!(app.store.context(&record.id).unwrap().live_state, "ended");
 }

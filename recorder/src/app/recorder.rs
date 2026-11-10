@@ -63,7 +63,7 @@ const SEND_WAIT: Duration = Duration::from_secs(600);
 /// Jobs that run beside the person's own actions instead of disabling the controls.
 /// Shown when a recording or a send is asked for while an update installs.
 const UPDATING: &str = "Tico Recorder is updating. Try again in a moment.";
-const BACKGROUND: [&str; 15] = [
+const BACKGROUND: [&str; 16] = [
     "live",
     "calendar",
     "autodraft",
@@ -79,7 +79,10 @@ const BACKGROUND: [&str; 15] = [
     "call-state",
     "call-release",
     "call-presence",
+    "call-watch",
 ];
+/// How long quitting waits for Tico to take back a call's source.
+const QUIT_RELEASE_WAIT: Duration = Duration::from_secs(3);
 /// A call's live meeting is read this often while the window's own sync does not read it, to notice the call end.
 const CALL_READ_EVERY: Duration = Duration::from_secs(5);
 /// Who is in the Meet window goes to the call this often.
@@ -481,6 +484,9 @@ pub struct Recorder {
     pub visible: bool,
     /// When the default Tico was last asked what speech it can handle, and which Tico it was.
     services_at: Option<(Instant, String)>,
+    /// Stopped call recordings still live here (the app quit or crashed mid-call): their meetings are read until
+    /// the call ends, then they are kept as in Tico.
+    watched_calls: BTreeSet<String>,
     /// Call sources waiting to be given back, and the one being given back now.
     releases: std::collections::VecDeque<Release>,
     releasing: Option<Release>,
@@ -494,6 +500,7 @@ pub struct Recorder {
     call_prompt: Option<CallPrompt>,
     /// When the call recording's live meeting was last read here, and its Meet names last sent.
     call_read_at: Instant,
+    call_watch_at: Instant,
     call_presence_at: Instant,
     /// A call whose Tico refused its Meet names (an older Tico): they are not sent again.
     call_presence_off: String,
@@ -624,11 +631,13 @@ impl Recorder {
             visible: true,
             services_at: None,
             pending_call: None,
+            watched_calls: BTreeSet::new(),
             releases: Default::default(),
             releasing: None,
             claiming: None,
             call_prompt: None,
             call_read_at: Instant::now(),
+            call_watch_at: Instant::now() - CALL_READ_EVERY,
             call_presence_at: Instant::now(),
             call_presence_off: String::new(),
             call_view: Value::Null,
@@ -638,6 +647,7 @@ impl Recorder {
         if !demo {
             app.job("devices", || Ok(json!(capture::sources()?)));
         }
+        app.watched_calls = app.unfinished_calls();
         Ok(app)
     }
     fn say(&mut self, message: impl Into<String>) {
@@ -1070,6 +1080,105 @@ impl Recorder {
             Ok(json!({}))
         });
     }
+    /// A call recording that stopped without Stop or the call's end (capture ended, or the app quits): kept as in
+    /// Tico, and its source given back while the call is live. One already kept as in Tico was handled already.
+    fn call_stopped(&mut self, id: &str) {
+        let (Ok(context), Ok(record)) = (self.store.context(id), self.store.get(id)) else {
+            return;
+        };
+        if context.call_id.is_empty() || sent_to(&record.deliveries, &context.live_destination) {
+            return;
+        }
+        let result = calls::mark_sent(
+            &self.store,
+            id,
+            &context.live_destination,
+            &context.call_id,
+            "",
+        );
+        self.report(result);
+        if context.live_state != "ended" {
+            self.release_call(&context.live_destination, &context.call_id, Some(id.into()));
+        }
+    }
+    /// On quit: the releases still queued, and the one under way (its job may not get to it before the app ends),
+    /// go now without the last words, waiting at most `QUIT_RELEASE_WAIT`. Tico takes a repeated release as one.
+    fn quit_releases(&mut self) {
+        let queued: Vec<Release> = self
+            .releasing
+            .take()
+            .into_iter()
+            .chain(self.releases.drain(..))
+            .collect();
+        if queued.is_empty() {
+            return;
+        }
+        let (config, connect) = (self.config.clone(), self.tico_for);
+        let (done, wait) = mpsc::channel();
+        std::thread::spawn(move || {
+            for release in queued {
+                if let Err(error) = connect(&config, &release.destination)
+                    .and_then(|tico| tico.release_call(&release.call))
+                {
+                    eprintln!("Call source not given back on quit: {error:#}");
+                }
+            }
+            let _ = done.send(());
+        });
+        let _ = wait.recv_timeout(QUIT_RELEASE_WAIT);
+    }
+    /// Call recordings not recording now whose call is still live here and not yet kept as in Tico.
+    fn unfinished_calls(&self) -> BTreeSet<String> {
+        self.records
+            .iter()
+            .filter(|row| ["live", "paused"].contains(&row.live_state.as_str()))
+            .filter(|row| self.active.as_ref().is_none_or(|(id, _)| id != &row.id))
+            .filter_map(|row| {
+                let context = self.store.context(&row.id).ok()?;
+                (!context.call_id.is_empty()
+                    && !sent_to(&row.deliveries, &context.live_destination))
+                .then(|| row.id.clone())
+            })
+            .collect()
+    }
+    /// Reads the meetings of `watched_calls` every few seconds; one whose call ended is kept as in Tico.
+    fn watch_stopped_calls(&mut self) {
+        if self.watched_calls.is_empty()
+            || self.background.contains("call-watch")
+            || self.call_watch_at.elapsed() < CALL_READ_EVERY
+        {
+            return;
+        }
+        self.call_watch_at = Instant::now();
+        let ids: Vec<String> = self.watched_calls.iter().cloned().collect();
+        let (config, connect, store) = (self.config.clone(), self.tico_for, self.store.clone());
+        self.job_for("call-watch", None, move || {
+            let mut done = vec![];
+            for id in ids {
+                let Ok(context) = store.context(&id) else {
+                    done.push(id);
+                    continue;
+                };
+                let read = connect(&config, &context.live_destination)
+                    .and_then(|tico| tico.read_live(&store, &id));
+                match read {
+                    Ok(view) if view["state"] == "ended" => {
+                        calls::mark_sent(
+                            &store,
+                            &id,
+                            &context.live_destination,
+                            &context.call_id,
+                            view["imported_meeting_id"].as_str().unwrap_or_default(),
+                        )?;
+                        done.push(id);
+                    }
+                    Ok(_) => {}
+                    Err(error) => eprintln!("Call meeting unread: {error:#}"),
+                }
+            }
+            Ok(json!({ "done": done }))
+        });
+    }
     /// The call recording in progress: it stops by itself once its call's live meeting has ended in Tico and is
     /// kept as in Tico there (no Finish). Until then it reads that meeting every few seconds, and tells the call who
     /// is in the Meet window.
@@ -1123,9 +1232,14 @@ impl Recorder {
     /// Used on quit: stop and wait for the final audio to be saved.
     pub fn shutdown(&mut self) {
         self.screen.stop_and_wait();
+        let call = self.call_recording();
         if let Some((_, handle)) = self.active.take() {
             let _ = handle.finish();
         }
+        if let Some((id, _)) = call {
+            self.call_stopped(&id);
+        }
+        self.quit_releases();
         self.join_delete();
         self.save_context();
     }
@@ -1582,6 +1696,15 @@ impl Recorder {
                     }
                     continue;
                 }
+                "call-watch" => {
+                    if let Ok(value) = &reply.result {
+                        for id in value["done"].as_array().into_iter().flatten() {
+                            self.watched_calls.remove(id.as_str().unwrap_or_default());
+                        }
+                        self.reload();
+                    }
+                    continue;
+                }
                 "call-state" => {
                     if let Ok(view) = reply.result {
                         self.call_view = view;
@@ -1906,6 +2029,8 @@ impl Recorder {
                 self.screen.stop_meeting(&id);
                 let result = handle.finish();
                 self.report(result);
+                // Capture that ended by itself, not by Stop or the call's end.
+                self.call_stopped(&id);
             }
             self.reload();
             tico_recorder_native::qos::release_memory();
@@ -1935,6 +2060,7 @@ impl Recorder {
         self.sync_presence();
         self.sync_saved();
         self.watch_call();
+        self.watch_stopped_calls();
         self.next_release();
         if self
             .pending_call
