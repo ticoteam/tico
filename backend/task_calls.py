@@ -692,6 +692,9 @@ def task_view(
                 else None,
                 "choices": None if private else requirement.get("choices"),
                 "shows": [] if private else requirement.get("shows") or [],
+                # What it shows is where its words come from: a reader who may not open one of those pages reads
+                # none of the ask, its choices or its answer (files.readable_page_refs drops the whole entry).
+                **({"source": requirement["shows"]} if requirement.get("shows") and not private else {}),
                 "answer": {
                     "id": answer["id"],
                     "value": answer["answer"],

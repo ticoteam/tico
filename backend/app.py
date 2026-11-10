@@ -3039,6 +3039,13 @@ def create_app(settings=None):
             for event in history:
                 event["source"] = SRC.source_of(lines, event)  # reads `data`, which the answer leaves out
                 event.pop("data", None)
+            # An ask's words come from the pages it showed (body_sources): a reader who may not open one reads none.
+            from .files import readable_page_refs
+
+            history = readable_page_refs(c, auth, who, history)
+            for event in history:
+                if isinstance(event, dict):
+                    event.pop("body_sources", None)
             # Who follows it (backend/task_followers.py): null for a task with no thread of its own.
             return {
                 "task": {

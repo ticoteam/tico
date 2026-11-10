@@ -212,12 +212,20 @@ def _wake_key(row: Row, answer_id: str) -> str:
     return f"{row['id']}:{row['visit']['id']}:answer:{answer_id}"
 
 
-def _wake(conn: "sqlite3.Connection", row: Row, target: str | None, lead: str, wake_key: str) -> str | None:
+def _wake(
+    conn: "sqlite3.Connection", row: Row, target: str | None, lead: str, wake_key: str, shows: object = None
+) -> str | None:
     """Wake a bot about an open task once per key. A snoozed task wakes nobody. A bot that cannot run gets it when it
-    can."""
+    can. `shows`, the pages the ask showed, go with the words as their provenance (refs.body_sources), so a reader who
+    may no longer open one of them reads none of the words (files.readable_page_refs)."""
     if not is_bot(target) or row["status"] != "open" or row.get("snooze"):
         return None
-    return task_wakes.add(conn, row, target, row["visit"], task_wakes.body(conn, row, lead), wake_key=wake_key)
+    shown: list[Any] = shows if isinstance(shows, list) else []  # pyright: ignore[reportUnknownVariableType]
+    sources = [str(ref) for ref in shown]
+    _, refs = _h().sourced_text(lead, sources)
+    return task_wakes.add(
+        conn, row, target, row["visit"], task_wakes.body(conn, row, lead), wake_key=wake_key, refs=refs or None
+    )
 
 
 def _whose(conn: "sqlite3.Connection", row: Row, bot: str | None) -> str | None:
@@ -238,14 +246,21 @@ def _tell_bot(
     not woken: whoever has the turn gets the words."""
     steered = R.steers(requirement["kind"], value)
     if steered and value == NO:
-        _wake(conn, row, _whose(conn, row, W.holder(conn, row)), f"{_name(conn, by)} sent this back: {notes}", key)
+        _wake(
+            conn,
+            row,
+            _whose(conn, row, W.holder(conn, row)),
+            f"{_name(conn, by)} sent this back: {notes}",
+            key,
+            requirement.get("shows"),
+        )
     elif requirement.get("visit_id") and not steered:
         asker = requirement.get("added_by_id")
         target = _whose(conn, row, asker if is_bot(asker) else W.holder(conn, row))
         lead = f'{_name(conn, by)} answered "{R.name_of(requirement)}": {value}'
         if is_bot(asker) and target != asker:
             lead = f'{_name(conn, by)} answered "{R.name_of(requirement)}", asked by {_name(conn, asker)}: {value}'
-        _wake(conn, row, target, lead, key)
+        _wake(conn, row, target, lead, key, requirement.get("shows"))
 
 
 def answer(

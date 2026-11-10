@@ -582,7 +582,9 @@ def bound(conn: "sqlite3.Connection", requirement_id: str) -> bool:
 
 def private_history(conn: "sqlite3.Connection", viewer: object, events: list[Row]) -> list[Row]:
     """A task's history as `viewer` reads it: an event about a bound OK they are no party of (its ask, an answer to it,
-    a give) keeps what happened and loses its words: the ask's line becomes PRIVATE_LINE, a note goes."""
+    a give) keeps what happened and loses its words: the ask's line becomes PRIVATE_LINE, a note goes. An event about
+    an ask that showed pages carries them as its words' provenance (`body_sources`), for files.readable_page_refs."""
+    shows_of: dict[str, list[str]] = {}
     for event in events:
         data: Any = event.get("data")
         if isinstance(data, str):
@@ -594,8 +596,22 @@ def private_history(conn: "sqlite3.Connection", viewer: object, events: list[Row
         rid = str(found.get("requirement") or "")
         if not rid and event.get("field") == "requirement":
             rid = str(event.get("new") or "")
-        if rid and hidden_from(conn, viewer, rid):
+        if not rid:
+            continue
+        if hidden_from(conn, viewer, rid):
             event["note"] = PRIVATE_LINE if event.get("field") == "requirement" else ""
+        if rid not in shows_of:
+            requirement = _requirement(conn, rid) or {}
+            shown: Any = requirement.get("shows")
+            if isinstance(shown, str):
+                try:
+                    shown = json.loads(shown or "null")
+                except ValueError:
+                    shown = None
+            listed: list[Any] = shown if isinstance(shown, list) else []  # pyright: ignore[reportUnknownVariableType]
+            shows_of[rid] = [str(ref) for ref in listed]
+        if shows_of[rid]:
+            event["body_sources"] = shows_of[rid]
     return events
 
 
