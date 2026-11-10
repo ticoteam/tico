@@ -1,7 +1,7 @@
 """The Video Producer's pipeline script (templates/catalog/video-producer/software/pipeline.py) with `hub` stubbed: a
 stage waits for its mover's approval of each file, the owner is found from pipeline.yaml or the command, a self-moved
 stage runs until its project budget (plus any raise the owner approved) and is done on its `.done` file, a file is
-used only when it is approved or its stage is self-moved, and a failed `hub file approved` stops the pipeline instead of
+used only when it is approved or its stage is self-moved, and a failed `tico file approved` stops the pipeline instead of
 reading as pending."""
 
 import importlib.machinery
@@ -29,7 +29,7 @@ def repo(tmp_path, monkeypatch):
     (root / "pipeline.yaml").write_text((TEMPLATE / "pipeline.yaml").read_text())
     approved = set()
 
-    def hub_approved(asset, mover="owner"):  # stands in for `hub file approved --by`: (approved, detail)
+    def hub_approved(asset, mover="owner"):  # stands in for `tico file approved --by`: (approved, detail)
         rel = asset.relative_to(root).as_posix()
         return rel in approved, ({"by": "Ana"} if rel in approved else {})
 
@@ -84,8 +84,8 @@ def test_the_owner_comes_from_the_pipeline_or_the_command_and_is_asked_for_when_
     assert waiting.startswith("waiting: no owner is named") and "--owner" in waiting
     step = pipeline.next_step(repo.project, stages, task="T-1", owner="Ana Lee")
     publish, ask = step.splitlines()
-    assert publish == "1. hub file publish projects/launch/script/intro.md"
-    assert ask.startswith("2. hub task ask T-1 --to 'Ana Lee' 'OK the script files for launch?' --kind ok")
+    assert publish == "1. tico file publish projects/launch/script/intro.md"
+    assert ask.startswith("2. tico task ask T-1 --to 'Ana Lee' 'OK the script files for launch?' --kind ok")
     assert "--show file:<FILE@N> --version N" in ask
     repo.approved.add(script.relative_to(repo.root).as_posix())
     assert pipeline.next_step(repo.project, stages, owner="Ana Lee").startswith("waiting: make the storyboard files")
@@ -94,7 +94,7 @@ def test_the_owner_comes_from_the_pipeline_or_the_command_and_is_asked_for_when_
         (repo.root / "pipeline.yaml").read_text().replace('owner: ""', "owner: Ana Lee")
     )
     step = pipeline.next_step(repo.project, cfg(repo), task="T-1")  # the owner comes from pipeline.yaml
-    assert "--to 'Ana Lee'" in step and "hub file publish projects/launch/storyboard/sheet.html" in step
+    assert "--to 'Ana Lee'" in step and "tico file publish projects/launch/storyboard/sheet.html" in step
 
 
 def test_a_bot_mover_gets_a_hand_off_task_not_a_question(repo):
@@ -107,7 +107,7 @@ def test_a_bot_mover_gets_a_hand_off_task_not_a_question(repo):
     put(repo, "brief", "brief.md", approve=True)
     put(repo, "script", "intro.md")
     step = pipeline.next_step(repo.project, cfg(repo), task="T-1")
-    assert "hub task create --owner bot:reviewer --parent T-1" in step and "--show" not in step
+    assert "tico task create --owner bot:reviewer --parent T-1" in step and "--show" not in step
     assert "projects/launch/script/intro.md" in step
 
 
@@ -127,7 +127,7 @@ def test_a_self_stage_is_done_on_its_done_file_and_the_budget_gates_it(repo):
 
 
 class FakeOks:
-    """Stands in for `hub ok use` against Tico's OK grants (backend/task_asks.py use): exit 0 only for an OK that was
+    """Stands in for `tico ok use` against Tico's OK grants (backend/task_asks.py use): exit 0 only for an OK that was
     given, for the same subject and exactly the same content, and not used before; it is used then."""
 
     def __init__(self):
@@ -138,7 +138,7 @@ class FakeOks:
 
     def run(self, command, **kwargs):
         self.calls.append(command)
-        assert command[:3] == ["hub", "ok", "use"]
+        assert command[0] in ("tico", "hub") and command[1:3] == ["ok", "use"]
         rid, subject = command[3], command[command.index("--for") + 1]
         content = json.loads(command[command.index("--content") + 1])
         grant = self.grants.get(rid)
@@ -171,7 +171,7 @@ def test_going_over_budget_asks_the_owner_for_an_ok_bound_to_the_project_and_amo
     stages = cfg(repo)
     over_budget(repo)
     ask = pipeline.next_step(repo.project, stages, task="T-1", owner="Ana Lee")
-    assert ask.startswith("over budget (10.00 of 10.00 USD used): ask the owner for an OK: hub task ask T-1")
+    assert ask.startswith("over budget (10.00 of 10.00 USD used): ask the owner for an OK: tico task ask T-1")
     assert "--to 'Ana Lee'" in ask and "--for budget_raise:launch" in ask
     assert """--content '{"project":"launch","usd":"10.00"}'""" in ask and "--choices" not in ask
     assert "Spend 10 USD more on launch?" in ask
@@ -227,9 +227,9 @@ def test_a_bot_mover_is_approved_by_that_bot_and_the_hand_off_says_how_to_review
     assert calls[-1][-2:] == ["--by", "bot:reviewer"]
     assert REAL_APPROVAL(intro, "owner")[0] is True and calls[-1][-2:] == ["--by", "human"]
     hand_off = pipeline.request(repo.project, cfg(repo), {"id": "script", "mover": "bot:reviewer"}, [intro], "T-1", "")
-    assert "hub task create --owner bot:reviewer --parent T-1" in hand_off
-    assert hand_off.splitlines()[0] == "1. hub file publish projects/launch/script/intro.md"
-    assert "<FILE@N>" in hand_off and "hub file review <FILE@N> --approve|--changes --task <this task>" in hand_off
+    assert "tico task create --owner bot:reviewer --parent T-1" in hand_off
+    assert hand_off.splitlines()[0] == "1. tico file publish projects/launch/script/intro.md"
+    assert "<FILE@N>" in hand_off and "tico file review <FILE@N> --approve|--changes --task <this task>" in hand_off
     assert "projects/launch/script/intro.md" not in hand_off.split("\n", 1)[1].replace("intro.md: <FILE@N>", "")
 
 
@@ -243,7 +243,7 @@ TRACEBACK = (
 
 
 def hub_file_approved(monkeypatch, answers):
-    """The real approval() against a fake `hub file approved`: answers maps a file's repo path to (exit, stdout, stderr)."""
+    """The real approval() against a fake `tico file approved`: answers maps a file's repo path to (exit, stdout, stderr)."""
     calls = []
 
     def fake_run(command, **kwargs):
@@ -275,8 +275,8 @@ def test_the_hubs_not_approved_answer_is_pending_and_asks_for_review(repo, monke
     )
     assert REAL_APPROVAL(script) == (False, {})
     step = pipeline.next_step(repo.project, cfg(repo), task="T-1", owner="Ana Lee")
-    assert step.startswith("1. hub file publish projects/launch/script/intro.md")
-    assert "hub task ask T-1 --to 'Ana Lee' 'OK the script files for launch?' --kind ok --show file:<FILE@N>" in step
+    assert step.startswith("1. tico file publish projects/launch/script/intro.md")
+    assert "tico task ask T-1 --to 'Ana Lee' 'OK the script files for launch?' --kind ok --show file:<FILE@N>" in step
     assert pipeline.gate(script) == 1
 
 
@@ -298,7 +298,7 @@ def test_the_hubs_not_approved_answer_is_pending_and_asks_for_review(repo, monke
             "",
         ),
         (2, json.dumps({"error": "validation", "retryable": False, "detail": "--by is human"}), ""),  # bad input
-        (2, "", "usage: hub file approved TARGET"),
+        (2, "", "usage: tico file approved TARGET"),
         (7, "", "something unexpected"),
     ],
 )
@@ -311,7 +311,7 @@ def test_a_failed_hub_call_is_an_error_not_a_pending_file(repo, monkeypatch, cod
     )
     with pytest.raises(pipeline.Problem) as caught:
         pipeline.next_step(repo.project, cfg(repo), task="T-1", owner="Ana Lee")
-    assert f"hub file approved exited {code}" in str(caught.value)
+    assert f"tico file approved exited {code}" in str(caught.value)
     assert (stderr or stdout).strip()[-40:] in str(caught.value)
     with pytest.raises(pipeline.Problem):
         pipeline.gate(script)
@@ -326,7 +326,7 @@ def test_a_crash_shows_the_stderr_tail_in_the_error_and_stops_the_command(repo, 
     assert pipeline.main(["next", str(repo.project), "--task", "T-1", "--owner", "Ana Lee"]) == 2
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err.startswith("error: hub file approved exited 1 for projects/launch/script/intro.md")
+    assert captured.err.startswith("error: tico file approved exited 1 for projects/launch/script/intro.md")
     assert "TypeError: Client.get() got multiple values for argument 'path'" in captured.err
 
 

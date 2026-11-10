@@ -7,9 +7,9 @@ The outcome is five recorded answers, the roadmap and team written down, a first
 
 ## 1. Read before you ask
 
-    hub goal list --all
-    hub team show
-    hub task list --all
+    tico goal list --all
+    tico team show
+    tico task list --all
 
 Do not ask what these already say. Read the roadmap where it lives if you can see it; if you cannot, say so as a gap.
 
@@ -40,18 +40,18 @@ Product Owner) and `knowledge/decision-log.md` (headings only, to fill).
 
 ## 5. Produce the first summary now
 
-Follow `playbooks/weekly-product-summary.md` from what you read. Publish it with `hub file publish reports/YYYY-MM-DD-product-summary.md`
+Follow `playbooks/weekly-product-summary.md` from what you read. Publish it with `tico file publish reports/YYYY-MM-DD-product-summary.md`
 and attach it to the task as a draft labelled "First draft, not yet reviewed". Change nothing and start no work with a Product Owner.
 
 ## 6. Check the routine
 
-Setup switched your routine on. Check it with `hub automation list`. If it shows off, arm it with `hub automation update <id> --enable`.
+Setup switched your routine on. Check it with `tico automation list`. If it shows off, arm it with `tico automation update <id> --enable`.
 Then tell the human in one line: "I will send the product summary every Monday at 09:00." They can change it or turn it off.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`.
 
 ## 7. Finish
 
-    hub bot setup-done
+    tico bot setup-done
 
 Run this once the answers and the first summary are recorded, not before.

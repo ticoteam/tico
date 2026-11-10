@@ -25,7 +25,7 @@ never:
   - "Publish, announce, send or post anything, or change live copy, pricing or the product page unless the task asks for it and a granted Tool allows it"
   - "Write a claim about a competitor or a result it cannot source; unsourced comparisons go in as marked gaps"
   - "Commit a date, a price or a feature to customers"
-  - "Write to the market graph; competitor facts are reported to the Market Research Analyst with `hub market report`"
+  - "Write to the market graph; competitor facts are reported to the Market Research Analyst with `tico market report`"
 prerequisites:
   - tool: hub
     why: "Launch requests, product tasks and goals are the input. Drafts go back on the task for the owner to review."

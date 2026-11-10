@@ -7,7 +7,7 @@ exceptions with a proposed fix for each. The CRM is read only and nothing change
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/hygiene-rules.md`, `knowledge/stages.md`, `knowledge/exceptions.md` and last week's report.
 
@@ -51,6 +51,6 @@ quarter add picklist and unused-field observations as proposals.
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-crm-report.md` in the shape of `knowledge/examples/crm-report.md`, update
-`knowledge/exceptions.md`, then `hub file publish reports/YYYY-MM-DD-crm-report.md`. Commit and `hub
+`knowledge/exceptions.md`, then `tico file publish reports/YYYY-MM-DD-crm-report.md`. Commit and `hub
 task done <id> -m "..." --version N`: the headline, the path, the size of the read, what failed.
 Apply requested fixes with your Tools and verify the result. Always finish the task.

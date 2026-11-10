@@ -874,10 +874,13 @@ OUTSIDE_ACTIONS = tuple(
         ('publish package', r"\bcargo\s+publish\b"),
         ('publish package', r"\btwine\s+upload\b"),
         ('publish package', r"\bdocker\s+(?:image\s+)?push\b"),
-        ('consume approval', r"\b(?:hub\s+)?approval\s+consume\b"),
-        ('send email', r"\b(?:hub\s+)?(?:mail|email)\s+send\b"),
+        # `tico` is the teamwork CLI; `hub` is its old name, read for good.
+        ('publish release', r"\b(?:hub|tico)\s+release\s+now\b"),
+        ('send support report', r"\b(?:hub|tico)\s+support\s+send\b"),
+        ('consume approval', r"\b(?:(?:hub|tico)\s+)?approval\s+consume\b"),
+        ('send email', r"\b(?:(?:hub|tico)\s+)?(?:mail|email)\s+send\b"),
         ('send email', r"\bsendmail\b"),
-        ('send webhook', r"\b(?:hub\s+)?webhook\s+send\b"),
+        ('send webhook', r"\b(?:(?:hub|tico)\s+)?webhook\s+send\b"),
         ('make payment', r"\bstripe\s+(?:payments|payment_intents)\s+(?:create|confirm)\b"),
     )
 )
@@ -907,6 +910,7 @@ LEGACY_OUTSIDE_PROGRAMS = {
     'twine': 'possible package publish (older computer omitted command details)',
     'docker': 'possible image publish (older computer omitted command details)',
     'hub': 'possible approval, publish or send (older computer omitted command details)',
+    'tico': 'possible approval, publish or send (older computer omitted command details)',
     'stripe': 'possible payment (older computer omitted command details)',
     'sendmail': 'send email',
 }
@@ -1225,14 +1229,14 @@ SHELL_CALLS = frozenset({"Bash", "bash", "shell", "exec_command"})
 
 def read_only_shells(c, attempt_id):
     """Whether every shell call of a run whose lease lapsed only read, so the lost turn repeats nothing when it runs
-    again. A lapsed lease is what a computer that dropped mid-reply looks like: a turn that had only run `hub needs-you
-    show` and `hub task list` would otherwise sit held for review for hours while its person hears nothing. Only for a
+    again. A lapsed lease is what a computer that dropped mid-reply looks like: a turn that had only run `tico needs-you
+    show` and `tico task list` would otherwise sit held for review for hours while its person hears nothing. Only for a
     run with no hub write recorded (`writes`: every hub write counts there) and only for calls the runner scanned whole
     and found no named outside action in (`outside_actions`, runner-rs shell_outside_actions: a merge, publish, send or
     payment anywhere in the line) and judged read-only as a whole (`reads_only`, runner-rs shell_reads_only: every run of
     the line is setup, a reading program or a hub read, with no redirection to a file, expansion or heredoc). The
-    summary is never judged: it names one program of a line that may hold more (`curl -X POST ... && hub task list`
-    summarizes as `hub task list`). An older runner's call carries no `reads_only` and stays held. The resumed turn's
+    summary is never judged: it names one program of a line that may hold more (`curl -X POST ... && tico task list`
+    summarizes as `tico task list`). An older runner's call carries no `reads_only` and stays held. The resumed turn's
     note still says to check what already happened first."""
     row = c.execute("SELECT state,coalesce(writes,0) AS writes FROM attempts WHERE id=?", (attempt_id,)).fetchone()
     if not row or row['state'] != 'expired' or row['writes']:
@@ -2302,7 +2306,7 @@ def stranded(c, settings, bot, source_id, target_id):
     return (
         f"{label}'s history exists only on {source}: {repository} is not on GitHub yet, so {target} could not fetch "
         f"it and the bot would stop running. Create it as an empty private repository on GitHub "
-        f"(`hub bot repo-create {label} --empty`, or by hand); {source} then publishes it, and the bot can move"
+        f"(`tico bot repo-create {label} --empty`, or by hand); {source} then publishes it, and the bot can move"
     )
 
 
@@ -5065,7 +5069,7 @@ class Execution:
             config = {**config, "session": "task"}
         gateway_connection.hand_out(c, aid, config)
         # The room's recent page. The runner forwards only what arrived since the bot last
-        # answered; the bot reads further back itself with `hub conversation show` when it wants to. The
+        # answered; the bot reads further back itself with `tico conversation show` when it wants to. The
         # hub keeps no pointer to the bot's session and rebuilds nothing on its behalf.
         epoch = c.execute(
             "SELECT epoch,updated_at FROM session_epochs WHERE conversation_id=?", (conv["id"],)
@@ -9003,7 +9007,7 @@ class Execution:
                 H.KEEPER,
                 title,
                 f"Job {row['id']} stopped partway twice and was dismissed.\n"
-                f"Read its attempts (`hub sql`), fix the cause, and send the request again if it still matters.\n\n"
+                f"Read its attempts (`tico sql`), fix the cause, and send the request again if it still matters.\n\n"
                 + H.BOT_REVIEW_ID.format(id=row['bot_id']),
                 H.bot_actor(maintainer),
                 deduplicate=False,

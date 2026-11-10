@@ -7,7 +7,7 @@ NDA with a status and the exact changes, and the packets and index up to date. N
 
 ## 1. Collect the queue
 
-    hub task list --owner me
+    tico task list --owner me
 
 Plus NDAs that arrived in the contracts mailbox, if it is connected. Yesterday's desk report tells you what
 was waiting on a human; check whether each moved.
@@ -41,8 +41,8 @@ the requester once for any missing value. Never guess a legal entity name.
 ## 5. Write the desk report
 
 `reports/YYYY-MM-DD-nda-desk.md`: counts by status first, then each NDA in one line (party, status, the one
-thing that matters, who acts), packets waiting, index rows added. `hub file publish` it, commit, and
-`hub task done <id> -m "..." --version N` with the counts first.
+thing that matters, who acts), packets waiting, index rows added. `tico file publish` it, commit, and
+`tico task done <id> -m "..." --version N` with the counts first.
 
 ## Done when
 - Every open NDA on the queue has a status, the exact changes, and an owner, or a question open on its task.

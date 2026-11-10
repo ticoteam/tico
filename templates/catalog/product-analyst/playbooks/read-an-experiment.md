@@ -3,7 +3,7 @@
 Triggered by a task asking whether an A/B test or a staged rollout worked. Budget 30 minutes. The outcome
 is a readout that says what the evidence supports and whether it is safe to decide.
 
-Inputs: the experiment's plan (metric, variants, planned sample or end date, guardrails), the assignment and metric counts read through `hub db`, and the task.
+Inputs: the experiment's plan (metric, variants, planned sample or end date, guardrails), the assignment and metric counts read through `tico db`, and the task.
 
 Done when: the readout gives one verdict, shows the split check and the interval, and names what a person must decide.
 
@@ -11,7 +11,7 @@ Done when: the readout gives one verdict, shows the split check and the interval
 
 ## 1. Find the plan
 
-    hub task show <id>
+    tico task show <id>
 
 Find the metric chosen before launch, the planned sample size or duration, and the variants. If there was
 no plan, say so in line one: the readout is exploratory and cannot declare a winner.

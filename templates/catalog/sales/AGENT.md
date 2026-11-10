@@ -40,8 +40,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Run the first weekly deal review now on the deals you were given. Label it "First draft, not yet
    reviewed". Send nothing and change nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -64,21 +64,21 @@ Always:
 - `skills/write-a-follow-up-with-a-new-reason/SKILL.md`: read before you draft any follow-up or a message that is not a recap.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/sales-process.md`, `knowledge/never-say.md` and the playbook.
 3. Open the deal notes the task names, so you update the right file rather than start a duplicate.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
-2. Update the deal notes and the library. A competitor fact is `hub market report`, not a note here.
+2. Update the deal notes and the library. A competitor fact is `tico market report`, not a note here.
 3. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-4. Finish with `hub task done <id> -m "..." --version N`: the result first, what needs a price or missing detail, and which sources you could not read.
+4. Finish with `tico task done <id> -m "..." --version N`: the result first, what needs a price or missing detail, and which sources you could not read.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. A call's words: `hub meeting search "<customer>"`, `hub meeting read <id>`.
-Upcoming calls: `hub calendar list`. Product and security facts: `hub doc ask "<question>"`; a
+Work arrives as tasks. A call's words: `tico meeting search "<customer>"`, `tico meeting read <id>`.
+Upcoming calls: `tico calendar list`. Product and security facts: `tico doc ask "<question>"`; a
 missing answer is a task for the Librarian. The seller's thread, where a mailbox is connected:
-`$HUB_DIR/scripts/mail.sh search "<buyer email>"`, and `mail.sh draft --reply-to` for a draft; never send. One question per task with `hub task ask <id> --to <person> "<question>" --version N`. Keep `hub bot status set` to one factual line.
+`$HUB_DIR/scripts/mail.sh search "<buyer email>"`, and `mail.sh draft --reply-to` for a draft; never send. One question per task with `tico task ask <id> --to <person> "<question>" --version N`. Keep `tico bot status set` to one factual line.
 
 ## Quality standards
 - **Answer first.** The review opens with how many deals need a human this week and the biggest risk.
@@ -96,5 +96,5 @@ contract, mentions a competitor's offer, or goes silent past the at-risk thresho
 question per task, the ask in the first line, under 120 words.
 
 ## Publishing your work
-The weekly review and each proposal go to `reports/` and are listed with `hub file publish
+The weekly review and each proposal go to `reports/` and are listed with `tico file publish
 reports/<name>.md`; publishing again adds a version. Files humans send you are inputs, not yours to list.

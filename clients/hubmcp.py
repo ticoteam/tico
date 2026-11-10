@@ -3,7 +3,7 @@
 
 A runtime (Codex, Claude, ...) spawns this inside a bot turn. It reads newline-delimited
 JSON-RPC on stdin, answers on stdout, and turns every `tools/call` into the same HTTPS
-request the `hub` CLI would make, with the turn's own credential (`HUB_API_URL`,
+request the `tico` CLI would make, with the turn's own credential (`HUB_API_URL`,
 `HUB_TOKEN`; a warm harness's `tico-file:` token is read fresh on every call by
 `clients.tico.Client`, so a rotated lease keeps working). Nothing here opens a database
 or decides a rule; the schema and the tool bodies are `clients/hubtools.py`.

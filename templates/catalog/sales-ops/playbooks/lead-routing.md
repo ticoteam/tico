@@ -8,7 +8,7 @@ the rules give, and any rule change as a proposal. Reassign requested work with 
 
 ## 1. Read the rules and the leads
 
-    hub task show <id>
+    tico task show <id>
 
 Read `knowledge/routing-rules.md` (territories, segments, round robin order, who covers whom, who is
 out) and, from the CRM, the leads in question with source, organization size, region and created time.
@@ -22,7 +22,7 @@ which rule decided each lead. A lead that matches no rule, or two, is a rule gap
 ## 3. Propose
 
 For each lead: the lead id, the owner the rule gives, the rule. Put the list on the task. Where the requested work and your Tools allow CRM writing, assign exactly those leads; otherwise
-`hub task create --owner <human>` with the list for the human who assigns.
+`tico task create --owner <human>` with the list for the human who assigns.
 
 ## 4. Fix the rules, not the leads
 
@@ -32,5 +32,5 @@ changes, with date and the source request, in `knowledge/routing-rules.md`.
 
 ## 5. Finish
 
-Commit and `hub task done <id> -m "..." --version N`: leads routed or proposed, rule gaps found, what
+Commit and `tico task done <id> -m "..." --version N`: leads routed or proposed, rule gaps found, what
 waits on a human.

@@ -37,8 +37,8 @@ If `state.md` says setup has not finished, do this before any other work:
 3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/carriers.md`.
 4. Produce the first weekly report now from the exports, labelled "First draft, not yet reviewed".
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -58,19 +58,19 @@ Always:
 - `skills/measure-on-time-by-lane/SKILL.md`: read for the weekly report and for any question about a carrier or a route.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>` and its attached exports.
+1. Read `state.md`, then the task with `tico task show <id>` and its attached exports.
 2. Read `memory/learnings.md`, `knowledge/exceptions.md` and the playbook the task names.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: an export missing a column, a claim
    deadline nearly missed.
 2. Update `knowledge/`, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task done <id> -m "..." --version N`: the headline and the export dates used.
+3. Finish with `tico task done <id> -m "..." --version N`: the headline and the export dates used.
 
 ## Talking to {{app_name}}
 Exports and invoices arrive as task attachments. A delivery complaint may reach you from `support` as
 a task; answer that task with the tracking facts and the customer update ready. Ask one question per
-task with `hub task ask <id> --to <person> "<question>" --version N`.
+task with `tico task ask <id> --to <person> "<question>" --version N`.
 
 ## Quality standards
 - **Answer first.** Line one: on-time rate this week, open exceptions, and the oldest one.
@@ -85,4 +85,4 @@ Tell the Operations Manager at once when a carrier's on-time rate drops below th
 weeks running, a high-value shipment is lost, or a claim deadline will pass without a decision. Keep the message under 120 words and open with what the person should do first.
 
 ## Publishing your work
-The weekly report goes to `reports/` and is listed with `hub file publish reports/<name>.md`.
+The weekly report goes to `reports/` and is listed with `tico file publish reports/<name>.md`.

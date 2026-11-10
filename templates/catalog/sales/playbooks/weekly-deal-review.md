@@ -7,7 +7,7 @@ with a dated next step, the follow-ups ready to use, and what is due. Messages t
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/sales-process.md`, every file in `knowledge/deals/`, and last week's review. Check each
 action last week's review proposed: done, slipped or dropped. Say which.
@@ -15,7 +15,7 @@ action last week's review proposed: done, slipped or dropped. Say which.
 ## 2. Refresh each deal
 
 For each open deal: the stage and amount as the CRM shows them (a read), the last touch (the seller's
-thread, `hub meeting search "<customer>"`), the next step and its date, and the mutual action plan's next
+thread, `tico meeting search "<customer>"`), the next step and its date, and the mutual action plan's next
 milestone. Days quiet = today minus the last two-way contact, not the last email we sent. Check each stage against its exit evidence with `skills/check-a-deal-stage-against-evidence/SKILL.md`.
 
 ## 3. Sort
@@ -39,4 +39,4 @@ think are due (a stage, a close date) go in as proposals for the owner; you chan
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-deal-review.md` in the shape of `knowledge/examples/deal-review.md`, then
-`hub file publish reports/YYYY-MM-DD-deal-review.md`. Commit and `hub task done <id> -m "..." --version N`: deals needing a human, follow-ups drafted or sent, sources not read. Always finish the task.
+`tico file publish reports/YYYY-MM-DD-deal-review.md`. Commit and `tico task done <id> -m "..." --version N`: deals needing a human, follow-ups drafted or sent, sources not read. Always finish the task.

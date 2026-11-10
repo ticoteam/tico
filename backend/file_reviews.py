@@ -1,10 +1,10 @@
-"""File reviews: whether a person approved an exact file version (`hub file approved`, docs/files.md).
+"""File reviews: whether a person approved an exact file version (`tico file approved`, docs/files.md).
 
 A bot asks a person for a bound OK of the file (POST /api/v2/tasks/{id}/oks with subject `file:<id>@<version>`,
 `file:<id>` or `file:<path in its checkout>`). The version and its digest are pinned when it asks (`freeze`), and the
 person's OK from its preview approves exactly that version; a send back asks for changes on it (`_asked`). A plain
 answer on an ask that only shows a file approves nothing. A bot may review another
-bot's file too (`hub file review`), recorded in the file's activity log (action `reviewed`). By default only a
+bot's file too (`tico file review`), recorded in the file's activity log (action `reviewed`). By default only a
 person's verdict counts (`--by human`); `--by bot:SLUG` or `--by any` reads those. The newest verdict on that version
 decides, and a version never inherits another's: a new version is a new review.
 """
@@ -20,7 +20,7 @@ VERDICTS = ("approve", "changes")
 
 
 def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=None, verdict=None, note=""):
-    """A verdict given directly (`hub file review`): a bot reviewing another bot's file, on a task it reads, when it can
+    """A verdict given directly (`tico file review`): a bot reviewing another bot's file, on a task it reads, when it can
     open the file. Recorded as a `reviewed` line like an answer's, with no question. A bot's only: a person approves a
     file by a bound OK of the version pinned when it was asked (task_asks), and their token or Assistant never gives a
     verdict here; nor does a bot that acts for a person (the Assistant, BotOps)."""
@@ -88,7 +88,7 @@ def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=No
 
 
 def approved(c, auth, who, fid=None, version=None, path=None, digest=None, by="human"):
-    """Whether this exact version is approved (`hub file approved`): {approved, by, at, task, question, file, version,
+    """Whether this exact version is approved (`tico file approved`): {approved, by, at, task, question, file, version,
     digest, verdict}. By file id (current version without one), or by a path in the bot's checkout and the digest of
     its bytes now, which finds the bot's versions with those exact bytes. Only verdicts on tasks the caller reads
     count, from whom `by` names (a person by default, `bot:SLUG`, or `any`); the newest such verdict decides."""

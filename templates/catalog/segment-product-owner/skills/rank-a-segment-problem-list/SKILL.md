@@ -7,7 +7,7 @@ description: Rank one customer segment's problems by the distinct accounts they 
 When to use: each weekly segment product review, and whenever a new source (a batch of tickets, a feedback theme, a set of calls) changes what the segment's problems look like.
 
 Steps:
-1. Collect the evidence since the last review, by source, and note each source's date range: tasks with the segment label (`hub task list --updated-since <ISO time> --label segment:<slug>`), call notes (`hub meeting search` then `hub meeting read`), the feedback theme in the Customer Insights Analyst's latest weekly update, and the usage export attached to the task.
+1. Collect the evidence since the last review, by source, and note each source's date range: tasks with the segment label (`tico task list --updated-since <ISO time> --label segment:<slug>`), call notes (`tico meeting search` then `tico meeting read`), the feedback theme in the Customer Insights Analyst's latest weekly update, and the usage export attached to the task.
 2. Map each item to one problem, named in the customer's words ("I can't connect my calendar", not "calendar integration bug"). Two items about the same failure are one problem.
 3. Count distinct accounts for each problem. An account counts once per problem, however many tickets, calls or messages it has. Record how many sources each problem has.
 4. Apply the rule in `knowledge/product-practice.md`: a problem is ranked only with at least 3 distinct accounts from at least 2 sources in the last 30 days. Anything below that is "watching".

@@ -1,4 +1,4 @@
-"""The Directory's routes, end to end (track 4): `hub directory` as a bot runs it, the same questions over MCP, and what a
+"""The Directory's routes, end to end (track 4): `tico directory` as a bot runs it, the same questions over MCP, and what a
 reader without access gets back from any route. The store's own rules are in test_entities_store.py; these pin that each
 route answers what the store says over the API's real request path, and that a reader without access learns nothing.
 """
@@ -17,7 +17,7 @@ ANA, CARA = "human:ana", "human:cara"
 
 
 class Forward:
-    """The client `hub directory` calls, answered by the app's own test client as `token`: each request is the real one."""
+    """The client `tico directory` calls, answered by the app's own test client as `token`: each request is the real one."""
 
     def __init__(self, api, token):
         self.api, self.token = api, token
@@ -42,7 +42,7 @@ def answer(api, method, path, token, **kwargs):
 
 @pytest.fixture
 def cli(api, monkeypatch):
-    """`hub directory` argv in, as ana: the command's request goes to the app and its answer comes back."""
+    """`tico directory` argv in, as ana: the command's request goes to the app and its answer comes back."""
     monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: Forward(api, "ana-test"))
     return lambda *argv: remotecli.run(hubcli.parser().parse_args(["directory", *argv]))

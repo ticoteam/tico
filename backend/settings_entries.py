@@ -1721,7 +1721,7 @@ NOT_SETTINGS = {
     ("POST", "settings/history/{x}/undo"): "undoes one past change; the owner does it from History",
     ("POST", "strategy-bot/log/{x}/undo"): "undoes one Strategy bot action",
     ("POST", "repositories/refresh"): "re-reads the repositories from GitHub",
-    ("POST", "release/now"): "starts one release (`hub release now`)",
+    ("POST", "release/now"): "starts one release (`tico release now`)",
     ("POST", "screening/test"): "runs screening's built-in samples; nothing is kept",
     ("POST", "{x}/deliveries/{x}/replay"): "replays one delivery",
     ("POST", "{x}/sends/{x}/retry"): "retries one send",

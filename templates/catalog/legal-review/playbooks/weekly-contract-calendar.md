@@ -7,8 +7,8 @@ expiries in the next 90 days, plus the summaries waiting for a human. A calendar
 
 ## 1. Read where things stand
 
-    hub task show <id>
-    hub doc search "renewal"
+    tico task show <id>
+    tico doc search "renewal"
 
 Then `knowledge/contracts.md`, `knowledge/playbook.md` and last week's calendar. Add any contract that
 arrived since, by following `playbooks/summarise-a-contract.md` at a lighter depth: the key terms table and
@@ -39,14 +39,14 @@ Write `reports/YYYY-MM-DD-contract-calendar.md`: a headline, the urgent items wi
 date, the summaries waiting, and what you could not read. Close with the line "Summaries for a human, not
 legal advice; have counsel review anything that matters."
 
-    hub file publish reports/YYYY-MM-DD-contract-calendar.md
+    tico file publish reports/YYYY-MM-DD-contract-calendar.md
 
 Only the reviewers named in `state.md` receive it. An urgent item is a task for the human who owns the
-relationship, `hub task create --owner <person>`. Nothing goes to a counterparty.
+relationship, `tico task create --owner <person>`. Nothing goes to a counterparty.
 
 ## 6. Finish
 
-Update `knowledge/contracts.md`, commit, then `hub task done <id> -m "..." --version N`: the headline,
+Update `knowledge/contracts.md`, commit, then `tico task done <id> -m "..." --version N`: the headline,
 urgent items first, and which contracts you could not read.
 
 ## When a source fails

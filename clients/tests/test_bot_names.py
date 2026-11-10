@@ -1,6 +1,6 @@
-"""`hub bot check-names` (clients/bot_names.py): which old names it flags in a bot's own files, what --fix rewrites, and
+"""`tico bot check-names` (clients/bot_names.py): which old names it flags in a bot's own files, what --fix rewrites, and
 what it leaves alone. The fake bot holds the words it must not touch (an owner, a created field of another system, a
-status page, a `hub notice list`) next to the names it must change."""
+status page, a `tico notice list`) next to the names it must change."""
 
 import json
 import runpy
@@ -20,16 +20,16 @@ FILES = {
         "# Acme bot\n"
         "\n"
         "The owner decides. Nothing created yet; the hub status page is green.\n"
-        "Run `hub sql \"SELECT id, refs_json, created FROM tasks WHERE owner = 'x' AND state_json IS NULL\"` to read.\n"
-        "Tasks are `hub say hello`. `hub notice list` shows notices; `hub routine set --text-file p.txt` schedules.\n"
+        "Run `tico sql \"SELECT id, refs_json, created FROM tasks WHERE owner = 'x' AND state_json IS NULL\"` to read.\n"
+        "Tasks are `tico say hello`. `tico notice list` shows notices; `hub routine set --text-file p.txt` schedules.\n"
     ),
     "playbooks/check.md": (
         "Read the board:\n"
         "\n"
         "```sh\n"
-        "hub sql \"SELECT owner, created, started_at FROM tasks\"\n"
-        "hub sql \"SELECT count(*) AS created FROM tasks\"\n"
-        "hub meetings granola status\n"
+        "tico sql \"SELECT owner, created, started_at FROM tasks\"\n"
+        "tico sql \"SELECT count(*) AS created FROM tasks\"\n"
+        "tico meetings granola status\n"
         "```\n"
     ),
     "scripts/report.py": (
@@ -40,11 +40,11 @@ FILES = {
         "subprocess.run([\"hub\", \"sql\", \"SELECT created FROM tasks\"])\n"
         "print(\"the hub status page is up\", row.attempt_id)\n"
         "NOTE = \"\"\"\n"
-        "hub tools call these.\n"
+        "tico tools call these.\n"
         "\"\"\"\n"
         "TOOLS = {\"hub\", \"docs\", \"web\"}\n"
     ),
-    "memory/notes.md": "`hub sql \"SELECT created FROM tasks\"`\n",
+    "memory/notes.md": "`tico sql \"SELECT created FROM tasks\"`\n",
     "knowledge/notes.md": "The Stripe `created` field is epoch seconds. Use `snoozed_until` never.\n",
 }
 
@@ -69,12 +69,12 @@ def test_flags_the_old_names_in_code_and_not_the_words_that_look_like_them(tmp_p
             ("AGENT.md", 4, "created", "sql", True),
             ("AGENT.md", 4, "owner", "sql", False),  # owner stays on other tables: report it
             ("AGENT.md", 4, "state_json", "sql", True),
-            ("AGENT.md", 5, "hub say", "command", True),
-            ("AGENT.md", 5, "hub routine", "removed", False),
+            ("AGENT.md", 5, "tico say", "command", True),
+            ("AGENT.md", 5, "tico routine", "removed", False),
             ("playbooks/check.md", 4, "owner", "sql", False),
             ("playbooks/check.md", 4, "created", "sql", True),
             ("playbooks/check.md", 5, "created", "sql", False),  # `AS created` names an alias, not the column
-            ("playbooks/check.md", 6, "hub meetings", "command", True),
+            ("playbooks/check.md", 6, "tico meetings", "command", True),
             ("memory/notes.md", 1, "created", "sql", False),  # a bot's notes are reported, never rewritten
             ("scripts/report.py", 2, "refs_json", "key", True),
             ("scripts/report.py", 3, "attempt_id", "key", True),
@@ -90,12 +90,12 @@ def test_fix_rewrites_the_unambiguous_names_only_and_a_second_run_finds_the_rest
 
     agent = (root / "AGENT.md").read_text()
     assert "SELECT id, refs, created_at FROM tasks WHERE owner = 'x' AND saved_state IS NULL" in agent
-    assert "Tasks are `hub message send hello`." in agent
-    assert "`hub notice list`" in agent and "`hub routine set --text-file p.txt`" in agent
+    assert "Tasks are `tico message send hello`." in agent
+    assert "`tico notice list`" in agent and "`hub routine set --text-file p.txt`" in agent
     check = (root / "playbooks/check.md").read_text()
     assert "SELECT owner, created_at, started_at FROM tasks" in check
     assert "count(*) AS created FROM" in check
-    assert "hub meeting granola status" in check
+    assert "tico meeting granola status" in check
     report = (root / "scripts/report.py").read_text()
     assert 'row["refs"]' in report and 'who.get("run_id")' in report
     assert "SELECT created_at FROM tasks" in report and "row.run_id" in report
@@ -105,8 +105,8 @@ def test_fix_rewrites_the_unambiguous_names_only_and_a_second_run_finds_the_rest
 
     left = bot_names.scan(root, bot_names.load_names())
     assert sorted((f.path, f.old) for f in left) == [
-        ("AGENT.md", "hub routine"),
         ("AGENT.md", "owner"),
+        ("AGENT.md", "tico routine"),
         ("memory/notes.md", "created"),
         ("playbooks/check.md", "created"),
         ("playbooks/check.md", "owner"),
@@ -156,11 +156,11 @@ def test_a_name_renamed_on_some_tables_is_found_with_its_tables_and_stays_where_
         tmp_path / "bot-acme",
         {
             "AGENT.md": (
-                "`hub sql \"SELECT owner FROM tasks\"`\n"
-                "`hub sql \"SELECT owner FROM meetings\"`\n"
-                "`hub sql \"SELECT m.from_actor, n.from_actor FROM messages m JOIN notes n ON n.id = m.id\"`\n"
-                "`hub sql \"SELECT due FROM tasks\"`\n"
-                "`hub sql \"SELECT ts FROM kpi_readings UNION SELECT ts FROM events\"`\n"
+                "`tico sql \"SELECT owner FROM tasks\"`\n"
+                "`tico sql \"SELECT owner FROM meetings\"`\n"
+                "`tico sql \"SELECT m.from_actor, n.from_actor FROM messages m JOIN notes n ON n.id = m.id\"`\n"
+                "`tico sql \"SELECT due FROM tasks\"`\n"
+                "`tico sql \"SELECT ts FROM kpi_readings UNION SELECT ts FROM events\"`\n"
             ),
             "scripts/read.py": (
                 "import sqlite3\n"
@@ -175,7 +175,7 @@ def test_a_name_renamed_on_some_tables_is_found_with_its_tables_and_stays_where_
                 "print(task[\"owner\"], task.get(\"due\"), meeting[\"owner\"], task[\"state\"])\n"
                 "print(event[\"ts\"], say(\"pushed\", \"at\", 1), \"task.created\", \"{{task.owner}}\", \"src/main.ts\")\n"
             ),
-            "scripts/kept.py": "rows = run(['hub', 'sql', 'SELECT owner FROM meetings'])\nprint(row['owner'])\n",
+            "scripts/kept.py": "rows = run(['tico', 'sql', 'SELECT owner FROM meetings'])\nprint(row['owner'])\n",
         },
     )
     found = {(f.path, f.line, f.old): f for f in bot_names.scan(root, bot_names.load_names())}
@@ -201,7 +201,7 @@ def test_a_name_renamed_on_some_tables_is_found_with_its_tables_and_stays_where_
     assert found[("scripts/read.py", 3, "from_actor")].new == "sender_id"
     assert found[("AGENT.md", 5, "ts")].new == "created_at or measured_at"
 
-    # One spelling and no table keeping it: due, in a `hub sql` call. Everything else needs a person.
+    # One spelling and no table keeping it: due, in a `tico sql` call. Everything else needs a person.
     assert sorted(key for key, f in found.items() if f.fixable) == [("AGENT.md", 4, "due")]
     bot_names.fix(root, list(found.values()))
     agent = (root / "AGENT.md").read_text()
@@ -232,7 +232,7 @@ def test_a_renamed_table_is_flagged_with_its_new_name_and_fixed_only_in_hub_sql(
             "# Entity bot\n"
             "\n"
             "The market_watches table is prose here, so it is not read.\n"
-            "Run `hub sql \"SELECT name FROM market_entities WHERE type = 'company'\"` to list them.\n"
+            "Run `tico sql \"SELECT name FROM market_entities WHERE type = 'company'\"` to list them.\n"
         ),
         "scripts/graph.py": 'import sqlite3\nrows = sqlite3.connect(path).execute("SELECT count(*) FROM market_edges")\n',
     }
@@ -294,3 +294,16 @@ def test_the_shipped_map_is_the_applied_rename_data_and_the_cli_command_table():
         for old, new, tail, rewrite in hubcli.RENAMED
     ]
     assert sorted(shipped["commands"], key=lambda r: r["old"]) == sorted(cli, key=lambda r: r["old"])
+
+
+def test_a_line_written_with_tico_is_read_like_one_written_with_hub(tmp_path):
+    root = tmp_path / "bot-acme"
+    root.mkdir()
+    (root / "AGENT.md").write_text("Say it with `tico say hello`.\n\n```\ntico meetings granola status\n```\n")
+    (root / "run.py").write_text('subprocess.run(["tico", "meetings", "list"])\n')
+    olds = {(f.path, f.kind, f.fixable) for f in bot_names.scan(root, bot_names.load_names())}
+    assert olds == {("AGENT.md", "command", True), ("run.py", "command", False)}
+    bot_names.fix(root, bot_names.scan(root, bot_names.load_names()))
+    assert (
+        root / "AGENT.md"
+    ).read_text() == "Say it with `tico message send hello`.\n\n```\ntico meeting granola status\n```\n"

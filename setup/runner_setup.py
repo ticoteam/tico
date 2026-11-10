@@ -1,4 +1,4 @@
-"""`tico setup runner`: put a Linux computer that runs bots onto a Tico server, with a one-time join code."""
+"""`python3 -m setup runner`: put a Linux computer that runs bots onto a Tico server, with a one-time join code."""
 
 from __future__ import annotations
 
@@ -533,7 +533,9 @@ def doctor_runners(io: IO, deps: Deps, server_url: str) -> bool:
             sh = deps.ssh_shell(r["ssh_host"], r.get("ssh_port", 22), r.get("ssh_identity", ""))
         elif r["target"] == "aws":
             if not r.get("instance_id"):
-                io.say("  not launched yet: its setup stopped before the box started; run `tico setup runner` again")
+                io.say(
+                    "  not launched yet: its setup stopped before the box started; run `python3 -m setup runner` again"
+                )
                 ok = False
                 continue
             ec2, _, ssm, account = deps.aws_clients(r["aws_region"], r.get("aws_profile", ""))

@@ -4,17 +4,17 @@ Runs once, on the first message or task you receive, while `state.md` says setup
 
 Inputs: the minute book, bylaws or articles, the shareholder agreement, past consents and minutes in the docs or on tasks, the calendar, and the answers the human gives.
 Outcome: five recorded answers; the entity register, board facts and minute book index started from the real records, with blanks where none were found; an approvals list; a first calendar with the gaps; the first routine checked.
-Done when: `state.md` says `Setup: finished`, `hub bot setup-done` has run, and the first calendar is on the task.
+Done when: `state.md` says `Setup: finished`, `tico bot setup-done` has run, and the first calendar is on the task.
 
 ---
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub calendar list
-    hub doc search "minutes"
-    hub doc search "consent"
-    hub doc search "bylaws"
+    tico task show <id>
+    tico calendar list
+    tico doc search "minutes"
+    tico doc search "consent"
+    tico doc search "bylaws"
 
 Past minutes, consents, bylaws and formation documents often sit in the docs. Read them before you ask, so questions one
 to three become "is this complete?".
@@ -56,18 +56,18 @@ human, not legal advice." Send nothing to the board.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows as off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will write this entity and board
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows as off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will write this entity and board
 calendar on the 3rd of every month, and build each board pack two weeks before the meeting." They can change it or
 turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule
-or to leave it off, adjust `knowledge/` and the routine to match (`hub automation update <id>`, with `--disable` to
+or to leave it off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to
 turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the routine run. Until then
 nothing you have runs on its own. Run it once the answers and the first result are recorded, not before.

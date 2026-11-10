@@ -10,9 +10,9 @@ submitted or sent.
 
 ## 1. Read where things stand
 
-    hub task show <id>
-    hub team show
-    hub task list
+    tico task show <id>
+    tico team show
+    tico task list
 
 Then `knowledge/change-log.md`, `knowledge/benefits-calendar.md`, `knowledge/eligibility.md` and last week's page.
 
@@ -41,8 +41,8 @@ Enrollment opening within 30 days means the comparison (`playbooks/compare-plans
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-benefits-deadlines.md` in the shape of `knowledge/examples/benefits-deadlines.md`,
-then `hub file publish reports/YYYY-MM-DD-benefits-deadlines.md --scope task --task <id>`. Reminders to
-employees go on the task for review. Commit, and `hub task done <id> -m "..." --version N`.
+then `tico file publish reports/YYYY-MM-DD-benefits-deadlines.md --scope task --task <id>`. Reminders to
+employees go on the task for review. Commit, and `tico task done <id> -m "..." --version N`.
 
 ## When a source fails
 

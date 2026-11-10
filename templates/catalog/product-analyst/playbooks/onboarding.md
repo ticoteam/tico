@@ -7,12 +7,12 @@ finished. Budget 25 minutes. The outcome is five recorded answers and a first re
 
 ## 1. Read before you ask
 
-    hub db list
-    hub goal list --all
-    hub task list
+    tico db list
+    tico goal list --all
+    tico task list
 
-Run `hub db doctor <name>` on each database you can see, and look for a tracking plan with
-`hub doc search "tracking"`. Do not ask what these already say.
+Run `tico db doctor <name>` on each database you can see, and look for a tracking plan with
+`tico doc search "tracking"`. Do not ask what these already say.
 
 ## 2. Introduce yourself in three lines
 
@@ -39,17 +39,17 @@ Follow `playbooks/weekly-usage-readout.md` on the real data. Attach the readout 
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will write this readout every Wednesday at 09:00." They
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will write this readout every Wednesday at 09:00." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub automation update <id>`, with `--disable` to turn it off).
+(`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

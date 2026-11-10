@@ -7,10 +7,10 @@ Schedule: Mondays at 10:00 team time (routine `weekly-launch-review`), after set
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/launches.md`, `knowledge/positioning.md`, and the open product and launch tasks
-(`hub task list`), goals and `hub calendar list`.
+(`tico task list`), goals and `tico calendar list`.
 
 ## 2. Launches
 
@@ -20,7 +20,7 @@ with no complete brief is red, and names the missing information and its owner.
 
 ## 3. Positioning check
 
-Read what sales calls and lost deals said this week (`hub meeting search`), the market graph delta
+Read what sales calls and lost deals said this week (`tico meeting search`), the market graph delta
 for the competitors, and the public product page. Note where buyers describe the problem or the
 alternatives differently from `knowledge/positioning.md`, with the quote and date. Apply requested positioning changes with dated evidence; mark unsupported claims as gaps.
 
@@ -31,8 +31,8 @@ days is marked stale at the top.
 
 ## 5. Write the review and hand it over
 
-`reports/YYYY-MM-DD-launch-review.md`, answer first. Then `hub file publish` it, commit, and
-`hub task done <id> -m "..." --version N`: the headline, the path and what you could not read.
+`reports/YYYY-MM-DD-launch-review.md`, answer first. Then `tico file publish` it, commit, and
+`tico task done <id> -m "..." --version N`: the headline, the path and what you could not read.
 Always finish it.
 
 ## When a source fails

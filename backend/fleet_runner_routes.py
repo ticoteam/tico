@@ -152,7 +152,7 @@ def register(
 
     # An external agent (a Hermes profile) is a bot with a standing credential instead of a
     # computer: a person mints it here, the agent's box heartbeats with it, and the same token
-    # is the bearer for the MCP endpoint and the `hub` CLI (docs/hermes-agents.md).
+    # is the bearer for the MCP endpoint and the `tico` CLI (docs/hermes-agents.md).
     @app.post("/api/v2/bots/{bot}/agent-credential")
     def agent_credential(request: Request, bot: str, body: M.Empty):
         who = request.state.identity

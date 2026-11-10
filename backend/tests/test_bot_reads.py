@@ -1,4 +1,4 @@
-"""What a bot itself reads through the `hub` CLI: the org chart with each bot's reports_to and department, and the
+"""What a bot itself reads through the `tico` CLI: the org chart with each bot's reports_to and department, and the
 daily and weekly updates. Runs the real CLI against a live server, as the bot."""
 
 import io

@@ -32,5 +32,5 @@ a payment. If a term or a payment-plan answer is needed, write "[for you to deci
 ## 4. Finish
 
 Attach the draft with recipient, subject, body and its source row. Send that exact text with your Tools only when a person has turned mail sending
-on in Tico and the task asks for the send. Otherwise keep the draft. Then `hub task done <id> -m "..." --version N`: the invoice, its step, and
+on in Tico and the task asks for the send. Otherwise keep the draft. Then `tico task done <id> -m "..." --version N`: the invoice, its step, and
 what needs a human.

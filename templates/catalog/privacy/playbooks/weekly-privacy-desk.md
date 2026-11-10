@@ -8,7 +8,7 @@ human, not legal advice. Nothing is sent and no data is touched.
 
 ## 1. Requests first
 
-    hub task list
+    tico task list
 
 For each row in `knowledge/requests.md` that is not closed: days left to the deadline, which systems' steps are
 done (check each step's task), and what is blocking. Any request inside 7 days with steps open goes to the top
@@ -21,7 +21,7 @@ follow `playbooks/review-a-dpa.md` now.
 
 ## 3. Vendors
 
-Read the finance team's newest spend report and `hub doc search "new vendor"` for tools added since last week.
+Read the finance team's newest spend report and `tico doc search "new vendor"` for tools added since last week.
 A new tool that touches personal data is a candidate subprocessor: add it to `knowledge/subprocessors.md` as
 "to confirm" with the question for its owner. If customer DPAs promise advance notice of new subprocessors, list
 the notice due and its date.
@@ -35,7 +35,7 @@ list it with its owner.
 
 `reports/YYYY-MM-DD-privacy-desk.md` in the shape of `knowledge/examples/privacy-desk.md`: the headline with the
 nearest deadline, requests, DPAs, vendors, stale records, then the not-legal-advice line.
-`hub file publish` it, commit, and `hub task done <id> -m "..." --version N` with the nearest deadline first.
+`tico file publish` it, commit, and `tico task done <id> -m "..." --version N` with the nearest deadline first.
 
 ## Done when
 - Every open request in `knowledge/requests.md` has its days left, its step status and its blocker, or "none".

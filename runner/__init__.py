@@ -1,7 +1,7 @@
 """The module paths that saved units and earlier releases run, forwarded to runner_support/.
 
 The Python helpers moved to runner_support/ (the Rust runner, runner-rs/, is the runner). What still names runner/:
-- launchd plists and systemd units, those earlier `scripts/tico install` runs wrote and those this release writes:
+- launchd plists and systemd units, those earlier `tico install` or `tico-computer install` runs wrote and those this release writes:
   `python -m runner --config <path> run|connectors|close-calls|importers` (runner/__main__.py);
 - cloud machine images, saved by earlier releases and by this one: `python -m runner.cloud_machine boot`;
 - a runner binary of an earlier release, still running while its checkout moves to this one: `python -m runner

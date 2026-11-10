@@ -223,4 +223,4 @@ unreported outcomes are retained before renewing a fingerprint while reporting i
 at most 100 receipts to `/v1/suggestions/outcomes`, containing only `suggestion_id` and `outcome` (`delivered`, `acted`, `dismissed`,
 `expired` or `condition_false`). Failed reporting keeps receipts unacknowledged for a later run. Both Gateway calls run
 outside write transactions. Privacy settings are owner-only at `GET/PUT /api/v2/system/suggestions` and discoverable
-through the existing `hub settings` and MCP settings catalogue.
+through the existing `tico settings` and MCP settings catalogue.

@@ -182,7 +182,7 @@ def test_a_woken_bot_is_told_where_to_read_the_rest_only_when_the_body_was_cut()
     values = {"type": "order.created"}
     call = {"trigger": "shop", "delivery": "d1", "content": "{...}"}
     assert "--part 2" not in R._wake_text({"text": "New {{type}}"}, values, call, "x")
-    assert "hub trigger delivery shop d1 --part 2" in R._wake_text(
+    assert "tico trigger delivery shop d1 --part 2" in R._wake_text(
         {"text": "New {{type}}"}, values, {**call, "cut": True}, "x"
     )
 

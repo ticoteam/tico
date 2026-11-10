@@ -2,7 +2,7 @@
 
 Triggered by a task with copy, a page, a deck, an email or a proposed name attached: "is this on brand?", "can we call it X?". Budget 20 minutes.
 
-Inputs: the attached item, its audience and where it will appear, the deadline, the brand card (`hub brand show`) and `knowledge/rulings.md`.
+Inputs: the attached item, its audience and where it will appear, the deadline, the brand card (`tico brand show`) and `knowledge/rulings.md`.
 
 Outcome: a verdict and marked changes on the task. The work itself is not edited.
 
@@ -12,13 +12,13 @@ Done when: the verdict is on the task in one line with the path to the full revi
 
 ## 1. Read the request
 
-    hub task show <id>
+    tico task show <id>
 
-Find the item, its audience, where it will appear and the deadline. If the audience is missing, ask once with `hub task ask <id> --to <person> "<question>" --version N`.
+Find the item, its audience, where it will appear and the deadline. If the audience is missing, ask once with `tico task ask <id> --to <person> "<question>" --version N`.
 
 ## 2. Review copy
 
-Follow `skills/review-copy-against-the-brand-book/SKILL.md`. Read it once as the audience, then line by line against the brand card (`hub brand show`). Mark each change as **rule** (quote the rule) or **suggestion** (your judgement, clearly labelled). Check product and plan names, prices and claims against `hub doc search`. Do not rewrite whole paragraphs; show the smallest change that fixes each line.
+Follow `skills/review-copy-against-the-brand-book/SKILL.md`. Read it once as the audience, then line by line against the brand card (`tico brand show`). Mark each change as **rule** (quote the rule) or **suggestion** (your judgement, clearly labelled). Check product and plan names, prices and claims against `tico doc search`. Do not rewrite whole paragraphs; show the smallest change that fixes each line.
 
 ## 3. Review a name
 
@@ -28,4 +28,4 @@ Follow `skills/run-a-name-clash-check/SKILL.md`. Check the name against the nami
 
 Write `reports/reviews/<date>-<item>.md`: the verdict first, then the marked changes, then open questions. On the task, put the verdict in one line and the path. If the review exposed a missing rule, propose it for the owner. Then:
 
-    hub task done <id> -m "<verdict>; reports/reviews/<date>-<item>.md" --version N
+    tico task done <id> -m "<verdict>; reports/reviews/<date>-<item>.md" --version N

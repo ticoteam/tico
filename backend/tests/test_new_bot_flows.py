@@ -2,7 +2,7 @@
 slug, and keeps working after it is renamed (backend/hubdb.py resolve_bot, rename_bot; docs/how-it-works.md).
 
 Every surface that names a bot is driven through the API the way its client drives it: the web app's routes, the
-runner's claim, the MCP tool table and the `hub` CLI (clients/hubtools.py, clients/remotecli.py). Stored references
+runner's claim, the MCP tool table and the `tico` CLI (clients/hubtools.py, clients/remotecli.py). Stored references
 must hold the id; reads give both the id and the slug.
 """
 

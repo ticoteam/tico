@@ -360,7 +360,7 @@ class Settings:
     # TypeSafe's published price, output free. Both 0 is unknown: the call's tokens are kept, its cost not counted.
     decisions_jev_usd_per_mtok_input: float = 0.042
     decisions_jev_usd_per_mtok_output: float = 0.0
-    # Org rule checks (backend/org_rule_check.py) spend from Decide's monthly cap above. How many `hub rules check` drafts
+    # Org rule checks (backend/org_rule_check.py) spend from Decide's monthly cap above. How many `tico rules check` drafts
     # one bot may check in a UTC day, and how many checks run at once (past that, an output goes through unchecked, `busy`).
     rules_check_daily_drafts: int = 200
     rule_check_concurrency: int = 8

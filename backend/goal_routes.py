@@ -652,7 +652,7 @@ def install(app, store, auth, mutate, settings):
 
     @app.get("/api/v2/goals")
     def goals_list(request: Request, owner: str | None = None, all: bool = False, status: str | None = None):
-        """`hub goal list`: mine, the chain above and my reports' by default; `all` is every goal, or every one
+        """`tico goal list`: mine, the chain above and my reports' by default; `all` is every goal, or every one
         `owner` owns."""
         who = request.state.identity
         auth.domain(who)

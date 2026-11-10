@@ -398,7 +398,7 @@ fn file_writer_task(
     let task = ["short_id", "id"]
         .iter()
         .find_map(|key| filed["task"][key].as_str().or(filed[key].as_str()))
-        .ok_or("hub task create returned no task id")?
+        .ok_or("tico task create returned no task id")?
         .to_owned();
     state.writer_task = Some(task.clone());
     state.writer_filing = false;
@@ -407,7 +407,7 @@ fn file_writer_task(
     Ok(())
 }
 fn hub_json(args: &[&str]) -> Result<Value> {
-    serde_json::from_str(&command("hub", args)?).map_err(|e| format!("Invalid hub response: {e}"))
+    serde_json::from_str(&command("tico", args)?).map_err(|e| format!("Invalid tico response: {e}"))
 }
 fn run() -> Result<()> {
     let mut args = env::args().skip(1);

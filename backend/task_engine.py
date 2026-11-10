@@ -95,7 +95,7 @@ def _refuse(
 
 def _runs_commands(by: str) -> bool:
     """Whether the caller acts through `hub` commands: a bot, or a bot acting for a person (the Assistant, BotOps).
-    A person in the app is told what is missing, never a `hub task ...` line."""
+    A person in the app is told what is missing, never a `tico task ...` line."""
     H = _h()
     return bool(is_bot(by) or H.VIA.get())
 
@@ -109,13 +109,13 @@ def _then(row: Row, *which: str) -> list[str]:
     `snooze`, `close`, `show` (THEN)."""
     ident, version = row["id"], row.get("version")
     said = {
-        "push": f'hub task move {ident} next -m "why" --version {version}',
-        "back": f'hub task move {ident} <earlier stage> -m "why" --version {version}',
-        "ask": f'hub task ask {ident} --to <person> "one sentence" --version {version}',
-        "file": f'hub task file --parent {ident} "title"',
-        "snooze": f'hub task snooze {ident} -m "why" --version {version}',
-        "close": f'hub task close {ident} -m "why" --version {version}',
-        "show": f"hub task show {ident}",
+        "push": f'tico task move {ident} next -m "why" --version {version}',
+        "back": f'tico task move {ident} <earlier stage> -m "why" --version {version}',
+        "ask": f'tico task ask {ident} --to <person> "one sentence" --version {version}',
+        "file": f'tico task file --parent {ident} "title"',
+        "snooze": f'tico task snooze {ident} -m "why" --version {version}',
+        "close": f'tico task close {ident} -m "why" --version {version}',
+        "show": f"tico task show {ident}",
     }
     return [said[name] for name in which]
 

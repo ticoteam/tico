@@ -116,4 +116,4 @@ Docs (internal and linked), Files, Meetings, Strategy (with Market as its tab), 
 - **Branch**: a person's bot that follows an original's instructions, model settings and repository, with personal tasks and chats.
 - **Allow branches**: the original's setting, off by default.
 - **Make my branch**: create or open your branch on your own computer.
-- **Copy**: an independent bot in a separate repository, created by `hub bot copy`.
+- **Copy**: an independent bot in a separate repository, created by `tico bot copy`.

@@ -43,5 +43,5 @@ several losses. Give the evidence and who decides.
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-retention.md` in the shape of `knowledge/examples/retention-report.md`, then
-`hub file publish reports/YYYY-MM-DD-retention.md`. Put each prepared reply on the task as its own item. Commit, then
-`hub task done <id> -m "..." --version N` with the counts and the path.
+`tico file publish reports/YYYY-MM-DD-retention.md`. Put each prepared reply on the task as its own item. Commit, then
+`tico task done <id> -m "..." --version N` with the counts and the path.

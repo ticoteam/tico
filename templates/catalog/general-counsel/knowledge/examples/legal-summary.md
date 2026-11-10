@@ -43,5 +43,5 @@ The outside firm's invoices were not in the docs, so legal spend is not in this 
 **Summary for a human, not legal advice. Have counsel review anything that matters.**
 
 ## Sources
-- `hub task list` 2026-09-28; `legal-review`, `compliance`, `privacy` reports 2026-09-28; `knowledge/escalation.md` 2026-09-14
+- `tico task list` 2026-09-28; `legal-review`, `compliance`, `privacy` reports 2026-09-28; `knowledge/escalation.md` 2026-09-14
 ```

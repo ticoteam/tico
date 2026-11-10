@@ -39,11 +39,11 @@ Write these fields into `knowledge/experiments/<slug>.md`:
 
 Open the idea task, owned by `growth-team-manager`, with the brief's path in the body. The Growth Team Manager (`growth-team-manager`) picks it at the Monday growth meeting:
 
-    hub task create --owner growth-team-manager --label growth:ideas --label channel:<slug> --title "..." --body "..."
+    tico task create --owner growth-team-manager --label growth:ideas --label channel:<slug> --title "..." --body "..."
 
 Once it is picked, ask the page owner whether to start it:
 
-    hub task ask <id> --to <owner> "Start the test as briefed? If yes, you start it in the testing tool; if not, I revise the sample and the run time." --choices "Start it,Change the brief" --version N
+    tico task ask <id> --to <owner> "Start the test as briefed? If yes, you start it in the testing tool; if not, I revise the sample and the run time." --choices "Start it,Change the brief" --version N
 
 Never start or stop a test yourself unless the task asks for it and a granted Tool allows it.
 
@@ -52,7 +52,7 @@ Never start or stop a test yourself unless the task asks for it and a granted To
 Each Monday, read the count in each arm, the sample ratio check and the guardrails. Do not show the primary metric's rate or
 difference before the planned end. When the owner confirms it has started, say so on the task:
 
-    hub task comment <id> "Started <date> in <testing tool>; planned end <date>."
+    tico task comment <id> "Started <date> in <testing tool>; planned end <date>."
 
 ## 6. At the planned end
 

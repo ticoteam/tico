@@ -1143,7 +1143,7 @@ def operation_issues(c, who, auth):
                 since=entry["since"],
                 needs_person=mine and quiet >= NEEDS_YOU_MINUTES,
                 action=f"Wake {entry['label']} and check that {auth.settings.app_name} runs there: "
-                "`tico status` says what stopped, `tico restart` starts it again.",
+                "`tico-computer status` says what stopped, `tico-computer restart` starts it again.",
             )
         else:
             # A computer offline for a moment (asleep, a restart) clears itself when it reconnects.
@@ -1806,7 +1806,7 @@ def checkout_issue(add, row, busy=0):
             severity="warning",
             action="Tico repairs these links on the next update. No local work needs a decision."
             if str(checkout["blocked"]).startswith("only flattened Tico links:")
-            else "On that computer: commit or stash the changes (or run pip install and scripts/tico update "
+            else "On that computer: commit or stash the changes (or run pip install and scripts/tico-computer update "
             "for a dependency change); the runner then updates itself.",
         )
     elif behind:
@@ -3417,7 +3417,7 @@ def install_views(app, store, auth, mutate, task_view):
                 "path": "canonical cloud history",
                 "note": (
                     "Provider session files stay on the assigned Mac; the hub keeps the "
-                    "conversation, which the bot reads with `hub conversation show`."
+                    "conversation, which the bot reads with `tico conversation show`."
                 ),
                 "runs": [{"run": turn["id"], "issue": None} for turn, _ in rows],
                 "turns": turns,
@@ -3496,7 +3496,7 @@ def install_views(app, store, auth, mutate, task_view):
     @app.get("/api/v2/needs-you/summary")
     def needs_summary_route(request: Request, limit: int = NEEDS_SUMMARY_ITEMS):
         """What the Needs you list holds: the total, per kind and per bot, with each bot's newest `limit` items (at
-        most 10). `hub needs-you show` over MCP. A person only: the list is theirs."""
+        most 10). `tico needs-you show` over MCP. A person only: the list is theirs."""
         who = request.state.identity
         human_only(who)
         with store.read_transaction() as c:

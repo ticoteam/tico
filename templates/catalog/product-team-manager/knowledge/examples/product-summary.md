@@ -27,5 +27,5 @@ committed roadmap has slipped.
 - The release calendar, which lives in a doc this team has not linked yet.
 
 ## Sources
-- hub task list --all, read 2026-11-02 08:50 PT
+- tico task list --all, read 2026-11-02 08:50 PT
 - Studio Product Owner's report of 2026-11-01

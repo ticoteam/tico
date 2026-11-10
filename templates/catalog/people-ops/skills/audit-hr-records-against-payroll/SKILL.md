@@ -26,5 +26,5 @@ Checks before you finish:
 - No salary, health, family, id or conduct detail appears on the page.
 
 Example (generic, invented): Reference E-031, title field. HR record says "Support Specialist" (export 2026-09-27). Payroll says
-"Support Agent" (export 2026-09-27). Roster says "Support Specialist" (`hub team show`, 2026-09-28). Proposed: payroll to correct
+"Support Agent" (export 2026-09-27). Roster says "Support Specialist" (`tico team show`, 2026-09-28). Proposed: payroll to correct
 its title to match the roster, owner payroll contact.

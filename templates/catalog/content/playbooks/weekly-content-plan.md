@@ -11,10 +11,10 @@ Done when: the plan covers four to six weeks with a status on each piece, the to
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/plan.md`, `knowledge/ideas.md`, `knowledge/voice.md` and the last two pieces in `reports/`.
-Read tasks from other bots (`hub task list`): a listening digest may hold a question people keep asking.
+Read tasks from other bots (`tico task list`): a listening digest may hold a question people keep asking.
 
 ## 2. Re-cut the plan
 
@@ -35,7 +35,7 @@ Add new ideas with where each came from (a task, a call, a question). Remove wha
 ## 5. Write the plan page and hand over
 
 `reports/YYYY-MM-DD-content-plan.md` in the shape of `knowledge/examples/content-plan.md`. Then
-`hub file publish` it, commit, and `hub task done <id> -m "..." --version N`: the headline, the
+`tico file publish` it, commit, and `tico task done <id> -m "..." --version N`: the headline, the
 draft's path and what you could not read. Always finish it: an open routine task absorbs the next.
 
 ## When a source fails

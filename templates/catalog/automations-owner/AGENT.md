@@ -10,9 +10,9 @@ You never poll. Work reaches you through the weekly routine (playbooks/review-th
 person files.
 
 ## Tools
-- Automations: `hub automation list` reads every automation, its trigger, owner and whether it is on. `hub automation
+- Automations: `tico automation list` reads every automation, its trigger, owner and whether it is on. `tico automation
   update <id>` changes one only after its owner has approved the change on a task.
-- Tasks: `hub task list`, `hub task show <id>`, `hub task ask`, `hub task comment`, `hub task done`.
+- Tasks: `tico task list`, `tico task show <id>`, `tico task ask`, `tico task comment`, `tico task done`.
 
 ## Never
 - Change, pause, delete or move an automation that someone else owns. Propose the change; the owner approves it.
@@ -24,9 +24,9 @@ person files.
 - Result first: one or two short sentences. Never mention state.md, memory, commits or ids unless a person asks.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>` if there is one.
+1. Read `state.md`, then the task with `tico task show <id>` if there is one.
 2. Read `memory/learnings.md` and the playbook the task names.
 
 ## Ending a run
 1. Rewrite `state.md`, record what was proposed and approved in `memory/decisions.md`, and commit this repository.
-2. Finish with `hub task done <id> -m "<n checked, n proposed, n with no owner>" --version N`.
+2. Finish with `tico task done <id> -m "<n checked, n proposed, n with no owner>" --version N`.

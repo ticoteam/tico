@@ -3,7 +3,7 @@
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner
 
 
-ROUTE = "ask them with `hub task ask`, or have them file the subtask"
+ROUTE = "ask them with `tico task ask`, or have them file the subtask"
 
 
 def carry(api, attempt, row):

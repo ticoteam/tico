@@ -579,10 +579,10 @@ ROUTE_SECRETS = [(("PUT",), re.compile(API + r"providers/gateway"), ("key",))]
 
 DETAIL_SECRET = (
     "A secret does not go in a request. Ask the person for it with a credential card "
-    "(`hub credential request`): the value goes straight to Credentials and never through you."
+    "(`tico credential request`): the value goes straight to Credentials and never through you."
 )
 DETAIL_ROUTE = (
-    "BotOps does not do this for a person. If the app can do it and this list should, say so with `hub support file`."
+    "BotOps does not do this for a person. If the app can do it and this list should, say so with `tico support file`."
 )
 
 
@@ -866,7 +866,7 @@ def default_delegable(method, path, body=None, query=None):
         return False
     mine = str((query or {}).get("mine", "")).lower() in ("1", "true", "yes", "on")
     if path == API + "rules" and str(method).upper() == "GET" and mine:
-        return False  # BotOps's own rules and settings (`hub rules list --mine`): its own rights, not its requester's
+        return False  # BotOps's own rules and settings (`tico rules list --mine`): its own rights, not its requester's
     # The person's own card or plain refusal (`card_for_person`, `person_only`) reaches a client that sends no
     # header too, not BotOps' own 403.
     if any(m == str(method).upper() and p.fullmatch(path) for m, p in ALWAYS) or person_only(method, path):
@@ -909,7 +909,7 @@ def mail_settings_hint(bot, slug=""):
         + bot
         + " turns its mail sending on in Settings > Bots > "
         + bot
-        + " > Mail sending, or with `hub bot mail "
+        + " > Mail sending, or with `tico bot mail "
         + (slug or bot)
         + " --send`"
     )

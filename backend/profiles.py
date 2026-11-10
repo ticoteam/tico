@@ -558,7 +558,7 @@ LEAD_SLUGS = (
     "cpo",
     "*-manager",
 )
-# The Librarian answers questions asked through `hub doc ask`, which are not tasks, but its nightly routines are: it
+# The Librarian answers questions asked through `tico doc ask`, which are not tasks, but its nightly routines are: it
 # becomes a Custom profile that wakes on its own timers and takes the tasks they open.
 LIBRARIAN = "librarian"
 
@@ -624,7 +624,7 @@ def migrate(c, tell=True):
             "Tico gave each of your bots a profile, which decides what wakes it and what tasks it takes:\n"
             + "\n".join(lines)
             + more
-            + "\nChange one in Settings > Bots > Edit, or with `hub bot profile <bot> <name>`.",
+            + "\nChange one in Settings > Bots > Edit, or with `tico bot profile <bot> <name>`.",
         )
     return sum(len(v) for v in told.values())
 

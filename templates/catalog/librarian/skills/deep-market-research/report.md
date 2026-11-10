@@ -1,6 +1,6 @@
 # The research report's shape
 
-Written with `hub doc write _librarian/research/<slug>.md --title "<question>" --body-file <file.md> --note "Round <n>"`,
+Written with `tico doc write _librarian/research/<slug>.md --title "<question>" --body-file <file.md> --note "Round <n>"`,
 rewritten whole each round. Plain sentences. Every sentence that says something about the market ends with its source as a link:
 `[example.com](https://example.com/page)`. A count says what it counts: "31 of 164 reviews". An assumption is
 labelled as one in the same sentence. Leave out a section with nothing in it, except Open questions.

@@ -75,7 +75,7 @@ def test_retired_status_health_recovery_and_old_reports(prepared, revoked):
         assert W.inventory(c, 'old') == []
         assert W.holdings(c, 'bot:cmo') == []
         notes = W.recovery_prompt(c, H.task(c, tid), 'cmo')
-        assert f'hub task worktree add Acme/product --task {tid}' in notes[0]
+        assert f'tico task worktree add Acme/product --task {tid}' in notes[0]
         assert W.recovery_prompt(c, H.task(c, tid), 'cpo') == []
     # Health uses the same retirement projection, including the last report's facts.
     with api.app_state.store.read() as c:

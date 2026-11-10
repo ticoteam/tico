@@ -3,7 +3,7 @@
 Triggered when you are given a task to build. Budget as long as the change needs. A task you have worked for more than
 four hours gets a note to Head of Engineering on the task, not a silent wait.
 
-Inputs: the task and its conversation (`hub task show <id>`), its acceptance tests if Head of Product wrote them,
+Inputs: the task and its conversation (`tico task show <id>`), its acceptance tests if Head of Product wrote them,
 `knowledge/standards.md` and `knowledge/patterns.md`.
 
 Outcome: one pull request linked to the task, opened as a draft and marked ready once, one head commit whose checks you
@@ -17,9 +17,9 @@ names the head commit and the checks.
 
 ## 1. Read the task
 
-    hub task show <id>
+    tico task show <id>
 
-Read the spec, the acceptance tests and the last conversation. If the task is unclear, ask once with `hub task ask <id> --to <person> "<question>" --version N`
+Read the spec, the acceptance tests and the last conversation. If the task is unclear, ask once with `tico task ask <id> --to <person> "<question>" --version N`
 and keep going on what is clear. Do not build a behaviour the spec does not state.
 
 ## 2. Branch and open a draft
@@ -41,7 +41,7 @@ pull request as a draft, then link it:
 
     git -C software/<repo> push -u origin HEAD
     gh pr create -R <repo> --draft --base <base branch> --title "<title>" --body "<what changes and why>"
-    hub task link <id> <pull request url> --wake-once
+    tico task link <id> <pull request url> --wake-once
 
 If {{app_name}} already opened a draft for the branch, `gh pr create` says so: edit that one with `gh pr edit`. A draft
 gets no review request. Where the repository's CI skips drafts ({{app_name}}'s own does; `knowledge/standards.md` says
@@ -78,7 +78,7 @@ ready after a pass. Every push to a ready pull request runs CI, so batch the fix
 
 ## 7. Finish the task
 
-    hub task done <id> -m "PR <pull request url> at <head sha>: checks run <list>; not checked <list>" --version N
+    tico task done <id> -m "PR <pull request url> at <head sha>: checks run <list>; not checked <list>" --version N
 
 Paste the receipt line from step 5 into the note when you have one. Review comments that come later are answered under
 `playbooks/fix-what-review-and-qa-found.md`.

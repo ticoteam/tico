@@ -7,18 +7,18 @@ owner. Nothing is sent to anyone else.
 
 ## 1. Read what was decided last time
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/rhythm.md` (recipient, thresholds, exclusions) and `knowledge/open-loops.md`. If
 `reports/` already holds this week's brief, update it; do not write a second.
 
 ## 2. Read the team, once each
 
-    hub goal list --all
-    hub goal show <id>                     # each goal that is red, yellow, or has no reading
-    hub update list --kind weekly              # the bots' week in review
-    hub task list
-    hub meeting search --since <last Friday>
+    tico goal list --all
+    tico goal show <id>                     # each goal that is red, yellow, or has no reading
+    tico update list --kind weekly              # the bots' week in review
+    tico task list
+    tico meeting search --since <last Friday>
 
 Read only what changed since last week's brief. Team meetings only; you cannot see private ones,
 and you never guess at them. If a source refuses you, note which one and carry on.
@@ -38,11 +38,11 @@ and the evidence, and leave the choice to its owner.
 
 ## 4. Chase what is stalled
 
-For each stalled item find who owns the next step (`hub goal show`, `hub task show`). Then:
+For each stalled item find who owns the next step (`tico goal show`, `tico task show`). Then:
 1. Check `knowledge/open-loops.md`. If you already asked this week, do not ask again; say so.
 2. Draft one nudge of one or two sentences that names the item, what has been quiet and for how long,
    and the specific thing you need. Put it in the brief under the item.
-3. Send a nudge only when the task asks for it and a granted Tool allows it (`hub message send --fyi <person> "..."`),
+3. Send a nudge only when the task asks for it and a granted Tool allows it (`tico message send --fyi <person> "..."`),
    and within the limit of ten unsolicited messages to a human a day. Otherwise it stays a draft under the item.
 4. Add the loop to `knowledge/open-loops.md` with today's date.
 
@@ -55,14 +55,14 @@ Follow `playbooks/monday-agenda.md` and place it under the brief as the last sec
 Write `reports/YYYY-MM-DD-weekly-brief.md` in the shape of `knowledge/examples/weekly-brief.md`: one
 page, headline first, every line cited. End with "Could not read" naming any blocked source.
 
-    hub file publish reports/YYYY-MM-DD-weekly-brief.md
+    tico file publish reports/YYYY-MM-DD-weekly-brief.md
 
-Once the routine is armed, tell the owner with `hub message send --fyi <owner> "<one line and the link>"`.
+Once the routine is armed, tell the owner with `tico message send --fyi <owner> "<one line and the link>"`.
 Before it is armed, attach the report to the task and say it is a draft.
 
 ## 7. Finish
 
-Commit, then `hub task done <id> -m "..." --version N` with the headline, how many goals are
+Commit, then `tico task done <id> -m "..." --version N` with the headline, how many goals are
 red, yellow and green, how many items are stalled, and the report path. Always finish it: a
 routine task left open absorbs next Friday's.
 

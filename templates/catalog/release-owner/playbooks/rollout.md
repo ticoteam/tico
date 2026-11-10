@@ -7,7 +7,7 @@ anyone between steps.
 
 ## 0. The one gate: the owner's OK
 
-Start only when `hub task show <id>` shows the owner's OK on the release task for this exact version and commit: the
+Start only when `tico task show <id>` shows the owner's OK on the release task for this exact version and commit: the
 ask you put to them (`playbooks/cut-a-release.md`, step 5), answered ok.
 
 The ask names the version and the commit and shows the release page,
@@ -36,7 +36,7 @@ It does, in order, stopping at the first failure:
 4. **The rest together.** Updates every other install at once, the same way.
 
 It prints a JSON report: per install `before`, `after`, `outcome` (`healthy`, `already`, `rolled_back`, `failed`,
-`refused`, `timeout`) and computers by state. While it runs, keep `hub bot status set` on the step it is on.
+`refused`, `timeout`) and computers by state. While it runs, keep `tico bot status set` on the step it is on.
 
 If the run is cut short, run the remaining step on its own (`tag`, `wait`, `update [--only NAME]`); each one is safe
 to repeat. `status` prints what every install runs now.
@@ -45,7 +45,7 @@ to repeat. `status` prints what every install runs now.
 
 Stop and report; do not retry a failed update or try another version. The updater has already rolled that install
 back on its own. Comment on the release task with the step, the install, the updater's message and the before and
-after versions of every install, and `hub task ask <id> --to <person> "<question>" --version N` the owner what to do. A canary failure means no other install
+after versions of every install, and `tico task ask <id> --to <person> "<question>" --version N` the owner what to do. A canary failure means no other install
 was touched.
 
 ## 3. Report
@@ -61,8 +61,8 @@ outcome and computers. Update `knowledge/versioning.md` with the release and dat
 
 - `knowledge/rollout.json`: the repository and each install (copy `knowledge/rollout.example.json`). Mark the team's
   own install `"canary": true`.
-- On each install, its owner runs `hub service-key create --label "<this bot>" --scope update` and stores the key in
+- On each install, its owner runs `tico service-key create --label "<this bot>" --scope update` and stores the key in
   this team's Tools > Credentials, granted to this bot, with the variable named in `key_env`
   (for example `UPDATE_KEY_ACME`; a name starting `TICO_` is Tico's own and is refused).
-- Write access for this bot on the repository: `hub bot repos <slug> --chosen <owner>/<repo>:write` (keep the grants it
+- Write access for this bot on the repository: `tico bot repos <slug> --chosen <owner>/<repo>:write` (keep the grants it
   already has in the same command).

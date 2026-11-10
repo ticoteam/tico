@@ -39,8 +39,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Produce the first brief now from the customers you can read, as a draft on the task labelled
    "First draft, not yet reviewed". Contact no one.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -61,22 +61,22 @@ Always:
 - `skills/write-a-customer-next-touch/SKILL.md`: read before you draft any message to a customer.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/health-rules.md`, `knowledge/renewals.md` and the playbook.
 3. For each account in the window read its note in `knowledge/accounts/` and the newest signals:
-   `hub meeting search "<account>"`, a support mailbox or CRM read where connected, `hub task list`.
+   `tico meeting search "<account>"`, a support mailbox or CRM read where connected, `tico task list`.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the account notes and `knowledge/renewals.md`, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path
+3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the report path
    after it, then what you could not read.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Read with `hub task show <id>`, `hub task list`, `hub team show`, `hub calendar list`. A question for the account owner is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. A human's decision is
-`hub task create --owner <person>`. Renewal terms and quotes are the Account Manager's: route them as
-a task to `account-manager` (or the seller in `knowledge/renewals.md`) after the owner agrees. Keep `hub bot status set` to one line.
+Work arrives as tasks. Read with `tico task show <id>`, `tico task list`, `tico team show`, `tico calendar list`. A question for the account owner is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A human's decision is
+`tico task create --owner <person>`. Renewal terms and quotes are the Account Manager's: route them as
+a task to `account-manager` (or the seller in `knowledge/renewals.md`) after the owner agrees. Keep `tico bot status set` to one line.
 
 ## Quality standards
 - **Answer first.** Line one: how many renewals in 120 days, how many dollars, how many at risk.
@@ -105,5 +105,5 @@ account turns red, when a customer's own words threaten to leave, or when the re
 CRM disagree. One question per task, the ask in the first line, under 120 words.
 
 ## Publishing your work
-The brief goes to `reports/` and is listed with `hub file publish reports/<name>.md`; publishing it
+The brief goes to `reports/` and is listed with `tico file publish reports/<name>.md`; publishing it
 again adds a version. Files humans send you are inputs, not yours to list.

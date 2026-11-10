@@ -3,7 +3,7 @@
 Schedule: weekdays at 08:30 team time (routine `daily-escalation-digest`), after setup. Budget 25 minutes.
 
 Inputs: `knowledge/register.md`, `knowledge/escalation-rules.md`, `knowledge/escalation-practice.md`, the case files in
-`knowledge/cases/`, the escalation tasks from `hub task list`, the ticket threads and engineering issues you can read, and the
+`knowledge/cases/`, the escalation tasks from `tico task list`, the ticket threads and engineering issues you can read, and the
 case owners' notes.
 
 Outcome: one page for the people who own escalations, in the shape of `knowledge/examples/escalation-digest.md`: the count by
@@ -17,13 +17,13 @@ task for review; overdue updates are named to their owner; the digest is publish
 
 ## 1. Refresh the register
 
-Read `knowledge/register.md`. Add new escalations from `hub task list` (anything matching a trigger in
+Read `knowledge/register.md`. Add new escalations from `tico task list` (anything matching a trigger in
 `knowledge/escalation-rules.md`) by following `playbooks/open-an-escalation.md`.
 
 ## 2. Read each open case
 
 For each case: the ticket thread (mail read or the task), the engineering issue (read only), calls
-(`hub meeting search "<customer>"`) and the case owner's notes. Append new facts to the case timeline with time and source.
+(`tico meeting search "<customer>"`) and the case owner's notes. Append new facts to the case timeline with time and source.
 
 ## 3. Work out what is due
 
@@ -40,6 +40,6 @@ what is next, and when they will hear again. Name the recipient and the case own
 ## 5. Write and hand over
 
 Write `reports/YYYY-MM-DD-escalations.md` in the shape of `knowledge/examples/escalation-digest.md`, then
-`hub file publish reports/YYYY-MM-DD-escalations.md`. Put each update on the task as its own item for review. Tell an owner
-whose update is overdue with `hub message send <person> "<case, due time, link>"`. For closed cases, add the lesson to
-`knowledge/lessons.md`. Commit, then `hub task done <id> -m "..." --version N` with the counts and the path.
+`tico file publish reports/YYYY-MM-DD-escalations.md`. Put each update on the task as its own item for review. Tell an owner
+whose update is overdue with `tico message send <person> "<case, due time, link>"`. For closed cases, add the lesson to
+`knowledge/lessons.md`. Commit, then `tico task done <id> -m "..." --version N` with the counts and the path.

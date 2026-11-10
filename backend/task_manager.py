@@ -188,7 +188,7 @@ def _paused(c):
                 "paused",
                 row,
                 f"Paused: {first.line}",
-                f"hub task show {row['id']}; if another bot in the department can do it: hub task reassign "
+                f"tico task show {row['id']}; if another bot in the department can do it: tico task reassign "
                 f"{row['id']} <bot> -m \"<why>\" --version N; if not, leave it: the person who can fix it has it in "
                 "Needs you",
                 stamp=first.line,
@@ -228,8 +228,8 @@ def _held(c):
                 "held",
                 None,
                 f"{bot['slug']} is {why}" + (f" ({detail[:120]})" if detail else ""),
-                f"hub task create --owner botops --title \"Look at the held bot {bot['slug']}\" "
-                f"--body \"It is held; check its last runs, then release it (hub bot release) or raise its budget.\"",
+                f"tico task create --owner botops --title \"Look at the held bot {bot['slug']}\" "
+                f"--body \"It is held; check its last runs, then release it (tico bot release) or raise its budget.\"",
                 owner="bot:" + row["bot"],
                 stamp=str(row["held_at"]),
             )
@@ -257,7 +257,7 @@ def _owner_review(c, at):
             None,
             f"{r['n']} interrupted run{'s' if r['n'] != 1 else ''} of {r['slug']} "
             f"waiting for its owner's review since {str(r['since'])[:16]} UTC; its tasks and routines wait meanwhile",
-            f"hub task create --owner botops --title \"Review the interrupted runs of {r['slug']}\" "
+            f"tico task create --owner botops --title \"Review the interrupted runs of {r['slug']}\" "
             f"--body \"Resume or dismiss them after checking what already happened.\"",
             owner="bot:" + r["bot_id"],
             stamp=f"{r['n']}",
@@ -288,8 +288,8 @@ def _duplicates(c):
                         "duplicate",
                         row,
                         f"same title, requester and owner as {seen[key]['id']}",
-                        f"hub task relate {row['id']} {seen[key]['id']} --kind duplicate_of; then "
-                        f"hub task close {row['id']} -m \"Duplicate of {seen[key]['id']}\" --version N",
+                        f"tico task relate {row['id']} {seen[key]['id']} --kind duplicate_of; then "
+                        f"tico task close {row['id']} -m \"Duplicate of {seen[key]['id']}\" --version N",
                         about=(seen[key]["id"],),
                     )
                 )
@@ -472,7 +472,7 @@ def report(c, auth, settings, at):
 
 
 def view(c, settings):
-    """What Settings and `hub task-manager` show: whether the bot is on, and each department's last check."""
+    """What Settings and `tico task-manager` show: whether the bot is on, and each department's last check."""
     from . import system_routines as SR
 
     chart = Chart(c, settings)

@@ -168,7 +168,7 @@ goes on), for each reader that is an active bot, in one transaction:
    messages wait unread and the cursor stays. A high-volume channel is best read daily: otherwise every message would cost a short run.
 
 Readers are named per channel in the Slack channel list, which lives in the database and is managed
-in the app (Tools > Slack channels, `hub slack channel add '#name' --reader cto`, or BotOps
+in the app (Tools > Slack channels, `tico slack channel add '#name' --reader cto`, or BotOps
 as the person who asked). Only an owner or an admin changes it, like turning posting off. A channel may be listed
 by name alone: the gateway asks Slack for its id. Reading grants no posting right: a reader that wants to say
 something in the channel is bound by `post:` and the solicited-reply rule exactly as before,
@@ -236,7 +236,7 @@ the preview is sent again with the same link as text.
 | `slack_reads` | channel and reader: the cursor (`last_ts`, `last_run`, `digests`) | |
 | `slack_digests` | digest written: the reader, its conversation and message, the channels, the event ids it covered | |
 
-Only `slack_posts` is in `hub sql`'s safe-column list (`backend/sql.py`, `docs/hub-sql.md`); the other Slack tables are not readable there.
+Only `slack_posts` is in `tico sql`'s safe-column list (`backend/sql.py`, `docs/hub-sql.md`); the other Slack tables are not readable there.
 
 ## Running it
 
@@ -280,7 +280,7 @@ interactivity on, the `app_mention`, `message.im`, `message.channels`, `message.
 
 ## Recovery
 
-Read the queue with `hub sql` or SQLite against the live database, read-only:
+Read the queue with `tico sql` or SQLite against the live database, read-only:
 
 ```sql
 SELECT event_id, channel, thread_ts, state, reason, processed_at

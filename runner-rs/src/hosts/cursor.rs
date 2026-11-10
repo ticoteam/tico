@@ -4,7 +4,7 @@
 //!     cursor-agent -p --output-format stream-json --force --trust --model auto --workspace <repo> --resume <chat id>
 //!
 //! The prompt goes in on stdin. No effort setting (it lives in the model name), no steering, and no MCP: the
-//! bot uses the hub CLI over bash. CURSOR_API_KEY, when set, signs it in without a browser login.
+//! bot uses the tico CLI over bash. CURSOR_API_KEY, when set, signs it in without a browser login.
 
 use std::process::Stdio;
 use std::sync::OnceLock;

@@ -2,7 +2,7 @@
   "id": "listening-item",
   "version": 5,
   "owner": "listening",
-  "summary": "One post Listening saved from a signed-in read: an independent probability per category, so one post can go to several inboxes (market, content, leads, creators, partners), plus whether it is a vendor's promotion, which keeps it out of leads. The hub asks it (`hub listen decide`); the destinations and thresholds are the company's registry/listening.yaml (`templates/environment-registry/listening.yaml`). The wording below describes the fictional Acme, a company that makes project-tracking software for small teams; rewrite the questions for your own company.",
+  "summary": "One post Listening saved from a signed-in read: an independent probability per category, so one post can go to several inboxes (market, content, leads, creators, partners), plus whether it is a vendor's promotion, which keeps it out of leads. The hub asks it (`tico listen decide`); the destinations and thresholds are the company's registry/listening.yaml (`templates/environment-registry/listening.yaml`). The wording below describes the fictional Acme, a company that makes project-tracking software for small teams; rewrite the questions for your own company.",
   "state": [
     "source",
     "url",

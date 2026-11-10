@@ -15,7 +15,7 @@ question on the task.
 
 ## 1. Read the handoff
 
-Follow `skills/check-a-handoff-before-kickoff/SKILL.md` on the deal record, the order form and any sales call (`hub meeting search "<customer>"`).
+Follow `skills/check-a-handoff-before-kickoff/SKILL.md` on the deal record, the order form and any sales call (`tico meeting search "<customer>"`).
 Write down, each with its source, who signed, who will use the product, what they are replacing, what they said success looks like,
 and every promise made.
 
@@ -41,4 +41,4 @@ asks for them, a granted Tool allows it, and a person has turned mail sending on
 ## 6. Hand over
 
 Save the plan, attach it and the agenda to the task, and ask one question if a promise cannot be met as sold. Commit, then
-`hub task done <id> -m "..." --version N`.
+`tico task done <id> -m "..." --version N`.

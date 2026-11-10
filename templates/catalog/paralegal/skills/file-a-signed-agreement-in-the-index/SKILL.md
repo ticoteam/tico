@@ -12,7 +12,7 @@ Steps:
 3. Record the parties' legal names as written in the document, the kind of agreement, the date signed and the term.
 4. For an NDA, record the confidentiality period and work out its end date from the signed date and the clause. Write the arithmetic.
 5. Add one row to `knowledge/executed-index.md` with the file's location.
-6. Commit, then close the task with `hub task done <id> -m "..." --version N`, naming the row added.
+6. Commit, then close the task with `tico task done <id> -m "..." --version N`, naming the row added.
 
 Checks before you finish:
 - The row matches the signed document, not a draft.

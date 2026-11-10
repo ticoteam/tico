@@ -1,4 +1,4 @@
-"""`hub doc ask "question"`: ask the Librarian and wait for its answer (docs/librarian.md).
+"""`tico doc ask "question"`: ask the Librarian and wait for its answer (docs/librarian.md).
 
 A bot sends the Librarian a direct message and waits for its reply there. A person's script (or the Assistant, acting as that person) uses the route the
 Docs page uses, `POST /api/v2/docs/ask`, which puts the question in their own private docs conversation,
@@ -11,7 +11,7 @@ then waits for the reply there. Either way the result is the same:
 
 `covered` is false when the Librarian said the docs do not cover the question (its answer then starts
 "Not in the docs"). A wait that runs out returns `timeout`, `message_id` and `conversation_id`;
-`hub doc ask-status <conversation_id> <message_id>` collects the same answer without sending again.
+`tico doc ask-status <conversation_id> <message_id>` collects the same answer without sending again.
 The server MCP uses short waits so proxies can return these ids before their request timeout.
 """
 

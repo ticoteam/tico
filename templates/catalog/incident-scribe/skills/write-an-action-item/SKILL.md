@@ -8,7 +8,7 @@ When to use: when a postmortem or review needs an action item, or a task asks fo
 
 Steps:
 1. Search before you write. Look for an existing task or action item on the same cause in every status (open, doing,
-   waiting, done), with `hub task list --all` or a search on the cause. If one exists, link it and add the new
+   waiting, done), with `tico task list --all` or a search on the cause. If one exists, link it and add the new
    evidence instead of making a duplicate.
 2. Write the change in one sentence, as a system change: an alert, a guard, a test, a runbook line or a rollback
    step. "Be more careful" is not an action item. Rewrite it until it names something that can be built or checked.
@@ -19,7 +19,7 @@ Steps:
    timeout fails the template check" or "the alert names the table".
 6. Attach the evidence: the timeline line or source that shows why the item exists.
 7. Record it in `knowledge/actions.md` with the status "proposed". Create a task with
-   `hub task create --owner <person> --title "<action item>" --parent <id>` only when the task asks for it and the owner is confirmed.
+   `tico task create --owner <person> --title "<action item>" --parent <id>` only when the task asks for it and the owner is confirmed.
 
 Checks before you finish:
 - A search across every status was made, and any match is linked.

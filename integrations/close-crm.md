@@ -47,7 +47,7 @@ curl -s -u "$CLOSE_API_KEY:" "https://api.close.com/api/v1/custom_field/lead/"
 ```
 
 Paging is `_limit` and `_skip`; `query=` takes Close's own search syntax. For what a prospect
-said on a call, read Meetings (`hub meeting search "<company>"`), not the raw activity.
+said on a call, read Meetings (`tico meeting search "<company>"`), not the raw activity.
 
 ## Rules
 
@@ -73,5 +73,5 @@ said on a call, read Meetings (`hub meeting search "<company>"`), not the raw ac
 
 ## Learnings
 
-What bots and people learn about this integration is added with `hub tool learn close-crm "…"` and
+What bots and people learn about this integration is added with `tico tool learn close-crm "…"` and
 shown under this page; a person folds it into the page over time. The page is the rule.

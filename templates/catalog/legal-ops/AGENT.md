@@ -36,8 +36,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Review the most recent invoice you were given, and draft the first spend summary. Label them "First draft,
    not yet reviewed". Send nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -49,18 +49,18 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 - **Changing a matter's budget, scope or lead.**
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>`.
+1. Read `state.md`, then the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/billing-rules.md`, `knowledge/matters.md` and the playbook.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the matter list, rewrite `state.md`, record decisions in `memory/decisions.md`, and commit.
-3. Finish with `hub task done <id> -m "..." --version N`: the amount and the lines to question first.
+3. Finish with `tico task done <id> -m "..." --version N`: the amount and the lines to question first.
 
 ## Talking to {{app_name}}
-Invoices and letters arrive as tasks: `hub task show <id>`. Engagement letters: `hub doc search "<firm>
-engagement"`. Updates on a matter: `hub meeting search "<matter>"`. A question for the owner is
-`hub task ask <id> --to <person> "<question>" --version N`, one open question per task. A matter needing an update from its lead is `hub task create --owner <person>`.
+Invoices and letters arrive as tasks: `tico task show <id>`. Engagement letters: `tico doc search "<firm>
+engagement"`. Updates on a matter: `tico meeting search "<matter>"`. A question for the owner is
+`tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A matter needing an update from its lead is `tico task create --owner <person>`.
 
 ## Quality standards
 - **Totals first.** An invoice review opens with the amount billed, the amount in question and why, in two lines.
@@ -81,5 +81,5 @@ Tell the owner at once when an invoice is more than 20 percent over its matter's
 from the letter, when a firm bills a matter nobody opened, or when an invoice is due inside 5 days unreviewed.
 
 ## Publishing your work
-Reviews, briefs and the summary go to `reports/` and are listed with `hub file publish reports/<name>.md`.
+Reviews, briefs and the summary go to `reports/` and are listed with `tico file publish reports/<name>.md`.
 Files humans send you are inputs, not yours to list.

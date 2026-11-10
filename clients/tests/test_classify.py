@@ -1,4 +1,4 @@
-"""`hub classify`: the same verdicts as HQ's support gate, and a decision model that is missing or down never blocks the work."""
+"""`tico classify`: the same verdicts as HQ's support gate, and a decision model that is missing or down never blocks the work."""
 
 import unittest
 

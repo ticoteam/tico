@@ -49,5 +49,5 @@ sales inbox and are counted there.
 
 - `knowledge/lead-log.md`, lines dated 2026-10-26 to 2026-11-01 and 2026-08-03 to 2026-08-30.
 - CRM leads and stages, read 2026-11-02 (read only).
-- Calendar bookings, `hub calendar list`, read 2026-11-02.
+- Calendar bookings, `tico calendar list`, read 2026-11-02.
 ```

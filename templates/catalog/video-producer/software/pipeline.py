@@ -10,7 +10,7 @@ Stages, their movers, the owner and the budget come from pipeline.yaml at the re
 stage (projects/<slug>/<stage>/<asset>). An asset may have a provenance sidecar: the same file name with `.json` added,
 holding `cost_usd`. A self-moved stage is done when its folder holds a `.done` file. The budget raised by the owner is in
 projects/<slug>/budget.json, recorded only after Tico takes the owner's OK of exactly that project and amount
-(`hub ok use`): an OK never given, still waiting, for another amount or already used is refused. Approval is `hub file approved <path>`: exit 0 when approved, 1 when its answer says
+(`tico ok use`): an OK never given, still waiting, for another amount or already used is refused. Approval is `tico file approved <path>`: exit 0 when approved, 1 when its answer says
 `"approved": false`. Any other result stops the pipeline with an error, since a failed call also exits 1.
 Standard library only.
 """
@@ -35,7 +35,7 @@ NO_OWNER = (
 
 
 class Problem(Exception):
-    """Something the pipeline cannot answer for: a bad pipeline.yaml, a file outside a project, or hub failing."""
+    """Something the pipeline cannot answer for: a bad pipeline.yaml, a file outside a project, or tico failing."""
 
 
 # ----------------------------------------------------------------------------- the pipeline file
@@ -156,15 +156,15 @@ def raise_content(project, usd):
 
 
 def use_raise_ok(project, usd, ok_id):
-    """`hub ok use`: Tico takes the OK once, only when the owner gave it for this project and exactly this amount.
+    """`tico ok use`: Tico takes the OK once, only when the owner gave it for this project and exactly this amount.
     Anything else, or a call that fails, raises Problem: nothing is recorded without it."""
     content = json.dumps(raise_content(project, usd), separators=(",", ":"))
-    command = ["hub", "ok", "use", ok_id, "--for", raise_subject(project), "--content", content]
+    command = ["tico", "ok", "use", ok_id, "--for", raise_subject(project), "--content", content]
     command += ["-m", f"Budget for {project.name} raised by {float(usd):.2f} USD"]
     try:
         done = subprocess.run(command, cwd=REPO, capture_output=True, text=True, timeout=60, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
-        raise Problem(f"hub ok use could not run: {exc}; the budget is not raised") from None
+        raise Problem(f"tico ok use could not run: {exc}; the budget is not raised") from None
     if done.returncode != 0:
         output = (done.stderr.strip() or done.stdout.strip())[-500:] or "no output"
         raise Problem(f"Tico did not take OK {ok_id} for {usd:g} USD on {project.name}: {output}")
@@ -209,36 +209,36 @@ def answer_of(text):
 
 
 def approval(asset, mover="owner"):
-    """(approved, detail) from `hub file approved --by`. Exit 0: approved. Exit 1 with an answer that says
+    """(approved, detail) from `tico file approved --by`. Exit 0: approved. Exit 1 with an answer that says
     `"approved": false`: not approved. Anything else raises Problem. The CLI also exits 1 when a call fails (Tico
     unreachable, an unexpected error), so the code alone is not a verdict: a failed call is never read as pending."""
     path = rel(asset)
-    command = ["hub", "file", "approved", path, "--by", approved_by(mover)]
+    command = ["tico", "file", "approved", path, "--by", approved_by(mover)]
     try:
         done = subprocess.run(command, cwd=REPO, capture_output=True, text=True, timeout=60, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
-        raise Problem(f"hub file approved could not run for {path}: {exc}") from None
+        raise Problem(f"tico file approved could not run for {path}: {exc}") from None
     answer = answer_of(done.stdout)
     if done.returncode == 0:
         return True, answer
     if done.returncode == 1 and answer.get("approved") is False:
         return False, {}
     output = (done.stderr.strip() or done.stdout.strip())[-500:] or "no output"
-    raise Problem(f"hub file approved exited {done.returncode} for {path}, so its approval is unknown: {output}")
+    raise Problem(f"tico file approved exited {done.returncode} for {path}, so its approval is unknown: {output}")
 
 
 # ----------------------------------------------------------------------------- what to do next
 def ask_ok(task, person, text, shows=0):
-    """`hub task ask --kind ok`: a person's OK, asked on the project task. With `shows`, it shows that many published
-    file versions, each a `file:<FILE@N>` placeholder filled from `hub file publish`: the OK is for those versions only."""
-    command = shlex.join(["hub", "task", "ask", task, "--to", person, text, "--kind", "ok"])
+    """`tico task ask --kind ok`: a person's OK, asked on the project task. With `shows`, it shows that many published
+    file versions, each a `file:<FILE@N>` placeholder filled from `tico file publish`: the OK is for those versions only."""
+    command = shlex.join(["tico", "task", "ask", task, "--to", person, text, "--kind", "ok"])
     return command + " --show file:<FILE@N>" * shows + " --version N"
 
 
 def ask_raise(task, person, text, project, usd):
-    """`hub task ask --for`: the owner's OK bound to this project and exactly this amount, used once by `raise`."""
+    """`tico task ask --for`: the owner's OK bound to this project and exactly this amount, used once by `raise`."""
     content = json.dumps(raise_content(project, usd), separators=(",", ":"))
-    command = ["hub", "task", "ask", task, "--to", person, text, "--for", raise_subject(project), "--content", content]
+    command = ["tico", "task", "ask", task, "--to", person, text, "--for", raise_subject(project), "--content", content]
     return shlex.join(command) + " --version N"
 
 
@@ -250,12 +250,12 @@ def request(project, cfg, stage, files, task, owner):
     if mover.startswith("bot:"):
         # The reviewer runs in its own repository, so it reviews by file id and version: this bot publishes each file
         # first (step 1), then fills the <FILE@N> placeholders from that output into the hand-off (step 2).
-        steps = [f"1. {shlex.join(['hub', 'file', 'publish', rel(f)])}" for f in files]
+        steps = [f"1. {shlex.join(['tico', 'file', 'publish', rel(f)])}" for f in files]
         lines = [f"Review each file for the {stage['id']} stage of {project.name}. Files, as <FILE@N> from step 1:"]
         lines += [f"- {rel(f)}: <FILE@N>" for f in files]
-        lines.append("Run for each one: hub file review <FILE@N> --approve|--changes --task <this task> [--note TEXT]")
+        lines.append("Run for each one: tico file review <FILE@N> --approve|--changes --task <this task> [--note TEXT]")
         create = [
-            "hub",
+            "tico",
             "task",
             "create",
             "--owner",
@@ -271,7 +271,7 @@ def request(project, cfg, stage, files, task, owner):
         return "\n".join(steps)
     # A person OKs exact file versions: this bot publishes each file first (step 1), then shows each version it printed.
     person = owner if mover == "owner" else mover.split(":", 1)[1]
-    steps = [f"1. {shlex.join(['hub', 'file', 'publish', rel(f)])}" for f in files]
+    steps = [f"1. {shlex.join(['tico', 'file', 'publish', rel(f)])}" for f in files]
     ask = ask_ok(task, person, f"OK the {stage['id']} files for {project.name}?", len(files))
     steps.append(f"2. {ask}   (each <FILE@N> from step 1, in order)")
     return "\n".join(steps)

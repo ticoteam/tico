@@ -11,7 +11,7 @@ and the outcomes of last sweep's batch recorded. Quiet is a normal result.
 
 ## 1. Read the surfaces first
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/surfaces.md`, before opening anything. It names every surface, {{company_name}}'s listing on
 each, who controls it, and what it allows. A surface not on it is not this sweep's work; a new
@@ -54,14 +54,14 @@ A section with nothing in it is absent. Put coverage, counts and outcomes in fiv
 
 ## 6. Hand over what needs someone
 
-    hub task create --owner <owner> --parent <id>      # a claim only the business owner can do; one task per listing
-    hub task create --owner sales --parent <id>      # the milestone customer list for invitations
+    tico task create --owner <owner> --parent <id>      # a claim only the business owner can do; one task per listing
+    tico task create --owner sales --parent <id>      # the milestone customer list for invitations
 
 Never a task that asks anyone to change copy, and never one to show the sweep happened.
 
 ## 7. Finish the task
 
-Commit, then `hub task done <id> -m "..." --version N` with the counts in the first line.
+Commit, then `tico task done <id> -m "..." --version N` with the counts in the first line.
 Always finish it.
 
 ## When a surface fails

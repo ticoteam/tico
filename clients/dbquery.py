@@ -1,10 +1,10 @@
-"""`hub db`: read-only queries against a team database, run on the computer that holds the credential.
+"""`tico db`: read-only queries against a team database, run on the computer that holds the credential.
 
-  hub db list                                    the databases this bot may use
-  hub db doctor [name]                           check the grant, the credential, the connection, read-only
-  hub db <name> "<select>" [--param k=v ...]     one read-only statement
-  hub db <name> --query <id> [--param k=v ...]   a named query from the team's catalog
-  hub db <name> find|aggregate|count|distinct|collections ...   a MongoDB database (clients/dbmongo.py)
+  tico db list                                    the databases this bot may use
+  tico db doctor [name]                           check the grant, the credential, the connection, read-only
+  tico db <name> "<select>" [--param k=v ...]     one read-only statement
+  tico db <name> --query <id> [--param k=v ...]   a named query from the team's catalog
+  tico db <name> find|aggregate|count|distinct|collections ...   a MongoDB database (clients/dbmongo.py)
 
 Queries execute beside the bot, never on the server. Tico stores the encrypted Credential and
 delivers it only to a granted bot for the run; database access also needs network reachability
@@ -216,7 +216,7 @@ def check_statement(sql, kind):
         raise Refusal(
             "read_only",
             f"only read statements run here ({', '.join(allowed)}); this starts with `{words[0]}`. "
-            "Writes are never available through `hub db`.",
+            "Writes are never available through `tico db`.",
         )
     if "into" in words:
         raise Refusal("read_only", "`INTO` writes a table or a file and is not allowed; select the rows instead")
@@ -473,7 +473,7 @@ RUNNERS = {"postgres": run_postgres, "mysql": run_mysql, "sqlite": run_sqlite}
 
 
 def execute(db, sql, values=None, order=(), max_rows=None, timeout=None):
-    """Run one read-only statement on `db`; returns the result dict `hub sql` returns.
+    """Run one read-only statement on `db`; returns the result dict `tico sql` returns.
 
     Raises Refusal for a rule and for a database error (its message scrubbed of credentials)."""
     max_rows = min(int(max_rows or db.max_rows), db.max_rows, MAX_ROWS_CEILING)
@@ -553,7 +553,7 @@ def limit(entry, key, default, ceiling):
 def open_database(name, actor, environ=None):
     """The Database `actor` may use under `name`, with its credential from the environment.
 
-    A bot needs a declared `tools:` entry; a person running `hub db` on their own computer
+    A bot needs a declared `tools:` entry; a person running `tico db` on their own computer
     needs the credential in their own environment, which is their grant."""
     environ = environ if environ is not None else os.environ
     if not NAME.match(name) or name in RESERVED:
@@ -794,7 +794,7 @@ def named_query(client, name, query_id):
                 "catalog",
                 f"no query `{query_id}` in the `{name}` catalog. Named queries live in the company's private "
                 f"config as integrations/queries/{name}.yaml (docs/databases.md, step 5); "
-                f"`hub tool query-search {name} <term>` searches them",
+                f"`tico tool query-search {name} <term>` searches them",
             ) from None
         raise
 
@@ -810,7 +810,7 @@ def parse_params(pairs):
 
 
 def run(client, args, environ=None):
-    """The `hub db` command; `client` is the hub client that records the audit."""
+    """The `tico db` command; `client` is the hub client that records the audit."""
     environ = environ if environ is not None else os.environ
     actor = client.get("me")["actor"]
     target = args.target
@@ -834,7 +834,7 @@ def run(client, args, environ=None):
 
             return mongo_run(client, db, args, dbmongo)
         if getattr(args, "extra", None):
-            raise Refusal("usage", "give one statement, quoted: hub db NAME \"SELECT ...\"")
+            raise Refusal("usage", "give one statement, quoted: tico db NAME \"SELECT ...\"")
         values = parse_params(args.param)
         order = ()
         query_id = args.query_id
@@ -856,7 +856,7 @@ def run(client, args, environ=None):
                     )
         else:
             if not args.sql:
-                raise Refusal("usage", 'give a statement (hub db NAME "SELECT ...") or --query ID')
+                raise Refusal("usage", 'give a statement (tico db NAME "SELECT ...") or --query ID')
             sql = args.sql
             values = {k: coerce(v, "") for k, v in values.items()}
         try:
@@ -871,7 +871,7 @@ def run(client, args, environ=None):
 
 
 def mongo_run(client, db, args, dbmongo):
-    """`hub db <mongo> find|aggregate|count|distinct|collections ...` or `--query ID`: the same audit-first flow as SQL."""
+    """`tico db <mongo> find|aggregate|count|distinct|collections ...` or `--query ID`: the same audit-first flow as SQL."""
     values, query_id, entry = parse_params(args.param), args.query_id, None
     if query_id:
         if args.sql or getattr(args, "extra", None):

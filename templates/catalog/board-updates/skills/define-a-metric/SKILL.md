@@ -11,7 +11,7 @@ Steps:
 1. Name the metric the way the team says it, with its unit: "Monthly recurring revenue (USD)", "Paying studios (count)".
 2. Write the formula in one line: what is counted, what is excluded, and over which period. Example: "MRR: sum of monthly subscription fees
    for accounts active on the last day of the month. Excludes one-off fees, trials and services."
-3. Name the source: the system, report or KPI id (`hub kpi show <kpi id>`), and the date of the reading. A metric with no source is not added.
+3. Name the source: the system, report or KPI id (`tico kpi show <kpi id>`), and the date of the reading. A metric with no source is not added.
 4. Name the owner who supplies it, and the day of the month it is due.
 5. Set the order: where it sits in the table. Keep it fixed. A new metric goes at the end unless the owner asks otherwise, and is shown as new for one month.
 6. Record the baseline: the value for the prior month, from the same source, so the first comparison is like for like. If it cannot be rebuilt, say so and

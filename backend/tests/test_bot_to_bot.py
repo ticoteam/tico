@@ -359,4 +359,4 @@ def test_the_cli_prints_why_a_message_was_held(monkeypatch, capsys):
     held = "held for cpo's next run; nothing runs it now. Add --needs-action ..."
     monkeypatch.setattr(remotecli, "run", lambda *_: {"id": "m1", "woke": False, "held": held})
     assert remotecli.main(SimpleNamespace(cmd="message", fn="message send")) == 0
-    assert capsys.readouterr().err.strip() == "hub: " + held
+    assert capsys.readouterr().err.strip() == "tico: " + held

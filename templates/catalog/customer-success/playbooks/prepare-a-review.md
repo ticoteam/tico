@@ -13,10 +13,10 @@ has five items at most, and the pack is published and attached to the task.
 
 ## 1. Read the account
 
-    hub task show <id>
+    tico task show <id>
 
 Read `knowledge/accounts/<account>.md`, the renewal date in `knowledge/renewals.md`, and the calls
-(`hub meeting search "<account>"`) and tickets since the last review.
+(`tico meeting search "<account>"`) and tickets since the last review.
 
 ## 2. Show value in the customer's terms
 
@@ -36,4 +36,4 @@ renewal timeline with a gap for any commercial term. Draft the follow-up note th
 
 ## 5. Hand over
 
-Write `reports/YYYY-MM-DD-<account>-review.md`, `hub file publish` it, attach it to the task, and `hub task done <id> -m "..." --version N`: the pack's headline and what you could not read.
+Write `reports/YYYY-MM-DD-<account>-review.md`, `tico file publish` it, attach it to the task, and `tico task done <id> -m "..." --version N`: the pack's headline and what you could not read.

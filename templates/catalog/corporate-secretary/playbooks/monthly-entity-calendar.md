@@ -8,7 +8,7 @@ legal advice. Nothing is sent, signed or filed.
 
 ## 1. Meetings
 
-    hub calendar list
+    tico calendar list
 
 For each board or shareholder meeting in the next 90 days: the date, the notice the bylaws require
 (`knowledge/board.md`) and the date notice must go by, the pack due date (default 14 days before), and the pack's
@@ -22,7 +22,7 @@ days waiting and who each waits on. Check the tasks for signed copies that arriv
 ## 3. Entities
 
 For each entity in `knowledge/entities.md`: annual filings and accounts due inside 90 days (and whether
-`compliance` has them), officer or director changes since last month (`hub team show` for people who left), and any
+`compliance` has them), officer or director changes since last month (`tico team show` for people who left), and any
 fact older than twelve months to re-confirm.
 
 ## 4. Cap table
@@ -33,7 +33,7 @@ last month with no matching approval in the minute book goes on the list for the
 ## 5. Write and hand over
 
 `reports/YYYY-MM-DD-entity-board-calendar.md` in the shape of `knowledge/examples/entity-board-calendar.md`,
-ending with the not-legal-advice line. `hub file publish` it, commit, and `hub task done <id> -m "..." --version N` with the nearest deadline first.
+ending with the not-legal-advice line. `tico file publish` it, commit, and `tico task done <id> -m "..." --version N` with the nearest deadline first.
 
 ## Done when
 - Every meeting in the next 90 days has its notice date, pack due date and pack status, or is listed as missing from the calendar.

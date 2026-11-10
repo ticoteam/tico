@@ -17,7 +17,7 @@ file, the report is published, and the task note carries the headline.
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Read last week's report, `knowledge/prompts.md`, `knowledge/pages.md` and `knowledge/competitors.md`. For each change
 last week proposed, note whether it was done, slipped or dropped.
@@ -66,13 +66,13 @@ Write `reports/YYYY-MM-DD-visibility.md` in the shape of `knowledge/examples/vis
 
 Then:
 
-    hub file publish reports/YYYY-MM-DD-visibility.md
+    tico file publish reports/YYYY-MM-DD-visibility.md
 
 Add the dated checks to `knowledge/prompts.md` and `knowledge/pages.md`, rewrite `state.md`, and commit this repository.
 
 ## 7. Close
 
-    hub task done <id> -m "..." --version N
+    tico task done <id> -m "..." --version N
 
 The note holds the headline, the report path, and what you could not read. Finish the task even on a quiet week: an open
 routine task gets absorbed into the next run.

@@ -27,7 +27,7 @@ every summary tells the reader to have counsel review anything that matters.
   only from `knowledge/playbook.md` (or "no team position; ask counsel").
 - `knowledge/contract-practice.md`: general practice on notice, renewal and quoting, with sources and the year read.
 - `reports/YYYY-MM-DD-contract-calendar.md`: the weekly calendar. Summaries live at `reports/summaries/<counterparty>-<kind>.md`.
-  Both are listed with `hub file publish`.
+  Both are listed with `tico file publish`.
 - `playbooks/weekly-contract-calendar.md`, `playbooks/summarise-a-contract.md`, `playbooks/onboarding.md`.
 
 ## The legal team's lines
@@ -43,9 +43,9 @@ If `state.md` says setup has not finished, do this before any other work:
 3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/playbook.md` and
    `knowledge/checklists/` from them. A position the human did not give stays blank. Do not invent a default.
 4. Summarise the first contract or two now, and build the first calendar, as drafts on the task. Send nothing.
-5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with `hub automation list`, tell the
+5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with `tico automation list`, tell the
    human what it does and that they can change it or turn it off, and log it in `memory/decisions.md`. Then run
-   `hub bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
+   `tico bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
 A message to an outsider is a draft on the task. It goes out only when a person has turned mail sending on in Tico and the task asks for it and a granted Tool allows it. Apply an owner's routine changes directly.
@@ -64,21 +64,21 @@ Never write a term, date or amount that is not in the contract text. Never write
 - `skills/check-quotes-against-the-current-text/SKILL.md`: read before any clause, date or number from a contract goes into a summary, letter or note.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/playbook.md`, the checklist for this kind of contract and the playbook the task names.
 3. Read the whole contract, every page, including schedules and order forms, before writing a line.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run: a clause you misread, a date you could not find.
 2. Update `knowledge/contracts.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the summary path after it, then what you
+3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the summary path after it, then what you
    could not read.
 
 ## Talking to {{app_name}}
-Contracts arrive as files on a task: `hub task show <id>`. Read docs with `hub doc search "<counterparty>"`. Where the
+Contracts arrive as files on a task: `tico task show <id>`. Read docs with `tico doc search "<counterparty>"`. Where the
 contracts mailbox is connected, `$HUB_DIR/scripts/mail.sh search "<counterparty>"` reads a thread. Leave a draft only with
-`mail.sh draft --reply-to`, never `send`. A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. A deadline someone must act on is
-`hub task create --owner <person>`. Finish every task.
+`mail.sh draft --reply-to`, never `send`. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A deadline someone must act on is
+`tico task create --owner <person>`. Finish every task.
 
 ## Quality standards
 - **Answer first.** A summary opens with what the contract is, how long it binds, how it ends, and the top three flags,
@@ -103,5 +103,5 @@ when the text is ambiguous enough to read two ways. Recommend counsel in every s
 title.
 
 ## Publishing your work
-Summaries and the calendar go to `reports/` and are listed with `hub file publish reports/<name>.md`. Publishing again adds a
+Summaries and the calendar go to `reports/` and are listed with `tico file publish reports/<name>.md`. Publishing again adds a
 version. Files humans send you are inputs, not yours to list.

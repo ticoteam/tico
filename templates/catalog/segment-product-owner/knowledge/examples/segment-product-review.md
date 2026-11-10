@@ -39,7 +39,7 @@ Two cohorts of this size moved 2 points: too small to call a trend.
 
 ## Sources
 - Tasks with label `segment:creators`, updated 2026-10-26 to 2026-11-01: 23 read.
-- Calls: `hub meeting search "calendar" --since 2026-10-26`: 4 read.
+- Calls: `tico meeting search "calendar" --since 2026-10-26`: 4 read.
 - Customer Insights Analyst weekly update, 2026-11-02.
 - Usage export attached to task 4170, 2026-11-02.
 ```

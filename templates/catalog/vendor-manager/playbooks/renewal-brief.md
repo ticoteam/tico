@@ -3,7 +3,7 @@
 Triggered when a renewal's notice window opens, or by a task that names a vendor and asks "should we keep it?". Budget
 25 minutes.
 
-Inputs: the contract and its order form (`hub doc search "<vendor>"`, then `hub doc read <id>`),
+Inputs: the contract and its order form (`tico doc search "<vendor>"`, then `tico doc read <id>`),
 `knowledge/vendors.md`, `knowledge/reviews/<vendor>.md`, the latest spend report or seat export, and procurement's past
 comparisons where they exist.
 
@@ -18,13 +18,13 @@ the next step is on the task; the brief is published; and the owner has been ask
 
 ## 1. Read the contract, not the register
 
-    hub doc search "<vendor>"
-    hub doc read <id>
+    tico doc search "<vendor>"
+    tico doc read <id>
 
 Confirm the end date, the notice period and its unit, how notice must be given (email, letter, portal) and whether it must
 be received or only sent, the price and any uplift clause, the minimum term, and what happens to the team's data on exit.
 If the terms need a summary, ask the Contracts Manager within the requested work:
-`hub task create --owner legal-review`.
+`tico task create --owner legal-review`.
 
 ## 2. Gather the evidence
 
@@ -50,5 +50,5 @@ Tool allows it, and a person has turned mail sending on in Tico. Otherwise it st
 
 ## 5. Hand over
 
-Write `reports/renewal-<vendor>-<date>.md`, publish it with `hub file publish`, ask the vendor's owner once for the
+Write `reports/renewal-<vendor>-<date>.md`, publish it with `tico file publish`, ask the vendor's owner once for the
 decision, and record the decision in `knowledge/vendors.md` when it comes. Finish the task.

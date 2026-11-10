@@ -9,13 +9,13 @@ Done when: `reports/YYYY-MM-DD-growth-week.md` is written and published; every w
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then the knowledge files above and last week's page. If last week flagged an action, check whether it happened and say so.
 
 ## 2. Gather the week, by workstream
 
-For each workstream in `knowledge/workstreams.md`, read what its owner produced since last Friday: `hub task list`, `hub update list --kind weekly --bot <slug>`, the owner's newest published report, and imported meetings that mention it. A bot or human with nothing this week is "no report", never "on track".
+For each workstream in `knowledge/workstreams.md`, read what its owner produced since last Friday: `tico task list`, `tico update list --kind weekly --bot <slug>`, the owner's newest published report, and imported meetings that mention it. A bot or human with nothing this week is "no report", never "on track".
 
 ## 3. Read the pipeline
 
@@ -31,7 +31,7 @@ Three to five, in this order: closest to close and needing a step; stalled past 
 
 ## 6. Forecast
 
-From the sales roll-up: commit, best case and pipeline for the period, and the deals it flagged. Put the gap to the period's target in one line, if `hub goal list` shows one. At most five deals to inspect on the forecast call. Use `skills/build-a-forecast-call-pack/SKILL.md`.
+From the sales roll-up: commit, best case and pipeline for the period, and the deals it flagged. Put the gap to the period's target in one line, if `tico goal list` shows one. At most five deals to inspect on the forecast call. Use `skills/build-a-forecast-call-pack/SKILL.md`.
 
 ## 7. Blockers and asks
 
@@ -39,7 +39,7 @@ List each blocker once: what is blocked, who can clear it, what they must decide
 
 ## 8. Calendar, six weeks ahead
 
-Update `knowledge/calendar.md` from `hub calendar list` and the workstreams. Flag collisions (two sends or two launches the same day), launches inside two weeks with no brief or owner, demos without an owner, and gaps.
+Update `knowledge/calendar.md` from `tico calendar list` and the workstreams. Flag collisions (two sends or two launches the same day), launches inside two weeks with no brief or owner, demos without an owner, and gaps.
 
 ## 9. Propose next week's priorities
 
@@ -51,7 +51,7 @@ For each new lead, account or request with no owner, propose the owner in one li
 
 ## 11. Write the page and hand it over
 
-Write `reports/YYYY-MM-DD-growth-week.md` in the shape of `knowledge/examples/growth-week.md`, then `hub file publish reports/YYYY-MM-DD-growth-week.md`. Commit, then `hub task done <id> -m "..." --version N`: the headline, the path, what you could not read. Always finish it: an open scheduled task absorbs the next.
+Write `reports/YYYY-MM-DD-growth-week.md` in the shape of `knowledge/examples/growth-week.md`, then `tico file publish reports/YYYY-MM-DD-growth-week.md`. Commit, then `tico task done <id> -m "..." --version N`: the headline, the path, what you could not read. Always finish it: an open scheduled task absorbs the next.
 
 ## When a source fails
 

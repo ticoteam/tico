@@ -485,7 +485,7 @@ def install(app, store, auth, mutate):
     @app.post("/api/v2/skills/proposals", status_code=201)
     def skill_propose(request: Request, body: M.SkillPropose):
         """Propose a skill or an update: the whole folder as text files. A bot or a person may; an admin approves. The bundle is
-        checked here (the same rules as `hub skill submit`), and screening follows before anyone can approve it."""
+        checked here (the same rules as `tico skill submit`), and screening follows before anyone can approve it."""
         who = reader(request)
         return mutate(request, body, lambda c: propose(c, auth, who, body))
 

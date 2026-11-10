@@ -8,7 +8,7 @@ Done when: the review is published; every campaign has a result or "unmeasured" 
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/targets.md`, `knowledge/structure.md`, `knowledge/negatives.md`, `knowledge/tests.md`, `knowledge/changes.md` and last week's review. For every change applied in the last two weeks, note what it was meant to do; step 6 checks it.
 
@@ -45,8 +45,8 @@ Rank by money at stake. For each one: the exact edit (platform, campaign or ad g
 
 ## 9. Write and hand over
 
-Write `reports/YYYY-MM-DD-search-ads.md` in the shape of `knowledge/examples/search-ads-review.md`, then run `hub file publish reports/YYYY-MM-DD-search-ads.md`. Update `knowledge/negatives.md`, `knowledge/structure.md`, `knowledge/tests.md` and `knowledge/changes.md`, commit this repository, then run `hub task done <id> -m "..." --version N`: the headline, the report path, and what you could not read.
+Write `reports/YYYY-MM-DD-search-ads.md` in the shape of `knowledge/examples/search-ads-review.md`, then run `tico file publish reports/YYYY-MM-DD-search-ads.md`. Update `knowledge/negatives.md`, `knowledge/structure.md`, `knowledge/tests.md` and `knowledge/changes.md`, commit this repository, then run `tico task done <id> -m "..." --version N`: the headline, the report path, and what you could not read.
 
 ## When the export is missing
 
-Say which report is missing and for which dates. Ask once with `hub task ask <id> --to <person> "<question>" --version N`, and finish with what you have. Never fill a gap from last week's numbers.
+Say which report is missing and for which dates. Ask once with `tico task ask <id> --to <person> "<question>" --version N`, and finish with what you have. Never fill a gap from last week's numbers.

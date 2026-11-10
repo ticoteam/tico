@@ -11,9 +11,9 @@ else. Do not put a personal API token in a product backend: it carries everythin
 The owner and the admins make, list and revoke keys:
 
 ```sh
-hub service-key create --label "Billing backend"
-hub service-key list
-hub service-key revoke <id>
+tico service-key create --label "Billing backend"
+tico service-key list
+tico service-key revoke <id>
 ```
 
 `create` answers with the key (`tico_sk_...`) this once; Tico keeps only a hash. Put it in the other system's secret
@@ -77,7 +77,7 @@ a release out to several installs ([Releasing](releasing.md#the-release-managers
 because only the owner updates the install:
 
 ```sh
-hub service-key create --label "Release Manager" --scope update
+tico service-key create --label "Release Manager" --scope update
 ```
 
 (`POST /api/v2/service-keys` with `{"label": "...", "scope": "update"}`.) It reaches these routes, the same ones the
@@ -92,7 +92,7 @@ owner's **Check for updates** and **Update now** use, and nothing else:
 `GET /healthz` needs no key; its `release` is the release the server runs. Every other route answers `403`, the task
 routes included, and a tasks key answers `403` on these. The update is recorded as started by the key
 (`system.update.started` with actor `service:<id>`). The updater checks, snapshots and rolls back exactly as for the
-owner's click ([Updates](updates.md#the-servers-own-updater)). `hub service-key list` shows each key's `scope`.
+owner's click ([Updates](updates.md#the-servers-own-updater)). `tico service-key list` shows each key's `scope`.
 
 ## What a person sees
 

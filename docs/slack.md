@@ -35,8 +35,8 @@ list in Tico's database, not a file:
 - **In the app.** Tools > Slack channels (an owner or an admin): the channel (`#customer_success` or its id),
   the bots that read it, whether bots may post (on unless you turn it off), and a note. A channel listed by name gets
   its id from Slack once Tico is in it.
-- **With `hub`.** `hub slack channel add '#customer_success' --reader support`, `hub slack channel list`,
-  `hub slack channel remove '#customer_success' [--reader BOT]`.
+- **With `tico`.** `tico slack channel add '#customer_success' --reader support`, `tico slack channel list`,
+  `tico slack channel remove '#customer_success' [--reader BOT]`.
 - **By asking BotOps.** "Let the support bot read #customer_success": BotOps adds it as the person who asked,
   so a member is told who to ask. The MCP tools are `hub_slack_channel_add`, `_list`, `_remove` and `_import`.
 
@@ -45,7 +45,7 @@ A reader gets what is new in the channel about once an hour, as a message in its
 list and its `tools:` entry. Channels shared outside the workspace are always refused, whatever the list says.
 
 **An older install** has `registry/slack-channels.yaml`. It is still read, and its channels show in the list marked as
-coming from the file, until an owner or an admin presses **Import** (or runs `hub slack channel import`). After that the
+coming from the file, until an owner or an admin presses **Import** (or runs `tico slack channel import`). After that the
 file is ignored. A public install has no such file and needs none.
 
 ## Link a channel to a thread
@@ -76,8 +76,8 @@ A channel can be linked to a Tico thread, and the two carry each other's message
   Nothing wakes a bot for it.
 
 In the app, an owner or an admin links a thread in Tools > Slack (Link a thread), or in the thread's
-Who can read sheet. The same list shows each link's state, with Resume and Unlink. Elsewhere: `hub thread link-slack
-<thread> [<channel>]` (CLI), the `hub_thread_link_slack` tool (MCP), or the API. Resume is `hub thread slack-resume <link-id>`. `GET /api/v2/slack/links` reads a page
+Who can read sheet. The same list shows each link's state, with Resume and Unlink. Elsewhere: `tico thread link-slack
+<thread> [<channel>]` (CLI), the `hub_thread_link_slack` tool (MCP), or the API. Resume is `tico thread slack-resume <link-id>`. `GET /api/v2/slack/links` reads a page
 at a time (`limit`, `cursor`; follow `next_cursor`).
 
 ## What humans can do

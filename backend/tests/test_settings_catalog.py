@@ -1,5 +1,5 @@
 """The settings catalogue (backend/settings_catalog.py): every route a Settings card writes has an entry, and
-`hub settings find|show|set` change a setting with the rights of the person who asked.
+`tico settings find|show|set` change a setting with the rights of the person who asked.
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """

@@ -1,6 +1,6 @@
 # The queue: Needs you, bot-made tasks, the sources that file them, and undo. Case 1 is the real Nov 3 chat (split into
 # its four asks), on Pipelines v3: tasks are open, done or closed; a bot asks a person through an ask on its task (an OK
-# or a question), and what waits on the person is `hub needs-you show`. The fictional company is Acme; the owner is
+# or a question), and what waits on the person is `tico needs-you show`. The fictional company is Acme; the owner is
 # Dana. Canned hub outputs are shaped like the real routes (backend/views.py needs-you, docs/dev/pipelines-v3-cutover.md
 # "The task as JSON"; clients/hubcli.py for the commands).
 #
@@ -225,8 +225,8 @@
         source: {kind: automation, id: auto_docs_release, name: "Docs and release notes for each release", trigger: "release.published"}
         siblings_this_week: 14
         stops:
-          - {fix: "Turn the automation off", command: "hub automation update auto_docs_release --disable --summary 'stop per-release docs tasks'"}
-          - {fix: "Or a rule that stops it", command: "hub rules add --text 'No per-release docs tasks for the owner' --who human:dana"}
+          - {fix: "Turn the automation off", command: "tico automation update auto_docs_release --disable --summary 'stop per-release docs tasks'"}
+          - {fix: "Or a rule that stops it", command: "tico rules add --text 'No per-release docs tasks for the owner' --who human:dana"}
     - match: '^automation list'
       out:
         automations:

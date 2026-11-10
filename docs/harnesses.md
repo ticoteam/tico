@@ -86,7 +86,7 @@ takes an API key. Candidates:
 
 - **pi** (already a Tico host, `runner-rs/src/hosts/pi.rs`): a long-lived process driven over JSON on stdin and stdout
   (`pi --mode rpc`), a JSON event stream Tico already parses, resumable sessions, read/bash/edit/write/grep tools, MCP servers (the bot
-  reaches Tico through the hub MCP server and the `hub` CLI over bash), no permission prompts, an npm package, and keys
+  reaches Tico through the hub MCP server and the `tico` CLI over bash), no permission prompts, an npm package, and keys
   for many providers by environment variable. Tico reaches every model through OpenRouter, so one key covers all of them.
 - **OpenCode**: also capable and widely used, with a large provider list, but it would need a new host adapter and its
   own event format, and ships a per-platform native binary. Nothing in a headless run needs what it adds.

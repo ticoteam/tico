@@ -113,7 +113,7 @@ def _queue_items(rows, full, bot_reader):
             continue  # Capacity is an explained queue, never a "no more slots" alert to a bot.
         oldest = row.get("oldest_queued", row["oldest"])
         minutes = max(0, quiet_minutes(oldest))
-        command = "hub run list " + shlex.quote(row["slug"])
+        command = "tico run list " + shlex.quote(row["slug"])
         fixes = [row["fix"]] if full and row.get("fix") else []
         if bot_reader:
             fixes = [_fix(command, "#/bot/" + row["bot"])]
@@ -2338,7 +2338,7 @@ def _aged_pr_checks(c, who, auth, full, kind):
                 "whose_move": actor,
                 "text": f"PR #{link['number']} ({task_name}{link['task_title'][:200]}): "
                 f"{'conflicting' if reason == 'conflict' else 'green and mergeable'} for {minutes // 60} h; {action}",
-                "fix": action + "; hub task show " + link["task_id"],
+                "fix": action + "; tico task show " + link["task_id"],
                 "fixes": [_fix("Open PR", link["url"]), _fix("Open task", "#/tasks/" + link["task_id"])],
             }
         )

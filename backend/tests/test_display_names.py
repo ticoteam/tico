@@ -76,7 +76,7 @@ def test_messages_tasks_and_asks_have_display_names(api, named_data):
 
 def test_the_person_a_task_waits_on_is_named_though_they_are_not_on_the_task(api, named_data):
     """names.LISTED_KEYS: the `who` and `asked_by` of a task's waits and requirements go into `actors`, which
-    `hub task show` prints names from."""
+    `tico task show` prints names from."""
     task_id = named_data['task']['id']
     tasks = api.get('/api/v2/tasks', headers=headers()).json()
     assert tasks['actors']['human:ben'] == 'Ben'

@@ -22,7 +22,7 @@ whether data the new version wrote still works on the old one. If it cannot be r
 
 ## 3. Draft the request
 
-Post it on the task for the person who runs deploys (`hub task create --owner <person> --title "Roll back <repo> to <version>" --parent <id>`),
+Post it on the task for the person who runs deploys (`tico task create --owner <person> --title "Roll back <repo> to <version>" --parent <id>`),
 with, in this order:
 1. the version to return to, and the commit it points at;
 2. the evidence: the bad deploy's run id, the first failing check, the time it reached users;

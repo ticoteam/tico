@@ -800,7 +800,7 @@ class Calls:
             title = _call(c, call_id)["title"]
         body = (
             f"Action items for {title} could not be made: the Gateway did not answer for a day. The connector "
-            f"can retry them with `hub call retry {call_id}` or POST /api/v2/calls/{call_id}/action-items/retry."
+            f"can retry them with `tico call retry {call_id}` or POST /api/v2/calls/{call_id}/action-items/retry."
         )
         try:
             with self.store.transaction() as c:

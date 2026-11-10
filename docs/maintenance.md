@@ -40,7 +40,7 @@ Update skips before 05:00 company time without using up its cadence, so it can b
 
 ## Run now
 
-`POST /api/v2/maintenance/run`, or `hub maintenance run [--step KEY]`. A plain Run now uses the same claim and due rules as the schedule, so a step runs only when it is due. `--step` runs that one step even when it is not due; a switched off step stays off. A run that is already going is returned instead of a second one. With an Idempotency-Key, a repeat of the same key returns the run that key made, and starts nothing.
+`POST /api/v2/maintenance/run`, or `tico maintenance run [--step KEY]`. A plain Run now uses the same claim and due rules as the schedule, so a step runs only when it is due. `--step` runs that one step even when it is not due; a switched off step stays off. A run that is already going is returned instead of a second one. With an Idempotency-Key, a repeat of the same key returns the run that key made, and starts nothing.
 
 ## Recording and recovery
 
@@ -85,5 +85,5 @@ The Learn step's settings include the last seven days of runs, items read, items
   and the monthly cap, one row per step with its switch, How often and number of bots, Run now, and a Runs tab with each
   step's line. Anyone signed in can read it; only an owner or an admin can change it.
 - API: `GET /api/v2/maintenance`, `PATCH /api/v2/maintenance`, `GET /api/v2/maintenance/runs`, `POST /api/v2/maintenance/run`.
-- CLI: `hub maintenance status`, `hub maintenance set`, `hub maintenance run`, `hub maintenance runs`.
+- CLI: `tico maintenance status`, `tico maintenance set`, `tico maintenance run`, `tico maintenance runs`.
 - MCP: the `hub_maintenance*` tools.

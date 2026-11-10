@@ -10,7 +10,7 @@ owned by your manager, that can be approved, changed or declined from the page a
 
 Open `knowledge/briefs.md`. If a brief for this problem is open, add the new evidence to that task as a comment:
 
-    hub task comment <id> "<evidence, its source and date>"
+    tico task comment <id> "<evidence, its source and date>"
 
 Do not file a second brief. If an earlier brief was declined, read its reason first. File again only with evidence the
 reason did not cover.
@@ -43,7 +43,7 @@ One page, plain words, in this shape:
 
 Save the page to a file in your checkout, then file it:
 
-    hub task create --owner <your manager> --title "Product brief: <problem>" --body-file <file> --label segment:<slug>
+    tico task create --owner <your manager> --title "Product brief: <problem>" --body-file <file> --label segment:<slug>
 
 If the problem is already a Product roadmap item, comment the brief on that item instead of filing a new task. Record the
 brief in `knowledge/briefs.md`: the date, the problem, the task id, and "filed".

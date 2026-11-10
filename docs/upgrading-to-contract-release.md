@@ -73,7 +73,7 @@ Each needs-you item has `id`, `kind`, `title`, `body`, `subject`, `created_at` a
   bot made in this release gets a UUID as its `id`.
 - Use the `id` for actor strings (`bot:<id>`), references and lookups. Use the `slug` to display a bot. A route, field
   or command that takes a bot accepts either.
-- Rename a bot with `hub bot update acme-ops --new-slug acme-support` (CLI), the `new_slug` argument of `hub_bot_update`
+- Rename a bot with `tico bot update acme-ops --new-slug acme-support` (CLI), the `new_slug` argument of `hub_bot_update`
   (MCP), or the `slug` field of `POST /api/v2/bots/{bot}/definition`. The `id`, the history and the folder stay.
 - A bot's checkout folder is named when the bot is made: `bot-<slug>`, or `bot-<slug>-<part of its id>` when that name
   is taken. A rename does not change it. Clients find a bot's files by `folder` from `GET /api/v2/bots`, not by slug.
@@ -156,11 +156,11 @@ Some response fields were renamed in this release and the spec now says so:
 
 ## Check a bot's repository
 
-`hub bot check-names <slug>` lists the old column, field and command names a bot's checkout still uses, and runs on the
-computer without the server. It reads SQL in `hub sql`, SQL-looking strings, keys read from API answers, and `hub`
+`tico bot check-names <slug>` lists the old column, field and command names a bot's checkout still uses, and runs on the
+computer without the server. It reads SQL in `tico sql`, SQL-looking strings, keys read from API answers, and `hub`
 commands. A name renamed on some tables only is reported with those tables: `SELECT owner FROM tasks` is flagged and
 `SELECT owner FROM meetings` is not.
 
-`hub bot check-names <slug> --fix` rewrites a name only when it has one new spelling everywhere and no table keeps it.
+`tico bot check-names <slug> --fix` rewrites a name only when it has one new spelling everywhere and no table keeps it.
 It leaves everything else for you to change, including `owner`, `state`, `from_actor`, a bot's `memory/` and SQL outside
-a `hub sql` call, which may be the bot's own database.
+a `tico sql` call, which may be the bot's own database.

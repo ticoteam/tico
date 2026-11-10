@@ -8,7 +8,7 @@ reasoning_effort: medium
 max_run_minutes: 45
 
 # The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
-# (Start setup, go-live). `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
 routines:
   - id: weekly-benefits-deadlines
     title: Weekly benefits deadlines
@@ -23,4 +23,4 @@ routines:
 # owner decision, so the bot files a task for the owner rather than editing this file.
 tools: []
 # There is deliberately no broker or provider portal entry: a human submits every enrollment and change there.
-# Plan documents are read through the Librarian (`hub doc ask`), which every run already has.
+# Plan documents are read through the Librarian (`tico doc ask`), which every run already has.

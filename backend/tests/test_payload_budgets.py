@@ -117,7 +117,7 @@ def test_payloads_stay_under_their_budgets(api):
     assert len(opened.content) <= 256 * KB and snap["has_more"] and snap["execution"]["parts"]
     assert len(snap["execution"]["parts"]) <= 40
 
-    # The inbox (`hub inbox`): ana's 1,000 unread replies and 500 tasks arrive as the newest 100 of each, flagged.
+    # The inbox (`tico inbox`): ana's 1,000 unread replies and 500 tasks arrive as the newest 100 of each, flagged.
     # A 6 KB reply is sent with its body and raw body, so 100 measure about 1.3 MB; held there.
     inbox = api.get("/api/v2/messages?unread=1", headers=headers())
     unread = inbox.json()

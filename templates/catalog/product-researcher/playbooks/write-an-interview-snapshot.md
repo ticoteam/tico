@@ -8,7 +8,7 @@ Triggered by a task naming an interview, call or feedback batch, and used for ea
 
 ## 1. Read the source
 
-    hub meeting read <id>
+    tico meeting read <id>
 
 Or the notes attached to the task. Read the whole thing before writing. If it is a private meeting, stop: bots
 read team meetings only. Note who spoke, when, and how the conversation came about.
@@ -34,11 +34,11 @@ other people want are not evidence; leave them out or mark them "opinion". Do no
 ## 4. Link it
 
 Add the snapshot to the opportunities it supports in `knowledge/opportunities.md`, with the date, and update the
-source counts. Competitor names and features go to `hub market report` with the quote and source.
+source counts. Competitor names and features go to `tico market report` with the quote and source.
 
 ## 5. Finish
 
-Commit, then `hub task done <id> -m "..." --version N`: the snapshot path, the one thing that surprised you,
+Commit, then `tico task done <id> -m "..." --version N`: the snapshot path, the one thing that surprised you,
 and what you could not read. You contact no one.
 
 ## When the source is thin

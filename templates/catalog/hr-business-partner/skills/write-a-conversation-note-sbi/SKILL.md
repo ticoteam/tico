@@ -17,7 +17,7 @@ Steps:
 6. Write the expectation: the standard the role or goal sets, referred to by its document or goal reference.
 7. Add the support offered (a plan, a meeting, a tool, training) and the follow-up date. A note with no follow-up date is not
    finished.
-8. Point to the policy page the manager should read first (`hub doc ask`). Do not say what should be decided, what the outcome
+8. Point to the policy page the manager should read first (`tico doc ask`). Do not say what should be decided, what the outcome
    should be, or what the person will receive.
 9. List the open questions the manager should answer before the meeting, as a short list.
 

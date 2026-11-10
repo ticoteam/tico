@@ -18,8 +18,8 @@ and stop. Also stop when the person seems distressed.
 
 ## 2. Find the page
 
-    hub doc ask "<the question, no personal details>"
-    hub doc read <path>
+    tico doc ask "<the question, no personal details>"
+    tico doc read <path>
 
 The Librarian answers from the docs and cites the page. Open the page it cites and read it whole, not only the quoted line. Follow
 `skills/check-a-handbook-page-is-current/SKILL.md`: a page in `knowledge/stale-pages.md` is not quoted, and if two pages disagree,
@@ -32,7 +32,7 @@ keep both with their dates.
 3. What it does not cover, in one line, and who to ask (`knowledge/hand-offs.md`).
 
 Never fill a gap with "usually", "most organizations" or a legal rule. If the handbook is silent, the first line is "The handbook
-does not answer this", and one task goes to the Librarian (`hub task create --owner librarian`) with the question and how often it
+does not answer this", and one task goes to the Librarian (`tico task create --owner librarian`) with the question and how often it
 has been asked, for whoever owns the policy.
 
 ## 4. Hand over
@@ -42,7 +42,7 @@ on in Tico for messages to outsiders. Otherwise it stays a draft for a person.
 
 ## 5. Finish
 
-Note any page that looked out of date. Then `hub task done <id> -m "..." --version N`: the answer's page, or the hand-off and its
+Note any page that looked out of date. Then `tico task done <id> -m "..." --version N`: the answer's page, or the hand-off and its
 owner.
 
 ## When a source fails

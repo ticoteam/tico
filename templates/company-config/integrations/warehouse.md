@@ -2,8 +2,8 @@
 service: warehouse
 title: Acme warehouse database
 kind: sql
-summary: Acme's reporting PostgreSQL replica (customers, orders, products), read through `hub db warehouse`.
-access: "`hub db warehouse \"<select>\"` or `hub db warehouse --query <id>`; read-only, audited."
+summary: Acme's reporting PostgreSQL replica (customers, orders, products), read through `tico db warehouse`.
+access: "`tico db warehouse \"<select>\"` or `tico db warehouse --query <id>`; read-only, audited."
 credentials:
   - DB_WAREHOUSE_URL — read-only connection string, stored in Tools > Credentials and granted to the bot
 declared_as: |
@@ -20,7 +20,7 @@ aliases: [acme-db]
 ## What it is
 
 Acme's reporting replica: PostgreSQL 16, read-only role `tico_readonly`, refreshed continuously from
-production. It is the only database a bot may read. The generic rules are in `hub tool show postgres`.
+production. It is the only database a bot may read. The generic rules are in `tico tool show postgres`.
 
 ## What data it has
 
@@ -34,9 +34,9 @@ production. It is the only database a bot may read. The generic rules are in `hu
 ## How a bot uses it
 
 ```bash
-hub tool query-search warehouse revenue                       # find a named query
-hub db warehouse --query revenue-by-month --param start=2026-01-01 --param end=2026-07-01
-hub db warehouse "SELECT status, count(*) FROM orders WHERE placed_at >= :since GROUP BY 1" --param since=2026-09-01
+tico tool query-search warehouse revenue                       # find a named query
+tico db warehouse --query revenue-by-month --param start=2026-01-01 --param end=2026-07-01
+tico db warehouse "SELECT status, count(*) FROM orders WHERE placed_at >= :since GROUP BY 1" --param since=2026-09-01
 ```
 
 ## Rules
@@ -49,7 +49,7 @@ hub db warehouse "SELECT status, count(*) FROM orders WHERE placed_at >= :since 
 ## Recipes
 
 `revenue-by-month`, `orders-by-status`, `top-products`, `new-customers-by-region` (see
-`hub tool query-search warehouse`).
+`tico tool query-search warehouse`).
 
 ## Gotchas
 
@@ -59,5 +59,5 @@ hub db warehouse "SELECT status, count(*) FROM orders WHERE placed_at >= :since 
 
 ## Learnings
 
-What bots and humans learn about this database is added with `hub tool learn warehouse "..."` and shown
+What bots and humans learn about this database is added with `tico tool learn warehouse "..."` and shown
 under this page; a human folds it into the page over time. The page is the rule.

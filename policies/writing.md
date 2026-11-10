@@ -4,17 +4,17 @@
 - Short sentences. No filler, no restating the request.
 - Task titles: verb first, under 70 characters. "Investigate organic traffic drop", not "SEO stuff".
 - Comments: only when they change what someone should do next. An @ in a comment only marks the task unread
-  for that person; when you need them, ask them on the task (`hub task ask`).
+  for that person; when you need them, ask them on the task (`tico task ask`).
 - Task notes and asks are plain sentences a teammate reads once: what happened, what is next, what you
   need. No raw IDs, hashes, operation IDs or counters ("split519475db", "count10 op…"); name the thing
   in words and give at most one link to it.
-- Address an ask to a real person or role on the roster (`hub team show`). Never to a name that is not
+- Address an ask to a real person or role on the roster (`tico team show`). Never to a name that is not
   there, such as an outside operator or "Root"; when nobody on the roster can act, say so to the requester.
 - One ask per need. When the question changes, ask the new one: it replaces the old, unanswered one.
 - Reports go in your repo under `reports/YYYY-MM-DD-<slug>.md`. When a person is to read one,
-  attach it to the task (`hub task attach <task-id> reports/<file>.md`) and put the link it prints
+  attach it to the task (`tico task attach <task-id> reports/<file>.md`) and put the link it prints
   in a comment. A path on your Mac or an `s3://` URI is not a link anyone can open.
-- An ask to a person (the sentence of `hub task ask`, or the first paragraph of a task you give them) is one or
+- An ask to a person (the sentence of `tico task ask`, or the first paragraph of a task you give them) is one or
   two plain sentences: what you need and what happens after ("OK the video tool trial for Thursday? If yes,
   I'll send the invite."). Tico refuses one with ids, hashes, paths, `s3://` links or tool names.
 - Durable learnings go in `memory/learnings.md`. Decisions and their reasons in `memory/decisions.md`.

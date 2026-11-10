@@ -126,7 +126,7 @@ A bot that hits a Tico bug (or a person's token, through MCP) reports it to the 
 copy-and-paste task. Whether a person says yes first is the team's rule **Bots send reports to the Tico team without
 asking** (`bot_reports_direct`, Settings > General > Team, owner only; on by default).
 
-**On.** `hub support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) is checked as below and
+**On.** `tico support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) is checked as below and
 then sent at once: no ask is made, and the command prints the ticket. The ticket is filed as the install's default
 person and counts toward their 10 a day, but it is not in their Support chat: its replies are kept for the team and the
 bot, not shown to the person. The checks come first: the message is checked as a drafted report's is, a quarantined
@@ -140,7 +140,7 @@ yes, as below.
 
 **Off.** The report waits for a person's OK:
 
-1. `hub support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) drafts the report: the
+1. `tico support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) drafts the report: the
    `message` (up to 4000 characters, plain text), its `content_sha256`, and `include_ids` (default true: the version
    and install ID go with it; `--no-ids` sends only the message). It asks a person for an OK on a task, "Send this
    report to Tico support?", and prints the OK's id. Nothing is sent, and the draft is refused while support is off
@@ -149,7 +149,7 @@ yes, as below.
    host it goes to, and OKs it with their own click in Tico. Their Assistant and a token cannot give this OK. Saying
    no sends nothing. The ask goes to the person whose token or Assistant drafted the report, else the owner of its task
    when that is a person, else the install's default person.
-3. After the OK, `hub support send --approval <id>` (MCP `hub_support_send`,
+3. After the OK, `tico support send --approval <id>` (MCP `hub_support_send`,
    `POST /api/v2/support/tickets/from-approval`) files it **as the person who OK'd it**: the ticket is kept under their
    name and counts toward their 10 a day. A bot's report is not in their Support chat, and its replies are not either.
    Only whoever asked for the OK may send it, and only once it is OK'd and its message still matches its hash. The OK
@@ -301,7 +301,7 @@ so the decision model can be tuned. The human who filed a ticket sees nothing di
 
 The same check is `POST /v1/staff/judge` (`{"text": "..."}` answers `{verdict, reason}`, nothing kept), which `software/gh-support`
 calls, with the staff key already in its secrets, for each new issue, Discussion and outside comment: `spam` is not filed and is
-counted in its output line, `injection_risk` is filed with a warning. A message bot checks email with `hub classify` (text on
+counted in its output line, `injection_risk` is filed with a warning. A message bot checks email with `tico classify` (text on
 standard input or `--file`), which asks the server's own decision model the same question.
 
 On HQ, `HQ_JUDGE_KEY` is that provider's key (`HQ_JUDGE_URL` only to point elsewhere). Without it every verdict is
@@ -320,7 +320,7 @@ watcher's report is answered at once; the ticket's task opens a few seconds late
 
 An ordinary note to a person, such as "please ignore this test", counts as legitimate text.
 Words such as "ignore", "test", and "please" do not make it a prompt injection by themselves.
-The check looks for instructions addressed to an AI, bot, or assistant. `hub classify` uses the same distinction.
+The check looks for instructions addressed to an AI, bot, or assistant. `tico classify` uses the same distinction.
 
 | Answer | What happens |
 |---|---|

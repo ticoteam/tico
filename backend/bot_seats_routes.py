@@ -32,7 +32,7 @@ def register(app, auth, mutate, onboarding, report_mutate, settings, settings_ad
     @app.post("/api/v2/bots/{bot}/onboarded")
     def bot_onboarded(request: Request, bot: str, body: M.OnboardingComplete):
         """Mark onboarding complete: a person above the bot on the org chart makes it Active (backend/lifecycle.py).
-        The bot's own call (`hub bot ready`) is its "I'm ready", with `summary` saying what it learned, and leaves it
+        The bot's own call (`tico bot ready`) is its "I'm ready", with `summary` saying what it learned, and leaves it
         Onboarding. Repeating either changes nothing more."""
         who = request.state.identity
         return mutate(

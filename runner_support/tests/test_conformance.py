@@ -1586,7 +1586,7 @@ def test_behind_a_proxy_that_refuses_default_user_agents_the_runner_and_hub_get_
     api, live, tmp_path, rust_binary
 ):
     """A real install sits behind Cloudflare, which refuses a library's default user agent: v0.3.28's runners silently
-    stopped receiving events when the stream request went out without Tico's own. Here the runner and the `hub` CLI
+    stopped receiving events when the stream request went out without Tico's own. Here the runner and the `tico` CLI
     reach the server only through such a proxy: the event stream opens, a turn runs, and no request is refused."""
     proxy = RefusingProxy(live)
     machine = Computer(api, live, tmp_path, "claude", rust_binary, registration={"url": proxy.url})

@@ -57,7 +57,7 @@ NOTE_MAX = 2000
 # the read says so (truncated), in the response, the task and the rule_reads row.
 DOC_CHARS = 400_000
 # A document's text goes into Counsel's task only up to this many characters (a run's prompt budget). A longer one is
-# named by file and version, and Counsel reads it with `hub file read`.
+# named by file and version, and Counsel reads it with `tico file read`.
 TEXT_INLINE_MAX = 20_000
 ASK_MATCHES = 8
 STOP_WORDS = frozenset(
@@ -486,7 +486,7 @@ def read(c, auth, who, files, blobs, body, found):
         lines += [
             "",
             f"The document is {len(text)} characters, too long for this task. Its text is not here.",
-            f"Read the whole of this version with `hub file read {file_id} --version {number}` and work from that.",
+            f"Read the whole of this version with `tico file read {file_id} --version {number}` and work from that.",
             "",
             fence(f"Title: {title}"),
         ]

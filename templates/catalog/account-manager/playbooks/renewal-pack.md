@@ -15,7 +15,7 @@ ten minutes once the gaps are filled. Nothing is sent.
 
 ## 1. Read the account
 
-    hub task show <id>
+    tico task show <id>
 
 Open the account plan and the contract. Check the notice clause and the uplift clause against `knowledge/renewal-rules.md`
 (`skills/read-a-contract-for-renewal-terms/SKILL.md`).
@@ -38,10 +38,10 @@ The order form or renewal quote in the team's template, with the gaps marked, an
 
 ## 5. Hand over
 
-Save the pack in `reports/`, publish it with `hub file publish reports/<file>`, and attach it to the task with
-`hub task attach <id> <file>`. Send the cover note only when the task asks, a person has turned mail sending on for this bot in
+Save the pack in `reports/`, publish it with `tico file publish reports/<file>`, and attach it to the task with
+`tico task attach <id> <file>`. Send the cover note only when the task asks, a person has turned mail sending on for this bot in
 Tico, and a granted Tool allows it. Otherwise it stays a draft on the task. Then:
 
-    hub task done <id> -m "..." --version N
+    tico task done <id> -m "..." --version N
 
 The note holds the options, the gaps, and the notice deadline.

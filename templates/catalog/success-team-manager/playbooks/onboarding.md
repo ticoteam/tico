@@ -5,9 +5,9 @@ outcome is three recorded answers, a first draft summary on the task, and the ro
 
 ## 1. Read before you ask
 
-    hub team show --team success
-    hub task list
-    hub update list --kind weekly --limit 10
+    tico team show --team success
+    tico task list
+    tico update list --kind weekly --limit 10
 
 Note which success and support bots exist and what they last reported. Do not ask what these already say.
 
@@ -25,5 +25,5 @@ moment it arrives, dated.
 ## 4. Write and check
 
 Write `knowledge/team.md` from the answers. Produce the first summary as a draft on the task, labelled "First draft, not yet
-reviewed". Check the routine with `hub automation list`, tell the owner it is set to draft only, and log it in
-`memory/decisions.md`. Then `hub bot setup-done` once the answers and the draft are recorded.
+reviewed". Check the routine with `tico automation list`, tell the owner it is set to draft only, and log it in
+`memory/decisions.md`. Then `tico bot setup-done` once the answers and the draft are recorded.

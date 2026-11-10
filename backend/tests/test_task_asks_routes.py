@@ -305,9 +305,9 @@ def test_a_personal_token_never_gives_an_ok_on_anyones_ask_but_sends_back_and_he
         assert c.execute("SELECT answer FROM answers WHERE requirement_id=?", (asks[1],)).fetchone()[0] == "ok"
 
 
-# ----------------------------------------------------------------------------- the generic use (hub ok use)
+# ----------------------------------------------------------------------------- the generic use (tico ok use)
 def test_the_generic_use_lets_only_the_asker_act_once_on_exactly_what_was_okd(api):
-    """`hub ok use <rid> --for KIND:ID --content JSON` (POST /api/v2/oks/{rid}/use), as the Video Producer uses a
+    """`tico ok use <rid> --for KIND:ID --content JSON` (POST /api/v2/oks/{rid}/use), as the Video Producer uses a
     `budget_raise:<slug>` OK: refused for an OK that does not exist, still waits, is for other content or another
     subject, or is used by anyone but the bot that asked; used once; and an OK whose task was closed lets nothing go."""
     bot, other = as_bot(api), as_bot(api, "video")
@@ -560,7 +560,7 @@ def test_the_assistant_never_answers_ok_with_space_or_case_around_it(api, value)
 
 def test_an_ok_of_a_file_counts_only_while_its_giver_may_still_open_the_file(api):
     """Codex review 2, finding 4: file access was checked only when the preview opened. Taken away after, the cached
-    hash still gave the OK, the bot used it, and `hub file approved` kept counting it. The giver's access to that file
+    hash still gave the OK, the bot used it, and `tico file approved` kept counting it. The giver's access to that file
     is checked again at the OK, at the use and when the verdict is read."""
     bot = as_bot(api)
     fid = a_file(api)

@@ -4,7 +4,7 @@ description: Draft minutes of a board or stockholder meeting from a recording or
 ---
 # Draft minutes from a meeting
 
-When to use: after a board or shareholder meeting, from an imported recording (`hub meeting read <id>`) or the chair's notes on the task.
+When to use: after a board or shareholder meeting, from an imported recording (`tico meeting read <id>`) or the chair's notes on the task.
 
 Steps:
 1. Confirm the meeting: the entity, the date, the time, the place or call, and the notice given under the bylaws (`knowledge/board.md`).

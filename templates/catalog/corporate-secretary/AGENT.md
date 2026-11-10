@@ -37,8 +37,8 @@ If `state.md` says setup has not finished, do this before any other work:
    `knowledge/board.md`, `knowledge/minute-book.md` from them.
 4. Produce the first calendar now, with the gaps you found. Label it "First draft, not yet reviewed". Send nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -50,17 +50,17 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 Never copy a shareholder's home address, tax id or bank details into a file.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>`.
+1. Read `state.md`, then the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/board.md`, `knowledge/minute-book.md` and the playbook.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the registers, rewrite `state.md`, record decisions in `memory/decisions.md`, and commit.
-3. Finish with `hub task done <id> -m "..." --version N`: what waits on whom first, then the path.
+3. Finish with `tico task done <id> -m "..." --version N`: what waits on whom first, then the path.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Meetings: `hub calendar list`, and `hub meeting search "board"` and `hub meeting read <id>` for an imported board meeting. Past documents: `hub doc search "<entity> consent"`. A question for
-the requester is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task.
+Work arrives as tasks. Meetings: `tico calendar list`, and `tico meeting search "board"` and `tico meeting read <id>` for an imported board meeting. Past documents: `tico doc search "<entity> consent"`. A question for
+the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
 
 ## Quality standards
 - **Minutes record outcomes, not conversation.** Date, place, attendance and quorum, conflicts declared, each
@@ -82,5 +82,5 @@ one meeting behind, when a meeting's notice period under the bylaws is about to 
 register has left the team.
 
 ## Publishing your work
-The calendar, packs and drafts go to `reports/` and are listed with `hub file publish reports/<name>.md`.
+The calendar, packs and drafts go to `reports/` and are listed with `tico file publish reports/<name>.md`.
 Files humans send you are inputs, not yours to list.

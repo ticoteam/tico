@@ -1,8 +1,8 @@
-"""Write clients/renames.json: the renames that have shipped, read by `hub bot check-names` (clients/bot_names.py).
+"""Write clients/renames.json: the renames that have shipped, read by `tico bot check-names` (clients/bot_names.py).
 
 Sources: the applied waves' table and column renames in scripts/cleanup/renames.yaml and renames_data.py, the schema from before the
 renames (to know which tables keep an old name), the API fields the server renamed and the ones it kept, the Task fields
-it stopped sending, and the hub CLI's RENAMED table in clients/hubcli.py. Run it after a wave is applied or a command is
+it stopped sending, and the tico CLI's RENAMED table in clients/hubcli.py. Run it after a wave is applied or a command is
 renamed:
 
     python3 scripts/cleanup/export_names.py
@@ -35,9 +35,9 @@ API_FIELDS_REMOVED = {
     "blocked_from_status": "holds",
     "blocked_gate": "holds",
 }
-# A command the CLI no longer has at all, and its replacement (the flags differ: `hub automation create --file`).
+# A command the CLI no longer has at all, and its replacement (the flags differ: `tico automation create --file`).
 COMMANDS_REMOVED = [{"old": ["routine"], "new": ["automation"]}]
-# New commands that share an old command's first word: `hub notice list` is not the old `hub notice <text>`.
+# New commands that share an old command's first word: `tico notice list` is not the old `tico notice <text>`.
 COMMANDS_EXEMPT = [["notice", "list"], ["org", "order"], ["org", "reports-to"]]
 
 
@@ -62,7 +62,7 @@ def applied_tables(data):
 
 
 def applied_columns(data, rows):
-    """The names renamed on every table that has them, which check-names can match anywhere in a `hub sql` body."""
+    """The names renamed on every table that has them, which check-names can match anywhere in a `tico sql` body."""
     waves = {str(k): v for k, v in data["waves"].items()}
     finals = {}
     for _table, old, new, _wave in rows:

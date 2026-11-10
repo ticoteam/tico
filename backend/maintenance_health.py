@@ -235,7 +235,7 @@ def _runner_checks(c, settings):
                     else _holding_fix(machine["label"])
                     if rows and rows[0]["running"] and update["state"] != "incompatible" and not update["error"]
                     else f"BotOps: update the runner on {machine['label']} (Settings > Computers, or "
-                    "`scripts/tico install` once on that computer so it updates itself).",
+                    "`scripts/tico-computer install` once on that computer so it updates itself).",
                     # Its bots are paused until it updates: bad, as Health says (runner_versions.health_check).
                     severity=BAD if update["state"] == "incompatible" else WARN,
                 )
@@ -267,7 +267,7 @@ def _runner_checks(c, settings):
                 f"Computer {r['label']} has said since {since} UTC that it is restarting, which takes at most "
                 f"{health.RESTART_STUCK_MINUTES} minutes; {running} turn(s) still run there{holds}.",
                 f"BotOps: look at the turns still running on {r['label']} (Runs); stopping one is a person's "
-                f"choice. If none runs, restart Tico on {r['label']} by hand (`tico restart`).",
+                f"choice. If none runs, restart Tico on {r['label']} by hand (`tico-computer restart`).",
             )
         )
     for x in health.silent_computers(c):
@@ -280,7 +280,7 @@ def _runner_checks(c, settings):
                 f"Computer {x['label']} was last heard from at {(x['last_seen_at'] or '')[:16]}; "
                 f"{x['queued'] + x['dead']} job(s) wait for {', '.join(x['bots'])}.",
                 f"Ask the person who runs {x['label']} to wake it and check Tico there "
-                "(`tico status`; `tico restart` starts it again), or move its bots to an online computer.",
+                "(`tico-computer status`; `tico-computer restart` starts it again), or move its bots to an online computer.",
             )
         )
     starts = None
@@ -496,7 +496,7 @@ def _check_hold_checks(c):
                 f"{since[:16].replace('T', ' ')} UTC); {title}. Every turn on it since then ({tries}) "
                 "stopped on the limit, and Tico retries it after every reset.",
                 f"BotOps: wait for {model}'s limit to reset; or switch the check model: {name} declines "
-                "this check and files it again on another model (hub task child --check-model); or drop "
+                "this check and files it again on another model (tico task child --check-model); or drop "
                 f"the check: {name} declines it. A declined check's queued turn is let go.",
             )
         )
@@ -666,7 +666,7 @@ def _bot_checks(c, settings=None):
                         f"A task worktree of {label} failed",
                         f"{label}: {error[:400]}",
                         (
-                            f"Run `hub task worktree add {r['repo']} --task {r['task_id']}` on the owner's current computer. "
+                            f"Run `tico task worktree add {r['repo']} --task {r['task_id']}` on the owner's current computer. "
                             "Unpushed work stayed on the retired computer."
                             if r['state'] == 'retired'
                             else "BotOps: save any unique work in that worktree on a branch, then remove its link so "
@@ -736,7 +736,7 @@ def _stop_checks(c):
                 f"{name}'s last {hold['fails']} runs each failed within a minute of starting, with "
                 f"{run_backoff.CLASS_WORDS.get(kind, run_backoff.CLASS_WORDS[run_backoff.OTHER])}. Held "
                 f"since {str(hold['held_at'])[:16]} UTC. Last error: {hold['error'] or 'none reported'}.",
-                f"BotOps: read {name}'s last runs, fix the cause, then release it (hub bot release {row.get('slug', bot)}). "
+                f"BotOps: read {name}'s last runs, fix the cause, then release it (tico bot release {row.get('slug', bot)}). "
                 "Tico also tries one run on its own at growing intervals and releases it when one completes. "
                 "Its queued work is kept.",
                 subject=kind,
@@ -757,7 +757,7 @@ def _stop_checks(c):
                 f"{hold['budget']}. Held since {str(hold['held_at'])[:16]} UTC. This looks like a runaway "
                 "loop, not normal work.",
                 f"BotOps: read {name}'s last runs for what keeps waking it, then release it "
-                f"(hub bot release {row.get('slug', bot)}) or raise its budget (hub bot budget {row.get('slug', bot)} --{hold['window']} N).",
+                f"(tico bot release {row.get('slug', bot)}) or raise its budget (tico bot budget {row.get('slug', bot)} --{hold['window']} N).",
                 subject=hold["window"],
                 severity=BAD,
             )
@@ -778,7 +778,7 @@ def _stop_checks(c):
                 "Each waits, then Tico tries it again on its own; the wait doubles with each failed try, "
                 "up to an hour. The server log has the traceback.",
                 f"BotOps: read the server log for the traceback and fix its cause. To retry the held runs "
-                f"now, release {name} (hub bot release {row.get('slug', bot)}); one that fails again is held with a longer "
+                f"now, release {name} (tico bot release {row.get('slug', bot)}); one that fails again is held with a longer "
                 "wait.",
                 severity=BAD,
             )

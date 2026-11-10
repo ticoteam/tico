@@ -1,4 +1,4 @@
-"""Whether a person approved an exact file version (backend/file_reviews.py, `hub file approved`): an OK on an ask
+"""Whether a person approved an exact file version (backend/file_reviews.py, `tico file approved`): an OK on an ask
 bound to the version pinned when it was asked approves it, a send back asks for changes, a newer verdict decides, and an
 answer taken back, a plain answer, a closed task or a giver who left counts for nothing. On a store with no app."""
 

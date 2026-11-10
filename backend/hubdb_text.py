@@ -639,7 +639,7 @@ LINT_PATH = re.compile(
 
 
 LINT_TOOL = re.compile(
-    r"\bhub\s+(?:task|message|question|approval|note|chat|doc|file|goal|kpi|bot|routine|update|tool|calendar|meeting|support|team|tag|human|group|conversation|whoami|sql)\b|(?<![\w-])--[a-z][\w-]*|\b[a-z][a-z0-9]*_[a-z0-9_]+\b|`[^`]+`"
+    r"\b(?:hub|tico)\s+(?:task|message|question|approval|note|chat|doc|file|goal|kpi|bot|routine|update|tool|calendar|meeting|support|team|tag|human|group|conversation|whoami|sql)\b|(?<![\w-])--[a-z][\w-]*|\b[a-z][a-z0-9]*_[a-z0-9_]+\b|`[^`]+`"
 )
 
 
@@ -862,7 +862,7 @@ def person_ask_refusal(person, text, where):
     """What a refusal of this ask says, or "" when it passes: what failed, what to do about it in this same turn, the
     rule and an example, so the bot fixes it in one retry. An ask refused for its length carries a rewrite to retry
     with (person_ask_rewrite), or, when none keeps the decision, the exact repair: a blocker is never left unasked
-    for want of a shorter wording. `where` is "ask" (an ask on a task, `hub task ask`) or "assign" (the body of a task
+    for want of a shorter wording. `where` is "ask" (an ask on a task, `tico task ask`) or "assign" (the body of a task
     given to them)."""
     text = str(text or "").strip()
     problems = lint_person_ask(text)

@@ -18,7 +18,7 @@ Every bot reads what it is a member or participant of, Homes it may read, task t
 asks to a person. An internal bot (in a turn) also reads, as a person in its seat would, every company thread and its
 group's team threads, plus the tree its attempt was handed (`attempt_conversations`); an external agent never gets
 company or team standing read. The same rule is said three times: in Python (`readable`, which
-`Auth.conversation` calls), as SQL for `hub sql` (`readable_sql`, `message_sql`) and for the SSE stream
+`Auth.conversation` calls), as SQL for `tico sql` (`readable_sql`, `message_sql`) and for the SSE stream
 (`readable_ids`). backend/tests/test_threads_privacy.py runs one matrix through all three.
 
 Inside a readable thread a message can still be hidden: history migrated from a shared bot room keeps its old
@@ -919,8 +919,8 @@ def readable_sql(
 ):
     """A SQL boolean over a conversations row named `alias` (bare columns when alias is ''): the thread is readable.
 
-    `inner(table)` names an unfiltered table (hub sql's temp views); `tasks` is a SELECT of the task ids the viewer
-    reads (hub sql passes its filtered view); `meeting(id_sql)` renders the meeting-room check (hub sql's function),
+    `inner(table)` names an unfiltered table (tico sql's temp views); `tasks` is a SELECT of the task ids the viewer
+    reads (tico sql passes its filtered view); `meeting(id_sql)` renders the meeting-room check (tico sql's function),
     and without it meeting threads are left to Python (`readable_ids`). `conversation(id_sql)`, when given, is the
     meeting-provenance check every thread also passes. `only` (readable_ids) is every stored audience the roots of
     the rows asked about have (None for a root that predates threads), plus "home" when a row is a Home itself: the
@@ -2929,8 +2929,8 @@ def name_problem(actor):
     detail = NAME_REQUIRED
     if str(actor or "").startswith("bot:"):
         detail += (
-            " Pass a title: `title` in hub_thread_create or hub_thread_dm_group, or --title on hub thread create "
-            "and hub thread dm-group. Only a DM with one teammate may be unnamed."
+            " Pass a title: `title` in hub_thread_create or hub_thread_dm_group, or --title on tico thread create "
+            "and tico thread dm-group. Only a DM with one teammate may be unnamed."
         )
     return Problem("name_required", detail, 422)
 

@@ -227,7 +227,7 @@ def test_a_bot_discovers_computers_and_reads_performance_by_label_or_id(api):
         assert seen["computer"] == {"id": rid, "label": "Test Mac"} and seen["points"][0][1] == 20.0
     for wanted in ("No such box", "Old Mac", gone):
         failed, seen = call(api, "hub_computer_performance", {"computer": wanted}, token=bot)
-        assert failed and f"No computer named {wanted!r}; hub computer list names them" in str(seen), seen
+        assert failed and f"No computer named {wanted!r}; tico computer list names them" in str(seen), seen
     for wanted in ("Test Mac", "No such box"):  # a runner credential is neither a person nor a bot
         assert api.get(f"/api/v2/computers/{wanted}/performance", headers=headers(r["token"])).status_code == 403
     # Two computers whose labels match once case and spaces are ignored: the label is refused, each id still reads its own.

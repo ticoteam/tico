@@ -593,7 +593,7 @@ def settings_update(c, actor, fields):
 
 
 def kpi_fields(c, actor, kpi_id, fields):
-    """The KPI tree columns (`hub kpi update`): parent, growth role, funnel stage and loop. One North Star at a time:
+    """The KPI tree columns (`tico kpi update`): parent, growth role, funnel stage and loop. One North Star at a time:
     naming a new one moves the role from the old."""
     if not fields:
         return

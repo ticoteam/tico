@@ -429,7 +429,7 @@ cases.
 - **On the task:** one line under the title, and "To leave Build" at the side with every requirement, met or not.
 - **Last change:** the task's header says when it last changed, and History says what changed. That is how you tell slow
   from stuck.
-- **In the bot's wake** and in `hub task show`: the same list.
+- **In the bot's wake** and in `tico task show`: the same list.
 
 A wait on the outside world, such as a vendor, is a snooze to a date. It is the one wait the check leaves alone.
 
@@ -637,7 +637,7 @@ refuses everything else.
 
 ### The picture in words
 
-- **What happens (hints)** comes in from four places: a person or bot acts (app, hub CLI, MCP); a GitHub webhook (may be
+- **What happens (hints)** comes in from four places: a person or bot acts (app, tico CLI, MCP); a GitHub webhook (may be
   lost, late or doubled); a Jev verdict, a run ending, a release published; the Heartbeat (every 10 s, no matter what).
 - **The task engine** holds three parts: `move()`, the only writer of stage, owner, status; the never-stuck check, which
   looks at state, wakes, and calls `move()`; and facts, saved copies of the outside: PRs, checks, releases, Jev verdicts,
@@ -931,7 +931,7 @@ The phone view is in [S17](#s17-on-a-phone). What changed since the version you 
 3. What Scout gets the next time it asks:
 
 ```text
-$ hub task ask G-41 --to chris \
+$ tico task ask G-41 --to chris \
     "Archive 9 newsletters?"
 Not asked. A rule covers this:
   "Scout archives newsletters in the
@@ -1193,7 +1193,7 @@ done, asking a person, waiting on a task
 you filed, snoozed to a date, or closed.
 ```
 
-**hub task show E-214:**
+**tico task show E-214:**
 
 ```text
 E-214 Build checkout flow   v12
@@ -1209,32 +1209,32 @@ Filed by: P-12 Checkout flow
 **The commands:**
 
 ```text
-hub task done E-214 -m "note"
-hub task move E-214 next|<stage> -m "why"
-hub task close E-214 -m "why"
-hub task ask E-214 --to chris "one line"
+tico task done E-214 -m "note"
+tico task move E-214 next|<stage> -m "why"
+tico task close E-214 -m "why"
+tico task ask E-214 --to chris "one line"
      [--choices a,b] [--show page:12]
-hub task attach E-214 --req "Review page" page:12
-hub task file --parent E-214 --pipeline general "title"
-hub task snooze E-214 [--until 2026-11-14] -m "why"
-hub task ask E-214 --withdraw
+tico task attach E-214 --req "Review page" page:12
+tico task file --parent E-214 --pipeline general "title"
+tico task snooze E-214 [--until 2026-11-14] -m "why"
+tico task ask E-214 --withdraw
 ```
 
 **A refusal:**
 
 ```text
-$ hub task move E-214 next
+$ tico task move E-214 next
 Not moved. Not met: Checks pass (lint, unit).
 You can:
   fix the checks, then it moves by itself
-  hub task move E-214 next -m "why"   push past
-  hub task ask E-214 --to ...          ask a person
-  hub task close E-214 -m "why"
+  tico task move E-214 next -m "why"   push past
+  tico task ask E-214 --to ...          ask a person
+  tico task close E-214 -m "why"
 ```
 
 A refusal never counts toward quarantine.
 
-MCP tools mirror these one for one. There is no `hub card`.
+MCP tools mirror these one for one. There is no `tico card`.
 
 ### S17. On a phone
 
@@ -1487,7 +1487,7 @@ A, B and C are approved. This page is the build spec in the repo, and the checks
 ### Phase 1: the engine and General
 
 - **Builds:** the tables and the database trigger. `move()`. `waiting_on()`. The never-stuck check with the ladder, Late
-  and Paused. Snooze. Asks, with 👍, 👎 and rules. The General preset. The hub task commands. Screens S1 to S6 and S13 to
+  and Paused. Snooze. Asks, with 👍, 👎 and rules. The General preset. The tico task commands. Screens S1 to S6 and S13 to
   S17. The fault rig.
 - **Deletes, in the same phase:** every other writer of stage, owner and status, the 17 upkeep files, question tasks,
   approval objects, stale checks, and the old pipeline movers. Product and Engineering pipelines don't run on main until

@@ -1578,7 +1578,7 @@ STABLE = [
         "post",
         "Assistant",
         "proposeAssistantAction",
-        "Propose one operation for the caller to confirm (what the assistant's `hub assistant propose` calls)",
+        "Propose one operation for the caller to confirm (what the assistant's `tico assistant propose` calls)",
         "AssistantActionResult",
     ),
     (

@@ -10,7 +10,7 @@ Schedule: the 3rd of each month at 09:00 team time (routine `month-end-close-rev
 
 ## 1. Inputs
 
-- On the task: the trial balance, the reconciliation exports, and the bank and card statements for the period. If any is missing, ask once with `hub task ask <id> --to <person> "<question>" --version N`, list what is missing, and carry on. Mark the parts that need it as open.
+- On the task: the trial balance, the reconciliation exports, and the bank and card statements for the period. If any is missing, ask once with `tico task ask <id> --to <person> "<question>" --version N`, list what is missing, and carry on. Mark the parts that need it as open.
 - `knowledge/close-checklist.md` (steps, owners, tolerance, review limits), `knowledge/reconciliations.md`, and last month's review.
 
 ## 2. Steps
@@ -25,4 +25,4 @@ Schedule: the 3rd of each month at 09:00 team time (routine `month-end-close-rev
 
 ## 3. Write and hand over
 
-Write the report and publish it with `hub file publish reports/<name>.md`. Commit it. Finish with `hub task done <id> -m "..." --version N` and the headline.
+Write the report and publish it with `tico file publish reports/<name>.md`. Commit it. Finish with `tico task done <id> -m "..." --version N` and the headline.

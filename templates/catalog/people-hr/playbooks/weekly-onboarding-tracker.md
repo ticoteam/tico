@@ -12,12 +12,12 @@ to the Librarian, the page is published, and the draft welcome messages are atta
 
 ## 1. Read where things stand
 
-    hub task show <id>
-    hub team show
-    hub calendar list
+    tico task show <id>
+    tico team show
+    tico calendar list
 
 Then `knowledge/onboarding-base.md`, `knowledge/hand-offs.md`, last week's tracker and the open tasks labelled for onboarding
-(`hub task list`).
+(`tico task list`).
 
 ## 2. Find who is starting
 
@@ -45,17 +45,17 @@ the owner's word on the task. Late items go at the top.
 ## 5. Handbook gaps
 
 Note any question a new hire will need answered that the handbook does not cover, and send it to the Librarian as one task
-(`hub task create --owner librarian`).
+(`tico task create --owner librarian`).
 
 ## 6. Write the page and hand it over
 
 Write `reports/YYYY-MM-DD-onboarding-tracker.md` in the shape of `knowledge/examples/onboarding-tracker.md`, then:
 
-    hub file publish reports/YYYY-MM-DD-onboarding-tracker.md
+    tico file publish reports/YYYY-MM-DD-onboarding-tracker.md
 
 A welcome message is drafted on the new hire's task. It is sent only when the task asks for it, a granted Tool allows it and mail
 sending is on in Tico; otherwise it stays a draft for a person. Chase each late item's owner with one line on its task. Then
-`hub task done <id> -m "..." --version N`: the headline, counts (late, due), and what you could not read.
+`tico task done <id> -m "..." --version N`: the headline, counts (late, due), and what you could not read.
 
 ## When a source fails
 

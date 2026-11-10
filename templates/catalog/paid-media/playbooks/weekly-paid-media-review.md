@@ -7,7 +7,7 @@ did, where it was wasted, and three changes prepared for review. Nothing is chan
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/targets.md`, `knowledge/changes.md` and last week's review. For every change applied
 in the last two weeks, note what it was meant to do; step 5 checks it.
@@ -44,7 +44,7 @@ the result into `knowledge/changes.md`. A change that did not work is a line, no
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-paid-media.md` in the shape of `knowledge/examples/paid-media-review.md`,
-then `hub file publish reports/YYYY-MM-DD-paid-media.md`. Commit, and `hub task done <id> -m
+then `tico file publish reports/YYYY-MM-DD-paid-media.md`. Commit, and `tico task done <id> -m
 "..." --version N`: the headline, the path, what you could not read.
 
 Done when: the report is published with the spend and cost per result by campaign, the exclusions with their spend,
@@ -52,5 +52,5 @@ three changes each with its evidence, and last fortnight's changes checked.
 
 ## When the export is missing
 
-Say which report is missing and for which dates, ask once with `hub task ask <id> --to <person> "<question>" --version N`, and finish with
+Say which report is missing and for which dates, ask once with `tico task ask <id> --to <person> "<question>" --version N`, and finish with
 what you have. Never fill a gap from last week's numbers.

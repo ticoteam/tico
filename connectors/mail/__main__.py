@@ -215,8 +215,8 @@ def cmd_e2e(args):
         )
     c = Checks()
     tag = stamp().replace(":", "").replace("-", "")
-    subject = f"hub mail e2e {tag}"
-    body = "This is the hub mail service checking itself end to end.\n\nNothing here needs an answer.\n\nAna\n"
+    subject = f"tico mail e2e {tag}"
+    body = "This is the Tico mail service checking itself end to end.\n\nNothing here needs an answer.\n\nAna\n"
     g, draft_id, event_id, second = None, "", "", ""
     try:
         g = open_gmail(box)
@@ -238,7 +238,7 @@ def cmd_e2e(args):
             calendar = cal.Calendar(open_calendar(box), box)
             start = datetime.now(zone(DEFAULT_TZ)) + timedelta(days=2)
             start = start.replace(hour=12, minute=0, second=0, microsecond=0)
-            ev = calendar.create_event(start, start + timedelta(minutes=15), f"hub mail e2e {tag} (delete me)")
+            ev = calendar.create_event(start, start + timedelta(minutes=15), f"tico mail e2e {tag} (delete me)")
             event_id = ev.get("id", "")
             calendar.delete_event(event_id)
             event_id = ""
@@ -1780,7 +1780,7 @@ def draft_task(ctx):
 
 
 def _default_task_attach(task_id, name, data, key):
-    """Attach one file to a Tico task through the API behind `hub task attach`; returns its file id.
+    """Attach one file to a Tico task through the API behind `tico task attach`; returns its file id.
     Tests replace `TASK_ATTACH`. '' when this process holds no Tico credential."""
     url, token = os.environ.get("HUB_API_URL"), os.environ.get("HUB_TOKEN")
     if not url or not token:
@@ -2323,7 +2323,7 @@ def cmd_discard(args):
         if send.get("state") not in ("canceled", "failed", "blocked"):
             raise Refused(
                 "This draft has a frozen email in Tico's send queue.",
-                "Cancel it first with `hub email cancel " + queued["send_id"] + "`.",
+                "Cancel it first with `tico email cancel " + queued["send_id"] + "`.",
             )
     if db.draft_was_sent(ctx.conn, ctx.mailbox, did):
         ctx.audit("discard-refused", did, {"reason": "already sent"})
@@ -2801,7 +2801,7 @@ def cmd_schedule(args):
         end,
         would["summary"],
         attendees=[attendee],
-        description=f"Booked by the hub mail service for {ctx.slug}, Issue {ctx.issue or '-'}.",
+        description=f"Booked by the Tico mail service for {ctx.slug}, Issue {ctx.issue or '-'}.",
         send_updates="none",
     )
     ctx.audit("event-create", event.get("id", ""), dict(would, thread=args.thread))

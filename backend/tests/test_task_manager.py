@@ -98,7 +98,7 @@ def test_a_paused_task_opens_one_check_that_a_later_report_absorbs_and_a_private
     assert first["items"] == 1 and first["words"] == "1 department, 1 item"
     (check,) = _checks(c)
     assert check["title"] == "Task check: Company (1)" and paused in check["body"]
-    assert "Paused: " in check["body"] and "has no computer" in check["body"] and "hub task show" in check["body"]
+    assert "Paused: " in check["body"] and "has no computer" in check["body"] and "tico task show" in check["body"]
     assert private not in check["body"] and SECRET not in check["body"]
     assert _report(c)["items"] == 0 and len(_checks(c)) == 1  # reported once: left out for a day, nothing new
     second = _new(c, "Chase the Acme renewal")
@@ -137,7 +137,7 @@ def test_two_open_tasks_with_one_title_requester_and_owner_are_a_duplicate_and_o
     assert _report(c)["items"] == 1
     (check,) = _checks(c)
     assert f"same title, requester and owner as {first}" in check["body"]
-    assert f"hub task relate {second} {first} --kind duplicate_of" in check["body"]
+    assert f"tico task relate {second} {first} --kind duplicate_of" in check["body"]
     third, _ = _twin(c, "Book the Acme review")
     H.task_snooze(c, H.KEEPER, third, "Not this quarter", None)
     assert _report(c)["items"] == 0

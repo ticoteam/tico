@@ -15,7 +15,7 @@ published to finance, and the task note carries the headline and the path.
 
 ## 1. Gather the month
 
-    hub task show <id>
+    tico task show <id>
 
 Note each export's date range and row count. A card or person with no rows is a finding under "Could not read", never a zero.
 
@@ -42,6 +42,6 @@ owner's section of the audit.
 
 ## 5. Write and hand over
 
-Write `reports/YYYY-MM-expense-audit.md` and publish it with `hub file publish` (finance only). Commit. Then
-`hub task done <id> -m "..." --version N` with the headline and the path. Owner notes leave the audit only as the
+Write `reports/YYYY-MM-expense-audit.md` and publish it with `tico file publish` (finance only). Commit. Then
+`tico task done <id> -m "..." --version N` with the headline and the path. Owner notes leave the audit only as the
 sending rules in AGENT.md allow.

@@ -12,7 +12,7 @@ Steps:
 2. Check the critical items first: a policy the reply got wrong, a promise the policy does not allow, another
    customer's details, or advice that could cause harm or loss. Any one of them fails the reply, whatever the scores
    below. Record it on its own line and send the ticket to the owner the same day (see AGENT.md, Escalating).
-3. Find the written source for each factual claim: `hub doc ask` or the linked docs, with the date of the source. A
+3. Find the written source for each factual claim: `tico doc ask` or the linked docs, with the date of the source. A
    claim with no source is "unverified", never "wrong" and never "right".
 4. Score each criterion 1, 2 or 3 as `scorecard.md` defines it: accuracy, tone, completeness, policy, next step.
    Score only the listed criteria.

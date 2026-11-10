@@ -45,7 +45,7 @@ has none, propose one in the digest and do not invent it.
 
 Follow `skills/find-a-duplicate-issue/SKILL.md`: distinctive terms first, then the decision call with the candidate and the existing issues:
 
-    hub decision ask --set covered --state-file cand.json --option covered=existing.json
+    tico decision ask --set covered --state-file cand.json --option covered=existing.json
 
 At 0.7 or above, propose "duplicate of #n" with the sentence from each issue that shows the match.
 Between 0.5 and 0.7, propose "possibly related to #n" and ask the requester. Below, propose nothing.

@@ -11,7 +11,7 @@ its reason, the patch plan is in merge order, and the report is published with `
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/patch-policy.md`, `knowledge/exposure.md`, `knowledge/ledger.md` and last week's report. Check
 whether last week's plan was merged (`gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD"`).
@@ -47,4 +47,4 @@ deadline from the policy.
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-security-report.md` in the shape of `knowledge/examples/security-report.md`,
-`hub file publish` it with `--scope task`, and create a task for the owner of each tier 1 item the same day (`hub task create --owner <owner>`). Update `knowledge/ledger.md`, commit, then `hub task done <id> -m "..." --version N`.
+`tico file publish` it with `--scope task`, and create a task for the owner of each tier 1 item the same day (`tico task create --owner <owner>`). Update `knowledge/ledger.md`, commit, then `tico task done <id> -m "..." --version N`.

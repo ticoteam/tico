@@ -301,7 +301,7 @@ def test_a_long_document_is_named_not_pasted_and_counsel_reads_the_whole_version
         body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
     assert len(body) < 2_000
     assert "Filler clause" not in body and "Keep a record of each consent" not in body
-    assert f"hub file read {file_id} --version {version}" in body
+    assert f"tico file read {file_id} --version {version}" in body
     assert "UNTRUSTED DOCUMENT" in body
     # Counsel's run reads the version it was asked about, in full.
     got = api.get(f"/api/v2/files/{file_id}/versions/{version}", headers=read_run(api))
@@ -317,7 +317,7 @@ def test_a_short_document_is_fenced_inside_the_task(api):
     with api.app.state.store.read() as c:
         body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
     assert "Keep a record of each consent for five years." in body
-    assert "hub file read" not in body
+    assert "tico file read" not in body
 
 
 def test_only_the_run_asked_reads_a_file_and_no_other_counsel_run_does(api):
@@ -385,7 +385,7 @@ def test_the_run_asked_reads_a_long_file_on_a_private_task(api):
     assert same_file == file_id and newer == version + 1
     with api.app.state.store.read() as c:
         body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
-    assert f"hub file read {file_id} --version {version}" in body
+    assert f"tico file read {file_id} --version {version}" in body
     assert "Filler clause" not in body
     run = read_run(api)
     got = api.get(f"/api/v2/files/{file_id}/versions/{version}", headers=run)
@@ -1261,7 +1261,7 @@ def test_a_hostile_page_title_stays_fenced_when_the_document_is_too_long_for_the
     r = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
     row = task_row(api, r["task_id"])
     assert hostile in row["body"] and hostile not in outside_fence(row["body"])
-    assert f"hub file read {r['file']['id']} --version 1" in row["body"]
+    assert f"tico file read {r['file']['id']} --version 1" in row["body"]
 
 
 def test_a_link_read_is_private_to_its_requester_and_counsel(api, monkeypatch):

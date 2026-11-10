@@ -48,7 +48,7 @@ onboarding:
   - ask: "How old may a ticket get before it is a problem, and who owns an old one? (Default: flag anything waiting more than 3 days, escalate at 7.)"
     why: "Sets the backlog aging buckets and who gets the escalation."
   - ask: "Which support bots and humans work in this team, and what does each own?"
-    why: "Routing proposals need to name the right owner. I read `hub team show` first and only ask about what it does not show."
+    why: "Routing proposals need to name the right owner. I read `tico team show` first and only ask about what it does not show."
 first_routine:
   title: "Weekly support summary"
   cadence: "Mondays at 09:00 team time"

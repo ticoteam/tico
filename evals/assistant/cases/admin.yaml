@@ -32,7 +32,7 @@
     - '^bot (archive|pause)\b'
   reply: |
     Dana moves three things to Engineering: the Security group (with its bot), and the Upgrade Manager and Performance Monitor
-    bots. The turn makes the moves with `hub group update`: Security nested under Engineering (`--parent engineering`), and the two
+    bots. The turn makes the moves with `tico group update`: Security nested under Engineering (`--parent engineering`), and the two
     bots added to Engineering (`--add-bot`), in one call or a few. Adding a teammate to a group takes it out of the group it was
     in, so no separate removal is needed. Nothing else changes: no delete, no pause, no other group. Reply: one or two short
     lines with the links to what moved and "say undo to put it back".
@@ -60,7 +60,7 @@
     - '^group (delete\b|update\s+--)'
     - '^group update growth\b.*--(parent|add-bots?|remove-bots?)'
   reply: |
-    Renames the Growth group to Marketing with one `hub group update growth --name Marketing`. The group keeps its people and
+    Renames the Growth group to Marketing with one `tico group update growth --name Marketing`. The group keeps its people and
     bots; nothing else moves. Reply: one line with the new name and "say undo to put it back".
 
 - id: admin-bot-owners-add
@@ -89,7 +89,7 @@
     - '^bot (archive|pause|update|check)\b'
     - '^message send\b'
   reply: |
-    Adds Priya as an owner of the Upgrade Manager bot, through `hub bot owners upgrade-manager --add priya`. Dana stays an owner.
+    Adds Priya as an owner of the Upgrade Manager bot, through `tico bot owners upgrade-manager --add priya`. Dana stays an owner.
     This is the bot's owner list, not the company's ownership: nothing is transferred or removed. Reply: one line with a link
     to the bot (`[Upgrade Manager](#/bot/upgrade-manager)`) and "say undo to put it back".
 
@@ -115,7 +115,7 @@
     - '^bot access pricing\b.*--write\b.*\bpriya\b'
     - '^bot owners\b'
   reply: |
-    Gives Priya read access to the Pricing bot and not write, with `hub bot access pricing --read dana,priya`. `--read` replaces
+    Gives Priya read access to the Pricing bot and not write, with `tico bot access pricing --read dana,priya`. `--read` replaces
     the whole read list, so the call names Dana too, who keeps her own levels. Priya gets no write. Reply: one line on what
     Priya can read and cannot change, a link to the bot (`[Pricing](#/bot/pricing)`), and "say undo to put it back".
 
@@ -141,7 +141,7 @@
     - '^human add\b'
   reply: |
     The Assistant cannot send an invite or change the sign-in list. The turn does not call an invite route and does not run
-    `hub human add`. It does the part it can: `hub group update engineering --add-human priya`. It gives Dana the link where she
+    `tico human add`. It does the part it can: `tico group update engineering --add-human priya`. It gives Dana the link where she
     sends the invite itself, [Settings > People](#/settings/people), in one sentence. No lecture, no offer to send the invite.
 
 - id: admin-credential-hand-off
@@ -189,7 +189,7 @@
   reply: |
     Dana asks to turn on the bots' go-ahead rule. The owner has turned off the Assistant's direct actions (team rule
     assistant_direct off), so the server returns a Confirm card for this Confirm-class setting rather than applying it. The turn
-    finds the setting and sets it with `hub settings set team.rules.bots_go_ahead true`, and the server returns the card in her
+    finds the setting and sets it with `tico settings set team.rules.bots_go_ahead true`, and the server returns the card in her
     chat rather than a change. The reply says the card is in her chat and nothing changes until she taps it. It never says the
     rule is on. One or two lines, with the Team rules link ([Settings > Humans](#/settings/people)).
 
@@ -200,7 +200,7 @@
     - match: '^automation guide'
       out:
         format: {name: "text", owner: "bot:<slug> or person:<id>", trigger: {type: "schedule", cron: "five fields, e.g. 0 9 * * 1", tz: "IANA zone"}, steps: [{id: "text", type: "bot_turn", bot: "<slug>", prompt: "text"}]}
-        save: "hub automation create --file - (the JSON on stdin)"
+        save: "tico automation create --file - (the JSON on stdin)"
     - match: '^bot show finance-analyst'
       out: {bot: {slug: finance-analyst, display_name: "Finance Analyst", status: active, owners: [dana]}}
     - match: '^automation list'
@@ -225,7 +225,7 @@
     - '^message send\b'
   reply: |
     Dana asks for a Monday 9am routine: the Finance Analyst puts last week's unpaid bills in her queue. The turn saves ONE
-    automation with `hub automation create --file -` (a JSON body with a name, owner `bot:finance-analyst`, a schedule trigger
+    automation with `tico automation create --file -` (a JSON body with a name, owner `bot:finance-analyst`, a schedule trigger
     with cron `0 9 * * 1` (a time zone only if the team has one; otherwise it is left out and the reply names the zone it runs in,
     never a question about the zone), and one bot_turn step for that bot). The reply gives its name, when it runs, the link
     [name](#/automations/<id>), and "say undo to put it back". It does not run it now, does not file tasks itself, and sends nothing
@@ -268,8 +268,8 @@
   must_not:
     - '^finance act budget_update\b.*"amount":\s*4000\b'
   reply: |
-    Dana raises the Marketing budget to $4,000 a month from December 1. The turn finds the budget id (`hub finance report
-    budget_vs_actual`: Marketing, now $3,000 a month) and makes the change with `hub finance act budget_update`: one committed
+    Dana raises the Marketing budget to $4,000 a month from December 1. The turn finds the budget id (`tico finance report
+    budget_vs_actual`: Marketing, now $3,000 a month) and makes the change with `tico finance act budget_update`: one committed
     call with that id, amount 400000 (amounts are in cents, so $4,000 is 400000, not 4000), effective_from 2026-12-01, and an
     operation id. A dry run before it is fine; the real change must still be made. It reports the outcome
     the answer gives (committed here) in one line, with the new amount and date, and says how to undo it (the old amount from
@@ -299,7 +299,7 @@
     - '^inbound audience ibx_billing company\b'
     - '^automation inbox\b.*--send\s+on'
   reply: |
-    Dana wants the billing inbox seen by the Finance team only. The turn changes that one inbox with `hub inbound audience
+    Dana wants the billing inbox seen by the Finance team only. The turn changes that one inbox with `tico inbound audience
     ibx_billing team --group finance`. The support inbox and its sending are left alone. Reply: one line that billing@ is now
     for Finance only, with the link [Tools](#/tools?show=mail), and "say undo to put it back".
 
@@ -319,7 +319,7 @@
         next_offset: null
     - match: '^meeting read mtg_tue_sync_1103'
       exit: 1
-      out: {error: {code: not_found, message: "No meeting mtg_tue_sync_1103 you can read: a Pending meeting is read in `hub meeting pending` until it is shared"}}
+      out: {error: {code: not_found, message: "No meeting mtg_tue_sync_1103 you can read: a Pending meeting is read in `tico meeting pending` until it is shared"}}
       after:
         - when: '^meeting approve mtg_tue_sync_1103\b'
           out:
@@ -342,7 +342,7 @@
     - '^meeting delete\b'
   reply: |
     Dana asks to share the Tuesday sync that is in her Pending, and for a task for Priya from its action items. The turn shares
-    the meeting with the team (`hub meeting approve`, not private) only because she asked it to share; a task alone would not
+    the meeting with the team (`tico meeting approve`, not private) only because she asked it to share; a task alone would not
     justify approve. It reads its action items, and files ONE task for Priya with her item, owned by her, with its link. It does
     not file Marco's item: Dana asked only for Priya's. Reply: two short lines, the meeting shared (with its link) and Priya's
     task (with its link), and how to undo the task (close it).
@@ -372,6 +372,6 @@
     - '^goal (save|create|update)\b'
   reply: |
     Dana adds a goal: close the Harbor Co renewal at list price by Nov 30, serving the Retention bet. The turn posts ONE read-back
-    with `hub goal read-back` (goal_create, with its title, owner and date, and the bet it serves) and saves nothing: no `hub
+    with `tico goal read-back` (goal_create, with its title, owner and date, and the bet it serves) and saves nothing: no `hub
     goal save`, no create, no update. The reply is the read-back in short, and says it is saved only on her plain yes. One
     question at most, if it is needed; the read-back is the expected call.

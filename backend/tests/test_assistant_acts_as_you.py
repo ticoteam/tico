@@ -544,7 +544,7 @@ def _template_tools():
     template = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "assistant"
     tools = set()
     for path in template.rglob("*.md"):
-        for span in re.findall(r"\bhub ([^\n`]+)", path.read_text(encoding="utf-8")):
+        for span in re.findall(r"\b(?:tico|hub) ([^\n`]+)", path.read_text(encoding="utf-8")):
             words = []
             for token in span.split():
                 if not re.fullmatch(r"[a-z][a-z-]*", token):

@@ -10,11 +10,11 @@ The old `#/mail` route remains available for existing deep links.
 
 ## Reading mail
 
-`hub email mailboxes` lists the person's readable mailboxes, including shared ones. With Whole Workspace connected,
-`hub email inbox <address>`, `hub email search <address> "<Gmail query>"`, `hub email thread <address> <thread-id>` and
-`hub email message <address> <message-id>` read live from Gmail without saving mail. The person's Assistant has the
+`tico email mailboxes` lists the person's readable mailboxes, including shared ones. With Whole Workspace connected,
+`tico email inbox <address>`, `tico email search <address> "<Gmail query>"`, `tico email thread <address> <thread-id>` and
+`tico email message <address> <message-id>` read live from Gmail without saving mail. The person's Assistant has the
 same mailbox access. Output is Markdown by default; add `--json` for the API response. Lists accept `--limit` (up to
-50) and `--cursor` with the previous `next_cursor`. Inbox accepts `--q` to search within INBOX. `hub mail` is postal mail.
+50) and `--cursor` with the previous `next_cursor`. Inbox accepts `--q` to search within INBOX. `tico mail` is postal mail.
 
 The mail API requires a mailbox for live lists; it does not combine Workspace inboxes. Personal Connect Google grants
 and legacy connections keep their existing stored reads; live reading needs Whole Workspace. Existing mail sync and
@@ -22,8 +22,8 @@ stored copies are unchanged by live reads. Opening a message or thread checks ac
 
 ## Organizing live
 
-With Whole Workspace, use `hub email archive|unarchive|mark-read|mark-unread <address> <id> ...` or
-`hub email label|unlabel <address> <label> <id> ...`. Supply ids (up to 500) or `--query "<Gmail query>"` with
+With Whole Workspace, use `tico email archive|unarchive|mark-read|mark-unread <address> <id> ...` or
+`tico email label|unlabel <address> <label> <id> ...`. Supply ids (up to 500) or `--query "<Gmail query>"` with
 `--limit` (default 100, maximum 500). Each call needs Read and write and the company's **What Tico may do >
 Organize mail** switch; the Assistant acts as its person, bots at their own level. Gmail keeps the mail;
 `mail.organize` records only ids and action details. Output gives count and undo; `--json` includes all ids.
@@ -277,8 +277,8 @@ hub_calendar_status(id="<action id>")
 The schedule call queues one idempotent action for the private Mac calendar tool. Only a status of
 `succeeded` means the Google event and invitations exist. `pending` and `running` are unfinished;
 `unknown` must be inspected before retrying. This standing calendar grant does not enable Gmail
-reading, drafting or sending. The equivalent shell commands are `hub calendar list`,
-`hub calendar schedule` and `hub calendar status`.
+reading, drafting or sending. The equivalent shell commands are `tico calendar list`,
+`tico calendar schedule` and `tico calendar status`.
 
 The mail-local calendar commands have a broader registry-based grant: every bot can read or create
 an event on any address in `registry/people.yaml`; Gmail permissions, including `read_only`, do not
@@ -678,7 +678,7 @@ The key can act as any mailbox in the team, so bots must not be able to read it.
   there is no line. A bot made before this is linked when the server starts, if it is unambiguous: a message-bot template, a
   mailbox in its instructions or its `gmail` identity, and the person whose email it is (or the only person on the roster).
   Changing it later is an owner's or admin's call, or BotOps's as the requester (an ask for their OK):
-  `hub api POST access/people/<person> '{"inbox_bot": "<bot>", "mailbox": "ana@acme.example"}'`. Without the link the runner holds the key
+  `tico api POST access/people/<person> '{"inbox_bot": "<bot>", "mailbox": "ana@acme.example"}'`. Without the link the runner holds the key
   but gives the bot no token, and the mail tool says "this bot has no mailbox" (the bot's Tools list shows a problem; it is not "ready").
   Because the key is not in the bot's environment, the Tools list shows `GOOGLE_SA_KEY` as "present (held by the computer)" when the
   computer has the key and runs the `connectors` job, and as missing only when the computer has no key. The `mail.db` and
@@ -761,12 +761,12 @@ mail cannot be recalled. Pending sends recover across server/runner restarts. An
 inspect and remove a suppression through the API.
 
 ```bash
-hub email policy                                    # company policy
-hub email policy --settings '{"mode":"on_their_own"}'
-hub email policy --mailbox support@acme.example       # inbox effective rule
-hub email policy --bot support --settings '{"mode":"ask_first"}'
-hub email sends --mailbox support@acme.example --pending
-hub email cancel <send-id>
+tico email policy                                    # company policy
+tico email policy --settings '{"mode":"on_their_own"}'
+tico email policy --mailbox support@acme.example       # inbox effective rule
+tico email policy --bot support --settings '{"mode":"ask_first"}'
+tico email sends --mailbox support@acme.example --pending
+tico email cancel <send-id>
 ```
 
 The v2 API exposes `/email/sending-policy`, `/email/inboxes/{mailbox}/sending-policy`,
@@ -783,12 +783,12 @@ goes through the one sending policy. A bot whose older mail switch was off moves
 Ask first or Never keeps it); its forward addresses and standing allowances are dropped, since they only lifted asks.
 An older daily cap stays as the bot's cap. A retired `registry/mail-policy.yaml` is read once into the company and
 inbox policies (blocked recipients, owner-handled addresses, sending off, paused inboxes, caps) and never again.
-The older `hub bot mail` / `/bots/{bot}/mail-settings` controls remain
+The older `tico bot mail` / `/bots/{bot}/mail-settings` controls remain
 compatible: their switch sets the bot's mode, and forward addresses are refused. `bot.yaml` carries no sending
 setting, and the mail tool reads no `registry/mail-policy.yaml`: every computer, Mac or Docker, asks Tico. The message
 bot's template also carries `questions/mail-triage.json`, so the decision questions are in the bot's own repository wherever it runs.
 
-**The decision model.** `mail.sh inbox --decisions` and the spam and injection check (`hub classify`) ask the
+**The decision model.** `mail.sh inbox --decisions` and the spam and injection check (`tico classify`) ask the
 server's decision model. It asks the Tico AI Gateway first, with the gateway key in the server's `.env`
 (`TICO_GATEWAY_KEY`); then your own `TYPESAFE_API_KEY`, if you set one (it is optional); then one of the team's model keys
 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`). `compose.yaml` hands them

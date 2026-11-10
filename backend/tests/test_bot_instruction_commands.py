@@ -3,8 +3,8 @@
 Bots copy the commands they read in policies/, the templates their repositories are made from (AGENT.md, playbooks,
 skills), the shared skills, the integration pages, the runner's prompt and the BotOps routine's text. When the task
 engine changed (docs/pipelines-v3.md), those texts kept teaching commands that no longer existed, so a bot in a new
-company failed on its first task. Parsing was not enough either: `hub task label <id> --add x` parsed, but the CLI
-refused it before sending anything ("Run `hub task show` first", even right after a show), so a bot that followed the
+company failed on its first task. Parsing was not enough either: `tico task label <id> --add x` parsed, but the CLI
+refused it before sending anything ("Run `tico task show` first", even right after a show), so a bot that followed the
 text looped.
 
 So: every `hub` command quoted in those texts is parsed with the real parser (a placeholder the bot fills in, such as
@@ -32,7 +32,7 @@ FOLDERS = ("policies", "templates", "skills", "integrations", "runner-rs/src/tes
 SUFFIXES = (".md", ".yaml", ".txt")
 # The commands run as taught, not only parsed: the task engine's, whose CLI checks a line before it sends it.
 RUN_GROUPS = ("task", "tasks", "ok", "needs-you")
-SPAN = re.compile(r"`(hub [^`]+)`")
+SPAN = re.compile(r"`((?:tico|hub) [^`]+)`")
 PATH = re.compile(r"[\w./-]+")
 # A value the text leaves for the bot to fill in (`--kind <kind>`, `--content JSON`, `NUMBER`, `--period-start D`)
 # gets a sample that a choice, a number or a JSON flag may refuse; the bot puts in a real one.
@@ -58,8 +58,36 @@ def cases():
     return out
 
 
+def doc_cases():
+    """(where, line, text, argv) for each command quoted in docs/ (not docs/history, the record of what was). Docs write
+    commands in tables and lists (`goal list` / `kpi list` in one span), so they are held only to names the CLI has."""
+    out = []
+    for path in sorted((ROOT / "docs").rglob("*.md")):
+        where = str(path.relative_to(ROOT))
+        if where.startswith("docs/history/"):
+            continue
+        for number, text in commands_in(path):
+            argv = argv_of(text)
+            if argv and argv != ["\x00unbalanced quotes"]:
+                out.append((where, number, text, argv))
+    return out
+
+
+def test_no_doc_teaches_a_command_the_cli_took_away_or_renamed():
+    found = doc_cases()
+    assert len(found) > 500  # guard the guard
+    failures = []
+    for where, number, text, argv in found:
+        gone = hubcli.removed_notice(argv)
+        if gone:
+            failures.append(f"{where}:{number}: `{text}` is taught, but {gone}")
+        elif hubcli.rename_argv(argv)[1]:
+            failures.append(f"{where}:{number}: `{text}` is taught by its old name: {hubcli.rename_argv(argv)[1]}")
+    assert not failures, "\n".join(failures)
+
+
 def mention(argv):
-    """A command named in prose (`hub task create`, `hub meeting read <id> --offset`): it names the command and maybe a
+    """A command named in prose (`tico task create`, `tico meeting read <id> --offset`): it names the command and maybe a
     flag, not a whole line to run."""
     return len([a for a in argv if not a.startswith("-")]) <= 2 or argv[-1].startswith("-")
 
@@ -92,7 +120,7 @@ def test_every_command_a_bot_is_taught_parses():
             if error is None or FILLED.search(error):
                 continue
             # A line that leaves out a required argument is refused by argparse with what is missing and an example
-            # (`hub task create --owner <bot>` in prose): the bot is told what to add, it does not loop.
+            # (`tico task create --owner <bot>` in prose): the bot is told what to add, it does not loop.
             if "the following arguments are required" in error or mention(option) and "expected one argument" in error:
                 continue
             failures.append(f"{where}:{number}: `{' '.join(option)}` does not parse: {error}")
@@ -146,7 +174,7 @@ def runs(argv, tmp_path, monkeypatch):
 def test_every_task_command_a_bot_is_taught_runs_as_taught(tmp_path, monkeypatch):
     """The CLI refuses no taught task, OK or Needs-you line on its own: a line that parses is sent."""
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "1").write_text("Acme\n")  # `hub task attach <id> <file>`: the file the bot attaches
+    (tmp_path / "1").write_text("Acme\n")  # `tico task attach <id> <file>`: the file the bot attaches
     (tmp_path / "f").write_text("Acme\n")
     for name, value in {
         "HUB_API_URL": "https://tico.acme.example/api/v2",
@@ -159,7 +187,7 @@ def test_every_task_command_a_bot_is_taught_runs_as_taught(tmp_path, monkeypatch
     parser = hubcli.parser()
     failures, ran = [], set()
     for where, number, text, argv in cases():
-        # `hub task worktree ...` runs git in the bot's own checkout (runner_support/worktrees.py): parsed only.
+        # `tico task worktree ...` runs git in the bot's own checkout (runner_support/worktrees.py): parsed only.
         if argv[0] not in RUN_GROUPS or mention(argv) or argv[1:2] == ["worktree"]:
             continue
         for option in variants(argv):

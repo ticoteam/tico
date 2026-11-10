@@ -16,14 +16,14 @@ lead has a hand-off task, the report is published and the task note carries the 
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Read last week's report, `knowledge/lead-method.md` and `knowledge/sources.md`.
 
 ## 2. Pull last week's arrivals
 
 Use the export on the task if one is attached. Otherwise read the leads with their source tag, stage, owner and first-touch
-time, from the CRM through `hub db list` and `hub db <name> "<select>"`, or from `hub sql "<select>"` for the team's own
+time, from the CRM through `tico db list` and `tico db <name> "<select>"`, or from `tico sql "<select>"` for the team's own
 tables. Monday to Sunday. Write the pull into `knowledge/sources.md` with its window and the date it was pulled. A lead with no
 tag is counted as "no source" and listed for the tracking owner. If no source has the leads, every count reads "not measured".
 
@@ -34,7 +34,7 @@ step as its reason. Check that the qualified and the not-qualified add up to the
 
 ## 4. Check each hand-off
 
-For each qualified lead, find its hand-off task. List your own tasks with `hub task list --requester me`. A qualified lead with
+For each qualified lead, find its hand-off task. List your own tasks with `tico task list --requester me`. A qualified lead with
 no hand-off task is handed off now, following `skills/hand-off-a-qualified-lead/SKILL.md`. A hand-off past its pick-up time
 is named in the report with the sales owner it went to.
 
@@ -58,14 +58,14 @@ a source, with the count and window behind it. Send it as a task to the person w
 
 Write `reports/YYYY-MM-DD-leads.md` in the shape of the example. Then:
 
-    hub file publish reports/YYYY-MM-DD-leads.md
+    tico file publish reports/YYYY-MM-DD-leads.md
 
-Log the week's counts in `knowledge/sources.md`. Record the qualified count as a KPI reading with `hub kpi log` if
-`hub kpi list` shows one you own. Rewrite `state.md`, and commit this repository.
+Log the week's counts in `knowledge/sources.md`. Record the qualified count as a KPI reading with `tico kpi log` if
+`tico kpi list` shows one you own. Rewrite `state.md`, and commit this repository.
 
 ## 9. Close
 
-    hub task done <id> -m "..." --version N
+    tico task done <id> -m "..." --version N
 
 The note holds the headline, the report path, the hand-offs not yet picked up, and what could not be counted. Finish the task
 even on a quiet week.

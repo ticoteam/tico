@@ -366,7 +366,7 @@ def update_from_original(workspace, original, slug, base_sha, theirs=None, folde
         raise CopyError(
             "no_base",
             "This copy has no recorded starting point. Once you have compared it with the original "
-            "by hand, `hub bot update-from-original <bot> --resolved` records that it is up to date.",
+            "by hand, `tico bot update-from-original <bot> --resolved` records that it is up to date.",
         )
     theirs, mine_path = theirs or source(workspace, original), source(workspace, slug, "the copy", folder)
     current = head(theirs)
@@ -395,7 +395,7 @@ def update_from_original(workspace, original, slug, base_sha, theirs=None, folde
             "conflicts": plan["conflicts"],
             "would_update": sorted(plan["changes"]),
             "detail": "Nothing was changed. Settle each conflict with the person, edit the copy's file, commit it, "
-            "then `hub bot update-from-original <bot> --resolved`.",
+            "then `tico bot update-from-original <bot> --resolved`.",
         }
     if not plan["changes"]:
         return {**result, "status": "current", "updated": []}
@@ -550,7 +550,7 @@ def publish(api, slug):
 
 @refusing
 def run_copy(api, person, args, workspace=None):
-    """`hub bot copy`: the server registers the new bot (rights, limit, model, credentials); this computer makes its repository."""
+    """`tico bot copy`: the server registers the new bot (rights, limit, model, credentials); this computer makes its repository."""
     root = workspace or workspace_of()
     original = args["bot"]
     # The copy's folder is the server's to pick (bot-<slug>, or one with its id's hex when another bot's checkout has
@@ -607,7 +607,7 @@ def place(person, slug, computer):
 
 @refusing
 def run_update(person, args, workspace=None):
-    """`hub bot update-from-original`: the server says the copy is the requester's and what it was copied from; the three-way
+    """`tico bot update-from-original`: the server says the copy is the requester's and what it was copied from; the three-way
     merge is a commit on the copy's repository here; the server then records the original's commit the copy is up to date with."""
     root = workspace or workspace_of()
     slug = args["bot"]
@@ -631,7 +631,7 @@ def run_update(person, args, workspace=None):
 
 @refusing
 def run_suggest(person, args, workspace=None):
-    """`hub bot suggest-to-original`: the copy's own changes to its instructions go to the server, which opens a pull request on the
+    """`tico bot suggest-to-original`: the copy's own changes to its instructions go to the server, which opens a pull request on the
     original's repository when the requester may write to it, else files a task for the original's owner with the diff."""
     root = workspace or workspace_of()
     slug = args["bot"]
@@ -659,7 +659,7 @@ def run_suggest(person, args, workspace=None):
 
 @refusing
 def run_skill(person, args, workspace=None):
-    """`hub skill copy`: the server checks read on the source and write on every target; the skill's folder is committed into each."""
+    """`tico skill copy`: the server checks read on the source and write on every target; the skill's folder is committed into each."""
     root = workspace or workspace_of()
     plan = person.post(
         f"bots/{args['bot']}/skills/copy",

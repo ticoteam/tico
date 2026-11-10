@@ -130,7 +130,7 @@ def test_done_never_pushes_past_and_a_move_with_a_reason_does(c):
     with _refused("task_not_met") as refusal:
         H.task_move(c, BUILDER, row["id"], H.TASK_NEXT, None, _version(c, row["id"]))
     assert refusal.value.extra["missing"] and refusal.value.extra["version"] == _version(c, row["id"])
-    assert any("hub task move" in command for command in refusal.value.extra["next"])
+    assert any("tico task move" in command for command in refusal.value.extra["next"])
     moved = H.task_move(c, BUILDER, row["id"], H.TASK_NEXT, "Ana is away; Friday is safe.", _version(c, row["id"]))
     assert moved["status"] == "done"
     assert asked["requirement_id"]
@@ -235,7 +235,7 @@ def test_a_bot_cannot_close_what_a_person_asked_for_and_a_person_closes_it_with_
     child = _new(c, by=BUILDER, owner=HELPER, title="Gather the numbers", parent_id=row["id"])
     with _refused("task_needs_person") as refusal:
         H.task_close(c, BUILDER, row["id"], "Not possible this week.", _version(c, row["id"]))
-    assert any("hub task ask" in command for command in refusal.value.extra["next"])
+    assert any("tico task ask" in command for command in refusal.value.extra["next"])
     closed = H.task_close(c, ANA, row["id"])
     assert (closed["status"], closed["closed_by_id"]) == ("closed", ANA)
     assert H.task(c, child["id"])["status"] == "closed"
@@ -530,7 +530,7 @@ def test_a_replayed_refusal_on_a_private_task_says_again_what_is_missing_to_who_
         H.task_ask(c, BUILDER, row["id"], BEN, "Do we drop the Acme contract?", seen_version=_version(c, row["id"]))
     first = _move_through_the_store(company, BEN, row["id"], "ben-1")
     assert first.code == "task_not_met" and "Acme" in json.dumps(first.extra["missing"])
-    assert "next" not in first.extra  # a person in the app is told what is missing, never a `hub task ...` line
+    assert "next" not in first.extra  # a person in the app is told what is missing, never a `tico task ...` line
     with company.transaction() as c:
         stored = c.execute("SELECT response FROM idempotency WHERE key='ben-1'").fetchone()[0]
         assert "Acme" not in stored  # never kept: built again on a replay

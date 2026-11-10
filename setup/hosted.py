@@ -234,7 +234,7 @@ def rotate(args, io: IO, deps) -> int:
         domain = known[0]
     saved, env_text = state.load(domain)
     if not saved:
-        raise MissingInput(f"No saved setup for {domain}; run `tico setup` first.")
+        raise MissingInput(f"No saved setup for {domain}; run the setup wizard first.")
     if owned.strict(saved.get("asset_prefix", "")):  # bound to its domain and install, as every strict command
         awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved)  # named again: it changes the server
         owned.check_mode(domain, saved.get("aws_name", ""), saved["asset_prefix"], saved)

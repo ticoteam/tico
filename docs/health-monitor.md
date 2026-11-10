@@ -22,7 +22,7 @@ It shows the company count, warning and stop levels, and when the incident opene
 See [Company turn levels](computers.md#company-turn-levels) for what counts, defaults, recovery and how an admin changes the levels.
 This record does not provide the separate automatic fixer.
 
-Health's **Stuck bots** check and `hub health check` name the bot, its queue split (jobs
+Health's **Stuck bots** check and `tico health check` name the bot, its queue split (jobs
 that can start, jobs behind an interrupted run awaiting review, jobs held after repeated refusals until cooldown,
 jobs held on purpose), the oldest age, why it cannot
 start, and a fix or a command to inspect its runs. Work held on purpose never makes a bot stuck. The web Stuck list,
@@ -102,7 +102,7 @@ same ticket. The ticket is the owner's: replies show on their Support page.
 
 The team rule `health_monitor_reports` (on by default; in Settings > General > Health > Details and `PUT /api/v2/access/rules`) files
 tickets without asking anyone. When it is off, each report is an OK asked of the owner on a task, bound to exactly that
-message: they read it first, and it is sent with `hub support send --approval <id>` once OK'd. An OK sent back or
+message: they read it first, and it is sent with `tico support send --approval <id>` once OK'd. An OK sent back or
 withdrawn clears the report, so the next report of that problem asks again. `TICO_SUPPORT=off` turns reporting off with the rest of support.
 A copy run from source (version `dev`: a checkout, a test, the never-stuck rig) files nothing unless
 `TICO_HQ_URL` is set; Maintenance's run details say `source_copy`.
@@ -125,5 +125,5 @@ open ticket with that signature and closes each (`POST /v1/staff/tickets/by-sign
 
 ## Commands
 
-    hub health findings        what Check health found, with each problem's report
-    hub health report <key>    report a finding as a Tico bug, one ticket per problem
+    tico health findings        what Check health found, with each problem's report
+    tico health report <key>    report a finding as a Tico bug, one ticket per problem

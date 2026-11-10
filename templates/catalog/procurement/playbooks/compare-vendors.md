@@ -18,11 +18,11 @@ published, and the task note carries the suggestion.
 
 ## 1. Read the request and what the team has
 
-    hub task show <id>
+    tico task show <id>
 
 Restate the need in one line: the job, for whom, how many seats or units, by when. Check `knowledge/vendors.md` for a tool
 the team already owns that does the job. If one exists, compare it too. Ask the requester one question with
-`hub task ask <id> --to <person> "<question>" --version N` only if the need is unclear.
+`tico task ask <id> --to <person> "<question>" --version N` only if the need is unclear.
 
 ## 2. Shortlist three to five
 
@@ -57,13 +57,13 @@ Write `reports/R-<id>-comparison.md`: headline with the suggestion, the score an
 scores; the whole-term cost; claims and their sources; checks before deciding (two references from each finalist, a
 sample export, prices beyond the quote); the draft email; what could not be read.
 
-Where a contract's terms are the question, the request goes to `hub task create --owner legal-review`. It is not decided
+Where a contract's terms are the question, the request goes to `tico task create --owner legal-review`. It is not decided
 here.
 
 ## 7. Finish
 
-    hub file publish reports/R-<id>-comparison.md
-    hub task done <id> -m "..." --version N
+    tico file publish reports/R-<id>-comparison.md
+    tico task done <id> -m "..." --version N
 
 Attach the draft email to the task. The note holds the suggestion, the decide-by date and what could not be read. A page
 that failed to load makes its score provisional, and the report says so. The human contacts vendors and decides.

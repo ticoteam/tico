@@ -7,12 +7,12 @@ The outcome is four recorded answers, a draft of the first parent plan and progr
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub team show
+    tico task show <id>
+    tico team show
     gh pr list -R <repo> --state open --limit 30
 
 Check what you can already reach: the repositories in your GitHub access, the builders on the team
-(`hub team show`) and each bot's repository access (`hub bot repos <slug>`), and any open tasks that already
+(`tico team show`) and each bot's repository access (`tico bot repos <slug>`), and any open tasks that already
 name an outcome. Do not ask what these already say. If you cannot read a
 repository, that is a gap to name, and a task for the owner if they want it connected.
 
@@ -43,17 +43,17 @@ task, labelled "First draft, not yet reviewed". Change nothing on GitHub.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will post a delivery check on each open
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will post a delivery check on each open
 parent every day at 09:00, and nothing leaves the team." They can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule
-or to leave it off, adjust `knowledge/delivery.md` and the routine to match (`hub automation update <id>`, with
+or to leave it off, adjust `knowledge/delivery.md` and the routine to match (`tico automation update <id>`, with
 `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the routine run; until then
 nothing you have runs on its own. Run it once the answers and the first result are recorded, not before.

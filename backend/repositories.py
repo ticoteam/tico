@@ -1201,7 +1201,7 @@ def install(app, store, service):
                 )
             if gains and who.via == 'assistant':
                 # The person's Assistant cannot make this change on its words: it is their card in Settings, or one
-                # proposed (`hub assistant propose`) for them to confirm.
+                # proposed (`tico assistant propose`) for them to confirm.
                 raise Problem(
                     'confirm_required',
                     'That lets a bot run workflows, edit workflow files or create product '
