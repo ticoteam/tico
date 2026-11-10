@@ -1281,3 +1281,14 @@ def test_another_servers_runner_role_in_another_region_is_never_reused(monkeypat
     assert mine in iam.called("create_role")[0]["Tags"] and mine in iam.profiles["tico-runner-b2"]["Tags"]
     assert mine in ssm.called("put_parameter")[0]["Tags"]
 
+
+def test_runner_records_of_servers_that_slug_alike_never_share_a_file():
+    keys = set()
+    for url in ("https://a-b.example.com", "https://a.b.example.com", "https://a.b.example.com:8443"):
+        for prefix in ("tico", "hub"):
+            s = Settings(server_url=url, aws_region="us-west-2", asset_prefix=prefix)
+            keys.add(runner_setup.runner_key(s, "runner-b1"))
+    long = "https://" + "x" * 45 + ".example.com"
+    for suffix in ("", "/a"):
+        keys.add(runner_setup.runner_key(Settings(server_url=long + suffix, aws_region="us-west-2"), "runner-b1"))
+    assert len(keys) == 8

@@ -172,9 +172,11 @@ def _aws_plan(s: Settings, label: str) -> awsmod.AwsPlan:
 
 
 def runner_key(s: Settings, name: str) -> str:
-    """The file its record is saved in: one per server, region and name, so another server's runner is never overwritten."""
+    """The file its record is saved in: one per server, region and name, so another server's runner is never overwritten.
+    The digest of the full identity (prefix, URL with port and path, region) keeps names that slug alike apart."""
     host = urllib.parse.urlsplit(s.server_url).hostname or ""
-    return f"{name}--{awsmod.slug(host)}--{s.aws_region}"
+    ident = awsmod.server_identity(s.asset_prefix, s.server_url, s.aws_region)[:10]
+    return f"{name}--{awsmod.slug(host)[:20]}--{s.aws_region}--{ident}"
 
 
 def runner_prefix(s: Settings, label: str, given: str | None) -> str:
