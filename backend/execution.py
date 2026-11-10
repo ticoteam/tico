@@ -175,7 +175,9 @@ MAKE_PAGE = "make_page"
 def oks_used(c, bot, since, until=None):
     """The OKs a person gave that this bot used (backend/task_asks.py `use`) between `since` and `until` (now): their
     subjects, such as "email_send:<id>". A run that used one acted outside the company: running it again would act
-    again."""
+    again. None before the OK table exists (backend/task_asks.py makes it)."""
+    if not H._has_table(c, "ok_grants"):
+        return []
     return [
         row[0]
         for row in c.execute(
