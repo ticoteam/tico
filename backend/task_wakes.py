@@ -311,11 +311,11 @@ def runs_since(conn: "sqlite3.Connection", task: Row) -> int:
 LIVE_JOBS = ("queued", "leased", "running", "input", "stalled")
 
 
-def lost(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | None:
+def lost(conn: "sqlite3.Connection", task: Row, actor: str | None, *, whole_visit: bool = False) -> Row | None:
     """The wake about this task that `actor` was owed and never got: its newest one in this visit since the visit last
-    changed (by order), when it queued a run and that run never started (its job is gone, or ended with no run of it
-    started), and no run of this bot on the task started on a wake written after it. `id`, `body`. None when nothing
-    was lost."""
+    changed (by order; with `whole_visit`, in the whole visit), when it queued a run and that run never started (its
+    job is gone, or ended with no run of it started), and no run of this bot on the task started on a wake written
+    after it. `id`, `body`. None when nothing was lost."""
     H = _h()
     if not H.is_bot(actor):
         return None
@@ -325,7 +325,7 @@ def lost(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | None
         "(SELECT j.state FROM jobs j WHERE j.id = m.id) FROM messages m "
         "WHERE m.rowid > ? AND m.wake_key LIKE ? ESCAPE '\\' AND m.recipient_id=? "
         "AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 ORDER BY m.rowid DESC LIMIT 1",
-        (_marks(task)[1], _like(f"{task['id']}:{visit.get('id')}"), actor),
+        (0 if whole_visit else _marks(task)[1], _like(f"{task['id']}:{visit.get('id')}"), actor),
     ).fetchone()
     if not found or not found[3] or found[4] in LIVE_JOBS:
         return None

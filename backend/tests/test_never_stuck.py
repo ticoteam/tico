@@ -558,6 +558,16 @@ def test_a_bot_that_runs_jobs_gets_one_free_wake_per_change_and_then_its_try(c, 
     assert _said(c, task_id, BUILDER).count("This task is not finished. Carry on.") == 2  # the free one, and again
 
 
+def test_every_bot_with_a_turn_gets_back_a_wake_it_lost_not_only_the_one_the_ladder_tries(c, general, later):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    E.add_requirement(c, task_id, ANA, "ok", REVIEWER, "OK the wording")  # the builder still has its own work
+    asked = _said(c, task_id, REVIEWER)
+    c.execute("DELETE FROM jobs WHERE bot_id='reviewer' AND state='queued'")  # the reviewer's wake goes missing
+    assert later(seconds=10) == {"woken": 1} and _queued(c, task_id) == [BUILDER, REVIEWER]
+    assert _said(c, task_id, REVIEWER) == asked * 2 and _ladder(c, task_id) == ("owner", 0)  # same words, no try
+    assert later(seconds=10) == {}  # once
+
+
 def test_a_second_wake_for_one_bot_and_task_folds_into_one(c, general):
     row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
     first = task_wakes.add(c, row, BUILDER, row["visit"], "First words.", wake_key=f"{row['id']}:a")

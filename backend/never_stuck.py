@@ -169,11 +169,15 @@ def _ladder(
     # Whoever has the task's own work, before a bot that was only asked for an OK or an answer; the manager bot at
     # level manager.
     target = W.turn(conn, row, waits)
-    if not target:
-        return
     manager: str | None = _part(row, "pipeline").get("manager_id")
-    if level == "manager" and not _usable(conn, manager, seen):
+    if target and level == "manager" and not _usable(conn, manager, seen):
         _to_person(conn, row, level, done)
+        return
+    epoch: str = visit.get("last_change_at") or visit["entered_at"]
+    tries = int(visit.get("tries") or 0)
+    # Before the ladder tries anyone, every bot that has a turn gets back a wake it lost (R3).
+    woken, spent_by = _recover(conn, row, target, W.turns(conn, row, waits), level, tries, epoch, at, done)
+    if not target or target in woken:
         return
     if task_wakes.live_run(conn, row, target, at) or task_wakes.queued(conn, row["id"], target):
         return
@@ -183,18 +187,7 @@ def _ladder(
         # is written; if it never reads, Late takes the task on.
         return
     read: str | None = inbox["read_at"] if inbox else None  # it took its wake then, and nothing ran on the engine
-    epoch: str = visit.get("last_change_at") or visit["entered_at"]
-    tries = int(visit.get("tries") or 0)
-    spent = False  # its wake for this try was lost twice: the try is spent
-    lost = task_wakes.lost(conn, row, target)
-    if lost:
-        # Its wake went missing, or its run never started: the same words again, on this pass. Nothing ran, so
-        # nothing is counted (R3). Once per try: when the second one is lost too, the try is spent at its time.
-        key = f"{row['id']}:{visit['id']}:lost:{H.actor_id(target)}:{level}:{tries}:{epoch}"
-        if task_wakes.add(conn, row, target, visit, lost["body"], level=level, try_n=tries, wake_key=key):
-            done["woken"] += 1
-            return
-        spent = True
+    spent = target in spent_by  # its wake for this try was lost twice: the try is spent
     gap = GAPS[tries] if tries < TRIES else GAPS[0]
     due: str | None = visit.get("next_try_at")
     if not due:
@@ -227,6 +220,50 @@ def _ladder(
         _to_manager(conn, row, manager, f"{_name(conn, target)} stopped {TRIES} times without finishing it.", at, done)
     else:
         _to_person(conn, row, level, done)
+
+
+def _recover(
+    conn: "sqlite3.Connection",
+    row: Row,
+    target: str | None,
+    turns: set[str],
+    level: str,
+    tries: int,
+    epoch: str,
+    at: str,
+    done: dict[str, int],
+) -> tuple[set[str], set[str]]:
+    """Write again the lost wake of every bot that has a turn and is not on it: no live run, no queued wake, no wake
+    unread in its own inbox. The same words, on this pass, and nothing is counted (R3). Once per bot, level, try and
+    change: when that one is lost too, the bot's try is spent. Returns the bots woken, and those whose try is spent.
+
+    For the bot the ladder tries (`target`) a wake is lost only since the last change: after a change the ladder wakes
+    it anyway. Any other bot (one named on an OK or an answer) is woken by nothing else, so its newest wake in the
+    whole visit counts: it gets a turn back only when the task leaves a person or a snooze ends."""
+    visit = row["visit"]
+    woken: set[str] = set()
+    spent: set[str] = set()
+    for bot in sorted(turns):
+        if task_wakes.live_run(conn, row, bot, at) or task_wakes.queued(conn, row["id"], bot):
+            continue
+        inbox = task_wakes.inbox(conn, row, bot)
+        if inbox and not inbox["read_at"]:
+            continue
+        lost = task_wakes.lost(conn, row, bot, whole_visit=bot != target)
+        if not lost:
+            continue
+        key = f"{row['id']}:{visit['id']}:lost:{_slug(bot)}:{level}:{tries}:{epoch}"
+        if task_wakes.add(conn, row, bot, visit, lost["body"], level=level, try_n=tries, wake_key=key):
+            done["woken"] += 1
+            woken.add(bot)
+        else:
+            spent.add(bot)
+    return woken, spent
+
+
+def _slug(actor: str) -> str:
+    """A bot's id without "bot:", as a wake key holds it."""
+    return str(_h().actor_id(actor))
 
 
 def _snoozed_since(conn: "sqlite3.Connection", visit: Row, since: str) -> bool:
