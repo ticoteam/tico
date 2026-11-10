@@ -64,3 +64,41 @@ def test_a_fold_never_leaves_a_bot_that_runs_jobs_without_a_queued_run(c, genera
     message = task_wakes.add(c, row, BUILDER, row["visit"], "More words.", wake_key=f"{row['id']}:x")
     assert message and "job" not in _refs(c, message)
     assert _queued(c, row["id"]) == [BUILDER]  # the wake it would have folded is still queued
+
+
+def _chat_run(c, conversation_id, bot):
+    """A run of `bot` on a message in a conversation that names no task: a person wrote to it there."""
+    message, run = H.new_id(), H.new_id()
+    c.execute(
+        "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, created_at) "
+        "VALUES (?,?,?,?,'say','Any news?','{}',?)",
+        (message, conversation_id, ANA, bot, H.now()),
+    )
+    c.execute(
+        "INSERT INTO attempts (id, bot_id, created_at, started_at, finished_at, state, message_id) "
+        "VALUES (?,?,?,?,?,'completed',?)",
+        (run, H.actor_id(bot), H.now(), H.now(), H.now(), message),
+    )
+
+
+def test_a_run_counts_for_the_task_it_names_and_by_its_conversation_only_when_one_open_task_has_it(c, general):
+    from backend import task_engine as E
+
+    first = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    second = X.new_task(c, ANA, "Fix the footer", assignee=BUILDER)
+    c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (first["conversation_id"], second["id"]))
+    c.execute(
+        "UPDATE messages SET conversation_id=? WHERE wake_key LIKE ?", (first["conversation_id"], second["id"] + ":%")
+    )
+    X.ran(c, second["id"], BUILDER)  # the run names the footer task, in the conversation the two share
+    first, second = E.task(c, first["id"]), E.task(c, second["id"])
+
+    def runs(row):
+        return task_wakes.runs_since(c, row, row["visit"]["entered_at"])
+
+    assert (runs(first), runs(second)) == (0, 1)
+    assert task_wakes.last_run(c, first, BUILDER) is None
+    _chat_run(c, first["conversation_id"], BUILDER)  # two open tasks have that conversation: it is neither's
+    assert (runs(first), runs(second)) == (0, 1)
+    E.move(c, second["id"], E.CLOSED, ANA, "Not needed")
+    assert runs(E.task(c, first["id"])) == 1  # now the conversation is one open task's

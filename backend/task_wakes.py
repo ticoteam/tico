@@ -250,6 +250,29 @@ def live_run(conn: "sqlite3.Connection", task: Row, actor: str | None, now: str 
     )
 
 
+# The runs (attempts `a`) and the message each ran on (`m`), and which of them are on one task: the attempt or its
+# message names the task (the attempt's task, the wake's key, the message's task), or, when neither names any task, the
+# message is in the task's conversation and no other open task has that conversation. Bound by `_on_task`.
+_RUNS = (
+    "FROM attempts a LEFT JOIN jobs j ON j.id = a.job_id LEFT JOIN messages m ON m.id = COALESCE(a.message_id, "
+    "j.message_id) "
+)
+_ON_TASK = (
+    "(a.task_id = ? OR m.wake_key LIKE ? ESCAPE '\\' OR json_extract(m.refs, '$.task') = ? OR (? AND "
+    "a.task_id IS NULL AND m.wake_key IS NULL AND json_extract(m.refs, '$.task') IS NULL AND m.conversation_id = ?))"
+)
+
+
+def _on_task(conn: "sqlite3.Connection", task: Row) -> tuple[object, ...]:
+    """The values `_ON_TASK` takes for this task."""
+    conversation = task.get("conversation_id") or ""
+    sharing = conn.execute(
+        "SELECT COUNT(*) FROM tasks WHERE conversation_id=? AND status='open' AND id<>?", (conversation, task["id"])
+    ).fetchone()
+    alone = bool(conversation) and not (sharing and sharing[0])
+    return (task["id"], _like(task["id"]), task["id"], 1 if alone else 0, conversation)
+
+
 def last_run(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | None:
     """This bot's newest run on this task: its `state` and when it ended (`finished_at`). None when it never ran for
     it."""
@@ -257,10 +280,9 @@ def last_run(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | 
     if not H.is_bot(actor):
         return None
     found = conn.execute(
-        "SELECT a.state, a.finished_at FROM attempts a JOIN jobs j ON j.id = a.job_id "
-        "JOIN messages m ON m.id = j.message_id WHERE a.bot_id=? "
-        "AND (m.wake_key LIKE ? ESCAPE '\\' OR m.conversation_id = ?) ORDER BY a.created_at DESC, a.id DESC LIMIT 1",
-        (H.actor_id(actor), _like(task["id"]), task.get("conversation_id") or ""),
+        f"SELECT a.state, a.finished_at {_RUNS}WHERE a.bot_id=? AND {_ON_TASK} "
+        "ORDER BY a.created_at DESC, a.id DESC LIMIT 1",
+        (H.actor_id(actor), *_on_task(conn, task)),
     ).fetchone()
     return {"state": found[0], "finished_at": found[1]} if found else None
 
@@ -270,9 +292,8 @@ def runs_since(conn: "sqlite3.Connection", task: Row, since: str) -> int:
     never-stuck ladder holds to 7. A run that started at the very time of the change counts: the bound is never read
     short."""
     found = conn.execute(
-        "SELECT COUNT(*) FROM attempts a JOIN jobs j ON j.id = a.job_id JOIN messages m ON m.id = j.message_id "
-        "WHERE (m.wake_key LIKE ? ESCAPE '\\' OR m.conversation_id = ?) AND COALESCE(a.started_at, a.created_at) >= ?",
-        (_like(task["id"]), task.get("conversation_id") or "", since),
+        f"SELECT COUNT(*) {_RUNS}WHERE {_ON_TASK} AND COALESCE(a.started_at, a.created_at) >= ?",
+        (*_on_task(conn, task), since),
     ).fetchone()
     return int(found[0]) if found else 0
 
@@ -295,10 +316,9 @@ def lost(conn: "sqlite3.Connection", task: Row, actor: str | None, since: str) -
     if not found or not found[3] or found[4] not in (None, "canceled"):
         return None
     taken = conn.execute(
-        "SELECT 1 FROM attempts a JOIN jobs j ON j.id = a.job_id JOIN messages m ON m.id = j.message_id "
-        "WHERE a.bot_id=? AND (a.job_id=? OR ((m.wake_key LIKE ? ESCAPE '\\' OR m.conversation_id = ?) "
+        f"SELECT 1 {_RUNS}WHERE a.bot_id=? AND (a.job_id=? OR ({_ON_TASK} "
         "AND COALESCE(a.started_at, a.created_at) > ?)) LIMIT 1",
-        (H.actor_id(actor), found[0], _like(task["id"]), task.get("conversation_id") or "", found[2]),
+        (H.actor_id(actor), found[0], *_on_task(conn, task), found[2]),
     ).fetchone()
     return None if taken else {"id": str(found[0]), "body": str(found[1] or "")}
 
