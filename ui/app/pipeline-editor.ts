@@ -81,7 +81,8 @@ function peReqHTML(req: PipelineReqRec, si: number, ri: number): string {
   return `<details class="pe-req"${req.id ? '' : ' open'}><summary><span class="pe-req-name">${esc(req.line || peKindName(req.kind))}</span>`
     + `<span class="pe-req-who muted">${esc(who)}</span></summary><div class="pe-req-body">`
     + peF('Needs', `<select data-pe-rf="kind" ${at}${req.id ? ' disabled' : ''}>${kinds}</select>`)
-    + peF('Says', `<input data-pe-rf="line" ${at} maxlength="200" value="${esc(req.line)}" autocomplete="off">`)
+    // A page's line is what Jev checks (S11); on any other kind it is the requirement's name.
+    + peF(req.kind === 'page' ? 'Jev checks' : 'Name', `<input data-pe-rf="line" ${at} maxlength="200" value="${esc(req.line)}" autocomplete="off">`)
     + (okKind ? peF('From', `<select data-pe-rf="person_id" ${at}>${peChoice([...pePeople(), ...peBots()], req.person_id, 'Choose')}</select>`)
       + peF('Who OKs', `<select data-pe-rf="who_oks" ${at}>${PE_WHO_OKS.map(([v, l]) => `<option value="${v}"${v === req.who_oks ? ' selected' : ''}>${l}</option>`).join('')}</select>`) : '')
     + `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rf="can_push_past" ${at}${req.can_push_past && !never ? ' checked' : ''}${never ? ' disabled' : ''}> Can be pushed past</label>`
@@ -237,6 +238,13 @@ function peClick(state: PeState, target: Element): void {
 
 // ---------------------------------------------------------------- saving
 
+/** The panels open before a save, found again in the saved record by their place. */
+function peOpenSame(open: WeakSet<PipelineStageRec>, before: PipelineStageRec[], saved: PipelineRec): WeakSet<PipelineStageRec> {
+  const next = new WeakSet<PipelineStageRec>();
+  saved.stages.forEach((stage, i) => { const was = before[i]; if (was && open.has(was)) next.add(stage); });
+  return next;
+}
+
 /** What changed between two records, as a person names it: a pipeline field, or a stage by its name. */
 function peChanged(a: PipelineRec, b: PipelineRec): string[] {
   const out: string[] = [];
@@ -262,10 +270,13 @@ async function peSave(state: PeState): Promise<void> {
   try {
     const saved = await pipelineSave(state.id, {...state.draft, settings_version: state.base.settings_version});
     if (PE !== state) return;
+    // The editor stays as S11 draws it, now on the saved record: its ids and its new settings_version.
     state.saving = false;
+    const draft = peCopy(saved);
+    state.open = peOpenSame(state.open, state.draft.stages, draft);
+    state.base = saved; state.draft = draft;
     toast('Saved');
-    document.getElementById('pe-dialog')?.dispatchEvent(new CustomEvent('pe-saved', {detail: saved}));
-    (document.getElementById('pe-dialog') as HTMLDialogElement | null)?.close();
+    peDraw(state);
   } catch (error) {
     if (PE !== state) return;
     state.saving = false;
