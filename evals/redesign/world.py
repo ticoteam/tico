@@ -97,7 +97,11 @@ class World:
             github_webhook_secret=SECRET,
             release_commit="",
             release_repo=REPO,
-            test_identities={"ana-test": Identity("human:ana", "owner", "ana@acme.example")},
+            test_identities={
+                "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
+                # The Release Manager ships between its turns, signed in as an agent.
+                "release-test": Identity("bot:release-manager", "bot", agent="hermes"),
+            },
         )
         self.settings = settings
         self.app = create_app(settings)
@@ -114,6 +118,12 @@ class World:
             for slug, config in bots.items():
                 c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)", (slug, "engineering", "ana"))
                 bot_settings.write(c, slug, config)
+            if "release-manager" in bots:  # signed in as an agent, as an external Release Manager is
+                c.execute(
+                    "INSERT INTO agents(bot,harness,token_hash,created_at,created_by) "
+                    "VALUES('release-manager','hermes','x-release',?,'human:ana')",
+                    (H.now(),),
+                )
             c.execute(
                 "INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),)
             )
