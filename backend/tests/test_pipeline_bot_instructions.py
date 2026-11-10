@@ -57,8 +57,16 @@ def test_no_pipeline_template_teaches_the_old_words(template):
     "template, stages, commands",
     [
         ("builder", ["On deck", "Build", "Fixes 1", "Fixes 2"], ["tico task link", "tico task attach", "--req"]),
-        ("pr-reviewer", ["Review 1 or Review 2", "New commits since the review"], ["headRefOid", "tico file publish", "tico task attach", "--req"]),
-        ("product-manager", ["Ideas", "Spec", "In development", "Validate"], ["tico task attach", "--pipeline engineering"]),
+        (
+            "pr-reviewer",
+            ["Review 1 or Review 2", "New commits since the review"],
+            ["headRefOid", "tico file publish", "tico task attach", "--req"],
+        ),
+        (
+            "product-manager",
+            ["Ideas", "Spec", "In development", "Validate"],
+            ["tico task attach", "--pipeline engineering"],
+        ),
         ("engineering-manager", ["Stuck", "On ice", "Changed after OK", "Merged anyway"], ["tico task reassign"]),
         ("release-owner", ["Merge", "Release"], ["tico task queue", '"Fixes 2"', "--force-with-lease"]),
     ],
@@ -92,5 +100,7 @@ def test_only_the_release_manager_may_push_a_rebased_branch():
 
 def test_the_release_manager_is_named_once():
     assert card("release-owner")["name"] == "Release Manager"
-    named = [p.name for p in CATALOG.iterdir() if (p / "card.yaml").exists() and card(p.name)["name"] == "Release Manager"]
+    named = [
+        p.name for p in CATALOG.iterdir() if (p / "card.yaml").exists() and card(p.name)["name"] == "Release Manager"
+    ]
     assert named == ["release-owner"]
