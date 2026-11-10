@@ -63,7 +63,7 @@ def ensure_schema(c):
 # messages to bots, marking updates read, quiet notes. A message for another person, run-now, spend, access, archive
 # and the rest are proposals. The owner's rule "Assistant acts without asking" off (backend/team_rules.py) narrows it
 # to what only touches the person.
-_SETTLES = ("done", "closed", "declined")
+_SETTLES = ("done", "closed")
 
 
 def _mine(actor, value):
@@ -88,7 +88,6 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
         "/api/v2/changelog/read",
         "/api/notes",
         "/api/v2/assistant/actions",
-        "/api/v2/assistant/read-back",
         "/api/v2/assistant/learned",
         "/api/v2/goals/read-back",
     ):
@@ -161,14 +160,22 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
 # run cites it itself (`X-Tico-On-Behalf-Of` names another message, or `turn`, the one that started the run). The server
 # checks the message, not the words: the person's own, typed in their own Assistant room, in the last INSTRUCTION_TTL_S.
 # The turn is the person, so their rights stay the ceiling: the route's own checks run as them. Only what `NEVER` names
-# stays a card or the person's own tap. A decline is undone by asking again. Approving (send, spend, publish, merge) is a
-# click on a card unless the person turned on "My assistant can decide approvals for me" (`decides`, below) and the team
-# allows it; then an approval addressed to them is decided on their words too (`approval_words`). When the owner's rule
-# "Assistant acts without asking" is off, all of it is a card again.
+# stays a card or the person's own tap. An OK that lets something go (send, spend, publish: backend/task_asks.py) is the
+# person's own click on its preview, never a turn's, a card's or their words to the Assistant (NEVER names its route).
+# When the owner's rule "Assistant acts without asking" is off, all of it is a card again.
 INSTRUCTION_TTL_S = 30 * 60
-# The steps a bulk card (`POST /api/v2/assistant/batch`) may hold: task changes, comments, links, approval decisions and
-# answers. A card is still checked against this list, whatever a turn may do on its own.
-_INSTRUCTED = [re.compile(p) for p in (r"/api/v2/tasks/[^/]+", r"/api/v2/tasks/[^/]+/(comments|links|answers)")]
+# The steps a bulk card (`POST /api/v2/assistant/batch`) may hold: task changes, comments, links and answers to what a
+# bot asked the person. A card is still checked against this list, whatever a turn may do on its own.
+_INSTRUCTED = [
+    re.compile(p)
+    for p in (
+        r"/api/v2/tasks/[^/]+",
+        r"/api/v2/tasks/[^/]+/(comments|links|done|move|owner|snooze|unsnooze)",
+        r"/api/v2/tasks/[^/]+/asks/[^/]+/(answer|give)",
+    )
+]
+# An answer to an ask on a task (`POST /api/v2/tasks/{id}/asks/{requirement}/answer`): the person's, never someone else's.
+ANSWERING = re.compile(r"/api/v2/tasks/([^/]+)/asks/([^/]+)/answer")
 # An automation's change and an org rule's add or retire may sit on a bulk card too (one card holds the closes and the
 # rule stop). Each runs as the person through its own route, and must pass `admits_on_turn` like any other write.
 _CARD_OTHER = [
@@ -176,45 +183,6 @@ _CARD_OTHER = [
     ("POST", re.compile(r"/api/v2/rules")),
     ("POST", re.compile(r"/api/v2/rules/[^/]+/retire")),
 ]
-_DECIDING = re.compile(r"/api/v2/approvals/([^/]+)")
-DECIDES_KEY = "assistant.decides_approvals"
-
-
-def decides(c, actor):
-    """Whether this person's own Assistant may decide approvals addressed to them: their own switch in Settings, on by
-    default and turned off by them (an explicit off row stays off), and the team's rule (backend/team_rules.py), on
-    unless the owner turned it off."""
-    from . import team_rules
-
-    row = c.execute("SELECT value FROM preferences WHERE actor=? AND key=?", (actor, DECIDES_KEY)).fetchone()
-    on = json.loads(row[0]) is True if row else True
-    allowed = team_rules.load(c)["assistant_approvals"]
-    return {"decides_approvals": on, "team_allows": allowed, "active": on and allowed}
-
-
-def approving(method, path, body=None):
-    """Whether this request approves an approval (as opposed to declining one, or anything else)."""
-    return (
-        method == "POST"
-        and bool(_DECIDING.fullmatch(normalize_path(path) or ""))
-        and _fields(body).get("decision") == "approved"
-    )
-
-
-def approve_hint(settings, state):
-    """What the Assistant is told when it may not approve: the one sentence it passes on to the person."""
-    where = "Settings > General"
-    if not state["team_allows"]:
-        return (
-            "Approving stays the person's click on a card: the team's owner turned off assistants deciding "
-            "approvals (Settings > Humans). Tell them that in one sentence and propose a card (`hub assistant "
-            "propose`)"
-        )
-    return (
-        "Approving is the person's click on a card until they let you decide approvals. Tell them in one sentence: "
-        f"they can turn on “My assistant can decide approvals for me” in {where}. Then propose a card "
-        "(`hub assistant propose`)"
-    )
 
 
 def _fields(body):
@@ -311,8 +279,10 @@ NEVER = [
         ("POST", r"/api/v2/runners/enroll"),
         ("POST", r"/api/v2/agents/pairings(/.*)?"),
         (None, r"/api/v2/agents/pairings(/.*)?"),
+        # An OK bound to what it lets go (backend/task_asks.py) is the person's own click on its preview in Tico.
+        ("POST", r"/api/v2/tasks/[^/]+/asks/[^/]+/ok"),
         # A message the person wrote is theirs: a turn never edits, deletes or redacts it, so a "No" cannot become a "yes"
-        # after the read-back (`instruction` and `approval_words` also refuse a message that was edited).
+        # (`instruction` also refuses a message that was edited).
         ("PATCH", r"/api/v2/messages/[^/]+"),
         ("DELETE", r"/api/v2/messages/[^/]+"),
         ("POST", r"/api/v2/messages/[^/]+/redact"),
@@ -360,7 +330,7 @@ NEVER = [
         (None, r"/api/v2/oauth(/.*)?"),
         # Handing the company to another owner.
         (None, r"/api/v2/access/owner(/.*)?"),
-        # The Assistant's own switches: whether it decides approvals (the person's own sign-in only) and whether it is on.
+        # The Assistant's own switches: whether it is on.
         (None, r"/api/v2/assistant/settings"),
         ("POST", r"/api/v2/assistant/turn-on"),
         # The company's AI provider keys and config (a credential): the owner's own sign-in, never a chat.
@@ -377,7 +347,7 @@ NEVER = [
     )
 ]
 # The team's rules that decide the Assistant itself (backend/team_rules.py): only the owner's own sign-in changes them.
-ASSISTANT_RULES = ("assistant_direct", "assistant_approvals")
+ASSISTANT_RULES = ("assistant_direct",)
 
 
 # The automation actions that send something outside the company (backend/automation_actions.py): a webhook, a reply
@@ -460,8 +430,7 @@ def settings_route_unmatched(method, path, body=None):
 def admits_on_turn(method, path, body=None):
     """Whether a person's own Assistant turn may make this write as them, on their cited words. Every write is admitted
     except what `NEVER` names, a body that carries a secret (a secret never goes through a chat: BotOps' rule, which
-    botops_act checks the same way), and the team's rules for the Assistant itself. The approvals are not decided here:
-    an approve runs only on its read-back and the person's yes (`approval_words`)."""
+    botops_act checks the same way), and the team's rules for the Assistant itself."""
     from . import botops_act, team_rules
 
     path = canonical(path)
@@ -496,9 +465,9 @@ def _json(body):
     return body if body is not None else {}
 
 
-def instructed_route(method, path, body=None, decides=False):
-    """Whether a bulk card may hold this step: a task change, comment, link or answer, or an approval decision (`decides`:
-    an approve, which the card's own click covers). A card is checked against this whatever a turn may do on its own."""
+def instructed_route(method, path, body=None):
+    """Whether a bulk card may hold this step: a task change, comment, link, or an answer to what a bot asked the person.
+    A card is checked against this whatever a turn may do on its own."""
     path = normalize_path(path)
     if not path or path == "/api/v2/tasks/dry-run":
         return False
@@ -506,183 +475,41 @@ def instructed_route(method, path, body=None, decides=False):
         return admits_on_turn(method, path, body)
     if method != "POST":
         return False
-    if _DECIDING.fullmatch(path):
-        return _fields(body).get("decision") == "declined" or (decides and _fields(body).get("decision") == "approved")
     return any(p.fullmatch(path) for p in _INSTRUCTED)
 
 
-# Approving is the person's own decision. The Assistant may put an approve on a card only when the person's message in
-# their chat names it; "clear my queue" or "close 50 of these" declines, dismisses and closes, and never approves.
-APPROVING = re.compile(r"\b(approv\w*|merge[sd]?|merging|publish\w*|send|sending|spend\w*|pay|paying)\b", re.I)
-
-
-def approvals_in(path, body):
-    """The approvals this operation (or bulk card) would approve."""
-    steps = body.get("actions") if path == BATCH_PATH and isinstance(body, dict) else [{"path": path, "body": body}]
-    return [
-        m.group(1)
-        for s in steps or []
-        if isinstance(s, dict)
-        and (m := _DECIDING.fullmatch(str(s.get("path") or "")))
-        and _fields(s.get("body")).get("decision") == "approved"
-    ]
-
-
 def require_addressed(c, who, path, body):
-    """403 unless every approval and question this operation (or bulk card) decides or answers was put to this person:
-    a card never lists, let alone decides, someone else's."""
+    """403 unless every ask this operation (or bulk card) answers was put to this person: a card never lists, let alone
+    answers, someone else's."""
+    from . import task_requirements as R
+
     steps = body.get("actions") if path == BATCH_PATH and isinstance(body, dict) else [{"path": path}]
     for s in steps or []:
         target = str(s.get("path") or "") if isinstance(s, dict) else ""
-        if m := _DECIDING.fullmatch(target):
-            row = H.approval(c, m.group(1)) or {}
-            refuse_own_click(row)
-            message_id = row.get("message_id")
-        elif m := re.fullmatch(r"/api/v2/tasks/([^/]+)/answers", target):
-            if (H.task(c, m.group(1)) or {}).get("owner_id") != who.actor:  # a question task is its person's
-                raise Problem("forbidden", "That approval or question is not addressed to you", 403)
+        m = ANSWERING.fullmatch(normalize_path(target) or "")
+        if not m:
             continue
-        else:
-            continue
-        if (H.message(c, message_id) or {}).get("recipient_id") != who.actor:
-            raise Problem("forbidden", "That approval or question is not addressed to you", 403)
+        requirement = R.get(c, m.group(2))
+        visit = requirement.get("visit_id") if requirement else None
+        if not requirement or not visit:
+            visit = (H._one(c, "SELECT id FROM visits WHERE task_id=? AND left_at IS NULL", (m.group(1),)) or {}).get(
+                "id"
+            )
+        if not requirement or not visit or R.person_of(c, requirement, visit) != who.actor:
+            raise Problem("forbidden", "That ask is not addressed to you", 403)
 
 
-def refuse_own_click(row):
-    """A Company page edition or stats board is decided only by the person's own click in Tico, either way, whatever
-    "My assistant can decide approvals for me" says: not on a card, not on their words (backend/company_page/editions.py)."""
-    from .company_page.editions import own_click_approval
-
-    if own_click_approval(row.get("payload")):
-        raise Problem(
-            "approve_own_click",
-            "What the Company page sends outside is decided only by the person's own "
-            "click in Tico, so leave it out and tell them it is waiting",
-            403,
-        )
-
-
-def require_named_approval(c, who, ref):
-    """403 unless the person's cited message (default: the one that started this run) asks to approve."""
-    cited = instruction(c, who, ref or "turn")["cited"]
-    if not APPROVING.search(str((H.message(c, cited) or {}).get("body") or "")):
-        raise Problem(
-            "approve_not_asked",
-            "Approving is the person's own decision: their message must name it (approve, "
-            "merge, publish, send, spend). Decline, answer or close what they asked for, and leave the "
-            "approvals for them",
-            403,
-        )
-
-
-# Approving on the person's words is bound to a list they saw: the Assistant first posts its read-back (`read_back`,
-# below), which the server writes whole from the approvals themselves and records with their ids. Then the person's plain
-# yes, with nothing else from the Assistant in between, approves exactly those, never anything else addressed to them.
-AFFIRM = re.compile(
-    r"(yes|yep|yeah|y|ok|okay|sure|go ahead|go|do it|please do|confirm(ed)?|correct|that'?s right)"
-    r"\b[\s,.!]*(please|thanks|thank you|go ahead|do it)?[\s.!]*",
-    re.I,
-)
-READ_BACK = "approval.read_back"
 # Unicode's Default_Ignorable_Code_Point characters that are not format (Cf) characters: variation selectors, Hangul
 # fillers and the like render as nothing.
 IGNORABLE = re.compile("[͏ᅟᅠ឴឵᠋-᠏⁥ㅤ︀-️ﾠ￰-￸\U000e0000-\U000e0fff]")
 
 
 def plain_line(text):
-    """One read-back line, shown exactly as written: a requesting bot's payload can't add lines, a footer or a question,
-    hide part of the line behind markup (an HTML comment opened in one field and closed in another), or reorder it with
-    invisible format characters."""
+    """One line, shown exactly as written: a bot's words can't add lines, a footer or a question, hide part of the line
+    behind markup (an HTML comment opened in one field and closed in another), or reorder it with invisible format
+    characters."""
     text = "".join(ch for ch in str(text) if unicodedata.category(ch) != "Cf" and not IGNORABLE.fullmatch(ch))
     return re.sub(r"\s+", " ", text).strip().replace("<", "‹").replace(">", "›")
-
-
-# Known fields first, in this order; every other payload key follows, sorted, so a field added later is shown, not
-# left out. Only the hashes are not: the person can't check them and the fields beside them say what they cover.
-APPROVAL_FIELDS = (
-    "amount",
-    "to",
-    "cc",
-    "mailbox",
-    "repo",
-    "pr",
-    "url",
-    "account",
-    "subject",
-    "title",
-    "what",
-    "attachments",
-)
-# A read-back cuts nothing: an approval with a field (or a key) longer than this stays the person's click.
-FIELD_LIMIT = 400
-KEY = re.compile(r"[A-Za-z0-9_]{1,40}")
-QUOTES = '"“”„‟″〝〞〟＂«»'
-
-
-def hidden_key(key):
-    return str(key).endswith("sha256") or key == "file_id"
-
-
-def field_text(value):
-    """One payload value written out whole: a list joined with ", ", a file as its name and size, any other object as
-    its key=value pairs; never a hash. A size that is not a whole number is shown as size=..., never "(... bytes)"
-    where text could pass for a second file."""
-    if isinstance(value, (list, tuple)):
-        return ", ".join(field_text(v) for v in value)
-    if isinstance(value, dict):
-        sized = "name" in value and type(value.get("size")) is int
-        rest = " ".join(
-            f"{k}={field_text(v)}"
-            for k, v in sorted(value.items(), key=lambda kv: str(kv[0]))
-            if not hidden_key(k) and k != "name" and not (k == "size" and sized)
-        )
-        head = field_text(value["name"]) + (f" ({value['size']} bytes)" if sized else "") if "name" in value else ""
-        return " ".join(x for x in (head, rest) if x)
-    return str(value)
-
-
-def field_value(value, limit=FIELD_LIMIT):
-    """One payload value as a card or read-back shows it: one plain line, at most `limit` characters, no quotes of its
-    own to close the ones around it."""
-    text = plain_line(field_text(value)).translate({ord(q): "'" for q in QUOTES})
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
-
-
-def approval_fields(payload):
-    """The payload keys a card or read-back shows, known ones first."""
-    shown = [k for k in payload if not hidden_key(k)]
-    return [k for k in APPROVAL_FIELDS if k in shown] + sorted(str(k) for k in shown if k not in APPROVAL_FIELDS)
-
-
-def shows_blank(value):
-    """Whether part of a value has something in it yet reads back as nothing (a file with only hidden keys)."""
-    if isinstance(value, (list, tuple)):
-        return any(shows_blank(v) for v in value)
-    if isinstance(value, dict):
-        return (bool(value) and not plain_line(field_text(value))) or any(
-            shows_blank(v) for k, v in value.items() if not hidden_key(k)
-        )
-    return value not in (None, "") and not plain_line(field_text(value))
-
-
-def too_long(payload):
-    """The fields a read-back could not show whole (or whose key is not a plain name, or that read back as nothing):
-    the approval stays a click."""
-    return [
-        str(k)
-        for k in payload
-        if not hidden_key(k)
-        and (
-            not KEY.fullmatch(str(k))
-            or field_value(payload[k], 10**6) != field_value(payload[k])
-            or shows_blank(payload[k])
-        )
-    ]
-
-
-def approval_id(path):
-    m = _DECIDING.fullmatch(normalize_path(path) or "")
-    return m.group(1) if m else None
 
 
 def edited(c, msg):
@@ -694,60 +521,6 @@ def edited(c, msg):
     return bool(
         c.execute("SELECT 1 FROM message_revisions WHERE message_id=? AND revision>0 LIMIT 1", (msg["id"],)).fetchone()
     )
-
-
-def approval_words(c, who, cited, assistant_bot, approval):
-    """What an approval the Assistant decides for the person is recorded with: their words and the read-back they
-    answered. The cited message must be a plain yes, the last thing anyone else said in the room before it (since the
-    person's previous message) the read-back the server wrote, listing this approval, and nothing the person wrote
-    after it: "wait, no" takes it back. Their own sentence, words in a file, a page, a bot's message or the read-back
-    alone never approve, and the Assistant never approves what it asked for itself."""
-    bot = "bot:" + assistant_bot
-    if (H.approval(c, approval) or {}).get("requested_by_id") == bot:
-        raise Problem(
-            "own_request",
-            "You asked for this approval yourself, so it stays the person's click: propose it "
-            "on a card (`hub assistant propose`)",
-            403,
-        )
-    msg = H.message(c, cited) or {}
-    if msg and edited(c, msg):
-        raise Problem(
-            "approve_not_asked",
-            "That message was edited after it was posted, so it is no yes: post the read-back again and ask the person",
-            403,
-        )
-    words = str(msg.get("body") or "").strip()
-    room, at = msg.get("conversation_id"), str(msg.get("created_at") or "")
-    back = None
-    later = c.execute(
-        "SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>? AND id<>? "
-        "AND deleted_at IS NULL LIMIT 1",
-        (room, who.actor, at, cited),
-    ).fetchone()
-    if len(words) <= 60 and AFFIRM.fullmatch(words) and not later:
-        before = c.execute(
-            "SELECT created_at FROM messages WHERE conversation_id=? AND sender_id=? AND created_at<? "
-            "AND id<>? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
-            (room, who.actor, at, cited),
-        ).fetchone()
-        last = c.execute(
-            "SELECT m.id, m.sender_id, m.body, e.detail FROM messages m LEFT JOIN events e "
-            "ON e.target=m.id AND e.action=? WHERE m.conversation_id=? AND m.sender_id<>? AND m.created_at>=? AND m.created_at<=? "
-            "AND m.id<>? AND m.deleted_at IS NULL ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1",
-            (READ_BACK, room, who.actor, before["created_at"] if before else "", at, cited),
-        ).fetchone()
-        if last and last["sender_id"] == bot and last["detail"]:
-            back = {"body": last["body"], "approves": (json.loads(last["detail"]) or {}).get("approves") or []}
-    if not back or approval not in back["approves"]:
-        raise Problem(
-            "approve_not_asked",
-            "Approving needs the person's yes to your read-back: post the list with "
-            "`hub approval read-back <id>...` as your reply and end the turn; their plain yes to it approves "
-            "exactly what it lists",
-            403,
-        )
-    return {"words": preview(words, 300), "read_back": back["body"], "approves": back["approves"]}
 
 
 def instruction(c, who, ref):
@@ -849,11 +622,10 @@ _PROPOSABLE = [
         ("PUT", r"/api/v2/letters/bots/[^/]+/settings"),
         ("POST", r"/api/v2/automations"),
         ("PATCH", r"/api/v2/automations/[^/]+"),
-        ("POST", r"/api/v2/approvals/[^/]+"),
-        ("POST", r"/api/v2/tasks/[^/]+/answers"),
+        ("POST", r"/api/v2/tasks/[^/]+/asks/[^/]+/(answer|give)"),
         ("POST", r"/api/v2/tasks"),
         ("POST", r"/api/v2/tasks/[^/]+"),
-        ("POST", r"/api/v2/tasks/[^/]+/(comments|links|labels|run-now)"),
+        ("POST", r"/api/v2/tasks/[^/]+/(comments|links|labels|run-now|done|move|owner|snooze|unsnooze)"),
         ("POST", r"/api/v2/messages"),
         ("POST", r"/api/v2/chat/[^/]+"),
         ("POST", r"/api/v2/notes"),
@@ -1008,9 +780,9 @@ def age(ts):
 
 
 def _kind(step):
-    """What one step of a card is, for counting and grouping: approvals, answers or task actions."""
+    """What one step of a card is, for counting and grouping: answers or task actions."""
     path = str(step.get("path") or "")
-    return "approval" if _DECIDING.fullmatch(path) else "answer" if path.endswith("/answers") else "task"
+    return "answer" if ANSWERING.fullmatch(path) else "task"
 
 
 def batch_line(steps):
@@ -1020,7 +792,6 @@ def batch_line(steps):
     if set(counts) <= {"task"}:
         return f"{len(steps)} task actions, on one Confirm"
     names = {
-        "approval": ("approval decision", "approval decisions"),
         "answer": ("answer", "answers"),
         "task": ("task action", "task actions"),
     }
@@ -1031,24 +802,20 @@ AGE_BANDS = ((7, "under a week old"), (30, "1 to 4 weeks old"), (None, "over a m
 
 
 def groups(c, steps):
-    """Card lines that sum a bulk card up by what it does and how old the items are ("Decline 11 publish approvals,
-    over a month old"), with the reason when the whole group shares one, above the line for every item."""
+    """Card lines that sum a bulk card up by what it does and how old the items are ("Close 11 tasks, over a month
+    old"), with the reason when the whole group shares one, above the line for every item."""
     out = {}
     for s in steps:
         body, path, created = s.get("body") or {}, str(s.get("path") or ""), None
-        if m := _DECIDING.fullmatch(path):
-            row = H.approval(c, m.group(1)) or {}
-            verb = "Approve" if body.get("decision") == "approved" else "Decline"
-            noun, created = f"{row.get('kind') or ''} approval".strip(), row.get("created_at")
-        elif m := re.fullmatch(r"/api/v2/tasks/([^/]+)/answers", path):
-            verb, noun, created = "Answer", "bot question", (H.task(c, m.group(1)) or {}).get("created_at")
+        if m := ANSWERING.fullmatch(path):
+            send_back = body.get("value") == "no"
+            verb, noun = ("Send back" if send_back else "Answer"), "bot ask"
+            created = (H.task(c, m.group(1)) or {}).get("created_at")
         else:
-            m = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/(comments|links))?", path)
+            m = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/(comments|links|done|move))?", path)
             sub = m.group(2) if m else None
-            verb = (
-                {"comments": "Comment on", "links": "Link"}.get(sub)
-                or ("Close" if body.get("close") else None)
-                or {"done": "Mark done", "declined": "Decline"}.get(body.get("status"), "Change")
+            verb = {"comments": "Comment on", "links": "Link", "done": "Mark done"}.get(sub) or (
+                "Close" if sub == "move" and body.get("to") == "closed" else "Move" if sub == "move" else "Change"
             )
             noun, created = "task", (H.task(c, m.group(1)) or {}).get("created_at") if m else None
         days = days_old(created)
@@ -1137,34 +904,18 @@ def describe(c, method, path, body, viewer=None, admins=()):
             else ", a computer that does not take members' bots"
         )
 
-    def approval_line(aid):
-        row = H.approval(c, aid)
-        verb = {"approved": "Approve", "declined": "Decline"}.get(body.get("decision"), "Decide")
-        if not row:
-            return f"{verb} approval {aid}"
-        # What the person says yes to: the amount and target first, each field cleaned, capped and quoted on its own,
-        # so a long or crafted field (padding, "card; amount: 9") can't push a later one out or pose as it.
-        payload = row.get("payload") or {}
-        detail = "; ".join(f"{field_value(k, 40)}: “{field_value(payload[k])}”" for k in approval_fields(payload))
-        return (
-            f"{verb} the {row['kind']} approval requested by {who(row['requested_by_id'])}"
-            + (f" ({detail})" if detail else "")
-            + f", {age(row['created_at'])}"
-            + (f"; reason: {preview(body['note'], 120)}" if body.get("note") else "")
-        )
+    def answer_line(tid, rid):
+        from . import task_requirements as R
 
-    def answer_line(tid):
-        from . import question_tasks
-
+        requirement = R.get(c, rid) or {}
         card = H.task(c, tid) or {}
-        asked = ((question_tasks.fields(card)["questions"] or [{}])[0].get("question") if card else "") or card.get(
-            "title"
-        )
-        said = body.get("other") or "; ".join(str(v) for v in (body.get("answers") or {}).values())
+        said = body.get("value")
+        verb = "Send back" if said == "no" else "Answer"
         return (
-            f"Answer {who(card.get('requester_id'))}'s question “{preview(asked, 80)}”"
-            + (f", {age(card['created_at'])}" if card.get("created_at") else "")
-            + f": {preview(said, 120)}"
+            f"{verb} {who(requirement.get('added_by_id') or card.get('owner_id'))}'s ask "
+            f"“{preview(requirement.get('line') or card.get('title'), 80)}”"
+            + (f", {age(requirement['created_at'])}" if requirement.get("created_at") else "")
+            + f": {preview(body.get('note') if said == 'no' else said, 120)}"
         )
 
     diff = []
@@ -1177,8 +928,7 @@ def describe(c, method, path, body, viewer=None, admins=()):
                 diff.append({"field": k, "old": t.get(k), "new": v})
         return f"Change task “{t['title']}” ({len(diff)} field{'s' if len(diff) != 1 else ''})", diff
     rules = (
-        (r"/api/v2/approvals/([^/]+)", lambda g: approval_line(g[0])),
-        (r"/api/v2/tasks/([^/]+)/answers", lambda g: answer_line(g[0])),
+        (r"/api/v2/tasks/([^/]+)/asks/([^/]+)/answer", lambda g: answer_line(g[0], g[1])),
         (r"/api/v2/tasks", lambda g: f"Create task “{body.get('title', '')}” for {who(body.get('owner'))}"),
         (
             r"/api/v2/tasks/([^/]+)/(comments|links|labels|run-now)",
@@ -1462,9 +1212,9 @@ def unnamed(c, method, path, bot):
 # Body fields a proposal may never carry: each has its own explicit confirm that a card's click does not replace.
 PERSON_ONLY_FIELDS = ("replace_lost_key",)
 
-# One card for a group of Needs-you actions ("close these 20 tasks", "decline the old publish batches"):
-# `{"actions": [{method, path, body}, ...]}`, each a task change, comment or link, an approval decision or an answer to
-# a bot's question, never anything else. One click runs them in order, each as the person through its own route, and a
+# One card for a group of Needs-you actions ("close these 20 tasks", "send back the old drafts"):
+# `{"actions": [{method, path, body}, ...]}`, each a task change, comment or link, or an answer to a bot's ask, never
+# anything else. One click runs them in order, each as the person through its own route, and a
 # step that fails does not stop the rest.
 BATCH_PATH = "/api/v2/assistant/batch"
 MAX_BATCH = 100
@@ -1508,20 +1258,15 @@ def batch_steps(body):
         if not isinstance(step, dict) or set(step) - {"method", "path", "body"}:
             raise Problem("operation", "Each action is {method, path, body}", 422)
         method, path, sent = str(step.get("method") or "POST"), normalize_path(step.get("path")), step.get("body") or {}
-        deciding = (
-            isinstance(sent, dict)
-            and bool(path and _DECIDING.fullmatch(path))
-            and sent.get("decision") in ("approved", "declined")
-        )
         if (
             not isinstance(sent, dict)
-            or not (instructed_route(method, path, sent) or (method == "POST" and deciding))
+            or not instructed_route(method, path, sent)
             or any(f in sent for f in PERSON_ONLY_FIELDS)
         ):
             raise Problem(
                 "operation",
-                "A bulk card holds only task changes, comments and links, approval decisions, "
-                "answers to bots' questions, automation changes (PATCH /api/v2/automations/<id>) and org rules "
+                "A bulk card holds only task changes, comments and links, "
+                "answers to bots' asks, automation changes (PATCH /api/v2/automations/<id>) and org rules "
                 "(POST /api/v2/rules, /api/v2/rules/<id>/retire); propose anything else on its own",
                 422,
             )
@@ -1668,8 +1413,6 @@ def create_proposal(
         for s in body["actions"] if path == BATCH_PATH else ():
             refuse_unrunnable(routes, s["method"], s["path"], s["body"])
     require_addressed(c, who, path, body)
-    if who.via == "assistant" and not who.confirmed and approvals_in(path, body):
-        require_named_approval(c, who, asked)
     same = c.execute(
         "SELECT * FROM assistant_actions WHERE owner=? AND status='pending' AND method=? AND path=? "
         "AND body=? AND proposer=?",
@@ -2351,148 +2094,6 @@ def install(app, store, auth, mutate, onboarding):
             raise Problem("forbidden", "Only the owner turns the " + settings.assistant_name + " on", 403)
         return mutate(request, body, lambda c: onboarding.turn_on_assistant(c, who))
 
-    @app.get("/api/v2/assistant/settings")
-    def my_settings(request: Request):
-        who = person(request)
-        with store.read() as c:
-            return {**decides(c, who.actor), "where": f"Settings > {settings.assistant_name}"}
-
-    @app.post("/api/v2/assistant/settings")
-    def set_my_settings(request: Request, body: M.AssistantSettings):
-        """Only the person, signed in to the app: never their Assistant, a bot, or a token turning it on for them."""
-        who = own(request)
-        if body.decides_approvals and who.via_token:
-            raise Problem(
-                "forbidden",
-                "Turn this on in " + settings.app_name + " itself, in Settings > " + settings.assistant_name,
-                403,
-            )
-
-        def work(c):
-            before = decides(c, who.actor)["decides_approvals"]
-            c.execute(
-                "INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) ON CONFLICT(actor,key) "
-                "DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-                (who.actor, DECIDES_KEY, json.dumps(body.decides_approvals), H.now()),
-            )
-            if before != body.decides_approvals:
-                H.event(c, who.actor, "assistant.decides_approvals", who.actor, {"on": body.decides_approvals})
-            return {**decides(c, who.actor), "where": f"Settings > {settings.assistant_name}"}
-
-        return mutate(request, body, work)
-
-    @app.get("/api/v2/assistant/decisions")
-    def my_decisions(request: Request, days: int = 30):
-        """The approvals this person's Assistant decided for them, newest first, each with their words and whether it
-        can still be undone (nothing has acted on it yet)."""
-        who = own(request)
-        since = H.shift(H.now(), days=-max(1, min(days, 90)))
-        with store.read() as c:
-            rows = c.execute(
-                "SELECT a.id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.decided_by_id=? "
-                "AND a.decided_via='assistant' AND m.recipient_id=? AND a.decided_at>=? "
-                "ORDER BY a.decided_at DESC LIMIT 200",
-                (who.actor, who.actor, since),
-            ).fetchall()
-            out = []
-            for r in rows:
-                row = H.approval(c, r["id"])
-                what, _ = describe(c, "POST", "/api/v2/approvals/" + row["id"], {"decision": row["decision"]})
-                out.append(
-                    {
-                        "id": row["id"],
-                        "kind": row["kind"],
-                        "decision": row["decision"],
-                        "what": what.split(" ", 1)[-1],  # "the publish approval requested by ..."
-                        "decided_at": row["decided_at"],
-                        "decided_for": row.get("decided_for"),
-                        "consumed_at": row["consumed_at"],
-                        "can_undo": not row["consumed_at"],
-                    }
-                )
-            return {"decisions": out, "assistant": settings.assistant_name}
-
-    @app.post("/api/v2/assistant/read-back")
-    def read_back(request: Request, body: M.AssistantReadBack):
-        """The Assistant's list of what it is about to approve for the person, posted in their chat as its reply. The
-        server writes all of it from the approvals themselves, so what the person says yes to is what runs, and records
-        the ids: only those may then be approved, on their yes (`approval_words`). `note` is the Assistant's own words
-        shown above the list (the real decision it found, with its link); the yes still approves only the listed ids."""
-        who = person(request)
-        if who.via != "assistant" or who.confirmed or not who.attempt_id:
-            raise Problem(
-                "forbidden",
-                "Only the " + settings.assistant_name + ", in the person's own chat, reads back approvals",
-                403,
-            )
-        ids = list(dict.fromkeys(body.approvals))
-
-        def work(c):
-            state = decides(c, who.actor)
-            if not state["active"]:
-                raise Problem("approve_setting_off", approve_hint(settings, state), 403)
-            room = chat_room(c, settings, who, create=False)
-            if not room or "bot:" + room_bot(settings, room) != who.task_actor:
-                raise Problem("not_found", "No Assistant chat", 404)
-            bot = room_bot(settings, room)
-            lines = []
-            for aid in ids:
-                row = H.approval(c, aid)
-                if not row or (H.message(c, row.get("message_id")) or {}).get("recipient_id") != who.actor:
-                    raise Problem("forbidden", "That approval is not addressed to you", 403)
-                if row["decision"]:
-                    raise Problem("conflict", f"Approval {aid} is already decided", 409)
-                if row["requested_by_id"] == "bot:" + bot:
-                    raise Problem(
-                        "own_request",
-                        "You asked for this approval yourself, so it stays the person's "
-                        "click: propose it on a card (`hub assistant propose`)",
-                        403,
-                    )
-                refuse_own_click(row)
-                if cut := too_long(row.get("payload") or {}):
-                    raise Problem(
-                        "approve_too_long",
-                        f"Approval {aid} has more in {', '.join(field_value(k, 40) for k in cut)} "
-                        "than the read-back can show in full, so it stays the person's click: leave it out",
-                        409,
-                    )
-                what, _ = describe(c, "POST", "/api/v2/approvals/" + aid, {"decision": "approved"})
-                lines.append("- " + plain_line(what))
-            n = len(ids)
-            text = (
-                f"I'll approve {'this' if n == 1 else f'these {n}'} for you:\n"
-                + "\n".join(lines)
-                + "\n\nReply yes to approve exactly "
-                + ("this" if n == 1 else "these")
-                + "; any other reply approves nothing."
-            )
-            # The note is the Assistant's own words, one plain line above the list; the list and the yes line the server
-            # writes stay below it and last, so the note can never be read as part of what the yes approves.
-            if note := " ".join(body.note.split()):
-                text = note + "\n\n" + text
-            # The reply to the person's message: the turn's closing text is not posted after it (backend/execution.py),
-            # so their next message answers this list and nothing else.
-            turn = c.execute(
-                "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (who.attempt_id,)
-            ).fetchone()
-            msg = H._write_message(
-                c,
-                "bot:" + bot,
-                who.actor,
-                text,
-                room,
-                "say",
-                {"assistant": True, "read_back": True},
-                turn["message_id"] if turn else None,
-                None,
-                delivered_at=H.now(),
-            )
-            H.event(c, who.actor, READ_BACK, msg["id"], {"approves": ids})
-            return {"message_id": msg["id"], "approves": ids, "text": text}
-
-        return mutate(request, body, work)
-
     @app.post("/api/v2/assistant/actions")
     def propose(request: Request, body: M.AssistantAction):
         caller = request.state.identity
@@ -2546,11 +2147,6 @@ def install(app, store, auth, mutate, onboarding):
                     422,
                 )
             if background:
-                # Never an approve, on a background card: the person decides approvals in their own chat or in Tico.
-                if _DECIDING.fullmatch(normalize_path(body.path)) or approvals_in(body.path, body.body):
-                    raise Problem(
-                        "forbidden", "A background card never approves: the person decides it themselves", 403
-                    )
                 sent = c.execute(
                     "SELECT count(*) FROM assistant_actions WHERE owner=? AND proposer='assistant' AND created_at>=?",
                     (who.actor, H.shift(H.now(), seconds=-86400)),
