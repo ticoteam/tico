@@ -50,8 +50,6 @@ function botTaskRowHTML(t: TaskAny): string {
   const stage = t.status === 'open' ? botTaskStage(t) : '';
   return taskRowHTML(t, {after: stage ? `<span class="muted">${esc(stage)}</span>` : ''});
 }
-// The rows other pages still draw through the old name (person-page.ts, assistant-page.ts) until they move to taskRowHTML.
-function v2TaskRow(t: unknown, ..._was: unknown[]): string { return botTaskRowHTML(t as TaskAny); }
 // The task a Needs-you item is about: an ask's or a task's own, a stuck stretch's first.
 const botNeedTaskId = (it: NeedsEntry) => String(it.task_id || it.task_ids?.[0] || it.task?.id || '');
 // Done recently needs only what changed since the window opened. A failed task load is retried, never shown as an

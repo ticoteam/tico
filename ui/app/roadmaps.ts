@@ -28,6 +28,8 @@ interface RoadmapRankingState {
   previous: number[];
   next: number | null | undefined;
   seq: number;
+  menuAnchor?: HTMLElement | null;
+  menuField?: string;
 }
 interface RoadmapRankTask {
   id: string;

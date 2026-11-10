@@ -27,7 +27,7 @@ declare const window: Window & typeof globalThis & {
   __pwned?: number;
   __copied: string[]; // set by the test before it is read
 };
-interface Approval {id: string; state: string; to?: string; to_name?: string; note?: string}
+interface Approval {id: string; task_id?: string; state: string; to?: string; to_name?: string; note?: string}
 interface Edition {
   id: string; status: string; audience_id: string; title: string | null; audience_name: string;
   author: {id: string; name: string; kind: string};
