@@ -31,9 +31,10 @@ Run `python3 software/pipeline.py status projects/<slug> --task <project task>` 
   bot's verdict counts for its stage; a person's verdict does not.
 - **Mover is `self`**: work on the stage. Touch `.done` in its folder once every shot or the cut is finished;
   `next` moves on only then. The project's spend is the sum of `cost_usd` over the self-moved stages, and it may not
-  pass `budget_usd` plus any raise the owner OK'd. Over it, `next` prints the ask for the owner's OK. When the owner
-  OKs it, run `python3 software/pipeline.py raise projects/<slug> --usd <amount> --ok <requirement id>`
-  once. It records the raise in `projects/<slug>/budget.json`.
+  pass `budget_usd` plus any raise the owner OK'd. Over it, `next` prints the ask for the owner's OK of that project and
+  amount. When the owner OKs it, run the `raise` line `next` printed, with the requirement id the ask printed. Tico
+  takes the OK once, only for that project and amount; then the raise is recorded in `projects/<slug>/budget.json`.
+  If Tico refuses it, the budget stays as it is: never raise it any other way.
 
 ## Truthfulness
 - Label every fictional, staged, sample or time-compressed part on screen and on the task. A storyboard is never shown
@@ -44,8 +45,8 @@ Run `python3 software/pipeline.py status projects/<slug> --task <project task>` 
 - Exact UI, prices and logos are added in post from the source file, never generated.
 
 ## Files
-- Every asset is a Tico file. Publish it with `hub file publish <path>` before you ask for its review, and attach the
-  exact version you asked about with `--review`.
+- Every asset is a Tico file. Publish it with `hub file publish <path>` before you ask for its review, and show the
+  exact version you ask about (`--show file:<FILE@N>`).
 - Every made file gets a sidecar `<file>.json` beside it: `{"stage", "kind", "prompt", "model", "cost_usd", "parents",
   "tool", "at"}`. `parents` lists the files it was made from as `path@version`. Write the real `cost_usd`, and leave the
   field out when the cost is not known.
