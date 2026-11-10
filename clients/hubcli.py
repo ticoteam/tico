@@ -2279,9 +2279,6 @@ def parser():
     s.add_argument("--poster", help="a PNG or JPEG preview")
     s.add_argument("--note", help="short note on this version (at most 500 characters)")
     s.set_defaults(fn="task attach")
-    s = task.add_parser("answers", help="list the task's structured answers, oldest first")
-    s.add_argument("id")
-    s.set_defaults(fn="task answers")
     s = task.add_parser("context", help="readable page and meeting references for a task")
     s.add_argument("id")
     s.set_defaults(fn="task context")
@@ -5225,6 +5222,7 @@ REMOVED = [
     (("answer",), ANSWER_INSTEAD),
     (("task", "question"), ASK_INSTEAD),
     (("task", "ask-resolve"), ANSWER_INSTEAD),
+    (("task", "answers"), "the answers are on the task: hub task show <id>, under To leave"),
     (("approval", "request"), ASK_INSTEAD),
     (("approval",), ANSWER_INSTEAD),
     (("approvals",), ANSWER_INSTEAD),

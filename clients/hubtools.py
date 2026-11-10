@@ -1646,11 +1646,6 @@ def task_comment(api, args):
     return {**result, "visuals_local": local} if local and isinstance(result, dict) else result
 
 
-@tool("hub_task_answers", "List all structured answers on a task, oldest first.", {"id": TASK_ID}, required=("id",))
-def task_answers(api, args):
-    return api.get(f"tasks/{args['id']}/answers")
-
-
 COMMENT_ID = _s("The comment's id (`id` in the task's `comments`)")
 
 
@@ -13270,6 +13265,7 @@ REMOVED_TOOLS = {
     "hub_question_answer": ANSWER_GONE,
     "hub_answer": ANSWER_GONE,
     "hub_task_ask_resolve": ANSWER_GONE,
+    "hub_task_answers": "the answers are on the task: hub_task_show, under To leave",
     **{f"hub_approval_{verb}": ANSWER_GONE for verb in ("approve", "decline", "read_back", "show", "list")},
     "hub_approval_request": ASK_GONE,
     **{name: WAIT_GONE for name in ("hub_task_wait", "hub_task_check_back", "hub_task_later", "hub_task_defer")},

@@ -438,6 +438,7 @@ def test_the_old_engines_tools_are_gone_and_a_call_by_one_says_what_to_use():
         "hub_approval_approve",
         "hub_pipeline_manager",
         "hub_requirements",
+        "hub_task_answers",
     ):
         assert name not in hubtools.BY_NAME
         reply = hubtools.Protocol(Recorder(), kind="bot").handle(

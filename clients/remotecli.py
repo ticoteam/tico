@@ -877,8 +877,6 @@ def run(args, who=None):
             links = s3links.apply(client, body, ("text",))
             result = s3links.annotate(post(f"tasks/{args.id}/comments", body, delegate=asked), links)
             return {**result, "visuals_local": local} if local and isinstance(result, dict) else result
-        if sub == "answers":
-            return client.get(f"tasks/{args.id}/answers")
         if sub == "comment-edit":
             body = {"text": args.text}
             if getattr(args, "approval_id", None):

@@ -1556,6 +1556,7 @@ def test_hub_notice_list_is_not_the_renamed_notice_send():
         (["answer", "m1", "Yes"], "hub task answer"),
         (["task", "question", "Which plan?", "--on", "ana"], "hub task ask"),
         (["task", "ask-resolve", "t1", "c1"], "Needs you"),
+        (["task", "answers", "t1"], "hub task show <id>, under To leave"),
         (["approval", "approve", "ap1"], "hub task answer"),
         (["approval", "request", "--kind", "send"], "hub task ask"),
         (["task", "wait", "t1", "--on", "task:t2"], "hub task file"),
