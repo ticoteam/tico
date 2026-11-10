@@ -45,6 +45,7 @@ FAILED_KEY = "onboarding.company_import_failed"
 # The built-ins the chart shows in a team rather than in the Built-in group: the Finance Owner is the Bookkeeper, in
 # Corporate. Every other built-in stays in the Built-in group whatever team a file names.
 IN_TEAM_BUILT_INS = ("bookkeeper",)
+SOFTWARE_DEPARTMENTS = ("product", "engineering")  # the default chart's seats a company that makes no software skips
 
 
 def plan(onboarding, c, who, text):
@@ -766,13 +767,20 @@ def default_chart(onboarding, c, home):
     """The chart a new company starts with when setup picked none: the chart formula's own default
     (backend/company_file/chart_formula.py: no segment or bet picked, the default channels), which is the chart the
     site's company file gives a company that picked nothing, in plan()'s `seats` shape. A seat whose template this
-    install lacks is left out, and a seat under it reports to the owner. The Finance Owner's seat is filled by the
-    Bookkeeper, as on import."""
+    install lacks is left out, and a seat under it reports to the owner. A company that said software is not its
+    product gets no Product or Engineering seats, as the chart builder does (company_file/actions.py `seed`). The
+    Finance Owner's seat is filled by the Bookkeeper, as on import."""
     from .company_file import chart_formula as F
 
     cards = {card["template"]: card for card in O.read_cards(onboarding.settings)}
-    display = O.display_names(onboarding.settings, O.load(c))
-    rows = [row for row in F.build({})["employees"] if row["template"] in cards]
+    record = O.load(c)
+    display = O.display_names(onboarding.settings, record)
+    no_software = record["answers"].get("software_product") == "no"
+    rows = [
+        row
+        for row in F.build({})["employees"]
+        if row["template"] in cards and not (no_software and row["department"] in SOFTWARE_DEPARTMENTS)
+    ]
     keys = {row["id"] for row in rows}
     seats = {}
     for row in rows:

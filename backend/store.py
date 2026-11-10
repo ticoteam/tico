@@ -1188,6 +1188,10 @@ def _close_idle(conns):
 class Store:
     def __init__(self, settings, recorder=None):
         self.settings = settings
+        # Whether this start made the database file: it then has nothing from an older release, so initialize's cutover
+        # sets up the built-ins and says nothing of moving them (backend/redesign_migration.py `_finish`).
+        path = getattr(settings, "db_path", None)
+        self.new_file = path is not None and (not path.exists() or not path.stat().st_size)
         # The server's file reader, set by the app once it has one (backend/media.py); None until then.
         self.blobs = None
         # The flight recorder (backend/flight.py) times every statement and write transaction when one is given.
@@ -2407,7 +2411,7 @@ class Store:
         c.close()
         # Once per install: routines and wake rules become automations (backend/redesign_migration.py). Each object
         # in its own write, so a restart part way goes on where it stopped.
-        redesign_migration.cutover(self)
+        redesign_migration.cutover(self, new=self.new_file)
 
     def close(self):
         """Closes the store's idle read connections now, as the finalizer does once the store is freed. A connection

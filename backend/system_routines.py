@@ -344,6 +344,13 @@ def _pages_watched(c, settings):
     return _row_exists(c, "SELECT 1 FROM entity_watches WHERE active=1 LIMIT 1")
 
 
+def _release_manager(c, settings):
+    # The daily release asks the Release Manager (release_schedule_routes.release_manager); with none, it has no one to ask.
+    from . import release_schedule_routes
+
+    return release_schedule_routes.release_manager(c) is not None
+
+
 def _strategy_bot(c, settings):
     from . import strategy_bot
 
@@ -417,8 +424,8 @@ JOBS = [
     Job(
         "task_manager_report",
         "Task Manager report",
-        "Lists each department's quiet tasks, overdue asks, review tickets without a pull request, merged work that did "
-        "not move and held bots in plain code, and opens one task for the Task Manager per department that has something.",
+        "Lists each department's paused tasks, held bots, runs waiting on an owner's review and duplicate tasks in plain "
+        "code, and opens one task for the Task Manager per department that has something.",
         CHECKS,
         "Hourly on weekdays, 08:00 to 18:00",
         3600,
@@ -563,6 +570,7 @@ JOBS = [
         "At the release hours",
         10,
         then=("ask_release",),
+        applies=_release_manager,
     ),
     Job(
         "hosted_update",
