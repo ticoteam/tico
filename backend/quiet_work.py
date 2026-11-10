@@ -446,7 +446,7 @@ def defer(conn, actor, task_id, after=None, at=None, next_run=False, handled=Fal
     closed, `at` a time, or with the `next_run`. `handled` says the run is done with it for now (it stays delivered).
     The owner bot or a person. Returns the task."""
     H = _H()
-    from . import task_snooze
+    from .task_moves_routes import parse_until
 
     H._writer(conn, actor, task_id=task_id)
     row = H.task(conn, task_id)
@@ -493,7 +493,7 @@ def defer(conn, actor, task_id, after=None, at=None, next_run=False, handled=Fal
             H.refuse(conn, actor, "defer", f"that task is already {other['status']}: work this one now")
         cond.update(kind="task", task=other["id"])
     else:
-        stamp = task_snooze.parse_until(at)
+        stamp = parse_until(at)
         if not stamp:
             H.refuse(conn, actor, "date", "defer until an ISO-8601 date (2026-11-02) or date-time")
         if stamp <= H.now():
