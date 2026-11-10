@@ -284,12 +284,17 @@ def _live_tasks(c, bot, memo):
     from .task_privacy import attempt_tasks
 
     try:
-        rows = c.execute("SELECT id FROM attempts WHERE bot_id=? AND state IN ('leased','running')", (bot,)).fetchall()
+        rows = c.execute(
+            "SELECT id, task_id FROM attempts WHERE bot_id=? AND state IN ('leased','running')", (bot,)
+        ).fetchall()
     except sqlite3.OperationalError as exc:
         if 'no such table' not in str(exc):
             raise  # a fault must not release a checkout under its running turn
         return frozenset()  # a local hub has no attempts table
-    return frozenset(tid for row in rows for tid in attempt_tasks(c, row[0], memo))
+    # A turn's task is its attempt's task_id; the messages it carried name the rest.
+    return frozenset(
+        {row[1] for row in rows if row[1]} | {tid for row in rows for tid in attempt_tasks(c, row[0], memo)}
+    )
 
 
 def live_turn_cache(c, computer):
