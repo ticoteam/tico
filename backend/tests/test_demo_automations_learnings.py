@@ -192,11 +192,13 @@ def _every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_future
         for row in schedules:
             trigger = row["trigger"]
             if row["id"] == sweep:
-                # Created at boot after the demo window (onboarding.ensure_builtin_routines), on the real clock, so it
-                # has no run in the window. It is next at its first time after its creation.
+                # Made when the sample company is completed (onboarding.complete_company), on the build's clock and
+                # not by a demo section, so it has no seeded run. It is next at its first time after both its creation
+                # and the build's now: never in the past.
                 made = at_time(row["created_at"])
-                assert at_time(row["next_run"]) > made, row["name"]
-                assert at_time(row["next_run"]) == next_due(trigger["cron"], made, trigger["tz"]), row["name"]
+                after = max(made, NOW)
+                assert at_time(row["next_run"]) > after, row["name"]
+                assert at_time(row["next_run"]) == next_due(trigger["cron"], after, trigger["tz"]), row["name"]
                 continue
             # Next is the schedule's first time after the build's now.
             assert at_time(row["next_run"]) > NOW, row["name"]
