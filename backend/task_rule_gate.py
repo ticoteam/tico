@@ -8,7 +8,8 @@ applied inside it.
 - Hold: nothing is written but the hold; the answer names the rule. Send anyway is the hold's own route
   (`org_rule_check.send`): only whoever may send a hold today, and it replays the same write (`TaskRules.replay`).
 - An ask a rule covers (docs/pipelines-v3.md, "How a rule stops the next one"): a bot's ask is refused with the rule's
-  words, under `COVERS`, an engine-style refusal that never counts toward quarantine. With the check down the ask goes.
+  words, under `COVERS`, an engine-style refusal that never counts toward quarantine. With the judge out the ask goes;
+  a cause here (`LOCAL`: every call slot busy, the day's calls spent, too long to check) refuses it to try again.
 - The check cannot run (an error here, not the judge being out): nothing is written (fail closed).
 
 The hold's text is what the write says. A hand-off also says the task to its new owner, so the judge reads the task's
@@ -67,6 +68,58 @@ def covering(verdict):
         return []
     broken = [r for r in verdict.get("rules") or [] if r.get("id") in (verdict.get("broken") or [])]
     return sorted(broken, key=lambda r: -org_rule_check.STRICT.get(r.get("if_broken") or "block", 2))
+
+
+# A check that could not run for a cause here, not the judge being out: nothing about the judge's health, so it never
+# fails open (docs/pipelines-v3.md's "if it can't be reached, the ask goes" is the judge being out).
+# - `busy`: every call slot is in use. Nothing is written; the writer tries again (503, retryable).
+# - `day_cap`: the day's rule-check calls are spent; `too_large`: the text is past what one call can read. These take
+#   the hold path a too-long output already takes: held when a Block or Escalate rule matches, delivered with a line
+#   saying it could not be checked when every rule is Warn.
+# A bot's ask (or OK ask) with any of them is refused, nothing written, never counted toward quarantine: an ask is
+# never let through unchecked by a cap the bot itself can spend.
+LOCAL = ("busy", "day_cap", "too_large")
+NOT_ASKED_LOCAL = {
+    "busy": "Not asked yet: the rule check is busy. Try again in a minute.",
+    "day_cap": "Not asked: the rule check has no calls left today, so this ask cannot be checked. Do the work without "
+    "asking, or ask tomorrow.",
+    "too_large": "Not asked: this ask is too long to check against the company's rules. Shorten it and ask again.",
+}
+BUSY = "The rule check is busy, so nothing was written. Try again in a minute."
+
+
+def local_cause(verdict):
+    """Why a verdict could not be judged for a cause here (`LOCAL`), or None. A structured verdict reads its judged
+    part."""
+    if not verdict or "refused" in verdict or "applied" in verdict:
+        return None
+    if verdict.get("check") == "structured":
+        return local_cause(verdict.get("judged"))
+    if verdict.get("local"):
+        return verdict["local"]
+    if verdict.get("outcome") == "too_large":
+        return "too_large"
+    if verdict.get("outcome") == "unchecked" and verdict.get("error") in LOCAL:
+        return verdict["error"]
+    return None
+
+
+def held_locally(verdict):
+    """A verdict whose day's calls were spent, on the hold path: every rule it meets broken as `too_large` is, the
+    cause kept (`local`), so `org_rule_check.apply` holds it or warns that it went unchecked."""
+    if not verdict or "refused" in verdict or "applied" in verdict:
+        return verdict
+    if verdict.get("check") == "structured":
+        judged = verdict.get("judged")
+        return {**verdict, "judged": held_locally(judged)} if judged else verdict
+    if verdict.get("outcome") == "unchecked" and verdict.get("error") == "day_cap":
+        return {
+            **verdict,
+            "outcome": "too_large",
+            "local": "day_cap",
+            "broken": [r["id"] for r in verdict.get("rules") or []],
+        }
+    return verdict
 
 
 def not_asked(rule):
@@ -130,13 +183,15 @@ class TaskRules:
             text = said_text(row, said, hands_over)
             if not text:
                 return None
-            return self.rule_check(
-                who,
-                operation,
-                text,
-                lambda c: self.audience(c, who, row, to),
-                obj=f"{row['id']}@{row['version']}",
-                context={"task": row["title"]},
+            return held_locally(
+                self.rule_check(
+                    who,
+                    operation,
+                    text,
+                    lambda c: self.audience(c, who, row, to),
+                    obj=f"{row['id']}@{row['version']}",
+                    context={"task": row["title"]},
+                )
             )
         except Exception:  # fail closed: the write is refused, never sent unchecked
             LOG.exception("Task rule check failed")
@@ -148,7 +203,13 @@ class TaskRules:
         their other writes."""
         if not verdict:
             return None
-        if ask and H.is_bot(str(verdict.get("author") or "")):
+        cause = local_cause(verdict)
+        bot_ask = ask and H.is_bot(str(verdict.get("author") or ""))
+        if bot_ask and cause:
+            raise Problem("task_rule_unchecked", NOT_ASKED_LOCAL[cause], 503, retryable=True)
+        if cause == "busy":
+            raise Problem("rule_check_busy", BUSY, 503, retryable=True)
+        if bot_ask:
             rules = covering(verdict)
             if rules:
                 H.refuse(c, who.actor, COVERS, not_asked(rules[0]))

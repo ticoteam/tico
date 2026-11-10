@@ -4,6 +4,8 @@ reviewer only, and a check that cannot run writes nothing."""
 
 import json
 
+import pytest
+
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post
 from backend.tests.test_org_rule_check import (  # noqa: F401 - fixtures
@@ -175,6 +177,109 @@ def test_the_judge_being_out_lets_the_write_go_with_an_unchecked_event(ruled):
     got = done_by_ops(api, task, "Our favorite color is red.")
     assert "held" not in got and row(api, task["id"])["status"] == "done"
     assert reasons(api) == ["error"]
+
+
+def problem(got):
+    """(code, retryable) of an error answer, whichever shape it is in."""
+    error = got["error"]
+    if isinstance(error, dict):
+        return error["code"], bool(error.get("retryable"))
+    return error, bool(got.get("retryable"))
+
+
+def no_calls_left(monkeypatch):
+    from backend import org_rule_check as K
+
+    monkeypatch.setattr(K.B, "daily_cap", lambda *a, **k: 0)
+
+
+def all_slots_busy(monkeypatch):
+    from backend import org_rule_check as K
+
+    monkeypatch.setattr(K, "_ask", lambda *a, **k: (None, "busy"))
+
+
+def bots_ask(api, task, line="May I say our favorite color is red?", expected=200):
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/asks",
+        json={"to": "ana", "line": line, "version": task["version"]},
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == expected, r.text
+    return r.json()
+
+
+def asks_on(api, task):
+    return sql(
+        api, "SELECT id FROM requirements WHERE visit_id IN (SELECT id FROM visits WHERE task_id=?)", (task["id"],)
+    )
+
+
+@pytest.mark.parametrize("cause", ["day_cap", "busy", "too_large"])
+def test_a_bots_ask_the_check_cannot_judge_here_is_refused_to_try_again(ruled, monkeypatch, cause):
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    before = asks_on(api, task)
+    if cause == "day_cap":
+        no_calls_left(monkeypatch)
+    elif cause == "busy":
+        all_slots_busy(monkeypatch)
+    else:
+        from clients import judge as J
+
+        monkeypatch.setattr(J, "MAX_STATE_CHARS", 200)
+    got = bots_ask(api, task, "Which launch day suits you, Monday or Tuesday or later this month?", 503)
+    assert problem(got) == ("task_rule_unchecked", True), got
+    assert asks_on(api, task) == before and row(api, task["id"])["version"] == task["version"]
+    assert sql(api, "SELECT state FROM bots WHERE slug='ops'")[0]["state"] == "active"
+    assert judge.calls == []
+
+
+def test_a_bot_spending_the_days_calls_cannot_then_ask_unchecked(ruled, monkeypatch):
+    api, judge = ruled
+    color_rule(api)
+    from backend import org_rule_check as K
+
+    monkeypatch.setattr(K.B, "daily_cap", lambda settings, who: 1)
+    task = task_for_ops(api)
+    bots_ask(api, task, "Which launch day suits you?")  # the day's one call
+    assert len(judge.calls) == 1
+    task = task_for_ops(api, "Write the second note")
+    bots_ask(api, task, "May I say our favorite color is red?", 503)
+    assert asks_on(api, task) == [] and len(judge.calls) == 1
+
+
+def test_a_done_note_with_the_days_calls_spent_takes_the_hold_path(ruled, monkeypatch):
+    api, judge = ruled
+    color_rule(api)
+    no_calls_left(monkeypatch)
+    task = task_for_ops(api)
+    got = done_by_ops(api, task, "All shipped.")
+    assert got["held"] and "could not be checked today" in got["held"]["text"]
+    assert row(api, task["id"])["status"] != "done"
+
+
+def test_a_done_note_with_the_days_calls_spent_under_warn_rules_goes_with_its_line(ruled, monkeypatch):
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    no_calls_left(monkeypatch)
+    task = task_for_ops(api)
+    got = done_by_ops(api, task, "All shipped.")
+    assert "held" not in got and row(api, task["id"])["status"] == "done"
+    said = json.dumps(sql(api, "SELECT notes FROM answers ORDER BY rowid DESC LIMIT 1"))
+    assert "could not be checked against the rule" in said
+    assert reasons(api) == ["day_cap"]
+
+
+def test_a_done_note_with_every_call_slot_busy_writes_nothing(ruled, monkeypatch):
+    api, _ = ruled
+    color_rule(api)
+    all_slots_busy(monkeypatch)
+    task = task_for_ops(api)
+    got = done_by_ops(api, task, "All shipped.", 503)
+    assert problem(got) == ("rule_check_busy", True), got
+    assert row(api, task["id"])["status"] != "done"
 
 
 def test_a_held_hand_off_of_a_private_task_keeps_its_text_off_the_hold(ruled):

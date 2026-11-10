@@ -1323,20 +1323,21 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     mode = strictest["if_broken"]
     if too_large and mode == "warn":
         # Every rule it meets is Warn: delivered, its line saying it went unchecked. A Block or Escalate rule holds it.
+        # `local` is a cause here the caller put on this path (the day's calls spent: backend/task_rule_gate.py).
+        cause = verdict.get("local") or "too_large"
         H.event(
             c,
             author,
             "rules.unchecked",
             operation,
-            {"operation": operation, "reason": "too_large", "rules": [r["id"] for r in broken]},
+            {"operation": operation, "reason": cause, "rules": [r["id"] for r in broken]},
         )
-        line = (
-            f"Warning: {_author_name(c, author)}'s message was too long to check against the rule "
-            f"'{strictest['text']}'."
-        )
+        could_not = "was too long to check" if cause == "too_large" else "could not be checked"
+        line = f"Warning: {_author_name(c, author)}'s message {could_not} against the rule '{strictest['text']}'."
         told = (
-            f"Your {OPERATIONS.get(operation, operation)} was delivered with a warning: it is too long to check "
-            f"against the rule '{strictest['text']}'."
+            f"Your {OPERATIONS.get(operation, operation)} was delivered with a warning: it "
+            + ("is too long to check" if cause == "too_large" else "could not be checked today")
+            + f" against the rule '{strictest['text']}'."
         )
         if tell:
             _tell_bot(c, author, told)
@@ -1488,7 +1489,10 @@ def _write_hold(
         why = f"the Directory rules could not be checked ({error}), so it is held until a person checks it"
         quoted = ""
     else:
-        why = "it is too long to check against the rule" if too_large else "it broke the rule"
+        why = "it broke the rule"
+        if too_large:
+            local = verdict.get("local")
+            why = f"it {'could not be checked today' if local else 'is too long to check'} against the rule"
         quoted = f" '{strictest['text']}'"
     told = (
         f"Your {OPERATIONS.get(operation, operation)} was held: {why}{quoted}. "
@@ -1522,7 +1526,10 @@ def warn_line(gate):
 
 
 # A warning line as apply writes it (`warn`), alone in its paragraph at the head of a text warned_note built.
-WARN_LINE = re.compile(r"Warning: [^\n]*'s message (?:may break|was too long to check against) the rule '[^\n]*'\.")
+WARN_LINE = re.compile(
+    r"Warning: [^\n]*'s message (?:may break|was too long to check against|could not be checked against) "
+    r"the rule '[^\n]*'\."
+)
 
 
 def unwarned(text):
