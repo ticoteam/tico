@@ -318,6 +318,8 @@ HUB_IDS = {
     "role": "AROAhub-hotmic",
     "profile": "AIPAhub-hotmic",
     "param": "/hub/hotmic/env",
+    "volumes": ["vol-root"],  # the launch's own root volume and primary network interface (as test_destroy_never_* has)
+    "enis": ["eni-root"],
 }
 
 
@@ -2373,3 +2375,105 @@ def test_the_backup_bucket_is_proved_again_right_before_each_of_its_writes(write
             s3, iam, domain=DOMAIN, region="us-west-2", account_id=ACCOUNT, name="hotmic", names=HUB_ID, ids={}
         )
     assert not any(s3.called(w) for w in BACKUP_WRITES)
+
+
+def test_a_create_intent_without_a_token_matches_only_its_own_name_and_type():
+    # Codex review 5, case 8: an intent journalled before a create (its answer lost) proved any resource with the
+    # install's tags, whatever its name: ingress was authorised on a tagged foreign security group of another name.
+    p = hub_plan(domain=DOMAIN, region="us-east-1")
+    ec2 = fakes.FakeEC2()
+    ec2.sgs = [{"GroupId": "sg-prod", "GroupName": "production-web", "Tags": HUB_OURS}]
+    ids = {"intents": {"sg": {"name": "hub-hotmic"}}}
+    with pytest.raises(MissingInput, match="sg-prod"):
+        strict_dep(p, ec2, IAM(), fakes.FakeSSM(), ids=ids).ensure_sg()
+    assert not ec2.called("authorize_security_group_ingress") and "sg" not in ids
+    # Its own name and type: the create that landed.
+    ec2.sgs[0]["GroupName"] = "hub-hotmic"
+    assert strict_dep(p, ec2, IAM(), fakes.FakeSSM(), ids=ids).ensure_sg() == "sg-prod" and ids["sg"] == "sg-prod"
+    # Another kind's intent of the same name proves nothing, and an intent never matches a resource with no name.
+    assert not owned.recorded({"intents": {"eip": {"name": "hub-hotmic"}}}, "sg", "sg-prod", name="hub-hotmic")
+    assert not owned.recorded({"intents": {"sg": {"name": "hub-hotmic"}}}, "sg", "sg-prod")
+    eip = {"AllocationId": "eip-prod", "PublicIp": "198.51.100.1", "Tags": HUB_ID.tags("hotmic", "production-ip")}
+    ec2.eips = [eip]
+    with pytest.raises(MissingInput, match="eip-prod"):
+        strict_dep(p, ec2, IAM(), fakes.FakeSSM(), ids={"intents": {"eip": {"name": "hub-hotmic"}}}).ensure_eip()
+    # Destroy holds to it too: a tagged group of another name is not the one the intent made.
+    ec2.sgs[0]["GroupName"] = "production-web"
+    with pytest.raises(MissingInput, match="security group sg-prod"):
+        owned.refuse_unrecorded(
+            ec2, IAM(), {"security-group": ["sg-prod"]}, HUB_ID, "hotmic", {"intents": {"sg": {"name": "hub-hotmic"}}}
+        )
+
+
+def test_the_volume_and_network_interface_a_launch_made_are_journalled_and_nothing_else_goes_with_the_server():
+    # Codex review 5, case 8: attached volumes and network interfaces were proved by tags alone. The launch's own root
+    # volume and primary interface are journalled; one attached since with DeleteOnTermination, even with the install's
+    # tags, stops the terminate.
+    ids = {}
+    d = strict_dep(hub_plan(), fakes.FakeEC2(), IAM(), fakes.FakeSSM(), ids=ids)
+    d.put_env("TICO_DOMAIN=x\n")
+    d.launch_or_reuse(d.prepare(), "#!/bin/bash\n")
+    assert ids["volumes"] == ["vol-1"] and ids["enis"] == ["eni-1"]
+    ec2 = d.ec2
+    assert owned.foreign_attached(ec2, ["i-1"], "hotmic", HUB_ID, ids) == []
+    attach = [{"InstanceId": "i-1", "DeleteOnTermination": True}]
+    ec2.volumes.append({"VolumeId": "vol-tagged", "Tags": HUB_OURS, "Attachments": attach})
+    ec2.enis.append({"NetworkInterfaceId": "eni-tagged", "TagSet": HUB_OURS, "Attachment": attach[0]})
+    with pytest.raises(MissingInput, match="vol-tagged, eni-tagged"):
+        owned.refuse_foreign_attached(ec2, ["i-1"], "hotmic", HUB_ID, ids)
+    # An instance found by its journalled ClientToken (its launch answer lost) gets its own journalled on the retry.
+    again = {k: v for k, v in ids.items() if k not in ("instance", "volumes", "enis")}
+    again["intents"] = {"instance": {"name": "hub-hotmic", "token": ec2.instances[0]["ClientToken"]}}
+    d2 = strict_dep(hub_plan(), ec2, IAM(), fakes.FakeSSM(), ids=again)
+    d2.launch_or_reuse(d2.prepare(), "#!/bin/bash\n")
+    assert again["instance"] == "i-1" and again["volumes"] == ["vol-1"] and again["enis"] == ["eni-1"]
+
+
+class KeyedIAM(IAM):
+    """A user's access keys as IAM keeps them: at most two, listed with their creation dates."""
+
+    def __init__(self, keys=()):
+        super().__init__()
+        self.keys = list(keys)
+
+    def list_access_keys(self, UserName):
+        return {"AccessKeyMetadata": list(self.keys)}
+
+    def delete_access_key(self, **kw):
+        self._rec("delete_access_key", **kw)
+        self.keys = [k for k in self.keys if k["AccessKeyId"] != kw["AccessKeyId"]]
+
+    def create_access_key(self, UserName):
+        self._rec("create_access_key", UserName=UserName)
+        kid = f"AKIANEW{len(self.calls)}"
+        self.keys.append({"AccessKeyId": kid, "CreateDate": 99})
+        return {"AccessKey": {"AccessKeyId": kid, "SecretAccessKey": "s3cr3t"}}
+
+
+def test_only_an_access_key_this_install_recorded_making_is_ever_deleted():
+    # Codex review 5, case 8: with two keys, the older was deleted whoever made it. Keys setup makes are journalled as
+    # made; only one of those is deleted, and two keys it never recorded are refused for a by-hand check.
+    user = "hub-backup-hotmic"
+    base = {"backup_user": f"AIDA{user}"}
+    for keys, recorded_keys, gone in (
+        ([("AKIAFOREIGN", 1), ("AKIAOURS", 2)], ["AKIAOURS"], "AKIAOURS"),
+        ([("AKIAOLD", 1), ("AKIANEWER", 2)], ["AKIAOLD", "AKIANEWER"], "AKIAOLD"),
+        ([("AKIAA", 1), ("AKIAB", 2)], [], None),
+    ):
+        iam, s3 = KeyedIAM({"AccessKeyId": k, "CreateDate": t} for k, t in keys), S3()
+        iam.users[user] = {"UserId": f"AIDA{user}", "Tags": HUB_OURS}
+        ids = {**base, "backup_keys": list(recorded_keys)}
+        bucket = HUB_ID.backup_bucket(DOMAIN, ACCOUNT)
+        s3.tagsets[bucket], ids["backup_bucket"] = HUB_OURS, bucket
+        run = lambda: owned.create_s3(  # noqa: E731
+            s3, iam, domain=DOMAIN, region="us-west-2", account_id=ACCOUNT, name="hotmic", names=HUB_ID, ids=ids
+        )
+        if gone is None:
+            with pytest.raises(MissingInput, match="AKIAA, AKIAB"):
+                run()
+            assert not iam.called("delete_access_key") and not iam.called("create_access_key")
+            continue
+        values = run()
+        assert [c["AccessKeyId"] for c in iam.called("delete_access_key")] == [gone]
+        new = values["LITESTREAM_ACCESS_KEY_ID"]
+        assert ids["backup_keys"] == [k for k in recorded_keys if k != gone] + [new]

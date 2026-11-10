@@ -1642,7 +1642,7 @@ def _destroy_strict(args, io: IO, deps: Deps, saved: dict) -> int:
     for kind, ids in found.items():
         for i in ids:
             io.say(f"  {kind}: {i}")
-    owned.refuse_foreign_attached(ec2, found.get("instance", []), name, names)
+    owned.refuse_foreign_attached(ec2, found.get("instance", []), name, names, saved.get("aws_ids") or {})
     owned.refuse_unrecorded(ec2, iam, found, names, name, saved.get("aws_ids") or {})  # before DNS, too
     records = None
     if getattr(args, "dns", False):

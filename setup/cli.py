@@ -314,6 +314,10 @@ def _backup_storage_strict(args, io: IO, deps: Deps, domain: str, saved: dict, m
         intent = (theirs.get("intents") or {}).get(kind)
         if intent and not ids.get(kind):
             ids.setdefault("intents", {})[kind] = intent
+    # The backup user's access keys either run recorded making: only those are ever deleted.
+    keys = list(dict.fromkeys((ids.get("backup_keys") or []) + (theirs.get("backup_keys") or [])))
+    if keys:
+        ids["backup_keys"] = keys
     state.save_backup(domain, record)
 
     def save() -> None:
@@ -321,7 +325,7 @@ def _backup_storage_strict(args, io: IO, deps: Deps, domain: str, saved: dict, m
         server = state.load(domain)[0]
         if saved and server.get("install_id") == install_id:  # the server install's record says the same
             journal = dict(server.get("aws_ids") or {})
-            journal.update({k: ids[k] for k in kinds if ids.get(k)})
+            journal.update({k: ids[k] for k in (*kinds, "backup_keys") if ids.get(k)})
             state.save(domain, {**server, "aws_ids": journal})
 
     return owned.create_s3(

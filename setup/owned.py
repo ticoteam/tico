@@ -110,7 +110,7 @@ def prove_server(ec2, account: str, s) -> None:
     rows = ec2.describe_instances(InstanceIds=[iid])["Reservations"]
     inst = next((i for r in rows for i in r["Instances"] if i.get("InstanceId") == iid), None)
     ok = inst is not None and names.is_ours(inst.get("Tags"), s.aws_name)
-    if not ok or not recorded(s.aws_ids or {}, "instance", iid, (inst or {}).get("ClientToken", "")):
+    if not ok or not recorded(s.aws_ids or {}, "instance", iid, (inst or {}).get("ClientToken", ""), row_name(inst)):
         raise MissingInput(
             f"EC2 instance {iid}, named in {s.domain}'s saved state, is not this install's server (its tags, or the "
             "instance this install recorded making, differ); refusing to run anything on it. Check the saved state."
@@ -227,12 +227,26 @@ def check_region(had: str, given: str | None, what: str) -> None:
 # state lost, cut short or edited) is never adopted, changed or deleted: setup refuses and says what to check by hand.
 
 
-def recorded(ids: dict, kind: str, value: str, token: str = "") -> bool:
-    """`value` is the `kind` this install recorded making, or the one its journalled create (answer lost) made."""
+def recorded(ids: dict, kind: str, value: str, token: str = "", name: str = "") -> bool:
+    """`value` is the `kind` this install recorded making, or the one its journalled create (answer lost) made: the same
+    ClientToken where the create took one (an instance), else the same name under the same kind (`name`, the found
+    resource's own name; none given proves nothing)."""
     if ids.get(kind):
         return ids[kind] == value
     intent = (ids.get("intents") or {}).get(kind)
-    return intent is not None and bool(value) and (not intent.get("token") or intent["token"] == token)
+    if intent is None or not value:
+        return False
+    if intent.get("token"):
+        return intent["token"] == token
+    return bool(name) and intent.get("name") == name and intent.get("type", kind) == kind
+
+
+def row_name(row: dict | None) -> str:
+    """A described resource's own name: a security group's GroupName, else its Name tag (an instance, an address)."""
+    row = row or {}
+    if row.get("GroupName"):
+        return row["GroupName"]
+    return next((t.get("Value", "") for t in row.get("Tags") or [] if t.get("Key") == "Name"), "")
 
 
 def by_hand(what: str) -> str:
@@ -251,8 +265,9 @@ class Journal:
         self.ids, self.save, self.n, self.name = ids, save, names, name
 
     def intend(self, kind: str, **what: str) -> None:
-        """Before a create call: if its answer is lost, the retry knows the resource it made for this install's."""
-        self.ids.setdefault("intents", {})[kind] = what
+        """Before a create call: if its answer is lost, the retry knows the resource it made for this install's (by
+        its ClientToken, or by its name and kind)."""
+        self.ids.setdefault("intents", {})[kind] = {**what, "type": kind}
         self.save()
 
     def token(self, kind: str) -> str:
@@ -266,12 +281,12 @@ class Journal:
             (self.ids.get("intents") or {}).pop(kind, None)
             self.save()
 
-    def adopt(self, kind: str, value: str, what: str, resource: str, token: str = "") -> None:
+    def adopt(self, kind: str, value: str, what: str, resource: str, token: str = "", name: str | None = None) -> None:
         """An existing resource with this install's tags is used only when it is the one recorded, or the one a
-        journalled create made."""
+        journalled create made. `name`: the resource's own name, when `resource` is its id."""
         if self.ids.get(kind) and self.ids[kind] != value:
             raise not_ours(what, resource, self.n, self.name)
-        if not recorded(self.ids, kind, value, token):
+        if not recorded(self.ids, kind, value, token, resource if name is None else name):
             raise MissingInput(by_hand(f"{what} {resource}"))
         self.made(kind, value)
 
@@ -314,7 +329,9 @@ class StrictDeployer(Deployer):
         found = [i for res in r["Reservations"] for i in res["Instances"] if self.n.is_ours(i.get("Tags"), self.p.name)]
         if found:
             i = found[0]
-            self.j.adopt("instance", i["InstanceId"], "EC2 instance", i["InstanceId"], i.get("ClientToken", ""))
+            self.j.adopt(
+                "instance", i["InstanceId"], "EC2 instance", i["InstanceId"], i.get("ClientToken", ""), row_name(i)
+            )
         return found[0] if found else None
 
     def put_env(self, env_text: str, *, company_file=False) -> None:
@@ -381,10 +398,10 @@ class StrictDeployer(Deployer):
         flt = self.n.filters(self.p.name)
         for g in self.ec2.describe_security_groups(Filters=flt)["SecurityGroups"]:
             if self.n.is_ours(g.get("Tags"), self.p.name):
-                self.j.adopt("sg", g["GroupId"], "Security group", g["GroupId"])
+                self.j.adopt("sg", g["GroupId"], "Security group", g["GroupId"], name=row_name(g))
         for a in self.ec2.describe_addresses(Filters=flt)["Addresses"]:
             if self.n.is_ours(a.get("Tags"), self.p.name):
-                self.j.adopt("eip", a["AllocationId"], "Elastic IP", a["AllocationId"])
+                self.j.adopt("eip", a["AllocationId"], "Elastic IP", a["AllocationId"], name=row_name(a))
         if s3 is not None and self.p.plan_bucket:  # setup's own plan bucket
             owned = {"Bucket": self.p.plan_bucket, "ExpectedBucketOwner": self.account_id}
             if bucket_proof(s3, owned, self.n, self.p.name, "--name") == "ours":
@@ -460,7 +477,8 @@ class StrictDeployer(Deployer):
         """Read now, right before a write: the plan bucket carries this install's tags and is the one it recorded
         making."""
         n, owned = self.n, {"Bucket": self.p.plan_bucket, "ExpectedBucketOwner": self.account_id}
-        if n.is_ours(bucket_tags(s3, owned), self.p.name) and recorded(self.ids, "plan_bucket", self.p.plan_bucket):
+        bucket = self.p.plan_bucket
+        if n.is_ours(bucket_tags(s3, owned), self.p.name) and recorded(self.ids, "plan_bucket", bucket, name=bucket):
             return
         raise not_ours("S3 bucket", self.p.plan_bucket, n, self.p.name, "--name")
 
@@ -620,7 +638,7 @@ class StrictDeployer(Deployer):
         r = self.ec2.describe_security_groups(Filters=self.n.filters(self.p.name))["SecurityGroups"]
         r = [g for g in r if self.n.is_ours(g.get("Tags"), self.p.name)]
         if r:
-            self.j.adopt("sg", r[0]["GroupId"], "Security group", r[0]["GroupId"])
+            self.j.adopt("sg", r[0]["GroupId"], "Security group", r[0]["GroupId"], name=row_name(r[0]))
             # Proved this install's: a run stopped before its ingress gets it now.
             self.authorize(r[0]["GroupId"], r[0].get("IpPermissions") or [])
             return r[0]["GroupId"]
@@ -693,7 +711,7 @@ class StrictDeployer(Deployer):
             r = self.ec2.describe_addresses(Filters=self.n.filters(self.p.name))["Addresses"]
             r = [a for a in r if self.n.is_ours(a.get("Tags"), self.p.name)]
             if r:
-                self.j.adopt("eip", r[0]["AllocationId"], "Elastic IP", r[0]["AllocationId"])
+                self.j.adopt("eip", r[0]["AllocationId"], "Elastic IP", r[0]["AllocationId"], name=row_name(r[0]))
                 return r[0]["AllocationId"], r[0]["PublicIp"]
             if wait is not None:
                 self.sleep(wait)
@@ -776,9 +794,31 @@ class StrictDeployer(Deployer):
             iid, created = self.launch(user_data, self.ensure_role(), prep["sg"], prep.get("subnet", "")), True
             self.say(f"  launched {iid}")
         self.ec2.get_waiter("instance_running").wait(InstanceIds=[iid])
+        self.journal_attached(iid)
         if prep["alloc"]:
             self.associate(prep["alloc"], iid)
         return iid, created
+
+    def journal_attached(self, iid: str) -> None:
+        """The root volume and primary network interface the launch made with the server, journalled once it runs (the
+        RunInstances answer names no volume yet). Only those two: anything attached since is never this install's, and
+        an instance that shows neither leaves them unrecorded, so destroy refuses to terminate it."""
+        if self.ids.get("volumes") and self.ids.get("enis"):
+            return
+        rows = self.ec2.describe_instances(InstanceIds=[iid])["Reservations"]
+        inst = next((i for r in rows for i in r["Instances"] if i.get("InstanceId") == iid), {})
+        root = inst.get("RootDeviceName")
+        self.ids["volumes"] = [
+            m["Ebs"]["VolumeId"]
+            for m in inst.get("BlockDeviceMappings") or []
+            if root and m.get("DeviceName") == root and (m.get("Ebs") or {}).get("VolumeId")
+        ]
+        self.ids["enis"] = [
+            n["NetworkInterfaceId"]
+            for n in inst.get("NetworkInterfaces") or []
+            if (n.get("Attachment") or {}).get("DeviceIndex") == 0 and n.get("NetworkInterfaceId")
+        ]
+        self.save()
 
     def associate(self, alloc: str, iid: str) -> None:
         """Read fresh by its id: setup's own address (its tags, the recorded allocation), free or already on this server.
@@ -790,7 +830,8 @@ class StrictDeployer(Deployer):
                 raise
             rows = []
         row = next((a for a in rows if a.get("AllocationId") == alloc), None)
-        if row is None or not self.n.is_ours(row.get("Tags"), self.p.name) or not recorded(self.ids, "eip", alloc):
+        mine = recorded(self.ids, "eip", alloc, name=row_name(row))
+        if row is None or not self.n.is_ours(row.get("Tags"), self.p.name) or not mine:
             raise MissingInput(
                 f"Elastic IP {alloc} is no longer this install's (released, retagged, or not the allocation it recorded); "
                 "refusing to attach it. Check it by hand in the EC2 console, then run setup again."
@@ -824,9 +865,10 @@ def profile_is_ours(prof: dict, name: str, names: Names) -> bool:
     )
 
 
-def foreign_attached(ec2, instance_ids: list[str], name: str, names: Names) -> list[str]:
+def foreign_attached(ec2, instance_ids: list[str], name: str, names: Names, ids: dict) -> list[str]:
     """The volumes and network interfaces that terminating these instances would delete (DeleteOnTermination) but that
-    lack this install's tags: someone attached them, so terminating would delete what setup did not make."""
+    are not the ones this install journalled its launch making (with its tags): someone attached them, so terminating
+    would delete what setup did not make."""
     if not instance_ids:
         return []
     flt = [{"Name": "attachment.instance-id", "Values": list(instance_ids)}]
@@ -834,25 +876,25 @@ def foreign_attached(ec2, instance_ids: list[str], name: str, names: Names) -> l
         v["VolumeId"]
         for v in ec2.describe_volumes(Filters=flt)["Volumes"]
         if any(a.get("InstanceId") in instance_ids and a.get("DeleteOnTermination") for a in v.get("Attachments", []))
-        and not names.is_ours(v.get("Tags"), name)
+        and not (names.is_ours(v.get("Tags"), name) and v["VolumeId"] in (ids.get("volumes") or []))
     ]
     enis = [
         n["NetworkInterfaceId"]
         for n in ec2.describe_network_interfaces(Filters=flt)["NetworkInterfaces"]
         if (n.get("Attachment") or {}).get("InstanceId") in instance_ids
         and n["Attachment"].get("DeleteOnTermination")
-        and not names.is_ours(n.get("TagSet"), name)
+        and not (names.is_ours(n.get("TagSet"), name) and n["NetworkInterfaceId"] in (ids.get("enis") or []))
     ]
     return vols + enis
 
 
-def refuse_foreign_attached(ec2, instance_ids: list[str], name: str, names: Names) -> None:
-    found = foreign_attached(ec2, instance_ids, name, names)
+def refuse_foreign_attached(ec2, instance_ids: list[str], name: str, names: Names, ids: dict) -> None:
+    found = foreign_attached(ec2, instance_ids, name, names, ids)
     if found:
         raise MissingInput(
-            f"Terminating {', '.join(instance_ids)} would also delete {', '.join(found)}, which this setup did not make "
-            "(attached with DeleteOnTermination, without this install's tags); refusing. Detach it, or turn off its "
-            "DeleteOnTermination, then run destroy again."
+            f"Terminating {', '.join(instance_ids)} would also delete {', '.join(found)}, which this install did not "
+            "record making (attached with DeleteOnTermination); refusing, and nothing was deleted. Check it by hand in the EC2 console: detach "
+            "it, or turn off its DeleteOnTermination, then run destroy again."
         )
 
 
@@ -875,20 +917,33 @@ def refuse_unrecorded(ec2, iam, found: dict, names: Names, name: str, ids: dict)
         r = ec2.describe_instances(Filters=names.filters(name))
         token = {i["InstanceId"]: i.get("ClientToken", "") for res in r["Reservations"] for i in res["Instances"]}
         bad += [f"EC2 instance {i}" for i in found["instance"] if not recorded(ids, "instance", i, token.get(i, ""))]
-    bad += [f"Elastic IP {a}" for a in found.get("elastic-ip", []) if not recorded(ids, "eip", a)]
-    bad += [f"security group {g}" for g in found.get("security-group", []) if not recorded(ids, "sg", g)]
+
+    def named(kind: str, rows: Callable[[], list[dict]], key: str) -> dict[str, str]:
+        """Each found resource's own name, read only when an intent (no recorded id) has to be matched by it."""
+        if ids.get(kind) or not (ids.get("intents") or {}).get(kind):
+            return {}
+        return {r.get(key, ""): row_name(r) for r in rows()}
+
+    eips = named("eip", lambda: ec2.describe_addresses(Filters=names.filters(name))["Addresses"], "AllocationId")
+    sgs = named("sg", lambda: ec2.describe_security_groups(Filters=names.filters(name))["SecurityGroups"], "GroupId")
+    bad += [f"Elastic IP {a}" for a in found.get("elastic-ip", []) if not recorded(ids, "eip", a, name=eips.get(a, ""))]
+    bad += [
+        f"security group {g}"
+        for g in found.get("security-group", [])
+        if not recorded(ids, "sg", g, name=sgs.get(g, ""))
+    ]
     for n in found.get("iam-role", []):
         try:
             rid = iam.get_role(RoleName=n)["Role"].get("RoleId", "")
         except iam.exceptions.NoSuchEntityException:
             continue
-        if not recorded(ids, "role", rid):
+        if not recorded(ids, "role", rid, name=n):
             bad.append(f"IAM role {n}")
         prof = instance_profile(iam, n)
         if prof is not None and profile_is_ours(prof, n, names):
-            if not recorded(ids, "profile", prof.get("InstanceProfileId", "")):
+            if not recorded(ids, "profile", prof.get("InstanceProfileId", ""), name=n):
                 bad.append(f"IAM instance profile {n}")
-    bad += [f"SSM parameter {p}" for p in found.get("ssm-parameter", []) if not recorded(ids, "param", p)]
+    bad += [f"SSM parameter {p}" for p in found.get("ssm-parameter", []) if not recorded(ids, "param", p, name=p)]
     if bad:
         raise MissingInput(
             by_hand(", ".join(bad)).replace("refusing to use, change or delete it", "nothing was deleted")
@@ -909,7 +964,7 @@ def destroy(ec2, iam, ssm, found, say, sleep, names: Names, name: str, ids: dict
         ok = (
             row is not None
             and names.is_ours(row.get("Tags"), name)
-            and recorded(ids, kind, rid, row.get("ClientToken", ""))
+            and recorded(ids, kind, rid, row.get("ClientToken", ""), row_name(row))
         )
         return row if ok else None
 
@@ -923,7 +978,7 @@ def destroy(ec2, iam, ssm, found, say, sleep, names: Names, name: str, ids: dict
         for i in found["instance"]:
             (insts.append(i) if still("instance", i, rows, "InstanceId") else left(f"instance {i}"))
     if insts:
-        refuse_foreign_attached(ec2, insts, name, names)
+        refuse_foreign_attached(ec2, insts, name, names, ids)
         ec2.terminate_instances(InstanceIds=insts)
         say("  waiting for the instance to terminate ...")
         ec2.get_waiter("instance_terminated").wait(InstanceIds=insts)
@@ -945,7 +1000,7 @@ def destroy(ec2, iam, ssm, found, say, sleep, names: Names, name: str, ids: dict
         """(the profile read just now, whether it is this install's: its tags and recorded id)."""
         prof = instance_profile(iam, n)
         pid = (prof or {}).get("InstanceProfileId", "")
-        return prof, prof is not None and profile_is_ours(prof, n, names) and recorded(ids, "profile", pid)
+        return prof, prof is not None and profile_is_ours(prof, n, names) and recorded(ids, "profile", pid, name=n)
 
     for n in found.get("iam-role", []):
         prof, ours = profile_now(n)
@@ -974,7 +1029,7 @@ def destroy(ec2, iam, ssm, found, say, sleep, names: Names, name: str, ids: dict
                 role = iam.get_role(RoleName=n)["Role"]
             except iam.exceptions.NoSuchEntityException:
                 break
-            if not (names.is_ours(role.get("Tags"), name) and recorded(ids, "role", role.get("RoleId", ""))):
+            if not (names.is_ours(role.get("Tags"), name) and recorded(ids, "role", role.get("RoleId", ""), name=n)):
                 left(f"IAM role {n}")
                 break
             try:
@@ -986,7 +1041,7 @@ def destroy(ec2, iam, ssm, found, say, sleep, names: Names, name: str, ids: dict
             tags = ssm.list_tags_for_resource(ResourceType="Parameter", ResourceId=p)["TagList"]
         except ssm.exceptions.InvalidResourceId:
             continue
-        if names.is_ours(tags, name) and recorded(ids, "param", p):
+        if names.is_ours(tags, name) and recorded(ids, "param", p, name=p):
             ssm.delete_parameter(Name=p)
         else:
             left(f"SSM parameter {p}")
@@ -1043,7 +1098,7 @@ def create_s3(
             if error_code(e) not in ("404", "NoSuchBucket", "NotFound"):
                 raise
             tags = []
-        if not (names.is_ours(tags, name) and recorded(j.ids, "backup_bucket", bucket)):
+        if not (names.is_ours(tags, name) and recorded(j.ids, "backup_bucket", bucket, name=bucket)):
             raise not_ours("S3 bucket", bucket, names, name, pick)
 
     prove_bucket()
@@ -1138,9 +1193,21 @@ def create_s3(
     keys = sorted(iam.list_access_keys(UserName=user)["AccessKeyMetadata"], key=lambda k: k["CreateDate"])
     if len(keys) >= 2:  # IAM allows two; a secret cannot be read back, so a re-run makes a new one
         prove_user()
-        iam.delete_access_key(UserName=user, AccessKeyId=keys[0]["AccessKeyId"])
+        # Only a key this install recorded making (its id, from the create call's answer) is ever deleted.
+        mine = [k["AccessKeyId"] for k in keys if k["AccessKeyId"] in (j.ids.get("backup_keys") or [])]
+        if not mine:
+            raise MissingInput(
+                f"IAM user {user} has two access keys ({', '.join(k['AccessKeyId'] for k in keys)}) and this install "
+                "recorded making neither; refusing to delete one. Delete the one no longer in use by hand in the IAM "
+                "console, then run setup again."
+            )
+        iam.delete_access_key(UserName=user, AccessKeyId=mine[0])
+        j.ids["backup_keys"] = [k for k in j.ids["backup_keys"] if k != mine[0]]
+        save()
     prove_user()
     key = iam.create_access_key(UserName=user)["AccessKey"]
+    j.ids.setdefault("backup_keys", []).append(key["AccessKeyId"])
+    save()
     say(f"  created an access key for {user}")
     return {
         "TICO_BACKUP_URL": f"s3://{bucket}/{names.backup_key_prefix}",

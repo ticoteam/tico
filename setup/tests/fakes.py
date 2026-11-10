@@ -144,7 +144,7 @@ class FakeEC2:
 
     def create_security_group(self, **kw):
         self._rec("create_security_group", **kw)
-        self.sgs.append({"GroupId": "sg-1", "Tags": kw["TagSpecifications"][0]["Tags"]})
+        self.sgs.append({"GroupId": "sg-1", "GroupName": kw["GroupName"], "Tags": kw["TagSpecifications"][0]["Tags"]})
         return {"GroupId": "sg-1"}
 
     def authorize_security_group_ingress(self, **kw):
@@ -181,7 +181,16 @@ class FakeEC2:
         again = [i for i in self.instances if token and i.get("ClientToken") == token]
         if again:  # as EC2 does: a repeated ClientToken answers with the instance it already launched
             return {"Instances": [{"InstanceId": again[0]["InstanceId"]}]}
-        self.instances.append({"InstanceId": "i-1", "Tags": kw["TagSpecifications"][0]["Tags"]})
+        root = (kw.get("BlockDeviceMappings") or [{}])[0].get("DeviceName", "/dev/xvda")
+        self.instances.append(
+            {
+                "InstanceId": "i-1",
+                "Tags": kw["TagSpecifications"][0]["Tags"],
+                "RootDeviceName": root,
+                "BlockDeviceMappings": [{"DeviceName": root, "Ebs": {"VolumeId": "vol-1"}}],
+                "NetworkInterfaces": [{"NetworkInterfaceId": "eni-1", "Attachment": {"DeviceIndex": 0}}],
+            }
+        )
         if token:
             self.instances[-1]["ClientToken"] = token
         vol = [t["Tags"] for t in kw["TagSpecifications"] if t["ResourceType"] == "volume"]
