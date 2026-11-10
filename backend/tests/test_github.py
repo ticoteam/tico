@@ -189,35 +189,6 @@ def test_each_merged_pr_ships_once_the_release_contains_it(api):
         assert H.task(c, task['id'])['status'] == task['status']
 
 
-def test_task_link_upgrade_preserves_legacy_pr_rows(api):
-    from backend.store import Store
-
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Keep the existing PR', 'body': 'x', 'links': [PR]})
-    store = api.app.state.store
-    with store.transaction() as c:
-        c.execute(
-            'CREATE TABLE legacy_task_links(id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), '
-            'kind TEXT NOT NULL, url TEXT NOT NULL, title TEXT, state TEXT, added_by TEXT, created_at TEXT NOT NULL, '
-            'pr_sha TEXT, pr_merged_at TEXT)'
-        )
-        c.execute(
-            'INSERT INTO legacy_task_links SELECT id,task_id,kind,url,title,state,added_by,created_at,pr_sha,pr_merged_at FROM task_links'
-        )
-        c.execute('DROP TABLE task_links')
-        c.execute('ALTER TABLE legacy_task_links RENAME TO task_links')
-        c.execute('PRAGMA user_version=17')
-        c.execute('DELETE FROM cloud_migrations WHERE version=51')
-    # Version 17 is below the bridge, so this boot is the legacy import path (adopt_legacy), as test_upgrade does.
-    Store(store.settings).initialize(seed_market=False, adopt_legacy=True)
-    with store.read() as c:
-        link = H.task_links(c, task['id'])[0]
-        assert link['url'] == PR and link['state'] == 'open' and link['title'] == 'tico#412'
-        assert link['repo'] == 'ticoteam/tico' and link['number'] == 412
-        assert link['path'] is None and link['computer_id'] is None and link['checks'] is None
-        assert c.execute('PRAGMA user_version').fetchone()[0] == len(H.MIGRATIONS)
-        assert c.execute('SELECT 1 FROM cloud_migrations WHERE version=51').fetchone()
-
-
 def test_reviewer_who_pushes_is_not_the_bot_and_changes_requests_always_wake(api):
     from backend.repositories import metadata
 

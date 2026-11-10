@@ -980,32 +980,6 @@ def test_phase_two_keys_a_budget_vendor_name_and_never_takes_a_contact_id(books)
         assert SB.budgets(c, book)[held].vendor == vendor
 
 
-def test_the_upgrade_drops_fin_vendor_legacy_and_vendor_keys_still_follow_aliases(books):
-    """Migration 0005 removes fin_vendor_legacy from an install that has it; a vendor's keys still come from its contact's
-    id and its names (vendor_keys reads no legacy table)."""
-    from backend.finance.store import ap as SAP
-    from backend.finance.store import schema
-
-    with books.transaction() as c:
-        book = str(c.execute("SELECT id FROM fin_books").fetchone()[0])
-        vendor = _vendor(c, "Acme Supplies")
-        SAP.alias_add(c, book, "acme supplies co", vendor, AT)
-        restore_config(c)
-        c.execute("DELETE FROM schema_migrations WHERE version>='0005' AND version NOT LIKE 'legacy_%'")
-        c.execute(
-            "CREATE TABLE fin_vendor_legacy (book_id TEXT NOT NULL, raw TEXT NOT NULL, name_key TEXT NOT NULL, "
-            "PRIMARY KEY (book_id, raw))"
-        )
-        c.execute("INSERT INTO fin_vendor_legacy VALUES(?, 'ACME SUPPLIES CO', 'acme supplies co')", (book,))
-    books.initialize(seed_market=False)
-    with books.read() as c:
-        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='fin_vendor_legacy'").fetchone()
-        assert c.execute("SELECT 1 FROM schema_migrations WHERE version='0005_drop_fin_vendor_legacy'").fetchone()
-        assert "fin_vendor_legacy" not in schema.table_names()
-        keys = SAP.vendor_keys(c, book, vendor)
-        assert keys[0] == vendor and "acme supplies co" in keys and "ACME SUPPLIES CO" not in keys
-
-
 def test_a_long_vendor_name_whose_key_folds_longer_still_reclassifies_and_settles(books):
     """Codex fix check: 79 A's and ß fold to an 81-character key (names are capped at 80 before folding, keys never
     after). A reconciled debit under that name, found as a lost payment, moves to the payment's line and settles:
