@@ -47,7 +47,7 @@ def inline(store, auth, run_id, only, wait):
 
 
 def test_the_steps_run_in_one_fixed_order_and_the_api_lists_them_so(api):
-    assert M.ORDER == ("collect", "clean_up", "find_stuck", "check_health", "learn", "suggest", "update", "dream")
+    assert M.ORDER == ("collect", "clean_up", "check_health", "learn", "suggest", "update", "dream")
     assert [s["key"] for s in get(api, "maintenance")["steps"]] == list(M.ORDER)
     assert all("old_timer" not in s for s in get(api, "maintenance")["steps"]), "every step runs in the run"
     suggest = next(s for s in get(api, "maintenance")["steps"] if s["key"] == "suggest")
@@ -105,7 +105,6 @@ def test_run_now_runs_every_step_in_order_like_a_scheduled_run(api):
     assert [s["step"] for s in run["steps"]] == list(M.ORDER), "one log row per step, in order"
     steps = {s["step"]: s for s in run["steps"]}
     assert steps["collect"]["status"] == "ran"
-    assert steps["find_stuck"]["status"] == "ran" and cursor(store, "find_stuck"), "Find stuck is live"
     assert steps["learn"]["status"] == "off", "learn is off by default"
     assert steps["check_health"]["status"] == "ran"
     assert steps["suggest"]["status"] == "skipped" and steps["suggest"]["reason"] in (

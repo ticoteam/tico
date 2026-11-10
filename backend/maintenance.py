@@ -27,21 +27,21 @@ from contextlib import contextmanager
 from datetime import datetime, time, timedelta, timezone
 
 from . import learnings, suggestions, updates
-from .maintenance_steps import check_health, clean_up, collect, dream, find_stuck, learn, suggest, update
+from .maintenance_steps import check_health, clean_up, collect, dream, learn, suggest, update
 from .store import H, Problem
 from .updates import START_HOUR, ZONE
 from . import sources as SRC
 
 LOG = logging.getLogger("tico.maintenance")
 REGISTRY_KEY = "maintenance"  # registry_metadata: the run's schedule, pause and monthly cap
-STEP_SOURCES = {"find_stuck": "stuck-check", "check_health": "check-health"}  # what a step's keeper lines are
-# Find stuck gets the shared BotOps wake first; Check health keeps a refused wake for the next run.
-ORDER = ("collect", "clean_up", "find_stuck", "check_health", "learn", "suggest", "update", "dream")
+STEP_SOURCES = {"check_health": "check-health"}  # what a step's own lines are written as
+# Stuck tasks are the never-stuck check's, on the Heartbeat (backend/never_stuck.py): no Maintenance step. A stored
+# find_stuck row from migration 0090 is left alone: only the steps named here run or show.
+ORDER = ("collect", "clean_up", "check_health", "learn", "suggest", "update", "dream")
 NAMES = {
     "collect": "Collect",
     "clean_up": "Clean up",
     "check_health": "Check health",
-    "find_stuck": "Find stuck",
     "learn": "Learn",
     "suggest": "Suggest",
     "update": "Update",
@@ -51,19 +51,18 @@ EVERY_RUN = (
     "collect",
     "clean_up",
     "check_health",
-)  # "How often" is every run, and fixed (Find stuck is custom: every 6 hours)
+)  # "How often" is every run, and fixed
 LIVE = {
     "collect": collect.run,
     "clean_up": clean_up.run,
     "check_health": check_health.run,
-    "find_stuck": find_stuck.run,
     "learn": learn.run,
     "suggest": suggest.run,
     "update": update.run,
     "dream": dream.run,
 }
 SCHEDULES = {"hourly": 1, "2h": 2, "3h": 3, "6h": 6, "12h": 12, "daily": 0}
-MAX_BOTS_STEPS = ("find_stuck", "dream")  # the steps that take "Most bots per run"
+MAX_BOTS_STEPS = ("dream",)  # the steps that take "Most bots per run"
 STATUSES = ("ran", "skipped", "failed", "pending")
 ABANDONED_MINUTES = 30  # a live run with no heartbeat this long is abandoned
 HEARTBEAT_SECONDS = 60
@@ -125,7 +124,7 @@ def due(row, at):
     """Whether a step is due at `at` by its "How often". The clock counts from its last attempt, not its last success:
     a step that failed does not retry every run. A week or custom cadence is due DUE_SLACK early: a step's clock is its
     run's start, which lands a few seconds into a bucket, so an exact comparison misses the bucket it was meant for by
-    seconds and slips a whole bucket (a 6-hour Find stuck ran 7 hours apart)."""
+    seconds and slips a whole bucket (a 6-hour step ran 7 hours apart)."""
     if row["frequency"] == "run" or not row["last_started_at"]:
         return True
     last = H.parse_ts(row["last_started_at"])
@@ -214,14 +213,14 @@ def _held(c, now, start):
 
 
 def next_due(c, at):
-    """When Maintenance needs the server up: a live run, or the first unclaimed bucket with Find stuck or Update due.
+    """When Maintenance needs the server up: a live run, or the first unclaimed bucket with Update due.
     Other steps catch up after a wake. Paused runs schedule no wake. Stale runs do not hold a bucket. Reads only."""
     cfg, now = run_settings(c), _stamp(at)
     if live_run(c, now):
         return at
     if cfg["paused"]:
         return None
-    steps = [row for key, row in steps_of(c).items() if key in ("find_stuck", "update") and row["enabled"]]
+    steps = [row for key, row in steps_of(c).items() if key == "update" and row["enabled"]]
     if not steps:
         return None
     when = next_bucket(cfg["schedule"], at) if _held(c, now, _stamp(bucket(cfg["schedule"], at))) else at
@@ -616,7 +615,7 @@ STEP_FIELDS = ("enabled", "frequency", "custom_every", "custom_unit", "max_bots"
 def save_step(c, actor, change):
     """One step's switch, "How often", custom interval and "Most bots per run"; only what is sent changes."""
     key = change["key"]
-    row = c.execute("SELECT * FROM maintenance_steps WHERE key=?", (key,)).fetchone()
+    row = c.execute("SELECT * FROM maintenance_steps WHERE key=?", (key,)).fetchone() if key in ORDER else None
     if row is None:
         raise Problem("not_found", "No such Maintenance step", 404)
     before = dict(row)

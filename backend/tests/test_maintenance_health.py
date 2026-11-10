@@ -1878,7 +1878,7 @@ def test_a_grouped_wake_once_held_by_rule_gate_and_caps_then_wakes_once(environm
     )
 
 
-def test_a_grouped_wake_hides_a_private_title_and_find_stuck_hands_botops_its_list(environment, monkeypatch, clock):
+def test_a_grouped_wake_hides_a_private_title(environment, monkeypatch, clock):
     _story(environment, monkeypatch, [_part_private_title], clock=clock)
 
 
