@@ -97,9 +97,10 @@ def check(
     at: str = now or H.now()
     done = {"snoozes_ended": 0, "moved": 0, "woken": 0, "to_manager": 0, "to_person": 0, "late": 0}
     seen: dict[str, str | None] = {}
+    # A snooze of a task that was deleted, or is not on the engine, is no task's: it is left alone.
     due = conn.execute(
-        "SELECT task_id FROM snoozes WHERE ended_at IS NULL AND until_at IS NOT NULL AND until_at <= ? "
-        "ORDER BY until_at, id",
+        "SELECT z.task_id FROM snoozes z JOIN tasks t ON t.id = z.task_id AND t.pipeline_id IS NOT NULL "
+        "WHERE z.ended_at IS NULL AND z.until_at IS NOT NULL AND z.until_at <= ? ORDER BY z.until_at, z.id",
         (at,),
     ).fetchall()
     todo = [(str(found[0]), True) for found in due]
@@ -341,6 +342,7 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
     broken: list[str] = []
     seen: dict[str, str | None] = {}
     needs: dict[str, list[Row]] = {}
+    someone: bool | None = None  # whether anyone can sign in: read once, when a turn names nobody
     now: str = H.now()
     open_ids = [
         str(found[0])
@@ -367,6 +369,11 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
                 or task_wakes.queued(conn, task_id, wait.who)
             ):
                 broken.append(f"2: task {task_id} is {wait.who}'s turn with no run, no wake and no next try")
+        if any(wait.state == W.PERSON and not wait.who for wait in waits):
+            if someone is None:
+                someone = W.company_person(conn) is not None
+            if someone:
+                broken.append(f"3: task {task_id} is a person's turn that names nobody")
         people = {wait.who for wait in waits if wait.state == W.PERSON and wait.who}
         for person in sorted(people):
             if person not in needs:
@@ -432,7 +439,7 @@ def _rule_5(conn: "sqlite3.Connection") -> list[str]:
     )
     out += _lines(
         conn,
-        "SELECT e.key, v.task_id FROM effects e JOIN visits v ON v.id = e.visit_id "
+        "SELECT e.key, v.task_id FROM effects e JOIN visits v ON v.id = e.visit_id JOIN tasks t ON t.id = v.task_id "
         "WHERE e.kind='queue_pr' AND e.state IN ('owed', 'done') AND v.how IN ('back', 'closed') AND NOT EXISTS "
         "(SELECT 1 FROM effects u WHERE u.visit_id = e.visit_id AND u.kind='dequeue_pr')",
         "5: effect {0} of task {1} was not undone when it moved back or closed",

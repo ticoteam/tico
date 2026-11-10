@@ -21,7 +21,7 @@ SELECTED_BY = (answers, never_stuck, pipeline_settings, task_engine, task_requir
 
 # Seeds that pass, and seeds that fail on a known bug (the bug each one hits).
 PASSING_SEEDS = (1, 2, 4, 8)
-FAILING_SEEDS = {7: "deleted-snoozed-task", 23: "runs-outside-ladder"}
+FAILING_SEEDS = {27: "runs-outside-ladder"}
 
 
 def _scenario_cases() -> list[object]:

@@ -172,6 +172,20 @@ def test_a_task_that_changed_starts_the_count_again_and_the_next_wake_is_not_a_t
     assert _said(c, task_id, BUILDER)[-1] == "You stopped before this task was finished. Try 1 of 3."
 
 
+def test_a_new_version_alone_is_not_progress(c, general, later):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    X.ran(c, task_id, BUILDER)
+    assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    X.ran(c, task_id, BUILDER)  # it stopped early again
+    mark = _visit(c, task_id)["progress_mark"]
+    c.execute("UPDATE tasks SET version = version + 1, title='Write the launch note today' WHERE id=?", (task_id,))
+    assert E.progress_mark(c, _visit(c, task_id)["id"]) == mark
+    assert later(seconds=10) == {} and _ladder(c, task_id) == ("owner", 1)  # no change: the count goes on
+    assert _visit(c, task_id)["progress_mark"] == mark
+    assert later(seconds=890) == {"woken": 1} and _ladder(c, task_id) == ("owner", 2)
+    assert _said(c, task_id, BUILDER)[-1] == "You stopped before this task was finished. Try 2 of 3."
+
+
 def test_nothing_is_sent_while_the_bot_runs_and_a_run_that_was_cut_off_is_a_try(c, general, later):
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     job_id, message_id = c.execute(
@@ -365,6 +379,25 @@ def test_a_task_the_check_cannot_work_out_is_left_as_it_was_and_the_rest_still_h
     assert _ladder(c, broken) == ("owner", 0)  # what it half did was rolled back
     with pytest.raises(ValueError):
         NS.check(c, later_at)  # with nowhere to report it, the error is raised
+
+
+def test_a_deleted_snoozed_task_leaves_nothing_the_check_trips_on(c, general, later):
+    from backend import task_delete
+
+    task_id = X.new_task(c, ANA, "Chase the vendor", assignee=BUILDER)["id"]
+    X.ran(c, task_id, BUILDER)
+    E.snooze(c, task_id, ANA, until=H.shift(H.now(), minutes=10))
+    assert task_delete.delete_tasks(c, [task_id], apply=True, keep_work=True)["applied"]
+    assert c.execute("SELECT COUNT(*) FROM snoozes WHERE task_id=? AND ended_at IS NULL", (task_id,)).fetchone()[0] == 0
+    failures: list[tuple[str, Exception]] = []
+    assert NS.check(c, H.shift(H.now(), minutes=11), failures) == dict.fromkeys(
+        ("snoozes_ended", "moved", "woken", "to_manager", "to_person", "late"), 0
+    )
+    assert failures == []
+    # A snooze a delete left open before it ended them, and the deleted task's open visit, are no task's: every read
+    # passes them by.
+    c.execute("UPDATE snoozes SET ended_at=NULL, ended_by_id=NULL WHERE task_id=?", (task_id,))
+    assert later(minutes=11) == {} and NS.rules_hold(c) == []
 
 
 def test_each_rule_that_breaks_is_named(c, general, later, monkeypatch):

@@ -395,6 +395,26 @@ def _push_past(
     return pushed
 
 
+def _may_close(conn: "sqlite3.Connection", by: str, row: Row) -> None:
+    """A bot can't close a person's request by itself (C8): a task a person asked for that no task filed. It asks the
+    person why it can't be done, and they close it or reassign it. A person closes anything; a bot closes what a bot
+    asked for and what a task filed."""
+    requester = row.get("requester_id")
+    if not is_bot(by) or not is_human(requester):
+        return
+    if conn.execute("SELECT 1 FROM links WHERE to_task_id=?", (row["id"],)).fetchone():
+        return
+    name = _h().actor_name(conn, requester)
+    _refuse(
+        conn,
+        by,
+        "task_needs_person",
+        f"{name} asked for this task, so only a person can close it. Ask {name}, in one sentence, why it can't be "
+        "done: they will close it or reassign it.",
+        row["id"],
+    )
+
+
 def move(
     conn: "sqlite3.Connection",
     task_id: str,
@@ -429,6 +449,8 @@ def move(
         _need_why(conn, by, why, "reopen it", task_id, everyone=True)
     else:
         _need_why(conn, by, why, "close it" if kind == "closed" else "move it back", task_id)
+    if kind == "closed" and not cascade:
+        _may_close(conn, by, row)
     if kind in ("back", "closed"):
         stage_effects.undo(conn, row, by, f"Closed with {row.get('title') or 'the task that filed it'}")
     if kind == "closed":
@@ -585,6 +607,22 @@ def fill_open_slots(conn: "sqlite3.Connection", stage_ids: Sequence[str] | None 
 
 
 # ----------------------------------------------------------------------------- reassign
+def _may_name(conn: "sqlite3.Connection", by: str, actor: str | None, task_id: str) -> None:
+    """Refuse naming someone who cannot act: a person who left, was removed or cannot sign in, a bot that does not
+    exist, or anything that is not a person or a bot. Nobody (None) is not refused here."""
+    if actor is None:
+        return
+    if is_human(actor):
+        if not R.active_person(conn, actor):
+            _refuse(conn, by, "task_requirement", "That person has left or is not here. Ask someone who is.", task_id)
+        return
+    if is_bot(actor):
+        if not _h().bot(conn, actor):
+            _refuse(conn, by, "task_requirement", "There is no such bot here", task_id)
+        return
+    _refuse(conn, by, "task_requirement", "Name a person or a bot", task_id)
+
+
 def reassign(
     conn: "sqlite3.Connection",
     task_id: str,
@@ -606,6 +644,7 @@ def reassign(
     owner = owner or None
     if owner == row.get("owner_id"):
         return row
+    _may_name(conn, by, owner, task_id)
     ts = H.now()
     fields: Row = {"owner_id": owner, "version": int(row.get("version") or 0) + 1, "updated_at": ts}
     if row["stage"].get("owner") == "assignee":
@@ -628,12 +667,13 @@ def reassign(
 
 
 def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence[R.Standing] | None = None) -> str:
-    """What the never-stuck check compares to tell a task that changed from one that did not: the task's version, the
-    answers, added requirements, filed tasks and snoozes of this visit, and where each requirement stands (so a PR
-    that opened or a check that finished is a change). A comment is not a change. `standings` saves reading them
-    again when the caller has them."""
+    """What the never-stuck check compares to tell a task that changed from one that did not: the answers, added
+    requirements, filed tasks and snoozes of this visit, and where each requirement stands (so a PR that opened or a
+    check that finished is a change). A comment is not a change, and neither is the task's version: it says the row
+    changed since someone looked, and a field edit (a new title, a label) raises it. A move and a reassign start the
+    ladder again themselves. `standings` saves reading them again when the caller has them."""
     found = conn.execute(
-        "SELECT v.task_id, t.version, "
+        "SELECT v.task_id, "
         "(SELECT COUNT(*) FROM answers a WHERE a.visit_id = v.id), "
         "(SELECT COUNT(*) FROM answers a WHERE a.visit_id = v.id AND a.undone_at IS NOT NULL), "
         "(SELECT COUNT(*) FROM requirements r WHERE r.visit_id = v.id), "
@@ -643,7 +683,7 @@ def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence
         " WHERE l.visit_id = v.id AND COALESCE(c.status, 'closed') <> 'open'), "
         "(SELECT COUNT(*) FROM snoozes z WHERE z.task_id = v.task_id AND z.visit_id = v.id), "
         "(SELECT COUNT(*) FROM snoozes z WHERE z.task_id = v.task_id AND z.visit_id = v.id AND z.ended_at IS NOT NULL) "
-        "FROM visits v JOIN tasks t ON t.id = v.task_id WHERE v.id=?",
+        "FROM visits v WHERE v.id=?",
         (visit_id,),
     ).fetchone()
     if not found:
@@ -724,6 +764,22 @@ def _end_snooze(conn: "sqlite3.Connection", snoozed: Row, by: str, ts: str) -> N
     conn.execute(
         "UPDATE snoozes SET ended_at=?, ended_by_id=? WHERE id=? AND ended_at IS NULL", (ts, str(by), snoozed["id"])
     )
+
+
+def on_delete(conn: "sqlite3.Connection", task_ids: Sequence[str], by: str) -> int:
+    """The delete path (`task_delete.delete_tasks`), before the rows go: a deleted task's open snooze ends, so nothing
+    waits for its date. Its visit, requirements and links stay for a restore; every read skips a task that is gone.
+    Returns how many snoozes it ended."""
+    ids = [str(task_id) for task_id in task_ids if task_id]
+    if not ids:
+        return 0
+    cursor = conn.execute(
+        "UPDATE snoozes SET ended_at=?, ended_by_id=? WHERE ended_at IS NULL AND task_id IN ("
+        + ",".join("?" * len(ids))
+        + ")",
+        (_h().now(), str(by), *ids),
+    )
+    return cursor.rowcount
 
 
 def snooze(
@@ -827,10 +883,7 @@ def add_requirement(
         _refuse(conn, by, "task_requirement", "Only an OK or an answer can be added to one task", task_id)
     if not (is_human(person) or is_bot(person)):
         _refuse(conn, by, "task_requirement", "Name who it is for", task_id)
-    if is_human(person) and not R.active_person(conn, person):
-        _refuse(conn, by, "task_requirement", "That person has left or is not here. Ask someone who is.", task_id)
-    if is_bot(person) and not H.bot(conn, person):
-        _refuse(conn, by, "task_requirement", "There is no such bot here", task_id)
+    _may_name(conn, by, person, task_id)
     if not (line or "").strip():
         _refuse(conn, by, "task_requirement", "Say what you are asking, in one sentence", task_id)
     ts = H.now()

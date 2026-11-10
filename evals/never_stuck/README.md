@@ -35,12 +35,9 @@ fails on a known bug is a strict expected failure: when the bug is fixed the tes
 
 | Name | Seen in | What happens |
 | --- | --- | --- |
-| `deleted-snoozed-task` | seeds 7, 9, 43; bug case | Deleting a snoozed task leaves its snooze open. Every later check pass tries to unsnooze it and raises not-found. |
 | `runs-outside-ladder` | seeds 23, 27, 49, 52; bug case | The 7-run bound counts the ladder's own wakes only. An unsnooze, a Late wake, an entry, ask or answer wake to a bot without the turn, or a wake queued before the last change is a bot run on top of it. |
 | `lost-wake-is-a-try` | scenario 3 | A lost wake is found only after the 2-minute gap and counts as try 1 ("You stopped before this task was finished"). The spec says the next pass, and no try. |
-| `bot-closes-persons-request` | scenario 12 | A bot closes a task a person asked for, with a reason, and the engine accepts it (C8). |
 | `mention-not-in-needs` | scenario 43 | An @ of a person on a task puts nothing in their Needs you (C28 is not built). |
-| `file-into-not-run` | bug case | A stage's `file_into` saves, but a move into that stage raises NotImplementedError instead of filing or refusing. |
 
 A sweep tags each failure with the bug it matches, so a new one stands out as `[NEW]`; `--allow-known` makes only new
 ones fail the run. When a bug is fixed, drop it from `sim.KNOWN_BUGS` or `scenarios.FAILING`.

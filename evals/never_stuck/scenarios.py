@@ -323,7 +323,6 @@ CHECKS: dict[str, Scenario] = {}
 # Scenarios that fail on this branch because of an engine bug, by the bug's name (README.md).
 FAILING: dict[int, str] = {
     3: "lost-wake-is-a-try",
-    12: "bot-closes-persons-request",
     43: "mention-not-in-needs",
 }
 
@@ -334,7 +333,7 @@ LATER: dict[int, tuple[str, str]] = {
     19: ("2 and 3", "only the General preset exists; Product and Engineering presets arrive with their phases"),
     20: ("2", "waking the Product Manager when Spec empties (C10) arrives with Product"),
     22: ("2", "factories and the Done count arrive with Product"),
-    26: ("2", "on-enter filing into a pipeline arrives with Product (stage_effects.enter raises for it)"),
+    26: ("2", "on-enter filing into a pipeline arrives with Product (pipeline_settings refuses it until then)"),
     27: ("2", "Jev and the production version check arrive with Product"),
     28: ("3", "GitHub: commits and review state"),
     29: ("3", "GitHub: PRs and Merge"),
@@ -809,7 +808,8 @@ def s18(r: Rig) -> None:
 def s21(r: Rig) -> None:
     from backend import task_engine as E
 
-    task = r.task(ANA, "Spec the export", WORK, assignee=WRITER)
+    # A bot asked for it: a bot may close it (C8 keeps a person's request for a person to close).
+    task = r.task(MANAGER, "Spec the export", WORK, assignee=WRITER)
     r.to_deck(task)
     r.check()
     version = r.row(task)["version"]
@@ -863,7 +863,7 @@ def s24(r: Rig) -> None:
 
     task, sub = _filed(r)
     version = r.row(task)["version"]
-    r.ok(WRITER, lambda c: E.move(c, task, E.CLOSED, WRITER, "Customer cancelled", version), "close the task")
+    r.ok(ANA, lambda c: E.move(c, task, E.CLOSED, ANA, "Customer cancelled", version), "close the task")
     row = r.row(sub)
     expect(row["status"] == "closed", f"the filed task is {row['status']}")
     note = [e for e in r.events(sub) if e["kind"] == "move"][-1]["note"]
@@ -890,9 +890,13 @@ def s25(r: Rig) -> None:
         }
 
     r.pipeline(record("Alpha", None))
-    r.pipeline(record("Beta", "alpha"))
-    out = r.refused(E.SYSTEM, lambda c: PS.save(c, E.SYSTEM, record("Alpha", "beta")), "task_settings", "the loop")
-    expect("would loop" in out.detail, out.detail)
+    r.pipeline(record("Beta", None))
+    # Filing into a pipeline is refused until Product (R7), so Beta's handoff is one saved before that: in the table.
+    r.raw(lambda c: c.execute("UPDATE stages SET on_enter=? WHERE pipeline_id='beta'", ('{"file_into": "alpha"}',)))
+    looped = record("Alpha", "beta")
+    r.refused(E.SYSTEM, lambda c: PS.save(c, E.SYSTEM, looped), "task_settings", "the loop")
+    problems = r.w.read(lambda c: PS.check(c, looped))
+    expect(any("would loop" in p for p in problems), f"the loop is not named: {problems}")
 
 
 @scenario(36, "A run is held or cut off")
@@ -1109,17 +1113,6 @@ def s52(r: Rig) -> None:
 
 
 # ----------------------------------------------------------------------------- bugs the seeded runs found
-@bug("deleted-snoozed-task", "A deleted task's snooze stays open and the check raises on it every pass")
-def b_deleted_snoozed(r: Rig) -> None:
-    from backend import task_delete
-    from backend import task_engine as E
-
-    task, sub = _filed(r)
-    version = r.row(sub)["version"]
-    until = _h().shift(r.w.now(), seconds=600)
-    r.ok(BUILDER, lambda c: E.snooze(c, sub, BUILDER, "Waiting on the vendor", until, version), "snooze the filed task")
-    r.ok(ANA, lambda c: task_delete.delete_tasks(c, [sub], apply=True, keep_work=True), "delete it")
-    r.later(minutes=11)  # the snooze's date passes
 
 
 @bug("runs-outside-ladder", "A snooze ends while another bot is asked: 8 runs without a change")
@@ -1146,35 +1139,46 @@ def b_runs_outside_ladder(r: Rig) -> None:
     expect(len(runs) <= 7, f"{len(runs)} bot runs without a change before a person was asked: {runs}")
 
 
-@bug("file-into-not-run", "A pipeline saved with 'file into' raises on every move into that stage")
-def b_file_into(r: Rig) -> None:
+@extra(
+    "file-into-not-run", "'File into' is refused until Product, and a stage that has it takes a move without raising"
+)
+def c_file_into(r: Rig) -> None:
+    from backend import pipeline_settings as PS
     from backend import task_engine as E
 
-    r.pipeline(
-        {
-            "id": "handoff",
-            "name": "Handoff",
-            "goal": "Work handed to General.",
-            "prefix": "H",
-            "manager_id": MANAGER,
-            "stages": [
-                {"name": "Plan", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
-                {
-                    "name": "Hand off",
-                    "owner": "assignee",
-                    "on_enter": {"file_into": GENERAL},
-                    "requirements": [{"kind": "linked_done"}],
-                },
-            ],
-        }
+    record: dict[str, Any] = {
+        "id": "handoff",
+        "name": "Handoff",
+        "goal": "Work handed to General.",
+        "prefix": "H",
+        "manager_id": MANAGER,
+        "stages": [
+            {"name": "Plan", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+            {
+                "name": "Hand off",
+                "owner": "assignee",
+                "on_enter": {"file_into": GENERAL},
+                "requirements": [{"kind": "linked_done"}],
+            },
+        ],
+    }
+    out = r.refused(E.SYSTEM, lambda c: PS.save(c, E.SYSTEM, record), "task_settings", "saving 'file into'")
+    expect("comes with the Product pipeline" in out.detail, out.detail)
+    record["stages"][1]["on_enter"] = {}
+    r.pipeline(record)
+    # Saved before the refusal: the stage has it in the table.
+    r.raw(
+        lambda c: c.execute("UPDATE stages SET on_enter=? WHERE id='handoff-hand-off'", ('{"file_into": "general"}',))
     )
     task = r.task(ANA, "Hand it over", "handoff", assignee=WRITER)
     version = r.row(task)["version"]
     try:
-        out = r.act(WRITER, lambda c: E.move(c, task, E.NEXT, WRITER, "Planned in the call", version))
+        moved = r.act(WRITER, lambda c: E.move(c, task, E.NEXT, WRITER, "Planned in the call", version))
     except NotImplementedError as error:
         raise ScenarioFailed(f"the move raised {error!r} instead of being refused or done") from error
-    expect(not isinstance(out, Refusal), f"refused: {out!r}")
+    expect(not isinstance(moved, Refusal), f"refused: {moved!r}")
+    expect(r.stage_of(task) == "Hand off", f"the task is in {r.stage_of(task)}")
+    r.check()
 
 
 # ----------------------------------------------------------------------------- extra checks
@@ -1189,6 +1193,24 @@ def c_clock_back(r: Rig) -> None:
     runs = r.ladder(task, hours=24)
     expect(r.visit(task).get("level") == "person", f"after the clock went back the ladder did not end: {runs}")
     expect(r.runs(task) <= 7, f"{r.runs(task)} runs")
+
+
+@extra("deleted-snoozed-task", "A snoozed task is deleted: its snooze ends with it and the check passes it by")
+def c_deleted_snoozed(r: Rig) -> None:
+    from backend import task_delete
+    from backend import task_engine as E
+
+    task, sub = _filed(r)
+    version = r.row(sub)["version"]
+    until = _h().shift(r.w.now(), seconds=600)
+    r.ok(BUILDER, lambda c: E.snooze(c, sub, BUILDER, "Waiting on the vendor", until, version), "snooze the filed task")
+    r.ok(ANA, lambda c: task_delete.delete_tasks(c, [sub], apply=True, keep_work=True), "delete it")
+    left = r.w.read(
+        lambda c: c.execute("SELECT COUNT(*) FROM snoozes WHERE task_id=? AND ended_at IS NULL", (sub,)).fetchone()[0]
+    )
+    expect(left == 0, "the deleted task's snooze is still open")
+    r.later(minutes=11)  # the snooze's date passes: nothing raises
+    expect(r.waits(task) == [("bot", WRITER)], f"the task that filed it waits on {r.waits(task)}")
 
 
 @extra("crash-in-check", "A crash at any point inside a never-stuck pass rolls the whole pass back")

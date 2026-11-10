@@ -229,6 +229,23 @@ def test_a_filed_task_that_closes_keeps_the_parent_and_wakes_its_owner_once(c, g
     assert told == [f"{parent['id']}:{parent['visit']['id']}:filed:{child['id']}"]
 
 
+def test_a_bot_cannot_close_a_persons_request_and_is_told_to_ask_them(c, general):
+    asked = X.new_task(c, ANA, "Book the flights", assignee="bot:builder")
+    with _refused("task_needs_person") as refused:
+        E.move(c, asked["id"], E.CLOSED, "bot:builder", "Not possible", seen_version=asked["version"])
+    assert "Ask Ana, in one sentence, why it can't be done" in str(refused.value)
+    assert E.task(c, asked["id"])["status"] == "open"
+    assert E.move(c, asked["id"], E.CLOSED, ANA)["status"] == "closed"  # a person closes anything
+    # A bot closes what a bot asked for, and what a task filed (and the engine closes filed tasks with their parent).
+    theirs = X.new_task(c, "bot:manager", "Tidy the labels", assignee="bot:builder")
+    closed = E.move(c, theirs["id"], E.CLOSED, "bot:builder", "Done by hand", seen_version=theirs["version"])
+    assert closed["status"] == "closed"
+    parent = X.new_task(c, ANA, "Plan the trip", assignee="bot:builder")
+    filed = X.new_task(c, ANA, "Find a hotel", assignee="bot:builder", parent=parent["id"])
+    closed = E.move(c, filed["id"], E.CLOSED, "bot:builder", "Not needed", seen_version=filed["version"])
+    assert closed["status"] == "closed"
+
+
 def test_reopen_needs_a_note_and_goes_back_to_the_stage_the_task_left(c, build):
     row = X.new_task(c, ANA, "Build the importer", "eng")
     E.fill_open_slots(c)
@@ -358,3 +375,21 @@ def test_a_requirement_added_to_one_task_holds_it_until_answered_withdrawn_or_th
     asked = E.add_requirement(c, row["id"], ANA, "ok", ANA, "OK the importer's limits")
     E.move(c, row["id"], "Build", ANA)
     assert R.get(c, asked["requirement_id"])["withdrawn_at"]  # moving back ends it: nothing is left behind
+
+
+def test_a_reassign_names_only_someone_who_can_act(c, general):
+    row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
+    X.left(c, "human:ben")
+    X.no_sign_in(c, "human:cara")
+    for who, words in (
+        ("human:ben", "has left or is not here"),
+        ("human:cara", "has left or is not here"),
+        ("human:nobody", "has left or is not here"),
+        ("bot:nobody", "no such bot"),
+        ("everyone", "Name a person or a bot"),
+    ):
+        with pytest.raises(H.Refused, match=f"task_requirement.*{words}|{words}.*task_requirement"):
+            E.reassign(c, row["id"], who, ANA)
+    assert E.task(c, row["id"])["owner_id"] == "bot:builder"
+    assert E.reassign(c, row["id"], "bot:reviewer", ANA)["owner_id"] == "bot:reviewer"
+    assert E.reassign(c, row["id"], ANA, ANA)["owner_id"] == ANA

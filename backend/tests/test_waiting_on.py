@@ -204,3 +204,27 @@ def test_an_ok_that_names_a_bot_is_that_bots_turn(c, general):
     waits = W.waiting_on(c, row["id"])
     assert [(w.state, w.who, w.ask) for w in waits] == [("person", ANA, False), ("bot", "bot:reviewer", True)]
     assert [n["kind"] for n in W.needs(c, ANA)] == ["task"]  # the reviewer's OK is not in Ana's list
+
+
+def test_a_person_who_cannot_sign_in_is_never_chosen_and_someone_who_can_always_is(c, general, monkeypatch):
+    from backend import never_stuck as NS
+    from backend import task_requirements as R
+
+    ben = "human:ben"
+    X.pipeline(c, "plans", "Plans", ({"name": "Plan", "owner": ben, "requirements": [{"kind": "owner_done"}]},))
+    c.execute("UPDATE pipelines SET owner_id=?, manager_id=? WHERE id='plans'", (ben, ben))
+    c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='builder'")
+    task_id = X.new_task(c, "bot:builder", "Plan the offsite", "plans")["id"]
+    assert _states(c, task_id) == [("person", ben)]
+    X.no_sign_in(c, ben)  # on the chart, but sign-in is off: he cannot act
+    assert not R.active_person(c, ben)
+    # The stage, the pipeline and the bot that asked all fall to Ben, and the company owner does not resolve: the
+    # person who has been here longest has it.
+    monkeypatch.setattr(W.pipeline_rights, "company_owner", lambda conn: "")
+    who = W.person_for(c, E.task(c, task_id))
+    assert who and who != ben and R.active_person(c, who)
+    assert _states(c, task_id) == [("person", who)]
+    assert [n["task_id"] for n in W.needs(c, who) if n["kind"] == "task"] == [task_id]
+    assert NS.rules_hold(c) == []
+    monkeypatch.setattr(W, "person_for", lambda conn, row: None)  # a turn that names nobody is a broken rule
+    assert NS.rules_hold(c) == [f"3: task {task_id} is a person's turn that names nobody"]

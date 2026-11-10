@@ -74,7 +74,8 @@ messages      + wake_key, unique where not null
 `open`).
 
 `tasks.version` goes up by one on every move and every reassign, and on nothing else the engine does. A snooze, an
-answer and an added requirement leave it alone.
+answer and an added requirement leave it alone. After the cut-over a field edit (a new title, a label) raises it too.
+It says "this row changed since you looked", not progress: `progress_mark` does not read it.
 
 `answers.answer` values: `done` (owner_done), `ok` and `no` (ok, and a page's person OK), `again` (the owner asks the
 person to look again after a `no`), the chosen choice (answer), `give` (a stage's OK given to the person in `notes`),
@@ -125,9 +126,13 @@ def fill_open_slots(conn, stage_ids=None) -> list[str]
     # Every task that is ready and has room, oldest first. Returns the ids it moved.
 def reassign(conn, task_id, owner, by, why=None, seen_version=None) -> dict
     # Same writer. Same visit. Resets tries and level. Drops the old owner's queued wakes for the task.
+    # `owner` is a person who is here, a bot that exists, or nobody; anyone else is refused task_requirement.
     # In a stage owned by `assignee`, the task's assignee follows.
 def snooze(conn, task_id, by, why=None, until=None, seen_version=None) -> dict
 def unsnooze(conn, task_id, by, why=None) -> dict
+def on_delete(conn, task_ids, by) -> int
+    # The delete path (task_delete.delete_tasks), before the rows go: each task's open snooze ends. Its visit,
+    # requirements and links stay for a restore; every read skips a task that is gone.
 def add_requirement(conn, task_id, by, kind, person, line, *, choices=None, shows=None, seen_version=None) -> dict
     # kind is ok or answer (C30). A bot's second one on the visit replaces its first (C15).
     # `person` is a person who is here (not left or removed) or a bot that exists. The result carries `requirement_id`.
@@ -139,8 +144,9 @@ def changed(conn, task_id, by) -> None
     # Something the task waits on changed outside a move (an answer came or was taken back). The ladder starts again.
     # Whoever calls it also wakes the bot it hands the turn to.
 def progress_mark(conn, visit_id, standings=None) -> str
-    # What tells a task that changed from one that did not: its version, this visit's answers, added requirements,
-    # filed tasks and snoozes, and where each requirement stands. A comment is not a change.
+    # What tells a task that changed from one that did not: this visit's answers, added requirements, filed tasks and
+    # snoozes, and where each requirement stands. A comment is not a change, nor the task's version (a field edit
+    # raises it); a move and a reassign start the ladder again themselves.
 
 def task(conn, task_id) -> dict | None
     # The row plus `visit` (the open one), `stage`, `pipeline` and `snooze` (the open one or None).
@@ -160,7 +166,7 @@ one of these rules, or `not-found`, and nothing else:
 task_changed         changed since you looked               (also: a bot gave no seen_version)
 task_not_met         not met: <requirement line>            (forward with no why)
 task_no_push_past    <requirement> can't be pushed past. Move back or close.
-task_needs_person    <requirement> needs a person; try again needs a person
+task_needs_person    <requirement> needs a person; try again needs a person; a bot closing a person's request
 task_stage_full      no room in <stage>
 task_why             say why
 task_no_such_stage   no such stage in this pipeline
@@ -177,6 +183,11 @@ Who must say why:
 - Back and Close: a bot. A person may leave it out.
 - Reopen: everyone gives a note.
 - Snooze: a bot.
+
+A bot can't close a person's request (C8): `move(..., CLOSED)` by a bot is refused `task_needs_person` when the task's
+requester is a person and no task filed it, and the detail tells it to ask that person, in one sentence, why it can't be
+done (they close it or reassign it). A person closes anything. A bot closes what a bot asked for and what a task filed.
+The engine closing filed tasks with the task above them (`cascade`) is not a bot.
 
 A bot sends `seen_version` with every command that takes one: move, reassign, snooze and add a requirement. A person
 may leave it out.
@@ -227,7 +238,8 @@ def get(conn, requirement_id) -> dict | None
 def newest_answers(conn, visit_id) -> dict[str, dict]
 def person_of(conn, requirement, visit_id) -> str | None   # who it waits on: the newest give, else person_id; never
                                                            # a person who left
-def active_person(conn, actor) -> bool            # a person who is here: in humans, not left or hidden on the roster
+def active_person(conn, actor) -> bool            # a person who is here and can act: in humans, not left or hidden
+                                                  # on the roster, sign-in not turned off (`sign_in: false`)
 def steers(kind, value) -> bool                   # no / again / give on an ok or a page; never on a question
 def standing(conn, task, requirement, answer=None) -> Standing
 def standings(conn, task) -> list[Standing]
@@ -255,6 +267,7 @@ def all_met(waits) -> bool                                       # it only waits
 def needs(conn, person) -> list[dict]                            # Needs you for a person: a read, nothing stored
 def of(conn, row, seen=None, standings=None) -> list[Wait]       # the same, for a task already read with task()
 def person_for(conn, row) -> str | None                          # the person a task falls to
+def company_person(conn) -> str | None                           # the company owner, else whoever has been here longest
 def holder(conn, row) -> str | None                              # who has the task's own work now
 ```
 
@@ -271,8 +284,11 @@ person, or a bot named to approve. Without it the wait is the task's own work. T
   A person's own task stays theirs at every level. An owner or manager who is a person who left gives `person_for`.
 - `person_for`, first that is a person who is here (not left or removed): the person the ladder already chose, the
   task's owner where that is a person, the pipeline's owner or manager where that is a person, the owner of its manager
-  bot, the owner of the bot that has the task, whoever asked for the task. Else the company owner.
-- A cause that pauses a bot is in the list of the bot's owner, else the company owner when that owner left.
+  bot, the owner of the bot that has the task, whoever asked for the task. Else the company owner, else the person who
+  has been here longest (first on the roster). Anyone who left, was removed or cannot sign in is skipped, so it is None
+  only when nobody can sign in.
+- A cause that pauses a bot is in the list of the bot's owner, else the company owner when that owner left
+  (`company_person`: whoever has been here longest when the owner cannot act).
 - A bot that has the task may leave it waiting on something it started: a question or an OK it added, or a task it
   filed. Until that ends, the rest of what is missing is nobody's turn: the task waits on the person, or on the filed
   task, and the bot is not woken. A person's own task stays in their list.
@@ -326,7 +342,8 @@ def check(conn, now=None, failures=None) -> dict[str, int]
     # One pass, in the caller's write transaction: snoozes that ended, then every open task in a work stage that is
     # not by hand and not snoozed, oldest visit first. Returns snoozes_ended, moved, woken, to_manager, to_person, late.
     # Each task is done in its own savepoint. One that raises is rolled back and added to `failures` as
-    # (task id, error); with no list the error is raised.
+    # (task id, error), and the pass goes on to the next; with no list the error is raised. A row that names a task
+    # that was deleted (an open snooze, a visit, a queued wake, a requirement) is passed by: no read raises on it.
 def rules_hold(conn) -> list[str]
     # The seven rules that hold at all times. One sentence per break, starting with the rule's number. Empty: all hold.
 ```
@@ -366,7 +383,7 @@ What `rules_hold` reads for each rule:
 2. Every bot's turn on a task that is not snoozed has a live run, a queued wake, a next try time, or a level above
    `owner`.
 3. Every person's turn is in that person's `needs` exactly once: one `task` entry for the task's own work, and one
-   `ask` entry per requirement that names them.
+   `ask` entry per requirement that names them. A person's turn that names nobody is a break while anyone can sign in.
 4. The trigger exists, the guard is closed, and every task on the engine has a status that fits its stage, a stage of
    its own pipeline, and exactly one open visit, in that stage.
 5. At most one handoff per visit; no handed-off task still open after its visit was left by Back or Close; no
@@ -432,7 +449,9 @@ No answer, give or thumb changes `tasks.version`. Giving the owner's own `done` 
 ## stage_effects.py, pipeline_settings.py
 
 ```python
-stage_effects.enter(conn, task, by) -> None        # file a linked task; add a queue_pr effect row
+stage_effects.enter(conn, task, by) -> None        # file a linked task; add a queue_pr effect row. Neither is built
+                                                   # yet: a stage that has one (saved before the refusal) does
+                                                   # nothing on enter, and never raises into the move
 stage_effects.undo(conn, task, by, note) -> None   # close tasks filed in the visit; add dequeue_pr rows
 stage_effects.filed_open(conn, visit_id) -> list[str]
 stage_effects.run(conn_factory) -> int             # the GitHub calls still owed (phase 3)
@@ -460,14 +479,15 @@ The record `read` gives and `save` takes. Keys are the column names. `settings_v
                                            "line"}]}]}
 ```
 
-- `on_enter` is `{}`, `{"file_into": "<pipeline id>"}` or `{"queue_prs": true}` (refused until phase 3).
+- `on_enter` is `{}`, `{"file_into": "<pipeline id>"}` (refused until phase 2: "Filing into a pipeline comes with the
+  Product pipeline") or `{"queue_prs": true}` (refused until phase 3).
 - A row with an id is changed in place; without one it is made: a stage as `<pipeline id>-<slug of its name>` (`-2`,
   `-3` on a clash), a requirement as `H.new_id()`. A stage left out is retired (refused while it holds open tasks), a
   requirement left out is withdrawn. A requirement's kind does not change in place. A requirement id is listed once in
   the whole record, across every stage.
 - A stage's owner applies when a task enters the stage: changing it does not reassign the tasks already there.
-- An OK on a stage names someone who is here: a person who has not left or a bot that exists (a named bot makes it
-  that bot's turn).
+- An OK on a stage names someone who is here: a person who has not left and can sign in, or a bot that exists (a
+  named bot makes it that bot's turn). The pipeline's manager and owner, and a stage's owner, are the same.
 - `save` refuses `task_settings` with the first problem `check` finds, or who may not change it, and `task_changed`
   when `seen_version` is not `settings_version` (a bot must give it to change a pipeline). Each save raises
   `settings_version` by one and writes one `events` row, `pipeline.save`, with `version` and `changes`
