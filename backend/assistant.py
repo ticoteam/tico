@@ -814,7 +814,7 @@ def groups(c, steps):
             noun, created = "task", (H.task(c, m.group(1)) or {}).get("created_at") if m else None
         days = days_old(created)
         band = next(label for limit, label in AGE_BANDS if limit is None or days < limit)
-        out.setdefault((verb, noun, band), []).append(str(body.get("note") or "").strip())
+        out.setdefault((verb, noun, band), []).append(str(body.get("why") or body.get("note") or "").strip())
     lines = []
     for (verb, noun, band), notes in out.items():
         shared = notes[0] if notes and all(n == notes[0] for n in notes) else ""

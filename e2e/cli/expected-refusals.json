@@ -112,6 +112,7 @@
  "task done": "usage",
  "task label": "usage",
  "task move": "usage",
+ "task reassign": "usage",
  "task relate": "kind",
  "task run": "run-now",
  "task snooze": "usage",

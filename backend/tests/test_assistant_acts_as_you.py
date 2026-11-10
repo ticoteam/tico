@@ -31,12 +31,12 @@ def test_the_turn_closes_a_task_the_person_owns_as_them_on_the_cite(api):
     token = attempt["token"]
     current = get(api, "tasks/" + task, token)
     current = current.get("task", current)
-    closed = post(api, "tasks/" + task, {"version": current["version"], "status": "done"}, token=token)
-    assert closed["status"] == "done"
+    post(api, f"tasks/{task}/done", {"version": current["version"]}, token=token)
     with api.app.state.store.read() as c:
+        assert H.task(c, task)["status"] == "done"
         assert (
             c.execute(
-                "SELECT via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' "
+                "SELECT via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='move' "
                 "ORDER BY created_at DESC LIMIT 1",
                 (task,),
             ).fetchone()[0]
@@ -49,13 +49,18 @@ def test_a_bulk_change_on_the_turn_records_each_task_as_the_person_via_assistant
         ids = [H.task_create(c, "bot:ops", f"Follow up {n}", "Pending.", "human:ana")["id"] for n in range(2)]
     r, attempt = assistant_turn(api, "ana-test")
     token = attempt["token"]
-    done = post(api, "task-bulk", {"filter": {"owner": "human:ana", "status": "open"}, "action": "close"}, token=token)
-    assert done["changed"] >= 2, done
+    # Many tasks at once is the person's own sign-in; the turn closes each through its own route, with its version.
+    bulk = {"filter": {"owner": "human:ana", "status": "open"}, "action": "close"}
+    post(api, "task-bulk", bulk, token=token, expected=403)
+    for task_id in ids:
+        current = get(api, "tasks/" + task_id, token)
+        current = current.get("task", current)
+        post(api, f"tasks/{task_id}/move", {"to": "closed", "version": current["version"]}, token=token)
     with api.app.state.store.read() as c:
         latest = {}  # newest first: keep the first row seen for each task
         for task_id, via in c.execute(
             "SELECT subject_id, via FROM history_events WHERE subject_type='task' AND subject_id IN (?,?) "
-            "AND kind='status' ORDER BY created_at DESC",
+            "AND kind='move' ORDER BY created_at DESC",
             ids,
         ).fetchall():
             latest.setdefault(task_id, via)
@@ -242,10 +247,17 @@ def test_the_assistants_background_run_puts_one_card_in_the_persons_own_chat(api
 
 def test_a_background_card_never_approves_and_is_capped_per_person_per_day(api):
     coo = setup_attempt(api, "coo")[2]["token"]
-    approve = {"actions": [{"path": "/api/v2/approvals/a1", "body": {"decision": "approved"}}]}
-    card(
-        api, coo, "/api/v2/assistant/batch", approve, summary="Approve the spend", for_person="human:ana", expected=403
-    )
+    # An OK is the person's own tap on its preview: never a card, alone or as a bulk step.
+    with api.app.state.store.transaction() as c:
+        ads = H.task_create(c, "human:ana", "Run the ads", "Q4.", "bot:ops")
+        ok = H.task_ask(
+            c, "bot:ops", ads["id"], "human:ana", "Spend $500 on ads?", kind="ok", seen_version=ads["version"]
+        )
+    give = f"/api/v2/tasks/{ads['id']}/asks/{ok['requirement_id']}/ok"
+    for path, body in (("/api/v2/assistant/batch", {"actions": [{"path": give, "body": {}}]}), (give, {})):
+        sent = {"summary": "OK the spend", "method": "POST", "path": path, "body": body, "for": "human:ana"}
+        refused = api.post("/api/v2/assistant/actions", json=sent, headers=headers(coo))
+        assert refused.status_code in (403, 422), refused.text
     for n in range(5):
         card(api, coo, "/api/v2/bots/ops/archive", {"expected_revision": n + 1}, for_person="human:ana")
     card(api, coo, "/api/v2/bots/ops/archive", {"expected_revision": 9}, for_person="human:ana", expected=429)
@@ -258,7 +270,7 @@ def test_one_card_holds_closes_an_automation_change_and_a_rule_stop(api):
     token = assistant_turn(api, "ana-test")[1]["token"]
     batch = {
         "actions": [
-            {"path": "/api/v2/tasks/" + task, "body": {"status": "done", "version": 1}},
+            {"path": f"/api/v2/tasks/{task}/move", "body": {"to": "done", "version": 1}},
             {"method": "PATCH", "path": "/api/v2/automations/" + aid, "body": {"name": "Weekly digest"}},
         ]
     }

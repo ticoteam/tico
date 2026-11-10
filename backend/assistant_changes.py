@@ -127,7 +127,7 @@ def describe(c, auth, who, kind, row, settings):
         detail = json.loads(row["data"] or "{}") or {}
         obj = f"task:{row['subject_id']}"
         what = move_line(c, auth, who, row, detail)
-        words = cited_words(c, detail.get("delegation"))
+        words = cited_words(c, detail.get("delegation") or move_delegation(c, row))
         undo, why = undoable(c, auth, who, kind, row, detail, settings)
     elif kind == "audit":
         obj = row["object"]
@@ -225,6 +225,17 @@ def cited_words(c, delegation):
         return ""
     message = H.message(c, cited)
     return (message or {}).get("body") or ""
+
+
+def move_delegation(c, row):
+    """The cited request of a move or hand-over: a task's history row does not keep it, the event its effects write in
+    the same write does (`H.event` stamps `delegation` on a write made via the Assistant; backend/task_effects.py)."""
+    found = c.execute(
+        "SELECT detail FROM events WHERE actor=? AND target=? AND action IN ('task.close','task.update') "
+        "AND created_at>=? AND json_extract(detail,'$.via')='assistant' ORDER BY created_at, id LIMIT 1",
+        (row["actor_id"], row["subject_id"], row["created_at"]),
+    ).fetchone()
+    return (json.loads(found["detail"] or "{}") or {}).get("delegation") if found else None
 
 
 def can_see(c, auth, who, task_id):
