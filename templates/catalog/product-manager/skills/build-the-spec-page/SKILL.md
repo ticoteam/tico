@@ -52,9 +52,9 @@ content in `.scroll`.
 4. Publish it on the task: `hub page publish specs/<slug>.html --spec --task <id>`.
 5. Hand it in for an OK, showing the page:
 
-       hub task ask <id> --to <the person who approves specs> "Approve the spec for <title>?" --show page:<page id> --version N
+       hub task ask <id> --to <the person who OKs specs> "OK the spec for <title>?" --kind ok --show page:<page id> --version N
 
-   Then end the turn. Do not approve it yourself. If they send it back, read the note, revise the page, publish it
+   Then end the turn. Do not answer it yourself. If they send it back, read the note, revise the page, publish it
    again and ask again.
 
 ## Done

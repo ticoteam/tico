@@ -33,8 +33,8 @@ def private_run(api, *, carried=("books",), extra=None, feed=True):
             made[f"extra{i}"] = H.task_create(c, requester, title, "Private work.", owner, private=True, lint=False)[
                 "id"
             ]
-        for tid in made.values():
-            c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt, tid))
+        for tid in made.values():  # the run carries each task, as the engine records it
+            H.event(c, "system", "task.next-run.carried", attempt, {"task_id": tid})
     if feed:
         mercury(api)
     return token, made, attempt
@@ -176,10 +176,10 @@ def test_the_refusal_is_noted_on_the_task_in_one_sentence_and_nobody_is_asked(ap
     err, widened = call(
         api,
         "hub_task_update",
-        {"id": made["books"], "visibility": "public", "public_title": "Books check"},
+        {"id": made["books"], "private": False, "version": shown["task"]["version"]},
         token=token,
     )
-    assert err and widened.get("error") == "private", widened
+    assert err and widened.get("error") == "privacy", widened
     with api.app.state.store.read() as c:
         assert H.task_private(c, H.task(c, made["books"])), "the Books check stays private"
         assert H.task(c, made["books"])["status"] == "open"

@@ -69,7 +69,7 @@ Done when: the change is made as the requester and read back, or the refusal is 
 - `hub bot access <slug> --see <everyone, or a list>` (or `--read` or `--write` the same way): who may see and use it.
 - `hub bot owners <slug> --add <person>` (`--remove <person>`): who owns it.
 - `hub bot archive <slug>` and `hub bot restore <slug>`. "Delete" or "remove" a bot means archive.
-- `hub bot mail <slug> --send` or `--no-send`: sending without approval, which only a person may turn on.
+- `hub bot mail <slug> --send` or `--no-send`: sending without a person's OK, which only a person may turn on.
 
 ## Credentials
 

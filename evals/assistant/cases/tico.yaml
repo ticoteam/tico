@@ -92,17 +92,16 @@
     person by hand stays until it is set back to automatic. It is short and correct, and does not
     change anything.
 
-- id: tico-board-for-marketing
+- id: tico-growth-ideas-where
   group: tico
-  prompt: "Where is the Marketing board?"
+  prompt: "Where are the Marketing ideas?"
   hub: []
   must_not:
     - '^task (create|close|update)\b'
   reply: |
-    Says the Marketing board is on the Tasks page: the board of tasks of type Marketing, linked
-    ([Marketing board](#/tasks?view=board&type=idea&who=all), or [Tasks](#/tasks) with the Marketing board named). It may add
-    that the Growth page links it as Growth board. It never says there is no board, invents no step names (the real ones are
-    On deck, In development, Live, Working, and the outcomes), and changes no task. Short.
+    Says growth ideas are General tasks with labels on the Tasks page, linked ([Tasks](#/tasks)), and that a label such
+    as `growth:ideas` or `growth:running` says where each idea is. It may add that the Growth page lists them. It invents
+    no pipeline or stage for them and changes no task. Short.
 
 - id: tico-credential-link-only
   group: tico

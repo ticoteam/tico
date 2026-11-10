@@ -4775,6 +4775,14 @@ class Execution:
             threads.replace_note_wake(c, msg, "bot:" + row["bot_id"])
             H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "unreadable"})
             return {"attempt": None}
+        from . import task_wakes
+
+        if not task_wakes.may_start(c, msg):
+            # The engine canceled its wake: the bot has no turn on the task now, or the visit started its 7 runs since
+            # it last changed. Under this write lock, so two claims never both take the seventh. The never-stuck check
+            # writes a lost wake again for a bot that still has a turn, and hands a task at 7 runs to a person.
+            H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "no_turn_or_runs"})
+            return {"attempt": None}
         # The bot's budget and back-off: an error in them passes the bot over, and holds no run.
         with shared_check():
             if turn_budgets.enforce(c, self.store.settings, row, msg):

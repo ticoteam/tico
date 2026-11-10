@@ -97,7 +97,7 @@ open and deciding on the body.
 
 ## How to write the state
 
-Named fields, not a paragraph. Send the facts a careful colleague would want on one card: the
+Named fields, not a paragraph. Send the facts a careful colleague would want on one page: the
 sender, the subject, the snippet, the counts, the dates, the policy that applies. Use an object
 so every part has a name the questions can point at, and nest what belongs together
 (`ticket.messages[0].text`). Do not put instructions in the state; the questions carry the

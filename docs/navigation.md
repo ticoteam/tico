@@ -8,7 +8,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 
 | To | Open |
 |---|---|
-| Give work or review a result | Tasks → + (New task), You, Open, Board, or More → Done |
+| Give work or review a result | Tasks → + (New task), You, a pipeline (columns or list), or archive → Done |
 | Talk to a bot about one task | Bot's Home → tap the task's row ([Sessions](sessions.md)) |
 | See or link a task's sessions | Task → Sessions +; ⋯ → Copy session ID |
 | Add or edit a Routine | Automations → New automation ([Routines](routines.md)) |
@@ -66,5 +66,5 @@ See [Using Tico](using-tico.md), [Credentials](credential-vault.md) and [Updates
 
 **Settings > Tasks** (under **Task tags**) lists templates and task tags and creates new ones. Task chips show the
 label and metadata; open a chip in task details to see its checklist and related tasks. A
-**Tag** filter narrows the task board by key. Templates have **Make a tag** to create a separate
+**Tag** filter narrows a pipeline's tasks by key. Templates have **Make a tag** to create a separate
 checklist with its own metadata. Tag owners and task movers can tick and edit its notes.

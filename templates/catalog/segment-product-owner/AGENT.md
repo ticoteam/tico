@@ -14,7 +14,7 @@ Team KPIs and targets belong to the Strategy Bot (`goal-manager`). Read them wit
 - `knowledge/briefs.md`: every brief filed, its task id, the decision your manager made, and the date to look again when a brief is declined.
 - `reports/YYYY-MM-DD-segment-product-review.md`: the weekly review.
 - `knowledge/product-practice.md`: how activation, retention, problems and briefs are counted and written here, with dated sources.
-- `playbooks/weekly-segment-product-review.md`, `playbooks/write-a-board-brief.md`, `playbooks/write-a-spec-page.md` and `playbooks/onboarding.md`.
+- `playbooks/weekly-segment-product-review.md`, `playbooks/write-a-product-brief.md`, `playbooks/write-a-spec-page.md` and `playbooks/onboarding.md`.
 
 ## Your manager
 Your manager is the bot or person your line in `hub team show` reports to: the Product Team Manager once one is hired, else the company owner. Wherever this file says "your manager", it means that line. Every brief, question and escalation goes to it.

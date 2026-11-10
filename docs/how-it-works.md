@@ -15,8 +15,9 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
   the owner's too; the other three are helpers it hands work to. BotOps sets up and
   fixes bots, computers, Tools and Credentials; the [Librarian](librarian.md) answers from the team's docs and the Tico
   manual; the [Strategy Bot](goals-and-kpis.md#the-strategy-bot) keeps KPIs and goal status current. The [Task Manager](task-manager.md)
-  is a built-in helper outside the chart: once an hour it looks for tasks that stopped moving, and wakes only when it
-  finds something. [Check health](health-monitor.md) is a plain-code step that runs hourly and opens one BotOps task
+  is a built-in helper outside the chart: it manages the General pipeline, and once an hour it looks for tasks that say
+  Paused, held bots and duplicates, and wakes only when it finds something. [Check health](health-monitor.md) is a
+  plain-code step that runs hourly and opens one BotOps task
   per install problem.
 - **Message bots** work a human's email or a Slack channel. **External agents** (Hermes, OpenClaw, Codex, Claude) connect
   over MCP with a token ([Connect an external agent](connect-an-agent.md)).
@@ -31,7 +32,7 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
 | BotOps (built-in) | Sets up and fixes bots, computers, Tools and Credentials | Sidebar | “Add a bot that answers #support” |
 | Librarian (built-in) | Answers from your docs and the Tico manual, with sources | Ask the Librarian on Docs and on Strategy's Market tab | “What is our refund limit?” |
 | Strategy Bot (built-in) | Keeps KPIs and goal colours current | Top of Goals; ask your Assistant | “Why is this goal yellow?” |
-| Task Manager (built-in) | Tidies tasks hourly on weekdays: closes what is done, fixes drifted steps, one Needs-you line per department | Its “Task check” tasks; its bot page → Settings | `hub task-manager status` |
+| Task Manager (built-in) | Manages General; tidies tasks hourly on weekdays: Paused tasks, held bots, duplicates | Its “Task check” tasks; its bot page → Settings | `hub task-manager status` |
 | Your bots | Do the team's work from their Instructions | Team in the sidebar: its Home or a task | “Draft replies to the open tickets” |
 | Message bots (Beta) | Work a human's email or a Slack channel | Message bots in the sidebar | “Sort today's email” |
 
@@ -50,11 +51,11 @@ Words are defined in the [Glossary](glossary.md).
   `idle`, `running`, `waiting_human`, `waiting_bot`, `blocked`, `limited`, `crashed`, `paused`,
   `quarantined`.
 - **Task** — a unit of work with a requester, an owner (bot or human), a title, a body and a
-  note; a `lane` (`company` or `product`), a `rank` in its owner's queue, labels, links (a pull
-  request first), and relations to other tasks (a parent, blockers, related, duplicates, follow-ups). States: `open`, `doing`,
-  `waiting`, `review`, `ready`, `done`, `closed`, `declined` (`review` and `ready` belong to the
-  product lane). The owner marks it `done`; only the requester or a person who can edit it closes it. Every
-  task has a comment thread, on the record with the author.
+  note; a pipeline and a stage in it, a `rank` in its owner's queue, labels, links (a pull request first), the tasks
+  it filed, and relations to other tasks (related, duplicates, follow-ups). Status: `open`, `done` or `closed`; what
+  an open task waits on is read, never stored ([Whose turn it is](tasks.md#whose-turn-it-is)). The owner says
+  `done`; a bot can't close a person's request by itself. Every task has a comment thread, on the record with the
+  author.
 - **Message** — one line in a thread. Kinds: `say`, `notice`, `steer`. How it reaches a bot
   is one of three ways ([Steer, queue or defer](using-tico.md#steer-queue-or-defer)): **Steer** goes into the bot's
   turn running in that thread now (when the harness can steer, `steer` in its manifest; otherwise right after
@@ -62,13 +63,11 @@ Words are defined in the [Glossary](glossary.md).
   nobody until the bot's next turn there or a deadline. Chat says which, and Stop and redirect ends the turn so the next
   one starts with that message. A requesting bot steers its delegated task's running turn with
   `hub message send --steer --ref task:<id>`.
-  A bot's question to a person is a question task, and it lands in **Needs you**.
-- **Approval** — a human's yes or no to one exact action. Kinds: `send`, `spend`, `publish`,
-  `merge`. A bot may request one when uncertain about a specific action; authorized work needs no separate
-  approval. Only a human decides; an approval is spent once and does not turn outbound sending on. Rules: `policies/approvals.md`.
-  Each one records when its exact payload was ready (`ready_since`, when the request passed its checks) and whose decision
-  it is (`decision_owner`, the person it was sent to); reads add `age_s`, and its card says "Ready 2 h 10 min, waiting on
-  Sam". A release's publish approval waiting over an hour is a [Check health](health-monitor.md) finding.
+  A bot's question to a person is an ask on its task, and it lands in their **Needs you**
+  ([Asks and OKs](tasks.md#asks-and-oks)). An OK on one exact action (send this email, spend, publish) is an ask bound
+  to
+  exactly what the person was shown: only they give it, by their own click, and it is used once. Authorized work needs
+  no separate OK, and an OK does not turn outbound sending on. Rules: `policies/approvals.md`.
 - **Routine** — a cron schedule owned by a bot: `id`, `title`, `cron`, `timezone`, `template`
   (a playbook file) or inline `instructions`, `labels`. Each occurrence becomes a task.
 - **Goal** — what a human or a bot is for: a title, an owner (`company`, a human or a bot), the goal it
@@ -85,15 +84,14 @@ Words are defined in the [Glossary](glossary.md).
 The rules for all six live in the backend's write layer, not in prompts: a bot acts only as
 itself; it may message only active bots and humans; at most 20 bot-to-bot messages per
 thread per hour and 10 unsolicited messages per human per bot per day
-(`TICO_UNSOLICITED_PER_DAY`); one open question per topic to each person (`--topic`); the requester closes; an approval
-is optional, decided by a human and consumed once. Bot requests to a human are linted:
+(`TICO_UNSOLICITED_PER_DAY`); a bot has one open ask of its own per task; a bot can't close a person's request; an OK
+is optional, given by a person and used once. Bot requests to a human are linted:
 a verb at the front of the title, a nonempty first line and under 120 words outside quoted drafts. A
 problem is a warning: the task or message is written, and the response's `warnings` (also the task's
 history) says what to fix next time; `TICO_STYLE_LINT=refuse` turns them back into refusals, `off` drops
 them. A daily update's shape is checked the same way (`warning` on the posted update). Put the ask
 first; the first-line check does not judge whether it is an ask. Replies to the human's own message are exempt from this
-request-format lint, and so is a task on a custom type, which is a ticket on that type's board
-rather than a request ([Tasks](tasks.md)); title and Credential checks apply separately. Refusals open a
+request-format lint; title and Credential checks apply separately. Refusals open a
 review task at 3 a day. A refusal counts toward the pause only when it repeats one the bot already had that day (same
 rule, same words): at 10 such repeats the responsible task/chat, or the bot when the sources are mixed or unknown,
 is held for an hour and resumes by itself. A bot's first try at
@@ -123,7 +121,8 @@ not retry this action; leave a note for a person if you still need it."
 **hub.acme.example** — the record, the interface and the clock. A FastAPI backend (`backend/`) on one
 EC2 instance with SQLite on an encrypted EBS volume, attachments in a private S3 bucket, backed up
 to S3 twice over (Litestream replicates about every minute; a verified bundle of the database and
-every attachment is taken daily and restore-tested), behind Cloudflare Access. It holds every task, message, approval, routine, run and
+every attachment is taken daily and restore-tested), behind Cloudflare Access. It holds every task, message, routine,
+run and
 bot setting, serves the web interface (`ui/`), and runs the scheduler that turns due routines into
 tasks. It never runs a bot. It runs from the Docker image ([install.md](install.md)). Beside it
 on the same host, the Slack gateway (`backend/slack_gateway.py`, its own unit) turns a DM to
@@ -133,7 +132,9 @@ in so that each channel's readers see it within the hour (`docs/slack-gateway.md
 Pages: **Tasks** (where the app opens), **Meetings** (imported transcripts, source sync status, Import, and each meeting's
 action items), **Docs**,
 **Tools**, **Changelog**, the **Team** tree, and under your email **Settings**
-and, for the owner and admins, **SQL**. Tasks has List, Board and Done; Routines and wake rules are **Automations**.
+and, for the owner and admins, **SQL**. Tasks has You and a view of each pipeline (columns or list), with Snoozed, Done
+and Closed behind
+the archive button; Routines and wake rules are **Automations**.
 Credentials are in **Tools → Credentials**. See [Navigation](navigation.md). A bot's page has **Chat**,
 **Tasks**, **Docs** and **More**. The assistant (Tico, `coo`), BotOps, the Librarian, the Strategy Owner, the Task Manager, the Finance Owner and the Brand Owner are built in and cannot be archived or deleted (`409 system_bot`); the assistant
 and the Librarian work in the background and are not listed for humans. Each human has one private **Assistant** DM, opened by **Tico Assistant** (or a page's **Ask**) from any page except its own and setup, even while the signed-out banner shows
@@ -250,15 +251,18 @@ open from the last occurrence absorbs the next one. The runner claims it like an
 the bot owns, it gets its own thread and session: the wake, the note and the bot's answer land there, and
 the bot's Home gets one-line reports ([Sessions](sessions.md)).
 
-**A message to a bot may wake it, or wait.** One set of wake rules decides, each with an id: a person's message,
-an ask, an approval and a gate verdict always wake the bot (`person_message`, `ask`, `approval`, `verdict`), except that a
-Manager hears of a verdict as a note (`profile_manager_note`); a bot's own
-write (`own_write`), news about a task that waits on something (`parked`), a legacy stall or status check on a task that has not moved
-(`same_state`; the [task roundup](tasks.md) lists such tasks instead, three times a day by default) and a plain bot-to-bot message (`bot_to_bot`) wait for the bot's next run; a deferred item waits too, until its deadline (`deferred`, [Steer, queue or defer](using-tico.md#steer-queue-or-defer)); a finished request and a
+**A message to a bot may wake it, or wait.** One set of wake rules decides, each with an id: a task becoming the
+bot's turn in its pipeline, a person's message, an ask, an answer to the bot's ask and an OK always wake the bot
+(`task_turn`, `person_message`, `ask`, `answer`, `approval`), except that a Manager hears of its sub-tasks' results as
+a note (`profile_manager_note`); a bot's own
+write (`own_write`), news about a task that waits on something (`parked`), a legacy stall or status check on a task
+that has not moved (`same_state`; the [task roundup](tasks.md) lists such tasks instead, three times a day by default)
+and a plain bot-to-bot message (`bot_to_bot`) wait for the bot's next run; a deferred item waits too, until its
+deadline (`deferred`, [Steer, queue or defer](using-tico.md#steer-queue-or-defer)); a finished request and a
 person's review comments are batched (`batch_*`); one check finishing is ignored (`pr_check`) and a head whose checks
-all finished wakes the ticket's owner at a working step (`pr_checks_done`) or is a note (`pr_checks_note`); work wakes
-(an assignment, a review request, a blocker, a routine, a due date, a finished subtask, a published release) and anything
-no rule names waits as a note (`default_note`). Teams, task types, departments, bots and
+all finished wakes the task's owner while the task is its turn (`pr_checks_done`) or is a note (`pr_checks_note`);
+work wakes (an assignment, a blocker, a routine, a due date, a snooze ending, a finished sub-task) and anything
+no rule names waits as a note (`default_note`). Teams, pipelines, departments, bots and
 single tasks can override these with rules of their own (the **What wakes** automations on the Automations page). Every message to a bot records the
 rule that decided it, and every run records the rule that woke it, so `rule_weekly` in `hub sql` shows runs, tokens and
 runs that did nothing per rule ([Querying Tico with SQL](hub-sql.md)).
@@ -330,9 +334,8 @@ bot-wide limit. Without a run token, an external agent's writes are fenced by th
 validation refusals throughout that mutation stay attributed to the task even when the write rolls back.
 Native thread posts and file publishing check the resolved task; files also check the publishing attempt's hold.
 Message mutations check the stored message and thread associations independently, so a reference to another task
-cannot mask the thread's own hold. Approvals check their task when requested or consumed, and replacement checks
-the older approval's stored task too. Thread metadata and read marks, task-backed note cancellation, page changes,
-file reviews, task pins and cards, and status updates that retain the held task follow the same fence.
+cannot mask the thread's own hold. Asks and OKs check their task. Thread metadata and read marks, task-backed
+note cancellation, page changes, file reviews, task pins, and moves that keep the held task follow the same fence.
 Two or more distinct tasks/chats in the remaining count, or any refusal with no attributable task/chat, still
 quarantine the whole bot. A run's source takes precedence over the task its refused write names. Escape quarantines
 always stop the whole bot and require a person to clear them. The cooldown resets only the held source's count;
@@ -354,7 +357,13 @@ BotOps resumes or dismisses it after checking what already happened. Nothing is 
 While such a review is owed the bot's tasks and routines wait, but a human's own
 messages still run: nothing about them is uncertain.
 
-**Needs you.** Every issue Tico derives says whether a human has to act. Those that do reach a person only as a Needs you card that BotOps raises on its task. The status dot left of your name shows only two states: "Can't reach Tico", and "Tico stopped / bots aren't running" (which includes no computer online). Health checks are not in the account menu or on the dot; they are listed on **Settings → General → Health → Details**, one line per problem, each with its fix (a computer with a Tico update waiting gets *Restart* on its line). Stopped runs and quarantined bots are BotOps's to review, so they stay off the dot; **Settings → General → Health → Details** lists them as notes, with *Review stopped runs* for a bot's stopped runs. Issues Tico resolves itself (a computer that
+**Needs you.** Every issue Tico derives says whether a human has to act. Those that do reach a person only in Needs you,
+from the task BotOps holds for it. The status dot left of your name shows only two states: "Can't reach Tico", and "Tico
+stopped / bots aren't running" (which includes no computer online). Health checks are not in the account menu or on the
+dot; they are listed on **Settings → General → Health → Details**, one line per problem, each with its fix (a computer
+with a Tico update waiting gets *Restart* on its line). Stopped runs and quarantined bots are BotOps's to review, so
+they stay off the dot; **Settings → General → Health → Details** lists them as notes, with *Review stopped runs* for a
+bot's stopped runs. Issues Tico resolves itself (a computer that
 just dropped off, a usage limit that is retrying) stay out of the way as *resolves on its own* in
 **Settings → General → Health → Details**, one row per computer rather than one per bot. A cloud deploy is different: hub.acme.example is
 unreachable for a few minutes, the runner keeps the run going and the server extends every
@@ -551,7 +560,10 @@ runtime alone follows its provider's current model. `check_order` in the same vi
 **A bot's session is its own** ([Sessions](sessions.md)). By default every task is its own provider thread, and the bot's
 Home and other turns share one more. BotOps (and any bot set to `session: task`) also gives each
 thread its own provider thread, so unrelated requesters stay separate; `session: bot` keeps
-everything on one thread. A subtask someone else filed continues its parent task's thread when the bot owns both; one the bot filed for itself gets its own (`subtask_session: own` gives every subtask its own). Each bot task has its own thread, so the main thread reads only the Home plus a quiet line when a task starts, is blocked, done, declined or stuck ([Tasks](tasks.md#subtasks-and-prs)). Wakes about the same task resume its thread. A task's set-up worktrees
+everything on one thread. A subtask someone else filed continues its parent task's thread when the bot owns both; one
+the bot filed for itself gets its own (`subtask_session: own` gives every subtask its own). Each bot task has its own
+thread, so the main thread reads only the Home plus a quiet line when a task starts, is done or closed
+([Tasks](tasks.md#done-closed-and-reopen)). Wakes about the same task resume its thread. A task's set-up worktrees
 on that computer join its session (Claude Code's `--add-dir`), and the prompt carries each repo's
 AGENTS.md (else CLAUDE.md), labelled as rules for writing code there that never grant access;
 a link out of the worktree is refused, the whole is capped at 16 KB, and a resumed thread gets
@@ -562,11 +574,11 @@ one task at once: a wake about a task its turn is on goes into that turn, or wai
 **Turns at once** caps its turns across all computers; at the limit its queued work waits and says so ("At its turn
 limit"), and its other bots keep their turns. A task a bot
 files for itself during a turn starts its own turn once that turn ends (or after 5 minutes), and not at all if that
-turn finished, declined or parked it. Only that
+turn finished, closed or parked it. Only that
 computer knows which thread
 it is. Tico never ends a thread, never asks the bot for a checkpoint before a model or computer
 change, and never rebuilds history into a prompt (a fresh session on a task starts from the task's last
-checkpoint, [Tasks](tasks.md#picking-work-back-up)): when the conversation fills the model's window
+checkpoint, [Tasks](tasks.md)): when the conversation fills the model's window
 the runtime compacts it, and a run carries only what the thread said since the bot last answered.
 A bot that wants what was said before reads it with `hub conversation show <conversation id>`: the
 newest 200 messages, then `--before <next_before>` for each older page. Every run's prompt names the
@@ -574,25 +586,21 @@ thread and that command, because a compacted session, or one on a new model, no 
 all of it. The runner fast-forwards the checkout from origin before the run, and
 pulls or clones any `reads:` sibling repos beside it.
 
-**A bot needs you.** It asks with `hub task question` (the task goes `waiting`), requests an approval,
-files a task for you, or sets its own task waiting on you (`hub task update --status waiting --on
-<you> --note "<what you need to do>"`). A bot's waiting note, or the first paragraph of a task it gives
-you, must say in one or two plain sentences what it needs and what happens after, with no ids, file
-paths or tool names; Tico refuses it otherwise. A task a bot set waiting on you before that rule, with
-no plain ask, sits at the bottom of Needs you while the bot's task roundup lists it to restate it.
-**Needs you** at the top of **Tasks** lists everything waiting on you across all boards. Rows answerable
-on a card open that card; other rows open the full task. **Catch up** walks the answerable cards one
-at a time. The tab, list header and Tasks badges share their count, independent of the selected board;
-the badges hide at zero. Tickets on a numbered type stay on their board and come to Needs you only
-with a question for you ([Tasks](tasks.md)). There
-is no priority; a mover (anyone in the leadership, product or engineering group) drags a task up or
-down, into another column, or between lanes; everyone else sees the board and comments.
+**A bot needs you.** It adds an ask to its task (`hub task ask <id> --to <you> "<question>"`, or `--kind ok` for
+an OK) or files a sub-task for you to do. The ask, or the first paragraph of a task it gives you, must say in one
+or two plain sentences what it needs and what happens after, with no ids, file paths or tool names; Tico refuses
+it otherwise. The task stays in its stage until you answer ([Asks and OKs](tasks.md#asks-and-oks)).
+**Needs you** at the top of **Tasks** lists every ask with your name and every task that is your turn, across
+all pipelines ([Needs you](tasks.md#needs-you)). The tab and Tasks badges share one count and hide at zero.
+There is no priority; anyone may push a task past its stage or move it back
+([Pipelines and stages](tasks.md#pipelines-and-stages)).
 
-**A bot finishes.** It commits its repository, marks the task `done` with a note, and the reply is
-saved in the thread. The task shows under **Tasks → Done** with the bot's note; a bot that
-requested it gets a *Finished: <title>* message (`/api/v2/messages?unread=1`) and may choose Close.
-Its requester or a person closes it; until then its owner can reopen it with `doing`, or put it back with `open` and a note. Every run is listed under **Settings → History → Runs** and on
-the bot's **More** tab.
+**A bot finishes.** It commits its repository and says done with a note (`hub task done <id> -m "<note>"`), and
+the reply is saved in the thread. When that was the last stage, the task is Done, behind the archive button on
+**Tasks**, with the bot's note, and a bot that requested it gets a *Finished: <title>* message
+(`/api/v2/messages?unread=1`). A task
+in Done can be reopened with a note ([Done, closed and reopen](tasks.md#done-closed-and-reopen)). Every run is
+listed under **Settings → History → Runs** and on the bot's **More** tab.
 
 **You change a bot's Instructions.** Open **Bot → More → Instructions → Edit Instructions**
 and ask BotOps to make the change. It commits and pushes the update for the next run. For a manual edit, change `AGENT.md` (or a playbook, `memory/`, `knowledge/`) in
@@ -614,9 +622,9 @@ window and a gap between sweeps, and it grants no right.
 | Profile | Wakes at once for | Everything else | Takes |
 |---|---|---|---|
 | **Doer** (the default) | people, hand-offs, asks, awaited results | batched, 15 minutes | any task; pulls its open tasks by itself |
-| **Reviewer** | its review or QA request, a verdict it waits for, people | a note | review and QA requests only (a subtask titled Review 1/2, QA or Security, a live-acceptance check, a task that runs production acceptance, top-level or as a subtask, such as "Run waitlist production acceptance" or "Production acceptance run: waitlist", or a top-level "Release QA:" / "Post-release QA:" task); any other task is refused with the reason |
-| **Lead** | people, escalations, a ticket it asked for ending declined, blocked or done, approvals | one digest a day (09:00 team time by default) | any task, started only when a person or a bot asks |
-| **Manager** | people, a task given to it, its own clock | a note for its next run, verdicts and its subtasks' results included | any task, started only when a person or a bot asks |
+| **Reviewer** | its review or QA request, a result it waits for, people | a note | review and QA requests only (a subtask titled Review 1/2, QA or Security, a live-acceptance check, a task that runs production acceptance, top-level or as a subtask, such as "Run waitlist production acceptance" or "Production acceptance run: waitlist", or a top-level "Release QA:" / "Post-release QA:" task); any other task is refused with the reason |
+| **Lead** | people, escalations, a task it asked for finishing or closing, a blocker, OKs | one digest a day (09:00 team time by default) | any task, started only when a person or a bot asks |
+| **Manager** | people, a task given to it, its own clock | a note for its next run, its sub-tasks' results included | any task, started only when a person or a bot asks |
 | **Responder** | people | a note | no task: refused like a bot synced from another platform |
 | **Monitor** | its own watcher, people | a note | its watcher's tasks only |
 | **Custom** | what its rules say | its rules | what its settings say |
@@ -632,7 +640,8 @@ to a Doer, and so is "Run production acceptance plan": "plan" is not one of thos
 
 A bot's own clock still wakes it: a routine or schedule wakes a Reviewer, Lead, Manager and Monitor, and a due date or a
 snooze ending wakes a Lead, Manager and Monitor; a Responder has no routines. The task roundup's task lines go only to bots with sweeps on (a Manager or a Doer, or a
-Custom bot that keeps them on); a Reviewer, Lead, Responder or Monitor is listed only its questions and its own follow-up times. Doers pull open tasks themselves; the others start a task only when it is handed to them.
+Custom bot that keeps them on); a Reviewer, Lead, Responder or Monitor is listed only its asks and its own follow-up
+times. Doers pull open tasks themselves; the others start a task only when it is handed to them.
 **Custom** copies the profile's rows into the Rules table, marked as the profile's, to edit there; choosing a named profile
 again deletes them after a confirm. Set a profile in **Settings → Bots → Edit**, with `hub bot profile <bot> [name]`, MCP
 `hub_bot_profile`, or `POST /api/v2/bots/{bot}/profile` with `expected_revision` (`GET /api/v2/profiles` lists the choices
@@ -692,28 +701,27 @@ made or revoked is an `events` row (`token.create`, `token.revoke`).
 | `templates/` | the bot repository contract and prompt templates |
 | `skills/` | shared runtime skills for bots |
 
-To reopen a finished task, open it and choose **Reopen**. After **Done**, the toast offers **Undo**.
-Reopening clears its completion dates and closer, so Goals and KPIs count it as active again;
-the earlier completion stays in task history. Questions may be asked in sequence; a new question to the same
-person on the same `--topic` updates the open one.
+To reopen a finished task, open it from the archive and choose **Reopen** with a note
+([Done, closed and reopen](tasks.md#done-closed-and-reopen)). A bot has one ask of its own open on a task at a
+time; asking again replaces it.
 
 An ordinary bot-to-bot `hub message send` starts work but does not return the receiving bot's
 final answer. To get an answer back, send it flagged `--needs-action`
 (`hub message send <bot> "<question>" --needs-action`). A bot receiving an ordinary message that asks for a reply
 sends that reply explicitly with `hub message send`. Humans' replies are delivered automatically.
 
-A bot never answers a question for a person. A person answers a question task in **Needs you**, in Decide, in
-the Assistant, or by replying in their chat with the bot, and the bot hears the answer once.
+A bot never answers an ask for a person. A person answers it in **Needs you**, and the bot hears the answer
+once.
 
 Computer readiness covers only bots assigned to that Computer. Eligible bots are placement
 options, and their missing repositories do not count as readiness or Health failures there.
 
 ## Task pipelines
 
-Task types add named steps above the existing status contract. General is built in and backfilled
-onto existing tasks. Every status write maps to a compatible step, or clears the step when the
-type has none, so older runners and scripts keep working. Movers manage definitions
-in Settings → Tasks; the board's type filter uses steps as columns. See [Tasks](tasks.md).
+Every task is in one pipeline, at one stage, with one owner whose turn it is. A new company has one pipeline,
+General, with one stage, To do, managed by the Task Manager. A task's status is `open`, `done` or `closed`; only
+the task engine moves it. See [Pipelines and stages](tasks.md#pipelines-and-stages) and
+[Pipelines](pipelines-v3.md).
 
 ## On computers
 
