@@ -203,9 +203,11 @@ def test_a_quarantine_stopped_turn_on_a_host_that_does_not_report_its_calls_requ
 def test_a_quarantine_stopped_turn_that_used_up_an_approval_is_held(api):
     machine, message, attempt = working(api, safe=True)
     with api.app.state.store.transaction() as c:
+        # An OK a person gave that the bot used during the run (backend/task_asks.py `use`): the send went out.
         c.execute(
-            "INSERT INTO approvals(id,kind,message_id,requested_by_id,created_at,consumed_at) VALUES(?,?,?,?,?,?)",
-            ('quarantine-send', 'send', message['id'], 'bot:ops', H.now(), H.now()),
+            "INSERT INTO ok_grants(requirement_id,subject,asked_by_id,content_hash,created_at,ok_by_id,ok_at,used_by_id,"
+            "used_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            ('quarantine-send', 'email_send:quarantine', 'bot:ops', 'h', H.now(), 'human:ana', H.now(), 'bot:ops', H.now()),
         )
     quarantine(api)
     post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
