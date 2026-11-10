@@ -374,3 +374,23 @@ def test_a_real_rule_break_counts_for_whoever_reads_its_task(api):
         assert [line[:2] for line in never_stuck.rules_hold(c)] == ["7:"]
     member = _never_stuck(api, "cara-test")
     assert member["counts"]["broken"] == 1 and member["status"] == "bad"
+
+
+def test_no_sql_reads_a_task_or_a_break_from_the_never_stuck_reading(api):
+    """Codex review 2, 5: Ben, an Admin, may not read the private task the break is about. Guarded SQL over
+    registry_metadata gives him the reading's numbers, never that task's id or the break's words."""
+    import json
+
+    from backend import health
+
+    hidden = post(api, "tasks", {"title": "Quiet acquisition", "body": "x", "owner": "ops", "private": True})
+    _wake_left_queued(api, hidden["id"])
+    health.record_never_stuck(api.app.state.store)
+    assert api.get("/api/v2/tasks/" + hidden["id"], headers=headers("ben-test")).status_code == 404
+    rows = post(
+        api, "sql", {"sql": "SELECT key, value FROM registry_metadata WHERE key LIKE 'health:%'"}, token="ben-test"
+    )
+    said = json.dumps(rows)
+    assert health.NEVER_STUCK_KEY in said
+    assert hidden["id"] not in said and "wake" not in said and "queued" not in said, said
+    assert _never_stuck(api, "ben-test")["counts"]["broken"] == 1

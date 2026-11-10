@@ -658,8 +658,10 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         # hashes roadmap visitors' addresses: with it the small IPv4 space turns every stored hash back into an address.
         # The setup research job (backend/strategy_setup.py) holds the owner's words and an unpublished draft, and the
         # imported company file (backend/company_import.py) its unpublished strategy: the owner's.
+        # Nor the never-stuck reading's tasks and break sentences (health.NEVER_STUCK_TASKS_KEY): they name tasks an
+        # Admin may not read. Its numbers (health:never_stuck) are readable.
         "registry_metadata": (
-            "key!='roadmap_ip_secret'"
+            "key NOT IN ('roadmap_ip_secret','health:never_stuck:tasks')"
             + ("" if owner else " AND key NOT IN ('strategy.draft_from','onboarding.company_file')")
         )
         if admin and not bot

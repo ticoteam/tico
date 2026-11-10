@@ -2466,7 +2466,11 @@ NEEDS_PLATE_WARN = 10  # more items than this on one person's Needs you plate is
 NEEDS_PLATE_BAD = 25  # more than this is bad
 NEEDS_PLATE_ASKERS = 3  # the bots named on a plate, most items first
 NEVER_STUCK_COUNTS = ("waiting_on_nothing", "retry", "manager", "person", "cant_run", "broken")
-NEVER_STUCK_KEY = "health:never_stuck"  # registry_metadata: the hourly never-stuck reading (record_never_stuck)
+# registry_metadata: the hourly never-stuck reading (record_never_stuck). Its numbers sit under NEVER_STUCK_KEY, which an
+# Admin's SQL reads; which tasks each counts, and the breaks' words, sit under NEVER_STUCK_TASKS_KEY, which no SQL reads
+# (backend/sql.py), since they name tasks the Admin may not read.
+NEVER_STUCK_KEY = "health:never_stuck"
+NEVER_STUCK_TASKS_KEY = "health:never_stuck:tasks"
 
 
 def _plate_people(c, auth):
@@ -2579,15 +2583,22 @@ def never_stuck_reading(c):
     }
 
 
+NEVER_STUCK_TASKS_FIELDS = ("breaks", "tasks", "broken_tasks")
+
+
 def record_never_stuck(store):
-    """The hourly reading (backend/scheduler.py), kept for Health to show."""
+    """The hourly reading (backend/scheduler.py), kept for Health to show: its numbers under NEVER_STUCK_KEY, what
+    names a task under NEVER_STUCK_TASKS_KEY."""
     with store.read() as c:
         reading = never_stuck_reading(c)
+    numbers = {k: v for k, v in reading.items() if k not in NEVER_STUCK_TASKS_FIELDS}
+    named = {k: reading[k] for k in NEVER_STUCK_TASKS_FIELDS}
     with store.transaction() as c:
-        c.execute(
-            "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (NEVER_STUCK_KEY, json.dumps(reading)),
-        )
+        for key, value in ((NEVER_STUCK_KEY, numbers), (NEVER_STUCK_TASKS_KEY, named)):
+            c.execute(
+                "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, json.dumps(value)),
+            )
     return reading
 
 
@@ -2608,9 +2619,12 @@ def _never_stuck_check(c, visible_sql=None):
     is broken. A rule break names a task and a bot, so its words are never shown: the owner and Admins (no
     `visible_sql`) get the company's numbers; anyone else gets the numbers over the tasks they may read."""
 
-    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (NEVER_STUCK_KEY,)).fetchone()
-    reading = json.loads(row[0]) if row else None
-    named = reading
+    def stored(key):
+        row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (key,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    reading = stored(NEVER_STUCK_KEY)
+    named = stored(NEVER_STUCK_TASKS_KEY) if visible_sql else None
     if not reading or (visible_sql and not (named and "broken_tasks" in named)):
         return _check("never_stuck", "Tasks", "unknown", "The hourly never-stuck reading has not run yet.")
     if visible_sql:
