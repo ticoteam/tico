@@ -16,7 +16,7 @@ It wakes the recipient at once, as before, when (WAKES):
 - it is a gate verdict (a `VERDICT: approve|changes PR #<n> head <sha>` line, Review 1/2, QA, Security);
 - it @mentions the recipient (an @mention always reaches, D6).
 Fail open: anything this cannot read (references that are not an object, a flag that is not true or false)
-wakes. A person's message, the keeper's notices (assignments, gate requests, approvals, a blocker done) and
+wakes. A person's message, Tico's own notices (assignments, gate requests, asks) and
 everything on token saving 2/9's always-wake list never reach this rule: only bot-to-bot messages do.
 """
 

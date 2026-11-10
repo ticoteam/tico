@@ -108,11 +108,11 @@ def excerpt(body, limit=DESCRIPTION_CHARS):
 
 
 def state(c, row):
-    """What column or status a task is in, in words."""
-    if row.get("step_id"):
-        step = c.execute("SELECT name FROM task_steps WHERE id=?", (row["step_id"],)).fetchone()
-        if step and step[0]:
-            return step[0]
+    """What stage a task is in, in words, else its status."""
+    if row.get("stage_id"):
+        stage = c.execute("SELECT name FROM stages WHERE id=?", (row["stage_id"],)).fetchone()
+        if stage and stage[0]:
+            return stage[0]
     return str(row.get("status") or "open").replace("_", " ").capitalize()
 
 

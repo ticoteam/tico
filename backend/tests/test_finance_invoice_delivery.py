@@ -1,5 +1,6 @@
-"""Invoice emails (backend/finance/delivery.py): a reminder or an invoice reaches the customer only under a Tico `send`
-approval that Finance issues when the action commits, for these recipients, this exact text and this document. The
+"""Invoice emails (backend/finance/delivery.py): a reminder or an invoice reaches the customer only under an OK of its
+frozen send (backend/task_asks.py, `email_send:<id>`) that Finance asks for when the action commits, for these
+recipients and this exact text. The
 Bookkeeper sends it; Finance never does. A bot cannot issue or decide one; a failed send raises one Needs-you, and so does
 one no report covers for a day; and no Bookkeeper mailbox refuses a reminder at planning, before its stage is used.
 
@@ -14,11 +15,13 @@ import pytest
 from backend import bot_settings as BS
 from backend import hubdb as H
 from backend import mailbox_access as MA
+from backend import task_asks
 from backend.finance import actions as FA
 from backend.finance import delivery
 from backend.finance import jobs
 from backend.finance.core.errors import CONFLICT, DENIED, NOT_AVAILABLE, FinanceError
 from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.tests.helpers.finance_oks import give
 
 BOT = "bot:bookkeeper"
 EMAIL = "ap@acme-retail.example"
@@ -65,12 +68,18 @@ def _sent_invoice(c, emails=(EMAIL,)) -> str:
 
 def _ask_mail(c, approval_id: str) -> dict:
     """The invoice email an ask names: what the person decides on (its shown payload's `mail`)."""
-    return H.approval(c, approval_id)["payload"]["payload"]["mail"]
+    return task_asks.grant(c, approval_id)["content"]["payload"]["mail"]
+
+
+def _send_ok(c, send_id: str) -> dict:
+    """What an email's send OK is for (email_sending.content): the mailbox, recipients, subject and hashes."""
+    return task_asks.grant(c, send_id)["content"]
 
 
 def _send_approvals(c) -> list[dict]:
-    """Every send approval Finance has issued, as its payload names the email."""
-    return [json.loads(row[0]) for row in c.execute("SELECT payload FROM approvals WHERE kind='send'").fetchall()]
+    """Every send OK asked for, as its content names the email."""
+    rows = c.execute("SELECT requirement_id FROM ok_grants WHERE subject LIKE 'email_send:%'").fetchall()
+    return [_send_ok(c, str(row[0])) for row in rows]
 
 
 def _approved_reminder(c, stage=7) -> tuple[str, str, str]:
@@ -80,7 +89,7 @@ def _approved_reminder(c, stage=7) -> tuple[str, str, str]:
     _mailbox(c)
     asked = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": stage})
     assert asked.status == "needs_approval" and asked.approver == OWNER, asked
-    H.approval_decide(c, OWNER, asked.approval_id, "approved")
+    give(c, OWNER, asked.approval_id)
     done = FA.approval_decided(c, asked.approval_id, AT)
     assert done.status == "committed", done
     return iid, str(done.result["send_approval_id"]), str(done.result["text"])
@@ -98,14 +107,15 @@ def test_a_bots_reminder_asks_a_person_and_records_nothing_until_they_say_yes(bo
 def test_finance_yes_records_the_reminder_but_the_frozen_email_still_needs_its_own_preview(books):
     with books.transaction() as c:
         iid, send_id, text = _approved_reminder(c)
-        appr = H.approval(c, send_id)
-        assert appr["kind"] == "send" and appr["decision"] is None, appr
-        payload = appr["payload"]
-        assert payload["to"] == [EMAIL] and payload["cc"] == [] and payload["mailbox"] == BOX, payload
+        found = task_asks.grant(c, send_id)
+        assert found["subject"].startswith("email_send:") and task_asks.standing(c, send_id) == task_asks.WAITING
+        payload = found["content"]
+        assert payload["recipients"] == [EMAIL] and payload["mailbox"] == BOX, payload
         assert payload["body_sha256"] == delivery.digest(text)
-        queued = c.execute("SELECT * FROM email_sends WHERE id=?", (payload["email_send_id"],)).fetchone()
+        queued = c.execute("SELECT * FROM email_sends WHERE id=?", (found["subject"].removeprefix("email_send:"),))
+        queued = queued.fetchone()
         assert queued["state"] == "waiting_approval" and payload["content_sha256"] == queued["content_sha256"]
-        assert payload["bcc"] == [] and not c.execute("SELECT * FROM email_send_previews").fetchone()
+        assert not c.execute("SELECT * FROM email_send_previews").fetchone()
         assert (
             c.execute("SELECT send_approval_id FROM fin_invoice_reminders WHERE invoice_id=?", (iid,)).fetchone()[0]
             == send_id
@@ -117,15 +127,9 @@ def test_a_bot_cannot_issue_or_decide_a_send_approval(books):
         with pytest.raises(FinanceError) as refused:
             delivery.issue(c, BOT, BOT, to=[EMAIL], subject="Invoice", text="Invoice", box=BOX, document={}, ref="x")
         assert refused.value.code == DENIED
-        asked = H.approval_request(
-            c,
-            BOT,
-            "send",
-            {"to": [EMAIL], "cc": [], "subject": "Invoice", "body_sha256": delivery.digest("Invoice"), "mailbox": BOX},
-            to=OWNER,
-        )
+        _, send_id, _ = _approved_reminder(c)
         with pytest.raises(H.Refused):
-            H.approval_decide(c, BOT, asked["id"], "approved")
+            give(c, BOT, send_id)
 
 
 def test_no_bookkeeper_mailbox_refuses_the_reminder_at_planning_and_uses_no_stage(books):
@@ -203,14 +207,14 @@ def test_an_invoice_send_by_a_bot_waits_for_a_person_then_its_email_goes_under_a
         _mailbox(c)
         asked = act(c, BOT, "invoice_send", {"invoice_id": draft})
         assert asked.status == "needs_approval" and asked.approver == OWNER, asked
-        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        give(c, OWNER, asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done.status == "committed", done
         number = c.execute("SELECT number FROM fin_invoices WHERE id=?", (draft,)).fetchone()[0]
         assert done.result["delivery"] == "send_approval" and done.result["subject"] == f"Invoice {number}"
-        appr = H.approval(c, done.result["send_approval_id"])
-        assert appr["payload"]["body_sha256"] == delivery.digest(done.result["text"])
-        assert appr["payload"]["to"] == [EMAIL]
+        sent = _send_ok(c, done.result["send_approval_id"])
+        assert sent["body_sha256"] == delivery.digest(done.result["text"])
+        assert sent["recipients"] == [EMAIL]
 
 
 def test_an_unchanged_ask_sends_under_a_send_approval_for_exactly_the_intent_it_named(books):
@@ -221,12 +225,13 @@ def test_an_unchanged_ask_sends_under_a_send_approval_for_exactly_the_intent_it_
         _mailbox(c)
         asked = act(c, BOT, "invoice_send", {"invoice_id": draft})
         named = _ask_mail(c, asked.approval_id)
-        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        give(c, OWNER, asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done.status == "committed" and done.result["delivery"] == "send_approval", done
-        issued = H.approval(c, done.result["send_approval_id"])["payload"]
-        same = ("to", "cc", "subject", "body_sha256", "mailbox", "document_sha256")
+        issued = _send_ok(c, done.result["send_approval_id"])
+        same = ("subject", "body_sha256", "mailbox")
         assert {k: issued[k] for k in same} == {k: named[k] for k in same}, (issued, named)
+        assert issued["recipients"] == named["to"] and named["cc"] == []
         assert named["to"] == [EMAIL] and named["mailbox"] == BOX and named["text"] == done.result["text"]
 
 
@@ -255,19 +260,19 @@ def test_an_invoice_email_asked_for_asks_again_when_the_customer_email_changes(b
         assert asked.status == "needs_approval" and asked.approver == OWNER, asked
         assert _ask_mail(c, asked.approval_id)["to"] == [EMAIL]
         assert act(c, OWNER, "contact_update", {"contact_id": customer, "emails": [NEW_EMAIL]}).status == "committed"
-        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        give(c, OWNER, asked.approval_id)
         again = FA.approval_decided(c, asked.approval_id, AT)
         assert again.status == "needs_approval" and again.approval_id not in (None, asked.approval_id), again
         assert _ask_mail(c, again.approval_id)["to"] == [NEW_EMAIL]
-        assert not any(NEW_EMAIL in appr["to"] for appr in _send_approvals(c)), _send_approvals(c)
+        assert not any(NEW_EMAIL in appr["recipients"] for appr in _send_approvals(c)), _send_approvals(c)
         assert tuple(
             c.execute("SELECT status, send_approval_id FROM fin_invoices WHERE id=?", (draft,)).fetchone()
         ) == ("draft", None)
         # The fresh ask is decided like any other: approved, the email goes under a send approval for the new address.
-        H.approval_decide(c, OWNER, again.approval_id, "approved")
+        give(c, OWNER, again.approval_id)
         sent = FA.approval_decided(c, again.approval_id, AT)
         assert sent.status == "committed" and sent.result["delivery"] == "send_approval", sent
-        assert H.approval(c, sent.result["send_approval_id"])["payload"]["to"] == [NEW_EMAIL]
+        assert _send_ok(c, sent.result["send_approval_id"])["recipients"] == [NEW_EMAIL]
 
 
 def test_a_reminder_asked_for_asks_again_when_a_partial_payment_changes_its_text(books):
@@ -277,7 +282,7 @@ def test_a_reminder_asked_for_asks_again_when_a_partial_payment_changes_its_text
         asked = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": 7})
         assert asked.status == "needs_approval", asked
         assert act(c, OWNER, "invoice_record_payment", {"invoice_id": iid, "amount": 10_000}).status == "committed"
-        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        give(c, OWNER, asked.approval_id)
         again = FA.approval_decided(c, asked.approval_id, AT)
         assert again.status == "needs_approval" and again.approval_id != asked.approval_id, again
         assert "200.00" in _ask_mail(c, again.approval_id)["text"]  # 300.00 less the 100.00 paid
@@ -292,7 +297,7 @@ def test_a_reminder_asked_for_asks_again_when_the_sending_mailbox_changes(books)
         asked = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": 7})
         assert asked.status == "needs_approval", asked
         _mailbox(c, box=OTHER_BOX)
-        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        give(c, OWNER, asked.approval_id)
         again = FA.approval_decided(c, asked.approval_id, AT)
         assert again.status == "needs_approval" and again.approval_id != asked.approval_id, again
         assert _ask_mail(c, again.approval_id)["mailbox"] == OTHER_BOX
@@ -310,7 +315,7 @@ def test_a_reminder_is_checked_against_its_due_date_again_when_it_is_approved(bo
         asked = act(c, BOT, "invoice_remind", {"invoice_id": iid, "stage": 7})
         assert asked.status == "needs_approval", asked
         c.execute("UPDATE fin_invoices SET due_date=? WHERE id=?", (due, iid))
-        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        give(c, OWNER, asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done.status == "failed" and done.code == CONFLICT, done
         assert c.execute("SELECT COUNT(*) FROM fin_invoice_reminders").fetchone()[0] == 0

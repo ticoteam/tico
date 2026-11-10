@@ -188,12 +188,6 @@ def test_every_source_writes_its_topic(api):
             return {(row["topic"], row["kind"]) for row in c.execute("SELECT * FROM changes WHERE seq>?", (before,))}
 
     aid, cid = attempt["id"], msg["conversation_id"]
-    approval = post(
-        api,
-        "approvals",
-        {"kind": "publish", "payload": {"url": "https://acme.example/draft", "content_sha256": "a" * 64}},
-        token=attempt["token"],
-    )
     task = post(api, "tasks", {"owner": "ben", "title": "Coverage", "body": "Please."})
     assert logged(lambda c: c.execute("UPDATE tasks SET title='Covered' WHERE id=?", (task["id"],))) == {
         ("tasks", "update"),
@@ -242,9 +236,6 @@ def test_every_source_writes_its_topic(api):
     assert logged(lambda c: c.execute("INSERT INTO bot_control(bot,draining) VALUES('finance',1)")) == {
         ("bots", "control")
     }
-    assert logged(lambda c: c.execute("UPDATE approvals SET decision='approved' WHERE id=?", (approval["id"],))) == {
-        ("needs", "approval")
-    }
     assert logged(
         lambda c: c.execute(
             "INSERT INTO chat_goals(id,conversation_id,bot,objective,status,set_by,set_at,updated_at) "
@@ -278,6 +269,44 @@ def test_every_source_writes_its_topic(api):
             for need in E.NEEDS.get(name, ())
         )
     }
+
+
+def test_the_engines_tables_log_their_task_and_the_needs_of_its_people(api):
+    """A task's row changes only on a move, a reassign or a field edit: an ask, an answer, a snooze and a task it
+    files log the task too, and an ask moves the Needs-you list of the person it names."""
+    store = api.app.state.store
+
+    def logged(write):
+        with store.read() as c:
+            before = E.latest(c)
+        write()
+        with store.read() as c:
+            return [
+                (row["topic"], row["kind"], row["subject_id"])
+                for row in c.execute("SELECT * FROM changes WHERE seq>?", (before,))
+            ]
+
+    task = post(api, "tasks", {"owner": "ana", "title": "Coverage", "body": "Please."})
+    asked = []
+    found = logged(
+        lambda: asked.append(
+            api.post(
+                f"/api/v2/tasks/{task['id']}/asks", json={"to": "ben", "line": "Which day?"}, headers=headers()
+            ).json()["requirement_id"]
+        )
+    )
+    assert ("tasks", "ask", task["id"]) in found and ("needs", "ask", "human:ben") in found
+    found = logged(
+        lambda: post(api, f"tasks/{task['id']}/asks/{asked[0]}/answer", {"value": "Monday"}, token="ben-test")
+    )
+    assert ("tasks", "answer", task["id"]) in found and ("needs", "ask", "human:ben") in found
+    found = logged(lambda: post(api, f"tasks/{task['id']}/snooze", {"until": "2099-01-05", "why": "Later"}))
+    assert ("tasks", "snooze", task["id"]) in found and ("needs", "task", "human:ana") in found
+    child = []
+    found = logged(
+        lambda: child.append(post(api, "tasks", {"owner": "ana", "title": "Sub", "body": "x", "parent": task["id"]}))
+    )
+    assert ("tasks", "filed", task["id"]) in found and ("tasks", "filed", child[0]["id"]) in found
 
 
 def test_the_log_is_installed_idempotently_and_follows_its_definitions(api, monkeypatch):
@@ -418,49 +447,6 @@ def test_a_read_with_tasks_and_bots_asks_for_the_viewers_bot_access_once(api, mo
 
 def _task_views(rows, c, who, visible_sql="1"):
     return [{"id": row["id"]} for row in rows]
-
-
-def test_the_tasks_stream_never_sends_a_members_only_ticket_to_a_non_member(api):
-    # A company-readable ticket on a members-only pipeline (Legal): its changes reach a non-member's stream as
-    # they would for any task, unless the pipeline rule (pipeline_rights.list_sql) is applied to the stream too.
-    tag = uuid.uuid4().hex[:8]
-    with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, "Legal" + tag, [{"name": "Doing", "status": "doing"}])
-        c.execute(
-            "UPDATE task_types SET pipeline_owner_id='human:ana', pipeline_visibility='members' WHERE id=?",
-            (typ["id"],),
-        )
-        task = H.task_create(c, "human:ben", "Contract " + tag, "", "human:ben", type=typ["id"], lint=False)
-        c.execute("UPDATE tasks SET private=0 WHERE id=?", (task["id"],))
-    auth, store = api.app.state.auth, api.app.state.store
-    cara = Identity("human:cara", "human", "cara@acme.example")
-    with store.read() as c:
-        cursor = E.latest(c)
-    with store.transaction() as c:
-        c.execute("UPDATE tasks SET title='Contract renamed " + tag + "' WHERE id=?", (task["id"],))
-    with store.read() as c:
-        sent = E.read(c, auth, cara, cursor, topics=("tasks",), task_views=_task_views)[0]
-    assert task["id"] not in str(sent)
-
-
-def test_a_deleted_members_only_ticket_is_not_reported_gone_to_a_non_member(api):
-    tag = uuid.uuid4().hex[:8]
-    with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, "Legal" + tag, [{"name": "Doing", "status": "doing"}])
-        c.execute(
-            "UPDATE task_types SET pipeline_owner_id='human:ana', pipeline_visibility='members' WHERE id=?",
-            (typ["id"],),
-        )
-        task = H.task_create(c, "human:ben", "Contract " + tag, "", "human:ben", type=typ["id"], lint=False)
-        c.execute("UPDATE tasks SET private=0 WHERE id=?", (task["id"],))
-    auth, store = api.app.state.auth, api.app.state.store
-    cara = Identity("human:cara", "human", "cara@acme.example")
-    with store.read() as c:
-        cursor = E.latest(c)
-    post(api, "tasks/" + task["id"] + "/delete", {})
-    with store.read() as c:
-        sent = E.read(c, auth, cara, cursor, topics=("tasks",), task_views=_task_views)[0]
-    assert task["id"] not in str(sent)
 
 
 def test_link_insert_and_delete_events_require_both_resources_for_each_viewer(api):

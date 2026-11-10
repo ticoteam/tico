@@ -758,7 +758,7 @@ class PostalMail:
         if not row or row["status"] not in ("new", "failed") or row["task_id"]:
             return  # another drain filed it first
         from . import blobs
-        from .task_review import file_added
+        from .files import file_added
 
         reading = reading or {"sender": "", "summary": "", "deadline": None, "text": ""}
         rule = route_for(kind)
@@ -836,26 +836,35 @@ class PostalMail:
         """The letter's task for `to`; a bot that cannot take it (paused, gone) hands it to the owner."""
         private = True if private else None
         requester = owner_actor(c, self.auth) if inform_owner else None
-        try:
-            return H.task_create(
-                c,
-                H.KEEPER,
-                title,
-                body,
-                to,
-                due=due,
-                lint=False,
-                deduplicate=False,
-                private=private,
-                requester_actor=requester,
-            )["id"]
-        except H.Refused:
-            owner = owner_actor(c, self.auth)
-            if not owner or owner == to:
-                raise
-            return H.task_create(
-                c, H.KEEPER, title, body, owner, due=due, lint=False, deduplicate=False, private=private
-            )["id"]
+        made = H.attempt(
+            c,
+            H.task_create,
+            H.KEEPER,
+            title,
+            body,
+            to,
+            due=due,
+            lint=False,
+            deduplicate=False,
+            private=private,
+            requester_actor=requester,
+        )
+        if made:
+            return made["id"]
+        owner = owner_actor(c, self.auth)
+        # Nobody else to hand it to: file it for `to` again, so the refusal says why.
+        return H.task_create(
+            c,
+            H.KEEPER,
+            title,
+            body,
+            to if not owner or owner == to else owner,
+            due=due,
+            lint=False,
+            deduplicate=False,
+            private=private,
+            requester_actor=requester if not owner or owner == to else None,
+        )["id"]
 
     def file_bot(self, c):
         from .views import default_bot

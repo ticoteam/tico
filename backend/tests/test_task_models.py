@@ -640,14 +640,13 @@ def test_a_cheaper_task_model_on_a_bot_that_sends_warns_in_plain_words_and_still
     assert set_task_model(api, HAIKU)["warning"] == ""
     set_task_model(api, None)
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO approvals(id,kind,requested_by_id,created_at) VALUES('ap-1','send','bot:ops',?)", (H.now(),)
-        )
+        asked = H.task_create(c, "bot:ops", "Send the launch note", "To the list.", "bot:ops", lint=False)
+        H.task_ask(c, "bot:ops", asked["id"], "human:ana", "OK to send it?", kind="ok", seen_version=asked["version"])
     saved = set_task_model(api, HAIKU)
     assert saved["task_model"]["model"] == "claude-haiku-5-5", "it still saves"
     assert saved["warning"] == (
-        "This bot sends messages for you. Haiku 5.5 is a cheaper model than its own Sonnet 5.5, "
-        "and may word things badly. It still saves, and its tasks run on it."
+        "This bot asks you to OK what it sends, spends or publishes. Haiku 5.5 is a cheaper model than its own "
+        "Sonnet 5.5, and may get it wrong. It still saves, and its tasks run on it."
     )
     assert get(api, "bots/ops")["task_model_warning"] == saved["warning"], "the bot view carries it too"
     task, turn = task_turn(api, machine)

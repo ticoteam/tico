@@ -1,4 +1,4 @@
-"""Task list routes: task filters, notes, labels, stuck tasks, task flow."""
+"""Task list routes: task filters, notes, labels."""
 
 from .store import H
 from . import models as M
@@ -11,7 +11,6 @@ from . import org_rule_check
 from . import task_privacy as privacy
 import re
 from . import reach
-from . import pipeline_rights
 from . import views
 
 
@@ -28,8 +27,6 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         limit: int = 500,
         offset: int = 0,
         sort: str = "queue",
-        type: str | None = None,
-        step: str | None = None,
         number: int | None = None,
         updated_since: str | None = None,
         brief: bool = False,
@@ -49,8 +46,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 raise Problem("limit", "limit is between 1 and 500", 422)
             if offset < 0:
                 raise Problem("offset", "offset is zero or greater", 422)
-            if sort not in ("queue", "finished", "step"):
-                raise Problem("sort", "sort is queue, finished or step", 422)
+            if sort not in ("queue", "finished"):
+                raise Problem("sort", "sort is queue or finished", 422)
             owner, requester, filters = task_filters(
                 c,
                 owner=owner,
@@ -58,19 +55,16 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 status=status,
                 lane=lane,
                 label=label,
-                type=type,
-                step=step,
                 number=number,
                 updated_since=updated_since,
                 member=member,
                 role=role,
                 snoozed=snoozed,
-                viewer=who.task_actor or who.actor,
                 # A snoozed task is off every list until its date unless asked for by id, number or filter.
                 by_id=ids is not None or number is not None or bool(re.fullmatch(r"#\d+", q.strip())),
             )
             # One read: the visibility, the rows, the cursor and the ETag agree (backend/task_reads.py).
-            visible_sql = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
+            visible_sql = auth.task_sql(c, who)
             # Several tasks by id in one read (an agent's "show these"), instead of one GET each.
             typed = None
             if ids is not None:
@@ -88,11 +82,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                         for field in (
                             "body",
                             "acceptance_criteria",
-                            "acceptance",
                             "public_title",
                             "public_summary",
-                            "check_back_note",
-                            "check_back",
                             "requester_count",
                             "external_requesters",
                             "internal_requesters",
@@ -101,30 +92,9 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                             "size",
                         ):
                             row.pop(field, None)
-                        for field in (
-                            "verdict",
-                            "verdict_head",
-                            "check_back_at",
-                            "done_at",
-                            "closed_at",
-                            "closed_by_id",
-                            # Null on every task that is not on the engine (docs/pipelines-v3.md).
-                            "pipeline_id",
-                            "stage_id",
-                            "assignee_id",
-                        ):
+                        for field in ("done_at", "closed_at", "closed_by_id", "assignee_id"):
                             if row.get(field) is None:
                                 row.pop(field, None)
-                        if isinstance(row.get("step"), dict):
-                            row["step"].pop("public_name", None)
-                            # A stage's Warn after and card cap are the stage's, sent once with the pipeline's steps (task
-                            # types), not on each of a board's cards (pipeline-rail.ts pipelineStepLimit).
-                            row["step"].pop("limit_minutes", None)
-                            row["step"].pop("card_cap", None)
-                        # A snooze's note (up to 500 characters) is text too; the task's own read keeps it whole.
-                        for hold in row.get("holds") or ():
-                            if hold["kind"] == "snoozed":
-                                hold.pop("reason", None)
 
             if changed_after is not None:
                 found = reads.changed(c, changed_after, visible_sql)
@@ -290,9 +260,9 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            visible_sql = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
-            # The tag is of the labels this reader sees, not of the newest task change: an edit to a ticket it cannot
-            # read (on a members-only pipeline) leaves the tag, and the answer, as they were.
+            visible_sql = auth.task_sql(c, who)
+            # The tag is of the labels this reader sees, not of the newest task change: an edit to a task it cannot
+            # read leaves the tag, and the answer, as they were.
             keys = H.labels_in_use(c, visible_sql)
             tags = [H.tag_by_key(c, key) for key in keys]
             tag = reads.etag("labels", reads.access(visible_sql), reads.names(c), who.actor, keys, tags)
@@ -300,69 +270,3 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 return reads.not_modified(tag)
             response.headers["ETag"] = tag
             return {"labels": keys, "tags": tags}
-
-    @app.get("/api/v2/tasks/stuck")
-    def tasks_stuck(request: Request, hours: int = H.STUCK_HOURS):
-        """Every bot's stuck work, for the fleet maintainer's sweep and for people."""
-        who = request.state.identity
-        if who.role not in ("human", "owner") and who.actor != H.bot_actor(H.FLEET_MAINTAINER):
-            raise Problem("forbidden", "The stuck-task sweep is BotOps's and people's", 403)
-        principal = who.task_actor or who.actor
-        with store.read() as c:
-            hidden = pipeline_rights.hidden_pipeline_ids(c, principal)
-            return {
-                "tasks": [
-                    t
-                    for t in H.stuck_tasks(c, hours=max(1, hours), hidden=auth.unreadable_bots(c, who))
-                    if privacy.task_readable(c, who, H.task(c, t["id"]))
-                    and not pipeline_rights.left_out(hidden, principal, H.task(c, t["id"]) or {})
-                ]
-            }
-
-    @app.get("/api/v2/tasks/flow")
-    def tasks_flow(
-        request: Request,
-        days: int = 30,
-        tz: int = 0,
-        owner: str | None = None,
-        requester: str | None = None,
-        owner_kind: str | None = None,
-        label: str | None = None,
-        recurring: bool | None = None,
-        type: str | None = None,
-    ):
-        """Status changes over time for the Tasks page's stats: counts by day, time in each stage."""
-        who = request.state.identity
-        if who.role not in ("human", "owner"):
-            raise Problem("forbidden", "Task stats are for humans", 403)
-        if days < 1 or days > 365:
-            raise Problem("days", "days is between 1 and 365", 422)
-        if owner_kind not in (None, "", "bot", "human"):
-            raise Problem("owner_kind", "owner_kind is bot or human", 422)
-        with store.read() as c:
-            owner = H.resolve_actor(c, owner) if owner else None
-            requester = H.resolve_actor(c, requester) if requester else None
-            typ = H.type_get(c, type) if type else None
-            # A members-only pipeline is no type to someone outside it: refused as an unknown one is.
-            if typ and not pipeline_rights.may_see(c, who.task_actor or who.actor, typ["id"]):
-                typ = None
-            if type and not typ:
-                raise Problem("type", "No task type " + type, 422)
-            tz = max(-840, min(840, tz))  # minutes east of UTC; days are the viewer's days
-            today = H.shift(H.now(), minutes=tz)[:10] + "T00:00:00.000000Z"
-            since = H.shift(today, days=1 - days, minutes=-tz)
-            return {
-                "since": since,
-                **H.task_flow(
-                    c,
-                    since,
-                    tz_minutes=tz,
-                    visible=pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who)),
-                    owner=owner,
-                    requester=requester,
-                    owner_kind=owner_kind or None,
-                    label=label,
-                    recurring=recurring,
-                    type_id=typ["id"] if typ else None,
-                ),
-            }

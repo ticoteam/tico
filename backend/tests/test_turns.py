@@ -168,15 +168,14 @@ def test_a_folded_step_carries_its_label_and_keeps_its_tool_name():
 
 
 def test_a_hub_phrase_is_the_longest_command_it_starts_with():
-    assert turns.tool_label({"tool": "Bash", "summary": "hub approval read-back"}) == "Preparing approvals for your yes"
-    assert turns.tool_label({"tool": "mcp__hub__hub_approval_read_back"}) == "Preparing approvals for your yes"
-    assert turns.tool_label({"tool": "Bash", "summary": "hub approval approve"}) == "Approving"
-    assert turns.tool_label({"tool": "Bash", "summary": "hub needs-you list"}) == "Reading the Needs you list"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub task done 12 -m sent"}) == "Finishing a task"
+    assert turns.tool_label({"tool": "mcp__hub__hub_task_move"}) == "Moving a task"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub task answer 12 r1 ok"}) == "Answering an ask"
     assert turns.tool_label({"tool": "Bash", "summary": "hub finance report"}) == "Working in Finance"
     assert turns.tool_label({"tool": "Bash", "summary": "hub meeting search"}) == "Searching"
     assert turns.tool_label({"tool": "Bash", "summary": "hub settings set"}) == "Changing a setting"
     assert turns.tool_label({"tool": "shell", "summary": "hub history"}) == "Reading the chat"
-    assert turns.tool_label({"tool": "Bash", "summary": "hub task question"}) == "Asking a teammate"
+    assert turns.tool_label({"tool": "Bash", "summary": "hub task ask 12 --to ana"}) == "Asking a teammate"
 
 
 def test_an_unmapped_hub_command_never_shows_its_words():

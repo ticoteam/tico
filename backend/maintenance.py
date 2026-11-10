@@ -27,7 +27,7 @@ from contextlib import contextmanager
 from datetime import datetime, time, timedelta, timezone
 
 from . import learnings, suggestions, updates
-from .maintenance_steps import check_health, clean_up, collect, dream, find_stuck, learn, suggest, update
+from .maintenance_steps import check_health, clean_up, collect, dream, learn, suggest, update
 from .store import H, Problem
 from .updates import START_HOUR, ZONE
 from . import sources as SRC
@@ -36,7 +36,7 @@ LOG = logging.getLogger("tico.maintenance")
 REGISTRY_KEY = "maintenance"  # registry_metadata: the run's schedule, pause and monthly cap
 STEP_SOURCES = {"find_stuck": "stuck-check", "check_health": "check-health"}  # what a step's keeper lines are
 # Find stuck gets the shared BotOps wake first; Check health keeps a refused wake for the next run.
-ORDER = ("collect", "clean_up", "find_stuck", "check_health", "learn", "suggest", "update", "dream")
+ORDER = ("collect", "clean_up", "check_health", "learn", "suggest", "update", "dream")
 NAMES = {
     "collect": "Collect",
     "clean_up": "Clean up",
@@ -56,7 +56,6 @@ LIVE = {
     "collect": collect.run,
     "clean_up": clean_up.run,
     "check_health": check_health.run,
-    "find_stuck": find_stuck.run,
     "learn": learn.run,
     "suggest": suggest.run,
     "update": update.run,

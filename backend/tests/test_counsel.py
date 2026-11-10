@@ -1364,7 +1364,7 @@ def test_read_identity_includes_source_and_receipts_match_persisted_reads(api, m
             assert receipt["file"]["id"] == persisted["file_id"]
             assert receipt["file"]["version"] == persisted["version"]
             assert f"From: {source_row['name']} ({source_row['kind']})" in task["body"]
-            assert task["closed_at"] is None and task["status"] not in ("done", "closed", "declined")
+            assert task["closed_at"] is None and task["status"] == "open"
 
 
 def test_the_server_refuses_counsel_outward_routes_and_comments_only_on_its_own_task(api, monkeypatch):
@@ -1513,7 +1513,7 @@ def test_a_completed_counsel_turn_finishes_its_read_task_and_a_failed_one_does_n
         {"outcome": "failed", "text": "Model error.", "last_seq": 0},
         token=r["token"],
     )
-    assert task_state(api, second["task_id"])["status"] in ("open", "doing")
+    assert task_state(api, second["task_id"])["status"] == "open"
 
 
 def next_counsel_run(api, r):
@@ -1549,10 +1549,9 @@ def test_a_leftover_counsel_task_does_not_block_a_read_and_the_read_sees_only_it
 
     org(api)
     counsel_on(api)
-    # A declined "Can I" stays in the person's list with Counsel: the next read's notice names it, without its text.
+    # A "Can I" left open with Counsel: the next read's notice names it, without its text.
     asked = post(api, "rules/ask", {"question": "Can I text customers on Sunday about the secret Globex launch?"})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='declined' WHERE id=?", (asked["task_id"],))
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='tico-counsel'")
     file_id, version = store_file(api, CONTRACT)
     other_file, _ = store_file(api, "Globex launch plan: secret.", title="Globex Plan")
