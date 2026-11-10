@@ -685,11 +685,6 @@ def test_task_page_reads_a_fixed_number_of_statements_and_hides_private_provenan
     assert counts[30, "ana"] <= counts[3, "ana"] + 5 and counts[30, "cara"] <= counts[3, "cara"] + 5
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="views.needs_items reads the whole H.task_view once per task with an ask (its to_leave, can_work, the "
-    "next stage, the filed links): about 7 statements per ask, so 30 asks cost 230 statements to 3 asks' 70",
-)
 def test_needs_you_reads_a_fixed_number_of_statements_and_hides_private_items(api):
     """Needs you reads its tasks' brief rows and asks for the whole list together, so a long list costs what a short
     one does, and a private task its reader is not a party to stays off the list."""
