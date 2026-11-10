@@ -206,7 +206,12 @@ class FakeEC2:
         return FakeWaiter()
 
     def terminate_instances(self, **kw):
+        """As EC2 does: an address associated with a terminated instance is disassociated from it."""
         self._rec("terminate_instances", **kw)
+        for a in self.eips:
+            if a.get("InstanceId") in kw["InstanceIds"]:
+                for k in ("InstanceId", "AssociationId", "NetworkInterfaceId", "PrivateIpAddress"):
+                    a.pop(k, None)
 
     def release_address(self, **kw):
         self._rec("release_address", **kw)

@@ -435,7 +435,7 @@ class FilteredEC2(fakes.FakeEC2):
 
     def __init__(self, **kw):
         super().__init__(**kw)
-        self.filters = []
+        self.filters, self.address_reads = [], []
 
     def _match(self, rows, Filters):
         self.filters.append(Filters)
@@ -454,6 +454,7 @@ class FilteredEC2(fakes.FakeEC2):
         return {"SecurityGroups": self._match(self.sgs, Filters)}
 
     def describe_addresses(self, Filters=(), AllocationIds=()):
+        self.address_reads.append({"Filters": Filters, **({"AllocationIds": AllocationIds} if AllocationIds else {})})
         rows = [a for a in self.eips if not AllocationIds or a["AllocationId"] in AllocationIds]
         return {"Addresses": self._match(rows, list(Filters))}
 
@@ -2544,3 +2545,53 @@ def test_the_plan_object_is_deleted_only_by_its_recorded_version_or_a_delete_con
             assert not s3.versions.get(("hub-plans-x", key))  # this install's own version is gone
         else:
             assert result == "ChangedSinceWritten" and s3.called("delete_object")[-1]["IfMatch"] == etag(b"ours")
+
+
+def test_an_elastic_ip_is_released_only_when_a_fresh_read_shows_it_associated_with_nothing():
+    # Codex review 5, case 4: an address associated with a network interface (no InstanceId) passed the check, and
+    # ReleaseAddress in a default VPC disassociates it on its own. Right before the release, a read by its allocation id
+    # must show no association at all; otherwise it is left, with the step to take by hand.
+    eni = {"AssociationId": "eipassoc-prod", "NetworkInterfaceId": "eni-prod", "PrivateIpAddress": "10.0.0.5"}
+    for association, released in (
+        (eni, False),
+        ({"AssociationId": "eipassoc-x", "InstanceId": "i-hub"}, False),
+        ({}, True),
+    ):
+        d, ec2, iam, ssm = id_install()
+        ec2.eips[1].update(association)
+        if association.get("InstanceId"):  # still shown on the terminated server: EC2 has not caught up
+            ec2.terminate_instances = lambda **kw: ec2._rec("terminate_instances", **kw)
+        out, slept = [], []
+        owned.destroy(
+            ec2,
+            iam,
+            ssm,
+            {"instance": ["i-hub"], "elastic-ip": ["eip-hub"]},
+            out.append,
+            slept.append,
+            names=HUB_ID,
+            name="hotmic",
+            ids=HUB_IDS,
+        )
+        assert (deleted(ec2, iam, ssm)["eips"] == ["eip-hub"]) == released, (association, out)
+        said = "\n".join(out)
+        if not released:
+            assert "left alone: Elastic IP eip-hub" in said and "release it by hand" in said, said
+            assert sum(slept) <= 60
+        # A read by its allocation id, after the terminate, decided.
+        assert ec2.called("terminate_instances") and any("AllocationIds" in f for f in ec2.address_reads), association
+    # As EC2 does: terminating the server it is attached to frees the address, and the release goes ahead.
+    d, ec2, iam, ssm = id_install()
+    ec2.eips[1].update({"AssociationId": "eipassoc-x", "InstanceId": "i-hub", "NetworkInterfaceId": "eni-hub"})
+    owned.destroy(
+        ec2,
+        iam,
+        ssm,
+        {"instance": ["i-hub"], "elastic-ip": ["eip-hub"]},
+        print,
+        lambda s: None,
+        names=HUB_ID,
+        name="hotmic",
+        ids=HUB_IDS,
+    )
+    assert deleted(ec2, iam, ssm)["eips"] == ["eip-hub"]

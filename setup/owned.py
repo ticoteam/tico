@@ -893,6 +893,27 @@ def refuse_foreign_attached(ec2, instance_ids: list[str], name: str, names: Name
         )
 
 
+def association(ec2, alloc: str, sleep: Callable[[float], None] | None) -> str | None:
+    """What the address is associated with, read fresh by its allocation id ("" for nothing at all: no association, no
+    instance, no network interface; None when it is gone). With `sleep` (it was on the server just terminated), EC2 is
+    given a little while to show it freed."""
+    for wait in (1, 2, 4, 8, 16, None) if sleep else (None,):
+        try:
+            rows = ec2.describe_addresses(AllocationIds=[alloc])["Addresses"]
+        except Exception as e:
+            if error_code(e) != "InvalidAllocationID.NotFound":
+                raise
+            return None
+        row = next((r for r in rows if r.get("AllocationId") == alloc), None)
+        if row is None:
+            return None
+        at = [row[k] for k in ("AssociationId", "InstanceId", "NetworkInterfaceId") if row.get(k)]
+        if not at or wait is None:
+            return ", ".join(at)
+        sleep(wait)
+    return ""
+
+
 def _delete_sg(ec2, g: str, sleep) -> None:
     for attempt in range(6):  # the network interface lingers briefly after termination
         try:
@@ -984,7 +1005,18 @@ def destroy(ec2, iam, ssm, found, say, sleep, names: Names, name: str, ids: dict
         elif row.get("InstanceId") and row["InstanceId"] not in insts:
             left(f"Elastic IP {a}", f"is attached to {row['InstanceId']}, which is not this install's server")
         else:
-            ec2.release_address(AllocationId=a)
+            at = association(ec2, a, sleep if row.get("InstanceId") else None)
+            if at is None:
+                left(f"Elastic IP {a}", "is gone already")
+            elif at:
+                left(
+                    f"Elastic IP {a}",
+                    f"is still associated ({at}), and releasing it would detach it from that; release it by hand in "
+                    "the EC2 console (Elastic IPs) once you have checked nothing there needs it",
+                )
+            else:
+                # EC2 has no conditional release: an association made in the instant after this read is not caught.
+                ec2.release_address(AllocationId=a)
     for g in found.get("security-group", []):
         if still("sg", g, ec2.describe_security_groups(Filters=flt)["SecurityGroups"], "GroupId"):
             _delete_sg(ec2, g, sleep)
