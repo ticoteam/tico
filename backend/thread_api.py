@@ -370,7 +370,7 @@ def _match(c, v, actors):
     found = c.execute(sql, {**names, "me": v.actor, "n": len(wanted), "fetch": MATCH_LIMIT + 20})
     rows = []
     for r in (threads.thread_row(c, dict(r)) for r in found):
-        if r["id"] != dm and threads.thread_readable(c, v, r):
+        if r and r["id"] != dm and threads.thread_readable(c, v, r):
             rows.append(r)
         if len(rows) >= MATCH_LIMIT:
             break
