@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from . import access as Access
 from . import hubdb_core, pipeline_rights, task_engine
+from . import pipeline_seats as S
 from . import task_requirements as R
 from .hubdb_core import KEEPER as SYSTEM
 
@@ -52,7 +53,7 @@ REQUIREMENT_FIELDS = ("kind", "settings", "can_push_past", "who_oks", "person_id
 WHO_OKS = ("none", "people_only", "people_with_exceptions")
 OK_KINDS = ("ok", "page")  # the kinds whose "Who OKs" switch means something on a stage (kinds 2 and 3)
 NAMES_PERSON = ("ok", "page")  # only a requirement met with a button names someone (C29): a person or a bot
-PHASE = {"page": 2, "pr_open": 3, "checks_pass": 3, "pr_merged": 3, "in_release": 3}
+REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 BUILT_IN = ("done", "closed")
 PREFIX = re.compile(r"^[A-Za-z]{1,2}$")
 ASSIGNEE = "assignee"
@@ -87,6 +88,191 @@ PRESETS: dict[str, Row] = {
     },
 }
 TASK_MANAGER = "task-manager"  # the built-in bot that manages General (backend/task_manager.py)
+
+
+def _stage(sid: str, name: str, purpose: str, minutes: int | None, requirements: list[Row], **more: Any) -> Row:
+    return {
+        "id": sid,
+        "name": name,
+        "purpose": purpose,
+        "owner": None,  # the stage's role (ROLES), filled by preset()
+        "by_hand": False,
+        "task_limit": None,
+        "expected_minutes": minutes,
+        "expected_bots_only": True,
+        "on_enter": {},
+        "requirements": requirements,
+        **more,
+    }
+
+
+def _page(line: str, rubric: str, **settings: bool) -> Row:
+    return {"kind": "page", "line": line, "settings": {"rubric": rubric, **settings}}
+
+
+REVIEW_RUBRIC = (
+    "A real review of the newest commit of every linked PR: what was read and run, what is wrong, and what to fix. "
+    "Not a summary of the change."
+)
+# The Product and Engineering presets (docs/pipelines-v3.md "Default pipelines"). Made only for a company that builds
+# software (a blank answer is yes), once its setup is finished (ensure_presets).
+PRESETS["engineering"] = {
+    "id": "engineering",
+    "name": "Engineering",
+    "goal": "From a task to a published release.",
+    "prefix": "E",
+    "manager_id": None,
+    "owner_id": None,
+    "private": False,
+    "factory_id": "product",
+    "preset": "engineering",
+    "stages": [
+        _stage("engineering-on-deck", "On deck", "Waits for room in Build, oldest first.", None, []),
+        _stage(
+            "engineering-build",
+            "Build",
+            "Build it in its own thread, open a PR and link it, and get the checks green.",
+            1440,
+            [{"kind": "pr_open"}, {"kind": "checks_pass"}],
+            task_limit=3,
+        ),
+        _stage(
+            "engineering-review-1",
+            "Review 1",
+            "Review the newest commit and attach a Review page.",
+            120,
+            [_page("Review page", REVIEW_RUBRIC, at_head=True)],
+        ),
+        _stage(
+            "engineering-fixes-1",
+            "Fixes 1",
+            "Fix what the review found, push, and say done once the checks are green.",
+            240,
+            [{"kind": "owner_done"}, {"kind": "checks_pass"}],
+        ),
+        _stage(
+            "engineering-review-2",
+            "Review 2",
+            "Review the newest commit again and attach a Review page.",
+            120,
+            [_page("Review page", REVIEW_RUBRIC, at_head=True)],
+        ),
+        _stage(
+            "engineering-fixes-2",
+            "Fixes 2",
+            "Fix what the second review found and attach a Review page that shows what was built.",
+            240,
+            [
+                {"kind": "checks_pass"},
+                _page(
+                    "Review page",
+                    "Shows what was built, with screenshots or output, and how it was checked. Enough for a person "
+                    "to OK it without opening the code.",
+                ),
+            ],
+        ),
+        _stage(
+            "engineering-merge",
+            "Merge",
+            "The PRs are in the merge queue. If GitHub takes one out, queue it again, fix it on its branch, or send "
+            "the task back to Fixes 2.",
+            120,
+            [{"kind": "pr_merged"}],
+            on_enter={"queue_prs": True},
+        ),
+        _stage(
+            "engineering-release",
+            "Release",
+            "Waits for a published release that holds the merge.",
+            1440,
+            [{"kind": "in_release"}],
+        ),
+    ],
+    "done": {"id": "engineering-done"},
+    "closed": {"id": "engineering-closed"},
+}
+PRESETS["product"] = {
+    "id": "product",
+    "name": "Product",
+    "goal": "Discerning, high-quality specs that ship",
+    "prefix": "P",
+    "manager_id": None,
+    "owner_id": None,
+    "private": False,
+    "factory_id": "product",
+    "preset": "product",
+    "stages": [
+        _stage(
+            "product-ideas",
+            "Ideas",
+            "Ideas wait here. Move one to Spec when it is worth a spec. Snooze one to park it.",
+            None,
+            [],
+            by_hand=True,
+        ),
+        _stage(
+            "product-spec",
+            "Spec",
+            "A spec a builder can build from.",
+            2880,
+            [_page("Spec page", "Covers goal, scope, what done looks like")],
+            task_limit=2,
+        ),
+        _stage(
+            "product-in-development",
+            "In development",
+            "Engineering builds it. This task leaves when every Engineering task filed for it is Done.",
+            7200,
+            [{"kind": "linked_done"}],
+            on_enter={"file_into": "engineering"},
+        ),
+        _stage(
+            "product-validate",
+            "Validate",
+            "Check it in production and attach a Checked in production page that names the version production runs.",
+            1440,
+            [
+                _page(
+                    "Checked in production",
+                    "Names the version production runs and shows the change working there. If that version is older "
+                    "than the release that holds this work, it is not yet.",
+                    with_release=True,
+                )
+            ],
+        ),
+    ],
+    "done": {"id": "product-done"},
+    "closed": {"id": "product-closed"},
+}
+SOFTWARE = ("engineering", "product")  # the presets only a company that builds software gets
+FACTORY = {"id": "product", "name": "Product", "goal": "From an idea to something checked in production."}
+# Who fills each preset's manager, its stage owners, and which stages' page requirement a person OKs (D5, D9).
+ROLES: dict[str, Row] = {
+    "engineering": {
+        "manager": S.ENGINEERING_MANAGER,
+        "stages": {
+            "engineering-on-deck": S.BUILDER,
+            "engineering-build": S.BUILDER,
+            "engineering-review-1": S.REVIEWER_1,
+            "engineering-fixes-1": S.BUILDER,
+            "engineering-review-2": S.REVIEWER_2,
+            "engineering-fixes-2": S.BUILDER,
+            "engineering-merge": S.RELEASE_MANAGER,
+            "engineering-release": S.RELEASE_MANAGER,
+        },
+        "ok": ("engineering-fixes-2",),
+    },
+    "product": {
+        "manager": S.PRODUCT_MANAGER,
+        "stages": {
+            "product-ideas": S.PRODUCT_MANAGER,
+            "product-spec": S.PRODUCT_MANAGER,
+            "product-in-development": S.PRODUCT_MANAGER,
+            "product-validate": S.PRODUCT_MANAGER,
+        },
+        "ok": ("product-spec",),
+    },
+}
 
 
 def _h() -> Any:
@@ -301,6 +487,22 @@ def _kind_name(kind: str) -> str:
     return R.KIND_NAMES.get(kind, kind)
 
 
+def _check_settings(req: Row, label: str, problems: list[str]) -> None:
+    """A requirement's settings: only its kind's keys (task_requirements.SETTINGS), each of its type."""
+    name = _kind_name(req["kind"])
+    for key, value in req["settings"].items():
+        if key not in R.SETTINGS.get(req["kind"], ()):
+            problems.append(f"{name} has no setting {key} (on {label}).")
+        elif key in ("at_head", "with_release", "prereleases") and not isinstance(value, bool):
+            problems.append(f"{key} on {label} is on or off.")
+        elif key == "rubric" and not isinstance(value, str):
+            problems.append(f"What Jev checks on {label} must be text.")
+        elif key == "release_repo" and (
+            not isinstance(value, str) or (value.strip() and not REPO.match(value.strip()))
+        ):
+            problems.append(f"The release repo on {label} is owner/name, or empty for the server's.")
+
+
 def _check_requirement(conn: "sqlite3.Connection", stage: Row, req: Row, problems: list[str]) -> None:
     kind, label = req["kind"], stage["name"] or "a stage"
     if kind not in R.KINDS:
@@ -309,8 +511,7 @@ def _check_requirement(conn: "sqlite3.Connection", stage: Row, req: Row, problem
     name = _kind_name(kind)
     if kind == "answer":
         problems.append(f"Answer from someone is never set on a stage (on {label}). Add it to one task instead.")
-    elif kind not in R.PHASE_ONE:
-        problems.append(f"{name} can't be saved until phase {PHASE.get(kind, 2)} (on {label}).")
+    _check_settings(req, label, problems)
     if kind in R.NEVER_PUSHED_PAST and req["can_push_past"]:
         problems.append(f"{name} can't be pushed past (C3), on {label}.")
     if req["who_oks"] not in WHO_OKS:
@@ -339,7 +540,6 @@ def _check_on_enter(conn: "sqlite3.Connection", record: Row, stage: Row, label: 
     if not action:
         return
     if list(action) == ["queue_prs"] and action["queue_prs"] is True:
-        problems.append(f"Queue the PRs to merge can't be saved until phase 3 (on {label}).")
         return
     target = action.get("file_into") if list(action) == ["file_into"] else None
     if not isinstance(target, str) or not target:
@@ -347,9 +547,6 @@ def _check_on_enter(conn: "sqlite3.Connection", record: Row, stage: Row, label: 
             f"On enter on {label} is nothing, file a linked task into a pipeline, or queue the PRs to merge."
         )
         return
-    # Filing a linked task is not built until phase 2 (stage_effects.enter): a stage that files would hold every task
-    # that enters it on a task nobody files.
-    problems.append(f"Filing into a pipeline comes with the Product pipeline (on {label}).")
     found = task_engine.pipeline(conn, target)
     if target != record["id"] and (not found or found.get("retired_at")):
         problems.append(f"{label} files into a pipeline that does not exist: {target}.")
@@ -651,9 +848,9 @@ def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts
         if row["kind"] == "work" and sid not in wanted:
             conn.execute("UPDATE stages SET retired_at=?, updated_at=? WHERE id=?", (ts, ts, sid))
     # Names are unique among a pipeline's live stages: park the kept ones on their ids first, so a swap of two names
-    # never meets itself halfway.
+    # never meets itself halfway. Not "\0": SQLite's NOCASE stops at a NUL, so "\0review-1" and "\0review-2" are one.
     for sid in wanted:
-        conn.execute("UPDATE stages SET name=? WHERE id=?", ("\0" + sid, sid))
+        conn.execute("UPDATE stages SET name=? WHERE id=?", ("\x01" + sid, sid))
     taken: set[str] = set()
     for position, stage in enumerate(record["stages"]):
         values = (
@@ -772,36 +969,179 @@ def _task_manager(conn: "sqlite3.Connection") -> str | None:
     return f"bot:{found['id']}"
 
 
+def _onboarding(conn: "sqlite3.Connection") -> Row:
+    """The setup record's answers and whether setup finished (backend/onboarding.py `load`), read raw: this module
+    runs at every start, before the rest of the app is loaded."""
+    found = conn.execute("SELECT value FROM registry_metadata WHERE key='onboarding'").fetchone()
+    return _as_dict(_loads(found[0]) if found else None) or {}
+
+
+def makes_software(conn: "sqlite3.Connection") -> bool:
+    """Whether the company builds software: its answer to "Software is the product" is not "no" (a blank is yes, D7)."""
+    answers = _as_dict(_onboarding(conn).get("answers")) or {}
+    return str(answers.get("software_product") or "").strip().lower() != "no"
+
+
+def _set_up(conn: "sqlite3.Connection") -> bool:
+    """Whether the company finished its setup, so its answers and its bots are known."""
+    return bool(_onboarding(conn).get("completed"))
+
+
 def preset(conn: "sqlite3.Connection", key: str) -> Row:
-    """A preset's record for this org, ready to save: its manager filled in from the bots the org has."""
+    """A preset's record for this org, ready to save: its manager, its stage owners and the person on its people OKs
+    filled in from the bots and people the org has (pipeline_seats). A role nobody fills is left empty."""
     record = copy.deepcopy(PRESETS[key])
     if key == "general":
         record["manager_id"] = _task_manager(conn)
+    roles = ROLES.get(key)
+    if not roles:
+        return record
+    who = S.resolve(conn)
+    record["manager_id"] = who.get(roles["manager"])
+    person = S.ok_person(conn, record["manager_id"])
+    for stage in record["stages"]:
+        stage["owner"] = who.get(roles["stages"].get(stage["id"], ""))
+        if stage["id"] in roles["ok"]:
+            for req in stage["requirements"]:
+                if req["kind"] == "page":
+                    req["person_id"] = person
     return record
 
 
-def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
-    """Every start: make each preset pipeline the org does not have yet. Returns the ids it made. A preset the org
-    has, under its id or as its preset, is never changed, nor one it retired, with one exception: General is made at
-    the first start, before the org has any bot, so while nobody has changed it and it has no manager, it gets the
-    preset's manager once that bot exists. A preset whose name or prefix another pipeline already uses is left out,
-    so a start never fails on it."""
-    made: list[str] = []
-    for key in PRESETS:
-        record = preset(conn, key)
-        have = conn.execute(
-            "SELECT id, manager_id, settings_version, retired_at FROM pipelines WHERE id=? OR preset=?",
-            (record["id"], key),
-        ).fetchone()
-        if have:
-            untouched = int(have[2] or 1) == 1 and not have[1] and not have[3]
-            if untouched and record.get("manager_id"):
+def _untouched(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
+    """A preset nobody changed: still at its first settings version and not retired."""
+    found = conn.execute(
+        "SELECT settings_version, retired_at FROM pipelines WHERE id=?", (pipeline_id,)
+    ).fetchone()
+    return bool(found) and int(found[0] or 1) == 1 and not found[1]
+
+
+def _fill(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> None:
+    """An untouched preset made before its roles' bots existed gets them once they do: an empty manager, an empty
+    stage owner, an empty person on a stage's people OK. Nothing a person set is changed, and the settings version
+    stays 1, so the next bot that appears is filled in too."""
+    record = preset(conn, key)
+    ts = _h().now()
+    if record.get("manager_id"):
+        conn.execute(
+            "UPDATE pipelines SET manager_id=?, updated_at=? WHERE id=? AND manager_id IS NULL",
+            (record["manager_id"], ts, pipeline_id),
+        )
+    for stage in record["stages"] if key in ROLES else ():
+        if stage.get("owner"):
+            conn.execute(
+                "UPDATE stages SET owner=?, updated_at=? WHERE id=? AND pipeline_id=? AND owner IS NULL",
+                (stage["owner"], ts, stage["id"], pipeline_id),
+            )
+        for req in stage["requirements"]:
+            if req.get("person_id"):
                 conn.execute(
-                    "UPDATE pipelines SET manager_id=?, updated_at=? WHERE id=?",
-                    (record["manager_id"], _h().now(), have[0]),
+                    "UPDATE requirements SET person_id=? WHERE stage_id=? AND kind=? AND person_id IS NULL "
+                    "AND withdrawn_at IS NULL AND visit_id IS NULL",
+                    (req["person_id"], stage["id"], req["kind"]),
                 )
+
+
+def _ensure_factory(conn: "sqlite3.Connection") -> None:
+    """The Product factory that holds Product and Engineering (S12), made when missing."""
+    if conn.execute("SELECT 1 FROM factories WHERE id=?", (FACTORY["id"],)).fetchone():
+        return
+    ts = _h().now()
+    position = conn.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM factories WHERE retired_at IS NULL").fetchone()
+    conn.execute(
+        "INSERT INTO factories (id, name, goal, position, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+        (FACTORY["id"], FACTORY["name"], FACTORY["goal"], int(position[0]), ts, ts),
+    )
+
+
+def _held(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
+    return bool(
+        conn.execute(
+            "SELECT 1 FROM tasks WHERE pipeline_id IS NOT NULL AND pipeline_id=? AND status='open' LIMIT 1",
+            (pipeline_id,),
+        ).fetchone()
+    )
+
+
+def _retire_software(conn: "sqlite3.Connection") -> list[str]:
+    """A company that says it builds no software: its untouched Product and Engineering, holding no open task, are
+    retired. The settings version stays 1, so they come back if the answer turns to yes. Product first: Engineering
+    stays while a pipeline still in use files into it. Returns the ids retired."""
+    retired: list[str] = []
+    for key in reversed(SOFTWARE):
+        pid = PRESETS[key]["id"]
+        if not _untouched(conn, pid) or _held(conn, pid):
             continue
+        if any(pid in targets for targets in _handoffs(conn, pid).values()):
+            continue
+        ts = _h().now()
+        conn.execute("UPDATE pipelines SET retired_at=?, updated_at=? WHERE id=?", (ts, ts, pid))
+        _h().event(conn, SYSTEM, "pipeline.retire", pid, {"version": 1, "why": "no software"})
+        retired.append(pid)
+    return retired
+
+
+def _bring_back(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
+    """A preset retired because the company said it builds no software (retired at version 1), now that it says yes:
+    in use again, unless another pipeline took its name or prefix meanwhile."""
+    found = conn.execute(
+        "SELECT name, prefix, settings_version, retired_at FROM pipelines WHERE id=?", (pipeline_id,)
+    ).fetchone()
+    if not found or not found[3] or int(found[2] or 1) != 1:
+        return False
+    if conn.execute(
+        "SELECT 1 FROM pipelines WHERE id<>? AND retired_at IS NULL AND (name=? COLLATE NOCASE OR prefix=?)",
+        (pipeline_id, found[0], found[1]),
+    ).fetchone():
+        return False
+    conn.execute("UPDATE pipelines SET retired_at=NULL, updated_at=? WHERE id=?", (_h().now(), pipeline_id))
+    return True
+
+
+def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
+    """Every start, and the end of setup (onboarding.complete_company): make each preset pipeline the org does not
+    have yet. Returns the ids it made.
+
+    - General is made for every company, at the first start.
+    - Product and Engineering are made for a company that builds software (`makes_software`: a blank answer is yes),
+      once its setup finished, so their roles find the bots setup made. With them comes the Product factory. A company
+      that says no gets its untouched pair retired; saying yes again brings that pair back.
+    - A preset the org has, under its id or as its preset, is never changed, nor one it retired, with one exception:
+      while nobody has changed it (settings version 1), an empty manager, stage owner or person on a people OK is
+      filled in once the bot or person for it exists.
+    - A preset whose name or prefix another pipeline already uses is left out, so a start never fails on it."""
+    made: list[str] = []
+    software = makes_software(conn)
+    if not software:
+        _retire_software(conn)
+    for key in PRESETS:
+        if key in SOFTWARE and not software:
+            continue
+        have = conn.execute("SELECT id FROM pipelines WHERE id=? OR preset=?", (PRESETS[key]["id"], key)).fetchone()
+        if have:
+            if key in SOFTWARE:
+                _bring_back(conn, str(have[0]))
+            if _untouched(conn, str(have[0])):
+                _fill(conn, key, str(have[0]))
+            continue
+        if key in SOFTWARE:
+            if not _set_up(conn):
+                continue
+            _ensure_factory(conn)
+        record = preset(conn, key)
         if check(conn, record):
             continue
         made.append(save(conn, SYSTEM, record)["id"])
     return made
+
+
+def from_preset(conn: "sqlite3.Connection") -> list[str]:
+    """The pipelines a company has only because every company of its kind gets them: presets nobody changed that hold
+    no task. `company_import.new_company` passes over them."""
+    return [
+        str(row[0])
+        for row in conn.execute(
+            "SELECT p.id FROM pipelines p WHERE p.preset IS NOT NULL AND p.settings_version=1 "
+            "AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.pipeline_id = p.id)"
+        ).fetchall()
+    ]

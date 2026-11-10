@@ -23,6 +23,12 @@ def c(company):
     with company.transaction() as conn:
         for slug in ("builder", "reviewer", "manager"):
             X.bot(conn, slug)
+        # A company that builds no software: General is its only preset (Product and Engineering are in
+        # backend/tests/test_product_engineering_presets.py).
+        conn.execute(
+            "UPDATE registry_metadata SET value=? WHERE key='onboarding'",
+            ('{"answers": {"software_product": "no"}, "completed": "2026-01-01T00:00:00Z"}',),
+        )
         yield conn
 
 
@@ -162,7 +168,8 @@ def test_defaults_fill_in_the_switches_by_kind(c):
     assert (ok["can_push_past"], ok["who_oks"]) == (True, "people_with_exceptions")
     merged = _ops(name="Releases", prefix="R")
     merged["stages"][1]["requirements"] = [{"kind": "pr_merged"}]
-    assert PS.check(c, merged) == ["PR merged can't be saved until phase 3 (on Sign off)."]  # and its switch is off
+    saved = PS.save(c, ANA, merged)
+    assert _req(saved, 1)["can_push_past"] is False  # its switch is off
 
 
 def _stage(record, n=0):
@@ -189,10 +196,9 @@ CASES = {
     ),
     "a limit of zero": (lambda r: _stage(r, 1).update(task_limit=0), "The limit on Sign off is a whole number"),
     "a part of a minute": (lambda r: _stage(r).update(expected_minutes=1.5), "a whole number of minutes above zero"),
-    "a page, before phase 2": (lambda r: _req(r).update(kind="page"), "A page can't be saved until phase 2"),
-    "checks, before phase 3": (
-        lambda r: _req(r).update(kind="checks_pass"),
-        "Checks pass can't be saved until phase 3",
+    "a setting a kind lacks": (
+        lambda r: _req(r).update(kind="checks_pass", settings={"rubric": "green"}),
+        "Checks pass has no setting rubric (on Intake).",
     ),
     "an answer on a stage": (
         lambda r: _req(r).update(kind="answer", person_id=BEN),
@@ -215,10 +221,6 @@ CASES = {
     "a merge pushed past": (
         lambda r: _req(r).update(kind="pr_merged", can_push_past=True),
         "can't be pushed past (C3)",
-    ),
-    "queue the PRs": (
-        lambda r: _stage(r).update(on_enter={"queue_prs": True}),
-        "Queue the PRs to merge can't be saved",
     ),
     "another action": (lambda r: _stage(r).update(on_enter={"send_email": True}), "On enter on Intake is nothing"),
     "a handoff with no linked work": (
@@ -280,31 +282,28 @@ def test_a_by_hand_stage_may_have_requirements_or_none(c):
     assert PS.check(c, record) == []
 
 
-def test_filing_into_a_pipeline_is_refused_until_it_is_built_and_a_stage_that_has_it_moves_tasks_in(c):
+def test_a_stage_that_files_into_a_pipeline_saves_and_moving_into_it_files_one_task(c):
     PS.ensure_presets(c)
     record = _ops()
-    _stage(record).update(on_enter={"file_into": "general"}, requirements=[{"kind": "linked_done"}])
-    assert PS.check(c, record) == ["Filing into a pipeline comes with the Product pipeline (on Intake)."]
-    with _refused("task_settings", "Filing into a pipeline comes with the Product pipeline"):
-        PS.save(c, ANA, record)
-    # A stage saved with it before this refusal: a move into it goes through and files nothing.
-    saved = PS.save(c, ANA, _ops())
+    _stage(record, 1).update(on_enter={"file_into": "general"}, requirements=[{"kind": "linked_done"}])
+    assert PS.check(c, record) == []
+    saved = PS.save(c, ANA, record)
     second = saved["stages"][1]["id"]
-    c.execute("UPDATE stages SET on_enter=? WHERE id=?", ('{"file_into": "general"}', second))
     row = X.new_task(c, ANA, "Order the chairs", saved["id"])
     X.say_done(c, row, ANA)
     moved = E.move(c, row["id"], E.NEXT, ANA)
     assert moved["stage_id"] == second
-    assert c.execute("SELECT COUNT(*) FROM links WHERE from_task_id=?", (row["id"],)).fetchone()[0] == 0
+    filed = c.execute("SELECT to_task_id, kind FROM links WHERE from_task_id=?", (row["id"],)).fetchall()
+    assert [r[1] for r in filed] == ["handoff"]
+    assert E.task(c, filed[0][0])["pipeline_id"] == "general"
 
 
 def test_handoffs_that_form_a_loop_are_refused_across_pipelines(c):
     PS.ensure_presets(c)
     product = _ops(name="Product", prefix="P")
     _stage(product).update(requirements=[{"kind": "linked_done"}])
+    _stage(product).update(on_enter={"file_into": "general"})
     product = PS.save(c, ANA, product)
-    # Saved before filing was refused (R7): the handoff is in the table, and still counts toward a loop.
-    c.execute("UPDATE stages SET on_enter=? WHERE id=?", ('{"file_into": "general"}', product["stages"][0]["id"]))
     general = PS.read(c, "general")
     _stage(general).update(on_enter={"file_into": product["id"]}, requirements=[{"kind": "linked_done"}])
     assert any("would loop" in p for p in PS.check(c, general))

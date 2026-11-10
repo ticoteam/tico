@@ -73,7 +73,13 @@ def test_a_new_company_is_complete_when_its_first_run_ends_and_a_restart_adds_no
     machine(api)  # the owner's computer, so the built-ins can run and BotOps is active
     first_run(api)
     after_setup = whole(api)
-    assert {"managers": after_setup["managers"]} == {"managers": [{"id": "general", "manager_id": "bot:task-manager"}]}
+    # No answer to "Software is the product" is yes: Product and Engineering come too, managed by nobody until their
+    # bots are hired (pipeline_settings.ensure_presets).
+    assert after_setup["managers"] == [
+        {"id": "engineering", "manager_id": None},
+        {"id": "general", "manager_id": "bot:task-manager"},
+        {"id": "product", "manager_id": None},
+    ]
     assert {"bot": "botops", "routine_key": routines.SWEEP_KEY} in after_setup["routines"]
     restarted = environment(seed_roster=False)
     assert whole(restarted) == after_setup
