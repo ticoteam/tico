@@ -8640,8 +8640,8 @@ def support_message(value):
     "hub_support_send",
     "Send a Tico bug report a person OK'd (hub_support_report gave its OK id). It is filed as the person who "
     "OK'd it and its replies reach their Support page. Before their OK, after they send it back, or for an OK you did "
-    "not ask for, it is refused; a second call answers with the same ticket. When Tico support cannot be reached the "
-    "OK is not used: try again later.",
+    "not ask for, it is refused; a second call answers with the same ticket. When Tico support cannot be reached, "
+    "try again later (Maintenance also sends it): it still goes once.",
     {"ok": _s("The OK id hub_support_report returned")},
     required=("ok",),
     writes=True,

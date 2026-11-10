@@ -651,17 +651,31 @@ class Support:
         install's default person while the team rule lets bots send without asking (`RULE`), this copy names an HQ of
         its own (`from_source`) and the privacy check `check(c)` passes. Otherwise a person OKs it first: the person
         whose token or Assistant drafted it, the task's owner when that is a person, or the install's default person.
-        Returns {ticket, sent, filed_as, status: sent, task_id} when it went, else {id, approval, task_id,
-        requirement_id, status: pending}."""
+        A report that already went under the rule answers with its ticket. Returns {ticket, sent, filed_as, status:
+        sent, task_id} when it went, else {id, approval, task_id, requirement_id, status: pending}."""
         from . import lifecycle
 
         problems = H.lint_support(payload) if isinstance(payload, dict) else ["a report is an object"]
         if problems or not H.support_text_matches(payload):
             raise Problem("validation", "; ".join(problems) or "The message does not match its hash", 422)
+        key = "approval:" + _key_of(who.actor, payload)
         with self.sending:
             with self.store.transaction() as c:
                 validate_identity(c, who)
                 lifecycle.refuse_send(c, who, None, what="anything")
+                done = c.execute(
+                    "SELECT * FROM support_tickets WHERE request_key=? ORDER BY created_at LIMIT 1", (key,)
+                ).fetchone()
+                if done:
+                    # This very report already went under the team rule: a retry gets its ticket, whatever the rule
+                    # says now, and no person is asked to OK a report HQ already has.
+                    return {
+                        "ticket": view(done),
+                        "sent": True,
+                        "filed_as": done["actor"],
+                        "status": "sent",
+                        "task_id": task_id or None,
+                    }
                 person = H.default_human(c)
                 direct = who.role == "bot" and team_rules.load(c)[RULE] and not from_source()
                 if direct:
@@ -680,7 +694,13 @@ class Support:
                         "approval": asked["requirement_id"],
                         "status": "pending",
                     }
-            key = "approval:" + _key_of(who.actor, payload)
+                # An OK this bot asked for the same report, still waiting, is not needed now it goes under the rule.
+                for (rid,) in c.execute(
+                    "SELECT requirement_id FROM ok_grants WHERE subject=? AND asked_by_id=? AND used_at IS NULL",
+                    (SUBJECT + _key_of(who.actor, payload), who.actor),
+                ).fetchall():
+                    if task_asks.standing(c, rid) == task_asks.WAITING:
+                        task_asks.withdraw(c, rid, "Sent to Tico support under the team rule")
             ticket = self._send(Identity(H.human_actor(person), "human"), payload, "bot_report", key)
             return {
                 "ticket": ticket,
