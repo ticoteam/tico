@@ -403,3 +403,31 @@ def test_no_sql_reads_a_task_or_a_break_from_the_never_stuck_reading(api):
     assert health.NEVER_STUCK_KEY in said
     assert hidden["id"] not in said and "wake" not in said and "queued" not in said, said
     assert _never_stuck(api, "ben-test")["counts"]["broken"] == 1
+
+
+def test_a_closed_sub_task_the_reader_may_not_open_says_neither_its_title_nor_why_it_was_closed(api):
+    """Codex review 3: a stage that waits on what the task filed, and a private sub-task Cara may not open is closed
+    with a reason. What the parent waits on is Cara's own turn now (she owns it), but its line came from the sub-task:
+    the parent's read, its brief row, its waits and her Needs you say a sub-task was closed, never which or why."""
+    import json
+
+    stage = {"owner": "assignee", "requirements": [{"kind": "linked_done"}]}
+    post(api, "pipelines/hiring", {"name": "Hiring", "stages": [{"id": "plan", "name": "Plan", **stage}]})
+    parent = post(api, "tasks", {"title": "Plan the team", "body": "x", "owner": "cara", "pipeline": "hiring"})
+    child = post(
+        api,
+        "tasks",
+        {"title": "Quiet acquisition", "body": "x", "owner": "ben", "parent": parent["id"], "private": True},
+    )
+    assert api.get("/api/v2/tasks/" + child["id"], headers=headers("cara-test")).status_code == 404
+    post(api, f"tasks/{child['id']}/move", {"to": "closed", "why": "Salary freeze"})
+    mine = get(api, "tasks/" + parent["id"])["task"]  # Ana asked for the sub-task: she is told which, and why
+    assert "Quiet acquisition" in json.dumps(mine["waits"]) and "Salary freeze" in json.dumps(mine["waits"])
+    full = get(api, "tasks/" + parent["id"], token="cara-test")["task"]
+    row = next(t for t in get(api, "tasks?brief=true", token="cara-test")["tasks"] if t["id"] == parent["id"])
+    needs = [i for i in get(api, "needs-you", token="cara-test")["items"] if i.get("task_id") == parent["id"]]
+    assert needs and full["waits"] and row["turn"]
+    said = json.dumps([full, row, needs])
+    assert "Quiet acquisition" not in said and "Salary freeze" not in said and child["id"] not in said, said
+    assert "A sub-task was closed" in json.dumps([full["waits"], row["turn"], needs])
+

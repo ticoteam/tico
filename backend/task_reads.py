@@ -201,10 +201,9 @@ def brief(c, rows, visible_sql="1"):
     """The engine's fields of a list row (docs/dev/pipelines-v3-cutover.md, "The task as JSON", Brief), laid over each
     row in place: `turn` (the headline wait; `running` when a bot's turn is a run going now), `late`, `snoozed`
     and `pushed_past` (it entered its stage pushed past a requirement). One `H.task_waits` for every row, one read of the
-    open visits and one of the open snoozes, never a read per row. A sub-task the reader may not open is "A sub-task"
-    in a turn's line, as in the task's own read."""
-    from dataclasses import asdict
-
+    open visits and one of the open snoozes, never a read per row. A sub-task the reader may not open is named by
+    neither its title nor its id in a turn's line, as in the task's own read (waiting_on.unnamed)."""
+    from . import waiting_on as W
     from .store import H
 
     ids = [row["id"] for row in rows]
@@ -229,8 +228,8 @@ def brief(c, rows, visible_sql="1"):
             (marks,),
         )
     }
-    turns = {tid: asdict(found[0]) if found else None for tid, found in waits.items()}
-    named = sorted({t["who"] for t in turns.values() if t and t["state"] == "tasks" and t["who"]})
+    heads = {tid: found[0] if found else None for tid, found in waits.items()}
+    named = sorted({head.about for head in heads.values() if head and head.about})
     shown = (
         {
             r[0]
@@ -242,11 +241,10 @@ def brief(c, rows, visible_sql="1"):
         if named
         else set()
     )
+    turns = {tid: W.view(head, shown.__contains__) if head else None for tid, head in heads.items()}
     running = _running(c, {tid: t["who"] for tid, t in turns.items() if t and t["state"] == "bot" and t["who"]})
     for row in rows:
         turn = turns.get(row["id"])
-        if turn and turn["state"] == "tasks" and turn["who"] not in shown:
-            turn["line"], turn["who"] = "A sub-task", None  # neither its title nor its id
         if turn:
             turn["running"] = row["id"] in running
         row["turn"] = turn

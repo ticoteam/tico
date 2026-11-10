@@ -92,12 +92,14 @@ def _active_ids(conn: "sqlite3.Connection") -> frozenset[str]:
 @dataclass
 class Standing:
     """Where one requirement stands for one visit. `on` is who or what it waits on: an actor, `jev`, `github`, or a
-    task id. `line` is one sentence: what is missing, or what met it."""
+    task id. `line` is one sentence: what is missing, or what met it. `about` is the task it filed whose title (and
+    why it was closed) the line says, so a reader who may not open that task is not told them (waiting_on.unnamed)."""
 
     requirement: Row
     state: str
     on: str | None = None
     line: str = ""
+    about: str | None = None
 
     @property
     def met(self) -> bool:
@@ -263,15 +265,14 @@ def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer
     still_open = [f for f in filed if f["status"] == "open"]
     if still_open:
         first = still_open[0]
-        return Standing(requirement, WAITING, first["id"], first.get("title") or "")
+        return Standing(requirement, WAITING, first["id"], first.get("title") or "", first["id"])
     closed = [f for f in filed if f["status"] != "done"]
     if closed:
         first = closed[0]
         why = (first.get("why") or "").strip()
         title = first.get("title") or "A filed task"
-        return Standing(
-            requirement, NOT_MET, task.get("owner_id"), f"{title} was closed: {why}" if why else f"{title} was closed"
-        )
+        line = f"{title} was closed: {why}" if why else f"{title} was closed"
+        return Standing(requirement, NOT_MET, task.get("owner_id"), line, first["id"])
     return Standing(requirement, MET, line="Done")
 
 
