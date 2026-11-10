@@ -941,9 +941,7 @@ def s25(r: Rig) -> None:
         }
 
     r.pipeline(record("Alpha", None))
-    r.pipeline(record("Beta", None))
-    # Filing into a pipeline is refused until Product (R7), so Beta's handoff is one saved before that: in the table.
-    r.raw(lambda c: c.execute("UPDATE stages SET on_enter=? WHERE pipeline_id='beta'", ('{"file_into": "alpha"}',)))
+    r.pipeline(record("Beta", "alpha"))
     looped = record("Alpha", "beta")
     r.refused(E.SYSTEM, lambda c: PS.save(c, E.SYSTEM, looped), "task_settings", "the loop")
     problems = r.w.read(lambda c: PS.check(c, looped))
@@ -1191,39 +1189,27 @@ def c_runs_outside_ladder(r: Rig) -> None:
     expect(all(bot != WRITER for bot, _, _ in runs), f"the writer, who asked and waits, was woken: {runs}")
 
 
-@extra(
-    "file-into-not-run", "'File into' is refused until Product, and a stage that has it takes a move without raising"
-)
+@extra("file-into", "A stage that files into General files one linked task on enter, once per visit")
 def c_file_into(r: Rig) -> None:
-    from backend import pipeline_settings as PS
     from backend import task_engine as E
 
-    record: dict[str, Any] = {
-        "id": "handoff",
-        "name": "Handoff",
-        "goal": "Work handed to General.",
-        "prefix": "H",
-        "manager_id": MANAGER,
-        "stages": [
-            {"name": "Plan", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
-            {
-                "name": "Hand off",
-                "owner": "assignee",
-                "on_enter": {"file_into": GENERAL},
-                "requirements": [{"kind": "linked_done"}],
-            },
-        ],
-    }
-    out = r.act(E.SYSTEM, lambda c: PS.save(c, E.SYSTEM, record))
-    # Refused until the Product pipeline lands (track A); after that it saves, and filing is the software cases' to check
-    # (software_scenarios). Either way the move below must not raise.
-    if isinstance(out, Refusal):
-        expect(out.rule == "task_settings" and "comes with the Product pipeline" in out.detail, out.detail)
-    record["stages"][1]["on_enter"] = {}
-    r.pipeline(record)
-    # Saved before the refusal: the stage has it in the table.
-    r.raw(
-        lambda c: c.execute("UPDATE stages SET on_enter=? WHERE id='handoff-hand-off'", ('{"file_into": "general"}',))
+    r.pipeline(
+        {
+            "id": "handoff",
+            "name": "Handoff",
+            "goal": "Work handed to General.",
+            "prefix": "H",
+            "manager_id": MANAGER,
+            "stages": [
+                {"name": "Plan", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+                {
+                    "name": "Hand off",
+                    "owner": "assignee",
+                    "on_enter": {"file_into": GENERAL},
+                    "requirements": [{"kind": "linked_done"}],
+                },
+            ],
+        }
     )
     task = r.task(ANA, "Hand it over", "handoff", assignee=WRITER)
     version = r.row(task)["version"]
@@ -1233,6 +1219,14 @@ def c_file_into(r: Rig) -> None:
         raise ScenarioFailed(f"the move raised {error!r} instead of being refused or done") from error
     expect(not isinstance(moved, Refusal), f"refused: {moved!r}")
     expect(r.stage_of(task) == "Hand off", f"the task is in {r.stage_of(task)}")
+    filed = r.w.read(
+        lambda c: c.execute(
+            "SELECT t.pipeline_id, t.title FROM links l JOIN tasks t ON t.id = l.to_task_id WHERE l.from_task_id=? "
+            "AND l.kind='handoff'",
+            (task,),
+        ).fetchall()
+    )
+    expect([tuple(f) for f in filed] == [(GENERAL, "Hand it over")], f"filed {[tuple(f) for f in filed]}")
     r.check()
 
 

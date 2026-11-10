@@ -3,15 +3,13 @@ people that act when the engine gives them a turn, and faults on.
 
 Faults: webhooks lost, repeated or late; GitHub down for a while; checks failing; the merge queue dropping a PR; Jev
 unsure, or its call failing; a bot's run crashing with nothing done. Bots act only on a wake the engine queued for them
-(the real wakes and ladder), people only when the task waits on them.
+(the real wakes and ladder), people only when the task waits on them, and the daily release hour publishes what merged.
 
 What must hold, every step: the never-stuck check and the rig's checks (no open task waits on nothing). At the end: both
 tasks Done within a week of simulated time, no task used more than 7 bot runs in a row without a change, and each task's
 history holds every stage in order.
 
-    python -m evals.never_stuck.run --software --seeds 1-200 [-j 2]
-
-On the shared base the presets are not built, so every seed ends `not_built`; the sweep reports those apart."""
+    python -m evals.never_stuck.run --software --seeds 1-200 [-j 2]"""
 
 import random
 from collections import Counter
@@ -42,6 +40,7 @@ class SoftwareSim:
         self.runs = 0
         self.used: Counter[str] = Counter()
         self.tag = 0
+        self.fired: str | None = None  # the last day the release hour fired
         self.crash = rng.choice((0.0, 0.05, 0.15))
         self.slow_people = rng.choice((0.2, 0.5, 0.8))
         self.older_first = rng.random() < 0.5  # production runs an older version when the PM first checks
@@ -112,7 +111,7 @@ class SoftwareSim:
             if "Jev is checking" not in lines:
                 self._page(task, bot, stage)
         elif bot == RELEASE and stage == "Merge":
-            if "Dropped from the merge queue" in lines:
+            if "Dropped from the merge queue" in lines or "GitHub refused the merge" in lines:
                 red = self._red(task)
                 for n in red:
                     self._push(n)
@@ -123,6 +122,21 @@ class SoftwareSim:
                 self.tag += 1
                 self.used["publish a release"] += 1
                 r.gh.publish(f"v1.{self.tag}.0")
+
+    def release_hour(self) -> bool:
+        """The daily release hour (D13, a routine on the Release Manager): once a day from 10:00, the Release Manager
+        publishes a release of what merged since the last one. While GitHub is down it cannot; the next step tries."""
+        gh, now = self.r.gh, self.r.w.now()
+        day = now[:10]
+        if self.fired == day or now[11:13] < "10" or gh.is_down():
+            return False
+        self.fired = day
+        if not gh.unreleased():
+            return False
+        self.tag += 1
+        self.used["the release hour publishes"] += 1
+        gh.publish(f"v1.{self.tag}.0")
+        return True
 
     def _push(self, number: int) -> None:
         self.used["push a fix"] += 1
@@ -136,7 +150,7 @@ class SoftwareSim:
     def step(self, p: str) -> bool:
         """One round: every bot with a queued wake runs once, people answer what waits on them. True if anyone did."""
         r = self.r
-        did = False
+        did = self.release_hour()
         for task in self.open_tasks(p):
             for bot in (*BOTS, *SOFTWARE_BOTS):
                 if not r.queued(task, bot):

@@ -219,9 +219,12 @@ def _settings(folder: Path) -> Any:
 def _store(settings: Any) -> Any:
     from backend import store as store_module
 
+    from backend.blobs import Blobs
+
     store = store_module.Store(settings)
     store.factory = RigConnection
     store.pooled = store_module._pooled(RigConnection)
+    store.blobs = Blobs(settings)  # what connections carry, as media.install sets it: Jev reads a page's bytes from it
     return store
 
 
@@ -240,8 +243,8 @@ def _people() -> dict[str, Any]:
 
 def _fill(c: sqlite3.Connection, software: bool = False) -> None:
     """People, four bots on one computer, General managed by the Manager bot, and the Work pipeline. A software company
-    also has the five role bots, each with its template, and the presets every start makes (`ensure_presets`): Product
-    and Engineering once track A has added them."""
+    also has the role bots, each with its template, a finished setup, and the presets the end of setup makes
+    (`ensure_presets`): Product and Engineering."""
     from backend import bot_settings as BS
     from backend import pipeline_settings as PS
     from backend import task_engine as E
@@ -271,6 +274,11 @@ def _fill(c: sqlite3.Connection, software: bool = False) -> None:
     PS.save(c, E.SYSTEM, general)
     PS.save(c, E.SYSTEM, json.loads(json.dumps(WORK_RECORD)))
     if software:
+        # Setup finished (Product and Engineering are made then, not at a first start), with no answer to "Software is
+        # the product": a blank is yes.
+        from backend import onboarding as O
+
+        O.Onboarding._store(c, {**O.load(c), "completed": H.now()}, "human:ana")
         PS.ensure_presets(c)
 
 

@@ -143,6 +143,9 @@ class SoftRig(Rig):
         super().__init__(world)
         rng = random.Random(world.seed * 104729 + 7)
         self.gh = RigGitHub(rng=rng, faults=Faults.on(rng) if faults else Faults())
+        # The repo shipped before the run (production runs v1.0.0), so it is one that publishes releases (C31): a task
+        # in Release waits for the next one. The server learns of it on its first read of the repo's releases.
+        self.gh.gh.publish(REPO, "v1.0.0", at=_h().now())
         self.fake_jev = FakeJev(rng)
 
     # -------------------------------------------------------------- not built yet

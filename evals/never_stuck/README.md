@@ -32,8 +32,9 @@ python -m evals.never_stuck.perf --tasks 10000              # one check pass ove
   `fake_github.py` (CI, the merge queue, webhooks lost, repeated, late, GitHub down, queue drops, over track C's
   `backend/tests/helpers/fake_github.py`), `fake_jev.py` (Jev via `pipeline_judges.ENGINE`: met, not met, unsure, a
   failed call), `software_scenarios.py` (`idea-to-done` and the refusals), `software_sim.py` (the seeded run with
-  faults). A case that reaches a stub or a missing preset ends `NotBuiltYet`; `software_scenarios.PENDING` lists the
-  tracks each waits on, and the test runs those as strict expected failures, so each turns red when its tracks land.
+  faults; the daily release hour publishes what merged). A case that reaches a stub or a missing preset ends
+  `NotBuiltYet`; `software_scenarios.PENDING` (empty: every case is built) lists what each waits on, and the test runs
+  those as strict expected failures.
 - `run.py`: the command line. `perf.py`: the 10,000-task timing.
 
 `backend/tests/test_never_stuck_rig.py` runs every scenario and a few seeds in about 15 s (`-n 2`). A scenario or seed that

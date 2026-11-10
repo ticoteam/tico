@@ -4,8 +4,7 @@ with webhooks, CI, a merge queue that lands or drops PRs, and the faults.
 - Every change (a PR opened, a push, checks finishing, a close, a merge, a queue removal, a release) sends a webhook:
   a `Delivery` with its own delivery id and the fact as GitHub had it then, at a version taken when it was sent.
   `deliver` takes the ones that are due the way the server's webhook does (contract section 7): drop a delivery id seen
-  before (`task_facts.seen_delivery`), save the fact (`save_pr` / `save_release`), give the stage owner its one wake
-  when the PR left the queue (`merge_queue.removed`), and nudge the open tasks it touches (`task_engine.advance`).
+  before (`task_facts.seen_delivery`), then `task_facts.save_and_settle` (a PR) or `save_release` (a release).
 - With faults on, a webhook may be lost, sent twice, or late (so they arrive out of order), and GitHub may be down for a
   while: every call raises, and webhooks wait until it is back. Only the 5-minute re-read (`task_facts.refresh`) finds
   what a lost webhook said.
@@ -321,7 +320,6 @@ class RigGitHub:
 
 def take(c: Any, d: Delivery) -> bool:
     """One webhook, as the server's webhook takes it: False for a delivery seen before."""
-    from backend import merge_queue as MQ
     from backend import release_schedule_routes as RS
     from backend import task_engine as E
     from backend import task_facts as TF
@@ -334,11 +332,11 @@ def take(c: Any, d: Delivery) -> bool:
         tasks = list(RS.pending(c))
     else:
         assert d.fact is not None and d.number is not None
-        saved = TF.save_pr(c, d.repo, d.number, d.fact, d.version)
-        fact = TF.pr(c, d.repo, d.number)
-        if saved and fact and fact["queue_state"] == "removed":
-            MQ.removed(c, fact)
-        tasks = linked(c, d.repo, d.number)
+        # What the server's webhook and the re-read both do with a PR's fact (task_facts.save_and_settle): save it, the
+        # one wake when it left the queue, the Merge stage's reactions (a late fact queued, "Changed after OK"), and a
+        # nudge of the tasks that link it. The rig's fact is the whole PR, as the re-read sees it.
+        TF.save_and_settle(c, d.repo, d.number, d.fact, d.version)
+        return True
     for task in tasks:
         E.advance(c, task)
     return True

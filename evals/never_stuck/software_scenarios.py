@@ -34,26 +34,7 @@ class Case:
 CASES: dict[str, Case] = {}
 
 # The tracks each case waits on, as they stand on the shared base (chris/pe-base). Lift a name when they land.
-PENDING: dict[str, str] = {
-    "idea-to-done": "A (presets, file_into, seats), B (attach, Jev step, page kind), C (PR kinds, re-read, queue)",
-    "presets": "A (Product and Engineering presets, seats)",
-    "no-software": "A (presets; retired when the company says it makes no software)",
-    "bot-past-people-only-ok": "A (presets), B (attach, Jev step, page kind)",
-    "push-past-pr-merged": "A (presets), C (queue, PR merged)",
-    "spec-full": "A (presets, C10 room wake)",
-    "close-product-while-queued": "A (file_into, undo pulls PRs), B (spec page), C (queue, dequeue)",
-    "close-product-after-merge": "A (file_into, undo), B (spec page), C (queue, PR merged)",
-    "engineering-closed": "A (file_into), B (spec page)",
-    "not-validated-twice": "A (file_into, repeat filing), B (pages), C (merge, release)",
-    "handoff-loop": "A (presets; file_into saved)",
-    "queue-removed-three-choices": "A (presets), C (queue, removal wake, queue again)",
-    "github-refuses-the-merge": "A (presets), C (queue effect tries)",
-    "closed-task-pr-merged-anyway": "A (presets), C (dequeue, merged anyway)",
-    "no-checks": "A (presets), C (Checks pass, C13)",
-    "checks-run-too-long": "A (presets), C (Checks pass 2 h timeout)",
-    "jev-fails-three-times": "A (presets), B (Jev step tries, page kind)",
-    "jev-unsure": "A (presets), B (Jev step, page kind)",
-}
+PENDING: dict[str, str] = {}
 
 
 def case(name: str, what: str, covers: tuple[int, ...] = ()) -> Callable[[Callable[[SoftRig], None]], Any]:
@@ -239,7 +220,7 @@ def presets(r: SoftRig) -> None:
     for record in (product, engineering):
         for stage in record["stages"]:
             expect(stage["owner"], f"{stage['name']} has no owner")
-            if stage["name"] != "On deck":
+            if stage["name"] != "On deck" and not stage.get("by_hand"):  # Ideas: tasks leave by hand, nothing asked
                 expect(stage["requirements"], f"{stage['name']} has no requirement")
     on_deck = next(s for s in engineering["stages"] if s["name"] == "On deck")
     expect(not on_deck["requirements"], f"On deck has {on_deck['requirements']}")
@@ -290,6 +271,13 @@ def bot_past_people_only_ok(r: SoftRig) -> None:
 
     p = r.idea("Dark mode")
     r.by_hand(p)
+    # The preset's Spec OK is "People, with exceptions" (the default: a bot may push past with a reason); the owner
+    # makes it People only, as a requirement can be at any time.
+    r.raw(
+        lambda c: c.execute(
+            "UPDATE requirements SET who_oks='people_only' WHERE stage_id=? AND kind='page'", (r.row(p)["stage_id"],)
+        )
+    )
     r.attach(p, r.page(PM, "Spec: dark mode"), PM)
     r.jev()
     r.check()
@@ -480,16 +468,41 @@ def queue_removed_three_choices(r: SoftRig) -> None:
 @case("github-refuses-the-merge", "GitHub is down: the queue call is tried 3 times, then it is the owner's turn")
 def github_refuses_the_merge(r: SoftRig) -> None:
     r.preset(ENGINEERING)
+    from backend import task_engine as E
+
     e = r.task(ANA, "Rate limits", ENGINEERING)
+    r.pr(e, 1)
+    r.settle(r.gh.ci_s)  # the PR is read and green: its head is known, so entering Merge owes its queue call
     r.gh.down_until = S._h().shift(r.w.now(), seconds=10 * 86400)
-    r.to_merge(e)
+    if r.stage_of(e) != "Merge":
+        r.ok(ANA, lambda c: E.move(c, e, "Merge", ANA, "Reviewed in the call"), "Ana drags it to Merge")
+    r.at(e, "Merge")
     r.says(e, "Queuing the PR")
+    r.effects()
     for gap in (60, 300, 900):
         r.settle(gap + 10)
     r.at(e, "Merge")
     r.says(e, "GitHub refused the merge: GitHub is unavailable")
     expect(r.waits(e) == [("bot", RELEASE)], f"waits on {r.waits(e)}")
     expect(r.gh.stats["call enqueue"] == 3, f"enqueue was called {r.gh.stats['call enqueue']} times, not 3")
+
+
+@case("github-down-for-days", "GitHub is down for days before the PR is read: Late hands it on, then a person has it")
+def github_down_for_days(r: SoftRig) -> None:
+    r.preset(ENGINEERING)
+    e = r.task(ANA, "Webhook retries", ENGINEERING)
+    r.gh.down_until = S._h().shift(r.w.now(), seconds=10 * 86400)
+    r.pr(e, 1)  # linked while GitHub is down: no webhook arrives and every read fails
+    r.settle()  # On deck: it moves into Build on the next pass
+    r.at(e, "Build")
+    r.says(e, "Reading the PR from GitHub")
+    r.settle(3600)
+    expect(not r.wakes(e, EM), f"the manager was told before Build's expected day: {r.wakes(e, EM)}")
+    r.settle(86400)
+    late = [w for w in r.wakes(e, EM) if w[0].endswith(":late") or w[0].startswith("late") or "Late" in w[2]]
+    expect(late, f"a day in Build waiting on GitHub did not reach the manager: {r.wakes(e)}")
+    r.settle(2 * 86400 + 60)
+    expect(r.visit(e).get("level") == "person", f"three days on GitHub did not reach a person: {r.visit(e)}")
 
 
 @case("closed-task-pr-merged-anyway", "Close a task in Merge after GitHub merged its PR: the manager is told once")
