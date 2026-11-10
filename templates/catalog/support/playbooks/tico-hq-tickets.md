@@ -90,11 +90,16 @@ post the requested file from this bot's repository:
 
     software/hq-tickets reply TK-XXXXXXXX reports/hq-TK-XXXXXXXX.md
 
-With **Ask first**, keep the reply as a draft on the task and ask a person for its OK there
-(`hub task ask <id> --to <person> "Post this reply to TK-XXXXXXXX?" --show file:reports/hq-TK-XXXXXXXX.md --version N`);
-a person posts it on that OK. With **Never**, or when Tico cannot be asked, `reply` refuses: keep the reply as a draft
-on the task. Verify the reply with `show` before
-saying it was posted.
+With **Ask first**, keep the reply as a draft on the task and ask a person for an OK of exactly that text:
+
+    software/hq-tickets ask TK-XXXXXXXX reports/hq-TK-XXXXXXXX.md --task <id> --to <person> --version N
+
+It prints the OK's id. Once they gave it (`hub task show <id>` says so), post it:
+
+    software/hq-tickets reply TK-XXXXXXXX reports/hq-TK-XXXXXXXX.md --ok <OK id>
+
+The OK covers that text only, once. Change a word and ask again. With **Never**, or when Tico cannot be asked, `reply`
+refuses: keep the reply as a draft on the task. Verify the reply with `show` before saying it was posted.
 
 ## 5. Finish
 
