@@ -1445,3 +1445,35 @@ def test_a_stale_event_that_reopens_a_merged_pr_does_not_rearm_its_merge_wake(ap
     _merged(api)
     assert _burst(api, task['id']) == []
     assert _flush(api) == []
+
+
+def test_a_published_release_tells_automations_once_and_names_no_task(api, monkeypatch):
+    """`release.published` (event_catalog) fires once per release of the server's release repository: GitHub
+    redelivering the webhook, a draft, a prerelease and another repository's release fire nothing."""
+    from backend import automations
+    from backend import event_catalog as CAT
+
+    assert CAT.canonical("release.published") == "release.published"
+    assert CAT.canonical("release_published") == "release.published"
+    heard = []
+    monkeypatch.setattr(
+        automations,
+        "on_event",
+        lambda c, type_, subject, data, actor, access=None: heard.append((type_, subject, data())),
+    )
+    repo = "ticoteam/tico"
+    api.app.state.store.settings.release_repo = repo
+
+    def publish(tag, full_name=repo, draft=False):
+        url = f"https://github.com/{full_name}/releases/tag/{tag}"
+        rel = {"tag_name": tag, "draft": draft, "html_url": url}
+        return hook(api, "release", {"action": "published", "repository": {"full_name": full_name}, "release": rel})
+
+    publish("v1.4.0")
+    publish("v1.4.0")  # GitHub redelivers
+    publish("v1.5.0", draft=True)
+    publish("v1.5.0-rc.1")
+    publish("v9.0.0", full_name="ticoteam/site")
+    releases = [h for h in heard if h[0] == "release.published"]
+    url = f"https://github.com/{repo}/releases/tag/v1.4.0"
+    assert releases == [("release.published", f"{repo}@v1.4.0", {"release": "v1.4.0", "repository": repo, "url": url})]

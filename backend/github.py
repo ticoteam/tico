@@ -678,10 +678,23 @@ def _merge_wakes(c, links, url):
 
 def release(c, payload, release_repo=""):
     """A release published: nothing waits on it in General (In a release is a requirement of the Engineering pipeline,
-    which comes later). Recorded for the webhook's answer only."""
+    which comes later). A release of the server's release repository, not a draft or a prerelease (a tag with a
+    suffix), is `release.published` for the automations and outgoing webhooks, once: `github-release:<repo>@<tag>`
+    records it, so GitHub redelivering the webhook fires nothing. The payload names the release, never a task."""
+    from .repositories import metadata, save_metadata
+
     rel = payload.get("release") or {}
     tag = str(rel.get("tag_name") or "")
-    action = "published" if payload.get("action") == "published" and not rel.get("draft") else payload.get("action")
+    repo = str((payload.get("repository") or {}).get("full_name") or "")
+    published = payload.get("action") == "published" and not rel.get("draft")
+    action = "published" if published else payload.get("action")
+    if published and tag and "-" not in tag and repo and repo.lower() == str(release_repo or "").lower():
+        target = f"{repo}@{tag}"
+        key = "github-release:" + target.lower()
+        if not metadata(c, key):
+            save_metadata(c, key, {"at": H.now()})
+            facts = {"release": tag, "repository": repo, "url": str(rel.get("html_url") or "")}
+            H.hook(c, "release.published", target, lambda: facts, H.KEEPER, revision=0)
     return {"release": tag, "action": action, "woken": []}
 
 
