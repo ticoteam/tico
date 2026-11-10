@@ -31,8 +31,9 @@ DEFAULT_TIMES = ["10:00"]
 MAX_TIMES = 2
 AT = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 TITLE = "Release: "
-# Starter templates (templates/catalog): the Release Manager comes from release-owner, else release-notes.
-RELEASE_OWNER, MANAGER, WRITER = "release-owner", "release-notes", "docs-writer"
+# Starter templates (templates/catalog): the Release Manager comes from release-owner. release-notes is a writer, not
+# the Release Manager (D1).
+RELEASE_OWNER, WRITER = "release-owner", "docs-writer"
 
 
 def zone() -> tzinfo:
@@ -108,7 +109,7 @@ def _named(c: Any, slug: str, templates: tuple[str, ...]) -> str | None:
 
 
 def release_manager(c: Any, cfg: dict[str, Any] | None = None) -> str | None:
-    return _named(c, (cfg or load(c))["bot"], (RELEASE_OWNER, MANAGER))
+    return _named(c, (cfg or load(c))["bot"], (RELEASE_OWNER,))
 
 
 def technical_writer(c: Any, cfg: dict[str, Any] | None = None) -> str | None:
