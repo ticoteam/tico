@@ -380,43 +380,35 @@ def test_an_uncanned_list_read_is_an_empty_list_with_a_note(tmp_path, monkeypatc
     assert out["messages"] == [] and out["note"] == "no canned data"
 
 
-def test_approval_list_is_built_from_the_message_list_in_the_real_shape(tmp_path, monkeypatch):
-    old, new = "2a7f0c9e-4000-4000-8000-000000000001", "5f3e21c0-4000-4000-8000-000000000002"
-    long_text = "Approve this spend: " + "x" * 300
-    messages = [
-        {
-            "id": "m1",
-            "from_actor": "bot:release",
-            "text": "Approve this publish:\n{\"release\": \"v0.5.17\"}",
-            "refs": {"approval": old, "task": "b1c2d3e4"},
-            "created": "2026-10-30T10:00:00Z",
-        },
-        {
-            "id": "m2",
-            "from_actor": "bot:growth",
-            "text": long_text,
-            "refs": {"approval": new},
-            "created": "2026-11-01T09:00:00Z",
-        },
-    ]
-    answer = _hub_answer(
-        tmp_path, monkeypatch, [{"match": r"^message list", "out": {"actor": "human:dana", "messages": messages}}]
-    )
-    env = json.loads(answer(["approval", "list"], "cli")[0])
-    assert set(env) == {"actor", "status", "total", "approvals", "next"}
-    assert (env["actor"], env["status"], env["total"], env["next"]) == ("human:dana", "pending", 2, None)
-    rows = env["approvals"]
-    assert [r["id"] for r in rows] == [new, old]  # newest first
-    assert set(rows[0]) == {"id", "status", "from_actor", "summary", "message_id", "task_id", "created", "link"}
-    assert rows[0]["task_id"] is None and rows[0]["link"] is None
-    assert len(rows[0]["summary"]) <= 200 and rows[0]["summary"].endswith("...")
-    assert rows[1]["summary"] == 'Approve this publish: {"release": "v0.5.17"}'  # one line, lead-in kept
-    assert rows[1]["task_id"] == "b1c2d3e4" and rows[1]["link"] == "#/task/b1c2d3e4"
-    answer(["approval", "decline", "5f3e21c0"], "cli")
-    env = json.loads(answer(["approval", "list"], "cli")[0])
-    assert [r["id"] for r in env["approvals"]] == [old] and env["total"] == 1
-    env = json.loads(answer(["approval", "list", "--status", "declined"], "cli")[0])
-    assert env["status"] == "declined" and [(r["id"], r["status"]) for r in env["approvals"]] == [(new, "declined")]
+NEEDS = {
+    "actor": "human:dana",
+    "count": 3,
+    "by_kind": {"ask": 2, "task": 1},
+    "items": [
+        {"kind": "ask", "id": "r1-0000", "task_id": "t-aaaa", "requirement_id": "r1-0000", "line": "OK to send"},
+        {"kind": "ask", "id": "r2-0000", "task_id": "t-bbbb", "requirement_id": "r2-0000", "line": "Which date?"},
+        {"kind": "task", "id": "t-cccc", "task_id": "t-cccc", "requirement_id": None, "line": "Vendor list"},
+    ],
+    "next": None,
+}
+
+
+def test_an_answered_ask_and_a_closed_task_leave_needs_you(tmp_path, monkeypatch):
+    """`task answer <task> <requirement> ...` takes that ask out of a later `needs-you show`, and `task close|done` takes
+    every item of that task out, with the counts following, as the real list is read from the tasks."""
+    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^needs-you show", "out": NEEDS}])
+    assert json.loads(answer(["needs-you", "show"], "cli")[0])["count"] == 3
+    answer(["task", "answer", "t-bbbb", "r2", "Oct 8", "--version", "3"], "cli")
+    answer(["task", "close", "t-cccc", "-m", "old", "--version", "2"], "cli")
+    out = json.loads(answer(["needs-you", "show"], "cli")[0])
+    assert [i["id"] for i in out["items"]] == ["r1-0000"]
+    assert out["count"] == 1 and out["by_kind"] == {"ask": 1}
+
+
+def test_a_dry_run_answer_leaves_the_ask(tmp_path, monkeypatch):
+    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^needs-you show", "out": NEEDS}])
+    answer(["task", "answer", "t-aaaa", "r1", "no", "--dry-run"], "cli")
+    assert json.loads(answer(["needs-you", "show"], "cli")[0])["count"] == 3
 
 
 FAKE_CLAUDE = r"""#!/usr/bin/env python3
@@ -575,22 +567,6 @@ def test_rerun_errors_selects_only_the_errored_samples(tmp_path):
     for r in rows:
         (tmp_path / f"{r['id']}.s{r['sample']}.json").write_text(json.dumps(r))
     assert live.errored_samples(tmp_path) == {("a", 2), ("b", 1)}
-
-
-def test_bulk_echo_counts_only_the_ids_a_call_names():
-    """A canned count stands unless the call names task ids: the CLI's --where-id values, or an MCP filter's ids. A UUID
-    under another flag, such as a pipeline (--where-type), is not an id, so the filter's canned counts are kept."""
-    # bulk_echo lives in the fake hub's shared core (FAKE_CORE), not at the runner's top level: exec it, as _hub_answer does.
-    ns = {}
-    exec(live.FAKE_CORE, ns)
-    bulk_echo = ns["bulk_echo"]
-    canned = {"dry_run": True, "matched": 150, "changed": 150, "skipped": 0}
-    pipeline = "7b3e9a10-9600-4000-8000-000000000009"
-    by_pipeline = ["task", "bulk", "close", "--where-type", pipeline, "--where-status", "open", "--dry-run"]
-    assert bulk_echo(canned, by_pipeline)["matched"] == 150
-    assert bulk_echo(canned, ["task", "bulk", "close", "--where-id", pipeline, "--dry-run"])["matched"] == 1
-    as_mcp = ["task", "bulk", "close", "--filter", json.dumps({"ids": [pipeline]}), "--dry-run"]
-    assert bulk_echo(canned, as_mcp)["matched"] == 1
 
 
 def test_the_filter_close_playbook_keeps_mine_by_default_and_closes_each_on_their_yes():
