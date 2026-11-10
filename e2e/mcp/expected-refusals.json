@@ -190,7 +190,6 @@
  "hub_relay_set": "404 not_found",
  "hub_relay_wake_url_off": "409 gateway",
  "hub_relay_wake_url_set": "422 url",
- "hub_release_now": "404 not_found",
  "hub_repo_product_create": "422 github_repo",
  "hub_repo_update": "405 http_error",
  "hub_roadmap_tasks": "404 not_found",
