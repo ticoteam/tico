@@ -158,6 +158,18 @@ def test_undo_leaves_a_task_alone_when_anything_happened_to_it_since(c):
     assert text.count("changed since") == 4, text
 
 
+def test_undo_reopens_every_task_a_close_closed_under_it(c):
+    """Closing a task closes the open tasks under it. The decision keeps every task its close ended, and Undo reopens
+    them all."""
+    top = _filed(c, "ops", "Launch the referral program")
+    middle = H.task_create(c, "bot:ops", "Design the cards", "Work it.", "bot:ops", parent_id=top, lint=False)["id"]
+    low = H.task_create(c, "bot:ops", "Print the cards", "Work it.", "bot:ops", parent_id=middle, lint=False)["id"]
+    made = _decide(c, [{"do": "close", "task_id": top, "note": "Referrals wait for next quarter"}])
+    assert [H.task(c, t)["status"] for t in (top, middle, low)] == ["closed"] * 3
+    SA.undo(c, OWNER, made["id"])
+    assert [H.task(c, t)["status"] for t in (top, middle, low)] == ["open"] * 3
+
+
 # ----------------------------------------------------------------------------- through the routes
 
 

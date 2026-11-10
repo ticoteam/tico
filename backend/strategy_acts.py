@@ -360,6 +360,25 @@ def _was_private(c, item, task):
     return bool(before["private"]) if "private" in before else H.task_private(c, task)
 
 
+def _open_under(c, task_id, seen=None):
+    """Every open task a close of this one closes with it (task_engine._close_under: the tasks it filed, however deep,
+    through ended ones in between)."""
+    seen = seen if seen is not None else set()
+    out = []
+    for child, status in c.execute(
+        "SELECT t.id, t.status FROM links l JOIN tasks t ON t.id=l.to_task_id WHERE l.from_task_id=? "
+        "ORDER BY l.created_at, l.id",
+        (task_id,),
+    ).fetchall():
+        if child in seen:
+            continue
+        seen.add(child)
+        if status == "open":
+            out.append(child)
+        out.extend(_open_under(c, child, seen))
+    return out
+
+
 def _apply(c, change, goal_id, reason):
     """Make one change as the Strategy Bot; returns what Undo needs: the task, and its fields before and after."""
     do = change["do"]
@@ -388,7 +407,15 @@ def _apply(c, change, goal_id, reason):
     else:
         # A bot does not close what a person asked for: refused, the close becomes the owner's proposal.
         note = change["note"] or f"Closed by the {strategy_bot.name(c)}: {reason}"
+        open_under = {t: _snapshot(H.task(c, t)) for t in _open_under(c, row["id"])}
         H.task_close(c, STRATEGY_BOT, row["id"], note, row["version"], mover=True)
+        # The close ended the open tasks under it too: each is kept (no words), so Undo reopens them all.
+        under = [
+            {"task_id": t, "before": was, **_changed(c, t)}
+            for t, was in open_under.items()
+            if (H.task(c, t) or {}).get("status") == "closed"
+        ]
+        return {"task_id": row["id"], "made": False, "before": before, **_changed(c, row["id"]), "under": under}
     return {"task_id": row["id"], "made": False, "before": before, **_changed(c, row["id"])}
 
 
@@ -552,9 +579,10 @@ def _stored(c, action_id):
     for item in row["done"]:
         # A task's fields before and after, as stored: keyed by the tasks columns of the release that made the
         # decision, read under this one's (backend/migrations/renames_data.py), so Undo puts back what was there.
-        for side in ("before", "after"):
-            if isinstance(item.get(side), dict):
-                item[side] = renames.current_row("tasks", item[side])
+        for kept in [item, *(item.get("under") or [])]:
+            for side in ("before", "after"):
+                if isinstance(kept.get(side), dict):
+                    kept[side] = renames.current_row("tasks", kept[side])
     row["undo"] = H._json(row.pop("undo", None), None) or None
     row["undoable"] = row["state"] == "done"
     return row
@@ -583,6 +611,8 @@ def _as_read_by(c, can_read, row):
 
     def item(x):
         task_id = _task_of(x)
+        # The tasks a close ended under its task are Undo's to reopen, not a line to read: each may be private.
+        x = {k: v for k, v in x.items() if k != "under"}
         if task_id is None:
             return x
         out = {**x, "text": _say(c, x.get("text"), task_id, can_read)}
@@ -619,7 +649,7 @@ def receipt(row):
     keeps (owner, status, queue place, readers). The log with those is the owner's (GET /api/v2/strategy-bot/log)."""
 
     def item(x):
-        return {k: v for k, v in x.items() if k not in ("before", "after", "mark")}
+        return {k: v for k, v in x.items() if k not in ("before", "after", "mark", "under")}
 
     return {**row, "done": [item(x) for x in row["done"]], "left": [item(x) for x in row["left"]]}
 
@@ -682,6 +712,9 @@ def undo(c, actor, action_id):
             if did:
                 restored.append({"task_id": task["id"], "text": did})
                 _tell(c, actor, H.task(c, task["id"]), item["after"]["owner_id"])
+                # A close that ended the tasks under it: they open again with it, each on the same terms.
+                for below in item.get("under") or []:
+                    _restore_under(c, actor, below, row["created_at"], restored, kept)
     finally:
         ACTION.reset(token)
     result = {"restored": restored, "kept": kept}
@@ -693,13 +726,31 @@ def undo(c, actor, action_id):
     return action_id
 
 
+def _restore_under(c, actor, item, since, restored, kept):
+    task = H.task(c, item["task_id"])
+    if not task:
+        return
+    note = lambda text: kept.append({"task_id": task["id"], "text": text})
+    try:
+        with triggers.savepoint(c):
+            did = _restore(c, actor, task, item, since, note)
+    except H.Refused as exc:
+        note(f"{TASK} could not be put back: {_refusal(c, task, exc)}")
+        return
+    if did:
+        restored.append({"task_id": task["id"], "text": did})
+        _tell(c, actor, H.task(c, task["id"]), item["after"]["owner_id"])
+
+
 def _per_task(done):
     """One item per task, in the order the decision first changed it: its fields before the decision's first change
     to it and after its last, so two changes to one task are undone together."""
     tasks = {}
     for item in done:
         if item["task_id"] in tasks:
-            tasks[item["task_id"]].update(after=item["after"], mark=item.get("mark"))
+            first = tasks[item["task_id"]]
+            first.update(after=item["after"], mark=item.get("mark"))
+            first["under"] = [*(first.get("under") or []), *(item.get("under") or [])]
         else:
             tasks[item["task_id"]] = dict(item)
     return list(tasks.values())
