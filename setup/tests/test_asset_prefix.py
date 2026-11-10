@@ -58,28 +58,20 @@ class IAM(fakes.FakeIAM):
 
     def __init__(self, role_tags=None):
         super().__init__(role_tags)
-        self.users, self.roles = {}, {}
-
-    def create_role(self, **kw):
-        self._rec("create_role", **kw)
-        self.roles[kw["RoleName"]] = kw["Tags"]
-
-    def list_role_tags(self, RoleName):
-        if RoleName not in self.roles:
-            return super().list_role_tags(RoleName)
-        return {"Tags": self.roles[RoleName]}
+        self.users = {}  # name: {"UserId", "Tags"}
 
     def get_user(self, UserName):
         if UserName not in self.users:
             raise self.exceptions.NoSuchEntityException()
-        return {}
+        return {"User": {"UserName": UserName, "UserId": self.users[UserName]["UserId"]}}
 
     def create_user(self, **kw):
         self._rec("create_user", **kw)
-        self.users[kw["UserName"]] = kw["Tags"]
+        self.users[kw["UserName"]] = {"UserId": f"AIDA{kw['UserName']}", "Tags": kw["Tags"]}
+        return {"User": {"UserName": kw["UserName"], "UserId": f"AIDA{kw['UserName']}"}}
 
     def list_user_tags(self, UserName):
-        return {"Tags": self.users[UserName]}
+        return {"Tags": self.users[UserName]["Tags"]}
 
     def list_access_keys(self, UserName):
         return {"AccessKeyMetadata": []}
@@ -1165,3 +1157,41 @@ def test_destroy_never_terminates_an_instance_that_would_take_a_volume_setup_did
     assert deleted(ec2, iam, ssm)["instances"] == []
     ec2.volumes[1]["Attachments"] = attached(False)
     assert go(argv, deps=d)[0] == 0 and deleted(ec2, iam, ssm)["instances"] == ["i-tico"]
+
+
+def test_a_role_or_backup_user_replaced_between_the_proof_and_the_write_is_never_written():
+    p = aws.plan_aws(domain=DOMAIN, front_door="caddy", region="us-west-2", name="hotmic", prefix="hub")
+    for replacement in ({"RoleId": "AROAOTHER", "Tags": HUB_TAGS}, {"RoleId": "AROAOTHER", "Tags": PRODUCTION}):
+        iam = IAM()
+        iam.roles["hub-hotmic"] = {"RoleId": "AROAFIRST", "Tags": HUB_TAGS}
+        dep = aws.Deployer(p, fakes.FakeEC2(), iam, fakes.FakeSSM(), ACCOUNT, say=print, sleep=lambda s: None)
+        dep.preflight()  # proven: setup's role
+        iam.roles["hub-hotmic"] = replacement  # deleted and made again by someone else
+        with pytest.raises((MissingInput, SystemExit), match="hub-hotmic"):
+            dep.ensure_role()
+        assert not iam.called("attach_role_policy") and not iam.called("put_role_policy")
+    ssm = fakes.FakeSSM(param_tags=HUB_TAGS)  # an existing parameter is overwritten, never re-tagged
+    aws.Deployer(p, fakes.FakeEC2(), IAM(), ssm, ACCOUNT, say=print, sleep=lambda s: None).put_env("A=1")
+    assert ssm.called("put_parameter")[0]["Overwrite"] and not ssm.called("add_tags_to_resource")
+    s3, iam = S3(), IAM()
+    real_get = iam.get_user
+
+    def swapped(UserName):  # the user is replaced right after setup's first read of it
+        got = real_get(UserName)
+        iam.users[UserName] = {"UserId": "AIDAOTHER", "Tags": iam.users[UserName]["Tags"]}
+        return got
+
+    iam.users["hub-backup-acme"] = {"UserId": "AIDAFIRST", "Tags": HUB.tags("acme")}
+    iam.get_user = swapped
+    with pytest.raises(MissingInput, match="IAM user hub-backup-acme"):
+        backup.create_s3(
+            s3,
+            iam,
+            domain="tico.example.com",
+            region="us-west-2",
+            account_id=ACCOUNT,
+            name="acme",
+            names=HUB,
+            say=print,
+        )
+    assert not iam.called("put_user_policy") and not iam.called("create_access_key")

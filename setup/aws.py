@@ -421,6 +421,7 @@ class Deployer:
         self.p, self.ec2, self.iam, self.ssm, self.say, self.sleep = plan, ec2, iam, ssm, say, sleep
         self.account_id = account_id
         self.n = plan.names
+        self.role_id = ""  # the IAM role preflight or ensure_role proved setup's, by its immutable RoleId
 
     @property
     def param_name(self) -> str:
@@ -457,11 +458,13 @@ class Deployer:
                 Tags=self.n.tags(self.p.name),
                 **tier,
             )
+            self.ssm.add_tags_to_resource(
+                ResourceType="Parameter", ResourceId=self.param_name, Tags=self.n.tags(self.p.name)
+            )
         else:
+            # Tags were read just above. SSM has no conditional put, so a parameter replaced in that instant is the
+            # one residual window; it is never re-tagged here, so a replacement keeps its own tags.
             self.ssm.put_parameter(Name=self.param_name, Value=env_text, Type="SecureString", Overwrite=True, **tier)
-        self.ssm.add_tags_to_resource(
-            ResourceType="Parameter", ResourceId=self.param_name, Tags=self.n.tags(self.p.name)
-        )
 
     def param_tags(self) -> list[dict] | None:
         """The settings parameter's tags; None when there is no such parameter."""
@@ -486,6 +489,8 @@ class Deployer:
         if tags is not None and not self.n.is_ours(tags, self.p.name):
             raise not_ours("IAM role", self.n.resource(self.p.name), self.n, self.p.name)
         n = self.n.resource(self.p.name)
+        if tags is not None:
+            self.role_id = self.prove_role(n)
         prof = instance_profile(self.iam, n)
         if prof is not None and not profile_is_ours(prof, n, self.n):
             raise not_ours("IAM instance profile", n, self.n, self.p.name)
@@ -563,14 +568,19 @@ class Deployer:
         # boundary, tagged ManagedBy=<prefix>-setup, refuses a role that would get them afterwards.
         boundary = {"PermissionsBoundary": self.p.boundary} if self.p.boundary else {}
         try:
-            self.iam.create_role(
+            made = self.iam.create_role(
                 RoleName=n, AssumeRolePolicyDocument=json.dumps(trust), Tags=self.n.tags(self.p.name), **boundary
             )
+            self.role_id = ((made or {}).get("Role") or {}).get("RoleId", "")
         except self.iam.exceptions.EntityAlreadyExistsException:
             if not self.n.is_ours(self.iam.list_role_tags(RoleName=n)["Tags"], self.p.name):
                 raise SystemExit(
                     f"IAM role {n} exists but was not created by tico setup; refusing to reuse it."
                 ) from None
+            self.role_id = self.prove_role(n, self.role_id)
+        # IAM has no compare-and-swap: the role is re-read by RoleId right before each write, and a role replaced in
+        # the instant between that read and the write is the residual window.
+        self.prove_role(n, self.role_id)
         self.iam.attach_role_policy(RoleName=n, PolicyArn=SSM_CORE)
         arn = self.ssm_param_arn()
         pol = {
@@ -586,6 +596,7 @@ class Deployer:
                     "Resource": f"arn:aws:s3:::{self.p.plan_bucket}/plans/{self.p.name}/*",
                 }
             )
+        self.prove_role(n, self.role_id)
         self.iam.put_role_policy(RoleName=n, PolicyName=self.n.role_policy, PolicyDocument=json.dumps(pol))
         try:
             self.iam.create_instance_profile(InstanceProfileName=n, Tags=self.n.tags(self.p.name))
@@ -597,6 +608,17 @@ class Deployer:
             if not prof.get("Roles"):  # an earlier run stopped between creating it and adding the role
                 self.iam.add_role_to_instance_profile(InstanceProfileName=n, RoleName=n)
         return n
+
+    def prove_role(self, n: str, role_id: str = "") -> str:
+        """The role's RoleId, read now: it must carry this install's tags and, given role_id, be that same role (one
+        deleted and made again under the name is another role)."""
+        role = self.iam.get_role(RoleName=n)["Role"]
+        tags = role.get("Tags")
+        if tags is None:  # GetRole returns tags on real IAM; older fakes and SDKs may not
+            tags = self.iam.list_role_tags(RoleName=n)["Tags"]
+        if not self.n.is_ours(tags, self.p.name) or (role_id and role.get("RoleId") != role_id):
+            raise not_ours("IAM role", n, self.n, self.p.name)
+        return role.get("RoleId", "")
 
     def ssm_param_arn(self) -> str:
         return f"arn:aws:ssm:{self.p.region}:{self.account_id}:parameter{self.param_name}"
@@ -908,6 +930,15 @@ def destroy(
                 iam.delete_instance_profile(InstanceProfileName=n)
         except iam.exceptions.NoSuchEntityException:
             pass
+        try:  # read again right before the deletes: a role replaced since it was listed is left alone
+            now = iam.list_role_tags(RoleName=n)["Tags"]
+            mine = {t["Key"]: t["Value"] for t in now or []}.get(names.managed_tag[0]) == names.managed_tag[1]
+            still = names.is_ours(now, name) if name else mine
+        except iam.exceptions.NoSuchEntityException:
+            continue
+        if not still:
+            say(f"  left alone: IAM role {n} changed since it was listed and is no longer this setup's.")
+            continue
         iam.detach_role_policy(RoleName=n, PolicyArn=SSM_CORE)
         iam.delete_role_policy(RoleName=n, PolicyName=names.role_policy)
         iam.delete_role(RoleName=n)

@@ -50,7 +50,12 @@ class Iam(fakes.FakeIAM):
     def get_user(self, UserName):
         if self.user_tags is None:
             raise self.exceptions.NoSuchEntityException()
-        return {}
+        return {"User": {"UserName": UserName, "UserId": "AIDAUSER"}}
+
+    def create_user(self, **kw):
+        self._rec("create_user", **kw)
+        self.user_tags = kw["Tags"]
+        return {"User": {"UserName": kw["UserName"], "UserId": "AIDAUSER"}}
 
     def list_user_tags(self, UserName):
         return {"Tags": self.user_tags}

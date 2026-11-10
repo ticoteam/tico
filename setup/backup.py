@@ -93,10 +93,10 @@ def create_s3(
         raise RuntimeError(f"cannot use bucket {bucket}: {awsmod.error_code(e) or e}") from e
     user = names.backup_user(name)
     try:
-        iam.get_user(UserName=user)
+        user_id = ((iam.get_user(UserName=user) or {}).get("User") or {}).get("UserId", "")
         user_exists = True
     except iam.exceptions.NoSuchEntityException:
-        user_exists = False
+        user_id, user_exists = "", False
     if user_exists and not names.is_ours(iam.list_user_tags(UserName=user).get("Tags"), name):
         raise awsmod.not_ours("IAM user", user, names, name)
     awsmod.ensure_bucket(s3, owned, region, names, name, proof, claim or (lambda b, on: None), pick)
@@ -159,9 +159,27 @@ def create_s3(
     )
 
     if not user_exists:
-        iam.create_user(UserName=user, Tags=names.tags(name))
+        try:
+            made = iam.create_user(UserName=user, Tags=names.tags(name))
+        except iam.exceptions.EntityAlreadyExistsException:  # made by someone else since the read above
+            raise awsmod.not_ours("IAM user", user, names, name) from None
+        user_id = ((made or {}).get("User") or {}).get("UserId", "")
         say(f"  created IAM user {user}")
+
+    def prove_user() -> None:
+        # IAM has no compare-and-swap: the user is re-read by UserId right before each write; one replaced in the
+        # instant between that read and the write is the residual window.
+        try:
+            now = (iam.get_user(UserName=user) or {}).get("User") or {}
+            tags = iam.list_user_tags(UserName=user).get("Tags")
+        except iam.exceptions.NoSuchEntityException:
+            raise awsmod.not_ours("IAM user", user, names, name) from None
+        if not names.is_ours(tags, name) or (user_id and now.get("UserId") != user_id):
+            raise awsmod.not_ours("IAM user", user, names, name)
+
+    prove_user()
     iam.put_user_policy(UserName=user, PolicyName=names.backup_policy, PolicyDocument=json.dumps(policy(bucket)))
+    prove_user()
     keys = sorted(iam.list_access_keys(UserName=user)["AccessKeyMetadata"], key=lambda k: k["CreateDate"])
     if len(keys) >= 2:  # IAM allows two; a secret cannot be read back, so a re-run makes a new one
         iam.delete_access_key(UserName=user, AccessKeyId=keys[0]["AccessKeyId"])

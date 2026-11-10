@@ -184,8 +184,9 @@ class FakeIAM:
     exceptions = _Exc
 
     def __init__(self, role_tags=None):
-        # role_tags: the role exists with these tags (None: no role), and so does its profile; profiles: made here.
-        self.calls, self.role_tags, self.profiles = [], role_tags, {}
+        # role_tags: every role exists with these tags (None: none until made), and so does its profile; roles and
+        # profiles: the ones made here or set by a test (a role as its tags, or {"RoleId", "Tags"}); gone: deleted.
+        self.calls, self.role_tags, self.profiles, self.roles, self.gone = [], role_tags, {}, {}, set()
 
     def _rec(self, name, **kw):
         self.calls.append((name, kw))
@@ -193,16 +194,46 @@ class FakeIAM:
     def called(self, name):
         return [kw for n, kw in self.calls if n == name]
 
-    def list_role_tags(self, RoleName):
-        if self.role_tags is None:
+    def _role(self, name) -> dict:
+        r = self.roles.get(name)
+        if r is not None:
+            return r if isinstance(r, dict) else {"RoleId": f"AROA{name}", "Tags": r}
+        if self.role_tags is None or name in self.gone:
             raise _Exc.NoSuchEntityException()
-        return {"Tags": self.role_tags}
+        return {"RoleId": f"AROA{name}", "Tags": self.role_tags}
+
+    def list_role_tags(self, RoleName):
+        return {"Tags": self._role(RoleName)["Tags"]}
+
+    def get_role(self, RoleName):
+        tags = self.list_role_tags(RoleName)["Tags"]  # first: a test's own list_role_tags decides existence
+        try:
+            rid = self._role(RoleName)["RoleId"]
+        except _Exc.NoSuchEntityException:
+            rid = f"AROA{RoleName}"
+        return {"Role": {"RoleName": RoleName, "RoleId": rid, "Tags": tags}}
+
+    def create_role(self, **kw):
+        self._rec("create_role", **kw)
+        try:
+            self._role(kw["RoleName"])
+        except _Exc.NoSuchEntityException:
+            self.gone.discard(kw["RoleName"])
+            self.roles[kw["RoleName"]] = {"RoleId": f"AROANEW{kw['RoleName']}", "Tags": kw.get("Tags", [])}
+            return {"Role": {"RoleName": kw["RoleName"], "RoleId": self.roles[kw["RoleName"]]["RoleId"]}}
+        raise _Exc.EntityAlreadyExistsException()
+
+    def delete_role(self, **kw):
+        self._rec("delete_role", **kw)
+        self.roles.pop(kw["RoleName"], None)
+        self.gone.add(kw["RoleName"])
 
     def create_instance_profile(self, **kw):
         self._rec("create_instance_profile", **kw)
         if kw["InstanceProfileName"] in self.profiles:
             raise _Exc.EntityAlreadyExistsException()
         self.profiles[kw["InstanceProfileName"]] = {"Tags": kw.get("Tags", []), "Roles": []}
+        return {"InstanceProfile": {"InstanceProfileName": kw["InstanceProfileName"], "InstanceProfileId": "AIPANEW"}}
 
     def add_role_to_instance_profile(self, **kw):
         self._rec("add_role_to_instance_profile", **kw)
@@ -222,7 +253,15 @@ class FakeIAM:
         if p is None:  # a role that exists, set up by setup, has its profile beside it
             p = {"Tags": self.list_role_tags(RoleName=InstanceProfileName)["Tags"], "Roles": [InstanceProfileName]}
         roles = [{"RoleName": r} for r in p["Roles"]]
-        return {"InstanceProfile": {"InstanceProfileName": InstanceProfileName, "Tags": p["Tags"], "Roles": roles}}
+        pid = p.get("InstanceProfileId", f"AIPA{InstanceProfileName}")
+        return {
+            "InstanceProfile": {
+                "InstanceProfileName": InstanceProfileName,
+                "InstanceProfileId": pid,
+                "Tags": p["Tags"],
+                "Roles": roles,
+            }
+        }
 
     def __getattr__(self, name):
         return lambda **kw: self._rec(name, **kw)
