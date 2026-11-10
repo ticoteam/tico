@@ -274,12 +274,15 @@ def not_shared(conn: "sqlite3.Connection", row: Row, who: str) -> Row | None:
     }
 
 
-def shut_out(conn: "sqlite3.Connection", row: Row, target: Row, owner: str | None = None) -> Row | None:
+def shut_out(
+    conn: "sqlite3.Connection", row: Row, target: Row, owner: str | None = None, *, new: bool = False
+) -> Row | None:
     """Why private task `row` may not go into work stage `target`, as a plain `{"who", "cause", "fix"}`, or None when
     it may. The engine never adds a reader, an owner or a party to a private task (docs/pipelines-v3.md, "Private
     tasks. Same engine. Who can see them doesn't change."), so the task stops before a stage whose owner, or someone the
     stage asks, cannot read it, and waits until a person who can see it shares it. `owner` is who would own it there
-    (`owner_for`). A task the new owner keeps private by default is judged as it will be: private."""
+    (`owner_for`). A task the new owner keeps private by default is judged as it will be: private. `new`: the task is
+    being made (`enter`), so whoever makes it is told to add the reader as they do."""
     H = _h()
     if target["kind"] != "work":
         return None
@@ -311,7 +314,7 @@ def shut_out(conn: "sqlite3.Connection", row: Row, target: Row, owner: str | Non
         fix = f"Make it private and add {name} under Who can see"
     else:
         cause = f"{name} {how} {target['name']} and cannot read this private task"
-        fix = f"Someone who can see it adds {name} under Who can see"
+        fix = f"Add {name} under Who can see" if new else f"Someone who can see it adds {name} under Who can see"
     return {"who": who, "cause": cause, "fix": fix}
 
 
@@ -467,7 +470,7 @@ def _wake_turn(
         row,
         target,
         row["visit"],
-        task_wakes.body(conn, row, turn_lead or lead),
+        task_wakes.body(conn, row, turn_lead or lead, to=target),
         refs=refs,
         trigger=trigger,
         source=source,
@@ -525,8 +528,13 @@ def enter(
             _refuse(conn, by, "not-found", "No such task to file under", task_id)
         if depth(conn, parent) >= MAX_DEPTH:
             _refuse(conn, by, "task_too_deep", f"Sub-tasks nest at most {MAX_DEPTH} deep", task_id)
-    ts = H.now()
     owner = owner_for(first, assignee)
+    # The rule a move into a stage keeps keeps a new task out of its first stage too: a private task never goes where
+    # its owner, or someone the stage asks, cannot read it, for nobody could take it on from there.
+    held = shut_out(conn, row, first, owner, new=True)
+    if held:
+        _refuse(conn, by, "task_not_shared", f"{held['cause']}. {held['fix']} as you create it.", task_id, said=held)
+    ts = H.now()
     _write(
         conn,
         task_id,
@@ -785,10 +793,13 @@ def move(
         _need_why(conn, by, why, "close it" if kind == "closed" else "move it back", task_id)
     if kind == "closed" and not cascade:
         _may_close(conn, by, row)
+    # Why its sub-tasks close, kept on each: their readers may not read a private task that filed them, so it is not named.
+    named = not H.task_private(conn, row) and row.get("title")
+    closed_with = f"Closed with {named or 'the task that filed it'}"
     if kind in ("back", "closed"):
-        stage_effects.undo(conn, row, by, f"Closed with {row.get('title') or 'the task that filed it'}")
+        stage_effects.undo(conn, row, by, closed_with)
     if kind == "closed":
-        _close_under(conn, task_id, by, f"Closed with {row.get('title') or 'the task that filed it'}")
+        _close_under(conn, task_id, by, closed_with)
     how = {"forward": "met", "done": "met", "back": "back", "closed": "closed", "reopen": "reopened"}[kind]
     if pushed:
         how = "pushed_past"
@@ -870,7 +881,8 @@ def _close_under(conn: "sqlite3.Connection", task_id: str, by: str, note: str) -
 
 def _ended(conn: "sqlite3.Connection", row: Row, by: str) -> None:
     """A task ended. If a task filed it and that was the last one open from that visit, the filing task's owner is woken
-    once with how each ended, and the filing task moves on if that was all it needed."""
+    once with how each ended, and the filing task moves on if that was all it needed. A filed task the woken bot may
+    not be told of (task_wakes.told) is "A sub-task": that it ended, never its title."""
     link = _h()._one(conn, "SELECT * FROM links WHERE to_task_id=?", (row["id"],))
     if not link or not link.get("visit_id"):
         return
@@ -882,23 +894,27 @@ def _ended(conn: "sqlite3.Connection", row: Row, by: str) -> None:
     if advance(conn, above["id"]):
         return
     filed = conn.execute(
-        "SELECT t.title, t.status FROM links l JOIN tasks t ON t.id = l.to_task_id WHERE l.visit_id=? "
+        "SELECT t.id, t.title, t.status FROM links l JOIN tasks t ON t.id = l.to_task_id WHERE l.visit_id=? "
         "ORDER BY l.created_at, l.id",
         (link["visit_id"],),
     ).fetchall()
-    lead = "The tasks this one filed have ended: " + "; ".join(
-        f"{title or 'A task'}: {'Done' if status == 'done' else 'Closed'}" for title, status in filed
-    )
     _reset_ladder(conn, above["visit"], _h().now(), by)
     above = _task(conn, above["id"])
     target, _ = _turn_of(conn, above)
     if target:
+        from . import waiting_on as W
+
+        shown = task_wakes.told(conn, above, target)
+        lead = "The tasks this one filed have ended: " + "; ".join(
+            f"{(title or 'A task') if shown(filed_id) else W.SUB_TASK}: {'Done' if status == 'done' else 'Closed'}"
+            for filed_id, title, status in filed
+        )
         task_wakes.add(
             conn,
             above,
             target,
             above["visit"],
-            task_wakes.body(conn, above, lead),
+            task_wakes.body(conn, above, lead, to=target),
             wake_key=f"{above['id']}:{above['visit']['id']}:filed:{row['id']}",
         )
 
@@ -932,7 +948,7 @@ def tell_owner(
         row,
         owner,
         row["visit"],
-        task_wakes.body(conn, row, text) if run else text,
+        task_wakes.body(conn, row, text, to=owner) if run else text,
         wake_key=f"{row['id']}:{row['visit']['id']}:{what}",
         quiet=not run,
         refs=refs,
@@ -1048,7 +1064,7 @@ def reassign(
             moved,
             owner,
             moved["visit"],
-            task_wakes.body(conn, moved, "This task is yours now." + (f" {why}" if why else "")),
+            task_wakes.body(conn, moved, "This task is yours now." + (f" {why}" if why else ""), to=owner),
             wake_key=f"{task_id}:{moved['visit']['id']}:owner:v{moved['version']}",
         )
     return moved
@@ -1146,7 +1162,7 @@ def try_again(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None
             out,
             target,
             out["visit"],
-            task_wakes.body(conn, out, lead),
+            task_wakes.body(conn, out, lead, to=target),
             wake_key=f"{task_id}:{visit['id']}:again:{ts}",
         )
     return out

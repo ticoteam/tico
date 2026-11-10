@@ -21,7 +21,6 @@ engine's modules reach back to hubdb and the store.
 import functools
 import json
 from collections.abc import Callable, Iterable
-from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, Concatenate, NoReturn, ParamSpec, TypeVar
 
 from . import hubdb_core, task_effects
@@ -689,10 +688,16 @@ def prime_views(conn: "sqlite3.Connection", task_ids: Iterable[str], viewer: str
         _h().prime_task_delegated(conn, ids, viewer)
 
 
-def hidden_filed(conn: "sqlite3.Connection", row: Row, viewer: str | None, visible_sql: str | None = None) -> list[str]:
+def hidden_filed(
+    conn: "sqlite3.Connection", row: Row, viewer: str | None, visible_sql: str | None = None, *, kept: bool = False
+) -> list[str]:
     """The tasks the open visit of `row` (task_engine.task's shape) filed that `viewer` may not read (`_readable`).
     Their titles and ids are not theirs to see: not in what the task waits on, not in a requirement's standing, not
-    in a refusal."""
+    in a refusal (waiting_on.unnamed says what they are told instead).
+
+    `kept`: the words are a wake or a note kept in the task's thread, read later by whoever reads the task, not only by
+    `viewer`. A private task filed there is hidden too unless its words may reach every reader of this one
+    (H.subtask_flows_up)."""
     visit: Row = row.get("visit") or {}
     if row.get("status") != "open" or not visit:
         return []
@@ -700,14 +705,22 @@ def hidden_filed(conn: "sqlite3.Connection", row: Row, viewer: str | None, visib
     if viewer is None or not filed:
         return []
     readable = _readable_rows(conn, viewer, filed, visible_sql)
-    return [other for other in filed if other not in readable]
+    H = _h()
+    return [
+        other
+        for other in filed
+        if other not in readable
+        or kept
+        and H.task_private(conn, readable[other])
+        and not H.subtask_flows_up(conn, readable[other], row)
+    ]
 
 
 def standing_line(standing: "R.Standing", hidden: list[str]) -> str:
     """How a requirement stands, said to someone who may not read the tasks in `hidden` (`hidden_filed`)."""
-    if hidden and standing.requirement["kind"] == "linked_done" and not standing.met:
-        return "A sub-task is not finished"
-    return standing.line
+    from . import waiting_on as W
+
+    return W.unnamed(standing, lambda task_id: task_id not in hidden).line
 
 
 def _answer_view(conn: "sqlite3.Connection", task_id: str, answer: Row, private: bool) -> Row:
@@ -780,13 +793,11 @@ def task_view(
     pipe: Row = row.get("pipeline") or {}
     live = row["status"] == "open" and bool(visit)
     standings = R.standings(conn, row) if live else []
-    waits = [asdict(wait) for wait in W.of(conn, row, standings=standings)] if live else []
     # A task this one filed may be private to people who can read this one: its title is not theirs to see, here or
-    # in the line that says what this task waits on.
+    # in the line that says what this task waits on, nor its id, nor why it was closed (waiting_on.unnamed).
     hidden = hidden_filed(conn, row, viewer, visible_sql)
-    for wait in waits:
-        if wait["state"] == W.TASKS and wait["who"] in hidden:
-            wait["line"], wait["who"] = "A sub-task", None  # neither its title nor its id
+    shown: Callable[[str], bool] = lambda task_id: task_id not in hidden
+    waits = [W.view(wait, shown) for wait in W.of(conn, row, standings=standings)] if live else []
     answers = R.newest_answers(conn, visit["id"]) if live else {}
     holder = W.holder(conn, row) if live else None
     works = bool(viewer) and can_work(conn, str(viewer), row)

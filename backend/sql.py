@@ -986,7 +986,8 @@ WORKED_OUT = ("task_waits",)
 def task_waits(conn, c, private, hidden):
     """What each open task the caller may read waits on, as the engine reads it (`H.task_waits`, backend/waiting_on.py):
     one row per wait, `position` 0 the headline. A person or bot the caller may not see is '' with no line; a sub-task
-    they may not read is "A sub-task" with no id, as the task's own read says it."""
+    they may not read is named by neither its title nor its id, as the task's own read says it (waiting_on.unnamed)."""
+    from . import waiting_on as W
     from .store import H
 
     visible = f'SELECT id FROM "{private("visible_tasks")}"'
@@ -1001,10 +1002,9 @@ def task_waits(conn, c, private, hidden):
     rows = []
     for tid, waits in H.task_waits(c, ids).items():
         for position, wait in enumerate(waits):
+            wait = W.unnamed(wait, readable.__contains__)
             who, line = wait.who, wait.line or ""
-            if wait.state == "tasks" and who and who not in readable:
-                who, line = None, "A sub-task"
-            elif who and who in hidden:
+            if who and who in hidden:
                 who, line = "", ""
             rows.append((tid, position, wait.state, who, line, wait.since, wait.until))
     conn.executemany('INSERT INTO "task_waits" VALUES(?,?,?,?,?,?,?)', rows)

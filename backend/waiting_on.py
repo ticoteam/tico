@@ -23,9 +23,9 @@ The nine states, in headline order:
 
 import json
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from itertools import chain
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from . import hubdb_core, pipeline_rights, read_cache, task_wakes
 from . import task_engine as E
@@ -62,7 +62,9 @@ class Wait:
     """One thing a task waits on. `who` is an actor for `person`, `paused` and `bot`, a task id for `tasks`, the stage
     id for `room` and `by_hand`, whoever snoozed it for `snoozed`, and None for `jev` and `github`. `line` is one
     sentence. `until` is a snooze's end, where it has one. `ask` is set when a requirement names who it waits on (an
-    OK or an answer); without it the wait is the task's own work, which whoever has the task has."""
+    OK or an answer); without it the wait is the task's own work, which whoever has the task has. `about` is the task
+    it filed whose title (or why it was closed) the line says: it never leaves the server (`view`), and a reader who
+    may not open that task is not told them (`unnamed`)."""
 
     state: str
     who: str | None = None
@@ -71,6 +73,39 @@ class Wait:
     since: str | None = None
     until: str | None = None
     ask: bool = False
+    about: str | None = None
+
+
+# What a reader who may not open a task this one filed is told of it (`unnamed`).
+SUB_TASK = "A sub-task"
+SUB_TASK_OPEN = "A sub-task is not finished"
+SUB_TASK_CLOSED = "A sub-task was closed"
+
+Said = TypeVar("Said", Wait, R.Standing)
+
+
+def unnamed(said: Said, shown: Callable[[str], bool]) -> Said:
+    """A wait or a requirement's standing as said to a reader who may open only the tasks `shown` says yes to. Its
+    line may come from a task this one filed (`about`: its title, or why it was closed). To anyone who may not open
+    that task it says only that a sub-task is open or was closed: never its title, its id or the reason. The one rule
+    for every read and every wake that says what a task waits on (docs/pipelines-v3.md, "Private tasks. Same
+    engine. Who can see them doesn't change.")."""
+    if not said.about or shown(said.about):
+        return said
+    if isinstance(said, Wait):
+        if said.state == TASKS:
+            return replace(said, who=None, line=SUB_TASK, about=None)
+        return replace(said, line=SUB_TASK_CLOSED, about=None)
+    if said.state == R.WAITING:
+        return replace(said, on=None, line=SUB_TASK_OPEN, about=None)
+    return replace(said, line=SUB_TASK_CLOSED, about=None)
+
+
+def view(wait: Wait, shown: Callable[[str], bool]) -> Row:
+    """A wait as JSON for a reader (`unnamed`), without `about`: which task a line came from is the server's."""
+    out = asdict(unnamed(wait, shown))
+    del out["about"]
+    return out
 
 
 def person_for(conn: "sqlite3.Connection", row: Row) -> str | None:
@@ -219,6 +254,14 @@ def _bound(conn: "sqlite3.Connection", requirement_id: str) -> bool:
     return task_asks.bound(conn, requirement_id)
 
 
+def _shown(conn: "sqlite3.Connection", row: Row, viewer: str) -> Callable[[str], bool]:
+    """Whether `viewer` may open a task `row` filed (task_calls.hidden_filed), for `unnamed`."""
+    from . import task_calls
+
+    hidden = set(task_calls.hidden_filed(conn, row, viewer))
+    return lambda task_id: task_id not in hidden
+
+
 def _private_line() -> str:
     from . import task_asks
 
@@ -234,15 +277,16 @@ def _turn(
     since: str | None = None,
     ask: bool = False,
     seen: dict[str, str | None] | None = None,
+    about: str | None = None,
 ) -> Wait:
     """The wait for something `who` has to do: a person's turn, a bot's turn, or Paused when that bot cannot run. A
     Paused wait's line is the cause as a sentence: "Builder has no computer"."""
     if not who or is_human(who):
-        return Wait(PERSON, who, line, requirement_id, since, ask=ask)
+        return Wait(PERSON, who, line, requirement_id, since, ask=ask, about=about)
     cause = task_wakes.cannot_run(conn, who, seen) or task_wakes.task_cause(conn, row["id"], who)
     if cause:
         return Wait(PAUSED, who, task_wakes.cause_line(conn, who, cause), requirement_id, since, ask=ask)
-    return Wait(BOT, who, line, requirement_id, since, ask=ask)
+    return Wait(BOT, who, line, requirement_id, since, ask=ask, about=about)
 
 
 _FILED_OPEN_SQL = (
@@ -317,7 +361,7 @@ def of(
         if standing.state == R.WAITING and requirement["kind"] == "linked_done":
             if standing.on not in on_tasks:
                 on_tasks.add(standing.on or "")
-                out.append(Wait(TASKS, standing.on, line, requirement["id"], since))
+                out.append(Wait(TASKS, standing.on, line, requirement["id"], since, about=standing.about))
         elif standing.state == R.WAITING and standing.on in (R.JEV, R.GITHUB):
             out.append(Wait(JEV if standing.on == R.JEV else GITHUB, None, line, requirement["id"], since))
         elif standing.state == R.WAITING:
@@ -334,10 +378,10 @@ def of(
                 first, title = filed[0]
                 if first not in on_tasks:
                     on_tasks.add(first)
-                    out.append(Wait(TASKS, first, title, requirement["id"], since))
+                    out.append(Wait(TASKS, first, title, requirement["id"], since, about=first))
                 continue
             # Not met: whoever has the task's work has this too.
-            out.append(_turn(conn, row, has, line, requirement["id"], since, False, seen))
+            out.append(_turn(conn, row, has, line, requirement["id"], since, False, seen, standing.about))
     if by_hand:
         out.append(Wait(BY_HAND, stage["id"], f"Leaves {stage['name']} by hand", None, entered))
     elif not unmet:
@@ -516,6 +560,9 @@ def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
         people = sorted({str(wait.who) for wait in waits if wait.state == PERSON and wait.who})
         for person in people:
             mine = [wait for wait in waits if wait.state == PERSON and wait.who == person]
+            if any(wait.about for wait in mine):  # said to them: a sub-task they may not open is not named
+                shown = _shown(conn, row, person)
+                mine = [unnamed(wait, shown) for wait in mine]
             work = [wait for wait in mine if not wait.ask]
             for wait in [wait for wait in mine if wait.ask] + work[:1]:
                 out.setdefault(person, []).append(
