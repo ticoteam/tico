@@ -1028,8 +1028,8 @@ impl Recorder {
         });
     }
     /// The call recording in progress: it stops by itself once its call's live meeting has ended in Tico and is
-    /// kept as in Tico there (no Finish). Until then it reads that meeting every few seconds when the window's own
-    /// sync does not, and tells the call who is in the Meet window.
+    /// kept as in Tico there (no Finish). Until then it reads that meeting every few seconds, and tells the call who
+    /// is in the Meet window.
     fn watch_call(&mut self) {
         let Some((id, context)) = self.call_recording() else {
             return;
@@ -1053,10 +1053,9 @@ impl Recorder {
             self.reload();
             return;
         }
-        let window_syncs = self.visible && self.meeting.as_deref() == Some(id.as_str());
-        if !window_syncs
-            && self.call_read_at.elapsed() >= CALL_READ_EVERY
-            && !self.background.contains("call-state")
+        // Always its own read, whatever the window syncs: a sync shares lines first, which Tico refuses once the
+        // call is over, so it may never get to reading the state.
+        if self.call_read_at.elapsed() >= CALL_READ_EVERY && !self.background.contains("call-state")
         {
             self.call_read_at = Instant::now();
             let (config, connect, store) = (self.config.clone(), self.tico_for, self.store.clone());

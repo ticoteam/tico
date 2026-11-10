@@ -1895,8 +1895,7 @@ fn the_source_records_into_the_calls_live_meeting_and_stops_by_itself_when_the_c
     let tico = FakeTico::start(|method, path| source_answer(method, path, "ended"));
     let directory = tempfile::tempdir().unwrap();
     let mut app = call_app(directory.path(), &tico);
-    // Hidden, as during a call: the Recorder reads the call's meeting itself.
-    app.set_visible(false);
+    // The window stays open on the call's recording: the Recorder still reads the call's meeting itself.
     app.accept_claim(
         "acme",
         CALL,
@@ -2092,4 +2091,55 @@ fn tico_saying_the_call_has_transcript_wins_and_a_refused_release_is_queued() {
     assert_eq!(tico.asked("GET /api/v2/live-meetings/live-1"), 0);
     assert!(app.error.is_empty(), "{}", app.error);
     assert!(app.store.list().unwrap().is_empty(), "nothing recorded");
+}
+
+#[test]
+fn a_refused_line_on_a_call_reads_the_meeting_instead_of_retrying() {
+    let tico = FakeTico::start(|method, path| {
+        if method == "POST" && path == "/api/v2/live-meetings/live-1/chunks" {
+            // The call ended and its source went: Tico refuses this Recorder's lines.
+            return (
+                403,
+                json!({"error":{"code":"forbidden","detail":"Only the person who connected this meeting can control its transcript"}}),
+            );
+        }
+        source_answer(method, path, "ended")
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let record = store.create("Pricing call").unwrap();
+    store
+        .update_context(&record.id, |context| {
+            context.live_destination = "acme".into();
+            context.live_id = "live-1".into();
+            context.live_state = "live".into();
+            context.call_id = CALL.into();
+            Ok(())
+        })
+        .unwrap();
+    store
+        .save_audio(
+            &record.id,
+            tico_recorder_native::audio::Channel::Microphone,
+            0,
+            1000,
+            &vec![0.2; 16000],
+            16000,
+        )
+        .unwrap();
+    let claimed = store.claim_transcription().unwrap().unwrap();
+    store
+        .transcription_result(&claimed, "Ship it on Friday", "", json!({"fixture":true}))
+        .unwrap();
+    let mut config = settings::Settings::default();
+    config.destinations = vec![Destination {
+        id: "acme".into(),
+        name: "Acme".into(),
+        base_url: tico.url.clone(),
+        actor: "human:1".into(),
+    }];
+    let remote = local_tico(&config, "acme").unwrap();
+    remote.push_live(&store, &record.id).unwrap();
+    assert_eq!(tico.asked("POST /api/v2/live-meetings/live-1/chunks"), 1);
+    assert_eq!(store.context(&record.id).unwrap().live_state, "ended");
 }

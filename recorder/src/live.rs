@@ -294,7 +294,29 @@ impl Tico {
         let _guard = store.live_lock();
         self.push_live_inner(store, id)
     }
+    /// A call's recording writes to the call's meeting only while it holds the call's source and the call is live:
+    /// Tico refusing a write (403, or 409 for an ended meeting) means read the meeting's state now, not retry.
     fn push_live_inner(&self, store: &Store, id: &str) -> Result<()> {
+        let pushed = self.push_live_once(store, id);
+        let Err(error) = &pushed else {
+            return pushed;
+        };
+        let text = format!("{error:#}");
+        let context = store.context(id)?;
+        if context.call_id.is_empty()
+            || !(text.contains("HTTP 403 (") || text.contains("HTTP 409 ("))
+        {
+            return pushed;
+        }
+        let view = self.call(
+            &format!("/api/v2/live-meetings/{}", context.live_id),
+            None,
+            "",
+        )?;
+        note_state(store, id, &view)?;
+        Ok(())
+    }
+    fn push_live_once(&self, store: &Store, id: &str) -> Result<()> {
         let record = store.get(id)?;
         let context = store.context(id)?;
         ensure!(
