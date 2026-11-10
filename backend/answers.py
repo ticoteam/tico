@@ -167,6 +167,14 @@ def _may_answer(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row,
         return
     if kind == "ok" and value not in (OK, NO):
         _refuse(conn, by, "task_requirement", "An OK takes ok or no", task_id)
+    if kind == "ok":
+        from . import task_asks
+
+        # An OK bound to exact content is given only through its preview, with the hash of what was shown
+        # (task_asks.give_ok). A send back stays a plain answer.
+        refused = task_asks.refuses_plain_ok(conn, requirement["id"], value)
+        if refused:
+            _refuse(conn, by, "task_requirement", refused, task_id)
     if kind == "answer" and not value:  # a choice or any text: "no" is an answer like any other
         _refuse(conn, by, "task_requirement", "Give an answer", task_id)
     # A requirement that names nobody (a stage's OK), or a person who left, is any person's. A bot answers only when it
@@ -260,6 +268,14 @@ def answer(
         E.changed(conn, task_id, by)
         out = E.task(conn, task_id) or row
         _tell_bot(conn, out, requirement, by, value, notes, _wake_key(out, answer_id))
+    if requirement["kind"] == "answer":
+        from . import strategy_merge
+
+        merged: Any = strategy_merge
+        # A person's answer on an item the Strategy Bot merged is their answer to every original still asked of them,
+        # and the item is done. Any other task is left alone.
+        if merged.on_answer(conn, by, task_id, value):
+            out = E.task(conn, task_id) or out
     out["answer_id"] = answer_id
     return out
 

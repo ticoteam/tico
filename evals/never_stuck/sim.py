@@ -260,6 +260,10 @@ class Computer:
                 continue
             if self.busy(bot):
                 continue  # the bot's next run takes this wake
+            # As the claim of a job does (execution.start_claimed): the engine may hold the run and cancel its wake.
+            if not self.sim.write(lambda c, job_id=job_id: task_wakes.may_start(c, job_id)):
+                self.sim.log(f"{bot}'s wake on {self.sim.name(task)} may not start a run: canceled")
+                continue
             self._start(job_id, bot, task)
 
     def _start(self, job_id: str, bot: str, task: str) -> None:
