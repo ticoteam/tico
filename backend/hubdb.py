@@ -5758,6 +5758,8 @@ def task_create(
         from . import task_followers
 
         made = task(conn, row["id"])
+        if made is None:
+            raise LookupError(f"task {row['id']} is not there after its insert")
         task_followers.seed_owner(conn, made)
         if follow:
             task_followers.follow_on_create(conn, made, actor)
@@ -6132,7 +6134,7 @@ def task_update(
             _task_event(conn, task_id, KEEPER, "lint", None, "; ".join(plain), "")
             event(conn, actor, "task.lint", task_id, {"problems": plain})
         event(conn, actor, "task.update", task_id, {"note": note})
-        after = isolate_private_task(conn, task(conn, task_id))
+        after = isolate_private_task(conn, task(conn, task_id) or row)
         if private is not None or task_private(conn, after) != task_private(conn, row):
             conn.execute("DELETE FROM task_delegations WHERE task_id=?", (task_id,))
         if task_private(conn, after) and not task_private(conn, row):
@@ -6164,6 +6166,8 @@ def task_update(
         elif current != "open":
             after = task_calls.task_move(conn, actor, task_id, task_calls.REOPEN, note or None, seen, mover=mover)
     after = task(conn, task_id) or after
+    if after is None:  # refuse() above raises for a missing task; the checker cannot see it
+        raise LookupError(f"no task {task_id}")
     return {**after, "warnings": plain} if plain else after
 
 

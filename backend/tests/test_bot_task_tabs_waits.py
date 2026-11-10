@@ -6,6 +6,7 @@ import pytest
 from backend import bot_task_tabs as T
 from backend.store import H
 from backend.tests.helpers import engine as X
+from backend.tests.helpers.tasks_board import api, get, post  # noqa: F401 - api is a fixture
 
 ANA = "human:ana"
 
@@ -33,3 +34,10 @@ def test_needs_you_and_waiting_read_the_engine_and_open_holds_the_bots_work(c):
     assert _shown(c, "active") == {working["id"], asking["id"]}
     assert _shown(c, "blocked") == set()  # what waits on Ana is in her Needs you, not in Waiting
     assert _shown(c, "blocked", viewer="human:ben") == {asking["id"]}
+
+
+def test_the_tabs_route_lists_the_bots_tasks_the_caller_may_read(api):
+    """GET /bots/{bot}/task-tabs/tasks filters by the caller's own task access (auth.task_sql) alone."""
+    task = post(api, "tasks", {"owner": "ops", "title": "Draft the plan", "body": "Draft it."})
+    out = get(api, "bots/ops/task-tabs/tasks")
+    assert any(task["id"] in tab["ids"] for tab in out["tabs"])

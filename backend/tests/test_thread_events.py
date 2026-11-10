@@ -5,7 +5,7 @@ an agent token gets only the topics it may read. In-process through events.read,
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import events as E
-from backend import task_privacy
+from backend import task_privacy, threads
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import headers  # noqa: F401  (the fixture and its helper)
@@ -176,6 +176,13 @@ def test_a_message_anywhere_moves_the_sidebar_of_whoever_reads_it_whatever_is_on
         [event] = activity(api, ben, after, **scope)
         assert (event["thread_id"], event["root_id"]) == (sub["id"], other["id"])
         assert event["counters"]["last_seq"] > 0
+        # Enough for a list that does not hold the row to add it without a read.
+        assert event["thread"]["id"] == sub["id"] and event["thread"]["root_id"] == other["id"]
+        with api.app.state.store.read() as c:
+            whole = threads.view(c, threads.viewer(api.app.state.auth, ben), sub["id"])
+        assert {k: event["thread"][k] for k in ("title", "name", "audience")} == {
+            k: whole[k] for k in ("title", "name", "audience")
+        }
     with api.app.state.store.read() as c:
         events, _, _, _ = E.read(
             c,

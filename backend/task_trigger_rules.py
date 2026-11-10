@@ -274,6 +274,8 @@ def _run(conn, item, rule, params):
             detail = "Completed: " + result["detail"]
         else:
             rendered = templating.render_json(params, values)
+            if not isinstance(rendered, dict):
+                raise ValueError("action settings are not an object")
             # Any referenced task must still be readable by the Action's author.
             if rendered.get("task") and not H.task_private_readable(conn, by, H.task(conn, rendered["task"]) or {}):
                 raise ValueError("writer cannot read related task")

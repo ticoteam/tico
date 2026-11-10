@@ -142,6 +142,18 @@ def test_needs_you_and_spend_show_only_their_own_reader(api):
     assert shown["hidden"] is True and shown["data"] is None  # a member sees no company spend
 
 
+def test_needs_you_rows_say_each_items_own_line(api):
+    """A Needs you row says what the item asks of its reader (the ask's line), not the title of the task it is on."""
+    from backend.store import H
+
+    with api.app.state.store.transaction() as c:
+        work = H.task_create(c, "human:ben", "Launch plan", "Plan it.", "human:ben", lint=False)
+        H.task_ask(c, "human:ben", work["id"], "human:ana", "Which region?")
+    needs = next(p["card"] for p in place(api, "dashboard")["pins"] if p["card"]["template"] == "needs_you")
+    asks = [row for row in needs["data"]["items"] if row["kind"] == "ask"]
+    assert [(row["title"], row["task_id"]) for row in asks] == [("Which region?", work["id"])]
+
+
 def test_a_page_pinned_by_a_person_widens_to_the_places_audience_and_is_in_its_activity(api):
     fid = page(api, "inbox", "Mail volume")
     get(api, f"files/{fid}/activity", "cara-test", expected=404)

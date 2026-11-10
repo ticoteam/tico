@@ -206,10 +206,12 @@ def _apply(c, body, row, footer, label):
         H.task_move(c, H.KEEPER, task_id, H.TASK_REOPEN, f"Open again in {label}.")
         changed = True
     owner = _owner(c, body.owner) if body.owner else None
-    if owner and owner != H.task(c, task_id)["owner_id"]:
+    if owner and owner != (H.task(c, task_id) or {}).get("owner_id"):
         H.task_reassign(c, H.KEEPER, task_id, owner, f"Given to them in {label}.")
         changed = True
     row = H.task(c, task_id)
+    if not row:
+        raise Problem("not_found", "No such task", 404)
     current = {"body": row["body"], "labels": H.task_labels(row), "due": row["due_at"]}
     wanted = {
         "body": body.body + footer if body.body is not None else None,
@@ -223,7 +225,7 @@ def _apply(c, body, row, footer, label):
     links = [url for url in dict.fromkeys(body.links) if url not in have]
     for url in links:
         H.task_link(c, H.KEEPER, task_id, url)
-    closing = body.close and H.task(c, task_id)["status"] != "closed"
+    closing = body.close and (H.task(c, task_id) or {}).get("status") != "closed"
     if closing:
         H.task_close(c, H.KEEPER, task_id, body.note or "")
     return bool(changed or fields or links or closing)

@@ -27,8 +27,8 @@ from clients.gateway import user_agent
 
 TRANSPORT = None
 MAX_RESPONSE = 32768
-# What a person may be paged about. Nothing pages a person about a task (docs/pipelines-v3.md): the old "an overdue
-# task needs you" and "a bot has a stalled task" went with the old engine; their columns stay, always 0.
+# What a person may be paged about. Nothing pages a person about a task (docs/pipelines-v3.md): an overdue or stuck
+# task reaches them in Needs you.
 KINDS = ("legal_mail",)
 TEXTS = {
     "legal_mail": "Tico: legal mail has arrived. Open Inboxes in Tico.",
@@ -96,11 +96,8 @@ def prefs(c, ident):
         "phone_version": "",
         "verified_at": None,
         "revocation_pending": 0,
-        "stall_after": "",
         "call_consent": 0,
         **dict.fromkeys(KINDS, 0),
-        "urgent_needs": 0,
-        "bot_stuck": 0,
         "urgent_calls": 0,
         "timezone": "UTC",
         "quiet_start": "22:00",

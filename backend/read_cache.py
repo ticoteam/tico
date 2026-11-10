@@ -5,14 +5,18 @@ ending a snapshot or returning a connection to the pool discards its inputs too.
 roster tables and the task steps are shared between snapshots, at an unchanged count (backend/roster_clock.py).
 """
 
+from collections.abc import Callable, Hashable, Iterable, Mapping
 from copy import deepcopy
+from typing import Any, TypeVar
 
 from . import bot_settings as BS
 from . import roster_clock
 
+T = TypeVar("T")
 
-def cache(c):
-    values = getattr(c, 'read_cache', None)
+
+def cache(c: Any) -> dict[Any, Any] | None:
+    values: dict[Any, Any] | None = getattr(c, 'read_cache', None)
     if values is None:
         return None
     if not c.in_transaction:
@@ -63,7 +67,7 @@ def metadata(c, key):
     return found[0] if found else None
 
 
-def value(c, key, build, shared=False):
+def value(c: Any, key: Hashable, build: Callable[[], T], shared: bool = False) -> T:
     """The snapshot's value for `key`. A caller that enriches the result gets its own copy; one that only reads it
     (`shared=True`) gets the snapshot's object, so it must never change it: a copy of a roster and every bot's
     configuration costs more than the read it saves, and a request asks for them several times."""
@@ -87,7 +91,7 @@ def one(c, statement, args=()):
     return values[key]
 
 
-def prime(c, statement, found):
+def prime(c: Any, statement: str, found: Mapping[tuple[Any, ...], Any]) -> None:
     """Seed `one` with rows read together in this snapshot, {args: row or None}, so a loop of one-row lookups that
     follows reads none of them again. A row already cached stays as it is."""
     values = cache(c)
@@ -97,7 +101,7 @@ def prime(c, statement, found):
         values.setdefault(("one", statement, tuple(args)), row)
 
 
-def prime_rows(c, statement, found):
+def prime_rows(c: Any, statement: str, found: Mapping[tuple[Any, ...], Iterable[Any]]) -> None:
     """Seed `rows` as `prime` seeds `one`: {args: the rows that statement returns for them}."""
     values = cache(c)
     if values is None:

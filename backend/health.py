@@ -10,6 +10,7 @@ counts plus which computers are up and the day's failed runs, so it can check th
 import json
 import os
 import shlex
+import sqlite3
 from datetime import datetime, timezone
 
 from . import (
@@ -2478,6 +2479,7 @@ def _plate_check(c, who, auth, full):
             readable = _readable(c, visible_sql, sorted({tid for item in items for tid in _plate_tasks(item)}))
             items = [item for item in items if any(tid in readable for tid in _plate_tasks(item))]
         if len(items) > NEEDS_PLATE_WARN:
+            H.prime_tasks(c, [item.get("task_id") for item in items])
             bots = {}
             for item in items:
                 asker = (H.task(c, item.get("task_id") or "") or {}).get("requester_id")
@@ -2603,7 +2605,7 @@ def _never_stuck_check(c, visible_sql=None):
     named = stored(NEVER_STUCK_TASKS_KEY) if visible_sql else None
     if not reading or (visible_sql and not (named and "broken_tasks" in named)):
         return _check("never_stuck", "Tasks", "unknown", "The hourly never-stuck reading has not run yet.")
-    if visible_sql:
+    if visible_sql and named:
         listed, breaks = named["tasks"], named["broken_tasks"]
         ids = {tid for found in listed.values() for tid in found} | {tid for found in breaks for tid in found}
         readable = _readable(c, visible_sql, sorted(ids))
@@ -2627,6 +2629,29 @@ def _never_stuck_check(c, visible_sql=None):
     # The same numbers as fields, so a screen reads them rather than the sentence.
     check["counts"] = counts
     check["at"] = reading.get("at")
+    return check
+
+
+def _claimed_oks_check(c):
+    """How many reports to Tico support a person's OK click claimed (support.ok_given) and Maintenance has not
+    delivered yet (support.claimed): a number only, for the owner and Admins. Finance actions commit in the click's own
+    transaction, so none of them ever waits here."""
+    from . import support
+
+    try:
+        waiting = len(support.claimed(c))
+    except sqlite3.OperationalError:  # an install that never made the tables: nothing was claimed
+        waiting = 0
+    if not waiting:
+        check = _check("claimed_oks", "OK'd sends", "ok", "Nothing OK'd waits to be sent.")
+    else:
+        check = _check(
+            "claimed_oks",
+            "OK'd sends",
+            "warn",
+            f"{_plural(waiting, 'report')} to Tico support OK'd and not sent yet; Maintenance tries again each run.",
+        )
+    check["counts"] = {"claimed_not_delivered": waiting}
     return check
 
 
@@ -3613,6 +3638,8 @@ def view(c, who, settings, auth, github, config):
     # Tasks (S15): where the never-stuck ladder has them, from its hourly reading, as numbers: the company's for the
     # owner and Admins, the tasks they may read for anyone else.
     checks.append(_never_stuck_check(c, None if full else auth.task_sql(c, who)))
+    if full:
+        checks.append(_claimed_oks_check(c))
 
     checks.extend(_aged_pr_checks(c, who, auth, full, kind))
 

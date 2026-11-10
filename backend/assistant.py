@@ -808,7 +808,7 @@ def groups(c, steps):
         else:
             m = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/(comments|links|done|move))?", path)
             sub = m.group(2) if m else None
-            verb = {"comments": "Comment on", "links": "Link", "done": "Mark done"}.get(sub) or (
+            verb = {"comments": "Comment on", "links": "Link", "done": "Mark done"}.get(sub or "") or (
                 "Close" if sub == "move" and body.get("to") == "closed" else "Move" if sub == "move" else "Change"
             )
             noun, created = "task", (H.task(c, m.group(1)) or {}).get("created_at") if m else None

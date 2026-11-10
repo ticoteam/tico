@@ -198,13 +198,16 @@ class Ahead:
         self.found: dict[str, tuple[Row, list[R.Standing], list[W.Wait]]] = {}
 
 
-# The one-task reads `task_engine.task` makes (through the read cache, `hubdb._one`), read for many in `read_ahead`.
-_TASK_READS = (
-    ("SELECT * FROM tasks WHERE id=?", "id"),
-    ("SELECT * FROM visits WHERE task_id=? AND left_at IS NULL", "task_id"),
-    ("SELECT * FROM snoozes WHERE task_id=? AND ended_at IS NULL", "task_id"),
+_PART_READS = (
+    (
+        "SELECT * FROM stages WHERE id=?",
+        "SELECT stage_id FROM visits WHERE left_at IS NULL AND task_id IN (SELECT value FROM json_each(?))",
+    ),
+    (
+        "SELECT * FROM pipelines WHERE id=?",
+        "SELECT pipeline_id FROM tasks WHERE id IN (SELECT value FROM json_each(?))",
+    ),
 )
-_PART_READS = (("SELECT * FROM stages WHERE id=?", "stage_id"), ("SELECT * FROM pipelines WHERE id=?", "pipeline_id"))
 _SNOOZE_ENDED = "SELECT MAX(ended_at) FROM snoozes WHERE visit_id=? AND ended_at IS NOT NULL"
 
 
@@ -222,24 +225,14 @@ def read_ahead(conn: "sqlite3.Connection", task_ids: list[str], seen: dict[str, 
     if not task_ids or RC.cache(conn) is None:
         return ahead
     listed = json.dumps(task_ids)
-    found: dict[str, Any] = {}
-    for sql, column in _TASK_READS:
-        rows: dict[tuple[str], Any] = {(each,): None for each in task_ids}
-        for row in conn.execute(sql.replace(f"{column}=?", f"{column} IN (SELECT value FROM json_each(?))"), (listed,)):
-            if rows[(str(row[column]),)] is None:
-                rows[(str(row[column]),)] = row
-        RC.prime(conn, sql, rows)
-        if column == "id":
-            found = {key[0]: row for key, row in rows.items() if row is not None}
-    for sql, column in _PART_READS:
-        ids = sorted({str(row[column]) for row in found.values() if row[column]})
-        listed_parts = sql.replace("id=?", "id IN (SELECT value FROM json_each(?))")
-        parts = {(str(row["id"]),): row for row in conn.execute(listed_parts, (json.dumps(ids),))}
-        RC.prime(conn, sql, {(each,): parts.get((each,)) for each in ids})
+    # Each task's stage and pipeline (task_engine.task reads them by id), then the tasks as task_engine.task reads each
+    # one and what standings and waits read for each (waiting_on.prime).
+    for sql, of_tasks in _PART_READS:
+        parts = {(str(row["id"]),): row for row in conn.execute(sql.replace("id=?", f"id IN ({of_tasks})"), (listed,))}
+        RC.prime(conn, sql, parts)
+    W.prime(conn, task_ids)
     tasks = [row for row in (E.task(conn, each) for each in task_ids) if row and row.get("visit")]
     visits: list[Row] = [row["visit"] for row in tasks]
-    R.prime(conn, visits)
-    W.prime(conn, visits)
     task_wakes.prime_holds(conn, [str(row["id"]) for row in tasks])
     visit_ids = json.dumps([str(visit["id"]) for visit in visits])
     marks = E.PROGRESS_SQL.replace("SELECT v.task_id,", "SELECT v.id, v.task_id,").replace(

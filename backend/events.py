@@ -196,8 +196,10 @@ _MEETING_ACCESS = "OLD.review_state IS NOT NEW.review_state OR OLD.owner IS NOT 
 
 
 # Who could read a task before this write: its parties and privacy, kept on the row when they
-# change (and on a delete), so a delta read says `gone` only to someone who could have seen it.
-_WAS = "json_array(OLD.owner_id,OLD.requester_id,OLD.private,OLD.readers,OLD.pipeline_id)"  # task_reads._could_read
+# change (and on a delete), so a delta read says `gone` only to someone who could have seen it. Its status rides
+# along (and a status change keeps a snapshot too), so a reader who could see the task before and can now gets
+# `was: {owner, status}` to move it between the lists they hold.
+_WAS = "json_array(OLD.owner_id,OLD.requester_id,OLD.private,OLD.readers,OLD.pipeline_id,OLD.status)"  # _could_read
 _MEDIA = ("width", "height", "thumb_blob_id", "poster_blob_id")
 _MEDIA_TASKS = (
     "SELECT task_id AS id FROM task_assets WHERE blob_id=NEW.blob_id UNION SELECT f.task_id "
@@ -387,7 +389,8 @@ TRIGGERS = [
             "update",
             "NEW.id",
             # A task's pipeline is part of who reads it (a private pipeline), so a change of it keeps a snapshot too.
-            ref=f"CASE WHEN {_changed('owner_id', 'requester_id', 'private', 'readers', 'pipeline_id')} THEN {_WAS} END",
+            ref=f"CASE WHEN {_changed('owner_id', 'requester_id', 'private', 'readers', 'pipeline_id', 'status')} "
+            f"THEN {_WAS} END",
         )
         + _needs(
             "task",
@@ -2105,6 +2108,9 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
         entry = {"id": task_id, "kind": row["kind"], "kinds": sorted(kinds[task_id])}
         if task_id in views:
             entry["task"] = views[task_id]
+            was = _was(view, visible_sql, task_id, first_was.get(task_id))
+            if was:
+                entry["was"] = was
             if task_id in meeting_links:
                 entry["meeting_links"] = list(meeting_links[task_id].values())
         elif task_id not in present and _trashed_visible(c, who, task_id):
@@ -2126,6 +2132,20 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
             entry.update(kind=row["kind"], kinds=sorted({r["kind"] for r in ordinary}))
         out.append((row, entry))
     return out
+
+
+def _was(view, visible_sql, task_id, first):
+    """The task's owner and status before this batch's first change of them, for a reader who could open it then (and
+    can now: only called for a task they read). An owner the reader may not see is None. None when nothing moved."""
+    from . import task_reads
+
+    if not first:
+        return None
+    ref, was = first
+    if len(was) < 6 or not task_reads._could_read(view.c, visible_sql, task_id, ref):
+        return None
+    owner = was[0]
+    return {"owner": None if owner and view.hidden_actor(owner) else owner, "status": was[5]}
 
 
 class Hydrated:
@@ -2364,6 +2384,10 @@ def _threads(view, rows):
             entry["message_id"] = shown[-1]
             count = sum(1 for ref in shown if _activity_unread(view, tid, ref))
             entry.update(unread=count > 0, unread_count=count)
+            # Enough of the thread for a list that does not hold its row to add one: title, audience, who a DM is with.
+            brief = threads.brief(view.c, view.reader, found)
+            if brief:
+                entry["thread"] = brief
         elif kind == "counters":
             entry["counters"] = {
                 "last_seq": found.get("last_seq") or 0,

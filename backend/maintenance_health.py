@@ -1168,45 +1168,55 @@ def file_reports(store, auth, settings, support, signatures):
 
 
 def _send_approved(store, support):
-    """Reports the owner OK'd, sent once as whoever asked (support.file_approved claims the OK with task_asks.use and
-    commits, then sends). A failed or over-cap send stays queued, claimed or not, and goes again under the same
-    Idempotency-Key. Its ticket and current occurrence baseline are kept on its health report. Returns
-    {signature: answer}."""
-    from . import task_asks
+    """Deliver the reports a person's click claimed (support.claimed: the click used the OK and so queued the report;
+    nothing here ever claims one). Each goes as whoever asked (support.file_approved, which rechecks the giver's
+    authority before the first send), under the Idempotency-Key of its OK, so a failed or over-cap send goes again and
+    HQ answers a retry with the first ticket. A Health Monitor report keeps its ticket and current occurrence baseline
+    on its health report. Returns {signature or OK id: answer}."""
+    from . import support as support_module, task_asks
 
     with store.read() as c:
-        waiting = [
-            {**dict(r), "requested_by_id": (task_asks.grant(c, r["approval_id"]) or {}).get("asked_by_id")}
-            for r in c.execute(
-                "SELECT signature, approval_id FROM health_reports WHERE ticket_id IS NULL AND approval_id IS NOT NULL "
-                "ORDER BY created_at"
-            ).fetchall()
-            # OK'd, or claimed by a send that never came back (support.file_approved resends it under its key).
-            if task_asks.standing(c, r["approval_id"]) in (task_asks.OK, task_asks.USED)
-        ]
+        reports, unrecorded = {}, []
+        for r in c.execute(
+            "SELECT signature, approval_id, ticket_id FROM health_reports WHERE approval_id IS NOT NULL"
+        ):
+            reports[r["approval_id"]] = r["signature"]
+            if r["ticket_id"] is None:
+                unrecorded.append(r["approval_id"])
+        waiting = support_module.claimed(c)
+        queued = {row["requirement_id"] for row in waiting}
+        # A Health Monitor report whose ticket was kept but not yet recorded on it (a crash in between): file_approved
+        # answers with the kept ticket, and it is recorded below.
+        for rid in unrecorded:
+            kept = c.execute("SELECT 1 FROM support_tickets WHERE request_key=?", ("approval:" + rid,)).fetchone()
+            if rid not in queued and kept and task_asks.standing(c, rid) == task_asks.USED:
+                waiting.append({"requirement_id": rid, "asked_by_id": (task_asks.grant(c, rid) or {})["asked_by_id"]})
         today = _reports_today(c)
     sent = {}
     for row in waiting:
+        rid = row["requirement_id"]
+        name = reports.get(rid) or rid
         if today >= REPORTS_PER_DAY:
-            sent[row["signature"]] = {"signature": row["signature"], "deferred": "support_busy"}
+            sent[name] = {"signature": name, "deferred": "support_busy"}
             continue
         try:
-            answer = support.file_approved(SimpleNamespace(actor=row["requested_by_id"]), row["approval_id"])
+            answer = support.file_approved(SimpleNamespace(actor=row["asked_by_id"]), rid)
         except Exception as exc:  # noqa: BLE001 - a report that cannot be sent waits for the next run
-            log.warning("Health report %s could not be sent yet", row["signature"], exc_info=True)
-            sent[row["signature"]] = {"signature": row["signature"], "deferred": type(exc).__name__}
+            log.warning("Report %s could not be sent yet", name, exc_info=True)
+            sent[name] = {"signature": name, "deferred": getattr(exc, "code", None) or type(exc).__name__}
             continue
         ticket = answer["ticket"]["id"]
-        with store.transaction() as c:
-            c.execute(
-                "UPDATE health_reports SET ticket_id=?, reported_at=?, reported_occurrences="
-                "(SELECT coalesce(max(occurrences),0) FROM health_findings WHERE signature=?) "
-                "WHERE signature=? AND approval_id=?",
-                (ticket, H.now(), row["signature"], row["signature"], row["approval_id"]),
-            )
-            H.event(c, row["requested_by_id"], "health_monitor.reported", row["signature"], {"ticket": ticket})
+        if rid in reports:
+            with store.transaction() as c:
+                c.execute(
+                    "UPDATE health_reports SET ticket_id=?, reported_at=?, reported_occurrences="
+                    "(SELECT coalesce(max(occurrences),0) FROM health_findings WHERE signature=?) "
+                    "WHERE signature=? AND approval_id=?",
+                    (ticket, H.now(), name, name, rid),
+                )
+                H.event(c, row["asked_by_id"], "health_monitor.reported", name, {"ticket": ticket})
         today += 1
-        sent[row["signature"]] = {"signature": row["signature"], "ticket": ticket, "approval": row["approval_id"]}
+        sent[name] = {"signature": name, "ticket": ticket, "approval": rid}
     return sent
 
 

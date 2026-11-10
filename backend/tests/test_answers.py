@@ -252,12 +252,16 @@ def test_a_bot_that_cannot_run_still_gets_the_wake(c, general):
     assert [who for _, who in _answer_wakes(c, row["id"])] == ["bot:builder"]
 
 
-def test_a_bot_answers_an_ok_only_when_the_requirement_names_it(c, general):
+def test_a_bot_answers_an_ask_only_when_the_requirement_names_it(c, general):
+    """An OK added to one task is asked of a person (docs/pipelines-v3.md, "A requirement on one task"); a bot is
+    asked for an answer."""
     row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
-    asked = E.add_requirement(c, row["id"], ANA, "ok", "bot:reviewer", "Check the facts")
     with _refused("task_requirement"):
-        A.answer(c, row["id"], asked["requirement_id"], "bot:builder", "ok", seen_version=row["version"])
-    out = A.answer(c, row["id"], asked["requirement_id"], "bot:reviewer", "ok", seen_version=row["version"])
+        E.add_requirement(c, row["id"], ANA, "ok", "bot:reviewer", "Check the facts")
+    asked = E.add_requirement(c, row["id"], ANA, "answer", "bot:reviewer", "Are the facts right?")
+    with _refused("task_requirement"):
+        A.answer(c, row["id"], asked["requirement_id"], "bot:builder", "Yes", seen_version=row["version"])
+    out = A.answer(c, row["id"], asked["requirement_id"], "bot:reviewer", "Yes", seen_version=row["version"])
     assert out["status"] == "open" and [s.state for s in R.standings(c, out)] == [R.NOT_MET, R.MET]
 
 
@@ -616,7 +620,7 @@ def test_an_ok_bound_to_exact_content_is_never_a_plain_answer_only_given_from_it
 
 def test_an_ok_bound_to_nothing_is_a_plain_answer(c, general):
     row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
-    plain = E.add_requirement(c, row["id"], ANA, "ok", ANA, "OK the wording")
+    plain = E.add_requirement(c, row["id"], BEN, "ok", ANA, "OK the wording")
     out = H.task_answer(c, ANA, row["id"], plain["requirement_id"], "ok")
     assert R.newest_answers(c, out["visit"]["id"])[plain["requirement_id"]]["answer"] == "ok"
 

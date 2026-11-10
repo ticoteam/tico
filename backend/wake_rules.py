@@ -466,7 +466,7 @@ def hold(conn, msg, rule, rule_id=None):
             "own_write": "your own write caused it",
             "wake_once": "the task waits on its pull request's checks (wake once)",
             "reconnect": "the task waits for an account to be reconnected",
-        }.get(rule if rule == "own_write" else parked(conn, task_row), "the task is waiting")
+        }.get(rule if rule == "own_write" else parked(conn, task_row) or "", "the task is waiting")
     )
     text = str(msg["body"] or "")
     if len(text) > H.NOTE_MAX - 400:

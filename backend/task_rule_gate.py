@@ -1,3 +1,4 @@
+# pyright: strict
 """The org rule check (backend/org_rule_check.py) on the v3 task routes (backend/task_moves_routes.py): the one place a
 task write that says something goes through. A done note, a move's or a hand-off's why, an ask's line and choices, an
 answer, a snooze's why: each is checked like any other write of its author, outside the store's write, and its verdict
@@ -18,9 +19,16 @@ to a reviewer who may not read it.
 """
 
 import logging
+from collections.abc import Callable, Sequence
+from typing import Any
 
-from . import org_rule_check
-from .store import H, Problem
+from . import org_rule_check as org_rule_check_module
+from .store import H as hubdb, Problem
+
+H: Any = hubdb
+org_rule_check: Any = org_rule_check_module
+Row = dict[str, Any]
+Said = Sequence[tuple[str, Any]]
 
 LOG = logging.getLogger("tico.task_rule_gate")
 
@@ -47,7 +55,7 @@ org_rule_check.OPERATIONS.setdefault("batch_note", "a note to a bot on its item"
 org_rule_check.OPERATIONS.setdefault("task_bulk", "a change to many tasks")
 
 
-def said_text(row, said, hands_over=False, hide_task=False):
+def said_text(row: Row | None, said: Said, hands_over: bool = False, hide_task: bool = False) -> str:
     """What a write says, as the check reads it: each (label, text) it carries, and the task itself when it hands the
     task to a new owner. `hide_task`: the task's own words are left out (a private task's, on its hold)."""
     parts = [f"{label}: {value}" for label, value in said if value]
@@ -59,18 +67,21 @@ def said_text(row, said, hands_over=False, hide_task=False):
     return "\n\n".join(parts)
 
 
-def covering(verdict):
+def covering(verdict: Row | None) -> list[Row]:
     """The rules a verdict found broken, strictest first: what covers an ask. Nothing for no verdict, a pass, a check
     that could not run (the ask goes: better one extra ask than a lost one) or one already decided."""
     if not verdict or "refused" in verdict or "applied" in verdict or verdict.get("draft"):
         return []
     if verdict.get("check") == "structured":
-        rules = list(verdict.get("held") or []) if verdict.get("outcome") == "held" and not verdict.get("error") else []
-        judged = verdict.get("judged")
+        rules: list[Row] = (
+            list(verdict.get("held") or []) if verdict.get("outcome") == "held" and not verdict.get("error") else []
+        )
+        judged: Row | None = verdict.get("judged")
         return rules + (covering(judged) if judged else [])
     if verdict.get("outcome") != "broken":
         return []
-    broken = [r for r in verdict.get("rules") or [] if r.get("id") in (verdict.get("broken") or [])]
+    found: list[Row] = verdict.get("rules") or []
+    broken = [r for r in found if r.get("id") in (verdict.get("broken") or [])]
     return sorted(broken, key=lambda r: -org_rule_check.STRICT.get(r.get("if_broken") or "block", 2))
 
 
@@ -92,7 +103,7 @@ NOT_ASKED_LOCAL = {
 BUSY = "The rule check is busy, so nothing was written. Try again in a minute."
 
 
-def local_cause(verdict):
+def local_cause(verdict: Row | None) -> str | None:
     """Why a verdict could not be judged for a cause here (`LOCAL`), or None. A structured verdict reads its judged
     part."""
     if not verdict or "refused" in verdict or "applied" in verdict:
@@ -100,29 +111,30 @@ def local_cause(verdict):
     if verdict.get("check") == "structured":
         return local_cause(verdict.get("judged"))
     if verdict.get("local"):
-        return verdict["local"]
+        return str(verdict["local"])
     if verdict.get("outcome") == "too_large":
         return "too_large"
     # Unchecked whole, or in part (some of its calls answered, `unchecked_rules` the rest).
     if (verdict.get("outcome") == "unchecked" or verdict.get("unchecked_rules")) and verdict.get("error") in LOCAL:
-        return verdict["error"]
+        return str(verdict["error"])
     return None
 
 
-def held_locally(verdict):
+def held_locally(verdict: Row | None) -> Row | None:
     """A verdict whose day's calls were spent, on the hold path: every rule it meets broken as `too_large` is, the
     cause kept (`local`), so `org_rule_check.apply` holds it or warns that it went unchecked."""
     if not verdict or "refused" in verdict or "applied" in verdict:
         return verdict
     if verdict.get("check") == "structured":
-        judged = verdict.get("judged")
+        judged: Row | None = verdict.get("judged")
         return {**verdict, "judged": held_locally(judged)} if judged else verdict
     if verdict.get("outcome") == "unchecked" and verdict.get("error") == "day_cap":
+        rules: list[Row] = verdict.get("rules") or []
         return {
             **verdict,
             "outcome": "too_large",
             "local": "day_cap",
-            "broken": [r["id"] for r in verdict.get("rules") or []],
+            "broken": [r["id"] for r in rules],
         }
     return verdict
 
@@ -130,24 +142,27 @@ def held_locally(verdict):
 CHANGED = "The task changed while this was checked, so nothing was written. Send it again."
 
 
-def stale(verdict, obj_now, audience_now):
+def stale(verdict: Row, obj_now: Any, audience_now: Any) -> bool:
     """Whether the task or the audience moved since `verdict` was checked."""
     if verdict.get("obj") and obj_now != verdict["obj"]:
         return True
     author = verdict.get("author")
-    return sorted({r for r in audience_now or () if r and r != author}) != list(verdict.get("recipients") or [])
+    now: list[str] = list(audience_now or ())
+    return sorted({r for r in now if r and r != author}) != list(verdict.get("recipients") or [])
 
 
-def not_asked(rule):
+def not_asked(rule: Row) -> str:
     return f'Not asked. A rule covers this: "{rule.get("text") or "a rule"}" Act on the rule instead of asking.'
 
 
-def note_first(c, who, task_id, gate, version=None, mover=None):
+def note_first(
+    c: Any, who: Any, task_id: str, gate: Row | None, version: int | str | None = None, mover: bool | None = None
+) -> Any:
     """A warned write with no words of its own the recipient reads (a hand-off alone, an ask's line): the warning
     line goes before the task's note, which stays whole. Returns the version to send the write itself with."""
     if not (gate and gate.get("warn")):
         return version
-    row = H.task(c, task_id)
+    row: Row = H.task(c, task_id) or {}
     H.task_update(
         c,
         who.actor,
@@ -156,14 +171,15 @@ def note_first(c, who, task_id, gate, version=None, mover=None):
         mover=mover,
         seen_version=version,
     )
-    return H.task(c, task_id)["version"] if version is not None else None
+    after: Row = H.task(c, task_id) or {}
+    return after.get("version") if version is not None else None
 
 
-def held(gate):
+def held(gate: Row | None) -> bool:
     return bool(gate and gate.get("held"))
 
 
-def warn_on(gate, text):
+def warn_on(gate: Row | None, text: str) -> str:
     """A field the recipient reads, with the warning line first when the write was warned."""
     return org_rule_check.warned_text(gate, text) if gate and gate.get("warn") else text
 
@@ -171,11 +187,20 @@ def warn_on(gate, text):
 class TaskRules:
     """The check of a task write, built once per app (backend/app.py) from its rule check and audience."""
 
-    def __init__(self, auth, rule_check, rule_task_audience, rule_target, store):
+    def __init__(
+        self,
+        auth: Any,
+        rule_check: Callable[..., Any],
+        rule_task_audience: Callable[..., Any],
+        rule_target: Callable[..., Any],
+        store: Any,
+    ) -> None:
         self.auth, self.rule_check, self.store = auth, rule_check, store
         self.rule_task_audience, self.rule_target = rule_task_audience, rule_target
 
-    def audience(self, c, who, row, to=None, also=None):
+    def audience(
+        self, c: Any, who: Any, row: Row | None, to: str | None = None, also: Callable[[Any], Any] | None = None
+    ) -> Any:
         """A task write's audience: the task's owner and requester, the person it hands the task or the ask to (`to`,
         as the caller names them), and anyone else it reaches (`also(c)`: actors, such as whoever asked what an
         answer answers)."""
@@ -183,15 +208,25 @@ class TaskRules:
         return self.rule_task_audience(c, row, who.actor, "", *extra, *(also(c) if also else ()))
 
     @staticmethod
-    def place(row):
+    def place(row: Row | None) -> Callable[[Any, Any, Any], Any]:
         """A task write's place, as `where:` reads it: its task's conversation, the thread its comments are in."""
 
-        def place(c, author, recipients):
+        def place(c: Any, author: Any, recipients: Any) -> Any:
             return org_rule_check.place_for(c, author, recipients, (row or {}).get("conversation_id") or "")
 
         return place
 
-    def check(self, who, tid, operation, said, *, to=None, also=None, hands_over=False):
+    def check(
+        self,
+        who: Any,
+        tid: str,
+        operation: str,
+        said: Said,
+        *,
+        to: str | None = None,
+        also: Callable[[Any], Any] | None = None,
+        hands_over: bool = False,
+    ) -> Any:
         """The verdict for one task write by `who`, outside the write, or None (nothing to check). `said` is the
         write's (label, text) pairs; `to` who it reaches besides the task's people, `also(c)` anyone else; `hands_over`
         that it gives the task to `to`. The write's place is its task's thread (`place`). A task the caller may not
@@ -206,18 +241,22 @@ class TaskRules:
                 if not org_rule_check.in_force(c):
                     return None  # no rule in force: nothing read, nothing asked
                 try:
-                    row = self.auth.task(c, who, self.auth.resolve_task(c, who, tid))
+                    row: Row = self.auth.task(c, who, self.auth.resolve_task(c, who, tid))
                 except Problem as exc:
                     return org_rule_check.refused(exc)
             text = said_text(row, said, hands_over)
             if not text:
                 return None
+
+            def reached(c: Any) -> Any:
+                return self.audience(c, who, row, to, also)
+
             return held_locally(
                 self.rule_check(
                     who,
                     operation,
                     text,
-                    lambda c: self.audience(c, who, row, to, also),
+                    reached,
                     obj=f"{row['id']}@{row['version']}",
                     context={"task": row["title"]},
                     place=self.place(row),
@@ -228,7 +267,20 @@ class TaskRules:
             LOG.exception("Task rule check failed")
             return org_rule_check.refused(Problem("rule_check", FAILED, 503, retryable=True))
 
-    def apply(self, c, who, task_id, verdict, said, replay, *, to=None, also=None, hands_over=False, ask=False):
+    def apply(
+        self,
+        c: Any,
+        who: Any,
+        task_id: str,
+        verdict: Row | None,
+        said: Said,
+        replay: Any,
+        *,
+        to: str | None = None,
+        also: Callable[[Any], Any] | None = None,
+        hands_over: bool = False,
+        ask: bool = False,
+    ) -> Any:
         """The verdict inside the write: the gate (`org_rule_check.apply`), or a refusal. The task and the audience
         are read again here and must be the ones checked (`obj_now`, `audience_now`): a task edited, handed over or
         given new people since its check is a 409 (`task_changed`, nothing written; sent again, it is checked again),
@@ -238,7 +290,7 @@ class TaskRules:
             return None
         if "refused" in verdict:
             raise verdict["refused"]
-        row = H.task(c, task_id)
+        row: Row | None = H.task(c, task_id)
         if "applied" not in verdict:
             obj_now = org_rule_check.current_obj(c, verdict.get("obj")) if verdict.get("obj") else None
             audience_now = self.audience(c, who, row, to, also)
@@ -253,7 +305,7 @@ class TaskRules:
         private = bool(row and H.task_private(c, row))
         payload = said_text(row, said, hands_over, hide_task=private)
         judged = said_text(row, said, hands_over)
-        private_to = {row["id"]: list(verdict.get("recipients") or [])} if private else None
+        private_to = {row["id"]: list(verdict.get("recipients") or [])} if private and row else None
         gate = org_rule_check.apply(
             c,
             verdict,
@@ -269,7 +321,7 @@ class TaskRules:
         return gate
 
     @staticmethod
-    def _refused(c, who, verdict, ask):
+    def _refused(c: Any, who: Any, verdict: Row, ask: bool) -> None:
         """What stops a write before the gate: a cause here (`LOCAL`) refuses a bot's ask and makes any write wait out
         a busy check; a bot's ask a rule covers is refused with the rule's words."""
         cause = local_cause(verdict)
@@ -287,7 +339,9 @@ class TaskRules:
     # backend/goal_routes.py): the same contract, checked outside the write and applied inside it, with the audience
     # the caller names (`reach(c)`, actors) read again inside. Its hold has no Send anyway replayer: the writer edits
     # and sends again.
-    def check_words(self, who, operation, said, reach, context=None):
+    def check_words(
+        self, who: Any, operation: str, said: Said, reach: Callable[[Any], Any], context: Row | None = None
+    ) -> Any:
         """The verdict for a write of `said` ((label, text) pairs) reaching `reach(c)`, outside the write, or None.
         Fails closed like `check`."""
         try:
@@ -304,7 +358,16 @@ class TaskRules:
             LOG.exception("Task rule check failed")
             return org_rule_check.refused(Problem("rule_check", FAILED, 503, retryable=True))
 
-    def apply_words(self, c, who, verdict, said, reach, ask=False, private_to=None):
+    def apply_words(
+        self,
+        c: Any,
+        who: Any,
+        verdict: Row | None,
+        said: Said,
+        reach: Callable[[Any], Any],
+        ask: bool = False,
+        private_to: Callable[[Any], Any] | None = None,
+    ) -> Any:
         """`check_words`'s verdict inside the write: a refusal, a 409 when the audience moved since the check, or the
         gate (`org_rule_check.apply`). `private_to(c)`: {private task id: the people the write reaches only through
         it}, whom a hold lists only to a reader of that task."""

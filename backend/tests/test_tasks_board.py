@@ -22,7 +22,7 @@ def related(task, kind, direction=None):
 
 def test_done_and_closed_tasks_stay_as_their_requester_left_them(api):
     """Done records the stage's work finished; a bot cannot reopen what a person closed; a person reopens with a why."""
-    from backend.tests.test_task_moves_routes import as_bot
+    from backend.tests.helpers.task_moves_routes import as_bot
 
     bot = as_bot(api, "ops")
     mine = post(api, "tasks", {"owner": "ana", "title": "Decide the content hold", "body": "Keep or change it?"})

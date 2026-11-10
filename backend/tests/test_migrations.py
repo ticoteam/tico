@@ -421,6 +421,20 @@ def test_a_changed_applied_file_refuses_to_boot(tmp_path, monkeypatch, name):
     assert snapshot(path) == before
 
 
+def test_a_retired_file_emptied_after_it_ran_still_boots(tmp_path, monkeypatch):
+    """A file in SUPERSEDED never runs again, so stubbing it out (a deleted import) does not refuse the database."""
+    directory = tmp_path / "migrations"
+    directory.mkdir()
+    for migration in migrations.files():
+        shutil.copy(migration.path, directory / migration.path.name)
+    retired = directory / "20261107140000_blocked_reason_recompute.py"
+    monkeypatch.setattr(migrations, "DIRECTORY", directory)
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    retired.write_text(retired.read_text() + "\n# emptied after it ran\n")
+    boot(path)
+
+
 def test_pending_files_run_in_mixed_version_order_even_below_an_applied_version(tmp_path):
     conn = sqlite3.connect(tmp_path / "hub.sqlite", isolation_level=None)
     conn.execute("CREATE TABLE ran(version TEXT)")

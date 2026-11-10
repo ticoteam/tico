@@ -1057,6 +1057,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
             "letter_proofs",
             "letter_outbox_grants",
             "agents",
+            "ok_grants",  # an event about a bound OK reads only to its parties (task_asks.event_hidden)
         }
 
         class Source:

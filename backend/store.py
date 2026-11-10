@@ -449,7 +449,7 @@ def replayed_refusal(c, principal, result):
     `principal` may read it (task_engine.refusal_extra). Anything else is the receipt as kept."""
     refusal = result.get("_refusal") if isinstance(result, dict) else None
     again = refusal.get("again") if isinstance(refusal, dict) else None
-    if not again:
+    if not again or not isinstance(refusal, dict):
         return result
     from . import task_engine
 
@@ -486,7 +486,7 @@ def is_poll(operation, result):
     return operation.endswith(("/renew", "/events"))
 
 
-def encode(value):
+def encode(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 

@@ -82,10 +82,10 @@ def _publish(conn: "sqlite3.Connection", name: str, row: Row, actor: str, change
 
 
 def _tell_requester(conn: "sqlite3.Connection", after: Row, actor: str, why: str | None) -> None:
-    """A bot that asked for a task hears once how it ended. Not when it ended it itself or owns it. Not when the engine
-    already told it, on the task that filed this one, that what it filed there has ended (task_engine._ended, which
-    runs before this): only a wake it wrote counts, so a parent that is closing, is snoozed, or has left the stage the
-    task was filed from takes nothing away."""
+    """A bot that asked for a task hears once how it ended, on its next run: no run starts for it (never-stuck rule 7).
+    Not when it ended it itself or owns it. Not when the engine already told it, on the task that filed this one, that
+    what it filed there has ended (task_engine._ended, which runs before this): only a wake it wrote counts, so a
+    parent that is closing, is snoozed, or has left the stage the task was filed from takes nothing away."""
     H = _h()
     requester = after.get("requester_id")
     if not H.is_bot(requester) or requester in (actor, after.get("owner_id")):
@@ -103,7 +103,8 @@ def _tell_requester(conn: "sqlite3.Connection", after: Row, actor: str, why: str
     said = f"{'Finished' if after['status'] == 'done' else 'Closed'}: {after.get('title') or 'A task'}"
     if (why or "").strip():
         said += f"\n{why}"
-    message = H._wake(conn, after, requester, said, {"news": "task_done"}, quiet_bots=True)
+    # News, not work: it waits in the bot's room for its next run. Nothing wakes a bot about a Done or Closed task.
+    message = H._wake(conn, after, requester, said, {"news": "task_done"}, quiet_bots=True, quiet=True)
     if message:
         conn.execute("UPDATE messages SET wake_key=? WHERE id=?", (wake_key, message["id"]))
 
@@ -219,19 +220,18 @@ def reassigned(
     conn: "sqlite3.Connection", before: Row, after: Row, by: str, why: str | None = None, revision: str | None = None
 ) -> None:
     """A task was given to another owner in its stage. Someone handing a bot's work to someone else is what became of
-    the run that made it; then everything that follows the owner (`_follow_owner`), and whoever the task asks is
-    brought in to read it if it is private now (task_calls.bring_in_asked); then `task.assigned` is published."""
+    the run that made it; then everything that follows the owner (`_follow_owner`); then `task.assigned` is published.
+    Nobody is made a reader of a private task."""
     H = _h()
     actor = cause(by)
     old, new = before.get("owner_id"), after.get("owner_id")
     if old == new:
         return
-    from . import run_triggers, task_calls
+    from . import run_triggers
 
     runs: Any = run_triggers
     runs.turn_result(conn, actor, before, "overridden", H.event)
     _follow_owner(conn, before, after, actor)
-    task_calls.bring_in_asked(conn, after["id"], by)
     _publish_owner(conn, before, after, actor, revision)
     H.event(conn, actor, "task.update", after["id"], {"owner": new, "note": why})
     H.recount(conn, [new, old, after.get("requester_id")])

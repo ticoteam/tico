@@ -534,8 +534,9 @@ def restore_tasks(c, ids, actor=None):
     and stays in the trash, since restoring would lose that value for good.
 
     The row goes back open and in no stage, then its thread, messages and links, and last the engine places it
-    (task_engine.restore): an open task on a new visit in the stage it was in, or the first one if that stage is gone;
-    a done or closed one as it ended. What it was asked, and the wakes written for it, are not replayed."""
+    (task_engine.restore): an open task on a new visit in the stage it was in while that stage may take it, else the
+    first one; a done or closed one as it ended. A private task no stage may take is not restored (`not_shared`, with
+    its cause and fix) and stays in the trash. What it was asked, and the wakes written for it, are not replayed."""
     ensure(c)
     actor = actor or H.KEEPER
     entries = []
@@ -550,6 +551,7 @@ def restore_tasks(c, ids, actor=None):
     unplaced = {e["task_id"]: found for e, snap in snapshots if (found := _unplaced(c, snap))}
     if unplaced:
         return {"restored": [], "unplaced": unplaced}
+    c.execute("SAVEPOINT trash_restore_all")
     c.execute("SAVEPOINT trash_restore")
     try:
         for e, snap in snapshots:
@@ -561,21 +563,21 @@ def restore_tasks(c, ids, actor=None):
             # Open and in no stage, as any new row: the engine places it once its thread and links are back.
             _insert(c, "tasks", {**task, "status": "open"}, skip=(*LINKS, *PLACED[1:]))
         messages = []
-        for e, snap in snapshots:
+        for _e, snap in snapshots:
             for conv in snap["rows"].get("conversations", []):
                 _insert(c, "conversations", conv)
             for msg in snap["rows"].get("messages", []):
                 _insert(c, "messages", msg)
                 messages.append(msg["id"])
     except sqlite3.IntegrityError as error:
-        c.execute("ROLLBACK TO trash_restore")
-        c.execute("RELEASE trash_restore")
+        c.execute("ROLLBACK TO trash_restore_all")
+        c.execute("RELEASE trash_restore_all")
         return {"restored": [], "conflict": str(error)}
     c.execute("RELEASE trash_restore")
     # The messages were read long ago: putting them back must not wake a bot on them again. The insert above does not
     # call backend/enqueue.py, so it makes no job for them; the snapshot's own jobs come back below, as they were.
     _delete(c, "jobs", "message_id", messages)
-    for e, snap in snapshots:
+    for _e, snap in snapshots:
         for table, found in snap["rows"].items():
             if table not in CORE and table != "task_relations":
                 for row in found:
@@ -616,7 +618,18 @@ def restore_tasks(c, ids, actor=None):
 
     for e, snap in snapshots:
         was = snap["rows"]["tasks"][0]
-        task_engine.restore(c, e["task_id"], actor, {k: was.get(k) for k in PLACED})
+        try:
+            task_engine.restore(c, e["task_id"], actor, {k: was.get(k) for k in PLACED})
+        except H.Refused as refused:
+            # No stage may take it (a private task none of its owners could read): nothing comes back.
+            c.execute("ROLLBACK TO trash_restore_all")
+            c.execute("RELEASE trash_restore_all")
+            extra = refused.extra or {}
+            return {
+                "restored": [],
+                "not_shared": {e["task_id"]: {"cause": extra.get("cause"), "fix": extra.get("fix")}},
+            }
+    c.execute("RELEASE trash_restore_all")
     _mirror_parents(c, [e["task_id"] for e in entries])
     H.recount(c, [t for e in entries for t in (e["owner"], e["requester"])])
     # A task restorer may not read its meetings, so skipped links must not reveal their count.

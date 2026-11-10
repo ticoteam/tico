@@ -320,37 +320,14 @@ def task_reassign(
 
 # ----------------------------------------------------------------------------- asks and answers
 def bring_in(conn: "sqlite3.Connection", actor: str, row: Row, who: str) -> None:
-    """Whoever an ask names must be able to read the task. On a private task that is only someone who already reads
-    it, or one person its owning bot brings in by asking them (hubdb.task_reach_refusal has the rule): they become a
-    reader of this task and nothing else. Anyone else is refused, so nobody is asked about a task they cannot open."""
-    H = _h()
-    if H.task_private_readable(conn, who, row):
-        return
-    why = H.task_reach_refusal(conn, actor, row, who)
-    if why:
-        _refuse(conn, actor, "private", str(why), row["id"])
-    H.task_reach(conn, actor, row, who)
-
-
-def bring_in_asked(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
-    """A private task that just entered a stage or changed owner: everyone its open visit asks, bot or person, becomes
-    a reader of this task and nothing else, recorded in its history as brought in by its owner (by `by` when the owner
-    is a person). The stage's rule is the pipeline's configuration, so this is never refused. Before anyone is woken,
-    so the one asked can open what they are woken for. They stay readers after the task leaves the stage, as a person
-    an ask brought in does."""
+    """Whoever an ask names must be able to read the task already. On a private task anyone else is refused, with the
+    fix named (a person who can see it adds them under Who can see): nobody is asked about a task they cannot open,
+    and an ask makes nobody a reader (task_engine.not_shared; the engine checks it again for every ask)."""
     from . import task_engine as E
-    from . import task_requirements as R
 
-    H = _h()
-    row = E.task(conn, task_id)
-    if not row or not row.get("visit") or not H.task_private(conn, row):
-        return
-    owner = row.get("owner_id")
-    for requirement in R.for_visit(conn, row["visit"]):
-        who = R.person_of(conn, requirement, row["visit"]["id"]) if requirement["kind"] in ("ok", "answer") else None
-        if who:
-            H.task_reach(conn, str(owner) if is_bot(owner) else by, row, who)
-            row = E.task(conn, task_id) or row
+    unshared = E.not_shared(conn, row, who)
+    if unshared:
+        _refuse(conn, actor, "private", f"{unshared['cause']}. {unshared['fix']}.", row["id"])
 
 
 @_task_write()
@@ -380,8 +357,9 @@ def task_ask(
         # person who handed it the task is always in it). Refused before anything is written.
         from types import SimpleNamespace
 
-        from . import reach
+        from . import reach as reach_module
 
+        reach: Any = reach_module
         reach.check(conn, SimpleNamespace(role="bot", actor=actor), target, "task", task_id=task_id)
     bring_in(conn, actor, row, target)
     if is_bot(actor) and is_human(target):
@@ -669,24 +647,36 @@ def task_view(
     holder = W.holder(conn, row) if live else None
     works = bool(viewer) and can_work(conn, str(viewer), row)
     to_leave: list[Row] = []
+    from . import task_asks
+
     for standing in standings:
         requirement: Row = standing.requirement
         answer = answers.get(requirement["id"])
+        # A bound OK's line, what it shows and a send back's note are its parties' (task_asks.party): anyone else who
+        # reads the task learns only that it waits on a person.
+        private = requirement["kind"] == "ok" and task_asks.hidden_from(conn, viewer, requirement["id"])
         to_leave.append(
             {
                 "requirement_id": requirement["id"],
                 "kind": requirement["kind"],
-                "line": R.name_of(requirement),
+                "line": task_asks.PRIVATE_LINE if private else R.name_of(requirement),
                 "met": standing.met,
-                "standing": standing_line(standing, hidden),
+                "standing": task_asks.PRIVATE_LINE if private and not standing.met else standing_line(standing, hidden),
                 "who": None if standing.met or standing.on in hidden else standing.on,
-                "asked_by": requirement.get("added_by_id") if requirement.get("visit_id") else None,
-                "choices": requirement.get("choices"),
-                "shows": requirement.get("shows") or [],
+                "asked_by": None
+                if private
+                else requirement.get("added_by_id")
+                if requirement.get("visit_id")
+                else None,
+                "choices": None if private else requirement.get("choices"),
+                "shows": [] if private else requirement.get("shows") or [],
+                # What it shows is where its words come from: a reader who may not open one of those pages reads
+                # none of the ask, its choices or its answer (files.readable_page_refs drops the whole entry).
+                **({"source": requirement["shows"]} if requirement.get("shows") and not private else {}),
                 "answer": {
                     "id": answer["id"],
                     "value": answer["answer"],
-                    "note": answer.get("notes"),
+                    "note": None if private else answer.get("notes"),
                     "by": answer["by_id"],
                     "at": answer["created_at"],
                 }
@@ -696,18 +686,25 @@ def task_view(
             }
         )
     following = E.next_stage(conn, row) if live else None
+    ready = bool(waits) and all(wait["state"] == W.ROOM for wait in waits)
+    held = E.shut_out(conn, row, following) if following and ready else None
+    for wait in waits:
+        if held and wait["state"] == W.ROOM:
+            # Everything is met, and the next stage has someone who cannot read this private task: it waits there
+            # until someone who can see it shares it (the never-stuck pass then moves it).
+            wait["line"], wait["fix"] = held["cause"], held["fix"]
+    # The task that filed this one, and the tasks this one filed, only as far as `viewer` may read them
+    # (`_readable`): one they may not read is left out whole, its id, status and that it exists at all.
     above = conn.execute("SELECT from_task_id FROM links WHERE to_task_id=?", (task_id,)).fetchone()
+    filed_by = above[0] if above and _readable(conn, viewer, above[0], visible_sql) else None
     filed: list[Row] = []
     for child_id, kind in conn.execute(
         "SELECT to_task_id, kind FROM links WHERE from_task_id=? ORDER BY created_at, id", (task_id,)
     ).fetchall():
         child: Row | None = H.task(conn, child_id)
-        if not child:
+        if not child or not _readable(conn, viewer, child_id, visible_sql):
             continue
-        shown = viewer is None or H.task_private_readable(conn, viewer, child)
-        filed.append(
-            {"id": child_id, "kind": kind, "status": child["status"], "title": child["title"] if shown else None}
-        )
+        filed.append({"id": child_id, "kind": kind, "status": child["status"], "title": child["title"]})
     snooze: Row | None = row.get("snooze")
     late = None
     if live and visit.get("late_told_at"):
@@ -733,6 +730,6 @@ def task_view(
         "snooze": {"until": snooze.get("until_at"), "by": snooze.get("by_id"), "why": snooze.get("why")}
         if snooze
         else None,
-        "filed_by": above[0] if above else None,
+        "filed_by": filed_by,
         "filed": filed,
     }

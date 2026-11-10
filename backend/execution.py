@@ -2794,7 +2794,7 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
     `followed` is the bot's followed config; `busy` the taken (bot, lane) pairs; `live` the (bot, task) pairs with a
     turn out (live_tasks); `runner` the computer's row, whose company subscription signs a check's runtime in."""
     message = H.message(c, job["message_id"])
-    if not job_message_readable(c, job["bot_id"], message):
+    if not message or not job_message_readable(c, job["bot_id"], message):
         return "unreadable"
     # The bot's budget and back-off are the bot's own state: an error reading them is shared_check's, and the whole
     # bot is passed over. The checks below depend on this job, so an error in them holds this job alone.
@@ -4808,8 +4808,10 @@ class Execution:
         msg = H.message(c, row["message_id"])
         from . import threads
 
-        if not job_message_readable(c, row["bot_id"], msg) or not threads.still_addressed(
-            c, msg, "bot:" + row["bot_id"]
+        if (
+            not msg
+            or not job_message_readable(c, row["bot_id"], msg)
+            or not threads.still_addressed(c, msg, "bot:" + row["bot_id"])
         ):
             c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))
             threads.moot_delivery(c, msg, "bot:" + row["bot_id"])

@@ -526,7 +526,8 @@ def test_support_off_refuses_drafting_and_sending(environment, hq, monkeypatch):
     monkeypatch.setenv("TICO_SUPPORT", "off")
     assert draft(api, bot, message="Another").status_code == 409
     assert send(api, bot, approval["id"]).status_code == 409
-    assert hq.seen == [] and not consumed(api, approval["id"])
+    # The person's click claimed it (support.ok_given); with support off nothing is sent.
+    assert hq.seen == [] and consumed(api, approval["id"])
 
 
 def test_an_okd_report_is_claimed_before_it_leaves_and_a_retry_sends_the_same_report_once(environment, hq):  # noqa: F811  (the fixture)

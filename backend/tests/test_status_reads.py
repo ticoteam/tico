@@ -1,5 +1,6 @@
 """The status page reads each table once for every bot, and says exactly what each bot's own status line says."""
 
+from backend import task_engine as E
 from backend import task_privacy as privacy, usage_limits
 from backend.events import prime_status_lines, status_line
 from backend.store import H
@@ -131,11 +132,10 @@ def finish_private(store, slug):
                 f"SELECT owner_id='bot:{slug}' FROM tasks WHERE id IN ({','.join('?' * len(ids))})", tuple(ids)
             )
         } == {0, 1}
-        c.execute(
-            f"UPDATE tasks SET status=CASE WHEN owner_id=? THEN 'done' ELSE 'closed' END "
-            f"WHERE id IN ({','.join('?' * len(ids))})",
-            ("bot:" + slug, *ids),
-        )
+        for tid, owner in c.execute(
+            f"SELECT id, owner_id FROM tasks WHERE id IN ({','.join('?' * len(ids))})", tuple(ids)
+        ).fetchall():
+            E.move(c, tid, E.DONE if owner == "bot:" + slug else E.CLOSED, H.KEEPER, "Finished")
     return ids
 
 
@@ -147,7 +147,8 @@ def test_status_pages_read_a_fixed_number_of_statements_and_show_each_person_wha
     busy(api, machine, 6, 6)
     big = {path: page(api, monkeypatch, path) for path in PAGES}
     assert {path: count for path, (_, count) in big.items()} == small
-    assert len(big["/api/v2/status"][0]["bots"]) >= 12 and len(big["/api/status"][0]["queued"]) >= 48
+    # Each bot is woken for its two tasks that are its turn; the two that wait on Ana's answers queue nothing.
+    assert len(big["/api/v2/status"][0]["bots"]) >= 12 and len(big["/api/status"][0]["queued"]) >= 24
     # Ana owns the company; Ben is not on the private tasks, the bots' asks to Ana, or the Inbox bot.
     for token in ("ana-test", "ben-test"):
         primed = {path: page(api, monkeypatch, path, token)[0] for path in PAGES}
@@ -214,7 +215,7 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
                 "bot:" + slugs[(n + 1) % 6],
                 private=False,
             )
-            c.execute("UPDATE tasks SET status=? WHERE id=?", ("done" if n % 2 else "closed", task["id"]))
+            E.move(c, task["id"], E.DONE if n % 2 else E.CLOSED, H.KEEPER, "Finished")
     after, more = read()
     assert after == before and more == steps and steps
 
@@ -223,10 +224,10 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
     # come back as one row of JSON: the same rows, values and types, for many bots and for one.
     with store.transaction() as c:
         shared = H.task_create(c, "human:ben", "Reader copy", "Read along.", "bot:busy-2", private=True)
-        c.execute("UPDATE tasks SET readers=json_array('human:cara'), status='waiting' WHERE id=?", (shared["id"],))
+        c.execute("UPDATE tasks SET readers=json_array('human:cara') WHERE id=?", (shared["id"],))
         H.task_create(c, "bot:busy-3", "Asked only", "For a person.", "human:cara", private=False)  # requester only
         done = H.task_create(c, "bot:busy-0", "Done company work", "Old.", "bot:busy-0", private=False)
-        c.execute("UPDATE tasks SET status='done' WHERE id=?", (done["id"],))
+        E.move(c, done["id"], E.DONE, H.KEEPER, "Finished")
     actors = [f"bot:busy-{n}" for n in range(4)]
     marks = " IN (" + ",".join("?" * len(actors)) + ")"
 
@@ -249,7 +250,7 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
     ids = {row["id"] for row in packed}
     assert shared["id"] in ids and done["id"] not in ids
     assert any(row["private"] and row["status"] not in H.ACTIVE_STATUSES for row in packed)
-    assert any(H.task_readers(row) == ["human:cara"] and row["status"] == "waiting" for row in packed)
+    assert any(H.task_readers(row) == ["human:cara"] and row["status"] == "open" for row in packed)
     assert any(row["owner_id"] == "human:cara" and row["requester_id"] == "bot:busy-3" for row in packed)
 
     # A status line with no task id hides its focus when any private task of the bot is unreadable to the viewer:

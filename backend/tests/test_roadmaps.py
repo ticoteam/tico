@@ -117,97 +117,34 @@ def test_visibility_defaults_do_not_rewrite_tasks_and_private_never_publishes(ap
     assert get(api, 'tasks/' + child['id'])['task']['visibility'] == 'private'
 
 
-def test_bot_public_text_and_comment_need_exact_single_use_approval(api):
+def test_a_bot_has_no_way_to_publish_yet_and_is_told_so(api):
+    """Codex review 2 of the asks track, finding 9: the publication preview handed a bot a payload no route could ask
+    an OK for. Until the roadmap ships, the preview answers as the public routes do, the generic OK route refuses a
+    publish subject (its module asks it, and has no ask path yet), and public text is refused with the same words."""
     from backend.tests.helpers.tasks_board import bot_token
 
     token = bot_token(api, 'cpo')
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Improve search', 'body': 'Draft'})
     changes = {'visibility': 'public', 'public_title': 'Search', 'public_summary': 'Search improvements'}
-    post(api, 'tasks/' + task['id'], {'version': task['version'], **changes}, token=token, expected=422)
-    preview = post(api, 'tasks/' + task['id'] + '/publication-preview', changes, token=token)
-    approval = post(
-        api, 'approvals', {'kind': 'publish', 'task_id': task['id'], 'payload': preview['payload']}, token=token
+    for body in (changes, {'comment': 'Now available'}, {'labels': ['roadmap']}):
+        r = api.post('/api/v2/tasks/' + task['id'] + '/publication-preview', json=body, headers=headers(token))
+        assert r.status_code == 404 and R.NOT_YET in r.text, r.text
+    asked = api.post(
+        '/api/v2/tasks/' + task['id'] + '/oks',
+        json={
+            'to': 'ana',
+            'line': 'OK to publish?',
+            'subject': R.publication_subject(task['id']),
+            'content': R.publication_payload(task['id'], 'text', changes),
+            'version': task['version'],
+        },
+        headers=headers(token),
     )
-    post(api, 'approvals/' + approval['id'], {'decision': 'approved'})
-    task = post(
-        api, 'tasks/' + task['id'], {'version': task['version'], **changes, 'approval_id': approval['id']}, token=token
-    )
-    assert task['public_summary'] == changes['public_summary']
-    post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Now available', 'public': True}, token=token, expected=422)
-    preview = post(api, 'tasks/' + task['id'] + '/publication-preview', {'comment': 'Now available'}, token=token)
-    approval = post(
-        api, 'approvals', {'kind': 'publish', 'task_id': task['id'], 'payload': preview['payload']}, token=token
-    )
-    post(api, 'approvals/' + approval['id'], {'decision': 'approved'})
-    result = post(
-        api,
-        'tasks/' + task['id'] + '/comments',
-        {'text': 'Now available', 'public': True, 'approval_id': approval['id']},
-        token=token,
-    )
-    assert result['comment']['public'] == 1
-    post(
-        api,
-        'tasks/' + task['id'] + '/comments',
-        {'text': 'Now available', 'public': True, 'approval_id': approval['id']},
-        token=token,
-        expected=422,
-    )
-
-
-def test_the_cli_carries_public_and_the_approval_id_on_a_comment_and_its_edit(api, monkeypatch):
-    """`hub task comment --public --approval-id` and `hub task comment-edit --approval-id` reach the server's gate."""
-    from clients import remotecli
-    from clients.hubcli import parser
-    from backend.tests.helpers.tasks_board import bot_token
-
-    token = bot_token(api, 'cpo')
-
-    class Client:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def get(self, path, **params):
-            return get(api, path, token=token)
-
-        def post(self, path, body, key=None):
-            r = api.post('/api/v2/' + path, json=body, headers=headers(token))
-            if r.status_code != 200:
-                raise SystemExit(r.text)
-            return r.json()
-
-    monkeypatch.setattr(remotecli, 'Client', Client)
-    monkeypatch.setenv('HUB_API_URL', 'https://example.com')
-
-    def cli(*argv):
-        return remotecli.run(parser().parse_args(['task', *argv]))
-
-    def approved(payload):
-        approval = post(api, 'approvals', {'kind': 'publish', 'task_id': task['id'], 'payload': payload}, token=token)
-        post(api, 'approvals/' + approval['id'], {'decision': 'approved'})
-        return approval['id']
-
-    def consumed(approval):
-        with api.app.state.store.read() as c:
-            return c.execute('SELECT consumed_at FROM approvals WHERE id=?', (approval,)).fetchone()[0]
-
-    task = _public_task(api)
-    with pytest.raises(SystemExit, match='approv'):
-        cli('comment', task['id'], 'Now available', '--public')
-    first = approved(
-        post(api, 'tasks/' + task['id'] + '/publication-preview', {'comment': 'Now available'}, token=token)['payload']
-    )
-    comment = cli('comment', task['id'], 'Now available', '--public', '--approval-id', first)['comment']
-    assert comment['public'] == 1 and consumed(first)
-    with pytest.raises(SystemExit, match='approv'):
-        cli('comment-edit', task['id'], comment['id'], 'Now available to all')
-    second = approved(
-        post(api, 'tasks/' + task['id'] + '/publication-preview', {'comment': 'Now available to all'}, token=token)[
-            'payload'
-        ]
-    )
-    edited = cli('comment-edit', task['id'], comment['id'], 'Now available to all', '--approval-id', second)['comment']
-    assert edited['body'] == 'Now available to all' and edited['public'] == 1 and consumed(second)
+    assert asked.status_code in (403, 422) and 'publication-preview' not in asked.text, asked.text
+    refused = post(api, 'tasks/' + task['id'], {'version': task['version'], **changes}, token=token, expected=422)
+    assert 'publication-preview' not in json.dumps(refused)
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT count(*) FROM ok_grants').fetchone()[0] == 0
 
 
 def test_requester_contacts_follow_task_privacy_and_teammates_can_remove_themselves(api):

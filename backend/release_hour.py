@@ -1,3 +1,4 @@
+# pyright: strict
 """The daily release hour (docs/pipelines-v3.md D13): a routine on the Release Manager.
 
 At each time the release schedule names (release_schedule_routes, company time), the routine does what Release now
@@ -9,16 +10,19 @@ slot fires it when it is back within GRACE, and skips it after that: the next sl
 """
 
 import json
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
+from typing import Any, cast
 
 from . import release_schedule_routes as RS
-from .store import H
+from .store import H as _H
+
+H: Any = _H
 
 GRACE = timedelta(hours=2)
 KEEP = 14  # the fired slots kept: a week of two a day
 
 
-def instant(day: date, text: str, zone) -> datetime:
+def instant(day: date, text: str, zone: tzinfo) -> datetime:
     """When the wall time `text` ("HH:MM") happens on `day` in `zone`, as an aware datetime in that zone. A time the
     autumn night has twice is its first; a time the spring gap skips is the first instant after the gap."""
     hour, minute = (int(x) for x in text.split(":"))
@@ -36,14 +40,14 @@ def instant(day: date, text: str, zone) -> datetime:
     return step.astimezone(zone)
 
 
-def due(cfg, at):
+def due(cfg: dict[str, Any], at: datetime) -> tuple[str, datetime] | None:
     """(slot, instant) of the newest slot at or before `at` and no older than GRACE, or None. A slot is the company
     date and the configured time, "2026-11-01T01:30": one per date and time, whatever the clocks do that night."""
     if not cfg["on"]:
         return None
     zone = RS.zone()
     today = at.astimezone(zone).date()
-    best = None
+    best: tuple[str, datetime] | None = None
     for day in (today - timedelta(days=1), today):
         for text in cfg["times"]:
             point = instant(day, text, zone)
@@ -52,7 +56,7 @@ def due(cfg, at):
     return best
 
 
-def following(cfg, at):
+def following(cfg: dict[str, Any], at: datetime) -> datetime | None:
     """The first release hour after `at` (`instant`), or None while the schedule is off."""
     if not cfg["on"]:
         return None
@@ -62,19 +66,19 @@ def following(cfg, at):
     return min((p for p in points if p > at), default=None)
 
 
-def next_wake(c, at: datetime):
+def next_wake(c: Any, at: datetime) -> datetime | None:
     """When a sleeping server must be up for the release hour: `at` while a due slot has not fired, else the next
     hour (`following`), or None while the schedule is off."""
     return at if unfired(c, at) else following(RS.load(c), at)
 
 
-def due_slot(cfg, at):
+def due_slot(cfg: dict[str, Any], at: datetime) -> datetime | None:
     """The due slot's instant (`due`), or None."""
     found = due(cfg, at)
     return found[1] if found else None
 
 
-def _slot_key(key):
+def _slot_key(key: Any) -> str | None:
     """A fired slot's key as `due` writes it; one an older server wrote (an instant with its offset) keeps its wall
     date and time. None when it does not parse."""
     try:
@@ -83,22 +87,24 @@ def _slot_key(key):
         return None
 
 
-def _fired(c):
+def _fired(c: Any) -> dict[str, Any]:
     """{slot: what it did} for the slots fired; a key that does not parse is left out."""
     row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (RS.FIRED,)).fetchone()
     try:
-        fired = json.loads(row[0]) if row and row[0] else {}
+        fired: Any = json.loads(row[0]) if row and row[0] else {}
     except ValueError:
         fired = {}
-    out = {}
-    for key, value in (fired if isinstance(fired, dict) else {}).items():
+    out: dict[str, Any] = {}
+    # isinstance narrows the parsed JSON to dict[Unknown, Unknown]; its keys and values are any JSON
+    items = cast("dict[Any, Any]", fired) if isinstance(fired, dict) else {}
+    for key, value in items.items():
         slot = _slot_key(key)
         if slot:
             out[slot] = value
     return out
 
 
-def unfired(c, at: datetime):
+def unfired(c: Any, at: datetime) -> tuple[str, datetime] | None:
     """The due slot (`due`) when it has not fired and no newer slot has, else None. Read-only: the scheduler asks this
     on every pass and takes the write lock only when it says yes."""
     found = due(RS.load(c), at)
@@ -107,7 +113,7 @@ def unfired(c, at: datetime):
     return found
 
 
-def tick(c, at: datetime):
+def tick(c: Any, at: datetime) -> dict[str, Any] | None:
     """Fire the due slot once, in `c` (a write transaction). Returns what Release now answered, with the slot as
     `at`, or None when nothing was due."""
     found = unfired(c, at)
@@ -125,7 +131,7 @@ def tick(c, at: datetime):
     return answer
 
 
-def words(answer):
+def words(answer: dict[str, Any] | None) -> str | None:
     """The run's line on the system jobs screen, or None for a pass with nothing due."""
     if answer is None:
         return None
