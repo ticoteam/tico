@@ -47,6 +47,8 @@ interface ThreadRow {
   // Catch up, as the server counts it).
   task_id?: string | null | undefined;
   task_hidden?: boolean | undefined;
+  // The thread's live call, for the rail's green phone (ui/app/thread-call.ts keeps it live).
+  live_call?: { id: string; live_count?: number | undefined } | null | undefined;
   [key: string]: unknown;
 }
 // The rail's reply: Pinned and the rest, the next page's cursor, the Catch up count and the unread of each DM.
