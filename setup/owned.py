@@ -686,11 +686,25 @@ class StrictDeployer(Deployer):
         self.ec2.authorize_security_group_ingress(GroupId=gid, IpPermissions=perms)
 
     def ensure_eip(self) -> tuple[str, str]:
-        r = self.ec2.describe_addresses(Filters=self.n.filters(self.p.name))["Addresses"]
-        r = [a for a in r if self.n.is_ours(a.get("Tags"), self.p.name)]
-        if r:
-            self.j.adopt("eip", r[0]["AllocationId"], "Elastic IP", r[0]["AllocationId"])
-            return r[0]["AllocationId"], r[0]["PublicIp"]
+        """AllocateAddress takes no ClientToken: a retry cannot ask EC2 for the address an earlier call made. An open
+        intent (an answer that was lost) is waited for while EC2's listing catches up, and never allocated again."""
+        waits = (1, 2, 4, 8, 16) if (self.ids.get("intents") or {}).get("eip") is not None else ()
+        for wait in (*waits, None):
+            r = self.ec2.describe_addresses(Filters=self.n.filters(self.p.name))["Addresses"]
+            r = [a for a in r if self.n.is_ours(a.get("Tags"), self.p.name)]
+            if r:
+                self.j.adopt("eip", r[0]["AllocationId"], "Elastic IP", r[0]["AllocationId"])
+                return r[0]["AllocationId"], r[0]["PublicIp"]
+            if wait is not None:
+                self.sleep(wait)
+        if waits:
+            name = self.n.resource(self.p.name)
+            raise MissingInput(
+                f"Setup's last run asked EC2 for an Elastic IP ({name}) but never heard back, and none with this "
+                "install's tags is listed yet; refusing to allocate a second one. Check by hand in the EC2 console "
+                f"(Elastic IPs, tag {self.n.install_tag}={self.n.install_id}) after a few minutes and run setup again. "
+                "If there is none, remove the \"eip\" entry under \"intents\" in this install's state.json first."
+            )
         self.j.intend("eip", name=self.n.resource(self.p.name))
         a = self.ec2.allocate_address(
             Domain="vpc",

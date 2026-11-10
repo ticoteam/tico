@@ -423,6 +423,50 @@ class FilteredEC2(fakes.FakeEC2):
         return {"Addresses": self._match(rows, list(Filters))}
 
 
+class LaggingEC2(FilteredEC2):
+    """EC2 is eventually consistent: an address it allocated is missing from describe_addresses for `lag` reads. The
+    first AllocateAddress answer is lost."""
+
+    def __init__(self, lag):
+        super().__init__()
+        self.lag, self.reads, self.lost = lag, 0, False
+
+    def allocate_address(self, **kw):
+        a = super().allocate_address(**kw)
+        a["AllocationId"] = f"eipalloc-{len(self.eips)}"
+        self.reads = 0
+        if not self.lost:
+            self.lost = True
+            raise Lost("allocate_address")
+        return a
+
+    def describe_addresses(self, Filters=(), AllocationIds=()):
+        self.reads += 1
+        return super().describe_addresses(Filters, AllocationIds) if self.reads > self.lag else {"Addresses": []}
+
+
+def test_a_lost_allocate_address_is_waited_for_and_never_allocated_twice():
+    # Codex review 5, case 11: AllocateAddress has no ClientToken. Its answer lost and the address not yet listed, the
+    # retry allocated a second one and recorded it over the first. An open intent is now waited for, then refused.
+    for lag, found in ((3, True), (50, False)):
+        ids, sleeps = {}, []
+        ec2 = LaggingEC2(lag)
+        d = owned.StrictDeployer(hub_plan(), ec2, None, None, ACCOUNT, sleep=sleeps.append, ids=ids)
+        with pytest.raises(Lost):
+            d.ensure_eip()
+        assert ids["intents"]["eip"] and "eip" not in ids
+        ec2.reads = 0
+        if found:
+            assert d.ensure_eip() == ("eipalloc-1", "203.0.113.9") and ids["eip"] == "eipalloc-1"
+            assert not ids.get("intents", {}).get("eip")
+        else:
+            with pytest.raises(MissingInput, match="Elastic IP") as e:
+                d.ensure_eip()
+            assert "by hand" in str(e.value) and ids["intents"]["eip"] and "eip" not in ids
+            assert sum(sleeps) <= 60
+        assert len(ec2.called("allocate_address")) == 1, lag
+
+
 def test_hub_discover_and_destroy_find_only_hub_tagged_resources():
     ec2 = FilteredEC2(
         extra_instances=[{"InstanceId": "i-tico", "Tags": TICO_TAGS}, {"InstanceId": "i-hub", "Tags": HUB_TAGS}],
