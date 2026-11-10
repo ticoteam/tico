@@ -8027,8 +8027,8 @@ def task_origin(conn, row):
 # ----------------------------------------------------------------------------- the task calls
 # Done, move, close, reassign, asks, answers and snooze (backend/task_calls.py), under the names every caller uses:
 # H.task_move(...). Imported last: task_calls reads hubdb when a call runs, not when it loads.
-from . import task_calls as _task_calls  # noqa: E402
-from .task_calls import (  # noqa: E402
+from . import task_calls as _task_calls
+from .task_calls import (
     attempt as attempt,
     task_answer as task_answer,
     task_answer_undo as task_answer_undo,
