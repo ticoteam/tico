@@ -435,7 +435,8 @@ impl Tico {
         response(self.signed(request).send()?)
             .with_context(|| format!("Tico request {path} failed"))
     }
-    /// A DELETE of a Tico endpoint, answered and refused as `call` answers.
+    /// A DELETE of a Tico endpoint with an empty JSON body (`{}`: Tico's routes read one), answered and refused as
+    /// `call` answers.
     pub fn delete(&self, path: &str, key: &str) -> Result<Value> {
         ensure!(
             path.starts_with('/') && !path.starts_with("//"),
@@ -446,7 +447,11 @@ impl Tico {
             settings::safe_url(&self.destination.base_url)?,
             path
         );
-        let request = self.client.delete(url).header("Idempotency-Key", key);
+        let request = self
+            .client
+            .delete(url)
+            .header("Idempotency-Key", key)
+            .json(&serde_json::json!({}));
         response(self.signed(request).send()?)
             .with_context(|| format!("Tico request {path} failed"))
     }

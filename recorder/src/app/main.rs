@@ -155,6 +155,8 @@ commands! {
     import_legacy(directory: String) => |app| app.import_legacy(&directory);
     confirm_connect() => |app| app.confirm_connect();
     dismiss_connect() => |app| app.dismiss_connect();
+    confirm_call() => |app| app.confirm_call();
+    dismiss_call() => |app| app.dismiss_call();
     dismiss_error() => |app| app.dismiss_error();
     open_url(url: String) => |app| app.open_url(&url);
     dismiss_notice() => |app| app.dismiss_notice();
@@ -495,6 +497,8 @@ fn main() {
             import_legacy,
             confirm_connect,
             dismiss_connect,
+            confirm_call,
+            dismiss_call,
             dismiss_error,
             open_url,
             dismiss_notice,

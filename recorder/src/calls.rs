@@ -106,18 +106,34 @@ impl Tico {
         )
     }
     /// Claims the source, and gives it straight back when the call's meeting already holds transcript from an
-    /// earlier source: a new recording numbers its lines from the start, which that meeting refuses, so this
-    /// Recorder then records nothing. Answers the claim as Tico gave it, `source` false in that case.
+    /// earlier source (Tico's `has_transcript`, else the meeting's own `seq`): a new recording numbers its lines from
+    /// the start, which that meeting refuses, so this Recorder then records nothing. Answers the claim as Tico gave
+    /// it, `source` false in that case, and `release_pending` when Tico did not take the source back after a few
+    /// tries (the caller queues it).
     pub fn claim_fresh_call(&self, call: &str) -> Result<Value> {
         let mut reply = self.claim_call(call)?;
-        if reply["source"] == true
-            && let Some(meeting) = reply["meeting_id"].as_str()
+        if reply["source"] != true {
+            return Ok(reply);
+        }
+        let written = match reply["has_transcript"].as_bool() {
+            Some(written) => written,
             // Best effort: a meeting this Recorder cannot read yet is recorded as a fresh one.
-            && let Ok(view) = self.call(&format!("/api/v2/live-meetings/{meeting}"), None, "")
-            && view["seq"].as_i64().unwrap_or(0) > 0
-        {
-            self.release_call(call)?;
+            None => reply["meeting_id"].as_str().is_some_and(|meeting| {
+                self.call(&format!("/api/v2/live-meetings/{meeting}"), None, "")
+                    .is_ok_and(|view| view["seq"].as_i64().unwrap_or(0) > 0)
+            }),
+        };
+        if written {
             reply["source"] = json!(false);
+            let released = (0..3).any(|attempt| {
+                if attempt > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                }
+                self.release_call(call).is_ok()
+            });
+            if !released {
+                reply["release_pending"] = json!(true);
+            }
         }
         Ok(reply)
     }

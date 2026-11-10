@@ -63,7 +63,7 @@ const SEND_WAIT: Duration = Duration::from_secs(600);
 /// Jobs that run beside the person's own actions instead of disabling the controls.
 /// Shown when a recording or a send is asked for while an update installs.
 const UPDATING: &str = "Tico Recorder is updating. Try again in a moment.";
-const BACKGROUND: [&str; 15] = [
+const BACKGROUND: [&str; 16] = [
     "live",
     "calendar",
     "autodraft",
@@ -79,13 +79,60 @@ const BACKGROUND: [&str; 15] = [
     "call-state",
     "call-release",
     "call-presence",
+    "call-watch",
 ];
+/// How long quitting waits for Tico to take back a call's source.
+const QUIT_RELEASE_WAIT: Duration = Duration::from_secs(3);
 /// A call's live meeting is read this often while the window's own sync does not read it, to notice the call end.
 const CALL_READ_EVERY: Duration = Duration::from_secs(5);
 /// Who is in the Meet window goes to the call this often.
 const CALL_PRESENCE_EVERY: Duration = Duration::from_secs(10);
 /// How long giving a call back waits for the last words to be transcribed and shared.
 const CALL_LAST_WORDS: Duration = Duration::from_secs(120);
+/// A call link waiting for its org's sign-in is dropped after this long.
+const PENDING_CALL_FOR: Duration = Duration::from_secs(300);
+/// A release Tico did not take is tried this many times in all, a little later each time.
+const RELEASE_TRIES: u32 = 5;
+/// A call held for the person to choose Record (`Recorder::call_prompt`).
+#[derive(Clone, Debug)]
+struct CallPrompt {
+    destination: String,
+    call: String,
+    meeting_id: String,
+    title: String,
+    at: Instant,
+}
+/// A call's source to give back (`Recorder::release_call`).
+#[derive(Clone, Debug)]
+struct Release {
+    destination: String,
+    call: String,
+    /// The recording whose last words go to the call's meeting first.
+    id: Option<String>,
+    tries: u32,
+    after: Instant,
+}
+/// Waits for a stopped call recording's last audio and words, shares them, then ends its meeting here so nothing
+/// more goes there.
+fn share_last_words(tico: &Tico, store: &Store, id: &str) -> anyhow::Result<()> {
+    wait_stopped(store, id)?;
+    let deadline = Instant::now() + CALL_LAST_WORDS;
+    while Instant::now() < deadline
+        && store
+            .get(id)?
+            .chunks
+            .iter()
+            .any(|chunk| ["pending", "running"].contains(&chunk.status.as_str()))
+    {
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    let shared = tico.push_live(store, id);
+    store.update_context(id, |context| {
+        context.live_state = "ended".into();
+        Ok(())
+    })?;
+    shared
+}
 /// Drafting reads streamed text too, so it can follow speech closely; one model call per
 /// interval at most.
 pub const DRAFT_INTERVAL: Duration = Duration::from_secs(10);
@@ -437,12 +484,23 @@ pub struct Recorder {
     pub visible: bool,
     /// When the default Tico was last asked what speech it can handle, and which Tico it was.
     services_at: Option<(Instant, String)>,
-    /// A call link waiting for sign-in to its org: (org address, call id).
-    pending_call: Option<(String, String)>,
-    /// The call being claimed now: (connection id, call id).
-    claiming: Option<(String, String)>,
+    /// Stopped call recordings still live here (the app quit or crashed mid-call): their meetings are read until
+    /// the call ends, then they are kept as in Tico.
+    watched_calls: BTreeSet<String>,
+    /// Call sources waiting to be given back, and the one being given back now.
+    releases: std::collections::VecDeque<Release>,
+    releasing: Option<Release>,
+    /// A call link waiting for sign-in to its org: (org address, call id, when it came). It goes after
+    /// `PENDING_CALL_FOR`, and when its sign-in card is dismissed or replaced or another org signs in.
+    pending_call: Option<(String, String, Instant)>,
+    /// The call being claimed now: (connection id, call id, whether to ask before recording).
+    claiming: Option<(String, String, bool)>,
+    /// A call this Recorder is the source for, from a link to an org it was not signed in to: it records only once
+    /// the person chooses Record.
+    call_prompt: Option<CallPrompt>,
     /// When the call recording's live meeting was last read here, and its Meet names last sent.
     call_read_at: Instant,
+    call_watch_at: Instant,
     call_presence_at: Instant,
     /// A call whose Tico refused its Meet names (an older Tico): they are not sent again.
     call_presence_off: String,
@@ -573,8 +631,13 @@ impl Recorder {
             visible: true,
             services_at: None,
             pending_call: None,
+            watched_calls: BTreeSet::new(),
+            releases: Default::default(),
+            releasing: None,
             claiming: None,
+            call_prompt: None,
             call_read_at: Instant::now(),
+            call_watch_at: Instant::now() - CALL_READ_EVERY,
             call_presence_at: Instant::now(),
             call_presence_off: String::new(),
             call_view: Value::Null,
@@ -584,6 +647,7 @@ impl Recorder {
         if !demo {
             app.job("devices", || Ok(json!(capture::sources()?)));
         }
+        app.watched_calls = app.unfinished_calls();
         Ok(app)
     }
     fn say(&mut self, message: impl Into<String>) {
@@ -856,30 +920,57 @@ impl Recorder {
     pub fn record_call(&mut self, address: &str, call: &str) {
         if self.claiming.is_some()
             || self
+                .call_prompt
+                .as_ref()
+                .is_some_and(|prompt| prompt.call == call)
+            || self
                 .call_recording()
                 .is_some_and(|(_, context)| context.call_id == call)
         {
             return;
         }
+        // Another call's link replaces a question still open.
+        self.dismiss_call();
         match self.connection_for(address) {
-            Some(destination) => self.claim_call(&destination, call),
+            Some(destination) => self.claim_call(&destination, call, false),
             None => {
-                self.pending_call = Some((address.to_owned(), call.to_owned()));
+                self.pending_call = Some((address.to_owned(), call.to_owned(), Instant::now()));
                 if !self.signing_in {
                     self.connect = Some(address.to_owned());
                 }
             }
         }
     }
-    /// After a sign-in: a call link that waited for it goes on when that org is signed in now.
+    /// After a sign-in: a call link that waited for it goes on when that org is signed in now. Its link came for an
+    /// org this Recorder had no sign-in for, so it records only once the person chooses Record.
     pub fn continue_call(&mut self) {
-        if let Some((address, call)) = self.pending_call.take()
+        if let Some((address, call, at)) = self.pending_call.take()
+            && at.elapsed() < PENDING_CALL_FOR
             && let Some(destination) = self.connection_for(&address)
         {
-            self.claim_call(&destination, &call);
+            self.claim_call(&destination, &call, true);
         }
     }
-    fn claim_call(&mut self, destination: &str, call: &str) {
+    /// Record, on the question a call from a newly signed-in org asks.
+    pub fn confirm_call(&mut self) {
+        if let Some(prompt) = self.call_prompt.take() {
+            self.accept_claim(
+                &prompt.destination,
+                &prompt.call,
+                Claim::Source {
+                    meeting_id: prompt.meeting_id,
+                    title: prompt.title,
+                },
+            );
+        }
+    }
+    /// Cancel on that question (or it went unanswered): the source goes back.
+    pub fn dismiss_call(&mut self) {
+        if let Some(prompt) = self.call_prompt.take() {
+            self.release_call(&prompt.destination, &prompt.call, None);
+        }
+    }
+    fn claim_call(&mut self, destination: &str, call: &str, ask: bool) {
         if self.updating {
             self.error = UPDATING.into();
             return;
@@ -890,7 +981,7 @@ impl Recorder {
         }
         let (config, connect) = (self.config.clone(), self.tico_for);
         let (destination, call) = (destination.to_owned(), call.to_owned());
-        self.claiming = Some((destination.clone(), call.clone()));
+        self.claiming = Some((destination.clone(), call.clone(), ask));
         self.job_for("call", None, move || {
             connect(&config, &destination)?.claim_fresh_call(&call)
         });
@@ -946,40 +1037,151 @@ impl Recorder {
             Claim::Failed(error) => self.error = error,
         }
     }
-    /// Gives the call's source back, in the background. With the recording `id`, it first waits for that
-    /// recording's last audio and words and shares them, then ends its meeting here so nothing more goes there.
-    fn release_call(&mut self, destination: &str, call: &str, id: Option<String>) {
+    /// Gives the call's source back. Releases queue up and go one at a time in the background; a failed one is
+    /// tried again a little later, up to `RELEASE_TRIES` times. With the recording `id`, its last audio and words
+    /// are waited for and shared first, then its meeting is ended here so nothing more goes there.
+    pub fn release_call(&mut self, destination: &str, call: &str, id: Option<String>) {
+        self.releases.push_back(Release {
+            destination: destination.to_owned(),
+            call: call.to_owned(),
+            id,
+            tries: 0,
+            after: Instant::now(),
+        });
+        self.next_release();
+    }
+    fn next_release(&mut self) {
+        if self.releasing.is_some() || self.background.contains("call-release") {
+            return;
+        }
+        let Some(at) = self
+            .releases
+            .iter()
+            .position(|release| release.after <= Instant::now())
+        else {
+            return;
+        };
+        let release = self.releases.remove(at).expect("a queued release");
         let (config, connect, store) = (self.config.clone(), self.tico_for, self.store.clone());
-        let (destination, call) = (destination.to_owned(), call.to_owned());
+        let (destination, call, id) = (
+            release.destination.clone(),
+            release.call.clone(),
+            release.id.clone(),
+        );
+        self.releasing = Some(release);
         self.job_for("call-release", None, move || {
             let tico = connect(&config, &destination)?;
-            if let Some(id) = &id {
-                wait_stopped(&store, id)?;
-                let deadline = Instant::now() + CALL_LAST_WORDS;
-                while Instant::now() < deadline
-                    && store
-                        .get(id)?
-                        .chunks
-                        .iter()
-                        .any(|chunk| ["pending", "running"].contains(&chunk.status.as_str()))
-                {
-                    std::thread::sleep(Duration::from_millis(250));
-                }
-                if let Err(error) = tico.push_live(&store, id) {
-                    eprintln!("Call's last words not shared: {error:#}");
-                }
-                store.update_context(id, |context| {
-                    context.live_state = "ended".into();
-                    Ok(())
-                })?;
+            if let Some(id) = &id
+                && let Err(error) = share_last_words(&tico, &store, id)
+            {
+                eprintln!("Call's last words not shared: {error:#}");
             }
             tico.release_call(&call)?;
             Ok(json!({}))
         });
     }
+    /// A call recording that stopped without Stop or the call's end (capture ended, or the app quits): kept as in
+    /// Tico, and its source given back while the call is live. One already kept as in Tico was handled already.
+    fn call_stopped(&mut self, id: &str) {
+        let (Ok(context), Ok(record)) = (self.store.context(id), self.store.get(id)) else {
+            return;
+        };
+        if context.call_id.is_empty() || sent_to(&record.deliveries, &context.live_destination) {
+            return;
+        }
+        let result = calls::mark_sent(
+            &self.store,
+            id,
+            &context.live_destination,
+            &context.call_id,
+            "",
+        );
+        self.report(result);
+        if context.live_state != "ended" {
+            self.release_call(&context.live_destination, &context.call_id, Some(id.into()));
+        }
+    }
+    /// On quit: the releases still queued, and the one under way (its job may not get to it before the app ends),
+    /// go now without the last words, waiting at most `QUIT_RELEASE_WAIT`. Tico takes a repeated release as one.
+    fn quit_releases(&mut self) {
+        let queued: Vec<Release> = self
+            .releasing
+            .take()
+            .into_iter()
+            .chain(self.releases.drain(..))
+            .collect();
+        if queued.is_empty() {
+            return;
+        }
+        let (config, connect) = (self.config.clone(), self.tico_for);
+        let (done, wait) = mpsc::channel();
+        std::thread::spawn(move || {
+            for release in queued {
+                if let Err(error) = connect(&config, &release.destination)
+                    .and_then(|tico| tico.release_call(&release.call))
+                {
+                    eprintln!("Call source not given back on quit: {error:#}");
+                }
+            }
+            let _ = done.send(());
+        });
+        let _ = wait.recv_timeout(QUIT_RELEASE_WAIT);
+    }
+    /// Call recordings not recording now whose call is still live here and not yet kept as in Tico.
+    fn unfinished_calls(&self) -> BTreeSet<String> {
+        self.records
+            .iter()
+            .filter(|row| ["live", "paused"].contains(&row.live_state.as_str()))
+            .filter(|row| self.active.as_ref().is_none_or(|(id, _)| id != &row.id))
+            .filter_map(|row| {
+                let context = self.store.context(&row.id).ok()?;
+                (!context.call_id.is_empty()
+                    && !sent_to(&row.deliveries, &context.live_destination))
+                .then(|| row.id.clone())
+            })
+            .collect()
+    }
+    /// Reads the meetings of `watched_calls` every few seconds; one whose call ended is kept as in Tico.
+    fn watch_stopped_calls(&mut self) {
+        if self.watched_calls.is_empty()
+            || self.background.contains("call-watch")
+            || self.call_watch_at.elapsed() < CALL_READ_EVERY
+        {
+            return;
+        }
+        self.call_watch_at = Instant::now();
+        let ids: Vec<String> = self.watched_calls.iter().cloned().collect();
+        let (config, connect, store) = (self.config.clone(), self.tico_for, self.store.clone());
+        self.job_for("call-watch", None, move || {
+            let mut done = vec![];
+            for id in ids {
+                let Ok(context) = store.context(&id) else {
+                    done.push(id);
+                    continue;
+                };
+                let read = connect(&config, &context.live_destination)
+                    .and_then(|tico| tico.read_live(&store, &id));
+                match read {
+                    Ok(view) if view["state"] == "ended" => {
+                        calls::mark_sent(
+                            &store,
+                            &id,
+                            &context.live_destination,
+                            &context.call_id,
+                            view["imported_meeting_id"].as_str().unwrap_or_default(),
+                        )?;
+                        done.push(id);
+                    }
+                    Ok(_) => {}
+                    Err(error) => eprintln!("Call meeting unread: {error:#}"),
+                }
+            }
+            Ok(json!({ "done": done }))
+        });
+    }
     /// The call recording in progress: it stops by itself once its call's live meeting has ended in Tico and is
-    /// kept as in Tico there (no Finish). Until then it reads that meeting every few seconds when the window's own
-    /// sync does not, and tells the call who is in the Meet window.
+    /// kept as in Tico there (no Finish). Until then it reads that meeting every few seconds, and tells the call who
+    /// is in the Meet window.
     fn watch_call(&mut self) {
         let Some((id, context)) = self.call_recording() else {
             return;
@@ -1003,10 +1205,9 @@ impl Recorder {
             self.reload();
             return;
         }
-        let window_syncs = self.visible && self.meeting.as_deref() == Some(id.as_str());
-        if !window_syncs
-            && self.call_read_at.elapsed() >= CALL_READ_EVERY
-            && !self.background.contains("call-state")
+        // Always its own read, whatever the window syncs: a sync shares lines first, which Tico refuses once the
+        // call is over, so it may never get to reading the state.
+        if self.call_read_at.elapsed() >= CALL_READ_EVERY && !self.background.contains("call-state")
         {
             self.call_read_at = Instant::now();
             let (config, connect, store) = (self.config.clone(), self.tico_for, self.store.clone());
@@ -1031,9 +1232,14 @@ impl Recorder {
     /// Used on quit: stop and wait for the final audio to be saved.
     pub fn shutdown(&mut self) {
         self.screen.stop_and_wait();
+        let call = self.call_recording();
         if let Some((_, handle)) = self.active.take() {
             let _ = handle.finish();
         }
+        if let Some((id, _)) = call {
+            self.call_stopped(&id);
+        }
+        self.quit_releases();
         self.join_delete();
         self.save_context();
     }
@@ -1466,8 +1672,36 @@ impl Recorder {
             let here = reply.meeting == self.meeting;
             match reply.kind.as_str() {
                 "call" => {
-                    if let Some((destination, call)) = self.claiming.take() {
-                        self.accept_claim(&destination, &call, calls::claim_outcome(reply.result));
+                    if let Some((destination, call, ask)) = self.claiming.take() {
+                        // Tico did not take back a source this Recorder gave up: the release queue keeps trying.
+                        if reply
+                            .result
+                            .as_ref()
+                            .is_ok_and(|answer| answer["release_pending"] == true)
+                        {
+                            self.release_call(&destination, &call, None);
+                        }
+                        match calls::claim_outcome(reply.result) {
+                            Claim::Source { meeting_id, title } if ask => {
+                                self.call_prompt = Some(CallPrompt {
+                                    destination,
+                                    call,
+                                    meeting_id,
+                                    title,
+                                    at: Instant::now(),
+                                })
+                            }
+                            claim => self.accept_claim(&destination, &call, claim),
+                        }
+                    }
+                    continue;
+                }
+                "call-watch" => {
+                    if let Ok(value) = &reply.result {
+                        for id in value["done"].as_array().into_iter().flatten() {
+                            self.watched_calls.remove(id.as_str().unwrap_or_default());
+                        }
+                        self.reload();
                     }
                     continue;
                 }
@@ -1490,9 +1724,19 @@ impl Recorder {
                     continue;
                 }
                 "call-release" => {
-                    if let Err(error) = reply.result {
+                    if let (Err(error), Some(mut release)) = (reply.result, self.releasing.take()) {
                         eprintln!("Call source not given back: {error}");
+                        release.tries += 1;
+                        if release.tries < RELEASE_TRIES {
+                            // Its last words went already (or never will); only the release is tried again.
+                            release.id = None;
+                            release.after =
+                                Instant::now() + Duration::from_secs(release.tries.into());
+                            self.releases.push_back(release);
+                        }
                     }
+                    self.releasing = None;
+                    self.next_release();
                     continue;
                 }
                 _ => {}
@@ -1785,6 +2029,8 @@ impl Recorder {
                 self.screen.stop_meeting(&id);
                 let result = handle.finish();
                 self.report(result);
+                // Capture that ended by itself, not by Stop or the call's end.
+                self.call_stopped(&id);
             }
             self.reload();
             tico_recorder_native::qos::release_memory();
@@ -1814,6 +2060,23 @@ impl Recorder {
         self.sync_presence();
         self.sync_saved();
         self.watch_call();
+        self.watch_stopped_calls();
+        self.next_release();
+        if self
+            .pending_call
+            .as_ref()
+            .is_some_and(|(_, _, at)| at.elapsed() >= PENDING_CALL_FOR)
+        {
+            self.pending_call = None;
+        }
+        if self
+            .call_prompt
+            .as_ref()
+            .is_some_and(|prompt| prompt.at.elapsed() >= PENDING_CALL_FOR)
+        {
+            self.dismiss_call();
+            self.bump();
+        }
         self.watch_inputs();
         let outside = self.outside_state();
         if outside != self.outside {
@@ -2988,6 +3251,7 @@ impl Recorder {
         let root = self.store.root().to_path_buf();
         self.signing_in = true;
         self.connect = None;
+        self.drop_pending_call_unless(&address);
         self.job("signin", move || {
             let name = sign_in_saving(&root, &address, |url| {
                 signin::open_browser(url);
@@ -3028,6 +3292,8 @@ impl Recorder {
         if orgs.is_empty() {
             return;
         }
+        // Signing in to the desktop app's orgs is not the call's sign-in: its card may not be the one answered.
+        self.pending_call = None;
         let root = self.store.root().to_path_buf();
         self.signing_in = true;
         self.connect = None;
@@ -3146,19 +3412,42 @@ impl Recorder {
         if let Some(address) = link_address(link, "open") {
             match self.connection_for(&address) {
                 Some(id) => self.choose_connection(&id),
-                None if !self.signing_in => self.connect = Some(address),
+                None if !self.signing_in => {
+                    self.drop_pending_call_unless(&address);
+                    self.connect = Some(address)
+                }
                 None => {}
             }
             return;
         }
         match connect_address(link) {
-            Some(address) => self.connect = Some(address),
+            Some(address) => {
+                self.drop_pending_call_unless(&address);
+                self.connect = Some(address)
+            }
             None => self.error = "That link is not a Tico Recorder connect link".into(),
         }
     }
     pub fn confirm_connect(&mut self) {
         if let Some(address) = self.connect.take() {
             self.sign_in(&address);
+        }
+    }
+    /// Drops the waiting call link unless it is for the org at `address`.
+    fn drop_pending_call_unless(&mut self, address: &str) {
+        let bare = |text: &str| text.trim().trim_end_matches('/').to_owned();
+        if self
+            .pending_call
+            .as_ref()
+            .is_some_and(|(waiting, _, _)| bare(waiting) != bare(address))
+        {
+            self.pending_call = None;
+        }
+    }
+    #[cfg(test)]
+    pub fn expire_pending_call(&mut self) {
+        if let Some((_, _, at)) = &mut self.pending_call {
+            *at = Instant::now() - PENDING_CALL_FOR;
         }
     }
     pub fn dismiss_connect(&mut self) {
@@ -3269,6 +3558,7 @@ impl Recorder {
             "message": message,
             "signing_in": self.signing_in,
             "connect": self.connect,
+            "call_prompt": self.call_prompt.as_ref().map(|prompt| json!({"title": prompt.title})),
             "first_run": self.config.destinations.is_empty() && !self.demo,
             "suggested": self.tico_url,
             "recording": recording,
