@@ -25,7 +25,7 @@ from . import visuals
 from . import app_delivery, login_holds, providers, runner_versions, runs
 from .harnesses import resolve_harness
 from . import personal_tokens, profiles, rooms, team_rules, turns, wake_presets
-from . import bot_stops, pipeline_stats, run_triggers
+from . import bot_rows, bot_stops, run_triggers
 
 from . import read_cache, roster_clock
 from .store import (
@@ -737,7 +737,7 @@ def operation_issues(c, who, auth):
     status_inputs = privacy.status_inputs(c, shown)
     # Each bot's computer, status and queue read together, not a few queries per bot.
     prime_machines(c, shown)
-    queues = pipeline_stats.job_queues(
+    queues = bot_rows.job_queues(
         c, who, [b["id"] for b in bots if b["id"] in status_inputs and b["state"] != "archived"]
     )
     # Every stopped run of every bot that has one, read together: its checks below read each bot's runs from here.
@@ -2262,8 +2262,8 @@ def fleet_snapshot(c, auth, identity, task_view):
     privacy.snapshot(c)
     principal = auth.tico_principal(c, identity)
     access = auth.bot_accesses(c, principal)
-    bot_rows = H.bots(c)
-    allowed = {row["id"] for row in bot_rows if access.get(row["id"], auth.FULL)["write"]}
+    bot_list = H.bots(c)
+    allowed = {row["id"] for row in bot_list if access.get(row["id"], auth.FULL)["write"]}
     task_rows = [
         dict(t) for t in c.execute(f"SELECT {privacy.STATUS_TASK_COLUMNS} FROM tasks WHERE {privacy.STATUS_TASKS_SQL}")
     ]
@@ -2297,10 +2297,10 @@ def fleet_snapshot(c, auth, identity, task_view):
     ):
         live_by_bot.setdefault(row["bot_id"], []).append(row)
     # machine() / presence used to re-SELECT assignment+agent rows once per readable bot; Health already primes.
-    shown = [row["id"] for row in bot_rows if row["id"] in allowed and access.get(row["id"], auth.FULL)["read"]]
+    shown = [row["id"] for row in bot_list if row["id"] in allowed and access.get(row["id"], auth.FULL)["read"]]
     prime_machines(c, shown)
     bots = []
-    for row in bot_rows:
+    for row in bot_list:
         slug = row["id"]
         if slug not in allowed:
             continue

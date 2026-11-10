@@ -23,7 +23,7 @@ from starlette.requests import ClientDisconnect
 from . import built_on
 from . import agents, app_delivery, mcp_oauth, oidc, views
 from . import outcome_stats
-from . import factory_manager, pipeline_judges
+from . import pipeline_judges
 from . import recorder_installs
 from . import assistant_changes, why_here
 from . import teammate_access
@@ -5356,7 +5356,6 @@ def create_app(settings=None):
 
     install_meeting_items(app, store, mutate, task_create, auth)
     pipeline_judges.install(app, store, mutate, auth)
-    factory_manager.install(app, store, mutate, auth)
     from . import presence
 
     presence.install(app, store, mutate, auth)
