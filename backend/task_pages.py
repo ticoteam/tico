@@ -160,7 +160,8 @@ def attach(
     if not _one(conn, "SELECT 1 AS one FROM bot_file_versions WHERE file_id=? AND version=?", (file_id, version)):
         _refuse(conn, by, "task_requirement", f"That page has no version {version}", task_id)
     rubric, context = judged_against(conn, row, found)
-    unread = sorted(ref_ for ref_, sha in (context.get("heads") or {}).items() if not sha)
+    heads: dict[str, str | None] = context.get("heads") or {}
+    unread = sorted(ref_ for ref_, sha in heads.items() if not sha)
     if unread:
         _refuse(
             conn, by, "task_requirement", f"Tico is still reading {unread[0]} from GitHub. Try again soon.", task_id

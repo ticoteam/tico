@@ -143,14 +143,14 @@ const factories = (async () => {
   const state = {id: 'product', pipelines: [{id: 'product', name: 'Product'}, {id: 'engineering', name: 'Engineering'}],
     draft: rec({stages: [stage('spec', 'Spec', {requirements: [{...req('page'), who_oks: 'people_with_exceptions'}]}),
       stage('release', 'Release', {requirements: [req('in_release')]})]})};
-  const kinds = ctx.peReqHTML(state.draft.stages[0].requirements[0], 0, 0);
+  const kinds = ctx.peReqHTML(state.draft.stages[0]!.requirements[0]!, 0, 0);
   assert.doesNotMatch(kinds, /later|disabled>/, 'every kind may be picked');
   assert.match(kinds, /<option value="in_release">In a release<\/option>/);
   assert.match(kinds, /<span>Jev checks<\/span>/);
   assert.match(kinds, /<span>Then OK from<\/span><select[^>]*><option value="">Nobody<\/option>/, 'a page needs no person');
   assert.match(kinds, /data-pe-rs="at_head"[^>]*> Newest commit only/);
   assert.match(kinds, /data-pe-rs="with_release"[^>]*> With its release/);
-  const release = ctx.peReqHTML(state.draft.stages[1].requirements[0], 1, 0);
+  const release = ctx.peReqHTML(state.draft.stages[1]!.requirements[0]!, 1, 0);
   assert.match(release, /data-pe-rf="release_repo"/);
   assert.match(release, /data-pe-rs="prereleases"[^>]*> Pre-releases count/);
   assert.match(release, /data-pe-rf="can_push_past"[^>]*disabled/, 'In a release is never pushed past');
@@ -160,20 +160,20 @@ const factories = (async () => {
   ctx.peInput(state, field('HTMLInputElement', {peSi: '0', peRi: '0', peRs: 'at_head'}, 'on', true));
   ctx.peInput(state, field('HTMLInputElement', {peSi: '1', peRi: '0', peRs: 'prereleases'}, 'on', true));
   ctx.peInput(state, field('HTMLInputElement', {peSi: '1', peRi: '0', peRf: 'release_repo'}, ' ticoteam/tico '));
-  assert.deepEqual(plain(state.draft.stages[0].requirements[0].settings), {at_head: true});
-  assert.deepEqual(plain(state.draft.stages[1].requirements[0].settings), {prereleases: true, release_repo: 'ticoteam/tico'});
+  assert.deepEqual(plain(state.draft.stages[0]!.requirements[0]!.settings), {at_head: true});
+  assert.deepEqual(plain(state.draft.stages[1]!.requirements[0]!.settings), {prereleases: true, release_repo: 'ticoteam/tico'});
   ctx.peInput(state, field('HTMLInputElement', {peSi: '0', peRi: '0', peRs: 'at_head'}, 'on', false));
-  assert.deepEqual(plain(state.draft.stages[0].requirements[0].settings), {}, 'a switch off is not saved');
+  assert.deepEqual(plain(state.draft.stages[0]!.requirements[0]!.settings), {}, 'a switch off is not saved');
 
-  const onEnter = ctx.peOnEnterOptions(state, state.draft.stages[0]);
+  const onEnter = ctx.peOnEnterOptions(state, state.draft.stages[0]!);
   assert.match(onEnter, /<option value="" selected>Nothing<\/option><option value="file_into:engineering">File into Engineering<\/option><option value="queue_prs">Queue PRs<\/option>/,
     'a stage files into another pipeline, not its own');
   ctx.peInput(state, field('HTMLSelectElement', {peSi: '0', peSf: 'on_enter'}, 'file_into:engineering'));
-  assert.deepEqual(plain(state.draft.stages[0].on_enter), {file_into: 'engineering'});
-  assert.match(ctx.peOnEnterOptions(state, state.draft.stages[0]), /value="file_into:engineering" selected/);
+  assert.deepEqual(plain(state.draft.stages[0]!.on_enter), {file_into: 'engineering'});
+  assert.match(ctx.peOnEnterOptions(state, state.draft.stages[0]!), /value="file_into:engineering" selected/);
   ctx.peInput(state, field('HTMLSelectElement', {peSi: '1', peSf: 'on_enter'}, 'queue_prs'));
-  assert.deepEqual(plain(state.draft.stages[1].on_enter), {queue_prs: true});
+  assert.deepEqual(plain(state.draft.stages[1]!.on_enter), {queue_prs: true});
   ctx.peInput(state, field('HTMLSelectElement', {peSi: '1', peSf: 'on_enter'}, ''));
-  assert.deepEqual(plain(state.draft.stages[1].on_enter), {});
+  assert.deepEqual(plain(state.draft.stages[1]!.on_enter), {});
 }
 factories.then(() => console.log('pipeline-view-unit: ok'), error => { console.error(error); process.exitCode = 1; });

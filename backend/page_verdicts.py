@@ -165,11 +165,12 @@ def _job(conn: "sqlite3.Connection", row: Row, page: Row) -> tuple[Row, Row]:
         if version
         else (None, False)
     )
+    pipeline: Row = task.get("pipeline") or {}
     asked: Row = {
         "id": requirement["id"],
         "name": R.name_of(requirement),
         "rubric": judged.get("rubric") or R.name_of(requirement),
-        "goal": ((task.get("pipeline") or {}).get("goal")) or "",
+        "goal": pipeline.get("goal") or "",
         "pipeline_id": task.get("pipeline_id"),
     }
     attachment: Row = {
@@ -228,7 +229,7 @@ def run(store: Any, now: str | None = None) -> int:
     from . import pipeline_judges as PJ
 
     H = _h()
-    now = now or H.now()
+    now = str(now or H.now())
     jobs: list[tuple[Row, Row, Row]] = []
     orphans: list[str] = []
     with store.read() as c:

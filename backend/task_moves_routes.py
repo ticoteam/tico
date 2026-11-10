@@ -467,7 +467,7 @@ def register(
             except ValueError as exc:
                 raise Problem("validation", str(exc), 422) from None
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (file_id,)).fetchone()
-            if not row or not F.file_visible(c, auth, who, row, {}):
+            if not row or not F.file_visible(c, auth, who, row, {}):  # pyright: ignore[reportUnknownMemberType]
                 raise Problem("not_found", "That page is not one you can read", 404)
             made = task_pages.attach(c, task_id, body.requirement, ref, who.actor, seen_version=body.version)
             return {"page": {"file_id": made["file_id"], "version": made["version"]}}

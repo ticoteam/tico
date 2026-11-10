@@ -309,9 +309,8 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     page = P.current(conn, visit_id, requirement["id"])
     if not page:
         return Standing(requirement, NOT_MET, owner, "No page attached")
-    if (requirement.get("settings") or {}).get("at_head") and json.loads(page["heads"] or "{}") != F.heads(
-        conn, task["id"]
-    ):
+    settings: Row = requirement.get("settings") or {}
+    if settings.get("at_head") and json.loads(page["heads"] or "{}") != F.heads(conn, task["id"]):
         return Standing(requirement, NOT_MET, owner, "New commits since the review")
     if answer and (answer.get("page_version") != page["version"] or answer["created_at"] < page["created_at"]):
         answer = None  # given on an earlier page
