@@ -8537,6 +8537,71 @@ for line in sys.stdin:
         std::fs::remove_dir_all(dir).ok();
     }
 
+    #[tokio::test]
+    async fn a_task_never_falls_back_to_the_bots_checkout_when_its_upstream_cannot_be_read() {
+        let _controls = RunControls;
+        crate::sessions::WORKTREE_WAIT.with(|v| v.set(Some((Duration::ZERO, Duration::ZERO))));
+        let (url, _seen, server) = recording_server().await;
+        let (runner, dir) = runner_at(&url, "task-upstream-unreadable");
+        let mut env = crate::env::Env::new();
+        env.insert(
+            "PATH".into(),
+            "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin".into(),
+        );
+        // A checkout Git confirms has no upstream keeps its fallback; one whose upstream is configured but can't be
+        // read (its remote is gone) is not known to have none, so the task's turn fails instead.
+        for (case, unreadable) in [("no-upstream", false), ("unreadable", true)] {
+            let bot = format!("{case}-{}", uuid::Uuid::new_v4().simple());
+            let task = format!("task-{case}");
+            let config = json!({"runtime": "pi", "harness": "pi", "model": "synthetic"});
+            let main = crate::sessions::local_path(&runner.config, &bot, &config);
+            std::fs::create_dir_all(&main).unwrap();
+            repo_git(&main, &["init", "-q", "-b", "main"]);
+            std::fs::write(main.join("AGENT.md"), "# Fixture\n").unwrap();
+            repo_git(&main, &["add", "-A"]);
+            repo_git(&main, &["commit", "-qm", "start"]);
+            if unreadable {
+                repo_git(&main, &["config", "branch.main.remote", "missing-remote"]);
+                repo_git(&main, &["config", "branch.main.merge", "refs/heads/main"]);
+            }
+            let mut attempt = json!({
+                "id": format!("a-{case}"), "bot": bot, "token": "synthetic", "lease_seconds": 120,
+                "lane": format!("task:{task}"), "task": {"id": task},
+                "conversation": {"id": "c1"}, "message": {"refs": {}}, "config": config
+            });
+            let lost = AtomicBool::new(false);
+            let mut place = runner.enter_lanes(&attempt, &lost).await.unwrap();
+            let session = crate::sessions::path_for(&runner.config.projects_dir(), &bot, &task);
+            let placed = runner
+                .place_turn(&mut place, &mut attempt, &env, &lost)
+                .await;
+            assert!(place.session_path.is_none());
+            assert!(!session.exists(), "no task worktree was made");
+            if unreadable {
+                let error =
+                    placed.expect_err("an unreadable upstream must not use the shared checkout");
+                assert!(
+                    error.contains(crate::sessions::UPSTREAM_LOOKUP_FAILED),
+                    "{error}"
+                );
+                assert!(error.contains("fatal:"), "Git's reason is kept: {error}");
+                assert!(
+                    !place.has_checkout(),
+                    "a refused placement holds no shared checkout"
+                );
+            } else {
+                assert!(placed.is_ok(), "no upstream keeps its fallback: {placed:?}");
+                assert!(
+                    place.has_checkout(),
+                    "it runs in the bot's checkout as before"
+                );
+            }
+            drop(place);
+        }
+        server.abort();
+        std::fs::remove_dir_all(dir).ok();
+    }
+
     fn repo_git(dir: &Path, args: &[&str]) -> String {
         let out = std::process::Command::new("git")
             .args([

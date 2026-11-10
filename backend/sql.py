@@ -769,8 +769,8 @@ class Gates:
 
     KEYS = ("task", "task_id", "turn_id", "run", "attempt_id", "answers", "inputs")
 
-    def __init__(self, inner, private, denied):
-        self.inner, self.denied = inner, bool(denied)
+    def __init__(self, inner, private, denied, page):
+        self.inner, self.denied, self.page = inner, bool(denied), page
         self.tasks, self.messages = '"' + private("known_tasks") + '"', inner("messages")
         self.denied_tasks = '"' + private("denied_tasks") + '"'
         self.rooms = '"' + private("unreadable_rooms") + '"'
@@ -843,11 +843,13 @@ class Gates:
         return f"{checked}WHEN {direct} THEN 1 WHEN {inherited} THEN 1 ELSE 0 END"
 
     def root(self, alias):
-        """A message settled by its own row: no parent, answers or inputs, and (unread here) no run."""
+        """A message settled by its own row: no parent, answers or inputs, its file references readable, and (unread
+        here) no run. Its file check is ReadIndex.message's own-refs check, so a parent with a refused file is not a yes."""
         # Preserve CASE's false result for NULL comparisons under the negated root checks in message/attempt.
         return (
             f"(coalesce({alias}.in_reply_to,'')='' AND coalesce({alias}.conversation_id NOT IN "
-            f"(SELECT id FROM {self.rooms}),0) AND {self.refs(alias + '.refs', top=False)})"
+            f"(SELECT id FROM {self.rooms}),0) AND {self.refs(alias + '.refs', top=False)} "
+            f"AND {self.page(alias + '.refs')})"
         )
 
     def message(self, alias="source"):
@@ -931,7 +933,20 @@ def materialize(conn, index, tables, inner, function, private):
         "denied_reads",
         f"SELECT key FROM main.read_deps WHERE dep IN (SELECT 't:'||id FROM \"{private("denied_tasks")}\")",
     )
-    gates = Gates(inner, private, index.denied)
+    page = function("page_message") + "(refs)"
+
+    def page_gate(refs):
+        """The file check for one row's refs. A page review can narrow a message independently of task/run provenance.
+        Only these top-level keys enter that check; escaped keys and every non-object keep Python's JSON parsing and
+        page permissions."""
+        no_page = " AND ".join(f"instr({refs},'\"{key}\"')=0" for key in privacy.PAGE_MESSAGE_KEYS)
+        return (
+            f"(CASE WHEN coalesce({refs},'') IN ('','{{}}') THEN 1 WHEN json_valid({refs}) "
+            f"AND json_type({refs})='object' AND instr({refs},'\\')=0 AND {no_page} THEN 1 "
+            f"ELSE {function('page_message')}({refs}) END)"
+        )
+
+    gates = Gates(inner, private, index.denied, page_gate)
     # Task-only refs repeat across a room's history. Validate the compact and spaced object encodings once per
     # task, without reading message history; every other encoding or shape keeps the ordinary refs gate.
     task_refs = gates.refs("json_object('task',id)", top=False, cached=False)
@@ -944,17 +959,11 @@ def materialize(conn, index, tables, inner, function, private):
     create("plain_refs", allowed + objects)
     message = function("message") + "(id,conversation_id,refs,in_reply_to)"
     attempt = function("attempt") + "(id)"
-    page = function("page_message") + "(refs)"
-    # A page review can narrow a message independently of task/run provenance. Only these top-level keys enter
-    # that check; escaped keys and every non-object keep Python's JSON parsing and page permissions.
-    no_page = " AND ".join(f"instr(refs,'\"{key}\"')=0" for key in privacy.PAGE_MESSAGE_KEYS)
-    page_gate = (
-        f"(CASE WHEN coalesce(refs,'') IN ('','{{}}') THEN 1 WHEN json_valid(refs) "
-        f"AND json_type(refs)='object' AND instr(refs,'\\')=0 AND {no_page} THEN 1 ELSE {page} END)"
-    )
 
     def settled(prefix):
-        """A settled row that touched no denied task is read at once; any other row keeps the gate and its walk."""
+        """A settled row that touched no denied task is read at once; any other row keeps the gate and its walk. A row
+        whose walk read a message naming a file is never settled (read_deps.names_file): its file refusals are per
+        reader, so ReadIndex reads it."""
         key = f"'{prefix}:'||source.id"
         return (
             f"{key} IN (SELECT key FROM {inner('read_index')}) AND {key} NOT IN "
@@ -966,13 +975,14 @@ def materialize(conn, index, tables, inner, function, private):
     return {
         table: (
             predicate.replace(
-                message, f"(CASE WHEN {settled('m')} THEN 1 WHEN {gates.message()} THEN 1 ELSE {message} END)"
+                message,
+                f"(CASE WHEN {settled('m')} THEN 1 WHEN {gates.message()} THEN 1 ELSE {message} END)",
             )
             .replace(
                 attempt,
                 f"(CASE WHEN {settled('a')} THEN 1 WHEN {gates.attempt('source.id')} THEN 1 ELSE {attempt} END)",
             )
-            .replace(page, page_gate),
+            .replace(page, page_gate("refs")),
             hidden,
         )
         for table, (predicate, hidden) in tables.items()
