@@ -1191,6 +1191,24 @@ def test_a_role_holder_that_resolves_owns_the_spawned_ticket_before_the_filer(co
     assert H.task(co.c, d41)["owner_id"] != H.task(co.c, card)["owner_id"]
 
 
+def test_with_no_pool_the_role_holder_owns_the_spawned_ticket_and_the_manager_is_not_chosen(co, monkeypatch):
+    """Spec A5, no pool: Engineering's first stage has no assign rule and its manager is an active bot on the roster. A
+    role holder resolves (stubbed, since the Hub stores no bot-to-role link today), so the holder owns the spawned ticket.
+    The pipeline's manager is not chosen, and the filer is not chosen either."""
+    H.sync_registry(co.c, {"eng": {"status": "active"}, "pipeline-manager": {"status": "active"}}, None)
+    co.c.execute("UPDATE task_steps SET flow = ? WHERE id = ?", (json.dumps({}), co.stage("Engineering", "Todo")))
+    co.c.execute("UPDATE task_types SET manager = ? WHERE id = ?", ("pipeline-manager", co.type["Engineering"]))
+    co.c.commit()
+    monkeypatch.setattr(pipeline_links, "_stored_role_holder", lambda conn: "eng")
+    card = review_card(co)
+    approve_spec(co, card)
+    (d41,) = subtasks(co, card)
+    owner = H.task(co.c, d41)["owner_id"]
+    assert owner == "bot:eng"
+    assert owner != "bot:pipeline-manager"
+    assert owner != H.task(co.c, card)["owner_id"]
+
+
 def test_the_role_holder_lookup_applies_only_to_a_type_with_the_engineering_role(co, monkeypatch):
     """With a stored holder stubbed to resolve, the lookup returns it for the Engineering type and nothing for another
     pipeline's type. Without the guard, a spawn into Product with no pool bot would reach Engineering's holder."""
