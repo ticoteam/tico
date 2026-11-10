@@ -1,4 +1,5 @@
 """Immutable per-run accounting, including both sides of a fallback."""
+
 import json
 
 # Each measured segment is an estimate fact (backend/usage_facts.py); a run with none reads from its own row, which
@@ -21,6 +22,7 @@ def family(part):
     """The model maker behind one segment (`anthropic`, `openai`, ...), from Tico's model catalog only. A model the
     catalog does not list is unknown (None) whatever ran it: Claude Code or Codex can run another maker's model."""
     from . import providers
+
     maker = (providers.MODEL_BY_ID.get(part.get("model") or "") or {}).get("provider")
     return maker if maker and maker not in RESELLERS else None
 
@@ -37,19 +39,31 @@ def ran_on(c, turn_ids):
     one maker when every segment agrees. A run's bot config names what was asked for, not what ran."""
     ids = list(turn_ids)
     parts, fallbacks, chosen = {}, {}, {}
-    for start in range(0, len(ids), 500):       # SQLite caps the parameters of one statement
-        chunk = ids[start:start + 500]
+    for start in range(0, len(ids), 500):  # SQLite caps the parameters of one statement
+        chunk = ids[start : start + 500]
         marks = ",".join("?" * len(chunk))
-        for row in c.execute(f"SELECT run_id,model,provider,runtime,harness,effort FROM usage_facts "
-                             f"WHERE source='estimate' AND run_id IN ({marks}) ORDER BY run_id,position", chunk):
+        for row in c.execute(
+            f"SELECT run_id,model,provider,runtime,harness,effort FROM usage_facts "
+            f"WHERE source='estimate' AND run_id IN ({marks}) ORDER BY run_id,position",
+            chunk,
+        ):
             parts.setdefault(row["run_id"], []).append(
-                {k: row[k] for k in ("model", "provider", "runtime", "harness", "effort")})
+                {k: row[k] for k in ("model", "provider", "runtime", "harness", "effort")}
+            )
         for row in c.execute(f"SELECT id,usage_model AS model,provider FROM attempts WHERE id IN ({marks})", chunk):
             if row["id"] not in parts and (row["model"] or row["provider"]):
-                parts[row["id"]] = [{"model": row["model"], "provider": row["provider"], "runtime": None, "harness": None,
-                                     "effort": None}]
-        for row in c.execute(f"SELECT id,json_extract(result,'$.fallback'),model FROM attempts "
-                             f"WHERE id IN ({marks})", chunk):
+                parts[row["id"]] = [
+                    {
+                        "model": row["model"],
+                        "provider": row["provider"],
+                        "runtime": None,
+                        "harness": None,
+                        "effort": None,
+                    }
+                ]
+        for row in c.execute(
+            f"SELECT id,json_extract(result,'$.fallback'),model FROM attempts WHERE id IN ({marks})", chunk
+        ):
             fallbacks[row[0]] = row[1]
             chosen[row[0]] = _record(row[2])
     out = {}
@@ -58,7 +72,10 @@ def ran_on(c, turn_ids):
         makers = {s["family"] for s in segments}
         # The bot's task model, the fallback from it, or a check kept over it, in plain words (backend/task_models.py).
         picked = chosen.get(tid) if isinstance(chosen.get(tid), dict) else None
-        out[tid] = {"segments": segments, "fallback": fallbacks.get(tid),
-                    "family": makers.pop() if len(makers) == 1 else None,
-                    "task_model": {"source": picked.get("source"), "note": picked.get("note")} if picked else None}
+        out[tid] = {
+            "segments": segments,
+            "fallback": fallbacks.get(tid),
+            "family": makers.pop() if len(makers) == 1 else None,
+            "task_model": {"source": picked.get("source"), "note": picked.get("note")} if picked else None,
+        }
     return out

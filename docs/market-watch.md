@@ -16,8 +16,13 @@ changes. It is for the pages where a change is news: pricing, changelog, careers
   bet that cites the entity, or whose thesis wrong-if watches it, trips the fit check like any other market change
   ([Strategy](strategy.md#the-fit-check)). A rejected insight trips nothing.
 - Lines that are only numbers, dates or a copyright notice are ignored, so a changing year files nothing.
-- Pages are read on the server through the same guard as `hub doc fetch`: public addresses only, every redirect checked,
+- Pages are read on the server through the same guard as `tico doc fetch`: public addresses only, every redirect checked,
   5 MB and 20 seconds. A page that cannot be read is marked `error` or `blocked` on its watch; the others still run.
+- With the [Tico AI Gateway](ai-gateway.md) connected, Tico's Signals read the pages instead: each watch is registered there
+  once, the page is read daily there, and each check files the changes it found, the same way. A stopped watch is ended
+  there. A watch Signals does not hold yet is read on the server as above.
+- A `release` watch follows a product's releases: its address is `github:owner/repo` or a release feed. It needs the
+  Gateway (Signals reads it every six hours), and each new release files like a page change.
 
 Watches are never deleted. Stopping one ends it, and the same page can be watched again.
 
@@ -30,17 +35,17 @@ watches for each core competitor while it sets up the first map ([playbook](../t
 |---|---|
 | Watched pages at once | 200 |
 | Pages read a day | 50, the longest unchecked first |
-| Page kinds | pricing, careers, changelog, docs, home, other |
+| Page kinds | pricing, careers, changelog, docs, home, other, release |
 | Smallest change filed | 40 characters |
 
 ## Commands
 
 | Command | Does |
 |---|---|
-| `hub market watch add <entity id> <url> [--kind pricing]` | Watch a page of a market entity |
-| `hub market watch list [--entity <id>]` | The watched pages, with when each was checked and changed |
-| `hub market watch stop <id>` | Stop watching a page |
-| `hub market watch check` | Read the watched pages now, in the background |
+| `tico market watch add <entity id> <url> [--kind pricing]` | Watch a page of a market entity (`--kind release` with `github:owner/repo`) |
+| `tico market watch list [--entity <id>]` | The watched pages, with when each was checked and changed |
+| `tico market watch stop <id>` | Stop watching a page |
+| `tico market watch check` | Read the watched pages now, in the background |
 
 The same four are hub tools (`hub_market_watch_add`, `hub_market_watch_list`, `hub_market_watch_stop`,
 `hub_market_watch_check`).
@@ -54,5 +59,5 @@ The same four are hub tools (`hub_market_watch_add`, `hub_market_watch_list`, `h
 | `POST /api/v2/market/watches/{id}/stop` | Stop it. Owner or Librarian |
 | `POST /api/v2/market/watches/check` | Read now; returns 202. Owner or Librarian |
 
-The daily run appears in **Settings > Routines** as Page monitors ([System routines](system-routines.md)). It does not
+The daily run appears in **Settings → System → What Tico runs on its own** as Page monitors ([System routines](system-routines.md)). It does not
 run on a test or rehearsal server.

@@ -1,19 +1,21 @@
 """Visual replies 1/4 (Dev 245, QA Fixes): a bot's `--visual` / MCP `visuals` file goes up as bytes, not base64 JSON
 (a third bigger), so a 21 MB picture and a 2.5 MB page attach on both paths: a chat reply (raw body, 27 MB request
 limit) and a task comment (multipart; JSON there stops at 10 MB)."""
+
 import pytest
 
-from backend.tests.test_api import api, headers, post  # noqa: F401  (fixture)
-from backend.tests.test_files import turn
+from backend.tests.helpers.api import headers, post  # noqa: F401  (fixture)
+from backend.tests.helpers.files import turn
 from clients import bot_files as BF, hubtools
 from clients.tico import APIError, MultipartBody
 
-BIG_PICTURE = b"\x89PNG\r\n\x1a\n" + b"\x00" * 21_000_000                    # under the 25 MB picture limit
-BIG_PAGE = "<!doctype html><p>" + "Signups by week. " * 150_000 + "</p>"     # about 2.5 MB of text
+BIG_PICTURE = b"\x89PNG\r\n\x1a\n" + b"\x00" * 21_000_000  # under the 25 MB picture limit
+BIG_PAGE = "<!doctype html><p>" + "Signups by week. " * 150_000 + "</p>"  # about 2.5 MB of text
 
 
 class Hub:
     """clients.tico.Client's surface, sent to the test app, so the server's real request limits apply."""
+
     def __init__(self, api, token):
         self.api, self.token = api, token
 
@@ -57,16 +59,27 @@ EXPECTED = [("Signups", "image", len(BIG_PICTURE)), ("Funnel", "page", len(BIG_P
 
 def test_a_bots_chat_reply_attaches_a_big_picture_and_a_big_page(api, checkout):
     _, attempt = turn(api)
-    sent = hubtools._message_send(Hub(api, attempt["token"]), {
-        "to": "human:ben", "text": "Two visuals", "conversation_id": attempt["message"]["conversation_id"],
-        "visuals": [{"path": "chart.png", "title": "Signups"}, {"path": "page.html", "title": "Funnel"}]})
+    sent = hubtools._message_send(
+        Hub(api, attempt["token"]),
+        {
+            "to": "human:ben",
+            "text": "Two visuals",
+            "conversation_id": attempt["message"]["conversation_id"],
+            "visuals": [{"path": "chart.png", "title": "Signups"}, {"path": "page.html", "title": "Funnel"}],
+        },
+    )
     assert attached(api, sent) == EXPECTED
 
 
 def test_a_bots_task_comment_attaches_a_big_picture_and_a_big_page(api, checkout):
     _, attempt = turn(api)
     task = post(api, "tasks", {"owner": "ops", "title": "Signups chart", "body": "x"}, "ben-test")
-    made = hubtools.task_comment(Hub(api, attempt["token"]), {
-        "id": task["id"], "text": "Two visuals",
-        "visuals": [{"path": "chart.png", "title": "Signups"}, {"path": "page.html", "title": "Funnel"}]})
+    made = hubtools.task_comment(
+        Hub(api, attempt["token"]),
+        {
+            "id": task["id"],
+            "text": "Two visuals",
+            "visuals": [{"path": "chart.png", "title": "Signups"}, {"path": "page.html", "title": "Funnel"}],
+        },
+    )
     assert attached(api, made["comment"]) == EXPECTED

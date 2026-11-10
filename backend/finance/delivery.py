@@ -1,16 +1,16 @@
 """Invoice emails: the send approval a reminder or an invoice goes out under, and how each send went.
 
-A reminder or an invoice reaches its customer only under a Tico `send` approval (docs/mail.md). Finance issues it when the
-action commits, for these recipients, this exact text and this invoice document, approved at once by the person whose
-yes the action waited on (or the person who made it). The Bookkeeper sends the text with that approval
-(`mail send --approval-issue`) and reports the outcome through `invoice_delivery`. Finance sends no mail itself, and a
-bot cannot issue or decide one. A failed send raises one Needs-you for the finance admin; a send with no report for a
-day raises one more. A retry sends the same text under the same approval, and a stage is never made again.
+A reminder or invoice enters the shared frozen send queue when the finance action commits. Its exact MIME,
+recipients and invoice document hash are bound to a send approval which still needs an authorized preview and yes.
+The finance decision alone never approves unseen MIME. The shared connector dispatches after approval and undo;
+the Bookkeeper reports the delivery outcome. A failed send raises one Needs-you for the finance admin, and an
+unreported send raises another after a day. Operation retries preserve the original frozen send.
 
 The ask carries the email's intent (`intent`: addresses, subject, text, document and mailbox), resolved when the action is
 planned. If any of it changes before the ask is decided, the ask is void and asked again; no send approval is issued for
 the changed email (actions.approval_decided).
 """
+
 import hashlib
 import json
 from collections.abc import Mapping
@@ -20,19 +20,20 @@ from clients.manifest import tools_of
 
 from .context import Ctx
 from .core.errors import CONFLICT, DENIED, FinanceError
+from .core.org import SYSTEM
 from .. import bot_settings as BS
 from .store import ap as SAP
 from .store import tico
 
-BOOKKEEPER = "bookkeeper"     # the Bookkeeper's slug; its stored bot config names the mailbox
-SEND = "send"                 # the Tico approval kind a mail send is checked against
-GMAIL = "gmail"               # the connector the Bookkeeper sends from
-MAIL = "mail"                 # the resolved key an invoice email's intent is kept under (documents.py, actions.py)
+BOOKKEEPER = "bookkeeper"  # the Bookkeeper's slug; its stored bot config names the mailbox
+SEND = "send"  # the Tico approval kind a mail send is checked against
+GMAIL = "gmail"  # the connector the Bookkeeper sends from
+MAIL = "mail"  # the resolved key an invoice email's intent is kept under (documents.py, actions.py)
 
 
 def digest(text: str) -> str:
     """The sha256 an approval's body_sha256 holds for this exact text (the mail connector hashes the body it sends)."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return hashlib.sha256((text.rstrip("\r\n") + "\n").encode("utf-8")).hexdigest()
 
 
 def document_digest(document: Mapping[str, Any]) -> str:
@@ -44,8 +45,14 @@ def intent(to: Any, subject: str, text: str, box: str, document: Mapping[str, An
     """What an invoice email sends, as its send approval names it: the normalized addresses, the subject, the sha256 of
     the exact text, the sha256 of the invoice document, and the mailbox it goes from. Finance resolves it when the action
     is planned (Plan.resolved) and asks with it; a change to any of these before the ask is decided asks again."""
-    return {"to": recipients(to), "cc": [], "subject": subject, "body_sha256": digest(text), "mailbox": box,
-            "document_sha256": document_digest(document)}
+    return {
+        "to": recipients(to),
+        "cc": [],
+        "subject": subject,
+        "body_sha256": digest(text),
+        "mailbox": box,
+        "document_sha256": document_digest(document),
+    }
 
 
 def recipients(emails: list[Any] | tuple[Any, ...] | None) -> list[str]:
@@ -81,16 +88,30 @@ def mailbox(c: Any) -> str:
     return ""
 
 
-def issue(c: Any, decider: str, requester: str, *, to: Any, subject: str, text: str, box: str,
-          document: Mapping[str, Any], ref: str) -> str:
-    """The send approval for one invoice email, approved by `decider` at once. Only Finance's commit path calls this,
-    for the person whose decision the action waits on; a bot is refused. Returns the approval id."""
+def issue(
+    c: Any,
+    decider: str,
+    requester: str,
+    *,
+    to: Any,
+    subject: str,
+    text: str,
+    box: str,
+    document: Mapping[str, Any],
+    ref: str,
+) -> str:
+    """Freeze an invoice email for its own preview and approval; the finance decision never approves unseen MIME."""
     if not tico.is_person(decider):
         raise FinanceError(DENIED, "an invoice email is approved by a person, not by a bot")
-    payload = {**intent(to, subject, text, box, document), "ref": ref}
-    approval_id = tico.approval_request(c, requester, SEND, payload, decider)
-    tico.approval_decide(c, decider, approval_id, "approved")
-    return approval_id
+    return tico.queue_email(
+        c,
+        requester,
+        recipients(to),
+        subject,
+        text,
+        ref,
+        {"mailbox": box, "document_sha256": document_digest(document), "ref": ref},
+    )
 
 
 def pending(c: Any, invoice_id: str | None = None) -> list[dict[str, Any]]:
@@ -105,10 +126,24 @@ def pending(c: Any, invoice_id: str | None = None) -> list[dict[str, Any]]:
         "SELECT i.id, i.number, r.stage, r.send_approval_id, r.sent_to, r.text, r.delivery_reason, r.created_at "
         "FROM fin_invoice_reminders r JOIN fin_invoices i ON i.id = r.invoice_id "
         "WHERE r.send_approval_id IS NOT NULL AND r.delivered_at IS NULL"
-        + (" AND i.id=?" if invoice_id else "") + " ORDER BY since", args).fetchall()
-    return [{"invoice_id": str(r[0]), "number": str(r[1]), "stage": r[2], "approval_id": str(r[3]),
-             "to": recipients(json.loads(r[4] or "[]")), "subject": subject_of(r[2], str(r[1])),
-             "text": str(r[5] or ""), "reason": r[6], "since": str(r[7] or "")} for r in rows]
+        + (" AND i.id=?" if invoice_id else "")
+        + " ORDER BY since",
+        args,
+    ).fetchall()
+    return [
+        {
+            "invoice_id": str(r[0]),
+            "number": str(r[1]),
+            "stage": r[2],
+            "approval_id": str(r[3]),
+            "to": recipients(json.loads(r[4] or "[]")),
+            "subject": subject_of(r[2], str(r[1])),
+            "text": str(r[5] or ""),
+            "reason": r[6],
+            "since": str(r[7] or ""),
+        }
+        for r in rows
+    ]
 
 
 def _which(stage: int | None) -> str:
@@ -117,7 +152,8 @@ def _which(stage: int | None) -> str:
 
 def report(c: Any, at: str, invoice_id: str, stage: int | None, delivered: bool, reason: str, person: str) -> None:
     """Record how a send went: delivered, or failed with its reason (one Needs-you for `person`, the finance admin).
-    A failed email stays waiting, so the retry sends the same text under the same approval."""
+    A failed email stays on the invoice as not delivered; its OK was used when it was handed to the provider, so it is
+    never sent again under that OK."""
     if stage is None:
         table, where, args = "fin_invoices", "id=?", (invoice_id,)
     else:
@@ -132,8 +168,39 @@ def report(c: Any, at: str, invoice_id: str, stage: int | None, delivered: bool,
         return
     SAP.update(c, table, str(row[0]), {"delivery_reason": reason[:300]})
     number = str(c.execute("SELECT number FROM fin_invoices WHERE id=?", (invoice_id,)).fetchone()[0])
-    tico.needs_you(c, person, f"Invoice email not sent: {number}{_which(stage)}",
-                   f"{reason[:300]}\n\nThe Bookkeeper retries under the same approval; the text does not change.")
+    tico.needs_you(
+        c,
+        person,
+        f"Invoice email not sent: {number}{_which(stage)}",
+        f"{reason[:300]}\n\nNothing else goes out under the OK it was sent with: a send again is asked again.",
+    )
+
+
+def outcome(c: Any, send: Mapping[str, Any], status: str, detail: str) -> None:
+    """The email queue's answer for one of Finance's invoice emails (email_sending `_outcome`), reported as the
+    Bookkeeper would: delivered once the provider took it; otherwise failed with what happened. Its OK was used before
+    the provider was called, so a failed one is never sent again under it. An email that is not an invoice's, or whose
+    invoice row is gone or already delivered, is left alone: the queue's own write never fails on Finance's account."""
+    from .context import load
+    from .payments import admin_person
+
+    parts = str(send.get("operation_key") or "").split(":")
+    if len(parts) not in (2, 3) or parts[0] != "invoice":
+        return
+    stage = int(parts[2]) if len(parts) == 3 and parts[2].isdigit() else None
+    if status == "sent":
+        reason = ""
+    elif status == "failed":
+        reason = "Not sent: " + (detail or "the mail service refused it") + ". Nothing else goes out under that OK."
+    else:
+        reason = "The mail service did not confirm it went: check the mailbox before anything is sent again."
+    c.execute("SAVEPOINT finance_delivery")
+    try:
+        report(c, tico.now(), parts[1], stage, status == "sent", reason, admin_person(load(c)))
+    except FinanceError as exc:
+        c.execute("ROLLBACK TO finance_delivery")
+        tico.audit(c, SYSTEM, "finance.delivery_skipped", str(send.get("id") or ""), {"why": str(exc)[:300]})
+    c.execute("RELEASE finance_delivery")
 
 
 def queue_items(c: Any) -> list[dict[str, str]]:
@@ -141,10 +208,18 @@ def queue_items(c: Any) -> list[dict[str, str]]:
     invoice search (its `emails` field), so the label names the search rather than carrying the text."""
     items: list[dict[str, str]] = []
     for row in pending(c):
-        label = (f"Invoice {row['number']}{_which(row['stage'])} email waits to send. Read it: "
-                 f"hub finance search --kind invoice --q {row['number']}")
-        items.append({"kind": "invoice_email", "id": f"{row['invoice_id']}:{row['stage'] or 'invoice'}",
-                      "label": label[:160], "stamp": str(row["reason"] or "pending")})
+        label = (
+            f"Invoice {row['number']}{_which(row['stage'])} email waits to send. Read it: "
+            f"tico finance search --kind invoice --q {row['number']}"
+        )
+        items.append(
+            {
+                "kind": "invoice_email",
+                "id": f"{row['invoice_id']}:{row['stage'] or 'invoice'}",
+                "label": label[:160],
+                "stamp": str(row["reason"] or "pending"),
+            }
+        )
     return items
 
 
@@ -152,18 +227,36 @@ def watch(ctx: Ctx) -> int:
     """The hourly look: an approved invoice email with no delivery report a day after it was made raises one Needs-you
     for the finance admin. How many it raised."""
     from .payments import admin_person
+
     cut = tico.shift(ctx.at, days=-1)
     n = 0
     for row in pending(ctx.c):
         if row["reason"] or row["since"] > cut:
             continue
         title = f"Invoice email has no delivery report: {row['number']}{_which(row['stage'])}"
-        body = ("The Bookkeeper has not reported whether this email was sent. Check the mailbox before anything is "
-                "resent; a retry uses the same approval and the same text.")
+        body = (
+            "The Bookkeeper has not reported whether this email was sent. Check the mailbox before anything is "
+            "resent; a retry uses the same approval and the same text."
+        )
         if tico.needs_you(ctx.c, admin_person(ctx), title, body):
             n += 1
     return n
 
 
-__all__ = ["BOOKKEEPER", "MAIL", "SEND", "digest", "document_digest", "intent", "issue", "mailbox", "pending", "queue_items",
-           "recipients", "report", "subject_of", "watch"]
+__all__ = [
+    "BOOKKEEPER",
+    "MAIL",
+    "SEND",
+    "digest",
+    "document_digest",
+    "intent",
+    "issue",
+    "mailbox",
+    "outcome",
+    "pending",
+    "queue_items",
+    "recipients",
+    "report",
+    "subject_of",
+    "watch",
+]

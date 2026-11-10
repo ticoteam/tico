@@ -2,7 +2,9 @@
 tasks, from the welcome's button or TICO_SAMPLE_COMPANY=on, on the shipped templates."""
 
 import re
+import shutil
 import uuid
+from pathlib import Path
 
 import pytest
 import yaml
@@ -17,83 +19,35 @@ from backend.config import Settings
 from backend.store import H, encode
 from backend import bot_settings as BS
 
-OWNER_EMAIL = "owner@sample.example"
-PEOPLE = {"default_user": "owner", "people": [
-    {"id": "owner", "name": "Owner Person", "email": OWNER_EMAIL, "primary_for": ["*"]},
-    {"id": "helper", "name": "Helper Person", "email": "helper@sample.example", "primary_for": []}]}
-# What a fresh environment seeds (templates/environment-registry/employees.yaml): the assistant and BotOps, planned.
-SEED = {"coo": {"name": "coo", "status": "planned"}, "botops": {"name": "botops", "status": "planned"}}
-TOKEN = "local-owner-secret-token-0123456789"
-ROLE_BOTS = {"head-of-product": "claude", "builder": "codex", "support-agent": "codex", "content-marketer": "codex"}
-
-
-def settings_for(tmp_path, **overrides):
-    registry = tmp_path / "registry"
-    registry.mkdir(exist_ok=True)
-    (registry / "hub-access.yaml").write_text(yaml.safe_dump({"bot_admins": ["helper@sample.example"]}))
-    token = tmp_path / "token"
-    token.write_text(TOKEN)
-    token.chmod(0o600)
-    return Settings(**{"db_path": tmp_path / "hub.db", "registry_dir": registry, "local_owner_token_file": token,
-                       "owner_email": OWNER_EMAIL, "environment_id": "sample-1", "company_name": "", "app_name": "Tico",
-                       "assistant_name": "Assistant", "assistant_bot": "coo", "enabled_providers": (), **overrides})
-
-
-@pytest.fixture
-def environment(tmp_path):
-    """A signed-in loopback environment on the shipped catalog, seeded like a fresh install."""
-    clients = []
-
-    def build(seed_roster=True, **overrides):
-        client = TestClient(create_app(settings_for(tmp_path, **overrides)))
-        client.__enter__()
-        clients.append(client)
-        if seed_roster:
-            with client.app.state.store.transaction() as c:
-                H.sync_registry(c, SEED, PEOPLE)
-                c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO NOTHING",
-                          (encode(PEOPLE),))
-                for slug, config in SEED.items():
-                    c.execute('INSERT INTO bot_config(bot,owner_id,repo) VALUES(?,?,?)', (slug, 'owner', 'bot-' + slug))
-                    BS.write(c, slug, config)
-        return client
-
-    yield build
-    for client in clients:
-        client.__exit__(None, None, None)
-
-
-def signed_in():
-    return {"Authorization": "Bearer " + TOKEN, "Idempotency-Key": str(uuid.uuid4())}
-
-
-def start(api):
-    return api.post("/api/v2/setup/sample", json={}, headers=signed_in())
-
-
-def machine(api):
-    code = api.post("/api/v2/enrollments", json={"operator": "owner"}, headers=signed_in()).json()["code"]
-    return api.post("/api/v2/runners/enroll", json={"code": code, "label": "Server", "platform": "test"},
-                    headers={"Idempotency-Key": str(uuid.uuid4())}).json()
-
-
-def rows(api, sql, args=()):
-    with api.app.state.store.read() as c:
-        return [dict(row) for row in c.execute(sql, args)]
-
-
-def bot_ids(api):
-    """Bot slug to bot id: a bot the sample makes has a generated id, and the tables name bots by it."""
-    return {row["slug"]: row["id"] for row in rows(api, "SELECT id,slug FROM bots")}
+from backend.tests.helpers.sample_company import (
+    OWNER_EMAIL,
+    PEOPLE,
+    ROLE_BOTS,
+    SEED,
+    TOKEN,
+    booted,
+    environment,
+    machine,
+    rows,
+    settings_for,
+    signed_in,
+    start,
+    bot_ids,
+)  # noqa: F401
 
 
 # ---------------------------------------------------------------------------------------------- the file
 def test_the_sample_is_a_company_file_of_five_bots_each_with_a_goal_and_short_starter_tasks():
     draft, extra = sample_company.team()
-    assert draft == from_yaml(sample_company.FILE.read_text())          # import can read it as it is
+    assert draft == from_yaml(sample_company.FILE.read_text())  # import can read it as it is
     assert [b["template"] for b in draft["bots"]] == ["coo", "product-lead", "builder", "support", "content"]
-    assert [b["title"] for b in draft["bots"]] == ["Assistant", "Head of Product", "Builder", "Support Agent",
-                                                   "Content Marketer"]
+    assert [b["title"] for b in draft["bots"]] == [
+        "Assistant",
+        "Head of Product",
+        "Builder",
+        "Support Agent",
+        "Content Marketer",
+    ]
     assert sorted(g["owner"] for g in draft["goals"]) == sorted(b["id"] for b in draft["bots"])
     runs_on = [row["runs_on"] for row in extra.values()]
     assert set(runs_on) == set(sample_company.RUNS_ON) and min(runs_on.count(r) for r in set(runs_on)) >= 2
@@ -102,7 +56,7 @@ def test_the_sample_is_a_company_file_of_five_bots_each_with_a_goal_and_short_st
         for task in row["tasks"]:
             assert set(task) == {"title", "approve", "body"} and len(task["body"]) < 1200
             # Nothing leaves the company: no approval to send, spend or publish, no mail, no publishing.
-            assert not re.search(r"approval request|mail send|support send|file publish|hub message", task["body"])
+            assert not re.search(r"approval request|mail send|support send|file publish|tico message", task["body"])
     # A made-up company that names none of the test fixtures' people or companies.
     assert not re.search(r"\b(ana|ben|cara|acme|globex)\b", sample_company.FILE.read_text(), re.I)
 
@@ -122,11 +76,16 @@ def test_the_owner_starts_the_sample_company_and_every_bot_has_its_model_goal_an
     providers = api.get("/api/v2/providers", headers=signed_in()).json()
     assert providers["enabled"] == ["anthropic", "openai"] and providers["default"]["runtime"] == "claude"
 
-    bots = {row["slug"]: row for row in rows(
-        api, "SELECT b.slug,b.display_name,b.state,s.runtime AS runtime,s.model AS model "
-             "FROM bots b LEFT JOIN bot_config bc ON bc.bot=b.id LEFT JOIN bot_settings s ON s.bot_id=b.id")}
+    bots = {
+        row["slug"]: row
+        for row in rows(
+            api,
+            "SELECT b.slug,b.display_name,b.state,s.runtime AS runtime,s.model AS model "
+            "FROM bots b LEFT JOIN bot_config bc ON bc.bot=b.id LEFT JOIN bot_settings s ON s.bot_id=b.id",
+        )
+    }
     assert {"coo", "botops", *ROLE_BOTS} <= set(bots)
-    assert {slug: bots[slug]["runtime"] for slug in ROLE_BOTS} == ROLE_BOTS          # spread over both subscriptions
+    assert {slug: bots[slug]["runtime"] for slug in ROLE_BOTS} == ROLE_BOTS  # spread over both subscriptions
     assert bots["builder"]["display_name"] == "Builder"
     setup = {row["bot"]: row for row in rows(api, "SELECT bot,onboarding_state,reports_to FROM bot_config")}
     # Set up by the sample's own answers: not parked, so their work is claimed once a computer runs them.
@@ -134,37 +93,50 @@ def test_the_owner_starts_the_sample_company_and_every_bot_has_its_model_goal_an
     assert all(setup[ids[slug]]["onboarding_state"] == O.ONBOARDED for slug in ROLE_BOTS)
     assert setup[ids["builder"]]["reports_to"] == ids["head-of-product"]
     # Their first routines stay off: only the starter tasks run on day one.
-    routines = rows(api, "SELECT s.bot,coalesce(sc.enabled,1) AS enabled FROM schedules s "
-                         "LEFT JOIN schedule_config sc ON sc.schedule_id=s.id WHERE s.bot IN (%s)"
-                    % ",".join("?" * len(ROLE_BOTS)), tuple(ids[slug] for slug in ROLE_BOTS))
+    routines = rows(
+        api,
+        "SELECT s.bot,coalesce(sc.enabled,1) AS enabled FROM schedules s "
+        "LEFT JOIN schedule_config sc ON sc.schedule_id=s.id WHERE s.bot IN (%s)" % ",".join("?" * len(ROLE_BOTS)),
+        tuple(ids[slug] for slug in ROLE_BOTS),
+    )
     assert routines and not any(r["enabled"] for r in routines)
     # No "Finish onboarding" reminder in Needs you for a sample bot.
-    assert not rows(api, "SELECT id FROM tasks WHERE title LIKE 'Finish onboarding%' AND status NOT IN ('done','closed')")
+    assert not rows(
+        api, "SELECT id FROM tasks WHERE title LIKE 'Finish onboarding%' AND status NOT IN ('done','closed')"
+    )
 
-    goals = {row["owner_id"]: row for row in rows(api, "SELECT id,owner_id,title FROM goals WHERE owner_id LIKE 'bot:%'")}
+    goals = {
+        row["owner_id"]: row for row in rows(api, "SELECT id,owner_id,title FROM goals WHERE owner_id LIKE 'bot:%'")
+    }
     assert {"bot:" + ids[slug] for slug in ("coo", *ROLE_BOTS)} <= set(goals)
-    tasks = rows(api, "SELECT id,owner_id,requester_id,title,body,goal_id,status FROM tasks WHERE id IN (%s)"
-                 % ",".join("?" * len(record["sample"]["tasks"])), tuple(record["sample"]["tasks"]))
+    tasks = rows(
+        api,
+        "SELECT id,owner_id,requester_id,title,body,goal_id,status FROM tasks WHERE id IN (%s)"
+        % ",".join("?" * len(record["sample"]["tasks"])),
+        tuple(record["sample"]["tasks"]),
+    )
     assert sorted(t["owner_id"] for t in tasks) == sorted("bot:" + ids[slug] for slug in ("coo", *ROLE_BOTS))
     for task in tasks:
         assert task["requester_id"] == "human:owner" and task["status"] == "open"
         assert task["goal_id"] == goals[task["owner_id"]]["id"]
-        # Each ends by asking the owner one Yes/No question, the card in Needs you.
-        assert re.search(r'hub task question --on owner "Approve [^"]+\?"', task["body"]), task["body"]
+        # Each ends by asking the owner one Yes/No question on the task, which the owner sees in Needs you.
+        ask = r'tico task ask <id> --to owner "Approve [^"]+\?" --choices Yes,No --version N'
+        assert re.search(ask, task["body"]), task["body"]
 
 
 def test_the_sample_company_is_only_for_a_new_company_and_only_the_owner_starts_it(environment):
     api = environment()
     helper = dict(signed_in(), Authorization="Bearer helper")
-    api.app.state.store.settings.test_identities["helper"] = Identity("human:helper", "human",
-                                                                      email="helper@sample.example")
+    api.app.state.store.settings.test_identities["helper"] = Identity(
+        "human:helper", "human", email="helper@sample.example"
+    )
     assert api.post("/api/v2/setup/sample", json={}, headers=helper).status_code == 403
     assert start(api).status_code == 200
     again = start(api)
     assert again.status_code == 409, again.text
     assert again.json()["error"]["code"] == "sample_company" and "already set up" in again.json()["error"]["detail"]
     builder = bot_ids(api)["builder"]
-    assert len(rows(api, "SELECT id FROM tasks WHERE owner_id=?", ("bot:" + builder,))) == 1        # nothing made twice
+    assert len(rows(api, "SELECT id FROM tasks WHERE owner_id=?", ("bot:" + builder,))) == 1  # nothing made twice
 
 
 def test_a_company_with_its_own_provider_keeps_it(environment):
@@ -172,8 +144,10 @@ def test_a_company_with_its_own_provider_keeps_it(environment):
     assert start(api).status_code == 200
     providers = api.get("/api/v2/providers", headers=signed_in()).json()
     assert providers["enabled"] == ["openai"]
-    bots = {row["slug"]: row["runtime"] for row in rows(
-        api, "SELECT b.slug,s.runtime AS runtime FROM bots b LEFT JOIN bot_settings s ON s.bot_id=b.id")}
+    bots = {
+        row["slug"]: row["runtime"]
+        for row in rows(api, "SELECT b.slug,s.runtime AS runtime FROM bots b LEFT JOIN bot_settings s ON s.bot_id=b.id")
+    }
     # Claude is off here, so the Claude bots run on the company's own default, as a wizard pick would.
     assert bots["builder"] == "codex" and bots["head-of-product"] == "codex"
 
@@ -184,8 +158,9 @@ def test_the_bots_start_once_a_computer_runs_them(environment):
     computer = machine(api)
     states = {row["slug"]: row["state"] for row in rows(api, "SELECT slug,state FROM bots")}
     assert all(states[slug] == "active" for slug in ("coo", *ROLE_BOTS))
-    placed = {row["bot"] for row in rows(api, "SELECT bot FROM assignments WHERE runner_id=?",
-                                         (computer["runner_id"],))}
+    placed = {
+        row["bot"] for row in rows(api, "SELECT bot FROM assignments WHERE runner_id=?", (computer["runner_id"],))
+    }
     ids = bot_ids(api)
     assert {ids[slug] for slug in ("coo", *ROLE_BOTS)} <= placed
     # Each starter task woke its bot: a job waits for the computer to claim it.
@@ -199,20 +174,33 @@ def test_each_role_bot_is_made_already_set_up_so_it_does_its_starter_task(enviro
     import io
     import json
     from runner_support import catalog_job
+
     api = environment()
     start(api)
     record, config = (api.get(path, headers=signed_in()).json() for path in ("/api/v2/setup", "/api/v2/config"))
 
-    class Server:                                  # the runner's view of this server, with no network
+    class Server:  # the runner's view of this server, with no network
         def get(self, path, **query):
             return {"onboarding": record, "config": config}[path]
 
     projects = tmp_path / "projects"
     projects.mkdir()
-    configs = {row["bot"]: json.loads(row["config"]) for row in rows(api, f"SELECT bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN}")}
+    configs = {
+        row["bot"]: json.loads(row["config"])
+        for row in rows(api, f"SELECT bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN}")
+    }
     ids = bot_ids(api)
-    request = {"bots": [{"bot": slug, "entry": {"bot": slug, "state": "active", "config": configs[ids[slug]]},
-                         "path": str(projects / ("bot-" + slug)), "action": "bootstrap"} for slug in ROLE_BOTS]}
+    request = {
+        "bots": [
+            {
+                "bot": slug,
+                "entry": {"bot": slug, "state": "active", "config": configs[ids[slug]]},
+                "path": str(projects / ("bot-" + slug)),
+                "action": "bootstrap",
+            }
+            for slug in ROLE_BOTS
+        ]
+    }
     out = io.StringIO()
     catalog_job.main({"projects_dir": str(projects)}, Server(), io.StringIO(json.dumps(request)), out)
     answer = json.loads(out.getvalue())
@@ -229,7 +217,7 @@ def test_each_role_bot_is_made_already_set_up_so_it_does_its_starter_task(enviro
 # The contract with the recommended install (Dev 212): TICO_SAMPLE_COMPANY=on loads the sample once, on the first start
 # of an empty team; a restart never loads it again; unset or any other value loads nothing.
 def test_flag_on_loads_the_sample_company_once_and_a_restart_does_not_duplicate_it(environment):
-    environment()                                        # the install's first start makes the team and its roster
+    environment()  # the install's first start makes the team and its roster
     first = environment(seed_roster=False, sample_company=True)
     sample = first.get("/api/v2/setup", headers=signed_in()).json()["sample"]
     assert sample["by"] == "human:owner" and len(sample["tasks"]) == 5
@@ -237,7 +225,7 @@ def test_flag_on_loads_the_sample_company_once_and_a_restart_does_not_duplicate_
     starter = "SELECT title FROM tasks WHERE title IN (%s) ORDER BY title" % ",".join("?" * len(titles))
     assert len(rows(first, starter, tuple(titles))) == len(titles)
     goals = rows(first, "SELECT id FROM goals ORDER BY id")
-    again = environment(seed_roster=False, sample_company=True)        # a restart, same database
+    again = environment(seed_roster=False, sample_company=True)  # a restart, same database
     assert again.get("/api/v2/setup", headers=signed_in()).json()["sample"] == sample
     assert len(rows(again, starter, tuple(titles))) == len(titles)
     assert rows(again, "SELECT id FROM goals ORDER BY id") == goals
@@ -268,8 +256,14 @@ def test_a_team_name_already_set_is_kept_and_the_starter_work_uses_it(environmen
     api = environment(seed_roster=False, company_name="Brightside Salons", sample_company=True)
     record = api.get("/api/v2/setup", headers=signed_in()).json()
     assert record["sample"] and record["names"]["company_name"] == "Brightside Salons"
-    bodies = " ".join(t["title"] + t["body"] for t in rows(api, "SELECT title,body FROM tasks WHERE id IN (%s)"
-                      % ",".join("?" * len(record["sample"]["tasks"])), tuple(record["sample"]["tasks"])))
+    bodies = " ".join(
+        t["title"] + t["body"]
+        for t in rows(
+            api,
+            "SELECT title,body FROM tasks WHERE id IN (%s)" % ",".join("?" * len(record["sample"]["tasks"])),
+            tuple(record["sample"]["tasks"]),
+        )
+    )
     assert "Brightside Salons" in bodies and "Sample Co" not in bodies
     # With no name set (config's "Company" is none), the team is called Sample Co.
     assert sample_company.team_name(settings_for_name("Company"), {"names": {}}) == ""
@@ -280,8 +274,20 @@ def settings_for_name(name):
     return type("S", (), {"company_name": name})()
 
 
-@pytest.mark.parametrize("value, on", [("on", True), ("ON", True), (" on ", True), ("1", False), ("true", False),
-                                       ("yes", False), ("off", False), ("", False), (None, False)])
+@pytest.mark.parametrize(
+    "value, on",
+    [
+        ("on", True),
+        ("ON", True),
+        (" on ", True),
+        ("1", False),
+        ("true", False),
+        ("yes", False),
+        ("off", False),
+        ("", False),
+        (None, False),
+    ],
+)
 def test_only_on_turns_the_flag_on_and_a_rehearsal_never_does(monkeypatch, tmp_path, value, on):
     monkeypatch.setenv("TICO_DB", str(tmp_path / "hub.db"))
     monkeypatch.delenv("TICO_REHEARSAL", raising=False)

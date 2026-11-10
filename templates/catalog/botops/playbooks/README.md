@@ -29,6 +29,5 @@ Done when: the matching playbook has been read and its own Done when line is met
 - `archive-and-cleanup.md`: archive, restore, deletion and cleanup.
 
 ## Tasks and files
-- `human-tasks.md`: tasks you file for a person, and the cards that ask for a choice.
-- `task-sweep.md`: the daily sweep of open tasks.
+- `human-tasks.md`: the asks and tasks you put to a person.
 - `publish-a-file.md`: reports, drafts and exports a human should find.

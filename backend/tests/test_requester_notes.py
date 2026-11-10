@@ -1,71 +1,59 @@
-"""A Dev ticket's requester hears step moves as notes and is woken only when the ticket is declined, blocked or done."""
-from backend import task_relations as TR
+"""A task's requester bot is not woken by its stage moves or by how it ends; the owner of the task that filed it is
+woken once when what it filed has ended (task_engine._ended, task_effects._tell_requester)."""
+
+from backend import task_engine as E
 from backend.store import H
-from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers import engine as X
+
+DEV = (
+    {"name": "In Progress", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+    {"name": "Review 1", "owner": "bot:ops", "requirements": [{"kind": "owner_done"}]},
+)
 
 
-def dev_ticket(api, owner="bot:cpo", requester="bot:coo"):
+def dev_task(api, owner="bot:cpo", requester="bot:coo"):
     with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, "Dev tickets", [
-            {"name": "In Progress", "status": "doing"}, {"name": "Review 1", "status": "review"},
-            {"name": "Done", "status": "done"}])
-        task = H.task_create(c, requester, "Improve messages", "Build messages.", owner, type=typ["id"],
-                             step="In Progress", lint=False)
+        X.pipeline(c, "dev", "Dev", DEV)
+        task = X.new_task(c, requester, "Improve messages", "dev", assignee=owner)
         c.execute("DELETE FROM jobs")
     return task
 
 
 def heard(api, bot):
+    """The bot's queued runs, and the quiet notes it was written."""
     with api.app.state.store.read() as c:
         jobs = c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (bot,)).fetchone()[0]
-        notes = c.execute("SELECT count(*) FROM messages WHERE recipient_id=? AND json_extract(refs,'$.quiet')=1 "
-                          "AND json_extract(refs,'$.rule') IS NOT NULL", ("bot:" + bot,)).fetchone()[0]
+        notes = c.execute(
+            "SELECT count(*) FROM messages WHERE recipient_id=? AND json_extract(refs,'$.quiet')=1",
+            ("bot:" + bot,),
+        ).fetchone()[0]
     return jobs, notes
 
 
-def test_a_step_move_is_a_note_to_the_requester_and_wakes_nobody(api):
-    task = dev_ticket(api)
+def test_a_stage_move_wakes_no_requester(api):
+    task = dev_task(api)
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cpo", task["id"], step="Review 1")
+        moved = E.move(c, task["id"], E.NEXT, "bot:cpo", "Built it", seen_version=task["version"])
+        assert moved["stage"]["name"] == "Review 1"
     assert heard(api, "coo")[0] == 0 and heard(api, "cpo")[0] == 0
-    assert heard(api, "coo")[1] >= 1
 
 
-def test_declined_wakes_the_requester(api):
-    task = dev_ticket(api)
+def test_a_close_is_a_note_to_the_requester_and_wakes_nobody(api):
+    task = dev_task(api)
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cpo", task["id"], status="declined", note="Not building this.")
-    assert heard(api, "coo")[0] == 1
+        E.move(c, task["id"], E.CLOSED, "bot:cpo", "Not building this.", seen_version=task["version"])
+    assert heard(api, "coo") == (0, 1)
 
 
-def test_blocked_on_someone_else_wakes_the_requester_once_and_a_wait_on_the_owner_does_not(api):
-    task = dev_ticket(api)
-    with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cpo", task["id"], status="waiting", waiting_on="human:ana", note="Needs the API key.")
-        H.task_update(c, "bot:cpo", task["id"], status="waiting", waiting_on="human:ana")       # still waiting: no news
-    assert heard(api, "coo")[0] == 1                    # the Dev ticket's own Blocked notice carries the wake
-    with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM jobs")
-        plain = H.task_create(c, "bot:coo", "Draft the note", "x", "bot:cpo", lint=False)
-        own = H.task_create(c, "bot:cpo", "Set up the repo", "x", "bot:cpo", lint=False)
-        TR.add_blocker(c, "bot:cpo", plain["id"], own["id"])                 # its owner's own work: no news
-        review = H.task_create(c, "bot:cpo", "Review the draft", "x", "bot:ops", parent_id=plain["id"], lint=False)
-        TR.add_blocker(c, "bot:cpo", plain["id"], review["id"])              # work it split off to a bot: no news
-        c.execute("DELETE FROM jobs WHERE bot_id='cpo'")
-    assert heard(api, "coo")[0] == 0
-    with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cpo", plain["id"], status="waiting", waiting_on="human:ana", note="Which date?")
-    assert heard(api, "coo")[0] == 1
-
-
-def test_done_wakes_a_requester_that_waits_on_the_ticket_once(api):
+def test_done_wakes_the_owner_of_the_task_that_filed_it_once(api):
     with api.app.state.store.transaction() as c:
         lead = H.task_create(c, "human:ana", "Ship messages", "Plan it.", "bot:coo", lint=False)
-        ticket = H.task_create(c, "bot:coo", "Improve messages", "Build messages.", "bot:cpo", parent_id=lead["id"], lint=False)
-        H.task_update(c, "bot:coo", lead["id"], status="waiting", note="Waiting on the ticket.")
+        sub = H.task_create(
+            c, "bot:coo", "Improve messages", "Build messages.", "bot:cpo", parent_id=lead["id"], lint=False
+        )
         c.execute("DELETE FROM jobs")
-        H.task_update(c, "bot:cpo", ticket["id"], status="doing")
-    assert heard(api, "coo")[0] == 0, "progress on the ticket is not news that wakes"
-    with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cpo", ticket["id"], status="done", note="Shipped.")
+        E.move(c, sub["id"], E.DONE, "bot:cpo", "Shipped.", seen_version=E.task(c, sub["id"])["version"])
     assert heard(api, "coo")[0] == 1
+    with api.app.state.store.read() as c:
+        keys = [k for k, who in X.wakes(c, lead["id"]) if who == "bot:coo"]
+    assert len([k for k in keys if ":filed:" in k]) == 1

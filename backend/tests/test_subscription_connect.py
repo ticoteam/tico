@@ -7,10 +7,9 @@ from backend import model_login as ML
 from backend import model_subscriptions as MS
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import assign, claim, get, headers, post, runner
-from backend.tests.test_api import api  # noqa: F401
-from backend.tests.test_credentials import setup
-from backend.tests.test_model_subscriptions import OTHER, TOKEN, codex_file, company, give, on
+from backend.tests.helpers.api import assign, claim, get, headers, post, runner
+from backend.tests.helpers.credentials import setup
+from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, codex_file, company, give, on
 
 CAPS = [MS.CAPABILITY, ML.SIGN_OUT_CAPABILITY, ML.CONNECT_CAPABILITY]
 
@@ -19,11 +18,24 @@ def computer(api, caps=CAPS, label="Test Mac", operator="ana", claude=True, bot=
     m = runner(api, operator=operator, label=label)
     if bot:
         assign(api, m, bot)
-    post(api, "runners/heartbeat", {
-        "version": "test", "platform": "test", "capabilities": caps,
-        "readiness": {"schema_version": 1, "runtimes": {"claude": {"installed": claude, "authenticated": "missing"},
-                                                        "codex": {"installed": True, "authenticated": "missing"}},
-                      "bots": {bot: {"runtime": "claude", "ready": True}} if bot else {}}}, token=m["token"])
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "capabilities": caps,
+            "readiness": {
+                "schema_version": 1,
+                "runtimes": {
+                    "claude": {"installed": claude, "authenticated": "missing"},
+                    "codex": {"installed": True, "authenticated": "missing"},
+                },
+                "bots": {bot: {"runtime": "claude", "ready": True}} if bot else {},
+            },
+        },
+        token=m["token"],
+    )
     return m
 
 
@@ -39,7 +51,9 @@ def anywhere(api, value):
     """Every table's rows that hold `value` in plain text."""
     found = []
     with api.app.state.store.read() as c:
-        for (table,) in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE '%_fts%'").fetchall():
+        for (table,) in c.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE '%_fts%'"
+        ).fetchall():
             for row in c.execute(f'SELECT * FROM "{table}"').fetchall():
                 if value in " ".join(str(v) for v in tuple(row)):
                     found.append(table)
@@ -59,8 +73,12 @@ def test_connect_signs_a_plan_in_on_a_computer_and_seals_the_result_without_the_
     work = asked(api, m)
     assert [(w["id"], w["kind"], w["runtime"], w["profile"]) for w in work] == [(login["id"], "connect", "claude", "")]
     # The person gets the link and pastes the page's code back, as for any sign-in.
-    post(api, f"runner-logins/{login['id']}/report", {"state": "waiting", "url": "https://claude.example/authorize",
-                                                      "lines": ["Paste code here"]}, m["token"])
+    post(
+        api,
+        f"runner-logins/{login['id']}/report",
+        {"state": "waiting", "url": "https://claude.example/authorize", "lines": ["Paste code here"]},
+        m["token"],
+    )
     seen = get(api, f"runners/{m['runner_id']}/logins/{login['id']}")
     assert seen["url"] == "https://claude.example/authorize" and seen["accepts_code"] and seen["lines"] == []
     post(api, f"runners/{m['runner_id']}/logins/{login['id']}/code", {"code": "abc123#state"})
@@ -73,9 +91,10 @@ def test_connect_signs_a_plan_in_on_a_computer_and_seals_the_result_without_the_
     assert asked(api, m) == []
     saved = get(api, "model-subscriptions")["subscriptions"]
     assert [(s["name"], s["kind"], s["added_by"], s["status"]) for s in saved] == [
-        ("Company Max", "claude_token", "human:ana", "new")]
+        ("Company Max", "claude_token", "human:ana", "new")
+    ]
     assert saved[0]["preview"].endswith(TOKEN[-4:]) and TOKEN not in json.dumps(saved)
-    assert anywhere(api, TOKEN) == []                                         # sealed; in no receipt, event or row
+    assert anywhere(api, TOKEN) == []  # sealed; in no receipt, event or row
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM subscription_connects").fetchone()[0] == 0
     # It is one job: the same computer cannot send a second value for it.
@@ -105,7 +124,7 @@ def test_reconnect_asks_before_the_sign_in_when_runs_would_restart_and_replaces_
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-one"}, m["token"])
     refused = api.post("/api/v2/model-subscriptions/connect", headers=headers(), json={"subscription": sid})
     assert refused.status_code == 409 and refused.json()["error"]["code"] == "confirm_restart"
-    assert refused.json()["error"]["running"] == 1 and asked(api, m) == []    # nothing starts without the confirm
+    assert refused.json()["error"]["running"] == 1 and asked(api, m) == []  # nothing starts without the confirm
     login = post(api, "model-subscriptions/connect", {"subscription": sid, "confirm": True})
     assert send(api, m, login, OTHER)["state"] == "done"
     saved = get(api, "model-subscriptions")["subscriptions"]
@@ -120,8 +139,9 @@ def test_only_a_person_who_may_save_starts_one_and_only_for_a_plan(api):
     company(api)
     computer(api)
     post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Max"}, "cara-test", expected=403)
-    api.app.state.store.settings.test_identities["assistant"] = Identity("human:ana", "owner", email="ana@acme.example",
-                                                                         via="assistant")
+    api.app.state.store.settings.test_identities["assistant"] = Identity(
+        "human:ana", "owner", email="ana@acme.example", via="assistant"
+    )
     post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Max"}, "assistant", expected=403)
     post(api, "model-subscriptions/connect", {"kind": "anthropic_key", "name": "Key"}, expected=422)
     post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "  "}, expected=422)
@@ -134,14 +154,16 @@ def test_connect_needs_a_computer_that_is_online_up_to_date_and_has_the_tool(api
     assert get(api, "model-subscriptions")["connect"] == []
     start = {"kind": "claude_token", "name": "Max"}
     assert post(api, "model-subscriptions/connect", start, expected=409)["error"]["code"] == "offline"
-    computer(api, caps=[MS.CAPABILITY, ML.SIGN_OUT_CAPABILITY], label="Old")   # an older runner
-    computer(api, claude=False, label="No Claude")               # no Claude Code on it
+    computer(api, caps=[MS.CAPABILITY, ML.SIGN_OUT_CAPABILITY], label="Old")  # an older runner
+    computer(api, claude=False, label="No Claude")  # no Claude Code on it
     assert get(api, "model-subscriptions")["connect"] == ["codex_login"]
     post(api, "model-subscriptions/connect", start, expected=409)
     m = computer(api, label="Good")
     assert post(api, "model-subscriptions/connect", start)["runner_id"] == m["runner_id"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.shift(H.now(), minutes=-10), m["runner_id"]))
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.shift(H.now(), minutes=-10), m["runner_id"])
+        )
     assert get(api, "model-subscriptions")["connect"] == ["codex_login"]
 
 
@@ -207,7 +229,7 @@ def test_a_cancelled_or_expired_job_a_wrong_computer_or_a_bad_value_saves_nothin
     other = computer(api, label="Other")
     login = post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Max"})
     m, other = (m, other) if login["runner_id"] == m["runner_id"] else (other, m)
-    send(api, other, login, expected=404)                                     # not the computer it was asked of
+    send(api, other, login, expected=404)  # not the computer it was asked of
     post(api, f"runner-logins/{login['id']}/subscription", {"value": TOKEN}, "ana-test", expected=403)  # not a computer
     post(api, f"runners/{m['runner_id']}/logins/{login['id']}/cancel", {})
     send(api, m, login, expected=409)
@@ -227,8 +249,12 @@ def test_a_cancelled_or_expired_job_a_wrong_computer_or_a_bad_value_saves_nothin
     assert get(api, "model-subscriptions")["subscriptions"] == []
     # A failed sign-in the computer reports says why, and keeps no line of what the CLI printed.
     login = post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Max"})
-    post(api, f"runner-logins/{login['id']}/report", {"state": "failed", "message": "It stopped",
-                                                      "lines": [f"Your token {TOKEN[:12]}"]}, m["token"])
+    post(
+        api,
+        f"runner-logins/{login['id']}/report",
+        {"state": "failed", "message": "It stopped", "lines": [f"Your token {TOKEN[:12]}"]},
+        m["token"],
+    )
     seen = get(api, f"runners/{m['runner_id']}/logins/{login['id']}")
     assert seen["state"] == "failed" and seen["message"] == "It stopped" and seen["lines"] == []
     with api.app.state.store.read() as c:
@@ -239,9 +265,13 @@ def test_connect_saves_the_owner_named_up_front_and_refuses_one_who_is_not_a_per
     setup(api)
     company(api)
     m = computer(api)
-    refused = post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Max", "owner_id": "human:eve"},
-                   expected=422)
-    assert refused["error"]["code"] == "owner" and asked(api, m) == []        # checked before anyone signs in
+    refused = post(
+        api,
+        "model-subscriptions/connect",
+        {"kind": "claude_token", "name": "Max", "owner_id": "human:eve"},
+        expected=422,
+    )
+    assert refused["error"]["code"] == "owner" and asked(api, m) == []  # checked before anyone signs in
     login = post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Ben Max", "owner_id": "ben"})
     assert send(api, m, login)["state"] == "done"
     saved = get(api, "model-subscriptions")["subscriptions"]

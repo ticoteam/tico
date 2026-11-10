@@ -1,4 +1,4 @@
-"""A real Tico server on the owner sign-in link, for ui/tests/owner-link.cjs.
+"""A real Tico server on the owner sign-in link, for ui/tests/owner-link.cts.
 
     python3 ui/tests/support/owner_link_server.py
 
@@ -38,9 +38,17 @@ def main():
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
     token = secrets.token_urlsafe(32)
-    settings = Settings(db_path=tmp / "hub.db", registry_dir=registry, public_url=PUBLIC, company_name="Acme",
-                        app_name="Acme HQ", auth_proxy="owner-link", hosted="own", owner_email=OWNER,
-                        owner_link_hash=digest(token))
+    settings = Settings(
+        db_path=tmp / "hub.db",
+        registry_dir=registry,
+        public_url=PUBLIC,
+        company_name="Acme",
+        app_name="Acme HQ",
+        auth_proxy="owner-link",
+        hosted="own",
+        owner_email=OWNER,
+        owner_link_hash=digest(token),
+    )
     app = create_app(settings)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     threading.Thread(target=server.run, daemon=True).start()
@@ -50,9 +58,21 @@ def main():
     with app.state.store.transaction() as c:
         H.sync_registry(c, {}, {"people": people})
         c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": people}),))
-        c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
-    print(json.dumps({"url": "http://127.0.0.1:%d" % port, "public": PUBLIC, "token": token,
-                      "db": str(settings.db_path), "registry": str(registry)}), flush=True)
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),)
+        )
+    print(
+        json.dumps(
+            {
+                "url": "http://127.0.0.1:%d" % port,
+                "public": PUBLIC,
+                "token": token,
+                "db": str(settings.db_path),
+                "registry": str(registry),
+            }
+        ),
+        flush=True,
+    )
     try:
         while True:
             time.sleep(1)

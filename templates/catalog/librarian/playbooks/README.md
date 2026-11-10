@@ -1,6 +1,6 @@
 One file per recurring kind of work. A playbook is the checklist you would hand a new hire.
 
-- `commands.md`: the hub commands, grouped by job. Use these; for any other, run `hub <group> --help` first.
+- `commands.md`: the tico commands, grouped by job. Use these; for any other, run `tico <group> --help` first.
 - `answer-a-question.md`: every question, from a human or a bot. The strategy: search, read, follow, cite.
 - `the-map.md`: what the `_librarian/` docs are, and the exact shape of each.
 - `refresh-the-map.md`: the daily routine, and what to do when someone asks for it now.
@@ -13,3 +13,5 @@ One file per recurring kind of work. A playbook is the checklist you would hand 
 - `urgent-market-insight.md`: one urgent insight, curated now.
 - `customer-themes.md`: a team meeting just became ready; add what customers raised to the customer themes page, with a count and short quotes.
 - `research-a-section.md`: a person's research request on a doc, a market page or a market entry: research the web, add what was found to that one place, cited.
+
+Deep research ("Deep research: <question>") is a skill, not a playbook: `skills/deep-market-research/SKILL.md`.

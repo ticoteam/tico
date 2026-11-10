@@ -11,13 +11,13 @@ marked provisional or not, the overlap with the levels around it is stated, and 
 
 ## 1. Define the role
 
-From the level guide (`hub doc ask "What does <level> mean for <role family>?"`) and the role brief: scope, level, location
+From the level guide (`tico doc ask "What does <level> mean for <role family>?"`) and the role brief: scope, level, location
 rule. A band is for a role family and level, not for a person.
 
 ## 2. Gather market data
 
 In this order of trust: the salary survey the team buys (attached to the task), the payroll provider's benchmark, public ranges
-published for comparable roles in the same market (`hub doc fetch <url>`, at least three, with dates). Record each data point's
+published for comparable roles in the same market (`tico doc fetch <url>`, at least three, with dates). Record each data point's
 source, date, location and level match. Public ranges show what employers advertise; weigh them below paid data.
 
 ## 3. Set the midpoint

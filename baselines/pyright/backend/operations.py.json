@@ -1,0 +1,30 @@
+{
+    "files": {
+        "./backend/operations.py": [
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 19,
+                    "endColumn": 26,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOperatorIssue",
+                "range": {
+                    "startColumn": 7,
+                    "endColumn": 21,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalOperand",
+                "range": {
+                    "startColumn": 22,
+                    "endColumn": 41,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

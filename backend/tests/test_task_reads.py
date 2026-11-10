@@ -2,12 +2,16 @@
 what changed and what left, never naming a task the reader could not have seen; a stale cursor
 resets; an unchanged full read is a 304."""
 
+import time
+import uuid
+
 from backend import events as E
 from backend.auth import Identity
 from backend import hubdb as H
-from backend.tests.test_api import api, get, headers, post, restrict  # noqa: F401
+from backend import task_reads
+from backend.tests.helpers.api import get, headers, post, restrict  # noqa: F401
 
-ACTIVE = "status=open,doing,waiting,review,ready,declined"
+ACTIVE = "status=open"
 
 
 def tasks(api, query, token="ana-test"):
@@ -27,7 +31,7 @@ def test_a_delta_returns_what_changed_and_what_left(api):
     assert delta(api, ACTIVE, cursor) == {"tasks": [], "gone": [], "cursor": cursor, "next_offset": None}
 
     post(api, "tasks/" + keep["id"], {"version": keep["version"], "title": "Draft the agenda today"})
-    post(api, "tasks/" + finish["id"], {"version": finish["version"], "status": "done"})
+    post(api, "tasks/" + finish["id"] + "/done", {"note": "Booked."})
     post(api, "tasks/" + trash["id"] + "/delete", {})
     got = delta(api, ACTIVE, cursor)
     assert [t["title"] for t in got["tasks"]] == ["Draft the agenda today"]
@@ -39,7 +43,9 @@ def test_a_delta_returns_what_changed_and_what_left(api):
 
 def test_a_task_made_private_is_gone_only_for_who_could_see_it(api):
     shared = post(api, "tasks", {"owner": "ben", "title": "Review the launch copy", "body": "Please."})
-    secret = post(api, "tasks", {"owner": "ben", "title": "Review the salary bands", "body": "Please.", "private": True})
+    secret = post(
+        api, "tasks", {"owner": "ben", "title": "Review the salary bands", "body": "Please.", "private": True}
+    )
     before = tasks(api, ACTIVE, token="cara-test")
     cara, ana = before["cursor"], tasks(api, ACTIVE)["cursor"]
     assert shared["id"] in str(before) and secret["id"] not in str(before)
@@ -75,6 +81,7 @@ def test_an_unchanged_full_read_is_a_304_until_a_task_or_a_grant_changes(api):
 
     def read(path, tag=None):
         return api.get("/api/v2/" + path, headers={**headers("cara-test"), **({"If-None-Match": tag} if tag else {})})
+
     for path in ("tasks?" + ACTIVE, "tasks/labels"):
         first = read(path)
         tag = first.headers["etag"]
@@ -82,7 +89,7 @@ def test_an_unchanged_full_read_is_a_304_until_a_task_or_a_grant_changes(api):
         assert again.status_code == 304 and again.content == b"" and again.headers["etag"] == tag, path
 
     tag = read("tasks?" + ACTIVE).headers["etag"]
-    assert read("tasks?" + ACTIVE + "&brief=true", tag).status_code == 200      # another query, another tag
+    assert read("tasks?" + ACTIVE + "&brief=true", tag).status_code == 200  # another query, another tag
     post(api, "tasks/" + task["id"], {"version": task["version"], "title": "Check the backups twice"})
     changed = read("tasks?" + ACTIVE, tag)
     assert changed.status_code == 200 and "Check the backups twice" in changed.text
@@ -97,18 +104,29 @@ def test_one_change_to_many_tasks_is_one_bulk_change_and_resets_lists(api):
     seed = post(api, "tasks", {"owner": "ben", "title": "Tag the launch work", "body": "Please."})
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("INSERT INTO tags(id,key,label,created_at,updated_at) VALUES('tg1','launch','Launch',?,?)", (H.now(), H.now()))
-        columns = [row[1] for row in c.execute("PRAGMA table_info(tasks)") if row[1] not in ("id", "number")]
+        c.execute(
+            "INSERT INTO tags(id,key,label,created_at,updated_at) VALUES('tg1','launch','Launch',?,?)",
+            (H.now(), H.now()),
+        )
+        # A copy starts in no stage, as every new row does (tasks_enter_only).
+        columns = [
+            row[1]
+            for row in c.execute("PRAGMA table_info(tasks)")
+            if row[1] not in ("id", "number", "pipeline_id", "stage_id")
+        ]
         for n in range(E.FAN_CAP + 1):
-            c.execute(f"INSERT INTO tasks(id,{','.join(columns)}) SELECT ?,{','.join(columns)} FROM tasks WHERE id=?",
-                      (f"bulk{n}", seed["id"]))
+            c.execute(
+                f"INSERT INTO tasks(id,{','.join(columns)}) SELECT ?,{','.join(columns)} FROM tasks WHERE id=?",
+                (f"bulk{n}", seed["id"]),
+            )
             c.execute("INSERT INTO task_tags(task_id,tag_id) VALUES(?, 'tg1')", (f"bulk{n}",))
     cursor = tasks(api, ACTIVE)["cursor"]
     with store.transaction() as c:
         before = E.latest(c)
         c.execute("UPDATE tags SET label='Launch week' WHERE id='tg1'")
         assert [tuple(r) for r in c.execute("SELECT topic, kind, subject_id FROM changes WHERE seq>?", (before,))] == [
-            ("tasks", "bulk", None)]
+            ("tasks", "bulk", None)
+        ]
     assert delta(api, ACTIVE, cursor)["reset"] is True
     # The stream sends it as one event, not one per task.
     with store.read() as c:
@@ -117,41 +135,16 @@ def test_one_change_to_many_tasks_is_one_bulk_change_and_resets_lists(api):
     assert [data for _, _, data in sent if data.get("bulk")] and len(sent) == 1
 
 
-def test_saving_a_big_types_steps_is_a_few_bulk_changes_not_one_per_task(api):
-    # Each step under FAN_CAP, the type over it: a save used to make a row per task per step write (TIDY, Oct 30).
-    typ = post(api, "task-types", {"name": "Development", "steps": [
-        {"name": "On Deck", "status": "open"}, {"name": "In Progress", "status": "doing"}]})["type"]
-    seed = post(api, "tasks", {"owner": "ben", "title": "Build the thing", "body": "Please.", "type": typ["id"],
-                               "step": typ["steps"][0]["id"]})
-    store = api.app.state.store
-    with store.transaction() as c:
-        columns = [row[1] for row in c.execute("PRAGMA table_info(tasks)") if row[1] not in ("id", "number", "step_id")]
-        for n in range(E.FAN_CAP):
-            c.execute(f"INSERT INTO tasks(id,step_id,{','.join(columns)}) SELECT ?,?,{','.join(columns)} FROM tasks WHERE id=?",
-                      (f"many{n}", typ["steps"][n % 2]["id"], seed["id"]))
-
-    def save(steps):
-        with store.read() as c:
-            before = E.latest(c)
-        r = api.post("/api/v2/task-types/" + typ["id"], headers=headers(), json={"steps": steps})
-        assert r.status_code == 200, r.text
-        with store.read() as c:
-            return [tuple(r) for r in c.execute("SELECT kind, subject_id FROM changes WHERE topic='tasks' AND seq>?",
-                                                (before,))]
-    steps = [{"id": s["id"], "name": s["name"], "status": s["status"]} for s in typ["steps"]]
-    assert save(steps) == [("bulk", None)]                     # the type's own row; its unchanged steps say nothing
-    steps[1]["name"] = "Doing"
-    assert save(steps) == [("bulk", None)] * 3                 # the type, and the renamed step's two writes
-    assert get(api, "task-types/" + typ["id"])["type"]["steps"][1]["name"] == "Doing"
-
-
 def test_a_bot_list_stays_304_when_only_other_tasks_change(api):
     mine = post(api, "tasks", {"owner": "ops", "title": "Check the backups", "body": "Please."})
     other = post(api, "tasks", {"owner": "coo", "title": "Plan the offsite", "body": "Soon."})
 
     def read(tag=None):
-        return api.get("/api/v2/tasks?owner=ops&status=open,doing,waiting,declined&brief=true",
-                       headers={**headers("ana-test"), **({"If-None-Match": tag} if tag else {})})
+        return api.get(
+            "/api/v2/tasks?owner=ops&status=open&brief=true",
+            headers={**headers("ana-test"), **({"If-None-Match": tag} if tag else {})},
+        )
+
     first = read()
     assert first.status_code == 200 and "body" not in first.json()["tasks"][0], "brief rows carry no body"
     tag = first.headers["etag"]
@@ -177,8 +170,9 @@ def test_a_batch_read_returns_only_readable_tasks_and_names_the_rest_missing(api
 def test_task_list_keeps_one_snapshot_and_next_read_sees_revocation(api, monkeypatch):
     store = api.app.state.store
     with store.transaction() as c:
-        private = H.task_create(c, "human:cara", "Private agenda", "Sensitive details", "human:ben",
-                                private=True, lint=False)
+        private = H.task_create(
+            c, "human:cara", "Private agenda", "Sensitive details", "human:ben", private=True, lint=False
+        )
     original = H.resolve_actor
     changed = False
 
@@ -188,7 +182,7 @@ def test_task_list_keeps_one_snapshot_and_next_read_sees_revocation(api, monkeyp
         if actor == "ben" and not changed:
             changed = True
             with store.transaction() as write:
-                write.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (private["id"],))
+                H.task_reassign(write, H.KEEPER, private["id"], "human:ana", "Ana takes it")
         return resolved
 
     monkeypatch.setattr(H, "resolve_actor", revoke_after_owner_read)
@@ -200,15 +194,13 @@ def test_task_list_keeps_one_snapshot_and_next_read_sees_revocation(api, monkeyp
     assert private["id"] in {t["id"] for t in tasks(api, ACTIVE, token="ana-test")["tasks"]}
 
 
-
 def test_hot_read_helpers_do_not_write_to_their_snapshot(api, monkeypatch):
     from contextlib import contextmanager
-    from backend.tests.test_api import assign, runner
+    from backend.tests.helpers.api import assign, runner
 
     store = api.app.state.store
     with store.transaction() as c:
-        H.task_create(c, "human:cara", "Private agenda", "Sensitive details", "human:ben",
-                      private=True, lint=False)
+        H.task_create(c, "human:cara", "Private agenda", "Sensitive details", "human:ben", private=True, lint=False)
         H.status_set(c, "bot:ops", "ops", "idle", "Ready")
     computer = runner(api)
     assign(api, computer, "ops")
@@ -253,3 +245,27 @@ def test_a_task_list_leaves_its_connection_to_the_pool(api, monkeypatch):
     for token in ("ana-test", "ben-test"):
         get(api, "tasks", token=token)
     assert opened == []
+
+
+def test_a_deleted_task_with_no_trash_row_is_reported_gone_to_its_reader(api):
+    # Its trash snapshot purged, the change row's own snapshot says who could read it: its reader is told it is gone.
+    made = post(api, "tasks", {"owner": "ben", "title": "Order lunch", "body": "Please."})
+    cursor = tasks(api, ACTIVE)["cursor"]
+    post(api, "tasks/" + made["id"] + "/delete", {})
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM task_trash WHERE task_id=?", (made["id"],))
+    assert made["id"] in delta(api, ACTIVE, cursor)["gone"]
+
+
+def test_a_changed_trigger_is_rebuilt_on_the_next_start(api):
+    # Every start runs events.ensure, which replaces a trigger whose SQL differs: an install from before the snapshot
+    # kept its pipeline still has the old tasks update trigger.
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("DROP TRIGGER changes_tasks_update")
+        c.execute("CREATE TRIGGER changes_tasks_update AFTER UPDATE ON tasks BEGIN SELECT 1; END")
+        E.ensure(c)
+        sql = c.execute(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='changes_tasks_update'"
+        ).fetchone()[0]
+    assert "OLD.pipeline_id" in sql

@@ -9,11 +9,11 @@
 #app-update a.primary{padding:5px 12px;border-radius:6px;text-decoration:none}
 #app-update .ghost{color:var(--bg);opacity:.75}
 #stale-banner:not([hidden])~#app-update{bottom:72px}
-/* Signed out (ui/app/session.js): over the top of every page until the person signs in again. */
+/* Signed out (ui/app/session.ts): over the top of every page until the person signs in again. */
 #signed-out{position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:3200;display:flex;align-items:center;gap:12px;max-width:calc(100vw - 32px);padding:8px 8px 8px 14px;background:var(--ink);color:var(--bg);border-radius:8px;font-size:var(--t-base);box-shadow:0 6px 20px rgba(0,0,0,.2)}
 #signed-out[hidden]{display:none}
 #signed-out>*{white-space:nowrap}
-/* The Tico team has access (ui/support.js): over the top of every page while the session lasts. */
+/* The Tico team has access (ui/support.ts): over the top of every page while the session lasts. */
 #support-access-banner{position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:3100;display:flex;align-items:center;gap:10px;max-width:calc(100vw - 32px);padding:6px 8px 6px 14px;background:var(--wait-bg);color:var(--ink);border:1px solid var(--wait);border-radius:8px;font-size:var(--t-sm);box-shadow:0 6px 20px rgba(0,0,0,.12)}
 #support-access-banner[hidden],#support-access-banner [hidden]{display:none}
 #usage-notice{position:fixed;left:16px;bottom:16px;z-index:3000;display:flex;align-items:center;gap:12px;max-width:min(560px,calc(100vw - 32px));padding:10px 14px;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;font-size:var(--t-sm);box-shadow:0 6px 20px rgba(0,0,0,.12)}
@@ -49,17 +49,21 @@ html.strip #main.chat-layout{height:calc(100dvh - var(--demo-h))}
   html.strip body:has(#main.chat-layout){height:calc(100dvh - var(--demo-h))}
   html.strip #main.chat-layout{top:calc(var(--chat-viewport-top,0px) + var(--demo-h));height:calc(var(--chat-viewport-height,100dvh) - var(--demo-h))}
 }
-/* Tico Cloud (ui/app/cloud-access.js): Out of credit, a strip like the demo's; Pay to continue, the whole page. */
+/* Tico Cloud (ui/app/cloud-access.ts): Out of credit, a strip like the demo's; Pay to continue, the whole page. */
 #cloud-banner,#cloud-lock{display:none}
+#cloud-banner[hidden],#cloud-lock[hidden]{display:none!important}
 html.cloud-frozen:not(.demo) #cloud-banner{position:fixed;top:0;left:0;right:0;z-index:3000;height:var(--demo-h);display:flex;align-items:center;justify-content:center;gap:10px;padding:0 12px;background:var(--wait-bg);color:var(--wait-ink);border-bottom:1px solid var(--wait);font-size:var(--t-sm);line-height:var(--lh-tight);white-space:nowrap}
 #cloud-banner strong{color:var(--ink);font-weight:600}
 #cloud-banner a{color:var(--ink);font-weight:600}
+#cloud-banner button{white-space:nowrap;font-size:inherit}
 html.cloud-locked #cloud-lock{position:fixed;inset:0;z-index:3300;display:flex;align-items:center;justify-content:center;padding:16px;background:var(--bg)}
 html.cloud-locked body>:not(#cloud-lock):not(#signed-out):not(script){visibility:hidden}
-.cloud-lock-card{width:min(380px,100%);display:flex;flex-direction:column;gap:12px;padding:22px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
-.cloud-lock-card h1{margin:0;font-size:var(--t-lg,18px);font-weight:600}
+.cloud-lock-card{width:min(440px,100%);display:flex;flex-direction:column;gap:16px;padding:28px;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.06)}
+.cloud-lock-card h1{margin:0;font-size:24px;line-height:1.2;font-weight:600}
 .cloud-lock-card p{margin:0;color:var(--muted);font-size:var(--t-sm)}
 .cloud-lock-card .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.cloud-lock-help{padding-top:16px;border-top:1px solid var(--line)}
+@media(max-width:480px){.cloud-lock-card{padding:24px}.cloud-lock-card .row>*{min-height:40px;display:inline-flex;align-items:center}}
 /* one spacing scale, used everywhere instead of ad-hoc pixel values */
 :root{--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:22px;--s6:32px;--radius:9px;--mobile-nav-height:64px}
 /* corners: controls 6px, menus and popovers 10px, cards --radius. Controls get one height from 20px lines and padding
@@ -67,8 +71,8 @@ html.cloud-locked body>:not(#cloud-lock):not(#signed-out):not(script){visibility
 :root{--r-ctl:6px;--r-pop:10px}
 *{box-sizing:border-box}
 html,body{height:100%}
-/* The rails' widths; dragging an edge changes them (ui/app/rails.js, ui/styles/rails.css). */
-:root{--rail-left:236px;--rail-right:320px;--rail-chat:360px}
+/* The rails' widths; dragging an edge changes them (ui/app/rails.ts, ui/styles/rails.css). */
+:root{--rail-left:236px;--rail-right:320px}
 body{margin:0;font:var(--t-md)/var(--lh) var(--sans);color:var(--ink);background:var(--bg);display:grid;grid-template-columns:var(--rail-left) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);min-height:100vh}
 a{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}
 /* no specificity of its own, so forms.css's one line-height (20px: every field and button 32px tall) is not reset by it */
@@ -93,32 +97,32 @@ h3{font-size:var(--t-base);line-height:var(--lh-tight);letter-spacing:var(--trac
    badges. */
 table,time,kbd,.age,.cnt,.count,.pill,.nav-badge,.tnum,[class*="-count"],input[type=number],
 .kpi-big,.kpi-val,.upd-kpi-val,.dash-big,.dash-stat,.flow-tile-n,.goal-metric,.settings-num,
-.mkt-total,.mkt-num,.mkt-n,.bt-val,.bt-spent,.bt-n,.bt-hot-n,.bd-money,.bt-cap,.billing-total,.gw-price,
+.mkt-num,.mkt-n,.bt-val,.bt-spent,.bt-n,.bt-hot-n,.bd-money,.bt-cap,.billing-total,.gw-price,
 .use-cost,.use-total,.use-money,.use-limit,.run-cost,.machine-chip-pct,.au-pct,.au-n,
 .run-when,.rp-clock,.rp-when,.tl-age,.tmodal-age,.rail-age,.bcard-step-age,.chat-time,.side-rec-time,.sh-when,
 .docs-recent-when,.lens-past-when,.cat-when,.goal-fin-when,.code-num,
 .lrn-n,.lens-n,.lc-n,.upd-n,.meet-pending-n,.tl-bulk-n,.tl-mi-n,.strat-bet-n,.strat-sv-n,.rdo-n,.bl-n,
-.support-badge,.pr-badge,.tl-waiting,.tchip-blocked,.code-chip,[data-support-count]::after{font-variant-numeric:tabular-nums}
+.support-badge,.pr-badge,.tl-waiting,.code-chip,[data-support-count]::after{font-variant-numeric:tabular-nums}
 .mono{font-family:var(--mono);font-size:var(--t-sm);font-variant-numeric:tabular-nums}
 .muted{color:var(--muted)}
 /* Icon glyphs are ligatures ("dynamic_feed"): until the icon font is in, a glyph would read as that word. They hold
-   their box but stay invisible until ui/theme.js marks the page html.icons-ready (the font settled, or 10s). */
+   their box but stay invisible until ui/theme.ts marks the page html.icons-ready (the font settled, or 10s). */
 html:not(.icons-ready) :is(.nav-icon,.mobile-nav-icon,.ob-ms,.agent-mark,.person-mail-link,.av-glyph,.int-key){visibility:hidden}
 /* Motion (tokens.css: --dur-fast, --dur, --ease). Surfaces that appear on top fade in; rows answer a
    hover with a quick tint. Only opacity and transform move, never layout. */
 @keyframes tico-pop{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:none}}
 @keyframes tico-fade{from{opacity:0}to{opacity:1}}
 /* menus settle from 98% on a desktop; dialogs, and a phone's menus (bottom sheets there), only fade, so their box never moves */
-:where(.tl-pop,.p-menu,.people-menu,.slash-menu,.mg-menu,#account-menu,#new-version-pop,[popover]:popover-open){animation:tico-fade var(--dur) var(--ease)}
-@media (min-width:761px){:where(.tl-pop,.p-menu,.people-menu,.slash-menu,.mg-menu,#account-menu,#new-version-pop,[popover]:popover-open){animation-name:tico-pop}}
+:where(.tl-pop,.p-menu,.people-menu,.slash-menu,#account-menu,#new-version-pop,[popover]:popover-open){animation:tico-fade var(--dur) var(--ease)}
+@media (min-width:761px){:where(.tl-pop,.p-menu,.people-menu,.slash-menu,#account-menu,#new-version-pop,[popover]:popover-open){animation-name:tico-pop}}
 :where(dialog[open]){animation:tico-fade var(--dur) var(--ease)}
 :where(.slash-menu,#account-menu,#new-version-pop){transform-origin:bottom center}
-:where(.p-menu,.people-menu,.mg-menu){transform-origin:top right}
+:where(.p-menu,.people-menu){transform-origin:top right}
 :where(dialog[open])::backdrop{animation:tico-fade var(--dur) var(--ease)}
 :where(.nav-link,.tree a.node,.inbox-list a,.tl-row,.mail-row,.meet-row,.kpi-line,.need-row,.req>summary,.settings-table tbody tr,
-  .search-results li,.market-list a,.slash-row,.p-menu button,#docs-menu button,.mg-menu button,.people-menu button,.section-toggle,.section-head,
+  .search-results li,.market-list a,.slash-row,.p-menu button,#docs-menu button,.people-menu button,.section-toggle,.section-head,
   button.ghost,button.primary){transition:background-color var(--dur-fast) var(--ease),border-color var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
-/* A page change cross-fades the window, opacity only (ui/app/router.js routeChanged). The whole window, not #main
+/* A page change cross-fades the window, opacity only (ui/app/router.ts routeChanged). The whole window, not #main
    alone: a named #main reports as a layout shift when the fade ends. The fade's layer takes no pointer; Chrome still
    gives a press during the fade to the root element, so the router ends the fade and passes the press on. */
 ::view-transition{pointer-events:none}
@@ -129,5 +133,5 @@ html:not(.icons-ready) :is(.nav-icon,.mobile-nav-icon,.ob-ms,.agent-mark,.person
   ::view-transition-group(*),::view-transition-old(*),::view-transition-new(*){animation:none!important}
   *,*::before,*::after{animation-duration:1ms!important;animation-iteration-count:1!important;transition-duration:1ms!important;scroll-behavior:auto!important}
 }
-/* A hidden or minimized window: every animation holds where it is until the window shows again (ui/app/avatars.js). */
+/* A hidden or minimized window: every animation holds where it is until the window shows again (ui/app/avatars.ts). */
 .page-hidden *,.page-hidden *::before,.page-hidden *::after{animation-play-state:paused!important}

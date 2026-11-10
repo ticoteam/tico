@@ -1,0 +1,33 @@
+name: infrastructure-owner                 # the slug: it matches the repository bot-infrastructure-owner and the label owner:infrastructure-owner
+display_name: "Infrastructure Owner"
+labels: [owner:infrastructure-owner]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 60
+
+# What the Tico AI Gateway gives this bot when nobody picked a model: its group's pick at this level.
+gateway:
+  level: high
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: weekly-ci-health
+    title: Weekly CI health report
+    cron: "0 9 * * 2"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-ci-health.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. The team's GitHub App gives the bot a short-lived
+# token for the repositories the owner lists for it in Settings (docs/github-app.md).
+tools:
+  - service: github
+    identity: "the product repositories the owner lists for this bot"
+    can: [read]
+    note: "reads workflow runs, job timings, logs and releases; opens its own pull requests when asked; never reruns, cancels, triggers or edits a workflow, or merges"
+# The token can trigger workflows, so the only thing between this bot and a rerun or a deploy is this entry and
+# .claude/settings.json, which denies every run, workflow, cache, credential, api, merge and release command. Keep it read only.

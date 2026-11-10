@@ -1,9 +1,10 @@
 """Changing a bot's connection re-checks its usage-limit hold: a hold belongs to the previous login, so the bot
 runs on the new one at once unless that login is held too."""
+
 from backend import login_holds
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, post, runner  # noqa: F401 (fixture)
-from backend.tests.test_login_holds import at, limit, providers_on, signed_in
+from backend.tests.helpers.api import assign, claim, post, runner  # noqa: F401 (fixture)
+from backend.tests.helpers.login_holds import at, limit, providers_on, signed_in
 
 
 def status(api, bot="ops"):
@@ -12,8 +13,12 @@ def status(api, bot="ops"):
 
 
 def move(api, machine, generation):
-    return post(api, "bots/ops/assignment", {"runner_id": machine["runner_id"], "expected_generation": generation},
-                token="ana-test")
+    return post(
+        api,
+        "bots/ops/assignment",
+        {"runner_id": machine["runner_id"], "expected_generation": generation},
+        token="ana-test",
+    )
 
 
 def test_moving_a_limited_bot_to_a_computer_re_checks_the_hold_there(api, monkeypatch):
@@ -36,8 +41,15 @@ def test_moving_a_limited_bot_to_a_computer_re_checks_the_hold_there(api, monkey
 
     # The other computer's login has its own hold; the bot shows that one.
     with api.app.state.store.transaction() as c:
-        login_holds.record(c, held["runner_id"], "", "fake", "2026-10-19T17:00:00.000000Z",
-                           "2026-10-19T19:30:00.000000Z", error="Usage limit")
+        login_holds.record(
+            c,
+            held["runner_id"],
+            "",
+            "fake",
+            "2026-10-19T17:00:00.000000Z",
+            "2026-10-19T19:30:00.000000Z",
+            error="Usage limit",
+        )
     at(monkeypatch, "2026-10-19T17:05:00.000000Z", api)
     move(api, held, 1)
     assert status(api)["state"] == "limited" and "19:30" in status(api)["focus"]
@@ -53,6 +65,7 @@ def test_moving_a_limited_bot_to_a_computer_re_checks_the_hold_there(api, monkey
 
 def test_switching_a_computers_login_frees_the_bots_limited_on_it(api, monkeypatch):
     from backend import execution
+
     providers_on(api)
     at(monkeypatch, "2026-10-19T17:00:00.000000Z")
     machine = runner(api)

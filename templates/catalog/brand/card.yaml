@@ -1,22 +1,26 @@
+# The Brand Owner. Installed with every environment: it builds the brand book with the owner and keeps the Brand card
+# (Strategy > Brand) true, so every bot that writes for customers writes in one voice.
 template: brand
 slug: brand
-name: Brand Manager
-required: false
-bootstrap: false
-group: marketing
-pack: marketing
+name: Brand Owner
+required: true
+bootstrap: true
+# A helper like Counsel: it serves the whole company, so it is in no group and not on the team chart.
+kind: helper
 icon: palette
-suggest: niche
+default: true
 tags: [brand, voice, naming, design, consistency, b2c, retail]
-summary: "Keeps the brand rules written down, reviews copy and assets against them, checks new names, and audits what went public each month with three fixes. It changes no live page or asset itself."
-when: "A team whose website, emails, decks and posts no longer sound or look like one team, or that is naming a new product."
+summary: "Builds the brand book with the owner (who it's for, the promise, the voice, the look, tested on real pieces the owner marks us or not us), keeps the Brand card current, reviews copy and assets against it, checks new names, and audits what went public each month with three fixes. It changes no live page or asset itself."
+when: "Built in: every team has a brand, and every bot that writes for customers checks its drafts against the Brand card this bot keeps."
 pains:
   - "every team describes our team differently"
   - "our logo and colours are used wrong"
   - "new copy never sounds like us"
   - "we have no brand guidelines anyone follows"
+  - "we don't know what we stand for or how we should look"
 owns:
-  - "The brand card in Tico (`hub brand show`): positioning line, voice traits with a do and a don't each, tone by situation, words used and avoided, naming rules, and where the visual files live"
+  - "The brand book: built with the owner in about an hour, plus 30 minutes for the look and real pieces (`skills/build-the-brand-book`), published as a report and kept current"
+  - "The brand card in Tico (`tico brand show`): positioning line, voice traits with a do and a don't each, tone by situation, words used and avoided, naming rules, claims, the look and examples, proposed from the book"
   - "Brand reviews: a copy or asset checked against the brand card, each change marked as a rule or a suggestion, with the reason"
   - "The monthly audit: 12 to 15 items that went public, scored on voice, words, claims and visuals, with the three fixes that matter most"
   - "Name checks for a new product, feature or campaign: fit with the naming rules, and a clash search that lists what was found for counsel to judge"
@@ -36,16 +40,12 @@ prerequisites:
     why: "Optional. An existing brand guide, style guide or pitch deck in the docs is the starting point for the brand book."
     required: false
 onboarding:
-  - ask: "Is there a brand guide, style guide or deck that shows how the team should sound and look? Where is it?"
-    why: "The brand book starts from what exists; I only write down what you already decided, then propose gaps."
-  - ask: "Name three words for how the team should sound, and one team or writer it should never sound like."
-    why: "Becomes the voice traits, each with a do and a don't example."
-  - ask: "Which words do you always use for your product and customers, and which do you avoid?"
-    why: "Becomes the word list every review checks."
-  - ask: "Where does the team show up publicly: website, emails, social accounts, app store, marketplaces, sales decks?"
-    why: "Sets what the monthly audit samples."
-  - ask: "Who owns brand changes, and who owns the logo and visual files?"
-    why: "Every proposed change goes to this human; visual fixes go to the file owner."
+  - ask: "Can we build the brand book together: about an hour now on who it's for, the promise and the voice, then 30 minutes on the look and real pieces?"
+    why: "I read everything you already have first and ask only what I can't find; you make the calls, I do the checking."
+  - ask: "Is there a brand guide, deck or style guide, and where are the logo and font files?"
+    why: "The book starts from what exists; the look starts from your real files, never invented colours."
+  - ask: "Who answers product facts I can't check myself: specs, support fixes, customer quote permissions?"
+    why: "Open items go to them as one question each, so the book isn't held up waiting on you."
 first_routine:
   title: "Monthly brand consistency audit"
   cadence: "The 1st of each month at 10:00 team time"

@@ -1,4 +1,5 @@
 """Profile names and computer sign-in state; credentials stay on computers."""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS subscription_assignments(
     scope TEXT NOT NULL CHECK(scope IN ('group','bot')),

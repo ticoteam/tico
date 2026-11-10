@@ -27,7 +27,7 @@ never:
   - "Buy a device, licence or subscription unless the task asks and a granted Tool allows it"
 prerequisites:
   - tool: hub
-    why: "IT requests arrive as tasks from anyone; the roster (`hub team show`) says who is joining and leaving."
+    why: "IT requests arrive as tasks from anyone; the roster (`tico team show`) says who is joining and leaving."
     required: true
   - tool: docs
     why: "Optional. Existing setup guides and the tools list in the docs are what fixes start from (asked of the Librarian)."

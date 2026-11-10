@@ -10,7 +10,7 @@ operation), an edit as `threads_edit`. Every list is paged and byte-capped by th
 
 import asyncio
 import json
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import Query, Request
 from pydantic import BaseModel, Field
@@ -35,8 +35,8 @@ class ThreadCreate(BaseModel):
     parent_message_id: str | None = None
     kind: str = "chat"
     task_id: str | None = None
-    body: str | None = None                       # a first message, posted with the thread
-    pin_for_members: bool = False                 # pin it for its starter and every person added
+    body: str | None = None  # a first message, posted with the thread
+    pin_for_members: bool = False  # pin it for its starter and every person added
 
 
 class ThreadPatch(BaseModel):
@@ -44,8 +44,8 @@ class ThreadPatch(BaseModel):
     archived: bool | None = None
     audience: str | None = None
     audience_group_id: str | None = None
-    retention_days: int | None = None             # sent as null: keep its messages for good
-    pinned_for_everyone: bool | None = None       # a manager pins the root for everyone who reads it, or unpins it
+    retention_days: int | None = None  # sent as null: keep its messages for good
+    pinned_for_everyone: bool | None = None  # a manager pins the root for everyone who reads it, or unpins it
 
 
 class ThreadPost(BaseModel):
@@ -54,9 +54,9 @@ class ThreadPost(BaseModel):
     to: str | None = None
     refs: dict = Field(default_factory=dict)
     parent_message_id: str | None = None
-    in_reply_to: str | None = None                # the message this one replies to, in the same root (flat replies)
-    delivery: Way | None = None                   # only in a bot's Home or a DM with one bot
-    defer_for: str | None = None                  # with delivery defer: <n>m, <n>h, <n>d or never (the default)
+    in_reply_to: str | None = None  # the message this one replies to, in the same root (flat replies)
+    delivery: Way | None = None  # only in a bot's Home or a DM with one bot
+    defer_for: str | None = None  # with delivery defer: <n>m, <n>h, <n>d or never (the default)
 
 
 class MessagePatch(BaseModel):
@@ -84,16 +84,18 @@ class Follow(BaseModel):
 
 class DmCreate(BaseModel):
     """A DM with these teammates, with an optional first message (POST /api/v2/threads/dm)."""
+
     members: list[str] = Field(..., min_length=1, max_length=50)
     body: str | None = None
     title: str = ""
-    delivery: Way | None = None                   # with `body`, in a DM with one bot
+    delivery: Way | None = None  # with `body`, in a DM with one bot
     defer_for: str | None = None
 
 
 class ThreadUpload(BaseModel):
     """A message with files in a thread (POST /api/v2/uploads/threads/{thread_id}/messages). The text may be empty when
     files come with it; each file's caption is in `titles`, in upload order."""
+
     text: str = Field("", max_length=200_000)
     kind: str = "say"
     to: str | None = None
@@ -128,8 +130,9 @@ def _reply_check(c, auth, who, thread_id, body):
     if not target:
         return None
     if getattr(body, "parent_message_id", None):
-        raise Problem("reply_target_invalid", "A reply goes in the thread: send in_reply_to without parent_message_id",
-                      422)
+        raise Problem(
+            "reply_target_invalid", "A reply goes in the thread: send in_reply_to without parent_message_id", 422
+        )
     return threads.reply_target(c, threads.viewer(auth, who), thread_id, target)["id"]
 
 
@@ -176,21 +179,24 @@ def _delivery_refs(c, auth, who, body, thread_id=None, members=None):
     # wakes it: the members of a DM with it may name any way, Write or not. Without this a member's message sent from
     # the composer (which names its remembered way) went as a quiet defer with no deadline.
     if not directs and members is not None:
-        directs = True                  # a DM's first message: making the DM is checked as it is made (threads.dm)
+        directs = True  # a DM's first message: making the DM is checked as it is made (threads.dm)
     elif not directs and thread_id and _dm_with(c, v, thread_id, bot):
         directs = threads.can_post(c, v, thread_id)
     if way in ("steer", "queue") and not directs:
         raise Problem("delivery", "Only someone who may message this bot can wake it: send it with defer", 403)
     if way == "defer" and not directs:
         if defer_for not in (None, delivery.NEVER):
-            raise Problem("delivery", "Only someone who may message this bot can give it a deadline: send it with "
-                          "defer and no defer_for", 403)
+            raise Problem(
+                "delivery",
+                "Only someone who may message this bot can give it a deadline: send it with defer and no defer_for",
+                403,
+            )
         defer_for = None
     # Riding along wakes nothing new, but it is a queue's place in the turn: only for someone who may queue.
     if way == "defer" and directs and thread_id and delivery.running_in_session(c, H.actor_id(bot), [thread_id]):
         way = "queue"
     if way == "queue":
-        return way, {"send_way": "queue", "delivery": "queue"}      # refs.delivery: execution.inputs keeps it out
+        return way, {"send_way": "queue", "delivery": "queue"}  # refs.delivery: execution.inputs keeps it out
     if way == "defer":
         return way, {"send_way": "defer", "quiet": True, **({"send_defer_for": defer_for} if defer_for else {})}
     return way, {}
@@ -208,21 +214,29 @@ def _sent_as(c, way, message):
     """What a post that named a way did (delivery.sent_as): the way and, for a defer, its deadline (null: none)."""
     due = None
     if way == "defer":
-        row = c.execute("SELECT due_at FROM deferrals WHERE item=? OR item IN (SELECT carrier_id FROM message_deliveries "
-                        "WHERE message_id=? AND carrier_id IS NOT NULL) LIMIT 1", (message["id"], message["id"])).fetchone()
+        row = c.execute(
+            "SELECT due_at FROM deferrals WHERE item=? OR item IN (SELECT carrier_id FROM message_deliveries "
+            "WHERE message_id=? AND carrier_id IS NOT NULL) LIMIT 1",
+            (message["id"], message["id"]),
+        ).fetchone()
         due = row[0] if row else None
     return delivery.sent_as(way, due)
 
 
 def _thread_message(message):
     """A message as the thread routes answer it: with thread_id beside conversation_id, as the timeline and events have it."""
-    return {**message, "thread_id": message.get("conversation_id")} if message and message.get("conversation_id") else message
+    return (
+        {**message, "thread_id": message.get("conversation_id")}
+        if message and message.get("conversation_id")
+        else message
+    )
 
 
 def _read_or_404(c, v, target):
     """Read on a teammate, or the same 404 whether they are missing or the viewer may not read them. A missing teammate
     passes this check and fails in threads.home with the same 404, so the two never differ."""
     from . import teammate_access
+
     try:
         levels = teammate_access.levels_for(c, v.who, target, auth=v.auth)
     except (ValueError, KeyError):
@@ -234,6 +248,7 @@ def _read_or_404(c, v, target):
 def _home_owner(target):
     """The owner actor a Home is keyed by (`person:` reads as `human:`), as threads.home takes it."""
     from . import teammate_access
+
     kind, ident = teammate_access.parse_target(target)
     return f"{kind}:{ident}"
 
@@ -246,7 +261,7 @@ def _shared(c, v, actor, *, cursor=None, limit=None):
     limit = max(1, min(int(limit or 50), threads.MAX_PAGE))
     actor = str(actor)
     if actor.startswith("bot:"):
-        actor = H.resolve_actor(c, actor) or actor      # a bot named by its slug: rows hold its id
+        actor = H.resolve_actor(c, actor) or actor  # a bot named by its slug: rows hold its id
     try:
         seen = teammate_access.levels_for(c, v.who, actor, auth=v.auth)["see"]
     except (ValueError, KeyError):
@@ -256,10 +271,14 @@ def _shared(c, v, actor, *, cursor=None, limit=None):
     activity = "(SELECT MAX(s.last_seq) FROM conversations s WHERE s.root_id=r.id)"
     them = threads.actor_viewer(c, actor)
     names = them.member_names(c) if them is not None else [actor]
-    where = ["r.parent_id IS NULL", "r.archived_at IS NULL", "r.closed_at IS NULL",
-             f"(EXISTS (SELECT 1 FROM thread_members m WHERE m.thread_id=r.id AND m.actor IN ({','.join('?' * len(names))})) "
-             f"OR EXISTS (SELECT 1 FROM {threads._PARTICIPANTS.format(r='r')} WHERE value=?) "
-             "OR EXISTS (SELECT 1 FROM tasks t WHERE t.id=r.task_id AND (t.owner_id=? OR t.requester_id=?)))"]
+    where = [
+        "r.parent_id IS NULL",
+        "r.archived_at IS NULL",
+        "r.closed_at IS NULL",
+        f"(EXISTS (SELECT 1 FROM thread_members m WHERE m.thread_id=r.id AND m.actor IN ({','.join('?' * len(names))})) "
+        f"OR EXISTS (SELECT 1 FROM {threads._PARTICIPANTS.format(r='r')} WHERE value=?) "
+        "OR EXISTS (SELECT 1 FROM tasks t WHERE t.id=r.task_id AND (t.owner_id=? OR t.requester_id=?)))",
+    ]
     args = [*names, actor, actor, actor]
     if cursor:
         try:
@@ -268,12 +287,17 @@ def _shared(c, v, actor, *, cursor=None, limit=None):
             args += [int(at), int(at), cid]
         except ValueError:
             raise Problem("cursor", "Unknown cursor", 422) from None
-    sql = (f"SELECT r.*, {activity} AS activity FROM conversations r WHERE " + " AND ".join(where)
-           + " AND " + threads.readable_sql(c, v, "r") + " ORDER BY activity DESC, r.id DESC LIMIT ?")
+    sql = (
+        f"SELECT r.*, {activity} AS activity FROM conversations r WHERE "
+        + " AND ".join(where)
+        + " AND "
+        + threads.readable_sql(c, v, "r")
+        + " ORDER BY activity DESC, r.id DESC LIMIT ?"
+    )
     rows = [dict(r) for r in c.execute(sql, (*args, limit * 3))]
     rows = [r for r in rows if threads.thread_readable(c, v, r["id"])]
-    summaries = threads.subtree_summaries(c, v, [r["id"] for r in rows[:limit + 1]])
-    dms_with = threads.dm_with(c, v, rows[:limit + 1])
+    summaries = threads.subtree_summaries(c, v, [r["id"] for r in rows[: limit + 1]])
+    dms_with = threads.dm_with(c, v, rows[: limit + 1])
     found, budget = [], threads.MAX_PAGE_BYTES
     for r in rows:
         item = threads.view(c, v, r, summary=summaries.get(r["id"]), dm=dms_with.get(r["id"]))
@@ -286,8 +310,12 @@ def _shared(c, v, actor, *, cursor=None, limit=None):
     listed = [t for t in found if t["audience"] not in ("personal", "participants")]
     tail = found[-1] if found else None
     more = len(found) >= limit
-    return {"attention": [], "threads": listed, "dms": dms,
-            "next_cursor": f"{tail['activity_seq']}:{tail['id']}" if more and tail else None}
+    return {
+        "attention": [],
+        "threads": listed,
+        "dms": dms,
+        "next_cursor": f"{tail['activity_seq']}:{tail['id']}" if more and tail else None,
+    }
 
 
 def install(app, store, auth, mutate, rule_check):
@@ -311,14 +339,17 @@ def install(app, store, auth, mutate, rule_check):
     def thread_place(who, thread_id):
         """A thread write's place, as `where:` reads it (its thread, root, audience and teams). The thread is authorized
         first, as `recipients` does."""
+
         def place(c, author, people):
             auth.conversation(c, who, thread_id)
             return org_rule_check.place_for(c, author, people, thread_id)
+
         return place
 
     def start_place(who, start, parent_message_id=None):
         """A first message's place: its sub-thread's (its parent's thread), or the new thread's own (`place_for_start`).
         Nothing is made before the check, so the place reads what the create would make."""
+
         def place(c, author, people):
             if parent_message_id:
                 message = H.message(c, parent_message_id) or {}
@@ -326,9 +357,15 @@ def install(app, store, auth, mutate, rule_check):
                     raise Problem("not_found", "Message not found", 404)
                 auth.conversation(c, who, message["conversation_id"])
                 return org_rule_check.place_for(c, author, people, message["conversation_id"])
-            return org_rule_check.place_for_start(c, author, people, audience=start["audience"],
-                                                  audience_group_id=start["audience_group_id"],
-                                                  members=start["members"])
+            return org_rule_check.place_for_start(
+                c,
+                author,
+                people,
+                audience=start["audience"],
+                audience_group_id=start["audience_group_id"],
+                members=start["members"],
+            )
+
         return place
 
     def check(who, thread_id, body):
@@ -338,10 +375,18 @@ def install(app, store, auth, mutate, rule_check):
         if getattr(body, "in_reply_to", None):
             with store.read() as c:
                 _reply_check(c, auth, who, thread_id, body)
-        reach.precheck(store, who, lambda c: reach.check_thread(c, who, thread_id, body.text, body.to,
-                                                                body.parent_message_id))
-        return rule_check(who, "threads", body.text, lambda c: recipients(c, who, thread_id, body.to), "",
-                          {"thread_id": thread_id}, place=thread_place(who, thread_id))
+        reach.precheck(
+            store, who, lambda c: reach.check_thread(c, who, thread_id, body.text, body.to, body.parent_message_id)
+        )
+        return rule_check(
+            who,
+            "threads",
+            body.text,
+            lambda c: recipients(c, who, thread_id, body.to),
+            "",
+            {"thread_id": thread_id},
+            place=thread_place(who, thread_id),
+        )
 
     @org_rule_check.replayer("threads_edit", audience=lambda c, bot, replay: org_rule_check.edit_people(c, replay))
     def replay_edit(c, bot, hold, replay, ingest, gate=None):
@@ -350,8 +395,13 @@ def install(app, store, auth, mutate, rule_check):
         return _thread_message(threads.edit_message(c, threads.viewer(auth, bot), replay["message_id"], replay["text"]))
 
     @app.get("/api/v2/threads")
-    def sidebar(request: Request, cursor: str | None = None, limit: int | None = None,
-                with_actor: str | None = Query(None, alias="with"), sort: str | None = None):
+    def sidebar(
+        request: Request,
+        cursor: str | None = None,
+        limit: int | None = None,
+        with_actor: str | None = Query(None, alias="with"),
+        sort: str | None = None,
+    ):
         """Needs attention, the threads and the DMs the viewer may read, one page. `sort=recent` lists newest first,
         `sort=important` by each thread's 1-10 level, then newest, without noise; neither, unread first. With
         `with=<actor>`, only the threads that teammate is a member of, in the same shape."""
@@ -387,6 +437,14 @@ def install(app, store, auth, mutate, rule_check):
         v = threads.viewer(auth, request.state.identity)
         with store.read_transaction() as c:
             return thread_rail.browse(c, v, q=q, cursor=cursor, limit=limit)
+
+    @app.get("/api/v2/threads/archived")
+    def archived(request: Request, cursor: str | None = None, limit: int | None = None):
+        """The threads the viewer archived and may still manage, newest first: Browse threads' Archived view. Unarchive is
+        PATCH with `archived` false."""
+        v = threads.viewer(auth, request.state.identity)
+        with store.read_transaction() as c:
+            return thread_rail.archived(c, v, cursor=cursor, limit=limit)
 
     @app.get("/api/v2/threads/catch-up")
     def catch_up(request: Request, cursor: str | None = None, limit: int | None = None):
@@ -426,21 +484,35 @@ def install(app, store, auth, mutate, rule_check):
             return {**threads.get(c, v, thread_id), "members": threads.members(c, v, thread_id, limit=50)}
 
     @app.get("/api/v2/threads/{thread_id}/timeline")
-    def timeline(request: Request, thread_id: str, cursor: str | None = None, limit: int | None = None,
-                 max_bytes: int | None = None, flat: int = 0):
+    def timeline(
+        request: Request,
+        thread_id: str,
+        cursor: str | None = None,
+        limit: int | None = None,
+        max_bytes: int | None = None,
+        flat: int = 0,
+    ):
         """The thread in tree order: a page of its own messages, each followed by its sub-thread's messages, and the
         breadcrumb; with `flat=1`, the thread and its open sub-threads in time order, every message at depth 0.
         `next_cursor` is the seq to pass as `cursor` for the page above. Each message has `reply_to` and `routed`; the
         first page has `bot_status`."""
         with store.read() as c:
-            return threads.timeline(c, threads.viewer(auth, request.state.identity), thread_id, cursor=cursor,
-                                    limit=limit, max_bytes=max_bytes, flat=bool(flat))
+            return threads.timeline(
+                c,
+                threads.viewer(auth, request.state.identity),
+                thread_id,
+                cursor=cursor,
+                limit=limit,
+                max_bytes=max_bytes,
+                flat=bool(flat),
+            )
 
     @app.get("/api/v2/threads/{thread_id}/bot-status")
     def bot_status(request: Request, thread_id: str):
         """The bots the thread's root waits on, and why (threads-contract §4.10): `{"bots": [...]}`, five at most,
         oldest wait first. 404 for a thread the viewer cannot read."""
         from . import thread_bot_status
+
         with store.read() as c:
             v = threads.viewer(auth, request.state.identity)
             row = threads.require(c, v, thread_id)
@@ -449,11 +521,32 @@ def install(app, store, auth, mutate, rule_check):
                 root = threads.require(c, v, root["id"])
             return {"bots": thread_bot_status.status(c, v, root)}
 
+    @app.get("/api/v2/threads/{thread_id}/reach")
+    def reach_preview(
+        request: Request,
+        thread_id: str,
+        text: str = "",
+        delivery_: Annotated[Way | None, Query(alias="delivery")] = None,
+        defer_for: str | None = None,
+        in_reply_to: str | None = None,
+    ):
+        """Who a message with `text` (its @mentions) sent this way would reach, each with its mode: steer when no
+        `delivery` is named. Writes nothing; 404 for a thread the viewer cannot read."""
+        if wrong := delivery.check(delivery_, defer_for):
+            raise Problem("delivery", wrong, 422)
+        with store.read() as c:
+            v = threads.viewer(auth, request.state.identity)
+            target = threads.reply_target(c, v, thread_id, in_reply_to)["id"] if in_reply_to else None
+            return threads.reaches(
+                c, v, thread_id, text[:20000], way=delivery_, defer_for=defer_for, in_reply_to=target
+            )
+
     @app.get("/api/v2/threads/{thread_id}/members")
     def members(request: Request, thread_id: str, cursor: str | None = None, limit: int | None = None):
         with store.read() as c:
-            return threads.members(c, threads.viewer(auth, request.state.identity), thread_id, cursor=cursor,
-                                   limit=limit)
+            return threads.members(
+                c, threads.viewer(auth, request.state.identity), thread_id, cursor=cursor, limit=limit
+            )
 
     @app.post("/api/v2/threads")
     def create_thread(request: Request, body: ThreadCreate):
@@ -461,11 +554,18 @@ def install(app, store, auth, mutate, rule_check):
         `body`, its first message is posted with it, and a held first message makes neither (core's post checks before
         it creates, and answers with the hold)."""
         who = request.state.identity
-        start = {"title": body.title, "audience": body.audience, "audience_group_id": body.audience_group_id,
-                 "members": body.members, "task_id": body.task_id, "kind": body.kind,
-                 **({"pin_for_members": True} if body.pin_for_members else {})}
+        start = {
+            "title": body.title,
+            "audience": body.audience,
+            "audience_group_id": body.audience_group_id,
+            "members": body.members,
+            "task_id": body.task_id,
+            "kind": body.kind,
+            **({"pin_for_members": True} if body.pin_for_members else {}),
+        }
         if body.body and not body.parent_message_id and body.audience in ("members", "team", "company"):
-            threads.require_name(who.actor, body.audience, body.title, 0)      # before the rule check spends a call
+            threads.require_name(who.actor, body.audience, body.title, 0)  # before the rule check spends a call
+
         def audience(c):
             if body.parent_message_id:
                 thread_id = (H.message(c, body.parent_message_id) or {}).get("conversation_id")
@@ -474,30 +574,52 @@ def install(app, store, auth, mutate, rule_check):
                 auth.conversation(c, who, thread_id)
                 return org_rule_check.thread_people(c, {"thread_id": thread_id})
             return org_rule_check.thread_people(c, {"start": start})
-        rc = rule_check(who, "threads", body.body, audience, "", {},
-                        place=start_place(who, start, body.parent_message_id)) if body.body else None
+
+        rc = (
+            rule_check(
+                who, "threads", body.body, audience, "", {}, place=start_place(who, start, body.parent_message_id)
+            )
+            if body.body
+            else None
+        )
 
         def work(c):
             v = threads.viewer(auth, who)
             if not body.body:
-                return threads.create(c, v, title=body.title, audience=body.audience,
-                                      audience_group_id=body.audience_group_id, members=body.members,
-                                      parent_message_id=body.parent_message_id, task_id=body.task_id, kind=body.kind,
-                                      pin_for_members=body.pin_for_members)
+                return threads.create(
+                    c,
+                    v,
+                    title=body.title,
+                    audience=body.audience,
+                    audience_group_id=body.audience_group_id,
+                    members=body.members,
+                    parent_message_id=body.parent_message_id,
+                    task_id=body.task_id,
+                    kind=body.kind,
+                    pin_for_members=body.pin_for_members,
+                )
             if body.parent_message_id:
                 # A sub-thread's first message: post makes the sub-thread only once the message goes through.
                 parent = H.message(c, body.parent_message_id)
                 if not parent:
                     raise Problem("not_found", "Message not found", 404)
-                posted = threads.post(c, v, parent["conversation_id"], body.body,
-                                      parent_message_id=body.parent_message_id, checked=rc, reach=True)
+                posted = threads.post(
+                    c,
+                    v,
+                    parent["conversation_id"],
+                    body.body,
+                    parent_message_id=body.parent_message_id,
+                    checked=rc,
+                    reach=True,
+                )
             else:
                 # A new thread's first message: post makes the thread only once the message goes through, so a held
                 # first message leaves no thread behind.
                 posted = threads.post(c, v, None, body.body, checked=rc, start=start, reach=True)
-            if "id" not in posted:          # held: no thread is made, its first message is the hold
+            if "id" not in posted:  # held: no thread is made, its first message is the hold
                 return posted
             return {**threads.get(c, v, posted["conversation_id"]), "message": _thread_message(posted)}
+
         return mutate(request, body, work)
 
     @app.patch("/api/v2/threads/{thread_id}")
@@ -515,6 +637,7 @@ def install(app, store, auth, mutate, rule_check):
             if body.pinned_for_everyone is not None:
                 thread_rail.set_pinned_for_everyone(c, v, thread_id, body.pinned_for_everyone)
             return threads.get(c, v, thread_id)
+
         return mutate(request, body, work)
 
     @app.post("/api/v2/threads/{thread_id}/messages")
@@ -531,15 +654,25 @@ def install(app, store, auth, mutate, rule_check):
             v = threads.viewer(auth, who)
             replying = _reply_check(c, auth, who, thread_id, body)
             way, marks = _delivery_refs(c, auth, who, body, thread_id) if body.delivery else (None, {})
-            message = threads.post(c, v, thread_id, body.text, kind=body.kind,
-                                   refs={**body.refs, **marks} if marks else body.refs,
-                                   parent_message_id=body.parent_message_id, to_actor=body.to, checked=rc, reach=True,
-                                   in_reply_to=replying)
-            if "id" not in message:         # held: post wrote nothing and answers with the hold
+            message = threads.post(
+                c,
+                v,
+                thread_id,
+                body.text,
+                kind=body.kind,
+                refs={**body.refs, **marks} if marks else body.refs,
+                parent_message_id=body.parent_message_id,
+                to_actor=body.to,
+                checked=rc,
+                reach=True,
+                in_reply_to=replying,
+            )
+            if "id" not in message:  # held: post wrote nothing and answers with the hold
                 return message
             out = _thread_message(message)
             out["reply_to"] = threads.reply_quotes(c, v, [out]).get(out["id"])
             return {**out, "sent_as": _sent_as(c, way, message)} if way else out
+
         return mutate(request, body, work)
 
     @app.patch("/api/v2/messages/{message_id}")
@@ -552,25 +685,45 @@ def install(app, store, auth, mutate, rule_check):
             # Only one's own message one can read is edited: anything else is the 404/403 before any check, so neither
             # the reach check nor the rule check reads (or names who reads) a message hidden from the caller.
             # Writer refusals belong in the mutation transaction; this lookup only checks ownership.
-            thread_id = threads._own_say(c, *threads._actor_of(viewer), message_id,
-                                         check_writer=False).get("conversation_id") or ""
+            thread_id = (
+                threads._own_say(c, *threads._actor_of(viewer), message_id, check_writer=False).get("conversation_id")
+                or ""
+            )
         # A bot's edit that @mentions someone new out of its reach is refused before the rule check spends judgment.
         reach.precheck(store, who, lambda c: reach.check_edit(c, who, message_id, body.text, viewer))
-        rc = rule_check(who, "threads_edit", body.text, lambda c: recipients(c, who, thread_id, None), "",
-                        {"message_id": message_id}, place=thread_place(who, thread_id)) if thread_id else None
+        rc = (
+            rule_check(
+                who,
+                "threads_edit",
+                body.text,
+                lambda c: recipients(c, who, thread_id, None),
+                "",
+                {"message_id": message_id},
+                place=thread_place(who, thread_id),
+            )
+            if thread_id
+            else None
+        )
 
         def work(c):
             threads._own_say(c, *threads._actor_of(viewer), message_id)
-            gate = org_rule_check.apply(c, rc, body.text, {"message_id": message_id, "text": body.text},
-                                        audience_now=recipients(c, who, thread_id, None) if rc else None)
+            gate = org_rule_check.apply(
+                c,
+                rc,
+                body.text,
+                {"message_id": message_id, "text": body.text},
+                audience_now=recipients(c, who, thread_id, None) if rc else None,
+            )
             if gate and gate.get("moved"):
-                raise Problem("moved", "The thread changed while the edit was checked; send it again", 409,
-                              retryable=True)
+                raise Problem(
+                    "moved", "The thread changed while the edit was checked; send it again", 409, retryable=True
+                )
             if gate and gate.get("held"):
                 return org_rule_check.held_answer(c, who, gate, auth=auth)
             reach.check_edit(c, who, message_id, body.text, viewer)
             edited = threads.edit_message(c, viewer, message_id, body.text)
             return {**_thread_message(edited), **org_rule_check.answer(gate)}
+
         return mutate(request, body, work)
 
     @app.delete("/api/v2/messages/{message_id}")
@@ -589,8 +742,9 @@ def install(app, store, auth, mutate, rule_check):
         """Read up to now in the thread and every sub-thread under it (`ago_ms`: up to that long ago)."""
         who = request.state.identity
         body = body or ReadAll()
-        return mutate(request, body, lambda c: threads.mark_all_read(c, threads.viewer(auth, who), thread_id,
-                                                                     ago_ms=body.ago_ms))
+        return mutate(
+            request, body, lambda c: threads.mark_all_read(c, threads.viewer(auth, who), thread_id, ago_ms=body.ago_ms)
+        )
 
     @app.post("/api/v2/threads/{thread_id}/members")
     def add_member(request: Request, thread_id: str, body: MemberAdd):
@@ -599,6 +753,7 @@ def install(app, store, auth, mutate, rule_check):
         def work(c):
             threads.add_member(c, threads.viewer(auth, who), thread_id, body.actor, role=body.role)
             return {"thread_id": thread_id, "actor": body.actor, "role": body.role}
+
         return mutate(request, body, work)
 
     @app.delete("/api/v2/threads/{thread_id}/members/{actor:path}")
@@ -608,13 +763,15 @@ def install(app, store, auth, mutate, rule_check):
         def work(c):
             threads.remove_member(c, threads.viewer(auth, who), thread_id, actor)
             return {"thread_id": thread_id, "actor": actor, "removed": True}
+
         return mutate(request, Nothing(), work)
 
     @app.put("/api/v2/threads/{thread_id}/follow")
     def follow(request: Request, thread_id: str, body: Follow):
         who = request.state.identity
-        return mutate(request, body, lambda c: threads.follow(c, threads.viewer(auth, who), thread_id,
-                                                              notify=body.notify))
+        return mutate(
+            request, body, lambda c: threads.follow(c, threads.viewer(auth, who), thread_id, notify=body.notify)
+        )
 
     @app.put("/api/v2/threads/{thread_id}/pin")
     def pin(request: Request, thread_id: str):
@@ -627,6 +784,13 @@ def install(app, store, auth, mutate, rule_check):
         """Unpin a root thread for me, over a pin for everyone too. The answer is the thread view."""
         who = request.state.identity
         return mutate(request, Nothing(), lambda c: thread_rail.unpin(c, threads.viewer(auth, who), thread_id))
+
+    @app.delete("/api/v2/threads/{thread_id}")
+    def delete_thread(request: Request, thread_id: str):
+        """Delete a thread whose messages are all deleted and that no one else is in. Refused with a plain reason (409)
+        otherwise. It leaves every list and reads as not found."""
+        who = request.state.identity
+        return mutate(request, Nothing(), lambda c: threads.delete(c, threads.viewer(auth, who), thread_id))
 
     @app.delete("/api/v2/threads/{thread_id}/follow")
     def unfollow(request: Request, thread_id: str):
@@ -643,9 +807,21 @@ def install(app, store, auth, mutate, rule_check):
             raise Problem("delivery", "delivery goes with a first message (body)", 422)
         _delivery_words(body)
         start = {"dm": body.members, "title": body.title}
-        rc = rule_check(who, "threads", body.body, lambda c: org_rule_check.thread_people(c, {"start": start}), "", {},
-                        place=lambda c, author, people: org_rule_check.place_for_start(
-                            c, author, people, audience="personal", members=body.members)) if body.body else None
+        rc = (
+            rule_check(
+                who,
+                "threads",
+                body.body,
+                lambda c: org_rule_check.thread_people(c, {"start": start}),
+                "",
+                {},
+                place=lambda c, author, people: org_rule_check.place_for_start(
+                    c, author, people, audience="personal", members=body.members
+                ),
+            )
+            if body.body
+            else None
+        )
 
         def work(c):
             v = threads.viewer(auth, who)
@@ -659,12 +835,13 @@ def install(app, store, auth, mutate, rule_check):
                 existing = threads._open_dm(c, actor, threads._dm_members_for(c, actor, body.members))
                 way, marks = _delivery_refs(c, auth, who, body, thread_id=existing, members=body.members)
             posted = threads.post(c, v, None, body.body, refs=marks or None, checked=rc, start=start, reach=True)
-            if "id" not in posted:          # held: no DM is made, its first message is the hold
+            if "id" not in posted:  # held: no DM is made, its first message is the hold
                 return posted
             message = _thread_message(posted)
             if way:
                 message = {**message, "sent_as": _sent_as(c, way, posted)}
             return {**threads.get(c, v, posted["conversation_id"]), "message": message}
+
         return mutate(request, body, work)
 
     @app.put("/api/v2/messages/{message_id}/reactions/{emoji}")
@@ -692,6 +869,7 @@ def install(app, store, auth, mutate, rule_check):
             if row.get("audience") != "home" or not owner.startswith("bot:"):
                 raise Problem("home", "Only a bot's Home has earlier messages to open", 422)
             return threads.open_earlier_messages(c, v, owner[4:])
+
         return mutate(request, Nothing(), work)
 
     @app.post("/api/v2/uploads/threads/{thread_id}/messages", openapi_extra=upload_contract(ThreadUpload))
@@ -700,9 +878,10 @@ def install(app, store, auth, mutate, rule_check):
         the same upload limit. Who may post is checked and the rule check runs before any byte is stored."""
         from .blobs import register
         from .views import human_only
+
         who = request.state.identity
         human_only(who)
-        thread_id = bot_home_merge.named_home(store, thread_id)     # as post_message names it: the Home, before the check
+        thread_id = bot_home_merge.named_home(store, thread_id)  # as post_message names it: the Home, before the check
         checked = {}
 
         def admit(body):
@@ -710,6 +889,7 @@ def install(app, store, auth, mutate, rule_check):
             with store.read() as c:
                 threads.require(c, threads.viewer(auth, who), thread_id, write=True)
             checked["rc"] = check(who, thread_id, body)
+
         body, uploads = await app.state.uploads.form(request, ThreadUpload, admit)
         if not body.text.strip() and not uploads:
             raise Problem("empty", "A message needs text or a file", 422)
@@ -722,16 +902,27 @@ def install(app, store, auth, mutate, rule_check):
             for index, item in enumerate(items):
                 caption = body.titles[index] if index < len(body.titles) else ""
                 item["title"] = caption or item["name"]
-            posted = threads.post(c, v, thread_id, body.text, kind=body.kind, to_actor=body.to, refs=marks or None,
-                                  parent_message_id=body.parent_message_id, checked=checked["rc"],
-                                  attachments=items or None, in_reply_to=replying)
-            if "id" not in posted:          # held: its files are in the hold's replay, linked when it is released
+            posted = threads.post(
+                c,
+                v,
+                thread_id,
+                body.text,
+                kind=body.kind,
+                to_actor=body.to,
+                refs=marks or None,
+                parent_message_id=body.parent_message_id,
+                checked=checked["rc"],
+                attachments=items or None,
+                in_reply_to=replying,
+            )
+            if "id" not in posted:  # held: its files are in the hold's replay, linked when it is released
                 return posted
             message = _thread_message(H.message(c, posted["id"]))
             message["reply_to"] = threads.reply_quotes(c, v, [message]).get(message["id"])
             if way:
                 message = {**message, "sent_as": _sent_as(c, way, posted)}
             return {"thread": threads.get(c, v, thread_id), "message": message}
+
         return await asyncio.to_thread(app.state.uploads.write, request, body, uploads, work)
 
     # The search index (migration 0047) follows every write through its triggers. Install can run before the schema,
@@ -745,4 +936,4 @@ def install(app, store, auth, mutate, rule_check):
                     ready.append(True)
 
     search_index()
-    app.state.thread_index = search_index     # context search asks for the index before it reads
+    app.state.thread_index = search_index  # context search asks for the index before it reads

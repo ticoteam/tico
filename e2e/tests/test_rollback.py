@@ -7,6 +7,7 @@ and must answer the scenario exactly as it did before the backup. Without a ref,
 checkout's server: a copy booted by the code under test, which proves the copy but not a rollback.
 
 A ref that is not in this checkout fails the test; it is never a skip, because a skipped rollback is not a rollback."""
+
 import io
 import json
 import os
@@ -17,7 +18,6 @@ from pathlib import Path
 
 import pytest
 
-from backend.tests.test_api import api  # noqa: F401  (the fixture)
 from e2e import scenario
 from e2e.normalize import normalize
 from e2e.server import serve, settings_for, snapshot
@@ -47,8 +47,9 @@ def same_checkout(api, tmp_path):  # noqa: F811
 
 def checkout(ref, into):
     """The tree at `ref`, extracted from git's archive: this checkout's working copy is not touched."""
-    commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--verify", "--quiet", ref + "^{commit}"],
-                            capture_output=True, text=True)
+    commit = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "--verify", "--quiet", ref + "^{commit}"], capture_output=True, text=True
+    )
     if commit.returncode != 0:
         pytest.fail(f"{REF_ENV}={ref} is not a commit in this checkout; fetch it first (git fetch origin {ref})")
     archive = subprocess.run(["git", "-C", str(ROOT), "archive", "--format=tar", ref], capture_output=True, check=True)
@@ -58,8 +59,14 @@ def checkout(ref, into):
 
 def old_server(tree, args):
     """One step of the rollback in a process of its own: the checkout's backend, this tree's e2e package."""
-    result = subprocess.run([sys.executable, "-m", "e2e.rollback_server", *args], cwd=tree,
-                            env={**os.environ, "PYTHONPATH": str(ROOT)}, capture_output=True, text=True, timeout=900)
+    result = subprocess.run(
+        [sys.executable, "-m", "e2e.rollback_server", *args],
+        cwd=tree,
+        env={**os.environ, "PYTHONPATH": str(ROOT)},
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
     assert result.returncode == 0, "old server step %s failed:\n%s" % (args[0], result.stderr[-4000:])
 
 

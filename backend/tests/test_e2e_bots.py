@@ -8,9 +8,9 @@ Slow: the runner binary is built once per run (cargo), and the runner starts as 
 
 import pytest
 
-from backend.tests.test_api import api, assign, get, post, ready, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import assign, get, post, ready, setup_attempt  # noqa: F401
 from backend.tests.live import block_outside_network, live  # noqa: F401
-from runner_support.tests.test_conformance import Computer, reply_to, rust_binary, until  # noqa: F401
+from runner_support.tests.helpers.conformance import Computer, reply_to, rust_binary, until  # noqa: F401
 
 pytestmark = pytest.mark.slow
 
@@ -53,9 +53,16 @@ def test_a_bot_hands_a_message_to_another_bot_that_needs_action_and_the_other_bo
     r, _, ops = setup_attempt(api)
     assign(api, r, "cpo")
     ready(api, r, ["ops", "cpo"])
-    handoff = post(api, "messages", {"to": "cpo", "text": "QA update: the release candidate passed group 3. "
-                                                          "Please write the release note.",
-                                     "needs_action": True}, token=ops["token"])
+    handoff = post(
+        api,
+        "messages",
+        {
+            "to": "cpo",
+            "text": "QA update: the release candidate passed group 3. Please write the release note.",
+            "needs_action": True,
+        },
+        token=ops["token"],
+    )
     job = job_for(api, handoff["id"])
     assert job["bot_id"] == "cpo" and job["state"] == "queued"
 
@@ -66,18 +73,17 @@ def test_a_bot_hands_a_message_to_another_bot_that_needs_action_and_the_other_bo
 
 def test_an_approval_a_bot_asks_for_is_decided_by_its_owner_and_consumed_once(api):
     _, _, bot = setup_attempt(api)
-    payload = {"to": "colleague@acme.example", "cc": [], "subject": "Acme draft", "body_sha256": "a" * 64,
-               "mailbox": "work"}
-    approval = post(api, "approvals", {"kind": "send", "payload": payload}, token=bot["token"])
+    payload = {"url": "https://acme.example/draft", "content_sha256": "a" * 64}
+    approval = post(api, "approvals", {"kind": "publish", "payload": payload}, token=bot["token"])
     path = "approvals/" + approval["id"]
     assert get(api, path, token="ana-test")["decision"] in (None, "")
 
-    post(api, path, {"decision": "approved"}, token="ben-test", expected=403)      # not the decider
+    post(api, path, {"decision": "approved"}, token="ben-test", expected=403)  # not the decider
     post(api, path, {"decision": "approved"})
     assert get(api, path, token="ana-test")["decision"] == "approved"
 
     result = post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=bot["token"], key="send-1")
     assert result["consumed_at"]
     again = post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=bot["token"], key="send-1")
-    assert again == result                                                          # a repeat is a replay
+    assert again == result  # a repeat is a replay
     post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=bot["token"], expected=422)

@@ -1,6 +1,7 @@
 """A computer's event stream (backend/events.py `runner_read`, `GET /api/v2/runners/me/events`): work and
 changes reach only the computer they concern, as hints with no values; a resume sends only what came
 since, a client past the log is reset, and a revoked computer's stream ends."""
+
 import asyncio
 import json
 import sqlite3
@@ -9,9 +10,9 @@ import pytest
 
 from backend import events as E
 from backend import hubdb as H
-from backend.tests.test_api import api, assign, post, ready, runner  # noqa: F401
-from backend.tests.test_credential_sharing import JIRA, jira, local
-from backend.tests.test_events import live, topic  # noqa: F401
+from backend.tests.helpers.api import assign, post, ready, runner  # noqa: F401
+from backend.tests.helpers.credential_sharing import JIRA, jira, local
+from backend.tests.helpers.events import live, topic  # noqa: F401
 
 
 def told(api, computer, after):
@@ -48,7 +49,10 @@ def test_the_migration_dropping_a_bots_subscription_refreshes_only_its_computer_
     assign(api, a, "ops")
     assign(api, b, "cpo")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO subscription_assignments VALUES(?,?,?,?,?)", ("bot", "ops", "private-first", H.now(), "human:ana"))
+        c.execute(
+            "INSERT INTO subscription_assignments VALUES(?,?,?,?,?)",
+            ("bot", "ops", "private-first", H.now(), "human:ana"),
+        )
     cursor = newest(api)
     # One login per AI tool per computer (#1259): the bot's choice goes, and its computer moves it to its own login.
     with api.app.state.store.transaction() as c:
@@ -62,8 +66,10 @@ def test_the_migration_dropping_a_bots_subscription_refreshes_only_its_computer_
     cursor = after
     # Retired group choices remain stored for compatibility, but no longer select a connection.
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO subscription_assignments VALUES(?,?,?,?,?)",
-                  ("group", "ops", "private-retired", H.now(), "human:ana"))
+        c.execute(
+            "INSERT INTO subscription_assignments VALUES(?,?,?,?,?)",
+            ("group", "ops", "private-retired", H.now(), "human:ana"),
+        )
     assert told(api, a, cursor)[0] == told(api, b, cursor)[0] == []
 
 

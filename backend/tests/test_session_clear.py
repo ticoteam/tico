@@ -2,16 +2,9 @@
 every later turn carries it as `session_epoch`, and its history starts after the clear. With native threads each chat
 is its own thread tree with its own provider session (clients/sessions.py root keys), so the bot's epoch
 (`bot_session_epoch`, for the one thread `session: bot` keeps) stays where it was and no other chat is touched."""
-from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (api is a fixture)
 
-
-def clear(api, bot="ops", token="ana-test"):
-    return api.post(f"/api/employees/{bot}/session/clear", json={}, headers=headers(token))
-
-
-def finish(api, machine, turn):
-    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-" + turn["id"][:8]}, machine["token"])
-    post(api, f"attempts/{turn['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."}, machine["token"])
+from backend.tests.helpers.api import assign, claim, post, ready, runner
+from backend.tests.helpers.session_clear import clear, finish
 
 
 def test_a_clear_moves_the_epoch_every_later_turn_carries_and_starts_history_after_it(api):

@@ -1,7 +1,7 @@
 """Goals: every node on the org chart says what it is for; colours, not percentages; KPIs anyone
 may log."""
 
-from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.helpers.api import get, post  # noqa: F401
 
 
 def company_goal(api, title="Grow revenue 30% this year"):
@@ -15,16 +15,23 @@ def test_company_goals_are_the_owners_and_a_sub_goal_gets_its_first_colour_from_
     post(api, "goals", {"title": "Ship faster", "owner": "company"}, token="ben-test", expected=403)
     post(api, "goals", {"title": "Nested", "owner": "company", "parent_id": top["id"]}, expected=422)
     # Ben sets his own goal under it: no colour yet.
-    mine = post(api, "goals", {"title": "Ship the rental stats page", "owner": "me", "parent_id": top["id"]},
-                token="ben-test")["goal"]
+    mine = post(
+        api, "goals", {"title": "Ship the rental stats page", "owner": "me", "parent_id": top["id"]}, token="ben-test"
+    )["goal"]
     assert mine["owner_id"] == "human:ben" and mine["status"] is None and mine["chain"][0]["id"] == top["id"]
     # Its owner gives it the first colour by hand, with a sentence; no one above has to agree first.
     post(api, f"goals/{mine['id']}/status", {"status": "green"}, token="ben-test", expected=422)
-    first = post(api, f"goals/{mine['id']}/status", {"status": "green", "note": "Design is done, build starts Monday."},
-                 token="ben-test")["goal"]
+    first = post(
+        api,
+        f"goals/{mine['id']}/status",
+        {"status": "green", "note": "Design is done, build starts Monday."},
+        token="ben-test",
+    )["goal"]
     assert first["status"] == "green" and first["status_by_id"] == "human:ben" and first["status_at"]
     # From then on the owner sets the colour, and the history says who said what.
-    yellow = post(api, f"goals/{mine['id']}/status", {"status": "yellow", "note": "Backend is late."}, token="ben-test")["goal"]
+    yellow = post(
+        api, f"goals/{mine['id']}/status", {"status": "yellow", "note": "Backend is late."}, token="ben-test"
+    )["goal"]
     assert yellow["status"] == "yellow"
     assert [e["new"] for e in yellow["events"] if e["field"] == "status"] == ["green", "yellow"]
     # Ana owns the parent, so she may still set it; Cara is neither the owner nor above him.
@@ -50,8 +57,9 @@ def owner_of(api, goal_id):
 
 def test_a_finished_goal_is_reopened_by_whoever_may_set_its_colour_and_undo_puts_its_colour_back(api):
     top = company_goal(api)
-    mine = post(api, "goals", {"title": "Ship the rental stats page", "owner": "me", "parent_id": top["id"]},
-                token="ben-test")["goal"]
+    mine = post(
+        api, "goals", {"title": "Ship the rental stats page", "owner": "me", "parent_id": top["id"]}, token="ben-test"
+    )["goal"]
     post(api, f"goals/{mine['id']}/status", {"status": "green", "note": "Design is done."})
     post(api, f"goals/{mine['id']}/status", {"status": "yellow", "note": "Backend is late."}, token="ben-test")
     # Only a finished goal is reopened.
@@ -71,8 +79,9 @@ def test_a_finished_goal_is_reopened_by_whoever_may_set_its_colour_and_undo_puts
     assert (last["actor"], last["old"], last["new"], last["note"]) == ("human:ana", "dropped", "yellow", "Undo remove")
     # Done, then reopened with a new colour and one line why.
     post(api, f"goals/{mine['id']}/status", {"status": "done", "note": ""}, token="ben-test")
-    again = post(api, f"goals/{mine['id']}/reopen", {"status": "red", "note": "The launch slipped"},
-                 token="ben-test")["goal"]
+    again = post(api, f"goals/{mine['id']}/reopen", {"status": "red", "note": "The launch slipped"}, token="ben-test")[
+        "goal"
+    ]
     assert (again["status"], again["status_by_id"], again["status_note"]) == ("red", "human:ben", "The launch slipped")
     last = [e for e in again["events"] if e["field"] == "status"][-1]
     assert (last["old"], last["new"], last["note"]) == ("done", "red", "Reopened: The launch slipped")
@@ -83,8 +92,9 @@ def test_a_finished_goal_is_reopened_by_whoever_may_set_its_colour_and_undo_puts
 
 def test_a_sub_goal_with_no_colour_is_reopened_with_one_by_its_owner(api):
     top = company_goal(api)
-    mine = post(api, "goals", {"title": "Ship the rental stats page", "owner": "me", "parent_id": top["id"]},
-                token="ben-test")["goal"]
+    mine = post(
+        api, "goals", {"title": "Ship the rental stats page", "owner": "me", "parent_id": top["id"]}, token="ben-test"
+    )["goal"]
     post(api, f"goals/{mine['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
     # Its owner brings it back with its first colour and a reason; nobody above has to accept it first.
     back = post(api, f"goals/{mine['id']}/reopen", {"status": "green", "note": "Back on"}, token="ben-test")["goal"]
@@ -93,19 +103,22 @@ def test_a_sub_goal_with_no_colour_is_reopened_with_one_by_its_owner(api):
 
 def test_reopening_with_auto_puts_back_the_colour_it_had_and_undo_gives_none_when_it_never_had_one(api):
     top = company_goal(api)
-    sub = post(api, "goals", {"title": "Ship the rental stats page", "owner": "me", "parent_id": top["id"]},
-               token="ben-test")["goal"]
+    sub = post(
+        api, "goals", {"title": "Ship the rental stats page", "owner": "me", "parent_id": top["id"]}, token="ben-test"
+    )["goal"]
     post(api, f"goals/{sub['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
     # Undo gives a goal that never had a colour none, whatever the page sends.
-    back = post(api, f"goals/{sub['id']}/reopen", {"status": "green", "note": "Back on", "undo": True},
-                token="ben-test")["goal"]
+    back = post(
+        api, f"goals/{sub['id']}/reopen", {"status": "green", "note": "Back on", "undo": True}, token="ben-test"
+    )["goal"]
     assert back["status"] is None and back["status_source"] == "auto"
     # A goal the Strategy Bot coloured gets that colour back when the arithmetic has nothing new to say.
     post(api, f"goals/{sub['id']}/status", {"status": "green", "note": "Set by hand."})
     post(api, f"goals/{sub['id']}/status/auto", {})
     post(api, f"goals/{sub['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
-    auto = post(api, f"goals/{sub['id']}/reopen", {"status": "auto", "note": "Removed by mistake"},
-                token="ben-test")["goal"]
+    auto = post(api, f"goals/{sub['id']}/reopen", {"status": "auto", "note": "Removed by mistake"}, token="ben-test")[
+        "goal"
+    ]
     assert auto["status_source"] == "auto" and auto["status"] is not None and auto["status"] != "dropped"
     # A colour handed back to the Strategy Bot before the removal comes back automatic, not as the hand-set one.
     post(api, f"goals/{sub['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
@@ -115,11 +128,13 @@ def test_reopening_with_auto_puts_back_the_colour_it_had_and_undo_gives_none_whe
 
 def test_undo_after_an_undo_or_a_reopen_puts_back_the_colour_sentence_not_the_history_reason(api):
     top = company_goal(api)
-    mine = post(api, "goals", {"title": "Ship the rental stats page", "owner": "me", "parent_id": top["id"]},
-                token="ben-test")["goal"]
+    mine = post(
+        api, "goals", {"title": "Ship the rental stats page", "owner": "me", "parent_id": top["id"]}, token="ben-test"
+    )["goal"]
     post(api, f"goals/{mine['id']}/status", {"status": "green", "note": "Accepted."})
-    set_at = post(api, f"goals/{mine['id']}/status", {"status": "yellow", "note": "Backend is late."},
-                  token="ben-test")["goal"]["status_at"]
+    set_at = post(
+        api, f"goals/{mine['id']}/status", {"status": "yellow", "note": "Backend is late."}, token="ben-test"
+    )["goal"]["status_at"]
 
     def drop_and_undo():
         post(api, f"goals/{mine['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
@@ -127,14 +142,23 @@ def test_undo_after_an_undo_or_a_reopen_puts_back_the_colour_sentence_not_the_hi
 
     drop_and_undo()
     twice = drop_and_undo()
-    assert (twice["status"], twice["status_note"], twice["status_by_id"], twice["status_at"]) == \
-        ("yellow", "Backend is late.", "human:ben", set_at)
+    assert (twice["status"], twice["status_note"], twice["status_by_id"], twice["status_at"]) == (
+        "yellow",
+        "Backend is late.",
+        "human:ben",
+        set_at,
+    )
     post(api, f"goals/{mine['id']}/status", {"status": "done", "note": ""}, token="ben-test")
-    reopened = post(api, f"goals/{mine['id']}/reopen", {"status": "red", "note": "The launch slipped"},
-                    token="ben-test")["goal"]
+    reopened = post(
+        api, f"goals/{mine['id']}/reopen", {"status": "red", "note": "The launch slipped"}, token="ben-test"
+    )["goal"]
     undone = drop_and_undo()
-    assert (undone["status"], undone["status_note"], undone["status_by_id"], undone["status_at"]) == \
-        ("red", "The launch slipped", "human:ben", reopened["status_at"])
+    assert (undone["status"], undone["status_note"], undone["status_by_id"], undone["status_at"]) == (
+        "red",
+        "The launch slipped",
+        "human:ben",
+        reopened["status_at"],
+    )
 
 
 def test_every_finished_goal_of_one_owner_is_listed_without_the_rest_of_the_team(api):
@@ -153,8 +177,36 @@ def test_a_check_in_says_whose_words_it_is_and_who_recorded_it(api):
     goal = post(api, "goals", {"title": "Grow activation", "owner": "me"})["goal"]
     own = post(api, f"goals/{goal['id']}/checkins", {"body": "On track.", "signal": "on_track"})["checkin"]
     assert own["sender_id"] == own["author"] == "human:ana" and own["sender_name"] == "Ana"
-    for_ben = post(api, f"goals/{goal['id']}/checkins",
-                   {"body": "Ben says the copy is late.", "from_actor": "human:ben"})["checkin"]
+    for_ben = post(
+        api, f"goals/{goal['id']}/checkins", {"body": "Ben says the copy is late.", "from_actor": "human:ben"}
+    )["checkin"]
     assert for_ben["sender_id"] == "human:ben" and for_ben["author"] == "human:ana"
     listed = get(api, f"goals/{goal['id']}/checkins")["checkins"]
     assert {c["sender_id"] for c in listed} == {"human:ana", "human:ben"}
+
+
+def test_a_closed_task_earns_a_goal_no_credit_only_a_done_one_does(company):
+    """A goal coloured by its tasks counts a task as finished when it is done. A closed task was dropped: it is not
+    work done, so a goal whose only tasks were closed has nothing to show, and one closed beside an open one does not
+    make it green."""
+    from backend import goals as GL
+    from backend.store import H
+    from backend.tests.helpers import engine as X
+
+    with company.transaction() as c:
+        X.bot(c, "ops")
+        dropped = GL.create(c, "human:ana", "Open a second city", "human:ana")
+        mixed = GL.create(c, "human:ana", "Win back lapsed customers", "human:ana")
+        shipped = GL.create(c, "human:ana", "Ship the booking page", "human:ana")
+
+        def filed(goal, title):
+            return H.task_create(c, "human:ana", title, "Work it.", "bot:ops", goal_id=goal["id"], lint=False)["id"]
+
+        H.task_close(c, "human:ana", filed(dropped, "Scout Denver"), "Not this year")
+        H.task_close(c, "human:ana", filed(mixed, "Email lapsed customers"), "Wrong list")
+        filed(mixed, "Call lapsed customers")
+        H.task_done(c, "human:ana", filed(shipped, "Build the booking page"), "Live")
+        scores = {g["title"]: GL.score(c, GL.goal(c, g["id"])) for g in (dropped, mixed, shipped)}
+    assert scores["Open a second city"]["basis"] != "tasks" and scores["Open a second city"]["status"] != "green"
+    assert scores["Win back lapsed customers"]["status"] != "green", scores
+    assert scores["Ship the booking page"] == {"status": "green", "basis": "tasks", "reason": "All 1 tasks done"}

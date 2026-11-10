@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 
 from backend import demo_seed
 from backend.app import create_app
-from backend.tests.test_api import api, api_settings, get  # noqa: F401
-from backend.tests.test_automation_runs import make, queued, run_row
+from backend.tests.helpers.api import api_settings, get  # noqa: F401
+from backend.tests.helpers.automation_runs import make, queued, run_row
 
 
 def test_another_apps_request_does_not_take_a_pending_automation_wakeup(api, tmp_path):

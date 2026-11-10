@@ -5,6 +5,7 @@
 
 Prints each difference; exits 1 when there is one. Run after `python3 -m e2e.run --kind contract --record`.
 """
+
 import json
 import subprocess
 import sys
@@ -13,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from e2e import renames  # noqa: E402
+from e2e import renames
 
 GOLDENS = "e2e/goldens"
 
@@ -41,7 +42,9 @@ def main(ref):
     rename_map = renames.load(ROOT / "scripts/cleanup/renames.yaml")
     found = 0
     for path in sorted((ROOT / GOLDENS).glob("*.json")):
-        shown = subprocess.run(["git", "show", f"{ref}:{GOLDENS}/{path.name}"], cwd=ROOT, capture_output=True, check=False, text=True)
+        shown = subprocess.run(
+            ["git", "show", f"{ref}:{GOLDENS}/{path.name}"], cwd=ROOT, capture_output=True, check=False, text=True
+        )
         if shown.returncode:
             print(f"{path.stem}: new golden")
             continue

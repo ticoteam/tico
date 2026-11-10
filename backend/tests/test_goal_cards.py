@@ -4,16 +4,12 @@ confirmed with the person's own target; and the Strategy Bot's Needs you task us
 reject"."""
 
 from backend import strategy_bot
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_goal_asks import asks, goal_manager, sync
-from backend.tests.test_kpis import goal_with_kpi
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.goal_asks import asks, goal_manager, sync
+from backend.tests.helpers.kpis import goal_with_kpi
+from backend.tests.helpers.goal_cards import inbox_measure, leaks, propose
 
 IMPROVE = {"kind": "improve", "baseline": 10, "target": 25, "deadline": "2099-12-31"}
-
-
-def propose(api, kind, payload, goal_id=None, kpi_id=None, token="ana-test"):
-    return post(api, "goal-proposals", {"kind": kind, "goal_id": goal_id, "kpi_id": kpi_id, "payload": payload,
-                                        "reason": "No measure yet"}, token=token)["proposal"]
 
 
 def tree_card(api, proposal_id, token="ana-test"):
@@ -25,20 +21,29 @@ def links(api, goal_id):
 
 
 def test_an_add_a_kpi_card_names_the_measure_says_what_it_counts_and_that_it_has_no_target_or_source(api):
-    goal_manager(api, level=2)          # above Passive, so Needs you lists suggestions not yet asked
+    goal_manager(api, level=2)  # above Passive, so Needs you lists suggestions not yet asked
     goal, activation = goal_with_kpi(api)
     new = propose(api, "goal_kpi", {"kpi": {"name": "Weekly demos", "definition": "Demos held, per week"}}, goal["id"])
     card = tree_card(api, new["id"])
     assert card["goal_title"] == "Raise activation"
-    assert card["measure"] == {"name": "Weekly demos", "definition": "Demos held, per week", "source_note": "",
-                               "unit": "", "direction": "up", "existing": False}
-    assert card["target_label"] == ""                       # the card reads "No target yet"
+    assert card["measure"] == {
+        "name": "Weekly demos",
+        "definition": "Demos held, per week",
+        "source_note": "",
+        "unit": "",
+        "direction": "up",
+        "existing": False,
+    }
+    assert card["target_label"] == ""  # the card reads "No target yet"
     # One that reuses a measure names it and says what it counts, never "existing KPI".
     other = post(api, "goals", {"title": "Keep customers", "owner": "ana"})["goal"]
     reuse = propose(api, "goal_kpi", {"kpi_id": activation["id"], "target": IMPROVE}, other["id"])
     card = tree_card(api, reuse["id"])
     assert (card["measure"]["name"], card["measure"]["definition"], card["measure"]["existing"]) == (
-        "Activation", "Signed-up accounts that finish setup", True)
+        "Activation",
+        "Signed-up accounts that finish setup",
+        True,
+    )
     assert card["target_label"].startswith("→ 25%")
     # Needs you draws the same card.
     sync(api)
@@ -50,10 +55,12 @@ def test_new_definition_and_new_wording_cards_carry_now_and_proposed(api):
     goal, kpi = goal_with_kpi(api)
     change = propose(api, "kpi_definition", {"definition": "Finish setup within 7 days"}, kpi_id=kpi["id"])
     assert get(api, f"kpis/{kpi['id']}")["proposals"][0]["card"]["changes"] == [
-        {"label": "Definition", "now": "Signed-up accounts that finish setup", "proposed": "Finish setup within 7 days"}]
+        {"label": "Definition", "now": "Signed-up accounts that finish setup", "proposed": "Finish setup within 7 days"}
+    ]
     wording = propose(api, "goal_wording", {"title": "Raise activation to 70%"}, goal["id"])
     assert tree_card(api, wording["id"])["changes"] == [
-        {"label": "Title", "now": "Raise activation", "proposed": "Raise activation to 70%"}]
+        {"label": "Title", "now": "Raise activation", "proposed": "Raise activation to 70%"}
+    ]
     target = propose(api, "kpi_target", {"kind": "maintain", "min": 50}, goal["id"], kpi["id"])
     card = tree_card(api, target["id"])
     assert card["now_label"].startswith("→ 70%") and card["target_label"] != card["now_label"]
@@ -76,14 +83,26 @@ def test_a_target_is_checked_as_a_links_target_and_refused_on_any_other_kind_or_
     # The measure should go down: a target above its baseline is wrong, as it is on a link; nothing is made.
     wrong = post(api, f"goal-proposals/{add['id']}/decide", {"decision": "confirm", "target": IMPROVE}, expected=422)
     assert "wrong side" in str(wrong)
-    post(api, f"goal-proposals/{add['id']}/decide", {"decision": "confirm", "target": {"kind": "improve", "target": 5}},
-         expected=422)                                       # no deadline
+    post(
+        api,
+        f"goal-proposals/{add['id']}/decide",
+        {"decision": "confirm", "target": {"kind": "improve", "target": 5}},
+        expected=422,
+    )  # no deadline
     assert "Weekly demos" not in links(api, goal["id"])
-    post(api, f"goal-proposals/{add['id']}/decide", {"decision": "reject", "target": {"kind": "maintain", "max": 3}},
-         expected=422)
+    post(
+        api,
+        f"goal-proposals/{add['id']}/decide",
+        {"decision": "reject", "target": {"kind": "maintain", "max": 3}},
+        expected=422,
+    )
     target = propose(api, "kpi_target", {"kind": "maintain", "min": 50}, goal["id"], kpi["id"])
-    post(api, f"goal-proposals/{target['id']}/decide", {"decision": "confirm", "target": {"kind": "maintain", "min": 60}},
-         expected=422)
+    post(
+        api,
+        f"goal-proposals/{target['id']}/decide",
+        {"decision": "confirm", "target": {"kind": "maintain", "min": 60}},
+        expected=422,
+    )
     # Still pending, both: a refused decision decides nothing.
     assert {p["id"] for p in get(api, "goals/tree")["proposals"]} >= {add["id"], target["id"]}
     post(api, f"goal-proposals/{add['id']}/decide", {"decision": "confirm", "target": {"kind": "maintain", "max": 3}})
@@ -98,7 +117,11 @@ def test_a_flag_confirmed_changes_nothing_else(api):
     after = get(api, f"goals/{goal['id']}")["goal"]
     assert done["status"] == "confirmed"
     assert (after["title"], after["body"], after["status"], links(api, goal["id"])) == (
-        before["title"], before["body"], before["status"], {k["name"]: k["link"] for k in before["kpis"]})
+        before["title"],
+        before["body"],
+        before["status"],
+        {k["name"]: k["link"] for k in before["kpis"]},
+    )
 
 
 def test_the_strategy_bots_task_uses_the_cards_words_and_an_old_one_is_reworded_once(api):
@@ -106,15 +129,27 @@ def test_the_strategy_bots_task_uses_the_cards_words_and_an_old_one_is_reworded_
     goal, kpi = goal_with_kpi(api)
     other = post(api, "goals", {"title": "Keep customers", "owner": "ana"})["goal"]
     made = {
-        propose(api, "goal_kpi", {"kpi": {"name": "Weekly demos"}}, goal["id"])["id"]: "Add the measure Weekly demos to Raise activation?",
-        propose(api, "goal_kpi", {"kpi_id": kpi["id"]}, other["id"])["id"]: "Add the measure Activation to Keep customers?",
-        propose(api, "kpi_target", {"kind": "maintain", "min": 50}, goal["id"], kpi["id"])["id"]: "Use a new Activation target on Raise activation?",
-        propose(api, "kpi_definition", {"definition": "Within 7 days"}, kpi_id=kpi["id"])["id"]: "Use a new definition for Activation?",
-        propose(api, "goal_wording", {"title": "Raise activation to 70%"}, goal["id"])["id"]: "Use new wording for Raise activation?",
+        propose(api, "goal_kpi", {"kpi": {"name": "Weekly demos"}}, goal["id"])[
+            "id"
+        ]: "Add the measure Weekly demos to Raise activation?",
+        propose(api, "goal_kpi", {"kpi_id": kpi["id"]}, other["id"])[
+            "id"
+        ]: "Add the measure Activation to Keep customers?",
+        propose(api, "kpi_target", {"kind": "maintain", "min": 50}, goal["id"], kpi["id"])[
+            "id"
+        ]: "Use a new Activation target on Raise activation?",
+        propose(api, "kpi_definition", {"definition": "Within 7 days"}, kpi_id=kpi["id"])[
+            "id"
+        ]: "Use a new definition for Activation?",
+        propose(api, "goal_wording", {"title": "Raise activation to 70%"}, goal["id"])[
+            "id"
+        ]: "Use new wording for Raise activation?",
     }
     sync(api)
     tasks = {a["ref"]: a for a in asks(api) if a["kind"] == "proposal"}
-    assert {ref: tasks[ref]["title"] for ref in made if ref in tasks} == {ref: t for ref, t in made.items() if ref in tasks}
+    assert {ref: tasks[ref]["title"] for ref in made if ref in tasks} == {
+        ref: t for ref, t in made.items() if ref in tasks
+    }
     assert tasks, "the Strategy Bot asked"
     for task in tasks.values():
         assert "Confirm or reject" not in task["title"] + task["body"] and "existing KPI" not in task["body"]
@@ -122,15 +157,17 @@ def test_the_strategy_bots_task_uses_the_cards_words_and_an_old_one_is_reworded_
     # A task filed before, in the old words, takes the card's words on the next pass, once.
     ref, task = next(iter(tasks.items()))
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET title=?, body=? WHERE id=?", ("Confirm or reject a new KPI for Raise activation",
-                                                                    "Confirm or reject it.", task["id"]))
+        c.execute(
+            "UPDATE tasks SET title=?, body=? WHERE id=?",
+            ("Confirm or reject a new KPI for Raise activation", "Confirm or reject it.", task["id"]),
+        )
     sync(api)
     again = next(a for a in asks(api) if a["ref"] == ref)
     assert (again["id"], again["title"], again["body"]) == (task["id"], made[ref], task["body"])
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET title=? WHERE id=?", ("My own words", task["id"]))
     sync(api)
-    assert next(a for a in asks(api) if a["ref"] == ref)["title"] == "My own words"     # a person's title stays
+    assert next(a for a in asks(api) if a["ref"] == ref)["title"] == "My own words"  # a person's title stays
 
 
 def test_a_flags_task_says_what_the_strategy_bot_noticed(api):
@@ -165,32 +202,16 @@ def test_an_empty_body_in_new_wording_shows_the_description_it_clears(api):
     wording = propose(api, "goal_wording", {"title": "Raise activation to 70%", "body": ""}, goal["id"])
     assert tree_card(api, wording["id"])["changes"] == [
         {"label": "Title", "now": "Raise activation", "proposed": "Raise activation to 70%"},
-        {"label": "Description", "now": "Half of sign-ups finish setup", "proposed": ""}]
+        {"label": "Description", "now": "Half of sign-ups finish setup", "proposed": ""},
+    ]
     post(api, f"goal-proposals/{wording['id']}/decide", {"decision": "confirm"})
-    assert get(api, f"goals/{goal['id']}")["goal"]["body"] == ""      # what the card said yes does
-
-
-# A member may not read the inbox bot (the base fixture: it is Ana's alone), so nothing of its goals or measures reaches
-# her through a suggestion: not its name, what it counts, its source, its unit, nor the target it has now.
-SECRETS = ("NDAs waiting", "Unsigned NDAs in the mail", "Mailbox count", "Close all NDAs")
-
-
-def inbox_measure(api):
-    hidden = post(api, "goals", {"title": "Close all NDAs by Q4", "owner": "bot:inbox", "top": True})["goal"]
-    kpi = post(api, "kpis", {"name": "NDAs waiting", "unit": "docs", "direction": "down", "cadence": "daily",
-                             "definition": "Unsigned NDAs in the mail", "source_note": "Mailbox count",
-                             "goal_id": hidden["id"]})["kpi"]
-    return hidden, kpi
-
-
-def leaks(response):
-    return [s for s in SECRETS if s in str(response)]
+    assert get(api, f"goals/{goal['id']}")["goal"]["body"] == ""  # what the card said yes does
 
 
 def test_a_suggestion_about_a_hidden_bots_measure_or_goal_shows_none_of_it(api):
     hidden, secret = inbox_measure(api)
     definition = propose(api, "kpi_definition", {"definition": "Within 3 days"}, kpi_id=secret["id"])
-    assert definition["id"] in {p["id"] for p in get(api, "goals/tree")["proposals"]}        # Ana reads it
+    assert definition["id"] in {p["id"] for p in get(api, "goals/tree")["proposals"]}  # Ana reads it
     tree = get(api, "goals/tree", "cara-test")
     assert definition["id"] not in {p["id"] for p in tree["proposals"]} and leaks(tree) == []
     # A measure she reads, on a goal she may not: its target suggestion there is that goal's.
@@ -225,6 +246,7 @@ def test_task_filing_skips_a_hidden_goal_when_its_decider_cannot_read_the_owner_
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='cpo'")
         from backend import goal_asks as GA
+
         assert GA._person(c, "bot:cpo", api.app.state.auth.owner_id(c), GA._org(c)) == "human:ben"
         # Model the per-person Read grant: the assigned person has no Read on CPO.
         GA.sync(c, api.app.state.auth.owner_id(c), reads=lambda person, owner: False)
@@ -236,6 +258,7 @@ def test_task_filing_skips_a_hidden_goal_when_its_decider_cannot_read_the_owner_
 def sync_reading(api):
     """The Strategy Bot's pass as the app runs it: told whose measures each person may read."""
     from backend import goal_asks as GA
+
     with api.app.state.store.transaction() as c:
         return GA.sync(c, api.app.state.auth.owner_id(c), reads=GA.readers(c, api.app.state.auth))
 
@@ -245,7 +268,9 @@ def test_reusing_a_hidden_bots_measure_on_her_goal_neither_names_nor_describes_i
     _, secret = inbox_measure(api)
     hers = post(api, "goals", {"title": "Keep customers", "owner": "cara"}, token="cara-test")["goal"]
     reuse = propose(api, "goal_kpi", {"kpi_id": secret["id"], "target": {"kind": "maintain", "max": 3}}, hers["id"])
-    [item] = [i for i in get(api, "goals/needs-you", "cara-test")["items"] if i.get("proposal", {}).get("id") == reuse["id"]]
+    [item] = [
+        i for i in get(api, "goals/needs-you", "cara-test")["items"] if i.get("proposal", {}).get("id") == reuse["id"]
+    ]
     measure = item["proposal"]["card"]["measure"]
     assert measure["hidden"] and (measure["unit"], measure["definition"], measure["source_note"]) == ("", "", "")
     assert leaks(item) == [] and "docs" not in str(item["proposal"]["card"])
@@ -254,14 +279,14 @@ def test_reusing_a_hidden_bots_measure_on_her_goal_neither_names_nor_describes_i
     named = propose(api, "goal_kpi", {"kpi_id": secret["id"]}, anas["id"])
     sync_reading(api)
     tasks = {a["ref"]: a for a in asks(api)}
-    assert reuse["id"] not in tasks            # she may not add it, so she is not asked to
+    assert reuse["id"] not in tasks  # she may not add it, so she is not asked to
     assert tasks[named["id"]]["title"] == "Add the measure NDAs waiting to Sign faster?"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT private FROM tasks WHERE id=?", (tasks[named["id"]]["id"],)).fetchone()[0] == 1
 
 
 def test_a_hidden_bots_measure_suggested_for_her_goal_stays_hidden_however_it_is_decided(api):
-    goal_manager(api, level=2)          # Needs you lists suggestions and the Strategy Bot's tasks
+    goal_manager(api, level=2)  # Needs you lists suggestions and the Strategy Bot's tasks
     hidden, secret = inbox_measure(api)
     post(api, f"goals/{hidden['id']}/kpis/{secret['id']}", {"kind": "maintain", "max": 3})
     hers = post(api, "goals", {"title": "Keep customers", "owner": "cara"}, token="cara-test")["goal"]
@@ -276,23 +301,28 @@ def test_a_hidden_bots_measure_suggested_for_her_goal_stays_hidden_however_it_is
     anas = post(api, "goals", {"title": "Sign faster", "owner": "ana"})["goal"]
     post(api, f"goals/{anas['id']}/kpis", {"kpi_id": secret["id"], "kind": "none"}, expected=403)
     assert "NDAs waiting" not in links(api, hers["id"])
-    assert reuse["id"] in {p["id"] for p in get(api, "goals/tree")["proposals"]}      # still waiting, undecided
+    assert reuse["id"] in {p["id"] for p in get(api, "goals/tree")["proposals"]}  # still waiting, undecided
     # A fresh reading past the target writes the inbox goal's colour reason; nothing of it reaches her.
     import datetime
+
     today = datetime.date.today().isoformat()
     yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
     post(api, f"kpis/{secret['id']}/readings", {"value": 7, "period_start": yesterday, "period_end": yesterday})
     with api.app.state.store.read() as c:
-        assert "NDAs waiting" in str(c.execute("SELECT status_note FROM goals WHERE id=?", (hidden["id"],)).fetchone()[0])
+        assert "NDAs waiting" in str(
+            c.execute("SELECT status_note FROM goals WHERE id=?", (hidden["id"],)).fetchone()[0]
+        )
     sync(api)
     for path in ("goals", "goals?all=true", "goals/tree", f"goals/{hers['id']}", "goals/needs-you"):
         assert leaks(get(api, path, "cara-test")) == [], path
     assert [a for a in asks(api) if a.get("owner_id") == "human:cara" and leaks(a)] == []
     # A link made before links were checked shows no line of the KPI to her either.
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, created_at, created_by_id, updated_at, updated_by_id) "
-                  "VALUES ('old-link', ?, ?, 'none', ?, 'human:ana', ?, 'human:ana')",
-                  (hers["id"], secret["id"], today, today))
+        c.execute(
+            "INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, created_at, created_by_id, updated_at, updated_by_id) "
+            "VALUES ('old-link', ?, ?, 'none', ?, 'human:ana', ?, 'human:ana')",
+            (hers["id"], secret["id"], today, today),
+        )
     [mine] = [g for g in get(api, "goals/tree", "cara-test")["goals"] if g["id"] == hers["id"]]
     assert mine["kpis"] == [] and get(api, f"goals/{hers['id']}", "cara-test")["goal"]["kpis"] == []
     # She may still say no to one waiting.
@@ -300,7 +330,7 @@ def test_a_hidden_bots_measure_suggested_for_her_goal_stays_hidden_however_it_is
 
 
 def test_a_bots_measure_goes_on_its_own_goal_and_not_with_a_goal_handed_to_a_person(api):
-    hidden, secret = inbox_measure(api)                     # made on the inbox bot's goal: allowed
+    hidden, secret = inbox_measure(api)  # made on the inbox bot's goal: allowed
     assert "NDAs waiting" in links(api, hidden["id"])
     post(api, f"goals/{hidden['id']}", {"owner": "cara"}, expected=403)
     assert get(api, f"goals/{hidden['id']}")["goal"]["owner_id"] == "bot:inbox"
@@ -318,11 +348,14 @@ def test_a_target_suggestion_does_not_link_a_hidden_bots_measure_to_her_goal(api
 def old_link(api, goal_id, kpi_id, **target):
     """A link made before links were checked: nothing makes one now (see exposes in backend/goal_routes.py)."""
     import datetime
+
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, max, created_at, created_by_id, updated_at, updated_by_id) "
-                  "VALUES (?, ?, ?, 'maintain', ?, ?, 'human:ana', ?, 'human:ana')",
-                  ("old-" + goal_id, goal_id, kpi_id, target.get("max"), now, now))
+        c.execute(
+            "INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, max, created_at, created_by_id, updated_at, updated_by_id) "
+            "VALUES (?, ?, ?, 'maintain', ?, ?, 'human:ana', ?, 'human:ana')",
+            ("old-" + goal_id, goal_id, kpi_id, target.get("max"), now, now),
+        )
 
 
 def test_an_old_link_to_a_hidden_measure_names_it_in_no_colour_reason_or_suggestion_she_reads(api):
@@ -333,6 +366,7 @@ def test_an_old_link_to_a_hidden_measure_names_it_in_no_colour_reason_or_suggest
     for goal in (auto, manual):
         old_link(api, goal["id"], secret["id"], max=3)
     import datetime
+
     yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
     post(api, f"kpis/{secret['id']}/readings", {"value": 7, "period_start": yesterday, "period_end": yesterday})
     post(api, "goals/refresh", {"goal_ids": [auto["id"], manual["id"]]})
@@ -341,4 +375,4 @@ def test_an_old_link_to_a_hidden_measure_names_it_in_no_colour_reason_or_suggest
     assert "NDAs waiting" in str(said[auto["id"]][0]) and "NDAs waiting" in str(said[manual["id"]][1])
     for path in ("goals", "goals?all=true", "goals/tree", f"goals/{auto['id']}", f"goals/{manual['id']}"):
         assert leaks(get(api, path, "cara-test")) == [], path
-    assert "NDAs waiting" in str(get(api, "goals/tree"))          # the owner reads it
+    assert "NDAs waiting" in str(get(api, "goals/tree"))  # the owner reads it

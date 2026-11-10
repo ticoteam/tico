@@ -4,10 +4,11 @@ tall each may grow, and the tabs over its task list, with their names, their ord
 A layout belongs to the bot, not to whoever looks: everyone who opens the bot's page sees the same sidebar, and
 changing one bot's never moves another's. The Assistant is the exception, since its list is each person's own: there
 every person keeps a layout of their own. A bot without a saved layout shows Tasks, Updates, Files and Routines in that
-order with the four default tabs (Needs You, Doing, Blocked, Assigned to Others).
+order with the four default tabs (Needs you, Open, Waiting, Assigned to others).
 
-Needs You, Doing and Blocked are editable filters with default conditions. Their built-in key preserves identity
-for Reset to default and Needs You also keeps the bot's questions and approvals. Done Recently keeps its own view.
+Needs you, Open and Waiting are editable filters with default conditions. Their built-in key preserves identity
+for Reset to default. Done recently keeps its own view. What a task waits on is read from the engine
+(`H.task_waits`), never stored or rebuilt in SQL: a filter on it narrows the bot's open tasks by their waits.
 Filters are rows of field and value that a task must all match, over the
 tasks the bot holds or asked for. The fields are a fixed list (FIELDS), not a query language. "me" and "others" mean
 the person looking, so the server counts each filter for its viewer. There is no cap on how many tabs a bot keeps;
@@ -30,35 +31,53 @@ CREATE TABLE IF NOT EXISTS bot_task_tabs (
   updated_at TEXT NOT NULL, updated_by TEXT NOT NULL, PRIMARY KEY (bot, viewer));
 """
 
-ACTIVE = ["open", "doing", "waiting"]
-FINISHED = ("done", "closed", "declined")
-# Finished tasks a filter shows unless it says Done within: the last two weeks, as Done Recently.
+ACTIVE = ["open"]
+FINISHED = ("done", "closed")
+# Finished tasks a filter shows unless it says Done within: the last two weeks, as Done recently.
 RECENT_DAYS = 14
 # Rows sent per filter tab in one read; its count is exact, and `next` reads the rest a page at a time.
 ROWS = 200
 
 DEFAULT_CONDITIONS = {
     "needs": [{"field": "needs", "value": "you"}],
-    "active": [{"field": "assigned_to", "value": "this_bot"}, {"field": "status", "value": ["open", "doing"]}],
-    "blocked": [{"field": "assigned_to", "value": "this_bot"}, {"field": "status", "value": ["waiting"]},
-                {"field": "waiting_on", "value": "not_me"}],
+    "active": [{"field": "assigned_to", "value": "this_bot"}, {"field": "status", "value": ["open"]}],
+    "blocked": [{"field": "assigned_to", "value": "this_bot"}, {"field": "waiting_on", "value": "not_me"}],
 }
 
-DEFAULT = [{"builtin": "needs", "name": "Needs You", "show_count": True},
-           {"builtin": "active", "name": "Doing", "show_count": True},
-           {"builtin": "blocked", "name": "Blocked", "show_count": True},
-           {"name": "Assigned to Others", "show_count": True, "conditions": [
-               {"field": "asked_by", "value": "this_bot"}, {"field": "assigned_to", "value": "others"},
-               {"field": "status", "value": ACTIVE}]}]
-WIDGETS = ("tasks", "updates", "files")            # an old saved "routines" is dropped: they are automations
+DEFAULT = [
+    {"builtin": "needs", "name": "Needs you", "show_count": True},
+    {"builtin": "active", "name": "Open", "show_count": True},
+    {"builtin": "blocked", "name": "Waiting", "show_count": True},
+    {
+        "name": "Assigned to others",
+        "show_count": True,
+        "conditions": [
+            {"field": "asked_by", "value": "this_bot"},
+            {"field": "assigned_to", "value": "others"},
+            {"field": "status", "value": ACTIVE},
+        ],
+    },
+]
+WIDGETS = ("tasks", "updates", "files")  # an old saved "routines" is dropped: they are automations
 DEFAULT_WIDGETS = [{"id": w, "hidden": False, "height": None} for w in WIDGETS]
 # Pages and cards pinned to the sidebar (backend/cards.py): any number, beside or instead of the built-ins.
 ITEM = re.compile(r"(page|card):[A-Za-z0-9_.-]{1,100}")
 
 # field -> what its value is. Lists are "any of"; every row of a tab must match.
-FIELDS = {"status": "statuses", "step": "steps", "type": "types", "assigned_to": "party", "asked_by": "party",
-          "waiting_on": "waiting", "needs": "attention", "created_within": "days", "updated_within": "days", "done_within": "days",
-          "due": "due", "label": "label"}
+FIELDS = {
+    "status": "statuses",
+    "stage": "stages",
+    "pipeline": "pipelines",
+    "assigned_to": "party",
+    "asked_by": "party",
+    "waiting_on": "waiting",
+    "needs": "attention",
+    "created_within": "days",
+    "updated_within": "days",
+    "done_within": "days",
+    "due": "due",
+    "label": "label",
+}
 WAITING = ("any", "person", "bot", "me", "not_me")
 
 
@@ -93,7 +112,7 @@ def legacy(tab):
         return {"name": tab["name"], "show_count": tab.get("show_count", True), "conditions": tab["conditions"]}
     rows = [{"field": "assigned_to", "value": "this_bot"}, {"field": "status", "value": list(tab.get("states") or [])}]
     if tab.get("types"):
-        rows.append({"field": "type", "value": list(tab["types"])})
+        rows.append({"field": "pipeline", "value": list(tab["types"])})
     if tab.get("waiting_on"):
         rows.append({"field": "waiting_on", "value": tab["waiting_on"]})
     return {"name": tab["name"], "show_count": True, "conditions": rows}
@@ -112,8 +131,10 @@ def widgets_of(stored):
 
 
 def stored(c, settings, who, bot):
-    return c.execute("SELECT tabs,widgets,updated_at,updated_by FROM bot_task_tabs WHERE bot=? AND viewer=?",
-                     (bot, viewer_key(settings, who, bot))).fetchone()
+    return c.execute(
+        "SELECT tabs,widgets,updated_at,updated_by FROM bot_task_tabs WHERE bot=? AND viewer=?",
+        (bot, viewer_key(settings, who, bot)),
+    ).fetchone()
 
 
 def read(c, settings, who, bot, ctx=None):
@@ -123,9 +144,17 @@ def read(c, settings, who, bot, ctx=None):
     widgets = widgets_of(json.loads(row["widgets"]) if row and row["widgets"] else None)
     if ctx is not None:
         from . import cards
+
         widgets = [w for w in widgets if cards.readable_item(ctx, w["id"])]
-    return {"bot": bot, "tabs": tabs, "widgets": widgets, "saved": bool(row), "personal": personal(settings, bot),
-            "updated_at": row["updated_at"] if row else None, "updated_by": row["updated_by"] if row else None}
+    return {
+        "bot": bot,
+        "tabs": tabs,
+        "widgets": widgets,
+        "saved": bool(row),
+        "personal": personal(settings, bot),
+        "updated_at": row["updated_at"] if row else None,
+        "updated_by": row["updated_by"] if row else None,
+    }
 
 
 def bad(message):
@@ -153,15 +182,19 @@ def condition(c, row):
     kind = FIELDS[field]
     if kind == "statuses":
         value = names(value, "Status")
-        if unknown := [v for v in value if v not in H.TASK_STATUSES]:
-            raise bad("Unknown status: " + ", ".join(unknown))
-    elif kind in ("steps", "types"):
-        value = names(value, "Step" if kind == "steps" else "Type")
-        table = "task_steps" if kind == "steps" else "task_types"
-        known = {r[0] for r in c.execute(f"SELECT id FROM {table} WHERE id IN (SELECT value FROM json_each(?))",
-                                         (json.dumps(value),))}
+        if unknown := [v for v in value if v not in ("open", "done", "closed")]:
+            raise bad("A status is open, done or closed, not " + ", ".join(unknown))
+    elif kind in ("stages", "pipelines"):
+        value = names(value, "Stage" if kind == "stages" else "Pipeline")
+        table = "stages" if kind == "stages" else "pipelines"
+        known = {
+            r[0]
+            for r in c.execute(
+                f"SELECT id FROM {table} WHERE id IN (SELECT value FROM json_each(?))", (json.dumps(value),)
+            )
+        }
         if unknown := [v for v in value if v not in known]:
-            raise bad(f"Unknown {'step' if kind == 'steps' else 'task type'}: " + ", ".join(unknown))
+            raise bad(f"Unknown {'stage' if kind == 'stages' else 'pipeline'}: " + ", ".join(unknown))
     elif kind == "party":
         mine = ("this_bot", "me", "others") if field == "assigned_to" else ("this_bot", "me")
         if not isinstance(value, str) or not value:
@@ -198,12 +231,15 @@ def clean(c, tabs):
             if tab.builtin in builtins:
                 raise bad("Each built-in tab can be listed once")
             if tab.types or tab.states or tab.waiting_on or (tab.builtin == "done" and tab.conditions):
-                raise bad("A built-in tab cannot use legacy fields; Done Recently keeps its own filter")
+                raise bad("A built-in tab cannot use legacy fields; Done recently keeps its own filter")
             builtins.add(tab.builtin)
             item = {"builtin": tab.builtin, "name": tab.name, "show_count": tab.show_count}
             if tab.builtin in DEFAULT_CONDITIONS:
-                item["conditions"] = ([condition(c, r) for r in tab.conditions] if "conditions" in tab.model_fields_set
-                                      else DEFAULT_CONDITIONS[tab.builtin])
+                item["conditions"] = (
+                    [condition(c, r) for r in tab.conditions]
+                    if "conditions" in tab.model_fields_set
+                    else DEFAULT_CONDITIONS[tab.builtin]
+                )
             out.append(item)
             continue
         if tab.conditions and (tab.types or tab.states or tab.waiting_on):
@@ -212,9 +248,13 @@ def clean(c, tabs):
             # Task-list tabs 2/3's shape, from a client that still sends it.
             if not tab.states:
                 raise bad("Pick at least one state for " + tab.name)
-            rows = legacy({"name": tab.name, "types": tab.types, "states": tab.states, "waiting_on": tab.waiting_on})["conditions"]
+            rows = legacy({"name": tab.name, "types": tab.types, "states": tab.states, "waiting_on": tab.waiting_on})[
+                "conditions"
+            ]
             tab = tab.model_copy(update={"conditions": [M.BotTaskCondition(**r) for r in rows]})
-        out.append({"name": tab.name, "show_count": tab.show_count, "conditions": [condition(c, r) for r in tab.conditions]})
+        out.append(
+            {"name": tab.name, "show_count": tab.show_count, "conditions": [condition(c, r) for r in tab.conditions]}
+        )
     return out
 
 
@@ -228,6 +268,7 @@ def clean_widgets(widgets):
 def keep_unread(ctx, before, after):
     """The saved pages a writer may not read stay where they were: a save never drops what it could not see."""
     from . import cards
+
     sent = {w["id"] for w in after}
     out = list(after)
     for at, w in enumerate(before):
@@ -239,15 +280,18 @@ def keep_unread(ctx, before, after):
 def write_widgets(ctx, bot, widgets):
     """Save the sidebar's widgets (the tabs as they are, the defaults when none are saved) and its pins with them."""
     from . import cards
+
     c, settings, who = ctx.c, ctx.settings, ctx.who
     if any(ITEM.fullmatch(w["id"]) for w in widgets) and personal(settings, bot):
         raise bad("The Assistant's sidebar holds its own widgets; pin pages to a bot or a team page")
     was = stored(c, settings, who, bot)
     tabs = was["tabs"] if was else json.dumps([legacy(t) for t in DEFAULT])
-    c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs,widgets,updated_at,updated_by) VALUES(?,?,?,?,?,?) "
-              "ON CONFLICT(bot,viewer) DO UPDATE SET widgets=excluded.widgets,updated_at=excluded.updated_at,"
-              "updated_by=excluded.updated_by", (bot, viewer_key(settings, who, bot), tabs, json.dumps(widgets),
-                                                 H.now(), who.actor))
+    c.execute(
+        "INSERT INTO bot_task_tabs(bot,viewer,tabs,widgets,updated_at,updated_by) VALUES(?,?,?,?,?,?) "
+        "ON CONFLICT(bot,viewer) DO UPDATE SET widgets=excluded.widgets,updated_at=excluded.updated_at,"
+        "updated_by=excluded.updated_by",
+        (bot, viewer_key(settings, who, bot), tabs, json.dumps(widgets), H.now(), who.actor),
+    )
     if not personal(settings, bot):
         cards.sync_bot(ctx, bot, widgets)
 
@@ -281,6 +325,7 @@ def order_widgets(ctx, bot, items):
 
 # ---- what a filter shows
 
+
 def ago(n):
     return (datetime.now(timezone.utc) - timedelta(days=n)).strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -295,52 +340,70 @@ def party_sql(column, value, bot, viewer):
     return f"{column}=?", [value]
 
 
-def bot_wait_sql(visible_sql):
-    """A bot wait uses the same readable, ordered blockers as the task's displayed wait line.
+def waits_ids(c, bot, value, viewer):
+    """The bot's open tasks (held or asked for) that wait as `value` says, from the engine's reads (`H.task_waits`):
+    `any` on someone or something other than the bot itself, `person` on a person, `bot` on another bot, `me` on the
+    viewer, `not_me` on anyone or anything but the bot and the viewer, `you` (Needs you) the viewer's own open tasks
+    and every one that waits on them."""
+    from . import waiting_on as W
 
-    Person waits/questions and gate/worktree holds keep their own meaning, even with a bot blocker.
-    Never infer a bot from waiting_on: that column stores people only.
-    """
-    blockers = ("SELECT b.owner_id FROM task_relations r JOIN tasks b ON b.id=r.from_task "
-                "WHERE r.to_task=tasks.id AND r.kind='blocks' AND b.status NOT IN ('done','closed','declined') "
-                f"AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=b.id AND ({visible_sql}))")
-    return ("status='waiting' AND coalesce(waiting_on,'') NOT LIKE 'human:%' "
-            "AND NOT EXISTS (SELECT 1 FROM task_holds bh WHERE bh.task_id=tasks.id AND bh.kind='blocked' "
-            "AND bh.released_at IS NULL AND bh.cause IN ('gate','worktree')) "
-            f"AND ({blockers} ORDER BY r.created_at,r.rowid LIMIT 1) LIKE 'bot:%' "
-            f"AND NOT EXISTS ({blockers} AND b.owner_id LIKE 'human:%') "
-            "AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE m.conversation_id=tasks.conversation_id AND {H.MESSAGE_TASK_SQL}=tasks.id "
-            f"AND m.kind='ask' AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL} "
-            "AND m.recipient_id LIKE 'human:%' AND coalesce(m.body,'')!='')")
+    ids = [
+        r[0]
+        for r in c.execute(
+            "SELECT id FROM tasks WHERE status='open' AND (owner_id=? OR requester_id=?)", ("bot:" + bot, "bot:" + bot)
+        )
+    ]
+    owners = dict(
+        c.execute(
+            "SELECT id, owner_id FROM tasks WHERE id IN (SELECT value FROM json_each(?))", (json.dumps(ids),)
+        ).fetchall()
+    )
+    me, out = "bot:" + bot, []
+    for task_id, waits in H.task_waits(c, ids).items():
+        head = waits[0] if waits else None
+        who = getattr(head, "who", None)
+        state = getattr(head, "state", None)
+        if value == "you":
+            hit = owners.get(task_id) == viewer or any(w.state == W.PERSON and w.who == viewer for w in waits)
+        elif value == "me":
+            hit = any(w.state == W.PERSON and w.who == viewer for w in waits)
+        elif value == "person":
+            hit = state == W.PERSON and who != me
+        elif value == "bot":
+            hit = state in (W.BOT, W.PAUSED) and bool(who) and who != me
+        elif value == "any":
+            hit = bool(head) and who != me
+        else:  # not_me
+            hit = bool(head) and who not in (me, viewer)
+        if hit:
+            out.append(task_id)
+    return out
 
 
-def tab_sql(tab, bot, viewer, visible_sql="1"):
+def tab_sql(c, tab, bot, viewer):
     """A filter's WHERE over the bot's tasks: every row, then finished tasks only for the window it names (two weeks
     when it names none) and never a routine's finished runs."""
-    where, args, window = ["id IN (SELECT id FROM tasks WHERE owner_id=? UNION SELECT id FROM tasks WHERE requester_id=?)"], \
-        ["bot:" + bot, "bot:" + bot], RECENT_DAYS
+    where, args, window = (
+        ["id IN (SELECT id FROM tasks WHERE owner_id=? UNION SELECT id FROM tasks WHERE requester_id=?)"],
+        ["bot:" + bot, "bot:" + bot],
+        RECENT_DAYS,
+    )
     for row in tab["conditions"]:
         field, value = row["field"], row["value"]
-        many = lambda column: (f"{column} IN (SELECT value FROM json_each(?))", [json.dumps(value)])  # noqa: E731
+        many = lambda column: (f"{column} IN (SELECT value FROM json_each(?))", [json.dumps(value)])
         if field == "status":
             part = many("status")
-        elif field == "step":
-            part = many("step_id")
-        elif field == "type":
-            part = many("type_id")
+        elif field == "stage":
+            part = many("stage_id")
+        elif field == "pipeline":
+            part = many("pipeline_id")
         elif field == "assigned_to":
             part = party_sql("owner_id", value, bot, viewer)
         elif field == "asked_by":
             part = party_sql("requester_id", value, bot, viewer)
-        elif field == "needs":
-            part = "((owner_id=? AND status IN ('open','doing','waiting')) OR (status='waiting' AND waiting_on=?))", [viewer, viewer]
-        elif field == "waiting_on":
-            part = {"any": ("status='waiting'", []),
-                    "person": ("status='waiting' AND waiting_on LIKE 'human:%'", []),
-                    "bot": (bot_wait_sql(visible_sql), []),
-                    "me": ("status='waiting' AND waiting_on=?", [viewer]),
-                    "not_me": ("status='waiting' AND coalesce(waiting_on,'')!=?", [viewer])}[value]
+        elif field in ("needs", "waiting_on"):
+            found = waits_ids(c, bot, "you" if field == "needs" else value, viewer)
+            part = "id IN (SELECT value FROM json_each(?))", [json.dumps(found)]
         elif field == "created_within":
             part = "created_at>=?", [ago(value)]
         elif field == "updated_within":
@@ -351,27 +414,45 @@ def tab_sql(tab, bot, viewer, visible_sql="1"):
         elif field == "due":
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             if value == "overdue":
-                part = ("coalesce(due_at,'')!='' AND substr(due_at,1,10)<? AND status NOT IN ('done','closed','declined')",
-                        [today])
+                part = (
+                    "coalesce(due_at,'')!='' AND substr(due_at,1,10)<? AND status='open'",
+                    [today],
+                )
             else:
                 until = (datetime.now(timezone.utc) + timedelta(days=value)).strftime("%Y-%m-%d")
                 part = "coalesce(due_at,'')!='' AND substr(due_at,1,10) BETWEEN ? AND ?", [today, until]
         else:  # label
-            part = ("EXISTS (SELECT 1 FROM task_tags JOIN tags ON tags.id=task_tags.tag_id "
-                    "WHERE task_tags.task_id=tasks.id AND tags.key=?)", [value])
+            part = (
+                "EXISTS (SELECT 1 FROM task_tags JOIN tags ON tags.id=task_tags.tag_id "
+                "WHERE task_tags.task_id=tasks.id AND tags.key=?)",
+                [value],
+            )
         where.append(part[0])
         args += part[1]
-    finished = "status IN ('done','closed','declined')"
+    finished = "status IN ('done','closed')"
     if window:
         where.append(f"(NOT {finished} OR coalesce(done_at,closed_at,updated_at,'')>=?)")
         args.append(ago(window))
-    where.append(f"NOT ({finished} AND (EXISTS (SELECT 1 FROM schedule_occurrences s WHERE s.task_id=tasks.id) "
-                 "OR coalesce(body,'') LIKE '%from schedule%'))")
+    where.append(
+        f"NOT ({finished} AND (EXISTS (SELECT 1 FROM schedule_occurrences s WHERE s.task_id=tasks.id) "
+        "OR coalesce(body,'') LIKE '%from schedule%'))"
+    )
     return " AND ".join(where), args
 
 
-BRIEF = ("body", "acceptance_criteria", "acceptance", "public_title", "public_summary", "requester_count",
-         "external_requesters", "internal_requesters", "important_requesters", "organization", "size")
+BRIEF = (
+    "body",
+    "acceptance_criteria",
+    "acceptance",
+    "public_title",
+    "public_summary",
+    "requester_count",
+    "external_requesters",
+    "internal_requesters",
+    "important_requesters",
+    "organization",
+    "size",
+)
 
 
 def install(app, store, auth, mutate, settings, task_views=None):
@@ -387,16 +468,18 @@ def install(app, store, auth, mutate, settings, task_views=None):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_see(c, who, bot)
-            return {**read(c, settings, who, bot, Ctx(c, auth, who, settings)),
-                    "can_edit": may_edit(c, auth, settings, who, bot)}
+            return {
+                **read(c, settings, who, bot, Ctx(c, auth, who, settings)),
+                "can_edit": may_edit(c, auth, settings, who, bot),
+            }
 
     @app.get("/api/v2/bots/{bot}/task-tabs/tasks")
     def task_tabs_tasks(request: Request, bot: str, tab: str = "", before: str = "", match_ids: str = ""):
         """What each filter tab shows the caller: its count and its newest tasks, among the tasks the bot holds or
         asked for that the caller may read, with `next` when it has more. `tab` (a key, c0, c1…) reads that tab alone
         and `before` (a tab's `next`) its next page. Default filters use their stable built-in keys;
-        Done Recently is drawn by the page from its own reads. `match_ids` optionally checks supplemental
-        question IDs against Needs You, so its count can deduplicate even beyond the current page."""
+        Done recently is drawn by the page from its own reads. `match_ids` optionally checks supplemental
+        question IDs against Needs you, so its count can deduplicate even beyond the current page."""
         who = request.state.identity
         auth.domain(who)
         after = before.rsplit("|", 1) if before else None
@@ -413,24 +496,38 @@ def install(app, store, auth, mutate, settings, task_views=None):
                 key = layout_tab.get("builtin") or "c" + str(at)
                 if key == "done" or tab and tab != key:
                     continue
-                where, args = tab_sql(layout_tab, bot, who.actor, visible)
+                where, args = tab_sql(c, layout_tab, bot, who.actor)
                 where = f"({visible}) AND {where}"
                 count = c.execute(f"SELECT count(*) FROM tasks WHERE {where}", args).fetchone()[0]
                 page, page_args = where, list(args)
                 if after:
                     page += " AND (created_at<? OR created_at=? AND id<?)"
                     page_args += [after[0], after[0], after[1]]
-                found = c.execute(f"SELECT id, created_at FROM tasks WHERE {page} ORDER BY created_at DESC, id DESC "
-                                  "LIMIT ?", (*page_args, ROWS + 1)).fetchall()
+                found = c.execute(
+                    f"SELECT id, created_at FROM tasks WHERE {page} ORDER BY created_at DESC, id DESC LIMIT ?",
+                    (*page_args, ROWS + 1),
+                ).fetchall()
                 more = len(found) > ROWS
                 found = found[:ROWS]
                 matched = []
                 if key == "needs" and match_ids:
-                    matched = [r[0] for r in c.execute(f"SELECT id FROM tasks WHERE {where} "
-                               "AND id IN (SELECT value FROM json_each(?))", (*args, json.dumps(match_ids.split(","))))]
-                out.append({"key": key, "name": layout_tab["name"], "count": count, "ids": [r[0] for r in found],
-                            "next": f"{found[-1][1]}|{found[-1][0]}" if more else None,
-                            **({"matched_ids": matched} if key == "needs" else {})})
+                    matched = [
+                        r[0]
+                        for r in c.execute(
+                            f"SELECT id FROM tasks WHERE {where} AND id IN (SELECT value FROM json_each(?))",
+                            (*args, json.dumps(match_ids.split(","))),
+                        )
+                    ]
+                out.append(
+                    {
+                        "key": key,
+                        "name": layout_tab["name"],
+                        "count": count,
+                        "ids": [r[0] for r in found],
+                        "next": f"{found[-1][1]}|{found[-1][0]}" if more else None,
+                        **({"matched_ids": matched} if key == "needs" else {}),
+                    }
+                )
                 ids += [r[0] for r in found]
             unique = list(dict.fromkeys(ids))
             rows = H.tasks(c, ids=unique, limit=max(1, len(unique)), visible=visible) if unique else []
@@ -446,6 +543,7 @@ def install(app, store, auth, mutate, settings, task_views=None):
         back to the defaults, widgets and all; leaving `widgets` out keeps the saved ones."""
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
+
         def work(c):
             who = request.state.identity
             if not H.bot(c, bot):
@@ -459,16 +557,19 @@ def install(app, store, auth, mutate, settings, task_views=None):
                 c.execute("DELETE FROM bot_task_tabs WHERE bot=? AND viewer=?", (bot, viewer))
                 if not viewer:
                     from . import cards
+
                     cards.sync_bot(ctx, bot, DEFAULT_WIDGETS)
             else:
                 if not body.tabs:
                     raise bad("Keep at least one tab")
                 was = stored(c, settings, who, bot)
                 tabs = json.dumps(clean(c, body.tabs))
-                c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs,widgets,updated_at,updated_by) "
-                          "VALUES(?,?,?,?,?,?) ON CONFLICT(bot,viewer) DO UPDATE SET tabs=excluded.tabs,"
-                          "updated_at=excluded.updated_at,updated_by=excluded.updated_by",
-                          (bot, viewer, tabs, was["widgets"] if was else None, H.now(), who.actor))
+                c.execute(
+                    "INSERT INTO bot_task_tabs(bot,viewer,tabs,widgets,updated_at,updated_by) "
+                    "VALUES(?,?,?,?,?,?) ON CONFLICT(bot,viewer) DO UPDATE SET tabs=excluded.tabs,"
+                    "updated_at=excluded.updated_at,updated_by=excluded.updated_by",
+                    (bot, viewer, tabs, was["widgets"] if was else None, H.now(), who.actor),
+                )
                 if "widgets" in body.model_fields_set:
                     if body.widgets is None:
                         write_widgets(ctx, bot, keep_unread(ctx, saved_widgets(ctx, bot), list(DEFAULT_WIDGETS)))
@@ -477,7 +578,9 @@ def install(app, store, auth, mutate, settings, task_views=None):
                     else:
                         write_widgets(ctx, bot, keep_unread(ctx, saved_widgets(ctx, bot), clean_widgets(body.widgets)))
             if not viewer:
-                H.event(c, who.actor, "bot.task_tabs_changed", bot,
-                        {"tabs": None if body.tabs is None else len(body.tabs)})
+                H.event(
+                    c, who.actor, "bot.task_tabs_changed", bot, {"tabs": None if body.tabs is None else len(body.tabs)}
+                )
             return {**read(c, settings, who, bot, ctx), "can_edit": True}
+
         return mutate(request, body, work)

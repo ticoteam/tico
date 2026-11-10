@@ -11,6 +11,7 @@ suggestion to the original is the exception that needs no repository here: the r
 GitHub App opens a pull request with them, or, when the requester may not write to the original, a task carries the diff to its
 owner. Every route is one BotOps may call as the requester (backend/botops_act.py): the server's own checks are the gate.
 """
+
 import base64
 import json
 import re
@@ -76,10 +77,15 @@ def model_settings(c, settings_admin, settings, bot, config):
     choice = settings_admin.models.get(config.get("model"))
     harness = resolve_harness(config, None)
     effort = bot.get("effort") or config.get("reasoning_effort")
-    if not choice or choice.get("deprecated") or harness in EXTERNAL_HARNESSES or (
-            company["enabled"] and not providers.runtime_enabled(choice["runtime"], company["enabled"], choice)):
+    if (
+        not choice
+        or choice.get("deprecated")
+        or harness in EXTERNAL_HARNESSES
+        or (company["enabled"] and not providers.runtime_enabled(choice["runtime"], company["enabled"], choice))
+    ):
         choice = settings_admin.models.get(company.get("model")) or next(
-            (m for m in settings_admin.models.values() if not m.get("deprecated")), None)
+            (m for m in settings_admin.models.values() if not m.get("deprecated")), None
+        )
         effort = harness = None
         if not choice:
             raise Problem("model", "Choose the company's AI provider first (Settings > Providers)", 422)
@@ -95,14 +101,29 @@ def credentials_for(c, vault, who, original, slug, tools, needed):
             wanted.setdefault(entry["env"], entry.get("service") or "")
     granted, needs = [], []
     admin = administrator(c, who, vault.admins)
+    # A key of a tool the requester may not see (backend/api_tools.py `visible`) is as if the original did not hold it.
+    from .api_tools import hidden_keys
+
+    hidden = hidden_keys(c, who, vault.admins)
     for env, service in sorted(wanted.items()):
-        held = [row for row in c.execute("SELECT * FROM credentials WHERE env=? AND ciphertext IS NOT NULL ORDER BY id", (env,))
-                if effective_grant(c, row["id"], "bot:" + original)]
+        held = [
+            row
+            for row in c.execute("SELECT * FROM credentials WHERE env=? AND ciphertext IS NOT NULL ORDER BY id", (env,))
+            if row["id"] not in hidden and effective_grant(c, row["id"], "bot:" + original)
+        ]
         item = {"env": env, "service": service}
         if not held:
-            needs.append({**item, "needs": f"needs credential {env}", "detail": "The original has no stored credential for it."})
+            needs.append(
+                {**item, "needs": f"needs credential {env}", "detail": "The original has no stored credential for it."}
+            )
         elif not admin:
-            needs.append({**item, "needs": f"needs credential {env}", "detail": ask_admin_detail(c, vault.admins, "give a bot a credential")})
+            needs.append(
+                {
+                    **item,
+                    "needs": f"needs credential {env}",
+                    "detail": ask_admin_detail(c, vault.admins, "give a bot a credential"),
+                }
+            )
         else:
             c.execute("SAVEPOINT copy_grant")
             try:
@@ -141,8 +162,12 @@ def install(app, store, auth, mutate, settings_admin, place_now):
     def _declared(c, bot):
         """The original's tools as its computer last reported them: the variable each needs."""
         from .bot_tools import _state
-        return [{"service": e.get("service") or "", "env": e.get("env") or ""} for e in _state(c, settings, bot)["raw"]
-                if str(e.get("env") or "").isupper()]
+
+        return [
+            {"service": e.get("service") or "", "env": e.get("env") or ""}
+            for e in _state(c, settings, bot)["raw"]
+            if str(e.get("env") or "").isupper()
+        ]
 
     @app.post("/api/v2/bots/{bot}/copy")
     def copy_bot(request: Request, bot: str, body: M.BotCopy):
@@ -164,17 +189,30 @@ def install(app, store, auth, mutate, settings_admin, place_now):
             slug = body.slug or free_slug(c, original["slug"])
             display = body.display_name.strip() or free_display_name(c, original["display_name"])
             choice, effort, harness = model_settings(c, settings_admin, settings, original, config)
-            created = settings_admin.create_bot(c, who, M.BotDefinitionCreate(
-                slug=slug, display_name=display, description=row["description"] or "",
-                reports_to="human:" + H.actor_id(who.actor), status="planned", repo="", model=choice["id"], effort=effort,
-                harness=harness, owners=[]))
+            created = settings_admin.create_bot(
+                c,
+                who,
+                M.BotDefinitionCreate(
+                    slug=slug,
+                    display_name=display,
+                    description=row["description"] or "",
+                    reports_to="human:" + H.actor_id(who.actor),
+                    status="planned",
+                    repo="",
+                    model=choice["id"],
+                    effort=effort,
+                    harness=harness,
+                    owners=[],
+                ),
+            )
             copy_id = H.resolve_bot(c, slug)["id"]
             made = settings_admin._config(c, copy_id)
             declared = _json(made["config"])
             declared["copied_from"] = {"bot": bot, "sha": body.sha}
             BS.write(c, copy_id, declared)
-            credentials = credentials_for(c, app.state.vault, who, bot, copy_id, [t.model_dump() for t in body.tools],
-                                          _declared(c, bot))
+            credentials = credentials_for(
+                c, app.state.vault, who, bot, copy_id, [t.model_dump() for t in body.tools], _declared(c, bot)
+            )
             # The copy's history is made after this, in BotOps's workspace, so only the computer BotOps's turn runs on (its
             # assignment, for a card the person clicked) holds it until GitHub does: recorded, its first placement goes there
             # and another computer is refused, with GitHub or without (backend/built_on.py).
@@ -182,7 +220,7 @@ def install(app, store, auth, mutate, settings_admin, place_now):
                 botops = c.execute("SELECT runner_id FROM assignments WHERE bot='botops'").fetchone()
                 built_on.remember(c, copy_id, who.runner_id or (botops["runner_id"] if botops else ""))
             placed = None
-            if body.computer:                            # an older BotOps; today's `hub bot copy` places after the build
+            if body.computer:  # an older BotOps; today's `tico bot copy` places after the build
                 c.execute("SAVEPOINT copy_place")
                 try:
                     placed = place_now(c, who, copy_id, body.computer, False)
@@ -190,12 +228,29 @@ def install(app, store, auth, mutate, settings_admin, place_now):
                     c.execute("ROLLBACK TO copy_place")
                     placed = {"placed": False, "problem": exc.detail}
                 c.execute("RELEASE copy_place")
-            H.event(c, who.actor, "bot.copied", copy_id, {"from": bot, "sha": body.sha, "with_memory": body.with_memory,
-                                                           "granted": [g["env"] for g in credentials["granted"]]})
-            return {**created, "copied_from": {"bot": bot, "sha": body.sha}, "with_memory": body.with_memory,
-                    "original_repo": row["repo"] or "emp-" + original["slug"], "original_folder": folder(c, bot),
-                    "folder": folder(c, copy_id), "credentials": credentials,
-                    **({"placement": placed} if placed else {})}
+            H.event(
+                c,
+                who.actor,
+                "bot.copied",
+                copy_id,
+                {
+                    "from": bot,
+                    "sha": body.sha,
+                    "with_memory": body.with_memory,
+                    "granted": [g["env"] for g in credentials["granted"]],
+                },
+            )
+            return {
+                **created,
+                "copied_from": {"bot": bot, "sha": body.sha},
+                "with_memory": body.with_memory,
+                "original_repo": row["repo"] or "emp-" + original["slug"],
+                "original_folder": folder(c, bot),
+                "folder": folder(c, copy_id),
+                "credentials": credentials,
+                **({"placement": placed} if placed else {}),
+            }
+
         return mutate(request, body, work)
 
     @app.post("/api/v2/bots/{bot}/repository-read-token")
@@ -204,14 +259,22 @@ def install(app, store, auth, mutate, settings_admin, place_now):
         computer (a copy, an update or a skill is made from its files). Only BotOps acting for a person who may read the bot gets one."""
         who = person(request)
         if who.via != "botops":
-            raise Problem("forbidden", "Only BotOps, acting for the person who asked, is given a token to read a bot's repository", 403)
+            raise Problem(
+                "forbidden",
+                "Only BotOps, acting for the person who asked, is given a token to read a bot's repository",
+                403,
+            )
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_read(c, who, bot)
             app_row = app.state.github_app.row(c)
-            repo = repo_of(settings_admin._config(c, bot)["repo"] or "emp-" + H.bot(c, bot)["slug"], app_row["org"]) if app_row else None
+            repo = (
+                repo_of(settings_admin._config(c, bot)["repo"] or "emp-" + H.bot(c, bot)["slug"], app_row["org"])
+                if app_row
+                else None
+            )
         if not repo or repo.split("/")[0].lower() != app_row["org"].lower():
             return {"configured": False}
         token, expires = app.state.github_app.mint([repo], READ_PERMISSIONS)
@@ -229,21 +292,33 @@ def install(app, store, auth, mutate, settings_admin, place_now):
         if not body.applied_sha:
             with store.read() as c:
                 config, source = origin(c, who, bot)
-                original = H.bot(c, source["bot"])["slug"]       # the client names its folder and words by slug
-                return {"bot": bot, "original": original, "base_sha": source.get("sha") or "",
-                        "folder": folder(c, bot), "original_folder": folder(c, source["bot"]),
-                        "repo": config["repo"] or "bot-" + H.bot(c, bot)["slug"],
-                        "original_repo": (settings_admin._config(c, source["bot"])["repo"]
-                                          or "emp-" + H.bot(c, source["bot"])["slug"])}
+                original = H.bot(c, source["bot"])["slug"]  # the client names its folder and words by slug
+                return {
+                    "bot": bot,
+                    "original": original,
+                    "base_sha": source.get("sha") or "",
+                    "folder": folder(c, bot),
+                    "original_folder": folder(c, source["bot"]),
+                    "repo": config["repo"] or "bot-" + H.bot(c, bot)["slug"],
+                    "original_repo": (
+                        settings_admin._config(c, source["bot"])["repo"] or "emp-" + H.bot(c, source["bot"])["slug"]
+                    ),
+                }
 
         def work(c):
             config, source = origin(c, who, bot)
             declared = _json(config["config"])
             declared["copied_from"] = {"bot": source["bot"], "sha": body.applied_sha}
             BS.write(c, bot, declared)
-            H.event(c, who.actor, "bot.copy_updated", bot, {"from": source["bot"], "before": source.get("sha") or "",
-                                                            "after": body.applied_sha})
+            H.event(
+                c,
+                who.actor,
+                "bot.copy_updated",
+                bot,
+                {"from": source["bot"], "before": source.get("sha") or "", "after": body.applied_sha},
+            )
             return {"bot": bot, "original": H.bot(c, source["bot"])["slug"], "base_sha": body.applied_sha}
+
         return mutate(request, body, work)
 
     def pull_request(service, repo, title, text, files, branch):
@@ -255,7 +330,9 @@ def install(app, store, auth, mutate, settings_admin, place_now):
         def call(method, path, expect, **kw):
             done = service._call(method, path, headers=head, **kw)
             if done.status_code not in expect:
-                raise Problem("github_suggest", f"GitHub answered {done.status_code} to {method} {path.split('?')[0]}", 502)
+                raise Problem(
+                    "github_suggest", f"GitHub answered {done.status_code} to {method} {path.split('?')[0]}", 502
+                )
             return done.json() if done.content else {}
 
         base = call("GET", f"/repos/{repo}", (200,))["default_branch"]
@@ -269,10 +346,20 @@ def install(app, store, auth, mutate, settings_admin, place_now):
                 if sha:
                     call("DELETE", path, (200,), json={"message": f"Remove {file.path}", "sha": sha, "branch": branch})
                 continue
-            call("PUT", path, (200, 201), json={"message": f"Update {file.path}", "branch": branch,
-                                                "content": base64.b64encode(file.content.encode()).decode(),
-                                                **({"sha": sha} if sha else {})})
-        return call("POST", f"/repos/{repo}/pulls", (201,), json={"title": title, "head": branch, "base": base, "body": text})["html_url"]
+            call(
+                "PUT",
+                path,
+                (200, 201),
+                json={
+                    "message": f"Update {file.path}",
+                    "branch": branch,
+                    "content": base64.b64encode(file.content.encode()).decode(),
+                    **({"sha": sha} if sha else {}),
+                },
+            )
+        return call(
+            "POST", f"/repos/{repo}/pulls", (201,), json={"title": title, "head": branch, "base": base, "body": text}
+        )["html_url"]
 
     @app.post("/api/v2/bots/{bot}/suggest-to-original")
     def suggest_to_original(request: Request, bot: str, body: M.BotSuggest):
@@ -283,7 +370,9 @@ def install(app, store, auth, mutate, settings_admin, place_now):
             raise Problem("too_large", "Suggest fewer or smaller files at once", 413)
         for file in body.files:
             if not (botcopy.safe_path(file.path) and botcopy.in_scope(file.path)):
-                raise Problem("path", f"{file.path} is not part of a bot's instructions (AGENT.md, skills/, playbooks/)", 422)
+                raise Problem(
+                    "path", f"{file.path} is not part of a bot's instructions (AGENT.md, skills/, playbooks/)", 422
+                )
         service = app.state.github_app
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
@@ -292,37 +381,90 @@ def install(app, store, auth, mutate, settings_admin, place_now):
             theirs = settings_admin._config(c, original)
             writes = auth.bot_access(c, who, original)["write"]
             app_row = service.row(c)
-            repo = repo_of(theirs["repo"] or "emp-" + H.bot(c, original)["slug"], app_row["org"] if app_row else "") if app_row else None
+            repo = (
+                repo_of(theirs["repo"] or "emp-" + H.bot(c, original)["slug"], app_row["org"] if app_row else "")
+                if app_row
+                else None
+            )
             owner = theirs["owner_id"] if theirs["owner_id"] and H.human(c, theirs["owner_id"]) else ""
-            names = {"copy": H.bot(c, bot)["display_name"], "original": H.bot(c, original)["display_name"],
-                     "person": (H.human(c, H.actor_id(who.actor)) or {}).get("name") or H.actor_id(who.actor),
-                     "copy_slug": H.bot(c, bot)["slug"], "original_slug": H.bot(c, original)["slug"]}
+            names = {
+                "copy": H.bot(c, bot)["display_name"],
+                "original": H.bot(c, original)["display_name"],
+                "person": (H.human(c, H.actor_id(who.actor)) or {}).get("name") or H.actor_id(who.actor),
+                "copy_slug": H.bot(c, bot)["slug"],
+                "original_slug": H.bot(c, original)["slug"],
+            }
         paths = [f.path for f in body.files]
-        text = "\n".join([
-            f"{names['person']} suggests these changes to {names['original']}'s instructions, made in their copy {names['copy']} ({names['copy_slug']}).",
-            "", "Files: " + ", ".join(paths),
-            *(["Not included, because both changed them: " + ", ".join(body.held_back)] if body.held_back else []),
-            "", "```diff", body.diff[:30_000], "```"])
+        text = "\n".join(
+            [
+                f"{names['person']} suggests these changes to {names['original']}'s instructions, made in their copy {names['copy']} ({names['copy_slug']}).",
+                "",
+                "Files: " + ", ".join(paths),
+                *(["Not included, because both changed them: " + ", ".join(body.held_back)] if body.held_back else []),
+                "",
+                "```diff",
+                body.diff[:30_000],
+                "```",
+            ]
+        )
         url, why = None, ""
         if writes and repo and repo.split("/")[0].lower() == app_row["org"].lower():
             try:
-                url = pull_request(service, repo, body.title.strip() or f"Suggestion from {names['copy']}", text, body.files,
-                                   f"tico/suggest-{names['copy_slug']}-{secrets.token_hex(3)}")
+                url = pull_request(
+                    service,
+                    repo,
+                    body.title.strip() or f"Suggestion from {names['copy']}",
+                    text,
+                    body.files,
+                    f"tico/suggest-{names['copy_slug']}-{secrets.token_hex(3)}",
+                )
             except Problem as exc:
                 why = exc.detail
         with store.transaction() as c:
             if url:
-                H.event(c, who.actor, "bot.suggestion_made", bot, {"original": original, "how": "pull_request", "url": url, "files": paths})
+                H.event(
+                    c,
+                    who.actor,
+                    "bot.suggestion_made",
+                    bot,
+                    {"original": original, "how": "pull_request", "url": url, "files": paths},
+                )
                 return {"suggested": True, "how": "pull_request", "original": original, "url": url, "files": paths}
             title = f"Review a suggestion from {names['copy']} for {names['original']}"
-            task = H.task_create(c, who.actor, title, text + "\n\nTo take it, apply these changes to " + names["original_slug"]
-                                 + "'s instructions (BotOps can do it).", "human:" + owner if owner else "bot:" + original,
-                                 allow_planned=True, lint=False)
-            H.event(c, who.actor, "bot.suggestion_made", bot, {"original": original, "how": "task", "task": task["id"], "files": paths})
-            return {"suggested": True, "how": "task", "original": original, "task_id": task["id"], "files": paths,
-                    "detail": ("You may not write to " + names["original"] if not writes else
-                               "GitHub is not connected for that repository" if not repo else why or "GitHub would not take it")
-                    + ", so its owner has a task with the diff."}
+            task = H.task_create(
+                c,
+                who.actor,
+                title,
+                text
+                + "\n\nTo take it, apply these changes to "
+                + names["original_slug"]
+                + "'s instructions (BotOps can do it).",
+                "human:" + owner if owner else "bot:" + original,
+                allow_planned=True,
+                lint=False,
+            )
+            H.event(
+                c,
+                who.actor,
+                "bot.suggestion_made",
+                bot,
+                {"original": original, "how": "task", "task": task["id"], "files": paths},
+            )
+            return {
+                "suggested": True,
+                "how": "task",
+                "original": original,
+                "task_id": task["id"],
+                "files": paths,
+                "detail": (
+                    "You may not write to " + names["original"]
+                    if not writes
+                    else "GitHub is not connected for that repository"
+                    if not repo
+                    else why or "GitHub would not take it"
+                )
+                + ", so its owner has a task with the diff.",
+            }
 
     @app.post("/api/v2/bots/{bot}/skills/copy")
     def copy_skill(request: Request, bot: str, body: M.SkillCopy):
@@ -349,9 +491,15 @@ def install(app, store, auth, mutate, settings_admin, place_now):
                 settings_admin._manager(c, who, slug)
                 # The answer names each target by slug and by the folder its checkout has (a rename keeps the folder):
                 # the client finds its files there. The audit names ids.
-                targets.append({"bot": row["slug"], "folder": folder(c, slug),
-                                "repo": settings_admin._config(c, slug)["repo"] or "emp-" + row["slug"]})
+                targets.append(
+                    {
+                        "bot": row["slug"],
+                        "folder": folder(c, slug),
+                        "repo": settings_admin._config(c, slug)["repo"] or "emp-" + row["slug"],
+                    }
+                )
                 ids.append(slug)
             H.event(c, who.actor, "bot.skill_copy_requested", bot, {"skill": body.skill, "to": ids})
             return {"skill": body.skill, "from": bot, "from_folder": folder(c, bot), "to": targets}
+
         return mutate(request, body, work)

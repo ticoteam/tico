@@ -4,7 +4,7 @@ A bot that studies how the team's work holds up (accepted, canceled, failed) nee
 Assistant proposal belongs to the person it was made for and carries their words, and a tool call's event names who
 made it. The owner grants a bot these totals in `registry_metadata` (`outcome-stats-readers`), outside any editable
 bot definition, so no bot grants them to itself. A granted bot reads `assistant_action_weekly` and `mcp_call_weekly` in
-`hub sql` (backend/sql.py) and `GET /api/v2/live/stats` without `via`; it still reads no `assistant_actions` row and
+`tico sql` (backend/sql.py) and `GET /api/v2/live/stats` without `via`; it still reads no `assistant_actions` row and
 writes nothing. Revoking the grant takes all of that away on its next query.
 """
 
@@ -70,6 +70,7 @@ def install(app, store, auth):
                 else:
                     grants.pop(slug, None)
                 save_metadata(c, GRANTS, grants)
-                H.event(c, who.actor, "outcome_stats.granted" if body.read else "outcome_stats.revoked",
-                        "bot:" + slug, {})
+                H.event(
+                    c, who.actor, "outcome_stats.granted" if body.read else "outcome_stats.revoked", "bot:" + slug, {}
+                )
             return {"readers": readers(c)}

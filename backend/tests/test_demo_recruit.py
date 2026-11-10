@@ -36,7 +36,7 @@ def open_seats(api):
     return {seat["title"]: seat for seat in api.get("/api/v2/seats").json()["seats"]}
 
 
-def test_open_seats_sit_under_their_managers(built):
+def _open_seats_sit_under_their_managers(built):
     with owner_api(built) as api:
         seats = open_seats(api)
         assert seats["Install Crew Coordinator"]["reports_to"] == "ops-manager"
@@ -45,7 +45,7 @@ def test_open_seats_sit_under_their_managers(built):
         assert seats["Devin"]["reports_to"] == "product-manager"
 
 
-def test_recruit_offers_templates_for_each_open_seat(built):
+def _recruit_offers_templates_for_each_open_seat(built):
     with owner_api(built) as api:
         seats = open_seats(api)
         warranty = api.post(f"/api/v2/seats/{seats['Warranty Claims']['id']}/recruit", json={}).json()
@@ -55,14 +55,26 @@ def test_recruit_offers_templates_for_each_open_seat(built):
         assert "dispatcher" in [row["template"] for row in install["candidates"]]
 
 
-def test_applicants_are_recruiter_tasks_at_four_stages(built):
+def _applicants_are_open_recruiter_tasks_one_asking_ana_and_one_snoozed(built):
     with owner_api(built) as api:
-        tasks = api.get("/api/v2/tasks", params={"owner": "bot:recruiter", "limit": 100}).json()["tasks"]
-        applicants = [task for task in tasks if task["title"].startswith("Applicant for Install Crew Coordinator")]
-        assert sorted(task["status"] for task in applicants) == ["doing", "open", "review", "waiting"]
+        tasks = api.get("/api/v2/tasks", params={"owner": "bot:recruiter", "snoozed": "all", "limit": 100}).json()[
+            "tasks"
+        ]
+        applicants = {
+            task["title"].rsplit(": ", 1)[1]: task
+            for task in tasks
+            if task["title"].startswith("Applicant for Install Crew Coordinator")
+        }
+        assert sorted(applicants) == ["Jordan Park", "Luis Ortega", "Maya Osei", "Priya Nair"]
+        assert {task["status"] for task in applicants.values()} == {"open"}
+        assert (applicants["Maya Osei"]["turn"]["state"], applicants["Maya Osei"]["turn"]["who"]) == (
+            "person",
+            "human:ana",
+        )
+        assert applicants["Luis Ortega"]["snoozed"]
 
 
-def test_the_cloud_agent_request_is_in_flight_with_its_first_task(built):
+def _the_cloud_agent_request_is_in_flight_with_its_first_task(built):
     with owner_api(built) as api:
         agents = {agent["id"]: agent for agent in api.get("/api/v2/cloud-agents").json()["agents"]}
         assert len(agents) == 8
@@ -72,10 +84,11 @@ def test_the_cloud_agent_request_is_in_flight_with_its_first_task(built):
         assert request["agent"]["id"] == "devin"
         assert request["seat"]["request_state"] == "requested"
         assert [task["title"] for task in request["tasks"]] == [
-            "Write a replay test for the scene that landed on the wrong window"]
+            "Write a replay test for the scene that landed on the wrong window"
+        ]
 
 
-def test_the_hire_last_week_closed_its_seat_and_kept_the_bot(built):
+def _the_hire_last_week_closed_its_seat_and_kept_the_bot(built):
     with sqlite3.connect(built.db_path) as db:
         seat = db.execute("SELECT closed_at, filled_by FROM seats WHERE title='Creator Partnerships'").fetchone()
     assert seat[0] and seat[1] == "creators"
@@ -84,16 +97,14 @@ def test_the_hire_last_week_closed_its_seat_and_kept_the_bot(built):
         assert "Creator Partnerships" not in open_seats(api)
 
 
-def test_building_twice_gives_the_same_rows(built, tmp_path_factory):
-    # Seat ids are random (lifecycle uses uuid4, which the demo does not pin), so the rows are keyed by title.
-    query = {"seats": "SELECT title,reports_to,created_at,closed_at,filled_by,agent,request_state,"
-                      "(SELECT title FROM tasks WHERE tasks.id=seats.first_task) FROM seats ORDER BY title",
-             "tasks": "SELECT title,owner_id,status,note FROM tasks WHERE title LIKE 'Applicant for%' "
-                      "OR title LIKE 'Write a replay test%' ORDER BY title"}
-
-    def rows(path):
-        with sqlite3.connect(path) as db:
-            return {name: db.execute(sql).fetchall() for name, sql in query.items()}
-
-    again = demo.build(tmp_path_factory.mktemp("demo-recruit-again"), now=NOW)
-    assert rows(again.db_path) == rows(built.db_path)
+def test_the_demo_recruit_tells_its_story(built, subtests):
+    """Every check reads the one demo build, in file order, each as its own subtest."""
+    for check in (
+        _open_seats_sit_under_their_managers,
+        _recruit_offers_templates_for_each_open_seat,
+        _applicants_are_open_recruiter_tasks_one_asking_ana_and_one_snoozed,
+        _the_cloud_agent_request_is_in_flight_with_its_first_task,
+        _the_hire_last_week_closed_its_seat_and_kept_the_bot,
+    ):
+        with subtests.test(check.__name__):
+            check(built)

@@ -4,8 +4,8 @@ the same per-message read check; a long branch keeps its latest messages under a
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import hubdb as H
 from backend import threads
-from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helper)
-from backend.tests.test_thread_api import new_thread, say, set_bot_access
+from backend.tests.helpers.api import headers  # noqa: F401  (the fixture and its helper)
+from backend.tests.helpers.thread_api import new_thread, say, set_bot_access
 
 
 def timeline(api, thread_id, token="ana-test", **params):
@@ -15,8 +15,11 @@ def timeline(api, thread_id, token="ana-test", **params):
 
 
 def reply(api, thread_id, message_id, text, token="ana-test"):
-    response = api.post(f"/api/v2/threads/{thread_id}/messages", json={"text": text, "parent_message_id": message_id},
-                        headers=headers(token))
+    response = api.post(
+        f"/api/v2/threads/{thread_id}/messages",
+        json={"text": text, "parent_message_id": message_id},
+        headers=headers(token),
+    )
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -56,9 +59,13 @@ def test_a_branch_carries_a_title_only_when_it_was_given_one(api):
     second = say(api, t["id"], "Which price?")
     sub = reply(api, t["id"], first["id"], "Acme")["thread_id"]
     named = reply(api, t["id"], second["id"], "Forty")["thread_id"]
-    assert api.patch(f"/api/v2/threads/{named}", json={"title": "Pricing"}, headers=headers("ana-test")).status_code == 200
+    assert (
+        api.patch(f"/api/v2/threads/{named}", json={"title": "Pricing"}, headers=headers("ana-test")).status_code == 200
+    )
+
     def titles():
         return [r["sub_thread"]["title"] for r in timeline(api, t["id"])["messages"] if r.get("sub_thread")]
+
     assert titles() == ["", "Pricing"]
     # An untitled branch's title is its parent's first line as it reads now: nothing is stored, so an edit shows through.
     edited = api.patch(f"/api/v2/messages/{first['id']}", json={"text": "Which supplier?"}, headers=headers("ana-test"))
@@ -96,7 +103,10 @@ def test_a_long_branch_shows_its_latest_messages_and_n_more_reads_the_rest_in_pl
     assert bodies(older) == [f"Reply {i}" for i in range(5)]
 
     # Read through the part on screen, the collapsed part is still unread; read through all of it, it is not.
-    assert api.post(f"/api/v2/threads/{sub}/read", json={"seq": older[-1]["seq"]}, headers=headers("ben-test")).status_code == 200
+    assert (
+        api.post(f"/api/v2/threads/{sub}/read", json={"seq": older[-1]["seq"]}, headers=headers("ben-test")).status_code
+        == 200
+    )
     again = timeline(api, t["id"], token="ben-test")["messages"]
     assert again[1]["unread"] is False and again[0]["sub_thread"]["last_read_seq"] == older[-1]["seq"]
 
@@ -107,8 +117,14 @@ def test_a_restricted_message_in_a_branch_is_one_quiet_row_and_no_count_gives_it
     sub = reply(api, t["id"], parent["id"], "Open reply")["thread_id"]
     with api.app.state.store.transaction() as c:
         secret = H.task_create(c, "human:ana", "Acme acquisition", "", "human:ana", private=True, lint=False)
-    posted = [api.post(f"/api/v2/threads/{sub}/messages", json={"text": f"Secret {i}", "refs": {"task": secret["id"]}},
-                       headers=headers("ana-test")) for i in range(2)]
+    posted = [
+        api.post(
+            f"/api/v2/threads/{sub}/messages",
+            json={"text": f"Secret {i}", "refs": {"task": secret["id"]}},
+            headers=headers("ana-test"),
+        )
+        for i in range(2)
+    ]
     assert all(p.status_code == 200 for p in posted), posted[0].text
     say(api, sub, "Last reply")
 
@@ -127,8 +143,11 @@ def test_a_sub_thread_under_a_hidden_message_does_not_show(api):
     t = new_thread(api, members=("human:ben",))
     with api.app.state.store.transaction() as c:
         secret = H.task_create(c, "human:ana", "Acme acquisition", "", "human:ana", private=True, lint=False)
-    parent = api.post(f"/api/v2/threads/{t['id']}/messages", json={"text": "Secret", "refs": {"task": secret["id"]}},
-                      headers=headers("ana-test")).json()
+    parent = api.post(
+        f"/api/v2/threads/{t['id']}/messages",
+        json={"text": "Secret", "refs": {"task": secret["id"]}},
+        headers=headers("ana-test"),
+    ).json()
     reply(api, t["id"], parent["id"], "Under the secret")
     assert "Under the secret" in bodies(timeline(api, t["id"])["messages"])
     rows = timeline(api, t["id"], token="ben-test")["messages"]
@@ -150,11 +169,22 @@ def closed_home(api, slug="ops"):
     """A migrated Home: its shared-room history keeps its old readers (ana, in the room); what is new follows Home Read."""
     bot = "bot:" + slug
     with api.app.state.store.transaction() as c:
-        room = H.open_conversation(c, "human:ana", ["human:ana", bot], kind="chat", subject="Ops room", scope="shared",
-                                   room_key=slug, allow_held=True)
+        room = H.open_conversation(
+            c,
+            "human:ana",
+            ["human:ana", bot],
+            kind="chat",
+            subject="Ops room",
+            scope="shared",
+            room_key=slug,
+            allow_held=True,
+        )
         for text in ("Old one", "Old two"):
             H.say(c, "human:ana", bot, text, conversation_id=room["id"])
-        c.execute("UPDATE messages SET legacy_audience=?, restricted=1 WHERE conversation_id=?", ("shared:" + slug, room["id"]))
+        c.execute(
+            "UPDATE messages SET legacy_audience=?, restricted=1 WHERE conversation_id=?",
+            ("shared:" + slug, room["id"]),
+        )
         threads._store_shared_homes(c, slug)
         threads.post(c, bot, room["id"], "New plan")
     return room["id"]
@@ -186,7 +216,10 @@ def test_a_task_private_message_stays_a_plain_hidden_row_not_earlier(api):
     t = new_thread(api, members=("human:ben",))
     with api.app.state.store.transaction() as c:
         secret = H.task_create(c, "human:ana", "Acme acquisition", "", "human:ana", private=True, lint=False)
-    posted = api.post(f"/api/v2/threads/{t['id']}/messages", json={"text": "Secret", "refs": {"task": secret["id"]}},
-                      headers=headers("ana-test"))
+    posted = api.post(
+        f"/api/v2/threads/{t['id']}/messages",
+        json={"text": "Secret", "refs": {"task": secret["id"]}},
+        headers=headers("ana-test"),
+    )
     assert posted.status_code == 200, posted.text
     assert "earlier" not in timeline(api, t["id"], token="ben-test")["messages"][0]

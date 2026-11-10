@@ -7,7 +7,7 @@ import pytest
 
 from clients import catalog
 from backend.tests.live import block_outside_network
-from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.helpers.api import get, post  # noqa: F401
 
 CORE = sorted({row["template"] for row in catalog.cards() if row.get("suggest") == "default"} | {"botops"})
 NAMES = {"company_name": "Acme", "app_name": "Tico", "assistant_name": "Tico"}
@@ -30,23 +30,41 @@ def test_the_core_set_is_the_default_suggestions_and_botops():
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("template", CORE)
-def test_a_company_from_the_template_has_its_bot_and_a_first_task_queues_a_job(api, tmp_path, template):
+def test_a_company_from_each_template_has_its_bot_and_a_first_task_queues_a_job(api, tmp_path):
+    for template in CORE:
+        try:
+            check_template(api, tmp_path, template)
+        except Exception as exc:
+            exc.add_note(f"in the core template {template!r}")  # one test loops them all: say which one failed
+            raise
+
+
+def check_template(api, tmp_path, template):
     slug = template
     card = next(row for row in catalog.cards() if row["template"] == template)
     repo = catalog.materialize(template, slug, tmp_path, NAMES, {}, display_name=card.get("name") or template)
     assert catalog.committed(repo), f"{repo} was not committed"
     assert catalog.check(repo, slug) == [], f"{template} does not pass the preflight checks"
 
-    post(api, "bots", {"slug": slug, "display_name": card.get("name") or template, "template": template,
-                       "status": "active"})
+    post(
+        api,
+        "bots",
+        {"slug": slug, "display_name": card.get("name") or template, "template": template, "status": "active"},
+    )
     made = get(api, f"bots/{slug}")
     assert made["slug"] == slug
-    bot_id = made["id"]                   # a new bot's id is a UUIDv7 unless it is a product bot; jobs name the id
+    bot_id = made["id"]  # a new bot's id is a UUIDv7 unless it is a product bot; jobs name the id
     # A new bot is still onboarding and takes no task until a person above it on the org chart says it is ready.
     post(api, f"bots/{slug}/onboarded", {})
 
     before = jobs_for(api, bot_id)
-    post(api, "tasks", {"owner": slug, "title": f"First task for {template}",
-                        "body": "Say what you can do for the company this week, in two sentences."})
+    post(
+        api,
+        "tasks",
+        {
+            "owner": slug,
+            "title": f"First task for {template}",
+            "body": "Say what you can do for the company this week, in two sentences.",
+        },
+    )
     assert jobs_for(api, bot_id) == before + 1, "the first task did not queue a job for the bot"

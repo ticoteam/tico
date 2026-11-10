@@ -1,4 +1,5 @@
 """The HTTP client's retry rule (clients/tico.py): 429 and every 5xx retry, the rest do not."""
+
 import io
 import json
 import unittest
@@ -7,8 +8,13 @@ from unittest import mock
 
 from clients.tico import APIError, Client, gmail_read_timeout
 
-CLOUDFLARE_530 = {"type": "about:blank", "title": "Error 1033: Cloudflare Tunnel error", "status": 530,
-                  "detail": "The host is unreachable", "retryable": False}
+CLOUDFLARE_530 = {
+    "type": "about:blank",
+    "title": "Error 1033: Cloudflare Tunnel error",
+    "status": 530,
+    "detail": "The host is unreachable",
+    "retryable": False,
+}
 
 
 class _Opener:
@@ -55,7 +61,9 @@ class Retries(unittest.TestCase):
         self.assertEqual(caught.exception.code, "http_error")
         self.assertEqual(caught.exception.detail, "HTTP 530: Error 1033: Cloudflare Tunnel error")
         # Every attempt of one request carries the same idempotency key.
-        self.assertEqual({r.get_header("Idempotency-key") for r in client.opener.calls}, {caught.exception.operation_id})
+        self.assertEqual(
+            {r.get_header("Idempotency-key") for r in client.opener.calls}, {caught.exception.operation_id}
+        )
 
     def test_a_404_is_not_retried(self):
         client = self.client([(404, {"error": {"code": "not_found", "detail": "No such attempt"}})])
@@ -65,6 +73,22 @@ class Retries(unittest.TestCase):
         self.assertFalse(sleep.called)
         self.assertFalse(caught.exception.retryable)
         self.assertEqual((caught.exception.code, caught.exception.detail), ("not_found", "No such attempt"))
+
+    def test_a_task_refusal_keeps_its_detail_what_is_missing_and_the_commands_allowed_next(self):
+        refusal = {
+            "error": "task_not_met",
+            "detail": "Not moved. Not met: Owner says done.",
+            "missing": ["Owner says done"],
+            "next": ['tico task close T1 -m "why" --version 3'],
+            "version": 3,
+        }
+        client = self.client([(409, refusal)])
+        with self.assertRaises(APIError) as caught:
+            client.post("tasks/T1/move", {"to": "next", "version": 3})
+        self.assertEqual(len(client.opener.calls), 1, "a refusal is not retried")
+        failure = caught.exception
+        self.assertEqual((failure.code, failure.detail, failure.status), ("task_not_met", refusal["detail"], 409))
+        self.assertEqual(failure.extra, {k: refusal[k] for k in ("missing", "next", "version")})
 
 
 def test_live_mail_waits_for_metadata_batches_without_changing_other_routes():
@@ -77,5 +101,3 @@ def test_live_mail_waits_for_metadata_batches_without_changing_other_routes():
 
 if __name__ == "__main__":
     unittest.main()
-
-

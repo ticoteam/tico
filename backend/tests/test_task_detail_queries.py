@@ -1,14 +1,16 @@
 """GET /api/v2/tasks/{tid} reads what a task holds (its comments and their runs' steps, its history, its child tasks) and
 the company's bots in batches, so the statements it takes do not grow with how many of those there are."""
+
 import contextlib
 
 import pytest
 
 from backend import task_privacy
 from backend.store import H
-from backend.tests import test_api as T
-from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401  (the api fixture)
-from backend.tests.test_bot_list_reads import add_bots
+from backend.tests.helpers import api as T
+from backend.tests.helpers.api_app import api_client
+from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401  (the api fixture)
+from backend.tests.helpers.bot_list_reads import add_bots
 
 # Tool calls each run streams. Every step names its own call id, so a run of N steps used to cost about N queries.
 STEPS = 10
@@ -23,9 +25,6 @@ def build(api, comments=0, people_comments=0, events=0, children=0, bots=0):
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
     tid = post(api, "tasks", {"owner": "ops", "title": "Grow the task", "body": "Do it."})["id"]
-    with api.app.state.store.transaction() as c:
-        kids = [H.task_create(c, "human:ana", f"Child {k}", "Part of it.", "bot:ops", parent_id=tid)["id"]
-                for k in range(max(children, comments, people_comments))]
     for k in range(max(comments, 1)):
         if k:
             post(api, f"tasks/{tid}/comments", {"text": f"@ops step {k}"})
@@ -34,18 +33,31 @@ def build(api, comments=0, people_comments=0, events=0, children=0, bots=0):
         rows = [{"seq": 1, "kind": "status", "payload": {"state": "active", "tool_events": True}}]
         for j in range(STEPS):
             call = {"tool": "Read", "item_id": f"r{k}-{j}"}
-            rows += [{"seq": 2 + 2 * j, "kind": "tool", "payload": {**call, "status": "started"}},
-                     {"seq": 3 + 2 * j, "kind": "tool", "payload": {**call, "status": "completed"}}]
+            rows += [
+                {"seq": 2 + 2 * j, "kind": "tool", "payload": {**call, "status": "started"}},
+                {"seq": 3 + 2 * j, "kind": "tool", "payload": {**call, "status": "completed"}},
+            ]
         post(api, f"attempts/{aid}/events", {"events": rows}, machine["token"])
-        post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": f"Reply {k}.", "last_seq": len(rows)},
-             machine["token"])
+        post(
+            api,
+            f"attempts/{aid}/complete",
+            {"outcome": "completed", "text": f"Reply {k}.", "last_seq": len(rows)},
+            machine["token"],
+        )
+    # The child tasks come after the runs: a parent waits on its sub-tasks, so its own wakes would have no turn left.
     with api.app.state.store.transaction() as c:
+        kids = [
+            H.task_create(c, "human:ana", f"Child {k}", "Part of it.", "bot:ops", parent_id=tid)["id"]
+            for k in range(max(children, comments, people_comments))
+        ]
         for k in range(people_comments):
             H.task_comment(c, "human:ben", tid, f"Ben note {k}", wake=False, extra_refs={"task": [kids[k]]})
         for k in range(events):
-            c.execute("INSERT INTO history_events(id,subject_type,subject_id,created_at,actor_id,kind,old,new,note) "
-                      "VALUES(?,'task',?,?,?,?,?,?,?)",
-                      (f"ev{k}", tid, H.now(), "human:ana", "status", "open", "doing", ""))
+            c.execute(
+                "INSERT INTO history_events(id,subject_type,subject_id,created_at,actor_id,kind,old,new,note) "
+                "VALUES(?,'task',?,?,?,?,?,?,?)",
+                (f"ev{k}", tid, H.now(), "human:ana", "status", "open", "doing", ""),
+            )
     return tid
 
 
@@ -65,7 +77,9 @@ def page_statements(api, monkeypatch, tid, token):
                     yield c
                 finally:
                     c.set_trace_callback(None)
+
         return borrowed
+
     with monkeypatch.context() as patched:
         for name in ("read", "read_transaction", "transaction"):
             patched.setattr(store, name, traced(getattr(store, name)))
@@ -74,21 +88,15 @@ def page_statements(api, monkeypatch, tid, token):
     return response.json(), len(seen)
 
 
-SCALES = [
-    ("comments and their steps", {"comments": 2}, {"comments": 12}),
-    ("people's comments naming child tasks", {"people_comments": 2}, {"people_comments": 12}),
-    ("history events", {"events": 2}, {"events": 30}),
-    ("child tasks", {"children": 2}, {"children": 12}),
-    ("bots in the company", {"bots": 5}, {"bots": 40}),
-]
-
-
-@pytest.mark.parametrize("what,small,big", SCALES, ids=[s[0] for s in SCALES])
-def test_the_task_page_takes_the_same_statements_however_many_of_each_it_holds(tmp_path, monkeypatch, what, small, big):
+def test_the_task_page_takes_the_same_statements_however_many_of_each_it_holds(tmp_path, monkeypatch):
+    """One small and one big install, every dimension growing at once: comments and their steps, people's comments
+    naming child tasks, history events, child tasks and bots in the company."""
+    small = {"comments": 2, "people_comments": 2, "events": 2, "children": 2, "bots": 5}
+    big = {"comments": 12, "people_comments": 12, "events": 30, "children": 12, "bots": 40}
     counted = {}
     for name, scale in (("small", small), ("big", big)):
         (tmp_path / name).mkdir()
-        install = T.api.__wrapped__(tmp_path / name, None)
+        install = api_client(tmp_path / name, None)
         api = next(install)
         try:
             tid = build(api, **scale)
@@ -100,9 +108,10 @@ def test_the_task_page_takes_the_same_statements_however_many_of_each_it_holds(t
         few, many = counted[("small", reader)], counted[("big", reader)]
         assert few > 0 and many > 0, (reader, few, many)
         assert many - few <= 4, (
-            f"GET /api/v2/tasks/{{tid}} as {reader} takes {many} statements with {big} {what} against {few} with "
+            f"GET /api/v2/tasks/{{tid}} as {reader} takes {many} statements with {big} against {few} with "
             f"{small}: a read runs once per item again instead of once for the whole page. Batch it with "
-            "task_privacy.prime_references before the per-row checks (see backend/turns.py annotate).")
+            "task_privacy.prime_references before the per-row checks (see backend/turns.py annotate)."
+        )
 
 
 def test_priming_the_task_reads_does_not_change_the_page(api, monkeypatch):

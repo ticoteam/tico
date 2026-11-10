@@ -7,172 +7,42 @@ import hmac
 import json
 import pathlib
 import re
-import secrets
 import sys
-import threading
-from contextlib import contextmanager
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401
-from backend.tests.test_decide_gateway import answer_all
-from backend.tests.test_gateway_connection import (delete, everything, handed_to, put_bot_on, ready, save,
-                                                   setup as connection_setup)
-from backend.tests.test_judge import QUESTIONS
+from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401
+from backend.tests.helpers.decide_gateway import answer_all
+from backend.tests.helpers.gateway_connection import delete, everything, handed_to, put_bot_on, ready, save
+from backend.tests.helpers.judge import QUESTIONS
+from backend.tests.helpers.gateway_enroll import CONTRACT, INVITE, fake_hq, setup, tick
 
-CONTRACT = json.loads((pathlib.Path(__file__).parent / "fixtures" / "gateway_enroll_contract.json").read_text())
-INVITE = "tgi_" + "s" * 43                       # a synthetic invite code
 PASTED = "tgw-synthetic-fixture-key-0042"
-
-
-class FakeHQ:
-    """HQ's enroll, rotate, key and decisions routes, answering as the contract says. `revoke_install` is staff's."""
-
-    def __init__(self):
-        self.invites, self.installs, self.keys, self.calls = {INVITE}, {}, {}, []
-        owner = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def log_message(self, *args):
-                pass
-
-            def reply(self, status, body):
-                data = json.dumps(body).encode()
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-
-            def bearer(self):
-                return self.headers.get("Authorization", "").removeprefix("Bearer ")
-
-            def known(self):
-                """The caller's key record, or the contract's refusal (status, code)."""
-                held = owner.keys.get(self.bearer())
-                if not held:
-                    return None, (401, "unknown_key")
-                if held["revoked"] or owner.installs[held["install"]]["revoked"]:
-                    return None, (401, "revoked_key")
-                return held, None
-
-            def do_GET(self):
-                owner.calls.append(("GET", self.path, dict(self.headers)))
-                held, refused = self.known()
-                if refused:
-                    return self.reply(refused[0], {"error": refused[1]})
-                self.reply(200, {"status": "active", "month": "2026-10", "cap_usd": 50.0, "spent_usd": 1.0, "used": 0.02,
-                                 "warning": False, "cap_reached": False, "rpm": 60, "tpm": 100000,
-                                 "source": "enrolled", "rotate_after": held["rotate_after"]})
-
-            def do_POST(self):
-                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
-                owner.calls.append(("POST", self.path, dict(self.headers), body))
-                path = self.path.removeprefix("/v1/gateway")
-                if path == CONTRACT["enroll"]["path"].removeprefix("/v1/gateway"):
-                    status, answer = owner.enroll(body)
-                elif path == CONTRACT["rotate"]["path"].removeprefix("/v1/gateway"):
-                    held, refused = self.known()
-                    status, answer = refused if refused else owner.rotate(held, self.bearer())
-                elif path == "/decisions":
-                    held, refused = self.known()
-                    status, answer = refused or (200, {"model": "tico-decide-1.0", "answers": answer_all(
-                        body["questions"]), "usage": {"input_tokens": 120, "output_tokens": 0, "cost_usd": 0.00001}})
-                else:
-                    status, answer = 404, "not_found"
-                self.reply(status, answer if isinstance(answer, dict) else {"error": answer})
-
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.url = f"http://127.0.0.1:{self.server.server_port}/v1/gateway"
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-
-    def mint(self, install, days=30):
-        key = "tgw_" + secrets.token_urlsafe(32)
-        after = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=days))
-        self.keys[key] = {"install": install, "revoked": False, "rotated": False, "key_id": "gk_" + secrets.token_hex(6),
-                          "rotate_after": after.strftime("%Y-%m-%dT%H:%M:%SZ")}
-        return key
-
-    def enroll(self, body):
-        install, secret = body.get("install", ""), body.get("secret", "")
-        patterns = CONTRACT["patterns"]
-        if not re.fullmatch(patterns["install"], install) or not re.fullmatch(patterns["secret"], secret):
-            return 422, "invalid"
-        known = self.installs.get(install)
-        if known and known["revoked"]:
-            return 403, "install_revoked"
-        if known and known["secret"] != hashlib.sha256(secret.encode()).hexdigest():
-            return 409, "already_enrolled"
-        if not known and body.get("invite") not in self.invites:
-            return 403, "invalid_invite"
-        for held in self.keys.values():
-            if held["install"] == install:
-                held["revoked"] = True                    # re-enrolling by the secret revokes the old key at once
-        self.installs[install] = {"secret": hashlib.sha256(secret.encode()).hexdigest(), "revoked": False}
-        key = self.mint(install)
-        return 201, {"key": key, "key_id": self.keys[key]["key_id"], "rotate_after": self.keys[key]["rotate_after"]}
-
-    def rotate(self, held, key):
-        if held["rotated"]:
-            return 409, "already_rotated"
-        held["rotated"] = True
-        new = self.mint(held["install"])
-        return 201, {"key": new, "key_id": self.keys[new]["key_id"], "rotate_after": self.keys[new]["rotate_after"],
-                     "old_valid_until": "2026-10-19T18:10:00Z"}
-
-    def revoke_install(self, install):
-        self.installs[install]["revoked"] = True
-
-    def posts(self, path):
-        return [call for call in self.calls if call[0] == "POST" and call[1].endswith(path)]
-
-
-@contextmanager
-def fake_hq():
-    fake = FakeHQ()
-    try:
-        yield fake
-    finally:
-        fake.server.shutdown()
-
-
-def setup(api, monkeypatch, fake, invite=INVITE):
-    connection_setup(api, monkeypatch)
-    from backend import gateway_connection
-    monkeypatch.setattr(gateway_connection, "check_later", lambda *args, **kwargs: None)
-    monkeypatch.setenv("TICO_GATEWAY_URL", fake.url)
-    if invite:
-        monkeypatch.setenv("TICO_GATEWAY_INVITE", invite)
-    else:
-        monkeypatch.delenv("TICO_GATEWAY_INVITE", raising=False)
-
-
-def tick(api, now=None):
-    from backend import gateway_connection
-    return gateway_connection.auto_tick(api.app.state.store, api.app.state.vault, api.app.state.store.settings,
-                                        now=now)
 
 
 def check(api):
     from backend import gateway_connection
+
     return gateway_connection.check_now(api.app.state.store, api.app.state.vault, api.app.state.store.settings)
 
 
 def record(api):
     from backend import gateway_connection
+
     with api.app.state.store.read() as c:
         return gateway_connection._row(c)
 
 
 def plain_key(api):
     from backend import gateway_connection
+
     with api.app.state.store.read() as c:
         return gateway_connection.key(c, api.app.state.vault, api.app.state.store.settings)
 
 
 def owner_health(api):
     from backend import gateway_connection
+
     with api.app.state.store.read() as c:
         return gateway_connection.health(c, api.app.state.store.settings)
 
@@ -180,6 +50,7 @@ def owner_health(api):
 def test_the_app_holds_to_the_same_contract_as_hq():
     from backend import gateway_connection as GC
     from clients import gateway as G
+
     assert CONTRACT["invite_env"] == GC.INVITE_ENV and CONTRACT["bot_header"] == G.BOT_HEADER
     assert CONTRACT["app"]["health_stopped"] == GC.STOPPED and CONTRACT["app"]["stop"] == [G.INSTALL_REVOKED]
     assert set(CONTRACT["app"]["enroll_again"]) <= set(GC.ENROLL_AGAIN)
@@ -188,7 +59,7 @@ def test_the_app_holds_to_the_same_contract_as_hq():
     secret, slug = "gis_" + "k" * 43, "ops"
     expected = "gb_" + hmac.new(secret.encode(), slug.encode(), hashlib.sha256).hexdigest()[:16]
     assert G.bot_id(secret, slug) == expected and re.fullmatch(CONTRACT["patterns"]["bot"], expected)
-    ui = (pathlib.Path(__file__).parents[2] / "ui" / "app" / "settings-providers.js").read_text()
+    ui = (pathlib.Path(__file__).parents[2] / "ui" / "app" / "settings-providers.ts").read_text()
     assert CONTRACT["app"]["settings_line"] in ui
 
 
@@ -202,6 +73,7 @@ def test_an_invited_install_meters_decide_and_bot_runs_under_its_own_key_until_t
     """Brief test 5: no key is typed or copied; Decide and a Tico-model bot run under the install's automatic key,
     each naming its bot opaquely; revoking the install stops both, with a plain Health finding."""
     from backend import judge
+
     with fake_hq() as fake:
         setup(api, monkeypatch, fake)
         assert tick(api) == "enrolled"
@@ -221,19 +93,26 @@ def test_an_invited_install_meters_decide_and_bot_runs_under_its_own_key_until_t
         # Decide asks with the automatic key and names itself by an opaque id, never a name.
         settings = api.app.state.store.settings
         monkeypatch.setattr(settings, "gateway_key", "", raising=False)
-        own = lambda state, questions, label=None: {"model": "own", "answers": answer_all(questions), "usage": {}, "ms": 1}
+        own = lambda state, questions, label=None: {
+            "model": "own",
+            "answers": answer_all(questions),
+            "usage": {},
+            "ms": 1,
+        }
         own.model, own.provider = "own", "own"
         monkeypatch.setattr(judge, "fallback_engine", lambda *args, **kwargs: own)
         api.app.state.judge = judge.primary_engine(settings, api.app.state.store, api.app.state.vault)
         asked = post(api, "decisions", {"state": {"subject": "Invoice 4471"}, "questions": QUESTIONS})
-        assert asked["model"] == "tico-decide-1.0"
+        assert asked["model"] == "tico-decide-low"
         sent = fake.posts("/decisions")[-1][2]
         assert sent["Authorization"] == "Bearer " + key
-        assert sent["X-Tico-Bot"] == "gb_" + hmac.new(secret.encode(), judge.DECIDE_BOT.encode(),
-                                                      hashlib.sha256).hexdigest()[:16]
+        assert (
+            sent["X-Tico-Bot"]
+            == "gb_" + hmac.new(secret.encode(), judge.DECIDE_BOT.encode(), hashlib.sha256).hexdigest()[:16]
+        )
 
         # A bot's run on a Tico model: its runner gets the key and the bot's opaque id for its relay.
-        put_bot_on(api, "ops", "tico-mid-1.0")
+        put_bot_on(api, "ops", "tico-medium-1.0")
         machine = runner(api)
         assign(api, machine, "ops")
         ready(api, machine, ["ops"])
@@ -241,8 +120,10 @@ def test_an_invited_install_meters_decide_and_bot_runs_under_its_own_key_until_t
         attempt = claim(api, machine, "ops")
         handed = handed_to(api, machine, attempt)
         assert handed["TICOAI_GATEWAY_KEY"]["value"] == key
-        assert handed["TICOAI_GATEWAY_BOT"]["value"] == "gb_" + hmac.new(secret.encode(), b"ops",
-                                                                         hashlib.sha256).hexdigest()[:16]
+        assert (
+            handed["TICOAI_GATEWAY_BOT"]["value"]
+            == "gb_" + hmac.new(secret.encode(), b"ops", hashlib.sha256).hexdigest()[:16]
+        )
         with api.app.state.store.read() as c:
             paid = c.execute("SELECT gateway_key_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0]
         assert paid == kept["key_id"]
@@ -284,7 +165,7 @@ def test_the_key_rotates_when_due_and_a_lost_one_is_replaced_by_the_installs_sec
         setup(api, monkeypatch, fake)
         tick(api)
         first, kept = plain_key(api), record(api)
-        assert tick(api) is None                                     # not due yet: nothing asked
+        assert tick(api) is None  # not due yet: nothing asked
         later = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=31)
         assert tick(api, now=later) == "rotated"
         second = plain_key(api)
@@ -311,8 +192,13 @@ def test_a_pasted_key_wins_and_clearing_an_automatic_key_is_not_undone_behind_th
         assert on["auto_off"] is False
         assert tick(api) == "enrolled" and record(api)["install"] == install
         # A pasted key replaces the automatic one and is never rotated.
-        fake.keys[PASTED] = {"install": install, "revoked": False, "rotated": False, "key_id": "gk_000000000001",
-                             "rotate_after": "2026-01-01T00:00:00Z"}
+        fake.keys[PASTED] = {
+            "install": install,
+            "revoked": False,
+            "rotated": False,
+            "key_id": "gk_000000000001",
+            "rotate_after": "2026-01-01T00:00:00Z",
+        }
         save(api, fake, key=PASTED)
         assert get(api, "providers/gateway")["automatic"] is False
         later = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=60)
@@ -324,16 +210,23 @@ def test_a_pasted_key_wins_and_clearing_an_automatic_key_is_not_undone_behind_th
 
 def test_a_key_pasted_while_the_install_enrolls_wins(api, monkeypatch):
     from clients import gateway as G
+
     with fake_hq() as fake:
         setup(api, monkeypatch, fake)
         enroll = G.enroll
 
         def meanwhile(*args, **kwargs):
             answer = enroll(*args, **kwargs)
-            fake.keys[PASTED] = {"install": "", "revoked": False, "rotated": False, "key_id": "gk_000000000001",
-                                 "rotate_after": ""}
-            save(api, fake, key=PASTED)                 # the owner saves a key while HQ answers
+            fake.keys[PASTED] = {
+                "install": "",
+                "revoked": False,
+                "rotated": False,
+                "key_id": "gk_000000000001",
+                "rotate_after": "",
+            }
+            save(api, fake, key=PASTED)  # the owner saves a key while HQ answers
             return answer
+
         monkeypatch.setattr(G, "enroll", meanwhile)
         assert tick(api) is None
         assert plain_key(api) == PASTED and get(api, "providers/gateway")["automatic"] is False
@@ -343,17 +236,19 @@ def test_an_install_hq_enrolled_whose_answer_was_lost_tries_again_as_itself(api,
     """The identity is kept before HQ is asked: the next try is the same install, so HQ counts it once against the
     invite and the key comes back by the install's secret."""
     from clients import gateway as G
+
     with fake_hq() as fake:
         setup(api, monkeypatch, fake)
         enroll = G.enroll
 
         def lost(*args, **kwargs):
-            enroll(*args, **kwargs)                     # HQ enrolls the install; its answer never arrives
+            enroll(*args, **kwargs)  # HQ enrolls the install; its answer never arrives
             return 0, {}, "unreachable"
 
         def died(*args, **kwargs):
-            enroll(*args, **kwargs)                     # HQ enrolls the install; the server stops before the answer
+            enroll(*args, **kwargs)  # HQ enrolls the install; the server stops before the answer
             raise SystemExit
+
         monkeypatch.setattr(G, "enroll", died)
         with pytest.raises(SystemExit):
             tick(api)
@@ -372,6 +267,7 @@ def test_an_install_hq_enrolled_whose_answer_was_lost_tries_again_as_itself(api,
 
 def test_a_refused_automatic_key_is_enrolled_again_hourly_not_on_every_tick(api, monkeypatch):
     from clients import gateway as G
+
     with fake_hq() as fake:
         setup(api, monkeypatch, fake)
         tick(api)
@@ -394,6 +290,7 @@ def test_a_refused_automatic_key_is_enrolled_again_hourly_not_on_every_tick(api,
 
 def test_a_rotation_that_fails_waits_the_hour(api, monkeypatch):
     from clients import gateway as G
+
     with fake_hq() as fake:
         setup(api, monkeypatch, fake)
         tick(api)
@@ -409,17 +306,24 @@ def test_a_rotation_that_fails_waits_the_hour(api, monkeypatch):
 
 def test_a_key_pasted_before_the_identity_is_kept_wins(api, monkeypatch):
     from clients import gateway as G
+
     with fake_hq() as fake:
         setup(api, monkeypatch, fake)
         safe_base = G.safe_base
 
         def meanwhile(base):
             if sys._getframe(1).f_code.co_name != "_auto_tick":
-                return safe_base(base)                  # only once the install has read the connection
-            fake.keys[PASTED] = {"install": "", "revoked": False, "rotated": False, "key_id": "gk_000000000001",
-                                 "rotate_after": ""}
-            save(api, fake, key=PASTED)                 # the owner saves a key before the install keeps its identity
+                return safe_base(base)  # only once the install has read the connection
+            fake.keys[PASTED] = {
+                "install": "",
+                "revoked": False,
+                "rotated": False,
+                "key_id": "gk_000000000001",
+                "rotate_after": "",
+            }
+            save(api, fake, key=PASTED)  # the owner saves a key before the install keeps its identity
             return safe_base(base)
+
         monkeypatch.setattr(G, "safe_base", meanwhile)
         assert tick(api) is None and fake.posts("/enroll") == []
         assert plain_key(api) == PASTED and get(api, "providers/gateway")["automatic"] is False
@@ -434,6 +338,7 @@ def test_an_enrolled_install_keeps_its_key_with_no_invite_until_tico_turns_it_of
         install = record(api)["install"]
         monkeypatch.delenv("TICO_GATEWAY_INVITE")
         from backend import gateway_connection
+
         with api.app.state.store.read() as c:
             assert gateway_connection.maintained(c, api.app.state.store.settings)
         first = plain_key(api)
@@ -470,7 +375,7 @@ def test_a_stop_with_no_invite_is_tried_again_under_a_new_invite(api, monkeypatc
         assert tick(api) == "stopped" and tick(api) is None
         fake.installs[install]["revoked"] = False
         later = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=2)
-        assert tick(api, now=later) is None             # no invite: the stop holds
+        assert tick(api, now=later) is None  # no invite: the stop holds
         monkeypatch.setenv("TICO_GATEWAY_INVITE", INVITE)
         assert tick(api, now=later) == "enrolled" and record(api)["install"] == install
 
@@ -513,6 +418,7 @@ def test_the_hourly_sweep_reconnects_an_enrolled_install_with_no_invite(api, mon
     identity, not only the invite: turned back on after Tico's stop, the install connects with no invite."""
     from backend import credentials, gateway_connection
     from backend.scheduler import Scheduler
+
     later_check, soon = gateway_connection.check_later, gateway_connection.check_soon
     with fake_hq() as fake:
         setup(api, monkeypatch, fake)
@@ -527,7 +433,7 @@ def test_the_hourly_sweep_reconnects_an_enrolled_install_with_no_invite(api, mon
         monkeypatch.setattr(gateway_connection, "check_later", later_check)
         threads = []
         monkeypatch.setattr(gateway_connection, "check_soon", lambda *args: threads.append(soon(*args)))
-        monkeypatch.setattr(credentials, "Vault", lambda store: api.app.state.vault)   # the test's fake KMS
+        monkeypatch.setattr(credentials, "Vault", lambda store: api.app.state.vault)  # the test's fake KMS
         Scheduler(api.app.state.store, api.app.state.execution).tick()
         assert threads and threads[0] is not None
         threads[0].join(10)

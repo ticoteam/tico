@@ -7,6 +7,7 @@ round trip. Only Tico's own terms change, and each such case has its one expecte
 Releases this guards: v0.2.36 to v0.2.42 (the Librarian rewrote teams' words, one case fixed per release), v0.3.9
 (display names reformatted .json attachments) and v0.3.10 (the fix left renamed routes without names).
 """
+
 import base64
 import hashlib
 import struct
@@ -17,8 +18,8 @@ import pytest
 
 from backend import docs
 from backend.store import H
-from backend.tests.test_api import api, headers, post  # noqa: F401
-from backend.tests.test_files import turn
+from backend.tests.helpers.api import headers, post  # noqa: F401
+from backend.tests.helpers.files import turn
 from backend import bot_settings as BS
 
 CORPUS = Path(__file__).parent / "fixtures" / "golden_corpus"
@@ -30,17 +31,29 @@ KNOWN = {}
 
 
 def _kept():
-    return [pytest.param(p, id=p.name, marks=[pytest.mark.xfail(strict=True, raises=AssertionError,
-                                                                reason=KNOWN[p.name])]
-                         if p.name in KNOWN else []) for p in KEPT]
+    return [
+        pytest.param(
+            p,
+            id=p.name,
+            marks=[pytest.mark.xfail(strict=True, raises=AssertionError, reason=KNOWN[p.name])]
+            if p.name in KNOWN
+            else [],
+        )
+        for p in KEPT
+    ]
 
 
 def _png():
     def chunk(kind, data):
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
-    rows = b"".join(b"\x00" + bytes((y * 40, 90, 200)) * 4 for y in range(4))     # 4x4 RGB
-    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 4, 8, 2, 0, 0, 0))
-            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+    rows = b"".join(b"\x00" + bytes((y * 40, 90, 200)) * 4 for y in range(4))  # 4x4 RGB
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 4, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
+    )
 
 
 # Attachments with no text in them: an image, and bytes that are not UTF-8 nor JSON whatever the name says.
@@ -66,8 +79,11 @@ def _cases():
 
 
 def _librarian(c):
-    c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,effort,state,created_at) "
-              "VALUES('librarian','librarian','Librarian','','active',?)", (H.now(),))
+    c.execute(
+        "INSERT OR IGNORE INTO bots(id,slug,display_name,effort,state,created_at) "
+        "VALUES('librarian','librarian','Librarian','','active',?)",
+        (H.now(),),
+    )
     if c.execute("INSERT OR IGNORE INTO bot_config(bot,owner_id) VALUES('librarian','ana')").rowcount:
         BS.write(c, 'librarian', {"runtime": "fake", "host": "keeper"})
 
@@ -83,6 +99,7 @@ def named(api):
 
 # 1. The Librarian's wording repair, on its own.
 
+
 @pytest.mark.parametrize("path", _kept())
 def test_librarian_wording_keeps_a_teams_own_words(path):
     original = _text(path)
@@ -93,10 +110,11 @@ def test_librarian_wording_keeps_a_teams_own_words(path):
 def test_librarian_wording_rewrites_ticos_terms_to_the_expected_text(path):
     expected = _expected(path)
     assert H.librarian_text(_text(path)) == expected
-    assert H.librarian_text(expected) == expected            # a second pass (the upgrade repairs) changes nothing
+    assert H.librarian_text(expected) == expected  # a second pass (the upgrade repairs) changes nothing
 
 
 # 2. The Librarian's writes, the upgrade repairs that redo them, and the API answers that show them.
+
 
 def test_librarian_docs_and_messages_change_only_ticos_terms_through_writes_upgrades_and_reads(named):
     api = named
@@ -107,12 +125,14 @@ def test_librarian_docs_and_messages_change_only_ticos_terms_through_writes_upgr
         for path, original, _ in cases:
             made[path.name] = {
                 "librarian": store.insert(c, "bot:librarian", path.stem, original, "_librarian/" + path.name)["id"],
-                "message": H.say(c, "bot:librarian", "human:ana", original)["id"]}
+                "message": H.say(c, "bot:librarian", "human:ana", original)["id"],
+            }
     # A person's doc is the person's text, Tico's terms included, byte for byte: a doc body keeps its own ends
     # (backend/docs.py Body), as a stored file does (section 4).
     for path, original, _ in cases:
-        made[path.name]["person"] = post(api, "docs", {"title": "Mine " + path.stem, "body": original,
-                                                       "path": "team/" + path.name})["doc"]["id"]
+        made[path.name]["person"] = post(
+            api, "docs", {"title": "Mine " + path.stem, "body": original, "path": "team/" + path.name}
+        )["doc"]["id"]
     before = {}
     for path, original, want in cases:
         for who, doc_id in (("librarian", made[path.name]["librarian"]), ("person", made[path.name]["person"])):
@@ -140,23 +160,27 @@ def test_librarian_docs_and_messages_change_only_ticos_terms_through_writes_upgr
 
 def _repair_markers(api):
     with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM registry_metadata WHERE key IN ('librarian_wording35','librarian_wording36',"
-                  "'librarian_fix33')")
+        c.execute(
+            "DELETE FROM registry_metadata WHERE key IN ('librarian_wording35','librarian_wording36','librarian_fix33')"
+        )
 
 
 def test_upgrade_repairs_fix_legacy_librarian_text_once_and_leave_a_persons_text_alone(named):
     api = named
     cases = _cases()
-    rows = {}          # doc id -> (case, kind, body and version after the upgrade)
+    rows = {}  # doc id -> (case, kind, body and version after the upgrade)
     with api.app.state.store.transaction() as c:
         store = docs.Docs(None, None, None, None)
 
         def legacy(title, body, path):
-            return store.insert(c, "human:ana", title, body, path)["id"]       # a person's write: no rewrite
+            return store.insert(c, "human:ana", title, body, path)["id"]  # a person's write: no rewrite
+
         for path, original, want in cases:
             # An older Librarian cache, written before its words were repaired (librarian_fix33).
             doc_id = legacy(path.stem, original, "_librarian/old-" + path.name)
-            c.execute("UPDATE docs SET created_by_id='bot:librarian',updated_by_id='bot:librarian' WHERE id=?", (doc_id,))
+            c.execute(
+                "UPDATE docs SET created_by_id='bot:librarian',updated_by_id='bot:librarian' WHERE id=?", (doc_id,)
+            )
             rows[doc_id] = (path.name, "unrepaired", want, 1 if want == original else 2)
             # The same, last touched by Tico's keeper (a title fix): only librarian_wording35 picks it up.
             doc_id = legacy(path.stem, original, "_librarian/kept-by-keeper-" + path.name)
@@ -166,8 +190,10 @@ def test_upgrade_repairs_fix_legacy_librarian_text_once_and_leave_a_persons_text
             # (librarian_wording36).
             doc_id = legacy(path.stem, original, "_librarian/broken-" + path.name)
             broken = original.replace("company", "team").replace("machine", "Computer") + "\nteam Computer"
-            c.execute("UPDATE docs SET body=?,version=2,created_by_id='bot:librarian',updated_by_id='keeper' WHERE id=?",
-                      (broken, doc_id))
+            c.execute(
+                "UPDATE docs SET body=?,version=2,created_by_id='bot:librarian',updated_by_id='keeper' WHERE id=?",
+                (broken, doc_id),
+            )
             store.snapshot(c, store.get_row(c, doc_id), H.KEEPER, "Updated generated Tico wording")
             rows[doc_id] = (path.name, "broken", want, 3)
             # A person's own page where the repairs look: the person's words, Tico's terms included.
@@ -188,8 +214,9 @@ def test_upgrade_repairs_fix_legacy_librarian_text_once_and_leave_a_persons_text
     with api.app.state.store.read() as c:
         for doc_id, (name, kind, _, _) in rows.items():
             if kind == "broken":
-                notes = [r[0] for r in c.execute("SELECT note FROM doc_versions WHERE doc_id=? ORDER BY version",
-                                                 (doc_id,))]
+                notes = [
+                    r[0] for r in c.execute("SELECT note FROM doc_versions WHERE doc_id=? ORDER BY version", (doc_id,))
+                ]
                 assert notes == ["Created", "Updated generated Tico wording", "Redid generated Tico wording"], name
     api.app.state.store.initialize(seed_market=False)
     check("second start")
@@ -203,7 +230,9 @@ def test_upgrade_repairs_fix_legacy_librarian_text_once_and_leave_a_persons_text
         store = docs.Docs(None, None, None, None)
         for path, original, want in cases:
             doc_id = store.insert(c, "human:ana", path.stem, original, "_librarian/fix33-" + path.name)["id"]
-            c.execute("UPDATE docs SET created_by_id='bot:librarian',updated_by_id='bot:librarian' WHERE id=?", (doc_id,))
+            c.execute(
+                "UPDATE docs SET created_by_id='bot:librarian',updated_by_id='bot:librarian' WHERE id=?", (doc_id,)
+            )
             rows[doc_id] = (path.name, "fix33 only", want, 1 if want == original else 2)
         c.execute("DELETE FROM registry_metadata WHERE key='librarian_fix33'")
     api.app.state.store.initialize(seed_market=False)
@@ -212,17 +241,18 @@ def test_upgrade_repairs_fix_legacy_librarian_text_once_and_leave_a_persons_text
 
 def test_librarian_edits_of_docs_and_task_comments_change_only_ticos_terms(named):
     api = named
-    _, attempt = turn(api, bot="librarian")            # the Librarian's own run, with its own credential
+    _, attempt = turn(api, bot="librarian")  # the Librarian's own run, with its own credential
     tid = post(api, "tasks", {"owner": "librarian", "title": "Brightwater FAQ", "body": "Tidy the FAQ."})["id"]
     for path, original, want in _cases():
         for token, body in ((attempt["token"], want), ("ana-test", original)):
             who = "person" if token == "ana-test" else "librarian"
             doc = post(api, "docs", {"title": who + " " + path.stem, "body": "Draft."}, token)["doc"]
-            edited = api.patch("/api/v2/docs/" + doc["id"], json={"version": doc["version"], "body": original},
-                               headers=headers(token))
+            edited = api.patch(
+                "/api/v2/docs/" + doc["id"], json={"version": doc["version"], "body": original}, headers=headers(token)
+            )
             assert edited.status_code == 200, (path.name, who, edited.text)
             read = api.get("/api/v2/docs/" + doc["id"], headers=headers()).json()["doc"]
-            assert read["body"] == body, (path.name, who, "doc edit")      # byte for byte, ends included
+            assert read["body"] == body, (path.name, who, "doc edit")  # byte for byte, ends included
 
             made = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "Draft."}, headers=headers(token))
             assert made.status_code == 200, (path.name, who, made.text)
@@ -236,6 +266,7 @@ def test_librarian_edits_of_docs_and_task_comments_change_only_ticos_terms(named
 
 # 3. Display names: added beside Tico's actor ids, never into a team's words, on every spelling of a route.
 
+
 def test_display_names_add_names_beside_ids_and_keep_every_body_as_written(named):
     api = named
     texts = [(p.name, _text(p)) for p in KEPT + REWRITTEN]
@@ -244,10 +275,15 @@ def test_display_names_add_names_beside_ids_and_keep_every_body_as_written(named
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "human:ana", "Brightwater handover", texts[0][1], "bot:ops")
         for name, body in texts:
-            sent[H.say(c, "bot:ops", "human:ana", body, conversation_id=task["conversation_id"],
-                       refs={"task": task["id"]})["id"]] = body
+            sent[
+                H.say(
+                    c, "bot:ops", "human:ana", body, conversation_id=task["conversation_id"], refs={"task": task["id"]}
+                )["id"]
+            ] = body
         notice = H.notice(c, "bot:ops", "human:ana", "New task from bot:ops: Brightwater handover")
-    doc = post(api, "docs", {"title": "Brightwater export", "body": _text(CORPUS / "kept" / "customer-export.json")})["doc"]
+    doc = post(api, "docs", {"title": "Brightwater export", "body": _text(CORPUS / "kept" / "customer-export.json")})[
+        "doc"
+    ]
 
     # A bot's post in a task's thread reaches a person only by an @mention (hubdb.counts_for_person), and H.say, a legacy
     # write, takes none: these are on the task, in no one's Inbox. Ana reads them in the task's thread.
@@ -280,10 +316,11 @@ def test_display_names_add_names_beside_ids_and_keep_every_body_as_written(named
     assert read["task"]["body"] == texts[0][1]
     assert read["task"]["owner_name"] == "Operations" and read["task"]["requester_name"] == "Ana Example"
     shown = api.get("/api/v2/docs/" + doc["id"], headers=headers()).json()["doc"]
-    assert shown["body"] == _text(CORPUS / "kept" / "customer-export.json")      # byte for byte, ends included
+    assert shown["body"] == _text(CORPUS / "kept" / "customer-export.json")  # byte for byte, ends included
 
 
 # 4. Stored files: every corpus file, as uploaded, from every read path.
+
 
 def _files():
     out = [(p.name, p.read_bytes()) for p in KEPT + REWRITTEN]
@@ -303,9 +340,14 @@ def test_stored_files_come_back_byte_for_byte_from_every_read_path(named, name, 
     with api.app.state.store.read() as c:
         series = c.execute("SELECT file_id FROM bot_file_versions WHERE blob_id=?", (first,)).fetchone()["file_id"]
     digest = hashlib.sha256(data).hexdigest()
-    for url in (f"/api/v2/files/{first}", f"/api/v2/files/{second}", f"/api/v2/files/{series}",
-                f"/api/v2/files/{series}?v=1", f"/api/v2/files/{series}/versions/1",
-                f"/api/v2/files/{first}?download=1"):
+    for url in (
+        f"/api/v2/files/{first}",
+        f"/api/v2/files/{second}",
+        f"/api/v2/files/{series}",
+        f"/api/v2/files/{series}?v=1",
+        f"/api/v2/files/{series}/versions/1",
+        f"/api/v2/files/{first}?download=1",
+    ):
         full = api.get(url, headers=headers())
         assert full.status_code == 200, (url, full.text)
         assert full.content == data, url

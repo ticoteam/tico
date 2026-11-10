@@ -17,6 +17,7 @@ every request, so no timer is needed), when HQ ends it, or when the feature is t
 Off: `TICO_SUPPORT=off`, demo and rehearsal mode (support.off_reason), the team rule `support_access`, and, until the
 security review is done, unless `TICO_SUPPORT_ACCESS=on`.
 """
+
 import asyncio
 import base64
 import logging
@@ -53,28 +54,31 @@ CREATE INDEX IF NOT EXISTS support_access_log_session ON support_access_log(sess
 TIERS = ("app", "full")
 TOKEN_PREFIX = "tico_sa_"
 LABEL = "Tico support"
-DEFAULT_HOURS, MAX_HOURS = 24, 720
-PULL_WAIT = 30               # seconds HQ may hold a pull open before answering with nothing
-DISPATCH_WAIT = 25           # one request run against this app; HQ gives up on it after 30
-MAX_BODY = 2 * 1024 * 1024   # bytes of one answer carried back
-MAX_BATCH = 20               # requests taken from one pull
+DEFAULT_HOURS, MAX_HOURS = 72, 8760
+PULL_WAIT = 30  # seconds HQ may hold a pull open before answering with nothing
+DISPATCH_WAIT = 25  # one request run against this app; HQ gives up on it after 30
+MAX_BODY = 2 * 1024 * 1024  # bytes of one answer carried back
+MAX_BATCH = 20  # requests taken from one pull
 LOGGED = 500
-LISTED = 50                  # sessions listed under a person's requests
-WORKER = True                # tests drive `pull_once` themselves
+LISTED = 50  # sessions listed under a person's requests
+WORKER = True  # tests drive `pull_once` themselves
 HQ_SESSION = re.compile(r"sa_[0-9a-f]{24}")
 METHODS = ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE")
 API_PATH = re.compile(r"/api/v2/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*")
 
 # Refused to both tiers: sessions themselves, signing in and out, anything that makes or shows a token, key or
 # credential value, and handing the install to someone else.
-ALWAYS_REFUSED = re.compile(r"/api/v2/(?:"
-                            r"support/access(?:/.*)?|logout|local-signin|oauth/.*|mcp/oauth.*"
-                            r"|me/tokens(?:/.*)?|access/tokens(?:/.*)?|service-keys(?:/.*)?|enrollments"
-                            r"|agents/pairings(?:/.*)?|directory/scim-token|github/token"
-                            r"|bots/[^/]+/(?:agent-credential(?:/revoke)?|repository-read-token)"
-                            r"|access/owner(?:/email)?"
-                            r"|credentials/[^/]+/reveal|credential-runtime|runner-[a-z-]*credential[a-z-]*(?:/.*)?"
-                            r")")
+ALWAYS_REFUSED = re.compile(
+    r"/api/v2/(?:"
+    r"support/access(?:/.*)?|logout|local-signin|oauth/.*|mcp/oauth.*"
+    r"|me/tokens(?:/.*)?|access/tokens(?:/.*)?|service-keys(?:/.*)?|enrollments"
+    r"|agents/pairings(?:/.*)?|skills/devices(?:/.*)?|directory/scim-token|github/token"
+    r"|bots/[^/]+/(?:agent-credential(?:/revoke)?|repository-read-token)"
+    r"|access/owner(?:/email)?"
+    r"|credentials/[^/]+/reveal|credential-runtime|runner-[a-z-]*credential[a-z-]*(?:/.*)?"
+    r"|tasks/[^/]+/asks/[^/]+/(?:ok|answer)|oks/[^/]+/use"  # an OK or an answer is the person's own (task_asks)
+    r")"
+)
 # Pages that open a person's own room or calendar: Tico support has neither, so it gets a plain refusal.
 PERSONAL = re.compile(r"/api/v2/(?:tasks/[^/]+/chat|assistant|calendar/upcoming)")
 # The one path form the gate reads: no empty, dot or percent-encoded segment, so the gate and the router read the same
@@ -85,12 +89,15 @@ PLAIN_PATH = re.compile(r"/api/v2(?:/[A-Za-z0-9_~@+=:-][A-Za-z0-9._~@+=:-]*)+")
 APP_READS_REFUSED = re.compile(r"/api/v2/(?:attempts/[^/]+/capture|runners/[^/]+/logins(?:/.*)?)")
 # The app tier's only writes: setup. A bot's model, fallback and context size; a computer's runner restart; and asking
 # a computer to read its subscriptions' allowance again. No model sign-in (its code would let support choose the
-# account a computer runs on), approvals, messages, tasks, runs, publishing, spending, people, access or credentials.
-APP_WRITES = tuple((method, re.compile(pattern)) for method, pattern in (
-    ("POST", r"/api/v2/bots/[^/]+/(?:model|task-model|fallback|compact-at)"),
-    ("POST", r"/api/v2/runners/[^/]+/restart"),
-    ("POST", r"/api/v2/subscriptions/refresh"),
-))
+# account a computer runs on), OKs, messages, tasks, runs, publishing, spending, people, access or credentials.
+APP_WRITES = tuple(
+    (method, re.compile(pattern))
+    for method, pattern in (
+        ("POST", r"/api/v2/bots/[^/]+/(?:model|task-model|fallback|compact-at)"),
+        ("POST", r"/api/v2/runners/[^/]+/restart"),
+        ("POST", r"/api/v2/subscriptions/refresh"),
+    )
+)
 
 
 class AccessStart(Contract):
@@ -118,8 +125,9 @@ def off_reason(settings, c=None):
 def require_on(settings, c):
     reason = off_reason(settings, c)
     if reason:
-        raise Problem("support_access_off", "Letting Tico support in is not available here.", 409,
-                      extra={"off_reason": reason})
+        raise Problem(
+            "support_access_off", "Letting Tico support in is not available here.", 409, extra={"off_reason": reason}
+        )
 
 
 def live(c, sid=None):
@@ -128,8 +136,9 @@ def live(c, sid=None):
     if sid is not None:
         where += " AND id=?"
         args.append(sid)
-    return c.execute("SELECT * FROM support_access WHERE " + where + " ORDER BY started_at DESC LIMIT 1",
-                     args).fetchone()
+    return c.execute(
+        "SELECT * FROM support_access WHERE " + where + " ORDER BY started_at DESC LIMIT 1", args
+    ).fetchone()
 
 
 def seconds_left(row):
@@ -146,10 +155,19 @@ def hq_ticket(c, ticket_id):
 def view(c, row):
     """`id` is HQ's session id (a session from before it was kept as the id has HQ's in `hq_session`); `ticket_id` is
     the ticket here and `hq_ticket` the same ticket at HQ."""
-    return {"id": row["id"], "hq_session": row["hq_session"], "ticket_id": row["ticket_id"],
-            "hq_ticket": hq_ticket(c, row["ticket_id"]), "tier": row["tier"], "started_by": row["started_by"],
-            "started_at": row["started_at"], "expires_at": row["expires_at"], "seconds_left": seconds_left(row),
-            "ended_at": row["ended_at"], "end_reason": row["end_reason"]}
+    return {
+        "id": row["id"],
+        "hq_session": row["hq_session"],
+        "ticket_id": row["ticket_id"],
+        "hq_ticket": hq_ticket(c, row["ticket_id"]),
+        "tier": row["tier"],
+        "started_by": row["started_by"],
+        "started_at": row["started_at"],
+        "expires_at": row["expires_at"],
+        "seconds_left": seconds_left(row),
+        "ended_at": row["ended_at"],
+        "end_reason": row["end_reason"],
+    }
 
 
 def hq_stamp(ts):
@@ -163,8 +181,14 @@ def identity(c, token, settings):
     row = c.execute("SELECT * FROM support_access WHERE token_hash=?", (digest(token),)).fetchone()
     if not row or row["ended_at"] or row["expires_at"] <= H.now() or off_reason(settings, c):
         raise Problem("identity", "Invalid credential", 401)
-    return Identity(SUPPORT_ACTOR, "owner" if row["tier"] == "full" else "human", via_token=True,
-                    token_label=LABEL, token_id=row["id"], support=row["tier"])
+    return Identity(
+        SUPPORT_ACTOR,
+        "owner" if row["tier"] == "full" else "human",
+        via_token=True,
+        token_label=LABEL,
+        token_id=row["id"],
+        support=row["tier"],
+    )
 
 
 def check_live(c, who):
@@ -186,12 +210,15 @@ def gate(who, path, method):
             raise Problem("support_access", "Tico support cannot do this.", 403)
         return
     if not any(method == allowed and pattern.fullmatch(path) for allowed, pattern in APP_WRITES):
-        raise Problem("support_access", "Tico support (app access) can read and change setup only. Ask for full "
-                      "access, or do this yourself.", 403)
+        raise Problem(
+            "support_access",
+            "Tico support (app access) can read and change setup only. Ask for full access, or do this yourself.",
+            403,
+        )
 
 
 # ---------------------------------------------------------------------- the link to HQ
-_tokens = {}                 # session id -> its token: in this process's memory only
+_tokens = {}  # session id -> its token: in this process's memory only
 _runtime = {"app": None, "loop": None, "worker": None}
 _worker_lock = threading.Lock()
 
@@ -208,12 +235,24 @@ def end(store, row, by, reason):
     """End a session now, and forget its token. Returns whether this call ended it."""
     _tokens.pop(row["id"], None)
     with store.transaction() as c:
-        done = c.execute("UPDATE support_access SET ended_at=?, ended_by=?, end_reason=?, token_hash=NULL "
-                         "WHERE id=? AND ended_at IS NULL", (H.now(), by or None, reason, row["id"])).rowcount
+        done = c.execute(
+            "UPDATE support_access SET ended_at=?, ended_by=?, end_reason=?, token_hash=NULL "
+            "WHERE id=? AND ended_at IS NULL",
+            (H.now(), by or None, reason, row["id"]),
+        ).rowcount
         if done:
-            H.event(c, by or "system", "support_access.ended" if reason != "stopped" else "support_access.stopped",
-                    row["id"], {"reason": reason, "ticket_id": row["ticket_id"], "hq_ticket": hq_ticket(c, row["ticket_id"]),
-                                "tier": row["tier"]})
+            H.event(
+                c,
+                by or "system",
+                "support_access.ended" if reason != "stopped" else "support_access.stopped",
+                row["id"],
+                {
+                    "reason": reason,
+                    "ticket_id": row["ticket_id"],
+                    "hq_ticket": hq_ticket(c, row["ticket_id"]),
+                    "tier": row["tier"],
+                },
+            )
     return bool(done)
 
 
@@ -223,10 +262,17 @@ def end_all(c, actor, reason):
     rows = c.execute("SELECT id, ticket_id FROM support_access WHERE ended_at IS NULL").fetchall()
     for row in rows:
         _tokens.pop(row["id"], None)
-        c.execute("UPDATE support_access SET ended_at=?, ended_by=?, end_reason=?, token_hash=NULL WHERE id=?",
-                  (H.now(), actor, reason, row["id"]))
-        H.event(c, actor, "support_access.ended", row["id"],
-                {"reason": reason, "ticket_id": row["ticket_id"], "hq_ticket": hq_ticket(c, row["ticket_id"])})
+        c.execute(
+            "UPDATE support_access SET ended_at=?, ended_by=?, end_reason=?, token_hash=NULL WHERE id=?",
+            (H.now(), actor, reason, row["id"]),
+        )
+        H.event(
+            c,
+            actor,
+            "support_access.ended",
+            row["id"],
+            {"reason": reason, "ticket_id": row["ticket_id"], "hq_ticket": hq_ticket(c, row["ticket_id"])},
+        )
     return len(rows)
 
 
@@ -241,8 +287,12 @@ def _tell_hq_ended(app, row):
     if not ticket or not row["hq_session"]:
         return
     try:
-        support._ask_hq("POST", f"/v1/support/{ticket['hq_id']}/access/{row['hq_session']}/end", body={},
-                        secret=app.state.support.secret(ticket))
+        support._ask_hq(
+            "POST",
+            f"/v1/support/{ticket['hq_id']}/access/{row['hq_session']}/end",
+            body={},
+            secret=app.state.support.secret(ticket),
+        )
     except Problem:
         pass
 
@@ -251,9 +301,18 @@ def _dispatch(app, token, request):
     """Run one request HQ carried against this app, as the session. Returns (status, content type, body)."""
     method = str(request.get("method") or "").upper()
     path, query = str(request.get("path") or ""), str(request.get("query") or "")
-    if (method not in METHODS or not API_PATH.fullmatch(path) or any(p in (".", "..") for p in path.split("/"))
-            or len(query) > 4000 or "#" in query):
-        return 400, "application/json", b'{"error":{"code":"support_access","detail":"Only /api/v2 requests are carried."}}'
+    if (
+        method not in METHODS
+        or not API_PATH.fullmatch(path)
+        or any(p in (".", "..") for p in path.split("/"))
+        or len(query) > 4000
+        or "#" in query
+    ):
+        return (
+            400,
+            "application/json",
+            b'{"error":{"code":"support_access","detail":"Only /api/v2 requests are carried."}}',
+        )
     try:
         body = base64.b64decode(str(request.get("body_b64") or ""), validate=True)
     except ValueError:
@@ -268,8 +327,11 @@ def _dispatch(app, token, request):
     async def go():
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
-            return await asyncio.wait_for(client.request(method, path + ("?" + query if query else ""),
-                                                         content=body or None, headers=headers), DISPATCH_WAIT)
+            return await asyncio.wait_for(
+                client.request(method, path + ("?" + query if query else ""), content=body or None, headers=headers),
+                DISPATCH_WAIT,
+            )
+
     loop = _runtime["loop"]
     try:
         response = asyncio.run_coroutine_threadsafe(go(), loop).result(DISPATCH_WAIT + 5)
@@ -287,7 +349,9 @@ def pull_once(app, wait=PULL_WAIT):
     live (False: the worker stops)."""
     store, settings = app.state.store, app.state.store.settings
     with store.read() as c:
-        row = c.execute("SELECT * FROM support_access WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1").fetchone()
+        row = c.execute(
+            "SELECT * FROM support_access WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
         reason = off_reason(settings, c) if row else ""
     if not row:
         return False
@@ -322,13 +386,29 @@ def pull_once(app, wait=PULL_WAIT):
         if still:
             status, content_type, content = _dispatch(app, token, request)
         else:
-            status, content_type, content = 410, "application/json", b'{"error":{"code":"ended","detail":"The session ended."}}'
+            status, content_type, content = (
+                410,
+                "application/json",
+                b'{"error":{"code":"ended","detail":"The session ended."}}',
+            )
         with store.transaction() as c:
-            c.execute("INSERT INTO support_access_log(session_id,created_at,by,method,path,status) VALUES(?,?,?,?,?,?)",
-                      (row["id"], H.now(), by, str(request.get("method") or "")[:10].upper(),
-                       str(request.get("path") or "")[:500], status))
-        reply = {"rid": str(request.get("rid") or "")[:80], "status": status, "content_type": content_type,
-                 "body_b64": base64.b64encode(content).decode()}
+            c.execute(
+                "INSERT INTO support_access_log(session_id,created_at,by,method,path,status) VALUES(?,?,?,?,?,?)",
+                (
+                    row["id"],
+                    H.now(),
+                    by,
+                    str(request.get("method") or "")[:10].upper(),
+                    str(request.get("path") or "")[:500],
+                    status,
+                ),
+            )
+        reply = {
+            "rid": str(request.get("rid") or "")[:80],
+            "status": status,
+            "content_type": content_type,
+            "body_b64": base64.b64encode(content).decode(),
+        }
         support._answer(support._ask_hq("POST", base + "/reply", body={"replies": [reply]}, secret=secret), (200,))
     with store.read() as c:
         return bool(live(c, row["id"]))
@@ -341,7 +421,7 @@ def _work(app):
             if not pull_once(app):
                 return
             delay = 1
-        except Exception as exc:          # HQ down or refusing: wait longer each time, up to five minutes
+        except Exception as exc:  # HQ down or refusing: wait longer each time, up to five minutes
             log.warning("Support access link to HQ failed: %s", type(exc).__name__)
             time.sleep(delay)
             delay = min(delay * 2, 300)
@@ -366,7 +446,9 @@ def started(app, loop):
     _runtime["app"], _runtime["loop"] = app, loop
     store = app.state.store
     with store.read() as c:
-        row = c.execute("SELECT * FROM support_access WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1").fetchone()
+        row = c.execute(
+            "SELECT * FROM support_access WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
         reason = off_reason(store.settings, c) if row else ""
     if not row:
         return
@@ -382,7 +464,7 @@ def started(app, loop):
 class Access:
     def __init__(self, app, store, settings, auth):
         self.app, self.store, self.settings, self.auth = app, store, settings, auth
-        self.starting = threading.Lock()     # one live session per install, even when two people start at once
+        self.starting = threading.Lock()  # one live session per install, even when two people start at once
 
     def may_manage(self, who):
         return self.auth.company_role(who) in ("owner", "admin")
@@ -398,13 +480,21 @@ class Access:
                 last = c.execute("SELECT * FROM support_access ORDER BY started_at DESC LIMIT 1").fetchone()
             # The sessions started from this person's own requests: each request lists its own sessions' logs.
             if not reason:
-                mine = c.execute("SELECT a.* FROM support_access a JOIN support_tickets t ON t.id=a.ticket_id "
-                                 "WHERE t.actor=? ORDER BY a.started_at DESC LIMIT ?", (who.actor, LISTED)).fetchall()
+                mine = c.execute(
+                    "SELECT a.* FROM support_access a JOIN support_tickets t ON t.id=a.ticket_id "
+                    "WHERE t.actor=? ORDER BY a.started_at DESC LIMIT ?",
+                    (who.actor, LISTED),
+                ).fetchall()
             person = not who.via_token and not who.via
-            return {"available": not reason, "off_reason": reason, "active": view(c, row) if row else None,
-                    "last": view(c, last) if last else None, "sessions": [view(c, x) for x in mine or ()],
-                    "can_start": bool(not reason and person and self.may_manage(who)),
-                    "can_full": bool(not reason and person and who.role == "owner")}
+            return {
+                "available": not reason,
+                "off_reason": reason,
+                "active": view(c, row) if row else None,
+                "last": view(c, last) if last else None,
+                "sessions": [view(c, x) for x in mine or ()],
+                "can_start": bool(not reason and person and self.may_manage(who)),
+                "can_full": bool(not reason and person and who.role == "owner"),
+            }
 
     def start(self, who, body):
         support.require_person(who)
@@ -416,8 +506,9 @@ class Access:
         with self.starting:
             with self.store.read() as c:
                 require_on(self.settings, c)
-                ticket = c.execute("SELECT * FROM support_tickets WHERE id=? AND actor=?",
-                                   (body.ticket_id, who.actor)).fetchone()
+                ticket = c.execute(
+                    "SELECT * FROM support_tickets WHERE id=? AND actor=?", (body.ticket_id, who.actor)
+                ).fetchone()
                 if not ticket:
                     raise Problem("not_found", "Ticket not found", 404)
                 if ticket["status"] not in ("open", "answered"):
@@ -426,25 +517,40 @@ class Access:
                     raise Problem("support_access_live", "Tico support already has access. Stop it first.", 409)
             now = H.now()
             expires = H.shift(now, hours=body.hours)
-            answer = support._ask_hq("POST", f"/v1/support/{ticket['hq_id']}/access",
-                                     body={"tier": body.tier, "expires_at": hq_stamp(expires)},
-                                     secret=self.app.state.support.secret(ticket))
+            answer = support._ask_hq(
+                "POST",
+                f"/v1/support/{ticket['hq_id']}/access",
+                body={"tier": body.tier, "expires_at": hq_stamp(expires)},
+                secret=self.app.state.support.secret(ticket),
+            )
             session = str(support._answer(answer, (200, 201)).get("session") or "")
             if not HQ_SESSION.fullmatch(session):
-                raise Problem("support_unreachable", "Could not reach Tico support. Try again in a moment.", 502,
-                              retryable=True)
+                raise Problem(
+                    "support_unreachable", "Could not reach Tico support. Try again in a moment.", 502, retryable=True
+                )
             # HQ's session id is the id here too, so this install's log and events match HQ and admin.
             sid = session
             token = TOKEN_PREFIX + secrets.token_urlsafe(32)
             with self.store.transaction() as c:
                 if c.execute("SELECT 1 FROM support_access WHERE id=?", (sid,)).fetchone():
-                    raise Problem("support_unreachable", "Could not reach Tico support. Try again in a moment.", 502,
-                                  retryable=True)
-                c.execute("INSERT INTO support_access(id,ticket_id,tier,started_by,started_at,expires_at,token_hash,"
-                          "hq_session) VALUES(?,?,?,?,?,?,?,?)",
-                          (sid, ticket["id"], body.tier, who.actor, now, expires, digest(token), session))
-                H.event(c, who.actor, "support_access.started", sid,
-                        {"ticket_id": ticket["id"], "hq_ticket": ticket["hq_id"], "tier": body.tier, "hours": body.hours})
+                    raise Problem(
+                        "support_unreachable",
+                        "Could not reach Tico support. Try again in a moment.",
+                        502,
+                        retryable=True,
+                    )
+                c.execute(
+                    "INSERT INTO support_access(id,ticket_id,tier,started_by,started_at,expires_at,token_hash,"
+                    "hq_session) VALUES(?,?,?,?,?,?,?,?)",
+                    (sid, ticket["id"], body.tier, who.actor, now, expires, digest(token), session),
+                )
+                H.event(
+                    c,
+                    who.actor,
+                    "support_access.started",
+                    sid,
+                    {"ticket_id": ticket["id"], "hq_ticket": ticket["hq_id"], "tier": body.tier, "hours": body.hours},
+                )
                 made = view(c, c.execute("SELECT * FROM support_access WHERE id=?", (sid,)).fetchone())
             _tokens[sid] = token
         wake(self.app)
@@ -474,8 +580,11 @@ class Access:
             require_on(self.settings, c)
         row = self._session(who, sid)
         with self.store.read() as c:
-            rows = c.execute("SELECT created_at,by,method,path,status FROM support_access_log WHERE session_id=? "
-                             "ORDER BY id DESC LIMIT ?", (sid, LOGGED)).fetchall()
+            rows = c.execute(
+                "SELECT created_at,by,method,path,status FROM support_access_log WHERE session_id=? "
+                "ORDER BY id DESC LIMIT ?",
+                (sid, LOGGED),
+            ).fetchall()
             return {"session": view(c, row), "log": [dict(r) for r in rows]}
 
 

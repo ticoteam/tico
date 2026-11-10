@@ -7,12 +7,8 @@ reads: []                        # other bot repositories this one may clone rea
 reasoning_effort: medium
 max_run_minutes: 60
 
-# Nothing addressed to anyone outside the team leaves until an owner turns this on. Until then
-# the bot puts the finished message on the task and drafts until a person turns mail sending on in Tico.
-outbound_send: false
-
 # The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
-# (Start setup, go-live). `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
 routines:
   - id: weekly-people-summary
     title: Weekly people summary
@@ -26,8 +22,8 @@ routines:
 # arrives in, never the value; declaring access here does not create it. Changing access is an
 # owner decision, so the bot files a task for the owner rather than editing this file.
 tools: []
-# Optional, uncomment when connected. The handbook is read through the Librarian (`hub doc ask`) and the roster
-# through `hub team show`, which every run already has. There is deliberately no HR-system entry: a human copies
+# Optional, uncomment when connected. The handbook is read through the Librarian (`tico doc ask`) and the roster
+# through `tico team show`, which every run already has. There is deliberately no HR-system entry: a human copies
 # anything a system needs.
 # tools:
 #   - service: slack

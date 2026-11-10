@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Turn a local employee folder into a private GitHub repo (without the GitHub App; with it, BotOps uses `hub bot repo-create`).
+# Turn a local employee folder into a private GitHub repo (without the GitHub App; with it, BotOps uses `tico bot repo-create`).
 # Usage: scripts/publish-employee.sh [--owner <org>] [--workspace <dir>] <slug> [<slug>...]
 #   --owner      GitHub organization or user that owns the repositories (or TICO_GITHUB_OWNER)
 #   --workspace  where the bot-<slug> (older: emp-<slug>) folders are (default: the folder holding this checkout)

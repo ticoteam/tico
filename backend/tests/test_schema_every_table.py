@@ -47,13 +47,24 @@ def shapes(tmp_path_factory):
     return before, upgraded, new
 
 
-def test_the_fixture_has_the_tables_made_on_first_use(shapes):
+def _the_fixture_has_the_tables_made_on_first_use(shapes):
     before, _, _ = shapes
     for table in ("slack_credentials", "github_app_states", "directory_credentials", "check_head_provenance"):
         assert table in before
 
 
-def test_every_table_of_an_upgraded_database_has_the_columns_of_a_new_one(shapes):
+def test_every_table_of_an_upgraded_database_has_the_columns_of_a_new_one(shapes, subtests):
+    """One test, so the two boots behind `shapes` run once, not once per worker that gets one of these checks."""
+    for check in (
+        _the_fixture_has_the_tables_made_on_first_use,
+        _every_table_has_the_columns_of_a_new_one,
+        _no_old_column_name_survives_an_upgrade,
+    ):
+        with subtests.test(check.__name__):
+            check(shapes)
+
+
+def _every_table_has_the_columns_of_a_new_one(shapes):
     _, upgraded, new = shapes
     differ = {}
     for table in sorted(set(upgraded) | set(new)):
@@ -61,15 +72,22 @@ def test_every_table_of_an_upgraded_database_has_the_columns_of_a_new_one(shapes
             continue
         have, want = upgraded.get(table), new.get(table)
         if have != want:
-            differ[table] = {"only_upgraded": sorted((have or set()) - (want or set())),
-                             "only_new": sorted((want or set()) - (have or set())),
-                             "table_missing": "upgraded" if have is None else "new" if want is None else ""}
+            differ[table] = {
+                "only_upgraded": sorted((have or set()) - (want or set())),
+                "only_new": sorted((want or set()) - (have or set())),
+                "table_missing": "upgraded" if have is None else "new" if want is None else "",
+            }
     assert not differ
 
 
-def test_no_old_column_name_survives_an_upgrade(shapes):
+def _no_old_column_name_survives_an_upgrade(shapes):
     _, upgraded, _ = shapes
     renamed = {(table, old) for table, old, _new, _wave in COLUMNS}
-    left = sorted(f"{t}.{c}" for t, cols in upgraded.items() if t not in LEFT_BEHIND for c in cols
-                  if (t, c) in renamed or OLD_LOOKING.match(c))
+    left = sorted(
+        f"{t}.{c}"
+        for t, cols in upgraded.items()
+        if t not in LEFT_BEHIND
+        for c in cols
+        if (t, c) in renamed or OLD_LOOKING.match(c)
+    )
     assert not left

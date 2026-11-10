@@ -1,0 +1,610 @@
+/* Settings > Health: what needs attention right now (backend/health.py). Everything shown is what
+   GET /api/v2/health computed; the only local state is which page is open. General's Health line counts it and opens
+   the full page (#/settings/health); Health has no tab of its own. */
+'use strict';
+
+// What GET /api/v2/health sends (backend/health.py), as the page reads it. A part the server leaves out is optional.
+type HlStatus = 'ok' | 'warn' | 'bad' | 'info' | 'unknown';
+
+interface HlFix {
+  label: string;
+  href?: string;
+  tab?: string;
+  click?: string;
+  login?: { runner_id: string; runtime: string; computer: string };
+  move?: { bot: string; runner_id: string; computer: string };
+  finish?: { bot: string };
+}
+
+interface HlCheck {
+  id: string;
+  label: string;
+  summary: string;
+  status: HlStatus;
+  fixes: HlFix[];
+  /** never_stuck only: the open tasks on each rung (backend/health.py _never_stuck_check). */
+  counts?: Partial<Record<HlLadderKey, number>>;
+}
+
+interface HlRuntime {
+  name: string;
+  installed: boolean;
+  ready: boolean;
+  needed?: boolean;
+  signable?: boolean;
+  plan?: string | null;
+  rejected?: boolean;
+  rejected_at?: string | null;
+  rejected_reason?: string | null;
+  credential_source?: string;
+}
+
+interface HlComputer {
+  id: string;
+  label: string;
+  online: boolean;
+  resting?: boolean;
+  last_seen_at?: string | null;
+  version?: string;
+  release?: string;
+  update?: { release?: string } | null;
+  runtimes: HlRuntime[];
+}
+
+/** A bot in Health's Stuck or Bots waiting lists (backend/health.py `_stuck` and `_waiting`). */
+interface HlStuck {
+  bot: string;
+  name: string;
+  reason: string;
+  why: string;
+  oldest?: string | null;
+  fix?: HlFix | null;
+  computer?: string;
+  queued?: number;
+  dead?: number;
+  quarantine_held?: number;
+  held?: number;
+}
+
+interface HlFailure {
+  bot: string;
+  at: string;
+}
+
+interface HlCopy {
+  total?: number;
+  done?: number;
+  failed?: number;
+}
+
+interface HlStorage {
+  mode?: string;
+  bucket?: string;
+  region?: string;
+  files?: number;
+  bytes?: number;
+  copy?: HlCopy;
+}
+
+interface HlHealth {
+  attention: number;
+  audience: string;
+  checks: HlCheck[];
+  computers: HlComputer[];
+  failures: HlFailure[];
+  stuck?: HlStuck[];
+  waiting?: HlStuck[];
+  storage?: HlStorage;
+  update?: ConfigUpdate | null;
+  limited?: Record<string, unknown>[];
+  on_fallback?: HealthFallbackRow[];
+}
+
+/** GET /api/v2/health/findings: Check health's open findings and the team rule. */
+interface HlFinding {
+  key: string;
+  kind: string;
+  title: string;
+  task_id?: string | null;
+  ticket_id?: string | null;
+  approval_id?: string | null;
+  occurrences?: number;
+  last_seen_at?: string | null;
+}
+
+interface HlFindings {
+  findings: HlFinding[];
+  botops?: boolean;
+  reports_without_asking?: boolean;
+}
+
+/** GET /api/v2/system/metrics: the flight recorder's last hour (backend/flight.py). */
+interface HlRoute {
+  route: string;
+  n: number;
+  p95?: number | null;
+  total_ms?: number;
+  callers?: Record<string, number>;
+}
+
+interface HlRequests {
+  n?: number;
+  errors?: number;
+  p95?: number | null;
+  routes?: HlRoute[];
+}
+
+interface HlProcess {
+  cpu_avg?: number | null;
+  cpu_max?: number | null;
+  lag_max?: number | null;
+  locked?: number;
+}
+
+interface HlDb {
+  bytes?: number;
+  wal_bytes?: number;
+  growth_24h?: number | null;
+}
+
+interface HlStall {
+  kind: string;
+  at: number;
+  stalled_s: number;
+  threads?: { busy?: { loop?: boolean; stack?: string[] }[] };
+}
+
+interface HlSlow {
+  route: string;
+  ms: number;
+  caller: string;
+  created_at: number;
+}
+
+interface HlSqlQuery {
+  sql: string;
+  n: number;
+  p95?: number | null;
+  total_ms?: number;
+}
+
+interface HlMetrics {
+  requests?: HlRequests;
+  process?: HlProcess;
+  db?: HlDb;
+  events?: { recent?: HlStall[] };
+  slow?: HlSlow[];
+  sql?: { queries?: HlSqlQuery[] };
+}
+
+/** The Report button's payload (ui/support.ts reportThisHTML). */
+interface HlReport {
+  kind: string;
+  title: string;
+  detail?: string;
+  ref?: string;
+  group: string;
+}
+
+/** One row of POST /api/v2/support/setup-check (backend/setup_check.py). */
+interface HlSetupRow {
+  name: string;
+  status: HlStatus;
+  detail: string;
+  fix?: string;
+}
+
+interface HlSetupReply {
+  checks?: HlSetupRow[];
+  doctor_only?: string;
+}
+
+let HL: HlHealth | null = null;
+let HL_LOAD = 0;
+let HL_METRICS: HlMetrics | null = null;   // owners and admins: the last hour from the flight recorder (GET /api/v2/system/metrics)
+let HL_FINDINGS: HlFindings | null = null;  // Check health's open findings and the team rule (GET /api/v2/health/findings)
+
+async function hlRefresh(): Promise<HlHealth | null> {
+  if (!S.me?.cloud) return null;
+  const seq = ++HL_LOAD;
+  // The last hour and the monitor are drawn only on the Health page: the minute poll elsewhere (the dot, the stuck
+  // bots, a new version) reads the checks alone. On the page, once the checks have said who this is (their audience),
+  // all three are read together; the first time, the other two follow the checks.
+  const page = !!$('#hl-page');
+  const extras = (hl: HlHealth | null): Promise<[HlMetrics | null, HlFindings | null]> => Promise.all([page && hl && hl.audience !== 'human' ? v2Get('/v2/system/metrics?minutes=60') : null,
+    page && hl ? v2Get('/v2/health/findings') : null]);
+  const checks = (data: HlHealth | null): HlHealth | null => data && Array.isArray(data.checks) ? data : null;
+  const [data, [metrics, findings]] = HL ? await Promise.all([v2Get('/v2/health'), extras(HL)])
+    : await v2Get('/v2/health').then(async data => [data, await extras(checks(data))]);
+  if (seq !== HL_LOAD) return HL;
+  HL = checks(data);
+  if (page) {
+    HL_METRICS = HL && HL.audience !== 'human' && metrics?.requests ? metrics : null;
+    HL_FINDINGS = HL && Array.isArray(findings?.findings) ? findings : null;
+  }
+  // The sidebar's "New version" reads the same answer, so it never lags the page beside it.
+  if (HL?.update && S.config) { S.config = {...S.config, update: HL.update}; window.renderNewVersion?.(); }
+  hlNav();
+  hlSummaryDraw();
+  hlPageDraw();
+  window.overviewStuckDraw?.();
+  return HL;
+}
+
+// The computers Health lists: everyone's for owners and admins; null for others, who are shown none. The account
+// menu reads it for its one no-computer line (ui/app/heartbeat.ts).
+window.hlComputers = () => HL && HL.audience !== 'human' ? HL.computers : null;
+window.hlNav = function hlNav() {
+  const attention = HL?.attention || 0;
+  document.querySelectorAll<HTMLElement>('[data-hl-alert]').forEach(dot => { dot.hidden = !attention; });
+  const details = document.querySelector('[data-hl-details]');
+  if (details) { if (attention) details.setAttribute('aria-label', `Health details, ${attention} to look at`); else details.removeAttribute('aria-label'); }
+  window.renderAccountStatus?.();
+};
+
+// General's Health line (ui/app/settings.ts #settings-health-line): the checks counted by severity, with Settings' own
+// issues (one a person must act on is urgent, the rest FYI), the release line with Update while one is out, and
+// Details for the full page. Before the checks load it is the label and Details alone.
+function hlCounts(): {urgent: number; fix: number; fyi: number} {
+  const checks = HL?.checks || [], issues = typeof SETTINGS_DATA !== 'undefined' && SETTINGS_DATA.issues || [];
+  const n = (status: HlStatus) => checks.filter(check => check.status === status).length, person = issues.filter(needsPerson).length;
+  return {urgent: n('bad') + person, fix: n('warn'), fyi: n('info') + issues.length - person};
+}
+window.hlSummaryDraw = hlSummaryDraw;
+function hlSummaryDraw(): void {
+  const host = $('#settings-health-line');
+  if (!host) return;
+  const {urgent, fix, fyi} = hlCounts(), loaded = !!HL;
+  const fyiWords = fyi ? `<span class="muted" data-hl-count="fyi">${fyi} FYI</span>` : '';
+  const counts = !loaded ? '' : urgent || fix ? [urgent && `<span class="err" data-hl-count="urgent">${urgent} urgent</span>`,
+    fix && `<span class="settings-health-fix" data-hl-count="fix">${fix} to fix</span>`, fyiWords].filter(Boolean).join(' · ')
+    : `<span class="ok" data-hl-count="ok">All good</span>${fyiWords ? ' · ' + fyiWords : ''}`;
+  // The same Update now as Health's Version row and the sidebar (notices.js): the owner's, unless Tico runs updates.
+  const u = S.config?.update, busy = typeof nvBusy !== 'undefined' && nvBusy;
+  const update = S.me?.role === 'owner' && u?.available && u.latest && !u.managed && typeof nvStart === 'function'
+    ? `<button class="primary" type="button" data-hl-update${busy ? ' disabled' : ''}>Update</button>` : '';
+  const version = u?.available && u.latest ? `<span class="settings-health-version" data-hl-version>${esc(nvVersion(u.latest))} available</span>${update}` : '';
+  host.innerHTML = `<div class="settings-health-row"><strong>Health</strong><span class="hl-alert" data-hl-alert${HL?.attention ? '' : ' hidden'}></span>
+    <span class="settings-health-counts tnum" data-hl-counts>${counts}</span>${version}
+    <a class="settings-health-details" href="#/settings/health" data-hl-details${HL?.attention ? ` aria-label="Health details, ${HL.attention} to look at"` : ''}>Details ›</a></div>
+    ${update || busy ? `<div data-hl-update-out>${typeof NV_OUT_HTML === 'string' ? NV_OUT_HTML : ''}</div>` : ''}`;
+}
+
+const HL_ICONS: Record<HlStatus, string> = {ok: 'check_circle', warn: 'warning', bad: 'error', info: 'radio_button_unchecked', unknown: 'help'};
+let HL_CHECKING = false;
+let HL_CHECK_MSG: {text: string; error?: boolean} | null = null;   // {text, error}: what the last "Check for updates" said, kept across redraws
+
+window.hlFixHtml = hlFixHtml;
+function hlFixHtml(fix: HlFix): string {
+  if (fix.login) return `<button class="ghost" type="button" data-model-login data-runner="${esc(fix.login.runner_id)}" data-runtime="${esc(fix.login.runtime)}" data-machine="${esc(fix.login.computer)}">${esc(fix.label)}</button>`;
+  if (fix.move) return `<button class="ghost" type="button" data-stuck-move="${esc(fix.move.bot)}" data-runner="${esc(fix.move.runner_id)}" data-machine="${esc(fix.move.computer)}">${esc(fix.label)}</button>`;
+  if (fix.finish) return `<button class="ghost" type="button" data-stuck-finish="${esc(fix.finish.bot)}">${esc(fix.label)}</button>`;
+  if (fix.click) return `<button class="ghost" type="button" data-hl-click="${esc(fix.click)}">${esc(fix.label)}</button>`;
+  return `<a class="ghost gs-link" href="${esc(fix.href)}"${fix.tab ? ` data-gs-tab="${esc(fix.tab)}"` : ''}>${esc(fix.label)}</a>`;
+}
+
+// Health · Tasks (S15): where the never-stuck check has the open tasks, a big number and its words on each line.
+type HlLadderKey = 'waiting_on_nothing' | 'retry' | 'manager' | 'person' | 'cant_run' | 'broken';
+const HL_LADDER: [HlLadderKey, string][] = [['waiting_on_nothing', 'waiting on nothing'], ['retry', 'on a retry'],
+  ['manager', 'with a manager'], ['person', 'reached a person'], ['cant_run', "can't run"], ['broken', 'broken']];
+function hlLadderHtml(counts: HlCheck['counts']): string {
+  if (!counts) return '';
+  return `<ul class="hl-ladder">${HL_LADDER.map(([key, words]) => `<li><strong>${esc(String(counts[key] ?? 0))}</strong> ${esc(words)}</li>`).join('')}</ul>`;
+}
+function hlCheckHtml(check: HlCheck): string {
+  const owner = check.id === 'version' && HL?.audience === 'owner';
+  const checkButton = owner
+    ? `<button class="ghost" type="button" data-hl-check-updates${HL_CHECKING ? ' disabled' : ''}>${HL_CHECKING ? 'Checking…' : 'Check for updates'}</button>` : '';
+  // Update now beside the check when a newer release is out: the same update the sidebar's New version starts (notices.js).
+  // None when Tico runs this server's updates (`managed`).
+  const u = S.config?.update, busy = typeof nvBusy !== 'undefined' && nvBusy;
+  const update = owner && u?.available && u.latest && !u.managed && typeof nvStart === 'function'
+    ? `<button class="primary" type="button" data-hl-update${busy ? ' disabled' : ''}>Update now</button>` : '';
+  const result = (owner && HL_CHECK_MSG
+    ? `<p class="hl-check-result${HL_CHECK_MSG.error ? ' err' : ''}" role="status">${esc(HL_CHECK_MSG.text)}</p>` : '')
+    + (update || (owner && busy) ? `<div data-hl-update-out>${typeof NV_OUT_HTML === 'string' ? NV_OUT_HTML : ''}</div>` : '');
+  return `<li class="hl-check ${esc(check.status)}" data-hl-check="${esc(check.id)}" data-status="${esc(check.status)}">
+    <span class="nav-icon hl-icon" aria-hidden="true">${HL_ICONS[check.status] || HL_ICONS.unknown}</span>
+    <div class="hl-main"><strong>${esc(check.label)}</strong>${(check.id === 'never_stuck' && hlLadderHtml(check.counts)) || `<p>${esc(check.summary)}</p>`}${result}</div>
+    <div class="hl-fixes">${check.fixes.map(hlFixHtml).join('')}${checkButton}${update}${hlReportHtml(check.status === 'bad' && {kind: 'health', title: check.label, detail: check.summary, ref: check.id, group: 'health:' + check.id})}</div></li>`;
+}
+
+// Report this on what is red: Support opens with it attached (ui/support.ts), unless this server turned support off.
+const hlReportHtml = (report: HlReport | false): string => report && window.supportOn?.() && window.reportThisHTML ? window.reportThisHTML(report) : '';
+
+function hlCredentialFix(source: string | undefined): string {
+  if (source === 'credentials') return 'Replace the model key in <a href="#/tools/keys?show=credentials">Tools > Keys</a>';
+  if (source === 'computer') return 'Update the computer-local key or sign in again';
+  return 'If the key is stored in <a href="#/tools/keys?show=credentials">Tools > Keys</a>, replace it there; otherwise update the computer-local key or sign in again';
+}
+
+function hlComputerHtml(machine: HlComputer): string {
+  const models = machine.runtimes.map(row => {
+    const state = row.rejected ? `sign-in rejected${row.rejected_at ? ' ' + esc(ago(row.rejected_at)) : ''}${row.rejected_reason ? ' (' + esc(row.rejected_reason) + ')' : ''}. ${hlCredentialFix(row.credential_source)}`
+      : row.plan ? (row.plan === 'api' ? 'company API key' : 'company plan') : row.ready ? 'signed in' : row.installed ? 'not signed in' : 'not installed';
+    const login = row.signable
+      ? ` <button class="ghost" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(row.name)}" data-machine="${esc(machine.label)}">Sign in</button>` : '';
+    // Red only when the team or an assigned bot needs it; the server sends only relevant harnesses.
+    const bad = row.rejected || (!row.installed && row.needed !== false);
+    return `<li data-ready="${row.ready}"${bad ? ' class="hl-model-bad"' : ''}>${esc(harnessWords(row.name))}: ${state}${login}</li>`;
+  }).join('');
+  return `<li class="hl-computer" data-online="${machine.online}"><span class="hl-dot ${machine.online ? 'on' : 'off'}" aria-hidden="true"></span>
+    <div><strong>${esc(machine.label)}</strong> <span class="muted">${machine.online ? 'online' : machine.resting ? 'stopped until work comes' : 'offline'}${machine.last_seen_at ? ', last seen ' + esc(ago(machine.last_seen_at)) : ', never seen'}</span>
+    ${window.runnerUpdateHtml?.(machine.update, machine.release || machine.update?.release || machine.version) || ''}
+    <ul class="hl-models">${models || '<li class="muted">No models reported</li>'}</ul></div></li>`;
+}
+
+// Owners only: where files live, how much, and the copy to S3 while it runs (`storage` on GET /api/v2/health).
+function hlStorageHtml(st: HlStorage | null | undefined): string {
+  if (!st || HL?.audience !== 'owner') return '';
+  const s3 = st.mode === 's3', copy: HlCopy = st.copy || {};
+  const total = Number(copy.total) || 0, done = Number(copy.done) || 0, failed = Number(copy.failed) || 0;
+  const files = Number(st.files) || 0;
+  const where = s3 ? `S3${st.bucket ? ' · ' + st.bucket : ''}` : 'Local disk';
+  const copying = total > 0 && done + failed < total;
+  return `<div class="hl-storage" data-hl-storage="${s3 ? 's3' : 'local'}">
+    <span class="nav-icon hl-icon" aria-hidden="true">inventory_2</span><div class="hl-storage-main"><strong>Storage</strong>
+    <span class="hl-where" title="${esc(st.region ? where + ' · ' + st.region : where)}">${esc(where)}</span>
+    <span class="muted tnum">${files.toLocaleString()} file${files === 1 ? '' : 's'} · ${esc(bytes(Number(st.bytes) || 0))}</span>
+    ${copying ? `<span class="hl-copy tnum" data-hl-copy>Copying to S3 · ${done.toLocaleString()} of ${total.toLocaleString()}</span>` : ''}
+    ${failed ? `<span class="err tnum" data-hl-copy-failed>${failed.toLocaleString()} failed</span>` : ''}
+    ${s3 ? '' : '<a class="hl-s3" href="#/settings/storage">Set up S3</a>'}</div></div>`;
+}
+
+// How often the hourly scan has seen a finding, and when it last did: seeing it again counts and wakes nobody.
+function hlSeen(f: HlFinding): string {
+  const n = Number(f.occurrences) || 1;
+  return `seen ${n.toLocaleString()} time${n === 1 ? '' : 's'}, last ${ago(f.last_seen_at)}`;
+}
+
+// Checks: what Check health (the maintenance step) still has open, from GET /api/v2/health/findings. A setup problem is
+// being fixed by BotOps, with its task linked when there is one. A Tico bug is reported to the Tico team or waits for a
+// yes in Needs you; one nobody has reported gets Report to Tico. Seeing a problem again only adds to its count.
+function hlFindingHtml(f: HlFinding, botops: boolean | undefined): string {
+  const setup = f.kind === 'setup';
+  const kind = setup
+    ? (botops === false ? 'not fixed: no BotOps bot' : f.task_id ? `<a href="#/task/${encodeURIComponent(f.task_id)}">being fixed by BotOps</a>` : 'being fixed by BotOps')
+    : f.ticket_id ? 'Tico bug, reported to the Tico team' : f.approval_id ? 'Tico bug, report waiting in Needs you' : 'Tico bug, not reported';
+  const report = !setup && !f.ticket_id && !f.approval_id ? `<button class="ghost" type="button" data-hl-report="${esc(f.key)}">Report to Tico</button>` : '';
+  // A stopped bot's finding (run_hold:<bot>, turn_budget:<bot>, claim_failed:<bot>) carries the same Release as the bot's page.
+  const m = /^(?:run_hold|turn_budget|claim_failed):(.+)$/.exec(f.key || '');
+  const release = m && typeof botReleaseButton === 'function' ? botReleaseButton(m[1], 'ghost') : '';
+  return `<li data-hl-finding="${esc(f.key)}"><strong>${esc(f.title)}</strong>
+    <span class="muted">${kind} · ${esc(hlSeen(f))}</span>${report}${release}</li>`;
+}
+
+// Owners also see the team rule that lets Check health report Tico bugs without a Needs you card first.
+function hlFindingsHtml(list: HlFindings | null): string {
+  if (!list) return '';
+  const rows = list.findings.map(f => hlFindingHtml(f, list.botops)).join('');
+  const note = list.botops === false && list.findings.some(f => f.kind === 'setup')
+    ? '<p class="muted">No BotOps bot is set up, so setup problems are not being fixed.</p>' : '';
+  const rule = HL?.audience === 'owner'
+    ? `<label class="hl-monitor-row"><input type="checkbox" role="switch" data-hl-report-rule${list.reports_without_asking ? ' checked' : ''}>
+      <span>Report Tico bugs to the Tico team without asking <span class="muted">(only the finding and the redacted diagnostics, never task or message text)</span></span></label>` : '';
+  return `<section class="hl-findings" data-hl-findings aria-labelledby="hl-findings-h"><h2 id="hl-findings-h">Checks</h2>
+    ${note}${rows ? `<ul class="hl-bots">${rows}</ul>` : '<p class="muted">Nothing open.</p>'}${rule}</section>`;
+}
+
+async function hlReportRuleSave(box: HTMLInputElement): Promise<void> {
+  box.disabled = true;
+  try { await put('/v2/access/rules', {health_monitor_reports: box.checked}); toast('Saved'); }
+  catch (e) { toast(errorMessage(e, ''), true); }
+  await hlRefresh();
+}
+
+async function hlReportFinding(button: HTMLButtonElement): Promise<void> {
+  button.disabled = true;
+  try { await post(`/v2/health/findings/${encodeURIComponent(String(button.dataset.hlReport))}/report`, {}); toast('Report sent'); }
+  catch (e) { toast(errorMessage(e, ''), true); }
+  await hlRefresh();
+}
+
+// A bot's queue as Pipeline splits it (backend/health.py `_queue_words`): work that can start, work behind an interrupted
+// run nobody reviewed, refusal-count holds, and work held on purpose.
+function hlQueueWords(row: HlStuck): string[] {
+  return [row.queued ? `${row.queued} queued` : '', row.dead ? `${row.dead} behind an interrupted run` : '',
+    row.quarantine_held ? `${row.quarantine_held} held after repeated refusals; resumes after cooldown` : '',
+    row.held ? `${row.held} held on purpose` : ''].filter(Boolean);
+}
+
+// Bots with queued work that is not starting, or left in setup for a day (backend/health.py `_stuck`): who, why, and
+// one fix. Overview shows the same rows.
+window.hlStuckHtml = function hlStuckHtml(rows: HlStuck[] | null | undefined): string {
+  return (rows || []).map(row => {
+    // Refused words are manager-only context, not support diagnostics.
+    const reportWhy = row.reason === 'quarantined' ? 'Quarantined: queued work waits for the quarantine to clear.' : row.why;
+    return `<li class="hl-stuck" data-stuck="${esc(row.bot)}" data-reason="${esc(row.reason)}">
+    <a href="#/bot/${esc(encodeURIComponent(row.bot))}">${esc(row.name)}</a> <span class="muted">${esc(row.why)}${row.reason === 'slow' && row.oldest ? ' · ' + esc(ago(row.oldest)) : ''}${hlQueueWords(row).map(words => ' · ' + words).join('')}</span>
+    ${row.fix ? hlFixHtml(row.fix) : ''}${['run_hold', 'budget'].includes(row.reason) && typeof botReleaseButton === 'function' ? botReleaseButton(row.bot, 'ghost') : ''}${hlReportHtml({kind: 'stuck', title: `${row.name}: ${reportWhy}`, detail: reportWhy, ref: row.bot, group: 'stuck:' + row.reason})}</li>`;
+  }).join('');
+};
+
+async function hlStuckMove(button: HTMLButtonElement): Promise<void> {
+  const e = botRow(String(button.dataset.stuckMove));
+  if (!e) { toast('Open Settings > Bots to move this bot', true); return; }
+  if (!await settingsConfirmTransition(e, 'machine', button.dataset.machine)) return;
+  await settingsBeginTransition(button, e, {kind: 'machine', runner_id: button.dataset.runner,
+    expected_generation: e.machine?.generation || 0, expected_revision: e.revision});
+  void hlRefresh();
+}
+
+// A bot stuck in onboarding: the same call as its page's "Mark onboarding complete" (POST /v2/bots/{bot}/onboarded).
+async function hlStuckFinish(button: HTMLButtonElement): Promise<void> {
+  const slug = String(button.dataset.stuckFinish);
+  button.disabled = true; button.textContent = 'Finishing…';
+  try {
+    const result = await post(`/v2/bots/${encodeURIComponent(slug)}/onboarded`, {});
+    const bot = botRow(slug);
+    if (bot) bot.onboarding_state = result.onboarding_state;
+    toast(`${botDisplayName(slug)} finished onboarding`);
+    void hlRefresh();
+  } catch (error) {
+    toast(errorMessage(error, ''), true);
+    button.disabled = false; button.textContent = 'Finish with defaults';
+  }
+}
+
+function hlPageDraw(): void {
+  const host: HTMLElement | null = $('#hl-page');
+  if (!host) return;
+  if (!HL) { host.innerHTML = '<div class="empty">Nothing to show yet.</div>'; return; }
+  const bots = (list: HlStuck[]) => list.map(row => `<li><a href="#/bot/${esc(encodeURIComponent(row.bot))}">${esc(row.name)}</a> <span class="muted">${row.reason === 'no_computer' ? 'no computer is online' : row.reason === 'computer_offline' ? esc(row.computer) + ' is offline' : 'waiting since ' + esc(ago(row.oldest))}${hlQueueWords(row).map(words => ', ' + words).join('')}</span></li>`).join('');
+  // A stuck bot is listed once, with its reason; "waiting" keeps only the offline ones with nothing queued.
+  const stuck = HL.stuck || [], idle = (HL.waiting || []).filter(row => !stuck.some(s => s.bot === row.bot));
+  // Settings' own checks that need nobody (ui/app/settings.ts shows only the ones that do).
+  const notes = (typeof SETTINGS_DATA !== 'undefined' && SETTINGS_DATA.issues || []).filter(issue => !needsPerson(issue));
+  host.innerHTML = `<p class="muted" id="hl-summary">${HL.attention ? `${HL.attention} issue${HL.attention === 1 ? '' : 's'} to look at`
+    : notes.length ? `Nothing urgent. ${notes.length} note${notes.length === 1 ? '' : 's'} below.` : 'Everything looks fine.'}</p>
+    <ul class="hl-list">${HL.checks.map(hlCheckHtml).join('')}</ul>${hlFindingsHtml(HL_FINDINGS)}
+    ${stuck.length ? `<h2>Stuck</h2><ul class="hl-bots">${hlStuckHtml(stuck)}</ul>` : ''}${hlStorageHtml(HL.storage)}
+    ${notes.length ? `<h2>Not urgent</h2><ul class="hl-notes">${notes.map(issue => `<li><strong>${esc(issue.title)}</strong> <span class="muted">${esc(issue.detail || '')}</span>${issue.kind === 'uncertain_work' && issue.bot ? ` <button class="ghost" type="button" data-execution-review="${esc(issue.bot)}">Review stopped runs</button>` : ''}</li>`).join('')}</ul>` : ''}
+    ${hlMetricsHtml(HL_METRICS)}
+    ${HL.computers.length ? `<h2>Computers</h2><ul class="hl-computers">${HL.computers.map(hlComputerHtml).join('')}</ul>` : ''}
+    ${idle.length ? `<h2>Bots waiting</h2><ul class="hl-bots">${bots(idle)}</ul>` : ''}
+    ${HL.failures.length ? `<h2>Failed in the last day</h2><ul class="hl-bots">${HL.failures.map(row => `<li>${esc(botDisplayName(row.bot))} <span class="muted">${esc(ago(row.at))}</span></li>`).join('')}</ul>` : ''}
+    <p class="hl-help"><button class="ghost" type="button" data-setup-help="health">Want help setting up?</button></p>`;
+  // A stopped run saved for later is still reviewed from here, so a person never needs a hidden control (Dev 280).
+  host.querySelectorAll<HTMLButtonElement>('[data-execution-review]').forEach(button => {
+    button.onclick = () => executionReview(String(button.dataset.executionReview));
+  });
+}
+
+const hlMs = (ms: number | null | undefined): string => ms == null ? '–' : ms >= 60000 ? `${(ms / 60000).toFixed(1)} min` : ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`;
+const hlPct = (n: number | null | undefined): string => n == null ? '–' : `${Math.round(n)}%`;
+const hlAt = (ts: number): string => ago(new Date(ts * 1000).toISOString());
+
+// The flight recorder's last hour (backend/flight.py): one line of numbers, then where the time went.
+function hlMetricsHtml(m: HlMetrics | null): string {
+  if (!m) return '';
+  const req: HlRequests = m.requests || {}, proc: HlProcess = m.process || {}, db: HlDb = m.db || {};
+  const stalls = (m.events?.recent || []).filter(e => e.kind === 'stall');
+  const stat = (label: string, value: string | number, title = '') => `<span${title ? ` title="${esc(title)}"` : ''}><span class="muted">${label}</span> ${value}</span>`;
+  const growth = db.growth_24h == null ? '' : ` (${db.growth_24h >= 0 ? '+' : '−'}${bytes(Math.abs(db.growth_24h))}/day)`;
+  const stats = [
+    stat('CPU', hlPct(proc.cpu_avg), proc.cpu_max == null ? '' : `max ${hlPct(proc.cpu_max)}`),
+    stat('p95', hlMs(req.p95)),
+    stat('Loop lag', hlMs(proc.lag_max), 'max'),
+    stat('Requests', (req.n || 0).toLocaleString()),
+    req.errors ? `<span class="err">${req.errors.toLocaleString()} errors</span>` : '',
+    m.slow?.length ? stat('Slow', m.slow.length) : '',
+    proc.locked ? `<span class="err">${proc.locked} locked</span>` : '',
+    db.bytes ? stat('DB', bytes(db.bytes) + growth, db.wal_bytes ? `WAL ${bytes(db.wal_bytes)}` : '') : ''].filter(Boolean).join('');
+  const table = (head: string[], rows: string[]) => rows.length ? `<div class="scroll"><table class="hl-table"><tr>${head.map((h, i) => `<th${i ? ' class="tnum"' : ''}>${h}</th>`).join('')}</tr>${rows.join('')}</table></div>` : '';
+  const routes = (req.routes || []).slice(0, 8).map(r => `<tr><td class="hl-code" title="${esc(Object.entries(r.callers || {}).map(([k, n]) => `${k} ${n}`).join(', '))}">${esc(r.route)}</td>
+    <td class="tnum">${r.n.toLocaleString()}</td><td class="tnum">${hlMs(r.p95)}</td><td class="tnum">${hlMs(r.total_ms)}</td></tr>`);
+  const sql = (m.sql?.queries || []).slice(0, 8).map(q => `<tr><td class="hl-code" title="${esc(q.sql)}">${esc(q.sql)}</td>
+    <td class="tnum">${q.n.toLocaleString()}</td><td class="tnum">${hlMs(q.p95)}</td><td class="tnum">${hlMs(q.total_ms)}</td></tr>`);
+  const slow = (m.slow || []).slice(0, 5).map(r => `<li><span class="hl-code">${esc(r.route)}</span> <span class="tnum">${hlMs(r.ms)}</span> <span class="muted">${esc(r.caller)} · ${esc(hlAt(r.created_at))}</span></li>`).join('');
+  const stall = stalls.slice(0, 3).map(e => {
+    const loop = (e.threads?.busy || []).find(t => t.loop);
+    return `<li><details><summary><span class="err">Stalled ${esc(String(e.stalled_s))} s</span> <span class="muted">${esc(hlAt(e.at))}</span></summary>
+      <pre class="hl-stack">${esc((loop?.stack || []).slice().reverse().join('\n'))}</pre></details></li>`;
+  }).join('');
+  return `<h2>Performance <span class="muted hl-window">last hour</span></h2><div class="hl-stats tnum" data-hl-metrics>${stats}</div>
+    ${stall ? `<ul class="hl-bots">${stall}</ul>` : ''}
+    ${table(['Route', 'Calls', 'p95', 'Time'], routes)}${table(['SQL', 'Calls', 'p95', 'Time'], sql)}
+    ${slow ? `<h2>Slow requests</h2><ul class="hl-bots">${slow}</ul>` : ''}`;
+}
+
+async function hlCheckUpdates(): Promise<void> {
+  if (HL_CHECKING) return;
+  HL_CHECKING = true; HL_CHECK_MSG = null;
+  hlPageDraw();
+  try {
+    // Not post(): that retries a 429 or 502 as a lost write, and here the refusal itself is the answer.
+    const reply = await fetch(API + '/v2/system/update/check', {method: 'POST'});
+    const notice = await reply.json().catch(() => ({}));
+    if (!reply.ok) throw apiFailure(notice, reply);
+    // The release it found is the one Update now installs, here and in the sidebar.
+    if (notice?.available && notice.latest && S.config) {
+      S.config.update = {...(S.config.update || {}), available: true, latest: notice.latest, current: notice.current || S.config.update?.current};
+      window.renderNewVersion?.();
+    }
+    await hlRefresh();
+    // An available update is already the Version line, refreshed above: say it once, not twice.
+    HL_CHECK_MSG = notice?.checking ? {text: 'Still checking. Look again in a moment.'}
+      : notice?.available ? null
+      : notice?.held ? {text: `${nvVersion(notice.latest)} is out. ${notice.held}.`}
+      : {text: notice?.latest ? `You are on the latest release, ${nvVersion(notice.current)}.`
+        : 'Checked. No release information came back.'};
+  } catch (error) {
+    HL_CHECK_MSG = {text: errorMessage(error, 'The check failed.'), error: true};
+  }
+  HL_CHECKING = false;
+  hlPageDraw();
+}
+
+// Setup check: `tico-setup doctor`'s checks run by the server against its own address, and Health's failing lines
+// (POST /v2/support/setup-check, backend/setup_check.py). It sits beside the Health list, not in it, so the minute's
+// redraw of that list keeps the result on screen; Send to Tico team attaches it to a message in the Tico team chat (ui/support.ts).
+const hlSetupCheckHTML = () => `<section class="card hl-setup" id="hl-setup-check" aria-labelledby="hl-setup-h"><header><h2 id="hl-setup-h">Setup check</h2></header>
+  <p class="muted">Runs the installer's checks from here and says how to fix what fails.</p>
+  <button class="ghost" type="button" data-hl-setup-check>Setup check</button>
+  <div class="hl-setup-result" data-hl-setup-result aria-live="polite"></div></section>`;
+async function hlSetupCheck(button: HTMLButtonElement): Promise<void> {
+  const host = button.closest('.hl-setup')?.querySelector<HTMLElement>('[data-hl-setup-result]');
+  if (!host || button.disabled) return;
+  button.disabled = true; button.textContent = 'Checking…';
+  host.innerHTML = '<p class="muted">Running the checks. This takes up to ten seconds.</p>';
+  try {
+    const r: HlSetupReply = await post('/v2/support/setup-check', {});
+    if (!host.isConnected) return;
+    const rows = r.checks || [];
+    const bad = rows.filter(c => c.status === 'bad').length, warn = rows.filter(c => c.status === 'warn').length;
+    const head = bad ? `${bad} of ${rows.length} ${rows.length === 1 ? 'check fails' : 'checks fail'}.` : warn ? `Nothing fails; ${warn} ${warn === 1 ? 'needs' : 'need'} a look.` : 'Every check passes.';
+    host.innerHTML = `<p class="hl-setup-head" role="status">${esc(head)}</p>
+      <ul class="hl-list">${rows.map(c => `<li class="hl-check ${esc(c.status)}" data-hl-setup-row="${esc(c.status)}"><span class="nav-icon hl-icon" aria-hidden="true">${HL_ICONS[c.status] || HL_ICONS.unknown}</span>
+        <div class="hl-main"><strong>${esc(c.name)}</strong><p>${esc(c.detail)}</p>${c.status !== 'ok' && c.fix ? `<p class="hl-setup-fix">Fix: ${esc(c.fix)}</p>` : ''}</div></li>`).join('')}</ul>
+      <p class="muted">${esc(r.doctor_only || '')}</p>
+      ${window.supportOn?.() && window.talkToUs ? '<button class="ghost" type="button" data-hl-setup-send>Send to Tico team</button>' : ''}`;
+    host.querySelector('[data-hl-setup-send]')?.addEventListener('click', () => window.talkToUs?.({kind: 'setup_check', title: head, checks: rows,
+      group: 'setup_check:' + rows.filter(c => c.status === 'bad').map(c => c.name).join(',')}));
+  } catch (e) {
+    if (host.isConnected) host.innerHTML = `<p class="err">${esc(errorMessage(e, ''))}</p>`;
+  } finally { button.disabled = false; button.textContent = 'Setup check'; }
+}
+
+window.hlMount = function hlMount() {
+  const host = $('#hl-page');
+  if (!host) return;
+  if (HL) hlPageDraw(); else host.innerHTML = '<div class="empty">Loading…</div>';
+  hlNav();
+  void hlRefresh().then(() => { if (!HL) hlPageDraw(); });
+};
+
+window.hlBoot = function () {
+  void hlRefresh();
+  // Every 2 minutes. Health classifies each computer's queue; the old 60 s cadence while live was
+  // down multiplied that work across tabs. Returning to the tab still refreshes at once.
+  let at = 0;
+  setInterval(() => {
+    if (document.hidden || !S.me?.cloud || Date.now() - at < 119000) return;
+    at = Date.now(); void hlRefresh();
+  }, 60000);
+  // A shown tab reads once: the refresh also restarts the 2-minute timer, so the next tick does not read again.
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.me?.cloud) { at = Date.now(); void hlRefresh(); } });
+};
+
+document.addEventListener('change', event => {
+  const box = eventElement(event)?.closest<HTMLInputElement>('[data-hl-report-rule]');
+  if (box) void hlReportRuleSave(box);
+});
+
+document.addEventListener('click', event => {
+  const el = eventElement(event);
+  if (el?.closest('[data-hl-check-updates]')) { void hlCheckUpdates(); return; }
+  const report = el?.closest<HTMLButtonElement>('[data-hl-report]');
+  if (report) { void hlReportFinding(report); return; }
+  const update = el?.closest<HTMLButtonElement>('[data-hl-update]');
+  if (update) { if (typeof nvBusy !== 'undefined' && !nvBusy) { update.disabled = true; void nvStart(); } return; }
+  const setup = el?.closest<HTMLButtonElement>('[data-hl-setup-check]');
+  if (setup) { void hlSetupCheck(setup); return; }
+  const move = el?.closest<HTMLButtonElement>('[data-stuck-move]');
+  if (move) { void hlStuckMove(move); return; }
+  const finish = el?.closest<HTMLButtonElement>('[data-stuck-finish]');
+  if (finish) { void hlStuckFinish(finish); return; }
+  const open = el?.closest<HTMLElement>('[data-hl-click]');
+  // After this click finishes: the page's outside-click handler would otherwise close the popup it opens.
+  if (open) setTimeout(() => document.querySelector<HTMLElement>(String(open.dataset.hlClick))?.click(), 0);
+});

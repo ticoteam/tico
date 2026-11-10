@@ -1,0 +1,119 @@
+{
+ "total_count": 9,
+ "jobs": [
+  {
+   "id": 128503211894,
+   "name": "plan",
+   "conclusion": "success",
+   "html_url": "https://github.com/ticoteam/tico/actions/runs/42405837018/job/128503211894",
+   "steps": [
+    {
+     "name": "Set up job",
+     "conclusion": "success"
+    }
+   ]
+  },
+  {
+   "id": 128503211946,
+   "name": "static checks",
+   "conclusion": "success",
+   "html_url": "https://github.com/ticoteam/tico/actions/runs/42405837018/job/128503211946",
+   "steps": [
+    {
+     "name": "Set up job",
+     "conclusion": "success"
+    }
+   ]
+  },
+  {
+   "id": 128503861824,
+   "name": "python-1",
+   "conclusion": "success",
+   "html_url": "https://github.com/ticoteam/tico/actions/runs/42405837018/job/128503861824",
+   "steps": [
+    {
+     "name": "Set up job",
+     "conclusion": "success"
+    },
+    {
+     "name": "Run selected tests",
+     "conclusion": "success"
+    },
+    {
+     "name": "Cancel the run when a suite failed",
+     "conclusion": "skipped"
+    }
+   ]
+  },
+  {
+   "id": 128503861882,
+   "name": "python-11",
+   "conclusion": "cancelled",
+   "html_url": "https://github.com/ticoteam/tico/actions/runs/42405837018/job/128503861882",
+   "steps": [
+    {
+     "name": "Set up job",
+     "conclusion": "success"
+    },
+    {
+     "name": "Run selected tests",
+     "conclusion": "cancelled"
+    },
+    {
+     "name": "Cancel the run when a suite failed",
+     "conclusion": "skipped"
+    }
+   ]
+  },
+  {
+   "id": 128503861901,
+   "name": "python-5",
+   "conclusion": "cancelled",
+   "html_url": "https://github.com/ticoteam/tico/actions/runs/42405837018/job/128503861901",
+   "steps": [
+    {
+     "name": "Set up job",
+     "conclusion": "success"
+    },
+    {
+     "name": "Run selected tests",
+     "conclusion": "failure"
+    },
+    {
+     "name": "Cancel the run when a suite failed",
+     "conclusion": "success"
+    }
+   ]
+  },
+  {
+   "id": 128503862852,
+   "name": "recorder tests",
+   "conclusion": "skipped",
+   "html_url": "https://github.com/ticoteam/tico/actions/runs/42405837018/job/128503862852",
+   "steps": []
+  },
+  {
+   "id": 128509671687,
+   "name": "checks",
+   "conclusion": "failure",
+   "html_url": "https://github.com/ticoteam/tico/actions/runs/42405837018/job/128509671687",
+   "steps": [
+    {
+     "name": "Set up job",
+     "conclusion": "success"
+    },
+    {
+     "name": "Needed jobs passed or were skipped",
+     "conclusion": "failure"
+    }
+   ]
+  },
+  {
+   "id": 128509673241,
+   "name": "PR job timings",
+   "conclusion": "cancelled",
+   "html_url": "https://github.com/ticoteam/tico/actions/runs/42405837018/job/128509673241",
+   "steps": []
+  }
+ ]
+}

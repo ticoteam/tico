@@ -7,14 +7,14 @@ description: "Sweep the team's docs for upkeep problems (duplicates, drafts left
 When to use: on the Monday map refresh, after the map's own reconcile (`playbooks/refresh-the-map.md` step 4), and when a person asks you to tidy the docs.
 
 Steps:
-1. Work from the full inventory: `hub doc list --limit 500` and every `next_cursor` after it, paged as in `playbooks/refresh-the-map.md` step 1. Group the titles by folder.
+1. Work from the full inventory: `tico doc list --limit 500` and every `next_cursor` after it, paged as in `playbooks/refresh-the-map.md` step 1. Group the titles by folder.
 2. Duplicates: two docs whose titles match once case, "copy", "(1)" and "old" are ignored, or that open with the same paragraph. Read both in full before you call them duplicates. Report both paths. Never delete, move or archive either.
 3. Drafts left behind: a doc whose text still says TODO, TBD, draft or placeholder, and whose `updated_at` date is more than 90 days old. Report it with that date.
 4. No owner: a doc that states a price, a policy or a process and names no owner in its text. Report it.
-5. Dead links: an internal doc that points to an archived doc, or to a linked source that `_librarian/missing.md` lists as unreadable. Match the addresses against `hub doc link-list`. Report the link.
+5. Dead links: an internal doc that points to an archived doc, or to a linked source that `_librarian/missing.md` lists as unreadable. Match the addresses against `tico doc link-list`. Report the link.
 6. Misplaced: a doc whose folder does not match its title and text, such as a holiday schedule at the top level. Report it only when the right folder is plain from the doc itself.
 7. Credentials: text that looks like a password, key or token. Never quote or copy it. Say the doc holds what looks like a credential and that someone should remove it (the `AGENT.md` rule), and list it in `_librarian/missing.md`.
-8. Write the findings. Drafts and dead links go under "Out of date" in `_librarian/missing.md`. Duplicates, misplaced docs and docs with no owner go in one task for the team owner, titled "Tidy the docs". Open it only if `hub task list` shows no open task with that title, and otherwise update that task with `hub task update <id> --note`. Credential findings go in the task too, without the text.
+8. Write the findings. Drafts and dead links go under "Out of date" in `_librarian/missing.md`. Duplicates, misplaced docs and docs with no owner go in one task for the team owner, titled "Tidy the docs". Open it only if `tico task list` shows no open task with that title, and otherwise add to that task with `tico task comment <id> "..."`. Credential findings go in the task too, without the text.
 
 Checks before you finish:
 - Every finding names its doc path. A duplicate names both paths and the date each was read.

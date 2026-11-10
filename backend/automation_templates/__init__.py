@@ -5,6 +5,7 @@ active bot on the org chart that can take the work it is given, takes out what t
 flow as the hub would save it: `enabled` off, nothing written. The caller checks it with automations._checked, which also
 tests the inbox and the owner's rights, and POST /api/v2/automations saves it.
 """
+
 import copy
 import json
 from pathlib import Path
@@ -18,12 +19,12 @@ ORDER = ("founder", "support", "sales", "blank")
 # template's bots in chart order by id, the first template's before the next's. The work goes to the first of them that
 # can take it (_pick), so a bot that cannot is skipped, not failed.
 ROLES = {
-    "legal_lead": ("general-counsel",),
-    "engineering_manager": ("engineering-manager", "engineering-lead"),
-    "finance_lead": ("finance-lead",),
-    "marketing_lead": ("marketing-lead",),
-    "support_lead": ("support-lead",),
-    "sales_lead": ("sales-lead",),
+    "legal_lead": ("general-counsel", "legal-owner"),
+    "engineering_manager": ("engineering-manager", "engineering-lead", "engineering-team-manager"),
+    "finance_lead": ("finance-lead", "bookkeeper"),
+    "marketing_lead": ("marketing-lead", "growth-team-manager"),
+    "support_lead": ("support-lead", "support-owner", "success-team-manager"),
+    "sales_lead": ("sales-lead", "growth-team-manager"),
 }
 # The actions that act as someone: a task is opened as the owner's actor, a reply is drafted as it (automation_actions
 # _create_task and _actor). A group with no lead to act as cannot run them.
@@ -39,8 +40,10 @@ DRAFT_TITLE = "Draft reply"
 # (automation_flow.render_prompt). A task body is rendered as plain text (automation_engine._act: render_args), so there
 # the message is substituted unquoted; a wake text is quoted like the prompt.
 MESSAGE_PART = {
-    "mail": ("\n\nThe message to handle: id {{message.id}} in thread {{message.thread}}, from {{message.from}} "
-             "({{message.from_name}}), subject {{message.subject}}. Its body:\n{{message.body}}"),
+    "mail": (
+        "\n\nThe message to handle: id {{message.id}} in thread {{message.thread}}, from {{message.from}} "
+        "({{message.from_name}}), subject {{message.subject}}. Its body:\n{{message.body}}"
+    ),
     "slack": "\n\nThe message to handle: from {{message.from}} in {{message.inbox}}. Its text:\n{{message.text}}",
 }
 
@@ -146,8 +149,12 @@ def _fill_actions(c, A, owner, actor, found, dest, assistant_bot, part):
 def _asked(rules, out):
     """The question ids a filter's rules read from a decide step's answers (`<out>.<question id>`)."""
     prefix = f"{out}."
-    return {str(cond.get("field"))[len(prefix):] for rule in rules for cond in rule.get("when") or []
-            if str(cond.get("field", "")).startswith(prefix)}
+    return {
+        str(cond.get("field"))[len(prefix) :]
+        for rule in rules
+        for cond in rule.get("when") or []
+        if str(cond.get("field", "")).startswith(prefix)
+    }
 
 
 def _pair(decide, follow):
@@ -162,11 +169,15 @@ def _pair(decide, follow):
         if question["type"] == "choice":
             question["criteria"] = {opt: text for opt, text in question["criteria"].items() if opt in reached}
     if any(q["type"] == "choice" and len(q["criteria"]) < 2 for q in questions.values()):
-        last = next((rule["to"] for rule in follow["rules"] if not rule.get("when") and rule.get("to")),
-                    reached[0] if reached else None)
+        last = next(
+            (rule["to"] for rule in follow["rules"] if not rule.get("when") and rule.get("to")),
+            reached[0] if reached else None,
+        )
         if last is None:
             return []
-        return [{"id": follow["id"], "type": "filter", "rules": [{"when": [], "to": last, "next": "end", "stop": True}]}]
+        return [
+            {"id": follow["id"], "type": "filter", "rules": [{"when": [], "to": last, "next": "end", "stop": True}]}
+        ]
     decide["questions"] = questions
     return [decide, follow]
 
@@ -236,25 +247,52 @@ def _as_sort(step, tpl):
         return [step]
     to, default = choose["to"], choose["default"]
     if len(to) < 2:
-        return [{"id": step["id"], "type": "filter", "rules": [{"when": [], "to": default, "next": "end", "stop": True}]}]
+        return [
+            {"id": step["id"], "type": "filter", "rules": [{"when": [], "to": default, "next": "end", "stop": True}]}
+        ]
     out = step.get("out") or step["id"]
     spec = tpl.get("sort") or {}
     names = {dest["id"]: dest["name"] for dest in tpl["destinations"]}
     criteria = {dest: (spec.get("criteria") or {}).get(dest) or names.get(dest, dest) for dest in to}
-    rules = [{"when": [{"field": f"{out}.route", "op": "is", "value": dest, "min": 0.5}], "to": dest,
-              "next": "end", "stop": True} for dest in to]
+    rules = [
+        {
+            "when": [{"field": f"{out}.route", "op": "is", "value": dest, "min": 0.5}],
+            "to": dest,
+            "next": "end",
+            "stop": True,
+        }
+        for dest in to
+    ]
     rules.append({"when": [], "to": default, "next": "end", "stop": True})
-    return [{"id": step["id"], "type": "decide", "level": "high", "out": out, "questions": {"route": {
-                "type": "choice", "instructions": spec.get("instructions") or "Where does this message belong? Pick the one that fits best.",
-                "criteria": criteria}}},
-            {"id": f"{step['id']}_route", "type": "filter", "rules": rules}]
+    return [
+        {
+            "id": step["id"],
+            "type": "decide",
+            "level": "high",
+            "out": out,
+            "questions": {
+                "route": {
+                    "type": "choice",
+                    "instructions": spec.get("instructions")
+                    or "Where does this message belong? Pick the one that fits best.",
+                    "criteria": criteria,
+                }
+            },
+        },
+        {"id": f"{step['id']}_route", "type": "filter", "rules": rules},
+    ]
 
 
 def _useful(destinations, steps):
     """Whether the flow does anything a Slack channel shows: an action other than the no-ops there."""
     dos = [action["do"] for dest in destinations for action in dest["then"]]
-    dos += [action["do"] for step in steps if step["type"] == "filter" for rule in step.get("rules") or []
-            for action in rule.get("then") or []]
+    dos += [
+        action["do"]
+        for step in steps
+        if step["type"] == "filter"
+        for rule in step.get("rules") or []
+        for action in rule.get("then") or []
+    ]
     return any(do not in NO_OP_IN_SLACK for do in dos)
 
 
@@ -265,6 +303,7 @@ def fill(c, tid, owner, inbox, settings=None):
     take a non-routine task (a draft is one) gets no drafts, and no choose either: Sort."""
     from .. import automation_actions as AA
     from .. import automations as A
+
     tpl = load(tid)
     if tpl is None:
         raise Problem("not_found", "No such template", 404)
@@ -293,8 +332,12 @@ def fill(c, tid, owner, inbox, settings=None):
             destinations.append({**{k: v for k, v in dest.items() if k != "then"}, "then": then})
     steps = _prune([step if drafts else _no_drafts(step) for step in tpl["steps"]], gone, no_actor=not actor)
     if not actor and not _useful(destinations, steps):
-        raise Problem("invalid", f"{owner} has no lead to act as, so the {tpl['name']} template would do nothing in its "
-                      "Slack channel. Give the group a lead first.", 422)
+        raise Problem(
+            "invalid",
+            f"{owner} has no lead to act as, so the {tpl['name']} template would do nothing in its "
+            "Slack channel. Give the group a lead first.",
+            422,
+        )
     # A group owns no turn. A bot owns one only if start_turn could file it: the gate a routine's task passes, asked as the
     # bot itself (onboarding, a Responder's or a synced bot's profile). Without a turn the choose becomes Sort (plan v2.1).
     # A bot that has a turn but no drafts (the Slack case above) gets Sort too: its choose would draft.
@@ -306,6 +349,11 @@ def fill(c, tid, owner, inbox, settings=None):
             if step["type"] == "llm":
                 step["as"] = ("assistant:" if kind == "person" else "bot:") + ident
                 step["prompt"] = step["prompt"] + part
-    return {"name": tpl["name"], "owner": owner, "enabled": False,
-            "trigger": {"type": "message", "inbox": str(inbox or "").strip()}, "steps": steps,
-            "destinations": destinations}
+    return {
+        "name": tpl["name"],
+        "owner": owner,
+        "enabled": False,
+        "trigger": {"type": "message", "inbox": str(inbox or "").strip()},
+        "steps": steps,
+        "destinations": destinations,
+    }

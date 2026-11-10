@@ -8,35 +8,50 @@ that conversation has other readers. A run started by it reads those threads, gr
 still in their audience (`grant`). A bot that is paused or quarantined keeps its deliveries until it is back, and a batch
 waits while the last one's run has not started, so one bot never has two.
 """
+
 from . import hubdb as H
-from . import threads
 
 WAKE = "thread_digest"
-MAX_BOTS = 200            # bots one run looks at
-MAX_DELIVERIES = 200      # deliveries one batch covers; the rest wait for the next run
-MAX_THREADS = 20          # threads one notice names, so its grant stays small; the rest wait for the next run
+MAX_BOTS = 200  # bots one run looks at
+MAX_DELIVERIES = 200  # deliveries one batch covers; the rest wait for the next run
+MAX_THREADS = 20  # threads one notice names, so its grant stays small; the rest wait for the next run
 
 
 def _waiting(c):
-    return [r[0] for r in c.execute(
-        "SELECT DISTINCT recipient FROM message_deliveries WHERE mode='digest' AND state='pending' "
-        "AND recipient LIKE 'bot:%' LIMIT ?", (MAX_BOTS,)).fetchall()]
+    return [
+        r[0]
+        for r in c.execute(
+            "SELECT DISTINCT recipient FROM message_deliveries WHERE mode='digest' AND state='pending' "
+            "AND recipient LIKE 'bot:%' LIMIT ?",
+            (MAX_BOTS,),
+        ).fetchall()
+    ]
 
 
 def _batch_open(c, slug):
-    return c.execute("SELECT 1 FROM jobs j JOIN message_refs m ON m.id=j.message_id WHERE j.bot_id=? "
-                     "AND j.state IN ('queued','leased') AND m.ref_wake=? LIMIT 1",
-                     (slug, WAKE)).fetchone() is not None
+    return (
+        c.execute(
+            "SELECT 1 FROM jobs j JOIN message_refs m ON m.id=j.message_id WHERE j.bot_id=? "
+            "AND j.state IN ('queued','leased') AND m.ref_wake=? LIMIT 1",
+            (slug, WAKE),
+        ).fetchone()
+        is not None
+    )
 
 
 def wake_bot(c, bot):
     """One batch for one bot, in the caller's transaction. Returns the notice's id, or None when nothing is due."""
+    from . import threads  # local: keeps threads out of the selector's fan-in
+
     slug = H.actor_id(bot)
     if (H.bot(c, slug) or {}).get("state") != "active" or _batch_open(c, slug):
         return None
     covered, counts = [], {}
-    for d in c.execute("SELECT id, message_id, thread_id FROM message_deliveries WHERE recipient=? AND mode='digest' "
-                       "AND state='pending' ORDER BY created_at LIMIT ?", (bot, MAX_DELIVERIES)).fetchall():
+    for d in c.execute(
+        "SELECT id, message_id, thread_id FROM message_deliveries WHERE recipient=? AND mode='digest' "
+        "AND state='pending' ORDER BY created_at LIMIT ?",
+        (bot, MAX_DELIVERIES),
+    ).fetchall():
         message = H.message(c, d["message_id"])
         thread = threads.thread_row(c, d["thread_id"]) if message else None
         if thread is None or not threads._source_readable(c, thread, message, bot):
@@ -49,13 +64,22 @@ def wake_bot(c, bot):
     if not covered:
         return None
     lines = "\n".join(f"- {thread_id}: {n}" for thread_id, n in counts.items())
-    notice = H.say(c, H.KEEPER, bot, f"New messages in threads you follow on digest (thread: messages):\n{lines}\n"
-                   "Catch up with hub_thread_catchup if they need you.", kind="notice",
-                   refs={"wake": WAKE, "wake_digest": len(covered), "trigger": "other", "threads": sorted(counts)})
+    notice = H.say(
+        c,
+        H.KEEPER,
+        bot,
+        f"New messages in threads you follow on digest (thread: messages):\n{lines}\n"
+        "Catch up with hub_thread_catchup if they need you.",
+        kind="notice",
+        refs={"wake": WAKE, "wake_digest": len(covered), "trigger": "other", "threads": sorted(counts)},
+    )
     now = H.now()
     marks = ",".join("?" * len(covered))
-    c.execute(f"UPDATE message_deliveries SET state='delivered', carrier_id=?, delivered_at=?, updated_at=? "
-              f"WHERE id IN ({marks})", (notice["id"], now, now, *covered))
+    c.execute(
+        f"UPDATE message_deliveries SET state='delivered', carrier_id=?, delivered_at=?, updated_at=? "
+        f"WHERE id IN ({marks})",
+        (notice["id"], now, now, *covered),
+    )
     return notice["id"]
 
 
@@ -73,6 +97,8 @@ def sweep(store):
 def grant(c, attempt_id, message):
     """A run a digest notice started, or took in, reads the threads it names: each one the bot is still in the audience
     of, so a thread it lost since is not granted. Every other message is left alone at the cost of a dict look."""
+    from . import threads  # local: keeps threads out of the selector's fan-in
+
     refs = message.get("refs") if isinstance(message.get("refs"), dict) else H._json(message.get("refs"), {})
     if (refs or {}).get("wake") != WAKE or message.get("sender_id") != H.KEEPER:
         return

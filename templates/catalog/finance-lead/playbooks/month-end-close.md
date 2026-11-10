@@ -3,7 +3,7 @@
 Triggered on the first working day of the month, or by a task asking "where is the close?". Budget 25 minutes, repeated
 daily until the close is done.
 
-Inputs: the close deadline in `knowledge/finance-calendar.md`, the close checklist (`hub finance report close --month YYYY-MM`),
+Inputs: the close deadline in `knowledge/finance-calendar.md`, the close checklist (`tico finance report close --month YYYY-MM`),
 and the Bookkeeper's (`bookkeeper`) status on the task. If the books are kept outside Tico, the name of who keeps them is in
 `knowledge/team.md`.
 
@@ -17,7 +17,7 @@ the last day the task is closed with the outcome.
 
 ## 1. Read the plan
 
-    hub task show <id>
+    tico task show <id>
 
 Read the close deadline in `knowledge/finance-calendar.md` and the month's close checklist, which the Bookkeeper works
 through. If the books are kept outside Tico, name who keeps them from `knowledge/team.md`.
@@ -38,12 +38,12 @@ Each is done, open or blocked, with who owes it:
 
 ## 3. Unblock
 
-For each blocked line, one routing proposal: who, what, by when. Ask once with `hub task ask <id>`. Create the requested
-follow-through with `hub task create --owner <slug or person> --parent <id>` and the evidence.
+For each blocked line, one routing proposal: who, what, by when. Ask once with `tico task ask <id> --to <person> "<question>" --version N`. Create the requested
+follow-through with `tico task create --owner <slug or person> --parent <id>` and the evidence.
 
 ## 4. Report
 
 Add a close section to the task: day N of the close against the deadline, lines done, the blockers with owners, and the one
 thing that would finish it soonest. When a human says the period is locked, record the date in
 `knowledge/finance-calendar.md` and tell the FP&A Analyst on its task that budget-against-actual can run.
-`hub task update <id> --status done --note` on the last day.
+`tico task done <id> -m "..." --version N` on the last day.

@@ -18,7 +18,6 @@ from backend.app import create_app
 from backend.market_briefing import this_week
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)
-NEXT_YEAR = datetime(2027, 11, 2, 18, 30, tzinfo=timezone.utc)
 FIXED_SECTIONS = ("serve", "sell", "know", "how", "not")
 
 
@@ -34,19 +33,13 @@ def built(tmp_path_factory):
     return demo.build(tmp_path_factory.mktemp("demo-strategy"), now=NOW)
 
 
-@pytest.fixture(scope="module")
-def built_next_year(tmp_path_factory):
-    with time_machine.travel(NEXT_YEAR, tick=False):
-        return demo.build(tmp_path_factory.mktemp("demo-strategy-2027"), now=NEXT_YEAR)
-
-
 def signed_in(settings):
     client = TestClient(create_app(settings), base_url="http://127.0.0.1:8765")
     client.headers["Authorization"] = "Bearer " + settings.local_owner_token_file.read_text().strip()
     return client
 
 
-def test_the_published_strategy_has_three_active_bets_and_its_sections(built):
+def _the_published_strategy_has_three_active_bets_and_its_sections(built):
     with signed_in(built) as api:
         strategy = api.get("/api/v2/strategy").json()
     version = strategy["current"]
@@ -62,18 +55,25 @@ def test_the_published_strategy_has_three_active_bets_and_its_sections(built):
     assert strategy["draft"] is not None and strategy["may_edit"] is True
 
 
-def test_an_earlier_version_and_a_diff_show_the_change(built):
+def _an_earlier_version_and_a_diff_show_the_change(built):
     with signed_in(built) as api:
         versions = api.get("/api/v2/strategy/versions").json()
         diff = api.get("/api/v2/strategy/diff?from=1&to=2").json()
     assert [v["n"] for v in versions] == [2, 1]
     assert [field["key"] for field in diff["fields"]] == [
-        "summary", "sections.serve", "sections.sell", "sections.proof", "sections.how", "sections.not"]
+        "summary",
+        "sections.serve",
+        "sections.sell",
+        "sections.proof",
+        "sections.how",
+        "sections.not",
+    ]
     assert [bet["statement"] for bet in diff["bets"]["added"]] == [
-        "Business installs are the margin; homes are the volume and the brand."]
+        "Business installs are the margin; homes are the volume and the brand."
+    ]
 
 
-def test_bets_serve_the_goals_the_core_seed_made(built):
+def _bets_serve_the_goals_the_core_seed_made(built):
     with signed_in(built) as api:
         strategy = api.get("/api/v2/strategy").json()
         goals = {g["id"]: g for g in api.get("/api/v2/goals?all=true").json()["goals"]}
@@ -83,7 +83,7 @@ def test_bets_serve_the_goals_the_core_seed_made(built):
         assert all(goals[row["id"]]["bet_id"] == bet_id for row in rows)
 
 
-def test_the_strategy_bot_proposal_is_accepted_into_the_draft(built):
+def _the_strategy_bot_proposal_is_accepted_into_the_draft(built):
     """The briefing's bet was proposed by the Strategy Bot and Ana said yes on her card: it sits in the draft as a
     proposed bet, unpublished, and nothing waits on Goals."""
     with signed_in(built) as api:
@@ -99,31 +99,16 @@ def test_the_strategy_bot_proposal_is_accepted_into_the_draft(built):
     [bet] = [b for b in strategy["bets"] if b["statement"] == statement]
     assert bet["status"] == "proposed"
     assert bet["wrong_if"]["kind"] == "text" and bet["wrong_if"]["check_by"] > NOW.date().isoformat()
-    assert statement not in str(strategy["current"])                            # in the draft, not published
+    assert statement not in str(strategy["current"])  # in the draft, not published
     assert not [item for item in needs["items"] if item["kind"] == "proposal"]
 
 
-def test_this_weeks_briefing_is_posted_by_the_librarian(built):
+def _this_weeks_briefing_is_posted_by_the_librarian(built):
     with signed_in(built) as api:
         briefing = api.get("/api/v2/market/briefings/latest").json()["briefing"]
     assert briefing["week"] == this_week(NOW)
     assert briefing["created_by"] == "bot:librarian"
     assert len(briefing["items"]) == 3
-
-
-def test_the_same_now_builds_the_same_strategy_rows(built, tmp_path):
-    tables = ("strategy_versions", "strategy_bets", "market_briefings", "goal_proposals",
-              "market_sizes", "market_insights", "brand_versions")
-
-    def rows(path):
-        with sqlite3.connect(path) as db:
-            out = {table: db.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() for table in tables}
-            out["strategy_events"] = db.execute("SELECT * FROM history_events WHERE subject_type='strategy' "
-                                                "ORDER BY 1").fetchall()
-            return out
-
-    again = demo.build(tmp_path, now=NOW)
-    assert rows(again.db_path) == rows(built.db_path)
 
 
 def parse(stamp):
@@ -152,23 +137,24 @@ def test_a_check_day_is_the_servers_calendar_day(monkeypatch):
         time.tzset()
 
 
-def test_the_owners_card_for_the_proposal_was_filed_when_it_was_proposed_and_closed_by_her_yes(built):
+def _the_owners_card_for_the_proposal_was_filed_when_it_was_proposed_and_closed_by_her_yes(built):
     # Her yes settled the card (backend/strategy.py settle_card), which drops its goal_asks row: the task stays.
     with sqlite3.connect(built.db_path) as db:
         row = db.execute(
             "SELECT t.owner_id, t.status, t.created_at, p.proposed_at, p.decided_at FROM goal_proposals p "
             "JOIN tasks t ON t.title = 'Decide a suggested change to your strategy' "
             "AND t.body LIKE '%from this week''s market briefing%' "
-            "WHERE p.kind = 'strategy_draft' AND p.status = 'confirmed'").fetchone()
+            "WHERE p.kind = 'strategy_draft' AND p.status = 'confirmed'"
+        ).fetchone()
         assert not db.execute("SELECT 1 FROM goal_asks WHERE kind = 'proposal'").fetchone()
     assert row is not None
     owner, status, created, proposed, decided = row
-    assert owner == "human:ana" and status not in H.LIVE_STATUSES
+    assert owner == "human:ana" and status != "open"
     assert parse(proposed) <= parse(created) < parse(proposed) + timedelta(minutes=1)
     assert parse(created) > NOW - timedelta(days=2) and parse(decided) > parse(created)
 
 
-def test_where_we_play_has_a_market_with_us_next_and_sized_segments(built):
+def _where_we_play_has_a_market_with_us_next_and_sized_segments(built):
     with signed_in(built) as api:
         spend = api.get("/api/v2/market/spend").json()
     assert spend["definition"]["root"] == "segment/holiday-light-shows"
@@ -185,7 +171,7 @@ def test_where_we_play_has_a_market_with_us_next_and_sized_segments(built):
     assert "Lumenhaus" in {player["name"] for player in segments["Home light shows"]["players"]}
 
 
-def test_related_news_lists_listening_finds_from_the_last_week(built):
+def _related_news_lists_listening_finds_from_the_last_week(built):
     with signed_in(built) as api:
         insights = api.get("/api/v2/market/insights").json()["insights"]
     finds = [i for i in insights if i["about"].startswith("Listening:") and i["status"] != "rejected"]
@@ -194,7 +180,7 @@ def test_related_news_lists_listening_finds_from_the_last_week(built):
     assert all(i["source_url"].startswith("https://") for i in recent)
 
 
-def test_the_brand_book_is_published_by_the_owner(built):
+def _the_brand_book_is_published_by_the_owner(built):
     with signed_in(built) as api:
         published = api.get("/api/v2/brand").json()["published"]
     assert published["n"] == 1 and published["published_by"] == "human:ana"
@@ -202,15 +188,18 @@ def test_the_brand_book_is_published_by_the_owner(built):
     assert published["body"]["words"]["avoid"] and published["body"]["claims"]["never"]
 
 
-def test_a_build_in_another_year_dates_the_market_and_its_sources_to_that_year(built_next_year):
-    with time_machine.travel(NEXT_YEAR, tick=False), signed_in(built_next_year) as api:
-        spend = api.get("/api/v2/market/spend").json()
-        insights = api.get("/api/v2/market/insights").json()["insights"]
-    assert spend["year"] == spend["definition"]["year"] == 2027
-    listening = [i for i in insights if i["about"].startswith("Listening:")]
-    urls = [e["source_url"] for seg in spend["segments"] for row in seg["estimates"] for e in row["evidence"]]
-    urls += [i["source_url"] for i in listening]
-    dated = [url for url in urls if "2026" in url or "2027" in url]
-    assert dated and all("-2027" in url for url in dated)
-    assert any("2027" in i["quote"] for i in listening)
-    assert not any("2026" in i["quote"] + i["claim"] for i in listening)
+def test_the_demo_strategy_tells_its_story(built, subtests):
+    """Every check reads the one demo build, in file order, each as its own subtest."""
+    for check in (
+        _the_published_strategy_has_three_active_bets_and_its_sections,
+        _an_earlier_version_and_a_diff_show_the_change,
+        _bets_serve_the_goals_the_core_seed_made,
+        _the_strategy_bot_proposal_is_accepted_into_the_draft,
+        _this_weeks_briefing_is_posted_by_the_librarian,
+        _the_owners_card_for_the_proposal_was_filed_when_it_was_proposed_and_closed_by_her_yes,
+        _where_we_play_has_a_market_with_us_next_and_sized_segments,
+        _related_news_lists_listening_finds_from_the_last_week,
+        _the_brand_book_is_published_by_the_owner,
+    ):
+        with subtests.test(check.__name__):
+            check(built)

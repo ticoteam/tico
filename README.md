@@ -7,7 +7,7 @@ the team's own model subscriptions, and report back. It is built for teams from 
 A small pilot is what has been measured ([sizing](docs/sizing.md)).
 
 - **A small server holds the team.** One Docker install (the server, HTTPS through Caddy or a
-  Cloudflare Tunnel, Litestream backups, an optional updater) keeps tasks, chats, approvals,
+  Cloudflare Tunnel, Litestream backups, an optional updater) keeps tasks, chats,
   automations, files and humans in SQLite. The server never runs a bot or a model CLI; when decisions (or Slack routing) are on, it sends the text of each
   question to the decision model: the Tico AI Gateway on Tico HQ with a gateway key, then your own TypeSafe key if you set one, then OpenAI, Anthropic, Gemini, xAI or OpenRouter with a key stored on the server.
 - **Computers run the bots.** A Mac (the native runner) or any Linux or cloud computer (the
@@ -32,7 +32,7 @@ API key. One signed-in model is enough for the first result; Health lists the ot
 
 1. In **Finish setup**, choose an AI provider, name your team and pick **Marketing** with **Content Marketer** (`content`) checked.
    With no provider yet, write one bet and one line under **What we won't do**; any short sentence works.
-   Seven built-in bots are created: Assistant, BotOps, Librarian, Strategy Bot, Task Manager, Bookkeeper and Counsel.
+   Ten built-in bots are created: Assistant, BotOps, Librarian, Strategy Owner, Task Manager, Finance Owner, Rules Owner, Brand Owner, Updates Owner and Automations Owner.
 2. Use **Add computer** to join this computer, run the command shown, then **Create my team**.
 3. Open **Settings > Computers** and **Sign in** beside Codex or Claude Code; finish the provider's browser flow.
    Other harnesses and API credentials are covered in [Harnesses](docs/harnesses.md). Choose the bot's model in **Settings > Bots**.
@@ -43,7 +43,7 @@ API key. One signed-in model is enough for the first result; Health lists the ot
    reports to the nearest hired manager above it until that manager is hired, then moves under it. On Content Marketer's
    page, press **Start onboarding**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
    to give it readers, publishing plans, topics, voice examples and privacy rules; review its first draft in chat.
-6. On **Tasks > New task**, assign it the short draft from [Your first result](docs/install.md#your-first-result). The bot marks
+6. On **Tasks**, press **+** (New task) and assign it the short draft from [Your first result](docs/install.md#your-first-result). The bot marks
    it Done with the draft file on the task. Read the draft, then close the task yourself: the requester closes it, not the bot.
 
 Success is a draft file on the task, read by a person, and a task you closed. The steps, and what to try next (meeting notes
@@ -58,7 +58,7 @@ For a team, on a Linux server (about 2 GB, with a domain pointed at it), run the
 curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh -o install.sh && sh install.sh
 ```
 
-It installs Docker if needed, downloads that release's compose bundle (checksum verified) and walks you through `tico setup`:
+It installs Docker if needed, downloads that release's compose bundle (checksum verified) and walks you through the setup wizard (`python3 -m setup`):
 a domain name to a signed-in Tico, with each step checked. Then open the app, complete **Finish setup**, and use
 **Settings > Computers > Add computer** to join a Mac or a Linux computer. What you need first, where to get a server, and what
 you will see are in [docs/install.md](docs/install.md).
@@ -87,9 +87,9 @@ team on localhost with no setup ([docs/demo.md](docs/demo.md)).
 | [docs/meetings.md](docs/meetings.md) | Meetings and call transcripts |
 | [docs/creating-bots.md](docs/creating-bots.md), [docs/onboarding.md](docs/onboarding.md) | Creating bots and finishing setup |
 | [docs/connect-tools.md](docs/connect-tools.md) | Connect common tools (Jira, Confluence, Linear, PostHog, Sentry, GitHub): a vendor's MCP server if it takes an API token, else a REST skill |
-| [docs/starter-bots.md](docs/starter-bots.md) | The 98 bot templates by group, their card fields and what a good bot looks like |
-| [docs/software-factory.md](docs/software-factory.md) | The software factory: Tico's recommended roles, models and Dev tickets steps for building software with bots |
-| [docs/onboarding-guide.md](docs/onboarding-guide.md) | Picking your first bots, writing good instructions, approval gates, and reviewing a bot's first week |
+| [docs/starter-bots.md](docs/starter-bots.md) | The 124 role templates by group, their card fields and what a good bot looks like |
+| [docs/software-factory.md](docs/software-factory.md) | The software factory: Tico's recommended roles and models for building software with bots |
+| [docs/onboarding-guide.md](docs/onboarding-guide.md) | Picking your first bots, writing good instructions, what needs your OK, and reviewing a bot's first week |
 | [docs/environments.md](docs/environments.md) | Sign-in options, environments, profiles, removal |
 | [docs/files.md](docs/files.md) | What bots publish, versions, who can see a file |
 | [docs/docs.md](docs/docs.md) | Docs: internal docs with history and locks, linked docs, import, search |
@@ -105,7 +105,7 @@ team on localhost with no setup ([docs/demo.md](docs/demo.md)).
 | Mode | Where the server runs | Status |
 |---|---|---|
 | Docker | Any Linux server, HTTPS by Caddy or Cloudflare Tunnel, built-in Google or Microsoft sign-in | the one-line installer; [docs/install.md](docs/install.md) |
-| Local only | The same Mac as the runner, bound to `127.0.0.1` | For trying Tico out; `scripts/tico env create --local` (below) |
+| Local only | The same Mac as the runner, bound to `127.0.0.1` | For trying Tico out; `scripts/tico-computer env create --local` (below) |
 
 The server runs no bots or model CLIs and may call your configured Decision provider, and a runner never holds team-wide authority: it works one
 leased run at a time. A bot is one git repository plus one row on the server. One environment
@@ -117,7 +117,7 @@ For the shortest trial, use Docker above. For a native development setup, follow
 and [register a Mac computer](docs/install.md#mac). Open the app, complete **Finish setup**, join the
 computer and sign in to your model provider. All four built-in repositories are created automatically. Each other role waits as a Recruiting seat; a bot is created only
 when you recruit one, and it is parked in **Needs setup** until you open it and press **Start onboarding**; then follow [Your first result](docs/install.md#your-first-result).
-Bots can allow [branches](docs/creating-bots.md#branches): personal tasks and chats on your computer, following the original's instructions and repository. Independent copies keep using `hub bot copy`.
+Bots can allow [branches](docs/creating-bots.md#branches): personal tasks and chats on your computer, following the original's instructions and repository. Independent copies keep using `tico bot copy`.
 
 See [Setup reference](docs/onboarding.md) for the wizard's saved fields and [Creating bots](docs/creating-bots.md) for custom bots.
 
@@ -163,7 +163,7 @@ which case the bundle is ad-hoc signed and Gatekeeper asks for **Open Anyway** t
 
 A bot is one durable git repository in the environment's workspace plus one row on the server. The
 repository holds `AGENT.md`, playbooks, knowledge and memory; the server holds runtime, model,
-effort, assignment, tasks and approvals. The runner looks for the checkout at
+effort, assignment and tasks. The runner looks for the checkout at
 `<workspace>/bot-<slug>` (an older `emp-<slug>` folder keeps working) unless the registration's `repos` map says otherwise.
 
 A new bot starts from a template, `templates/catalog/<template>/`. Use **Settings > Bots > Add from template**, or ask
@@ -216,7 +216,7 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_OIDC_CLIENT_ID` | For `oidc`: the OAuth client id | `1234-abc.apps.googleusercontent.com` |
 | `TICO_OIDC_CLIENT_SECRET` or `TICO_OIDC_CLIENT_SECRET_FILE` | For `oidc`: the client secret, or a file holding it | `/etc/tico/oidc-secret` |
 | `TICO_OIDC_ALLOWED_DOMAINS` | For `oidc`, optional: comma-separated email domains that may sign in (Google also checks the `hd` claim) | `acme.com` |
-| `TICO_GOOGLE_OAUTH_CLIENT_ID` and `TICO_GOOGLE_OAUTH_CLIENT_SECRET` | Optional: the server's Google OAuth web client, so each person can connect their own inbox and calendar, read only, from Settings > Inboxes ([docs/mail.md](docs/mail.md#connect-your-google-account)) | `1234-abc.apps.googleusercontent.com` |
+| `TICO_GOOGLE_OAUTH_CLIENT_ID` and `TICO_GOOGLE_OAUTH_CLIENT_SECRET` | Optional: the server's Google OAuth web client, so each person can connect their own inbox and calendar, read only, from Tools > Settings > Email ([docs/mail.md](docs/mail.md#connect-your-google-account)) | `1234-abc.apps.googleusercontent.com` |
 | `TICO_SESSION_IDLE_SECONDS` and `TICO_SESSION_ABSOLUTE_SECONDS` | For `oidc`, optional: how long a sign-in lasts without use (default 30 days) and in all (default 90 days). Lower them to sign humans out sooner | `28800` |
 | `TICO_STREAM_KEEPALIVE_SECONDS` | Optional: how often a quiet event stream (pages, runners) sends a keepalive, 5 to 50 seconds (default 15). Keep it under the idle timeout of any proxy in front | `20` |
 | `TICO_SESSION_SECRET` | For `oidc`, optional: at least 32 characters, signs the sign-in round trip. Generated and kept in `tico-session-secret` beside the database (mode 0600) when unset | |
@@ -227,7 +227,7 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_GITHUB_OWNER` | Organization that completes bare bot repository names | `acme-inc` |
 | `TICO_CREDENTIAL_ADMINS` | Comma-separated emails allowed to write shared credentials. The owner and the Admins when empty | `you@example.com` |
 | `TICO_UNSOLICITED_PER_DAY` | How many messages a bot may start to one human in a day before it must file a task instead. Default 10; lower it to tighten | `3` |
-| `TICO_STYLE_LINT` | What a writing problem in a bot's ask to a person or in its update does: `warn` (the default: written, with a warning), `refuse`, or `off` | `refuse` |
+| `TICO_STYLE_LINT` | What a writing problem in a bot's question to a person or in its update does: `warn` (the default: written, with a warning), `refuse`, or `off` | `refuse` |
 | `TICO_BLOCK_EXTERNAL_INVITES` | Set to `1` to limit bots to inviting humans on the team roster to calendar events (default: any address). Set it on computers too for `mail calendar add` | `1` |
 | `TICO_PROCESSING_OPERATORS` | Humans whose computers may run the Close transcript importer and tool publishers | `dana` |
 | `TICO_SCHEDULER` | `1` runs the routine scheduler and the other timed loops (webhook pulls from Tico Gateway, sleep when idle) in this process | `1` |
@@ -259,14 +259,14 @@ server's variable file; real hostnames, buckets, ARNs and humans live outside th
 | `backend/` | The server: API, authorization, write layer, scheduler, backups, settings admin (FastAPI, SQLite) |
 | `runner-rs/` | The local runner (`tico-runner`): enrollment, readiness, leases, runs, subscription profiles, updates, and one host per model CLI in `runner-rs/src/hosts/` |
 | `runner_support/` | The runner's Python helpers: the `python -m runner_support run` shim, the connectors, Close transcript and meeting import jobs, catalog set-up and the update process |
-| `clients/` | What bots and owners call: the `hub` CLI, the HTTP client, preflight, routine validation, team documents, and `environments.py` |
+| `clients/` | What bots and owners call: the `tico` CLI, the HTTP client, preflight, routine validation, team documents, and `environments.py` |
 | `ui/`, `app/` | The web interface and its browser tests; the Tauri desktop shell (Rust) |
-| `setup/` | `tico setup`, the guided Docker install of the server and of Linux runners |
+| `setup/` | the setup wizard (`python3 -m setup`), the guided Docker install of the server and of Linux runners |
 | `infra/` | cloud-init files for a new server or runner (they call `scripts/install.sh`) |
 | `connectors/`, `integrations/`, `skills/` | Shared adapters bots use instead of vendor APIs, one page per outside system, and shared runtime skills |
 | `policies/` | Rules every bot follows: approvals, access, handoffs, writing |
 | `templates/` | `catalog/` is the bot templates setup picks from, one folder per template with its card and its starting repository; `employee-repo/` is the generic starting point, `environment-registry/` seeds a new environment with `coo` and `botops` |
-| `scripts/` | `tico`, `hub`, `setup-runner.sh`, `app.sh`, `publish-employee.sh` and maintenance commands |
+| `scripts/` | `tico`, `tico-computer`, `hub` (`tico`'s old name), `setup-runner.sh`, `app.sh`, `publish-employee.sh` and maintenance commands |
 | `docs/` | Documentation: [how it works](docs/how-it-works.md), [using Tico](docs/using-tico.md), [finish setup](docs/onboarding.md), [creating bots](docs/creating-bots.md), [files](docs/files.md), [environments](docs/environments.md), [Hermes agents](docs/hermes-agents.md) and [OpenClaw agents](docs/openclaw-agents.md) (connect a profile in 2 minutes, with a scheduled sync); `history/` holds retired designs |
 
 ### Where a change belongs
@@ -286,18 +286,22 @@ change, change this repository.
 
 ## Operating commands
 
-`scripts/tico` is the one command on a Mac that runs bots (on Linux it does the same with systemd user units, [install.md](docs/install.md#a-linux-checkout-systemd)). `scripts/tico help` prints the full usage; the groups are:
+`scripts/tico-computer` is the one command on a Mac that runs bots (on Linux it does the same with systemd user units, [install.md](docs/install.md#a-linux-checkout-systemd)). `scripts/tico-computer help` prints the full usage; the groups are:
 
 ```
-scripts/tico [-e ENV] install|uninstall|restart|status|doctor|logs|update|open
-scripts/tico env create|list|show|remove ...         the teams on this Mac
-scripts/tico -e ENV enroll --code-file F --label L   register this Mac for one team
-scripts/tico -e ENV profile add|list|login|assign    the subscriptions its bots run on
-scripts/tico -e ENV bot create SLUG --name "Display" [--template T]
-scripts/tico -e ENV server install|uninstall|start|stop|restart|status|logs
+scripts/tico-computer [-e ENV] install|uninstall|restart|status|doctor|logs|update|open
+scripts/tico-computer env create|list|show|remove ...         the teams on this Mac
+scripts/tico-computer -e ENV enroll --code-file F --label L   register this Mac for one team
+scripts/tico-computer -e ENV profile add|list|login|assign    the subscriptions its bots run on
+scripts/tico-computer -e ENV bot create SLUG --name "Display" [--template T]
+scripts/tico-computer -e ENV server install|uninstall|start|stop|restart|status|logs
 ```
 
 `-e ENV` (or `TICO_ENV`) picks a team environment.
+
+`install` links `~/.local/bin/tico-computer` and `~/.local/bin/tico`. `tico` is the teamwork CLI (`tico task list`,
+`tico --help`); `tico install`, `tico restart` and the other computer commands above still reach `tico-computer` from
+a person's terminal, with a note, and are refused inside a bot turn.
 
 `scripts/setup-runner.sh [--env <slug>] <enrollment.json> [workspace]` does the venv, the
 enrollment, the bot service and `doctor` in one go from a file downloaded by **Add computer**, and
@@ -306,7 +310,7 @@ private GitHub repositories.
 
 ## Developer notes
 
-Run the suite locally; GitHub Actions also runs the default suite on every pull request to main and every push to main (PR checks). There is no budget on how many tests it has: write as many as a change needs, as long as each
+Run the suite locally; GitHub Actions also runs the default suite on every pull request to main that is not a draft (PR checks). There is no budget on how many tests it has: write as many as a change needs, as long as each
 guards a real failure: security and privacy boundaries, data safety (migrations, backup, restore),
 the updater and release path, core contracts (job claim and lease, task writes, chat, the API
 schema), regressions and edge cases that would lose or duplicate work. No tests of wording or docs. The default Python suite runs in about a minute on a laptop;
@@ -318,14 +322,15 @@ python -m pytest -q          # parallel by default (pytest-xdist); add -n 0 to d
 ```
 
 Browser checks need `npm ci` and a Playwright browser (`npx playwright install chromium`), then
-`npm run test:ui` (the core scripts in `ui/tests/`, three at a time; `--all` runs every script, `node scripts/ui-tests.cjs <name>` runs one). A script still running after its time limit (`TICO_UI_SCRIPT_TIMEOUT`, 120 seconds times the load slowdown) is stopped with every process it started, and its failure names the browser call it was waiting on; if any of them could not be stopped, the failure says "cleanup incomplete" and why. The UI has no build step and no runtime network
-dependency: `marked` and the icon font are vendored in `ui/vendor/` with their licenses.
+`npm run test:ui` (the core scripts in `ui/tests/`, three at a time; `--all` runs every script, `node scripts/ui-tests.cts <name>` runs one). A script still running after its time limit (`TICO_UI_SCRIPT_TIMEOUT`, 120 seconds times the load slowdown) is stopped with every process it started, and its failure names the browser call it was waiting on; if any of them could not be stopped, the failure says "cleanup incomplete" and why. The UI's TypeScript files are compiled by
+`npm run build:ui` (into `build/ui/`; ui/README.md), and the UI has no runtime network dependency: `marked` and the
+icon font are vendored in `ui/vendor/` with their licenses.
 
 The live checkout on an owner's Mac is what the runner executes: the launchd jobs run
 `python -m runner_support` with that directory as the working directory, and the bot job execs the Rust runner built
 from that tree (rebuilt on restart when `runner-rs/` changed). A pull without a restart leaves the old code
-running (`scripts/tico status` says so explicitly). Do development in a git worktree, never in the live checkout, and use
-`scripts/tico update`, which pulls and restarts after waiting for runs in flight.
+running (`scripts/tico-computer status` says so explicitly). Do development in a git worktree, never in the live checkout, and use
+`scripts/tico-computer update`, which pulls and restarts after waiting for runs in flight.
 
 ## License
 
@@ -366,11 +371,11 @@ registry directory (`TICO_REGISTRY_DIR`) and in bot repositories outside this on
 is the product. `templates/environment-registry/` shows the shape of the registry.
 
 Tasks support [tags with metadata, Markdown checklists and templates](docs/using-tico.md#tags-and-release-checklists).
-Open **Settings > Tasks** (under **Task tags**) or use `hub tag list|show|create|update`. Existing `--label` and
+Open **Settings > Tasks** (under **Task tags**) or use `tico tag list|show|create|update`. Existing `--label` and
 `hub_task_label` calls keep using tag keys.
 
 ## Task pipelines
 
-Tasks start on General. Movers can add types and named steps in Settings → Tasks, then select a
-type on the board to use its steps as columns. Bots and existing scripts keep using task statuses.
-See [Task types and steps](docs/tasks.md) for the UI, CLI, MCP and API.
+Every task sits in a pipeline, at one stage, and always shows whose turn it is. A new team has one pipeline, General,
+with one stage, To do. A task is open, done or closed; a person is asked through an ask on the task, in Needs you.
+See [Tasks](docs/tasks.md) for the UI, CLI, MCP and API, and [the spec](docs/pipelines-v3.md) for the whole design.

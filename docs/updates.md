@@ -8,39 +8,37 @@ updated never drags its computers ahead of it.
 
 ## What changed since your last look
 
-The sidebar's version row (above Ask Tico, one row at a time) reads **Updated to v…** while product changes you have not
+The sidebar's version row (above Tico Assistant, one row at a time) reads **Updated to v…** while product changes you have not
 acknowledged are unread, and **Update to v…** while a newer release is on offer (it then wins the row; its pop-up links
 **What's new**). Clicking **Updated to** opens **What's new**, which shows the product changes you have not acknowledged; **Changelog**
-in the account menu lists the same changes. **Since last look** includes every unread release and team announcement;
+in the account menu lists the same changes. **Since last look** includes every unread product change;
 choose **All product updates** to browse history or **All activity** to include accessible bot outcomes.
-Search changes, expand a release's remaining bullets, or open its full release notes. Opening the
+Search changes or expand an entry's remaining bullets. Opening the
 page marks the product entries it shows as read, and **Load older changes** does the same for the ones
 it adds; they stay listed and marked **New** until you leave the page.
 Read status belongs to each person and follows them across sign-ins and devices.
-A new company starts caught up: when the owner completes Finish setup, every release shipped before then is marked
-read for them, so a fresh install shows no **Updated to** row. Later releases count as usual, everyone else keeps
+A new company starts caught up: when the owner completes Finish setup, every product update shipped before then is marked
+read for them, so a fresh install shows no **Updated to** row. Later updates count as usual, everyone else keeps
 their own read status, and completing setup a second time changes nothing.
 
-Release entries come directly from the installed `CHANGELOG.md`. They work offline and require
-neither a Git checkout nor manual announcement posting. Unreleased notes and releases newer than
-the running server are excluded. The owner can still publish team product announcements.
+Product updates are the team announcements the owner publishes and the announcements packaged with the server's
+registry. They need no network call.
 
 The same history is available to signed-in users through the stable API and MCP:
 
 - `GET /api/v2/changelog`: `kind=product|activity|all` (default `all`), `unread=true`, `q` search,
-  `since_version=0.3.0` for releases newer than that version, and `limit` (1–250) / `offset` paging.
+  and `limit` (1–250) / `offset` paging.
   Each entry includes its `id`, `title`, `bullets`, `shipped_at` and `kind`; product entries include
-  `unread`, and releases add `version` and a full-notes `url`. The response also gives
+  `unread`. The response also gives
   `current_version`, `unread_count` and `next_offset` (`null` at the end). The unread count covers
   all product entries, independently of the current filter.
-- `POST /api/v2/changelog/read` with `{"ids":["release-0.3.0"]}` and an `Idempotency-Key`
+- `POST /api/v2/changelog/read` with the `id`s of the entries you saw and an `Idempotency-Key`
   acknowledges only those known product entries for the caller. Unknown or future ids are ignored.
 - MCP `hub_changelog_list` accepts the same filters and defaults to product changes;
   `hub_changelog_mark_read` accepts `ids` from that result. Listing does not mark anything read.
   For a catch-up request, list unread changes, show the user the summary, and acknowledge the
   entries shown when they ask to mark them read.
-- CLI: `hub changelog list --unread`, `hub changelog list --since-version 0.3.0`, and
-  `hub changelog mark-read release-0.3.0`.
+- CLI: `tico changelog list --unread` and `tico changelog mark-read <entry-id>`.
 
 ## Manual server update
 
@@ -68,7 +66,7 @@ health check and automatic rollback described below.
   the contract between runner and server raises that number.
 - Every heartbeat carries the computer's release, the commit it runs (an image's `release-manifest.json`, else the
   checkout's HEAD), its kind (`mac`, `linux` or `docker`) and how its update stands.
-  **Settings > Health** and **Settings > Computers** show one state per computer:
+  **Settings > General > Health > Details** and **Settings > Computers** show one state per computer:
 
   | State | Meaning |
   |---|---|
@@ -79,7 +77,7 @@ health check and automatic rollback described below.
   | Release not reported | a computer that predates this, or a development build. It is never paused |
 
 - A server that is a development build (no release) has nothing to compare, so computers keep following `main` as
-  before and Settings > Health shows no version line. A computer talking to a server from before this existed does the same.
+  before and Settings > General > Health > Details shows no version line. A computer talking to a server from before this existed does the same.
 
 A computer behind the server's release, or on no release at all, is **outdated**: its row in Settings > Computers carries
 an Outdated badge, and the page opens with a banner naming the online ones and whose they are. When a computer has stayed
@@ -88,7 +86,7 @@ only with the next server release.
 
 Health names computers that did not report a version and shows a newer computer's actual release separately.
 Computers lists team service status once, alongside the computer reports. Archived bots are left out of readiness.
-The MCP `hub_health_check` includes the same checks and fixes as Settings > Health, including watchers and queued work.
+The MCP `hub_health_check` includes the same checks and fixes as Settings > General > Health > Details, including watchers and queued work.
 Computers report whether a rejected model key came from Credentials or the computer only after the server
 advertises support. After a server rollback, they omit that field and keep reporting readiness; a later server
 upgrade enables it again.
@@ -120,7 +118,8 @@ Each line is a venv (its `pyvenv.cfg`) or a user-install folder built by another
 
 ## Disk space
 
-Health warns when a computer reports that its disk is over 85% full. Free space on that computer; for a Docker install,
+Health warns when a computer reports that its disk is over 85% full. A computer low on disk first cleans up what is safe
+by itself ([Task worktrees](worktrees.md#low-disk)), and the warning names what that freed. Free space on that computer; for a Docker install,
 `docker image prune -a` removes unused images. This can remove a cached rollback image, so the previous release may
 need to be pulled again if you later roll back. Disk-space update failures say what ran out and retry when free space
 increases, including while the server and computers are on different releases. Older computers that do not report disk
@@ -160,13 +159,13 @@ The runner is a git checkout. When the server's release is newer, the runner:
    or until the server's release changes. A disk-space failure retries as soon as free space increases.
 6. once the runner is healthy on the new release, restarts the background jobs that are installed on this Mac
    (`connectors`, `close-calls`, `importers`; the same `launchctl kickstart -k` or `systemctl --user restart` as
-   `scripts/tico restart`), so none keeps the old release in memory. A job that is not installed is left alone. Each job also checks the checkout's
+   `scripts/tico-computer restart`), so none keeps the old release in memory. A job that is not installed is left alone. Each job also checks the checkout's
    revision about once a minute and exits when it changes, so its supervisor starts it on the new code even after a
-   `scripts/tico update` or a pull by hand. Each restart is a line in the job's log
-   (`scripts/tico logs connectors`) and in `update.log`. A Docker runner replaces its container, jobs included.
+   `scripts/tico-computer update` or a pull by hand. Each restart is a line in the job's log
+   (`scripts/tico-computer logs connectors`) and in `update.log`. A Docker runner replaces its container, jobs included.
 
 A runner's release is the one it started on, not whatever the checkout names now. The runners of several company
-environments (`scripts/tico -e <env> install`) may share one checkout: the first to update moves it, and each other
+environments (`scripts/tico-computer -e <env> install`) may share one checkout: the first to update moves it, and each other
 runner, still on the old release, finds the checkout already there, runs the install step for its own Python and
 restarts onto it (with its own jobs). The same happens after a `git checkout` of a release by hand. Their updates take
 turns on a lock in the checkout's git directory, so one never moves the checkout while another is mid-update.
@@ -194,17 +193,17 @@ uses `failed` and the six-hour wait they already honor, so they take work betwee
 without an end. Persistent causes use the same blocked rule. It never installs, restarts or rolls back without
 the shared update lock.
 
-### Linux from a checkout: run `scripts/tico install` once
+### Linux from a checkout: run `scripts/tico-computer install` once
 
 A Mac has launchd to start the runner again after an update. A Linux computer running from a Tico checkout has nothing
 unless you give it something, and an update that stopped the runner with no supervisor would leave the computer offline.
 So a checkout runner that nothing supervises **refuses the update and says so** in Settings > Computers and Health:
-"no supervisor would start this runner again after an update: run `scripts/tico install` once".
+"no supervisor would start this runner again after an update: run `scripts/tico-computer install` once".
 
 Run it once on that computer, as the user the runner runs as (enroll first: [install.md](install.md#a-linux-checkout-systemd)):
 
 ```
-scripts/tico install            # the runner, connectors, close-calls and importers
+scripts/tico-computer install            # the runner, connectors, close-calls and importers
 ```
 
 It writes four systemd **user** units under `~/.config/systemd/user` (`tico-bot.service`, `tico-connectors.service`,
@@ -224,11 +223,33 @@ errors, and only if systemd confirms the runner's `KillMode` is `process` or `no
 default `control-group`; a detached updater would be killed on restart, so a launch failure is reported instead.
 An unknown stop policy also refuses that fallback.
 Linger is checked at install time; if it is off the command prints `loginctl enable-linger $USER`, because without it the jobs stop when the last session
-logs out and do not start at boot. `scripts/tico status`, `restart`, `logs` and `uninstall` work the same as on a Mac.
+logs out and do not start at boot. `scripts/tico-computer status`, `restart`, `logs` and `uninstall` work the same as on a Mac.
 
-A checkout with uncommitted changes, or on a branch other than `main`, is refused: nothing is
-stashed, reset or discarded. Settings > Health and Computers name the changed files until someone
+A checkout with uncommitted changes, or on a person's development branch, is refused: nothing is
+stashed, reset or discarded. Settings > General > Health > Details and Computers name the changed files until someone
 commits or stashes them.
+
+If a bot left the install on `tico/<8-character hex id>-<slug>` or `tico-session/<task>`, a release
+update can move it back onto a release. After draining work, under `tico-update.lock`, it checks that tracked
+files and the index are clean and that no merge, rebase, cherry-pick, revert or bisect is in progress. Local
+files that would be overwritten still block the update. It saves the current commit at
+`refs/tico/recovered/<UTC timestamp>-<branch>`, keeps the original branch ref, then does the normal detached
+release update and health check. Rollback still returns to the previous checkout. The recovery ref stays
+after success or rollback; `git show <ref>` reads the saved commit. The update log and `update-status.json`
+record “moved the install off bot branch … (kept at …)”. Health and BotOps name the branch and say whether
+it will be recovered on the next update or what blocks it. An older updater still needs a person to switch
+the install to `main` once before it can receive this fix.
+
+`HUB_DIR` names Tico's own install, where its helper scripts live. It must never be used for bot Git work.
+Bots use their own repositories and task checkouts, including when working on Tico itself. The repo guard
+also refuses outside paths whose resolved Git directory or common directory is shared with the install,
+including linked worktrees and `.git` pointers. For paths inside a repo, it finds and trusts only that
+repo's root for the Git check. This lets the supervisor check bot-owned folders such as `playbooks/`
+and `.state/`. Paths with no Git repo above them, and worktrees whose Git directory is gone, keep
+their usual worktree status or Git error. Any other failed check of the install or bot repo, including
+bad config, access errors and timeouts, refuses the path and says the repo could not be checked.
+Only matching Git metadata is reported as shared with the install. This guard checks destinations
+Tico selects; it does not isolate a bot's shell or user account.
 
 There is one repair for Tico's own links: if every tracked change is a link from HEAD replaced by a regular file
 with exactly its target's HEAD bytes, the updater restores those links under `tico-update.lock` and continues.
@@ -273,7 +294,10 @@ start if another environment moved the shared checkout to an older release.
 Git lock files also stay in place: once a lock is 30 minutes old, the updater
 reports its full path, age and one removal command. Check no Git is running for that repository
 before running that command on the Computer.
-`scripts/tico update` still works by hand and still follows `main`.
+`scripts/tico-computer update` still works by hand and still follows `main`. It ends with `tico-computer restart
+all`; a `scripts/tico` from before `tico-computer` existed ends with `scripts/tico restart all`, which `scripts/tico`
+still hands to `tico-computer` from a person's terminal, so that first update lands too. `tico` itself is the teamwork
+CLI: `tico update` is the bots' daily updates, not this computer's.
 
 A launch failure waits six hours before another attempt at the same release. A newly installed runner retries a
 launch failure from an older runner build at once; if that attempt fails, the six-hour wait applies again. A dead
@@ -305,7 +329,10 @@ the core's); a release newer than the host's core runs with that release's own c
 Before anything changes, the updater also renders the compose files with the target tag (`docker compose config`) and
 refuses the update when `server`, or `slack` when it runs, would not get that release's image: an override that sets
 `image:` would keep it on the old one. After the switch the server must run the image just pulled and report the target
-release on `/healthz`; otherwise the update counts as unhealthy and is rolled back.
+release on `/healthz`; otherwise the update counts as unhealthy and is rolled back. If the new server container exits while
+the update waits for it, or restarts twice since the wait began (a crash loop), the update stops waiting and starts the
+rollback at once; the update status says why. The rollback then gives the old server its own full wait, which stops early
+the same way if it crashes too. A server that runs but is slow to answer gets the whole wait.
 
 A Docker step that runs over its time limit is named in the update status: which step ran over, and its limit in
 seconds. Until the new version has passed its health and version checks, any failure rolls back like any other. After
@@ -366,14 +393,19 @@ refuses every update. A `cloudflared` command of its own should read `--config /
 COMPOSE_PROFILES=cloudflared,updater    # your existing profiles, plus updater
 TICO_UPDATER_URL=http://updater:8080
 TICO_TAG=vX.Y.Z                         # the release running now
-# TICO_UPDATER_SNAPSHOT_SECONDS=900     # optional; raise if a very large hub needs a longer pre-update copy
+# TICO_UPDATER_SNAPSHOT_SECONDS=1800    # optional; a fixed time for the pre-update copy (unset: it scales with hub.sqlite)
 ```
 
 and run `docker compose up -d`. From then on the updater moves `TICO_TAG`.
 
-Before switching images the updater copies `hub.sqlite` with SQLite's online backup API. That copy must pass
-`PRAGMA quick_check`, because rollback refuses a snapshot that fails it. On a multi-gigabyte database the copy and check
-can take minutes; set `TICO_UPDATER_SNAPSHOT_SECONDS` (default 900) in `.env` when a hub needs longer.
+Before switching images the updater copies `hub.sqlite` with SQLite's online backup API, and the status shows
+`snapshotting, N GB` while it does. The copy must pass `PRAGMA quick_check`, because rollback refuses a snapshot that
+fails it. On a multi-gigabyte database that check takes minutes, so the time allowed for the copy is the larger of
+20 minutes (1200 seconds) and 5 minutes (300 seconds) per gigabyte of `hub.sqlite`: max(1200 seconds, 300 seconds × N GB).
+A 3.6 GB hub gets the 20-minute floor, 1200 seconds, because 5 minutes × 3.6 GB is 1080 seconds. Set
+`TICO_UPDATER_SNAPSHOT_SECONDS` in `.env` to use a fixed number of seconds instead; a value that is not a positive whole
+number is ignored, with a warning in the updater's log. If the copy and check run past the limit, the update is refused
+cleanly; raise the limit for that hub rather than turning the check off.
 
 ## The runner
 
@@ -383,9 +415,13 @@ Every computer runs the Rust runner (`tico-runner`, from `runner-rs/`). The laun
 - **Docker:** the image ships the binary (`/usr/local/bin/tico-runner`), built from the same tree.
 - **Mac or Linux checkout:** a checkout on a release tag downloads that release's `tico-runner-<os>-<arch>.gz` from
   GitHub, checked against the release's `tico-runner-SHA256SUMS`, into `runner-rs/target/dist/`. Any other checkout
-  with `cargo` on PATH builds it (`cargo build --release`). `scripts/tico install` and every update get the binary
+  with `cargo` on PATH builds it (`cargo build --release`). `scripts/tico-computer install` and every update get the binary
   before the runner restarts (`python -m runner_support.engine prepare`); an update that cannot get it backs out and the
   runner keeps running the old release.
+- **A Mac checkout's wait for its binary:** when a release changed the runner's sources, the Mac binaries are added to
+  the release after the other assets. A Mac with no `cargo` on PATH does not try for them until they are listed: its
+  update waits and says why. The runner keeps the old release and takes no new work while it waits. After an hour
+  without them the update fails with that reason and is tried again later. Mac builds never block the release itself.
 
 A binary is only run when it was built from this checkout's `runner-rs` sources. When there is none and none can be
 had, the runner does not start: it logs why and launchd or systemd tries again. A bot on a model CLI the runner does
@@ -396,7 +432,7 @@ still runs the side jobs (connectors, Close calls, meeting importers), the catal
 `runner_support/`. A small `runner/` package forwards the old `python -m runner ...` commands and imports there, so
 launchd plists, systemd units and cloud machine images written before the move, and a runner or update process of an
 earlier release still running while its checkout moves, keep working. What is saved on a computer and started later
-keeps the old names on purpose: `scripts/tico install` still writes `python -m runner --config <path> <job>` into the
+keeps the old names on purpose: `scripts/tico-computer install` still writes `python -m runner --config <path> <job>` into the
 launchd plists and systemd units, and a cloud machine image still boots `python -m runner.cloud_machine boot`. So a
 computer moved back to a release from before the move (hosted staff can set an older target) still starts.
 
@@ -416,7 +452,7 @@ accepts only `vX.Y.Z` tags of one image. A bot on the runner can therefore ask i
 release, and nothing else: the token is readable by the runner supervisor only (bots run as another user), and the sidecar refuses a release older than the one running. The Add computer command sets this up: `install.sh --runner` writes the compose file and a
 `.env` with the image and updater tags pinned to the server's release ([install](install.md#linux-or-cloud-server-docker)).
 
-A runner started with a plain `docker run` has no sidecar: it says so in Settings > Health, and you update it as before
+A runner started with a plain `docker run` has no sidecar: it says so in Settings > General > Health > Details, and you update it as before
 (`docker pull`, then start it again). To move one onto the compose setup, run the `install.sh --runner` line from Add
 computer on the same computer: it reuses the `tico-runner` volume (`TICO_RUNNER_HOME_VOLUME` in `.env`), so the sign-in,
 the repositories and the enrollment stay, and the runner then follows the server.
@@ -452,7 +488,7 @@ Automatic rollback covers a release that does not come up. To go back by choice:
 
   Then set `TICO_TAG=vX.Y.Z` in `.env`, `docker compose pull` and `docker compose up -d`. Without a database change,
   skip the middle step. Computers newer than the server are left as they are (they still work, as long as they are at or above the minimum).
-- **Mac:** `git -C <checkout> checkout vX.Y.Z`, `scripts/tico restart`, and pin it (above) or the next heartbeat moves it
+- **Mac:** `git -C <checkout> checkout vX.Y.Z`, `scripts/tico-computer restart`, and pin it (above) or the next heartbeat moves it
   back to the server's release.
 - **Docker runner:** set `TICO_TAG=vX.Y.Z` and `TICO_RUNNER_PINNED=1` in `.env`, then `docker compose -f runner.compose.yaml up -d`.
 
@@ -465,6 +501,13 @@ bot had before is kept in the repository's history. The bot's own notes, knowled
 (`clients/catalog.py`, `refresh`).
 
 ## Coming from an older version
+
+### From 0.5 to 0.6: every company starts over
+
+Tico 0.6 does not carry tasks over. Every company starts on a new database. A 0.6 server refuses to start on a 0.5
+database that has tasks and changes nothing: "This database has tasks from Tico 0.5. Tico 0.6 does not carry tasks
+over: every company starts on a new database. Nothing was changed. Run Tico 0.5 on this database, or set up a new
+company on 0.6."
 
 ### Moving to Automations (one time)
 
@@ -504,7 +547,7 @@ Tico HQ can also show a short message for a version once in the app ([tico-hq.md
   run the release's install command once more on each computer (server, then each runner computer). From then on, Update
   in the app does everything.
 - **v0.2.6 to v0.2.8:** Update in the app to v0.2.9 or later. An updater that replaced itself in these versions stopped
-  pulling images, so a Linux runner computer may then show "No such image" under Settings > Health and stay on its old
+  pulling images, so a Linux runner computer may then show "No such image" under Settings > General > Health > Details and stay on its old
   version. Run this once in its directory (`/opt/tico-runner`):
 
   ```

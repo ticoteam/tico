@@ -15,7 +15,7 @@ inbox. A receiving bot accepts, rejects or marks each post as a duplicate. A sco
    Without destinations, posts can be saved and scored but route nowhere. The same destinations can be written in the server's
    `registry/listening.yaml`, which suits a company that keeps its registry in a repository.
 3. Configure a server Decision provider ([Decision setup](../questions/README.md)). Ask Listening for one sweep, then review the
-   receiver's result before changing its Routine. Use `hub listening stats` to distinguish an empty sweep from a blocked source.
+   receiver's result before changing its Routine. Use `tico listening stats` to distinguish an empty sweep from a blocked source.
 
 ```yaml
 destinations:
@@ -110,5 +110,5 @@ personal token; every POST has an `Idempotency-Key` for safe retries ([API](api.
 Trace a post with `GET /api/v2/listening/items/<item-id>`, read sweep history with `GET /api/v2/listening/runs`, and inspect
 coverage and receiver verdicts with `GET /api/v2/listening/stats`. Do not treat blocked or rate-limited sweeps as evidence that
 no relevant posts exist. Stats also carry `daily` (posts first seen per UTC day, by
-source) and `recent` (the newest posts routed to a destination you read, one row per post), which Market › Listening draws.
+source) and `recent` (the newest posts routed to a destination you read, one row per post), which the Market page's What are buyers saying? draws.
 See `templates/environment-registry/listening.yaml` for the full routing shape.

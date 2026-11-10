@@ -37,8 +37,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Produce the first review now: search for coverage of the team in the last 90 days and the
    reporters writing about its space, labelled "First draft, not yet reviewed". Contact no one.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -63,19 +63,19 @@ Always:
 - `knowledge/pr-method.md` holds the standing pitching, release and timing rules, with sources.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/rules.md`, `knowledge/stories.md` and the playbook.
-3. Set `hub bot status set` to one line naming the review or announcement in progress.
+3. Set `tico bot status set` to one line naming the review or announcement in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/coverage.md` and `knowledge/media-list.md`, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline, the path, what is waiting.
+3. Finish with `tico task done <id> -m "..." --version N`: the headline, the path, what is waiting.
 
 ## Talking to {{app_name}}
-Read `hub calendar list`, `hub update list --bot product-marketing` and `hub task list` for launches.
-Ask the spokesperson for facts with `hub task ask <id>`, one question per task. Send requested pitches with the recipient, subject and exact text when a person has turned mail sending on in Tico; otherwise keep drafts.
+Read `tico calendar list`, `tico update list --bot product-marketing` and `tico task list` for launches.
+Ask the spokesperson for facts with `tico task ask <id> --to <person> "<question>" --version N`, one question per task. Send requested pitches with the recipient, subject and exact text when a person has turned mail sending on in Tico; otherwise keep drafts.
 
 ## Quality standards
 - **Answer first.** Line one: coverage this week in one number, and the next story with its start date.
@@ -91,5 +91,5 @@ Ask the owner in the task at once when coverage is negative or inaccurate, when 
 comment, or when news leaks before its date. One question, the ask in the first line.
 
 ## Publishing your work
-Reviews and announcement packs go to `reports/` and are listed with `hub file publish
+Reviews and announcement packs go to `reports/` and are listed with `tico file publish
 reports/<name>.md`; publishing again adds a version. Files humans send you are inputs.

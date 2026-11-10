@@ -73,6 +73,7 @@ def raise_item(c, settings, bot, title, body):
     """One Needs-you task for the bot's operator (else the owner), and its id; None when nobody can be asked or the
     task was refused. The hold stands either way, and Health names it."""
     from . import usage_limits
+
     person = usage_limits.recipients(c, bot, getattr(settings, "owner_email", "") or "")
     if not person:
         return None
@@ -86,11 +87,9 @@ def raise_item(c, settings, bot, title, body):
 def close_item(c, task_id, note):
     """Close the Needs-you task a hold filed, once the bot is released. Quiet when it is already closed."""
     row = H.task(c, task_id) if task_id else None
-    if not row or row["status"] not in H.ACTIVE_STATUSES:
+    if not row or row["status"] != "open":
         return
-    try:
-        H.task_close(c, H.KEEPER, task_id, note=note, strict=False)
-    except H.Refused:
+    if H.attempt(c, H.task_close, H.KEEPER, task_id, note) is None:
         log.warning("Could not close the Needs-you task %s", task_id)
 
 
@@ -99,5 +98,9 @@ def release(c, actor, bot):
     claim could not start (backend/claim_holds.py). Queued work starts again. Answers what was cleared:
     {"run_hold": bool, "budget": bool, "claim": the number of jobs released}."""
     from . import claim_holds
-    return {"run_hold": run_backoff.release(c, actor, bot), "budget": turn_budgets.release(c, actor, bot),
-            "claim": claim_holds.release(c, actor, bot)}
+
+    return {
+        "run_hold": run_backoff.release(c, actor, bot),
+        "budget": turn_budgets.release(c, actor, bot),
+        "claim": claim_holds.release(c, actor, bot),
+    }

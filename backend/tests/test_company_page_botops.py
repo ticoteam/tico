@@ -1,12 +1,13 @@
 """BotOps acting for a person on the Company page: drafting and settings are the person's to do through BotOps, and what
 publishes, approves, overrides or takes an edition back stays the person's own click in the app. Acme is the fictional
 company; ana-test owns it, ben-test administers it and cara-test is a member (the base fixtures)."""
+
 import pytest
 
 from backend.botops_act import classify, default_delegable, person_only
-from backend.tests.test_api import api, headers  # noqa: F401  (fixture)
-from backend.tests.test_botops_confirm_cards import card_in_chat, confirm
-from backend.tests.test_member_bots import botops, turn  # noqa: F401  (fixture)
+from backend.tests.helpers.api import headers  # noqa: F401  (fixture)
+from backend.tests.helpers.botops_confirm_cards import card_in_chat, confirm
+from backend.tests.helpers.member_bots import botops, turn  # noqa: F401  (fixture)
 
 
 def act(api, attempt, method, path, body=None):
@@ -20,8 +21,11 @@ def act(api, attempt, method, path, body=None):
 # The person's own click in the app: BotOps is refused whatever the person said in chat. Each one is a real way an
 # edition reaches readers or leaves them, so none is delegated.
 REFUSED = [
-    ("POST", "editions/ed-1/publish"), ("POST", "editions/ed-1/override"), ("POST", "editions/ed-1/approval"),
-    ("POST", "editions/ed-1/retract"), ("POST", "editions/ed-1/correct"),
+    ("POST", "editions/ed-1/publish"),
+    ("POST", "editions/ed-1/override"),
+    ("POST", "editions/ed-1/approval"),
+    ("POST", "editions/ed-1/retract"),
+    ("POST", "editions/ed-1/correct"),
     ("POST", "audiences/aud-1/stats/approval"),
 ]
 

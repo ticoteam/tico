@@ -6,7 +6,7 @@
 
 ## Drive the wizard from your laptop
 
-`tico setup` normally runs on the server (`install.sh` starts it there). It can instead run on your laptop and reach the
+The setup wizard (`python3 -m setup`) normally runs on the server (`install.sh` starts it there). It can instead run on your laptop and reach the
 server for you. It needs `python3` (3.10+) and a clone of the repository; the AWS option also needs `pip install boto3`
 and your AWS credentials. Run it from the clone:
 
@@ -23,7 +23,7 @@ It asks **Where should Tico run?** and the rest of the questions are the same as
 
 Answers and credentials are kept in `~/.config/tico-setup/<domain>/` so a re-run resumes. `--dry-run` prints the plan. Further
 flags for this mode: `--target ssh|aws|command`, `--ssh`, `--ssh-port`, `--ssh-identity`, `--aws-region`, `--aws-profile`,
-`--aws-instance-type`, `--aws-os`, `--cloud-location`, `--cloud-size`, `--cloud-ssh-key`, `--compose-ref`.
+`--aws-instance-type`, `--aws-os`, `--asset-prefix`, `--cloud-location`, `--cloud-size`, `--cloud-ssh-key`, `--compose-ref`.
 
 ### The AWS server
 
@@ -38,14 +38,39 @@ account that only lets setup create IAM roles under a permissions boundary, pass
 `--aws-permissions-boundary`: the role is created under it, with both tags, in one call. Because the hop limit is 1, backups from the container need explicit keys: an IAM user (or R2
 token) limited to the backup bucket, in `LITESTREAM_ACCESS_KEY_ID` and `LITESTREAM_SECRET_ACCESS_KEY`.
 
+`--asset-prefix PREFIX` puts another word in place of `tico` in every AWS name, tag and path setup makes (1 to 10
+lowercase letters, digits and dashes, starting with a letter; not the starts AWS keeps: `aws`, `ssm`, `sthree`, `sg`, `sg-`,
+two dashes in a row). With `--asset-prefix hub --name acme`: tags
+`ManagedBy=hub-setup` and `hub-setup-name=acme`, resources `hub-acme`, settings `/hub/acme/env`, backup bucket
+`hub-backup-<domain>-<install id>` with user `hub-backup-acme`, starter plan bucket `hub-setup-plans-<install id>`. It is saved with the install the first time; every later
+command that changes the install (runs, `runner`, `destroy`, `backup-storage`, `owner-link`) must name it again, and is
+refused before any AWS call without it or with a different one. `doctor` reads it. Names on the server itself
+(`/opt/tico`, the containers, `TICO_*` settings) stay.
+
+Setup never changes, reuses or deletes an AWS resource without both of its tags for this prefix and name: before its
+first write it reads the names it will take (settings parameter, role, instance profile, backup bucket and user), and
+one that something else holds stops the run with its name; pick another `--name` or `--asset-prefix`. Likewise an
+existing Route 53 record for the domain that points elsewhere is left alone and named, unless it is exactly the record
+set this install created (zone, name, type, TTL and values, saved with the install; a CREATE is saved before it is sent,
+so one whose answer was lost is still known, and is adopted only once you confirm it with `--confirm-dns NAME`). Setup
+never changes a record it did not make: it prints the exact change to make by hand in the Route 53 console, then acts
+once the name is free. A record this install made that someone has since changed is no longer its own.
+Setup only creates a record where none is; it replaces one in a single batch that fails if the record changed since it
+was read. A record that already points at the server is left as it is and does not become setup's. (An install saved
+before install ids upserts its records as before.)
+
 A self-install's `--company-file` goes through a private, encrypted bucket setup creates in your AWS account, with
 public access blocked and a one-day expiry rule. Setup keeps its bucket name and chart for retries. The server role
 can read only this install's plan prefix. Creating the bucket needs permission to create/tag S3 buckets and configure
 public access blocking, ownership controls, encryption and lifecycle rules. A failure stops before the chart upload.
-Setup refuses an existing bucket without this install's ownership tags. The empty bucket remains after the chart is
+Setup creates each bucket with its tags in the CreateBucket call (this needs a current boto3), never creates a name
+that already exists, and refuses an existing bucket without this install's tags. The empty bucket remains after the chart is
 deleted. With an explicit `--plan-bucket BUCKET`
-(and `--plan-bucket-region` when it differs from `--aws-region`), as Tico's hosted servers use, setup puts the packed
-plan at `plans/<name>/<sha256>` in that bucket before launch, grants the server's role `s3:GetObject` on
+(and `--plan-bucket-region` when it differs from `--aws-region`), as Tico's hosted servers use, setup first checks the
+bucket belongs to the credentials' AWS account (and every object call names that account as the expected owner); under
+another `--asset-prefix` an explicit `--plan-bucket` is refused before anything is created: the plan goes only into
+the bucket setup made and recorded itself. It then puts the packed plan at `plans/<name>/<sha256>` in that bucket before launch, only where no object is
+(an install from before install ids puts it as before), and later deletes only the object it recorded writing; grants the server's role `s3:GetObject` on
 `plans/<name>/*` only, and names the key and its sha256 in the `.env`. At first boot the server copies it to
 `/opt/tico/company-file/plan.b64` (0400, the server's user), refuses to start on a sha256 mismatch, and the app reads it
 from `TICO_COMPANY_FILE` (the server mounts that folder by its absolute path, `TICO_COMPANY_FILE_DIR`). A copy the app can't use (missing, unreadable, empty or too big)
@@ -61,9 +86,38 @@ python3 -m setup destroy --domain tico.example.com --dry-run   # list what carri
 python3 -m setup destroy --domain tico.example.com             # asks you to type the name
 ```
 
+An install keeps the AWS account and region it was made in: a later run, `runner`, `backup-storage` or `destroy` with
+credentials for another account, or another `--aws-region`, is refused before anything changes. Without a saved
+install id (an install from before them, or a destroy run on another computer), destroy finds what carries the two
+tags for `--name` (or the domain's name), the prefix and `--aws-region` (default `us-east-1`), as it always has.
+
+With a saved install id, destroy reads each resource again right before deleting it, in order, and deletes it only while
+it carries the install's tags and is the one the install recorded; anything else is left alone and named. It refuses to
+terminate an instance that would take with it any volume or network interface (DeleteOnTermination on) other than the
+root volume and primary interface its launch made, releases an Elastic IP only when a fresh read shows it associated
+with nothing (otherwise it says to release it by hand), and finishes an install interrupted before its role got its
+inline policy.
+
+#### What setup cannot guarantee
+
+Under another `--asset-prefix`, setup reads a resource right before each change and refuses on any doubt, but AWS
+leaves a few gaps a read cannot close:
+
+- IAM, SSM, S3 bucket settings and Elastic IP release have no conditional writes. A resource deleted and made again
+  (with the same name and tags) in the instant after setup's last read is not caught.
+- In us-east-1, CreateBucket answers success for a bucket this account already owns. A bucket made under the same name
+  between setup's existence check and its create is not told apart; the names carry the install's random id, so only
+  someone who knows that id can make one.
+- With versioning off on the starter plan bucket, the plan object is deleted only while its ETag is unchanged, and an
+  ETag ignores metadata: the same bytes written again over it are deleted too.
+- What is this install's is known only from its saved state on this computer (`~/.config/tico-setup`). If it is lost,
+  cannot be read or was edited, setup stops: check by hand in the AWS console which resources the install made before
+  restoring the state or deleting anything.
+
 Destroy deletes the instance and its data with it, and leaves your DNS records alone. With `--dns` (and `--domain`) it
-first deletes the domain's A and AAAA records in Route 53 too, but only those that still point at this server's
-addresses; a record someone has pointed elsewhere is left and named. If Route 53 can't be read, nothing at all is
+first deletes the domain's A and AAAA records in Route 53 too, but only a record set exactly equal to one this install
+saved creating; anything else is left and named. (Without a saved install id, as for an older install or a destroy run
+from another computer, it deletes those that point only at this server's tagged addresses, as before.) If Route 53 can't be read, nothing at all is
 deleted, so running it again is safe.
 
 ### A Linux runner computer from your laptop

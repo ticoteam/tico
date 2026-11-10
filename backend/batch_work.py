@@ -1,5 +1,6 @@
 """Isolate one row of background work without losing the rest of its transaction."""
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -13,13 +14,20 @@ _logged = OrderedDict()
 _clock = time.monotonic
 
 # Errors of the storage or the writer lock, not of the row being worked on: they stop the batch or the claim.
-STORAGE_CODES = (sqlite3.SQLITE_FULL, sqlite3.SQLITE_IOERR, sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB,
-                 sqlite3.SQLITE_READONLY, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+STORAGE_CODES = (
+    sqlite3.SQLITE_FULL,
+    sqlite3.SQLITE_IOERR,
+    sqlite3.SQLITE_CORRUPT,
+    sqlite3.SQLITE_NOTADB,
+    sqlite3.SQLITE_READONLY,
+    sqlite3.SQLITE_BUSY,
+    sqlite3.SQLITE_LOCKED,
+)
 
 
 def storage_error(exc):
     """Whether `exc` is a storage failure rather than the row's own error."""
-    return (getattr(exc, "sqlite_errorcode", 0) & 0xff) in STORAGE_CODES
+    return (getattr(exc, "sqlite_errorcode", 0) & 0xFF) in STORAGE_CODES
 
 
 SHARED_ATTR = "shared_check"
@@ -39,7 +47,7 @@ def shared_check(scope="bot"):
 
 
 def shared_scope(exc):
-    """"bot" or "team" for an error out of a shared_check, else None."""
+    """ "bot" or "team" for an error out of a shared_check, else None."""
     return getattr(exc, SHARED_ATTR, None)
 
 
@@ -56,10 +64,16 @@ def report(kind, row_id, exc, logger="tico.scheduler"):
 
 
 @contextmanager
-def isolated(c, kind, row_id, failures=None):
+def isolated(c, kind, row_id, failures=None, private=False):
+    """One row's work in its own savepoint: its error rolls back only that row, is logged, goes on `failures` and on a
+    `background:<kind>:<row>` service_health row until the row next succeeds. service_health is readable by everyone
+    (sql.py), so `private` work (a row that is a task: its id or title must reach only who reads it) keeps the row id
+    and the error's words out of it: the service names a digest of the row, and the detail holds the error type only.
+    The server log still names the row."""
     health_available = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='service_health'").fetchone()
     c.execute("SAVEPOINT background_row")
-    service = f"background:{kind}:{row_id}"
+    shown = hashlib.sha256(str(row_id).encode()).hexdigest()[:16] if private else row_id
+    service = f"background:{kind}:{shown}"
     fatal = False
     try:
         yield
@@ -76,15 +90,27 @@ def isolated(c, kind, row_id, failures=None):
                 c.execute("DELETE FROM service_health WHERE service=?", (service,))
             return
         if failures is not None:
-            failures.append({kind: row_id, "error": type(exc).__name__})
+            failures.append({kind: type(exc).__name__} if private else {kind: row_id, "error": type(exc).__name__})
         report(kind, row_id, exc)
+        words = type(exc).__name__ if private else str(exc)[:300]
+        detail = {"kind": kind, "error": words} if private else {"kind": kind, "row": row_id, "error": words}
+        action = "Check the server log." if private else "Check this row's settings and the server log."
         if health_available:
-            c.execute("INSERT INTO service_health VALUES(?,NULL,?,?) "
-                      "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail=excluded.detail",
-                      (service, f"{kind}: {str(exc)[:300]}",
-                       json.dumps({"kind": kind, "row": row_id, "error": str(exc)[:300],
-                                   "failed_at": datetime.now(timezone.utc).isoformat(),
-                                   "action": "Check this row's settings and the server log."})))
+            c.execute(
+                "INSERT INTO service_health VALUES(?,NULL,?,?) "
+                "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail=excluded.detail",
+                (
+                    service,
+                    f"{kind}: {words}",
+                    json.dumps(
+                        {
+                            **detail,
+                            "failed_at": datetime.now(timezone.utc).isoformat(),
+                            "action": action,
+                        }
+                    ),
+                ),
+            )
     else:
         if health_available:
             c.execute("DELETE FROM service_health WHERE service=?", (service,))

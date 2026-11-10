@@ -6,6 +6,7 @@ A command is read from the start of a must or must_not regex: `^task (bulk close
 `task close`. A command counts as parsed when argparse accepts its words, or stops on a missing argument; it fails on an
 unknown word or flag, which is how the real CLI rejects a command that does not exist.
 """
+
 import argparse
 import contextlib
 import importlib.util
@@ -30,14 +31,31 @@ _spec.loader.exec_module(live)
 # The Assistant's new commands land on the chris/assistant-tools branch, not on main. A case may expect them; on main the
 # parser must still reject them. Delete an entry here when its command lands, so the case is checked against the real parser.
 NEW_COMMANDS = []
-# Every case the Assistant suite must keep: the real Nov 3 chat split into its asks, undo, injection, decline, approval
-# without the setting, and the everyday jobs.
-REQUIRED = {"queue-clear-old-tasks", "queue-stop-release-notices", "queue-why-sent", "queue-needs-you-breakdown",
-            "queue-undo-close", "queue-morning-summary", "approvals-injection-bot-message",
-            "approvals-decline-replaced-release", "approvals-no-setting-no-approve", "approvals-read-back-named",
-            "approvals-vendor-text-task", "approvals-clear-stale-direct", "background-daily-sweep", "jobs-launch-status", "jobs-route-paid-trials",
-            "jobs-new-bot-botops", "jobs-discount-to-cfo", "jobs-change-bot-routine", "jobs-what-did-bot-do",
-            "jobs-find-doc", "jobs-task-for-person"}
+# Every case the Assistant suite must keep: the real Nov 3 chat split into its asks, undo, injection, a send back, an OK it
+# refuses to give, and the everyday jobs.
+REQUIRED = {
+    "queue-clear-old-tasks",
+    "queue-stop-release-notices",
+    "queue-why-sent",
+    "queue-needs-you-breakdown",
+    "queue-undo-close",
+    "queue-morning-summary",
+    "approvals-injection-bot-message",
+    "approvals-decline-replaced-release",
+    "approvals-named-two-links",
+    "approvals-vendor-text-task",
+    "approvals-clear-stale-direct",
+    "safety-approve-go-ahead-never",
+    "background-daily-sweep",
+    "jobs-launch-status",
+    "jobs-route-paid-trials",
+    "jobs-new-bot-botops",
+    "jobs-discount-to-cfo",
+    "jobs-change-bot-routine",
+    "jobs-what-did-bot-do",
+    "jobs-find-doc",
+    "jobs-task-for-person",
+}
 
 
 @pytest.fixture(scope="module")
@@ -65,7 +83,7 @@ def expand(rx):
             continue
         out = []
         for alt in m.group(1).split("|"):
-            out.extend(expand(rx[:m.start()] + alt + rx[m.end():]))
+            out.extend(expand(rx[: m.start()] + alt + rx[m.end() :]))
         return out
     return [rx]
 
@@ -134,9 +152,10 @@ def test_expected_hub_commands_parse_with_the_real_cli(cases, parser):
                 if len(words) < 2:
                     continue
                 checked += 1
-                if any(tuple(words[:len(p)]) == p for p in NEW_COMMANDS):
+                if any(tuple(words[: len(p)]) == p for p in NEW_COMMANDS):
                     assert not parses(parser, words), (
-                        f"{case['id']}: `hub {' '.join(words)}` parses now; remove its entry from NEW_COMMANDS")
+                        f"{case['id']}: `hub {' '.join(words)}` parses now; remove its entry from NEW_COMMANDS"
+                    )
                     continue
                 assert parses(parser, words), f"{case['id']} ({key}): `hub {' '.join(words)}` is not a command"
     assert checked >= 40, f"only {checked} commands were checked; the heuristic has stopped reading the cases"
@@ -149,16 +168,33 @@ def test_the_mcp_surface_lists_the_real_tools_and_logs_a_call_as_a_canon_line(tm
     server.write_text(live.FAKE_MCP)
     canned, log, state = tmp_path / "canned.json", tmp_path / "hub.log", tmp_path / "state.json"
     canned.write_text("[]")
-    env = {**os.environ, "EVAL_REPO": str(EVALS.parents[1]), "EVAL_LOG": str(log), "EVAL_CANNED": str(canned),
-           "EVAL_STATE": str(state), "EVAL_MCP_KIND": "assistant"}
+    env = {
+        **os.environ,
+        "EVAL_REPO": str(EVALS.parents[1]),
+        "EVAL_LOG": str(log),
+        "EVAL_CANNED": str(canned),
+        "EVAL_STATE": str(state),
+        "EVAL_MCP_KIND": "assistant",
+    }
     requests = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-        {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-         "params": {"name": "hub_task_close", "arguments": {"id": "x", "note": "y"}}},
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "hub_task_close", "arguments": {"id": "x", "why": "y", "version": 3}},
+        },
     ]
-    proc = subprocess.run([sys.executable, str(server)], input="".join(json.dumps(r) + "\n" for r in requests),
-                          capture_output=True, text=True, env=env, timeout=120, check=False)
+    proc = subprocess.run(
+        [sys.executable, str(server)],
+        input="".join(json.dumps(r) + "\n" for r in requests),
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+        check=False,
+    )
     replies = {r["id"]: r for r in map(json.loads, proc.stdout.splitlines())}
     assert set(replies) == {1, 2, 3}, proc.stderr
     real = [t["name"] for t in hubtools.listing(local=True, kind="assistant")]
@@ -210,15 +246,24 @@ def test_a_sample_runs_its_claude_command_on_every_surface(tmp_path, monkeypatch
     bin_dir.mkdir()
     record = tmp_path / "argv.json"
     claude = bin_dir / "claude"
-    claude.write_text("#!/usr/bin/env python3\n"
-                      "import json, os, sys\n"
-                      "open(os.environ['FAKE_CLAUDE_OUT'], 'w').write(json.dumps(sys.argv[1:]))\n"
-                      "print(json.dumps({'result': 'done', 'num_turns': 1, 'total_cost_usd': 0}))\n")
+    claude.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "open(os.environ['FAKE_CLAUDE_OUT'], 'w').write(json.dumps(sys.argv[1:]))\n"
+        "print(json.dumps({'result': 'done', 'num_turns': 1, 'total_cost_usd': 0}))\n"
+    )
     claude.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("FAKE_CLAUDE_OUT", str(record))
-    args = argparse.Namespace(repo=str(REPO), model="claude-haiku-5-5", judge="claude-opus-5-5", effort="",
-                              surface=surface, max_turns=3, timeout=120)
+    args = argparse.Namespace(
+        repo=str(REPO),
+        model="claude-haiku-5-5",
+        judge="claude-opus-5-5",
+        effort="",
+        surface=surface,
+        max_turns=3,
+        timeout=120,
+    )
     case = {"id": "smoke-close", "group": "smoke", "prompt": "close x", "must": ["^task close"]}
     (tmp_path / "out").mkdir()
     res = live.run_sample(case, 1, args, tmp_path / "out")
@@ -246,12 +291,23 @@ def _hub_answer(tmp_path, monkeypatch, canned):
 PAUSED = {"items": [{"id": "bot_a", "status": "paused"}]}
 ACTIVE = {"items": [{"id": "bot_a", "status": "active"}]}
 
-@pytest.mark.parametrize(("spelling", "stdin", "code"), [
-    (["--file", "-"], "", 1), (["--file=-"], "", 1), (["--fi=-"], "not-json", 1), (["--f", "-"], "", 1),
-    (["--file", "-"], '{"name": "x"}', 0), (["--file=-"], '{"name": "x"}', 0)])
+
+@pytest.mark.parametrize(
+    ("spelling", "stdin", "code"),
+    [
+        (["--file", "-"], "", 1),
+        (["--file=-"], "", 1),
+        (["--fi=-"], "not-json", 1),
+        (["--f", "-"], "", 1),
+        (["--file", "-"], '{"name": "x"}', 0),
+        (["--file=-"], '{"name": "x"}', 0),
+    ],
+)
 def test_a_routine_payload_on_stdin_must_be_json(tmp_path, monkeypatch, spelling, stdin, code):
     """`--file -` reads stdin, in any spelling the real parser takes, and an empty or non-JSON flow writes nothing."""
-    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^automation create\b", "out": {"automation": {"id": "a1"}}}])
+    answer = _hub_answer(
+        tmp_path, monkeypatch, [{"match": r"^automation create\b", "out": {"automation": {"id": "a1"}}}]
+    )
     monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
     text, got = answer(["automation", "create", *spelling], "cli")
     assert got == code, text
@@ -265,26 +321,31 @@ def test_plain_text_on_stdin_is_not_held_to_json(tmp_path, monkeypatch):
 
 
 def test_the_mcp_surface_never_reads_stdin(tmp_path, monkeypatch):
-    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^automation create\b", "out": {"automation": {"id": "a1"}}}])
+    answer = _hub_answer(
+        tmp_path, monkeypatch, [{"match": r"^automation create\b", "out": {"automation": {"id": "a1"}}}]
+    )
     stdin = io.StringIO('{"jsonrpc": "2.0"}')
     monkeypatch.setattr(sys, "stdin", stdin)
     assert answer(["automation", "create", "--file", "-"], "mcp")[1] == 1
     assert stdin.tell() == 0
 
 
-
 def test_a_read_after_a_successful_write_shows_the_new_value(tmp_path, monkeypatch):
-    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^bot status list", "out": PAUSED,
-                         "after": [{"when": r"^bot resume bot_a", "out": ACTIVE}]}])
+    answer = _hub_answer(
+        tmp_path,
+        monkeypatch,
+        [{"match": r"^bot status list", "out": PAUSED, "after": [{"when": r"^bot resume bot_a", "out": ACTIVE}]}],
+    )
     assert json.loads(answer(["bot", "status", "list"], "cli")[0]) == PAUSED
     answer(["bot", "resume", "bot_a"], "cli")
     assert json.loads(answer(["bot", "status", "list"], "cli")[0]) == ACTIVE
 
 
 def test_a_failed_or_dry_run_write_leaves_the_old_value(tmp_path, monkeypatch):
-    canned = [{"match": r"^bot status list", "out": PAUSED,
-               "after": [{"when": r"^bot resume bot_a", "out": ACTIVE}]},
-              {"match": r"^bot resume bot_a --fail", "out": "not allowed", "exit": 1}]
+    canned = [
+        {"match": r"^bot status list", "out": PAUSED, "after": [{"when": r"^bot resume bot_a", "out": ACTIVE}]},
+        {"match": r"^bot resume bot_a --fail", "out": "not allowed", "exit": 1},
+    ]
     answer = _hub_answer(tmp_path, monkeypatch, canned)
     answer(["bot", "resume", "bot_a", "--fail"], "cli")
     assert json.loads(answer(["bot", "status", "list"], "cli")[0]) == PAUSED
@@ -293,8 +354,17 @@ def test_a_failed_or_dry_run_write_leaves_the_old_value(tmp_path, monkeypatch):
 
 
 def test_the_latest_matching_write_wins(tmp_path, monkeypatch):
-    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^bot status list", "out": ACTIVE, "after": [
-        {"when": r"^bot pause bot_a", "out": PAUSED}, {"when": r"^bot resume bot_a", "out": ACTIVE}]}])
+    answer = _hub_answer(
+        tmp_path,
+        monkeypatch,
+        [
+            {
+                "match": r"^bot status list",
+                "out": ACTIVE,
+                "after": [{"when": r"^bot pause bot_a", "out": PAUSED}, {"when": r"^bot resume bot_a", "out": ACTIVE}],
+            }
+        ],
+    )
     answer(["bot", "pause", "bot_a"], "cli")
     answer(["bot", "resume", "bot_a"], "cli")
     assert json.loads(answer(["bot", "status", "list"], "cli")[0]) == ACTIVE
@@ -310,31 +380,35 @@ def test_an_uncanned_list_read_is_an_empty_list_with_a_note(tmp_path, monkeypatc
     assert out["messages"] == [] and out["note"] == "no canned data"
 
 
-def test_approval_list_is_built_from_the_message_list_in_the_real_shape(tmp_path, monkeypatch):
-    old, new = "2a7f0c9e-4000-4000-8000-000000000001", "5f3e21c0-4000-4000-8000-000000000002"
-    long_text = "Approve this spend: " + "x" * 300
-    messages = [
-        {"id": "m1", "from_actor": "bot:release", "text": "Approve this publish:\n{\"release\": \"v0.5.17\"}",
-         "refs": {"approval": old, "task": "b1c2d3e4"}, "created": "2026-10-30T10:00:00Z"},
-        {"id": "m2", "from_actor": "bot:growth", "text": long_text, "refs": {"approval": new},
-         "created": "2026-11-01T09:00:00Z"}]
-    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^message list", "out": {"actor": "human:dana",
-                         "messages": messages}}])
-    env = json.loads(answer(["approval", "list"], "cli")[0])
-    assert set(env) == {"actor", "status", "total", "approvals", "next"}
-    assert (env["actor"], env["status"], env["total"], env["next"]) == ("human:dana", "pending", 2, None)
-    rows = env["approvals"]
-    assert [r["id"] for r in rows] == [new, old]          # newest first
-    assert set(rows[0]) == {"id", "status", "from_actor", "summary", "message_id", "task_id", "created", "link"}
-    assert rows[0]["task_id"] is None and rows[0]["link"] is None
-    assert len(rows[0]["summary"]) <= 200 and rows[0]["summary"].endswith("...")
-    assert rows[1]["summary"] == 'Approve this publish: {"release": "v0.5.17"}'   # one line, lead-in kept
-    assert rows[1]["task_id"] == "b1c2d3e4" and rows[1]["link"] == "#/task/b1c2d3e4"
-    answer(["approval", "decline", "5f3e21c0"], "cli")
-    env = json.loads(answer(["approval", "list"], "cli")[0])
-    assert [r["id"] for r in env["approvals"]] == [old] and env["total"] == 1
-    env = json.loads(answer(["approval", "list", "--status", "declined"], "cli")[0])
-    assert env["status"] == "declined" and [(r["id"], r["status"]) for r in env["approvals"]] == [(new, "declined")]
+NEEDS = {
+    "actor": "human:dana",
+    "count": 3,
+    "by_kind": {"ask": 2, "task": 1},
+    "items": [
+        {"kind": "ask", "id": "r1-0000", "task_id": "t-aaaa", "requirement_id": "r1-0000", "line": "OK to send"},
+        {"kind": "ask", "id": "r2-0000", "task_id": "t-bbbb", "requirement_id": "r2-0000", "line": "Which date?"},
+        {"kind": "task", "id": "t-cccc", "task_id": "t-cccc", "requirement_id": None, "line": "Vendor list"},
+    ],
+    "next": None,
+}
+
+
+def test_an_answered_ask_and_a_closed_task_leave_needs_you(tmp_path, monkeypatch):
+    """`task answer <task> <requirement> ...` takes that ask out of a later `needs-you show`, and `task close|done` takes
+    every item of that task out, with the counts following, as the real list is read from the tasks."""
+    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^needs-you show", "out": NEEDS}])
+    assert json.loads(answer(["needs-you", "show"], "cli")[0])["count"] == 3
+    answer(["task", "answer", "t-bbbb", "r2", "Oct 8", "--version", "3"], "cli")
+    answer(["task", "close", "t-cccc", "-m", "old", "--version", "2"], "cli")
+    out = json.loads(answer(["needs-you", "show"], "cli")[0])
+    assert [i["id"] for i in out["items"]] == ["r1-0000"]
+    assert out["count"] == 1 and out["by_kind"] == {"ask": 1}
+
+
+def test_a_dry_run_answer_leaves_the_ask(tmp_path, monkeypatch):
+    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^needs-you show", "out": NEEDS}])
+    answer(["task", "answer", "t-aaaa", "r1", "no", "--dry-run"], "cli")
+    assert json.loads(answer(["needs-you", "show"], "cli")[0])["count"] == 3
 
 
 FAKE_CLAUDE = r"""#!/usr/bin/env python3
@@ -369,8 +443,15 @@ def _fake_claude_env(tmp_path, monkeypatch, model_mode="ok", judge_mode="ok"):
 
 
 def _sample_args(surface="cli"):
-    return argparse.Namespace(repo=str(REPO), model="claude-haiku-5-5", judge="claude-opus-5-5", effort="",
-                              surface=surface, max_turns=3, timeout=120)
+    return argparse.Namespace(
+        repo=str(REPO),
+        model="claude-haiku-5-5",
+        judge="claude-opus-5-5",
+        effort="",
+        surface=surface,
+        max_turns=3,
+        timeout=120,
+    )
 
 
 GRADED_CASE = {"id": "err-case", "group": "smoke", "prompt": "close x", "reply": "Says it closed x."}
@@ -382,7 +463,7 @@ def test_a_rate_limited_model_run_is_an_error_not_a_failed_check(tmp_path, monke
     res = live.run_sample(GRADED_CASE, 1, _sample_args(), tmp_path / "out")
     assert res["error"] == "model" and res["pass"] is False and res["fails"] == []
     assert "rate limit" in res["why"]
-    assert log.read_text().split() == ["model"]          # no judge call for a run that never ran
+    assert log.read_text().split() == ["model"]  # no judge call for a run that never ran
 
 
 def test_a_judge_with_no_json_is_retried_then_marked_an_error(tmp_path, monkeypatch):
@@ -404,36 +485,93 @@ def test_a_judge_that_answers_after_a_retry_scores_the_sample(tmp_path, monkeypa
             if calls["n"] == 1:
                 return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"result": "no json"}), stderr="")
         return real_run(cmd, **kw)
+
     monkeypatch.setattr(live.subprocess, "run", flaky_judge)
     assert live.judge(GRADED_CASE, "Closed x.", [], {}, _sample_args()) == {"pass": True, "score": 4, "why": "fine"}
     assert calls["n"] == 2
 
 
 def test_the_summary_line_counts_errors_apart_from_the_pass_rate(tmp_path):
-    rows = [{"id": "a", "sample": 1, "pass": True, "score": 5, "turns": 2, "cost_usd": 0.1, "fails": [],
-             "surfaces": ["mcp"], "invalid": 0, "invalid_by_surface": {}},
-            {"id": "a", "sample": 2, "pass": False, "score": 2, "turns": 2, "cost_usd": 0.1,
-             "fails": ["no call /x/ that worked"], "surfaces": ["cli"], "invalid": 0, "invalid_by_surface": {}},
-            {"id": "b", "sample": 1, "pass": False, "score": None, "turns": None, "cost_usd": 0, "fails": [],
-             "surfaces": [], "invalid": 0, "invalid_by_surface": {}, "error": "model"},
-            {"id": "b", "sample": 2, "pass": False, "score": None, "turns": None, "cost_usd": 0, "fails": [],
-             "surfaces": [], "invalid": 0, "invalid_by_surface": {}, "error": "judge"}]
+    rows = [
+        {
+            "id": "a",
+            "sample": 1,
+            "pass": True,
+            "score": 5,
+            "turns": 2,
+            "cost_usd": 0.1,
+            "fails": [],
+            "surfaces": ["mcp"],
+            "invalid": 0,
+            "invalid_by_surface": {},
+        },
+        {
+            "id": "a",
+            "sample": 2,
+            "pass": False,
+            "score": 2,
+            "turns": 2,
+            "cost_usd": 0.1,
+            "fails": ["no call /x/ that worked"],
+            "surfaces": ["cli"],
+            "invalid": 0,
+            "invalid_by_surface": {},
+        },
+        {
+            "id": "b",
+            "sample": 1,
+            "pass": False,
+            "score": None,
+            "turns": None,
+            "cost_usd": 0,
+            "fails": [],
+            "surfaces": [],
+            "invalid": 0,
+            "invalid_by_surface": {},
+            "error": "model",
+        },
+        {
+            "id": "b",
+            "sample": 2,
+            "pass": False,
+            "score": None,
+            "turns": None,
+            "cost_usd": 0,
+            "fails": [],
+            "surfaces": [],
+            "invalid": 0,
+            "invalid_by_surface": {},
+            "error": "judge",
+        },
+    ]
     for r in rows:
         (tmp_path / f"{r['id']}.s{r['sample']}.json").write_text(json.dumps(r))
     head = live.summarise(tmp_path, "t1", "claude-haiku-5-5", "claude-opus-5-5", 2)
     lines = head.splitlines()
     assert lines[0] == "# t1: 1/2 pass (50%), 2 errored, model claude-haiku-5-5, judge claude-opus-5-5"
-    assert lines[3] == "2 samples errored: judge 1, model 1 (b s1, b s2). Left out of the pass rate; " \
-                        "rerun with --rerun-errors t1."
+    assert (
+        lines[3] == "2 samples errored: judge 1, model 1 (b s1, b s2). Left out of the pass rate; "
+        "rerun with --rerun-errors t1."
+    )
     md = (tmp_path / "summary.md").read_text()
     assert "| b | errored 2 | - | - | - | model error |" in md
     assert "| a | 1/2 |" in md
 
 
 def test_rerun_errors_selects_only_the_errored_samples(tmp_path):
-    rows = [{"id": "a", "sample": 1, "pass": True}, {"id": "a", "sample": 2, "pass": False, "error": "model"},
-            {"id": "b", "sample": 1, "pass": False, "error": "judge"}]
+    rows = [
+        {"id": "a", "sample": 1, "pass": True},
+        {"id": "a", "sample": 2, "pass": False, "error": "model"},
+        {"id": "b", "sample": 1, "pass": False, "error": "judge"},
+    ]
     for r in rows:
         (tmp_path / f"{r['id']}.s{r['sample']}.json").write_text(json.dumps(r))
     assert live.errored_samples(tmp_path) == {("a", 2), ("b", 1)}
 
+
+def test_the_filter_close_playbook_keeps_mine_by_default_and_closes_each_on_their_yes():
+    """Job 12a: keeping the caller's tasks is the default, the count comes first, and each task is closed with its version."""
+    text = (EVALS.parents[1] / "templates/catalog/assistant/playbooks/jobs.md").read_text()
+    job = text[text.index("12a.") : text.index("\n13. ")]
+    assert "Keep mine is the default" in job and "Close N? Say yes." in job
+    assert 'tico task close <id> -m "<why>" --version N' in job and "bulk" not in job

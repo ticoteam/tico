@@ -1,4 +1,4 @@
-"""`hub doc fetch <url>`: read one public link for the Librarian (docs/librarian.md). Runs on the
+"""`tico doc fetch <url>`: read one public link for the Librarian (docs/librarian.md). Runs on the
 computer that runs the bot, never on the Tico server, and never with more reach than a stranger has.
 
 What it enforces, on every hop of every request:
@@ -40,8 +40,18 @@ TIMEOUT_S = 20
 DEFAULT_MAX_CHARS = 30_000
 MAX_LINKS = 200
 PORTS = {80, 443, 8080, 8443}
-TEXT_TYPES = {"text/html", "application/xhtml+xml", "text/plain", "text/markdown", "text/x-markdown",
-              "application/json", "text/csv", "application/xml", "text/xml", "application/pdf"}
+TEXT_TYPES = {
+    "text/html",
+    "application/xhtml+xml",
+    "text/plain",
+    "text/markdown",
+    "text/x-markdown",
+    "application/json",
+    "text/csv",
+    "application/xml",
+    "text/xml",
+    "application/pdf",
+}
 USER_AGENT = "TicoLibrarian/1.0 (+https://github.com/ticoteam/tico)"
 GITHUB_API = "api.github.com"
 GOOGLE_HOSTS = ("googleapis.com", "docs.google.com")
@@ -68,9 +78,16 @@ def public_address(value):
         if ip.sixtofour:
             return public_address(str(ip.sixtofour))
         if ip.teredo or ip in ipaddress.ip_network("64:ff9b::/96"):
-            return False                          # tunnels that can wrap any IPv4 address, private ones too
-    return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved
-                or ip.is_unspecified or not ip.is_global)
+            return False  # tunnels that can wrap any IPv4 address, private ones too
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+        or not ip.is_global
+    )
 
 
 def resolve(host, port):
@@ -157,8 +174,10 @@ class Fetcher:
             raise FetchError("dns", f"{host} does not resolve")
         bad = [ip for ip in found if not public_address(ip)]
         if bad:
-            raise FetchError("private_address", f"{host} points to a private or internal address; only public "
-                                                "web addresses are fetched")
+            raise FetchError(
+                "private_address",
+                f"{host} points to a private or internal address; only public web addresses are fetched",
+            )
         return found[0]
 
     def get(self, url, accept="*/*", extra=None):
@@ -167,9 +186,15 @@ class Fetcher:
             parts, host, port = self.check_url(url)
             ip = self.address(host, port)
             tls = parts.scheme == "https"
-            headers = {"Host": parts.netloc.rsplit("@", 1)[-1], "User-Agent": USER_AGENT, "Accept": accept,
-                       "Accept-Encoding": "identity", "Connection": "close",
-                       **credential_headers(host, self.env), **(extra or {})}
+            headers = {
+                "Host": parts.netloc.rsplit("@", 1)[-1],
+                "User-Agent": USER_AGENT,
+                "Accept": accept,
+                "Accept-Encoding": "identity",
+                "Connection": "close",
+                **credential_headers(host, self.env),
+                **(extra or {}),
+            }
             target = urlunsplit(("", "", parts.path or "/", parts.query, ""))
             conn = _Connection(host, port, ip, tls, min(self.left(), TIMEOUT_S), self.opener)
             try:
@@ -187,12 +212,16 @@ class Fetcher:
                     response.read(0)
                     continue
                 if response.status >= 400:
-                    raise FetchError("http_" + str(response.status),
-                                     f"{host} answered {response.status} {response.reason or ''}".strip())
+                    raise FetchError(
+                        "http_" + str(response.status),
+                        f"{host} answered {response.status} {response.reason or ''}".strip(),
+                    )
                 ctype = (response.getheader("Content-Type") or "").split(";")[0].strip().lower()
                 if ctype not in TEXT_TYPES and not ctype.endswith("+json"):
-                    raise FetchError("content_type", f"{ctype or 'An unknown type'} is not fetched; only text, "
-                                                     "markdown, HTML, JSON, XML and PDF")
+                    raise FetchError(
+                        "content_type",
+                        f"{ctype or 'An unknown type'} is not fetched; only text, markdown, HTML, JSON, XML and PDF",
+                    )
                 body, truncated = self.read(response)
                 return url, ctype, body, truncated
             finally:
@@ -217,9 +246,29 @@ class Fetcher:
 # ----------------------------------------------------------------------------- turning it into text
 class _Text(HTMLParser):
     """HTML to readable text: headings, lists, links kept as [text](url), code and tables plain."""
+
     SKIP = {"script", "style", "noscript", "svg", "template", "iframe", "canvas", "head", "nav", "footer", "form"}
-    BLOCK = {"p", "div", "section", "article", "main", "header", "br", "tr", "ul", "ol", "table", "blockquote",
-             "pre", "figure", "dl", "dt", "dd", "details", "summary"}
+    BLOCK = {
+        "p",
+        "div",
+        "section",
+        "article",
+        "main",
+        "header",
+        "br",
+        "tr",
+        "ul",
+        "ol",
+        "table",
+        "blockquote",
+        "pre",
+        "figure",
+        "dl",
+        "dt",
+        "dd",
+        "details",
+        "summary",
+    }
 
     def __init__(self, base):
         super().__init__(convert_charrefs=True)
@@ -314,9 +363,13 @@ def pdf_to_text(data):
     try:
         import pypdf
     except ImportError:
-        raise FetchError("pdf", "This computer cannot read a PDF (pypdf is not installed); ask for the "
-                                "document as a web page or a Google Doc") from None
+        raise FetchError(
+            "pdf",
+            "This computer cannot read a PDF (pypdf is not installed); ask for the "
+            "document as a web page or a Google Doc",
+        ) from None
     import io
+
     try:
         return "\n\n".join((page.extract_text() or "") for page in pypdf.PdfReader(io.BytesIO(data)).pages)
     except Exception as exc:
@@ -336,7 +389,9 @@ def decode(body, ctype, response_charset=None):
 # ----------------------------------------------------------------------------- the fetch
 GOOGLE_DOC = re.compile(r"^https://docs\.google\.com/document/d/([\w-]+)")
 GOOGLE_FOLDER = re.compile(r"^https://drive\.google\.com/drive/(?:u/\d+/)?folders/([\w-]+)")
-GITHUB_REPO = re.compile(r"^https://(?:www\.)?github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?(?:/(tree|blob)/([^/]+)/?(.*))?/?$")
+GITHUB_REPO = re.compile(
+    r"^https://(?:www\.)?github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?(?:/(tree|blob)/([^/]+)/?(.*))?/?$"
+)
 
 
 def fetch(url, max_chars=DEFAULT_MAX_CHARS, env=None, resolver=resolve, opener=connect, clock=time.monotonic):
@@ -358,9 +413,15 @@ def fetch(url, max_chars=DEFAULT_MAX_CHARS, env=None, resolver=resolve, opener=c
         result = _page(fetcher, url)
     text = result["text"]
     truncated = result.get("truncated", False) or len(text) > max_chars
-    return {"url": url, "final_url": result["final_url"], "title": result["title"], "text": text[:max_chars],
-            "links": result["links"][:MAX_LINKS], "truncated": truncated,
-            **({"note": result["note"]} if result.get("note") else {})}
+    return {
+        "url": url,
+        "final_url": result["final_url"],
+        "title": result["title"],
+        "text": text[:max_chars],
+        "links": result["links"][:MAX_LINKS],
+        "truncated": truncated,
+        **({"note": result["note"]} if result.get("note") else {}),
+    }
 
 
 def _charset(ctype_header):
@@ -383,8 +444,13 @@ def _convert(final, ctype, body, truncated):
     if ctype in ("application/xml", "text/xml") or path.endswith(("sitemap.xml", "sitemap_index.xml")):
         urls = sitemap_urls(source)
         if urls:
-            return {"final_url": final, "title": "sitemap", "truncated": truncated,
-                    "text": "\n".join(urls), "links": [{"text": "", "url": u} for u in urls]}
+            return {
+                "final_url": final,
+                "title": "sitemap",
+                "truncated": truncated,
+                "text": "\n".join(urls),
+                "links": [{"text": "", "url": u} for u in urls],
+            }
     if ctype in ("text/html", "application/xhtml+xml"):
         title, text, links = html_to_text(source, final)
         return {"final_url": final, "title": title, "text": text, "links": links, "truncated": truncated}
@@ -395,8 +461,13 @@ def _convert(final, ctype, body, truncated):
             pass
     links = [{"text": t, "url": u} for t, u in re.findall(r"\[([^\]]*)\]\((https?://[^)\s]+)\)", source)]
     heading = re.match(r"\s*#\s+(.+)", source)
-    return {"final_url": final, "title": heading.group(1).strip() if heading else "", "text": source,
-            "links": links, "truncated": truncated}
+    return {
+        "final_url": final,
+        "title": heading.group(1).strip() if heading else "",
+        "text": source,
+        "links": links,
+        "truncated": truncated,
+    }
 
 
 def _google_doc(fetcher, url, doc_id):
@@ -405,34 +476,53 @@ def _google_doc(fetcher, url, doc_id):
         final, ctype, body, truncated = fetcher.get(export, "text/plain")
     except FetchError as exc:
         if exc.code in ("http_401", "http_403", "http_404"):
-            raise FetchError("not_public", "That Google Doc is not shared with anyone who has the link, so it "
-                                           "cannot be read here. Ask its owner to share it that way, or paste it "
-                                           "into an internal doc") from None
+            raise FetchError(
+                "not_public",
+                "That Google Doc is not shared with anyone who has the link, so it "
+                "cannot be read here. Ask its owner to share it that way, or paste it "
+                "into an internal doc",
+            ) from None
         raise
     if urlsplit(final).hostname == "accounts.google.com" or ctype != "text/plain":
-        raise FetchError("not_public", "That Google Doc is not shared with anyone who has the link, so it "
-                                       "cannot be read here. Ask its owner to share it that way, or paste it "
-                                       "into an internal doc")
+        raise FetchError(
+            "not_public",
+            "That Google Doc is not shared with anyone who has the link, so it "
+            "cannot be read here. Ask its owner to share it that way, or paste it "
+            "into an internal doc",
+        )
     text = decode(body, ctype).lstrip("﻿")
     first = next((line.strip() for line in text.splitlines() if line.strip()), "")
-    return {"final_url": url, "title": first[:120], "text": text, "links": [], "truncated": truncated,
-            "note": "Read as a public Google Doc (plain-text export)"}
+    return {
+        "final_url": url,
+        "title": first[:120],
+        "text": text,
+        "links": [],
+        "truncated": truncated,
+        "note": "Read as a public Google Doc (plain-text export)",
+    }
 
 
 def _google_folder(fetcher, url, folder_id):
     listing = f"https://drive.google.com/embeddedfolderview?id={folder_id}"
     final, ctype, body, truncated = fetcher.get(listing, "text/html")
     if urlsplit(final).hostname == "accounts.google.com":
-        raise FetchError("not_public", "That Drive folder is not shared with anyone who has the link, so it "
-                                       "cannot be listed here")
+        raise FetchError(
+            "not_public", "That Drive folder is not shared with anyone who has the link, so it cannot be listed here"
+        )
     title, text, links = html_to_text(decode(body, ctype), final)
     files = [link for link in links if "drive.google.com" in link["url"] or "docs.google.com" in link["url"]]
     if not files:
-        raise FetchError("not_public", "That Drive folder could not be listed without signing in (it is not "
-                                       "public, or it is empty)")
-    return {"final_url": url, "title": title or "Google Drive folder", "truncated": truncated,
-            "text": "\n".join(f"- [{f['text'] or f['url']}]({f['url']})" for f in files), "links": files,
-            "note": "A public Drive folder's listing; open each link to read it"}
+        raise FetchError(
+            "not_public", "That Drive folder could not be listed without signing in (it is not public, or it is empty)"
+        )
+    return {
+        "final_url": url,
+        "title": title or "Google Drive folder",
+        "truncated": truncated,
+        "text": "\n".join(f"- [{f['text'] or f['url']}]({f['url']})" for f in files),
+        "links": files,
+        "note": "A public Drive folder's listing; open each link to read it",
+    }
 
 
 def _github(fetcher, url, owner, name, kind, ref, path):
@@ -453,6 +543,7 @@ def _github(fetcher, url, owner, name, kind, ref, path):
             if exc.code != "http_404":
                 raise
             from clients import github_scope
+
             scope = github_scope.parse_url(url)
             try:
                 reference, folder = github_scope.resolve(scope, {}, call)
@@ -471,9 +562,12 @@ def _github(fetcher, url, owner, name, kind, ref, path):
         if kind == "tree":
             data = scoped_contents()
             entries = data if isinstance(data, list) else []
-            return {"final_url": url, "title": f"{owner}/{name}/{path}", "links": [
-                        {"text": e["path"], "url": e.get("html_url") or ""} for e in entries],
-                    "text": "\n".join(f"- {e['type']}: {e['path']}" for e in entries)}
+            return {
+                "final_url": url,
+                "title": f"{owner}/{name}/{path}",
+                "links": [{"text": e["path"], "url": e.get("html_url") or ""} for e in entries],
+                "text": "\n".join(f"- {e['type']}: {e['path']}" for e in entries),
+            }
         info = call("")
         branch = info.get("default_branch") or "HEAD"
         parts = [f"# {owner}/{name}", info.get("description") or ""]
@@ -491,11 +585,23 @@ def _github(fetcher, url, owner, name, kind, ref, path):
         paths = [f"{e['path']}" for e in tree.get("tree", []) if e.get("type") == "blob"]
         parts += ["", f"## Files on {branch}" + (" (list cut short by GitHub)" if tree.get("truncated") else "")]
         parts += [f"- {p}" for p in paths[:400]] + ([f"- ... and {len(paths) - 400} more"] if len(paths) > 400 else [])
-        return {"final_url": url, "title": f"{owner}/{name}", "text": "\n".join(parts), "links": links,
-                "note": "Read through the GitHub API" + (" with this bot's GitHub token" if credential_headers(
-                    GITHUB_API, fetcher.env) else ", without a token (public repositories only)")}
+        return {
+            "final_url": url,
+            "title": f"{owner}/{name}",
+            "text": "\n".join(parts),
+            "links": links,
+            "note": "Read through the GitHub API"
+            + (
+                " with this bot's GitHub token"
+                if credential_headers(GITHUB_API, fetcher.env)
+                else ", without a token (public repositories only)"
+            ),
+        }
     except FetchError as exc:
         if exc.code in ("http_401", "http_403", "http_404"):
-            raise FetchError("github_access", f"GitHub would not show {owner}/{name}: it is private or does not "
-                                              "exist, and this bot has no GitHub access to it") from None
+            raise FetchError(
+                "github_access",
+                f"GitHub would not show {owner}/{name}: it is private or does not "
+                "exist, and this bot has no GitHub access to it",
+            ) from None
         raise

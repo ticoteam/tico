@@ -11,10 +11,10 @@ from backend import bot_settings as BS
 from backend.getting_started import ONLINE_SECONDS
 from backend.scheduler import Scheduler
 from backend.store import H
-from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
-from backend.tests.test_cloud_machines import cloud, employee, enrolled, shared_enrolled  # noqa: F401
-from backend.tests.test_credentials import setup
-from backend.tests.test_model_subscriptions import add, give
+from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.cloud_machines import cloud, employee, enrolled, shared_enrolled  # noqa: F401
+from backend.tests.helpers.credentials import setup
+from backend.tests.helpers.model_subscriptions import add, give
 
 DEVICE_ID = sha256(b"acme-device-one").hexdigest()
 
@@ -23,7 +23,9 @@ DEVICE_ID = sha256(b"acme-device-one").hexdigest()
 def test_live_contact_overrides_stale_cloud_state_in_ui_payloads(cloud, shared):  # noqa: F811
     if shared:
         shared_enrolled(cloud, "ops")
-        computer = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+        computer = post(
+            cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"}
+        )
     else:
         computer = enrolled(cloud)
     rid = computer["runner_id"]
@@ -52,7 +54,9 @@ def test_live_contact_overrides_stale_cloud_state_in_ui_payloads(cloud, shared):
     assert cloud.row(key)["state"] == "stopping", "a late heartbeat cannot cancel the scheduler's stop fence"
     assert employee(cloud.api)["cloud_machine"]["state"] == "stopping", "live contact cannot cancel a stop on screen"
     post(cloud.api, f"computers/{rid}/revoke", {})
-    assert employee(cloud.api)["cloud_machine"]["state"] == "stopping", "revoked contact cannot prove the machine is live"
+    assert employee(cloud.api)["cloud_machine"]["state"] == "stopping", (
+        "revoked contact cannot prove the machine is live"
+    )
 
 
 def replaced_computer(api, label="Acme Mac", old_device_id=DEVICE_ID, new_device_id=DEVICE_ID):
@@ -83,12 +87,15 @@ def test_hourly_sweep_retires_a_replaced_offline_computer_and_it_can_enroll_agai
     assert next(r for r in get(api, "operations")["computers"] if r["id"] == rid)["revoked_at"]
     post(api, "runners/heartbeat", {"version": "test", "platform": "test"}, token=old["token"], expected=401)
     with store.read() as c:
-        assert not c.execute("SELECT 1 FROM registry_metadata WHERE key IN (?,?)",
-                             ("computer-repositories:" + rid, "computer-enrolled-as:" + rid)).fetchone()
+        assert not c.execute(
+            "SELECT 1 FROM registry_metadata WHERE key IN (?,?)",
+            ("computer-repositories:" + rid, "computer-enrolled-as:" + rid),
+        ).fetchone()
         events = list(c.execute("SELECT actor,detail FROM events WHERE action='runner.revoked' AND target=?", (rid,)))
         assert len(events) == 1 and events[0]["actor"] == H.KEEPER
         assert json.loads(events[0]["detail"])["reason"] == (
-            f"No bots assigned and offline for over 24 hours; replaced by Acme Mac ({current['runner_id']})")
+            f"No bots assigned and offline for over 24 hours; replaced by Acme Mac ({current['runner_id']})"
+        )
     sessions.set_mode.assert_called_once_with(rid, "off", "computer removed")
     sessions.exit_close.assert_called_once_with(exit=rid, reason="computer removed")
     assert computers.sweep(store, now) == [], "retirement is idempotent"
@@ -102,8 +109,10 @@ def test_retirement_preserves_assigned_cloud_recent_and_never_seen_computers(api
     store = api.app.state.store
     now = H.now()
     cutoff = H.shift(now, seconds=-computers.UNASSIGNED_OFFLINE_RETIRE_SECONDS)
-    boxes = {name: runner(api, label=name, device_id=sha256(name.encode()).hexdigest()) for name in (
-        "assigned", "cloud", "delivery", "recent", "boundary", "new", "never-seen")}
+    boxes = {
+        name: runner(api, label=name, device_id=sha256(name.encode()).hexdigest())
+        for name in ("assigned", "cloud", "delivery", "recent", "boundary", "new", "never-seen")
+    }
     replacements = {name: runner(api, label=name, device_id=sha256(name.encode()).hexdigest()) for name in boxes}
     assign(api, boxes["assigned"], "ops")
     with store.transaction() as c:
@@ -121,14 +130,18 @@ def test_retirement_preserves_assigned_cloud_recent_and_never_seen_computers(api
                 seen = None
             runner_states.save(c, rid, last_seen_at=seen)
         c.execute("UPDATE runners SET created_at=? WHERE id=?", (now, boxes["new"]["runner_id"]))
-        c.execute("INSERT INTO cloud_machines(bot,runner_id,state,updated_at) VALUES('cpo',?,'stopped',?)",
-                  (boxes["cloud"]["runner_id"], now))
+        c.execute(
+            "INSERT INTO cloud_machines(bot,runner_id,state,updated_at) VALUES('cpo',?,'stopped',?)",
+            (boxes["cloud"]["runner_id"], now),
+        )
         BS.write(c, "cpo", {"app_delivery": {"computer": boxes["delivery"]["runner_id"]}})
     assert computers.sweep(store, now) == [boxes["never-seen"]["runner_id"]]
     with store.read() as c:
         kept = {r["id"] for r in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL")}
-    assert kept == ({computer["runner_id"] for name, computer in boxes.items() if name != "never-seen"}
-                    | {computer["runner_id"] for computer in replacements.values()})
+    assert kept == (
+        {computer["runner_id"] for name, computer in boxes.items() if name != "never-seen"}
+        | {computer["runner_id"] for computer in replacements.values()}
+    )
     assert computers.sweep(store, H.shift(now, seconds=1)) == [boxes["boundary"]["runner_id"]]
     # A fresh heartbeat wins before the sweep, even when the old contact was long expired.
     ready(api, boxes["recent"], [])
@@ -144,12 +157,16 @@ def test_an_unreplaced_computer_is_kept_after_days_offline_without_bots(api):  #
     assert old["runner_id"] in {r["id"] for r in get(api, "computers")["computers"]}
 
 
-@pytest.mark.parametrize("old_device_id,new_device_id", [
-    (DEVICE_ID, sha256(b"acme-device-two").hexdigest()),
-    (None, DEVICE_ID),
-    (DEVICE_ID, None),
-    (None, None),
-], ids=["distinct-devices", "old-unknown", "replacement-unknown", "both-unknown"])
+@pytest.mark.parametrize(
+    "old_device_id,new_device_id",
+    [
+        (DEVICE_ID, sha256(b"acme-device-two").hexdigest()),
+        (None, DEVICE_ID),
+        (DEVICE_ID, None),
+        (None, None),
+    ],
+    ids=["distinct-devices", "old-unknown", "replacement-unknown", "both-unknown"],
+)
 def test_matching_labels_never_retire_distinct_or_unknown_devices(api, old_device_id, new_device_id):  # noqa: F811
     old, current = replaced_computer(api, label="MacBook Pro", old_device_id=old_device_id, new_device_id=new_device_id)
     ready(api, current, [])
@@ -177,28 +194,38 @@ def test_replacement_also_requires_same_owner_name_platform_newer_enrollment_and
     # image's machine id), even after it checks in again.
     ready(api, stale, [])
     assert computers.sweep(store, H.now()) == []
-    runner(api, label="Acme Mac", device_id=DEVICE_ID)   # enrolled after the old computer's last contact
+    runner(api, label="Acme Mac", device_id=DEVICE_ID)  # enrolled after the old computer's last contact
     assert computers.sweep(store, H.now()) == [old["runner_id"]]
-    assert {other_owner["runner_id"], other_name["runner_id"]} <= {
-        r["id"] for r in get(api, "computers")["computers"]}
+    assert {other_owner["runner_id"], other_name["runner_id"]} <= {r["id"] for r in get(api, "computers")["computers"]}
 
 
 def test_retirement_keeps_a_reported_grok_desktop_sign_in(api):  # noqa: F811
     old, _ = replaced_computer(api)
     store, rid = api.app.state.store, old["runner_id"]
     for signed_in in (True, False):
-        post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {
-            "schema_version": 1, "appdriver": {"apps": {"grok": {"signed_in": signed_in}}}}}, token=old["token"])
+        post(
+            api,
+            "runners/heartbeat",
+            {
+                "version": "test",
+                "platform": "test",
+                "readiness": {"schema_version": 1, "appdriver": {"apps": {"grok": {"signed_in": signed_in}}}},
+            },
+            token=old["token"],
+        )
         with store.transaction() as c:
             runner_states.save(c, rid, last_seen_at=H.shift(H.now(), hours=-72))
         assert computers.sweep(store, H.now()) == ([] if signed_in else [rid])
 
 
-@pytest.mark.parametrize("field,report", [
-    ("readiness", {"runtimes": {"tool": {"authenticated": True}}}),
-    ("capabilities", {"apps": [{"sign_in": "ready"}]}),
-    ("capabilities", {"apps": [{"signed_in": True}]}),
-])
+@pytest.mark.parametrize(
+    "field,report",
+    [
+        ("readiness", {"runtimes": {"tool": {"authenticated": True}}}),
+        ("capabilities", {"apps": [{"sign_in": "ready"}]}),
+        ("capabilities", {"apps": [{"signed_in": True}]}),
+    ],
+)
 def test_retirement_keeps_nested_reported_logins(api, field, report):  # noqa: F811
     old, _ = replaced_computer(api)
     store, rid = api.app.state.store, old["runner_id"]
@@ -210,19 +237,26 @@ def test_retirement_keeps_nested_reported_logins(api, field, report):  # noqa: F
 @pytest.mark.parametrize("hold", ["google_grant", "google_holder", "google_mail", "meetings"])
 def test_retirement_keeps_a_computer_holding_a_google_grant_or_meeting_importer(api, hold):  # noqa: F811
     from backend import google_connect
+
     old, _ = replaced_computer(api)
     store, rid = api.app.state.store, old["runner_id"]
     with store.transaction() as c:
         google_connect.ensure_schema(c)
         if hold.startswith("google_") and hold != "google_mail":
             column = "runner_id" if hold == "google_grant" else "holder"
-            c.execute(f"INSERT INTO google_connects(person_id,mailbox,status,{column},created_at,updated_at) "
-                      "VALUES('ana','ana@example.com','connected',?,?,?)", (rid, H.now(), H.now()))
+            c.execute(
+                f"INSERT INTO google_connects(person_id,mailbox,status,{column},created_at,updated_at) "
+                "VALUES('ana','ana@example.com','connected',?,?,?)",
+                (rid, H.now(), H.now()),
+            )
         elif hold == "google_mail":
             c.execute("INSERT INTO google_mail_holders(runner_id,holds,seen_at) VALUES(?,1,0)", (rid,))
         else:
-            c.execute("INSERT INTO meeting_importers(source,enabled,runner_id,updated_by,updated_at) "
-                      "VALUES('zoom',1,?,'ana',?)", (rid, H.now()))
+            c.execute(
+                "INSERT INTO meeting_importers(source,enabled,runner_id,updated_by,updated_at) "
+                "VALUES('zoom',1,?,'ana',?)",
+                (rid, H.now()),
+            )
     assert computers.sweep(store, H.now()) == []
     if hold == "meetings":
         with store.transaction() as c:
@@ -255,17 +289,33 @@ def test_retirement_keeps_stored_or_reported_logins(api, login):  # noqa: F811
     store, rid = api.app.state.store, old["runner_id"]
     with store.transaction() as c:
         if login == "profile":
-            c.execute("INSERT INTO computer_profiles(runner_id,profile,runtimes) VALUES(?,'work',?)",
-                      (rid, json.dumps({"claude": {"signed_in": True}})))
+            c.execute(
+                "INSERT INTO computer_profiles(runner_id,profile,runtimes) VALUES(?,'work',?)",
+                (rid, json.dumps({"claude": {"signed_in": True}})),
+            )
         elif login == "relay":
-            c.execute("INSERT INTO model_logins(id,runner_id,runtime,state,created_at,updated_at,expires_at,requested_by) "
-                      "VALUES('login',?,'claude','signed_in',?,?,?,'human:ana')", (rid, H.now(), H.now(), H.now()))
+            c.execute(
+                "INSERT INTO model_logins(id,runner_id,runtime,state,created_at,updated_at,expires_at,requested_by) "
+                "VALUES('login',?,'claude','signed_in',?,?,?,'human:ana')",
+                (rid, H.now(), H.now(), H.now()),
+            )
         elif login == "key":
-            c.execute("INSERT INTO credentials(id,name,kind,created_at,updated_at,updated_by) "
-                      "VALUES('key','Computer key','api_key',?,?,'human:ana')", (H.now(), H.now()))
-            c.execute("INSERT INTO computer_keys(credential_id,runner_id,runtime,state,created_at,created_by) "
-                      "VALUES('key',?,'claude','active',?,'human:ana')", (rid, H.now()))
+            c.execute(
+                "INSERT INTO credentials(id,name,kind,created_at,updated_at,updated_by) "
+                "VALUES('key','Computer key','api_key',?,?,'human:ana')",
+                (H.now(), H.now()),
+            )
+            c.execute(
+                "INSERT INTO computer_keys(credential_id,runner_id,runtime,state,created_at,created_by) "
+                "VALUES('key',?,'claude','active',?,'human:ana')",
+                (rid, H.now()),
+            )
         else:
-            runner_states.save(c, rid, readiness=json.dumps({"schema_version": 1, "runtimes": {
-                "claude": {"installed": True, "authenticated": "ready"}}}))
+            runner_states.save(
+                c,
+                rid,
+                readiness=json.dumps(
+                    {"schema_version": 1, "runtimes": {"claude": {"installed": True, "authenticated": "ready"}}}
+                ),
+            )
     assert computers.sweep(store, H.now()) == []

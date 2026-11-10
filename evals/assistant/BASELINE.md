@@ -1,5 +1,8 @@
 # Assistant baseline (main checkout, 2 samples per case)
 
+These scores are for the 0.5 cases. The Pipelines v3 cut-over rewrote the cases for asks and OKs, renamed or deleted
+some of the ids below, and has no baseline of its own yet.
+
 Run on `main` (`emp-tico-open-source/ticoteam-tico`, the template and the parser both from main), with
 `evals/assistant/run.py --samples 2 -j 6`, judge `claude-opus-5-5`. Per model, the headline is the share of sample runs that
 pass every check (must, must_not, invalid command, and the judge's rubric).
@@ -30,7 +33,7 @@ Changes to the cases landed while the baseline was running (the case files are r
 ## Known harness issue, found in this run
 
 `--help` lookups were counted as calls in the must_not checks and the judge's call list. The background case failed on
-`hub task close --help` and `hub message send --help`, and the judge read those lookups as attempted writes. Fixed in
+`tico task close --help` and `tico message send --help`, and the judge read those lookups as attempted writes. Fixed in
 `run.py` after this baseline (help lookups are now left out). The recorded baseline numbers keep the old scoring; the only
 case whose recorded result this touches is `background-daily-sweep`, which still needs a rerun.
 
@@ -75,3 +78,35 @@ case whose recorded result this touches is `background-daily-sweep`, which still
   Haiku is the weakest on this suite.
 
 Per-sample transcripts, hub logs and judge reasons are in `evals/assistant/out/base-*/`, which is gitignored.
+
+## Goals template (Assistant drives goals), Nov 5
+
+Haiku 5.5 under test, judge `claude-opus-5-5`, `--samples 2 -j 2`, surface `both`. Branch = this template; main = origin/main
+at the time.
+
+| set | branch | main |
+|---|---|---|
+| goals + tico (21 new cases) | 38/42 (90%) | not comparable (no morning message or where-we-stand skill) |
+| existing 31 cases | 49/62 (79%) | 48/62 (77%) |
+| existing, leaving out `background-daily-sweep` | 47/60 | 48/60 |
+
+`background-daily-sweep` now expects one `assistant morning` per person, which only the branch sends (2/2 against 0/2).
+The main column of the existing set was run on an older main checkout. The eight cases that dropped at n=2 were rerun at n=4
+on both, main from a fresh origin/main worktree:
+
+| case | branch | main |
+|---|---|---|
+| approvals-decline-replaced-release | 3/4 | 3/4 |
+| approvals-vendor-text-task | 2/4 | 1/4 |
+| followups-no-only-old-ones | 4/4 | 4/4 |
+| followups-yes-after-readback | 4/4 | 4/4 |
+| jobs-new-bot-botops | 1/4 | 1/4 |
+| jobs2-answer-bot-yes | 4/4 | 4/4 |
+| jobs2-ask-bot | 4/4 | 4/4 |
+| queue-needs-you-breakdown | 3/4 | 3/4 |
+
+No case is worse at n=4. Two case fixes came out of this, scored on both sides above:
+- `jobs2-answer-bot-yes` had two open BotOps questions, and the template (and its docs) say to ask which one then; main went
+  0/4. The second question is now Health Monitor's.
+- `jobs2-ask-bot` matched only the CLI form; the MCP call is logged as `question ask --bots analytics`, which the canned row
+  missed. The regex now takes both.

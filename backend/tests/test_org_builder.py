@@ -4,6 +4,7 @@ The proxy is a privacy boundary: a department's answer leaves the install only w
 install allows it (not demo, TICO_TELEMETRY, DO_NOT_TRACK or the usage-count setting), and whatever HQ answers is cut to
 this install's own template ids.
 """
+
 import json
 import re
 import subprocess
@@ -17,32 +18,17 @@ import yaml
 
 from backend import recruit
 from backend import recruit_rank as R
-from backend.tests.test_onboarding import (ASSISTANT_AGENT, ASSISTANT_CARD, BOTOPS_CARD, as_person,  # noqa: F401
-                                           environment, signed_in)
+from backend.tests.helpers.onboarding import (
+    ASSISTANT_AGENT,
+    ASSISTANT_CARD,
+    BOTOPS_CARD,
+    as_person,
+    environment,
+    signed_in,
+)
+from backend.tests.helpers.org_builder import CARDS, DEPARTMENTS, card
 
 ROOT = Path(__file__).resolve().parents[2]
-DEPARTMENTS = {"departments": [
-    {"id": "sales", "name": "Sales", "head": "sales-manager", "icon": "trending_up", "question": "What kind of sales?"},
-    {"id": "finance", "name": "Finance", "head": "controller", "icon": "account_balance"},
-    {"id": "engineering", "name": "Engineering", "head": "eng-lead", "icon": "code", "software_only": True}]}
-
-
-def card(template, department="", **fields):
-    return {"template": template, "name": fields.pop("name", template.replace("-", " ").title()),
-            "summary": fields.pop("summary", "Does " + template + " work."), "department": department, **fields}
-
-
-CARDS = [
-    card("sales-manager", "sales", lead=True, suggest="default", icon="groups", summary="Runs the pipeline review."),
-    card("sdr", "sales", suggest="default", tags=["cold email", "outbound"], summary="Writes first-touch emails."),
-    card("account-manager", "sales", suggest="common", tags=["renewals", "upsell"], summary="Keeps accounts growing."),
-    card("partner-scout", "sales", suggest="niche", tags=["partners", "resellers"], summary="Finds resellers."),
-    card("deal-desk", "sales", suggest="niche", tags=["contracts", "pricing"], summary="Prices big deals.",
-         recommend_when=["sells_to_businesses"]),
-    card("controller", "finance", lead=True, summary="Closes the books."),
-    card("collections", pack="operations", summary="Chases late invoices."),         # no department: its pack decides
-    card("assistant", required=True),                                               # built in: never offered
-]
 
 
 def catalog():
@@ -70,9 +56,11 @@ def test_a_department_starts_with_its_head_and_defaults_and_the_answer_brings_in
     why = {row["template_id"]: row["why"] for row in asked["bots"]}
     assert why["partner-scout"] == "" and why["account-manager"] == "Common in Sales"
     # A short tag of two words, said whole, is the why.
-    assert R.rank(built, "sales", "Our cold email gets no replies")["bots"][1] == {"template_id": "sdr",
-                                                                                   "why": "Matches “cold email”"}
-    assert "deal-desk" not in ids(asked)                                        # still niche, still not named
+    assert R.rank(built, "sales", "Our cold email gets no replies")["bots"][1] == {
+        "template_id": "sdr",
+        "why": "Matches “cold email”",
+    }
+    assert "deal-desk" not in ids(asked)  # still niche, still not named
     # "What you do" counts too, at half the weight of the answer itself; a consumer-only company sinks a business card.
     assert "deal-desk" in ids(R.rank(built, "sales", "pricing", {"what": "enterprise contracts"}))
     assert ids(R.rank(built, "sales", "pricing contracts"))[1] == "deal-desk"
@@ -86,37 +74,79 @@ def test_a_department_starts_with_its_head_and_defaults_and_the_answer_brings_in
 def test_a_why_is_never_a_single_word_a_word_of_a_name_or_a_phrase_most_of_the_group_carries():
     """First-run polish (Dev 236): "small property managers" put Matches “managers” on four Sales cards, "booking runs"
     (two summary words) on the SDR, and Matches “github” on most of Engineering. Each still ranks; none is a why."""
-    built = R.build({"departments": [{"id": "engineering", "name": "Engineering", "head": "eng-lead"}]}, [
-        card("eng-lead", "engineering", lead=True, tags=["github", "github actions", "weekly review"]),
-        card("devops", "engineering", name="DevOps Engineer", tags=["github", "flaky-tests", "build times", "pager alert noise"],
-             summary="Runs the build and keeps the deploys booking green."),
-        card("qa", "engineering", name="QA Engineer", suggest="default", tags=["github", "github actions", "bugs"]),
-        card("architect", "engineering", name="Software Architect", tags=["github actions", "design docs"]),
-        card("release", "engineering", name="Release Manager", tags=["releases"]),
-        card("eng-manager", "engineering", name="Engineering Manager", tags=["github actions", "delivery"],
-             suggest="niche"),
-        card("tech-writer", "engineering", name="Technical Writer", pains=["the docs runs behind every booking release"])])
+    built = R.build(
+        {"departments": [{"id": "engineering", "name": "Engineering", "head": "eng-lead"}]},
+        [
+            card("eng-lead", "engineering", lead=True, tags=["github", "github actions", "weekly review"]),
+            card(
+                "devops",
+                "engineering",
+                name="DevOps Engineer",
+                tags=["github", "flaky-tests", "build times", "pager alert noise"],
+                summary="Runs the build and keeps the deploys booking green.",
+            ),
+            card("qa", "engineering", name="QA Engineer", suggest="default", tags=["github", "github actions", "bugs"]),
+            card("architect", "engineering", name="Software Architect", tags=["github actions", "design docs"]),
+            card("release", "engineering", name="Release Manager", tags=["releases"]),
+            card(
+                "eng-manager",
+                "engineering",
+                name="Engineering Manager",
+                tags=["github actions", "delivery"],
+                suggest="niche",
+            ),
+            card(
+                "tech-writer",
+                "engineering",
+                name="Technical Writer",
+                pains=["the docs runs behind every booking release"],
+            ),
+        ],
+    )
     assert R._common([row for row in built["cards"]]) == {"github", "action"}
-    asked = R.rank(built, "engineering", "Release managers fight flaky tests and github actions; booking runs late",
-                   {"what": "Booking software for property managers"})
+    asked = R.rank(
+        built,
+        "engineering",
+        "Release managers fight flaky tests and github actions; booking runs late",
+        {"what": "Booking software for property managers"},
+    )
     why = {row["template_id"]: row["why"] for row in asked["bots"]}
-    assert why == {"eng-lead": "Heads Engineering and reports to you",
-                   "devops": "Matches “flaky tests”",            # not the summary's "booking runs"
-                   "qa": "A starting point for Engineering",      # "github actions" is on most of the group
-                   "architect": "Common in Engineering",
-                   "release": "Common in Engineering",            # "managers", "release": words of names
-                   "eng-manager": "",                             # niche, brought in by words alone
-                   "tech-writer": "Common in Engineering"}        # two words of a long pains phrase
-    assert ids(asked)[:2] == ["eng-lead", "devops"]               # the words still rank; "eng-manager" is in on them
+    assert why == {
+        "eng-lead": "Heads Engineering and reports to you",
+        "devops": "Matches “flaky tests”",  # not the summary's "booking runs"
+        "qa": "A starting point for Engineering",  # "github actions" is on most of the group
+        "architect": "Common in Engineering",
+        "release": "Common in Engineering",  # "managers", "release": words of names
+        "eng-manager": "",  # niche, brought in by words alone
+        "tech-writer": "Common in Engineering",
+    }  # two words of a long pains phrase
+    assert ids(asked)[:2] == ["eng-lead", "devops"]  # the words still rank; "eng-manager" is in on them
     assert not any(re.fullmatch(r"Matches “[^ ”]*”", row["why"]) for row in asked["bots"])
     # A reason quotes the tag's words only as a phrase the answer wrote: in order, side by side, a hyphen or a small
     # word between them at most. Scattered, reversed or partial words still rank, but are no reason.
-    for answer, said in [("Our flaky-tests block deploys", "Matches “flaky tests”"),
-                         ("Tests are flaky again", ""), ("We have flaky deploys but reliable tests", ""),
-                         ("Flaky engineering tests", ""), ("The pager alert noise never stops", "Matches “pager alert noise”"),
-                         ("Pager noise all night", "")]:
-        devops = next(row["why"] for row in R.rank(built, "engineering", answer)["bots"] if row["template_id"] == "devops")
+    for answer, said in [
+        ("Our flaky-tests block deploys", "Matches “flaky tests”"),
+        ("Tests are flaky again", ""),
+        ("We have flaky deploys but reliable tests", ""),
+        ("Flaky engineering tests", ""),
+        ("The pager alert noise never stops", "Matches “pager alert noise”"),
+        ("Pager noise all night", ""),
+    ]:
+        devops = next(
+            row["why"] for row in R.rank(built, "engineering", answer)["bots"] if row["template_id"] == "devops"
+        )
         assert devops == said or not said and not devops.startswith("Matches"), (answer, devops)
+
+
+def test_a_department_keeps_the_head_groups_yaml_names_when_a_team_manager_is_a_lead_too():
+    """A Team Manager is a lead as well, so the head that groups.yaml names keeps its department's seat, and the lead that
+    comes first by name does not take it."""
+    departments = [{"id": "marketing", "name": "Marketing", "head": "marketing-lead", "icon": "campaign"}]
+    cards = [
+        card("growth-team-manager", "marketing", lead=True, suggest="default", icon="campaign"),
+        card("marketing-lead", "marketing", lead=True, suggest="default", icon="campaign"),
+    ]
+    assert R.head_of(R.build({"departments": departments}, cards), "marketing") == "marketing-lead"
 
 
 def test_the_shipped_catalog_has_a_head_for_every_department_and_the_setup_page_role_list_is_current():
@@ -131,8 +161,9 @@ def test_the_shipped_catalog_has_a_head_for_every_department_and_the_setup_page_
         assert R.head_of(built, dept["id"]) == dept["head"], dept["id"]
         assert dept["icon"] and dept["question"] and dept["placeholder"], dept["id"]
     assert all(row["icon"] and row["summary"] for row in built["cards"])
-    check = subprocess.run([sys.executable, str(ROOT / "scripts" / "build_catalog_json.py"), "--check"],
-                           capture_output=True, text=True)
+    check = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "build_catalog_json.py"), "--check"], capture_output=True, text=True
+    )
     assert check.returncode == 0, check.stderr
 
 
@@ -145,8 +176,13 @@ def test_out_writes_what_tico_hq_serves_into_the_directory_it_is_given(tmp_path)
     roles = (ROOT / "backend" / "company_file" / "roles.json").read_text()
     made = subprocess.run([sys.executable, script, "--out", str(out)], capture_output=True, text=True)
     assert made.returncode == 0, made.stderr
-    assert (ROOT / "backend" / "company_file" / "roles.json").read_text() == roles            # the repository untouched
-    assert {p.name for p in out.iterdir()} == {"catalog.json", "onboarding-actions.json", "recruit_rank.py", "company_file"}
+    assert (ROOT / "backend" / "company_file" / "roles.json").read_text() == roles  # the repository untouched
+    assert {p.name for p in out.iterdir()} == {
+        "catalog.json",
+        "onboarding-actions.json",
+        "recruit_rank.py",
+        "company_file",
+    }
     built = recruit.catalog(SimpleNamespace(catalog_dir=ROOT / "templates" / "catalog"))
     catalog = json.loads((out / "catalog.json").read_text())
     assert catalog["version"] == built["version"] and catalog["departments"] == built["departments"]
@@ -154,11 +190,15 @@ def test_out_writes_what_tico_hq_serves_into_the_directory_it_is_given(tmp_path)
     actions = json.loads((ROOT / "backend" / "company_file" / "actions.json").read_text())
     assert planner["roles"] == json.loads(roles)["roles"] and planner["actions"] == actions["actions"]
     engine = ROOT / "backend" / "company_file"
-    assert planner["models"] == {key: json.loads((engine / ("model_%s.json" % key)).read_text())
-                                 for key in ("everything", "software", "services", "local", "store")}
+    assert planner["models"] == {
+        key: json.loads((engine / ("model_%s.json" % key)).read_text())
+        for key in ("everything", "software", "services", "local", "store")
+    }
     assert planner["seats"] == json.loads((engine / "seats.json").read_text())["seats"]
     generated = "# Generated by scripts/build_catalog_json.py from backend/%s. Do not edit; edit that file.\n"
-    assert (out / "recruit_rank.py").read_text() == generated % "recruit_rank.py" + (ROOT / "backend" / "recruit_rank.py").read_text()
+    assert (out / "recruit_rank.py").read_text() == generated % "recruit_rank.py" + (
+        ROOT / "backend" / "recruit_rank.py"
+    ).read_text()
     for source in (ROOT / "backend" / "company_file").glob("*.py"):
         copy = (out / "company_file" / source.name).read_text()
         assert copy == generated % ("company_file/" + source.name) + source.read_text(), source.name
@@ -183,6 +223,7 @@ def hq(monkeypatch):
         if isinstance(reply["json"], Exception):
             raise reply["json"]
         return httpx.Response(reply["status"], json=reply["json"])
+
     monkeypatch.setattr(recruit, "TRANSPORT", httpx.MockTransport(handler))
     monkeypatch.setenv("TICO_HQ_URL", "https://hq.test")
     for name in ("TICO_TELEMETRY", "DO_NOT_TRACK"):
@@ -194,18 +235,31 @@ def org(environment):
     api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")] + [(row, "") for row in CARDS[:-1]])
     # The older file name is still read (backend/recruit.py).
     (Path(api.app.state.store.settings.catalog_dir).parent / "departments.yaml").write_text(yaml.safe_dump(DEPARTMENTS))
-    api.put("/api/v2/onboarding", headers=signed_in(), json={"answers": {
-        "what_we_do": "We sell scheduling software to clinics", "customers": "businesses", "software_product": "yes"}})
+    api.put(
+        "/api/v2/onboarding",
+        headers=signed_in(),
+        json={
+            "answers": {
+                "what_we_do": "We sell scheduling software to clinics",
+                "customers": "businesses",
+                "software_product": "yes",
+            }
+        },
+    )
     return api
 
 
 def ask(api, share=True, briefing="Mostly resellers", department="sales", who=None):
-    return api.post("/api/v2/onboarding/recruit", headers=who or signed_in(),
-                    json={"department": department, "briefing": briefing, "share": share})
+    return api.post(
+        "/api/v2/onboarding/recruit",
+        headers=who or signed_in(),
+        json={"department": department, "briefing": briefing, "share": share},
+    )
 
 
-def test_the_install_sends_an_answer_to_hq_only_when_the_toggle_is_on_and_keeps_only_its_own_ids(environment, hq,
-                                                                                                    monkeypatch):
+def test_the_install_sends_an_answer_to_hq_only_when_the_toggle_is_on_and_keeps_only_its_own_ids(
+    environment, hq, monkeypatch
+):
     api = org(environment)
     listing = api.get("/api/v2/onboarding/departments", headers=signed_in()).json()
     assert listing["hq"] == {"available": True, "off_by": ""}
@@ -213,27 +267,48 @@ def test_the_install_sends_an_answer_to_hq_only_when_the_toggle_is_on_and_keeps_
     assert {"template", "department", "icon", "suggest", "summary", "lead"} <= set(listing["cards"][0])
 
     # On: exactly the department, the answer, three short facts and the catalog version; nothing else.
-    hq.reply["json"] = {"bots": [{"template_id": "partner-scout", "why": "Resellers\nare your channel"},
-                                 {"template_id": "controller", "why": "another department"},
-                                 {"template_id": "made-up", "why": "not in the catalog"},
-                                 {"template_id": "partner-scout", "why": "twice"}],
-                        "suggested_default": ["partner-scout", "made-up"]}
+    hq.reply["json"] = {
+        "bots": [
+            {"template_id": "partner-scout", "why": "Resellers\nare your channel"},
+            {"template_id": "controller", "why": "another department"},
+            {"template_id": "made-up", "why": "not in the catalog"},
+            {"template_id": "partner-scout", "why": "twice"},
+        ],
+        "suggested_default": ["partner-scout", "made-up"],
+    }
     answer = ask(api).json()
-    assert hq.seen == [{"department": "sales", "briefing": "Mostly resellers", "catalog_version": listing["version"],
-                        "about": {"what": "We sell scheduling software to clinics", "sells_to": "businesses",
-                                  "software": True}}]
-    assert answer == {"bots": [{"template_id": "partner-scout", "why": "Resellers are your channel"}],
-                      "suggested_default": ["partner-scout"], "bet": None, "source": "hq", "shared": True,
-                      "off_by": ""}
+    assert hq.seen == [
+        {
+            "department": "sales",
+            "briefing": "Mostly resellers",
+            "catalog_version": listing["version"],
+            "about": {"what": "We sell scheduling software to clinics", "sells_to": "businesses", "software": True},
+        }
+    ]
+    assert answer == {
+        "bots": [{"template_id": "partner-scout", "why": "Resellers are your channel"}],
+        "suggested_default": ["partner-scout"],
+        "bet": None,
+        "source": "hq",
+        "shared": True,
+        "off_by": "",
+    }
 
     # An HQ on the older engine says Matches “<word>”: the install's own why replaces it (none for a niche card).
-    hq.reply["json"] = {"bots": [{"template_id": "sales-manager", "why": "Matches “managers”"},
-                                 {"template_id": "account-manager", "why": "Matches “renewals”"},
-                                 {"template_id": "partner-scout", "why": "Matches “resellers”"},
-                                 {"template_id": "sdr", "why": "Books your demos"}]}
+    hq.reply["json"] = {
+        "bots": [
+            {"template_id": "sales-manager", "why": "Matches “managers”"},
+            {"template_id": "account-manager", "why": "Matches “renewals”"},
+            {"template_id": "partner-scout", "why": "Matches “resellers”"},
+            {"template_id": "sdr", "why": "Books your demos"},
+        ]
+    }
     assert {row["template_id"]: row["why"] for row in ask(api).json()["bots"]} == {
-        "sales-manager": "Heads Sales and reports to you", "account-manager": "Common in Sales", "partner-scout": "",
-        "sdr": "Books your demos"}
+        "sales-manager": "Heads Sales and reports to you",
+        "account-manager": "Common in Sales",
+        "partner-scout": "",
+        "sdr": "Books your demos",
+    }
 
     # The person's toggle off: nothing leaves, and the local recommender answers.
     local = ask(api, share=False).json()
@@ -252,7 +327,9 @@ def test_the_install_sends_an_answer_to_hq_only_when_the_toggle_is_on_and_keeps_
         off = ask(api).json()
         assert (off["source"], off["shared"], off["off_by"]) == ("local", False, reason)
         assert api.get("/api/v2/onboarding/departments", headers=signed_in()).json()["hq"] == {
-            "available": False, "off_by": reason}
+            "available": False,
+            "off_by": reason,
+        }
         monkeypatch.delenv(name)
     api.app.state.census.set_enabled(False, "human:owner")
     assert ask(api).json()["off_by"] == "setting"

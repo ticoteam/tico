@@ -1,10 +1,13 @@
 """Recorder proposals keep the meeting's words and recheck the target's task access."""
+
 import pytest
 
-from backend.tests.test_meeting_items import api, record, add, items, change, headers  # noqa: F401
-from backend.tests.test_meeting_task_links import task, get
-from backend.tests.test_recorder_audience import live_meeting, readable
-from backend.tests.test_api import post
+from backend import task_engine as E
+
+from backend.tests.helpers.meeting_items import record, add, items, change, headers  # noqa: F401
+from backend.tests.helpers.meeting_task_links import task, get
+from backend.tests.helpers.recorder_audience import live_meeting, readable
+from backend.tests.helpers.api import post
 
 
 def accept(api, rid, iid, token='ana-test', key=None, expected=200):
@@ -15,11 +18,19 @@ def accept(api, rid, iid, token='ana-test', key=None, expected=200):
 
 def test_accepting_a_closed_task_proposal_links_without_creating_a_task(api):
     rid, target = record(api), task(api, private=False)
-    proposal = add(api, rid, {'section': 'task', 'text': 'Follow up on the pricing plan',
-                             'proposed_task_id': target['id'], 'detail': {'body': 'The agreed details'}})['item']
+    proposal = add(
+        api,
+        rid,
+        {
+            'section': 'task',
+            'text': 'Follow up on the pricing plan',
+            'proposed_task_id': target['id'],
+            'detail': {'body': 'The agreed details'},
+        },
+    )['item']
     with api.app.state.store.transaction() as c:
         before = c.execute('SELECT count(*) FROM tasks').fetchone()[0]
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (target['id'],))
+        E.move(c, target['id'], E.CLOSED, 'human:ana', 'Settled in the meeting')
     result = accept(api, rid, proposal['id'], 'cara-test', 'accept-retry')
     assert result['pushed'] and result['item']['result_ref'] == target['id']
     assert not accept(api, rid, proposal['id'])['pushed']
@@ -73,8 +84,12 @@ def test_this_mac_deletes_pending_discards_live_content_and_keeps_sent_tasks(api
     post(api, f'live-meetings/{mid}/control', {'action': 'end'}, 'ben-test')
     rid = post(api, f'live-meetings/{mid}/finalize', {}, 'ben-test')['meeting_id']
     target = task(api, requester='human:ben', owner='human:ben', private=False)
-    add(api, rid, {'section': 'task', 'text': 'Already sent', 'status': 'pushed',
-                   'result_ref': target['id']}, 'ben-test')
+    add(
+        api,
+        rid,
+        {'section': 'task', 'text': 'Already sent', 'status': 'pushed', 'result_ref': target['id']},
+        'ben-test',
+    )
     with api.app.state.store.read() as c:
         before = dict(c.execute('SELECT * FROM tasks WHERE id=?', (target['id'],)).fetchone())
         assert c.execute('SELECT 1 FROM meeting_task_links WHERE meeting_id=?', (rid,)).fetchone()
@@ -91,8 +106,9 @@ def test_this_mac_deletes_pending_discards_live_content_and_keeps_sent_tasks(api
 
 
 def test_link_proposals_keep_person_and_assistant_permissions_and_refuse_bot_tokens(api):
-    from backend.tests.test_assistant import assistant_turn
-    from backend.tests.test_api import setup_attempt
+    from backend.tests.helpers.assistant import assistant_turn
+    from backend.tests.helpers.api import setup_attempt
+
     rid, target = record(api), task(api, private=False)
     iid = add(api, rid, {'section': 'task', 'text': 'Follow up', 'proposed_task_id': target['id']})['item']['id']
     _, _, claimed = setup_attempt(api)
@@ -104,7 +120,9 @@ def test_link_proposals_keep_person_and_assistant_permissions_and_refuse_bot_tok
 def test_task_trash_keeps_proposals_with_the_meeting_and_restores_only_the_pointer(api):
     rid = record(api, {'private': True, 'audience': 'participants'}, 'ben-test')
     target = task(api, private=False)
-    iid = add(api, rid, {'section': 'task', 'text': 'Follow up', 'proposed_task_id': target['id']}, 'ben-test')['item']['id']
+    iid = add(api, rid, {'section': 'task', 'text': 'Follow up', 'proposed_task_id': target['id']}, 'ben-test')['item'][
+        'id'
+    ]
     get(api, f'meetings/{rid}', expected=403)
     post(api, f"tasks/{target['id']}/delete", {})
     proposal = items(api, rid, 'ben-test')['sections']['task'][0]
@@ -119,21 +137,41 @@ def test_task_trash_keeps_proposals_with_the_meeting_and_restores_only_the_point
     assert not restored['skipped'] and not restored.get('unlinked')
 
 
-@pytest.mark.parametrize('audience,requested_private', [
-    ({'private': True}, False), ({'private': True, 'audience': 'participants'}, False), ({}, True),
-])
+@pytest.mark.parametrize(
+    'audience,requested_private',
+    [
+        ({'private': True}, False),
+        ({'private': True, 'audience': 'participants'}, False),
+        ({}, True),
+    ],
+)
 def test_push_keeps_private_and_participants_meeting_text_private_for_human_owners(api, audience, requested_private):
-    from backend.tests.test_meeting_items import push
+    from backend.tests.helpers.meeting_items import push
+
     if audience.get('audience') == 'participants':
         mid = live_meeting(api, visibility='private', added='ana')
         post(api, f'live-meetings/{mid}/control', {'action': 'end'}, 'ben-test')
         rid = post(api, f'live-meetings/{mid}/finalize', {}, 'ben-test')['meeting_id']
-        post(api, f'meetings/{rid}/review', {'action': 'approve', 'private': True, 'audience': 'participants'}, 'ben-test')
+        post(
+            api,
+            f'meetings/{rid}/review',
+            {'action': 'approve', 'private': True, 'audience': 'participants'},
+            'ben-test',
+        )
     else:
         rid = record(api, audience, 'ben-test')
     assert readable(api, rid, 'ana-test')
-    iid = add(api, rid, {'section': 'task', 'text': 'Send the pricing plan',
-                        'quote': 'A confidential quote', 'detail': {'owner': 'human:ana'}}, 'ben-test')['item']['id']
+    iid = add(
+        api,
+        rid,
+        {
+            'section': 'task',
+            'text': 'Send the pricing plan',
+            'quote': 'A confidential quote',
+            'detail': {'owner': 'human:ana'},
+        },
+        'ben-test',
+    )['item']['id']
     result = push(api, rid, iid, {'private': requested_private}, 'ben-test')
     created = get(api, 'tasks/' + result['item']['result_ref'], 'ben-test')['task']
     assert created['private'] and created['owner_id'] == 'human:ana'
@@ -142,11 +180,15 @@ def test_push_keeps_private_and_participants_meeting_text_private_for_human_owne
 
 @pytest.mark.parametrize('original', [{}, {'owner': 'human:ben'}])
 def test_post_save_create_applies_current_edits_under_the_saved_version_and_replays_once(api, original):
-    from backend.tests.test_meeting_items import push
+    from backend.tests.helpers.meeting_items import push
+
     rid = record(api)
     saved = add(api, rid, {'section': 'task', 'text': 'Send the original plan', 'detail': original})['item']
-    edited = {'version': saved['version'], 'text': 'Send the revised plan',
-              'detail': {'owner': 'human:cara', 'body': 'The current details', 'due': '2026-12-01T17:00:00-08:00'}}
+    edited = {
+        'version': saved['version'],
+        'text': 'Send the revised plan',
+        'detail': {'owner': 'human:cara', 'body': 'The current details', 'due': '2026-12-01T17:00:00-08:00'},
+    }
     key = 'create-edited-' + saved['id']
     result = push(api, rid, saved['id'], edited, key=key)
     replay = push(api, rid, saved['id'], edited, key=key)
@@ -161,11 +203,15 @@ def test_post_save_create_applies_current_edits_under_the_saved_version_and_repl
     assert changed['version'] > saved['version']
     push(api, rid, saved['id'], {**edited, 'version': saved['version']}, expected=409)
     change(api, rid, saved['id'], {'text': 'Stale edit', 'version': saved['version']}, expected=409)
-    assert next(row for row in items(api, rid)['sections']['task'] if row['id'] == saved['id'])['text'] == 'Send the newer plan'
+    assert (
+        next(row for row in items(api, rid)['sections']['task'] if row['id'] == saved['id'])['text']
+        == 'Send the newer plan'
+    )
 
 
 def test_missing_trashed_and_unreadable_targets_do_not_block_links_or_item_creation(api):
-    from backend.tests.test_meeting_task_links import link
+    from backend.tests.helpers.meeting_task_links import link
+
     rid = record(api)
     available = task(api, private=False)
     hidden = task(api, title='Secret target', private=True)
@@ -180,7 +226,9 @@ def test_missing_trashed_and_unreadable_targets_do_not_block_links_or_item_creat
     assert [row['task_id'] for row in response['tasks']] == [available['id']]
     assert 'Secret target' not in str(response) and hidden['id'] not in str(response)
     for target in ids[1:]:
-        value = add(api, rid, {'section': 'task', 'text': 'Send the plan', 'proposed_task_id': target}, 'cara-test')['item']
+        value = add(api, rid, {'section': 'task', 'text': 'Send the plan', 'proposed_task_id': target}, 'cara-test')[
+            'item'
+        ]
         assert value['proposed_task_id'] is None
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE tasks SET private=1 WHERE id=?', (available['id'],))

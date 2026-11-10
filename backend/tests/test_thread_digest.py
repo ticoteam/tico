@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import scheduler, thread_digest, threads
-from backend.tests.test_api import api, post  # noqa: F401  (the api fixture)
-from backend.tests.test_oidc import CLIENT, provider, signin  # noqa: F401  (the fixtures)
+from backend.tests.helpers.api import post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.oidc import CLIENT, provider, signin  # noqa: F401  (the fixtures)
 
 
 class Issuer:
@@ -49,8 +49,10 @@ def read_all(api, tid):
 def digested(api):
     """What the digests have covered for Ben: thread id -> the last sequence number an email covered."""
     with api.app.state.store.read() as c:
-        return {r["thread_id"]: r["emailed_seq"] for r in c.execute(
-            "SELECT thread_id, emailed_seq FROM thread_digests WHERE actor='human:ben'")}
+        return {
+            r["thread_id"]: r["emailed_seq"]
+            for r in c.execute("SELECT thread_id, emailed_seq FROM thread_digests WHERE actor='human:ben'")
+        }
 
 
 def snapshot(api):
@@ -74,7 +76,8 @@ def test_a_person_gets_one_email_listing_each_thread_with_its_unread_count_and_a
     assert email == "ben@acme.example"
     assert sorted(items, key=lambda item: item["title"]) == [
         {"title": "Budget", "unread": 2, "path": f"/#/thread/{budget}"},
-        {"title": "Launch plans", "unread": 2, "path": f"/#/thread/{launch}"}]
+        {"title": "Launch plans", "unread": 2, "path": f"/#/thread/{launch}"},
+    ]
     assert "Secret" not in json.dumps(items) and "Second note" not in json.dumps(items)
     with api.app.state.store.read() as c:
         detail = [r[0] for r in c.execute("SELECT detail FROM events WHERE action='thread.digest'")]
@@ -92,7 +95,7 @@ def test_a_thread_the_person_can_no_longer_read_is_not_listed_and_its_title_is_n
         follow(api, tid)
     say(api, gone, "Numbers")
     say(api, kept, "Hello")
-    with api.app.state.store.transaction() as c:    # the follower row stays: the membership is what went
+    with api.app.state.store.transaction() as c:  # the follower row stays: the membership is what went
         c.execute("DELETE FROM thread_members WHERE thread_id=? AND actor='human:ben'", (gone,))
     issuer = Issuer()
     assert sweep(api, issuer) == 1
@@ -103,7 +106,7 @@ def test_a_thread_the_person_can_no_longer_read_is_not_listed_and_its_title_is_n
 
 def test_nothing_new_sends_nothing_and_writes_nothing(api):
     issuer = Issuer()
-    assert sweep(api, issuer) == 0 and issuer.calls == []           # no one on digest at all
+    assert sweep(api, issuer) == 0 and issuer.calls == []  # no one on digest at all
     tid = thread(api, "Launch plans")
     follow(api, tid)
     say(api, tid, "Hi")
@@ -137,7 +140,7 @@ def test_a_refused_email_records_nothing_and_the_next_run_sends_it(api):
     follow(api, tid)
     say(api, tid, "Hi")
     issuer = Issuer((429, {"error": "too_many", "retry_after": 3600}))
-    assert sweep(api, issuer) == 0 and len(issuer.calls) == 1      # one attempt in the run, not a retry loop
+    assert sweep(api, issuer) == 0 and len(issuer.calls) == 1  # one attempt in the run, not a retry loop
     assert digested(api) == {}
     assert sweep(api, issuer) == 1 and len(issuer.calls) == 2
     assert tid in digested(api)
@@ -166,7 +169,7 @@ def test_a_title_is_one_line_within_the_issuers_limit_so_the_email_still_goes(ap
 
 def test_a_long_or_blank_subject_becomes_a_one_line_title_the_issuer_accepts():
     assert thread_digest.title_of("Launch\n\tplans " + "x" * 300) == "Launch plans " + "x" * 187
-    assert thread_digest.title_of(" \n\t ") == "Untitled thread"
+    assert thread_digest.title_of(" \n\t ") == "Thread"
 
 
 def test_an_install_without_a_tico_account_issuer_reads_and_writes_no_digest(api):
@@ -206,7 +209,7 @@ def test_a_digest_counts_what_the_thread_counts_as_unread(api):
         threads.post(c, "bot:ops", tid, "A bot posted, naming nobody")
         threads.post(c, "human:ben", tid, "Ben's own post")
     issuer = Issuer()
-    assert sweep(api, issuer) == 0 and issuer.calls == []           # activity and his own post are not unread
+    assert sweep(api, issuer) == 0 and issuer.calls == []  # activity and his own post are not unread
     with api.app.state.store.transaction() as c:
         threads.post(c, "bot:ops", tid, "A bot asks Ben", to_actor="human:ben")
     say(api, tid, "Cara too")

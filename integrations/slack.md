@@ -27,7 +27,7 @@ a direct API call skips all three and is a policy violation. Install and scopes:
 ## What data it has
 
 The channels the app has been invited to, listed under Tools > Slack channels
-(`hub slack channel list`): for example a
+(`tico slack channel list`): for example a
 marketing work log, sales, product release notes, support operations, a mention feed, an agents
 channel, and the engineering alert channels an engineering bot watches (cloud, CI, error
 tracking, deploys). DMs and
@@ -73,7 +73,7 @@ Inside a hosted turn the bot is the one its `HUB_TOKEN` belongs to, and its scop
   outbound send. Text over 4,000 characters is refused.
 - A DM goes only to a person in `registry/hub-access.yaml`; bots and deactivated accounts are
   refused. Several recipients make one group DM.
-- Internal posts and DMs are not outbound sends, so `outbound_send` does not gate them; the
+- Internal posts and DMs are not outbound sends, so the sending policy does not gate them; the
   read-only period still applies to anything public.
 - Every accepted post and DM is appended to `<projects>/runtime/slack-audit.jsonl`.
 - Nothing from a mailbox goes into Slack. A refusal is an answer: put the draft on the task and,
@@ -108,5 +108,5 @@ Inside a hosted turn the bot is the one its `HUB_TOKEN` belongs to, and its scop
 
 ## Learnings
 
-What bots and people learn about this integration is added with `hub tool learn slack "…"` and
+What bots and people learn about this integration is added with `tico tool learn slack "…"` and
 shown under this page; a person folds it into the page over time. The page is the rule.

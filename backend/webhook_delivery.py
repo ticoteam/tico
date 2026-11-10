@@ -13,6 +13,7 @@ replaced secret is still in its day of grace).
 A 2xx answer delivers. `webhook-delivery: abort-message` cancels. Anything else, a redirect included, is tried again
 at 5 s, 5 min, 30 min, 2 h, 5 h, 10 h and 10 h (each within 10 %), after which the send is `failed`.
 """
+
 import base64
 import hashlib
 import hmac
@@ -29,15 +30,22 @@ from . import runs
 log = logging.getLogger(__name__)
 
 WORKERS = 4
-SWEEP = 5.0                       # seconds a worker sleeps without a ring
-PER_HOST = 2                      # sends in flight to one host at once
-STALE = 120                       # seconds a `sending` row may sit before it returns to `ready`
-RETRY_AFTER = (5, 300, 1800, 7200, 18000, 36000, 36000)     # seconds after the 1st, 2nd... failed attempt
+SWEEP = 5.0  # seconds a worker sleeps without a ring
+PER_HOST = 2  # sends in flight to one host at once
+STALE = 120  # seconds a `sending` row may sit before it returns to `ready`
+RETRY_AFTER = (5, 300, 1800, 7200, 18000, 36000, 36000)  # seconds after the 1st, 2nd... failed attempt
 JITTER = 0.10
 SCHEDULE = O.Waits(RETRY_AFTER, jitter=JITTER)
 MAX_ATTEMPTS = SCHEDULE.max_attempts
-TABLE = O.Table("webhook_sends", due="ready", flight="sending", due_at="next_attempt_at", lease="claimed_at",
-                attempts="attempts", error="last_error")
+TABLE = O.Table(
+    "webhook_sends",
+    due="ready",
+    flight="sending",
+    due_at="next_attempt_at",
+    lease="claimed_at",
+    attempts="attempts",
+    error="last_error",
+)
 GRACE_HOURS = 24
 NOTIFY_HOURS = 24
 KEEP_DAYS = 30
@@ -52,7 +60,7 @@ def sealed_as(webhook_id, previous=False):
 
 def key_of(secret):
     """The signing key inside a `whsec_` secret: its base64 payload, decoded."""
-    return base64.b64decode(secret[len(PREFIX):] if secret.startswith(PREFIX) else secret)
+    return base64.b64decode(secret[len(PREFIX) :] if secret.startswith(PREFIX) else secret)
 
 
 def signature(secret, send_id, timestamp, body):
@@ -64,9 +72,14 @@ def signature(secret, send_id, timestamp, body):
 def headers_for(secrets_, send_id, timestamp, body, custom=None):
     """The headers of one attempt. The endpoint's own headers (lowercase names) go under Tico's: they can add or
     replace the user-agent, never the content type or the signing headers (webhooks.clean_headers refuses those)."""
-    return {"user-agent": "Tico-Webhooks/1", **(custom or {}), "content-type": "application/json",
-            "webhook-id": send_id, "webhook-timestamp": str(timestamp),
-            "webhook-signature": " ".join(signature(s, send_id, timestamp, body) for s in secrets_)}
+    return {
+        "user-agent": "Tico-Webhooks/1",
+        **(custom or {}),
+        "content-type": "application/json",
+        "webhook-id": send_id,
+        "webhook-timestamp": str(timestamp),
+        "webhook-signature": " ".join(signature(s, send_id, timestamp, body) for s in secrets_),
+    }
 
 
 def retry_delay(failed, rng=random):
@@ -109,8 +122,12 @@ def start(store, vault, *, rehearsal=False, transport=None, workers=WORKERS):
         if _workers["stop"].is_set() and not _workers["threads"]:
             _workers["stop"] = threading.Event()
         while len(_workers["threads"]) < workers:
-            t = threading.Thread(target=_loop, args=(store, vault, rehearsal, transport, _workers["stop"]),
-                                 name=f"webhook-delivery-{len(_workers['threads'])}", daemon=True)
+            t = threading.Thread(
+                target=_loop,
+                args=(store, vault, rehearsal, transport, _workers["stop"]),
+                name=f"webhook-delivery-{len(_workers['threads'])}",
+                daemon=True,
+            )
             t.start()
             _workers["threads"].append(t)
 
@@ -174,9 +191,12 @@ def withhold(store, now=None):
     """A rehearsal copy sends nothing: due sends end as `withheld`."""
     now = now or H.now()
     with store.transaction() as c:
-        return c.execute("UPDATE webhook_sends SET state='withheld', next_attempt_at=?, "
-                         "last_error='Rehearsal: nothing is sent from a copy' "
-                         "WHERE state='ready' AND next_attempt_at<=?", (now, now)).rowcount
+        return c.execute(
+            "UPDATE webhook_sends SET state='withheld', next_attempt_at=?, "
+            "last_error='Rehearsal: nothing is sent from a copy' "
+            "WHERE state='ready' AND next_attempt_at<=?",
+            (now, now),
+        ).rowcount
 
 
 def claim(store, now):
@@ -186,24 +206,32 @@ def claim(store, now):
         rows = c.execute(
             "SELECT s.id, s.webhook_id, w.host, w.rate_per_hour, w.window_start, w.window_count FROM webhook_sends s "
             "JOIN webhooks w ON w.id=s.webhook_id WHERE s.state='ready' AND s.next_attempt_at<=? AND w.deleted_at IS NULL "
-            "AND w.enabled=1 ORDER BY s.next_attempt_at LIMIT 100", (now,)).fetchall()
+            "AND w.enabled=1 ORDER BY s.next_attempt_at LIMIT 100",
+            (now,),
+        ).fetchall()
         busy = {}
         for row in rows:
             if row["host"] not in busy:
                 busy[row["host"]] = c.execute(
                     "SELECT count(*) FROM webhook_sends s JOIN webhooks w ON w.id=s.webhook_id "
-                    "WHERE s.state='sending' AND w.host=?", (row["host"],)).fetchone()[0]
+                    "WHERE s.state='sending' AND w.host=?",
+                    (row["host"],),
+                ).fetchone()[0]
             if busy[row["host"]] >= PER_HOST:
                 continue
             start_, count = row["window_start"], row["window_count"]
             if not start_ or start_ <= H.shift(now, hours=-1):
                 start_, count = now, 0
             if count >= row["rate_per_hour"]:
-                c.execute("UPDATE webhook_sends SET next_attempt_at=? WHERE id=?", (H.shift(start_, hours=1), row["id"]))
+                c.execute(
+                    "UPDATE webhook_sends SET next_attempt_at=? WHERE id=?", (H.shift(start_, hours=1), row["id"])
+                )
                 continue
             if not O.claim(c, TABLE, row["id"], now):
                 continue
-            c.execute("UPDATE webhooks SET window_start=?, window_count=? WHERE id=?", (start_, count + 1, row["webhook_id"]))
+            c.execute(
+                "UPDATE webhooks SET window_start=?, window_count=? WHERE id=?", (start_, count + 1, row["webhook_id"])
+            )
             return row["id"]
     return None
 
@@ -211,9 +239,12 @@ def claim(store, now):
 def deliver(store, vault, send_id, *, transport=None):
     """Post one claimed send and record what came back."""
     with store.read() as c:
-        send = c.execute("SELECT s.*, w.url, w.allow_http, w.secret, w.secret_prev, w.secret_prev_until, w.deleted_at, "
-                         "w.headers "
-                         "FROM webhook_sends s JOIN webhooks w ON w.id=s.webhook_id WHERE s.id=?", (send_id,)).fetchone()
+        send = c.execute(
+            "SELECT s.*, w.url, w.allow_http, w.secret, w.secret_prev, w.secret_prev_until, w.deleted_at, "
+            "w.headers "
+            "FROM webhook_sends s JOIN webhooks w ON w.id=s.webhook_id WHERE s.id=?",
+            (send_id,),
+        ).fetchone()
         if not send:
             return
         keys = []
@@ -222,6 +253,7 @@ def deliver(store, vault, send_id, *, transport=None):
         if send["secret_prev"] and (send["secret_prev_until"] or "") > H.now():
             keys.append(vault.cipher.unseal(c, sealed_as(send["webhook_id"], True), send["secret_prev"]))
         from . import webhooks
+
         stored = webhooks.headers_of(send)
         custom = webhooks.open_headers(c, vault, send["webhook_id"], stored)
     if webhooks.needs_value(stored):
@@ -236,13 +268,18 @@ def deliver(store, vault, send_id, *, transport=None):
     started = time.monotonic()
     status, head, error, abort = None, "", "", False
     try:
-        answer = egress.post(send["url"], body, headers_for(keys, send_id, timestamp, body, custom),
-                             allow_http=bool(send["allow_http"]), transport=transport)
+        answer = egress.post(
+            send["url"],
+            body,
+            headers_for(keys, send_id, timestamp, body, custom),
+            allow_http=bool(send["allow_http"]),
+            transport=transport,
+        )
         status, head = answer.status, answer.head
         abort = answer.headers.get("webhook-delivery", "").strip().lower() == "abort-message"
     except egress.Blocked as exc:
         error = exc.reason
-    except Exception as exc:                # a network error of any kind is a failed attempt, never a dead worker
+    except Exception as exc:  # a network error of any kind is a failed attempt, never a dead worker
         error = f"{type(exc).__name__}: {exc}"[:300]
     record(store, send, timestamp, status, head, error, abort, int((time.monotonic() - started) * 1000))
 
@@ -251,29 +288,61 @@ def record(store, send, timestamp, status, head, error, abort, ms):
     now = H.now()
     with store.transaction() as c:
         n = (c.execute("SELECT max(n) FROM webhook_attempts WHERE send_id=?", (send["id"],)).fetchone()[0] or 0) + 1
-        c.execute("INSERT INTO webhook_attempts(send_id,webhook_id,n,created_at,timestamp_sent,status,ms,response_head,error) "
-                  "VALUES(?,?,?,?,?,?,?,?,?)", (send["id"], send["webhook_id"], n, now, timestamp, status, ms,
-                                                head[:1024], error[:300]))
+        c.execute(
+            "INSERT INTO webhook_attempts(send_id,webhook_id,n,created_at,timestamp_sent,status,ms,response_head,error) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (send["id"], send["webhook_id"], n, now, timestamp, status, ms, head[:1024], error[:300]),
+        )
         if status is not None and 200 <= status < 300:
-            c.execute("UPDATE webhooks SET failing_since=NULL WHERE id=? AND failing_since IS NOT NULL", (send["webhook_id"],))
+            c.execute(
+                "UPDATE webhooks SET failing_since=NULL WHERE id=? AND failing_since IS NOT NULL", (send["webhook_id"],)
+            )
         else:
-            c.execute("UPDATE webhooks SET failing_since=? WHERE id=? AND failing_since IS NULL", (now, send["webhook_id"]))
+            c.execute(
+                "UPDATE webhooks SET failing_since=? WHERE id=? AND failing_since IS NULL", (now, send["webhook_id"])
+            )
         now_row = c.execute("SELECT state, attempts FROM webhook_sends WHERE id=?", (send["id"],)).fetchone()
         if not now_row or now_row["state"] != TABLE.flight:
-            return                              # deleted or retried by hand while the post was out; the attempt stays logged
+            return  # deleted or retried by hand while the post was out; the attempt stays logged
         attempts = now_row["attempts"] + 1
         shown = error or f"HTTP {status}"
         from . import task_trigger_rules
+
         task_trigger_rules.webhook_result(c, send["event_id"], status)
         if status is not None and 200 <= status < 300:
-            O.finish(c, TABLE, send["id"], "delivered", attempts=attempts, error="", due_at=now,
-                     extra={"last_status": status, "delivered_at": now})
+            O.finish(
+                c,
+                TABLE,
+                send["id"],
+                "delivered",
+                attempts=attempts,
+                error="",
+                due_at=now,
+                extra={"last_status": status, "delivered_at": now},
+            )
         elif abort:
-            O.finish(c, TABLE, send["id"], "canceled", attempts=attempts, error="The receiver asked not to be sent this message again",
-                     due_at=now, extra={"last_status": status})
-        elif O.settle_failure(c, TABLE, send["id"], attempts=attempts, error=shown, schedule=SCHEDULE, now=now,
-                              later=lambda at, seconds: H.shift(at, seconds=seconds), give_up_state="failed",
-                              extra={"last_status": status}):
+            O.finish(
+                c,
+                TABLE,
+                send["id"],
+                "canceled",
+                attempts=attempts,
+                error="The receiver asked not to be sent this message again",
+                due_at=now,
+                extra={"last_status": status},
+            )
+        elif O.settle_failure(
+            c,
+            TABLE,
+            send["id"],
+            attempts=attempts,
+            error=shown,
+            schedule=SCHEDULE,
+            now=now,
+            later=lambda at, seconds: H.shift(at, seconds=seconds),
+            give_up_state="failed",
+            extra={"last_status": status},
+        ):
             exhausted(c, send, attempts, status, shown, now)
         else:
             c.after_commit.append(ring)
@@ -282,8 +351,13 @@ def record(store, send, timestamp, status, head, error, abort, ms):
 def exhausted(c, send, attempts, status, shown, now):
     """The last attempt failed: one audit row (no payload), and at most one Needs-you line a day per endpoint to the
     person who owns it. Health shows the failure from the rows themselves."""
-    H.event(c, H.KEEPER, "webhook.exhausted", send["id"],
-            {"webhook": send["webhook_id"], "type": send["type"], "attempts": attempts, "status": status})
+    H.event(
+        c,
+        H.KEEPER,
+        "webhook.exhausted",
+        send["id"],
+        {"webhook": send["webhook_id"], "type": send["type"], "attempts": attempts, "status": status},
+    )
     hook = c.execute("SELECT * FROM webhooks WHERE id=?", (send["webhook_id"],)).fetchone()
     if not hook or hook["deleted_at"]:
         return
@@ -293,10 +367,16 @@ def exhausted(c, send, attempts, status, shown, now):
     try:
         # One savepoint: a refusal to file the line must not undo the failed send's record.
         c.execute("SAVEPOINT webhook_notice")
-        task = H.task_create(c, H.KEEPER, f"Webhook {hook['name']} is not receiving events",
-                             f"Tico gave up on a {send['type']} event after {attempts} attempts ({shown}). "
-                             f"Check the endpoint, then retry the send from Settings > Webhooks or "
-                             f"`hub webhook retry {send['id']}`.", hook["created_by"], lint=False)
+        task = H.task_create(
+            c,
+            H.KEEPER,
+            f"Webhook {hook['name']} is not receiving events",
+            f"Tico gave up on a {send['type']} event after {attempts} attempts ({shown}). "
+            f"Check the endpoint, then retry the send from Tools › Webhooks or "
+            f"`tico webhook retry {send['id']}`.",
+            hook["created_by"],
+            lint=False,
+        )
         c.execute("UPDATE webhooks SET notify_task=? WHERE id=?", (task["id"], hook["id"]))
         c.execute("RELEASE webhook_notice")
     except Exception:
@@ -311,11 +391,18 @@ def prune(c, now=None):
     deleted endpoint once nothing of it is left."""
     cutoff = H.shift(now or H.now(), days=-KEEP_DAYS)
     c.execute("DELETE FROM webhook_events WHERE created_at<?", (cutoff,))
-    c.execute(f"DELETE FROM webhook_sends WHERE state IN ({','.join('?' * len(TERMINAL))}) AND next_attempt_at<?",
-              (*TERMINAL, cutoff))
+    c.execute(
+        f"DELETE FROM webhook_sends WHERE state IN ({','.join('?' * len(TERMINAL))}) AND next_attempt_at<?",
+        (*TERMINAL, cutoff),
+    )
     c.execute("DELETE FROM webhook_attempts WHERE send_id NOT IN (SELECT id FROM webhook_sends)")
-    c.execute("DELETE FROM webhook_attempts WHERE rowid IN (SELECT rowid FROM (SELECT rowid, row_number() OVER "
-              "(PARTITION BY webhook_id ORDER BY created_at DESC, n DESC) AS rank FROM webhook_attempts) WHERE rank>?)",
-              (KEEP_ATTEMPTS,))
-    c.execute("DELETE FROM webhooks WHERE deleted_at IS NOT NULL AND deleted_at<? "
-              "AND NOT EXISTS(SELECT 1 FROM webhook_sends s WHERE s.webhook_id=webhooks.id)", (cutoff,))
+    c.execute(
+        "DELETE FROM webhook_attempts WHERE rowid IN (SELECT rowid FROM (SELECT rowid, row_number() OVER "
+        "(PARTITION BY webhook_id ORDER BY created_at DESC, n DESC) AS rank FROM webhook_attempts) WHERE rank>?)",
+        (KEEP_ATTEMPTS,),
+    )
+    c.execute(
+        "DELETE FROM webhooks WHERE deleted_at IS NOT NULL AND deleted_at<? "
+        "AND NOT EXISTS(SELECT 1 FROM webhook_sends s WHERE s.webhook_id=webhooks.id)",
+        (cutoff,),
+    )

@@ -1,10 +1,7 @@
 """Getting started: every tick is computed from live state, and each person keeps their own choices."""
 
-import json
-
-from backend.store import H
-
-from backend.tests.test_onboarding import as_person, environment, machine, signed_in  # noqa: F401
+from backend.tests.helpers.onboarding import as_person, environment, signed_in
+from backend.tests.helpers.getting_started import add_bot
 
 
 def items(api, headers=None):
@@ -16,43 +13,36 @@ def body_of(api):
     return api.get("/api/v2/getting-started", headers=signed_in()).json()
 
 
-def heartbeat(api, runner_id, *, seconds_ago=0, runtimes=None):
-    """A runner's last word, as the heartbeat stores it."""
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
-                  (H.shift(H.now(), seconds=-seconds_ago),
-                   json.dumps({"schema_version": 1, "runtimes": runtimes or {}, "bots": {}}), runner_id))
-
-
-def enrolled(api):
-    machine(api)
-    with api.app.state.store.read() as c:
-        return c.execute("SELECT id FROM runners").fetchone()["id"]
-
-
 def activate(api, *slugs):
     with api.app.state.store.transaction() as c:
         for slug in slugs:
             c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
 
 
-def add_bot(api, slug, state="active"):
-    with api.app.state.store.transaction() as c:
-        H.sync_registry(c, {slug: {"name": slug, "status": state}}, None)
-
-
-SIGNED_IN = {"codex": {"installed": True, "authenticated": "ready"}}
-
-
 def test_each_person_sees_only_what_they_can_act_on(environment):
     api = environment()
-    riley = as_person(api, "riley")                # a bot administrator
-    quinn = as_person(api, "quinn")                # neither
+    riley = as_person(api, "riley")  # a bot administrator
+    quinn = as_person(api, "quinn")  # neither
     assert [r["id"] for r in items(api)[0]["items"]] == [
-        "signed_in", "computer", "model", "github", "botops", "first_bot", "next_bot", "first_output", "first_update",
-        "strategy"]
+        "signed_in",
+        "computer",
+        "model",
+        "github",
+        "botops",
+        "first_bot",
+        "next_bot",
+        "first_output",
+        "first_update",
+        "strategy",
+    ]
     assert [r["id"] for r in items(api, riley)[0]["items"]] == [
-        "signed_in", "botops", "first_bot", "next_bot", "first_output", "first_update"]
+        "signed_in",
+        "botops",
+        "first_bot",
+        "next_bot",
+        "first_output",
+        "first_update",
+    ]
     assert [r["id"] for r in items(api, quinn)[0]["items"]] == ["signed_in", "first_output", "first_update"]
     assert api.get("/api/v2/getting-started").status_code in (401, 403)
 
@@ -62,14 +52,33 @@ def test_publish_your_strategy_is_ticked_by_the_first_published_version(environm
     step = items(api)[1]["strategy"]
     assert (step["label"], step["done"], step["href"]) == ("Publish your strategy", False, "#/strategy")
     revision = api.get("/api/v2/strategy", headers=owner).json()["draft"]["revision"]
-    assert api.put("/api/v2/strategy/draft", headers=owner,
-                   json={"revision": revision, "sections": {"not": "No enterprise deals."}}).status_code == 200
-    assert api.post("/api/v2/strategy/bets", headers=owner, json={
-        "statement": "Small landlords pay for bots", "rules_out": "Enterprise sales", "status": "active",
-        "wrong_if": {"kind": "text", "text": "Three landlords say no", "check_by": "2099-01-01"}}).status_code == 200
-    assert items(api)[1]["strategy"]["done"] is False                      # a draft is not a strategy yet
+    assert (
+        api.put(
+            "/api/v2/strategy/draft",
+            headers=owner,
+            json={"revision": revision, "sections": {"not": "No enterprise deals."}},
+        ).status_code
+        == 200
+    )
+    assert (
+        api.post(
+            "/api/v2/strategy/bets",
+            headers=owner,
+            json={
+                "statement": "Small landlords pay for bots",
+                "rules_out": "Enterprise sales",
+                "status": "active",
+                "wrong_if": {"kind": "text", "text": "Three landlords say no", "check_by": "2099-01-01"},
+            },
+        ).status_code
+        == 200
+    )
+    assert items(api)[1]["strategy"]["done"] is False  # a draft is not a strategy yet
     revision = api.get("/api/v2/strategy", headers=owner).json()["draft"]["revision"]
-    assert api.post("/api/v2/strategy/publish", headers=owner, json={"note": "First", "revision": revision}).status_code == 200
+    assert (
+        api.post("/api/v2/strategy/publish", headers=owner, json={"note": "First", "revision": revision}).status_code
+        == 200
+    )
     step = items(api)[1]["strategy"]
     assert step["done"] is True and step["why"] == ""
 

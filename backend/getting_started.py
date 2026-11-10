@@ -35,21 +35,25 @@ def _owner(who, what):
 
 
 def load_state(c, who):
-    row = c.execute("SELECT value FROM preferences WHERE actor=? AND key=?",
-                    (who.actor, PREFERENCE)).fetchone()
+    row = c.execute("SELECT value FROM preferences WHERE actor=? AND key=?", (who.actor, PREFERENCE)).fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
     except ValueError:
         stored = {}
     stored = stored if isinstance(stored, dict) else {}
-    return {"tour": bool(stored.get("tour")), "checklist": bool(stored.get("checklist")),
-            "skipped": [k for k in stored.get("skipped") or [] if k in OPTIONAL]}
+    return {
+        "tour": bool(stored.get("tour")),
+        "checklist": bool(stored.get("checklist")),
+        "skipped": [k for k in stored.get("skipped") or [] if k in OPTIONAL],
+    }
 
 
 def save_state(c, who, state):
-    c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) "
-              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-              (who.actor, PREFERENCE, encode(state), H.now()))
+    c.execute(
+        "INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) "
+        "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (who.actor, PREFERENCE, encode(state), H.now()),
+    )
 
 
 def change_state(c, who, body):
@@ -70,8 +74,11 @@ def change_state(c, who, body):
 # ------------------------------------------------------------------ live checks
 def _online_runners(c):
     since = H.shift(H.now(), seconds=-ONLINE_SECONDS)
-    return c.execute("SELECT id,label,readiness FROM runners_with_state WHERE revoked_at IS NULL "
-                     "AND last_seen_at>? ORDER BY last_seen_at DESC", (since,)).fetchall()
+    return c.execute(
+        "SELECT id,label,readiness FROM runners_with_state WHERE revoked_at IS NULL "
+        "AND last_seen_at>? ORDER BY last_seen_at DESC",
+        (since,),
+    ).fetchall()
 
 
 _wanted_runtimes = providers.wanted_runtimes
@@ -80,6 +87,7 @@ _wanted_runtimes = providers.wanted_runtimes
 def _covered(c, runner, name):
     """Whether the company's plan or key given to this computer signs `name` in (model_subscriptions.in_effect)."""
     from .model_subscriptions import in_effect
+
     return c is not None and in_effect(c, runner["id"], name) is not None
 
 
@@ -87,8 +95,11 @@ def _signed_in_runtime(runners, wanted, c=None):
     """A wanted runtime an online computer is signed in to: by its own login, or (with `c`) the company's plan."""
     for runner in runners:
         for name, row in (readiness_document(runner["readiness"]).get("runtimes") or {}).items():
-            if name in wanted and row.get("installed") and (row.get("authenticated") == "ready"
-                                                             or _covered(c, runner, name)):
+            if (
+                name in wanted
+                and row.get("installed")
+                and (row.get("authenticated") == "ready" or _covered(c, runner, name))
+            ):
                 return name
     return ""
 
@@ -98,34 +109,59 @@ def _login_target(runners, wanted, c=None):
     it, and that the browser can sign in (backend/model_login.py): where the checklist's Sign in button goes."""
     for runner in runners:
         for name, row in sorted((readiness_document(runner["readiness"]).get("runtimes") or {}).items()):
-            if name in wanted and name in model_login.RUNTIMES and row.get("installed") \
-                    and row.get("authenticated") != "ready" and not _covered(c, runner, name):
+            if (
+                name in wanted
+                and name in model_login.RUNTIMES
+                and row.get("installed")
+                and row.get("authenticated") != "ready"
+                and not _covered(c, runner, name)
+            ):
                 return {"runner_id": runner["id"], "runtime": name, "machine": runner["label"]}
     return None
 
 
 def built_in(settings):
-    """The bots every install starts with: the four a person talks to, the Task Manager (docs/task-manager.md) and the
-    Bookkeeper (docs/bookkeeper.md)."""
-    return {settings.assistant_bot, BOTOPS, LIBRARIAN, "goal-manager", "task-manager", "bookkeeper"}
+    """The bots every install starts with: the four a person talks to, the Task Manager (docs/task-manager.md), the
+    Bookkeeper (docs/bookkeeper.md), the Brand Owner, the Updates and Automations Owners, and Counsel, which
+    onboarding.ensure_counsel adds once a computer enrolls. Counsel is built in, so it is not one of the company's own
+    bots (own_bots)."""
+    return {
+        settings.assistant_bot,
+        BOTOPS,
+        LIBRARIAN,
+        "goal-manager",
+        "task-manager",
+        "bookkeeper",
+        H.BRAND_OWNER,
+        H.COUNSEL,
+        "updates-owner",
+        "automations-owner",
+    }
 
 
 def own_bots(c, settings):
     """Bots the company added, as opposed to the ones built in."""
     bootstrap = built_in(settings)
-    return [row["id"] for row in c.execute("SELECT id FROM bots WHERE state!='archived' ORDER BY slug")
-            if row["id"] not in bootstrap]
+    return [
+        row["id"]
+        for row in c.execute("SELECT id FROM bots WHERE state!='archived' ORDER BY slug")
+        if row["id"] not in bootstrap
+    ]
 
 
 def _next_bot(c, settings):
     """The starter bot to onboard next: Onboarding (`needs_setup`), in the order first run put them, which
     puts the team's first bot first. Returns (id, name, why), or None when nothing is waiting."""
-    rows = c.execute(f"SELECT bc.bot,b.display_name,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
-                     "WHERE bc.onboarding_state IN " + PARKED_SQL + " AND b.state!='archived'").fetchall()
+    rows = c.execute(
+        f"SELECT bc.bot,b.display_name,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
+        "WHERE bc.onboarding_state IN " + PARKED_SQL + " AND b.state!='archived'"
+    ).fetchall()
     if not rows:
         return None
-    ranked = sorted(((json.loads(row["config"] or "{}"), row) for row in rows),
-                    key=lambda pair: (pair[0].get("setup_rank", 999), pair[1]["bot"]))
+    ranked = sorted(
+        ((json.loads(row["config"] or "{}"), row) for row in rows),
+        key=lambda pair: (pair[0].get("setup_rank", 999), pair[1]["bot"]),
+    )
     row = ranked[0][1]
     why = "Press Start onboarding on its page and answer its questions; it drafts a first result for you to approve."
     return row["bot"], row["display_name"], why
@@ -133,15 +169,25 @@ def _next_bot(c, settings):
 
 def _first_output(c):
     """A starter bot has been onboarded: its onboarding is complete and a person has seen its first
-    result. The bot says so itself (`hub bot setup-done`), so this is what the database records."""
-    return c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.id=bc.bot "
-                     "WHERE bc.onboarding_state='onboarded' AND b.state!='archived' LIMIT 1").fetchone()
+    result. The bot says so itself (`tico bot setup-done`), so this is what the database records."""
+    return c.execute(
+        "SELECT bc.bot FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+        "WHERE bc.onboarding_state='onboarded' AND b.state!='archived' LIMIT 1"
+    ).fetchone()
 
 
 def _item(key, label, done, why, href="", tab="", optional=False, action="", login=None):
-    return {"id": key, "label": label, "done": bool(done), "optional": optional,
-            "why": "" if done else why, "href": href, "tab": tab, "action": action,
-            **({"login": login} if login and not done else {})}
+    return {
+        "id": key,
+        "label": label,
+        "done": bool(done),
+        "optional": optional,
+        "why": "" if done else why,
+        "href": href,
+        "tab": tab,
+        "action": action,
+        **({"login": login} if login and not done else {}),
+    }
 
 
 def checklist(c, who, settings, github):
@@ -152,36 +198,88 @@ def checklist(c, who, settings, github):
     login = (providers.PROVIDER_BY_RUNTIME.get(next(iter(sorted(wanted)), ""), {}) or {}).get("login", "")
     botops = H.bot(c, BOTOPS)
     mine = own_bots(c, settings)
-    building = c.execute("SELECT id FROM tasks WHERE owner_id=? AND title LIKE 'Build a bot:%' "
-                         "AND status NOT IN ('done','closed','declined') ORDER BY created_at DESC LIMIT 1",
-                         ("bot:" + BOTOPS,)).fetchone()
+    building = c.execute(
+        "SELECT id FROM tasks WHERE owner_id=? AND title LIKE 'Build a bot:%' "
+        "AND status='open' ORDER BY created_at DESC LIMIT 1",
+        ("bot:" + BOTOPS,),
+    ).fetchone()
     installed = bool(github and github["installation_id"])
     waiting = _next_bot(c, settings)
     items = [
         _item("signed_in", "Signed in", True, ""),
-        _item("computer", "A computer is online", runners,
-              "Bots run on a computer you set up. Add one and keep it awake.", "#/settings", "devices"),
-        _item("model", "A model is signed in on it", signed,
-              ("Sign in to a model on the computer" + (" (run `" + login + "`)" if login else "") + "."
-               if wanted else "Choose your AI providers first."),
-              "#/settings", "devices" if wanted else "models", login=_login_target(runners, wanted, c)),
-        _item("github", "GitHub is connected", installed,
-              "Lets bots keep their work in your GitHub.", "#/settings", "cloud", optional=True),
-        _item("botops", "BotOps is active", botops and botops["state"] == "active",
-              "BotOps builds your other bots. It starts once a computer hosts it.", "#/bot/" + BOTOPS),
-        _item("first_bot", "Create your first bot", mine,
-              "BotOps is building it." if building else "Say what it should do and BotOps builds it.",
-              "#/task/" + building["id"] if building else "", action="" if building else "create-bot"),
-        _item("next_bot", "Onboard " + waiting[1] if waiting else "No bot is onboarding", not waiting,
-              waiting[2] if waiting else "", "#/bot/" + waiting[0] if waiting else ""),
-        _item("first_output", "First approved output", _first_output(c),
-              "Onboard a starter bot and approve the first thing it drafts. That is the point of the team.",
-              "#/bot/" + waiting[0] if waiting else "#/tasks"),
-        _item("first_update", "Your first update arrived",
-              c.execute("SELECT 1 FROM updates LIMIT 1").fetchone(),
-              "Each active bot posts a short update every day.", "#/updates"),
-        _item("strategy", "Publish your strategy", _published(c),
-              "Setup saved a draft. Publish it when the bets and what you won't do are right.", "#/strategy"),
+        _item(
+            "computer",
+            "A computer is online",
+            runners,
+            "Bots run on a computer you set up. Add one and keep it awake.",
+            "#/settings",
+            "devices",
+        ),
+        _item(
+            "model",
+            "A model is signed in on it",
+            signed,
+            (
+                "Sign in to a model on the computer" + (" (run `" + login + "`)" if login else "") + "."
+                if wanted
+                else "Choose your AI providers first."
+            ),
+            "#/settings",
+            "devices" if wanted else "models",
+            login=_login_target(runners, wanted, c),
+        ),
+        _item(
+            "github",
+            "GitHub is connected",
+            installed,
+            "Lets bots keep their work in your GitHub.",
+            "#/settings",
+            "cloud",
+            optional=True,
+        ),
+        _item(
+            "botops",
+            "BotOps is active",
+            botops and botops["state"] == "active",
+            "BotOps builds your other bots. It starts once a computer hosts it.",
+            "#/bot/" + BOTOPS,
+        ),
+        _item(
+            "first_bot",
+            "Create your first bot",
+            mine,
+            "BotOps is building it." if building else "Say what it should do and BotOps builds it.",
+            "#/task/" + building["id"] if building else "",
+            action="" if building else "create-bot",
+        ),
+        _item(
+            "next_bot",
+            "Onboard " + waiting[1] if waiting else "No bot is onboarding",
+            not waiting,
+            waiting[2] if waiting else "",
+            "#/bot/" + waiting[0] if waiting else "",
+        ),
+        _item(
+            "first_output",
+            "First approved output",
+            _first_output(c),
+            "Onboard a starter bot and approve the first thing it drafts. That is the point of the team.",
+            "#/bot/" + waiting[0] if waiting else "#/tasks",
+        ),
+        _item(
+            "first_update",
+            "Your first update arrived",
+            c.execute("SELECT 1 FROM updates LIMIT 1").fetchone(),
+            "Each active bot posts a short update every day.",
+            "#/updates",
+        ),
+        _item(
+            "strategy",
+            "Publish your strategy",
+            _published(c),
+            "Setup saved a draft. Publish it when the bets and what you won't do are right.",
+            "#/strategy",
+        ),
     ]
     return items
 
@@ -196,9 +294,11 @@ def _published(c):
 
 # What each kind of person needs to see: the owner all of it, bot administrators what involves
 # bots, everyone else only what they can act on or read.
-AUDIENCE = {"owner": None,
-            "admin": {"signed_in", "botops", "first_bot", "next_bot", "first_output", "first_update"},
-            "human": {"signed_in", "first_output", "first_update"}}
+AUDIENCE = {
+    "owner": None,
+    "admin": {"signed_in", "botops", "first_bot", "next_bot", "first_output", "first_update"},
+    "human": {"signed_in", "first_output", "first_update"},
+}
 
 
 def view(c, who, settings, auth, github=None):
@@ -210,20 +310,35 @@ def view(c, who, settings, auth, github=None):
     for item in items:
         item["skipped"] = item["optional"] and not item["done"] and item["id"] in state["skipped"]
     settled = [i for i in items if i["done"] or i["skipped"]]
-    return {"items": items, "done": len(settled), "total": len(items),
-            "complete": len(settled) == len(items), "dismissed": state["checklist"],
-            "tour_seen": state["tour"],
-            "can_build": auth.bot_admin(who), "owner": who.role == "owner"}
+    return {
+        "items": items,
+        "done": len(settled),
+        "total": len(items),
+        "complete": len(settled) == len(items),
+        "dismissed": state["checklist"],
+        "tour_seen": state["tour"],
+        "can_build": auth.bot_admin(who),
+        "owner": who.role == "owner",
+    }
 
 
 # ------------------------------------------------------------------ actions
 def _task(c, auth, who, owner, title, body):
     from . import rooms
+
     if owner == BOTOPS:
         from .botops_act import request_task
+
         return request_task(c, auth, who, title, body)
-    return H.task_create(c, who.actor, title, body, "bot:" + owner, allow_planned=True,
-                         conversation_id=rooms.task_conversation_id(c, auth, "bot:" + owner, who.actor))
+    return H.task_create(
+        c,
+        who.actor,
+        title,
+        body,
+        "bot:" + owner,
+        allow_planned=True,
+        conversation_id=rooms.task_conversation_id(c, auth, "bot:" + owner, who.actor),
+    )
 
 
 def _active(c, slug):
@@ -237,12 +352,14 @@ def _botops(c):
 
 
 def _market_title(c, owner, actor):
-    """A title this request can still open: the hub refuses a second live task with the same one."""
-    marks = ",".join("?" * len(H.LIVE_STATUSES))
+    """A title this request can still open: Tico refuses a second open task with the same one."""
+    marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     for n in range(1, 20):
         title = MARKET_TASK if n == 1 else f"{MARKET_TASK} ({n})"
-        if not c.execute(f"SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status IN ({marks})",
-                         (actor, owner, title, *H.LIVE_STATUSES)).fetchone():
+        if not c.execute(
+            f"SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status IN ({marks})",
+            (actor, owner, title, *H.ACTIVE_STATUSES),
+        ).fetchone():
             return title
     return f"{MARKET_TASK} ({n})"
 
@@ -254,9 +371,15 @@ def market_context(c, auth, who, body):
     _owner(who, "sets up the market")
     if not _active(c, LIBRARIAN):
         raise Problem("librarian", "The Librarian is not running yet. It starts once a computer hosts it.", 409)
-    text = "\n".join([
-        "Build our market map from what the owner gave us. Follow playbooks/market-setup.md.", "",
-        "The owner's words: a website, a description, links, or all three.", "", body.text.strip()])
+    text = "\n".join(
+        [
+            "Build our market map from what the owner gave us. Follow playbooks/market-setup.md.",
+            "",
+            "The owner's words: a website, a description, links, or all three.",
+            "",
+            body.text.strip(),
+        ]
+    )
     task = _task(c, auth, who, LIBRARIAN, _market_title(c, "bot:" + LIBRARIAN, who.actor), text)
     H.event(c, who.actor, "getting_started.market_requested", LIBRARIAN, {"task": task["id"]})
     return {"task_id": task["id"], "bot": LIBRARIAN}

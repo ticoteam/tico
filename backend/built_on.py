@@ -1,6 +1,6 @@
 """The computer a new bot's repository was built on, until the bot is first placed (backend/app.py place_now).
 
-BotOps builds a bot in its own workspace (`hub bot create`, `hub bot copy`), and only that computer's runner can
+BotOps builds a bot in its own workspace (`tico bot create`, `tico bot copy`), and only that computer's runner can
 publish the history to GitHub, and only once the bot is assigned to it (runner-rs/src/execute.rs publish).
 A bot first placed anywhere else would wait for a repository GitHub never gets. So BotOps's GitHub call for the build
 records which computer made it, one `registry_metadata` row `bot-built-on:<bot>`, and the first placement goes
@@ -19,10 +19,12 @@ def remember(c, bot, runner_id):
         return
     if not c.execute("SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone():
         return
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value "
-              "WHERE NOT EXISTS (SELECT 1 FROM runners WHERE revoked_at IS NULL "
-              "AND id=json_extract(registry_metadata.value, '$.runner_id'))",
-              (PREFIX + bot, encode({"runner_id": runner_id, "at": H.now()})))
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value "
+        "WHERE NOT EXISTS (SELECT 1 FROM runners WHERE revoked_at IS NULL "
+        "AND id=json_extract(registry_metadata.value, '$.runner_id'))",
+        (PREFIX + bot, encode({"runner_id": runner_id, "at": H.now()})),
+    )
 
 
 def computer(c, bot):

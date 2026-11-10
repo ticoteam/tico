@@ -57,9 +57,17 @@ On the task, in the comment style chosen during setup (default labelled):
 Every comment is polite, about the code, and specific. Never "this is wrong": say what happens and why. Follow
 `skills/write-a-review-comment-the-author-can-act-on/SKILL.md`.
 
+## 4b. Screens
+
+Only when the check's text says it is the last review before merge. If the diff touches `ui/`, take before and after
+screenshots of the changed screens with `python3 scripts/release_shots.py --base <merge base> --head <head commit> --version
+<next release> --out <dir>`, then attach `manifest.json` and every picture it names to this check with `tico task attach <id> <file>`,
+one file per call. The review page shows only what is attached here. If the diff does not touch `ui/`, attach nothing and write
+"No screens changed" in your summary. If the tool cannot run on this computer, attach nothing and say so under Not checked.
+
 ## 5. Finish
 
-You post nothing. Commit, then `hub task update <id> --status done --note`: the pull request, the head commit, the number of
+You post nothing. Commit, then `tico task done <id> -m "..." --version N`: the pull request, the head commit, the number of
 blocking issues, and what you did not check. Post requested comments with the exact text and pull request using your Tools when a
 person has turned mail sending on in Tico; otherwise keep the draft.
 

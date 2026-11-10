@@ -10,7 +10,7 @@ visual address or [Tico file hosting](files.md#tico-file-hosting), pages and SVG
 ([details](#with-and-without-a-visual-address)).
 
 A page a bot keeps current, with a cadence and a status line Tico draws, is a [page](pages.md): the same frame and
-the same clean-up, published with `hub page publish`.
+the same clean-up, published with `tico page publish`.
 
 ## When a bot adds a visual
 
@@ -54,7 +54,7 @@ audio are cards too (see [Video and audio](#video-and-audio)) and count toward t
 - **"Couldn't show this visual"** shows, with **Open in file viewer**, when the visual can't be displayed.
 
 On a task, **Open in file viewer** and **Newer version** open the task's own file panel at that version; see
-[Tasks](tasks.md#files-and-questions-on-the-page). In a thread they open the file viewer.
+[Tasks](tasks.md#files). In a thread they open the file viewer.
 
 A visual shows as a file chip instead of a card only when its type or size isn't one that shows inline (see
 [Types and limits](#types-and-limits)).
@@ -98,12 +98,12 @@ Which formats play, and how full screen looks, depend on the browser or app you 
 
 ## Attach a visual
 
-**CLI.** Add `--visual PATH --title "…"` to `hub message send`, `hub chat send` or `hub task comment`. Repeat
+**CLI.** Add `--visual PATH --title "…"` to `tico message send`, `tico chat send` or `tico task comment`. Repeat
 `--visual` for more than one; each `--title` goes with the `--visual` in the same place in the list.
 
 ```
-hub task comment <task id> "Signups by week" --visual reports/signups.png --title "Signups, last 12 weeks"
-hub message send human:ana "Two drafts" --visual art/a.svg --title "Draft A" --visual art/b.svg --title "Draft B"
+tico task comment <task id> "Signups by week" --visual reports/signups.png --title "Signups, last 12 weeks"
+tico message send human:ana "Two drafts" --visual art/a.svg --title "Draft A" --visual art/b.svg --title "Draft B"
 ```
 
 `PATH` is a file in your bot's checkout, with the same checks as [publishing a file](files.md#publishing): no path
@@ -113,13 +113,13 @@ already in Tico instead: a file on that task, or in that thread for a message. A
 
 **MCP.** `hub_message_send`, `hub_chat_send` and `hub_task_comment` take `visuals`, a list of up to 10:
 `{"path": "reports/signups.png", "title": "…"}` for a file in the checkout, or `{"file": "<file id>@<version>",
-"title": "…"}` for a file already in Tico. A `path` works only from the hub tools on your bot's Computer.
+"title": "…"}` for a file already in Tico. A `path` works only from the tico tools on your bot's Computer.
 
 **API.** `POST /api/v2/messages` and `POST /api/v2/tasks/{id}/comments` take `attachments`, up to 10 items in order.
 Each is `"<file id>@<version>"` or `{"ref": "<file id>@<version>", "title": "…"}`. Upload the file first: to the task
 with `POST /api/v2/tasks/{id}/files`, or, from a bot's run, with `POST /api/v2/files/uploads` (it lands in the
 thread the run is in). A person's upload to a bot's thread, `POST /api/v2/uploads/chat/{bot}`, takes `titles`, one per
-file in upload order. A title is at most 200 characters. The schema is `VisualRef` in `docs/openapi/v2.json`.
+file in upload order. A title is at most 200 characters. The schema is `VisualRef` in the v2 spec (`GET /api/v2/openapi.json`).
 
 ## What gets stored
 
@@ -179,7 +179,7 @@ whose bytes don't match its type (a `.png` that isn't a PNG).
 
 Exactly the people who can read that thread or task, as for [files](files.md#visibility). Every request for
 a visual checks again that the reader still has access, so someone taken off a private task loses it at once.
-Visuals from a private task never show to guests or on the public roadmap.
+Visuals from a private task show only to those who can read that task ([Who can see a private task](tasks.md#who-can-see-a-private-task)), and never on the public roadmap.
 
 A visual is shown from a signed address made for one reader. It works only for that reader and expires after at
 most 2 hours. Each read of the message returns a current one, which stays the same for up to an hour.

@@ -1,8 +1,9 @@
-"""The model one task's runs use: `hub task create --model`, `hub task model`, `POST /api/v2/tasks/{id}/model`, and a
+"""The model one task's runs use: `tico task create --model`, `tico task model`, `POST /api/v2/tasks/{id}/model`, and a
 routine's bot_turn step, which stamps its choice on the task its run opens. It is kept per task in `task_run_models`,
 apart from the check model (backend/check_models.py), which holds when it cannot run: this falls back, to the bot's
 task model and then the bot's own model (backend/task_models.py `pick`). Whoever may set the bot's model may set this,
 and a bot never does, not even on its own task."""
+
 from . import strategy_acts
 from . import hubdb as H
 from . import providers
@@ -15,8 +16,11 @@ def of(c, task_id):
     bot's task model."""
     if not task_id or not H._has_table(c, "task_run_models"):
         return None
-    return H._one(c, "SELECT harness,runtime,model,effort AS reasoning_effort,set_by,set_at FROM task_run_models "
-                     "WHERE task_id=?", (task_id,))
+    return H._one(
+        c,
+        "SELECT harness,runtime,model,effort AS reasoning_effort,set_by,set_at FROM task_run_models WHERE task_id=?",
+        (task_id,),
+    )
 
 
 def stamped(model, effort="", harness=""):
@@ -26,8 +30,12 @@ def stamped(model, effort="", harness=""):
     row = providers.MODEL_BY_ID.get(model) or {}
     harness = str(harness or "").strip().lower() or str(next(iter(row.get("harnesses") or ()), "") or "")
     effort = str(effort or "").strip().lower() or str(row.get("default_effort") or "")
-    return {"harness": harness, "runtime": runtime_of(harness) or str(row.get("runtime") or ""), "model": model,
-            "reasoning_effort": effort}
+    return {
+        "harness": harness,
+        "runtime": runtime_of(harness) or str(row.get("runtime") or ""),
+        "model": model,
+        "reasoning_effort": effort,
+    }
 
 
 def _label(choice):
@@ -44,12 +52,21 @@ def set_choice(c, actor, task_id, choice, note=""):
     if choice is None:
         c.execute("DELETE FROM task_run_models WHERE task_id=?", (task_id,))
     else:
-        c.execute("INSERT INTO task_run_models(task_id,runtime,model,harness,effort,set_by,set_at) "
-                  "VALUES(?,?,?,?,?,?,?) "
-                  "ON CONFLICT(task_id) DO UPDATE SET runtime=excluded.runtime,model=excluded.model,"
-                  "harness=excluded.harness,effort=excluded.effort,set_by=excluded.set_by,set_at=excluded.set_at",
-                  (task_id, choice["runtime"], choice["model"], choice["harness"], choice["reasoning_effort"], actor,
-                   H.now()))
+        c.execute(
+            "INSERT INTO task_run_models(task_id,runtime,model,harness,effort,set_by,set_at) "
+            "VALUES(?,?,?,?,?,?,?) "
+            "ON CONFLICT(task_id) DO UPDATE SET runtime=excluded.runtime,model=excluded.model,"
+            "harness=excluded.harness,effort=excluded.effort,set_by=excluded.set_by,set_at=excluded.set_at",
+            (
+                task_id,
+                choice["runtime"],
+                choice["model"],
+                choice["harness"],
+                choice["reasoning_effort"],
+                actor,
+                H.now(),
+            ),
+        )
     H._task_event(c, task_id, actor, "run_model", _label(before), _label(choice), note)
     return of(c, task_id)
 
@@ -66,5 +83,8 @@ def may_set(c, auth, who, bot):
     (Auth.bot_manager, the rule settings_admin applies to the bot's own model; a branch's is its original's), never a
     bot, whatever it manages, and never the Strategy Bot, acting for a person or itself: a model stays the person's at
     every level (the "cost" gate settings_admin runs first)."""
-    return (who.role != "bot" and not strategy_acts.is_strategy_bot(who.actor)
-            and bool(auth.bot_manager(c, who, shared_bots.model_bot(c, bot))))
+    return (
+        who.role != "bot"
+        and not strategy_acts.is_strategy_bot(who.actor)
+        and bool(auth.bot_manager(c, who, shared_bots.model_bot(c, bot)))
+    )

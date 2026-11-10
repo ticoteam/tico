@@ -14,6 +14,7 @@ tabular figures, case-sensitive forms). Needs fontTools with brotli (`pip instal
 Every URL of the font carries `?v=<hash of the font>`: the server keeps a versioned font for a year (backend/app.py),
 so a new subset must arrive under a new URL.
 """
+
 import hashlib
 import io
 import re
@@ -32,9 +33,11 @@ MEMBER = "web/InterVariable.woff2"
 WEIGHTS = (400, 700)
 # Latin, Latin-1, Latin Extended-A/B and Additional, spacing and combining marks; then what the UI writes: general
 # punctuation, currency, letterlike symbols, arrows, a few operators and technical keys (⌘ ⏎), shapes, check marks.
-UNICODES = ("U+0000-024F,U+0259,U+02B0-02FF,U+0300-036F,U+03B8,U+1E00-1EFF,U+2000-206F,U+20A0-20CF,U+2100-2122,"
-            "U+2190-21FF,U+2212,U+2215,U+2260-2265,U+22EF,U+2303,U+2318,U+23CE,U+25A0-25FF,U+2713,U+2715,U+2717,"
-            "U+FB01-FB02,U+FEFF,U+FFFD")
+UNICODES = (
+    "U+0000-024F,U+0259,U+02B0-02FF,U+0300-036F,U+03B8,U+1E00-1EFF,U+2000-206F,U+20A0-20CF,U+2100-2122,"
+    "U+2190-21FF,U+2212,U+2215,U+2260-2265,U+22EF,U+2303,U+2318,U+23CE,U+25A0-25FF,U+2713,U+2715,U+2717,"
+    "U+FB01-FB02,U+FEFF,U+FFFD"
+)
 FEATURES = "kern,liga,calt,ccmp,locl,mark,mkmk,rvrn,tnum,case"
 
 # The files that name the font's URL: the page's preload and the @font-face rule.
@@ -73,23 +76,34 @@ def build(zip_path):
     from fontTools import subset
     from fontTools.ttLib import TTFont
     from fontTools.varLib import instancer
+
     with zipfile.ZipFile(io.BytesIO(release_zip(zip_path))) as z:
         font = TTFont(io.BytesIO(z.read(MEMBER)))
     font = instancer.instantiateVariableFont(font, {"wght": WEIGHTS})
-    font.recalcTimestamp = False        # the release's own date: the same input builds the same bytes
+    font.recalcTimestamp = False  # the release's own date: the same input builds the same bytes
     with tempfile.TemporaryDirectory() as tmp:
         limited = Path(tmp) / "limited.ttf"
         font.save(limited)
-        subset.main([str(limited), "--unicodes=" + UNICODES, "--layout-features=" + FEATURES,
-                     "--flavor=woff2", "--output-file=" + str(FONT)])
+        subset.main(
+            [
+                str(limited),
+                "--unicodes=" + UNICODES,
+                "--layout-features=" + FEATURES,
+                "--flavor=woff2",
+                "--output-file=" + str(FONT),
+            ]
+        )
 
 
 def main(argv):
     if "--check" in argv:
         stale = stale_font_urls()
         if stale:
-            sys.exit("the Inter URL is not this font's in: " + ", ".join(stale)
-                     + "\nrun python3 scripts/build-text-font.py --stamp")
+            sys.exit(
+                "the Inter URL is not this font's in: "
+                + ", ".join(stale)
+                + "\nrun python3 scripts/build-text-font.py --stamp"
+            )
         return
     if "--stamp" not in argv:
         build(argv[argv.index("--zip") + 1] if "--zip" in argv else None)

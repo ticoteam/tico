@@ -1,7 +1,7 @@
 # The Librarian
 
 The Librarian is a built-in bot that answers questions from the team's docs. Humans ask it from **Ask the Librarian** on Docs
-and on the Market tab of [Strategy](strategy.md) (`#/strategy/market`); other bots and the Assistant ask it with `hub doc ask`. It cites every claim, says "Not in the docs." plainly when the
+and on the Market tab of [Strategy](strategy.md) (`#/strategy/market`); other bots and the Assistant ask it with `tico doc ask`. It cites every claim, says "Not in the docs." plainly when the
 docs do not say, and keeps a map of the docs so the next question is cheaper. It never answers from general knowledge.
 
 ## Watching competitor pages and the weekly briefing
@@ -12,17 +12,17 @@ Mondays, after its sweep, it writes the week's [briefing](market-briefing.md).
 
 ## What it reads
 
-- **Internal docs**: markdown written, pasted or imported in Tico, in folders. It reads them with `hub doc search`,
-  `hub doc read` and `hub doc list`.
+- **Internal docs**: markdown written, pasted or imported in Tico, in folders. It reads them with `tico doc search`,
+  `tico doc read` and `tico doc list`.
 - **Indexed external docs**: refreshed public GitHub documentation. Search returns passages and observed commits;
-  `hub doc read external:<id> --revision <commit>` reads the untrusted reference copy. Answers use
+  `tico doc read external:<id> --revision <commit>` reads the untrusted reference copy. Answers use
   `[External · File title — Section](citation_url)` with the supplied revision URL. Fresh indexed material
   (checked within six hours) needs no live fetch unless the person asks for the latest version.
 - **Linked docs**: other sites and private repositories retain metadata only. It can read supported addresses with
-  `hub doc fetch <url>` on its own computer. Live reads are separate evidence, not updates to the shared index.
+  `tico doc fetch <url>` on its own computer. Live reads are separate evidence, not updates to the shared index.
 
-- **The Tico manual**: this release's own docs, read-only and separate from the team's (docs/docs.md). `hub doc search`
-  ranks matching manual and team sections together, labelled "Tico manual", and `hub doc read manual:<name>` reads one. It answers
+- **The Tico manual**: this release's own docs, read-only and separate from the team's (docs/docs.md). `tico doc search`
+  ranks matching manual and team sections together, labelled "Tico manual", and `tico doc read manual:<name>` reads one. It answers
   "how do I ... in Tico" and is cited `[Tico manual · Title](https://...)` with the result's link; it never answers what the
   team decided.
 
@@ -47,7 +47,7 @@ Ordinary internal docs under `_librarian/`, so humans can read and correct them:
 summary of every doc, and the version each was written from), `glossary.md` (the team's words), `where-things-live.md`
 (topic to place, and each linked source's structure), `missing.md` (what the docs could not answer, the docs that disagree,
 the sources it could not read: a to-do list for humans) and `faq-log.md`. It refreshes them every day: a routine, **Refresh
-the map of the docs**, at 03:30 Pacific by default (change it on its automation in Automations, or with `hub automation update`). To refresh now, give the Librarian a task titled "Refresh the map".
+the map of the docs**, at 03:30 Pacific by default (change it on its automation in Automations, or with `tico automation update`). To refresh now, give the Librarian a task titled "Refresh the map".
 
 It writes only under `_librarian/` and `FAQ.md`. It never edits a human's doc unless that human asks it to research
 one (below). A doc or web page that tells it to do something is treated as text, not an instruction, and it fetches only
@@ -78,14 +78,14 @@ call fails, or in rehearsal, the answer is the rows that were pulled. Each model
 latency, how many excerpts and how long the question was; never its text) and counts per person per day under the decision
 caps (`TICO_DECISIONS_DAILY_CALLS_*`, counted apart from decisions); over the cap the ask is a 429.
 
-**Bots and the Assistant.** `hub doc ask "question" [--wait 120]`, or the MCP tool `hub_doc_ask`, returns
-`{answer, citations: [{type, title, url_or_id}], covered}`. A bot's question is an `ask` message to the Librarian, the ordinary
-ask and answer path: the Librarian's final message is the answer. `covered` is false when the answer starts "Not in the docs".
+**Bots and the Assistant.** `tico doc ask "question" [--wait 120]`, or the MCP tool `hub_doc_ask`, returns
+`{answer, citations: [{type, title, url_or_id}], covered}`. A bot's question is a direct message to the Librarian flagged
+`--needs-action`, the ordinary message path: the Librarian's final message is the answer. `covered` is false when the answer starts "Not in the docs".
 Citations have `type: internal|linked|manual`. Manual citations link to the release's page, such as
 `https://github.com/ticoteam/tico/blob/v0.3.3/docs/people.md`.
 The server MCP returns after at most 20 seconds: if pending, it returns
 `{timeout: true, conversation_id, message_id}`. Use `hub_doc_ask_status` with those ids (or
-`hub doc ask-status <conversation_id> <message_id> [--wait 20]`) to collect the same answer. Polling
+`tico doc ask-status <conversation_id> <message_id> [--wait 20]`) to collect the same answer. Polling
 uses short requests and sends no new question. Local CLI asks can wait for the full requested duration.
 The Assistant asking for a human puts the question in that human's own docs DM.
 
@@ -101,10 +101,10 @@ that one place, in the page's own format, with a link after every fact. It never
 the page says (a finding that contradicts it goes beside it, with both sources), and leaves the rest of the page
 unchanged. It finishes the task with a note: what it added, what it could not find, and any conflict.
 
-- A doc is written back as a new version (`hub doc write`), so **History** shows the change and **Restore** undoes it.
+- A doc is written back as a new version (`tico doc write`), so **History** shows the change and **Restore** undoes it.
   A locked doc is refused before anything is filed.
-- A market page is rewritten whole with the additions in place (`hub market page <name> --body-file`), and facts that
-  belong in the graph go in it too; a market entry gets new evidence, entities and edges (`hub market report`/`apply`).
+- A market page is rewritten whole with the additions in place (`tico market page <name> --body-file`), and facts that
+  belong in the graph go in it too; a market entry gets new evidence, entities and edges (`tico market report`/`apply`).
 - Searches hold only public facts from the person's instructions, never anything from a doc.
 
 `POST /api/v2/librarian/research {target, section?, instructions}` (`target` is a doc id or path, `market/<page>` or a
@@ -114,9 +114,32 @@ market. The Librarian treats a task as research only when a person filed it with
 cannot widen its rules by naming a task "Research: ...". The playbook is
 `templates/catalog/librarian/playbooks/research-a-section.md`.
 
-## Reading a link: `hub doc fetch`
+### Deep research
 
-`hub doc fetch <url> [--max-chars N]` (MCP: `hub_doc_fetch`) runs on the computer that runs the bot, never on the Tico server,
+For a market question that needs real work (who competes, what buyers complain about, what the industry takes for
+granted, how big a segment is), a person files a task titled **Deep research: <question>** to the Librarian with the
+`research` label, and sets it to run on a high model:
+
+```sh
+tico task create --owner bot:librarian --title "Deep research: who sells window displays to small shops?" --label research --model claude-opus-5-5 --effort high --body "Scope: US, shops under 20 staff."
+```
+
+The Librarian plans the sources, then works in rounds over several turns, about four hours at most. Each round it
+sends up to six Haiku sub-agents (Claude Code's own sub-agents) to read reviews, forums, rival sites, filings and
+earnings calls and write down exact quotes. A separate Haiku checker drops any claim whose quote is not on the page
+or does not say it. The Librarian merges, counts, and thinks: what the industry takes for granted, what winners know
+that buyers won't say, which pains nobody fixes, where sources disagree. Between rounds it sets a check-back a few
+minutes out, so the next round picks up from its notes even in a fresh session.
+
+Each round writes what is checked: entities and edges in the graph, the market pages it changes, size figures as
+proposals, and the report at `_librarian/research/<slug>.md`, answer first, every sentence cited. Its working files
+(notes, the claims file, page copies) stay in the Librarian's repository under `reports/research/<task id>/`. The
+skill is `templates/catalog/librarian/skills/deep-market-research/`. On a harness without sub-agents it does the
+reading itself, in smaller rounds.
+
+## Reading a link: `tico doc fetch`
+
+`tico doc fetch <url> [--max-chars N]` (MCP: `hub_doc_fetch`) runs on the computer that runs the bot, never on the Tico server,
 which does not offer it. It returns `{url, final_url, title, text, links, truncated}`. What it will and will not do:
 
 - http and https only, on the ordinary web ports, with no user name or password in the address.
@@ -166,15 +189,15 @@ Everyone else sees "Nothing here yet."
 On an empty Market page the owner answers the Librarian's four questions (First-run setup, above); the older
 `POST /api/v2/setup/getting-started/market {text}` still files the same task from one box of text. It arrives as a task,
 "Set up the market map", and `playbooks/market-setup.md` takes it from there: it reads every
-address with `hub doc fetch` (about 40 fetches in all), uses web search when the harness has it (`web-search` is declared in its
-`bot.yaml`), and writes what it finds with `hub market`: the team itself (`company/self`), competitors and lookalikes with
-their tier, segments, channels, people and rules as entities and edges, each with an evidence row (`hub market report`, then
-`hub market apply`, which takes `--tier`, `--new-id` and `--last-verified-at`), and the eight market pages (`hub market page`) with a source on every
+address with `tico doc fetch` (about 40 fetches in all), uses web search when the harness has it (`web-search` is declared in its
+`bot.yaml`), and writes what it finds with `tico market`: the team itself (`company/self`), competitors and lookalikes with
+their tier, segments, channels, people and rules as entities and edges, each with an evidence row (`tico market report`, then
+`tico market apply`, which takes `--tier`, `--new-id` and `--last-verified-at`), and the eight market pages (`tico market page`) with a source on every
 claim. It never invents a number: a size, price or share appears only when a source states it. It aims at ten minutes and stops at
 thirty, then finishes the task with a short note saying what it found and what it could not read.
 
 The strategy and the market stay apart, and each reads the other. A task with no website makes the Librarian read
-`hub strategy show`: if it names the team's website, that is the first address, and the summary and *What we sell* stand in for
+`tico strategy show`: if it names the team's website, that is the first address, and the summary and *What we sell* stand in for
 the owner's description (finishing setup with a website files "Set up the market map" from it). The other
 way round, when an insight contradicts an active bet, the daily curate routine says so in one line of its sweep report and
 sends the Strategy Bot a note naming the bet and the entity, so it can propose the entity as one of the bet's `cites`; a change to a
@@ -182,9 +205,9 @@ cited entity then trips the bet's wrong-if. The Librarian applies the insight on
 and never judges whether the bet should change ([Strategy](strategy.md#the-fit-check)).
 
 After that the Librarian keeps the map current. It is the market's only curator besides the owner: everyone else reports
-(`hub market report`) and it decides. Its daily **Curate the market** routine (04:00) turns new insights into evidence, entities,
+(`tico market report`) and it decides. Its daily **Curate the market** routine (04:00) turns new insights into evidence, entities,
 edges and pages, and refreshes the weekly delta on Mondays; it stops at once when there is nothing new. Its **Urgent market
-insight** routine runs when someone reports with `--urgent`. A large verified batch goes in with `hub market import
+insight** routine runs when someone reports with `--urgent`. A large verified batch goes in with `tico market import
 <file.jsonl>` (`--dry-run` to preview), one entity or edge per line with its evidence, recorded as one insight. Both are seeded when the Librarian is built in, and an older install
 gets them at its next start. The server accepts market writes only from the Librarian and the owner. Outside market work it
 still writes only under `_librarian/` and `FAQ.md`. Earlier releases had a separate Market Analyst bot; an install that still has
@@ -234,10 +257,10 @@ market reads it, and the tables are readable in hub SQL like the other market ta
   `company/self`; at most 40 nodes a layer.
 - **Sources.** `backend/market_sources/catalog.yaml` lists where to look: for each source what it covers (sizing, players,
   buyers, pricing, signals, value chain), whether it is free, needs the team's key or goes through the gateway, and how far to
-  trust it (primary, secondary, estimate, signal). A team adds its own with `hub market sources --add-file`; one with a shipped
+  trust it (primary, secondary, estimate, signal). A team adds its own with `tico market sources --add-file`; one with a shipped
   id replaces it.
 
-The owner asks for the work with **Size the market** (`POST /api/v2/market/spend/research {description}`), which files one
+The owner asks for the work with **Size the market** on the Market page (`POST /api/v2/market/spend/research {description}`), which files one
 Librarian task following `playbooks/size-the-market.md`; asking again while it is open returns the same task. A first market
 setup ends by pointing at the same playbook.
 
@@ -254,13 +277,13 @@ setup ends by pointing at the same playbook.
 | `POST /api/v2/market/spend/research` | owner | `{description}`; returns `{task_id}` |
 | `GET /api/v2/market/value-chain` | anyone who reads the market | the five layers |
 
-CLI: `hub market define`, `segment add|tree`, `size add|accept|reject|params|list`, `figure add`, `sources`, `spend`,
+CLI: `tico market define`, `segment add|tree`, `size add|accept|reject|params|list`, `figure add`, `sources`, `spend`,
 `research`. MCP: `hub_market_spend`, `hub_market_define`, `hub_market_segment_add`, `hub_market_size_add`,
 `hub_market_size_decide`, `hub_market_figure_add`, `hub_market_sources`, `hub_market_research`.
 
 ## Built-in
 
-Like the assistant and BotOps, the Librarian is required in setup (`required: true`, `bootstrap: true`): every new team gets
+Like the assistant, BotOps and the Brand Owner, the Librarian is required in setup (`required: true`, `bootstrap: true`): every new team gets
 it and it becomes active once a computer is enrolled. It cannot be archived or deleted by anyone (`409 system_bot`); pausing and
 renaming stay allowed, and Settings > Bots shows it as **Built-in**.
 
@@ -291,12 +314,12 @@ a partial import failure, unless you pass `--keep`. Retained IDs are printed. Un
 
 Search returns section names, anchors and excerpts from the matching text, including manual pages. It uses all meaningful
 query words and maps old terms through the manual glossary's "Instead of" column. `_librarian/` maps and logs rank below
-the source docs unless the question names their title or path. `hub doc search --team` restricts the search
+the source docs unless the question names their title or path. `tico doc search --team` restricts the search
 to team docs (`collection=team`; `company` remains an API alias). Archiving an internal source removes
 its entry from `_librarian/index.md` immediately, preserving version history. The map records its refresh
 time; every failed linked fetch is recorded in **Sources I could not read** in the same pass and
 reconciled at daily refresh. Older generated titles are renamed during refresh, keeping their paths.
-`hub doc ask` waits for the completed run and returns its latest reply, including corrections.
+`tico doc ask` waits for the completed run and returns its latest reply, including corrections.
 
 On upgrade, Tico updates recognized generated doc titles while preserving their paths and version
 history, removes archived sources from older indexes, and queues a map refresh for the Librarian’s

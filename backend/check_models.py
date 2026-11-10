@@ -1,9 +1,10 @@
-"""A subtask a bot runs on another model: `hub task child --check-model <runtime>[:<model>] --role review|check`.
+"""A subtask a bot runs on another model: `tico task child --check-model <runtime>[:<model>] --role review|check`.
 
 The subtask stays the bot's own. Its turns run on the named runtime and model, in a session of their own, and
 read only the subtask's room. Only the runtime, model, harness and effort change: the bot's repository, tools,
 isolation and credentials are its own, so a check never runs with more than the bot has. When the bot finishes
 it, the parent's owner is woken on the parent with the verdict (hubdb._subtask_wake)."""
+
 from . import hubdb as H
 from . import providers
 from .harnesses import runtime_of
@@ -33,12 +34,6 @@ def parse(spec):
 
 AUTO = "auto"
 
-# A nightly memory tidy pass (spec nightly-memory-tidy v1.3): its named model, at low effort, and never a Haiku-tier
-# model. It never moves to another model when its login is out of quota, it commits and pushes no memory, and it ends
-# skipped with the reason in the run log rather than wait (criteria 17, 22, 24).
-PASS_EFFORT = "low"
-PASS_SKIPPED = "skipped: model unavailable"
-
 
 def authors_of(c, settings, task_id):
     """The model makers who wrote a task's work: every maker on its runs so far (usage_records.ran_on, so a fallback
@@ -46,6 +41,7 @@ def authors_of(c, settings, task_id):
     yet and adds nothing. Empty when none is known (a person's task with no runs)."""
     from .shared_bots import follow
     from .usage_records import ran_on
+
     task = H.task(c, task_id) if task_id else None
     if not task:
         return set()
@@ -76,20 +72,27 @@ def _auto(c, settings, bot, authors):
         if row["provider"] not in authors:
             return row["runtime"], row["model"], ""
         names = sorted(providers.PROVIDER_BY_ID[p]["label"] for p in authors if p in providers.PROVIDER_BY_ID)
-        return row["runtime"], row["model"], (f"no provider other than {' or '.join(names) or 'the author'} can run "
-                                              "it, so it runs on the author's own")
-    raise CheckModelError("runner_not_ready" if refused else "check_model",
-                          "No check model can run" + (": " + "; ".join(refused[:3]) if refused else
-                                                      ": enable an AI provider in Settings > Computers, or name one "
-                                                      "with --check-model"))
+        return (
+            row["runtime"],
+            row["model"],
+            (f"no provider other than {' or '.join(names) or 'the author'} can run it, so it runs on the author's own"),
+        )
+    raise CheckModelError(
+        "runner_not_ready" if refused else "check_model",
+        "No check model can run"
+        + (
+            ": " + "; ".join(refused[:3])
+            if refused
+            else ": enable an AI provider in Settings > Computers, or name one with --check-model"
+        ),
+    )
 
 
-def choose(c, settings, bot, spec, role, authors=(), memory_pass=False):
+def choose(c, settings, bot, spec, role, authors=()):
     """The check model a subtask of `bot` may name, or CheckModelError. The company must have the provider
     on (Settings > Computers), the model must be current, and the bot's computer must not report that
     runtime signed out. `auto` takes the company's check model for work by `authors`, from another provider when one
-    can run it and from theirs when none can; then `note` on the result says so for the task's history.
-    `memory_pass` (a nightly memory tidy pass) names a model that is not Haiku-tier and has the low effort, which it runs at."""
+    can run it and from theirs when none can; then `note` on the result says so for the task's history."""
     if role not in ROLES:
         raise CheckModelError("role", "Choose --role review or --role check")
     record = providers.load(c, settings)
@@ -106,46 +109,36 @@ def choose(c, settings, bot, spec, role, authors=(), memory_pass=False):
         raise CheckModelError("check_model", "Enable an AI provider in Settings before naming a check model")
     row = providers.MODEL_BY_ID.get(model) or {}
     effort = str(row.get("default_effort") or "")
-    if memory_pass:
-        if "haiku" in model.lower():
-            raise CheckModelError("check_model", "A nightly memory tidy pass never runs on a Haiku-tier model; name another model")
-        if PASS_EFFORT not in (row.get("efforts") or ()):
-            raise CheckModelError("check_model", f"{model} has no {PASS_EFFORT} effort, so it cannot run a nightly memory tidy pass")
-        effort = PASS_EFFORT
     harnesses = tuple(row.get("harnesses") or (runtime,))
     harness = next((h for h in harnesses if runtime_of(h) == runtime), harnesses[0])
     can = can_run(c, bot, runtime, harness=harness, model=model)
     if can.get("can_run") is False:
         raise CheckModelError("runner_not_ready", can.get("problem") or f"{runtime} cannot run on this bot's computer")
-    return {"runtime": runtime, "model": model, "harness": harness, "effort": effort, "role": role,
-            **({"note": note} if note else {}), **({"memory_pass": True} if memory_pass else {})}
+    return {
+        "runtime": runtime,
+        "model": model,
+        "harness": harness,
+        "effort": effort,
+        "role": role,
+        **({"note": note} if note else {}),
+    }
 
 
 def record(c, actor, task_id, check):
-    c.execute("INSERT INTO task_check_models(task_id,runtime,model,harness,effort,role,created_by,created_at) "
-              "VALUES(?,?,?,?,?,?,?,?)", (task_id, check["runtime"], check["model"], check["harness"],
-                                          check["effort"], check["role"], actor, H.now()))
-    H._task_event(c, task_id, actor, "check_model", None, f"{check['runtime']}:{check['model']}",
-                  check["role"] + (f"; {check['note']}" if check.get("note") else ""))
-    if check.get("memory_pass"):
-        from .repositories import save_metadata
-        save_metadata(c, "memory-pass:" + task_id, {"runtime": check["runtime"], "model": check["model"]})
-
-
-def file_pass(c, settings, task_id, spec):
-    """Name the model of a nightly memory tidy pass on its check subtask, the owner bot's own (the pilot's call).
-    Only the model and the low effort are set; the subtask stays the bot's own."""
-    owner = H.task(c, task_id)["owner_id"]
-    if not H.is_bot(owner):
-        raise CheckModelError("check_model", "A memory pass runs on a bot's own subtask")
-    bot = H.actor_id(owner)
-    record(c, owner, task_id, choose(c, settings, bot, spec, "check", memory_pass=True))
-
-
-def memory_pass(c, task_id):
-    """Whether this check subtask is a nightly memory tidy pass (file_pass)."""
-    from .repositories import metadata
-    return bool(task_id) and bool(metadata(c, "memory-pass:" + task_id))
+    c.execute(
+        "INSERT INTO task_check_models(task_id,runtime,model,harness,effort,role,created_by,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?)",
+        (task_id, check["runtime"], check["model"], check["harness"], check["effort"], check["role"], actor, H.now()),
+    )
+    H._task_event(
+        c,
+        task_id,
+        actor,
+        "check_model",
+        None,
+        f"{check['runtime']}:{check['model']}",
+        check["role"] + (f"; {check['note']}" if check.get("note") else ""),
+    )
 
 
 def prime(c, pairs):
@@ -153,16 +146,25 @@ def prime(c, pairs):
     queued work is no check subtask, and Health asks for every queued job (execution.prime_job_checks). A pair with
     one is left to its own read, which returns exactly the columns check_model selects."""
     from .read_cache import cache, prime as seed
+
     pairs = {(tid, bot) for tid, bot in pairs if tid and bot}
     if cache(c) is None or not pairs or not H._has_table(c, "task_check_models"):
         return
     have = set()
     for part in H.chunks(sorted({tid for tid, _ in pairs})):
-        have.update((row[0], row[1]) for row in c.execute(
-            "SELECT m.task_id,m.created_by FROM task_check_models m JOIN tasks t ON t.id=m.task_id "
-            f"WHERE m.task_id IN ({','.join('?' * len(part))}) AND t.owner_id=m.created_by", part))
-    seed(c, H.CHECK_MODEL_SQL, {(tid, "bot:" + bot, "bot:" + bot): None
-                                for tid, bot in pairs if (tid, "bot:" + bot) not in have})
+        have.update(
+            (row[0], row[1])
+            for row in c.execute(
+                "SELECT m.task_id,m.created_by FROM task_check_models m JOIN tasks t ON t.id=m.task_id "
+                f"WHERE m.task_id IN ({','.join('?' * len(part))}) AND t.owner_id=m.created_by",
+                part,
+            )
+        )
+    seed(
+        c,
+        H.CHECK_MODEL_SQL,
+        {(tid, "bot:" + bot, "bot:" + bot): None for tid, bot in pairs if (tid, "bot:" + bot) not in have},
+    )
 
 
 def of(c, task_id, bot):
@@ -172,12 +174,14 @@ def of(c, task_id, bot):
     first model again."""
     first = H.check_model(c, task_id, bot)
     from .repositories import metadata
+
     moved = metadata(c, "check-moved:" + task_id) if first else None
-    if (moved and _default_login(c, bot, first, moved["runner_id"])
-            and _out_of_quota(c, moved["runner_id"], first["runtime"])):
+    if (
+        moved
+        and _default_login(c, bot, first, moved["runner_id"])
+        and _out_of_quota(c, moved["runner_id"], first["runtime"])
+    ):
         return {k: moved[k] for k in ("runtime", "model", "harness", "effort", "role")}
-    if first and memory_pass(c, task_id):
-        return {**first, "memory_pass": True}
     return first
 
 
@@ -191,6 +195,7 @@ def _out_of_quota(c, runner_id, runtime, settings=None):
     """Whether Health's default_login_limited marks `runner_id`'s default `runtime` login out of quota: a turn there
     completing, or the provider's reset passing, ends it (maintenance_health.out_of_quota_logins)."""
     from .maintenance_health import out_of_quota_logins
+
     return any(x["runner_id"] == runner_id and x["runtime"] == runtime for x in out_of_quota_logins(c, settings))
 
 
@@ -203,8 +208,7 @@ def move_on(c, settings, bot, task_id, check, runner_id):
     from .maintenance_health import out_of_quota_logins
     from .repositories import save_metadata
     from .task_relations import parent_of
-    if memory_pass(c, task_id):
-        return None     # a memory pass never moves to another model: its limit ends it (skip_pass)
+
     first = H.check_model(c, task_id, bot)
     out = {x["runtime"] for x in out_of_quota_logins(c, settings) if x["runner_id"] == runner_id}
     if not first or check["runtime"] not in out or not _default_login(c, bot, check, runner_id):
@@ -219,37 +223,31 @@ def move_on(c, settings, bot, task_id, check, runner_id):
         except CheckModelError:
             continue
         save_metadata(c, "check-moved:" + task_id, {**nxt, "runner_id": runner_id})
-        H._task_event(c, task_id, H.KEEPER, "check_model", f"{check['runtime']}:{check['model']}",
-                      f"{nxt['runtime']}:{nxt['model']}", f"the computer's default {check['runtime']} login is out "
-                      f"of quota; back to {first['runtime']}:{first['model']} once it works again")
+        H._task_event(
+            c,
+            task_id,
+            H.KEEPER,
+            "check_model",
+            f"{check['runtime']}:{check['model']}",
+            f"{nxt['runtime']}:{nxt['model']}",
+            f"the computer's default {check['runtime']} login is out "
+            f"of quota; back to {first['runtime']}:{first['model']} once it works again",
+        )
         return nxt
     return None
-
-
-def skip_pass(c, task_id, check):
-    """A nightly memory tidy pass whose named model cannot run (its login is out of quota) ends skipped with the reason
-    on its own subtask: declined quietly, with no notice to its requester and no wake of its parent, and no retry.
-    Nothing else runs for it: no other model is named."""
-    from . import memory_tidy_runs
-    filed = c.execute('SELECT * FROM memory_tidy_passes WHERE check_task_id=?', (task_id,)).fetchone()
-    if filed:
-        # A waiting container resumes when its last child ends, independently
-        # of the verdict wake flag. Retire it before ending the check.
-        memory_tidy_runs.close_pass(c, filed, PASS_SKIPPED)
-    else:
-        H.task_update(c, H.KEEPER, task_id, status="declined", note=PASS_SKIPPED, quiet=True, wake_others=False)
-    H._task_event(c, task_id, H.KEEPER, "memory_pass", f"{check['runtime']}:{check['model']}", None, PASS_SKIPPED)
 
 
 def handed(c, attempt_id, task_id, check):
     """Remember that the claim handed this attempt out on the check's model, for its completion."""
     from .repositories import save_metadata
+
     save_metadata(c, "check-attempt:" + attempt_id, {"task_id": task_id, **dict(check)})
 
 
 def handed_out(c, attempt_id):
     """(task id, check) the claim handed this attempt out on, or (None, None); forgotten once read."""
     from .repositories import metadata
+
     found = metadata(c, "check-attempt:" + attempt_id)
     if not found:
         return None, None
@@ -260,21 +258,23 @@ def handed_out(c, attempt_id):
 def hold(c, task_id, runtime, until):
     """A usage limit on the check's model holds that check alone until `until`; the bot's own work goes on."""
     from .repositories import save_metadata
+
     save_metadata(c, "check-limited:" + task_id, {"runtime": runtime, "until": until})
 
 
 def held(c, task_id):
     """Whether a usage limit on the check's model still holds the check."""
     from .repositories import metadata
+
     return bool(task_id) and str(metadata(c, "check-limited:" + task_id).get("until") or "") > H.now()
 
 
 def dropped(c, task_id):
-    """Whether a check a usage limit has held, or a nightly memory tidy pass skipped (skip_pass), has left the board
-    (done, closed or declined): its queued turn is let go (Execution.hold_unrunnable) instead of retrying after every
-    reset and running once on a finished task."""
+    """Whether a check a usage limit has held has left the board (done, closed or declined): its queued turn is let go
+    (Execution.hold_unrunnable) instead of retrying after every reset and running once on a finished task."""
     from .repositories import metadata
-    if not task_id or not (metadata(c, "check-limited:" + task_id) or memory_pass(c, task_id)):
+
+    if not task_id or not metadata(c, "check-limited:" + task_id):
         return False
     row = c.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
     return bool(row) and row[0] not in H.ACTIVE_STATUSES
@@ -286,10 +286,14 @@ def apply(config, check):
     if not check:
         return config
     out = {k: v for k, v in config.items() if k not in ("fallback_models",)}
-    out.update(runtime=check["runtime"], model=check["model"], harness=check["harness"],
-               fallback={"off": True}, session="task", subtask_session="own")
-    if check.get("memory_pass"):
-        out["memory_pass"] = True     # the runner commits and pushes none of its memory (runner-rs finish_place)
+    out.update(
+        runtime=check["runtime"],
+        model=check["model"],
+        harness=check["harness"],
+        fallback={"off": True},
+        session="task",
+        subtask_session="own",
+    )
     if check["effort"]:
         out["reasoning_effort"] = check["effort"]
     else:
@@ -312,6 +316,7 @@ def review_default(c, settings, owner, parent_id):
     when the author is unknown or no check model can run it; then `why not` says so for the task's history, and
     the bot works on its own model, as before, rather than the review being refused."""
     from .shared_bots import follow
+
     parent = H.task(c, parent_id) if parent_id else None
     if not parent or not H.is_bot(owner) or parent["owner_id"] == owner:
         return None, None

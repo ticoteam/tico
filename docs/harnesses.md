@@ -86,7 +86,7 @@ takes an API key. Candidates:
 
 - **pi** (already a Tico host, `runner-rs/src/hosts/pi.rs`): a long-lived process driven over JSON on stdin and stdout
   (`pi --mode rpc`), a JSON event stream Tico already parses, resumable sessions, read/bash/edit/write/grep tools, MCP servers (the bot
-  reaches Tico through the hub MCP server and the `hub` CLI over bash), no permission prompts, an npm package, and keys
+  reaches Tico through the hub MCP server and the `tico` CLI over bash), no permission prompts, an npm package, and keys
   for many providers by environment variable. Tico reaches every model through OpenRouter, so one key covers all of them.
 - **OpenCode**: also capable and widely used, with a large provider list, but it would need a new host adapter and its
   own event format, and ships a per-platform native binary. Nothing in a headless run needs what it adds.
@@ -102,8 +102,10 @@ stdio server's environment names the Gateway key empty so it never inherits it. 
 
 **Compact at** applies to a pi turn: the turn's `settings.json` (in the same agent folder) sets pi's
 `compaction.reserveTokens` to the model's context window less the bot's Compact at (`reserve_tokens` in `hosts/pi.rs`,
-kept between pi's default 16,384 and a compaction point of 100,000). The Tico Gateway's models have a 200,000-token window.
-No OpenRouter model's window is known to Tico yet, so those turns keep pi's own compaction. pi's `compaction_end` with a
+kept between pi's default 16,384 and a compaction point of 100,000). The Tico Gateway's models have a 200,000-token window,
+so a Compact at of 250,000 or more compacts at 183,616 tokens there (200,000 less 16,384). No model outside the Gateway has a
+window Tico knows yet (OpenRouter's, DeepSeek's, Moonshot's and Mistral's included), so those turns keep pi's own compaction
+whatever the Compact at. pi's `compaction_end` with a
 result is a compaction: the session's next turn is given the whole prompt. pi can compact between one turn's tool calls,
 where Tico cannot put back what the turn left out, so that turn keeps what it was given until the next one.
 `compact_first` and `/compact` send pi's RPC `compact`, which ends at its `compaction_end`.
@@ -154,13 +156,13 @@ the `openrouter` provider offers every such model; enabling one vendor offers th
 
 ### The Tico AI Gateway
 
-The Gateway's picks (`tico-<department>-<level>[-fast][-<version>]`, for example `tico-sales-medium` or
-`tico-engineering-high-fast-1.0`; `backend/gateway_tiers.py`) run on pi through Tico's own Gateway, not OpenRouter. The
+The Gateway's picks (`tico-<level>[-fast][-<version>]`, level `xlow`, `low`, `medium`, `high` or `xhigh`, for example
+`tico-medium` or `tico-high-fast-1.0`; `backend/gateway_tiers.py`) run on pi through Tico's own Gateway, not OpenRouter. The
 catalog lists each tier at its current pinned version; any other id of the lineup (no version, an older version) resolves
-on lookup, and pi's `models.json` names the turn's model for the run. `tico-cheap-1.1`, `tico-cheap-1.0`, `tico-mid-1.0`
-and `tico-power-1.0` are the old lineup (`deprecated`, `lineup: old`): no picker offers them, but a bot already on one keeps
-running at its old price. In Settings the Gateway is a harness / provider of its own ("Tico AI Gateway") whose Model control is
-Department, Level, Fast and Version, and the stored model is the id they make. Their provider, `tico`, is never ticked: it is on
+on lookup, and pi's `models.json` names the turn's model for the run. An id from before this lineup (one with a
+department, or the first lineup's) was rewritten once to its level's id and resolves as that id when it still arrives
+(`gateway_tiers.new_id`). In Settings the Gateway is a harness / provider of its own ("Tico AI Gateway") whose Model control is
+Level, Fast and Version, and the stored model is the id they make. Their provider, `tico`, is never ticked: it is on
 exactly while the **Tico AI Gateway** connection in Settings > Models has a key (`backend/gateway_connection.py`),
 and OpenRouter's catch-all does not offer them. The key is the one Decide uses; the server's `TICO_GATEWAY_KEY` and
 `TICO_GATEWAY_URL` win over a saved one and show as connected. A saved key is sealed and never read back, only a
@@ -222,17 +224,17 @@ The current OpenAI and Claude choices, reviewed 2026-10-03, are:
 | Claude Code (Anthropic) | Fable 5.1 | `claude-fable-5-1` | 2026-09-01 |
 | Claude Code (Anthropic) | Haiku 5.5 | `claude-haiku-5-5` | 2026-10-07 |
 | Codex (OpenAI) | Sol 6.1 | `gpt-6.1-sol` | 2026-09-29 |
-| Codex (OpenAI) | Terra 6.1 | `gpt-6.1-terra` | 2026-10-26 |
 | Codex (OpenAI) | Luna 6 | `gpt-6-luna` | 2026-09-22 |
 
 Release dates: [Claude release notes](https://platform.claude.com/docs/en/release-notes/overview)
 and [OpenAI changelog](https://developers.openai.com/api/docs/changelog).
 The offered effort levels are low, medium, high, xhigh and max, supported by the existing runner
 adapters and documented for [Claude](https://platform.claude.com/docs/en/build-with-claude/effort),
-[Sol 6.1](https://developers.openai.com/api/docs/models/gpt-6.1-sol),
-[Terra 6.1](https://developers.openai.com/api/docs/models/gpt-6.1-terra) and
+[Sol 6.1](https://developers.openai.com/api/docs/models/gpt-6.1-sol) and
 [Luna 6](https://developers.openai.com/api/docs/models/gpt-6-luna).
 Astra, Sol 6 and Opus 5 remain readable for existing configurations but cannot be newly selected.
+Terra 6.1 (`gpt-6.1-terra`) is not offered for new choices. A bot whose **Model** or **Task model**
+is already Terra 6.1 keeps running on it.
 No existing bot is migrated automatically.
 
 Cursor Agent and Grok Build already have runner adapters and appear when their providers are enabled.
@@ -270,9 +272,15 @@ to the bot's own model, with the task context length and any task effort that mo
 A task's own model ([Choosing the model a task runs on](tasks.md#choosing-the-model-a-task-runs-on)) falls back to the
 bot's task model first, then to the bot's own model. A review or check subtask keeps its check model.
 
+A bot whose **Task model** is not offered yet keeps that model, and its tasks still run on it, when you change
+**Task context length** or save the same model again. Settings does not offer **Task effort** choices for such a
+model, so that field stays disabled there. A save that sends only an effort or a context length keeps the model too.
+Terra 6.1 (`gpt-6.1-terra`) is one such model. Choosing it for a bot that does not have it saved is refused, and
+so is choosing another model that is not offered yet.
+
 #### A warning about a cheaper task model
 
-A bot that has requested send, spend or publish approvals, or holds a tool grant that can write beyond its
+A bot that has asked a person to OK something on a task, or holds a tool grant that can write beyond its
 own repository, can show a warning under **Task model**. The warning compares models from the same provider
 using their listed output prices. Another provider's model, or one without a listed price, is not judged.
 
@@ -461,6 +469,7 @@ another bot's home; all turns use the original login in its own home.
 | `weekly_usage` | `refresh` (turns report it, and it can be refreshed on demand), `turns`, or `manual` (only a person's reading) | No weekly usage |
 | `account` | Where the signed-in account (email, plan, organization) is read: `status-json` (the `sign_in_status` JSON's `email`, `subscriptionType`, `orgName`) or `app-server` (Codex app-server `account/read`, never with a token refresh). Credential files are never read | Account shown as unavailable |
 | `tool_events` | The host emits one `tool` event per tool call, so a run with none provably did nothing | No evidence either way |
+| `skill_events` | Every skill the model uses is reported as a `Skill` call with its name, so a bot's install with no use in 30 days can read **Unused** (docs/skills.md) | Its installs read **Unknown**, never Unused |
 | `mcp_transports` / `mcp_unsupported` | The MCP transports a run takes; the reason shown when it takes none | No MCP servers, "it has no MCP support in Tico" |
 | `resume_after_interrupt` | An interrupted thread can be continued | `true`. No longer read: an interrupted session is always kept and resumed ([sessions](sessions.md#checkpoints-and-resume)) |
 | `steer` | A message sent while a turn runs is written into that turn (Claude Code, Codex and pi; Claude Code also needs a CLI that echoes its input) | The message waits for the next turn; DM says so and offers Stop and redirect |
@@ -476,9 +485,36 @@ another bot's home; all turns use the original login in its own home.
 | `readiness` | The runner reports install and sign-in for it | `true`; `false` reports nothing, so checks say unknown |
 | `repo_permission_lint` | Readiness warns about permission rules in the bot's repository | No lint |
 | `packet_only` | A tidy check runs from a supplied packet without Hub MCP or checkout tools; Codex also uses its read-only sandbox | The harness cannot run tidy packets |
-| `repo_commands` | The bot's repository skills and commands are offered as chat commands | Built-in commands only |
+| `repo_commands` | The bot's repository skills and commands, and the company skills staged for it, are offered as chat commands | Built-in commands only |
 
 Goals, chat commands and controls stay probed: the runner reports them per installed version in its heartbeat.
+
+### Company skills on a Claude Code or Codex turn
+
+At the start of each Claude Code or Codex turn the runner asks `GET /api/v2/attempts/{aid}/skills` for the skills installed for
+the bot (the latest approved version, or the pinned one). It fetches each bundle once by sha
+(`GET /api/v2/skills/bundles/{sha256}`) into `<state>/skill-bundles/<sha>.json`, checks the sha on every read, and
+writes the files under `<state>/skill-sessions/<attempt>/.claude/skills/<name>/`. That folder is added with
+`--add-dir`, so Claude Code loads the skills and its `/` menu lists them; readiness offers the last staged set as chat
+commands. The runner then reports what it staged (`POST /api/v2/attempts/{aid}/skills/receipt`). Only the attempt's
+runner, or the bot's own run of that attempt, may read its installs or post its receipt.
+
+A bundle that fails its sha, a path that leaves the skill folder, a link in the way, or any server error leaves that
+skill (or all of them) out and the turn runs on; the failure is logged without file contents. A server without these
+routes answers 404 and the runner stages nothing. Harnesses other than Claude Code and Codex stage none yet.
+
+Codex gets the same staged folder: before the thread starts or resumes, the runner gives the turn's own app server
+`<state>/skill-sessions/<attempt>/.claude/skills` as its only extra skill root (`skills/extraRoots/set`, Codex 0.136
+and later), and Codex lists those skills to the model next to its own. Nothing is written under `CODEX_HOME` or the
+repository. An app server without the call runs the turn without company skills. Codex counts a use only for an
+explicit selection: a `skill` item in the turn's input, which the app server echoes in the turn's user message, is
+reported as a `Skill` call. Codex sends no event when it resolves a `$name` typed in the text or when the model reads a
+`SKILL.md`, so neither is counted. The runner sends text only, so Codex bots' uses today come from a person's typed
+`/name` (below).
+
+Each `Skill` tool call the runner reports carries the skill's name (`skill`) and nothing of its arguments. The server
+counts a call to a directory skill once per (attempt, tool id); a person's message to a bot that starts with `/name`
+counts as that person's use of the bot's installed skill. Usage rows hold the skill, who, where and when only.
 
 A runtime with a second host (Gemini's Antigravity) declares it as `[variants.<harness>]` in the runtime's manifest,
 with its own `name`, `host`, `executable` and capabilities. The runner never installs a variant.

@@ -1,4 +1,5 @@
 """The integrated Rust listener keeps HTTP, streaming and screen sockets on the same origin."""
+
 import contextlib
 import os
 import subprocess
@@ -9,8 +10,8 @@ import time
 import httpx
 import pytest
 
-from backend.tests.test_screen_relay_contract import Service, gateway_origin, relay_binary, service  # noqa: F401
-from backend.tests.test_api import headers
+from backend.tests.helpers.screen_relay_contract import Service, gateway_origin, relay_binary, service  # noqa: F401
+from backend.tests.helpers.api import headers
 
 pytestmark = pytest.mark.slow
 
@@ -29,8 +30,9 @@ def test_same_origin_gateway_preserves_http_streams_socket_paths_and_hides_contr
             assert stream.headers["content-type"].startswith("text/event-stream")
             assert next(stream.iter_lines()) == "retry: 1000"
         r = service.computer()
-        response = client.post(f"/api/v2/runners/{r['runner_id']}/screen/sessions",
-                               json={"control": False}, headers=headers())
+        response = client.post(
+            f"/api/v2/runners/{r['runner_id']}/screen/sessions", json={"control": False}, headers=headers()
+        )
         assert response.status_code == 200, response.text
         opened = response.json()
         direct = service.relay_url
@@ -38,8 +40,10 @@ def test_same_origin_gateway_preserves_http_streams_socket_paths_and_hides_contr
         try:
             with service.websocket(opened["ws_path"], origin=service.origin) as browser:
                 with service.websocket(service.runner_path(opened), token=r["token"]) as runner:
-                    browser.send(b"same public path"); assert runner.recv(timeout=5) == b"same public path"
-                    runner.send(b"same bearer"); assert browser.recv(timeout=5) == b"same bearer"
+                    browser.send(b"same public path")
+                    assert runner.recv(timeout=5) == b"same public path"
+                    runner.send(b"same bearer")
+                    assert browser.recv(timeout=5) == b"same bearer"
         finally:
             service.relay_url = direct
 
@@ -52,15 +56,27 @@ def standard_startup(root, port):
     root.mkdir()
     (root / "registry").mkdir()
     origin = f"http://127.0.0.1:{port}"
-    env = {**os.environ, "TICO_DB": str(root / "hub.sqlite"), "TICO_REGISTRY_DIR": str(root / "registry"),
-           "TICO_BLOB_DIR": str(root / "blobs"), "TICO_SCHEDULER": "0", "TICO_UPDATE_CHECK": "off",
-           "TICO_TELEMETRY": "off", "TICO_SUPPORT": "off", "TICO_PUBLIC_URL": origin,
-           "TICO_AUTH_PROXY": "", "TICO_OWNER_EMAIL": "ana@acme.example",
-           "TICO_LOCAL_OWNER_TOKEN": "fictional-owner-token", "TICO_LOCAL_OWNER_EMAIL": "ana@acme.example"}
+    env = {
+        **os.environ,
+        "TICO_DB": str(root / "hub.sqlite"),
+        "TICO_REGISTRY_DIR": str(root / "registry"),
+        "TICO_BLOB_DIR": str(root / "blobs"),
+        "TICO_SCHEDULER": "0",
+        "TICO_UPDATE_CHECK": "off",
+        "TICO_TELEMETRY": "off",
+        "TICO_SUPPORT": "off",
+        "TICO_PUBLIC_URL": origin,
+        "TICO_AUTH_PROXY": "",
+        "TICO_OWNER_EMAIL": "ana@acme.example",
+        "TICO_LOCAL_OWNER_TOKEN": "fictional-owner-token",
+        "TICO_LOCAL_OWNER_EMAIL": "ana@acme.example",
+    }
     with (root / "server.log").open("w") as log:
-        process = subprocess.Popen([sys.executable, "-m", "backend.server", "--port", str(port)],
-                                   env=env, stdout=log, stderr=log)
+        process = subprocess.Popen(
+            [sys.executable, "-m", "backend.server", "--port", str(port)], env=env, stdout=log, stderr=log
+        )
         try:
+
             def running():
                 # Checked before any answer on the port is trusted: if another test took the port, that answer is
                 # theirs. The log is read once the process has exited, so it holds the relay's last words.
@@ -74,8 +90,9 @@ def standard_startup(root, port):
             def healthy():
                 running()
                 with contextlib.suppress(httpx.HTTPError):
-                    return httpx.get(origin + "/healthz", timeout=.5).status_code == 200
+                    return httpx.get(origin + "/healthz", timeout=0.5).status_code == 200
                 return False
+
             Service.eventually(healthy, seconds=20)
             hello = httpx.get(origin + "/control/v1/hello").status_code
             running()
@@ -86,19 +103,20 @@ def standard_startup(root, port):
             gone = time.monotonic() + 1.5
             while True:
                 try:
-                    answer = httpx.get(origin + "/healthz", timeout=.5).status_code
+                    answer = httpx.get(origin + "/healthz", timeout=0.5).status_code
                 except httpx.ConnectError:
                     break
                 assert answer == 200, f"the public port answered {answer} while the server stopped"
                 assert time.monotonic() < gone, "the public port still accepts connects"
-                time.sleep(.02)
+                time.sleep(0.02)
         finally:
             if process.poll() is None:
                 process.terminate()
                 try:
                     process.wait(10)
                 except subprocess.TimeoutExpired:
-                    process.kill(); process.wait(5)
+                    process.kill()
+                    process.wait(5)
         # A clean stop terminates its own Rust child; no listener survives on the former public port.
         listener = Service.bind(port)
         listener.close()
@@ -145,10 +163,18 @@ def test_gateway_does_not_reuse_a_backend_connection_the_backend_is_closing():
                 threading.Thread(target=serve, args=(backend.accept()[0],), daemon=True).start()
 
     threading.Thread(target=accept, daemon=True).start()
-    process = subprocess.Popen([relay_binary()], stdout=subprocess.PIPE, text=True,
-        env={**os.environ, "TICO_SCREEN_RELAY_KEY": "fictional-relay-key-for-isolated-tests-only",
-             "TICO_SCREEN_PYTHON_URL": f"http://127.0.0.1:{backend.getsockname()[1]}",
-             "TICO_SCREEN_RELAY_BIND": "127.0.0.1:0", "TICO_SCREEN_PUBLIC_BIND": "127.0.0.1:0"})
+    process = subprocess.Popen(
+        [relay_binary()],
+        stdout=subprocess.PIPE,
+        text=True,
+        env={
+            **os.environ,
+            "TICO_SCREEN_RELAY_KEY": "fictional-relay-key-for-isolated-tests-only",
+            "TICO_SCREEN_PYTHON_URL": f"http://127.0.0.1:{backend.getsockname()[1]}",
+            "TICO_SCREEN_RELAY_BIND": "127.0.0.1:0",
+            "TICO_SCREEN_PUBLIC_BIND": "127.0.0.1:0",
+        },
+    )
     try:
         assert process.stdout.readline().startswith("screen relay listening on ")
         public = gateway_origin(process)

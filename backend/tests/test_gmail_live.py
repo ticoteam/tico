@@ -1,9 +1,7 @@
 """Live Gmail reads use read-only tokens, bounded pages and the connector's normalizer."""
 
-import base64
-import copy
 import io
-from urllib.parse import parse_qs, unquote, urlsplit
+import json
 
 import pytest
 
@@ -11,51 +9,7 @@ from backend import gmail_live as G
 from backend import google_workspace as W
 from backend.mail import gmail_query
 from backend.store import Problem
-
-BOX = "ana@acme.example"
-NEXT = "Gmail+next/=?|opaque"
-
-
-def raw_message(mid, epoch=100):
-    return {"id": mid, "threadId": "t1", "internalDate": str(epoch * 1000),
-            "labelIds": ["INBOX", "UNREAD"], "snippet": "A &amp; B",
-            "payload": {"mimeType": "multipart/mixed", "headers": [
-                {"name": "From", "value": "Sender <sender@acme.example>"},
-                {"name": "To", "value": BOX}, {"name": "Subject", "value": "A contract"},
-                {"name": "List-Id", "value": "contracts.acme.example"},
-                {"name": "List-Unsubscribe", "value": "<https://acme.example/unsubscribe>"}],
-                "parts": [{"mimeType": "text/plain", "body": {
-                    "data": base64.urlsafe_b64encode(b"Live contract body.").decode()}},
-                    {"filename": "contract.pdf", "mimeType": "application/pdf",
-                     "body": {"attachmentId": "a1", "size": 123}}]}}
-
-
-@pytest.fixture
-def gmail_http(monkeypatch):
-    state = {"calls": [], "status": 200, "metadata_status": 200,
-             "messages": {"m1": raw_message("m1", 100), "m2": raw_message("m2", 200)}}
-
-    def call(url, *, token):
-        parsed = urlsplit(url)
-        path, query = unquote(parsed.path), parse_qs(parsed.query)
-        state["calls"].append((path, query, token))
-        if state["status"] != 200:
-            return state["status"], {"error": {"message": "PRIVATE GOOGLE TEXT"}}
-        if path.endswith("/messages"):
-            if query.get("pageToken") == [NEXT]:
-                return 200, {"messages": [{"id": "m1"}]}
-            return 200, {"messages": [{"id": "m2"}], "nextPageToken": NEXT}
-        if "/threads/" in path:
-            return 200, {"id": "t1", "messages": [copy.deepcopy(state["messages"][mid]) for mid in ("m2", "m1")]}
-        raw = copy.deepcopy(state["messages"][path.rsplit("/", 1)[-1]])
-        if query.get("format") == ["metadata"]:
-            if state["metadata_status"] != 200:
-                return state["metadata_status"], {}
-            raw["payload"].pop("parts")
-        return 200, raw
-
-    monkeypatch.setattr(G, "gmail_call", call)
-    return state
+from backend.tests.helpers.gmail_live import BOX, NEXT, gmail_http
 
 
 @pytest.fixture
@@ -112,7 +66,8 @@ def test_a_metadata_failure_refuses_the_page_instead_of_losing_a_message(gmail_h
 
 def test_query_filters_and_a_callers_or_query_are_anded():
     assert gmail_query("from:a OR from:b", "Needs review", 100, 200, "true") == (
-        '(from:a OR from:b) label:"Needs review" after:100 before:200 has:attachment')
+        '(from:a OR from:b) label:"Needs review" after:100 before:200 has:attachment'
+    )
     assert gmail_query("", "", None, None, "false") == ""
 
 
@@ -149,3 +104,85 @@ def test_http_timeout_and_invalid_json_are_refusals_with_short_timeouts(monkeypa
 def test_an_empty_gmail_page_is_a_success(monkeypatch, minted):
     monkeypatch.setattr(G, "gmail_call", lambda *args, **kwargs: (200, {}))
     assert G.list(None, BOX) == {"messages": [], "next_cursor": None, "q": ""}
+
+
+def test_batch_modify_chunks_and_uses_only_the_write_scope(gmail_http, minted):
+    ids = ["m" + str(n) for n in range(2001)]
+    G.organize(None, BOX, ids, add=("STARRED",), remove=("UNREAD",))
+    writes = gmail_http["writes"]
+    assert [len(body["ids"]) for _, body, _ in writes] == [1000, 1000, 1]
+    assert [mid for _, body, _ in writes for mid in body["ids"]] == ids
+    assert all(
+        path.endswith("/messages/batchModify")
+        and body["addLabelIds"] == ["STARRED"]
+        and body["removeLabelIds"] == ["UNREAD"]
+        for path, body, _ in writes
+    )
+    assert minted == [(BOX, "gmail", W.WORKSPACE_SCOPES["gmail"])]
+
+
+def test_only_safe_system_labels_or_existing_user_labels_can_change(gmail_http, minted):
+    for label in ("TRASH", "SPAM", "SENT", "DRAFT", "CATEGORY_PERSONAL", "unknown-label"):
+        with pytest.raises(Problem) as caught:
+            G.organize(None, BOX, ["m1"], remove=(label,))
+        assert caught.value.status == 422
+    assert gmail_http["writes"] == []
+    G.organize(None, BOX, ["m1"], add=("Label_1",))
+    assert gmail_http["writes"][0][1]["addLabelIds"] == ["Label_1"]
+
+
+def test_label_resolution_creates_only_on_first_label_use(gmail_http, minted):
+    assert G.resolve_label(None, BOX, "Receipts", create=True) == "Label_1"
+    with pytest.raises(Problem) as caught:
+        G.resolve_label(None, BOX, "New label")
+    assert caught.value.status == 404 and not gmail_http["writes"]
+    created = G.resolve_label(None, BOX, "New label", create=True)
+    assert G.resolve_label(None, BOX, "New label", create=True) == created
+    assert [body for _, body, _ in gmail_http["writes"]] == [{"name": "New label"}]
+    for name in ("trash", "SPAM", "SENT", "DRAFT", "CATEGORY_PERSONAL"):
+        with pytest.raises(Problem) as caught:
+            G.resolve_label(None, BOX, name, create=True)
+        assert caught.value.status == 422
+    assert len(gmail_http["writes"]) == 1
+
+
+def test_ids_resolve_all_pages_before_a_bounded_change_without_reading_content(gmail_http, minted):
+    assert G.message_ids(None, BOX, "in:inbox", limit=1) == ["m2"]
+    assert G.message_ids(None, BOX, "in:inbox", limit=100) == ["m2", "m1"]
+    assert len(gmail_http["calls"]) == 3
+    assert all(
+        path.endswith("/messages") and query["fields"] == ["messages(id),nextPageToken"]
+        for path, query, _ in gmail_http["calls"]
+    )
+    assert gmail_http["calls"][-1][1]["maxResults"] == ["99"]
+
+
+@pytest.mark.parametrize("status, expected", [(400, 422), (403, 403), (404, 404), (429, 503), (503, 502)])
+def test_modify_failures_are_refusals(gmail_http, minted, status, expected):
+    gmail_http["write_status"] = status
+    with pytest.raises(Problem) as caught:
+        G.organize(None, BOX, ["m1"], remove=("INBOX",))
+    assert caught.value.status == expected and "PRIVATE GOOGLE TEXT" not in caught.value.detail
+
+
+def test_batch_modify_http_sends_json_and_accepts_an_empty_success(monkeypatch, minted):
+    class Response(io.BytesIO):
+        status = 204
+
+    def answer(request, *, timeout):
+        assert request.get_method() == "POST" and request.get_header("Content-type") == "application/json"
+        assert json.loads(request.data) == {"ids": ["m1"], "addLabelIds": [], "removeLabelIds": ["INBOX"]}
+        return Response(b"")
+
+    monkeypatch.setattr(G.urllib.request, "urlopen", answer)
+    G.organize(None, BOX, ["m1"], remove=("INBOX",))
+
+
+def test_repeated_page_tokens_refuse_before_any_modify(gmail_http, minted):
+    gmail_http["pages"] = {
+        "": {"messages": [{"id": "m1"}], "nextPageToken": "loop"},
+        "loop": {"messages": [], "nextPageToken": "loop"},
+    }
+    with pytest.raises(Problem, match="incomplete page"):
+        G.message_ids(None, BOX, "in:inbox")
+    assert not gmail_http["writes"]

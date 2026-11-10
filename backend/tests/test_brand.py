@@ -4,18 +4,24 @@ check finds avoided words, wrong names and never-made claims. Examples use Acme.
 import json
 
 from backend import brand as B
-from backend.tests.test_api import api, get, post, put  # noqa: F401
-from backend.tests.test_company import bot
+from backend.tests.helpers.api import get, post, put  # noqa: F401
+from backend.tests.helpers.company import bot
 
 BRAND = {
     "positioning": "Home cleaning you book in a minute and never think about again",
     "voice": [{"trait": "warm", "do": "Say we", "dont": "Say the company"}, {"trait": "plain"}],
-    "words": {"use": [{"word": "clean", "not": "sanitize"}],
-              "avoid": [{"word": "cheap", "why": "We are fair, not cheap", "level": "block"},
-                        {"word": "maid", "level": "warn"}]},
+    "words": {
+        "use": [{"word": "clean", "not": "sanitize"}],
+        "avoid": [
+            {"word": "cheap", "why": "We are fair, not cheap", "level": "block"},
+            {"word": "maid", "level": "warn"},
+        ],
+    },
     "naming": [{"name": "Acme Clean", "rule": "Two words, both capitalized", "wrong": ["AcmeClean", "acme-clean"]}],
-    "claims": {"allowed": [{"claim": "Insured cleaners", "proof": "Policy on file", "status": "proven"}],
-               "never": ["eco-friendly", "best in town"]},
+    "claims": {
+        "allowed": [{"claim": "Insured cleaners", "proof": "Policy on file", "status": "proven"}],
+        "never": ["eco-friendly", "best in town"],
+    },
 }
 
 
@@ -79,11 +85,24 @@ def test_bots_propose_members_read_only_published_and_admins_confirm(api):
 
     # Filed under a goal, its unpublished words would show on that goal's page to members.
     goal = post(api, "goals", {"title": "More bookings", "owner": "ana"})["goal"]
-    refused = post(api, "goal-proposals", {"kind": "brand_draft", "goal_id": goal["id"], "payload": {
-        "sections": {"positioning": "Secret"}}}, token=ops, expected=422)
+    refused = post(
+        api,
+        "goal-proposals",
+        {"kind": "brand_draft", "goal_id": goal["id"], "payload": {"sections": {"positioning": "Secret"}}},
+        token=ops,
+        expected=422,
+    )
     assert refused["error"]["detail"].startswith("a brand draft proposal is about the page")
-    proposal = post(api, "goal-proposals", {"kind": "brand_draft", "reason": "Plain words sell better.", "payload": {
-        "sections": {"voice": [{"trait": "plain"}]}}}, token=ops)["proposal"]
+    proposal = post(
+        api,
+        "goal-proposals",
+        {
+            "kind": "brand_draft",
+            "reason": "Plain words sell better.",
+            "payload": {"sections": {"voice": [{"trait": "plain"}]}},
+        },
+        token=ops,
+    )["proposal"]
     # The proposal carries unpublished words: admins and the bot that made it read it; a member does not.
     assert not [p for p in get(api, "goal-proposals", token="cara-test")["proposals"] if p["kind"] == "brand_draft"]
     assert [p["id"] for p in get(api, "goal-proposals", token="ben-test")["proposals"]] == [proposal["id"]]
@@ -94,7 +113,9 @@ def test_bots_propose_members_read_only_published_and_admins_confirm(api):
 
 
 def test_clip_keeps_abbreviations_and_whole_words():
-    assert B._clip("U.S. homeowners with 1-3 units. Next: managers.", 90, first=True) == "U.S. homeowners with 1-3 units"
+    assert (
+        B._clip("U.S. homeowners with 1-3 units. Next: managers.", 90, first=True) == "U.S. homeowners with 1-3 units"
+    )
     assert B._clip("Dr. Smith and other dentists", 90, first=True) == "Dr. Smith and other dentists"
     assert B._clip("Owners (Oct 9). Not now: big operators", 90, first=True) == "Owners (Oct 9)"
     assert B._clip("one two three four", 12) == "one two…"
@@ -103,8 +124,11 @@ def test_clip_keeps_abbreviations_and_whole_words():
 def test_check_finds_avoided_words_wrong_names_and_never_claims_at_word_boundaries():
     hits = B.check(BRAND, "Cheap and eco-friendly! Book AcmeClean today; cheapest maids aren't a maid.")
     assert [(h["kind"], h["match"], h["level"]) for h in hits] == [
-        ("avoid", "Cheap", "block"), ("never_claim", "eco-friendly", "block"), ("naming", "AcmeClean", "warn"),
-        ("avoid", "maid", "warn")]
+        ("avoid", "Cheap", "block"),
+        ("never_claim", "eco-friendly", "block"),
+        ("naming", "AcmeClean", "warn"),
+        ("avoid", "maid", "warn"),
+    ]
     assert hits[0]["index"] == 0 and hits[0]["rule"] == "We are fair, not cheap"
 
 
@@ -119,6 +143,7 @@ def test_check_route_reads_the_published_brand(api):
 
 def test_growth_facing_bots_get_the_brand_in_their_turn(api):
     from backend import learned
+
     draft(api, sections={"positioning": "Acme cleans homes"})
     post(api, "brand/publish", {})
     settings = api.app.state.store.settings
@@ -129,7 +154,8 @@ def test_growth_facing_bots_get_the_brand_in_their_turn(api):
 
 def test_the_hub_tools_reach_every_brand_route(api):
     """Each MCP tool's path and body match its route, run through the server as the MCP endpoint runs them."""
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
+
     ok = lambda name, args=None, token="ana-test": call(api, name, args, token)  # noqa: E731
     err, out = ok("hub_brand_draft", {"section": "words", "body": '{"avoid": [{"word": "cheap", "level": "block"}]}'})
     assert not err and out["draft"]["revision"] == 1

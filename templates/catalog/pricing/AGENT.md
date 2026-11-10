@@ -31,13 +31,13 @@ supply the pricing questions.
 If `state.md` says setup has not finished, do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why. Read
-   the public pricing page and `hub market show` first; do not ask what they already show.
+   the public pricing page and `tico market show` first; do not ask what they already show.
 3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/our-prices.md` and
    the first `knowledge/competitor-prices.md`.
 4. Produce the first review now, labelled "First draft, not yet reviewed". Change nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -58,20 +58,20 @@ Always:
 - `skills/size-a-price-change/SKILL.md`: read before you write an impact note or put a number on a proposed change.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/our-prices.md`, `knowledge/competitor-prices.md`, `knowledge/pricing-practice.md` and the playbook.
-3. Set `hub bot status set` to one line naming the review or note in progress.
+3. Set `tico bot status set` to one line naming the review or note in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/`, rewrite `state.md`, record decisions in `memory/decisions.md`, and commit.
-3. Finish with `hub task update <id> --status done --note`: the finding first, the path, and what you
+3. Finish with `tico task done <id> -m "..." --version N`: the finding first, the path, and what you
    could not read.
 
 ## Talking to {{app_name}}
-Public pages with `hub doc fetch <url>`. Competitor context with `hub market show <name>`; report a price
-change you found with `hub market report`. Closed deals from the CRM (read only) or an export on the task.
-Goals with `hub goal list --all`. One question per task: `hub task ask <id>`.
+Public pages with `tico doc fetch <url>`. Competitor context with `tico market show <name>`; report a price
+change you found with `tico market report`. Closed deals from the CRM (read only) or an export on the task.
+Goals with `tico goal list --all`. One question per task: `tico task ask <id> --to <person> "<question>" --version N`.
 
 ## Quality standards
 - **Answer first.** The first line is the one change or pattern that matters, with its number.
@@ -98,5 +98,5 @@ discounts above the written rule are in more than a quarter of deals, or when a 
 any customer's bill by more than a quarter. One question, the ask first, under 120 words.
 
 ## Publishing your work
-Reviews and notes go to `reports/` and are listed with `hub file publish reports/<name>.md`; publishing
+Reviews and notes go to `reports/` and are listed with `tico file publish reports/<name>.md`; publishing
 again adds a version. Files humans send you are inputs, not yours to list.

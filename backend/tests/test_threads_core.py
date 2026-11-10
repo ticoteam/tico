@@ -3,8 +3,11 @@ held post writes nothing, a write that fails mid-way leaves nothing behind, sub-
 revisions apply highest-first, the loop guard defers and resumes, inbox readers read deliveries, reactions keep to
 readers, a run's reply lands in its sub-thread, and session keys keep private and public apart.
 
-The migration's reader sets are pinned by test_threads_migration_e2e.py (goldens of the pre-threads predicates).
+The migration's reader sets are checked by test_threads_migration_e2e.py (today's pre-threads predicates, read live).
 """
+
+import contextlib
+import inspect
 
 import pytest
 import time_machine
@@ -13,7 +16,7 @@ from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each 
 from backend import org_rule_check, threads
 from backend.store import H, Problem
 from backend.tests.demo_template import copy_demo
-from backend.tests.test_threads_migration_e2e import NOW, build, close, identities, open_store
+from backend.tests.helpers.threads_migration_e2e import NOW, build, close, identities, open_store  # noqa: F401
 from clients import sessions
 
 
@@ -27,17 +30,25 @@ def demo_template(tmp_path_factory):
         return build("demo", tmp_path_factory.mktemp("threads-demo-template"))
 
 
-@pytest.fixture
-def world(tmp_path, demo_template):
+@contextlib.contextmanager
+def demo_world(directory, demo_template):
     """A private copy of the template, read on the day it was built (including clocks outside hubdb.now)."""
     with time_machine.travel(NOW, tick=False):
-        settings = copy_demo(demo_template, tmp_path / "demo")
+        settings = copy_demo(demo_template, directory / "demo")
         store, auth = open_store(settings)
-        with store.transaction() as c:
-            auth.sync_access(c)
-            who = identities(c, auth)
-        yield store, auth, who
-        close(store)
+        try:
+            with store.transaction() as c:
+                auth.sync_access(c)
+                who = identities(c, auth)
+            yield store, auth, who
+        finally:
+            close(store)
+
+
+@pytest.fixture
+def world(tmp_path, demo_template):
+    with demo_world(tmp_path, demo_template) as made:
+        yield made
 
 
 def owner_of(c, auth):
@@ -53,6 +64,7 @@ def made_threads(c, auth, who):
     owner = threads.viewer(auth, owner_of(c, auth))
     other = next(a for a in people(who) if a != owner.actor)
     from backend import views
+
     groups = sorted((views.roster(c, shared=True).get("org_groups") or {}).keys())
     made = {
         "company": threads.create(c, owner, title="All hands", audience="company")["id"],
@@ -66,39 +78,117 @@ def made_threads(c, auth, who):
     return made
 
 
+# ----------------------------------------------------------------------------- every check on the demo world
+def test_the_threads_contracts_on_the_demo_world(tmp_path, demo_template, subtests):
+    """Every check below that reads the demo world, in one test. The template is built once per worker that gets a test
+    of this module (most of a minute on CI), so one test builds it once. Each check still opens its own copy of the
+    template and gets its own monkeypatch, as when it was a test of its own."""
+    checks = (
+        _python_sql_and_sse_renderings_agree_for_every_teammate,
+        _an_agent_reads_company_threads_only_in_a_turn_and_a_bot_writes_a_home_only_with_write,
+        _internal_bots_read_company_and_their_groups_threads_and_external_agents_do_not,
+        _a_members_thread_reaches_only_its_members_and_a_mention_grants_nothing,
+        _a_held_post_writes_no_message_and_no_delivery,
+        _a_held_first_message_makes_no_thread_sub_thread_or_dm,
+        _a_warned_post_writes_the_warned_text,
+        _a_write_that_fails_mid_way_leaves_no_message_seq_or_delivery,
+        _two_sub_thread_starts_make_one_sub_thread,
+        _revisions_apply_highest_first_and_a_delete_is_final,
+        _only_a_reader_gets_a_duplicate_a_sub_thread_or_a_tombstone,
+        _a_delete_while_an_edit_is_on_its_way_out_still_sends_the_tombstone,
+        _the_loop_guard_defers_bot_wakes_and_lets_them_go,
+        _a_carrier_reads_as_its_message_and_starts_a_run_only_while_that_message_is_readable,
+        _a_legacy_writer_fans_out_and_is_guarded_like_a_post,
+        _the_inbox_reads_deliveries_not_to_actor,
+        _reactions_need_read_access_and_are_one_per_emoji,
+        _a_runs_reply_goes_to_the_sub_thread_of_its_parent_and_never_across_trees,
+        _a_migrated_home_shows_old_readers_only_its_history_and_home_readers_only_whats_new,
+        _outside_members_come_off_only_by_a_manager_and_their_unsent_copies_go_moot,
+        _a_sub_thread_is_titled_by_its_parents_first_line_and_derives_it_on_read,
+        _a_public_turns_page_flags_only_what_some_reader_of_the_thread_may_not_read,
+    )
+    for n, check in enumerate(checks):
+        with (
+            subtests.test(check.__name__),
+            pytest.MonkeyPatch.context() as monkeypatch,
+            demo_world(tmp_path / str(n), demo_template) as world,
+        ):
+            if "monkeypatch" in inspect.signature(check).parameters:
+                check(world, monkeypatch)
+            else:
+                check(world)
+
+
 # ----------------------------------------------------------------------------- C1: three renderings
-def test_python_sql_and_sse_renderings_agree_for_every_teammate(world):
+def _python_sql_and_sse_renderings_agree_for_every_teammate(world):
     store, auth, who = world
     with store.transaction() as c:
         made = made_threads(c, auth, who)
     with store.read_transaction() as c:
-        ids = [r[0] for r in c.execute("SELECT id FROM conversations WHERE COALESCE(room_key,'') NOT LIKE 'live-meeting:%'")]
+        ids = [
+            r[0]
+            for r in c.execute("SELECT id FROM conversations WHERE COALESCE(room_key,'') NOT LIKE 'live-meeting:%'")
+        ]
         assert set(made.values()) <= set(ids)
         from backend.auth import Identity
+
         # Bots as external agents (identities) and as internal bots in a turn granted nothing.
         turns = {"turn:" + a: Identity(a, "bot", attempt_id="att-none") for a in who if a.startswith("bot:")}
+        checked = set()
         for actor, identity in {**who, **turns}.items():
             v = threads.viewer(auth, identity)
             python = {i for i in ids if threads.readable(c, v, i)}
-            marks = ",".join("?" * len(ids))
             # `tasks` is the viewer's readable tasks, as a caller passes it: a private task's thread is not SQL's call.
             tasks = [t for (t,) in c.execute("SELECT id FROM tasks") if threads._task_readable(c, v, t)]
+            if actor.startswith("bot:") or actor.startswith("turn:"):
+                # The renderings read a bot only through its standing (turn or agent, its group chain, the tasks it may
+                # read) and the threads it reads. Two bots with all of that alike give SQL and SSE the same input, so
+                # the first of each such class is checked in full; every person is. The key also holds the threads the bot
+                # is a member of and the Homes it may not read, which readable_sql reads directly.
+                names = sorted(v.member_names(c))
+                members = frozenset(
+                    r[0]
+                    for r in c.execute(
+                        "SELECT thread_id FROM thread_members WHERE actor IN ({})".format(",".join("?" * len(names))),
+                        names,
+                    )
+                )
+                kind = (
+                    actor.startswith("turn:"),
+                    tuple(v.chain(c)),
+                    tuple(tasks),
+                    frozenset(python),
+                    members,
+                    tuple(sorted(v.hidden_read(c) or ())),
+                )
+                if kind in checked:
+                    continue
+                checked.add(kind)
+            marks = ",".join("?" * len(ids))
             readable_tasks = "SELECT id FROM tasks WHERE id IN (" + (",".join(f"'{t}'" for t in tasks) or "NULL") + ")"
-            sql = {r[0] for r in c.execute(f"SELECT id FROM conversations WHERE id IN ({marks}) AND "
-                                           + threads.readable_sql(c, v, "conversations", tasks=readable_tasks), ids)}
+            sql = {
+                r[0]
+                for r in c.execute(
+                    f"SELECT id FROM conversations WHERE id IN ({marks}) AND "
+                    + threads.readable_sql(c, v, "conversations", tasks=readable_tasks),
+                    ids,
+                )
+            }
             sse = threads.readable_ids(c, threads.viewer(auth, identity), ids)
             assert sql <= python, (actor, "SQL shows what Python hides", sorted(sql - python)[:5])
             assert sse == python, (actor, sorted(sse ^ python)[:5])
             # Every stored-audience thread agrees exactly (legacy rows keep main's own SQL/Python split).
             stored = set(made.values())
             assert sql & stored == python & stored, (actor, sorted((sql ^ python) & stored))
+        assert len(checked) > 1, "the demo's bots fall into several classes, each checked"
 
 
-def test_an_agent_reads_company_threads_only_in_a_turn_and_a_bot_writes_a_home_only_with_write(world, monkeypatch):
+def _an_agent_reads_company_threads_only_in_a_turn_and_a_bot_writes_a_home_only_with_write(world, monkeypatch):
     """Spec C1's bot rule: outside a turn (an external agent) a bot reads by membership, participation or a Home, never
     because a thread is company- or team-wide, though it may still be woken there. Posting in a Home takes Write on
     its owner for bots too; only the Home's own bot and a run replying into its granted thread skip it."""
     from types import SimpleNamespace
+
     store, auth, who = world
     with store.transaction() as c:
         made = made_threads(c, auth, who)
@@ -108,16 +198,27 @@ def test_an_agent_reads_company_threads_only_in_a_turn_and_a_bot_writes_a_home_o
     # The run's attempt was granted the Home (attempt_conversations); the other bot reads the Home but may not write.
     monkeypatch.setattr(threads, "_bot_grant", lambda c, v, row: getattr(v.who, "attempt_id", "") == "att-1")
     from backend import teammate_access
+
     real_can = teammate_access.can
-    monkeypatch.setattr(teammate_access, "can", lambda c, w, level, target, **kw: (
-        False if (getattr(w, "actor", "") == other and level == "write") else real_can(c, w, level, target, **kw)))
+    monkeypatch.setattr(
+        teammate_access,
+        "can",
+        lambda c, w, level, target, **kw: (
+            False if (getattr(w, "actor", "") == other and level == "write") else real_can(c, w, level, target, **kw)
+        ),
+    )
     agent = threads.Viewer(None, SimpleNamespace(actor=bot, role="bot", agent="agent-1", attempt_id=""))
     stranger = threads.Viewer(None, SimpleNamespace(actor=other, role="bot", agent="agent-2", attempt_id=""))
     turn = threads.Viewer(None, SimpleNamespace(actor=other, role="bot", agent="", attempt_id="att-1"))
     with store.read_transaction() as c:
         company = made["company"]
-        sql = {r[0] for r in c.execute("SELECT id FROM conversations WHERE id IN (?,?) AND "
-                                       + threads.readable_sql(c, agent, "conversations"), (company, home))}
+        sql = {
+            r[0]
+            for r in c.execute(
+                "SELECT id FROM conversations WHERE id IN (?,?) AND " + threads.readable_sql(c, agent, "conversations"),
+                (company, home),
+            )
+        }
         assert not threads.readable(c, agent, company) and company not in sql
         assert threads.audience_has(c, company, bot), "the company thread may still wake it"
         assert threads.readable(c, agent, home) and home in sql
@@ -126,19 +227,24 @@ def test_an_agent_reads_company_threads_only_in_a_turn_and_a_bot_writes_a_home_o
         assert threads.can_post(c, turn, home), "a run replies into the thread it was granted"
 
 
-def test_internal_bots_read_company_and_their_groups_threads_and_external_agents_do_not(world):
+def _internal_bots_read_company_and_their_groups_threads_and_external_agents_do_not(world):
     """Bots are AI employees: an internal bot reads what a person in its seat reads, every company thread and its
     group's team threads (groups above its own included), in any turn; members and personal threads only as a member.
     An external agent never gets company or team standing read. Python, SQL and SSE agree on every row."""
     from backend.auth import Identity
+
     store, auth, who = world
     import json
+
     bot = "bot:content"
     with store.transaction() as c:
         # The demo's Content bot is in Marketing; here Marketing sits under Operations.
         roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
-        roster["org_groups"] = {"operations": {"name": "Operations"}, "leadership": {"name": "Leadership"},
-                                "marketing": {"name": "Marketing", "parent": "operations"}}
+        roster["org_groups"] = {
+            "operations": {"name": "Operations"},
+            "leadership": {"name": "Leadership"},
+            "marketing": {"name": "Marketing", "parent": "operations"},
+        }
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -171,8 +277,14 @@ def test_internal_bots_read_company_and_their_groups_threads_and_external_agents
             v = threads.viewer(auth, identity)
             python = {name for name, i in made.items() if threads.readable(c, v, i)}
             marks = ",".join("?" * len(ids))
-            sql_ids = {r[0] for r in c.execute(f"SELECT id FROM conversations WHERE id IN ({marks}) AND "
-                                               + threads.readable_sql(c, v, "conversations"), ids)}
+            sql_ids = {
+                r[0]
+                for r in c.execute(
+                    f"SELECT id FROM conversations WHERE id IN ({marks}) AND "
+                    + threads.readable_sql(c, v, "conversations"),
+                    ids,
+                )
+            }
             sse_ids = threads.readable_ids(c, threads.viewer(auth, identity), ids)
             sql = {name for name, i in made.items() if i in sql_ids}
             sse = {name for name, i in made.items() if i in sse_ids}
@@ -181,7 +293,7 @@ def test_internal_bots_read_company_and_their_groups_threads_and_external_agents
             assert threads.audience_has(c, made["company"], bot)
 
 
-def test_a_members_thread_reaches_only_its_members_and_a_mention_grants_nothing(world):
+def _a_members_thread_reaches_only_its_members_and_a_mention_grants_nothing(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -199,7 +311,7 @@ def test_a_members_thread_reaches_only_its_members_and_a_mention_grants_nothing(
 
 
 # ----------------------------------------------------------------------------- the write door
-def test_a_held_post_writes_no_message_and_no_delivery(world, monkeypatch):
+def _a_held_post_writes_no_message_and_no_delivery(world, monkeypatch):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -214,18 +326,22 @@ def test_a_held_post_writes_no_message_and_no_delivery(world, monkeypatch):
     monkeypatch.setattr(org_rule_check, "apply", apply)
     monkeypatch.setattr(org_rule_check, "held_answer", lambda c, who, gate, auth=None: {"held": gate["held"]})
     with store.transaction() as c:
-        before = (c.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
-                  c.execute("SELECT COUNT(*) FROM message_deliveries").fetchone()[0])
+        before = (
+            c.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
+            c.execute("SELECT COUNT(*) FROM message_deliveries").fetchone()[0],
+        )
         answer = threads.post(c, owner, tid, "The price is $10", checked={"outcome": "broken"})
-        after = (c.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
-                 c.execute("SELECT COUNT(*) FROM message_deliveries").fetchone()[0])
+        after = (
+            c.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
+            c.execute("SELECT COUNT(*) FROM message_deliveries").fetchone()[0],
+        )
     assert answer == {"held": {"id": "hold-1", "rule": "No prices"}}
     assert after == before
     assert seen["payload"] == "The price is $10"
     assert seen["replay"]["thread_id"] == tid and seen["replay"]["body"] == "The price is $10"
 
 
-def test_a_held_first_message_makes_no_thread_sub_thread_or_dm(world, monkeypatch):
+def _a_held_first_message_makes_no_thread_sub_thread_or_dm(world, monkeypatch):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -234,20 +350,32 @@ def test_a_held_first_message_makes_no_thread_sub_thread_or_dm(world, monkeypatc
         parent = threads.post(c, owner, tid, "Start here")
     seen = []
     verdict = {"held": {"id": "hold-1", "rule": "No prices"}}
-    monkeypatch.setattr(org_rule_check, "apply",
-                        lambda c, v, p=None, r=None, **_: seen.append(r) or {**verdict, "hold_id": "hold-1"})
+    monkeypatch.setattr(
+        org_rule_check, "apply", lambda c, v, p=None, r=None, **_: seen.append(r) or {**verdict, "hold_id": "hold-1"}
+    )
     monkeypatch.setattr(org_rule_check, "held_answer", lambda c, who, gate, auth=None: {"held": gate["held"]})
 
     def rows(c):
-        return (c.execute("SELECT COUNT(*) FROM conversations").fetchone()[0],
-                c.execute("SELECT COUNT(*) FROM messages").fetchone()[0])
+        return (
+            c.execute("SELECT COUNT(*) FROM conversations").fetchone()[0],
+            c.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
+        )
 
     checked = {"outcome": "broken"}
     with store.transaction() as c:
         before = rows(c)
         assert threads.post(c, owner, tid, "$10", parent_message_id=parent["id"], checked=checked) == verdict
-        assert threads.post(c, owner, None, "$10", checked=checked,
-                            start={"title": "New", "audience": "members", "members": [member]}) == verdict
+        assert (
+            threads.post(
+                c,
+                owner,
+                None,
+                "$10",
+                checked=checked,
+                start={"title": "New", "audience": "members", "members": [member]},
+            )
+            == verdict
+        )
         assert threads.post(c, owner, None, "$10", checked=checked, start={"dm": [member]}) == verdict
         assert rows(c) == before, "a held first message makes nothing"
     assert seen[0]["thread_id"] == tid and seen[0]["parent_message_id"] == parent["id"]
@@ -267,7 +395,7 @@ def test_a_held_first_message_makes_no_thread_sub_thread_or_dm(world, monkeypatc
         assert again["conversation_id"] == dm["conversation_id"], "a DM start reuses the open DM"
 
 
-def test_a_warned_post_writes_the_warned_text(world, monkeypatch):
+def _a_warned_post_writes_the_warned_text(world, monkeypatch):
     store, auth, who = world
     monkeypatch.setattr(org_rule_check, "apply", lambda c, v, p=None, r=None, **_: {"warn": "Warning: careful."})
     with store.transaction() as c:
@@ -277,7 +405,7 @@ def test_a_warned_post_writes_the_warned_text(world, monkeypatch):
     assert message["body"].startswith("Warning: careful.") and message["body"].endswith("Hello")
 
 
-def test_a_write_that_fails_mid_way_leaves_no_message_seq_or_delivery(world):
+def _a_write_that_fails_mid_way_leaves_no_message_seq_or_delivery(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -285,10 +413,12 @@ def test_a_write_that_fails_mid_way_leaves_no_message_seq_or_delivery(world):
         tid = threads.create(c, owner, title="Crash", audience="members", members=[member])["id"]
 
     def counts(c):
-        return (c.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
-                c.execute("SELECT COUNT(*) FROM message_deliveries").fetchone()[0],
-                c.execute("SELECT value FROM sequences WHERE name='messages'").fetchone()[0],
-                c.execute("SELECT last_seq FROM conversations WHERE id=?", (tid,)).fetchone()[0])
+        return (
+            c.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
+            c.execute("SELECT COUNT(*) FROM message_deliveries").fetchone()[0],
+            c.execute("SELECT value FROM sequences WHERE name='messages'").fetchone()[0],
+            c.execute("SELECT last_seq FROM conversations WHERE id=?", (tid,)).fetchone()[0],
+        )
 
     with store.read_transaction() as c:
         before = counts(c)
@@ -300,7 +430,7 @@ def test_a_write_that_fails_mid_way_leaves_no_message_seq_or_delivery(world):
         assert counts(c) == before
 
 
-def test_two_sub_thread_starts_make_one_sub_thread(world, monkeypatch):
+def _two_sub_thread_starts_make_one_sub_thread(world, monkeypatch):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -326,27 +456,41 @@ def test_two_sub_thread_starts_make_one_sub_thread(world, monkeypatch):
 
         second = threads.sub_thread(Missing(c), owner, parent["id"])
         assert second["id"] == first["id"]
-        assert c.execute("SELECT COUNT(*) FROM conversations WHERE parent_message_id=?",
-                         (parent["id"],)).fetchone()[0] == 1
+        assert (
+            c.execute("SELECT COUNT(*) FROM conversations WHERE parent_message_id=?", (parent["id"],)).fetchone()[0]
+            == 1
+        )
 
 
 # ----------------------------------------------------------------------------- C5: revisions
-def test_revisions_apply_highest_first_and_a_delete_is_final(world):
+def _revisions_apply_highest_first_and_a_delete_is_final(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
         tid = threads.create(c, owner, title="Mirror", audience="personal")["id"]
-        message = threads.post(c, owner, tid, "v0", via="slack",
-                               origin={"origin_id": "0190-acme@slack:acme", "revision": 0, "install": "slack:acme"})
-        again = threads.post(c, owner, tid, "v0", via="slack",
-                             origin={"origin_id": "0190-acme@slack:acme", "revision": 0, "install": "slack:acme"})
+        message = threads.post(
+            c,
+            owner,
+            tid,
+            "v0",
+            via="slack",
+            origin={"origin_id": "0190-acme@slack:acme", "revision": 0, "install": "slack:acme"},
+        )
+        again = threads.post(
+            c,
+            owner,
+            tid,
+            "v0",
+            via="slack",
+            origin={"origin_id": "0190-acme@slack:acme", "revision": 0, "install": "slack:acme"},
+        )
         assert again.get("duplicate") and again["id"] == message["id"]
         origin = {"origin_id": message["origin_id"]}
         assert threads.apply_revision(c, {**origin, "revision": 2}, body="v2")
-        assert threads.apply_revision(c, {**origin, "revision": 1}, body="v1") is None       # arrived late
+        assert threads.apply_revision(c, {**origin, "revision": 1}, body="v1") is None  # arrived late
         assert H.message(c, message["id"])["body"] == "v2"
         assert threads.apply_revision(c, {**origin, "revision": 3}, deleted=True)
-        assert threads.apply_revision(c, {**origin, "revision": 4}, body="back") is None     # a delete is final
+        assert threads.apply_revision(c, {**origin, "revision": 4}, body="back") is None  # a delete is final
         row = H.message(c, message["id"], include_deleted=True)
         assert row["deleted_at"] and not row["body"]
         kept = [r[0] for r in c.execute("SELECT body FROM message_revisions WHERE message_id=?", (message["id"],))]
@@ -354,12 +498,14 @@ def test_revisions_apply_highest_first_and_a_delete_is_final(world):
         mine = threads.post(c, owner, tid, "Private words")
         threads.edit_message(c, owner, mine["id"], "Other private words")
         threads.delete_message(c, owner, mine["id"])
-        audits = " ".join(str(r[0]) + str(r[1]) for r in c.execute(
-            "SELECT before, after FROM audit_log WHERE object=?", ("message:" + mine["id"],)))
+        audits = " ".join(
+            str(r[0]) + str(r[1])
+            for r in c.execute("SELECT before, after FROM audit_log WHERE object=?", ("message:" + mine["id"],))
+        )
         assert "words" not in audits and '"length"' in audits, "audit rows keep lengths, never a message's words"
 
 
-def test_only_a_reader_gets_a_duplicate_a_sub_thread_or_a_tombstone(world):
+def _only_a_reader_gets_a_duplicate_a_sub_thread_or_a_tombstone(world):
     """A replicated repeat, an existing sub-thread and a deleted message's tombstone are each answered only after the
     caller is authorized: an outsider gets 404, a repeat aimed at another thread 409, and a reader who could not read
     a message before it was deleted gets the quiet hidden row, not its author and refs."""
@@ -393,7 +539,7 @@ def test_only_a_reader_gets_a_duplicate_a_sub_thread_or_a_tombstone(world):
         assert mine["deleted"] and mine["refs"] == {} and mine["body"] is None
 
 
-def test_a_delete_while_an_edit_is_on_its_way_out_still_sends_the_tombstone(world):
+def _a_delete_while_an_edit_is_on_its_way_out_still_sends_the_tombstone(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -403,10 +549,14 @@ def test_a_delete_while_an_edit_is_on_its_way_out_still_sends_the_tombstone(worl
         unsent = threads.post(c, owner, tid, "never left")
 
         def outside(message):
-            return dict(c.execute("SELECT * FROM message_deliveries WHERE message_id=? AND recipient='slack:C1'",
-                                  (message["id"],)).fetchone())
+            return dict(
+                c.execute(
+                    "SELECT * FROM message_deliveries WHERE message_id=? AND recipient='slack:C1'", (message["id"],)
+                ).fetchone()
+            )
+
         threads.settle_delivery(c, outside(sent)["id"], "delivered")
-        threads.edit_message(c, owner, sent["id"], "v1")              # the edit is pending outbound
+        threads.edit_message(c, owner, sent["id"], "v1")  # the edit is pending outbound
         threads.delete_message(c, owner, sent["id"])
         row = outside(sent)
         assert row["state"] == "pending" and row["revision"] == 2, "the destination that had it gets the tombstone"
@@ -415,11 +565,12 @@ def test_a_delete_while_an_edit_is_on_its_way_out_still_sends_the_tombstone(worl
 
 
 # ----------------------------------------------------------------------------- C3: loop guard
-def test_the_loop_guard_defers_bot_wakes_and_lets_them_go(world, monkeypatch):
+def _the_loop_guard_defers_bot_wakes_and_lets_them_go(world, monkeypatch):
     store, auth, who = world
     monkeypatch.setattr(threads, "LOOP_GUARD_PER_HOUR", 2)
     # Bot-to-bot messages wake (no `bot_to_bot` wait), so each would start a run.
     from backend import rules
+
     monkeypatch.setattr(rules, "bot_to_bot_decision", lambda *a, **k: None)
     monkeypatch.setattr(rules, "judge", lambda *a, **k: None)
     bots = sorted(a for a in who if a.startswith("bot:"))[:2]
@@ -430,23 +581,33 @@ def test_the_loop_guard_defers_bot_wakes_and_lets_them_go(world, monkeypatch):
         for n in range(4):
             sender, target = bots[n % 2], bots[(n + 1) % 2]
             threads.post(c, sender, tid, f"turn {n}", to_actor=target)
-        capped = c.execute("SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND state='capped'",
-                           (root,)).fetchone()[0]
+        capped = c.execute(
+            "SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND state='capped'", (root,)
+        ).fetchone()[0]
         assert capped >= 1, "past the guard a bot-to-bot wake waits"
-        assert c.execute("SELECT COUNT(*) FROM messages WHERE conversation_id=? AND body LIKE 'turn %'",
-                         (tid,)).fetchone()[0] == 4, "the messages themselves are all written"
+        assert (
+            c.execute(
+                "SELECT COUNT(*) FROM messages WHERE conversation_id=? AND body LIKE 'turn %'", (tid,)
+            ).fetchone()[0]
+            == 4
+        ), "the messages themselves are all written"
         attention = threads.sidebar(c, owner)["attention"]
         assert [t["capped"] for t in attention if t["id"] == root] == [capped], "the owner sees the held wakes"
         threads.resume_capped(c, root)
-        assert c.execute("SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND state='capped'",
-                         (root,)).fetchone()[0] == 0
+        assert (
+            c.execute("SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND state='capped'", (root,)).fetchone()[
+                0
+            ]
+            == 0
+        )
         assert not [t for t in threads.sidebar(c, owner)["attention"] if t.get("capped")]
 
 
-def test_a_carrier_reads_as_its_message_and_starts_a_run_only_while_that_message_is_readable(world, monkeypatch):
+def _a_carrier_reads_as_its_message_and_starts_a_run_only_while_that_message_is_readable(world, monkeypatch):
     """A carrier copies the words of the message it wakes a bot for, so it is read as that message; no carrier is
     written for a message the bot may not read, and a claim refuses one whose message has gone."""
     from backend import rules, task_privacy
+
     monkeypatch.setattr(rules, "judge", lambda *a, **k: None)
     store, auth, who = world
     with store.transaction() as c:
@@ -459,9 +620,15 @@ def test_a_carrier_reads_as_its_message_and_starts_a_run_only_while_that_message
         plain = threads.post(c, owner, tid, f"@{H.actor_id(bot)} lunch?")
 
         def carriers(message):
-            return [dict(r) for r in c.execute("SELECT m.* FROM message_deliveries d JOIN messages m ON "
-                                               "m.id=d.carrier_id WHERE d.message_id=? AND d.recipient=?",
-                                               (message["id"], bot))]
+            return [
+                dict(r)
+                for r in c.execute(
+                    "SELECT m.* FROM message_deliveries d JOIN messages m ON "
+                    "m.id=d.carrier_id WHERE d.message_id=? AND d.recipient=?",
+                    (message["id"], bot),
+                )
+            ]
+
         assert not carriers(hidden), "no carrier for a message the bot may not read"
         found = carriers(plain)
         if not found:
@@ -474,11 +641,12 @@ def test_a_carrier_reads_as_its_message_and_starts_a_run_only_while_that_message
         assert not task_privacy.message_readable(c, member, carrier)
 
 
-def test_a_legacy_writer_fans_out_and_is_guarded_like_a_post(world, monkeypatch):
+def _a_legacy_writer_fans_out_and_is_guarded_like_a_post(world, monkeypatch):
     """hubdb.say without the write door (a runner reply, an old route): a mentioned person and an outside destination
     get their deliveries, and bot-to-bot wakes stop at the loop guard."""
     monkeypatch.setattr(threads, "LOOP_GUARD_PER_HOUR", 2)
     from backend import rules
+
     monkeypatch.setattr(rules, "bot_to_bot_decision", lambda *a, **k: None)
     monkeypatch.setattr(rules, "judge", lambda *a, **k: None)
     store, auth, who = world
@@ -494,12 +662,16 @@ def test_a_legacy_writer_fans_out_and_is_guarded_like_a_post(world, monkeypatch)
         assert {member, "slack:C1", bots[1]} <= got
         for n in range(4):
             H.say(c, bots[n % 2], bots[(n + 1) % 2], f"turn {n}", conversation_id=tid)
-        assert c.execute("SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND state='capped'",
-                         (root,)).fetchone()[0] >= 1, "legacy bot-to-bot wakes stop at the guard too"
+        assert (
+            c.execute("SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND state='capped'", (root,)).fetchone()[
+                0
+            ]
+            >= 1
+        ), "legacy bot-to-bot wakes stop at the guard too"
 
 
 # ----------------------------------------------------------------------------- C3: inbox readers read deliveries
-def test_the_inbox_reads_deliveries_not_to_actor(world):
+def _the_inbox_reads_deliveries_not_to_actor(world):
     store, auth, who = world
     bot = sorted(a for a in who if a.startswith("bot:"))[0]
     with store.transaction() as c:
@@ -512,16 +684,21 @@ def test_the_inbox_reads_deliveries_not_to_actor(world):
         tid = threads.create(c, threads.viewer(auth, owner), title="Mentions", audience="company")["id"]
         reader = next(a for a in people(who) if a != owner.actor)
         posted = threads.post(c, threads.viewer(auth, owner), tid, f"@{H.actor_id(reader)} see this")
-        row = c.execute("SELECT state FROM message_deliveries WHERE message_id=? AND recipient=?",
-                        (posted["id"], reader)).fetchone()
+        row = c.execute(
+            "SELECT state FROM message_deliveries WHERE message_id=? AND recipient=?", (posted["id"], reader)
+        ).fetchone()
         assert row is not None
         H.mark_read(c, reader, posted["id"], recipient=reader)
-        assert c.execute("SELECT state FROM message_deliveries WHERE message_id=? AND recipient=?",
-                         (posted["id"], reader)).fetchone()[0] == "read"
+        assert (
+            c.execute(
+                "SELECT state FROM message_deliveries WHERE message_id=? AND recipient=?", (posted["id"], reader)
+            ).fetchone()[0]
+            == "read"
+        )
 
 
 # ----------------------------------------------------------------------------- reactions
-def test_reactions_need_read_access_and_are_one_per_emoji(world):
+def _reactions_need_read_access_and_are_one_per_emoji(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -530,8 +707,7 @@ def test_reactions_need_read_access_and_are_one_per_emoji(world):
         message = threads.post(c, owner, tid, "Shipped")
         mine = threads.viewer(auth, who[member])
         threads.react(c, mine, message["id"], ":tada:")
-        assert threads.react(c, mine, message["id"], ":tada:") == [
-            {"emoji": ":tada:", "count": 1, "actors": [member]}]
+        assert threads.react(c, mine, message["id"], ":tada:") == [{"emoji": ":tada:", "count": 1, "actors": [member]}]
         with pytest.raises(Problem) as hidden:
             threads.react(c, threads.viewer(auth, who[outsider]), message["id"], ":tada:")
         assert hidden.value.status == 404
@@ -540,7 +716,7 @@ def test_reactions_need_read_access_and_are_one_per_emoji(world):
 
 
 # ----------------------------------------------------------------------------- runs reply in their sub-thread
-def test_a_runs_reply_goes_to_the_sub_thread_of_its_parent_and_never_across_trees(world):
+def _a_runs_reply_goes_to_the_sub_thread_of_its_parent_and_never_across_trees(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -573,12 +749,15 @@ def test_session_keys_never_share_a_thread_across_audience_classes():
 
 
 # ----------------------------------------------------------------------------- migration: crafted per-message cases
-from backend.tests.test_api import post as api_post  # noqa: E402
-from backend.tests.test_live_meetings import api, live  # noqa: E402,F401  (fixtures)
+from backend.tests.helpers.api import post as api_post  # noqa: F401
+from backend.tests.helpers.live_meetings import live  # noqa: F401
 
-UNSTAMPED = ("UPDATE messages SET seq=NULL, origin_id=NULL, revision=0, restricted=1, legacy_audience=NULL",
-             "UPDATE conversations SET root_id=id, path='/'||id||'/', last_seq=0, last_unread_seq=0",
-             "DELETE FROM message_deliveries", "DELETE FROM registry_metadata WHERE key='threads-migration'")
+UNSTAMPED = (
+    "UPDATE messages SET seq=NULL, origin_id=NULL, revision=0, restricted=1, legacy_audience=NULL",
+    "UPDATE conversations SET root_id=id, path='/'||id||'/', last_seq=0, last_unread_seq=0",
+    "DELETE FROM message_deliveries",
+    "DELETE FROM registry_metadata WHERE key='threads-migration'",
+)
 
 
 def message_readers(c, auth, ids):
@@ -597,17 +776,30 @@ def test_migration_keeps_each_crafted_messages_readers_and_a_roster_change_only_
     meeting = api_post(live, "live-meetings", {"title": "Synthetic restricted planning", "visibility": "private"})["id"]
     with store.transaction() as c:
         secret = H.task_create(c, "human:ana", "Acme acquisition", "", "bot:finance", private=True, lint=False)
-        direct = H.open_conversation(c, "human:ana", ["human:ana", "human:ben", "bot:ops"], kind="chat",
-                                     subject="Plans")
+        direct = H.open_conversation(
+            c, "human:ana", ["human:ana", "human:ben", "bot:ops"], kind="chat", subject="Plans"
+        )
         plain = H.say(c, "human:ana", "bot:ops", "Lunch at noon", conversation_id=direct["id"])
-        task_ref = H.say(c, "human:ana", "bot:ops", "See the acquisition", conversation_id=direct["id"],
-                         refs={"task": secret["id"]})
+        task_ref = H.say(
+            c, "human:ana", "bot:ops", "See the acquisition", conversation_id=direct["id"], refs={"task": secret["id"]}
+        )
         from backend.store import encode
+
         provenance = H.say(c, "human:ana", "bot:ops", "From the meeting", conversation_id=direct["id"])
-        c.execute("UPDATE messages SET refs=? WHERE id=?",
-                  (encode({"live_meeting": {"meeting_id": meeting}}), provenance["id"]))
-        shared = H.open_conversation(c, "human:ben", ["human:ben", "bot:cpo"], kind="chat", subject="CPO room",
-                                     scope="shared", room_key="cpo", allow_held=True)
+        c.execute(
+            "UPDATE messages SET refs=? WHERE id=?",
+            (encode({"live_meeting": {"meeting_id": meeting}}), provenance["id"]),
+        )
+        shared = H.open_conversation(
+            c,
+            "human:ben",
+            ["human:ben", "bot:cpo"],
+            kind="chat",
+            subject="CPO room",
+            scope="shared",
+            room_key="cpo",
+            allow_held=True,
+        )
         in_room = H.say(c, "human:ben", "bot:cpo", "Roadmap draft", conversation_id=shared["id"])
         nested = H.say(c, "human:ana", "bot:ops", "Nested reference", conversation_id=direct["id"])
         c.execute("UPDATE messages SET refs=? WHERE id=?", (encode({"origin": {"task": secret["id"]}}), nested["id"]))
@@ -619,8 +811,12 @@ def test_migration_keeps_each_crafted_messages_readers_and_a_roster_change_only_
     assert "human:cara" not in before[task_ref["id"]] and "human:ben" in before[plain["id"]]
     with store.transaction() as c:
         threads.migrate(c)
-        stamped = {r["id"]: dict(r) for r in c.execute(
-            "SELECT id, seq, origin_id, restricted, legacy_audience FROM messages WHERE id IN (?,?,?,?,?)", ids)}
+        stamped = {
+            r["id"]: dict(r)
+            for r in c.execute(
+                "SELECT id, seq, origin_id, restricted, legacy_audience FROM messages WHERE id IN (?,?,?,?,?)", ids
+            )
+        }
     assert all(r["seq"] and r["origin_id"] for r in stamped.values())
     assert stamped[task_ref["id"]]["restricted"] == 1 and stamped[in_room["id"]]["legacy_audience"] == "shared:cpo"
     assert stamped[nested["id"]]["restricted"] == 1, "a task named under a safe key is still a task reference"
@@ -644,18 +840,27 @@ def test_migration_keeps_each_crafted_messages_readers_and_a_roster_change_only_
     assert all("human:cara" not in removed[m] for m in ids)
 
 
-def test_a_migrated_home_shows_old_readers_only_its_history_and_home_readers_only_whats_new(world, monkeypatch):
+def _a_migrated_home_shows_old_readers_only_its_history_and_home_readers_only_whats_new(world, monkeypatch):
     """Spec section 4: the shared room is its bot's Home. Its history keeps exactly its old readers until a manager
     opens it; everything new follows Home Read. Pinned in Python, in SQL and in the legacy per-message check."""
     from backend import task_privacy
+
     store, auth, who = world
     with store.transaction() as c:
         homeless = [a for a in sorted(who) if a.startswith("bot:") and threads.home(c, a, create=False) is None]
         bot = homeless[0]
         slug = H.actor_id(bot)
         old_reader, home_reader = people(who)[:2]
-        room = H.open_conversation(c, old_reader, [old_reader, bot], kind="chat", subject="Shared room",
-                                   scope="shared", room_key=slug, allow_held=True)
+        room = H.open_conversation(
+            c,
+            old_reader,
+            [old_reader, bot],
+            kind="chat",
+            subject="Shared room",
+            scope="shared",
+            room_key=slug,
+            allow_held=True,
+        )
         old = H.say(c, old_reader, bot, "Old roadmap", conversation_id=room["id"])
         # What the migration does to a shared room: its history keeps its readers, the room becomes the Home.
         c.execute("UPDATE messages SET legacy_audience=?, restricted=1 WHERE id=?", ("shared:" + slug, old["id"]))
@@ -663,18 +868,30 @@ def test_a_migrated_home_shows_old_readers_only_its_history_and_home_readers_onl
         assert threads.home(c, bot, create=False)["id"] == room["id"]
         new = threads.post(c, bot, room["id"], "New plan")
     real_home = threads.Viewer.can_read_home
-    monkeypatch.setattr(threads.Viewer, "shared_slugs",
-                        lambda self, c, slugs: {x for x in slugs if x == slug and self.actor == old_reader})
-    monkeypatch.setattr(threads.Viewer, "can_read_home", lambda self, c, owner: (
-        self.actor == home_reader if owner == bot else real_home(self, c, owner)))
+    monkeypatch.setattr(
+        threads.Viewer,
+        "shared_slugs",
+        lambda self, c, slugs: {x for x in slugs if x == slug and self.actor == old_reader},
+    )
+    monkeypatch.setattr(
+        threads.Viewer,
+        "can_read_home",
+        lambda self, c, owner: self.actor == home_reader if owner == bot else real_home(self, c, owner),
+    )
 
     def sees(c, actor):
         v = threads.viewer(auth, who[actor])
         python = {m for m in (old["id"], new["id"]) if threads.readable(c, v, m)}
-        sql = {r[0] for r in c.execute(
-            "SELECT id FROM messages WHERE conversation_id=? AND " + threads.message_sql(c, v, "messages") + " AND "
-            "conversation_id IN (SELECT id FROM conversations WHERE " + threads.readable_sql(c, v, "conversations")
-            + ")", (room["id"],))}
+        sql = {
+            r[0]
+            for r in c.execute(
+                "SELECT id FROM messages WHERE conversation_id=? AND " + threads.message_sql(c, v, "messages") + " AND "
+                "conversation_id IN (SELECT id FROM conversations WHERE "
+                + threads.readable_sql(c, v, "conversations")
+                + ")",
+                (room["id"],),
+            )
+        }
         legacy = {m for m in (old["id"], new["id"]) if task_privacy.message_readable(c, actor, H.message(c, m))}
         return python, sql, legacy, threads.readable(c, v, room["id"])
 
@@ -688,14 +905,22 @@ def test_a_migrated_home_shows_old_readers_only_its_history_and_home_readers_onl
         assert old["id"] not in legacy
         # An internal bot that reads the Home, in a turn not granted the old room, sees only what is new too.
         from backend.auth import Identity
+
         peer = next(a for a in sorted(who) if a.startswith("bot:") and a != bot)
         v = threads.viewer(auth, Identity(peer, "bot", attempt_id="att-none"))
-        monkeypatch.setattr(threads.Viewer, "can_read_home", lambda self, c, owner: (
-            self.actor in (home_reader, peer) if owner == bot else real_home(self, c, owner)))
+        monkeypatch.setattr(
+            threads.Viewer,
+            "can_read_home",
+            lambda self, c, owner: self.actor in (home_reader, peer) if owner == bot else real_home(self, c, owner),
+        )
         v._hidden = None
-        sql = {r[0] for r in c.execute(
-            "SELECT id FROM messages WHERE conversation_id=? AND " + threads.message_sql(c, v, "messages"),
-            (room["id"],))}
+        sql = {
+            r[0]
+            for r in c.execute(
+                "SELECT id FROM messages WHERE conversation_id=? AND " + threads.message_sql(c, v, "messages"),
+                (room["id"],),
+            )
+        }
         assert {m for m in (old["id"], new["id"]) if threads.readable(c, v, m)} == {new["id"]} == sql
     with store.transaction() as c:
         threads.open_earlier_messages(c, H.KEEPER, slug)
@@ -705,7 +930,7 @@ def test_a_migrated_home_shows_old_readers_only_its_history_and_home_readers_onl
         assert sees(c, old_reader)[3] is False, "once opened, the Home is read by its Read audience alone"
 
 
-def test_outside_members_come_off_only_by_a_manager_and_their_unsent_copies_go_moot(world):
+def _outside_members_come_off_only_by_a_manager_and_their_unsent_copies_go_moot(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -713,8 +938,12 @@ def test_outside_members_come_off_only_by_a_manager_and_their_unsent_copies_go_m
         tid = threads.create(c, owner, title="Bridge", audience="members", members=[member])["id"]
         threads.add_outside_delivery(c, tid, "slack:C123")
         sent = threads.post(c, owner, tid, "Out to Slack")
-        assert c.execute("SELECT state FROM message_deliveries WHERE message_id=? AND recipient='slack:C123'",
-                         (sent["id"],)).fetchone()[0] == "pending"
+        assert (
+            c.execute(
+                "SELECT state FROM message_deliveries WHERE message_id=? AND recipient='slack:C123'", (sent["id"],)
+            ).fetchone()[0]
+            == "pending"
+        )
         plain = threads.viewer(auth, who[member])
         if not plain.admin(c):
             with pytest.raises(Problem) as refused:
@@ -722,11 +951,15 @@ def test_outside_members_come_off_only_by_a_manager_and_their_unsent_copies_go_m
             assert refused.value.status == 403
         assert threads.remove_outside_member(c, owner, tid, "slack:C123")["removed"] is True
         assert threads.remove_outside_member(c, owner, tid, "slack:C123")["removed"] is False
-        assert c.execute("SELECT state FROM message_deliveries WHERE message_id=? AND recipient='slack:C123'",
-                         (sent["id"],)).fetchone()[0] == "moot"
+        assert (
+            c.execute(
+                "SELECT state FROM message_deliveries WHERE message_id=? AND recipient='slack:C123'", (sent["id"],)
+            ).fetchone()[0]
+            == "moot"
+        )
 
 
-def test_a_sub_thread_is_titled_by_its_parents_first_line_and_derives_it_on_read(world):
+def _a_sub_thread_is_titled_by_its_parents_first_line_and_derives_it_on_read(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -745,7 +978,7 @@ def test_a_sub_thread_is_titled_by_its_parents_first_line_and_derives_it_on_read
     assert threads.sub_thread_title("word " * 30).endswith("…") and len(threads.sub_thread_title("word " * 30)) <= 61
 
 
-def test_a_public_turns_page_flags_only_what_some_reader_of_the_thread_may_not_read(world):
+def _a_public_turns_page_flags_only_what_some_reader_of_the_thread_may_not_read(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
@@ -761,4 +994,3 @@ def test_a_public_turns_page_flags_only_what_some_reader_of_the_thread_may_not_r
         page = [{"id": m["id"]} for m in (plain, reply, tied, tied_open, kept)]
         threads.mark_narrower(c, page)
     assert [bool(m.get("audience_limited")) for m in page] == [False, False, True, False, True]
-

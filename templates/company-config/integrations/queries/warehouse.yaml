@@ -1,5 +1,5 @@
-# Named queries for the Acme warehouse (fictional). `hub tool query-search warehouse <term>` searches them and
-# `hub db warehouse --query <id> --param name=value` runs one. Bind parameters as :name; `$1`, `$2`
+# Named queries for the Acme warehouse (fictional). `tico tool query-search warehouse <term>` searches them and
+# `tico db warehouse --query <id> --param name=value` runs one. Bind parameters as :name; `$1`, `$2`
 # also work and mean the params in the order listed. Every query is SELECT-only.
 queries:
 - id: revenue-by-month

@@ -11,7 +11,7 @@ Done when: the pass or the list of differences is on the task, and any baseline 
 
 ## 1. Read both
 
-    hub task show <id>
+    tico task show <id>
 
 The register from the payroll system and the documented change summary for that run.
 

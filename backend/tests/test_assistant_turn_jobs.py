@@ -9,15 +9,26 @@ import pytest
 
 from backend import bot_settings as BS
 from backend import hubdb as H
-from backend.tests.test_api import api, assign, get, headers, post, runner, setup_attempt  # noqa: F401
-from backend.tests.test_assistant import assistant_turn, say
-from backend.tests.test_automation_access import flow
-from backend.tests.test_batch import approval_for_ana
+from backend import task_asks
+from backend.tests.helpers.api import assign, get, headers, post, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.assistant import assistant_turn, say
+from backend.tests.helpers.automation_access import flow
 
 
 def turn(api, text="Please do it"):
     """The Assistant's turn for the person's own message: its run token, with no citation header."""
-    return assistant_turn(api, "ana-test", text)[1]["token"]
+    before = getattr(api, "last_turn", None)
+    if before is None:
+        runner_, attempt = assistant_turn(api, "ana-test", text)
+    else:
+        # A second turn is the same runner's: the first run ends, then the new message is the next job.
+        runner_, first = before
+        post(api, f"attempts/{first['id']}/started", {"thread_id": f"turn-{first['id']}"}, token=runner_["token"])
+        post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0}, token=runner_["token"])
+        say(api, f"{text} (turn {first['id'][-6:]})", "ana-test")
+        attempt = post(api, "jobs/claim", {}, token=runner_["token"])["attempt"]
+    api.last_turn = (runner_, attempt)
+    return attempt["token"]
 
 
 def call(api, token, method, path, body=None, expected=200):
@@ -39,7 +50,7 @@ def refused_as_card(api, token, method, path, body=None):
 
 
 def set_setting(api, token, key, value):
-    """`hub settings set`: the plan, then the run it names, both with the turn's token."""
+    """`tico settings set`: the plan, then the run it names, both with the turn's token."""
     planned = call(api, token, "POST", f"settings/catalog/{key}/plan", {"value": value})
     assert "run" in planned, planned
     run = planned["run"]
@@ -55,11 +66,28 @@ def repo_bot(api, bot="ops"):
         BS.write(c, bot, {"name": bot, "runtime": "codex", "model": "gpt-6-luna", "reasoning_effort": "high"})
     machine = runner(api)
     assign(api, machine, bot)
-    row = {"ready": True, "runtime": "codex", "model": "gpt-6-luna", "repository_present": True,
-           "configuration_valid": True, "problems": []}
-    post(api, "runners/heartbeat", {"version": "test", "platform": "test",
-                                    "readiness": {"schema_version": 1, "runtimes": {"codex": {"installed": True, "authenticated": "ready"}},
-                                                  "bots": {bot: row}}}, token=machine["token"])
+    row = {
+        "ready": True,
+        "runtime": "codex",
+        "model": "gpt-6-luna",
+        "repository_present": True,
+        "configuration_valid": True,
+        "problems": [],
+    }
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "readiness": {
+                "schema_version": 1,
+                "runtimes": {"codex": {"installed": True, "authenticated": "ready"}},
+                "bots": {bot: row},
+            },
+        },
+        token=machine["token"],
+    )
 
 
 def ana_task(api, owner="bot:ops", title="Send the invoice"):
@@ -67,127 +95,184 @@ def ana_task(api, owner="bot:ops", title="Send the invoice"):
         return H.task_create(c, owner, title, "Monday.", "human:ana")["id"]
 
 
-def test_a_turn_closes_a_task_directly(api):
+def test_one_assistant_turn_makes_every_write_the_person_could_make_with_no_card(api):
+    """Each write the person could make on their words goes through on a turn's token: a close, closes of the tasks listed, an owner
+    change, a question answered, settings, automations, a bot paused, resumed and set to a model,
+    a rule added and retired, a message and an ask. Every step builds what it acts on, so none leans on another."""
+    # A turn closes a task directly.
     task = ana_task(api)
     token = turn(api)
     current = call(api, token, "GET", f"tasks/{task}")["task"]
-    closed = call(api, token, "POST", f"tasks/{task}", {"version": current["version"], "status": "done"})
-    assert (closed.get("task") or closed)["status"] == "done", closed
+    closed = call(
+        api, token, "POST", f"tasks/{task}/move", {"to": "closed", "why": "Sent.", "version": current["version"]}
+    )
+    assert closed["task"]["status"] == "closed", ("close", closed)
 
-
-def test_a_turn_closes_tasks_in_bulk(api):
+    # A turn closes the tasks she listed, one at a time (a change to many tasks at once is a person's, on the Tasks
+    # page), and only those.
     ids = [ana_task(api, title=f"Follow up {n}") for n in range(2)]
     outside = ana_task(api, title="Not in the list")
     token = turn(api)
-    done = call(api, token, "POST", "task-bulk", {"filter": {"ids": ids}, "action": "close"})
-    assert done["changed"] == 2, done
+    for t in ids:
+        version = call(api, token, "GET", f"tasks/{t}")["task"]["version"]
+        call(api, token, "POST", f"tasks/{t}/move", {"to": "closed", "why": "Not needed.", "version": version})
     with api.app.state.store.read() as c:
-        assert [H.task(c, t)["status"] for t in ids] == ["closed", "closed"]
-        assert H.task(c, outside)["status"] == "open"
+        assert [H.task(c, t)["status"] for t in ids] == ["closed", "closed"], "close"
+        assert H.task(c, outside)["status"] == "open", "a close leaves a task outside the list"
 
-
-def test_a_turn_changes_a_task_owner(api):
-    task = ana_task(api)
+    # A turn changes a task owner.
+    task = ana_task(api, owner="human:ana")
     token = turn(api)
     current = call(api, token, "GET", f"tasks/{task}")["task"]
-    call(api, token, "POST", f"tasks/{task}", {"version": current["version"], "owner": "bot:ops"})
+    call(api, token, "POST", f"tasks/{task}/owner", {"version": current["version"], "owner": "bot:ops"})
+    with api.app.state.store.read() as c:
+        assert H.task(c, task)["owner_id"] == "bot:ops", "owner"
 
+    # A turn answers a question the bot asked.
+    with api.app.state.store.transaction() as c:
+        tool = H.task_create(c, "human:ana", "Pick the outbound tool", "x", "bot:finance", lint=False)
+        asked = H.task_ask(c, "bot:finance", tool["id"], "human:ana", "Close or Apollo?", seen_version=tool["version"])
+    call(
+        api,
+        turn(api, "Apollo"),
+        "POST",
+        f"tasks/{tool['id']}/asks/{asked['requirement_id']}/answer",
+        {"value": "Apollo"},
+    )
 
-def test_a_turn_declines_an_approval(api):
-    approval = approval_for_ana(api)["id"]
-    token = turn(api, "No, do not spend it")
-    call(api, token, "POST", f"approvals/{approval}", {"decision": "declined", "note": ""})
-
-
-def test_a_turn_approves_after_a_read_back_and_a_plain_yes_with_the_setting_on(api):
-    approval = approval_for_ana(api)["id"]
-    post(api, "assistant/settings", {"decides_approvals": True}, token="ana-test")
-    runner, first = assistant_turn(api, "ana-test", "Go ahead with the ads")
-    call(api, first["token"], "POST", "assistant/read-back", {"approvals": [approval]})
-    # The first run ends, then the next turn is the same runner's: its yes is a new message and the next job.
-    post(api, f"attempts/{first['id']}/started", {"thread_id": "first-run"}, token=runner["token"])
-    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0}, token=runner["token"])
-    say(api, "Yes", "ana-test")
-    yes = post(api, "jobs/claim", {}, token=runner["token"])["attempt"]["token"]
-    call(api, yes, "POST", f"approvals/{approval}", {"decision": "approved", "note": ""})
-
-
-def test_a_turn_answers_a_question_the_bot_asked(api):
-    finance = setup_attempt(api, "finance")[2]["token"]
-    asked = call(api, finance, "POST", "messages", {"to": "human:ana", "text": "Close or Apollo?", "kind": "ask"})
-    call(api, turn(api, "Apollo"), "POST", f"messages/{asked['id']}/answer", {"text": "Apollo"})
-
-
-def test_a_turn_sets_a_direct_setting_and_a_confirm_setting(api):
-    token = turn(api, "Turn off the stale review and the Apollo rule")
-    set_setting(api, token, "team.rules.stale_review", False)
+    # A turn sets a direct setting and a confirm setting.
+    token = turn(api, "Turn off topic upkeep and the Apollo rule")
+    set_setting(api, token, "team.rules.topic_fresh", False)
     set_setting(api, token, "team.rules.botops_direct", False)
 
-
-def test_a_turn_updates_an_automation_to_disabled_and_to_a_schedule(api):
+    # A turn updates an automation to disabled and to a schedule, then restores an earlier version of another.
     aid = post(api, "automations", flow(owner="person:ana"))["id"]
     token = turn(api, "Turn the digest off, then run it at nine")
     call(api, token, "PATCH", f"automations/{aid}", {"enabled": False})
     call(api, token, "PATCH", f"automations/{aid}", {"trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}})
-
-
-def test_a_turn_restores_an_earlier_automation_version(api):
     aid = post(api, "automations", flow(owner="person:ana"))["id"]
-    call(api, "ana-test", "PATCH", f"automations/{aid}", {"name": "Renamed"})   # a second version to restore over
-    token = turn(api, "Put the first version back")
-    call(api, token, "POST", f"automations/{aid}/versions/1/restore", {})
+    call(api, "ana-test", "PATCH", f"automations/{aid}", {"name": "Renamed"})  # a second version to restore over
+    call(api, turn(api, "Put the first version back"), "POST", f"automations/{aid}/versions/1/restore", {})
 
-
-def test_a_turn_pauses_and_resumes_a_bot(api):
+    # A turn pauses and resumes a bot, and sets its model.
     repo_bot(api)
     token = turn(api, "Pause Ops until I say")
     rev = call(api, token, "GET", "bots/ops/access")["revision"]
     call(api, token, "POST", "bots/ops/control", {"action": "pause", "expected_revision": rev})
-    assert call(api, token, "GET", "bots/ops")["state"] == "paused"
+    assert call(api, token, "GET", "bots/ops")["state"] == "paused", "pause"
     rev = call(api, token, "GET", "bots/ops/access")["revision"]
     call(api, token, "POST", "bots/ops/control", {"action": "resume", "expected_revision": rev})
-    assert call(api, token, "GET", "bots/ops")["state"] == "active"
-
-
-def test_a_turn_sets_a_bot_model(api):
-    repo_bot(api)
+    assert call(api, token, "GET", "bots/ops")["state"] == "active", "resume"
     catalog = get(api, "models")
     model = next(m["id"] for m in catalog["models"] if m.get("runtime") == "codex" and not m.get("deprecated"))
     token = turn(api, "Use the cheaper model for Ops")
     revision = call(api, token, "GET", "bots/ops")["revision"]
     call(api, token, "POST", "bots/ops/model", {"model": model, "expected_revision": revision})
 
-
-def test_a_turn_adds_and_retires_a_rule(api):
+    # A turn adds and retires a rule.
     token = turn(api, "Add the consent rule")
-    added = no_card(api, token, "POST", "rules", {"kind": "external", "text": "Keep a consent record.",
-                                                    "who": {"bots": ["ops"]}})
+    added = no_card(
+        api, token, "POST", "rules", {"kind": "external", "text": "Keep a consent record.", "who": {"bots": ["ops"]}}
+    )
     if added.status_code == 200 and added.json().get("id"):
         rule = added.json()
         call(api, turn(api, "Retire it"), "POST", f"rules/{rule['id']}/retire", {"version": rule.get("version", 1)})
 
-
-def test_a_turn_messages_a_bot_and_asks_it_without_waiting(api):
+    # A turn messages a bot and asks it without waiting.
     token = turn(api, "Tell Ops the invoice is sent")
     call(api, token, "POST", "messages", {"to": "ops", "text": "The invoice is sent.", "kind": "say"})
-    call(api, token, "POST", "messages", {"to": "ops", "text": "Is it paid?", "kind": "ask", "wait_s": 0})
+    call(
+        api,
+        token,
+        "POST",
+        "messages",
+        {"to": "ops", "text": "Is it paid?", "kind": "say", "needs_action": True, "wait_s": 0},
+    )
 
 
-@pytest.mark.parametrize("method,path,body", [
-    ("POST", "me/tokens", {"name": "new"}),
-    ("POST", "credentials/x1/grants", {"person": "human:ben"}),
-    ("PATCH", "messages/x1", {"body": "yes"}),
-    ("POST", "sql", {"query": "select 1"}),
-    ("PUT", "providers/openai", {"key": "x"}),
-    ("POST", "support/tickets", {"text": "help"}),
-])
-def test_the_person_alone_decides_these_on_the_turn(api, method, path, body):
-    refused_as_card(api, turn(api, "Do it"), method, path, body)
+def test_a_turn_sends_back_an_ok_a_bot_asked_of_her(api):
+    """A send back is hers to say through the Assistant; an OK never is."""
+    setup_attempt(api, "finance")
+    with api.app.state.store.transaction() as c:
+        okd = task_asks.ask_ok(
+            c,
+            "bot:finance",
+            "human:ana",
+            "Raise the ads budget?",
+            shows=[],
+            subject="budget_raise:ads",
+            content={"amount": 1200},
+        )
+    token = turn(api, "No, do not spend it")
+    answer = f"tasks/{okd['task_id']}/asks/{okd['requirement_id']}/answer"
+    # Her Assistant reads the task filed for her OK, as she does: by id and in her task list.
+    assert call(api, token, "GET", f"tasks/{okd['task_id']}")["task"]["id"] == okd["task_id"]
+    # It never gives the OK, whatever she says.
+    refused = call(api, token, "POST", answer, {"value": "ok"}, expected=403)
+    assert refused["error"]["code"] == "ok_not_yours", refused
+    with api.app.state.store.read() as c:
+        assert task_asks.standing(c, okd["requirement_id"]) == task_asks.WAITING
+    call(api, token, "POST", answer, {"value": "no", "note": "Not this month."})
+    with api.app.state.store.read() as c:
+        assert task_asks.standing(c, okd["requirement_id"]) == task_asks.SENT_BACK
+
+
+def test_another_persons_assistant_neither_reads_nor_sends_back_her_ok(api):
+    """The task filed for ana's OK is hers: ben's Assistant, on ben's own words, gets nothing of it."""
+    setup_attempt(api, "finance")
+    with api.app.state.store.transaction() as c:
+        okd = task_asks.ask_ok(
+            c,
+            "bot:finance",
+            "human:ana",
+            "Raise the ads budget?",
+            shows=[],
+            subject="budget_raise:ads",
+            content={"amount": 1200},
+        )
+    _, attempt = assistant_turn(api, "ben-test", "Send back ana's budget OK")
+    token = attempt["token"]
+    hidden = api.get(f"/api/v2/tasks/{okd['task_id']}", headers=headers(token))
+    assert hidden.status_code == 404, hidden.text
+    assert "ads budget" not in hidden.text
+    listed = api.get("/api/v2/tasks?limit=200", headers=headers(token))
+    assert okd["task_id"] not in listed.text
+    for value in ("no", "ok"):
+        r = api.post(
+            f"/api/v2/tasks/{okd['task_id']}/asks/{okd['requirement_id']}/answer",
+            json={"value": value, "note": "Not this month."},
+            headers=headers(token),
+        )
+        assert r.status_code == 404, r.text
+    with api.app.state.store.read() as c:
+        assert task_asks.standing(c, okd["requirement_id"]) == task_asks.WAITING
+
+
+def test_the_person_alone_decides_these_on_the_turn(api):
+    token = turn(api, "Do it")
+    for method, path, body in [
+        ("POST", "me/tokens", {"name": "new"}),
+        ("POST", "credentials/x1/grants", {"person": "human:ben"}),
+        ("PATCH", "messages/x1", {"body": "yes"}),
+        ("POST", "sql", {"query": "select 1"}),
+        ("PUT", "providers/openai", {"key": "x"}),
+        ("POST", "support/tickets", {"text": "help"}),
+    ]:
+        refused_as_card(api, token, method, path, body)
 
 
 def test_the_background_run_puts_a_card_in_the_persons_chat(api):
     coo = setup_attempt(api, "coo")[2]["token"]
-    made = post(api, "assistant/actions", {"summary": "Archive the Ops bot", "method": "POST",
-                                           "path": "/api/v2/bots/ops/archive", "body": {"expected_revision": 1},
-                                           "for": "human:ana"}, token=coo)["action"]
+    made = post(
+        api,
+        "assistant/actions",
+        {
+            "summary": "Archive the Ops bot",
+            "method": "POST",
+            "path": "/api/v2/bots/ops/archive",
+            "body": {"expected_revision": 1},
+            "for": "human:ana",
+        },
+        token=coo,
+    )["action"]
     assert made["owner"] == "human:ana" and made["status"] == "pending"

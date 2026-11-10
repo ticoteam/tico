@@ -9,14 +9,15 @@ stand in for the setup chat, so a starter task is claimed as soon as a computer 
 stays off until a person turns it on. Each bot gets its goal, and the owner files its starter tasks.
 
 It is not demo mode (backend/demo.py): these are real bots on the person's own subscriptions. Nothing a starter task
-asks for leaves the company. Each ends with one Yes/No question to the owner (`hub task question`), which is the card
-in Needs you; Tico's approvals are for a send, spending, publishing or a merge, and a starter task does none of them.
+asks for leaves the company. Each ends with one Yes/No question to the owner, asked on the task (`tico task ask`), which
+the owner sees in Needs you; an OK is for a send, spending or publishing, and a starter task does none of them.
 
 Two doors: the first-run welcome's "Start with a sample company" (POST /api/v2/setup/sample, the owner), and
 TICO_SAMPLE_COMPANY=on, which loads it on the first start whose owner is on the roster. Both leave a company that is
 already set up alone, and both keep a team name already set (the recommended install sets TICO_TEAM_NAME); the
 sample's own name, Sample Co, is used only when there is none, and its tasks and goals say whichever it is.
 """
+
 from pathlib import Path
 
 import yaml
@@ -35,12 +36,12 @@ FILE = Path(__file__).resolve().parent / "company_file" / "sample_company.yaml"
 RUNS_ON = {"claude": "anthropic", "codex": "openai"}
 ASK = """
 
-## Ask for the approval
-When {what} is on this task, ask the owner once, from this task:
+## Ask the owner
+When {what} is on this task, ask the owner once, on this task (`tico task show` prints its id and version):
 
-    hub task question --on {owner} "Approve {what}?"
+    tico task ask <id> --to {owner} "Approve {what}?" --choices Yes,No --version N
 
-Their answer reaches you on this task. Yes: mark this task done. No: change it as they say and ask once more.
+Their answer reaches you on this task. Yes: `tico task done`. No: change it as they say and ask once more.
 Nothing in this task is sent, posted or published outside Sample Co, whatever they answer.
 """
 
@@ -49,8 +50,10 @@ def team():
     """The sample company file: its draft (company_file.from_yaml, so it stays a file Tico can import) and, by bot
     id, what only the sample uses: `runs_on`, and the starter tasks."""
     text = FILE.read_text()
-    extra = {row["id"]: {"runs_on": row.get("runs_on") or "", "tasks": row.get("starter_tasks") or []}
-             for row in yaml.safe_load(text)["employees"]}
+    extra = {
+        row["id"]: {"runs_on": row.get("runs_on") or "", "tasks": row.get("starter_tasks") or []}
+        for row in yaml.safe_load(text)["employees"]
+    }
     return from_yaml(text), extra
 
 
@@ -87,21 +90,34 @@ def load(onboarding, c, who):
     name = team_name(settings, record) or company["name"]
     ours = lambda text: text.replace(company["name"], name)
     record["names"] = {**record["names"], "company_name": name}
-    record["answers"] = {**record["answers"], "what_we_do": ours(company["about"]), "customers": "businesses",
-                         "team_size": "1 (just me)", "software_product": "yes",
-                         "departments": [b["dept"] for b in draft["bots"] if b is not assistant]}
+    record["answers"] = {
+        **record["answers"],
+        "what_we_do": ours(company["about"]),
+        "customers": "businesses",
+        "team_size": "1 (just me)",
+        "software_product": "yes",
+        "departments": [b["dept"] for b in draft["bots"] if b is not assistant],
+    }
     names = O.display_names(settings, record)
     # The assistant is a required card: complete() makes it (or keeps the one there is) under the company's own name.
     record["selected"] = {
-        slugs[b["id"]]: {"template": cards[b["template"]]["template"], "display_name": b["title"],
-                         "instructions": O.render(cards[b["template"]], names, b["title"])["instructions"],
-                         "reports_to": slugs.get(b.get("reports_to"), "")}
-        for b in draft["bots"] if b is not assistant}
+        slugs[b["id"]]: {
+            "template": cards[b["template"]]["template"],
+            "display_name": b["title"],
+            "instructions": O.render(cards[b["template"]], names, b["title"])["instructions"],
+            "reports_to": slugs.get(b.get("reports_to"), ""),
+        }
+        for b in draft["bots"]
+        if b is not assistant
+    }
     onboarding._store(c, record, who.actor)
     chosen = providers.load(c, settings)["enabled"]
-    models = {slugs[bot_id]: providers.recommended(RUNS_ON[row["runs_on"]])["id"]
-              for bot_id, row in extra.items() if RUNS_ON.get(row["runs_on"]) in chosen}
-    onboarding.complete(c, who, models=models, seats=False)   # the sample is a working team, not a chart to recruit into
+    models = {
+        slugs[bot_id]: providers.recommended(RUNS_ON[row["runs_on"]])["id"]
+        for bot_id, row in extra.items()
+        if RUNS_ON.get(row["runs_on"]) in chosen
+    }
+    onboarding.complete(c, who, models=models, seats=False)  # the sample is a working team, not a chart to recruit into
     for slug in record["selected"]:
         onboarding.onboarded(c, who, slug, arm=False)
     owner = H.actor_id(who.actor)
@@ -115,15 +131,28 @@ def load(onboarding, c, who):
     for bot_id, row in extra.items():
         for task in row["tasks"]:
             body = ours(task["body"].rstrip() + ASK.format(what=task["approve"], owner=owner))
-            made = H.task_create(c, who.actor, ours(task["title"]), body, "bot:" + ids[slugs[bot_id]], allow_planned=True,
-                                 goal_id=goals.get(bot_id))
+            made = H.task_create(
+                c,
+                who.actor,
+                ours(task["title"]),
+                body,
+                "bot:" + ids[slugs[bot_id]],
+                allow_planned=True,
+                goal_id=goals.get(bot_id),
+            )
             tasks.append(made["id"])
     record = O.load(c)
     setup = {slugs[b["id"]]: state(name, b, H.now()[:10]) for b in draft["bots"] if b is not assistant}
-    record["sample"] = {"loaded": H.now(), "by": who.actor, "bots": sorted(slugs.values()), "tasks": tasks,
-                        "setup": setup}
+    record["sample"] = {
+        "loaded": H.now(),
+        "by": who.actor,
+        "bots": sorted(slugs.values()),
+        "tasks": tasks,
+        "setup": setup,
+    }
     onboarding._store(c, record, who.actor)
     H.event(c, who.actor, "onboarding.sample_loaded", "", {"bots": sorted(slugs.values()), "tasks": len(tasks)})
+    onboarding.complete_company(c)  # its bots are active now: what a start would complete for them, now
     return onboarding.view(c, who)
 
 
@@ -131,11 +160,15 @@ def state(name, bot, today):
     """The state.md sections a role bot's repository is made with (clients/catalog.materialize): its setup done from
     the sample's answers, so it works its starter task instead of asking the setup questions, and its routine off."""
     return {
-        "Setup": (f"Done {today}. You are the {bot['title']} at {name}, Tico's sample company: a made-up team for "
-                  "trying Tico. The sample's own answers stood in for the setup questions, so do not ask them."),
+        "Setup": (
+            f"Done {today}. You are the {bot['title']} at {name}, Tico's sample company: a made-up team for "
+            "trying Tico. The sample's own answers stood in for the setup questions, so do not ask them."
+        ),
         "Answers": f"- {today}: {bot['reason']}\n- {today}: The company is in `knowledge/company.md`.",
-        "Routine": ("Your first routine is off. The sample company keeps it off until a person turns it on in Tico; "
-                    "do not turn it on yourself."),
+        "Routine": (
+            "Your first routine is off. The sample company keeps it off until a person turns it on in Tico; "
+            "do not turn it on yourself."
+        ),
         "Next": "Do your starter task, then ask the owner the one Yes/No question it ends with. Then work your open tasks.",
     }
 
@@ -153,8 +186,14 @@ def _providers(c, settings, who):
     before = providers.load(c, settings)
     if providers.configured(before):
         return
-    before, after = providers.save(c, who.actor, {"enabled": ["anthropic", "openai"],
-                                                  "expected_revision": before["revision"]}, H.now())
+    before, after = providers.save(
+        c, who.actor, {"enabled": ["anthropic", "openai"], "expected_revision": before["revision"]}, H.now()
+    )
     keys = ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models")
-    H.event(c, who.actor, "providers.updated", "", {"before": {k: before[k] for k in keys},
-                                                     "after": {k: after[k] for k in keys}, "sample": True})
+    H.event(
+        c,
+        who.actor,
+        "providers.updated",
+        "",
+        {"before": {k: before[k] for k in keys}, "after": {k: after[k] for k in keys}, "sample": True},
+    )

@@ -5,7 +5,7 @@ Short creator-style clips with a made-up person. The person is an AI character e
 1. Never use a real person's photo, name or voice, and no lookalike of a real person. Label the clip AI-generated on
    screen and on the task.
 2. Make the character once, in the storyboard stage, from a reference image if the owner gave one:
-   `hub gateway image "PROMPT" --category character --ref <reference.png> --out projects/<slug>/storyboard/character.png`.
+   `tico gateway image "PROMPT" --category character --ref <reference.png> --out projects/<slug>/storyboard/character.png`.
    The owner approves the character before any clip uses it.
 3. Image-to-video needs the team's own video provider key. Without it, use the approved storyboard frames with
    motion graphics instead (playbooks/motion-graphics.md).

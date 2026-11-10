@@ -19,9 +19,9 @@ from unittest import mock
 
 import pytest
 
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_botops_parity import act
-from backend.tests.test_member_bots import botops, turn  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.member_bots import botops, turn  # noqa: F401
 from backend.tests.live import live  # noqa: F401
 from clients import hermes_agent as H
 
@@ -63,8 +63,16 @@ class Connector:
         jobs_file = self.profile / "cron" / "jobs.json"
         jobs = json.loads(jobs_file.read_text())["jobs"] if jobs_file.exists() else []
         if args[3] == "create":
-            jobs.append({"id": f"job{len(jobs) + 1}", "name": args[args.index("--name") + 1], "schedule_display": args[4],
-                         "enabled": True, "last_run_at": None, "last_status": None})
+            jobs.append(
+                {
+                    "id": f"job{len(jobs) + 1}",
+                    "name": args[args.index("--name") + 1],
+                    "schedule_display": args[4],
+                    "enabled": True,
+                    "last_run_at": None,
+                    "last_status": None,
+                }
+            )
         elif args[3] == "remove":
             jobs = [j for j in jobs if j["id"] != args[4]]
         jobs_file.parent.mkdir(parents=True, exist_ok=True)
@@ -77,13 +85,23 @@ class Connector:
     def run(self, *argv, sleep=None):
         """(exit code, stdout, stderr) of one command. Fails the test if any token we ever held was printed."""
         out, err = io.StringIO(), io.StringIO()
-        which = lambda name, *a, **k: "/usr/bin/systemctl" if name == "systemctl" else "/usr/bin/hermes" if name == "hermes" else REAL_WHICH(name, *a, **k)
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
-                mock.patch.object(H.subprocess, "run", self._run_command), mock.patch.object(H.shutil, "which", which), \
-                mock.patch.object(H.time, "sleep", (lambda seconds: sleep(out.getvalue())) if sleep else REAL_SLEEP):
+        which = lambda name, *a, **k: (
+            "/usr/bin/systemctl"
+            if name == "systemctl"
+            else "/usr/bin/hermes"
+            if name == "hermes"
+            else REAL_WHICH(name, *a, **k)
+        )
+        with (
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+            mock.patch.object(H.subprocess, "run", self._run_command),
+            mock.patch.object(H.shutil, "which", which),
+            mock.patch.object(H.time, "sleep", (lambda seconds: sleep(out.getvalue())) if sleep else REAL_SLEEP),
+        ):
             code = H.main(list(argv))
         self.printed += out.getvalue() + err.getvalue()
-        self.token()                                               # remember the latest
+        self.token()  # remember the latest
         for token in self.tokens:
             assert token not in self.printed, "the token was printed"
         return code, out.getvalue(), err.getvalue()
@@ -106,8 +124,13 @@ class Connector:
 
     def mcp(self, method, params=None, token=None):
         """What the profile's agent does over the `mcp_servers.tico` entry: JSON-RPC to the hub with its token."""
-        reply = H.request(self.url, token or self.token(), "POST", "/api/v2/mcp",
-                          {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}})
+        reply = H.request(
+            self.url,
+            token or self.token(),
+            "POST",
+            "/api/v2/mcp",
+            {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}},
+        )
         return reply["result"] if "result" in reply else reply
 
     def tool(self, name, **arguments):
@@ -118,7 +141,7 @@ class Connector:
 
 @pytest.fixture
 def connector(api, live, tmp_path, monkeypatch):
-    monkeypatch.setattr(api.app.state.store.settings, "runner_url", live)        # the address the hub tells a profile to use
+    monkeypatch.setattr(api.app.state.store.settings, "runner_url", live)  # the address the hub tells a profile to use
     return Connector(tmp_path, monkeypatch, live)
 
 
@@ -133,11 +156,14 @@ def bot(api):
 @pytest.mark.slow
 def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, botops, connector):
     # An owner makes a Hermes bot and turns it on; a Hermes bot has no computer to be placed on.
-    made = api.post("/api/v2/bots/register", json={"slug": "scout", "display_name": "Scout", "model": "hermes",
-                                                   "description": "A Hermes profile."}, headers=headers())
+    made = api.post(
+        "/api/v2/bots/register",
+        json={"slug": "scout", "display_name": "Scout", "model": "hermes", "description": "A Hermes profile."},
+        headers=headers(),
+    )
     assert made.status_code == 200 and made.json()["harness"] == "hermes", made.text
     post(api, "bots/scout/go-live", {"setup": False})
-    scout = bot(api)["id"]          # a bot made now has a UUIDv7 id; `scout` is its slug
+    scout = bot(api)["id"]  # a bot made now has a UUIDv7 id; `scout` is its slug
     assert scout != "scout"
 
     # Pair: the connector prints a code and waits; BotOps approves it as the owner who read it out.
@@ -156,12 +182,19 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
     assert token.startswith("tico-agent-")
     # The profile is wired: config entry, .env and credential file (the last two private), and a timer.
     assert "mcp_servers" in (connector.profile / "config.yaml").read_text()
-    assert (connector.profile / ".env").read_text().splitlines() == [f"TICO_AGENT_TOKEN={token}", f"TICO_URL={connector.url}"]
+    assert (connector.profile / ".env").read_text().splitlines() == [
+        f"TICO_AGENT_TOKEN={token}",
+        f"TICO_URL={connector.url}",
+    ]
     for private in (connector.profile / ".env", connector.config_dir / "scout.json"):
         assert stat.S_IMODE(private.stat().st_mode) == 0o600
     assert connector.credential()["token"] == token and connector.credential()["bot_id"] == scout
     assert connector.credential()["slug"] == "scout"
-    assert [c for c in connector.timer_calls if c[0] == "launchctl" and "bootstrap" in c or c[:3] == ["systemctl", "--user", "enable"]]
+    assert [
+        c
+        for c in connector.timer_calls
+        if c[0] == "launchctl" and "bootstrap" in c or c[:3] == ["systemctl", "--user", "enable"]
+    ]
     # ... and the heartbeat it sent is what the hub shows.
     listed = bot(api)
     assert listed["online"] is True and listed["agent"]["credential"] is True and listed["agent"]["profile"] == "scout"
@@ -184,11 +217,15 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
     assert connector.status()["last_reply"]["waiting"]["messages"] == 1
     (waiting,) = connector.tool("hub_message_list")["messages"]
     assert waiting["body"] == "What did you find today?"
-    reply = connector.tool("hub_message_send", to="ana", text="Three leads, all in Austin.", conversation_id=sent["conversation_id"])
+    reply = connector.tool(
+        "hub_message_send", to="ana", text="Three leads, all in Austin.", conversation_id=sent["conversation_id"]
+    )
     assert reply["sender_id"] == "bot:" + scout
     assert connector.tool("hub_message_mark_read", message_id=sent["id"]) == {"read": True}
     assert [m["body"] for m in get(api, f"conversations/{sent['conversation_id']}/messages")] == [
-        "What did you find today?", "Three leads, all in Austin."]
+        "What did you find today?",
+        "Three leads, all in Austin.",
+    ]
     # The next heartbeat, and `status` the profile's cron job reads, say nothing is waiting.
     assert connector.run("heartbeat", "--profile", "scout")[0] == 0
     assert connector.status()["last_reply"]["waiting"] == {"messages": 0, "tasks": 0}
@@ -204,7 +241,7 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
         assert connector.run("heartbeat", "--profile", "scout")[0] == 0
     assert post(api, "bots/scout/restore", {})["status"] == "active"
     held = connector.credential()
-    held["backoff"]["until"] = time.time() - 1                      # an hour has gone by
+    held["backoff"]["until"] = time.time() - 1  # an hour has gone by
     H.save_config("scout", held)
     code, out, err = connector.run("heartbeat", "--profile", "scout")
     assert code == 0 and "Bot scout answers again" in out and "backoff" not in connector.credential()
@@ -222,12 +259,17 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
     # route) makes a new one, clears the back-off and the loop works again.
     restored = post(api, "bots/scout/restore", {})
     assert restored["status"] == "active" and restored["restored"] is True
-    assert connector.run("heartbeat", "--profile", "scout")[0] == 0            # still backed off, so silent
+    assert connector.run("heartbeat", "--profile", "scout")[0] == 0  # still backed off, so silent
+
     def approve_as_owner(printed):
-        done = api.post("/api/v2/agents/pairings/approve", json={"code": CODE.search(printed).group(1), "bot": "scout"},
-                        headers=headers())
+        done = api.post(
+            "/api/v2/agents/pairings/approve",
+            json={"code": CODE.search(printed).group(1), "bot": "scout"},
+            headers=headers(),
+        )
         assert done.status_code == 200, done.text
         REAL_SLEEP(0.02)
+
     code, out, err = connector.pair(approve_as_owner)
     assert code == 0, err
     fresh = connector.token()

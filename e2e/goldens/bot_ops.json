@@ -24,6 +24,7 @@
         "name": "Ana"
       }
     ],
+    "cant_run": null,
     "claim_scoped": false,
     "claim_task": null,
     "compact_at": 250000,
@@ -35,13 +36,11 @@
     "folder": "bot-ops",
     "goals": "",
     "harness": "fake",
-    "host": "dispatcher",
+    "host": "keeper",
     "id": "ops",
-    "keep_tasks_going": null,
     "last_turn_at": "<time>",
     "manages_reports": true,
     "model": "",
-    "next_run": 0,
     "notes": 0,
     "onboarding_state": "",
     "online": true,
@@ -75,7 +74,7 @@
       "sweeps": true,
       "takes": "all"
     },
-    "queued": 8,
+    "queued": 3,
     "repo": "emp-ops",
     "repo_url": "",
     "reports_to": null,
@@ -121,14 +120,14 @@
         "A person's message or request",
         "An assignment",
         "A direct question",
-        "An awaited dependency resolving (a blocker done, an awaited review, a release)",
-        "An actionable blocker",
-        "A review, QA or Security request"
+        "A task to work",
+        "An awaited result (a sub-task finished, a worktree ready, an account reconnected)",
+        "An actionable blocker"
       ],
       "label": "Performance",
       "preset": "performance",
       "profile": "doer",
-      "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
+      "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results and blockers wake it at once.",
       "sweep_seconds": "<volatile>"
     }
   },

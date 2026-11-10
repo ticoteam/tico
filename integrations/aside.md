@@ -39,9 +39,9 @@ support-style bots); social sites and news (a listening bot, read); ad dashboard
 **The owner's social sessions are the listening bot's alone**. The Tool refuses
 any other bot that names a social site (X, Reddit, LinkedIn, Facebook, Instagram, TikTok,
 YouTube and the rest of `SOCIAL_HOSTS` in `connectors/browser.py`) in its `sites:` or its code;
-ad-account dashboards on those domains are not social reading. The listening bot saves what it reads in Tico (`hub listening save`), the decision model routes
+ad-account dashboards on those domains are not social reading. The listening bot saves what it reads in Tico (`tico listening save`), the decision model routes
 each post to the inboxes that want it (the team's `registry/listening.yaml`), and every other bot works its
-inbox (`hub listening item list`, `hub listening item resolve`) or asks the listening bot by task for a lookup.
+inbox (`tico listening item list`, `tico listening item resolve`) or asks the listening bot by task for a lookup.
 
 ## How a bot uses it
 
@@ -66,7 +66,7 @@ refused it. The REPL stops after 120 s; a `task` after 900 s (`ASIDE_TASK_TIMEOU
   `.hover`, `.tap`, `.evaluate`, `.evaluateHandle`, `.route`, `.goto`, `page.keyboard`,
   `page.mouse` and the `task` command. `can: [read, act]` allows them.
 - Messages to outsiders stay drafts until a person who manages it turns mail sending on in Tico. With sending on, a bot acts
-  within the requested work, its Instructions and granted Tools; no per-action approval is required.
+  within the requested work, its Instructions and granted Tools; no OK is needed for each action.
   See `policies/approvals.md` and `policies/shared-rules.md`.
 - Logins are never a bot's job. The owner signs in once in Aside; a login page, a captcha or a
   challenge means stop and say so.
@@ -92,5 +92,5 @@ refused it. The REPL stops after 120 s; a `task` after 900 s (`ASIDE_TASK_TIMEOU
 
 ## Learnings
 
-What bots and people learn about this Tool is added with `hub tool learn aside "…"` and
+What bots and people learn about this Tool is added with `tico tool learn aside "…"` and
 shown under this page; a person folds it into the page over time. The page is the rule.

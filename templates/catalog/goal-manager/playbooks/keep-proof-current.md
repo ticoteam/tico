@@ -15,27 +15,27 @@ At Passive, run it only when the owner asks.
 
 ## 1. Check what is there
 
-- `hub strategy show`: `current.sections.proof` is the published text. `proof_since` is when it last changed (null when
+- `tico strategy show`: `current.sections.proof` is the published text. `proof_since` is when it last changed (null when
   it is empty or nothing is published).
-- `hub proposal list`: a pending `strategy_draft` that already changes `proof` is waiting for the owner. Do not file
+- `tico proposal list`: a pending `strategy_draft` that already changes `proof` is waiting for the owner. Do not file
   another. Say in your note that it is waiting.
 
 ## 2. Gather the evidence
 
 Read each source. Keep only facts that say whether customers want the product.
 
-1. **Growth numbers.** `hub growth numbers`: new customers by month, and the share kept at 30, 90 and 180 days. Use the
-   newest full month. Blank is not zero: a blank share is "not known yet", never 0%. Then `hub kpi list` for usage
+1. **Growth numbers.** `tico growth numbers`: new customers by month, and the share kept at 30, 90 and 180 days. Use the
+   newest full month. Blank is not zero: a blank share is "not known yet", never 0%. Then `tico kpi list` for usage
    KPIs (active users, repeat use), with each reading's period.
-2. **Support work.** `hub team show` names the bots that talk to customers (Support, Customer success, Sales). For
-   each, `hub task list --owner <slug> --updated-since <30 days ago, as 2026-10-03T00:00:00Z> --brief`, then
-   `hub task show <id>` for the few that quote a customer: what they asked for, what they praised, why they left.
-3. **Meetings.** `hub meeting search "<the product's name>" --since <30 days ago, as 2026-10-03>`, then
-   `hub meeting read <id>` for customer calls. Team meetings only; you never see private ones.
-4. **Listening.** `hub market briefing latest` and `hub market delta`: what people said in public about the product
+2. **Support work.** `tico team show` names the bots that talk to customers (Support, Customer success, Sales). For
+   each, `tico task list --owner <slug> --updated-since <30 days ago, as 2026-10-03T00:00:00Z> --brief`, then
+   `tico task show <id>` for the few that quote a customer: what they asked for, what they praised, why they left.
+3. **Meetings.** `tico meeting search "<the product's name>" --since <30 days ago, as 2026-10-03>`, then
+   `tico meeting read <id>` for customer calls. Team meetings only; you never see private ones.
+4. **Listening.** `tico market briefing latest` and `tico market delta`: what people said in public about the product
    or the problem, with links.
-5. **Learnings.** Ask the customer-facing bots once: `hub question ask <slug> "What did customers say about <product>
-   in the last 30 days? Quote them, with the task or message each came from."` Use only answers that name a source.
+5. **Learnings.** Ask the customer-facing bots once: `tico message send <slug> "What did customers say about <product>
+   in the last 30 days? Quote them, with the task or message each came from." --needs-action` Use only answers that name a source.
 
 ## 3. Write it
 
@@ -58,10 +58,10 @@ Rules:
 
 If the text says what the published one says, stop: there is nothing to propose. Otherwise file one proposal:
 
-    hub proposal create --kind strategy_draft --payload-file proof.json --reason "<one sentence: what changed in the evidence>"
+    tico proposal create --kind strategy_draft --payload-file proof.json --reason "<one sentence: what changed in the evidence>"
 
 with `{"sections": {"proof": "..."}}`. It is one item in the owner's Needs you and counts toward their 5 a day
-(`asked_today` in `hub goal strategy-bot`); at 5, keep it for tomorrow. When a fact bears on a bet (retention under a
+(`asked_today` in `tico goal strategy-bot`); at 5, keep it for tomorrow. When a fact bears on a bet (retention under a
 bet's wrong-if, say), name the bet in the reason; `playbooks/bet-tripped.md` handles a bet that trips.
 
 **Done when:** one proposal changing `proof` is pending, or you found nothing new and said so. Every number in it has a

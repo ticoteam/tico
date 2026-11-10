@@ -6,8 +6,7 @@ from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each 
 from backend import hubdb as H
 from backend import threads, updates
 from backend.auth import Identity
-from backend.tests.test_api import api  # noqa: F401
-from backend.tests.test_bot_contact import bot
+from backend.tests.helpers.bot_contact import bot
 
 DAY = "2026-10-30"
 ANA = Identity("human:ana", "owner", "ana@acme.example")
@@ -16,8 +15,9 @@ CARA = Identity("human:cara", "human", "cara@acme.example")
 
 def home_cards(c, actor):
     home = threads.home(c, actor, create=True)
-    rows = c.execute("SELECT id, body, refs FROM messages WHERE conversation_id=? AND kind='notice' "
-                     "ORDER BY seq", (home["id"],)).fetchall()
+    rows = c.execute(
+        "SELECT id, body, refs FROM messages WHERE conversation_id=? AND kind='notice' ORDER BY seq", (home["id"],)
+    ).fetchall()
     cards = []
     for row in rows:
         refs = H._json(row["refs"], {}) or {}
@@ -65,6 +65,7 @@ def test_a_bots_card_never_wakes_the_bot(api):
         updates.post(c, "boss", "- Planned the launch.", kind="daily", day=DAY)
         cards = home_cards(c, "bot:boss")
         assert len(cards) == 1
-        woke = c.execute("SELECT COUNT(*) FROM message_deliveries WHERE message_id=? AND recipient='bot:boss'",
-                         (cards[0]["id"],)).fetchone()[0]
+        woke = c.execute(
+            "SELECT COUNT(*) FROM message_deliveries WHERE message_id=? AND recipient='bot:boss'", (cards[0]["id"],)
+        ).fetchone()[0]
     assert woke == 0

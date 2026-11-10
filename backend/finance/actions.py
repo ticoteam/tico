@@ -2,10 +2,14 @@
 then committed, sent to one person for approval, denied or failed, and recorded in `fin_actions` with its audit row
 in the same transaction. Callers outside backend/finance write only through here.
 
-Approvals are Tico approvals with no task, kind `finance` (`spend` is kept for money out, which phase 0 has none of;
-`spend_limit` is never used, since approving one applies a usage-cap proposal). The payload carries the action id.
-When a decision arrives, `approval_decided` verifies the approval is the one Finance asked for, re-checks rights, view
-and budgets, consumes it, and commits, all in one transaction."""
+An approval is an OK bound to exactly what was shown (backend/task_asks.py, subject `finance:<action id>`), asked of
+one person on a task of its own; the action's `approval_id` is the OK's requirement id. A bot never gives one: only the
+named person's own click on its preview in Tico does, and never the person who asked (`_approver`). Once the OK is
+given (`ok_given`, in the click's own transaction; the hourly `ok_sweep` only ends what was sent back or withdrawn and
+never claims an OK), `approval_decided` checks the OK is the one
+Finance asked for, given by that person, for exactly the payload about to run, re-checks rights, view and budgets, uses
+it, and commits, all in one transaction."""
+
 import json
 import logging
 import sqlite3
@@ -14,12 +18,29 @@ from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 from .. import hubdb as tico_db
-from . import banking, budgeting, cards, catalog, documents, gateway_sync, gating, handlers, jobs, mirror, payments
+from . import (
+    attribution,
+    banking,
+    budgeting,
+    campaigns,
+    cards,
+    catalog,
+    documents,
+    gateway_sync,
+    gating,
+    handlers,
+    jobs,
+    mirror,
+    receipts,
+    payments,
+    subscriptions,
+)
 from . import prepaids, purchasing, topups
 from . import posting
 from . import raw_totals, runs
 from . import setup as setup_mod
 from . import books_link, books_sync, delivery, rights, sync, tax, usage
+from . import statement_upload, vendors
 from .context import APPROVER_KEY, Ctx, is_set_up, load
 from .core import kinds as K
 from .core import org as O
@@ -47,6 +68,7 @@ SYSTEM = O.SYSTEM
 Principal = O.Principal
 log = logging.getLogger(__name__)
 
+
 def bills_address_set(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     """The bills address vendors send bills to (spec §5), set or cleared (""): the settings route asks through here."""
     V.only(p, ("address",))
@@ -57,6 +79,7 @@ def bills_address_set(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     def apply(aid: str) -> handlers.Result:
         set_bills_email(ctx.c, value, by=who, at=ctx.at)
         return {"address": value or None}
+
     return handlers.Plan(K.ALLOW, "Set the bills address" if value else "Clear the bills address", apply)
 
 
@@ -64,6 +87,7 @@ def books_disconnect(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     """A books connection's local part (spec §5): its credentials leave Tico's vault and its ids are cleared, and the
     connection is disconnected. Its HQ grant is revoked first, outside any transaction, by books_link.drop."""
     from .store import mirror as SM
+
     V.only(p, ("connection_id",))
     cid = V.text(p, "connection_id", 80)
     if cid not in {str(row[0]) for row in SM.books_connections(ctx.c)}:
@@ -72,6 +96,7 @@ def books_disconnect(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     def apply(aid: str) -> handlers.Result:
         books_link.clear_local(ctx.c, cid, now=ctx.at)
         return {"connection_id": cid, "status": "disconnected"}
+
     return handlers.Plan(K.ALLOW, "Disconnect the books connection", apply)
 
 
@@ -79,6 +104,7 @@ def finance_approver_set(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     """The one person finance-admin approvals go to (spec §16): named by the owner, or "" to send them back to the owner.
     Only a person on the org chart can be named, never a bot."""
     from .store import ledger as SL
+
     V.only(p, ("approver",))
     if "approver" not in p:
         raise FinanceError(INVALID, "approver is a person, or empty for the owner")
@@ -89,34 +115,61 @@ def finance_approver_set(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     def apply(aid: str) -> handlers.Result:
         SL.set_setting(ctx.c, APPROVER_KEY, value or None, who, ctx.at)
         return {"approver": value or None}
-    return handlers.Plan(K.ALLOW, "Name the finance approver" if value else "Send finance approvals to the owner", apply)
+
+    return handlers.Plan(
+        K.ALLOW, "Name the finance approver" if value else "Send finance approvals to the owner", apply
+    )
 
 
 # Every live kind's planner: phase 0's in handlers, then banking, cards, payments, rules, and payables/receivables.
 PLANNERS: dict[str, handlers.Planner] = {
-    **handlers.PLANNERS, "connection_create": banking.connection_create, "reconcile": banking.reconcile,
+    **handlers.PLANNERS,
+    "connection_create": banking.connection_create,
+    "reconcile": banking.reconcile,
     "reconcile_undo": banking.reconcile_undo,
-    "connection_sync": banking.connection_sync, "connection_disconnect": banking.connection_disconnect,
-    "connection_map": banking.connection_map, "connection_settings": banking.connection_settings,
+    "connection_sync": banking.connection_sync,
+    "connection_disconnect": banking.connection_disconnect,
+    "connection_map": banking.connection_map,
+    "money_account_add": banking.money_account_add,
+    "connection_settings": banking.connection_settings,
     "bills_address_set": bills_address_set,
-    "books_disconnect": books_disconnect, "finance_approver_set": finance_approver_set, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
-    **documents.PLANNERS, **mirror.PLANNERS, **tax.PLANNERS, **raw_totals.PLANNERS, **catalog.PLANNERS,
-    **purchasing.PLANNERS, **prepaids.PLANNERS, **topups.PLANNERS}
+    "books_disconnect": books_disconnect,
+    "finance_approver_set": finance_approver_set,
+    **cards.PLANNERS,
+    **payments.PLANNERS,
+    **gating.PLANNERS,
+    **documents.PLANNERS,
+    **mirror.PLANNERS,
+    **tax.PLANNERS,
+    **raw_totals.PLANNERS,
+    **catalog.PLANNERS,
+    **purchasing.PLANNERS,
+    **prepaids.PLANNERS,
+    **topups.PLANNERS,
+    **attribution.PLANNERS,
+    **campaigns.PLANNERS,
+    **receipts.PLANNERS,
+    **subscriptions.PLANNERS,
+    **vendors.PLANNERS,
+    **statement_upload.PLANNERS,
+}
 assert set(PLANNERS) == set(K.LIVE)
 
-STATUSES = ("committed", "needs_approval", "denied", "failed", "expired", "withdrawn")
+STATUSES = ("committed", "needs_approval", "denied", "failed", "withdrawn")
 DENIAL_CODES = (DENIED, NOT_AVAILABLE)
-SOURCE = "finance"                    # marks a Tico approval as Finance's, for the decide routes to route
+SOURCE = "finance"  # what an OK's content says it is for
+SUBJECT = "finance:"  # an OK's subject: this and the action id
 MAX_KEY = 200
 CARD_NUMBER_REFUSED = V.CARD_NUMBER_REFUSED
-STALE_DAYS = 14                        # hubdb.APPROVAL_STALE_DAYS: a withdrawal after this long is an expiry
 # Payload fields a planner fills in when the asker leaves them out (Plan.resolved): a retry without them is the same
 # request.
-RESOLVED_KEYS = frozenset({"effective_from", "date", "raise_check", "recipient_version", "provider_user_id", delivery.MAIL})
+RESOLVED_KEYS = frozenset(
+    {"effective_from", "date", "raise_check", "recipient_version", "provider_user_id", delivery.MAIL}
+)
 # What an invoice email's approval is for (its addresses, text, document and mailbox): a change to any of it before the
 # approval is decided voids the ask, and it is asked again (approval_decided).
 MAIL_MOVED = "the invoice email changed since it was asked: its addresses, text, subject, document or mailbox"
-RECIPIENT_RULE = payments.RECIPIENT_RULE                 # the rule an approval asked for changed payee details names
+RECIPIENT_RULE = payments.RECIPIENT_RULE  # the rule an approval asked for changed payee details names
 NEW_RECIPIENT_RULE = payments.NEW_RECIPIENT_RULE
 
 
@@ -133,12 +186,22 @@ class ActionResult:
     rule: str = ""
     dry_run: bool = False
     impact: Mapping[str, object] = field(default_factory=lambda: dict[str, object]())
-    replayed: bool = False              # the key's earlier action, returned again: nothing was done now
+    replayed: bool = False  # the key's earlier action, returned again: nothing was done now
 
     def as_dict(self) -> dict[str, object]:
-        return {"status": self.status, "kind": self.kind, "action_id": self.action_id, "result": dict(self.result),
-                "code": self.code, "reason": self.reason, "approval_id": self.approval_id, "approver": self.approver,
-                "rule": self.rule, "dry_run": self.dry_run, "impact": dict(self.impact)}
+        return {
+            "status": self.status,
+            "kind": self.kind,
+            "action_id": self.action_id,
+            "result": dict(self.result),
+            "code": self.code,
+            "reason": self.reason,
+            "approval_id": self.approval_id,
+            "approver": self.approver,
+            "rule": self.rule,
+            "dry_run": self.dry_run,
+            "impact": dict(self.impact),
+        }
 
 
 def _canonical(payload: object) -> dict[str, object]:
@@ -155,8 +218,10 @@ def _canonical(payload: object) -> dict[str, object]:
 
 
 def _trim_ids(payload: Mapping[str, object]) -> dict[str, object]:
-    return {k: v.strip() if isinstance(v, str) and (k.endswith("_id") or k == "obligation") else v
-            for k, v in payload.items()}
+    return {
+        k: v.strip() if isinstance(v, str) and (k.endswith("_id") or k == "obligation") else v
+        for k, v in payload.items()
+    }
 
 
 def _replayed_reason(c: sqlite3.Connection, p: O.Principal, row: Mapping[str, object], at: str | None) -> str:
@@ -178,10 +243,17 @@ def _stored(row: Mapping[str, object], full: bool = False) -> ActionResult:
     the call that just committed it): finance data is read fresh through finance/reads with the caller's current view,
     so a retry after a revoked grant returns nothing they may no longer see (spec §5)."""
     result = cast(dict[str, object], json.loads(str(row["result"] or "{}"))) if full else dict[str, object]()
-    return ActionResult(status=str(row["status"]), kind=str(row["kind"]), action_id=str(row["id"]),
-                        result={k: v for k, v in result.items() if k != "what"}, code=str(row["code"] or ""),
-                        reason=str(row["reason"] or ""), approval_id=str(row["approval_id"] or "") or None,
-                        approver=str(row["approval_to"] or "") or None, rule=str(row["rule_id"] or ""))
+    return ActionResult(
+        status=str(row["status"]),
+        kind=str(row["kind"]),
+        action_id=str(row["id"]),
+        result={k: v for k, v in result.items() if k != "what"},
+        code=str(row["code"] or ""),
+        reason=str(row["reason"] or ""),
+        approval_id=str(row["approval_id"] or "") or None,
+        approver=str(row["approval_to"] or "") or None,
+        rule=str(row["rule_id"] or ""),
+    )
 
 
 def _approval_payload(action_id: str, kind: str, payload: Mapping[str, object], what: str) -> dict[str, object]:
@@ -190,15 +262,28 @@ def _approval_payload(action_id: str, kind: str, payload: Mapping[str, object], 
     if kind in K.SPEND:
         # A Tico spend approval names the amount and the account it comes from (its rule 7 refuses one without).
         out["amount"] = payload.get("amount")
-        out["account"] = str(payload.get("money_account_id") or payload.get("account_id")
-                             or payload.get("from_account") or "bank")
+        out["account"] = str(
+            payload.get("money_account_id") or payload.get("account_id") or payload.get("from_account") or "bank"
+        )
     return out
 
 
-def _audit(c: sqlite3.Connection, p: O.Principal, action_id: str, kind: str, status: str, code: str = "",
-           extra: Mapping[str, object] | None = None) -> None:
-    tico.audit(c, p.actor, f"finance.{kind}", action_id,
-               {"status": status, "code": code, "on_behalf_of": p.for_actor, "rule": p.rule, **(extra or {})})
+def _audit(
+    c: sqlite3.Connection,
+    p: O.Principal,
+    action_id: str,
+    kind: str,
+    status: str,
+    code: str = "",
+    extra: Mapping[str, object] | None = None,
+) -> None:
+    tico.audit(
+        c,
+        p.actor,
+        f"finance.{kind}",
+        action_id,
+        {"status": status, "code": code, "on_behalf_of": p.for_actor, "rule": p.rule, **(extra or {})},
+    )
 
 
 def _hooks(c: sqlite3.Connection) -> list[object] | None:
@@ -226,7 +311,7 @@ def _release(c: sqlite3.Connection, name: str) -> None:
 
 
 def _requester(c: sqlite3.Connection, who: str) -> str:
-    """Who the Tico approval is asked by: the teammate, or the keeper for system work."""
+    """Who the OK is asked by: the teammate, or the keeper for system work."""
     return who if who != O.SYSTEM and tico.known_actor(c, who) else "keeper"
 
 
@@ -268,8 +353,9 @@ def _mirror_refusal(kind: str) -> str:
     return f"{kind} is not available while the books are a provider's (mirror mode)"
 
 
-def _plan(ctx: Ctx, p: O.Principal, kind: str, payload: Mapping[str, object],
-          action_id: str) -> tuple[K.Gate, handlers.Plan]:
+def _plan(
+    ctx: Ctx, p: O.Principal, kind: str, payload: Mapping[str, object], action_id: str
+) -> tuple[K.Gate, handlers.Plan]:
     """The right check first (a missing right is a denial, or for budgets a request to the asker's manager), then the
     kind's own checks and default gate, then the gate rules (§6.3), which run again whenever this does: at consume."""
     if ctx.book.mode == "mirror" and kind in mirror.REFUSED:
@@ -290,8 +376,15 @@ def _plan(ctx: Ctx, p: O.Principal, kind: str, payload: Mapping[str, object],
     return judged.gate, judged.plan
 
 
-def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload: Mapping[str, object],
-        idempotency_key: str, dry_run: bool = False, at: str | None = None) -> ActionResult:
+def act(
+    c: sqlite3.Connection,
+    principal: O.Principal | str,
+    kind: str,
+    payload: Mapping[str, object],
+    idempotency_key: str,
+    dry_run: bool = False,
+    at: str | None = None,
+) -> ActionResult:
     """Request one Finance action. The same key returns the first result and does nothing again. A dry run writes
     nothing and says what would happen: the outcome, the rule, the approver and the budget impact."""
     p = O.principal(principal)
@@ -317,10 +410,17 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
         tico_db.durable_commit(c)
         prior = SX.by_key(c, key)
         if prior is not None:
-            if prior["kind"] != kind or not _same_request(json.loads(prior["payload"]), body) or \
-                    prior["actor"] != p.actor:
-                return ActionResult(status="failed", kind=kind, code=CONFLICT,
-                                    reason="that idempotency key was used for a different request")
+            if (
+                prior["kind"] != kind
+                or not _same_request(json.loads(prior["payload"]), body)
+                or prior["actor"] != p.actor
+            ):
+                return ActionResult(
+                    status="failed",
+                    kind=kind,
+                    code=CONFLICT,
+                    reason="that idempotency key was used for a different request",
+                )
             return replace(_stored(prior), reason=_replayed_reason(c, p, prior, at), replayed=True)
     action_id = tico.new_id()
     try:
@@ -343,27 +443,69 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
         would = "needs_approval" if approver else "committed"
         if dry_run:
             _rollback(c, "fin_act", mark)
-            return ActionResult(status=would, kind=kind, approver=approver or None, rule=gate.rule, dry_run=True,
-                                impact={**plan.impact, "summary": plan.summary})
+            return ActionResult(
+                status=would,
+                kind=kind,
+                approver=approver or None,
+                rule=gate.rule,
+                dry_run=True,
+                impact={**plan.impact, "summary": plan.summary},
+            )
         if approver:
             what = _what(plan, action_id)
-            SX.insert(c, action_id=action_id, kind=kind, payload=body, actor=p.actor, on_behalf_of=p.for_actor,
-                      rule_id=gate.rule, key=key, rules=_rule_rows(plan, gate.rule, gate.outcome),
-                      status="needs_approval", result={"what": what}, code="", reason="", by=p.actor, at=ctx.at)
+            SX.insert(
+                c,
+                action_id=action_id,
+                kind=kind,
+                payload=body,
+                actor=p.actor,
+                on_behalf_of=p.for_actor,
+                rule_id=gate.rule,
+                key=key,
+                rules=_rule_rows(plan, gate.rule, gate.outcome),
+                status="needs_approval",
+                result={"what": what},
+                code="",
+                reason="",
+                by=p.actor,
+                at=ctx.at,
+            )
             approval_id = _ask(ctx, action_id, kind, body, what, p.who, approver, gate.rule, plan.asks)
             _audit(c, p, action_id, kind, "needs_approval", extra={"approval_id": approval_id, "to": approver})
             _release(c, "fin_act")
-            return ActionResult(status="needs_approval", kind=kind, action_id=action_id, approval_id=approval_id,
-                                approver=approver, rule=gate.rule, impact=plan.impact)
-        SX.insert(c, action_id=action_id, kind=kind, payload=body, actor=p.actor, on_behalf_of=p.for_actor,
-                  rule_id=gate.rule, key=key, rules=_rule_rows(plan, gate.rule, "allow"), status="committed",
-                  result={}, code="", reason="", by=p.actor, at=ctx.at)
+            return ActionResult(
+                status="needs_approval",
+                kind=kind,
+                action_id=action_id,
+                approval_id=approval_id,
+                approver=approver,
+                rule=gate.rule,
+                impact=plan.impact,
+            )
+        SX.insert(
+            c,
+            action_id=action_id,
+            kind=kind,
+            payload=body,
+            actor=p.actor,
+            on_behalf_of=p.for_actor,
+            rule_id=gate.rule,
+            key=key,
+            rules=_rule_rows(plan, gate.rule, "allow"),
+            status="committed",
+            result={},
+            code="",
+            reason="",
+            by=p.actor,
+            at=ctx.at,
+        )
         result = plan.apply(action_id)
         SX.finish(c, action_id, status="committed", result=result, code="", reason="", at=ctx.at)
         _audit(c, p, action_id, kind, "committed")
         _release(c, "fin_act")
-        return ActionResult(status="committed", kind=kind, action_id=action_id, result=result, rule=gate.rule,
-                            impact=plan.impact)
+        return ActionResult(
+            status="committed", kind=kind, action_id=action_id, result=result, rule=gate.rule, impact=plan.impact
+        )
     except FinanceError as e:
         _rollback(c, "fin_act", mark)
         if isinstance(e, gating.Denied) and not dry_run:
@@ -397,12 +539,29 @@ def _recorded(named: Named | None) -> dict[str, object]:
     """What a refusal keeps of the budgets and cards it names: their ids and the sentence, never a name."""
     if named is None:
         return {}
-    return {"named": {"budgets": list(named.budgets), "cards": list(named.cards), "template": named.template,
-                      "numbers": named.numbers, "plain": named.plain, "on": named.on}}
+    return {
+        "named": {
+            "budgets": list(named.budgets),
+            "cards": list(named.cards),
+            "template": named.template,
+            "numbers": named.numbers,
+            "plain": named.plain,
+            "on": named.on,
+        }
+    }
 
 
-def _finish_refused(c: sqlite3.Connection, p: O.Principal, kind: str, body: Mapping[str, object], key: str,
-                    action_id: str, e: FinanceError, dry_run: bool, at: str | None) -> ActionResult:
+def _finish_refused(
+    c: sqlite3.Connection,
+    p: O.Principal,
+    kind: str,
+    body: Mapping[str, object],
+    key: str,
+    action_id: str,
+    e: FinanceError,
+    dry_run: bool,
+    at: str | None,
+) -> ActionResult:
     """A denial or failure is recorded under its key too, so a retry gets the same answer. Bank details it sealed
     were rolled back with its savepoint, so the stored payload does not name them."""
     status = "denied" if e.code in DENIAL_CODES else "failed"
@@ -410,9 +569,23 @@ def _finish_refused(c: sqlite3.Connection, p: O.Principal, kind: str, body: Mapp
     if dry_run:
         return ActionResult(status=status, kind=kind, code=e.code, reason=e.message, dry_run=True)
     when = at or tico.now()
-    SX.insert(c, action_id=action_id, kind=kind, payload=body, actor=p.actor, on_behalf_of=p.for_actor,
-              rule_id=p.rule, key=key, rules=[], status=status, result=_recorded(e.named), code=e.code,
-              reason=e.named.fallback if e.named else e.message, by=p.actor, at=when)
+    SX.insert(
+        c,
+        action_id=action_id,
+        kind=kind,
+        payload=body,
+        actor=p.actor,
+        on_behalf_of=p.for_actor,
+        rule_id=p.rule,
+        key=key,
+        rules=[],
+        status=status,
+        result=_recorded(e.named),
+        code=e.code,
+        reason=e.named.fallback if e.named else e.message,
+        by=p.actor,
+        at=when,
+    )
     _audit(c, p, action_id, kind, status, e.code)
     return ActionResult(status=status, kind=kind, action_id=action_id, code=e.code, reason=e.message)
 
@@ -441,40 +614,68 @@ def _uncovered(row: Mapping[str, object], plan: handlers.Plan) -> set[str]:
     return {rule for rule, _ in plan.asks if rule not in named}
 
 
-def _ask(ctx: Ctx, action_id: str, kind: str, body: Mapping[str, object], what: str, who: str, approver: str,
-         rule: str, asks: Sequence[tuple[str, str]] | None = None) -> str:
+def _ask(
+    ctx: Ctx,
+    action_id: str,
+    kind: str,
+    body: Mapping[str, object],
+    what: str,
+    who: str,
+    approver: str,
+    rule: str,
+    asks: Sequence[tuple[str, str]] | None = None,
+) -> str:
     requester = _requester(ctx.c, who)
     payload = _approval_payload(action_id, kind, body, what)
-    approval_id = tico.approval_request(ctx.c, requester, K.approval_kind(kind), payload, approver)
+    title = what.removesuffix(f" (Finance action {action_id})")
+    approval_id = tico.ok_ask(ctx.c, requester, approver, title, SUBJECT + action_id, payload)
     named = None if asks is None else [{"rule": r, "outcome": "needs_approval"} for r, _ in asks]
-    SX.asked(ctx.c, action_id, approval_id=approval_id, approval_hash=tico.payload_hash(payload), requester=requester,
-             to=approver, rule_id=rule, payload=body, at=ctx.at, rules=named)
+    SX.asked(
+        ctx.c,
+        action_id,
+        approval_id=approval_id,
+        approval_hash=tico.content_hash(payload),
+        requester=requester,
+        to=approver,
+        rule_id=rule,
+        payload=body,
+        at=ctx.at,
+        rules=named,
+    )
     return approval_id
 
 
 # ------------------------------------------------------------------------------------------------ decisions
-def verify(row: Mapping[str, object], appr: Mapping[str, object]) -> str:
-    """Whether an approved Tico approval is the one this action waits on, decided by the person it was sent to, for
-    exactly the payload about to run. "" when it is; "payload" when the payload differs (ask again); else why not."""
-    if appr.get("kind") != K.approval_kind(str(row["kind"])):
-        return "it is a different kind of approval"
-    if appr.get("requested_by_id") != row["approval_by"]:
-        return "Finance did not ask for it"
-    decided_by = str(appr.get("decided_by_id") or "")
-    if not decided_by.startswith("human:") or decided_by != row["approval_to"]:
-        return "it was decided by someone other than the person it was sent to"
-    if appr.get("consumed_at"):
-        return "it was already used"
+def _expected(row: Mapping[str, object]) -> dict[str, object]:
+    """The content an action's OK must be bound to: the payload as it was asked, with its text."""
     result = json.loads(str(row["result"] or "{}"))
-    expected = tico.payload_hash(_approval_payload(str(row["id"]), str(row["kind"]),
-                                                   json.loads(str(row["payload"])), str(result.get("what", ""))))
-    if appr.get("payload_hash") != expected or row["approval_hash"] != expected:
+    return _approval_payload(
+        str(row["id"]), str(row["kind"]), json.loads(str(row["payload"])), str(result.get("what", ""))
+    )
+
+
+def verify(row: Mapping[str, object], found: Mapping[str, object]) -> str:
+    """Whether a given OK is the one this action waits on: asked by Finance for this action, given by the person it
+    was asked of (never a bot, never anyone else), not used, for exactly the payload about to run. "" when it is;
+    "payload" when the payload differs (ask again); else why not."""
+    if found.get("subject") != SUBJECT + str(row["id"]):
+        return "it is an OK for something else"
+    if found.get("asked_by_id") != row["approval_by"]:
+        return "Finance did not ask for it"
+    given_by = str(found.get("ok_by_id") or "")
+    if not tico.is_person(given_by) or given_by != row["approval_to"]:
+        return "it was given by someone other than the person it was asked of"
+    if found.get("used_at"):
+        return "it was already used"
+    expected = tico.content_hash(_expected(row))
+    if found.get("content_hash") != expected or row["approval_hash"] != expected:
         return "payload"
     return ""
 
 
-def _close(ctx: Ctx, row: Mapping[str, object], status: str, code: str, reason: str,
-           named: Named | None = None) -> ActionResult:
+def _close(
+    ctx: Ctx, row: Mapping[str, object], status: str, code: str, reason: str, named: Named | None = None
+) -> ActionResult:
     """End a waiting action: it releases any hold it reserved, and the key's result is final (ask again with a new
     key). A refusal that named budgets keeps its fallback and record, as a refused call does (`named`)."""
     action_id = str(row["id"])
@@ -482,26 +683,29 @@ def _close(ctx: Ctx, row: Mapping[str, object], status: str, code: str, reason: 
     budgeting.release_for(ctx, "action", action_id)
     payments.drop_details(ctx.c, json.loads(str(row["payload"] or "{}")))
     SX.finish(ctx.c, action_id, status=status, result=_recorded(named), code=code, reason=text, at=ctx.at)
-    if str(row["kind"]) == "payment_create":     # a scheduled bill that asked for it is open again, and says why
+    if row["approval_id"]:  # its OK is not needed any more: the task it was asked on closes with why
+        tico.ok_withdraw(ctx.c, str(row["approval_id"]), text)
+    if str(row["kind"]) == "payment_create":  # a scheduled bill that asked for it is open again, and says why
         documents.payment_ask_ended(ctx, action_id, json.loads(str(row["payload"] or "{}")), status, text)
     p = O.Principal(actor=str(row["actor"]), for_actor=str(row["on_behalf_of"] or ""))
     _audit(ctx.c, p, action_id, str(row["kind"]), status, code, {"approval_id": row["approval_id"]})
     done = _stored(SX.by_id(ctx.c, action_id))
-    return replace(done, reason=reason) if named else done     # the caller who just refused it gets the sentence
+    return replace(done, reason=reason) if named else done  # the caller who just refused it gets the sentence
 
 
 def withdraw_bill_asks(ctx: Ctx, bill_id: str, keep: str, why: str) -> list[str]:
     """End every waiting ask to pay this bill (its scheduled payment's payment_create, an earlier bill_schedule)
-    other than `keep`: its approval is withdrawn and it can never run. The ids ended."""
+    other than `keep`: its OK is withdrawn and it can never run. The ids ended."""
     out: list[str] = []
     for row in SX.waiting(ctx.c, ("payment_create", "bill_schedule")):
         body = json.loads(str(row["payload"] or "{}"))
-        mine = str(body.get("obligation") or "").strip() == f"bill:{bill_id}" if row["kind"] == "payment_create" \
-            else str(body.get("bill_id") or "").strip() == bill_id  # trimmed as the planners read them
+        mine = (
+            str(body.get("obligation") or "").strip() == f"bill:{bill_id}"
+            if row["kind"] == "payment_create"
+            else str(body.get("bill_id") or "").strip() == bill_id
+        )  # trimmed as the planners read them
         if not mine or str(row["id"]) == keep:
             continue
-        if row["approval_id"]:
-            tico.approval_withdraw(ctx.c, str(row["approval_id"]), why)
         _close(ctx, row, "withdrawn", "withdrawn", why)
         out.append(str(row["id"]))
     return out
@@ -526,32 +730,28 @@ def revalidate_org(c: sqlite3.Connection, at: str | None = None) -> None:
 
 
 def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = None) -> ActionResult | None:
-    """Act on a decision about a Finance approval, in the caller's transaction: approve commits once (re-checked),
-    decline denies, a withdrawal or expiry ends the action. None when the approval is not Finance's. Safe to call
+    """Act on how a Finance action's OK stands, in the caller's transaction: given, it commits once (re-checked); sent
+    back, the action is denied; withdrawn (or gone), the action ends. None when the OK is not Finance's. Safe to call
     more than once."""
     row = SX.by_approval(c, approval_id)
     if row is None:
         return None
-    tico_db.durable_commit(c)                # approving can move money: its commit reaches the disk (act says why)
+    tico_db.durable_commit(c)  # an OK can move money: its commit reaches the disk (act says why)
     if row["status"] != "needs_approval":
         return _stored(row)
     ctx = load(c, at)
     handlers.suspend_unstanding(ctx)
-    appr = tico.approval(c, approval_id)
-    if appr is None:
-        return _close(ctx, row, "withdrawn", "withdrawn", "its approval is gone")
-    decision = appr.get("decision")
-    if not decision:
+    found = tico.ok_grant(c, approval_id)
+    standing = tico.ok_standing(c, approval_id)
+    if found is None:
+        return _close(ctx, row, "withdrawn", "withdrawn", "its OK is gone")
+    if standing == "waiting":
         return _stored(row)
-    if decision == "declined":
-        return _close(ctx, row, "denied", "declined", f"declined by {appr.get('decided_by_id')}")
-    if decision != "approved":
-        stale = appr.get("decided_by_id") == "keeper" and str(appr.get("created_at") or "") <= \
-            tico.shift(ctx.at, days=-STALE_DAYS)
-        status = "expired" if stale else "withdrawn"
-        return _close(ctx, row, status, status, "nobody decided in time; ask again" if stale else
-                      "its approval was withdrawn; ask again")
-    problem = verify(row, appr)
+    if standing == "sent_back":
+        return _close(ctx, row, "denied", "declined", f"sent back by {row['approval_to']}")
+    if standing != "ok":
+        return _close(ctx, row, "withdrawn", "withdrawn", "its OK was withdrawn; ask again")
+    problem = verify(row, found)
     p = O.Principal(actor=str(row["actor"]), for_actor=str(row["on_behalf_of"] or ""), rule=str(row["rule_id"] or ""))
     kind, body = str(row["kind"]), json.loads(str(row["payload"]))
     if problem:
@@ -560,7 +760,7 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
     mark = _savepoint(c, "fin_decide")
     try:
         ctx.deciding = True
-        ctx.decider = str(appr.get("decided_by_id") or "")      # the person who said yes (verify: approval_to)
+        ctx.decider = str(found.get("ok_by_id") or "")  # the person who gave the OK (verify: approval_to)
         gate, plan = _plan(ctx, p, kind, body, str(row["id"]))
         now_to = _decider(ctx, row, gate, p.who)
         unnamed = _uncovered(row, plan)
@@ -568,8 +768,12 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
             # The planned gate's only decider is the requester (the install owner's own raise): nobody else decides it,
             # so it is not a rule the approval missed. Other rules the plan now needs still ask again.
             unnamed.discard(gate.rule)
-        if payments.moved(body, plan.resolved) or unnamed or _mail_moved(body, plan) or \
-                (now_to and (now_to != row["approval_to"] or _drifted(body, plan))):
+        if (
+            payments.moved(body, plan.resolved)
+            or unnamed
+            or _mail_moved(body, plan)
+            or (now_to and (now_to != row["approval_to"] or _drifted(body, plan)))
+        ):
             # The person who decides this changed since it was asked (a new manager, a finance approver named), or the
             # planner would now fix a value differently from the approved one (a parent raise that moved). When nobody
             # needs to decide it any more, it runs below with the plan as it now stands. A rule the plan now needs that
@@ -577,15 +781,17 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
             # An invoice email that changed is asked again too, whoever decides it (no send approval for the new one).
             _rollback(c, "fin_decide", mark)
             if unnamed:
-                return _reask(ctx, row, p, kind, body, "a rule now needs approval it did not name: "
-                                                       f"{', '.join(sorted(unnamed))}")
+                return _reask(
+                    ctx, row, p, kind, body, f"a rule now needs approval it did not name: {', '.join(sorted(unnamed))}"
+                )
             if _mail_moved(body, plan):
                 return _reask(ctx, row, p, kind, body, MAIL_MOVED)
             return _reask(ctx, row, p, kind, body)
-        tico.approval_consume(c, str(row["approval_by"]), approval_id)
+        tico.ok_use(c, approval_id, SUBJECT + str(row["id"]), _expected(row), str(row["approval_by"]))
         result = plan.apply(str(row["id"]))
         SX.finish(c, str(row["id"]), status="committed", result=result, code="", reason="", at=ctx.at)
         _audit(c, p, str(row["id"]), kind, "committed", extra={"approval_id": approval_id})
+        tico.ok_settle(c, approval_id, "Done in Finance.")
         _release(c, "fin_decide")
         return _stored(SX.by_id(c, str(row["id"])), full=True)
     except FinanceError as e:
@@ -601,26 +807,46 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
         raise
 
 
-def void_for_recipient(ctx: Ctx, old_action_id: str, kind: str, body: Mapping[str, object], summary: str,
-                       p: O.Principal) -> str:
+def void_for_recipient(
+    ctx: Ctx, old_action_id: str, kind: str, body: Mapping[str, object], summary: str, p: O.Principal
+) -> str:
     """A queued payment's recipient was replaced after its approval: that approval is void, and the new details are asked
     for as a new action (its own payment, with its own key) of a finance admin (§5, §6.4 rule 1). The old action keeps its
-    record. Called by payments.recheck; a pending approval is asked again by approval_decided instead. Returns the new
-    approval's id."""
+    record. Called by payments.recheck; a pending OK is asked again by approval_decided instead. Returns the new OK's
+    requirement id."""
     action_id = tico.new_id()
     what = f"{summary} (Finance action {action_id})"
-    SX.insert(ctx.c, action_id=action_id, kind=kind, payload=body, actor=p.actor, on_behalf_of=p.for_actor,
-              rule_id=RECIPIENT_RULE, key=f"reask-{old_action_id}-{body.get('recipient_version')}",
-              rules=[{"rule": RECIPIENT_RULE, "outcome": "needs_approval"}], status="needs_approval",
-              result={"what": what}, code="", reason="the recipient's details changed; asked again", by=p.actor,
-              at=ctx.at)
+    SX.insert(
+        ctx.c,
+        action_id=action_id,
+        kind=kind,
+        payload=body,
+        actor=p.actor,
+        on_behalf_of=p.for_actor,
+        rule_id=RECIPIENT_RULE,
+        key=f"reask-{old_action_id}-{body.get('recipient_version')}",
+        rules=[{"rule": RECIPIENT_RULE, "outcome": "needs_approval"}],
+        status="needs_approval",
+        result={"what": what},
+        code="",
+        reason="the recipient's details changed; asked again",
+        by=p.actor,
+        at=ctx.at,
+    )
     approver = payments.admin_person(ctx, p.who)
-    if not approver:            # nobody else decides the new details (§6.3): the ask fails, as _reask fails one
+    if not approver:  # nobody else decides the new details (§6.3): the ask fails, as _reask fails one
         _close(ctx, SX.by_id(ctx.c, action_id), "failed", DENIED, "nobody else decides this now; ask again")
         return ""
     approval_id = _ask(ctx, action_id, kind, body, what, p.who, approver, RECIPIENT_RULE)
-    _audit(ctx.c, p, action_id, kind, "needs_approval", "reask", {"void": old_action_id, "approval_id": approval_id,
-                                                                  "to": approver})
+    _audit(
+        ctx.c,
+        p,
+        action_id,
+        kind,
+        "needs_approval",
+        "reask",
+        {"void": old_action_id, "approval_id": approval_id, "to": approver},
+    )
     return approval_id
 
 
@@ -637,37 +863,71 @@ def _mail_moved(body: Mapping[str, object], plan: handlers.Plan) -> bool:
     return delivery.MAIL in plan.resolved and body.get(delivery.MAIL) != plan.resolved[delivery.MAIL]
 
 
-def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body: Mapping[str, object],
-           why: str = "the approved payload did not match") -> ActionResult:
+def _reask(
+    ctx: Ctx,
+    row: Mapping[str, object],
+    p: O.Principal,
+    kind: str,
+    body: Mapping[str, object],
+    why: str = "the approved payload did not match",
+) -> ActionResult:
     """The approved payload is not the one about to run, so that approval is void (or it does not verify for another
     reason, `why`). The change is planned again and asked again for the payload it would now run, of the person who
     decides it now. Never the requester."""
     action_id = str(row["id"])
-    ctx.deciding = True                       # the recheck runs on the true figures (figure_route)
+    if row["approval_id"]:  # the old OK is void: never asked again as the same one
+        tico.ok_withdraw(ctx.c, str(row["approval_id"]), f"{why}; asked again")
+    ctx.deciding = True  # the recheck runs on the true figures (figure_route)
     try:
         gate, plan = _plan(ctx, p, kind, body, action_id)
         approver = _decider(ctx, row, gate, p.who)
     except FinanceError as e:
         return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message, e.named)
     if payments.moved(body, plan.resolved):
-        approver = payments.admin_person(ctx, p.who)    # new payment details are a finance admin's to approve (§6.4)
+        approver = payments.admin_person(ctx, p.who)  # new payment details are a finance admin's to approve (§6.4)
     if not approver:
         return _close(ctx, row, "failed", DENIED, "nobody else decides this now; ask again")
     fresh = {**body, **plan.resolved}
     what = _what(plan, action_id)
-    SX.finish(ctx.c, action_id, status="needs_approval", result={"what": what}, code="",
-              reason=f"{why}; asked again", at=ctx.at)
+    SX.finish(
+        ctx.c,
+        action_id,
+        status="needs_approval",
+        result={"what": what},
+        code="",
+        reason=f"{why}; asked again",
+        at=ctx.at,
+    )
     approval_id = _ask(ctx, action_id, kind, fresh, what, p.who, approver, gate.rule or str(row["rule_id"]), plan.asks)
-    _audit(ctx.c, p, action_id, kind, "needs_approval", "reask", {"void": row["approval_id"],
-                                                                  "approval_id": approval_id, "to": approver})
+    _audit(
+        ctx.c,
+        p,
+        action_id,
+        kind,
+        "needs_approval",
+        "reask",
+        {"void": row["approval_id"], "approval_id": approval_id, "to": approver},
+    )
     return _stored(SX.by_id(ctx.c, action_id))
 
 
-def approvals_sweep(c: sqlite3.Connection, at: str | None = None, most: int = 200) -> list[ActionResult]:
-    """Finish waiting actions whose approval was decided, withdrawn (backend/approval_expiry.py withdraws undecided ones
-    after 14 days) or deleted: what a scheduler job runs, and what catches a decision no route handed over."""
+def ok_given(c: sqlite3.Connection, grant: Mapping[str, object], ctx: object = None) -> None:
+    """In the transaction of an OK of a Finance action (task_asks.ON_OK "finance"): the action commits now, or is
+    asked again or ends as approval_decided decides."""
+    approval_decided(c, str(grant["requirement_id"]))
+
+
+def ok_sweep(c: sqlite3.Connection, at: str | None = None, most: int = 200) -> list[ActionResult]:
+    """End waiting actions whose OK was sent back, withdrawn or is gone: what a scheduler job runs. It never claims
+    an OK: a given one is claimed and the action committed only by the person's click, in its own transaction
+    (`ok_given`, task_asks.ON_OK); a given OK whose action still waits (given before that step, or by a path without
+    it) is left for a new ask, never committed from here."""
     out: list[ActionResult] = []
-    for approval_id in SX.settled_waits(c, most):
+    for approval_id in SX.waits(c):
+        if len(out) >= most:
+            break
+        if tico.ok_standing(c, approval_id) in ("waiting", "ok"):
+            continue
         done = approval_decided(c, approval_id, at)
         if done is not None:
             out.append(done)
@@ -685,6 +945,7 @@ def action(c: sqlite3.Connection, action_id: str) -> ActionResult:
 def help(kind: str | None = None) -> dict[str, object]:
     """Plain-words docs for one action kind (`finance_act kind=help`), or every kind in one line each: what it does,
     its payload fields, the right it needs and whether it is live yet."""
+
     def need(k: str) -> str:
         n = K.NEEDS.get(k)
         if k in K.OWNER_ONLY:
@@ -692,14 +953,21 @@ def help(kind: str | None = None) -> dict[str, object]:
         if k in K.ADMIN_ONLY:
             return "finance.admin"
         return " or ".join(n) if isinstance(n, tuple) else (n or "")
+
     if kind is None:
         return {"kinds": [{"kind": k, "words": K.WORDS[k], "live": k in K.LIVE} for k in K.ALL]}
     if kind not in K.ALL:
         raise FinanceError(INVALID, f"unknown action kind {kind}")
-    return {"kind": kind, "words": K.WORDS[kind], "right": need(kind), "live": kind in K.LIVE,
-            "approval_kind": K.approval_kind(kind),
-            "fields": [{"name": n.rstrip("?"), "type": t, "required": not n.endswith("?"), "words": w}
-                       for n, t, w in K.SHAPES[kind]]}
+    return {
+        "kind": kind,
+        "words": K.WORDS[kind],
+        "right": need(kind),
+        "live": kind in K.LIVE,
+        "fields": [
+            {"name": n.rstrip("?"), "type": t, "required": not n.endswith("?"), "words": w}
+            for n, t, w in K.SHAPES[kind]
+        ],
+    }
 
 
 # What the server, the scheduler and the run hooks call (part B).
@@ -708,18 +976,21 @@ drain_events = jobs.drain
 open_next_period = jobs.open_next_period
 amortize_prepaids = jobs.amortize
 watch_documents = jobs.watch
+detect_subscriptions = subscriptions.detect  # the daily look (scheduler finance_tick)
 grant_defaults = rights.grant_defaults
-RIGHT_RULES = R.RULES                    # the one right an install from before RIGHTS_VERSION 2 is granted (bookkeeper)
+RIGHT_RULES = R.RULES  # the one right an install from before RIGHTS_VERSION 2 is granted (bookkeeper)
 
 
 def set_bills_email(c: sqlite3.Connection, address: str | None, by: str = O.SYSTEM, at: str | None = None) -> None:
     """Record the install's bills address (reads.bills_email and GET /finance/bills show it); None clears it."""
     from .store import ledger as SL
     from .tab_ap import BILLS_EMAIL_KEY
+
     value = (address or "").strip().lower()
     if value and ("@" not in value or len(value) > 200):
         raise FinanceError(INVALID, "a bills address is an email address")
     SL.set_setting(c, BILLS_EMAIL_KEY, value or None, by, at or tico.now())
+
 
 RunHold = runs.RunHold
 run_hold = runs.hold
@@ -742,6 +1013,7 @@ stripe_delivery = sync.stripe_delivery
 books_delivery = books_sync.delivery
 books_relayed = books_link.relayed_call
 stripe_probe = sync.stripe_probe
+brex_probe = sync.brex_probe
 
 
 def receive(c: sqlite3.Connection, payload: dict[str, object]) -> bool:
@@ -754,8 +1026,16 @@ def receive(c: sqlite3.Connection, payload: dict[str, object]) -> bool:
 WATCH_ACTIONS = ("finance_freeze_cards", "finance_pause_budget", "finance_act")
 
 
-def watch(c: sqlite3.Connection, rule_id: str, by: str, action: str, params: Mapping[str, object],
-          data: Mapping[str, object], key: str, at: str | None = None) -> ActionResult:
+def watch(
+    c: sqlite3.Connection,
+    rule_id: str,
+    by: str,
+    action: str,
+    params: Mapping[str, object],
+    data: Mapping[str, object],
+    key: str,
+    at: str | None = None,
+) -> ActionResult:
     """A Tico rule's Finance action (spec §6.1 watch rules), run as an ordinary action by the rule's maker under that
     rule, so it gets exactly the maker's rights and gates. A keeper-made rule acts as Finance itself (system work,
     which may only freeze cards). `budget_id` defaults to the event's own budget. One key per rule and event: the
@@ -769,13 +1049,20 @@ def watch(c: sqlite3.Connection, rule_id: str, by: str, action: str, params: Map
         return act(c, p, "budget_update", {"budget_id": budget, "amount": 0, "at_limit": "decline"}, key, at=at)
     if action == "finance_act":
         payload = params.get("payload")
-        return act(c, p, str(params.get("kind") or ""), cast(Mapping[str, object], payload)
-                   if isinstance(payload, Mapping) else {}, key, dry_run=params.get("dry_run") is True, at=at)
+        return act(
+            c,
+            p,
+            str(params.get("kind") or ""),
+            cast(Mapping[str, object], payload) if isinstance(payload, Mapping) else {},
+            key,
+            dry_run=params.get("dry_run") is True,
+            at=at,
+        )
     return ActionResult(status="failed", kind=action, code=INVALID, reason=f"no Finance watch action {action}")
 
 
 def note_view_as(c: sqlite3.Connection, owner: str, target: str) -> None:
-    """"View as" is audited (spec §7.5): the owner reads Finance exactly as `target` sees it."""
+    """ "View as" is audited (spec §7.5): the owner reads Finance exactly as `target` sees it."""
     tico.audit(c, owner, "finance.view_as", target, {})
 
 
@@ -805,23 +1092,86 @@ def note_full_read(c: sqlite3.Connection, viewer: str, accounts: Sequence[str]) 
 # backend/devcopy.py classifies every Finance table by these two lists. DEV_COPY_KEPT is kept whole: the books, budgets,
 # views, rules and history, and the definitions that act only through an action (scrub_dev_copy trims the pending ones).
 DEV_COPY_KEPT = (
-    "fin_accounts", "fin_actions", "fin_allocations", "fin_attachments", "fin_bill_lines", "fin_bill_retained",
-    "fin_bills", "fin_books", "fin_budget_versions", "fin_budgets", "fin_contacts", "fin_dimensions", "fin_entries",
-    "fin_events", "fin_feed_txns", "fin_invoice_lines", "fin_invoices", "fin_line_tags", "fin_lines",
-    "fin_money_accounts", "fin_periods", "fin_private_lines", "fin_projections", "fin_reconciliations",
-    "fin_restatements", "fin_rights", "fin_rollups", "fin_rule_counters", "fin_rule_runs", "fin_rules",
-    "fin_settings", "fin_statements", "fin_usage_snapshots", "fin_settlements", "fin_cash_rollups",
-    "fin_credit_refunds", "fin_vendor_aliases", "fin_vendor_labels", "fin_vendor_legacy", "fin_view_defaults",
-    "fin_view_grants", "fin_view_versions", "fin_raw_imports", "fin_close_snapshots", "fin_tax_jurisdictions",
-    "fin_tax_seeds", "fin_purchase_orders", "fin_po_lines", "fin_estimates", "fin_estimate_lines",
-    "fin_prepaid_postings", "fin_invoice_reminders",
+    "fin_accounts",
+    "fin_actions",
+    "fin_allocations",
+    "fin_attachments",
+    "fin_bill_lines",
+    "fin_bill_retained",
+    "fin_bills",
+    "fin_books",
+    "fin_budget_versions",
+    "fin_budgets",
+    "fin_book_entities",
+    "fin_dimensions",
+    "fin_entries",
+    "fin_events",
+    "fin_feed_txns",
+    "fin_invoice_lines",
+    "fin_invoices",
+    "fin_line_tags",
+    "fin_lines",
+    "fin_money_accounts",
+    "fin_periods",
+    "fin_private_lines",
+    "fin_projections",
+    "fin_reconciliations",
+    "fin_restatements",
+    "fin_rights",
+    "fin_rollups",
+    "fin_rule_counters",
+    "fin_rule_runs",
+    "fin_rules",
+    "fin_settings",
+    "fin_statements",
+    "fin_usage_snapshots",
+    "fin_settlements",
+    "fin_cash_rollups",
+    "fin_credit_refunds",
+    "fin_vendor_labels",
+    "fin_vendor_legacy",
+    "fin_view_defaults",
+    "fin_view_grants",
+    "fin_view_versions",
+    "fin_raw_imports",
+    "fin_statement_uploads",
+    "fin_close_snapshots",
+    "fin_tax_jurisdictions",
+    "fin_tax_seeds",
+    "fin_purchase_orders",
+    "fin_po_lines",
+    "fin_estimates",
+    "fin_estimate_lines",
+    "fin_prepaid_postings",
+    "fin_invoice_reminders",
+    "fin_ad_accounts",
+    "fin_ad_campaigns",
+    "fin_receipts",
+    "fin_ad_spends",
+    "fin_ad_warnings",
+    "fin_attributions",
+    "fin_attribution_rules",
+    "fin_subscriptions",
 )
 # Emptied: what moves money or calls a provider (connections and their tokens, cursors and id maps, the outbox and
-# inbox, cards and their authorizations, payees and payments) and spend holds. In the order they are deleted: a row
-# goes after the rows that point at it.
+# inbox, cards and their authorizations, payees and payments, the ad spend imports) and spend holds. In the order they
+# are deleted: a row goes after the rows that point at it.
 DEV_COPY_EMPTIED = (
-    "fin_card_auths", "fin_card_saves", "fin_payments", "fin_transfers", "fin_recipients", "fin_external_refs",
-    "fin_outbox", "fin_inbox", "fin_provider_users", "fin_cards", "fin_holds", "fin_connections",
+    "fin_card_auths",
+    "fin_card_saves",
+    "fin_statement_previews",
+    "fin_payments",
+    "fin_transfers",
+    "fin_recipients",
+    "fin_external_refs",
+    "fin_outbox",
+    "fin_inbox",
+    "fin_provider_users",
+    "fin_cards",
+    "fin_holds",
+    "fin_connections",
+    "fin_ad_imports",
+    "fin_briefs",
 )
 
 

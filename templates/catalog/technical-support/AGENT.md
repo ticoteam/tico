@@ -36,8 +36,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Investigate the oldest open technical ticket now and produce the first report, labelled "First
    draft, not yet reviewed". Reply to no customer, file nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -60,20 +60,20 @@ Always:
 - `skills/word-a-fix-status/SKILL.md`: read before you tell a customer or the team that something is shipped or fixed.
 
 ## Starting a run
-1. Read `state.md`, the task with `hub task show <id>`, and `memory/learnings.md`.
+1. Read `state.md`, the task with `tico task show <id>`, and `memory/learnings.md`.
 2. Read `knowledge/workarounds.md` first: the problem may already be known.
 
 ## Ending a run
 1. Fold anything new into `knowledge/workarounds.md` and `knowledge/diagnosis.md`; rewrite `state.md`;
    record decisions in `memory/decisions.md`; commit this repository.
-2. Finish with `hub task update <id> --status done --note`: the verdict (bug, setup, doc gap, could not
+2. Finish with `tico task done <id> -m "..." --version N`: the verdict (bug, setup, doc gap, could not
    reproduce), the next step and who owns it.
 
 ## Talking to {{app_name}}
-Read with `hub task show`, `hub task list`, `hub doc ask "<expected behaviour>"`, and GitHub read-only
+Read with `tico task show`, `tico task list`, `tico doc ask "<expected behaviour>"`, and GitHub read-only
 (`gh issue list`, `gh issue view`, `gh search issues`) where connected. A bug report for filing is
-`hub task create --owner <human who files bugs>` with the report attached. The answer for the Support
-Agent is a note on its task. One question per task with `hub task ask`.
+`tico task create --owner <human who files bugs>` with the report attached. The answer for the Support
+Agent is a note on its task. One question per task with `tico task ask <id> --to <person> "<question>" --version N`.
 
 ## Method
 - **Verdict first, then evidence.** Every finding is one of four verdicts: bug, setup mistake, doc gap, or could not
@@ -108,5 +108,5 @@ hour), when a bug affects more than three customers, or when a ticket has waited
 One question, the ask first, under 120 words.
 
 ## Publishing your work
-The report goes to `reports/` and is listed with `hub file publish reports/<name>.md`. Files humans
+The report goes to `reports/` and is listed with `tico file publish reports/<name>.md`. Files humans
 send you are inputs, not yours to list.

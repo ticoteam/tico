@@ -10,11 +10,9 @@ import pytest
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import execution, org_rule_check, threads
-from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401  (the api fixture)
-
-ANA = Identity("human:ana", "owner", "ana@acme.example")
+from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401  (the api fixture)
+from backend.tests.helpers.threads_runner import make_thread, say, write
 
 
 def bot_runner(api, bot="cpo"):
@@ -24,27 +22,17 @@ def bot_runner(api, bot="cpo"):
     return r
 
 
-def write(api, fn):
-    store = api.app.state.store
-    with store.transaction() as c:
-        return fn(c, threads.viewer(api.app.state.auth, ANA))
-
-
-def make_thread(api, **kw):
-    return write(api, lambda c, v: threads.create(c, v, **kw))["id"]
-
-
-def say(api, thread_id, text, parent=None):
-    return write(api, lambda c, v: threads.post(c, v, thread_id, text, parent_message_id=parent))
-
-
 def finish(api, r, attempt, text, **extra):
     aid = attempt["id"]
     post(api, f"attempts/{aid}/started", {"thread_id": "local-thread"}, token=r["token"])
     event = {"events": [{"seq": 1, "kind": "message", "payload": {"text": text, "final": True}}]}
     post(api, f"attempts/{aid}/events", event, token=r["token"])
-    return post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": text, "last_seq": 1, **extra},
-                token=r["token"])
+    return post(
+        api,
+        f"attempts/{aid}/complete",
+        {"outcome": "completed", "text": text, "last_seq": 1, **extra},
+        token=r["token"],
+    )
 
 
 def rows(api, sql, args=()):
@@ -53,8 +41,11 @@ def rows(api, sql, args=()):
 
 
 def replies(api, bot="cpo"):
-    return rows(api, "SELECT id, conversation_id, recipient_id, in_reply_to, body FROM messages WHERE sender_id=? "
-                     "ORDER BY rowid", ("bot:" + bot,))
+    return rows(
+        api,
+        "SELECT id, conversation_id, recipient_id, in_reply_to, body FROM messages WHERE sender_id=? ORDER BY rowid",
+        ("bot:" + bot,),
+    )
 
 
 @pytest.mark.parametrize("echo", [True, False], ids=["runner-names-parent", "older-runner"])
@@ -84,7 +75,7 @@ def test_a_carrier_turns_reply_is_withheld_when_the_bot_can_no_longer_post_there
     say(api, tid, "@cpo draft the board note")
     attempt = claim(api, r, "cpo")
     assert attempt is not None
-    with api.app.state.store.transaction() as c:      # archived mid-turn: nobody posts in it any more
+    with api.app.state.store.transaction() as c:  # archived mid-turn: nobody posts in it any more
         c.execute("UPDATE conversations SET archived_at=? WHERE id=?", (H.now(), tid))
     finish(api, r, attempt, "Here is the note")
     assert replies(api) == [], "the write door refuses the reply; nothing is posted"
@@ -125,8 +116,11 @@ def test_a_carrier_turns_reply_is_rule_checked_as_going_to_the_carried_sender(ap
     attempt = claim(api, r, "cpo")
     checked = []
     monkeypatch.setattr(org_rule_check.R, "any_active", lambda c: True)
-    monkeypatch.setattr(org_rule_check, "preflight",
-                        lambda store, judge, who, operation, text, recipients, **kw: checked.append(recipients))
+    monkeypatch.setattr(
+        org_rule_check,
+        "preflight",
+        lambda store, judge, who, operation, text, recipients, **kw: checked.append(recipients),
+    )
     finish(api, r, attempt, "Two items")
     assert checked == [["human:ana"]], "a carrier reply is never posted unchecked"
 

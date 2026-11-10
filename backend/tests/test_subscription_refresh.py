@@ -1,12 +1,21 @@
 """Only fixture computers and synthetic allowance reports; no provider requests."""
+
 from backend import hubdb as H
-from backend.tests.test_api import api, get, headers, post, runner  # noqa: F401
+from backend.tests.helpers.api import get, headers, post, runner  # noqa: F401
 
 
 def setup(api):
     r = runner(api)
-    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'profiles': [{'name': 'sample', 'runtimes': {
-        'codex': {'signed_in': True}, 'claude': {'signed_in': True}}}]}, token=r['token'])
+    post(
+        api,
+        'runners/heartbeat',
+        {
+            'version': 'test',
+            'platform': 'test',
+            'profiles': [{'name': 'sample', 'runtimes': {'codex': {'signed_in': True}, 'claude': {'signed_in': True}}}],
+        },
+        token=r['token'],
+    )
     return r, {'runner_id': r['runner_id'], 'profile': 'sample', 'runtime': 'codex'}
 
 
@@ -15,8 +24,12 @@ def reading(percent=40):
 
 
 def state(api):
-    return next(profile['runtimes']['codex'] for computer in get(api, 'subscriptions')['profiles_by_computer']
-                for profile in computer['profiles'] if profile['name'] == 'sample')
+    return next(
+        profile['runtimes']['codex']
+        for computer in get(api, 'subscriptions')['profiles_by_computer']
+        for profile in computer['profiles']
+        if profile['name'] == 'sample'
+    )
 
 
 def test_refresh_coalesces_and_keeps_auth_separate(api):
@@ -24,8 +37,12 @@ def test_refresh_coalesces_and_keeps_auth_separate(api):
     request = post(api, 'subscriptions/refresh', body)
     assert post(api, 'subscriptions/refresh', body)['id'] == request['id']
     assert get(api, 'runner-subscription-refreshes', r['token'])['refreshes'][0]['id'] == request['id']
-    post(api, f'runner-subscription-refreshes/{request["id"]}/report', {
-        'profile': 'sample', 'runtime': 'codex', 'state': 'succeeded', 'weekly': reading(100)}, token=r['token'])
+    post(
+        api,
+        f'runner-subscription-refreshes/{request["id"]}/report',
+        {'profile': 'sample', 'runtime': 'codex', 'state': 'succeeded', 'weekly': reading(100)},
+        token=r['token'],
+    )
     current = state(api)
     assert current['signed_in'] is True
     assert current['weekly']['used_percent'] == 100

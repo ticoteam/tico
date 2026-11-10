@@ -10,7 +10,7 @@ minutes. The outcome is one draft in the human's voice, a note of anything it le
     $HUB_DIR/scripts/mail.sh thread <id> --format md
 
 Read the whole conversation, not just the last message, and the human's calendar if a time is
-involved (`hub calendar list`). Never copy a token, key or private detail into the task.
+involved (`tico calendar list`). Never copy a token, key or private detail into the task.
 
 ## 2. Decide what the reply must do
 
@@ -36,8 +36,9 @@ command without `--dry-run`; it updates the same Gmail draft if run twice. The t
 
 On the task: the message id, the draft text, the gaps, and one line on why. While mail sending is off in Tico, keep it as a draft. When sending is on, send requested replies within the mailbox rules using your Tools.
 
-When `Sending` is On and a rule there covers this message, send it with no approval, as a reply to the thread so it goes
-to the sender and nobody else: `$HUB_DIR/scripts/mail.sh reply --thread <thread> --body-file out/reply.txt --issue <task id>`.
-A forward to a `forward_to:` address is a new message to that address: `mail.sh draft --to <address> --subject "..."`, then
-`mail.sh send --draft <id>`. The answer says `"sent": true`, or `"sent": false` with the gate that refused: then it is a
-draft, leave it on the task and say why. Everything the rules do not cover stays a request for review.
+When `Sending` is On and a rule there covers this message, send it as a reply to the thread so it goes to the sender
+and nobody else: `$HUB_DIR/scripts/mail.sh reply --thread <thread> --body-file out/reply.txt --issue <task id>`.
+A forward to an address the rules name is a new message to that address: `mail.sh draft --to <address> --subject "..."`,
+then `mail.sh send --draft <id>`. Tico decides every send: the answer says `"queued": true` (it goes after the undo
+window, or once a person OKs it in Tico), or `"downgraded": "draft"` with Tico's reason: then leave the draft on
+the task and say why. Everything the rules do not cover stays a request for review.

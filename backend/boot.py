@@ -12,6 +12,7 @@ written on every start as before.
 `tunnel-config` and `caddy-config` run one step each, for the entrypoint commands of the same names.
 Only the standard library is imported until a step needs more, so the process starts quickly.
 """
+
 import os
 import re
 import stat
@@ -41,7 +42,13 @@ def environment_identity(env=os.environ):
     import secrets
     import sqlite3
     from backend.hubdb import leave_wal_for_litestream
+
     if os.path.exists(env["TICO_DB"]):
+        from backend import migrations
+
+        # A database the server would refuse (a newer one, or one from Tico 0.5 with tasks) is refused here, before
+        # this step opens it at all: even the read-only probe below makes a missing -wal and -shm and writes the -shm.
+        migrations.preflight(env["TICO_DB"])
         # Upgrade the old metadata column before reading the id, without Settings.from_env: a named install needs
         # the id this step supplies before it can construct Settings. Warm starts need only the read-only probe.
         probe = sqlite3.connect("file:%s?mode=ro" % env["TICO_DB"], uri=True)
@@ -50,8 +57,8 @@ def environment_identity(env=os.environ):
         finally:
             probe.close()
         if "value_json" in columns and "value" not in columns:
-            from backend import hubdb, migrations
-            migrations.preflight(env["TICO_DB"])
+            from backend import hubdb
+
             hubdb.connect(env["TICO_DB"]).close()
     db = leave_wal_for_litestream(sqlite3.connect(env["TICO_DB"]))
     try:
@@ -60,13 +67,39 @@ def environment_identity(env=os.environ):
         if not re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", value):
             raise SystemExit("TICO_ENVIRONMENT_ID is lowercase letters, digits and hyphens")
         encoded = json.dumps(value)
-        if row is None or row[0] != encoded:      # the same id already stored needs no write
-            db.execute("INSERT INTO registry_metadata VALUES('docker-environment-id', ?) "
-                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (encoded,))
+        if row is None or row[0] != encoded:  # the same id already stored needs no write
+            db.execute(
+                "INSERT INTO registry_metadata VALUES('docker-environment-id', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (encoded,),
+            )
             db.commit()
     finally:
         db.close()
     return value
+
+
+def stored_environment_id(env=os.environ, tries=60, pause=2):
+    """The id the server recorded, for the Slack gateway, which never makes one. It may start beside a server that
+    refuses this database, so it reads without changing a byte of it or making a file beside it. None if it is not
+    there after `tries` reads."""
+    import json
+    import sqlite3
+    import time
+    from pathlib import Path
+    from backend.migrations import read_only
+
+    for attempt in range(tries):
+        try:
+            with read_only(Path(env["TICO_DB"])) as db:
+                row = db.execute("SELECT value FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
+        except sqlite3.Error:
+            row = None
+        if row:
+            return json.loads(row[0])
+        if attempt + 1 < tries:
+            time.sleep(pause)
+    return None
 
 
 # The Cloudflare tunnel's route. cloudflared's image has no shell and reads no environment for routes, and a tunnel that
@@ -78,17 +111,24 @@ def environment_identity(env=os.environ):
 # dashboard keeps its own route: cloudflared prefers the configuration Cloudflare holds and uses this file only when the
 # tunnel has none. docs/install.md, "Cloudflare Tunnel".
 
+
 def runner_host(env, domain):
     """The host of TICO_RUNNER_URL when the tunnel should serve it too: a plain hostname other than TICO_DOMAIN.
     A loopback or IP address never reaches the tunnel, so it adds nothing. The same cuts the shell version made."""
     host = env.get("TICO_RUNNER_URL", "")
     scheme = host.find("://")
     if scheme >= 0:
-        host = host[scheme + 3:]
+        host = host[scheme + 3 :]
     host = host.split("/", 1)[0].rsplit("@", 1)[-1].split(":", 1)[0]
     host = host.translate(_ASCII_LOWER).rstrip("\n")
-    if (not host or host == "localhost" or host.startswith(".") or host.endswith(".")
-            or re.search(r"[^a-z0-9.-]", host) or not re.search(r"[^0-9.]", host)):
+    if (
+        not host
+        or host == "localhost"
+        or host.startswith(".")
+        or host.endswith(".")
+        or re.search(r"[^a-z0-9.-]", host)
+        or not re.search(r"[^0-9.]", host)
+    ):
         return ""
     return "" if host == domain.translate(_ASCII_LOWER) else host
 
@@ -103,8 +143,10 @@ def visual_host(env, runner):
     from urllib.parse import urlsplit
 
     def refuse(reason):
-        print("tico: warning: TICO_VISUAL_ORIGIN " + reason + "; the tunnel config leaves out the visuals route",
-              file=sys.stderr)
+        print(
+            "tico: warning: TICO_VISUAL_ORIGIN " + reason + "; the tunnel config leaves out the visuals route",
+            file=sys.stderr,
+        )
         return ""
 
     if not env.get("TICO_VISUAL_ORIGIN", ""):
@@ -133,8 +175,11 @@ def visual_host(env, runner):
         pass
     else:
         return refuse("is an IP address, not a hostname")
-    if not (len(host) <= 253 and "." in host
-            and all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in host.split("."))):
+    if not (
+        len(host) <= 253
+        and "." in host
+        and all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in host.split("."))
+    ):
         return refuse("is not a plain DNS hostname")
     if host == env["TICO_DOMAIN"].lower():
         return refuse("is the app's own host (TICO_DOMAIN); visuals need a separate site")
@@ -157,9 +202,13 @@ def domain_aliases(env, runner, visual):
         raise Refused("tico: error: TICO_DOMAIN_ALIASES " + reason)
 
     def plain_hostname(host):
-        return bool(host and len(host) <= 253 and "." in host
-                    and any(ch in "abcdefghijklmnopqrstuvwxyz" for ch in host)
-                    and all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in host.split(".")))
+        return bool(
+            host
+            and len(host) <= 253
+            and "." in host
+            and any(ch in "abcdefghijklmnopqrstuvwxyz" for ch in host)
+            and all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in host.split("."))
+        )
 
     value = env.get("TICO_DOMAIN_ALIASES", "")
     if not value:
@@ -178,11 +227,20 @@ def domain_aliases(env, runner, visual):
             runner_name, port = parsed.hostname or "", parsed.port
         except ValueError:
             refuse("needs a valid runner URL before app aliases can be routed")
-        if (not runner_value.isascii() or any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in runner_value)
-                or parsed.scheme not in ("http", "https") or parsed.path not in ("", "/")
-                or parsed.query or parsed.fragment or parsed.username is not None or parsed.password is not None
-                or port == 0 or not plain_hostname(runner_name)
-                or runner_name != canonical and runner_name != runner):
+        if (
+            not runner_value.isascii()
+            or any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in runner_value)
+            or parsed.scheme not in ("http", "https")
+            or parsed.path not in ("", "/")
+            or parsed.query
+            or parsed.fragment
+            or parsed.username is not None
+            or parsed.password is not None
+            or port == 0
+            or not plain_hostname(runner_name)
+            or runner_name != canonical
+            and runner_name != runner
+        ):
             refuse("needs a valid runner URL before app aliases can be routed")
     seen = {canonical}
     aliases = []
@@ -214,7 +272,7 @@ def tunnel_config(env=os.environ):
         print("tico: error: TICO_DOMAIN is not a plain hostname: " + domain, file=sys.stderr)
         return 1
     runner = runner_host(env, domain)
-    visual = visual_host(env, runner)    # a bad value printed its warning and is left out
+    visual = visual_host(env, runner)  # a bad value printed its warning and is left out
     try:
         aliases = domain_aliases(env, runner, visual)
     except Refused as refused:
@@ -228,8 +286,10 @@ def tunnel_config(env=os.environ):
         netloc = (env.get("TICO_MEET_INTERNAL_URL") or "http://livekit:7880").split("://", 1)[-1].split("/", 1)[0]
         lines += ["  - hostname: " + domain, "    path: '^/rtc(?:/.*)?$'", "    service: http://" + netloc]
     elif meet_url:
-        print("warning: calls cannot connect over this tunnel: set TICO_MEET_URL, key and secret for " + domain,
-              file=sys.stderr)
+        print(
+            "warning: calls cannot connect over this tunnel: set TICO_MEET_URL, key and secret for " + domain,
+            file=sys.stderr,
+        )
     lines += ["  - hostname: " + domain, "    service: " + ORIGIN]
     for host in aliases:
         lines += ["  - hostname: " + host, "    service: " + ORIGIN]
@@ -277,13 +337,21 @@ def caddy_config(env=os.environ):
 
 def mark_environment(data_dir, environment_id, env=os.environ):
     from backend import replication
-    replication.write_markers(data_dir, environment_id,
-                              None if replication.no_mirror(env) else replication.mirror_from_env(env))
+
+    replication.write_markers(
+        data_dir, environment_id, None if replication.no_mirror(env) else replication.mirror_from_env(env)
+    )
 
 
 def prepare(data_dir):
-    environment_id = environment_identity()
-    os.environ["TICO_ENVIRONMENT_ID"] = environment_id    # what the entrypoint exported before the next steps
+    from backend.migrations import MigrationError
+
+    try:
+        environment_id = environment_identity()  # first: nothing below is written for a database that is refused
+    except MigrationError as refused:
+        print("tico: error: " + str(refused), file=sys.stderr)
+        return 1
+    os.environ["TICO_ENVIRONMENT_ID"] = environment_id  # what the entrypoint exported before the next steps
     status = tunnel_config()
     if status:
         return status
@@ -302,7 +370,14 @@ def main(argv=None):
     if argv == ["caddy-config"]:
         caddy_config()
         return 0
-    print("usage: python -m backend.boot prepare DATA|tunnel-config|caddy-config", file=sys.stderr)
+    if argv == ["stored-id"]:
+        value = stored_environment_id()
+        if value is None:
+            print("the server has not recorded this install's id", file=sys.stderr)
+            return 1
+        print(value)
+        return 0
+    print("usage: python -m backend.boot prepare DATA|tunnel-config|caddy-config|stored-id", file=sys.stderr)
     return 2
 
 

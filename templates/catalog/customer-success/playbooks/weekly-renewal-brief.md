@@ -16,7 +16,7 @@ and a next touch; the brief is published; and the task note names each notice de
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/renewals.md`, `knowledge/health-rules.md` and last week's brief. Check whether last week's flagged actions
 happened, and mark each one done, slipped or dropped.
@@ -31,7 +31,7 @@ owner, or no notice deadline, is flagged.
 
 Check the lifecycle stage first: an account still in onboarding is not scored on renewal health. Apply the four signal families
 in `knowledge/health-practice.md`. For each usage number, follow `skills/read-usage-without-misreading/SKILL.md`. For the last
-call, use `hub meeting search "<account>"`. Name every signal you could not read.
+call, use `tico meeting search "<account>"`. Name every signal you could not read.
 
 ## 4. Give each account a status
 
@@ -46,5 +46,5 @@ about price or dates stay marked, as `[price: Account Manager]` or `[date: accou
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-renewal-brief.md` in the shape of `knowledge/examples/renewal-brief.md`, then
-`hub file publish reports/YYYY-MM-DD-renewal-brief.md`. Commit the files, then `hub task update <id> --status done --note "..."`
+`tico file publish reports/YYYY-MM-DD-renewal-brief.md`. Commit the files, then `tico task done <id> -m "..." --version N`
 with the headline, the path, and what you could not read. Always finish the task.

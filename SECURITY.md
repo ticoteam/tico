@@ -33,7 +33,7 @@ already fixed in the latest release, we will say so.
 
 ## Scope
 
-Tico's server, runner, `hub` CLI, MCP tools and desktop shell in this repository. Problems in a
+Tico's server, runner, `tico` CLI, MCP tools and desktop shell in this repository. Problems in a
 third-party dependency are best reported to that project, but tell us if Tico's use of it makes the
 problem worse.
 
@@ -74,6 +74,9 @@ Tico shares workspace files and model sign-ins between bots on the same computer
 users described below, they run as the same OS user,
 in the same workspace, with the same model sign-ins. The runner delivers only credentials granted to that bot,
 not the whole environment or `_shared.env`; upgrades automatically grant each bot the shared credentials it already uses.
+A proxied API tool's key never reaches a computer at all: the run holds a token that works only through the server's
+tool proxy, for that tool and that run, while the server adds the key ([Proxied tools](docs/credential-vault.md#proxied-tools)).
+Computer delivery, which puts the value in the run's environment, is the legacy mode.
 This delivery filter is not OS isolation: bot code can still read another bot's files and credentials on that computer. This is a design choice, not a bug: it keeps setup simple and lets
 bots on a team cooperate.
 The same holds for a company model subscription given to a computer (docs/computers.md#company-subscriptions): it is

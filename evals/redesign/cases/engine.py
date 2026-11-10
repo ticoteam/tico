@@ -4,20 +4,52 @@ log, versions, built-ins, next_run across DST, and webhook triggers. Every autom
 "Test with sample"), mail through the mail sync's route, webhooks through the existing incoming trigger. Every check
 reads what the product answered: the run log (GET /{id}/runs), the automation read (counts, next_run), or the reply
 itself. A check that needs a run waits on its automation (wave 3), so an empty listing never passes."""
+
 import datetime as dt
 import json
 from zoneinfo import ZoneInfo
 
 from ..fakes import ReplayJudge, attach_judge, hook, stripe_sig
-from ..harness import (DANA, DANA_REF, CLAUDE_ID, CLAUDE_REF, LEAD, LEAD_REF, OPENAI_REF, W3, Check, Reply,
-                       Scenario, Unmet, auto_id, automation, body, builtin_rows, edit_auto, got, hook_post,
-                       mail_message, publish_mail, replied, rows, run_now, setup, today_counts, turn_of)
+from ..harness import (
+    DANA,
+    DANA_REF,
+    CLAUDE_ID,
+    CLAUDE_REF,
+    LEAD,
+    LEAD_REF,
+    OPENAI_REF,
+    W3,
+    Check,
+    Reply,
+    Scenario,
+    Unmet,
+    auto_id,
+    automation,
+    body,
+    builtin_rows,
+    edit_auto,
+    got,
+    hook_post,
+    mail_message,
+    publish_mail,
+    replied,
+    rows,
+    run_now,
+    setup,
+    today_counts,
+    turn_of,
+)
 
 INBOX = "dana@acme.example"
 SCHEDULE = {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}
 TO_DANA = {"type": "task_received", "to": DANA_REF}
-BUCKET = {"bucket": {"type": "choice", "instructions": "Where does it go?",
-                     "criteria": {"reply": "answer it", "archive": "noise"}}}
+BUCKET = {
+    "bucket": {
+        "type": "choice",
+        "instructions": "Where does it go?",
+        "criteria": {"reply": "answer it", "archive": "noise"},
+    }
+}
 NY, UTC = ZoneInfo("America/New_York"), dt.timezone.utc
 MINUTE = dt.timedelta(minutes=1)
 
@@ -144,15 +176,38 @@ def branch(f, before, after, ran_ids, held_ids):
 
 # ---------------------------------------------------------------------------------------------- 22 find
 def s22_steps(org, f):
-    org.step(f, "auto", automation, org, "Invoices · dana", DANA_REF, trigger=SCHEDULE, steps=[
-        {"id": "look", "type": "find", "enabled": True, "source": "mail", "query": "Invoice", "since": "last_run",
-         "limit": 10},
-        note("each", "seen")])
+    org.step(
+        f,
+        "auto",
+        automation,
+        org,
+        "Invoices · dana",
+        DANA_REF,
+        trigger=SCHEDULE,
+        steps=[
+            {
+                "id": "look",
+                "type": "find",
+                "enabled": True,
+                "source": "mail",
+                "query": "Invoice",
+                "since": "last_run",
+                "limit": 10,
+            },
+            note("each", "seen"),
+        ],
+    )
     org.step(f, "runs0", runs_of, org, f)
     org.pass_time(MINUTE)
-    org.step(f, "mail1", publish_mail, org, INBOX,
-             [mail(org, f"m22-{n}", "billing@vendor.example", f"Invoice {n}") for n in (1, 2, 3)]
-             + [mail(org, "m22-lunch", "omar@acme.example", "Lunch on Friday")])
+    org.step(
+        f,
+        "mail1",
+        publish_mail,
+        org,
+        INBOX,
+        [mail(org, f"m22-{n}", "billing@vendor.example", f"Invoice {n}") for n in (1, 2, 3)]
+        + [mail(org, "m22-lunch", "omar@acme.example", "Lunch on Friday")],
+    )
     org.pass_time(MINUTE)
     org.step(f, "run1", run_now, org, f, "auto")
     org.step(f, "runs1", runs_of, org, f)
@@ -210,15 +265,28 @@ PROMPT = "Check the build"
 
 
 def s23_steps(org, f):
-    org.step(f, "auto", automation, org, "Build check · builder-claude", CLAUDE_REF, trigger=SCHEDULE, steps=[
-        {"id": "act", "type": "bot_turn", "enabled": True, "bot": CLAUDE_ID, "prompt": PROMPT}])
+    org.step(
+        f,
+        "auto",
+        automation,
+        org,
+        "Build check · builder-claude",
+        CLAUDE_REF,
+        trigger=SCHEDULE,
+        steps=[{"id": "act", "type": "bot_turn", "enabled": True, "bot": CLAUDE_ID, "prompt": PROMPT}],
+    )
     org.step(f, "runs0", runs_of, org, f)
     org.step(f, "run", run_now, org, f, "auto")
     org.step(f, "runs", runs_of, org, f)
     org.step(f, "task", lambda: org.api("get", f"/api/v2/tasks/{turn_task(f)}", wave=W3))
     # During the turn the bot calls the hub with the turn's own token, as its tools do.
-    org.step(f, "turn1", org.turn, CLAUDE_ID,
-             act=lambda token, attempt: f.__setitem__("me", org.api("get", "/api/v2/me", who=token, wave=W3)))
+    org.step(
+        f,
+        "turn1",
+        org.turn,
+        CLAUDE_ID,
+        act=lambda token, attempt: f.__setitem__("me", org.api("get", "/api/v2/me", who=token, wave=W3)),
+    )
     org.step(f, "turn2", org.turn, CLAUDE_ID)
 
 
@@ -287,11 +355,21 @@ def second_held(f):
 # ---------------------------------------------------------------------------------------------- 24 switched off
 def s24_steps(org, f):
     org.step(f, "judge", attach_judge, org, ReplayJudge())
-    org.step(f, "auto", automation, org, "Triage · dana", DANA_REF, trigger=TO_DANA, steps=[
-        {"id": "gate", "type": "filter", "enabled": True, "rules": []},
-        {"id": "rank", "type": "decide", "enabled": False, "questions": BUCKET, "level": "low", "out": "d1"},
-        {"id": "draft", "type": "llm", "enabled": False, "as": CLAUDE_REF, "prompt": "Draft a reply", "out": "txt"},
-        note("note", "ran")])
+    org.step(
+        f,
+        "auto",
+        automation,
+        org,
+        "Triage · dana",
+        DANA_REF,
+        trigger=TO_DANA,
+        steps=[
+            {"id": "gate", "type": "filter", "enabled": True, "rules": []},
+            {"id": "rank", "type": "decide", "enabled": False, "questions": BUCKET, "level": "low", "out": "d1"},
+            {"id": "draft", "type": "llm", "enabled": False, "as": CLAUDE_REF, "prompt": "Draft a reply", "out": "txt"},
+            note("note", "ran"),
+        ],
+    )
     org.step(f, "runs0", runs_of, org, f)
     org.step(f, "run", run_now, org, f, "auto", sample=task_input("Quarterly report"))
     org.step(f, "runs", runs_of, org, f)
@@ -344,11 +422,31 @@ def enabled_ran(f):
 
 # ---------------------------------------------------------------------------------------------- 25 paths
 def s25_steps(org, f):
-    org.step(f, "auto", automation, org, "Urgent first · dana", DANA_REF, trigger=TO_DANA, steps=[
-        {"id": "fork", "type": "paths", "enabled": True,
-         "paths": [{"name": "urgent", "when": [cond("task.title", "contains", "urgent")], "steps": [note("u", "urgent")]},
-                   {"name": "prod", "when": [cond("task.title", "contains", "prod")], "steps": [note("p", "prod")]}],
-         "otherwise": {"steps": [note("o", "otherwise")]}}])
+    org.step(
+        f,
+        "auto",
+        automation,
+        org,
+        "Urgent first · dana",
+        DANA_REF,
+        trigger=TO_DANA,
+        steps=[
+            {
+                "id": "fork",
+                "type": "paths",
+                "enabled": True,
+                "paths": [
+                    {
+                        "name": "urgent",
+                        "when": [cond("task.title", "contains", "urgent")],
+                        "steps": [note("u", "urgent")],
+                    },
+                    {"name": "prod", "when": [cond("task.title", "contains", "prod")], "steps": [note("p", "prod")]},
+                ],
+                "otherwise": {"steps": [note("o", "otherwise")]},
+            }
+        ],
+    )
     org.step(f, "runs0", runs_of, org, f)
     org.step(f, "both", run_now, org, f, "auto", sample=task_input("urgent: prod down"))
     org.step(f, "runs1", runs_of, org, f)
@@ -373,19 +471,33 @@ def ran_in(f, sent, before, after, ran_ids, held_ids):
 # ---------------------------------------------------------------------------------------------- 26 limits
 def wide(n):
     """One paths step with n branches (CONTRACT: at most 10 per fork)."""
-    return [{"id": "fork", "type": "paths", "enabled": True,
-             "paths": [{"name": f"p{i}", "when": [cond("task.title", "contains", str(i))], "steps": [note(f"n{i}", "x")]}
-                       for i in range(n)],
-             "otherwise": {"steps": []}}]
+    return [
+        {
+            "id": "fork",
+            "type": "paths",
+            "enabled": True,
+            "paths": [
+                {"name": f"p{i}", "when": [cond("task.title", "contains", str(i))], "steps": [note(f"n{i}", "x")]}
+                for i in range(n)
+            ],
+            "otherwise": {"steps": []},
+        }
+    ]
 
 
 def nested(depth):
     """`depth` paths forks, each inside the branch of the one before (CONTRACT: at most 3 levels)."""
     steps = [note("leaf", "deep")]
     for level in range(depth):
-        steps = [{"id": f"fork{level}", "type": "paths", "enabled": True,
-                  "paths": [{"name": "in", "when": [cond("task.title", "contains", "x")], "steps": steps}],
-                  "otherwise": {"steps": []}}]
+        steps = [
+            {
+                "id": f"fork{level}",
+                "type": "paths",
+                "enabled": True,
+                "paths": [{"name": "in", "when": [cond("task.title", "contains", "x")], "steps": steps}],
+                "otherwise": {"steps": []},
+            }
+        ]
     return steps
 
 
@@ -398,7 +510,7 @@ def s26_steps(org, f):
 
 
 def not_listed(f):
-    setup(f, "listing", "ten", "three")   # the accepted flows must be listed, or the check has nothing to show
+    setup(f, "listing", "ten", "three")  # the accepted flows must be listed, or the check has nothing to show
     names = {r.get("name") for r in rows(body(f, "listing"))}
     gone = {"Eleven paths", "Four forks"} & names
     return not gone and {"Ten paths", "Three forks"} <= names, f"listed: {sorted(n for n in names if n)}"
@@ -406,16 +518,23 @@ def not_listed(f):
 
 # ---------------------------------------------------------------------------------------------- 27 run log
 def s27_steps(org, f):
-    org.step(f, "auto", automation, org, "Invoice log · dana", DANA_REF,
-             trigger={"type": "message", "inbox": INBOX, "filters": [cond("message.subject", "contains", "Invoice")]},
-             steps=[{"id": "gate", "type": "filter", "enabled": True, "rules": []}, note("kept", "kept")])
+    org.step(
+        f,
+        "auto",
+        automation,
+        org,
+        "Invoice log · dana",
+        DANA_REF,
+        trigger={"type": "message", "inbox": INBOX, "filters": [cond("message.subject", "contains", "Invoice")]},
+        steps=[{"id": "gate", "type": "filter", "enabled": True, "rules": []}, note("kept", "kept")],
+    )
     org.step(f, "read0", current, org, f)
     org.step(f, "runs0", runs_of, org, f)
-    org.step(f, "hit", run_now, org, f, "auto",
-             sample=message_input("m27-1", "billing@vendor.example", "Invoice 27"))
+    org.step(f, "hit", run_now, org, f, "auto", sample=message_input("m27-1", "billing@vendor.example", "Invoice 27"))
     org.step(f, "runs1", runs_of, org, f)
-    org.step(f, "miss", run_now, org, f, "auto",
-             sample=message_input("m27-2", "news@list.example", "Weekly newsletter"))
+    org.step(
+        f, "miss", run_now, org, f, "auto", sample=message_input("m27-2", "news@list.example", "Weekly newsletter")
+    )
     org.step(f, "runs2", runs_of, org, f)
     org.step(f, "read1", current, org, f)
     org.step(f, "day29", later, org, dt.timedelta(days=29))
@@ -501,7 +620,7 @@ def versions_recorded(f):
     setup(f, "auto", "edit", "versions")
     vs = [v for v in rows(body(f, "versions")) if v.get("n") in (1, 2)]
     ns = sorted(v["n"] for v in vs)
-    ok = ns == [1, 2] and all(v.get("actor") and v.get("at") for v in vs)
+    ok = ns == [1, 2] and all(v.get("actor") and v.get("created_at") for v in vs)
     return ok, f"versions {ns}, each with actor and time"
 
 
@@ -531,9 +650,22 @@ def on_builtin(org, f, method, who, payload=None):
 
 def s29_steps(org, f):
     org.step(f, "listing", listing, org)
-    org.step(f, "post", org.api, "post", "/api/v2/automations", {
-        "name": "Fake built-in · dana", "owner": DANA_REF, "enabled": True, "builtin": True, "trigger": SCHEDULE,
-        "steps": [{"id": "gate", "type": "filter", "enabled": True, "rules": []}]}, wave=W3)
+    org.step(
+        f,
+        "post",
+        org.api,
+        "post",
+        "/api/v2/automations",
+        {
+            "name": "Fake built-in · dana",
+            "owner": DANA_REF,
+            "enabled": True,
+            "builtin": True,
+            "trigger": SCHEDULE,
+            "steps": [{"id": "gate", "type": "filter", "enabled": True, "rules": []}],
+        },
+        wave=W3,
+    )
     org.step(f, "lead_pause", on_builtin, org, f, "patch", LEAD, {"enabled": False})
     org.step(f, "dana_pause", on_builtin, org, f, "patch", DANA, {"enabled": False})
     org.step(f, "delete", on_builtin, org, f, "delete", DANA)
@@ -559,7 +691,7 @@ def lead_refused(f):
 def dana_pause_warns(f):
     setup(f, "dana_pause")
     reply = got(f, "dana_pause")
-    warned = "warn" in json.dumps(reply.body, default=str).lower()   # CONTRACT names no field for the warning
+    warned = "warn" in json.dumps(reply.body, default=str).lower()  # CONTRACT names no field for the warning
     return reply.status == 200 and warned, f"{reply.status}, warning {warned}"
 
 
@@ -579,10 +711,18 @@ def local(day, hour, minute=0):
 
 
 def s30_steps(org, f):
-    org.step(f, "auto", automation, org, "Daily digest · dana", DANA_REF,
-             trigger={"type": "schedule", "cron": "0 9 * * *", "tz": "America/New_York"}, steps=[note("d", "digest")])
+    org.step(
+        f,
+        "auto",
+        automation,
+        org,
+        "Daily digest · dana",
+        DANA_REF,
+        trigger={"type": "schedule", "cron": "0 9 * * *", "tz": "America/New_York"},
+        steps=[note("d", "digest")],
+    )
     org.step(f, "read0", current, org, f)
-    org.step(f, "to_base", until, org, local(dt.date(2026, 10, 30), 9, 1))   # catch-up and Oct 30's run land here
+    org.step(f, "to_base", until, org, local(dt.date(2026, 10, 30), 9, 1))  # catch-up and Oct 30's run land here
     org.step(f, "runs_base", runs_of, org, f)
     for n, day in enumerate(DAYS):
         org.step(f, f"morning{n}", until, org, local(day, 8))
@@ -623,7 +763,7 @@ def fired_each_day(f):
 TRIGGER = "failed-payments"
 PAYLOAD = {"order": 42}
 STRIPE_EVENT = {"id": "evt_31", "type": "invoice.payment_failed", "data": {"order": 42}}
-RATE = 60   # deliveries an hour (backend/triggers.py HOURLY)
+RATE = 60  # deliveries an hour (backend/triggers.py HOURLY)
 
 
 def secret_of(f):
@@ -655,14 +795,22 @@ def signed(org, f):
 def s31_steps(org, f):
     org.step(f, "trigger", org.api, "post", "/api/v2/triggers", {"name": "Failed payments", "id": TRIGGER}, wave=W3)
     org.step(f, "show", org.api, "get", f"/api/v2/triggers/{TRIGGER}", wave=W3)
-    org.step(f, "auto", automation, org, "Failed payments · dana", DANA_REF,
-             trigger={"type": "webhook", "id": TRIGGER}, steps=[note("h", "hooked")])
+    org.step(
+        f,
+        "auto",
+        automation,
+        org,
+        "Failed payments · dana",
+        DANA_REF,
+        trigger={"type": "webhook", "id": TRIGGER},
+        steps=[note("h", "hooked")],
+    )
     org.step(f, "runs0", runs_of, org, f)
     org.step(f, "bad", hook_post, org, TRIGGER, "wrong-secret", PAYLOAD)
     org.step(f, "runs_bad", runs_of, org, f)
     org.step(f, "good", lambda: hook_post(org, TRIGGER, secret_of(f), PAYLOAD))
     org.step(f, "runs_good", runs_of, org, f)
-    org.step(f, "burst", burst, org, f, RATE - 1)   # with the good one, the hour's 60
+    org.step(f, "burst", burst, org, f, RATE - 1)  # with the good one, the hour's 60
     org.step(f, "over", lambda: hook_post(org, TRIGGER, secret_of(f), PAYLOAD))
     org.step(f, "read", current, org, f)
     org.step(f, "sign", org.api, "post", f"/api/v2/triggers/{TRIGGER}/signing", {"preset": "stripe"}, wave=W3)
@@ -670,7 +818,7 @@ def s31_steps(org, f):
     org.step(f, "runs_s0", runs_of, org, f)
     org.step(f, "unsigned", lambda: hook_post(org, TRIGGER, secret_of(f), PAYLOAD))
     org.step(f, "runs_s1", runs_of, org, f)
-    org.step(f, "hour", later, org, dt.timedelta(hours=1))   # the rate window clears
+    org.step(f, "hour", later, org, dt.timedelta(hours=1))  # the rate window clears
     org.step(f, "signed", signed, org, f)
     org.step(f, "runs_s2", runs_of, org, f)
 
@@ -706,7 +854,7 @@ def rate_holds(f):
 
 def rate_runs(f):
     setup(f, "auto", "read")
-    got(f, "over")   # the 61st was sent before the read
+    got(f, "over")  # the 61st was sent before the read
     counts = today_counts(unwrap(body(f, "read")))
     return (counts or {}).get("runs") == RATE, f"counts.today {counts}, want runs {RATE}"
 
@@ -715,10 +863,17 @@ def stripe_applied(f):
     setup(f, "sign", "show2")
     made = body(f, "sign").get("trigger") or {}
     shown = body(f, "show2").get("trigger") or {}
-    ok = made.get("preset") == "stripe" and bool(made.get("signing_secret")) and shown.get("preset") == "stripe" \
+    ok = (
+        made.get("preset") == "stripe"
+        and bool(made.get("signing_secret"))
+        and shown.get("preset") == "stripe"
         and "signing_secret" not in shown
-    return ok, f"sign reply preset {made.get('preset')}, secret shown {bool(made.get('signing_secret'))}; " \
-               f"read preset {shown.get('preset')}, secret on read {'signing_secret' in shown}"
+    )
+    return (
+        ok,
+        f"sign reply preset {made.get('preset')}, secret shown {bool(made.get('signing_secret'))}; "
+        f"read preset {shown.get('preset')}, secret on read {'signing_secret' in shown}",
+    )
 
 
 def unsigned_refused(f):
@@ -738,87 +893,171 @@ def signed_runs(f):
 
 
 SCENARIOS = [
-    Scenario(22, "engine-find", "Schedule + Find over mail: items since the last run, once per item, empty run logged",
-             s22_steps, [
-                 Check("Find pulls the three invoices published since the last run, not the lunch mail", W3,
-                       found_three),
-                 Check("the per-item step runs once for each item", W3, once_per_item),
-                 Check("with nothing new, the second run is logged empty", W3, empty_second),
-                 Check("a mail after the empty run is the only item the next run finds", W3, since_last),
-             ]),
-    Scenario(23, "engine-bot-turn", "Bot turn step: one turn on the chosen bot with its prompt", s23_steps, [
-        Check("the bot_turn step's output carries the turn {bot, task, session}", W3, turn_shape),
-        Check("the turn is on builder-claude, the chosen bot", W3, turn_bot),
-        Check("the turn's task carries the step's prompt", W3, turn_prompt),
-        Check("the run's turn is claimed on builder-claude", W3, turn_claimed),
-        Check("a second claim for the same run gets nothing", W3, second_held),
-        Check("the turn gets builder-claude's tools: its calls act as builder-claude", W3, turn_tools),
-    ]),
-    Scenario(24, "engine-step-off", "Steps switched off: skipped and logged; their model is never called", s24_steps, [
-        Check("the switched-off Decide is logged skipped, with no outputs", W3, off_logged),
-        Check("the switched-off LLM step is logged skipped and starts no turn", W3, llm_off),
-        Check("the judge is never called", W3, judge_untouched),
-        Check("the enabled Filter and note still run", W3, enabled_ran),
-    ]),
-    Scenario(25, "engine-paths-order", "Paths run in order: the first match wins; otherwise when none match", s25_steps, [
-        Check("two paths match: the paths output is {path: urgent}", W3,
-              lambda f: path_taken(f, "both", "runs0", "runs1", "urgent")),
-        Check("only the first matching path's steps run", W3,
-              lambda f: ran_in(f, "both", "runs0", "runs1", ["u"], ["p", "o"])),
-        Check("no path matches: the paths output is {path: otherwise}", W3,
-              lambda f: path_taken(f, "none", "runs1", "runs2", "otherwise")),
-        Check("no path matches: only the otherwise steps run", W3,
-              lambda f: ran_in(f, "none", "runs1", "runs2", ["o"], ["u", "p"])),
-    ]),
-    Scenario(26, "engine-path-limits", "11th path or 4th nesting level refused on save", s26_steps, [
-        Check("ten paths (the limit) are saved", W3, lambda f: replied(f, "ten", 200, 201)),
-        Check("an 11th path is refused on save (422)", W3, lambda f: replied(f, "eleven", 422, needs=("ten",))),
-        Check("three nesting levels (the limit) are saved", W3, lambda f: replied(f, "three", 200, 201)),
-        Check("a fourth nesting level is refused on save (422)", W3, lambda f: replied(f, "deep", 422, needs=("three",))),
-        Check("the refused flows are not listed; the accepted ones are", W3, not_listed),
-    ]),
-    Scenario(27, "engine-run-log", "Run log: step results and costs; dropped triggers counted only; pruned after 30 days",
-             s27_steps, [
-                 Check("a matching message makes one run; it and each step carry a result and a cost", W3,
-                       step_rows_carry_cost),
-                 Check("a message the trigger's filters drop writes no run row", W3, dropped_no_row),
-                 Check("today's counts go up: runs +1 and dropped +1", W3, dropped_counted),
-                 Check("on day 29 the run still has its step detail", W3, kept_29),
-                 Check("after 31 days the step detail is pruned and the run row stays", W3, pruned_31),
-                 Check("the day's counts are kept after the prune", W3, counts_kept),
-             ]),
-    Scenario(28, "engine-versions", "Each save makes a version; restore brings back the old flow", s28_steps, [
-        Check("two saves make versions 1 and 2, with actor and time", W3, versions_recorded),
-        Check("restore brings the first flow back as a new version", W3, restored),
-    ]),
-    Scenario(29, "engine-builtin", "Built-ins: made by the hub, paused by the top only with a warning, never deleted",
-             s29_steps, [
-                 Check("the hub lists its built-in automations with builtin true", W3, builtins_listed),
-                 Check("POST with builtin true is refused and nothing is listed", W3, post_refused),
-                 Check("the Engineering Lead cannot pause a built-in (403)", W3, lead_refused),
-                 Check("Dana pauses it and the reply carries a warning", W3, dana_pause_warns),
-                 Check("DELETE of a built-in answers 409 and it stays listed", W3, delete_refused),
-             ]),
-    Scenario(30, "engine-dst", "next_run in UTC; a New York schedule at 09:00 local across the DST change", s30_steps, [
-        Check("GET carries next_run as UTC ISO: 13:00Z today (09:00 New York, EDT)", W3,
-              lambda f: next_run_is(f, "read0", dt.datetime(2026, 10, 20, 13, tzinfo=UTC))),
-        Check("before the change, next_run is Oct 31 13:00Z (09:00 EDT)", W3,
-              lambda f: next_run_is(f, "read1", dt.datetime(2026, 10, 31, 13, tzinfo=UTC))),
-        Check("on the change day, next_run is Nov 1 14:00Z (09:00 EST)", W3,
-              lambda f: next_run_is(f, "read2", dt.datetime(2026, 11, 1, 14, tzinfo=UTC))),
-        Check("after the change, next_run is Nov 2 14:00Z (09:00 EST)", W3,
-              lambda f: next_run_is(f, "read3", dt.datetime(2026, 11, 2, 14, tzinfo=UTC))),
-        Check("it fires once each day at 09:00 New York, Oct 31 to Nov 2", W3, fired_each_day),
-    ]),
-    Scenario(31, "engine-webhook", "Webhook trigger: secret shown once, a bad secret refused, Stripe signing, 60 an hour",
-             s31_steps, [
-                 Check("the trigger's secret is shown once: in the create reply, not on a read", W3, secret_once),
-                 Check("a bad secret is refused and starts no run", W3, bad_refused),
-                 Check("the good secret starts one run", W3, good_runs),
-                 Check("60 deliveries an hour are taken; the 61st is refused with 429", W3, rate_holds),
-                 Check("only the 60 taken deliveries ran: today's runs are 60", W3, rate_runs),
-                 Check("the stripe preset is applied; its signing secret is shown once", W3, stripe_applied),
-                 Check("with stripe on, an unsigned delivery is refused (401) and starts no run", W3, unsigned_refused),
-                 Check("a delivery signed the Stripe way starts one run", W3, signed_runs),
-             ]),
+    Scenario(
+        22,
+        "engine-find",
+        "Schedule + Find over mail: items since the last run, once per item, empty run logged",
+        s22_steps,
+        [
+            Check("Find pulls the three invoices published since the last run, not the lunch mail", W3, found_three),
+            Check("the per-item step runs once for each item", W3, once_per_item),
+            Check("with nothing new, the second run is logged empty", W3, empty_second),
+            Check("a mail after the empty run is the only item the next run finds", W3, since_last),
+        ],
+    ),
+    Scenario(
+        23,
+        "engine-bot-turn",
+        "Bot turn step: one turn on the chosen bot with its prompt",
+        s23_steps,
+        [
+            Check("the bot_turn step's output carries the turn {bot, task, session}", W3, turn_shape),
+            Check("the turn is on builder-claude, the chosen bot", W3, turn_bot),
+            Check("the turn's task carries the step's prompt", W3, turn_prompt),
+            Check("the run's turn is claimed on builder-claude", W3, turn_claimed),
+            Check("a second claim for the same run gets nothing", W3, second_held),
+            Check("the turn gets builder-claude's tools: its calls act as builder-claude", W3, turn_tools),
+        ],
+    ),
+    Scenario(
+        24,
+        "engine-step-off",
+        "Steps switched off: skipped and logged; their model is never called",
+        s24_steps,
+        [
+            Check("the switched-off Decide is logged skipped, with no outputs", W3, off_logged),
+            Check("the switched-off LLM step is logged skipped and starts no turn", W3, llm_off),
+            Check("the judge is never called", W3, judge_untouched),
+            Check("the enabled Filter and note still run", W3, enabled_ran),
+        ],
+    ),
+    Scenario(
+        25,
+        "engine-paths-order",
+        "Paths run in order: the first match wins; otherwise when none match",
+        s25_steps,
+        [
+            Check(
+                "two paths match: the paths output is {path: urgent}",
+                W3,
+                lambda f: path_taken(f, "both", "runs0", "runs1", "urgent"),
+            ),
+            Check(
+                "only the first matching path's steps run",
+                W3,
+                lambda f: ran_in(f, "both", "runs0", "runs1", ["u"], ["p", "o"]),
+            ),
+            Check(
+                "no path matches: the paths output is {path: otherwise}",
+                W3,
+                lambda f: path_taken(f, "none", "runs1", "runs2", "otherwise"),
+            ),
+            Check(
+                "no path matches: only the otherwise steps run",
+                W3,
+                lambda f: ran_in(f, "none", "runs1", "runs2", ["o"], ["u", "p"]),
+            ),
+        ],
+    ),
+    Scenario(
+        26,
+        "engine-path-limits",
+        "11th path or 4th nesting level refused on save",
+        s26_steps,
+        [
+            Check("ten paths (the limit) are saved", W3, lambda f: replied(f, "ten", 200, 201)),
+            Check("an 11th path is refused on save (422)", W3, lambda f: replied(f, "eleven", 422, needs=("ten",))),
+            Check("three nesting levels (the limit) are saved", W3, lambda f: replied(f, "three", 200, 201)),
+            Check(
+                "a fourth nesting level is refused on save (422)",
+                W3,
+                lambda f: replied(f, "deep", 422, needs=("three",)),
+            ),
+            Check("the refused flows are not listed; the accepted ones are", W3, not_listed),
+        ],
+    ),
+    Scenario(
+        27,
+        "engine-run-log",
+        "Run log: step results and costs; dropped triggers counted only; pruned after 30 days",
+        s27_steps,
+        [
+            Check(
+                "a matching message makes one run; it and each step carry a result and a cost", W3, step_rows_carry_cost
+            ),
+            Check("a message the trigger's filters drop writes no run row", W3, dropped_no_row),
+            Check("today's counts go up: runs +1 and dropped +1", W3, dropped_counted),
+            Check("on day 29 the run still has its step detail", W3, kept_29),
+            Check("after 31 days the step detail is pruned and the run row stays", W3, pruned_31),
+            Check("the day's counts are kept after the prune", W3, counts_kept),
+        ],
+    ),
+    Scenario(
+        28,
+        "engine-versions",
+        "Each save makes a version; restore brings back the old flow",
+        s28_steps,
+        [
+            Check("two saves make versions 1 and 2, with actor and time", W3, versions_recorded),
+            Check("restore brings the first flow back as a new version", W3, restored),
+        ],
+    ),
+    Scenario(
+        29,
+        "engine-builtin",
+        "Built-ins: made by the hub, paused by the top only with a warning, never deleted",
+        s29_steps,
+        [
+            Check("the hub lists its built-in automations with builtin true", W3, builtins_listed),
+            Check("POST with builtin true is refused and nothing is listed", W3, post_refused),
+            Check("the Engineering Lead cannot pause a built-in (403)", W3, lead_refused),
+            Check("Dana pauses it and the reply carries a warning", W3, dana_pause_warns),
+            Check("DELETE of a built-in answers 409 and it stays listed", W3, delete_refused),
+        ],
+    ),
+    Scenario(
+        30,
+        "engine-dst",
+        "next_run in UTC; a New York schedule at 09:00 local across the DST change",
+        s30_steps,
+        [
+            Check(
+                "GET carries next_run as UTC ISO: 13:00Z today (09:00 New York, EDT)",
+                W3,
+                lambda f: next_run_is(f, "read0", dt.datetime(2026, 10, 20, 13, tzinfo=UTC)),
+            ),
+            Check(
+                "before the change, next_run is Oct 31 13:00Z (09:00 EDT)",
+                W3,
+                lambda f: next_run_is(f, "read1", dt.datetime(2026, 10, 31, 13, tzinfo=UTC)),
+            ),
+            Check(
+                "on the change day, next_run is Nov 1 14:00Z (09:00 EST)",
+                W3,
+                lambda f: next_run_is(f, "read2", dt.datetime(2026, 11, 1, 14, tzinfo=UTC)),
+            ),
+            Check(
+                "after the change, next_run is Nov 2 14:00Z (09:00 EST)",
+                W3,
+                lambda f: next_run_is(f, "read3", dt.datetime(2026, 11, 2, 14, tzinfo=UTC)),
+            ),
+            Check("it fires once each day at 09:00 New York, Oct 31 to Nov 2", W3, fired_each_day),
+        ],
+    ),
+    Scenario(
+        31,
+        "engine-webhook",
+        "Webhook trigger: secret shown once, a bad secret refused, Stripe signing, 60 an hour",
+        s31_steps,
+        [
+            Check("the trigger's secret is shown once: in the create reply, not on a read", W3, secret_once),
+            Check("a bad secret is refused and starts no run", W3, bad_refused),
+            Check("the good secret starts one run", W3, good_runs),
+            Check("60 deliveries an hour are taken; the 61st is refused with 429", W3, rate_holds),
+            Check("only the 60 taken deliveries ran: today's runs are 60", W3, rate_runs),
+            Check("the stripe preset is applied; its signing secret is shown once", W3, stripe_applied),
+            Check("with stripe on, an unsigned delivery is refused (401) and starts no run", W3, unsigned_refused),
+            Check("a delivery signed the Stripe way starts one run", W3, signed_runs),
+        ],
+    ),
 ]

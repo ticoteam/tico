@@ -4,8 +4,8 @@ Examples use Acme, a home-cleaning company."""
 import pytest
 
 from backend import growth as G
-from backend.tests.test_api import api, get, headers, post, put  # noqa: F401
-from backend.tests.test_company import bot
+from backend.tests.helpers.api import get, headers, post, put  # noqa: F401
+from backend.tests.helpers.company import bot
 
 
 def patch(api, path, body, token="ana-test", expected=200):
@@ -21,8 +21,15 @@ def add_channel(api, slug="google-search", name="Google Search", **more):
 # ----------------------------------------------------------------------------- economics
 def test_october_economics_for_google_search_and_the_unknown_row():
     conf = {"revenue_month": 90, "margin_pct": 40}
-    google = {"channel": "google-search", "spend": 3400, "bot_cost": 260, "new_customers": 71,
-              "kept_d30": 81, "kept_d90": 64, "kept_d180": 52}
+    google = {
+        "channel": "google-search",
+        "spend": 3400,
+        "bot_cost": 260,
+        "new_customers": 71,
+        "kept_d30": 81,
+        "kept_d90": 64,
+        "kept_d180": 52,
+    }
     row = G.economics_row(google, conf)
     assert row["cac"] == 51.55
     assert 9 <= row["expected_months"] <= 14 and 320 <= row["ltv"] <= 500
@@ -38,7 +45,7 @@ def test_expected_months_needs_d30_caps_at_sixty_and_uses_what_is_known():
     assert G.expected_months(None, 60, 50) is None
     assert G.expected_months(100, 100, 100) == G.LIFETIME_CAP
     only_d30 = G.expected_months(50)
-    assert 1 < only_d30 < 3          # halves every month: about 0.75 to month 1, then a short geometric tail
+    assert 1 < only_d30 < 3  # halves every month: about 0.75 to month 1, then a short geometric tail
     assert G.expected_months(81, None, 52) > G.expected_months(81, None, 40)
 
 
@@ -47,9 +54,21 @@ def test_economics_route_reads_the_month_and_flags_a_breached_guardrail(api):
     post(api, f"kpis/{kpi['id']}/readings", {"value": 7, "period_end": "2026-10-31T00:00:00Z"})
     add_channel(api, guardrail_kpi_id=kpi["id"], guardrail_max=5)
     put(api, "growth/settings", {"revenue_month": 90, "margin_pct": 40})
-    put(api, "growth/cohorts", {"channel": "google-search", "month": "2026-10", "spend": 3400, "bot_cost": 260,
-                                "new_customers": 71, "kept_d30": 81, "kept_d90": 64, "kept_d180": 52,
-                                "sources": {"spend": "Google Ads billing"}})
+    put(
+        api,
+        "growth/cohorts",
+        {
+            "channel": "google-search",
+            "month": "2026-10",
+            "spend": 3400,
+            "bot_cost": 260,
+            "new_customers": 71,
+            "kept_d30": 81,
+            "kept_d90": 64,
+            "kept_d180": 52,
+            "sources": {"spend": "Google Ads billing"},
+        },
+    )
     put(api, "growth/cohorts", {"channel": "unknown", "month": "2026-10", "new_customers": 18})
     put(api, "growth/cohorts", {"channel": "google-search", "month": "2026-09", "spend": 3000, "new_customers": 50})
     eco = get(api, "growth/economics")
@@ -57,8 +76,16 @@ def test_economics_route_reads_the_month_and_flags_a_breached_guardrail(api):
     assert [r["channel"] for r in eco["rows"]] == ["google-search", "unknown"]
     assert eco["rows"][0]["cac"] == 51.55 and eco["rows"][0]["sources"] == {"spend": "Google Ads billing"}
     assert eco["total"]["new_customers"] == 89 and eco["total"]["name"] == "All channels"
-    assert eco["guardrails"] == [{"channel": "google-search", "kpi_id": kpi["id"], "kpi_name": "Refund rate",
-                                  "value": 7.0, "max": 5.0, "breached": True}]
+    assert eco["guardrails"] == [
+        {
+            "channel": "google-search",
+            "kpi_id": kpi["id"],
+            "kpi_name": "Refund rate",
+            "value": 7.0,
+            "max": 5.0,
+            "breached": True,
+        }
+    ]
     assert get(api, "growth/economics?month=2026-09")["rows"][0]["cac"] == 60.0
     # The same channel and month again updates the row; only the fields sent change.
     put(api, "growth/cohorts", {"channel": None, "month": "2026-10", "kept_d30": 70})
@@ -90,14 +117,27 @@ def test_channel_and_cohort_permissions(api):
     post(api, "growth/channels", {"slug": "referrals", "name": "Referrals"}, token=ops, expected=403)
     post(api, "growth/channels", {"slug": "referrals", "name": "Referrals"}, token="cara-test", expected=403)
     post(api, "growth/channels", {"slug": "google-search", "name": "X"}, token="ben-test", expected=409)
-    changed = patch(api, "growth/channels/google-search", {"stage": "scaling", "why": "Cheapest bookings",
-                                                           "budget_month": 4000}, token=ops)
+    changed = patch(
+        api,
+        "growth/channels/google-search",
+        {"stage": "scaling", "why": "Cheapest bookings", "budget_month": 4000},
+        token=ops,
+    )
     assert (changed["stage"], changed["budget_month"]) == ("scaling", 4000)
     assert patch(api, "growth/channels/google-search", {"name": "Mine"}, token=ops, expected=403)["error"]
     patch(api, "growth/channels/google-search", {"stage": "paused"}, token=finance, expected=403)
     patch(api, "growth/channels/google-search", {"name": "Google Ads"}, token="ben-test")
-    assert put(api, "growth/cohorts", {"channel": "google-search", "month": "2026-10", "spend": 1}, token=finance)["spend"] == 1
-    put(api, "growth/cohorts", {"channel": "google-search", "month": "2026-10", "spend": 1}, token="cara-test", expected=403)
+    assert (
+        put(api, "growth/cohorts", {"channel": "google-search", "month": "2026-10", "spend": 1}, token=finance)["spend"]
+        == 1
+    )
+    put(
+        api,
+        "growth/cohorts",
+        {"channel": "google-search", "month": "2026-10", "spend": 1},
+        token="cara-test",
+        expected=403,
+    )
     put(api, "growth/cohorts", {"channel": "nope", "month": "2026-10"}, token=finance, expected=404)
     post(api, "growth/channels/google-search/retire", {}, token=ops, expected=403)
     post(api, "growth/channels/google-search/retire", {})
@@ -113,11 +153,20 @@ def test_lists_and_settings_say_whether_the_caller_may_edit(api):
 
 
 def test_sources_list_conflicts_and_only_admins_write(api):
-    post(api, "growth/sources", {"truth_for": "Revenue", "system": "Stripe", "reach_kind": "mcp"}, token=bot(api, "ops"),
-         expected=403)
+    post(
+        api,
+        "growth/sources",
+        {"truth_for": "Revenue", "system": "Stripe", "reach_kind": "mcp"},
+        token=bot(api, "ops"),
+        expected=403,
+    )
     first = post(api, "growth/sources", {"truth_for": "Revenue", "system": "Stripe", "reach_kind": "mcp"})
-    post(api, "growth/sources", {"truth_for": "revenue", "system": "QuickBooks", "reach_kind": "credential"},
-         token="ben-test")
+    post(
+        api,
+        "growth/sources",
+        {"truth_for": "revenue", "system": "QuickBooks", "reach_kind": "credential"},
+        token="ben-test",
+    )
     assert [x.lower() for x in get(api, "growth/sources", token="cara-test")["conflicts"]] == ["revenue"]
     post(api, f"growth/sources/{first['id']}/retire", {})
     assert get(api, "growth/sources")["conflicts"] == []
@@ -126,8 +175,10 @@ def test_sources_list_conflicts_and_only_admins_write(api):
 def test_the_total_weighs_profit_per_cohort_and_a_hidden_kpis_guardrail_stays_hidden(api):
     # Rich-but-thin and poor-but-fat cohorts: profit per customer-month is 10 and 9, so 9.5 together, never
     # the 55 x 50% = 27.5 that averaging revenue and margin apart would invent.
-    rows = [{"channel": "a", "spend": 950, "new_customers": 10, "kept_d30": 80, "revenue_month": 100, "margin_pct": 10},
-            {"channel": "b", "spend": 950, "new_customers": 10, "kept_d30": 80, "revenue_month": 10, "margin_pct": 90}]
+    rows = [
+        {"channel": "a", "spend": 950, "new_customers": 10, "kept_d30": 80, "revenue_month": 100, "margin_pct": 10},
+        {"channel": "b", "spend": 950, "new_customers": 10, "kept_d30": 80, "revenue_month": 10, "margin_pct": 90},
+    ]
     total = G.economics_total(rows, {})
     assert total["cac"] == 95.0 and total["payback_months"] == 10.0
     assert total["ltv"] == round(9.5 * total["expected_months"], 2)
@@ -144,11 +195,20 @@ def test_kpi_tree_fields_and_one_north_star(api):
     active = post(api, "kpis", {"name": "Active customers"})["kpi"]
     booked = post(api, "kpis", {"name": "Bookings"})["kpi"]
     post(api, f"kpis/{active['id']}", {"growth_role": "north_star"})
-    post(api, f"kpis/{booked['id']}", {"parent_kpi_id": active["id"], "growth_role": "input", "stage": "acquire",
-                                       "loop_name": "Referral", "loop_step": 2})
+    post(
+        api,
+        f"kpis/{booked['id']}",
+        {
+            "parent_kpi_id": active["id"],
+            "growth_role": "input",
+            "stage": "acquire",
+            "loop_name": "Referral",
+            "loop_step": 2,
+        },
+    )
     tree = {k["id"]: k for k in get(api, "growth/kpis")["kpis"]}
     assert tree[booked["id"]]["parent_kpi_id"] == active["id"] and tree[booked["id"]]["loop_step"] == 2
-    post(api, f"kpis/{active['id']}", {"parent_kpi_id": booked["id"]}, expected=422)      # a loop in the tree
+    post(api, f"kpis/{active['id']}", {"parent_kpi_id": booked["id"]}, expected=422)  # a loop in the tree
     post(api, f"kpis/{booked['id']}", {"growth_role": "north_star"})
     tree = {k["id"]: k for k in get(api, "growth/kpis")["kpis"]}
     assert tree[active["id"]]["growth_role"] is None and tree[booked["id"]]["growth_role"] == "north_star"
@@ -160,8 +220,10 @@ def test_a_kpi_says_whether_the_caller_may_edit_it_and_an_unreadable_one_has_no_
     kpi = post(api, "kpis", {"name": "Refund rate"})["kpi"]
     hidden = post(api, "kpis", {"name": "Inbox depth"})["kpi"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE kpis SET owner_id='bot:inbox' WHERE id=?", (hidden["id"],))   # the fixture restricts inbox to Ana
-    may = lambda token: {k["id"]: k["may_edit"] for k in get(api, "growth/kpis", token)["kpis"]}   # noqa: E731
+        c.execute(
+            "UPDATE kpis SET owner_id='bot:inbox' WHERE id=?", (hidden["id"],)
+        )  # the fixture restricts inbox to Ana
+    may = lambda token: {k["id"]: k["may_edit"] for k in get(api, "growth/kpis", token)["kpis"]}  # noqa: E731
     assert may("ana-test") == {kpi["id"]: True, hidden["id"]: True}
     assert may("cara-test") == {kpi["id"]: False} and may(bot(api, "ops"))[kpi["id"]] is False
 

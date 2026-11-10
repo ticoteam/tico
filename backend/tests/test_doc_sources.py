@@ -1,9 +1,10 @@
 """The four external-index contracts: fixed revisions, recovery, scope parsing and retrieval."""
+
 import base64
 import hashlib
 
 from backend.doc_sources import FetchFailure
-from backend.tests.test_docs import api, call, make  # noqa: F401
+from backend.tests.helpers.docs import call, make  # noqa: F401
 from clients import github_scope
 
 
@@ -59,8 +60,9 @@ def refresh(api, source, worker):
 
 
 def test_refresh_uses_one_fixed_commit(api):
-    source, worker, github = setup_source(api, {'README.md': '# Handbook\nOld facts.\n',
-                                               'docs/nested/retries.md': '# Retries\nBackoff is cobalt.\n'})
+    source, worker, github = setup_source(
+        api, {'README.md': '# Handbook\nOld facts.\n', 'docs/nested/retries.md': '# Retries\nBackoff is cobalt.\n'}
+    )
     github.on_blob = lambda: github.set_files('b' * 40, {'README.md': '# Handbook\nNew facts.\n'})
     worker.tick()
     files = call(api, 'GET', 'doc-sources/' + source['id'] + '/documents')['documents']
@@ -114,9 +116,12 @@ def test_scope_parsing_preserves_slash_references():
 
 
 def test_search_finds_a_nested_passage_and_tools_read_it_as_untrusted(api):
-    from backend.tests.test_mcp import call as tool
+    from backend.tests.helpers.mcp import call as tool
     from clients.docs_ask import parse_citations
-    source, worker, github = setup_source(api, {'docs/nested/retries.md': '# Transport\n\n## Backoff\nUse cobalt jitter.\n'})
+
+    source, worker, github = setup_source(
+        api, {'docs/nested/retries.md': '# Transport\n\n## Backoff\nUse cobalt jitter.\n'}
+    )
     make(api, 'Jitter overview', 'Jitter means varying retry timing.')
     make(api, 'Docs index', 'Use cobalt jitter.', path='_librarian/index.md')
     worker.tick()
@@ -125,8 +130,9 @@ def test_search_finds_a_nested_passage_and_tools_read_it_as_untrusted(api):
     assert hit['path'] == 'docs/nested/retries.md' and hit['section'] == 'Backoff'
     assert hit['trust'] == 'untrusted_external' and '?plain=1#L3-L4' in hit['citation_url']
     assert hits.index(hit) < next(i for i, row in enumerate(hits) if row.get('path') == '_librarian/index.md')
-    from backend.tests.test_openapi_v2 import conforms
+    from backend.tests.helpers.openapi_v2 import conforms
     from backend.openapi_v2 import generate
+
     schema = generate()
     assert conforms({'results': hits}, schema['components']['schemas']['DocsSearchResults'], schema) is None
     err, answer = tool(api, 'hub_context_show', {'id': hit['id'], 'revision': hit['commit']})
@@ -136,6 +142,13 @@ def test_search_finds_a_nested_passage_and_tools_read_it_as_untrusted(api):
     assert fast['kind'] == 'external_document' and fast['trust'] == 'untrusted_external'
     assert parse_citations('[External · Transport — Backoff](' + hit['citation_url'] + ')')[0]['type'] == 'external'
     call(api, 'PATCH', 'doc-sources/' + source['id'], {'archived': True})
-    assert not any(row['type'] == 'external' for row in call(api, 'GET', 'docs/search', params={'q': 'cobalt'})['results'])
-    assert call(api, 'GET', 'docs/search', params={'q': 'cobalt', 'source_id': source['id'], 'collection': 'all'})['results'] == []
+    assert not any(
+        row['type'] == 'external' for row in call(api, 'GET', 'docs/search', params={'q': 'cobalt'})['results']
+    )
+    assert (
+        call(api, 'GET', 'docs/search', params={'q': 'cobalt', 'source_id': source['id'], 'collection': 'all'})[
+            'results'
+        ]
+        == []
+    )
     call(api, 'GET', 'docs/external/' + hit['id'], params={'revision': hit['commit']}, expected=404)

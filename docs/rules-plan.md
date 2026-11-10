@@ -6,7 +6,7 @@ pass). Plan only, no code. Read against ticoteam/tico `origin/main` c15ff9b04. M
 ## The idea in one line
 
 A rule is one sentence, **Internal** (how teammates, bots and people, treat each other) or **External** (what someone
-outside requires of us). It says **Who** follows it; an internal rule can also say **With** whom. From then on the bots
+outside requires of us). Its **Followed by** line says who follows it; an internal rule can also say **With** whom. From then on the bots
 it applies to know it. Counsel reads contracts and suggests external rules. A rule can have a **due date** with a status (Upcoming, Due soon, Overdue, Satisfied); a routine that
 opens a task before it is optional.
 
@@ -17,19 +17,19 @@ opens a task before it is optional.
 | Outside obligations (vendor terms, customer contracts, laws, HOA) | `policies/*.md`, bot instructions, prose | No record, no source, no "applies to", no review |
 | Reading a contract for what binds us | Nothing | The core of this plan |
 | Legal dates | Tasks have `due`; the scheduler runs daily jobs (`backend/scheduler.py`) | Nothing says "file X by Y every year, start 2 weeks before" |
-| Who may message a bot, sending outside, limits | `bot_access.py` write audience (Open by default); `outbound_send` toggle in Settings › People (`ui/app/settings-access.js`); `usage_limits.py`, `turn_budgets.py`, `task_caps.py` | All exist and are editable, but spread across Settings; there's no single view per bot |
-| Checks on outbound calls | Optional approvals (`hub approval request --kind send\|spend\|publish\|merge`, payload-bound, consumed once); the mail connector's per-send switch (`connectors/mail/policy.py`) | Nothing ties an outside obligation to the action it governs |
+| Who may message a bot, sending outside, limits | `bot_access.py` write audience (Open by default); the Email sending policy (`backend/email_sending.py`); `usage_limits.py`, `turn_budgets.py`, `task_caps.py` | All exist and are editable, but spread across Settings; there's no single view per bot |
+| Checks on outbound calls | An OK asked on the task (`tico task ask <id> --to <person>`), answered in Needs you; Tico's send queue, which decides every email (`backend/email_sending.py`) | Nothing ties an outside obligation to the action it governs |
 
 ## The model
 
 **Rules** are the one new thing, in two kinds. Internal comes first: it's what Chris will start adding.
-- **Internal:** between teammates. "Never tell anyone what color you like" (Who: Everyone). "Ask Chris before
-  assigning him a task" (Who: all bots, With: Chris). "Don't ask Bookkeeper to pay anything" (Who: Marketing, With:
+- **Internal:** between teammates. "Never tell anyone what color you like" (Followed by: Everyone). "Ask Chris before
+  assigning him a task" (Followed by: all bots, With: Chris). "Don't ask Bookkeeper to pay anything" (Followed by: Marketing, With:
   Bookkeeper).
 - **External:** someone outside requires it, with a **From** (Twilio, Acme Corp, City of Austin, FTC) of kind
   Vendor, Customer, Government or Other.
 - Each is one sentence (up to 1000 characters) plus an optional description.
-- **Who** follows it: Everyone (every teammate), all bots, departments, bots or people. Only owners and admins can
+- **Followed by** (who follows it): Everyone (every teammate), all bots, departments, bots or people. Only owners and admins can
   add or edit an Everyone rule.
 - **With** (internal, optional): the teammates it's about: departments, bots or people. Empty means any output.
 - Status is suggested, active or retired.
@@ -41,13 +41,13 @@ opens a task before it is optional.
   | Sentence | Source | Who edits |
   |---|---|---|
   | "Only Marketing and Chris can message Marketing Bot" (the write audience; see/read stay in Settings) | `bot_access.py` | the bot's managers |
-  | "Marketing Bot can't send outside Tico" / "…can send mail" | Settings › People `outbound_send`; `mail_settings.py` | a person who manages the bot (never a bot, BotOps or the Assistant, for mail) |
+  | "Marketing Bot can't send outside Tico" / "…can send mail" | the bot's Email sending policy; `email_sending.py` | a person who manages the bot (never a bot, BotOps or the Assistant, for mail) |
   | "Spends up to $X a month" or "Follows the company limit" | `usage_limits.py` (may be a company or group pool) | as today |
   | "Up to N turns a day" or "Team default: N" | `turn_budgets.py` | as today |
   | "Up to N tasks a day to Chris" (one per cap row) | `task_caps.py` | as today |
   | "At most 10 unasked messages to a person a day", "Asks go 3 deep at most", "20 bot-to-bot messages an hour in one chat" | `hubdb.py` fixed limits | nobody (no edit link) |
 
-  Each shows in `hub rules list --mine` as a read-only `setting:` line, so a bot learns its limits from one command.
+  Each shows in `tico rules list --mine` as a read-only `setting:` line, so a bot learns its limits from one command.
 
 How a rule is used:
 1. **Checked** (always, §3): Decide checks a bot's outputs against the rules that apply, and holds or warns. Rules
@@ -62,34 +62,34 @@ How a rule is used:
 |---|---|
 | Rules (Internal, External) | `org_rules` with `kind internal\|external` |
 | Who / With | `who`, `with` |
-| From | `rule_sources` |
+| From | `org_rules.source_entity_id` (an organization entity) |
 | Suggested | status `suggested` |
 | Due | `rule_due_dates` + `rule_due_status`; routine optional |
 | Decide | `judge.py`'s default engine; not "Jev" |
 
 "Rules" alone in code already means wake rules (`backend/rules.py`), so new code never uses the bare word. The CLI is
-`hub rules …`, which is free today. There is no "Sources" tab name clash in the UI, because Docs/Meetings "Add source"
+`tico rules …`, which is free today. There is no "Sources" tab name clash in the UI, because Docs/Meetings "Add source"
 lives on other pages; on this page the button is **+ Add document**.
 
 ## Screens
 
-1. **Bot › Rules tab** (board 1): **Internal** (written rules where the bot is in Who, then its settings as
+1. **Bot › Rules tab** (board 1): **Internal** (written rules where the bot is under Followed by, then its settings as
    sentences, each opening the setting), then **External**.
-2. **Rules › Internal** (board 2): list with Rule | Who | With | Due; filters Who, With, and "Settings too" (off).
-   Clicking a rule opens a side panel: rule, description, Who, With, If broken (Block / Escalate / Warn, shown as Stop / Ask first / Warn), due date; Retire / Save.
+2. **Rules › Internal** (board 2): list with Rule | Followed by | With | Due; filters Followed by, With, and "Settings too" (off).
+   Clicking a rule opens a side panel: rule, description, Followed by, With, If broken (Block / Escalate / Warn, shown as Stop / Ask first / Warn), due date; Retire / Save.
    Who may reach whom, how often, and the lines between teammates (each line's rule an internal rule): see
    [reach.md](reach.md).
 3. **Blocked** (board 3): what a blocked bot gets back and does next (Block, the default), and an Escalate review task
    for the bot's manager (Keep blocked / Send anyway / Edit rule). **Nav:** Rules is a top-level item under Automations and Library, collapsed by default.
 4. **Rules › External** (board 4): the page is **Rules** with tabs **Internal · External · Due · Suggested**. External
-   is a flat list with filters for From, Who and Due. Buttons: **+ Add document**, **+ Add rule**. The From filter's list replaces a Sources tab. Clicking a
-   rule opens a side panel: edit the rule, a description, Who (company, departments or bots; + add), From;
+   is a flat list with filters for From, Followed by and Due. Buttons: **+ Add document**, **+ Add rule**. The From filter's list replaces a Sources tab. Clicking a
+   rule opens a side panel: edit the rule, a description, Followed by (company, departments or bots; + add), From;
    see its due date and the cited quote; Retire / Save. No "Counsel is reading" banner.
 5. **Add document** (board 5): one file or link, a short description ("We just closed our deal with Twilio"), and
    From (or a new one plus a kind). It starts a Counsel review. (Finding public terms on its own is Later #1.)
-6. **Suggested** (board 6): grouped by From ("Twilio"). Each row is the sentence, Who, and Skip / Add.
+6. **Suggested** (board 6): grouped by From ("Twilio"). Each row is the sentence, Followed by, and Skip / Add.
    **Add all** adds the group with the scopes shown. The quote is stored and shows in the rule's side panel, not here.
-7. **Add rule** (board 7): Internal or External first; Internal asks Who and With, External asks Who and From.
+7. **Add rule** (board 7): Internal or External first; Internal asks Followed by and With, External asks Followed by and From.
 8. **Due** (board 8), for both kinds: columns Due | Rule | Repeats | Routine | Owner | Status. Repeats is the frequency; Routine is
    optional ("30 days before" or —). Status is Overdue / Due soon / Upcoming / Satisfied. Clicking a row opens a
    side panel: Due, Repeats, Owner, Routine, the status with **Mark satisfied**, and a history of past due dates
@@ -104,9 +104,10 @@ The shape follows `strategy_bets` (`backend/strategy.py`): a statement, cites, p
 events.
 
 ```
-rule_sources(id, name, kind vendor|customer|government|other, created_by, created_at)
+Rule sources are organization entities, not a table (migration 20261108044824 retired `rule_sources`): an entity's
+`properties.rule_source` holds {id, kind vendor|customer|government|other, created_by, created_at}.
 
-org_rules(id, kind internal|external, text, description?, source_id (external only),
+org_rules(id, kind internal|external, text, description?, source_entity_id (external only; the From),
           cite {file_id+version, section, quote} (external only),
           who  {everyone: bool, all_bots: bool, groups: [], bots: [], people: []},
           with {groups: [], bots: [], people: []} (internal only, optional; empty = any output),
@@ -203,7 +204,7 @@ ahead of time so it doesn't try.
     included), a thread started with a first message (`POST /api/v2/threads`), and an edit (`PATCH /api/v2/messages/{id}`)
     are judged as a message to a person is, before the write; on Block the message is held and does not reach the thread
     until a reviewer releases it (`message.held` tells the owners and admins);
-  - `hub message send` (`POST /api/v2/messages`, and `POST /api/v2/chat/{bot}` through the same check and write),
+  - `tico message send` (`POST /api/v2/messages`, and `POST /api/v2/chat/{bot}` through the same check and write),
     task comments, task create and owner change: the routes `ask_ingest` already gates;
   - task questions (`POST /api/v2/task-questions`): title, body, question and why as one output to the person asked;
     on Block no task, fold, comment or note;
@@ -257,12 +258,10 @@ ahead of time so it doesn't try.
     `has_outside_members` (someone in it is outside the roster, or is a Slack actor). A write meets the
     rule when one of its terms holds. A message has the place of its thread (`conversations.id` is the thread id, with
     its root, audience and members read from the thread); a task comment has its task's conversation. The Rules panel
-    sets one choice (anywhere, direct chats, outside, a team, or a thread). Its thread list is the threads sidebar
-    (`GET /api/v2/threads`: root threads the viewer belongs to or follows, the public company and team ones, and DMs; 200
-    at most), so a readable thread outside those is set by id through the API and CLI.
+    no longer shows or sets a place, so `where:` is set through the API and CLI, where a thread is named by its id.
     The API and CLI take several terms. A rule with no `where:` applies wherever its Who matches. Mail and drafts have
     no place, so a `where:` rule never matches them.
-  - People's checks are charged to the same monthly budget as bots' (`rules_monthly_usd`) and counted on the Rules
+  - People's checks are charged to the same monthly budget as bots' (Decide's one monthly cap) and counted on the Rules
     page next to its spend ("$3 on people"). A person has a daily cap of their own (`decisions_daily_calls_human`).
 - **What's judged:** the whole output, short or long. Screening's 200-character minimum, 20k cut and `free_text`
   extraction are injection heuristics and aren't reused ("My favorite color is blue" must be checked). One output is
@@ -276,7 +275,7 @@ ahead of time so it doesn't try.
 - **If broken**, set per rule. In every mode the bot that sent it is told it broke a rule, and which one.
   - **Block** (default): not delivered. The write returns 200 with a `held` result, never a refusal, so it counts
     toward no quarantine (`hubdb.refuse` would). Nobody is pinged. The bot gets the rule and "Think it's wrong? Ask
-    <manager>: `hub rules appeal <hold-id>`", naming the same person Escalate would. No override toggle.
+    <manager>: `tico rules appeal <hold-id>`", naming the same person Escalate would. No override toggle.
   - **Escalate** (for serious rules): not delivered, plus one review task (Keep blocked / Send anyway / Edit rule).
   - **Warn** (optional): delivered with a warning line on the recipient's copy.
   - **On a completion reply**, the person waiting sees one line in the thread, without the text: "Marketing Bot's
@@ -289,16 +288,20 @@ ahead of time so it doesn't try.
     someone who left or whose sign-in is off is skipped. Never a bot. With no person at all, an Escalate stays a Block.
     The owner can always read, keep or send a bot's hold, its reviewer named or not (whoever can change a block's
     source can waive it). An admin does the same once the reviewer is missing or gone. The review task's hold list
-    shows it to them.
+    shows it to them. App-only Tico support does not read a hold once its reviewer is missing or gone: the owner and
+    Admins do, for a bot's hold and a person's (Chris, Nov 6, 2026: "Owner and admins only"; PR 2004 follow-up).
+    With the reviewer present nothing changes. Full-access Tico support has the owner's rights and is unchanged.
   - The held output lives in its own `org_rule_holds` row (operation, payload, author, destinations, rules, verdict),
     readable by the author bot, the reviewer and the person it is held for (who may withdraw it, not release it). It is
     never a message or task row: an undelivered message is
     what inboxes and the mailbox loop read. Send anyway submits the hold's one-shot server nonce: the normal write
     runs once, as the bot, with `bot_access` and ask ingest, but Decide isn't asked again for that exact payload. A
     changed payload or a newer rule version is a new check. A held automation step whose automation now acts as
-    someone else (a new owner, a group's new lead) is refused with 409 `changed`. Keep blocked leaves it. The review
+    someone else (a new owner, a group's new lead) is refused with 409 `changed`. Keep blocked leaves it. A held
+    output nobody decides within 24 hours expires unsent: the hourly sweep keeps it blocked (oldest first, 50 a sweep)
+    and tells the bot it was not sent, so it can write it again within the rules or drop it. The review
     task body is a fixed line plus the hold id; nothing from the output is copied in.
-  - **Appeal:** `hub rules appeal <hold-id> "<why>"` sends the hold to the reviewer as a review task. `why` is stored
+  - **Appeal:** `tico rules appeal <hold-id> "<why>"` sends the hold to the reviewer as a review task. `why` is stored
     on the hold and shown only to the reviewer, never in a task body or a prompt. It isn't checked by rules, never delivers the payload, and isn't an override. That's the
     "ask your manager" route, so a rule can't block it. Nobody hears anything unless the bot appeals.
   - Edit rule opens the side panel under the normal permission check.
@@ -315,21 +318,21 @@ ahead of time so it doesn't try.
     is a Health finding.
   - Model text: "Block holds what Decide catches. When Decide is off or over budget, the output goes through and is
     marked unchecked."
-- **Cost and cache:** one call per output with matching rules. Rule checks have their own monthly budget
-  (`TICO_RULES_MONTHLY_USD`, new, separate from the shared $50 `decisions_monthly_usd`, so rules can't starve
-  screening or ask ingest, nor the reverse) and the keeper pays. `hub rules check` has a per-bot daily cap; hitting
+- **Cost and cache:** one call per output with matching rules. Rule checks spend from Decide's one monthly budget
+  (`monthly_cap_usd` in Automations > Maintenance, else `TICO_DECISIONS_MONTHLY_USD`, $50) and the keeper pays.
+  Nov 8: the separate rules budget was removed. `tico rules check` has a per-bot daily cap; hitting
   it stops that bot's drafts only. The Rules header shows dollars left, and says so when it's gone.
   Verdicts are cached by a digest of the full check input (operation, author bot, resolved recipients, exact content
   or change, the object's version) plus the matched rule ids and versions, the question-set version and the Decide
   level. An unchanged retry is free; the same words sent as a message and as a task assignment are two checks.
 - **With `ask_ingest`:** where both apply (a task filed on a person), the rule check runs first, and a block skips
   ask ingest.
-- **Bots read rules; they're not injected.** Every teammate, bots included, can read every rule (`hub rules list`,
-  `hub_rules_list`). Bot instructions get one fixed line: "Rules apply to you. Read them: `hub rules list --mine`.
-  Check a draft: `hub rules check`." That's a policy text change, not a runner contract bump.
+- **Bots read rules; they're not injected.** Every teammate, bots included, can read every rule (`tico rules list`,
+  `hub_rules_list`). Bot instructions get one fixed line: "Rules apply to you. Read them: `tico rules list --mine`.
+  Check a draft: `tico rules check`." That's a policy text change, not a runner contract bump.
   - `--mine` = Everyone, the bot's group (via `team_of`), its slug, and rules where it's in With, plus its settings as
     read-only `setting:` lines.
-  - `hub rules check "<draft>" --to <teammate> [--as message|comment|task|assign]` runs the same check on the same
+  - `tico rules check "<draft>" --to <teammate> [--as message|comment|task|assign]` runs the same check on the same
     input and writes the verdict cache, so sending that exact draft costs no second call.
 - Settings shown as sentences are enforced by their own code, not Decide.
 
@@ -359,7 +362,7 @@ legal rules are one user of it.
   - the occurrence key;
   - an optional `rule_due_id`: the routine then reads its date and repeat from that row.
 
-  No new scheduler. Created like any routine (Automations page, `hub automation create`) or from the Due tab (the
+  No new scheduler. Created like any routine (Automations page, `tico automation create`) or from the Due tab (the
   Routine field in a due date's side panel).
 - **Linked to a rule's due date:**
   - The routine is optional; a due date with no routine still shows status and can be marked satisfied.
@@ -394,18 +397,18 @@ legal rules are one user of it.
 ### 6. CLI + MCP
 
 ```
-hub rules list [--internal | --external] [--bot X | --mine | --from F | --with W]
-hub rules due [--next 90d]                                                     # due dates + status
-hub rules due add <rule> --on 2027-01-31 --repeats yearly --owner bookkeeper [--task-days 30]
-hub rules due satisfied <rule|due-id> [--on 2027-01-31]
-hub rules edit <id> [--text ...] [--description ...] [--who ...] [--with ...] [--if-broken ...] [--reviewer ...]
-hub rules add "<sentence>" --who all-bots --with chris [--if-broken escalate --reviewer chris]   # internal
-hub rules add "<sentence>" --from twilio --who marketing[,bot:x]               # external
-hub rules read <file-id|url> --from twilio [--kind vendor] [--note "..."]     # starts a Counsel review
-hub rules suggested [--from F]   hub rules accept <id> [--who ...]   hub rules skip <id>   hub rules retire <id>
-hub rules check "<draft>" --to <teammate> [--as message|comment|task|assign]  # same check Decide runs on send
-hub rules appeal <hold-id> "<why>"                                             # a blocked bot asks its reviewer
-hub rules ask "<question>"                                                     # Counsel answers with cites
+tico rules list [--internal | --external] [--bot X | --mine | --from F | --with W]
+tico rules due [--next 90d]                                                     # due dates + status
+tico rules due add <rule> --on 2027-01-31 --repeats yearly --owner bookkeeper [--task-days 30]
+tico rules due satisfied <rule|due-id> [--on 2027-01-31]
+tico rules edit <id> [--text ...] [--description ...] [--who ...] [--with ...] [--if-broken ...] [--reviewer ...]
+tico rules add "<sentence>" --who all-bots --with chris [--if-broken escalate --reviewer chris]   # internal
+tico rules add "<sentence>" --from twilio --who marketing[,bot:x]               # external
+tico rules read <file-id|url> --from twilio [--kind vendor] [--note "..."]     # starts a Counsel review
+tico rules suggested [--from F]   tico rules accept <id> [--who ...]   tico rules skip <id>   tico rules retire <id>
+tico rules check "<draft>" --to <teammate> [--as message|comment|task|assign]  # same check Decide runs on send
+tico rules appeal <hold-id> "<why>"                                             # a blocked bot asks its reviewer
+tico rules ask "<question>"                                                     # Counsel answers with cites
 ```
 
 - MCP: `hub_rules_list`, `hub_rules_add`, `hub_rules_read`, `hub_rules_suggested`, `hub_rules_accept`,
@@ -416,7 +419,7 @@ hub rules ask "<question>"                                                     #
 - **Visibility:** every rule's sentence and From are readable by every teammate, bots included (public for now;
   hiding them is Later #14 if bots start gaming them). The quote follows
   its file's own visibility (`backend/files.py`). That check runs in the list, the bot tab, CLI, MCP and
-  `hub audit`. The table stays off the SQL page, as `learned` does. A private contract gets a vaguer sentence,
+  `tico audit`. The table stays off the SQL page, as `learned` does. A private contract gets a vaguer sentence,
   which Counsel suggests.
 
 ### 6.5 Finance coordination (agreed with the Finance dev, Oct 30)
@@ -440,7 +443,7 @@ hub rules ask "<question>"                                                     #
 This was the original wrapper idea. It's kept here and not scheduled.
 
 - **What it is.** A hub-side adapter per vendor with fixed ops on fixed hosts (`hub vendor call buffer.create_post`;
-  `hub api` is already taken). Its credential is marked **hub only**, which means it's never delivered to a run.
+  `tico api` is already taken). Its credential is marked **hub only**, which means it's never delivered to a run.
 - **Checks per rule:** bot confirms (an attestation, recorded as a claim), Decide checks, or code. Modes are Warn,
   Block or Ask, and the strictest wins. Ask uses a payload-bound approval, and the bot calls again with its id.
 - **Why it waits:**
@@ -462,7 +465,7 @@ government rules with citations into the same Suggested tab. Tico works fully wi
 | # | Ships |
 |---|---|
 | 0 | Routines with a due date (§4), as a general routine feature. Useful on its own and can ship first |
-| 1 | **Internal first**, in three PRs: (a) records + audit + visibility; Rules page (Internal, External, Due, Suggested); Add rule (Who, With, From); rule side panel; bot Rules tab (internal incl. settings as sentences, then external); nav item; due dates + status, optional routine; `hub rules` + MCP. (b) Decide checks on outputs, live with Block by default, plus Escalate / Warn, appeal and the rule-check eval |
+| 1 | **Internal first**, in three PRs: (a) records + audit + visibility; Rules page (Internal, External, Due, Suggested); Add rule (Who, With, From); rule side panel; bot Rules tab (internal incl. settings as sentences, then external); nav item; due dates + status, optional routine; `tico rules` + MCP. (b) Decide checks on outputs, live with Block by default, plus Escalate / Warn, appeal and the rule-check eval |
 | 1b | External from documents: Add document → Counsel (hidden helper) suggests with quotes → Add/Skip/Add all; eval set. Can ship right after 1 |
 
 ## Later (agreed Oct 30: not now, keep working through)
@@ -506,7 +509,7 @@ government rules with citations into the same Suggested tab. Tico works fully wi
   - A clean task then a forbidden body edit / close note is held and the task is unchanged; a note to a bot and an
     automation `_wake_bot` text are checked; a BotOps write as a person is checked.
   - An output over 120k is held; Send anyway with the nonce delivers once without a second Decide call.
-  - Rules' monthly budget running out doesn't change screening's or ask ingest's.
+  - Rule checks spend from Decide's one monthly cap; once it is spent they go through unchecked (`budget`).
   - An all-bots rule covers a bot created later; a Warn rule with a named reviewer round-trips.
   - Block: not delivered, the bot gets the rule, nobody is pinged, and the bot isn't quarantined (no refusal row).
   - A completion reply that breaks a rule is held, and the thread gets the one-line note.
@@ -515,7 +518,7 @@ government rules with citations into the same Suggested tab. Tico works fully wi
   - The 3rd same-rule block in a day opens one review task, not one per block.
   - Warn: delivered with the warning line.
   - Fail open on timeout, budget and error, with `rules.unchecked`.
-  - The same output isn't paid for twice (cache); `hub rules check` then send is one Decide call.
+  - The same output isn't paid for twice (cache); `tico rules check` then send is one Decide call.
   - No engine call inside `store.transaction()` (a lint the reliability plan can hold).
   - Rules never appear in a prompt.
 - **Suggestions:**
@@ -584,7 +587,7 @@ Taken from Codex:
 - Cites always point at a Files version (page monitors keep no history).
 - A separate `org_rule_holds` table.
 - `all_bots`, `if_broken` and `reviewer` fields, plus CLI flags.
-- `hub rules appeal`, so "ask your manager" can't itself be blocked.
+- `tico rules appeal`, so "ask your manager" can't itself be blocked.
 
 Not taken from Codex: nothing; all eight were verified.
 
@@ -616,7 +619,7 @@ Not taken:
 - Scheduler job, not a built-in automation.
 - Standing block with stable order and a count budget (protects the prompt delta).
 - Contract bump and runner release noted.
-- `hub api` is taken.
+- `tico api` is taken.
 - "Decide" not "Jev".
 - Drop the screening door.
 - No RRULE.

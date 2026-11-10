@@ -6,11 +6,11 @@ from datetime import datetime, timedelta, timezone
 
 from backend import bot_hours as B
 from backend.store import encode
-from backend.tests.test_api import api, get, headers, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import get, headers, setup_attempt  # noqa: F401
 
 ZONE = B.ZONE
-MONDAY = datetime(2026, 10, 5, 0, 0, tzinfo=ZONE)       # a past week, Monday 00:00 Pacific
-NOW = datetime(2026, 10, 14, 12, 0, tzinfo=ZONE)        # the Wednesday of the week after
+MONDAY = datetime(2026, 10, 5, 0, 0, tzinfo=ZONE)  # a past week, Monday 00:00 Pacific
+NOW = datetime(2026, 10, 14, 12, 0, tzinfo=ZONE)  # the Wednesday of the week after
 
 
 def runs(api):
@@ -22,29 +22,44 @@ def runs(api):
 
     def add(c, rid, start, end, events=()):
         # A finished run is one attempts row: the claim's copy, with its run record written on it.
-        row = {**base, "id": rid, "token_hash": rid, "state": "completed", "created_at": B.stamp(start),
-               "settled_at": B.stamp(end) if end else None, "trigger": "task", "exit": "completed"}
+        row = {
+            **base,
+            "id": rid,
+            "token_hash": rid,
+            "state": "completed",
+            "created_at": B.stamp(start),
+            "settled_at": B.stamp(end) if end else None,
+            "trigger": "task",
+            "exit": "completed",
+        }
         c.execute(f"INSERT INTO attempts({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
         events_of(c, rid, events)
+
     add.bot_token = attempt["token"]
     return add
 
 
 def run(c, rid, start, end, events=()):
-    c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,trigger,exit) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at,settled_at=excluded.settled_at,trigger=excluded.trigger,exit=excluded.exit",
-              (rid, "ops", B.stamp(start), B.stamp(end) if end else None, "task", "completed"))
+    c.execute(
+        "INSERT INTO attempts(id,bot_id,created_at,settled_at,trigger,exit) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at,settled_at=excluded.settled_at,trigger=excluded.trigger,exit=excluded.exit",
+        (rid, "ops", B.stamp(start), B.stamp(end) if end else None, "task", "completed"),
+    )
     events_of(c, rid, events)
 
 
 def events_of(c, rid, events):
     for seq, (at, kind) in enumerate(events, 1):
-        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,?,?,?,?)",
-                  (rid, seq, kind, "{}", B.stamp(at)))
+        c.execute(
+            "INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,?,?,?,?)",
+            (rid, seq, kind, "{}", B.stamp(at)),
+        )
 
 
 def people(c, ids):
-    c.execute("UPDATE registry_metadata SET value=? WHERE key='people'",
-              (encode({"people": [{"id": p, "email": p + "@acme.example"} for p in ids]}),))
+    c.execute(
+        "UPDATE registry_metadata SET value=? WHERE key='people'",
+        (encode({"people": [{"id": p, "email": p + "@acme.example"} for p in ids]}),),
+    )
 
 
 def week(answer, monday):
@@ -59,8 +74,13 @@ def test_eighty_bot_hours_and_one_person_read_two_to_one(api):
         for day in range(5):
             for lane in range(2):
                 start, hours = MONDAY + timedelta(days=day, hours=8 + lane), 7 if (day, lane) == (0, 0) else 8
-                run(c, f"r{day}{lane}", start, start + timedelta(hours=hours),
-                    [(start + timedelta(minutes=m), "tool") for m in range(10, hours * 60, 10)])
+                run(
+                    c,
+                    f"r{day}{lane}",
+                    start,
+                    start + timedelta(hours=hours),
+                    [(start + timedelta(minutes=m), "tool") for m in range(10, hours * 60, 10)],
+                )
         # A run across Sunday midnight counts on both sides of it: its second hour makes 80.
         late = MONDAY - timedelta(hours=1)
         run(c, "across", late, late + timedelta(hours=2))
@@ -71,7 +91,9 @@ def test_eighty_bot_hours_and_one_person_read_two_to_one(api):
     assert first["so_far"] is False
     assert week(answer, MONDAY - timedelta(days=7))["bot_hours"] == 1.0
     assert week(answer, MONDAY + timedelta(days=7))["so_far"] is True
-    assert [w["week"] for w in answer["weeks"]] == ["2026-09-28", "2026-10-05", "2026-10-12"], "none before the first run"
+    assert [w["week"] for w in answer["weeks"]] == ["2026-09-28", "2026-10-05", "2026-10-12"], (
+        "none before the first run"
+    )
     assert answer["last_7_days"]["full"] is True
 
     # Three people: 120 human hours a week. Nobody on the chart: hours with no ratio.
@@ -80,9 +102,10 @@ def test_eighty_bot_hours_and_one_person_read_two_to_one(api):
     with store.read_transaction() as c:
         assert week(B.Counter().count(c, now=NOW), MONDAY)["human_hours"] == 120
     with store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'",
-                  (encode({"people": [{"id": "ana", "email": "ana@acme.example", "hidden": True}],
-                           "default_user": "ana"}),))
+        c.execute(
+            "UPDATE registry_metadata SET value=? WHERE key='people'",
+            (encode({"people": [{"id": "ana", "email": "ana@acme.example", "hidden": True}], "default_user": "ana"}),),
+        )
     with store.read_transaction() as c:
         empty = week(B.Counter().count(c, now=NOW), MONDAY)
     assert (empty["people"], empty["human_hours"], empty["ratio"], empty["bot_hours"]) == (0, 0, None, 80.0)
@@ -118,7 +141,16 @@ def test_a_long_runs_few_reads_find_every_silence_and_only_people_read_it(api):
     answer = get(api, "overview/bot-hours")
     assert answer["last_7_days"]["bot_hours"] == round(244 / 60, 2)
     assert answer["people"] == 3 and answer["last_7_days"]["human_hours"] == 120
-    assert set(answer) == {"zone", "now", "first_run", "people", "hours_per_person", "gap_minutes", "last_7_days", "weeks"}
+    assert set(answer) == {
+        "zone",
+        "now",
+        "first_run",
+        "people",
+        "hours_per_person",
+        "gap_minutes",
+        "last_7_days",
+        "weeks",
+    }
     assert all(set(w) == {"week", "bot_hours", "people", "human_hours", "ratio", "so_far"} for w in answer["weeks"])
     assert api.get("/api/v2/overview/bot-hours", headers=headers(run.bot_token)).status_code == 403
 
@@ -128,7 +160,7 @@ def test_a_finish_that_changes_and_a_run_older_than_the_weeks_both_count(api, mo
     reads = []
     real = B.sampled
     monkeypatch.setattr(B, "sampled", lambda c, rid: reads.append(rid) or real(c, rid))
-    oldest = datetime(2026, 7, 27, 0, 0, tzinfo=ZONE)   # NOW's twelfth week back
+    oldest = datetime(2026, 7, 27, 0, 0, tzinfo=ZONE)  # NOW's twelfth week back
     stopped = MONDAY + timedelta(hours=9)
     with store.transaction() as c:
         people(c, ["ana"])

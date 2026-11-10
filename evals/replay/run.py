@@ -9,14 +9,16 @@ a real model, running the prompt you want to compare: the candidate prompt, or t
 report records each bot's instructions hash so you can see which prompt actually ran.
 
 For each case: a task is made owned by you with the case's title and body, its files attached and the people's opening
-messages posted as comments; it is then handed to the bot and run. A simulated person answers each question (on the task, or a
-card filed for them) with the case's `person` answers in order. The run ends when the task settles (waiting, review, ready, done, closed or
-declined) and the bot is quiet, or at --timeout. It is scored with the same code as the original outcome.
+messages posted as comments; it is then handed to the bot and run. A simulated person answers each ask the bot puts
+to them (on the task, or on a task it files for them) with the case's `person` answers in order. The run ends when the
+task is done or closed, or it is a person's turn with no answer left to give, and the bot is quiet, or at --timeout.
+It is scored with the same code as the original outcome.
 
 Cases that are not signed by a person (`reviewed_by`) or still hold a secret-looking value are refused, and so is a
 server that holds the cases' original tasks (the live team). A case whose bot never runs is reported as could not run.
 Exit code 0 only when every case ran and none regressed.
 """
+
 import argparse
 import importlib.util
 import json
@@ -26,7 +28,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-import replay  # noqa: E402
+import replay
 
 # The BotOps runner's HTTP client; loaded by path because that file is also named run.py.
 _spec = importlib.util.spec_from_file_location("botops_run", HERE.parent / "botops" / "run.py")
@@ -52,8 +54,18 @@ def prompt_of(server, token, bot):
 def prepare(server, token, me, case):
     """The case's opening state, owned by the caller so nothing runs until it is handed over."""
     task = case["task"]
-    made = ok(server, "POST", "tasks", {"title": task["title"], "body": task.get("body") or task["title"], "owner": me,
-                                        "acceptance_criteria": task.get("acceptance_criteria") or []}, token)
+    made = ok(
+        server,
+        "POST",
+        "tasks",
+        {
+            "title": task["title"],
+            "body": task.get("body") or task["title"],
+            "owner": me,
+            "acceptance_criteria": task.get("acceptance_criteria") or [],
+        },
+        token,
+    )
     tid = made["task"]["id"]
     for f in case.get("files") or []:
         ok(server, "POST", f"tasks/{tid}/files", {"name": f["name"], "text": f.get("text") or "(empty)"}, token)
@@ -65,42 +77,38 @@ def prepare(server, token, me, case):
 def hand_over(server, token, tid, bot):
     current = ok(server, "GET", f"tasks/{tid}", token=token)["task"]
     # The new owner is woken by the reassignment itself; a run-now on top could queue a second run.
-    ok(server, "POST", f"tasks/{tid}", {"version": current["version"], "owner": "bot:" + bot}, token)
+    ok(server, "POST", f"tasks/{tid}/owner", {"version": current["version"], "owner": "bot:" + bot}, token)
 
 
 def outcome(server, token, tid, bot):
     """The replay as it stands, read the same way capture read the original (replay.side)."""
     detail = ok(server, "GET", f"tasks/{tid}", token=token)
     children = [ok(server, "GET", f"tasks/{c['id']}", token=token) for c in detail.get("children") or []]
-    now = replay.side(detail, ok(server, "GET", f"tasks/{tid}/files", token=token), bot, children)
-    return now | {"waiting_on": detail["task"].get("waiting_on")}
+    return replay.side(detail, ok(server, "GET", f"tasks/{tid}/files", token=token), bot, children)
 
 
-def choose(ask, text):
-    """A structured question answered with the case's words: the option whose label they match, else as Other."""
-    answers = {q["id"]: [o["label"] for o in q.get("options") or [] if o["label"].casefold() == text.strip().casefold()][:1]
-               for q in ask.get("questions") or []}
-    return {"answers": answers, **({"other": text} if not all(answers.values()) else {})}
+def choose(question, text):
+    """The case's words as the answer: the choice they name, else the words themselves. An OK is answered `ok`
+    unless the words say no, then `no` with the words as the note."""
+    if question["kind"] == "ok":
+        refused = text.strip().casefold().startswith(("no", "send it back"))
+        return {"value": "no", "note": text} if refused else {"value": "ok"}
+    picked = [c for c in question["choices"] if c.casefold() == text.strip().casefold()][:1]
+    return {"value": picked[0] if picked else text}
 
 
 def answer(server, token, me, tid, now, text):
-    """The simulated person answers the bot's oldest open question to them the way a person does in the app: a
-    question on the task or on a card through its answer, a card they own by finishing it, a task waiting on them
-    by a comment. False when nothing waits on them."""
+    """The simulated person answers the oldest open ask to them the way a person does in the app: through the ask's
+    answer, or a task filed for them by saying it is done. False when nothing waits on them."""
     mine = [q for q in now["open_questions"] if q["to"] == me]
     if mine:
         q = mine[0]
-        if q["ask"]:
-            ok(server, "POST", f"tasks/{q['task']}/answers", {"target": {"comment": q["id"]}, **choose(q["ask"], text)}, token)
-        else:
-            ok(server, "POST", f"messages/{q['id']}/answer", {"text": text}, token)
+        version = ok(server, "GET", f"tasks/{q['task']}", token=token)["task"]["version"]
+        ok(server, "POST", f"tasks/{q['task']}/asks/{q['id']}/answer", {**choose(q, text), "version": version}, token)
         return True
-    if now["open_cards"]:
-        card = ok(server, "GET", f"tasks/{now['open_cards'][0]}", token=token)["task"]
-        ok(server, "POST", f"tasks/{card['id']}", {"version": card["version"], "status": "done", "note": text}, token)
-        return True
-    if now["status"] == "waiting" and now["waiting_on"] == me:
-        ok(server, "POST", f"tasks/{tid}/comments", {"text": text}, token)
+    if now["open_filed"]:
+        task = ok(server, "GET", f"tasks/{now['open_filed'][0]}", token=token)["task"]
+        ok(server, "POST", f"tasks/{task['id']}/done", {"version": task["version"], "note": text}, token)
         return True
     return False
 
@@ -119,7 +127,7 @@ def run_one(server, token, me, case, quiet=60, timeout=1800, poll=5):
             answers.pop(0)
             settled_at = None
             continue
-        if now["status"] in replay.SETTLED and not now["running"]:
+        if replay.settled(now) and not now["running"]:
             settled_at = settled_at or time.monotonic()
             if time.monotonic() - settled_at >= quiet:
                 break
@@ -138,8 +146,11 @@ def inside_repo(path):
 def source_team(server, token, cases):
     """True when the server holds a case's original task: that is the live team the cases came from, not a scratch
     team, and replaying there would hand real tasks to its live bots."""
-    return any(server.request("GET", f"tasks/{(c.get('source') or {}).get('task')}", token=token)[0] == 200
-               for c in cases if (c.get("source") or {}).get("task"))
+    return any(
+        server.request("GET", f"tasks/{(c.get('source') or {}).get('task')}", token=token)[0] == 200
+        for c in cases
+        if (c.get("source") or {}).get("task")
+    )
 
 
 def main(argv=None):
@@ -178,15 +189,26 @@ def main(argv=None):
         try:
             prompts.setdefault(case["bot"], prompt_of(server, args.token, case["bot"]))
             tid, now = run_one(server, args.token, me, case, quiet=args.quiet, timeout=args.timeout)
-        except (RuntimeError, OSError) as exc:     # OSError: a dropped connection or a read timeout
+        except (RuntimeError, OSError) as exc:  # OSError: a dropped connection or a read timeout
             rows.append({"id": case["id"], "verdict": "error", "why": [str(exc)], "before": before})
             print(f"{case['id']:30} ERROR {exc}")
             continue
         after = replay.measure(case, now)
         verdict, why = replay.compare(before, after)
         same_prompt = prompts[case["bot"]] == (case.get("prompt") or {}).get("sha256")
-        rows.append({"id": case["id"], "task": tid, "verdict": verdict, "why": why, "before": before, "after": after,
-                     "prompt": prompts[case["bot"]], "same_prompt": same_prompt, "transcript": now["transcript"]})
+        rows.append(
+            {
+                "id": case["id"],
+                "task": tid,
+                "verdict": verdict,
+                "why": why,
+                "before": before,
+                "after": after,
+                "prompt": prompts[case["bot"]],
+                "same_prompt": same_prompt,
+                "transcript": now["transcript"],
+            }
+        )
         print(f"{case['id']:30} {verdict.upper():10} {'; '.join(why)}")
     note = "Prompts: " + ", ".join(f"{bot} {digest[:12]}" for bot, digest in sorted(prompts.items()))
     text = replay.report(rows, "Behaviour replay" + (f": {args.candidate}" if args.candidate else ""), note)

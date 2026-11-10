@@ -1,207 +1,19 @@
 """Built-in OIDC sign-in, end to end against a provider running in the test process."""
 
 import base64
-import hashlib
 import html
 import json
 import re
-import threading
-import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from types import SimpleNamespace
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
-import jwt
 import pytest
-from cryptography.hazmat.primitives.asymmetric import rsa
 
 from backend import access as Access
-from backend import hubdb, identity_proxy, oidc, people_mirror
+from backend import hubdb, oidc, people_mirror
 from backend.config import Settings
-from backend.tests.test_api import api, post  # noqa: F401  (the api fixture)
-
-CLIENT = "tico-client"
-SECRET = "client-secret-value"
-
-
-def _b64(raw):
-    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
-
-
-_POOL = []
-
-
-def pool_key(index):
-    """Key generation dominates the run time, so keys are made once and shared."""
-    while len(_POOL) <= index:
-        _POOL.append(rsa.generate_private_key(65537, 2048))
-    return _POOL[index]
-
-
-class Provider:
-    """Discovery, JWKS, authorization bookkeeping and a token endpoint, on 127.0.0.1."""
-
-    def __init__(self, prefix=""):
-        self.prefix, self.codes, self.jwks_fetches, self.token_calls = prefix, {}, 0, []
-        # A Tico account issuer also sends invites (backend/invites.py): set to a list of (status, answer) to answer.
-        self.invites, self.invite_calls = None, []
-        # Where discovery says invites go (default: this issuer's /oauth2/invite), and where an invite POST is redirected.
-        self.invite_endpoint = self.invite_redirect = None
-        # It may also make accounts with a generated password (POST /oauth2/accounts): a list of (status, answer).
-        self.accounts, self.account_calls = None, []
-        # It takes the sign-in list (backend/people_mirror.py): a list of (status, answer) to answer; None = not advertised.
-        self.people, self.people_calls = None, []
-        # It mails an install's unread-threads digest (backend/oidc.py `digest`): a list of (status, answer) to answer.
-        self.digests, self.digest_calls = None, []
-        self.keys = []
-        self.rotate()
-        provider = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def log_message(self, *args):
-                pass
-
-            def reply(self, body, status=200):
-                raw = json.dumps(body).encode()
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(raw)))
-                self.end_headers()
-                self.wfile.write(raw)
-
-            def do_GET(self):
-                path = urlparse(self.path).path
-                if path.endswith("/.well-known/openid-configuration"):
-                    self.reply({"issuer": provider.issuer, "authorization_endpoint": provider.issuer + "/authorize",
-                                "token_endpoint": provider.issuer + "/token", "jwks_uri": provider.issuer + "/keys",
-                                "id_token_signing_alg_values_supported": ["RS256"],
-                                **({"tico_invite_endpoint": provider.invite_endpoint or provider.issuer + "/oauth2/invite"}
-                                   if provider.invites is not None else {}),
-                                **({"tico_accounts_endpoint": provider.issuer + "/oauth2/accounts"}
-                                   if provider.accounts is not None else {}),
-                                **({"tico_people_endpoint": provider.issuer + "/oauth2/people"}
-                                   if provider.people is not None else {}),
-                                **({"tico_digest_endpoint": provider.issuer + "/oauth2/digest"}
-                                   if provider.digests is not None else {})})
-                elif path.endswith("/keys"):
-                    provider.jwks_fetches += 1
-                    self.reply({"keys": [provider.jwk(kid, key) for kid, key in provider.keys]})
-                else:
-                    self.reply({}, 404)
-
-            def do_POST(self):
-                form = parse_qs(self.rfile.read(int(self.headers["Content-Length"])).decode())
-                one = {k: v[0] for k, v in form.items()}
-                if urlparse(self.path).path.endswith("/oauth2/invite"):
-                    provider.invite_calls.append(one)
-                    if provider.invite_redirect:
-                        self.send_response(307)
-                        self.send_header("Location", provider.invite_redirect)
-                        self.send_header("Content-Length", "0")
-                        return self.end_headers()
-                    status, answer = provider.invites.pop(0)
-                    return self.reply(answer, status)
-                if urlparse(self.path).path.endswith("/oauth2/people"):
-                    provider.people_calls.append(one)
-                    status, answer = provider.people.pop(0)
-                    return self.reply(answer, status)
-                if urlparse(self.path).path.endswith("/oauth2/digest"):
-                    provider.digest_calls.append(one)
-                    status, answer = provider.digests.pop(0)
-                    return self.reply(answer, status)
-                if urlparse(self.path).path.endswith("/oauth2/accounts"):
-                    provider.account_calls.append(one)
-                    status, answer = provider.accounts.pop(0)
-                    return self.reply(answer, status)
-                provider.token_calls.append(one)
-                self.reply(*provider.token(one))
-
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.issuer = "http://127.0.0.1:%d%s" % (self.server.server_port, prefix)
-        threading.Thread(target=lambda: self.server.serve_forever(0.02), daemon=True).start()
-
-    def rotate(self):
-        self.generation = getattr(self, "generation", -1) + 1
-        self.keys = [("key-%d" % self.generation, pool_key(self.generation))]      # the old key is retired
-
-    @staticmethod
-    def jwk(kid, key):
-        numbers = key.public_key().public_numbers()
-        size = lambda n: n.to_bytes((n.bit_length() + 7) // 8, "big")
-        return {"kty": "RSA", "kid": kid, "use": "sig", "alg": "RS256",
-                "n": _b64(size(numbers.n)), "e": _b64(size(numbers.e))}
-
-    def approve(self, authorize_url, **claims):
-        """The person consents: a code that will exchange for an ID token with these claims."""
-        query = {k: v[0] for k, v in parse_qs(urlparse(authorize_url).query).items()}
-        code = "code-%d" % len(self.codes)
-        self.codes[code] = {"query": query, "claims": claims}
-        return code, query["state"]
-
-    def token(self, form):
-        entry = self.codes.pop(form.get("code"), None)
-        if (not entry or form.get("client_id") != CLIENT or form.get("client_secret") != SECRET
-                or form.get("redirect_uri") != entry["query"]["redirect_uri"]
-                or _b64(hashlib.sha256(form.get("code_verifier", "").encode()).digest())
-                != entry["query"]["code_challenge"]):
-            return {"error": "invalid_grant"}, 400
-        now = int(time.time())
-        email = entry["claims"].get("email", "ben@acme.example")
-        # One account per address, as a real issuer has: a sign-in on a new address is a new account unless a test says so.
-        claims = {"iss": self.issuer, "aud": CLIENT, "sub": "acct-" + email, "iat": now, "exp": now + 300,
-                  "nonce": entry["query"]["nonce"], "email": email, "email_verified": True}
-        claims.update(entry["claims"])
-        claims = {k: v for k, v in claims.items() if v is not None}
-        kid, key = self.keys[0]
-        return {"id_token": jwt.encode(claims, key, algorithm="RS256", headers={"kid": kid}),
-                "access_token": "opaque", "token_type": "Bearer"}, 200
-
-
-@pytest.fixture
-def provider():
-    made = []
-
-    def make(prefix=""):
-        made.append(Provider(prefix))
-        return made[-1]
-    yield make
-    for item in made:
-        item.server.shutdown()
-        item.server.server_close()
-
-
-@pytest.fixture
-def signin(api, provider, monkeypatch):
-    monkeypatch.delenv("TICO_DOMAIN_ALIASES", raising=False)
-    fake = provider()
-    auth = api.app.state.auth
-    settings = auth.settings
-
-    def start(issuer=None, **changes):
-        settings.auth_proxy, settings.oidc_issuer = "oidc", issuer or fake.issuer
-        settings.oidc_client_id, settings.oidc_client_secret = CLIENT, SECRET
-        settings.session_secret = "s" * 40
-        for key, value in changes.items():
-            setattr(settings, key, value)
-        api.base_url = settings.public_url
-        auth.proxy = identity_proxy.build(settings, auth.store)
-        return auth.proxy
-    proxy = start()
-
-    def login(target="/", follow=False, claims=None, client=None, **query):
-        client = client or api
-        began = client.get("/auth/login", params={"next": target, **query}, follow_redirects=False)
-        assert began.status_code == 302, began.text
-        code, state = ns.fake.approve(began.headers["location"], **(claims or {}))
-        return client.get("/auth/callback", params={"code": code, "state": state}, follow_redirects=False)
-
-    def sessions():
-        with auth.store.read() as c:
-            return c.execute("SELECT * FROM oidc_sessions").fetchall()
-    ns = SimpleNamespace(api=api, fake=fake, auth=auth, settings=settings, proxy=proxy, start=start,
-                         login=login, sessions=sessions, provider=provider)
-    return ns
+from backend.tests.helpers.api import post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.oidc import CLIENT, SECRET, _b64, pool_key, provider, signin
 
 
 def me(client, **kw):
@@ -230,7 +42,7 @@ def test_full_flow_signs_in_the_roster_person(signin):
     assert who.status_code == 200 and who.json()["actor"] == "human:ben"
     assert signin.api.get("/api/me").json()["proxy_session"] is True
     value = signin.api.cookies.get("tico_session")
-    assert value not in json.dumps([dict(r) for r in signin.sessions()])      # only a hash is stored
+    assert value not in json.dumps([dict(r) for r in signin.sessions()])  # only a hash is stored
 
 
 def test_cookie_is_host_prefixed_and_secure_on_https(signin):
@@ -314,9 +126,20 @@ def test_fresh_alias_login_reaches_canonical_before_creating_host_only_cookies(s
 def test_canonical_entry_uses_only_host_authority_and_preserves_real_ports(signin, monkeypatch):
     monkeypatch.setenv("TICO_DOMAIN_ALIASES", "old.acme.example")
     for public, hosts, aliases in [
-        ("https://app.acme.example", ["app.acme.example", "APP.ACME.EXAMPLE:443"],
-         ["old.acme.example", "app.acme.example.evil.example", "app.acme.example.", "app.acme.example:8443", "app.acme.example:0",
-          "app.acme.example:", "app.acme.example?", "app.acme.example#"]),
+        (
+            "https://app.acme.example",
+            ["app.acme.example", "APP.ACME.EXAMPLE:443"],
+            [
+                "old.acme.example",
+                "app.acme.example.evil.example",
+                "app.acme.example.",
+                "app.acme.example:8443",
+                "app.acme.example:0",
+                "app.acme.example:",
+                "app.acme.example?",
+                "app.acme.example#",
+            ],
+        ),
         ("http://127.0.0.1:8765", ["127.0.0.1:8765"], ["127.0.0.1", "127.0.0.1:8766", "localhost:8765"]),
         ("http://[::1]:8765", ["[::1]:8765"], ["[::1]:8766", "[::1]:", "::1"]),
     ]:
@@ -329,16 +152,24 @@ def test_canonical_entry_uses_only_host_authority_and_preserves_real_ports(signi
 
         monkeypatch.setattr(proxy, "begin", begin)
         for host in hosts:
-            reply = signin.api.get("http://internal.example/auth/login", headers={
-                "Host": host, "Forwarded": "host=evil.example;proto=http", "X-Forwarded-Host": "evil.example"},
-                follow_redirects=False)
+            reply = signin.api.get(
+                "http://internal.example/auth/login",
+                headers={"Host": host, "Forwarded": "host=evil.example;proto=http", "X-Forwarded-Host": "evil.example"},
+                follow_redirects=False,
+            )
             assert reply.headers["location"] == "https://identity.example/authorize"
         assert len(calls) == len(hosts)
         for host in aliases:
             for path in (oidc.LOGIN_PATH, oidc.SIGN_IN_PATH):
-                reply = signin.api.get("http://internal.example" + path, headers={
-                    "Host": host, "Forwarded": "host=" + urlparse(public).netloc,
-                    "X-Forwarded-Host": urlparse(public).netloc}, follow_redirects=False)
+                reply = signin.api.get(
+                    "http://internal.example" + path,
+                    headers={
+                        "Host": host,
+                        "Forwarded": "host=" + urlparse(public).netloc,
+                        "X-Forwarded-Host": urlparse(public).netloc,
+                    },
+                    follow_redirects=False,
+                )
                 assert reply.status_code == 302 and reply.headers["location"] == public + path
                 assert "set-cookie" not in reply.headers
         for path in (oidc.LOGIN_PATH, oidc.SIGN_IN_PATH):
@@ -359,27 +190,34 @@ def test_alias_entry_only_keeps_existing_valid_login_arguments(signin, monkeypat
         raise AssertionError("An alias must not begin a provider login")
 
     monkeypatch.setattr(proxy, "begin", no_begin)
-    reply = signin.api.get(alias + oidc.LOGIN_PATH, params={
-        "next": "/tasks#/x", "fresh": "0", "code_challenge": "ignored-for-local", "unknown": "drop-me"},
-        follow_redirects=False)
+    reply = signin.api.get(
+        alias + oidc.LOGIN_PATH,
+        params={"next": "/tasks#/x", "fresh": "0", "code_challenge": "ignored-for-local", "unknown": "drop-me"},
+        follow_redirects=False,
+    )
     assert parse_qs(urlparse(reply.headers["location"]).query) == {"next": ["/tasks#/x"], "fresh": ["1"]}
     assert "set-cookie" not in reply.headers
     for target in ("https://evil.example/x", "//evil.example/x", "/auth/login"):
         reply = signin.api.get(alias + oidc.LOGIN_PATH, params={"next": target}, follow_redirects=False)
         assert reply.headers["location"] == public + oidc.LOGIN_PATH and "set-cookie" not in reply.headers
     for target, challenge in [(frontend + "/", ""), (frontend + "/", "short"), ("https://evil.example/", "a" * 43)]:
-        reply = signin.api.get(alias + oidc.LOGIN_PATH, params={"next": target, "code_challenge": challenge},
-                               follow_redirects=False)
+        reply = signin.api.get(
+            alias + oidc.LOGIN_PATH, params={"next": target, "code_challenge": challenge}, follow_redirects=False
+        )
         assert reply.status_code == 400 and "location" not in reply.headers and "set-cookie" not in reply.headers
-    reply = signin.api.get(alias + oidc.SIGN_IN_PATH, params={
-        "next": "//evil.example/x", "fresh": "1", "code_challenge": "a" * 43, "unknown": "drop-me"},
-        follow_redirects=False)
+    reply = signin.api.get(
+        alias + oidc.SIGN_IN_PATH,
+        params={"next": "//evil.example/x", "fresh": "1", "code_challenge": "a" * 43, "unknown": "drop-me"},
+        follow_redirects=False,
+    )
     assert reply.headers["location"] == public + oidc.SIGN_IN_PATH and "set-cookie" not in reply.headers
 
 
-@pytest.mark.parametrize("claims", [
-    {"aud": "someone-else"}, {"iss": "https://evil.example"}, {"nonce": "not-the-nonce"},
-    {"email_verified": False}], ids=lambda claims: ",".join(claims))
+@pytest.mark.parametrize(
+    "claims",
+    [{"aud": "someone-else"}, {"iss": "https://evil.example"}, {"nonce": "not-the-nonce"}, {"email_verified": False}],
+    ids=lambda claims: ",".join(claims),
+)
 def test_bad_id_tokens_never_start_a_session(signin, claims):
     result = signin.login(claims=claims)
     assert result.status_code in (400, 502) and result.headers["content-type"].startswith("text/html")
@@ -388,12 +226,12 @@ def test_bad_id_tokens_never_start_a_session(signin, claims):
 
 
 def test_wrong_signature_is_refused(signin):
-    signin.login()                                           # the provider's real key is now cached
+    signin.login()  # the provider's real key is now cached
     signin.api.cookies.clear()
     began = signin.api.get("/auth/login", follow_redirects=False)
     code, state = signin.fake.approve(began.headers["location"])
     other = pool_key(1)
-    signin.fake.keys[0] = (signin.fake.keys[0][0], other)          # same kid, another key
+    signin.fake.keys[0] = (signin.fake.keys[0][0], other)  # same kid, another key
     result = signin.api.get("/auth/callback", params={"code": code, "state": state}, follow_redirects=False)
     assert result.status_code == 400 and len(signin.sessions()) == 1 and me(signin.api).status_code == 401
 
@@ -401,24 +239,37 @@ def test_wrong_signature_is_refused(signin):
 def test_state_and_login_cookie_are_enforced(signin):
     began = signin.api.get("/auth/login", follow_redirects=False)
     code, state = signin.fake.approve(began.headers["location"])
-    assert signin.api.get("/auth/callback", params={"code": code, "state": state + "x"},
-                          follow_redirects=False).status_code == 400
+    assert (
+        signin.api.get(
+            "/auth/callback", params={"code": code, "state": state + "x"}, follow_redirects=False
+        ).status_code
+        == 400
+    )
     # The provider's code is spent by a good state only, so a fresh attempt is needed.
     began = signin.api.get("/auth/login", follow_redirects=False)
     code, state = signin.fake.approve(began.headers["location"])
     signin.api.cookies.clear()
-    assert signin.api.get("/auth/callback", params={"code": code, "state": state},
-                          follow_redirects=False).status_code == 400          # no cookie at all
+    assert (
+        signin.api.get("/auth/callback", params={"code": code, "state": state}, follow_redirects=False).status_code
+        == 400
+    )  # no cookie at all
     forged = began.headers["set-cookie"].split(";")[0]
     name, _, value = forged.partition("=")
     payload = json.loads(base64.urlsafe_b64decode(value.split(".")[0] + "=="))
     body = _b64(json.dumps({**payload, "s": "chosen"}).encode())
-    assert signin.api.get("/auth/callback", params={"code": code, "state": "chosen"},
-                          headers={"cookie": name + "=" + body + "." + value.split(".")[1]},
-                          follow_redirects=False).status_code == 400          # signature no longer fits
+    assert (
+        signin.api.get(
+            "/auth/callback",
+            params={"code": code, "state": "chosen"},
+            headers={"cookie": name + "=" + body + "." + value.split(".")[1]},
+            follow_redirects=False,
+        ).status_code
+        == 400
+    )  # signature no longer fits
     assert signin.sessions() == []
-    assert signin.api.get("/auth/callback", params={"error": "access_denied"},
-                          follow_redirects=False).status_code == 400
+    assert (
+        signin.api.get("/auth/callback", params={"error": "access_denied"}, follow_redirects=False).status_code == 400
+    )
 
 
 def test_disallowed_domain_and_hosted_domain(signin):
@@ -451,8 +302,9 @@ def test_idle_and_absolute_lifetimes(signin):
     assert me(signin.api).status_code == 401
 
 
-@pytest.mark.parametrize("target,expected", [
-    ("//evil.example/x", "/"), ("javascript:alert(1)", "/"), ("/tasks#/x", "/tasks#/x")])
+@pytest.mark.parametrize(
+    "target,expected", [("//evil.example/x", "/"), ("javascript:alert(1)", "/"), ("/tasks#/x", "/tasks#/x")]
+)
 def test_next_only_returns_to_same_origin_paths(signin, target, expected):
     done = signin.login(target)
     assert done.status_code == 302 and done.headers["location"] == expected
@@ -465,7 +317,7 @@ def test_logout_ends_the_session_and_lands_on_a_sign_in_page(signin):
     assert out.status_code == 302 and out.headers["location"] == "/auth/signed-out"
     assert signin.sessions() == [] and me(signin.api).status_code == 401
     replay = me(signin.api, headers={"cookie": "tico_session=" + value})
-    assert replay.status_code == 401                        # the id itself is dead, not only the cookie
+    assert replay.status_code == 401  # the id itself is dead, not only the cookie
     page = signin.api.get("/auth/signed-out")
     assert page.status_code == 200 and "/auth/login" in page.text
 
@@ -491,15 +343,26 @@ def test_writes_from_another_origin_are_refused(signin):
 
 
 def base(tmp_path, **kw):
-    return dict(db_path=tmp_path / "hub.db", registry_dir=tmp_path, auth_proxy="oidc",
-                oidc_issuer="https://accounts.google.com", oidc_client_id="id", oidc_client_secret="s",
-                public_url="https://tico.example", **kw)
+    return dict(
+        db_path=tmp_path / "hub.db",
+        registry_dir=tmp_path,
+        auth_proxy="oidc",
+        oidc_issuer="https://accounts.google.com",
+        oidc_client_id="id",
+        oidc_client_secret="s",
+        public_url="https://tico.example",
+        **kw,
+    )
 
 
-@pytest.mark.parametrize("changes,message", [
-    ({"oidc_client_secret": ""}, "TICO_OIDC_CLIENT_SECRET"),
-    ({"oidc_issuer": "https://login.microsoftonline.com/common/v2.0"}, "own tenant"),
-    ({"public_url": "http://tico.example"}, "https TICO_PUBLIC_URL")])
+@pytest.mark.parametrize(
+    "changes,message",
+    [
+        ({"oidc_client_secret": ""}, "TICO_OIDC_CLIENT_SECRET"),
+        ({"oidc_issuer": "https://login.microsoftonline.com/common/v2.0"}, "own tenant"),
+        ({"public_url": "http://tico.example"}, "https TICO_PUBLIC_URL"),
+    ],
+)
 def test_startup_validation_names_the_problem(tmp_path, changes, message):
     with pytest.raises(RuntimeError, match=message):
         Settings(**{**base(tmp_path), **changes})
@@ -616,11 +479,11 @@ def test_a_public_mail_domain_is_never_admitted_by_default_with_a_gmail_owner(si
     assert _humans_with(signin, "pat@gmail.com") == [] and signin.sessions() == []
 
 
-@pytest.mark.parametrize("prompt,sent", [("select_account", "select_account"), ("login", "login"), ("consent", None)])
-def test_login_passes_only_the_two_prompts_to_the_provider(signin, prompt, sent):
-    began = signin.api.get("/auth/login", params={"prompt": prompt}, follow_redirects=False)
-    query = {k: v[0] for k, v in parse_qs(urlparse(began.headers["location"]).query).items()}
-    assert query.get("prompt") == sent
+def test_login_passes_only_the_two_prompts_to_the_provider(signin):
+    for prompt, sent in (("select_account", "select_account"), ("login", "login"), ("consent", None)):
+        began = signin.api.get("/auth/login", params={"prompt": prompt}, follow_redirects=False)
+        query = {k: v[0] for k, v in parse_qs(urlparse(began.headers["location"]).query).items()}
+        assert query.get("prompt") == sent, prompt
 
 
 def _roster_with_bot_and_sign_in_off(auth):
@@ -648,7 +511,9 @@ def test_an_odd_address_is_left_out_so_it_cannot_block_the_list(signin):
     signin.fake.people = [(200, {"stored": 3})]
     with signin.auth.store.transaction() as c:
         roster = Access._load_json(c, "people")
-        Access._save_roster(c, {**roster, "people": [*roster["people"], {"id": "odd", "email": "odd name@acme.example"}]})
+        Access._save_roster(
+            c, {**roster, "people": [*roster["people"], {"id": "odd", "email": "odd name@acme.example"}]}
+        )
     assert people_mirror.push_now(signin.auth) == (200, {"stored": 3})
     sent = [row["email"] for row in json.loads(signin.fake.people_calls[-1]["people"])]
     assert sent == ["ana@acme.example", "ben@acme.example", "cara@acme.example"]
@@ -719,7 +584,7 @@ def mirror(monkeypatch):
 
 
 def test_a_429_with_an_html_body_waits_for_the_retry_after_header(signin, mirror, monkeypatch):
-    signin.fake.people = []                       # the account advertises the endpoint (read before any sign-in)
+    signin.fake.people = []  # the account advertises the endpoint (read before any sign-in)
     signin.login()
     monkeypatch.setattr(mirror, "_auth", signin.auth)
     limited = httpx.Response(429, headers={"Retry-After": "120"}, content=b"<html>Too many requests</html>")
@@ -730,7 +595,7 @@ def test_a_429_with_an_html_body_waits_for_the_retry_after_header(signin, mirror
 
 
 def test_a_change_during_the_wait_does_not_send_early(signin, mirror, monkeypatch):
-    signin.fake.people = []                       # the account advertises the endpoint (read before any sign-in)
+    signin.fake.people = []  # the account advertises the endpoint (read before any sign-in)
     signin.login()
     monkeypatch.setattr(mirror, "_auth", signin.auth)
     monkeypatch.setattr(oidc.httpx, "post", lambda *a, **k: httpx.Response(429, json={"retry_after": 600}))
@@ -738,8 +603,8 @@ def test_a_change_during_the_wait_does_not_send_early(signin, mirror, monkeypatc
     sent = []
     monkeypatch.setattr(mirror, "push_now", lambda *a, **k: sent.append(1))
     mirror.changed()
-    mirror.send()                                 # the daily loop, or a timer, during the wait
+    mirror.send()  # the daily loop, or a timer, during the wait
     assert sent == [] and mirror._timer.interval > mirror.DEBOUNCE_SECONDS * 3
     monkeypatch.setattr(mirror, "_next_allowed", 0.0)
-    mirror.send()                                 # the wait is over: one send, with the newest list
+    mirror.send()  # the wait is over: one send, with the newest list
     assert sent == [1]

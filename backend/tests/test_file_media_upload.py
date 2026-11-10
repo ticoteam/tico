@@ -5,8 +5,8 @@ The media bodies are synthetic: an MP4 header followed by zeros, so nothing larg
 
 import hashlib
 
-from backend.tests.test_files import turn
-from backend.tests.test_api import api, headers  # noqa: F401  (fixtures)
+from backend.tests.helpers.files import turn
+from backend.tests.helpers.api import headers  # noqa: F401  (fixtures)
 
 MB = 1024 * 1024
 MP4_HEAD = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
@@ -50,16 +50,18 @@ def test_media_must_start_with_the_container_its_name_says(api):
 
 def test_other_kinds_keep_the_25_mb_cap(api):
     _, attempt = turn(api, "ops")
-    big = b"%PDF-1.4\n" + b"0" * (25 * MB)     # over this kind's cap, under the body cap of the route
+    big = b"%PDF-1.4\n" + b"0" * (25 * MB)  # over this kind's cap, under the body cap of the route
     assert raw_upload(api, attempt["token"], "/api/v2/files/uploads?name=big.pdf", big).status_code == 422
 
 
 def test_s3_import_of_a_video_streams_the_same_way(api):
     _, attempt = turn(api, "ops")
     data = video(3 * MB)
-    made = raw_upload(api, attempt["token"],
-                      "/api/v2/files/imports?source=s3://acme-media/clips/cut.mp4&etag=v1", data)
+    made = raw_upload(api, attempt["token"], "/api/v2/files/imports?source=s3://acme-media/clips/cut.mp4&etag=v1", data)
     assert made.status_code == 200, made.text
     fid = made.json()["file"]["id"]
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT digest FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone()[0] == hashlib.sha256(data).hexdigest()
+        assert (
+            c.execute("SELECT digest FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone()[0]
+            == hashlib.sha256(data).hexdigest()
+        )

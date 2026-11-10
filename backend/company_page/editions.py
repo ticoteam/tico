@@ -8,37 +8,45 @@ The life of one:
   Outside editions rules (org_rule_check.outside_edition). `ready` only when both are clean; anything else is `held`,
   including no engine, the budget and a failed call. A person may `override` with a note. An override, like a passing
   check, holds for one exact fingerprint (text, version, disclosure revision and rules).
-- `request_approval` asks the audience's approver or the owner, by name, with the whole text in the payload. Deciding is
-  the person's own click: `require_own_click`, in the decide routes (backend/app.py, backend/batch.py) and refused earlier
-  for the Assistant (backend/assistant.py).
-- `publish` spends the approval and marks the edition published in one transaction, and only if the payload still equals
-  what publishing would send now. The route then calls `release_published`, after the commit: a rebuild inside a
-  transaction that rolled back would leave published files up. `correct` makes the next version through the same steps.
-  `retract` takes it down, and the page with it, in the same step: taking something back never lags.
+- `request_approval` asks the audience's approver or the owner, by name, for an OK bound to the whole text
+  (backend/task_asks.py, subject `edition:<id>`, content `approval_payload`). The OK is that person's own click on its
+  preview (task_asks.give_ok): never a token, the Assistant or BotOps.
+- `publish` uses the OK and marks the edition published in one transaction, and only if what publishing would send now
+  is exactly what was OK'd. The route then calls `release_published`, after the commit: a rebuild inside a transaction
+  that rolled back would leave published files up. `correct` makes the next version through the same steps. `retract`
+  takes it down, and the page with it, in the same step: taking something back never lags.
 
-Stats boards have the same approval (`request_board_approval`), spent when it is decided, because there is nothing further
-to publish. Nothing here is reachable by a bot: every write refuses a bot, and approvals also refuse BotOps.
+Stats boards have the same OK (`request_board_approval`, subject `board:<audience>`), used when it is given
+(`board_ok`), because there is nothing further to publish. Nothing here is reachable by a bot: every write refuses a
+bot, and the OK refuses anyone but the person's own click.
 """
+
 import hashlib
 import json
 import logging
 import re
 from decimal import Decimal, InvalidOperation
 
+from .. import task_asks
 from ..store import H, Problem
 
 LOG = logging.getLogger("tico.company_page.editions")
 
 SECTIONS = ("highlights", "lowlights", "numbers", "asks", "next")
-SECTION_LABELS = {"highlights": "Highlights", "lowlights": "Lowlights", "numbers": "Numbers", "asks": "Asks",
-                  "next": "Next"}
+SECTION_LABELS = {
+    "highlights": "Highlights",
+    "lowlights": "Lowlights",
+    "numbers": "Numbers",
+    "asks": "Asks",
+    "next": "Next",
+}
 TITLE_CHARS = 200
 ITEM_CHARS = 600
-ITEMS_MAX = 12              # in one section; with ITEM_CHARS this keeps one edition under a list's byte cap
+ITEMS_MAX = 12  # in one section; with ITEM_CHARS this keeps one edition under a list's byte cap
 NOTE_CHARS = 2000
-SOURCE_MAX = 40             # updates one draft is written from
-SOURCE_CHARS = 4000         # of one update
-DRAFT_STALE_S = 15 * 60     # a row still `drafting` this long was left by a restart: it can be claimed again
+SOURCE_MAX = 40  # updates one draft is written from
+SOURCE_CHARS = 4000  # of one update
+DRAFT_STALE_S = 15 * 60  # a row still `drafting` this long was left by a restart: it can be claimed again
 STREAM_MAX = 50
 # One page of the stream stops here, and always holds at least one edition. Large enough that STREAM_MAX of the largest
 # editions fit: release._whole_stream reads a short page as the end, so a smaller cap would drop older editions from the page.
@@ -48,7 +56,7 @@ LIST_BYTES = 200_000
 SEEN_MAX = 200
 EDITION_URL = "tico:editions/"
 BOARD_URL = "tico:stat-board/"
-COMPANY = "company"         # the source that stands for the company's own update
+COMPANY = "company"  # the source that stands for the company's own update
 OPEN_STATES = ("drafting", "held", "ready", "awaiting_approval")
 
 INSTRUCTIONS = (
@@ -86,12 +94,6 @@ def require_own_click(who):
     """A person at their own browser: no token, no Assistant (on a card or on their words), no BotOps, no Tico support."""
     if not is_person(who) or who.via or who.via_token or who.support or who.attempt_id or who.agent:
         raise Problem("forbidden", "Only the person's own click in Tico does this", 403)
-
-
-def own_click_approval(payload):
-    """Whether an approval's payload is one only `require_own_click` may decide."""
-    url = payload.get("url") if isinstance(payload, dict) else None
-    return isinstance(url, str) and url.strip().lower().startswith((EDITION_URL, BOARD_URL))
 
 
 # ----------------------------------------------------------------------------- body
@@ -175,15 +177,20 @@ def edition_text(title, sections, note=""):
 NUMBER = re.compile(r"(?<![A-Za-z])\d[\d,]*(?:\.\d+)?")
 WORD = re.compile(r"[^\W\d_][\w'’&-]*")
 LINK = re.compile(r"https?://\S+|www\.\S+|[\w.+-]+@[\w-]+\.[\w.-]+", re.I)
-MONTHS = frozenset("""january february march april may june july august september october november december
-    jan feb mar apr jun jul aug sep sept oct nov dec""".split())
+MONTHS = frozenset(
+    """january february march april may june july august september october november december
+    jan feb mar apr jun jul aug sep sept oct nov dec""".split()
+)
 CALENDAR = MONTHS | frozenset("monday tuesday wednesday thursday friday saturday sunday q1 q2 q3 q4 h1 h2".split())
 ACRONYMS = frozenset("AI API ARR MRR CEO CFO COO CTO CAC LTV KPI KPIs PR UI UX SaaS".split())
-SPELLED = frozenset("""two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen
+SPELLED = frozenset(
+    """two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen
     seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety hundred thousand million billion
-    trillion dozen""".split())
+    trillion dozen""".split()
+)
 # Words that start a sentence often enough to not read as a name there. Anywhere else a capital is a name.
-COMMON = frozenset("""a about across added adding after again all also although an and another any are as at back
+COMMON = frozenset(
+    """a about across added adding after again all also although an and another any are as at back
     because been before began being better both but by can closed closing completed continued continuing could customer
     customers delayed delivered did do down during each early either every expanded expect expected fewer finished
     first fixed for from further getting good grew growing growth had has have having he help helped her here hired
@@ -197,7 +204,8 @@ COMMON = frozenset("""a about across added adding after again all also although 
     highlights lowlights numbers asks hiring costs cost pipeline engineering design support operations finance
     introductions intros looking seeking wanted thanks monthly quarterly weekly annual update updates summary review
     retention churn margin margins pricing demand traffic signups users partners partner launch launches contracts
-    renewals enterprise cash burn runway headcount""".split())
+    renewals enterprise cash burn runway headcount""".split()
+)
 
 
 def _number(text):
@@ -228,19 +236,25 @@ def _period_years(period_start, period_end):
 
 
 def _is_date(text, start, raw):
-    """"October 31" is a date, not a figure."""
+    """ "October 31" is a date, not a figure."""
     words = WORD.findall(text[:start].rstrip()[-12:])
     return bool(words) and words[-1].lower() in MONTHS and raw.isdigit() and 1 <= int(raw) <= 31
 
 
-NOT_FIGURES = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?|\b\d{4}-\d{2}\b|\b[0-9a-f]{8}-[0-9a-f]{4}-"
-                         r"[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|\b\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\b", re.I)
+NOT_FIGURES = re.compile(
+    r"\d{4}-\d{2}-\d{2}(?:[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?|\b\d{4}-\d{2}\b|\b[0-9a-f]{8}-[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|\b\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\b",
+    re.I,
+)
 
 
 UNSEEN_MIN = 10
 MAGNITUDE = r"(?:\s?(?:[kmb]|thousand|million|billion)\b)"
-MONEY = re.compile(rf"[$€£]\s?\d[\d,]*(?:\.\d+)?{MAGNITUDE}?|\d[\d,]*(?:\.\d+)?\s?%"
-                   rf"|\d[\d,]*(?:\.\d+)?{MAGNITUDE}", re.I)
+MONEY = re.compile(
+    rf"[$€£]\s?\d[\d,]*(?:\.\d+)?{MAGNITUDE}?|\d[\d,]*(?:\.\d+)?\s?%"
+    rf"|\d[\d,]*(?:\.\d+)?{MAGNITUDE}",
+    re.I,
+)
 SCALE = {"k": 10**3, "thousand": 10**3, "m": 10**6, "million": 10**6, "b": 10**9, "billion": 10**9}
 
 
@@ -249,13 +263,15 @@ def _figure(token):
     body = re.sub(r"[$€£%,\s]", "", token).lower()
     unit = next((u for u in SCALE if body.endswith(u)), "")
     try:
-        return _number(str(Decimal(body[:len(body) - len(unit)]) * SCALE.get(unit, 1)))
+        return _number(str(Decimal(body[: len(body) - len(unit)]) * SCALE.get(unit, 1)))
     except InvalidOperation:
         return body
 
 
-IRREGULAR_PAST = frozenset("""built sent made ran won lost wrote began held kept met paid set got took gave found led cut
-    grew saw did""".split())
+IRREGULAR_PAST = frozenset(
+    """built sent made ran won lost wrote began held kept met paid set got took gave found led cut
+    grew saw did""".split()
+)
 
 
 def _source_words(text):
@@ -320,7 +336,7 @@ def leak_findings(title, sections, facts, period_start, period_end, names=(), so
         for link in LINK.findall(text):
             if link.lower() not in links:
                 add("links", link)
-        text = NOT_FIGURES.sub(" ", LINK.sub(" ", text))     # "2026-10" in a title is a date, not the figure "10"
+        text = NOT_FIGURES.sub(" ", LINK.sub(" ", text))  # "2026-10" in a title is a date, not the figure "10"
         figures = list(MONEY.finditer(text))
         for m in figures:
             value = _figure(m.group())
@@ -339,7 +355,7 @@ def leak_findings(title, sections, facts, period_start, period_end, names=(), so
                 add("numbers", word)
             if not word[0].isupper() or low in words or low in CALENDAR or word in ACRONYMS:
                 continue
-            before = text[:m.start()].rstrip()
+            before = text[: m.start()].rstrip()
             starts = not before or before[-1] in ".!?:;—–-•"
             if starts and low in COMMON:
                 continue
@@ -363,31 +379,46 @@ def _edition(c, edition_id):
 
 
 def _revision(c, audience_id):
-    row = c.execute("SELECT id FROM disclosure_revisions WHERE audience_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
-                    (audience_id,)).fetchone()
+    row = c.execute(
+        "SELECT id FROM disclosure_revisions WHERE audience_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        (audience_id,),
+    ).fetchone()
     return row["id"] if row else None
 
 
 def _rules_digest(c):
     """The Outside editions rules in force: a change means the judge has not read this edition against them."""
     from .. import org_rules as R
+
     raw = sorted((r["id"], r["version"]) for r in R.outside_edition_rules(c))
     return hashlib.sha256(json.dumps(raw).encode()).hexdigest()
 
 
 def fingerprint(c, row, rules=None):
     """What a check result or override holds for: one version of one text, under one disclosure revision and rule set."""
-    raw = json.dumps([row["id"], row["version"], row["audience_id"], _revision(c, row["audience_id"]),
-                      rules if rules is not None else _rules_digest(c), row["title"], _load_sections(row),
-                      row["correction_note"] or ""],
-                     sort_keys=True, ensure_ascii=False)
+    raw = json.dumps(
+        [
+            row["id"],
+            row["version"],
+            row["audience_id"],
+            _revision(c, row["audience_id"]),
+            rules if rules is not None else _rules_digest(c),
+            row["title"],
+            _load_sections(row),
+            row["correction_note"] or "",
+        ],
+        sort_keys=True,
+        ensure_ascii=False,
+    )
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def _checks_of(c, edition_id, kind):
     out = []
-    for r in c.execute("SELECT * FROM edition_checks WHERE edition_id=? AND kind=? ORDER BY created_at DESC, rowid DESC",
-                       (edition_id, kind)):
+    for r in c.execute(
+        "SELECT * FROM edition_checks WHERE edition_id=? AND kind=? ORDER BY created_at DESC, rowid DESC",
+        (edition_id, kind),
+    ):
         out.append({**dict(r), "detail": json.loads(r["detail"] or "{}")})
     return out
 
@@ -408,6 +439,7 @@ def _overridden(c, edition_id, fp):
 def author_view(c, author, company_name=""):
     """{"name", "kind"} of a source. All a reader ever learns of a bot is its display name; of a person, their name."""
     from .. import updates
+
     if author == COMPANY:
         return {"name": company_name or "Company", "kind": "company"}
     key = str(author or "").removeprefix("bot:")
@@ -420,12 +452,16 @@ def author_view(c, author, company_name=""):
 def period_label(start, end):
     from calendar import monthrange
     from datetime import date
+
     try:
         first, last = date.fromisoformat(start), date.fromisoformat(end)
     except ValueError:
         return f"{start} to {end}"
-    if first.day == 1 and (first.year, first.month) == (last.year, last.month) \
-            and last.day == monthrange(last.year, last.month)[1]:
+    if (
+        first.day == 1
+        and (first.year, first.month) == (last.year, last.month)
+        and last.day == monthrange(last.year, last.month)[1]
+    ):
         return first.strftime("%B %Y")
     return f"{start} to {end}"
 
@@ -443,17 +479,30 @@ def stream(c, audience_ids, before=None, limit=10, company_name=""):
     if not ids:
         return []
     limit = max(1, min(int(limit or 10), STREAM_MAX))
-    sql = ("SELECT * FROM editions WHERE status='published' AND audience_id IN (" + ",".join("?" * len(ids)) + ")"
-           + (" AND published_at<?" if before else "") + " ORDER BY published_at DESC, id DESC LIMIT ?")
+    sql = (
+        "SELECT * FROM editions WHERE status='published' AND audience_id IN ("
+        + ",".join("?" * len(ids))
+        + ")"
+        + (" AND published_at<?" if before else "")
+        + " ORDER BY published_at DESC, id DESC LIMIT ?"
+    )
     out, used = [], 0
     for row in c.execute(sql, (*ids, *([before] if before else []), limit)).fetchall():
         row = dict(row)
-        update = {"anchor": anchor_of(row), "title": row["title"], "author": author_view(c, row["author"], company_name),
-                  "period": period_label(row["period_start"], row["period_end"]), "published_at": row["published_at"],
-                  "version": row["version"], "correction_note": row["correction_note"],
-                  "sections": [{"key": s["key"], "items": [{"body": i["body"], "ask_id": i.get("ask_id")}
-                                                           for i in s["items"]]}
-                               for s in _load_sections(row) if s["items"]]}
+        update = {
+            "anchor": anchor_of(row),
+            "title": row["title"],
+            "author": author_view(c, row["author"], company_name),
+            "period": period_label(row["period_start"], row["period_end"]),
+            "published_at": row["published_at"],
+            "version": row["version"],
+            "correction_note": row["correction_note"],
+            "sections": [
+                {"key": s["key"], "items": [{"body": i["body"], "ask_id": i.get("ask_id")} for i in s["items"]]}
+                for s in _load_sections(row)
+                if s["items"]
+            ],
+        }
         used += len(json.dumps(update))
         if out and used > STREAM_BYTES:
             break
@@ -462,49 +511,76 @@ def stream(c, audience_ids, before=None, limit=10, company_name=""):
 
 
 def approval_payload(c, row, audience=None):
-    """The exact thing an approver approves and `publish` compares against: the full text, version, audience, disclosure
-    revision and rules. `text` is the whole edition, so a card or the approval's page shows all of it; the chat notice
-    hubdb.approval_request writes is a clip of this and only says one is waiting."""
+    """The exact thing an approver OKs and `publish` compares against: the full text, version, audience, disclosure
+    revision and rules. `text` is the whole edition, so the OK's preview shows all of it."""
     audience = audience or _audience(c, row["audience_id"])
     text = edition_text(row["title"], _load_sections(row), row["correction_note"] or "")
-    return {"url": f"{EDITION_URL}{row['id']}/{row['version']}", "title": row["title"], "text": text,
-            "content_sha256": hashlib.sha256(text.encode()).hexdigest(), "version": row["version"],
-            "audience": audience["name"], "audience_id": row["audience_id"],
-            "period": period_label(row["period_start"], row["period_end"]),
-            "disclosure_revision": _revision(c, row["audience_id"]), "rules": _rules_digest(c)}
+    return {
+        "url": f"{EDITION_URL}{row['id']}/{row['version']}",
+        "title": row["title"],
+        "text": text,
+        "content_sha256": hashlib.sha256(text.encode()).hexdigest(),
+        "version": row["version"],
+        "audience": audience["name"],
+        "audience_id": row["audience_id"],
+        "period": period_label(row["period_start"], row["period_end"]),
+        "disclosure_revision": _revision(c, row["audience_id"]),
+        "rules": _rules_digest(c),
+    }
 
 
-def _approval_state(row, expected):
-    """pending, approved, declined, lapsed (nobody decided it in time, hubdb.APPROVAL_STALE_DAYS), spent or stale (the
-    text, disclosure or rules moved since it was asked)."""
-    if row["consumed_at"]:
-        return "spent"
-    if row["decision"] == "withdrawn":
-        return "lapsed"
-    if row["decision"] == "declined":
-        return "declined"
-    if row["payload"] != expected:
-        return "stale"
-    return "approved" if row["decision"] == "approved" else "pending"
+def _subject(edition_id):
+    return f"edition:{edition_id}"
 
 
-def _decision_note(c, approval_id):
-    """What the person wrote when they decided: the approval's row doesn't hold it, its event does."""
-    row = c.execute("SELECT detail FROM events WHERE target=? AND action='approval.decide' ORDER BY created_at DESC LIMIT 1",
-                    (approval_id,)).fetchone()
-    return (json.loads(row["detail"] or "{}").get("note") or "") if row else ""
+def _ok_view(c, rid, current):
+    """Where an OK stands, as the Company page shows it: pending, approved, declined (sent back), lapsed (not asked any
+    more), spent (used) or stale (what it was asked about changed since). `current` is the content it would be for now."""
+    found = task_asks.grant(c, rid) if rid else None
+    if not found:
+        return {"id": rid, "state": "lapsed"}
+    standing = task_asks.standing(c, rid)
+    from .. import task_requirements as R
+
+    requirement = R.get(c, rid)
+    visit = requirement.get("visit_id") if requirement else None
+    asked_of = R.person_of(c, requirement, visit) if requirement and visit else None
+    answer = (
+        c.execute(
+            "SELECT notes FROM answers WHERE requirement_id=? AND answer='no' AND undone_at IS NULL "
+            "ORDER BY created_at DESC LIMIT 1",
+            (rid,),
+        ).fetchone()
+        if standing == task_asks.SENT_BACK
+        else None
+    )
+    state = {
+        task_asks.USED: "spent",
+        task_asks.WITHDRAWN: "lapsed",
+        task_asks.SENT_BACK: "declined",
+        task_asks.OK: "approved",
+        task_asks.WAITING: "pending",
+    }[standing]
+    if state in ("approved", "pending") and found["content_hash"] != task_asks.content_hash(current):
+        state = "stale"
+    return {
+        "id": rid,
+        "task_id": task_asks.task_of(c, rid),
+        "state": state,
+        "to": asked_of,
+        "to_name": H.actor_name(c, asked_of) if asked_of else None,
+        "requested_by": found["asked_by_id"],
+        "created_at": found["created_at"],
+        "decided_by": found["ok_by_id"],
+        "decided_at": found["ok_at"],
+        "note": (answer[0] or "") if answer else "",
+    }
 
 
 def approval_view(c, row):
     if not row["approval_id"]:
         return None
-    found = H.approval(c, row["approval_id"])
-    if not found:
-        return {"id": row["approval_id"], "state": "lapsed"}
-    return {"id": found["id"], "state": _approval_state(found, approval_payload(c, row)),
-            "to": found.get("decision_owner"), "to_name": found.get("decision_owner_name"),
-            "requested_by": found["requested_by_id"], "created_at": found["created_at"], "decided_by": found["decided_by_id"],
-            "decided_at": found["decided_at"], "note": _decision_note(c, found["id"])}
+    return _ok_view(c, row["approval_id"], approval_payload(c, row))
 
 
 def view(c, row, audience_names=None):
@@ -515,14 +591,45 @@ def view(c, row, audience_names=None):
         found = c.execute("SELECT name FROM audiences WHERE id=?", (row["audience_id"],)).fetchone()
         names[row["audience_id"]] = found["name"] if found else ""
     summary = _checks_of(c, row["id"], "summary")
-    return {**{k: row[k] for k in ("id", "audience_id", "period_start", "period_end", "version", "supersedes_id", "status",
-                                   "title", "approved_by", "published_at", "retracted_at", "retracted_by",
-                                   "retraction_note", "correction_note", "override_note", "created_at", "updated_at")},
-            "audience_name": names[row["audience_id"]], "author": {"id": row["author"], **author_view(c, row["author"])},
-            "period": period_label(row["period_start"], row["period_end"]), "sections": _load_sections(row),
-            "approval": approval_view(c, row), "checks_current": _cleared(c, row),
-            "last_check": ({"outcome": summary[0]["outcome"], "reasons": summary[0]["detail"].get("reasons") or [],
-                            "created_at": summary[0]["created_at"]} if summary else None)}
+    return {
+        **{
+            k: row[k]
+            for k in (
+                "id",
+                "audience_id",
+                "period_start",
+                "period_end",
+                "version",
+                "supersedes_id",
+                "status",
+                "title",
+                "approved_by",
+                "published_at",
+                "retracted_at",
+                "retracted_by",
+                "retraction_note",
+                "correction_note",
+                "override_note",
+                "created_at",
+                "updated_at",
+            )
+        },
+        "audience_name": names[row["audience_id"]],
+        "author": {"id": row["author"], **author_view(c, row["author"])},
+        "period": period_label(row["period_start"], row["period_end"]),
+        "sections": _load_sections(row),
+        "approval": approval_view(c, row),
+        "checks_current": _cleared(c, row),
+        "last_check": (
+            {
+                "outcome": summary[0]["outcome"],
+                "reasons": summary[0]["detail"].get("reasons") or [],
+                "created_at": summary[0]["created_at"],
+            }
+            if summary
+            else None
+        ),
+    }
 
 
 def full_view(c, edition_id):
@@ -530,17 +637,39 @@ def full_view(c, edition_id):
     row = _edition(c, edition_id)
     out = view(c, row)
     # An update can be gone by now; the edition's own source names it then.
-    out["sources"] = [{**{k: r[k] for k in ("id", "update_id", "body_sha256", "body")},
-                       "author_name": author_view(c, r["bot"] or row["author"])["name"]}
-                      for r in c.execute("SELECT s.*, u.bot FROM edition_sources s LEFT JOIN updates u ON u.id=s.update_id "
-                                         "WHERE s.edition_id=? ORDER BY s.rowid", (edition_id,)).fetchall()]
-    out["checks"] = [{"id": r["id"], "version": r["version"], "kind": r["kind"], "outcome": r["outcome"],
-                      "detail": json.loads(r["detail"] or "{}"), "created_at": r["created_at"]}
-                     for r in c.execute("SELECT * FROM edition_checks WHERE edition_id=? ORDER BY created_at DESC, rowid DESC "
-                                        "LIMIT 200", (edition_id,))]
-    out["seen_by"] = [dict(r) for r in c.execute(
-        "SELECT r.id AS reader_id, r.email, r.name, v.viewed_at FROM edition_views v JOIN readers r ON r.id=v.reader_id "
-        "WHERE v.edition_id=? ORDER BY v.viewed_at DESC LIMIT ?", (edition_id, SEEN_MAX))]
+    out["sources"] = [
+        {
+            **{k: r[k] for k in ("id", "update_id", "body_sha256", "body")},
+            "author_name": author_view(c, r["bot"] or row["author"])["name"],
+        }
+        for r in c.execute(
+            "SELECT s.*, u.bot FROM edition_sources s LEFT JOIN updates u ON u.id=s.update_id "
+            "WHERE s.edition_id=? ORDER BY s.rowid",
+            (edition_id,),
+        ).fetchall()
+    ]
+    out["checks"] = [
+        {
+            "id": r["id"],
+            "version": r["version"],
+            "kind": r["kind"],
+            "outcome": r["outcome"],
+            "detail": json.loads(r["detail"] or "{}"),
+            "created_at": r["created_at"],
+        }
+        for r in c.execute(
+            "SELECT * FROM edition_checks WHERE edition_id=? ORDER BY created_at DESC, rowid DESC LIMIT 200",
+            (edition_id,),
+        )
+    ]
+    out["seen_by"] = [
+        dict(r)
+        for r in c.execute(
+            "SELECT r.id AS reader_id, r.email, r.name, v.viewed_at FROM edition_views v JOIN readers r ON r.id=v.reader_id "
+            "WHERE v.edition_id=? ORDER BY v.viewed_at DESC LIMIT ?",
+            (edition_id, SEEN_MAX),
+        )
+    ]
     out["seen_count"] = c.execute("SELECT count(*) FROM edition_views WHERE edition_id=?", (edition_id,)).fetchone()[0]
     return out
 
@@ -552,8 +681,12 @@ def listing(c, audience_id=None, status=None, before=None, limit=25):
         if value:
             where.append(clause)
             args.append(value)
-    rows = c.execute("SELECT * FROM editions" + (" WHERE " + " AND ".join(where) if where else "")
-                     + " ORDER BY created_at DESC, rowid DESC LIMIT ?", (*args, limit + 1)).fetchall()
+    rows = c.execute(
+        "SELECT * FROM editions"
+        + (" WHERE " + " AND ".join(where) if where else "")
+        + " ORDER BY created_at DESC, rowid DESC LIMIT ?",
+        (*args, limit + 1),
+    ).fetchall()
     names, out, used = {}, [], 0
     for row in rows[:limit]:
         item = view(c, row, names)
@@ -569,9 +702,11 @@ def _source_authors(c, author):
     """The `updates.bot` keys a source reads. The company's update is its owner's (which rolls up the chart), or when
     they post none, what their direct reports post; a restricted bot's update never goes into a company-wide one."""
     from .. import updates
+
     if author != COMPANY:
         return [str(author).removeprefix("bot:")]
     from .. import org_rule_check as K
+
     owner = K.owner_or_admin(c)
     if not owner:
         return []
@@ -583,20 +718,27 @@ def source_updates(c, author, period_start, period_end):
     """The updates a draft may be written from: this source's, in the period, and never one flagged `meetings`, which
     only a meeting reader may read (updates.meeting_reader). Weeks in review when there are any, else daily updates."""
     from .. import org_rule_check as K
+
     keys = _source_authors(c, author)
     if not keys:
         return []
     if author == COMPANY:
         owner = K.owner_or_admin(c)
-        own = c.execute("SELECT 1 FROM updates WHERE bot=? AND day BETWEEN ? AND ? AND coalesce(meetings,0)=0 LIMIT 1",
-                        (owner, period_start, period_end)).fetchone()
+        own = c.execute(
+            "SELECT 1 FROM updates WHERE bot=? AND day BETWEEN ? AND ? AND coalesce(meetings,0)=0 LIMIT 1",
+            (owner, period_start, period_end),
+        ).fetchone()
         keys = [owner] if own else keys[1:]
         if not keys:
             return []
-    rows = [dict(r) for r in c.execute(
-        "SELECT id, bot, kind, day, body FROM updates WHERE bot IN (" + ",".join("?" * len(keys)) + ") "
-        "AND day BETWEEN ? AND ? AND coalesce(meetings,0)=0 ORDER BY day DESC, id LIMIT 400",
-        (*keys, period_start, period_end))]
+    rows = [
+        dict(r)
+        for r in c.execute(
+            "SELECT id, bot, kind, day, body FROM updates WHERE bot IN (" + ",".join("?" * len(keys)) + ") "
+            "AND day BETWEEN ? AND ? AND coalesce(meetings,0)=0 ORDER BY day DESC, id LIMIT 400",
+            (*keys, period_start, period_end),
+        )
+    ]
     weekly = [r for r in rows if r["kind"] == "weekly"]
     return (weekly or rows)[:SOURCE_MAX]
 
@@ -610,46 +752,71 @@ def claim(c, actor, audience_id, author, period_start, period_end):
     """Open this period's edition (`drafting`), or find the one there. {"edition_id", "fresh"}: `fresh` says the caller
     now runs the draft. A failed draft nobody has written over, or one a restart left behind, can be claimed again."""
     _audience(c, audience_id)
-    if not c.execute("SELECT 1 FROM audience_sources WHERE audience_id=? AND author=?", (audience_id, author)).fetchone():
+    if not c.execute(
+        "SELECT 1 FROM audience_sources WHERE audience_id=? AND author=?", (audience_id, author)
+    ).fetchone():
         raise Problem("validation", "That isn't one of this audience's sources", 422)
-    if str(period_start) > str(period_end) or not all(re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(d))
-                                                      for d in (period_start, period_end)):
+    if str(period_start) > str(period_end) or not all(
+        re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(d)) for d in (period_start, period_end)
+    ):
         raise Problem("validation", "A period is two dates, start then end", 422)
     at = H.now()
-    row = c.execute("SELECT * FROM editions WHERE audience_id=? AND author=? AND period_start=? AND period_end=? "
-                    "ORDER BY version LIMIT 1", (audience_id, author, period_start, period_end)).fetchone()
+    row = c.execute(
+        "SELECT * FROM editions WHERE audience_id=? AND author=? AND period_start=? AND period_end=? "
+        "ORDER BY version LIMIT 1",
+        (audience_id, author, period_start, period_end),
+    ).fetchone()
     if row:
         again = (row["status"] == "drafting" and row["updated_at"] < H.shift(at, seconds=-DRAFT_STALE_S)) or (
-            row["status"] == "held" and not _load_sections(dict(row)))
+            row["status"] == "held" and not _load_sections(dict(row))
+        )
         if not again:
             return {"edition_id": row["id"], "fresh": False}
         c.execute("UPDATE editions SET status='drafting', updated_at=? WHERE id=?", (at, row["id"]))
         c.execute("DELETE FROM edition_sources WHERE edition_id=?", (row["id"],))
         return {"edition_id": row["id"], "fresh": True}
     edition_id = H.new_id()
-    c.execute("INSERT INTO editions(id, audience_id, author, period_start, period_end, status, created_at, updated_at) "
-              "VALUES(?,?,?,?,?,'drafting',?,?)", (edition_id, audience_id, author, period_start, period_end, at, at))
+    c.execute(
+        "INSERT INTO editions(id, audience_id, author, period_start, period_end, status, created_at, updated_at) "
+        "VALUES(?,?,?,?,?,'drafting',?,?)",
+        (edition_id, audience_id, author, period_start, period_end, at, at),
+    )
     H.event(c, actor, "edition.claim", edition_id, {"audience": audience_id})
     return {"edition_id": edition_id, "fresh": True}
 
 
 def _record(c, row, kind, outcome, detail=None):
-    c.execute("INSERT INTO edition_checks(id, edition_id, version, kind, outcome, detail, created_at) "
-              "VALUES(?,?,?,?,?,?,?)", (H.new_id(), row["id"], row["version"], kind, outcome,
-                                        json.dumps(detail or {}, ensure_ascii=False), H.now()))
+    c.execute(
+        "INSERT INTO edition_checks(id, edition_id, version, kind, outcome, detail, created_at) VALUES(?,?,?,?,?,?,?)",
+        (H.new_id(), row["id"], row["version"], kind, outcome, json.dumps(detail or {}, ensure_ascii=False), H.now()),
+    )
 
 
 def _facts(c, row):
     from . import stats
+
     return stats.facts(c, row["audience_id"], row["period_start"], row["period_end"])
 
 
 def draft_input(facts, sources, period_start, period_end, labels):
     """The user half of the draft call: the period, the audience's filtered facts and the chosen updates. Nothing else."""
-    return json.dumps({"period": {"start": period_start, "end": period_end}, "facts": facts,
-                       "updates": [{"from": labels.get(s["bot"], "A teammate"), "day": s["day"], "kind": s["kind"],
-                                    "text": s["body"][:SOURCE_CHARS]} for s in sources]},
-                      ensure_ascii=False, default=str)
+    return json.dumps(
+        {
+            "period": {"start": period_start, "end": period_end},
+            "facts": facts,
+            "updates": [
+                {
+                    "from": labels.get(s["bot"], "A teammate"),
+                    "day": s["day"],
+                    "kind": s["kind"],
+                    "text": s["body"][:SOURCE_CHARS],
+                }
+                for s in sources
+            ],
+        },
+        ensure_ascii=False,
+        default=str,
+    )
 
 
 def run_draft(store, edition_id, primary=None):
@@ -657,6 +824,7 @@ def run_draft(store, edition_id, primary=None):
     an error, an answer that doesn't parse) leaves it `held` and empty with the reason, never published, and a person can
     draft again or write it themselves."""
     from .. import updates
+
     failure, write, sources, user = None, None, [], ""
     with store.read() as c:
         row = _edition(c, edition_id)
@@ -694,11 +862,15 @@ def run_draft(store, edition_id, primary=None):
             return full_view(c, edition_id)
         for source in sources:
             text = source["body"]
-            c.execute("INSERT INTO edition_sources(id, edition_id, update_id, body_sha256, body) VALUES(?,?,?,?,?)",
-                      (H.new_id(), edition_id, source["id"], hashlib.sha256(text.encode()).hexdigest(), text))
+            c.execute(
+                "INSERT INTO edition_sources(id, edition_id, update_id, body_sha256, body) VALUES(?,?,?,?,?)",
+                (H.new_id(), edition_id, source["id"], hashlib.sha256(text.encode()).hexdigest(), text),
+            )
         _record(c, row, "draft", "pass", {"sources": len(sources)})
-        c.execute("UPDATE editions SET status='held', title=?, body=?, updated_at=? WHERE id=?",
-                  (title, json.dumps({"sections": sections}, ensure_ascii=False), at, edition_id))
+        c.execute(
+            "UPDATE editions SET status='held', title=?, body=?, updated_at=? WHERE id=?",
+            (title, json.dumps({"sections": sections}, ensure_ascii=False), at, edition_id),
+        )
         H.event(c, H.KEEPER, "edition.drafted", edition_id, {"sources": len(sources)})
     return check(store, edition_id, primary)
 
@@ -720,6 +892,7 @@ def check(store, edition_id, primary=None):
     because the judge is a model call. An edit made meanwhile wins: its own check decides."""
     from .. import judge as B
     from .. import org_rule_check as K
+
     with store.read() as c:
         row = _edition(c, edition_id)
         if row["status"] == "drafting":
@@ -736,15 +909,29 @@ def check(store, edition_id, primary=None):
             failed = "empty"
         else:
             try:
-                names = (audience["name"], author_view(c, row["author"], store.settings.company_name)["name"],
-                         store.settings.company_name)
+                names = (
+                    audience["name"],
+                    author_view(c, row["author"], store.settings.company_name)["name"],
+                    store.settings.company_name,
+                )
                 # The correction note is published with the text, so the leak check reads it too.
                 checked = sections + ([{"key": "correction_note", "items": [{"body": note}]}] if note else [])
-                sources = [r["body"] for r in c.execute("SELECT body FROM edition_sources WHERE edition_id=?", (row["id"],))]
+                sources = [
+                    r["body"] for r in c.execute("SELECT body FROM edition_sources WHERE edition_id=?", (row["id"],))
+                ]
                 from . import stats as ST
+
                 unseen = ST.unseen_values(c, row["audience_id"])
-                leaks = leak_findings(row["title"], checked, _facts(c, row), row["period_start"], row["period_end"], names,
-                                      sources, unseen)
+                leaks = leak_findings(
+                    row["title"],
+                    checked,
+                    _facts(c, row),
+                    row["period_start"],
+                    row["period_end"],
+                    names,
+                    sources,
+                    unseen,
+                )
             except Exception as exc:  # noqa: BLE001 - facts that can't be read can't clear anything
                 LOG.warning("Edition leak check failed: %s", type(exc).__name__)
                 failed = "facts"
@@ -768,28 +955,43 @@ def check(store, edition_id, primary=None):
             reasons.append("leak")
         if verdict["outcome"] != "pass":
             reasons.append(verdict.get("reason") or "unchecked")
-        _record(c, row, "leak", "failed" if failed else "flagged" if leaks else "pass", leaks or ({"reason": failed} if failed else {}))
-        _record(c, row, "rules", "pass" if verdict["outcome"] == "pass" else "flagged" if verdict.get("reason") == "broken" else "failed",
-                {k: verdict.get(k) for k in ("reason", "broken", "rules")})
+        _record(
+            c,
+            row,
+            "leak",
+            "failed" if failed else "flagged" if leaks else "pass",
+            leaks or ({"reason": failed} if failed else {}),
+        )
+        _record(
+            c,
+            row,
+            "rules",
+            "pass" if verdict["outcome"] == "pass" else "flagged" if verdict.get("reason") == "broken" else "failed",
+            {k: verdict.get(k) for k in ("reason", "broken", "rules")},
+        )
         outcome = "held" if reasons else "pass"
         _record(c, row, "summary", outcome, {"fingerprint": fp, "reasons": reasons})
         clear = outcome == "pass" or _overridden(c, edition_id, fp)
         at = H.now()
         if row["status"] in ("held", "ready"):
-            c.execute("UPDATE editions SET status=?, updated_at=? WHERE id=?", ("ready" if clear else "held", at, edition_id))
+            c.execute(
+                "UPDATE editions SET status=?, updated_at=? WHERE id=?", ("ready" if clear else "held", at, edition_id)
+            )
         elif row["status"] == "awaiting_approval" and not clear:
             _drop_approval(c, row, "The checks no longer pass.")
-            c.execute("UPDATE editions SET status='held', approval_id=NULL, payload_hash=NULL, updated_at=? WHERE id=?",
-                      (at, edition_id))
+            c.execute(
+                "UPDATE editions SET status='held', approval_id=NULL, payload_hash=NULL, updated_at=? WHERE id=?",
+                (at, edition_id),
+            )
         H.event(c, H.KEEPER, "edition.checked", edition_id, {"outcome": outcome, "reasons": reasons})
         return full_view(c, edition_id)
 
 
 def _drop_approval(c, row, note):
-    """An undecided approval leaves the approver's queue. A decided one can't be withdrawn; once the edition no longer
-    names it, `publish` refuses it all the same."""
+    """The OK asked for this text leaves the approver's list, given or not: the edition no longer names it, and
+    `publish` would refuse it all the same."""
     if row.get("approval_id"):
-        H.approval_withdraw(c, row["approval_id"], note)
+        task_asks.withdraw(c, row["approval_id"], note)
 
 
 def override(c, who, edition_id, note):
@@ -807,7 +1009,9 @@ def override(c, who, edition_id, note):
     if not summary or summary[0]["detail"].get("fingerprint") != fp:
         raise Problem("checks_stale", "Run the checks on this text first", 409)
     _record(c, row, "override", "override", {"fingerprint": fp, "by": who.actor, "note": note})
-    c.execute("UPDATE editions SET status='ready', override_note=?, updated_at=? WHERE id=?", (note, H.now(), edition_id))
+    c.execute(
+        "UPDATE editions SET status='ready', override_note=?, updated_at=? WHERE id=?", (note, H.now(), edition_id)
+    )
     H.event(c, who.actor, "edition.override", edition_id, {})
     return full_view(c, edition_id)
 
@@ -842,12 +1046,20 @@ def edit(c, who, edition_id, body):
     require_writer(who)
     row = _edition(c, edition_id)
     if row["status"] not in ("held", "ready", "awaiting_approval"):
-        raise Problem("conflict", "A published edition changes through a correction" if row["status"] == "published"
-                      else f"This edition is {row['status']}", 409)
+        raise Problem(
+            "conflict",
+            "A published edition changes through a correction"
+            if row["status"] == "published"
+            else f"This edition is {row['status']}",
+            409,
+        )
     title, sections = _parsed(body, row)
     _drop_approval(c, row, "The edition changed.")
-    c.execute("UPDATE editions SET title=?, body=?, status='held', approval_id=NULL, payload_hash=NULL, updated_at=? "
-              "WHERE id=?", (title, json.dumps({"sections": sections}, ensure_ascii=False), H.now(), edition_id))
+    c.execute(
+        "UPDATE editions SET title=?, body=?, status='held', approval_id=NULL, payload_hash=NULL, updated_at=? "
+        "WHERE id=?",
+        (title, json.dumps({"sections": sections}, ensure_ascii=False), H.now(), edition_id),
+    )
     H.event(c, who.actor, "edition.edit", edition_id, {})
     return full_view(c, edition_id)
 
@@ -860,22 +1072,46 @@ def correct(c, who, edition_id, body, note):
     note = _note(note, "Say what changed")
     if row["status"] not in ("published", "retracted") or not row["published_at"]:
         raise Problem("conflict", "Only a published edition can be corrected", 409)
-    pending = c.execute(f"SELECT id FROM editions WHERE supersedes_id=? AND status IN ({','.join('?' * len(OPEN_STATES))})",
-                        (edition_id, *OPEN_STATES)).fetchone()
+    pending = c.execute(
+        f"SELECT id FROM editions WHERE supersedes_id=? AND status IN ({','.join('?' * len(OPEN_STATES))})",
+        (edition_id, *OPEN_STATES),
+    ).fetchone()
     if pending:
-        raise Problem("conflict", "A correction of this edition is already open", 409, extra={"edition_id": pending["id"]})
+        raise Problem(
+            "conflict", "A correction of this edition is already open", 409, extra={"edition_id": pending["id"]}
+        )
     title, sections = _parsed(body, row)
     new_id, at = H.new_id(), H.now()
-    version = c.execute("SELECT max(version) FROM editions WHERE audience_id=? AND author=? AND period_start=? AND "
-                        "period_end=?", (row["audience_id"], row["author"], row["period_start"],
-                                         row["period_end"])).fetchone()[0] + 1
-    c.execute("INSERT INTO editions(id, audience_id, author, period_start, period_end, version, supersedes_id, status, "
-              "title, body, correction_note, created_at, updated_at) VALUES(?,?,?,?,?,?,?,'held',?,?,?,?,?)",
-              (new_id, row["audience_id"], row["author"], row["period_start"], row["period_end"], version, edition_id,
-               title, json.dumps({"sections": sections}, ensure_ascii=False), note, at, at))
-    c.execute("INSERT INTO edition_sources(id, edition_id, update_id, body_sha256, body) "
-              "SELECT lower(hex(randomblob(16))), ?, update_id, body_sha256, body FROM edition_sources WHERE edition_id=?",
-              (new_id, edition_id))
+    version = (
+        c.execute(
+            "SELECT max(version) FROM editions WHERE audience_id=? AND author=? AND period_start=? AND period_end=?",
+            (row["audience_id"], row["author"], row["period_start"], row["period_end"]),
+        ).fetchone()[0]
+        + 1
+    )
+    c.execute(
+        "INSERT INTO editions(id, audience_id, author, period_start, period_end, version, supersedes_id, status, "
+        "title, body, correction_note, created_at, updated_at) VALUES(?,?,?,?,?,?,?,'held',?,?,?,?,?)",
+        (
+            new_id,
+            row["audience_id"],
+            row["author"],
+            row["period_start"],
+            row["period_end"],
+            version,
+            edition_id,
+            title,
+            json.dumps({"sections": sections}, ensure_ascii=False),
+            note,
+            at,
+            at,
+        ),
+    )
+    c.execute(
+        "INSERT INTO edition_sources(id, edition_id, update_id, body_sha256, body) "
+        "SELECT lower(hex(randomblob(16))), ?, update_id, body_sha256, body FROM edition_sources WHERE edition_id=?",
+        (new_id, edition_id),
+    )
     H.event(c, who.actor, "edition.correct", new_id, {"supersedes": edition_id})
     return full_view(c, new_id)
 
@@ -891,11 +1127,15 @@ def retract(c, who, edition_id, note):
         raise Problem("conflict", f"This edition is {row['status']}", 409)
     was_public = row["status"] == "published"
     _drop_approval(c, row, "The edition was taken back.")
-    c.execute("UPDATE editions SET status='retracted', retracted_at=?, retracted_by=?, retraction_note=?, updated_at=? "
-              "WHERE id=?", (H.now(), who.actor, note, H.now(), edition_id))
+    c.execute(
+        "UPDATE editions SET status='retracted', retracted_at=?, retracted_by=?, retraction_note=?, updated_at=? "
+        "WHERE id=?",
+        (H.now(), who.actor, note, H.now(), edition_id),
+    )
     H.event(c, who.actor, "edition.retract", edition_id, {"was_public": was_public})
     if was_public:
         from . import release
+
         release.rebuild(c, "edition retracted")
     return full_view(c, edition_id)
 
@@ -905,6 +1145,7 @@ def _approver(c, audience):
     """The audience's named approver when they're a person who can act, else the owner. Always somebody by name:
     approval_request's default would be the roster's first person, or a task's owner."""
     from .. import org_rule_check as K
+
     named = H.resolve_actor(c, audience["approver"]) if audience.get("approver") else None
     if named and H.is_human(named) and K._present(c, named):
         return named
@@ -912,6 +1153,19 @@ def _approver(c, audience):
     if not owner:
         raise Problem("no_approver", "Nobody can approve this: the company has no owner or admin on the team", 409)
     return owner
+
+
+def may_ok(c, person, grant):
+    """Whether `person` may OK this edition or stats board now (task_asks.MAY_OK): the audience's approver as it is
+    today, whoever holds the ask."""
+    audience_id = str((grant.get("content") or {}).get("audience_id") or "")
+    try:
+        approver = _approver(c, _audience(c, audience_id)) if audience_id else None
+    except Problem:
+        approver = None
+    if not approver or approver != person:
+        return "Only this audience's approver OKs it"
+    return None
 
 
 def request_approval(c, who, edition_id):
@@ -929,48 +1183,78 @@ def request_approval(c, who, edition_id):
             raise Problem("conflict", "This edition is approved: publish it", 409)
         _drop_approval(c, row, "Asked again.")
     elif row["status"] != "ready":
-        raise Problem("conflict", f"This edition is {row['status']}: it needs to pass its checks first"
-                      if row["status"] == "held" else f"This edition is {row['status']}", 409)
+        raise Problem(
+            "conflict",
+            f"This edition is {row['status']}: it needs to pass its checks first"
+            if row["status"] == "held"
+            else f"This edition is {row['status']}",
+            409,
+        )
     if not _cleared(c, row):
         raise Problem("checks_stale", "Run the checks on this text first", 409)
     payload = approval_payload(c, row, audience)
-    found = H.approval_request(c, who.actor, "publish", payload, to=_approver(c, audience))
-    c.execute("UPDATE editions SET status='awaiting_approval', approval_id=?, payload_hash=?, disclosure_revision_id=?, "
-              "updated_at=? WHERE id=?", (found["id"], found["payload_hash"], payload["disclosure_revision"], H.now(),
-                                          edition_id))
+    asked = task_asks.ask_ok(
+        c,
+        who.actor,
+        _approver(c, audience),
+        "Publish this edition?",
+        shows=[f"edition:{edition_id}"],
+        subject=_subject(edition_id),
+        content=payload,
+        title=f"Publish: {row['title'] or 'an edition'}"[:200],
+    )
+    c.execute(
+        "UPDATE editions SET status='awaiting_approval', approval_id=?, payload_hash=?, disclosure_revision_id=?, "
+        "updated_at=? WHERE id=?",
+        (
+            asked["requirement_id"],
+            task_asks.content_hash(payload),
+            payload["disclosure_revision"],
+            H.now(),
+            edition_id,
+        ),
+    )
     return full_view(c, edition_id)
 
 
-def _decided_by_addressee(found):
-    """A yes from the person it was addressed to, by their own hand, asked for by a person."""
-    return (found["decision"] == "approved" and H.is_human(found["requested_by_id"]) and not found.get("decided_via")
-            and found["decided_by_id"] == found.get("decision_owner"))
-
-
 def publish(c, who, edition_id, approval_id=None):
-    """Spend the approval and publish, one transaction. Refused unless the approved payload is exactly what publishing
-    would send now (same text, version, audience, disclosure revision and rules); a mismatch needs a new approval."""
+    """Use the OK and publish, one transaction. Refused unless what publishing would send now (same text, version,
+    audience, disclosure revision and rules) is exactly what the person OK'd; a change needs a new OK. The click is a
+    person's own; the OK is used as the one who asked for it."""
     require_own_click(who)
     row = _edition(c, edition_id)
     if row["status"] != "awaiting_approval" or not row["approval_id"]:
         raise Problem("conflict", f"This edition is {row['status']}, with no approval to publish on", 409)
     if approval_id and approval_id != row["approval_id"]:
         raise Problem("approval", "That approval isn't this edition's", 409)
-    found = H.approval(c, row["approval_id"])
-    if not found or found["kind"] != "publish" or not _decided_by_addressee(found) or found["consumed_at"]:
+    found = task_asks.grant(c, row["approval_id"])
+    if not found or found["subject"] != _subject(edition_id) or not H.is_human(found["asked_by_id"]):
         raise Problem("approval", "This edition has no approval to publish on", 409)
-    if found["payload"] != approval_payload(c, row):
-        raise Problem("approval_stale", "The edition, its disclosure or its rules changed after this was approved: "
-                      "ask for approval again", 409)
-    H.approval_consume(c, who.actor, found["id"])
+    payload = approval_payload(c, row)
+    if found["content_hash"] != task_asks.content_hash(payload):
+        raise Problem(
+            "approval_stale",
+            "The edition, its disclosure or its rules changed after this was approved: ask for approval again",
+            409,
+        )
+    if not task_asks.passes(c, row["approval_id"], _subject(edition_id), payload, found["asked_by_id"]):
+        # Not OK'd yet, sent back, taken back, or its giver may not OK it any more: the page's own word for it.
+        raise Problem("approval", "This edition has no OK to publish on: ask for approval again", 409)
+    task_asks.use(c, row["approval_id"], _subject(edition_id), payload, found["asked_by_id"])
+    task_asks.settle(c, row["approval_id"], "Published the edition.")
     at = H.now()
-    c.execute("UPDATE editions SET status='published', published_at=?, approved_by=?, payload_hash=?, updated_at=? "
-              "WHERE id=? AND status='awaiting_approval'", (at, found["decided_by_id"], found["payload_hash"], at, edition_id))
+    c.execute(
+        "UPDATE editions SET status='published', published_at=?, approved_by=?, payload_hash=?, updated_at=? "
+        "WHERE id=? AND status='awaiting_approval'",
+        (at, found["ok_by_id"], found["content_hash"], at, edition_id),
+    )
     if row["supersedes_id"]:
         # Only what is up gets superseded: a correction of a retracted edition leaves it retracted.
-        c.execute("UPDATE editions SET status='superseded', updated_at=? WHERE id=? AND status='published'",
-                  (at, row["supersedes_id"]))
-    H.event(c, who.actor, "edition.publish", edition_id, {"approval": found["id"], "version": row["version"]})
+        c.execute(
+            "UPDATE editions SET status='superseded', updated_at=? WHERE id=? AND status='published'",
+            (at, row["supersedes_id"]),
+        )
+    H.event(c, who.actor, "edition.publish", edition_id, {"approval": row["approval_id"], "version": row["version"]})
     _notify(c, edition_id)
     return full_view(c, edition_id)
 
@@ -979,6 +1263,7 @@ def release_published(store, edition):
     """Put a just-committed edition on the page. The publication stands if this fails: a rebuild that can't render closes
     the page rather than keep old files, the person is told (`release_failed`), and the day's refresh rebuilds it."""
     from . import release
+
     try:
         done = release.rebuild(store, "edition corrected" if edition["supersedes_id"] else "edition published")
     except Exception as exc:  # noqa: BLE001 - the transaction is over: all that's left is to say so
@@ -992,9 +1277,12 @@ def release_board(store, board_row_id):
     to change: a Private board's figures reach its readers when they're next built. A failed rebuild closes the page (as
     `release.rebuild` does) and is logged; the decision stands and the day's refresh tries again."""
     from . import release
+
     with store.read() as c:
-        row = c.execute("SELECT a.kind FROM stat_board_approvals s JOIN audiences a ON a.id = s.audience_id "
-                        "WHERE s.id=?", (board_row_id,)).fetchone()
+        row = c.execute(
+            "SELECT a.kind FROM stat_board_approvals s JOIN audiences a ON a.id = s.audience_id WHERE s.id=?",
+            (board_row_id,),
+        ).fetchone()
     if not row or row["kind"] != "public":
         return
     try:
@@ -1006,11 +1294,13 @@ def release_board(store, board_row_id):
 def _notify(c, edition_id):
     """Queue the readers' link. A notice that can't be queued never undoes a publication."""
     from .schedule import transparency
+
     if transparency(c) == "closed":
         return
     c.execute("SAVEPOINT edition_notify")
     try:
         from . import readers
+
         readers.notify_edition(c, edition_id)
     except Exception as exc:  # noqa: BLE001 - the page is the record; the notice is a courtesy
         LOG.warning("Edition notice failed: %s", type(exc).__name__)
@@ -1024,6 +1314,7 @@ def _board_text(c, audience_id, audience, view):
     and what it shows now or why nothing does, so approving "nothing shown" can't approve a delayed stat nobody read about.
     The stats come from the same list as the approval's hash, so the text and the approval can't drift apart."""
     from . import stats
+
     shown = {s["id"]: s for s in view["stats"]}
     held = {h["id"]: h["reason"] for h in view["held"]}
     absent = {a["id"]: a["reason"] for a in view["absent"]}
@@ -1055,68 +1346,96 @@ def _board_text(c, audience_id, audience, view):
     return "\n".join(lines)
 
 
-def _board_rows(c, audience_id):
-    prefix = f"{BOARD_URL}{audience_id}/"
-    return [r["id"] for r in c.execute(
-        "SELECT id FROM approvals WHERE kind='publish' AND substr(json_extract(payload,'$.url'),1,?)=? "
-        "ORDER BY created_at DESC, rowid DESC LIMIT 20", (len(prefix), prefix))]
+def _board_subject(audience_id):
+    return f"board:{audience_id}"
+
+
+def _board_content(c, audience_id, audience=None):
+    """What an OK of this audience's stats board is for now: which stats, in which form, under which disclosure
+    revision. `text` is every stat it covers, so the preview shows all of it."""
+    from . import stats
+
+    audience = audience or _audience(c, audience_id)
+    config = stats.board_config_hash(c, audience_id)
+    view = stats.board(c, audience_id, H.parse_ts(H.now()))
+    text = _board_text(c, audience_id, audience, view)
+    return {
+        "url": f"{BOARD_URL}{audience_id}/{config}",
+        "title": f"{audience['name']} stats board",
+        "text": text,
+        "content_sha256": hashlib.sha256(text.encode()).hexdigest(),
+        "audience": audience["name"],
+        "audience_id": audience_id,
+        "disclosure_revision": _revision(c, audience_id),
+    }
 
 
 def board_approval(c, audience_id):
-    """The latest ask to approve this audience's stats board and where it stands, so a lapsed one shows; or None."""
-    from . import stats
-    rows = _board_rows(c, audience_id)
-    if not rows:
+    """The latest ask to approve this audience's stats board and where it stands, so a lapsed one shows; or None. Stale
+    when the board it was asked about is not the board now (another config or disclosure revision)."""
+    found = task_asks.latest(c, _board_subject(audience_id))
+    if not found:
         return None
-    found = H.approval(c, rows[0])
-    current = f"{BOARD_URL}{audience_id}/{stats.board_config_hash(c, audience_id)}"
-    state = ("spent" if found["consumed_at"] else "lapsed" if found["decision"] == "withdrawn"
-             else "declined" if found["decision"] == "declined" else "stale" if found["payload"].get("url") != current
-             else "approved" if found["decision"] == "approved" else "pending")
-    return {"id": found["id"], "state": state, "to": found.get("decision_owner"),
-            "to_name": found.get("decision_owner_name"), "created_at": found["created_at"], "decided_by": found["decided_by_id"],
-            "decided_at": found["decided_at"], "note": _decision_note(c, found["id"])}
+    from . import stats
+
+    current = dict(found["content"] or {})
+    current["url"] = f"{BOARD_URL}{audience_id}/{stats.board_config_hash(c, audience_id)}"
+    current["disclosure_revision"] = _revision(c, audience_id)
+    out = _ok_view(c, found["requirement_id"], found["content"])
+    if out["state"] in ("approved", "pending") and (
+        current["url"] != (found["content"] or {}).get("url")
+        or current["disclosure_revision"] != (found["content"] or {}).get("disclosure_revision")
+    ):
+        out["state"] = "stale"
+    return out
 
 
 def request_board_approval(c, who, audience_id):
-    """Ask for approval of which stats this audience sees, in which form, under the current disclosure revision. The
-    values refresh by code after that (stats.board_approved); a loosened rule or a new stat changes the hash and asks again."""
-    from . import stats
+    """Ask for an OK of which stats this audience sees, in which form, under the current disclosure revision. The
+    values refresh by code after that (stats.board_approved); a loosened rule or a new stat changes the hash and asks
+    again. An ask still waiting for exactly this board is kept."""
     require_person(who)
     audience = _audience(c, audience_id)
-    config = stats.board_config_hash(c, audience_id)
-    url = f"{BOARD_URL}{audience_id}/{config}"
-    for old in _board_rows(c, audience_id):
-        found = H.approval(c, old)
-        if found["decision"] is None:
-            if found["payload"].get("url") == url:
-                return {"approval": found["id"], **board_approval(c, audience_id)}
-            H.approval_withdraw(c, old, "The stats board changed.")
-    view = stats.board(c, audience_id, H.parse_ts(H.now()))
-    text = _board_text(c, audience_id, audience, view)
-    payload = {"url": url, "title": f"{audience['name']} stats board", "text": text,
-               "content_sha256": hashlib.sha256(text.encode()).hexdigest(), "audience": audience["name"],
-               "audience_id": audience_id, "disclosure_revision": _revision(c, audience_id)}
-    found = H.approval_request(c, who.actor, "publish", payload, to=_approver(c, audience))
-    return {"approval": found["id"], **board_approval(c, audience_id)}
+    content = _board_content(c, audience_id, audience)
+    asked = task_asks.ask_ok(
+        c,
+        who.actor,
+        _approver(c, audience),
+        "Show these stats to " + audience["name"] + "?",
+        shows=[f"board:{audience_id}"],
+        subject=_board_subject(audience_id),
+        content=content,
+        title=f"Approve the {audience['name']} stats board"[:200],
+    )
+    return {"approval": asked["requirement_id"], **(board_approval(c, audience_id) or {})}
 
 
-def approval_decided(c, found):
-    """After an own-click approval is decided, in that transaction. An edition waits for `publish`. A stats board has
-    nothing further to do, so a yes is spent and recorded now, while it still describes the board. If it doesn't any
-    more, no row is written and the page shows it as stale. Returns the new board row's id, or None; the caller passes
-    it to `release_board` once the transaction has committed."""
-    url = str((found.get("payload") or {}).get("url") or "").strip()
-    if not url.startswith(BOARD_URL) or not _decided_by_addressee(found):
-        return None
+def board_ok(c, grant, ctx):
+    """In the transaction of an OK of a stats board (task_asks.ON_OK): there is nothing further to publish, so the OK is
+    used and recorded now, while it still describes the board. If it doesn't any more, nothing is recorded and the page
+    shows it as stale. The Public page is rebuilt once the transaction has committed."""
+    content = grant["content"] or {}
+    audience_id = str(content.get("audience_id") or "")
+    if not audience_id or not H.is_human(grant["asked_by_id"]):
+        return
+    app = getattr(ctx, "app", None)
+    store = getattr(getattr(app, "state", None), "store", None)
+    if store is None:
+        # The Public page is rebuilt after the OK commits: with nothing to rebuild it, the OK is not taken.
+        raise Problem("approval", "A stats board is OK'd from its preview in Tico", 409)
     from . import stats
-    audience_id, _, config = url[len(BOARD_URL):].partition("/")
-    revision = found["payload"].get("disclosure_revision")
+
+    url = str(content.get("url") or "")
+    _, _, config = url[len(BOARD_URL) :].partition("/")
+    revision = content.get("disclosure_revision")
     if config != stats.board_config_hash(c, audience_id) or revision != _revision(c, audience_id):
-        return None
-    H.approval_consume(c, found["decided_by_id"], found["id"])
+        return
+    task_asks.use(c, grant["requirement_id"], grant["subject"], content, grant["asked_by_id"])
+    task_asks.settle(c, grant["requirement_id"], "The stats board is approved.")
     row = H.new_id()
-    c.execute("INSERT INTO stat_board_approvals(id, audience_id, config_hash, disclosure_revision_id, approval_id, "
-              "approved_by, created_at) VALUES(?,?,?,?,?,?,?)",
-              (row, audience_id, config, revision, found["id"], found["decided_by_id"], H.now()))
-    return row
+    c.execute(
+        "INSERT INTO stat_board_approvals(id, audience_id, config_hash, disclosure_revision_id, approval_id, "
+        "approved_by, created_at) VALUES(?,?,?,?,?,?,?)",
+        (row, audience_id, config, revision, grant["requirement_id"], grant["ok_by_id"], H.now()),
+    )
+    ctx.after.append(lambda: release_board(store, row))

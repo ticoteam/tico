@@ -7,16 +7,17 @@ read access only on a private task sent from a private meeting. A person may hol
 the owner may hold any of them too. What a role means downstream (which column waits on whom, a dependency
 monitor) is the client's to decide.
 
-`set_roles` writes ordinary role changes (task update and create, the task page, `hub task update --role`,
+`set_roles` writes ordinary role changes (task update and create, the task page, `tico task update --role`,
 the MCP tools). A checked private meeting send grants its audience through `meeting_audience.grant`.
 Whoever may change the task's other fields may change who is on it.
 
 This module imports nothing from hubdb at load, so hubdb can import it; the writer reaches hubdb
 through `_H()`.
 """
+
 import re
 
-ROLE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")   # a role name: a short lower-case slug
+ROLE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")  # a role name: a short lower-case slug
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS task_roles(
@@ -29,6 +30,7 @@ CREATE INDEX IF NOT EXISTS task_roles_actor ON task_roles(actor, role);
 
 def _H():
     from . import hubdb
+
     return hubdb
 
 
@@ -55,18 +57,22 @@ def grouped(conn, task_ids):
     out = {tid: {} for tid in task_ids}
     ids = list(task_ids)
     for i in range(0, len(ids), 400):
-        part = ids[i:i + 400]
+        part = ids[i : i + 400]
         marks = ",".join("?" * len(part))
-        for row in conn.execute(f"SELECT task_id, role, actor FROM task_roles WHERE task_id IN ({marks}) "
-                                "ORDER BY created_at, rowid", part):
+        for row in conn.execute(
+            f"SELECT task_id, role, actor FROM task_roles WHERE task_id IN ({marks}) ORDER BY created_at, rowid", part
+        ):
             out[row[0]].setdefault(row[1], []).append(row[2])
     return out
 
 
 def member_sql(role=None):
     """A WHERE fragment over `tasks`: the actor bound to its `?` is on the task (in `role`, when given)."""
-    return ("EXISTS (SELECT 1 FROM task_roles r WHERE r.task_id=tasks.id AND r.actor=?"
-            + (" AND r.role=?" if role else "") + ")")
+    return (
+        "EXISTS (SELECT 1 FROM task_roles r WHERE r.task_id=tasks.id AND r.actor=?"
+        + (" AND r.role=?" if role else "")
+        + ")"
+    )
 
 
 # ----------------------------------------------------------------------------- writes
@@ -100,6 +106,7 @@ def set_roles(conn, actor, task_id, roles, mover=None, note="", checked=False):
 def _set_roles(conn, actor, task_id, roles, mover, note, checked):
     H = _H()
     from . import task_relations as TR
+
     wanted = clean(roles)
     if not wanted:
         return False
@@ -127,9 +134,13 @@ def _set_roles(conn, actor, task_id, roles, mover, note, checked):
             continue
         conn.execute("DELETE FROM task_roles WHERE task_id=? AND role=?", (task_id, role))
         for who in resolved:
-            conn.execute("INSERT INTO task_roles(task_id,role,actor,added_by,created_at) VALUES(?,?,?,?,?)",
-                         (task_id, role, who, actor, at))
-        H._task_event(conn, task_id, actor, "role:" + role, ", ".join(before) or None, ", ".join(resolved) or None, note or "")
+            conn.execute(
+                "INSERT INTO task_roles(task_id,role,actor,added_by,created_at) VALUES(?,?,?,?,?)",
+                (task_id, role, who, actor, at),
+            )
+        H._task_event(
+            conn, task_id, actor, "role:" + role, ", ".join(before) or None, ", ".join(resolved) or None, note or ""
+        )
         H.event(conn, actor, "task.roles", task_id, {"role": role, "actors": resolved})
         changed = True
     if changed:

@@ -12,7 +12,7 @@ import zipfile
 import pytest
 
 from backend import docs_import, docs_import_run, docs_import_worker
-from backend.tests.test_api import api, headers  # noqa: F401  (the api fixture)
+from backend.tests.helpers.api import headers  # noqa: F401  (the api fixture)
 
 ANA = "ana-test"
 BIG = 1_000_000
@@ -20,9 +20,11 @@ BIG = 1_000_000
 
 def docx(*paragraphs):
     body = "".join(f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>" for text in paragraphs)
-    xml = ('<?xml version="1.0" encoding="UTF-8"?>'
-           '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-           f"<w:body>{body}</w:body></w:document>")
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body>{body}</w:body></w:document>"
+    )
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("word/document.xml", xml)
@@ -31,12 +33,14 @@ def docx(*paragraphs):
 
 def text_pdf(line):
     stream = f"BT /F1 12 Tf 72 720 Td ({line}) Tj ET".encode()
-    objects = [b"<< /Type /Catalog /Pages 2 0 R >>",
-               b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-               b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
-               b"/Resources << /Font << /F1 5 0 R >> >> >>",
-               b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream",
-               b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+        b"/Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
     out, offsets = bytearray(b"%PDF-1.4\n"), []
     for number, body in enumerate(objects, 1):
         offsets.append(len(out))
@@ -100,7 +104,7 @@ def test_time_budget_stops_the_worker_and_writes_nothing(tmp_path, temp_root, mo
 @pytest.mark.skipif(sys.platform == "darwin", reason="macOS checks resident memory from the parent, not the limit")
 def test_memory_budget_refusal_uses_the_memory_message(temp_root, monkeypatch):
     # A 16 MB Word XML (under the 30 MB cap) cannot be parsed within a 64 MB address space: the worker refuses.
-    monkeypatch.setattr(docs_import_run, "MEMORY_LIMIT", 64 * 1024 ** 2)
+    monkeypatch.setattr(docs_import_run, "MEMORY_LIMIT", 64 * 1024**2)
     big = docx(*["word " * 400] * 8000)
     with pytest.raises(ValueError) as caught:
         docs_import_run.to_markdown("big.docx", big, max_chars=10 * BIG)
@@ -135,6 +139,7 @@ def test_a_busy_server_refuses_a_third_conversion_at_once(temp_root, monkeypatch
     try:
         assert all(held)
         with monkeypatch.context() as m:
+
             def no_worker(*args, **kwargs):
                 raise AssertionError("no conversion may start while the server is busy")
 
@@ -164,26 +169,38 @@ def test_a_failed_worker_gives_the_plain_failure_and_removes_its_copy(tmp_path, 
     assert list(temp_root.iterdir()) == []
 
 
-def test_a_crashed_worker_logs_its_last_stderr_line_capped_and_shows_the_plain_failure(tmp_path, temp_root,
-                                                                                        monkeypatch, caplog):
+def test_a_crashed_worker_logs_its_last_stderr_line_capped_and_shows_the_plain_failure(
+    tmp_path, temp_root, monkeypatch, caplog
+):
     noisy = "boom " + "x" * 400
-    monkeypatch.setattr(docs_import_run, "WORKER", fake_worker(
-        tmp_path, f"import sys\nprint('earlier', file=sys.stderr)\nprint({noisy!r}, file=sys.stderr)\nsys.exit(3)\n"))
+    monkeypatch.setattr(
+        docs_import_run,
+        "WORKER",
+        fake_worker(
+            tmp_path, f"import sys\nprint('earlier', file=sys.stderr)\nprint({noisy!r}, file=sys.stderr)\nsys.exit(3)\n"
+        ),
+    )
     with caplog.at_level("WARNING", logger="tico.docs_import"), pytest.raises(ValueError) as caught:
         docs_import_run.to_markdown("a.md", b"# A\n", max_chars=BIG)
     assert str(caught.value) == docs_import_run.FAILED_MESSAGE
     assert noisy not in str(caught.value)
     logged = [r.getMessage() for r in caplog.records if r.name == "tico.docs_import"]
     assert len(logged) == 1
-    assert noisy[:docs_import_run.CRASH_LINE_LIMIT] in logged[0]
-    assert noisy[:docs_import_run.CRASH_LINE_LIMIT + 1] not in logged[0]
+    assert noisy[: docs_import_run.CRASH_LINE_LIMIT] in logged[0]
+    assert noisy[: docs_import_run.CRASH_LINE_LIMIT + 1] not in logged[0]
     assert "earlier" not in logged[0]
     assert list(temp_root.iterdir()) == []
 
 
 def test_a_crash_after_a_large_stderr_logs_only_the_tail(tmp_path, temp_root, monkeypatch, caplog):
-    monkeypatch.setattr(docs_import_run, "WORKER", fake_worker(
-        tmp_path, "import sys\nsys.stderr.write('x' * 200000)\nsys.stderr.write('\\nthe last line\\n')\nsys.exit(3)\n"))
+    monkeypatch.setattr(
+        docs_import_run,
+        "WORKER",
+        fake_worker(
+            tmp_path,
+            "import sys\nsys.stderr.write('x' * 200000)\nsys.stderr.write('\\nthe last line\\n')\nsys.exit(3)\n",
+        ),
+    )
     with caplog.at_level("WARNING", logger="tico.docs_import"), pytest.raises(ValueError) as caught:
         docs_import_run.to_markdown("a.md", b"# A\n", max_chars=BIG)
     assert str(caught.value) == docs_import_run.FAILED_MESSAGE
@@ -232,8 +249,12 @@ def test_a_cancelled_conversion_stops_the_worker_and_writes_nothing(tmp_path, te
 def test_a_busy_import_route_answers_503_and_saves_no_doc(api):  # noqa: F811
     held = [docs_import_run._slots.acquire(blocking=False) for _ in range(docs_import_run.MAX_CONCURRENT)]
     try:
-        response = api.request("POST", "/api/v2/docs/import", headers=headers(ANA),
-                               files={"file": ("busy.md", b"# Busy title\n\nBody.\n", "text/markdown")})
+        response = api.request(
+            "POST",
+            "/api/v2/docs/import",
+            headers=headers(ANA),
+            files={"file": ("busy.md", b"# Busy title\n\nBody.\n", "text/markdown")},
+        )
     finally:
         for _ in held:
             docs_import_run._slots.release()
@@ -244,7 +265,11 @@ def test_a_busy_import_route_answers_503_and_saves_no_doc(api):  # noqa: F811
 
 
 def test_a_normal_import_route_saves_the_converted_doc(api):  # noqa: F811
-    response = api.request("POST", "/api/v2/docs/import", headers=headers(ANA),
-                           files={"file": ("handbook.md", b"# Handbook title\n\nBody text.\n", "text/markdown")})
+    response = api.request(
+        "POST",
+        "/api/v2/docs/import",
+        headers=headers(ANA),
+        files={"file": ("handbook.md", b"# Handbook title\n\nBody text.\n", "text/markdown")},
+    )
     assert response.status_code == 200, response.text
     assert "Handbook title" in api.request("GET", "/api/v2/docs", headers=headers(ANA)).text

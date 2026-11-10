@@ -3,7 +3,10 @@
 
 TICO_COMPANY_APPS is supplied through a private Actions secret, never a source file.
 --dry-run validates and reports hashes without network access or printing private values.
+A prerelease tag (v0.6.0-rc.1) builds and publishes no company app: `matrix` lists none and `publish` refuses, so a
+company's installed apps never move to a release its server is not on.
 """
+
 import argparse
 from contextlib import contextmanager
 import errno
@@ -81,8 +84,17 @@ def url(value):
     try:
         parsed = urlsplit(value)
         port = parsed.port
-        if (parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in
-                ("localhost", "127.0.0.1", "::1"))) or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        if (
+            (
+                parsed.scheme != "https"
+                and not (parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1", "::1"))
+            )
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
             raise Invalid("URLs require HTTPS (HTTP is allowed only for localhost)")
         if port is not None and not 1 <= port <= 65535:
             raise Invalid("Invalid URL port")
@@ -136,13 +148,21 @@ def parse(raw):
         if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", entry["bucket"]):
             raise Invalid("Invalid company bucket")
         prefix = entry.get("prefix", "").strip("/")
-        if prefix and (not re.fullmatch(r"[A-Za-z0-9_/-]+", prefix) or any(p in ("", ".", "..") for p in prefix.split("/"))):
+        if prefix and (
+            not re.fullmatch(r"[A-Za-z0-9_/-]+", prefix) or any(p in ("", ".", "..") for p in prefix.split("/"))
+        ):
             raise Invalid("Invalid company prefix")
         if entry["slug"] in seen or entry["id"] in ids:
             raise Invalid("Duplicate company slug or id")
         seen.add(entry["slug"])
         ids.add(entry["id"])
     return entries
+
+
+def prerelease(ref):
+    """Whether a ref is a semver prerelease tag (v0.6.0-rc.1, v1.2.0-beta), which release.yml publishes as a GitHub
+    prerelease. A branch name with a '-' in it is not one."""
+    return re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+(?:\+[0-9A-Za-z.-]+)?", str(ref or "")) is not None
 
 
 def key(entry):
@@ -165,6 +185,12 @@ class SafeRedirect(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def certificate_rejected(exc):
+    # urllib wraps handshake failures in URLError; a bad certificate stays bad until the server is fixed.
+    reason = exc.reason if isinstance(exc, URLError) else exc
+    return isinstance(reason, ssl.SSLCertVerificationError)
+
+
 def download_icon(icon_url):
     # A company server may be restarting for the release while its desktop build starts.
     for attempt in range(1, 9):
@@ -172,14 +198,21 @@ def download_icon(icon_url):
             with build_opener(SafeRedirect()).open(Request(icon_url), timeout=30) as response:
                 icon = response.read(1024 * 1024 + 1)
         except (URLError, TimeoutError, ConnectionError, IncompleteRead) as exc:
+            if isinstance(exc, HTTPError):
+                exc.close()  # the retry or the raise below does not read the answer
+            if certificate_rejected(exc):
+                raise  # retrying cannot change the server's certificate, so report it at once
             if isinstance(exc, HTTPError) and exc.code not in (408, 429) and not 500 <= exc.code < 600:
                 raise
             if attempt == 8:
                 raise
             wait_s = min(attempt * 30, 120)
             # Remote errors can contain private company URLs; report only the attempt and delay.
-            print(f"::warning::Company icon download failed (attempt {attempt}/8); retrying in {wait_s}s",
-                  file=sys.stderr, flush=True)
+            print(
+                f"::warning::Company icon download failed (attempt {attempt}/8); retrying in {wait_s}s",
+                file=sys.stderr,
+                flush=True,
+            )
             time.sleep(wait_s)
             continue
         if len(icon) > 1024 * 1024 or not icon.startswith(b"\x89PNG\r\n\x1a\n"):
@@ -187,14 +220,71 @@ def download_icon(icon_url):
         return icon
 
 
+def icon_address(entry):
+    icon_url = entry["icon_url"]
+    if icon_url.startswith("/"):
+        icon_url = entry["url"].rstrip("/") + icon_url
+    return icon_url
+
+
+def write_output(name, value):
+    if os.environ.get("GITHUB_OUTPUT"):
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+            stream.write(f"{name}={value}\n")
+
+
+def write_summary(line):
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
+            stream.write(line + "\n")
+
+
+def check_icon(entry):
+    # Runs once per company before its builds. A download outage (network, DNS, TLS, timeout or HTTP status
+    # after the retries) skips this company's build and publish with a warning, so the release run stays green.
+    # The company's installed app keeps its current version. A PNG that is invalid or oversized still fails.
+    for value in entry.values():
+        mask(value)
+    try:
+        download_icon(icon_address(entry))
+    except (OSError, IncompleteRead) as exc:
+        reason = failure_reason(exc)
+        print(
+            f"::warning::Company app icon unavailable ({reason}); this company's build and publish are skipped "
+            "and its installed app stays on its current version",
+            file=sys.stderr,
+            flush=True,
+        )
+        write_summary(
+            f"Company app skipped: icon unavailable ({reason}). The installed app stays on its current version."
+        )
+        write_output("available", "false")
+        return 0
+    except Invalid as exc:
+        raise OperationFailed(
+            f"Company app icon download (TICO_COMPANY_APPS.icon_url) failed: {failure_reason(exc)}"
+        ) from None
+    write_output("available", "true")
+    return 0
+
+
 def configure(entry, publishing=False):
     # No company identity is passed in process arguments or artifact names.
     base = url(entry.get("runner_url") or entry["url"])
-    for value in (*entry.values(), base, base + "/download/latest.json",
-                  "team.tico.env." + entry["id"], entry["deploy_role_arn"].split(":")[4]):
+    for value in (
+        *entry.values(),
+        base,
+        base + "/download/latest.json",
+        "team.tico.env." + entry["id"],
+        entry["deploy_role_arn"].split(":")[4],
+    ):
         mask(value)
-    values = {"TICO_HUB_URL": entry["url"], "TICO_APP_NAME": entry["app_name"],
-              "TICO_ENV_SLUG": entry["slug"], "COMPANY_ROLE": entry["deploy_role_arn"]}
+    values = {
+        "TICO_HUB_URL": entry["url"],
+        "TICO_APP_NAME": entry["app_name"],
+        "TICO_ENV_SLUG": entry["slug"],
+        "COMPANY_ROLE": entry["deploy_role_arn"],
+    }
     with operation("configuration environment"):
         with open(required_env("GITHUB_ENV"), "a", encoding="utf-8") as stream:
             for name, value in values.items():
@@ -204,28 +294,36 @@ def configure(entry, publishing=False):
     version = required_env("GITHUB_REF_NAME").removeprefix("v")
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?(?:\+[A-Za-z0-9.-]+)?", version):
         raise Invalid("GITHUB_REF_NAME must be a version tag for company builds")
-    icon_url = entry["icon_url"]
-    if icon_url.startswith("/"):
-        icon_url = entry["url"].rstrip("/") + icon_url
     with operation("icon download (TICO_COMPANY_APPS.icon_url)"):
-        icon = download_icon(icon_url)
+        icon = download_icon(icon_address(entry))
     with operation("icon file write"):
         Path("app/company-icon.png").write_bytes(icon)
     updater = {"endpoints": [base + "/download/latest.json"]}
     if base.startswith("http:"):
         updater["dangerousInsecureTransportProtocol"] = True
-    conf = {"version": version, "productName": entry["app_name"],
-            "identifier": "team.tico.env." + entry["id"], "mainBinaryName": "tico-" + key(entry)[:16],
-            "bundle": {"icon": ["company-icons/32x32.png", "company-icons/128x128.png",
-                                    "company-icons/128x128@2x.png", "company-icons/icon.icns", "company-icons/icon.ico"]},
-            "plugins": {"updater": updater}}
+    conf = {
+        "version": version,
+        "productName": entry["app_name"],
+        "identifier": "team.tico.env." + entry["id"],
+        "mainBinaryName": "tico-" + key(entry)[:16],
+        "bundle": {
+            "icon": [
+                "company-icons/32x32.png",
+                "company-icons/128x128.png",
+                "company-icons/128x128@2x.png",
+                "company-icons/icon.icns",
+                "company-icons/icon.ico",
+            ]
+        },
+        "plugins": {"updater": updater},
+    }
     with operation("configuration file write"):
         Path("app/company-config.json").write_text(json.dumps(conf), encoding="utf-8")
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("matrix", "configure", "build", "pack", "unpack", "publish"))
+    parser.add_argument("action", choices=("matrix", "icon", "configure", "build", "pack", "unpack", "publish"))
     parser.add_argument("--company")
     parser.add_argument("--target")
     parser.add_argument("--bundles")
@@ -247,14 +345,21 @@ def main(argv=None):
                 print("::warning::Company entries without a slug cannot be built", file=sys.stderr)
                 if not usable:
                     raise Invalid("Each company needs a slug")
-            value = json.dumps({"include": [{"company": k} for k in dict.fromkeys(key(e) for e in usable)]}, separators=(",", ":"))
+            if prerelease(os.environ.get("GITHUB_REF_NAME")):
+                print("::notice::A prerelease builds no company app", file=sys.stderr)
+                usable = []
+            value = json.dumps(
+                {"include": [{"company": k} for k in dict.fromkeys(key(e) for e in usable)]}, separators=(",", ":")
+            )
             print(value)
             if not args.dry_run and os.environ.get("GITHUB_OUTPUT"):
                 with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
                     stream.write("matrix=" + value + "\n")
                     stream.write("enabled=" + str(bool(usable)).lower() + "\n")
             return 0
-        matches = [e for e in entries if isinstance(e, dict) and isinstance(e.get("slug"), str) and key(e) == args.company]
+        matches = [
+            e for e in entries if isinstance(e, dict) and isinstance(e.get("slug"), str) and key(e) == args.company
+        ]
         entry = matches[0] if len(matches) == 1 else None
         if entry is None:
             raise Invalid("Company hash was not found in the private configuration")
@@ -264,6 +369,8 @@ def main(argv=None):
         if args.dry_run:
             print(f"Validated {args.action} for {key(entry)}")
             return 0
+        if args.action == "icon":
+            return check_icon(entry)
         if args.action == "configure":
             configure(entry, args.publishing)
         elif args.action in ("pack", "unpack"):
@@ -286,20 +393,52 @@ def main(argv=None):
             # Build tools can print derived private paths; suppress their output entirely.
             with open(os.devnull, "w") as log:
                 stage = "icon generation (cargo tauri icon)"
-                subprocess.run(["cargo", "tauri", "icon", "company-icon.png", "-o", "company-icons"],
-                               cwd="app", stdout=log, stderr=log, check=True)
+                subprocess.run(
+                    ["cargo", "tauri", "icon", "company-icon.png", "-o", "company-icons"],
+                    cwd="app",
+                    stdout=log,
+                    stderr=log,
+                    check=True,
+                )
                 stage = "build/bundling (cargo tauri build)"
-                subprocess.run(["cargo", "tauri", "build", "--target", args.target, "--bundles", args.bundles,
-                                "--config", "company-config.json"], cwd="app", stdout=log, stderr=log, check=True)
+                subprocess.run(
+                    [
+                        "cargo",
+                        "tauri",
+                        "build",
+                        "--target",
+                        args.target,
+                        "--bundles",
+                        args.bundles,
+                        "--config",
+                        "company-config.json",
+                    ],
+                    cwd="app",
+                    stdout=log,
+                    stderr=log,
+                    check=True,
+                )
         else:
             stage = "publish"
+            if prerelease(required_env("GITHUB_REF_NAME")):
+                raise Invalid("A prerelease never publishes a company app")
             if __package__:
                 from .app_release import main as release
             else:
                 from app_release import main as release
-            flags = ["--version", required_env("GITHUB_REF_NAME").removeprefix("v"), "--bucket", entry["bucket"],
-                     "--base", entry.get("runner_url") or entry["url"], "--prefix", entry.get("prefix", ""),
-                     "--quiet", "--complete", "bundles"]
+            flags = [
+                "--version",
+                required_env("GITHUB_REF_NAME").removeprefix("v"),
+                "--bucket",
+                entry["bucket"],
+                "--base",
+                entry.get("runner_url") or entry["url"],
+                "--prefix",
+                entry.get("prefix", ""),
+                "--quiet",
+                "--complete",
+                "bundles",
+            ]
             if os.environ.get("APPLE_SIGNING_IDENTITY"):
                 flags.append("--signed")
             if os.environ.get("APPLE_ID"):
@@ -315,7 +454,10 @@ def main(argv=None):
         return 1
     except SystemExit as exc:
         if exc.code:
-            print(f"::error::Company app {stage} validation failed; verify complete bundles and updater signatures", file=sys.stderr)
+            print(
+                f"::error::Company app {stage} validation failed; verify complete bundles and updater signatures",
+                file=sys.stderr,
+            )
             return 1
         return 0
 

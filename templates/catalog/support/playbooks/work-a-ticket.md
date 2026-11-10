@@ -12,7 +12,7 @@ the task note names the bucket and where the ticket went.
 
 ## 1. Read the ticket
 
-    hub task show <id>
+    tico task show <id>
 
 Read the whole thread, not the subject. If you cannot reach the source at all, say so and stop: an
 unread queue and an empty queue must never read the same.
@@ -33,10 +33,10 @@ legal matter, or a human's safety goes to a human immediately, before you finish
 
 ## 3. Research the answer
 
-    hub doc ask "<what the customer is asking, in plain words, no personal details>"
+    tico doc ask "<what the customer is asking, in plain words, no personal details>"
 
 Use the answer and its citations. `covered: false`, or an answer that contradicts what the ticket
-shows, is a doc gap: one task to the Librarian (`hub task create --owner librarian --parent <id>`) with
+shows, is a doc gap: one task to the Librarian (`tico task create --owner librarian --parent <id>`) with
 the ticket reference, the question and what you found. Never fill the gap with a guess, and never
 write the missing doc yourself.
 
@@ -54,8 +54,8 @@ One draft per ticket, on the task, never in the support tool. Each draft:
 
 ## 5. Route what is left
 
-    hub task create --owner <human> --parent <id>
-    hub task create --owner <slug> --parent <id>
+    tico task create --owner <human> --parent <id>
+    tico task create --owner <slug> --parent <id>
 
 One task per thing, with the ticket reference, what the customer could not do, and what you need
 decided. Never two tasks for the same thing, and never a second escalation of something an open task
@@ -64,7 +64,7 @@ already names. If the same problem has now arrived three times, that is one line
 
 ## 6. Finish
 
-Commit, then `hub task update <id> --status done --note`: the bucket, whether a draft is on the task,
+Commit, then `tico task done <id> -m "..." --version N`: the bucket, whether a draft is on the task,
 and who you routed it to. Add the ticket to `knowledge/follow-ups.md` with who it waits on (the customer, a colleague, a fix)
 and the next nudge date. A draft that rests on a human's word rather than a doc says so on the task.
 

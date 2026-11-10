@@ -19,14 +19,14 @@ refusal's `fix` and `link`, then end the run. Their answer, or the server, wakes
 filed for that same fix is still open, do not file another; add to it or end the run.
 
 ## A Tico bug
-When a `hub` command refuses something that should work, or Tico contradicts its manual, file it as the requester:
-`hub support file "<the command you ran, its operation_id if it had one, the error code and detail, what you expected>"`.
+When a `tico` command refuses something that should work, or Tico contradicts its manual, file it as the requester:
+`tico support file "<the command you ran, its operation_id if it had one, the error code and detail, what you expected>"`.
 Tell the person "Blocked on a Tico bug, reported as <ticket>" and stop. The report leaves the company: never paste credential
 values, tokens, customer data or message bodies. File each bug once; keep the ticket in your task note and name it on later
 runs instead of filing again. Never work around a Tico bug by hand-editing a computer (AGENT.md Boundaries).
 
 ## Waiting on a computer's update
-A computer's update (any computer's, this one's too) is read once: `hub computer list` or `hub health check`. If it is still
-waiting or updating, record that on your task (`--status waiting` with the reason) and end the run; read it again on your next
-run. Never sleep and look again: a running turn holds your own computer's update and the work queued behind it. Never stop,
+A computer's update (any computer's, this one's too) is read once: `tico computer list` or `tico health check`. If it is still
+waiting or updating, snooze your task with the reason (`tico task snooze <id> --until <in an hour> -m "Waiting for <computer>'s update" --version N`)
+and end the run; read it again when it comes back. Never sleep and look again: a running turn holds your own computer's update and the work queued behind it. Never stop,
 restart or rebuild another bot's turn, a build or an updater to hurry an update; stopping a turn is the person's choice.

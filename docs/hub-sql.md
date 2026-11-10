@@ -9,14 +9,14 @@ the caller and not by prompt text.
 - **The SQL page** (`#/sql`, under your email next to Credentials; the owner and admins, and the owner may limit it to
   the owner in Settings > People). Type, press
   ⌘↩, read the rows. The last query is remembered in the browser.
-- **`hub sql "<select>"`** from a bot run or from a computer. Prints an aligned table and a
+- **`tico sql "<select>"`** from a bot run or from a computer. Prints an aligned table and a
   trailing `N rows (M ms)` line; `--json` for the API response, `--csv` for CSV, `--max-rows N`
   to ask for fewer rows, `--param key=value` to bind `:key` (numbers bind as numbers). Inside a
-  run it is the bot. Outside a run, `hub sql` alone falls back to the computer's runner credential
+  run it is the bot. Outside a run, `tico sql` alone falls back to the computer's runner credential
   (`~/.config/tico/runner.json`) and queries as the human who registered the computer, so a
   script or an agent on Ana's Mac needs no browser session. From any other computer, a
   personal API token (Settings, Computers, API tokens; any human, unless the owner limits it to admins) makes
-  `hub` you: `export HUB_API_URL=https://hub.acme.example HUB_TOKEN=tico_pt_...` and no
+  `tico` you: `export HUB_API_URL=https://hub.acme.example HUB_TOKEN=tico_pt_...` and no
   `HUB_BOT` ([How Tico works](how-it-works.md), "Calling the API from a script").
 - **`POST /api/v2/sql`** with `{"sql": "...", "params": [...] | {...}, "max_rows": N}` →
   `{"columns": [...], "rows": [[...]], "row_count": N, "truncated": bool, "ms": N}`. Errors are
@@ -75,13 +75,13 @@ reviews), `runners` (credential hashes) with `runner_states` (what each computer
 
 ## Stable and unstable tables
 
-Twenty-three tables are stable. A change to one of their names or columns is announced in the release notes, with
+Twenty tables are stable. A change to one of their names or columns is announced in the release notes, with
 what to do about it. Every other table on this page is unstable: it can be renamed, merged or dropped in any release,
 so a query against one may need a change after an upgrade.
 
 The stable tables are `tasks`, `messages`, `conversations`, `bots`, `humans`, `principals`, `jobs`, `attempts`,
 `automations`, `automation_runs`, `goals`, `goal_kpis`, `kpis`, `kpi_readings`, `bot_files`, `pages`, `meetings`,
-`approvals`, `cards`, `docs`, `task_types`, `task_steps` and `runners`. `runners` is in the set, but SQL never reads it:
+`cards`, `docs` and `runners`. `runners` is in the set, but SQL never reads it:
 its rows hold credential hashes ([Reserved](#what-you-may-read), above).
 
 ### Naming
@@ -93,7 +93,7 @@ its rows hold credential hashes ([Reserved](#what-you-may-read), above).
 - `status` is a lifecycle a person sees and filters by (`tasks.status`, `goals.status`). `state` is a step the machinery
   is in, set by code (`jobs.state`, `attempts.state`). A machine step on a table that already has a `status` is named
   `<process>_state`. `bots.state` is the bot's lifecycle and keeps its name. Other value lists take their own name
-  (`approvals.decision`, `goals.status_source`). Each list has one spelling per meaning (`canceled`, not `cancelled`).
+  (`goals.status_source`). Each list has one spelling per meaning (`canceled`, not `cancelled`).
   [Status and state columns](status-and-state.md) gives every list and how the database enforces it.
 - A yes-or-no column reads as a question (`enabled`, `locked`), with no `is_` prefix. Soft deletion is `deleted_at`.
 - JSON is stored as text in a column named for what it holds (`refs`, `labels`, `payload`). There is no `_json`
@@ -104,20 +104,18 @@ its rows hold credential hashes ([Reserved](#what-you-may-read), above).
 ### Actor columns
 
 Each column in the stable set that records who did something, under its current name. An actor string is `human:<id>`,
-`bot:<id>` or a system name such as `keeper` or `system:company`; join it to `principals.id`. A bot id or a human id
+`bot:<id>` or a system name such as `system:company`; join it to `principals.id`. A bot id or a human id
 is the bare id, without the prefix.
 
 | Table | Columns | Holds |
 |---|---|---|
 | `tasks` | `requester_id, owner_id, closed_by_id, checkpoint_by_id` | actor string |
-| `task_holds` | `by_id` | actor string (who snoozed it) |
 | `messages` | `sender_id, recipient_id, answered_by_id` | actor string |
 | `conversations` | `owner_id` | actor string |
 | `goals` | `owner_id, status_by_id, last_read_by_id, why_by_id, created_by_id` | actor string (`owner_id` can also be `company`) |
 | `goal_kpis` | `created_by_id, updated_by_id` | actor string |
 | `kpis` | `owner_id, created_by_id, archived_by_id` | actor string |
 | `kpi_readings` | `actor_id` | actor string |
-| `approvals` | `requested_by_id, decided_by_id, decision_owner` | actor string |
 | `automations` | `owner_id` | `person:<id>`, `bot:<id>` or `group:<name>` |
 | `automations` | `created_by_id` | actor string |
 | `cards` | `made_by_id, updated_by_id` | actor string |
@@ -125,7 +123,6 @@ is the bare id, without the prefix.
 | `meetings` | `owner` | actor string |
 | `meetings` | `recorded_by, uploaded_by` | an email address or a runner id |
 | `jobs`, `attempts`, `bot_files` | `bot_id` | bot id |
-| `task_types` | `manager` | bot id |
 | `runners` | `owner_id` | human id |
 
 ## The useful tables
@@ -144,11 +141,9 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `principals` | `id, kind, deleted_at` | one row per human, bot and known system actor: `id` is the actor string, `kind` is human, bot, agent, service or system. `deleted_at` is set when the person or bot is removed; the row stays so history still names it |
 | `seats` | `id, title, description, reports_to, team, created_at, created_by, updated_at, updated_by, closed_at, closed_by` | Recruiting seats, readable by everyone like the chart; open ones have `closed_at` NULL; `reports_to` is a bot slug, `human:<id>` or `seat:<id>` |
 | `conversations` | `id, kind, scope, subject, task_id, participants, owner_id, room_key, created_at, last_message_at, closed_at` | `scope`: direct, personal, shared, task |
-| `messages` | `id, conversation_id, sender_id, recipient_id, kind, body, refs, in_reply_to, created_at, delivered_at, read_at, wait_s` | `kind`: say, ask, answer, notice, steer |
-| `tasks` | `id, title, body, requester_id, owner_id, status, due_at, goal_id, conversation_id, created_at, updated_at, done_at, closed_at, closed_by_id, note, version, acceptance, type_id, step_id, number, step_rank, waiting_on` | `status`: open, doing, waiting, review, ready, done, closed, declined; `waiting_on` the person a waiting task waits on; `number` is the team-wide ticket number a numbered type gives (NULL until one does), `step_rank` the task's place within its step, lower first ([Tasks](tasks.md)) |
-| `task_relations` | `from_task, to_task, kind, created_by, created_at` | every task-to-task relationship, read only when both tasks are; `kind`: `parent` (from is a subtask of to), `blocks` (from blocks to), `related` (stored once, lower id first), `duplicate_of`, `follow_up` (from was split off or followed up from to). It replaces the old `tasks.parent_id` and `tasks.blocked_by`: a task's parent is `SELECT to_task FROM task_relations WHERE from_task=:task AND kind='parent'`, its subtasks `SELECT from_task ... WHERE to_task=:task AND kind='parent'`, its blockers `SELECT from_task ... WHERE to_task=:task AND kind='blocks'` |
-| `task_holds` | `id, task_id, kind, cause, reason, by_id, until_at, from_step_id, from_status, gate, cleared_at, created_at, released_at` | a task's own holds, read with their task: `kind` `blocked` (moved to Blocked; `cause`: manual, dependency, stranded, gate, check, worktree; `from_step_id`/`from_status` where clearing it returns the task) or `snoozed` (`until_at`, `by_id`). A task has at most one open hold of each kind (`released_at` NULL); a released one stays as history. It replaces the old `tasks.snoozed_*`, `tasks.blocked_*` and `tasks.holds_cleared_at` columns: the tasks snoozed now are `SELECT task_id FROM task_holds WHERE kind='snoozed' AND released_at IS NULL` |
-| `task_types` | `id, name, numbered, created_at, updated_at` | types and, in `task_steps(id, type_id, name, position, status)`, their steps; `numbered` is 1 when the type numbers its tasks |
+| `messages` | `id, conversation_id, sender_id, recipient_id, kind, body, refs, in_reply_to, created_at, delivered_at, read_at, wait_s` | `kind`: say, notice, steer (older `ask` and `answer` rows are history only) |
+| `tasks` | `id, title, body, requester_id, owner_id, assignee_id, status, pipeline_id, stage_id, due_at, goal_id, conversation_id, created_at, updated_at, done_at, closed_at, closed_by_id, note, version, acceptance, number` | `status`: open, done, closed. `owner_id` is who has the task now, `assignee_id` who it was given to; stage, owner and status change only through the task engine. What an open task waits on is worked out, not stored: `task_waits` reads it |
+| `task_relations` | `from_task, to_task, kind, created_by, created_at` | every task-to-task relationship, read only when both tasks are; `kind`: `parent` (from is a sub-task of to: the task that filed it), `related` (stored once, lower id first), `duplicate_of`, `follow_up` (from was split off or followed up from to). A task's parent is `SELECT to_task FROM task_relations WHERE from_task=:task AND kind='parent'`, its sub-tasks `SELECT from_task ... WHERE to_task=:task AND kind='parent'`. A relation is a note: a task waits only on its requirements and the tasks it filed |
 | `history_events` | `subject_type, subject_id, created_at, actor_id, kind, old, new, note, action_id, via, data` | every change to a task, goal, the company profile, the strategy or the market graph, one row each: `subject_type` is `task`, `goal`, `company`, `strategy` or `market_entity`/`market_edge`/`market_evidence`/`market_document`; `subject_id` the task, goal or market row (`company` and `strategy` for those two); `kind` the field that changed. A goal's `status` row has `data` `{"status_by": ..., "status_source": ...}` (who set the colour and how); a market row may carry `{"insight_id": ...}`; a strategy row's `data` is the change. You see a task's rows when you can see the task, a goal's when you can see the goal, the strategy's when you own the install |
 | `task_roles` | `task_id, role, actor, added_by, created_at` | who is on a task, by role (a short name the team chooses: `developer`, `reviewer`, `qa` ...); one actor may hold several roles on a task |
 | `goals` | `id, title, owner_id, parent_id, body, status, status_note, status_by_id, status_at, status_source, suggest_status, suggest_note, suggest_at, rank, last_read_at, last_read_by_id, created_at, created_by_id, updated_at` | what every human and bot is for; `status`: red, yellow, green, gray (no data), done, dropped, or NULL while not yet scored; `status_source`: `auto` (the Strategy Bot's arithmetic) or `person` (set by hand, sticks until handed back); `suggest_*` is what the arithmetic says over a human's colour; `parent_id` is the goal it supports (optional); `owner` is `bot:x`, `human:x` or `company`; `tasks.goal_id` names the goal a task serves |
@@ -158,11 +153,11 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `kpi_definitions` | `kpi_id, version, created_at, actor, name, definition, unit, direction, cadence, source_note` | every version of a KPI's definition |
 | `goal_checkins` | `goal_id, kpi_id, created_at, author, sender_id, body, signal` | the owner's own words on how a goal is going; `author` recorded it, `sender_id` whose words they are; `signal`: on_track, at_risk, off_track |
 | `goal_proposals` | `id, kind, goal_id, kpi_id, payload, reason, proposed_by, proposed_at, status, decided_by, decided_at` | a change waiting for its owner to confirm |
-| `goal_asks` | `kind, ref, owner, task_id, created_at` | the Strategy Bot's task asking a person about a KPI or proposal; `kind`: kpi_red, kpi_stale, proposal; `ref`: the KPI or proposal id |
+| `goal_asks` | `kind, ref, owner, task_id, created_at` | the Strategy Bot's task asking a person about a KPI or proposal; `kind`: kpi_red, kpi_stale, proposal; `ref`: the KPI id (kpi_red), `kpis` (kpi_stale: one per person, listing their out-of-date measures) or the proposal id |
 | `task_delegations` | `task_id, delegate, requested_by, message_id, expires_at` | |
-| `approvals` | `id, kind, task_id, message_id, payload, requested_by_id, decided_by_id, decision, decided_at, consumed_at, created_at` | `kind`: send, spend, publish, merge |
 | `jobs` | `id, message_id, bot_id, state, created_at, attempt_id` | one per message a bot has to act on; `state`: queued, leased, running, input, completed, failed, uncertain, canceled |
 | `attempts` | `id, job_id, bot_id, runner_id, state, lease_until, created_at, started_at, finished_at, settled_at, result, final_text, trigger, message_id, task_id, exit, summary, input_tokens, cached_tokens, output_tokens, prompt_tokens, usage_model, provider, est_cost_usd, usage_reason, billing, trigger_kind, trigger_source, purpose, writes, outcome, did_nothing, rotated, session_kind, session_why, rule_id` | one per run (`state`: leased, running, input, completed, failed, interrupted, expired); its streamed output is `attempt_events(attempt_id, seq, kind, payload, created_at)`. `created_at` is when the run was claimed; `settled_at` when its record was closed (exit, summary and usage written), null while it runs; `exit` is null while running. A run recorded with no lease (the demo seed, a run from before leases) has a null `job_id` and `state`. An attempt with a `job_id` and a null `trigger` failed before its run record was written (old history); filter `job_id IS NULL OR trigger IS NOT NULL` for runs with a record. `usage_model` is the model its usage was reported for (`model` is the model record the claim handed out). Until migration 0060 the run record was a separate `turns` table with the same id: its `finished_at` is now `settled_at`, its `model` `usage_model`, `started_at` `created_at` and `bot` `bot_id`. **Sum `input_tokens`, `cached_tokens`, `output_tokens` and `est_cost_usd`** (input = `input_tokens` + `cached_tokens`); every run finished from this change on, failed, interrupted or usage-limited, has them set (older runs keep what they had, and some have none). A run whose runner counted nothing reads 0 tokens and $0, and `usage_reason` says why (`usage_unreported`, `usage_limited`, `no_result`); `cost_unpriced` means tokens were counted but the model has no list price, so `est_cost_usd` is null. On a run finished from this change on, a null `usage_reason` means usage was measured; an older run has a null reason whether or not it was. The older one-number `tokens_in`, `tokens_out` and `cost` columns are gone: their values moved into `input_tokens`, `output_tokens` and `est_cost_usd` where those were empty (`backend/migrations/0009_drop_turns_legacy_usage.py`). `trigger_kind`, `writes` and `outcome` are explained under [What woke each run](#what-woke-each-run-and-what-it-did) |
+| `task_waits` | `task_id, position, state, waiting_on, line, since, until` | worked out for the statement that names it, never stored: what each open task you may read waits on, as the engine reads it (`tico task show` and the task's `turn` say the same). `position` 0 is the headline. `state` is one of snoozed, person, paused, bot, jev, github, tasks, room, by_hand; `waiting_on` is the person or bot (empty when you may not see them), a sub-task's id for `tasks` (none, and the line "A sub-task", when you may not read it; a line that says why a sub-task you may not read was closed says only "A sub-task was closed"), the stage for `room` and `by_hand` |
 | `run_weekly` | `week, bot, trigger, purpose, runs, input_tokens, cached_input_tokens, output_tokens, acted, no_change, nothing_to_do, unknown, did_nothing, rotated, acted_pct, no_change_pct, nothing_to_do_pct, unknown_pct` | a read-only view: runs per week, bot, trigger and purpose, every attempt counted ([below](#what-woke-each-run-and-what-it-did)) |
 | `rule_weekly` | `week, bot, rule, runs, input_tokens, cached_input_tokens, output_tokens, acted, did_nothing, did_nothing_pct` | a read-only view: runs per week, bot and [wake rule](how-it-works.md#what-happens-when) (`attempts.rule_id`, the rule that woke the run; `unknown` for a run before rules), with tokens and the share that did nothing |
 | `schedules` | `id, bot, routine_key, title, cron, event_name, playbook, last_fired_at, next_due_at, deleted_at` (`timezone` and `enabled` are in `schedule_config(schedule_id, timezone, enabled)`) | routines from before Automations, kept but no longer fired (`docs/routines.md`); `schedule_occurrences(schedule_id, occurrence, task_id, outcome)` says what each firing did |
@@ -173,7 +168,7 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `refusals` | `created_at, actor, rule, detail, severity` | the rule a bot broke |
 | `meetings` | `id, title, owner, recorded_by, transcript_readable, notes, created_at, updated_at` | your notes; every team meeting |
 | `meeting_items` | `id, meeting_id, section, text, detail, quote, at_ms, status, created_by, updated_by, pushed_at, result_ref, created_at, updated_at` | a meeting's action items; `section`: doc, task, feature (older rows may say decision or question); `status`: proposed, pushed, dismissed; `result_ref` is the Tico task a push made. Visible exactly where its meeting is ([Meetings](meetings.md), What a meeting turns into) |
-| `meeting_comments` | `id, meeting_id, author, text, at_ms, created_at` | the thread beside a meeting: anyone who can open it can add to it ([Meetings](meetings.md)). Visible exactly where its meeting is |
+| `meeting_comments` | `id, meeting_id, author, text, at_ms, created_at` | an older thread beside a meeting, no longer written or shown ([Meetings](meetings.md)). Visible exactly where its meeting is |
 | `import_refs` | `source, external_id, meeting_id, runner_id, created_at` | which outside record a meeting was imported from — one row per Close call imported before the transcript-only worker ([Meetings](meetings.md), Close). Visible exactly where its meeting is |
 | `docs` | `id, path, title, body, locked, version, created_by_id, created_at, updated_by_id, updated_at` | internal Docs, readable by teammates |
 | `doc_versions` | `doc_id, version, title, path, body, actor, created_at, note` | versions of visible internal Docs |
@@ -181,16 +176,16 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `bot_files` | `id, bot_id, scope, identity, title, kind, locator, current_version, task_id, conversation_id` | Files, with the same task, thread or bot visibility as their APIs |
 | `bot_file_versions`, `bot_file_activity` | `file_id, version` or `file_id, action, actor, created_at` | versions and activity of visible Files |
 | `pages` | `file_id, cadence, as_of, replaced_by_id, archived, created_at, updated_at` | a bot's File published as a page: `file_id` is `bot_files.id`; `cadence`: none, daily, weekly, monthly; `as_of` is the date its data is from; `replaced_by` names the newer page, if any ([Pages](pages.md)) |
-| `cards` | `id, template, settings, title, made_by_id, created_at, updated_at, updated_by_id` | a built-in card: `template` is one of Tico's own templates and `settings` its checked settings. A card's numbers are worked out when it is read, for the reader, and are not stored ([Overview](overview.md)) |
-| `learnings` | `id, integration, actor, text, created_at, deleted_at` | Tools: what bots and humans learned about a tool (`integration` is the stored column; `integrations/`, `hub tool learn`) |
-| `assistant_action_weekly`, `mcp_call_weekly` | `week, proposer, status, actions, share_pct` and `week, bot, tool, calls, errors, error_pct, avg_ms, max_ms` | read-only totals for the owner and a bot the owner grants them (API only: `PUT /api/v2/outcome-stats/readers/<slug>`; revoke with `read: false`): how Assistant and BotOps proposals settled (`status`: done, failed, canceled, expired ...) and how bot MCP tool calls went, per week. No row, text, id or person is in them; the underlying `assistant_actions` stays unreadable to a bot. The same bot may call `hub mcp stats` (no `--via`) |
+| `cards` | `id, template, settings, title, made_by_id, created_at, updated_at, updated_by_id` | a built-in card: `template` is one of Tico's own templates and `settings` its checked settings. A card's numbers are worked out when it is read, for the reader, and are not stored ([Company](overview.md)) |
+| `learnings` | `id, integration, actor, text, created_at, deleted_at` | Tools: what bots and humans learned about a tool (`integration` is the stored column; `integrations/`, `tico tool learn`) |
+| `assistant_action_weekly`, `mcp_call_weekly` | `week, proposer, status, actions, share_pct` and `week, bot, tool, calls, errors, error_pct, avg_ms, max_ms` | read-only totals for the owner and a bot the owner grants them (API only: `PUT /api/v2/outcome-stats/readers/<slug>`; revoke with `read: false`): how Assistant and BotOps proposals settled (`status`: done, failed, canceled, expired ...) and how bot MCP tool calls went, per week. No row, text, id or person is in them; the underlying `assistant_actions` stays unreadable to a bot. The same bot may call `tico mcp stats` (no `--via`) |
 
 Only the signed-in owner can grant or revoke access; personal API tokens and delegated Assistant or BotOps turns cannot.
 Delegated turns also cannot read these totals through the owner's role. Revocation removes the bot's access on its next
 request. Buckets are not suppressed: a count of one is visible, without the underlying proposal or person's identity.
-People's MCP calls are excluded from `mcp_call_weekly` and a granted bot's `hub mcp stats`. Assistant proposal
+People's MCP calls are excluded from `mcp_call_weekly` and a granted bot's `tico mcp stats`. Assistant proposal
 totals combine all owners by week, proposer and status; action routes and methods are not exposed.
-Tool names in the MCP totals and a granted bot's `hub mcp stats` are registered hub tool names; unknown names count as `other`.
+Tool names in the MCP totals and a granted bot's `tico mcp stats` are registered hub tool names; unknown names count as `other`.
 
 `sqlite_master` lists the rest (`SELECT name, sql FROM sqlite_master WHERE type='table'`).
 
@@ -207,15 +202,7 @@ My open tasks (a bot's own; a human swaps in `human:<id>`):
 
 ```sql
 SELECT id, status, title, requester_id, due_at, updated_at
-FROM tasks WHERE owner_id=:me AND status IN ('open','doing','waiting') ORDER BY due_at, updated_at
-```
-
-What is waiting on a human, and for how long:
-
-```sql
-SELECT t.owner_id, t.title, t.updated_at, substr(m.body, 1, 100) AS question
-FROM tasks t JOIN messages m ON m.conversation_id=t.conversation_id AND m.kind='ask'
-WHERE t.status='waiting' ORDER BY t.updated_at
+FROM tasks WHERE owner_id=:me AND status='open' ORDER BY due_at, updated_at
 ```
 
 The last run of every bot, with the week's count and failures:
@@ -228,7 +215,7 @@ GROUP BY bot_id ORDER BY last_run DESC
 ```
 
 Successful runs finish with `completed`. `failed` and `expired` are terminal errors;
-a bot reporting blocked work can still complete its run successfully. Health counts failed and
+a bot that could not finish its work can still complete its run successfully. Health counts failed and
 expired attempts in the last 24 hours. Runs includes those attempts even when no run record was written
 (a job and a null `trigger`), with the attempt ID and reason. Drop the `trigger` filter when counting all execution attempts.
 
@@ -238,29 +225,32 @@ Every run records what woke it (`attempts.trigger_kind`), its tokens, and whethe
 (`attempts.outcome`). All three come from plain code, not from asking a model:
 
 - **`trigger_kind`**: `comment` (a bot wrote to it: a task comment or a message), `person_message` (a person
-  wrote to it, or pressed Run now), `status_or_relation` (a task of its moved: assigned, done, unblocked, a
-  subtask finished, reopened, snoozed by someone), `pr_checks` (its pull request's checks, review comments,
-  merge conflict, merge or release), `stall_check` (legacy: a ticket late at its working step, a task
-  not starting, a stale ask, a worktree left idle), `schedule` (a routine firing, a due date, a snooze ending,
-  a next-run task, an update request), `background_done` (background commands an earlier turn left running
-  when the runner ended it on its wait have ended), `task_roundup` (the list of a bot's tasks: a follow-up time that came, an unanswered question, a task to restate, a late ticket, an engineering exception, a backlog, a missed update or a quiet task, one per run) or `other` (anything else: a Slack digest, a meeting turn, a worktree
+  wrote to it, or pressed Run now), `status_or_relation` (a task of its moved: assigned, done, a
+  sub-task finished, reopened, snoozed by someone), `pr_checks` (its pull request's checks, review comments,
+  merge conflict, merge or release), `stall_check` (the never-stuck check woke it again after
+  it stopped early, or its task is Late), `schedule` (a routine firing, a due date, a snooze ending,
+  an update request), `release_published` (a release it follows was published), `task_turn` (its
+  turn on a task), `background_done` (background commands an earlier turn left running
+  when the runner ended it on its wait have ended), or `other` (anything else: a Slack digest, a meeting turn, a
+  worktree
   becoming ready). `trigger_source` names the event behind it where there is one: the message itself for
   `comment` and `person_message`, the subtask, the routine, the worktree.
 - **`writes`**: the hub writes the run made with its own run token (a task change, comment, link, message,
-  file, approval request), plus one for a reply Tico posted for it (to a person, or an answer to a bot's ask). Reads and bookkeeping are not
-  writes: `hub sql`, opening a thread, marking messages read, its own status line, refusals and lint.
+  file, ask), plus one for a reply Tico posted for it (to a person, or a reply to a bot's question). Reads and
+  bookkeeping are not
+  writes: `tico sql`, opening a thread, marking messages read, its own status line, refusals and lint.
   A git push from a worktree of the run's own task counts one per push: its runner reports them with the run's
-  result. A commit or pull request counts once Tico hears of it (`hub task link`, a task note, a push); a local
+  result. A commit or pull request counts once Tico hears of it (`tico task link`, a task note, a push); a local
   commit Tico never sees cannot be counted.
 - **`outcome`**: `acted` when `writes` is above zero; otherwise `no_change` when the run's task is still open
   as it ends (it looked, and nothing had moved) and `nothing_to_do` when there was no open task to act on (no
-  task, or one already done, closed or declined).
-- **What became of it**: when a bot's task sits at `done` or `review` and someone other than the bot or the keeper
-  moves it on, the run that delivered it gets one `turn.outcome` event (`target` the run's attempt id, `detail`
-  `{task_id, outcome, from, to}`): `accepted` (closed, or `review` moved to `done`), `edited` (its title or body
-  rewritten) or `overridden` (sent back to work, declined or handed to another owner). The first is the run's outcome;
-  later moves add none. `SELECT json_extract(detail,'$.outcome') o, count(*) FROM events WHERE
-  action='turn.outcome' GROUP BY o`. A caller's own decision calls get the same from `hub decision outcome`
+  task, or one already done or closed).
+- **What became of it**: when someone other than the bot or Tico acts on a bot's result, the run that delivered it
+  gets one `turn.outcome` event (`target` the run's attempt id, `detail` `{task_id, outcome, from, to}`): `accepted`
+  (the task reached Done by someone else's act, such as a person's OK), `edited` (a Done task's title or body
+  rewritten) or `overridden` (a Done task reopened, or the task given to someone else). The first is the run's outcome;
+  later ones add none. `SELECT json_extract(detail,'$.outcome') o, count(*) FROM events WHERE
+  action='turn.outcome' GROUP BY o`. A caller's own decision calls get the same from `tico decision outcome`
   (`decision.outcome` events, target the `judge.call` event id).
 - **`did_nothing`**: 1 when `writes` is 0, else 0: the exact flag to measure against. It sees every write that
   reaches Tico with the run's token, and every push from its task's worktrees; a push from anywhere else (the
@@ -334,8 +324,8 @@ FROM events WHERE action = 'reply.withheld' ORDER BY created_at DESC LIMIT 50
 Who asked what today:
 
 ```sql
-SELECT created_at, sender_id, recipient_id, substr(body, 1, 90) AS ask
-FROM messages WHERE kind='ask' AND created_at >= strftime('%Y-%m-%d', 'now') ORDER BY created_at DESC
+SELECT created_at, requester_id, owner_id, json_extract(questions, '$[0].question') AS question
+FROM tasks WHERE questions IS NOT NULL AND created_at >= strftime('%Y-%m-%d', 'now') ORDER BY created_at DESC
 ```
 
 Routine outcomes from before Automations, most recent first:
@@ -383,7 +373,7 @@ SELECT created_at, actor, json_extract(detail, '$.rows') AS rows, json_extract(d
 FROM events WHERE action='sql.query' ORDER BY created_at DESC LIMIT 20
 ```
 
-From a bot: `hub sql "SELECT ..." --param me=bot:seo`. From Ana's Mac: `scripts/hub sql "SELECT ..."`.
+From a bot: `tico sql "SELECT ..." --param me=bot:seo`. From Ana's Mac: `scripts/tico sql "SELECT ..."`.
 
 For a task's Slack notification status (Owner only):
 
@@ -413,15 +403,5 @@ Use these tables instead of the retained `tasks.labels` column.
 
 ## Task pipelines
 
-`task_types(id, name, created_at, updated_at)` and
-`task_steps(id, type_id, name, position, status)` describe the team's pipelines. Every task carries
-`type_id` and `step_id`; `status` stays the contract. Both definition tables are readable by every
-SQL caller. Joining to `tasks` still returns only tasks that caller may read.
-
-```sql
-SELECT t.id, t.title, t.status, ty.name AS type, s.name AS step
-FROM tasks t
-JOIN task_types ty ON ty.id = t.type_id
-LEFT JOIN task_steps s ON s.id = t.step_id
-ORDER BY t.updated_at DESC
-```
+A task's `pipeline_id` and `stage_id` say where it is; `status` is `open`, `done` or `closed`. The pipelines' own
+settings are read with `GET /api/v2/pipelines` ([Tasks](tasks.md#pipelines-and-stages)), not through SQL.

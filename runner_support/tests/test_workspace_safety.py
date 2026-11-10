@@ -1,4 +1,5 @@
 """Every bot workspace write checks its final destination before any setup or Git."""
+
 from contextlib import nullcontext
 from unittest import mock
 
@@ -9,7 +10,9 @@ from runner_support import isolation, repositories, worktrees
 
 
 @pytest.mark.parametrize('existing', [False, True], ids=['linked-parent', 'linked-destination'])
-@pytest.mark.parametrize('operation', ['mkdir', 'base', 'prepare', 'restore', 'resume', 'locks', 'marker', 'git', 'scratch'])
+@pytest.mark.parametrize(
+    'operation', ['mkdir', 'base', 'prepare', 'restore', 'resume', 'locks', 'marker', 'git', 'scratch']
+)
 def test_workspace_destinations_refuse_the_install_before_writing(tmp_path, monkeypatch, operation, existing):
     install = tmp_path / 'install'
     target = install / 'templates'
@@ -45,8 +48,9 @@ def test_workspace_destinations_refuse_the_install_before_writing(tmp_path, monk
             elif operation == 'restore':
                 worktrees.act(workspace, row, 'restore', {})
             elif operation == 'resume':
-                worktrees._create_or_resume_checkout(workspace / relative, workspace, workspace / 'repos/base',
-                                                     'main', {}, {}, 'task', {}, mock.Mock())
+                worktrees._create_or_resume_checkout(
+                    workspace / relative, workspace, workspace / 'repos/base', 'main', {}, {}, 'task', {}, mock.Mock()
+                )
             elif operation == 'locks':
                 context = worktrees.locked(workspace, 'task')
             elif operation == 'marker':

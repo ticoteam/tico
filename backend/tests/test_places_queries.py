@@ -1,10 +1,12 @@
 """GET /api/v2/places/{place} reads each pin, its card or page and what a card shows in batches, so the statements
 it takes do not grow with how many pins a place has (or how many cards of the same kind it shows)."""
+
 import contextlib
 
-from backend.tests import test_api as T
-from backend.tests.test_api import api, post, put  # noqa: F401  (the api fixture)
-from backend.tests.test_cards import page, task
+from backend.tests.helpers import api as T
+from backend.tests.helpers.api_app import api_client
+from backend.tests.helpers.api import post, put  # noqa: F401  (the api fixture)
+from backend.tests.helpers.cards import page, task
 
 # Card kinds a Dashboard can take, each read per card.
 KINDS = [
@@ -37,7 +39,9 @@ def place_statements(api, monkeypatch, path, token="ana-test"):
                     yield c
                 finally:
                     c.set_trace_callback(None)
+
         return borrowed
+
     with monkeypatch.context() as patched:
         for name in ("read", "read_transaction", "transaction"):
             patched.setattr(store, name, traced(getattr(store, name)))
@@ -51,7 +55,7 @@ def fill(api, count):
     holds 60 pins (PLACE_MAX), the four defaults among them."""
     put(api, "places/dashboard", {})
     for k in range(count):
-        task(api, "bot:ops", f"Ops work {k}", status="doing" if k % 2 else "open")
+        task(api, "bot:ops", f"Ops work {k}")
         fid = page(api, "ops", f"Weekly numbers {k}")
         post(api, "pins", {"place": "dashboard", "item": "page:" + fid})
         for template, settings in KINDS:
@@ -62,7 +66,7 @@ def test_the_dashboard_takes_the_same_statements_however_many_pins_it_shows(tmp_
     counted = {}
     for name, count in (("small", 1), ("big", 5)):
         (tmp_path / name).mkdir()
-        install = T.api.__wrapped__(tmp_path / name, None)
+        install = api_client(tmp_path / name, None)
         api = next(install)
         try:
             fill(api, count)
@@ -74,4 +78,5 @@ def test_the_dashboard_takes_the_same_statements_however_many_pins_it_shows(tmp_
     assert few > 0 and many > 0, (few, many)
     assert many - few <= 4, (
         f"GET /api/v2/places/dashboard takes {many} statements with 5 more pins a kind against {few} with 1: a read "
-        "runs once per pin again instead of once for the whole place. Batch it (see cards.prime_pins).")
+        "runs once per pin again instead of once for the whole place. Batch it (see cards.prime_pins)."
+    )

@@ -1,21 +1,32 @@
 """Personal import review protects drafts and publishes exactly once."""
+
 import json
 import sqlite3
 
 import pytest
 
 from backend import hubdb as H, meetings
-from backend.tests.test_api import api, as_member, get, headers, post, restrict, runner, setup_attempt  # noqa: F401
-from backend.tests.test_mcp import call
-from backend.tests.test_member_bots import botops, turn  # noqa: F401
-from backend.tests.test_lifecycle import debrief
-from backend.tests.test_new_bot_flows import create_bot
+from backend.tests.helpers.api import as_member, get, headers, post, restrict, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.mcp import call
+from backend.tests.helpers.member_bots import botops, turn  # noqa: F401
+from backend.tests.helpers.lifecycle import debrief
+from backend.tests.helpers.new_bot_flows import create_bot
 
 
 def imported(api, token='ben-test', **fields):
-    return post(api, 'meetings/import', {'source': 'zoom', 'external_id': 'queue-1',
-                'title': 'Planning', 'transcript': 'Sam: Review this transcript.',
-                'participants': ['cara@acme.example'], **fields}, token)
+    return post(
+        api,
+        'meetings/import',
+        {
+            'source': 'zoom',
+            'external_id': 'queue-1',
+            'title': 'Planning',
+            'transcript': 'Sam: Review this transcript.',
+            'participants': ['cara@acme.example'],
+            **fields,
+        },
+        token,
+    )
 
 
 def review(api, rid, action='approve', token='ben-test', **fields):
@@ -40,14 +51,24 @@ def test_pending_hidden_from_owner_participants_bots_search_sql_and_send(api):
         assert get(api, 'meetings/search', token)['results'] == []
         assert api.get('/api/v2/meetings/transcript?id=' + rid, headers=headers(token)).status_code == 404
         assert post(api, 'sql', {'sql': 'SELECT id FROM meetings'}, token)['rows'] == []
-        assert post(api, f'meetings/{rid}/review', {'action': 'approve'}, token,
-                    expected=403 if token == attempt['token'] else 404)
+        assert post(
+            api,
+            f'meetings/{rid}/review',
+            {'action': 'approve'},
+            token,
+            expected=403 if token == attempt['token'] else 404,
+        )
     # Even the filed-for person's search/export waits until sharing; the queue is their read path.
     assert get(api, 'meetings/search', 'ben-test')['results'] == []
     assert queue(api, 'ana-test')['pending_count'] == 0
     response = api.post('/api/meetings/' + rid + '/send', json={'bot_id': 'ops'}, headers=headers('ben-test'))
     assert response.status_code == 409
-    assert post(api, 'sql', {'sql': "SELECT target FROM events WHERE action IN ('note.created','meeting.imported')"})['rows'] == []
+    assert (
+        post(api, 'sql', {'sql': "SELECT target FROM events WHERE action IN ('note.created','meeting.imported')"})[
+            'rows'
+        ]
+        == []
+    )
 
 
 def test_manual_and_explicit_live_human_imports_but_machine_cannot_bypass(api):
@@ -87,7 +108,9 @@ def test_dismiss_survives_sync_restore_and_batch_selection_is_atomic(api):
     assert review(api, first['id'], 'restore')['review_state'] == 'pending'
     second = imported(api, external_id='queue-2')
     other = imported(api, token='cara-test')
-    assert post(api, 'meetings/review', {'action': 'approve_all', 'ids': [first['id'], other['id']]}, 'ben-test', expected=404)
+    assert post(
+        api, 'meetings/review', {'action': 'approve_all', 'ids': [first['id'], other['id']]}, 'ben-test', expected=404
+    )
     assert queue(api)['count'] == 2
     shared = post(api, 'meetings/review', {'action': 'approve_all'}, 'ben-test')
     assert shared['count'] == 2 and shared['pending_count'] == 0
@@ -104,8 +127,10 @@ def test_legacy_hub_migration_backfills_live_and_cloud_restart_keeps_queue(api, 
     for version, script in enumerate(H.MIGRATIONS[:19], 1):
         H._apply(db, script)
         db.execute(f'PRAGMA user_version={version}')
-    db.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-               ('legacy', 'Meeting', 'ben@acme.example', json.dumps({'id': 'legacy', 'kind': 'meeting'}), H.now(), H.now()))
+    db.execute(
+        "INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+        ('legacy', 'Meeting', 'ben@acme.example', json.dumps({'id': 'legacy', 'kind': 'meeting'}), H.now(), H.now()),
+    )
     H.migrate(db)
     assert db.execute('PRAGMA user_version').fetchone()[0] == len(H.MIGRATIONS)
     assert meetings.get('legacy', db)['review_state'] == 'live'
@@ -116,7 +141,9 @@ def test_legacy_hub_migration_backfills_live_and_cloud_restart_keeps_queue(api, 
     api.app.state.store.initialize(seed_market=False)
     assert queue(api)['meetings'][0]['id'] == made['id']
     with api.app.state.store.read() as c:
-        assert {53, 54, 55, 56, 57} <= {r[0] for r in c.execute('SELECT version FROM cloud_migrations WHERE version>=53')}
+        assert {53, 54, 55, 56, 57} <= {
+            r[0] for r in c.execute('SELECT version FROM cloud_migrations WHERE version>=53')
+        }
 
 
 def test_botops_can_review_only_the_requesting_persons_queue(api, botops):
@@ -139,8 +166,10 @@ def test_released_migrations_remain_in_place(tmp_path, version):
         H._apply(db, script)
         db.execute(f'PRAGMA user_version={i}')
     db.execute("INSERT INTO blob_locations VALUES('digest','example-bucket','2026-10-01')")
-    db.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-               ('released', 'Existing notes', 'ben@acme.example', '{}', H.now(), H.now()))
+    db.execute(
+        "INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+        ('released', 'Existing notes', 'ben@acme.example', '{}', H.now(), H.now()),
+    )
     H.migrate(db)
     assert db.execute('SELECT bucket FROM blob_locations').fetchone()[0] == 'example-bucket'
     assert db.execute('SELECT count(*) FROM task_file_reviews').fetchone()[0] == 0
@@ -169,8 +198,6 @@ def test_delayed_send_rechecks_rights_and_rolls_back_approval(api):
     assert delivery
     assert review(api, made['id'])['delivery']['task_id'] == delivery
     assert len(get(api, 'tasks', 'ben-test')['tasks']) == 1
-
-
 
 
 def test_share_and_send_hands_the_shared_meeting_to_a_bot_once(api):

@@ -2,7 +2,7 @@
 
 import json
 
-from backend.tests.test_api import api, runner  # noqa: F401
+from backend.tests.helpers.api import runner  # noqa: F401
 from backend import health
 
 
@@ -10,10 +10,14 @@ def test_failed_copies_on_online_computers_read_in_one_scan(api):
     made = {label: runner(api, "ana", label) for label in ("A Mac", "B Mac", "C Mac")}
     with api.app.state.store.transaction() as c:
         for label, r in made.items():
-            report = [{"full_name": f"acme/{label[0].lower()}", "state": "failed", "error": "access denied"},
-                      {"full_name": "acme/fine", "state": "ready"}]
-            c.execute("INSERT INTO registry_metadata VALUES(?,?)",
-                      ("computer-repositories:" + r["runner_id"], json.dumps({"repositories": report})))
+            report = [
+                {"full_name": f"acme/{label[0].lower()}", "state": "failed", "error": "access denied"},
+                {"full_name": "acme/fine", "state": "ready"},
+            ]
+            c.execute(
+                "INSERT INTO registry_metadata VALUES(?,?)",
+                ("computer-repositories:" + r["runner_id"], json.dumps({"repositories": report})),
+            )
     online = {made["A Mac"]["runner_id"], made["B Mac"]["runner_id"]}
     statements = []
     with api.app.state.store.read_transaction() as c:

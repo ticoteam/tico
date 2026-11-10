@@ -14,9 +14,9 @@ from pathlib import Path
 import pytest
 
 from backend.tests.live import block_outside_network
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_automation_api import NOTE_STEP
-from backend.tests.test_mcp import call
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.automation_api import NOTE_STEP
+from backend.tests.helpers.mcp import call
 from clients import hubtools
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,12 +45,14 @@ def no_outside_network(monkeypatch):
 def statuses(monkeypatch):
     """The HTTP status of each refusal the in-process API raises (the MCP reply carries only the code)."""
     from backend import mcp
+
     seen = []
     real = mcp.problem
 
     def record(payload, status, key):
         seen.append(status)
         return real(payload, status, key)
+
     monkeypatch.setattr(mcp, "problem", record)
     return seen
 
@@ -60,10 +62,23 @@ def seeded(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Acme smoke task", "body": "Seeded for the MCP smoke test."})
     message = post(api, "chat/ops", {"text": "Acme smoke message"})
     trigger = post(api, "triggers", {"name": "Acme smoke hook"})["trigger"]
-    automation = post(api, "automations", {"name": "Acme smoke automation", "owner": "person:ana", "steps": [NOTE_STEP],
-                                           "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}})
-    return {"task": task["id"], "conversation": message["conversation_id"], "message": message["id"],
-            "trigger": trigger["id"], "automation": automation["id"]}
+    automation = post(
+        api,
+        "automations",
+        {
+            "name": "Acme smoke automation",
+            "owner": "person:ana",
+            "steps": [NOTE_STEP],
+            "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"},
+        },
+    )
+    return {
+        "task": task["id"],
+        "conversation": message["conversation_id"],
+        "message": message["id"],
+        "trigger": trigger["id"],
+        "automation": automation["id"],
+    }
 
 
 def seeds_for(tool, seeds):
@@ -75,10 +90,25 @@ def seeds_for(tool, seeds):
     if tool.startswith("hub_automation_"):
         return {"id": seeds["automation"]}
     if tool.startswith(("hub_message_", "hub_conversation_")):
-        return {"id": seeds["conversation"], "conversation_id": seeds["conversation"], "in_reply_to": seeds["message"],
-                "to": "ops", "bot": "ops"}
-    return {"to": "ops", "owner": "ops", "bot": "ops", "slug": "ops", "name": SMOKE, "title": SMOKE, "text": SMOKE,
-            "body": SMOKE, "note": SMOKE, "subject": SMOKE}
+        return {
+            "id": seeds["conversation"],
+            "conversation_id": seeds["conversation"],
+            "in_reply_to": seeds["message"],
+            "to": "ops",
+            "bot": "ops",
+        }
+    return {
+        "to": "ops",
+        "owner": "ops",
+        "bot": "ops",
+        "slug": "ops",
+        "name": SMOKE,
+        "title": SMOKE,
+        "text": SMOKE,
+        "body": SMOKE,
+        "note": SMOKE,
+        "subject": SMOKE,
+    }
 
 
 def value(schema, name, strings, depth=0):
@@ -95,7 +125,9 @@ def value(schema, name, strings, depth=0):
     if kind == "array":
         if depth > 4:
             return []
-        return [value(schema.get("items", {}), name, strings, depth + 1) for _ in range(max(1, schema.get("minItems", 0)))]
+        return [
+            value(schema.get("items", {}), name, strings, depth + 1) for _ in range(max(1, schema.get("minItems", 0)))
+        ]
     if kind == "integer" or kind == "number":
         low = schema.get("minimum", 1)
         return min(max(1, low), schema.get("maximum", low))
@@ -130,8 +162,9 @@ def outcome(api, name, args, statuses):
 
 
 @pytest.mark.slow
-def test_every_remote_tool_answers_a_generated_call_as_its_recorded_refusal_or_success(api, no_outside_network,
-                                                                                       statuses):
+def test_every_remote_tool_answers_a_generated_call_as_its_recorded_refusal_or_success(
+    api, no_outside_network, statuses
+):
     seeds = seeded(api)
     problems, observed = [], {}
     tools = hubtools.listing(kind="owner")
@@ -140,7 +173,7 @@ def test_every_remote_tool_answers_a_generated_call_as_its_recorded_refusal_or_s
         name = tool["name"]
         try:
             result, payload = outcome(api, name, generated(tool, seeds), statuses)
-        except Exception as exc:       # a tool that raises instead of answering is the failure this test is for
+        except Exception as exc:  # a tool that raises instead of answering is the failure this test is for
             problems.append(f"{name}: raised {type(exc).__name__}: {exc}")
             continue
         if result != "ok":
@@ -149,10 +182,14 @@ def test_every_remote_tool_answers_a_generated_call_as_its_recorded_refusal_or_s
             continue
         if result == "ok":
             if name in EXPECTED:
-                problems.append(f"{name}: was refused as {EXPECTED[name]!r} and now succeeds; update expected-refusals.json")
+                problems.append(
+                    f"{name}: was refused as {EXPECTED[name]!r} and now succeeds; update expected-refusals.json"
+                )
         elif EXPECTED.get(name) != result:
             # A 5xx is a server error unless it is recorded as the server's own answer (a service it needs is not set up).
-            problems.append(f"{name}: answered {result!r} (recorded: {EXPECTED.get(name)!r}): {json.dumps(payload)[:200]}")
+            problems.append(
+                f"{name}: answered {result!r} (recorded: {EXPECTED.get(name)!r}): {json.dumps(payload)[:200]}"
+            )
     if RECORD:
         Path(RECORD).write_text(json.dumps(dict(sorted(observed.items())), indent=1, ensure_ascii=False) + "\n")
         assert not [p for p in problems if "raised" in p], "\n".join(problems)
@@ -164,24 +201,41 @@ def test_every_remote_tool_answers_a_generated_call_as_its_recorded_refusal_or_s
         "\nFix unexpected tool failures first. For intended refusal changes, edit e2e/mcp/expected-refusals.json; "
         "remove entries for deleted tools. To regenerate for review: "
         "TICO_E2E_RECORD_REFUSALS=/tmp/mcp-refusals.json python3 -m pytest -q -m slow backend/tests/test_e2e_mcp.py. "
-        "Review the diff before copying it over e2e/mcp/expected-refusals.json.")
+        "Review the diff before copying it over e2e/mcp/expected-refusals.json."
+    )
 
 
 def test_a_scripted_task_runs_over_mcp_from_create_to_done(api):
-    """A multi-step task as an external agent would run it: create, comment, assign, complete, then read it back."""
-    is_error, made = call(api, "hub_task_create", {"owner": "ben", "title": "Smoke: scripted MCP task",
-                                                   "body": "Check the release notes and say what changed."})
+    """A task as an external agent would run it: create, comment, read its version, reassign with it, finish with the
+    version the reassign gave back, then read it back Done."""
+    is_error, made = call(
+        api,
+        "hub_task_create",
+        {"owner": "ben", "title": "Smoke: scripted MCP task", "body": "Check the release notes and say what changed."},
+    )
     assert not is_error, made
     task_id = made["task"]["id"]
 
     is_error, comment = call(api, "hub_task_comment", {"id": task_id, "text": "Started on the release notes."})
     assert not is_error, comment
 
-    is_error, moved = call(api, "hub_task_update", {"id": task_id, "owner": "ana", "status": "doing"})
+    is_error, shown = call(api, "hub_task_show", {"id": task_id})
+    assert not is_error and shown["task"]["status"] == "open", shown
+    is_error, moved = call(
+        api,
+        "hub_task_reassign",
+        {"id": task_id, "owner": "ana", "why": "Hers now", "version": shown["task"]["version"]},
+    )
     assert not is_error, moved
-    assert moved["task"]["owner_id"] == "human:ana" and moved["task"]["status"] == "doing"
+    assert moved["task"]["owner_id"] == "human:ana" and moved["task"]["version"] > shown["task"]["version"]
 
-    is_error, done = call(api, "hub_task_done", {"id": task_id, "note": "Release notes checked."})
+    is_error, stale = call(
+        api, "hub_task_done", {"id": task_id, "note": "Release notes checked.", "version": shown["task"]["version"]}
+    )
+    assert is_error and stale["error"] == "task_changed" and stale["version"] == moved["task"]["version"], stale
+    is_error, done = call(
+        api, "hub_task_done", {"id": task_id, "note": "Release notes checked.", "version": moved["task"]["version"]}
+    )
     assert not is_error, done
 
     is_error, shown = call(api, "hub_task_show", {"id": task_id})

@@ -7,7 +7,7 @@ is sent and kept.
 
 ## For a human
 
-The **?** beside Search (on a computer, at the end of the sidebar's Ask row; on a phone, beside Search in the More
+The **?** beside Search (on a computer, at the end of the sidebar's Tico Assistant row; on a phone, beside Search in the More
 drawer) opens a chat with the **Tico team**. It is its own conversation, apart from the Assistant: on a computer a panel
 over the bottom left of the page, on a phone the whole screen above the tab bar. The **?** carries a dot when the team
 has replied to one of your requests and you haven't seen it.
@@ -59,7 +59,7 @@ This is redacted technical evidence, not an anonymous ticket: the message and op
 The allowlist and examples are in [PRIVACY.md](../PRIVACY.md#support-diagnostics).
 
 A reply to a request you wrote opens the chat by itself, once, with the reply in it; if you are typing in a field or a
-dialog is open, or Ask's panel or its peek is up, it waits until you are not. A bot's report is not in your chat at all: it is not listed there, and its
+dialog is open, or Ask's panel is up, it waits until you are not. A bot's report is not in your chat at all: it is not listed there, and its
 replies neither open the chat nor put a dot on the **?**. Having the chat open marks everything read; there is no Mark
 read or Refresh button.
 Messages are checked when you open the chat, when the app regains focus or comes back into view, and on the timer below.
@@ -126,27 +126,35 @@ A bot that hits a Tico bug (or a person's token, through MCP) reports it to the 
 copy-and-paste task. Whether a person says yes first is the team's rule **Bots send reports to the Tico team without
 asking** (`bot_reports_direct`, Settings > General > Team, owner only; on by default).
 
-**On.** `hub support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) is drafted as below and then decided and sent at once by the team rule: no card is made, and the command prints the ticket. The draft is decided as the install's default person (the one a drafted report would ask), with the note "team rule: bots send reports without asking", so it never shows in Needs you. The ticket is filed as that person and counts toward their 10 a day, but it is not in their Support chat: its replies
-are kept for the team and the bot, not shown to the person. The checks are a drafted report's, and they run first: the message is checked as `lint_approval` checks it, a quarantined bot is refused, and the privacy check for this send must pass. The day limit, the HQ call and the source are the same. The bot sends an `Idempotency-Key`, as every write does: a retry with the same key is the same ticket and nothing more reaches HQ, and the same key with other content is refused (409) and sends nothing. A retry after the owner turns direct reports off is still the same ticket, and a report already sent stays sent. If the rule is off when a report is sent, the draft waits for a person (below); a retry after the owner turns the rule on sends that draft once. If the send fails, the rule's decision is taken back and the draft waits the same way. The version and install ID go with it unless `--no-ids`.
+**On.** `tico support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) is checked as below and
+then sent at once: no ask is made, and the command prints the ticket. The ticket is filed as the install's default
+person and counts toward their 10 a day, but it is not in their Support chat: its replies are kept for the team and the
+bot, not shown to the person. The checks come first: the message is checked as a drafted report's is, a quarantined
+bot is refused, and the privacy check for this send must pass (when it does not, a person OKs the report, below). The
+day limit, the HQ call and the source are the same. The bot sends an `Idempotency-Key`, as every write does: a retry
+with the same key is the same ticket and nothing more reaches HQ, and the same key with other content is refused (409)
+and sends nothing. A report already sent stays sent. The version and install ID go with it unless `--no-ids`.
 
-**Off.** The report waits for a person's yes:
+A copy run from source (version `dev`) with no `TICO_HQ_URL` never sends by the rule: the report waits for a person's
+yes, as below.
 
-1. `hub support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) drafts the report as a
-   `support` approval: the `message` (up to 4000 characters, plain text), its `content_sha256`, and `include_ids`
-   (default true: the version and install ID go with it; `--no-ids` sends only the message). It prints the approval id.
-   Nothing is sent, and the draft is refused while support is off (demo, rehearsal, `TICO_SUPPORT=off`).
-2. The person the approval goes to sees **Send this to Tico support?** in Needs you and Decide, with the whole message,
-   what goes with it and the host it goes to, and approves or declines it in their own browser. Their Assistant may
-   approve it too, after its read-back and their plain yes, as with any approval ([The Assistant](assistant.md#letting-it-decide-your-approvals)).
-   A token may not approve it. Declining sends nothing, so anyone who may decide it may decline it. A bot's report goes
-   where any approval goes: the owner of its task, else the default person. A person's own report (drafted with their
-   token) goes to them.
-3. After a yes, `hub support send --approval <id>` (MCP `hub_support_send`, `POST /api/v2/support/tickets/from-approval`)
-   files it **as the person who approved it**: the ticket is kept under their name and counts
-   toward their 10 a day, but it is not in their Support chat (a bot's report is not shown there, and its replies are
-   not either). Only whoever asked for the approval may send it, and only once it is approved and its message
-   still matches its hash. The approval is spent in the same step that keeps the ticket, so if HQ refuses or cannot be
-   reached nothing is spent and the send can be tried again; sending again after it worked answers with the same ticket.
+**Off.** The report waits for a person's OK:
+
+1. `tico support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) drafts the report: the
+   `message` (up to 4000 characters, plain text), its `content_sha256`, and `include_ids` (default true: the version
+   and install ID go with it; `--no-ids` sends only the message). It asks a person for an OK on a task, "Send this
+   report to Tico support?", and prints the OK's id. Nothing is sent, and the draft is refused while support is off
+   (demo, rehearsal, `TICO_SUPPORT=off`).
+2. The person asked sees the ask in [Needs you](tasks.md#needs-you), with the whole message, what goes with it and the
+   host it goes to, and OKs it with their own click in Tico. Their Assistant and a token cannot give this OK. Saying
+   no sends nothing. The ask goes to the person whose token or Assistant drafted the report, else the owner of its task
+   when that is a person, else the install's default person.
+3. After the OK, `tico support send --approval <id>` (MCP `hub_support_send`,
+   `POST /api/v2/support/tickets/from-approval`) files it **as the person who OK'd it**: the ticket is kept under their
+   name and counts toward their 10 a day. A bot's report is not in their Support chat, and its replies are not either.
+   Only whoever asked for the OK may send it, and only once it is OK'd and its message still matches its hash. The OK
+   is used in the same step that keeps the ticket, so if HQ refuses or cannot be reached nothing is used and the send
+   can be tried again; sending again after it worked answers with the same ticket.
 
 No email and no diagnostics bundle go this way: diagnostics need a person to preview them on the form.
 
@@ -161,14 +169,15 @@ start it, it always starts from your open conversation with the team, and it end
    - **App only**: what an admin sees (settings, Health, computers, bots, tasks and run history), and changes to setup only: a
      bot's model, fallback and context size; a computer's runner restart; asking a computer to read its subscriptions'
      allowance again. Support cannot start a model sign-in or read the link and code of one you start (whoever enters the
-     code first chooses the account a computer runs on), see a credential's value or a raw run stream, approve anything for you, send a message, start or run a task or
+     code first chooses the account a computer runs on), see a credential's value or a raw run stream, OK anything for you, send a message, start or run a task or
      bot, publish, spend, or change people, access or credentials.
    - **Full access** (the owner only): what the owner can do in Tico. Even then support cannot make or see personal tokens,
      service keys or credential values, sign a person in or out of Tico, hand the install to someone else, or change these sessions.
      What it changes the owner's way can outlast Stop, such as a webhook, a credential, the GitHub App, Slack's tokens,
      directory sync or a computer's model sign-in (which account its AI tool runs on), and it reads what the owner reads, mail and raw run streams included: give it only when you want
      support to have that.
-3. Choose how long: 1 hour, 4 hours, 24 hours (the default), 7 days, or any number of hours up to 30 days. Press **Start**.
+3. Choose how long: 1 hour, 4 hours, 24 hours, 3 days (the default), 7 days, 30 days, 90 days, 365 days, or any whole number of
+   hours from 1 to 8760 (365 days). Longer access can cover managed services. Press **Start**.
 
 While it lasts, everyone on your Tico sees a banner on every screen: "Tico team has access (App only), 23 h 12 min left ·
 Stop"; the chat says the same over the box, and the banner opens the chat. **Stop** (the person who started it, the owner or
@@ -194,6 +203,32 @@ For the team: a session has one id, HQ's (`sa_` and 24 hex digits), in the insta
 the install's events name the request's HQ ticket (`TK-...`). `GET /v1/staff/access` lists live sessions, and
 `/v1/staff/access/<session>/api/v2/...` is one request to that install's API, with `X-Tico-Support-By: support-agent` when
 the bot makes it ([Tico HQ](tico-hq.md#support-access)).
+
+## Tico support on cloud machines
+
+Tico Cloud machines come with a support helper, on by default. It lets Tico staff and the Support Agent read and
+change files and run commands on the machine to diagnose and fix problems. The machine's user has `sudo`, so this
+access can reach bot workspaces, installed tools and credentials stored there. Each machine keeps an owner log of
+support actions, so you can see what support did and who acted.
+
+Only the owner can change **Tico support can reach our cloud machines**, in **Settings > People**, beside the rule
+for letting support into the app. Turning it off stops support work on the company's cloud machines at HQ. Turning
+it back on allows it again; a missing helper is installed on the machine's next start. The change is recorded under
+the owner's name in Tico's audit log. **Settings > Computers** shows each cloud machine's helper state.
+
+HQ holds the switch. Tico reads it on each Settings entry and saves a change there. After a failed or uncertain
+change, the page reads HQ again and shows its answer. Automatic retries keep the change's original revision, so a
+delayed enable cannot undo a newer disable. If HQ has already received a newer change, the page shows its current
+state and says "A newer change already reached Tico HQ." without retrying the write. If an uncertain change's read
+also fails, the switch stays unavailable until you open Settings again. It does not queue a local choice to send
+later. The owner can read and turn it off even while the company's plan is locked; turning it on requires an
+unlocked plan. An Assistant turn needs the person's
+confirmation, just like the rule for letting support into the app.
+
+This helper is separate from the time-limited app sessions above. Stopping an app session or turning off
+**Owners and admins may let Tico support in** does not turn off the cloud-machine helper. It is never installed on
+the shared hosts that run several companies' Tico servers. A company's shared cloud machine runs only that company's
+bots and can have the helper, just like a bot's own cloud machine. This switch is hidden outside Tico Cloud.
 
 ## Beta features
 
@@ -243,7 +278,7 @@ Everything below is how the Tico project's own Support Agent works tickets at HQ
 3. **The bot drafts.** It works the task with `playbooks/tico-hq-tickets.md`: reads the diagnostics first (`software/hq-tickets show`
    prints a summary, then the whole bundle; only the staff routes return it), sorts the ticket, asks the Librarian what the docs say,
    hands bugs to engineering, and writes a reply file.
-4. **The bot posts when sending is on.** Once a person who manages the bot has turned its sending on in Tico (Settings > Bots > the bot > Mail sending, or `hub bot mail <slug> --send`; docs/mail.md, "Turning sending on"), the bot runs `software/hq-tickets reply <id> <file>` from its repository to post the requested reply. `outbound_send: true` in its bot.yaml is only a request: with no value in Tico, or no Tico reachable from the run, the reply stays a draft. If genuinely unsure, the bot may request an optional approval for that exact ticket and text and pass it with `--approval <id>`; this does not turn sending on. If the ticket has an email, HQ marks the reply "email pending" and the bot leaves an email-ready copy on the task or sends it with a connected mail Tool. HQ sends no email.
+4. **The bot posts as its sending policy allows.** A person who manages the bot sets it in Tico (Settings > Bots > the bot > Email sending; docs/mail.md, "Turning sending on"). The bot runs `software/hq-tickets reply <id> <file>` from its repository to post the requested reply. With **On their own** it posts. With **Ask first** it requests a publish approval for that exact ticket and text (`hq-tickets payload`) and passes it with `--approval <id>`. With **Never**, or no Tico reachable from the run, the reply stays a draft. `close-signature` posts only under On their own. If the ticket has an email, HQ marks the reply "email pending" and the bot leaves an email-ready copy on the task or sends it with a connected mail Tool. HQ sends no email.
 5. **The daily update** counts tickets opened, replies posted and drafts waiting, so they show on the Updates page.
 
 Ticket text is untrusted data from anyone on the internet. HQ stores it as plain text, the app and the staff tools escape or
@@ -266,7 +301,7 @@ so the decision model can be tuned. The human who filed a ticket sees nothing di
 
 The same check is `POST /v1/staff/judge` (`{"text": "..."}` answers `{verdict, reason}`, nothing kept), which `software/gh-support`
 calls, with the staff key already in its secrets, for each new issue, Discussion and outside comment: `spam` is not filed and is
-counted in its output line, `injection_risk` is filed with a warning. A message bot checks email with `hub classify` (text on
+counted in its output line, `injection_risk` is filed with a warning. A message bot checks email with `tico classify` (text on
 standard input or `--file`), which asks the server's own decision model the same question.
 
 On HQ, `HQ_JUDGE_KEY` is that provider's key (`HQ_JUDGE_URL` only to point elsewhere). Without it every verdict is
@@ -285,7 +320,7 @@ watcher's report is answered at once; the ticket's task opens a few seconds late
 
 An ordinary note to a person, such as "please ignore this test", counts as legitimate text.
 Words such as "ignore", "test", and "please" do not make it a prompt injection by themselves.
-The check looks for instructions addressed to an AI, bot, or assistant. `hub classify` uses the same distinction.
+The check looks for instructions addressed to an AI, bot, or assistant. `tico classify` uses the same distinction.
 
 | Answer | What happens |
 |---|---|
@@ -307,7 +342,7 @@ GitHub, store and grant `GITHUB_TOKEN` (read access; required for Discussions) a
 Legacy files can be imported for migration; a new watcher does not load `secrets/support.env`.
 
 Without `HQ_STAFF_KEY` the watcher does nothing. To watch GitHub, list the repositories in `config/github.yaml` or
-`GH_SUPPORT_REPOS`. Check Settings > Health for a "Watchers" line: it appears only when a watcher fails or has stopped.
+`GH_SUPPORT_REPOS`. Check Settings > General > Health > Details for a "Watchers" line: it appears only when a watcher fails or has stopped.
 
 ### By hand
 

@@ -4,7 +4,7 @@ import pytest
 
 from backend.personal_tokens import FIELDS
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
 
 OWNER, ADMIN, PLAIN = "ana-test", "ben-test", "cara-test"
 
@@ -35,7 +35,9 @@ def test_the_list_never_carries_the_secret_or_its_hash(tokens):
     # Not through SQL either, not even for the owner (backend/sql.py denies unlisted tables).
     r = tokens.post("/api/v2/sql", json={"sql": "SELECT token_hash FROM human_tokens"}, headers=headers(OWNER))
     assert r.status_code == 422 and stored not in r.text
-    r = tokens.post("/api/v2/sql", json={"sql": "SELECT token_hash FROM human_tokens"}, headers=headers(issued["token"]))
+    r = tokens.post(
+        "/api/v2/sql", json={"sql": "SELECT token_hash FROM human_tokens"}, headers=headers(issued["token"])
+    )
     assert r.status_code == 422 and stored not in r.text
 
 
@@ -64,7 +66,8 @@ def test_a_token_cannot_list_mint_or_revoke_tokens(tokens):
     assert r.status_code == 403 and r.json()["error"]["detail"] == refused
     assert len(get(tokens, "me/tokens", token=ADMIN)["tokens"]) == 1
     # Machines and bots have no tokens either.
-    from backend.tests.test_api import runner
+    from backend.tests.helpers.api import runner
+
     r = tokens.get("/api/v2/me/tokens", headers=headers(runner(tokens)["token"]))
     assert r.status_code == 403
 
@@ -92,13 +95,16 @@ def test_the_owner_and_admins_see_and_revoke_everyones_tokens_and_members_only_t
 
 
 def test_a_token_cannot_make_other_credentials(tokens):
-    from backend.tests.test_agents import hermes_bot
-    from backend.tests.test_hermes_pairing import approve, pair
+    from backend.tests.helpers.agents import hermes_bot
+    from backend.tests.helpers.hermes_pairing import approve, pair
+
     hermes_bot(tokens)
     issued = mint(tokens, OWNER)
     refused = "an API token cannot make other credentials"
-    for path, body in (("bots/scout/agent-credential", {}),
-                       ("agents/pairings/approve", {"code": pair(tokens).json()["code"], "bot": "scout"})):
+    for path, body in (
+        ("bots/scout/agent-credential", {}),
+        ("agents/pairings/approve", {"code": pair(tokens).json()["code"], "bot": "scout"}),
+    ):
         r = tokens.post("/api/v2/" + path, json=body, headers=headers(issued["token"]))
         assert r.status_code == 403 and refused in r.json()["error"]["detail"], (path, r.text)
     with tokens.app.state.store.read() as c:

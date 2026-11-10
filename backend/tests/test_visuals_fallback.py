@@ -1,16 +1,17 @@
 """Visuals always on 1/3 (Dev 313): without a separate visual address, pictures, video and audio still show inline,
 served from the app's own address as media only; pages and SVG are cards that open the file viewer, and are never
 served from the app's own address. No visual response ever sets a cookie. Spec tests 1-4 and 7 (Product roadmap
-"Visuals always on"); the UI half is ui/tests/visual-fallback.cjs."""
+"Visuals always on"); the UI half is ui/tests/visual-fallback.cts."""
+
 import base64
 from dataclasses import replace
 
 import pytest
 
 from backend import visuals as V
-from backend.tests.test_api import api, headers, post  # noqa: F401  (fixtures)
-from backend.tests.test_files import publish, turn
-from backend.tests.test_visuals import PNG, VISUALS, bot_reply, media_settled, task_with_file, visual_on_task, wav
+from backend.tests.helpers.api import headers, post  # noqa: F401  (fixtures)
+from backend.tests.helpers.files import publish, turn
+from backend.tests.helpers.visuals import PNG, VISUALS, bot_reply, media_settled, task_with_file, visual_on_task, wav
 
 SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
 CLIP = bytes(range(256)) * 8
@@ -42,9 +43,17 @@ def page_and_svg_comment(api):
     tid, page, _ = task_with_file(api, private=False, name="funnel.html", text="<p>funnel</p>")
     svg = api.post(f"/api/v2/tasks/{tid}/files", json={"name": "logo.svg", "text": SVG}, headers=headers("ben-test"))
     assert svg.status_code == 200, svg.text
-    r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "Both", "attachments": [
-        {"ref": f"{page}@1", "title": "Funnel"}, {"ref": svg.json()["file_id"] + "@1", "title": "Logo"}]},
-        headers=headers("ben-test"))
+    r = api.post(
+        f"/api/v2/tasks/{tid}/comments",
+        json={
+            "text": "Both",
+            "attachments": [
+                {"ref": f"{page}@1", "title": "Funnel"},
+                {"ref": svg.json()["file_id"] + "@1", "title": "Logo"},
+            ],
+        },
+        headers=headers("ben-test"),
+    )
     assert r.status_code == 200, r.text
     return tid, r.json()["comment"]
 
@@ -59,9 +68,11 @@ def give_preview(api, fid, version, data=PNG, mime="image/png"):
     media_settled(api)
     digest = api.app.state.blobs.put(data, mime)
     with api.app.state.store.transaction() as c:
-        blob = c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES "
-                         "(lower(hex(randomblob(16))),'human:ben',?,?,?,?,'2026-10-21') RETURNING id",
-                         (digest, len(data), "preview", mime)).fetchone()[0]
+        blob = c.execute(
+            "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES "
+            "(lower(hex(randomblob(16))),'human:ben',?,?,?,?,'2026-10-21') RETURNING id",
+            (digest, len(data), "preview", mime),
+        ).fetchone()[0]
         c.execute("UPDATE bot_file_versions SET thumb_blob_id=? WHERE file_id=? AND version=?", (blob, fid, version))
 
 
@@ -69,8 +80,11 @@ def test_without_a_visual_address_pictures_video_and_audio_show_inline_from_the_
     """Spec 1 and 3: each gets an address on the app's own /visuals route, served with its own media type, nosniff,
     a content policy that runs no script, inline, and no cookie."""
     items = media_reply(api)["refs"]["attachments"]
-    assert [(a["kind"], a["src"][:9]) for a in items] == [("image", "/visuals/"), ("video", "/visuals/"),
-                                                          ("audio", "/visuals/")]
+    assert [(a["kind"], a["src"][:9]) for a in items] == [
+        ("image", "/visuals/"),
+        ("video", "/visuals/"),
+        ("audio", "/visuals/"),
+    ]
     for a, mime in zip(items, ("image/png", "video/mp4", "audio/wav")):
         assert "open" not in a
         r = api.get(a["src"])
@@ -83,7 +97,7 @@ def test_without_a_visual_address_pictures_video_and_audio_show_inline_from_the_
         assert r.headers["content-disposition"] == "inline"
         assert "set-cookie" not in r.headers
     part = api.get(items[1]["src"], headers={"Range": "bytes=0-1"})
-    assert part.status_code == 206 and part.content == CLIP[:2]           # video still seeks
+    assert part.status_code == 206 and part.content == CLIP[:2]  # video still seeks
 
 
 def test_without_a_visual_address_a_page_and_an_svg_are_open_cards_never_served_from_the_app(api, fallback):
@@ -143,7 +157,7 @@ def test_a_bot_reading_its_chat_gets_page_and_svg_open_cards_without_a_preview_a
             assert a["open"] is True and not a["removed"] and a["src"] is None, a
             assert a.get("preview_url") is None, a
     for a in api.get("/api/v2/messages/" + message["id"], headers=headers("ben-test")).json()["refs"]["attachments"]:
-        r = api.get(a["preview_url"])                         # the person's preview is unchanged
+        r = api.get(a["preview_url"])  # the person's preview is unchanged
         assert r.status_code == 200 and r.content == PNG and r.headers["content-type"] == "image/png", a
 
     tid, fid, comment = visual_on_task(api, private=False)
@@ -152,7 +166,7 @@ def test_a_bot_reading_its_chat_gets_page_and_svg_open_cards_without_a_preview_a
     assert listed.status_code == 200, listed.text
     [item] = next(m for m in listed.json()["comments"] if m["id"] == comment["id"])["refs"]["attachments"]
     assert item["file_id"] == fid and item["open"] is True and item["src"] is None
-    assert api.get(item["preview_url"]).status_code == 200                  # a bot's task preview still opens
+    assert api.get(item["preview_url"]).status_code == 200  # a bot's task preview still opens
 
 
 def test_with_a_visual_address_all_five_kinds_show_inline_there(api, monkeypatch):
@@ -177,20 +191,23 @@ def test_with_a_visual_address_the_apps_own_address_still_serves_media_only(api,
     for a in comment_items(api, tid, comment):
         path = a["src"].removeprefix(VISUALS)
         for method in ("GET", "HEAD"):
-            on = api.request(method, a["src"])                                          # on the visual address
+            on = api.request(method, a["src"])  # on the visual address
             assert on.status_code == 200 and on.headers["content-disposition"] == "inline", (a["kind"], method)
             for host in ("testserver", "tico.example", "visuals.localhost", "visuals.localhost:9002", "bad host:x"):
                 r = api.request(method, "http://" + host.split(" ")[0] + path, headers={"Host": host})
                 assert r.status_code == 404 and not r.content, (a["kind"], method, host)
-        give_preview(api, a["file_id"], a["version"])                    # its raster preview plays on the app host
+        give_preview(api, a["file_id"], a["version"])  # its raster preview plays on the app host
         token = V.mint(api.app.state.visual_key, "human:ben", a["file_id"], a["version"], "preview")
         r = api.get("/visuals/" + token, headers={"Host": "tico.example"})
         assert r.status_code == 200 and r.content == PNG and r.headers["content-disposition"] == "inline"
     video = media[1]
     media_settled(api)
-    with api.app.state.store.transaction() as c:                         # a video with its poster ready
-        c.execute("UPDATE bot_file_versions SET poster_blob_id=(SELECT thumb_blob_id FROM bot_file_versions WHERE "
-                  "thumb_blob_id IS NOT NULL LIMIT 1) WHERE file_id=?", (video["file_id"],))
+    with api.app.state.store.transaction() as c:  # a video with its poster ready
+        c.execute(
+            "UPDATE bot_file_versions SET poster_blob_id=(SELECT thumb_blob_id FROM bot_file_versions WHERE "
+            "thumb_blob_id IS NOT NULL LIMIT 1) WHERE file_id=?",
+            (video["file_id"],),
+        )
     poster = V.mint(api.app.state.visual_key, "human:ben", video["file_id"], video["version"], "poster")
     for a, path in [(a, a["src"].removeprefix(VISUALS)) for a in media] + [(video, "/visuals/" + poster)]:
         for method in ("GET", "HEAD"):
@@ -231,6 +248,7 @@ def test_there_is_no_switch_the_setup_alone_decides(monkeypatch, tmp_path):
     """Spec 7 (server half): the old opt-in that served pages from the app's own address is not read any more, and a
     loopback install without a visual address is the fallback like any other."""
     from backend.config import Settings
+
     monkeypatch.setenv("TICO_VISUAL_SAME_ORIGIN", "1")
     monkeypatch.delenv("TICO_VISUAL_ORIGIN", raising=False)
     monkeypatch.setenv("TICO_DB", str(tmp_path / "hub.db"))
@@ -248,27 +266,42 @@ def test_a_visual_address_on_the_apps_own_hostname_is_refused_whatever_the_schem
     host (or the reverse). Spelling the app's own address differently (case, default port, a path) is refused too. It
     stops the server, in check_origin and in Settings; a separate hostname is kept as given."""
     from backend.config import Settings
+
     monkeypatch.setenv("TICO_DB", str(tmp_path / "hub.db"))
     monkeypatch.delenv("TICO_PUBLIC_URL", raising=False)
     monkeypatch.delenv("TICO_VISUAL_ORIGIN", raising=False)
     local = Settings.from_env()
-    for app, same in (("https://tico.example", "https://tico.example:443"), ("https://tico.example", "https://TICO.example"),
-                      ("https://tico.example:443", "HTTPS://Tico.Example/"), ("http://tico.example", "http://tico.example:80"),
-                      ("https://Tico.example/app", "https://tico.EXAMPLE:443/visuals"),
-                      ("https://acme.example", "http://acme.example"), ("http://acme.example", "https://acme.example"),
-                      ("https://acme.example", "http://acme.example:443"), ("https://tico.example", "https://tico.example:8443"),
-                      ("https://tico.example:8443", "https://tico.example"), ("http://tico.example:8080", "https://Tico.example:9443/")):
+    for app, same in (
+        ("https://tico.example", "https://tico.example:443"),
+        ("https://tico.example", "https://TICO.example"),
+        ("https://tico.example:443", "HTTPS://Tico.Example/"),
+        ("http://tico.example", "http://tico.example:80"),
+        ("https://Tico.example/app", "https://tico.EXAMPLE:443/visuals"),
+        ("https://acme.example", "http://acme.example"),
+        ("http://acme.example", "https://acme.example"),
+        ("https://acme.example", "http://acme.example:443"),
+        ("https://tico.example", "https://tico.example:8443"),
+        ("https://tico.example:8443", "https://tico.example"),
+        ("http://tico.example:8080", "https://Tico.example:9443/"),
+    ):
+
         class S:
             public_url, visual_origin = app, same
+
         with pytest.raises(ValueError, match="must differ"):
             V.check_origin(S)
         monkeypatch.setenv("TICO_PUBLIC_URL", app)
         monkeypatch.setenv("TICO_VISUAL_ORIGIN", same)
         with pytest.raises(ValueError, match="must differ"):
             Settings.from_env()
-    for app, apart in (("https://tico.example", "https://files.tico.example"), ("https://tico.example:8080", "https://visuals.tico.example:8080"),
-                       ("https://acme.example", "http://visuals.acme-files.example")):
+    for app, apart in (
+        ("https://tico.example", "https://files.tico.example"),
+        ("https://tico.example:8080", "https://visuals.tico.example:8080"),
+        ("https://acme.example", "http://visuals.acme-files.example"),
+    ):
+
         class S:
             public_url, visual_origin = app, apart
+
         assert V.check_origin(S) == apart
         assert replace(local, public_url=app, visual_origin=apart).visual_origin == apart

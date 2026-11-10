@@ -1,6 +1,7 @@
 """The Finance tab's money reads keep private lines private and follow the current view: a payroll feed row never
 shows its amount or payee to a teammate who sees the bank line but not payroll detail, a payment to a private line is
 left out (of lists and of the balance sheet's due-out totals), and a payer whose grant was revoked sees only that their payment exists and its status."""
+
 from datetime import date
 
 from backend import hubdb as H
@@ -9,16 +10,34 @@ from backend.finance import budgeting, tab
 from backend.finance import reads as FR
 from backend.finance.store import actions as SX
 from backend.finance.context import load
-from backend.tests.test_finance_fixtures import (  # noqa: F401
-    ACME_ADDRESS, AT, MERCURY, OWNER, FakeMercury, account, act, books, close_month, connect, finance_template,
-    reopen_rows, store, sync_once)
+from backend.tests.helpers.finance_fixtures import (
+    ACME_ADDRESS,
+    AT,
+    MERCURY,
+    OWNER,
+    FakeMercury,
+    account,
+    act,
+    books,
+    close_month,
+    connect,
+    finance_template,
+    reopen_rows,
+    store,
+    sync_once,
+)
+from backend.tests.helpers.finance_oks import give
 
 SALARY = -812_345
 
 
 def _payroll_line(c) -> str:
-    made = act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
-                                            "parent_id": account(c, "6000")})
+    made = act(
+        c,
+        OWNER,
+        "account_create",
+        {"code": "6200", "name": "Payroll", "type": "expense", "parent_id": account(c, "6000")},
+    )
     pay = str(made.result["account_id"])
     assert act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals"}).status == "committed"
     return pay
@@ -30,9 +49,18 @@ def _checking(c) -> str:
 
 def _payee(store, fake) -> str:
     with store.transaction() as c:
-        made = act(c, OWNER, "recipient_add", {"name": "Eve Example", "method": "ach",
-                                               "account_number": "000011112222", "routing_number": "000000000",
-                                               "address": ACME_ADDRESS})
+        made = act(
+            c,
+            OWNER,
+            "recipient_add",
+            {
+                "name": "Eve Example",
+                "method": "ach",
+                "account_number": "000011112222",
+                "routing_number": "000000000",
+                "address": ACME_ADDRESS,
+            },
+        )
         assert made.status == "committed", made
     sync_once(store, fake)
     return str(made.result["recipient_id"])
@@ -41,8 +69,14 @@ def _payee(store, fake) -> str:
 def test_a_payroll_feed_row_never_shows_to_a_bank_line_viewer_without_payroll_detail(books):
     fake = FakeMercury()
     connect(books, fake)
-    gusto = {**MERCURY["txn_bank_fee"], "id": "txn-gusto", "amount": SALARY / 100, "counterpartyName": "Gusto",
-             "bankDescription": "GUSTO PAYROLL EVE EXAMPLE", "kind": "externalTransfer"}
+    gusto = {
+        **MERCURY["txn_bank_fee"],
+        "id": "txn-gusto",
+        "amount": SALARY / 100,
+        "counterpartyName": "Gusto",
+        "bankDescription": "GUSTO PAYROLL EVE EXAMPLE",
+        "kind": "externalTransfer",
+    }
     for raw in (gusto, MERCURY["txn_deposit"]):
         fake.txns[str(raw["id"])] = dict(raw)
     sync_once(books, fake)
@@ -56,11 +90,12 @@ def test_a_payroll_feed_row_never_shows_to_a_bank_line_viewer_without_payroll_de
 
         def feed_rows(who):
             return [r for r in FR.transactions(c, who, at=AT)["rows"] if r["kind"] == "feed"]
+
         assert {r["amount"] for r in feed_rows(OWNER)} == {SALARY, 50_000}
-        for who in ("human:cara", "human:dan"):                 # a bank line grant; everything but payroll detail
+        for who in ("human:cara", "human:dan"):  # a bank line grant; everything but payroll detail
             rows = feed_rows(who)
             assert [r["amount"] for r in rows] == [50_000], who
-            every = FR.transactions(c, who, at=AT)["rows"]           # feed rows and entries, earlier postings too
+            every = FR.transactions(c, who, at=AT)["rows"]  # feed rows and entries, earlier postings too
             assert "gusto" not in repr(every).lower() and all(abs(int(r["amount"])) != -SALARY for r in every)
         act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals", "full_detail": ["human:dan"]})
         assert {r["amount"] for r in feed_rows("human:dan")} == {SALARY, 50_000}
@@ -74,32 +109,56 @@ def test_payments_hide_private_lines_and_a_revoked_payer_keeps_only_the_status(b
         pay = _payroll_line(c)
         act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"})
         act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
-        grant = act(c, OWNER, "view_grant", {"subject": "human:ben", "what": "expenses", "whose": "team",
-                                             "whose_team": "sales"})
-        made = act(c, "human:ben", "payment_create", {"recipient_id": rid, "amount": 9_000,
-                                                      "account_id": account(c, "6100"), "tags": {"team": "sales"},
-                                                      "money_account_id": _checking(c), "memo": "Acme parts"})
+        grant = act(
+            c, OWNER, "view_grant", {"subject": "human:ben", "what": "expenses", "whose": "team", "whose_team": "sales"}
+        )
+        made = act(
+            c,
+            "human:ben",
+            "payment_create",
+            {
+                "recipient_id": rid,
+                "amount": 9_000,
+                "account_id": account(c, "6100"),
+                "tags": {"team": "sales"},
+                "money_account_id": _checking(c),
+                "memo": "Acme parts",
+            },
+        )
         assert made.status == "committed", made
-        made = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 812_345, "account_id": pay,
-                                                "tags": {"teammate": "human:eve", "team": "web"},
-                                                "money_account_id": _checking(c), "memo": "Eve salary"})
+        made = act(
+            c,
+            OWNER,
+            "payment_create",
+            {
+                "recipient_id": rid,
+                "amount": 812_345,
+                "account_id": pay,
+                "tags": {"teammate": "human:eve", "team": "web"},
+                "money_account_id": _checking(c),
+                "memo": "Eve salary",
+            },
+        )
         assert made.status == "committed", made
 
         def payments(who):
             return FR.payments(c, who, at=AT)["payments"]
+
         assert sorted(p["amount"] for p in payments(OWNER)) == [9_000, 812_345]
-        assert [p["amount"] for p in payments("human:cara")] == []          # leads Web, but no payroll detail
+        assert [p["amount"] for p in payments("human:cara")] == []  # leads Web, but no payroll detail
         assert [p["amount"] for p in payments("human:ben")] == [9_000]
 
-        def due_out(who):                                   # N4: the balance sheet's due-out follows the same cut
+        def due_out(who):  # N4: the balance sheet's due-out follows the same cut
             sheet = FR.balance_sheet(c, who, at=AT)
-            return [s["due_out"] for a in sheet["assets"] for s in a["sources"] if s["money_account_id"] ==
-                    _checking(c)][0]
+            return [
+                s["due_out"] for a in sheet["assets"] for s in a["sources"] if s["money_account_id"] == _checking(c)
+            ][0]
+
         act(c, OWNER, "view_grant", {"subject": "human:cara", "what": "bs_lines", "account_ids": [account(c, "1000")]})
         act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "everything"})
         assert due_out(OWNER) == {"count": 2, "amount": 821_345}
-        assert due_out("human:dan") == {"count": 1, "amount": 9_000}       # everything but payroll detail
-        assert due_out("human:cara") == {"count": 0, "amount": 0}          # the bank line only
+        assert due_out("human:dan") == {"count": 1, "amount": 9_000}  # everything but payroll detail
+        assert due_out("human:cara") == {"count": 0, "amount": 0}  # the bank line only
         act(c, OWNER, "view_revoke", {"grant_id": grant.result["grant_id"]})
         (left,) = payments("human:ben")
         assert left["status"] == "queued" and left["created_by"] == "human:ben"
@@ -112,7 +171,8 @@ def test_a_cards_spent_total_is_not_shown_when_it_holds_a_private_line(books):
     """Codex round 6 #3: a 100.00 card charge re-categorized onto a private line, attributed to someone else. The
     holder's Transactions leave it out, so their Cards read shows no spent total either (it would give the amount
     away); the owner, with full detail, still sees it."""
-    from backend.tests.test_finance_banking import LATER, _arrives, _card_for_eve, _txn
+    from backend.tests.helpers.finance_banking import LATER, _arrives, _card_for_eve, _txn
+
     fake = FakeMercury()
     connect(books, fake)
     _, card_id = _card_for_eve(books, fake)
@@ -122,6 +182,7 @@ def test_a_cards_spent_total_is_not_shown_when_it_holds_a_private_line(books):
 
     def spent(c, who):
         return next(x["spent"] for x in FR.cards(c, who, at=AT)["cards"] if x["id"] == card_id)
+
     with books.transaction() as c:
         assert spent(c, "human:eve") == 10_000
         pay = _payroll_line(c)
@@ -141,17 +202,31 @@ OCT_END = "2026-10-31T12:00:00.000000Z"
 def _october_debit_paid_by_a_november_payroll_bill(c) -> None:
     """A 40.00 debit posted to Other expenses in October; October closed in November; a private payroll bill dated
     November is paid from that row, so the "Pays bill" reclass posts in November. Gus sees the P&L, not payroll."""
-    from backend.tests.test_finance_ap import _ingest, _txn
-    made = act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
-                                            "parent_id": account(c, "6000")})
+    from backend.tests.helpers.finance_ap import _ingest, _txn
+
+    made = act(
+        c,
+        OWNER,
+        "account_create",
+        {"code": "6200", "name": "Payroll", "type": "expense", "parent_id": account(c, "6000")},
+    )
     payroll = str(made.result["account_id"])
     assert act(c, OWNER, "private_lines_set", {"account_id": payroll, "others_see": "totals"}).status == "committed"
     _ingest(c, _txn("txn-pay", -40.0, who="ACME PAYROLL", day="2026-10-14"))
     assert close_month(c, "2026-10", at=NOV).status == "committed"
     vendor = act(c, OWNER, "contact_create", {"name": "Acme Payroll", "kind": "vendor"}, at=NOV)
-    made = act(c, OWNER, "bill_create", {"vendor_id": str(vendor.result["contact_id"]), "bill_date": "2026-11-03",
-                                         "lines": [{"account_id": payroll, "amount": 4_000}], "number": "PR-7"},
-               at=NOV)
+    made = act(
+        c,
+        OWNER,
+        "bill_create",
+        {
+            "vendor_id": str(vendor.result["contact_id"]),
+            "bill_date": "2026-11-03",
+            "lines": [{"account_id": payroll, "amount": 4_000}],
+            "number": "PR-7",
+        },
+        at=NOV,
+    )
     assert made.status == "committed", made
     bid = str(made.result["bill_id"])
     assert act(c, OWNER, "bill_approve", {"bill_id": bid}, at=NOV).status == "committed"
@@ -197,7 +272,7 @@ def test_reversing_the_pays_bill_entry_never_re_exposes_the_amount(books):
     connect(books, FakeMercury())
     with books.transaction() as c:
         _october_debit_paid_by_a_november_payroll_bill(c)
-        reopen_rows(c)                       # the October debit is reconciled by its close; its reclass needs it open
+        reopen_rows(c)  # the October debit is reconciled by its close; its reclass needs it open
         pays = str(c.execute("SELECT id FROM fin_entries WHERE memo='Pays bill PR-7'").fetchone()[0])
         assert act(c, OWNER, "journal", {"reverses": pays}, at=NOV).status == "committed"
     with books.read() as c:
@@ -211,8 +286,9 @@ def test_reversing_the_pays_bill_entry_never_re_exposes_the_amount(books):
 
 
 def _other_budget(c, at: str = NOV) -> str:
-    made = act(c, OWNER, "budget_create", {"name": "Other expenses", "account_id": account(c, "6900"),
-                                           "amount": 10_000}, at=at)
+    made = act(
+        c, OWNER, "budget_create", {"name": "Other expenses", "account_id": account(c, "6900"), "amount": 10_000}, at=at
+    )
     assert made.status == "committed", made
     return str(made.result["budget_id"])
 
@@ -225,8 +301,9 @@ def test_a_budget_on_other_expenses_never_shows_a_payroll_payment_to_a_viewer_wi
     with books.transaction() as c:
         _october_debit_paid_by_a_november_payroll_bill(c)
         budget_id = _other_budget(c)
-        made = act(c, OWNER, "budget_create", {"name": "Cloud", "account_id": account(c, "6100"), "amount": 10_000},
-                   at=NOV)
+        made = act(
+            c, OWNER, "budget_create", {"name": "Cloud", "account_id": account(c, "6100"), "amount": 10_000}, at=NOV
+        )
         assert made.status == "committed", made
     with books.read() as c:
         for who, months, excluded in ((OWNER, [4_000, -4_000], False), ("human:gus", [0, 0], True)):
@@ -254,24 +331,45 @@ def _card_charge_paid_by_a_november_payroll_bill(store, fake) -> str:
     November, paid from that charge's feed row, so the "Pays bill" reclass posts in November. Returns the budget id."""
     with store.transaction() as c:
         payroll = _payroll_line(c)
-        made = act(c, OWNER, "budget_create", {"name": "Other expenses", "account_id": account(c, "6900"),
-                                               "amount": 10_000})
+        made = act(
+            c, OWNER, "budget_create", {"name": "Other expenses", "account_id": account(c, "6900"), "amount": 10_000}
+        )
         assert made.status == "committed", made
         budget_id = str(made.result["budget_id"])
-        card = act(c, OWNER, "card_create", {"holder": "human:eve", "budget_id": budget_id, "amount": 5_000,
-                                             "provider_user_id": "user-eve"})
+        card = act(
+            c,
+            OWNER,
+            "card_create",
+            {"holder": "human:eve", "budget_id": budget_id, "amount": 5_000, "provider_user_id": "user-eve"},
+        )
         assert card.status == "committed", card
-    sync_once(store, fake)                  # Mercury makes the card (card-eve); its allocation follows the sync
+    sync_once(store, fake)  # Mercury makes the card (card-eve); its allocation follows the sync
     fake.txns["txn-card-oct"] = {**MERCURY["txn_card_posted"], "id": "txn-card-oct", "amount": -40.0}
-    fake.events_list.append({"id": "evt-card-oct", "resourceType": "transaction", "resourceId": "txn-card-oct",
-                             "operationType": "create", "resourceVersion": 1})
+    fake.events_list.append(
+        {
+            "id": "evt-card-oct",
+            "resourceType": "transaction",
+            "resourceId": "txn-card-oct",
+            "operationType": "create",
+            "resourceVersion": 1,
+        }
+    )
     sync_once(store, fake, LATER)
     with store.transaction() as c:
         assert close_month(c, "2026-10", at=NOV).status == "committed"
         vendor = act(c, OWNER, "contact_create", {"name": "Acme Payroll", "kind": "vendor"}, at=NOV)
-        made = act(c, OWNER, "bill_create", {"vendor_id": str(vendor.result["contact_id"]), "bill_date": "2026-11-03",
-                                             "lines": [{"account_id": payroll, "amount": 4_000}], "number": "PR-7"},
-                   at=NOV)
+        made = act(
+            c,
+            OWNER,
+            "bill_create",
+            {
+                "vendor_id": str(vendor.result["contact_id"]),
+                "bill_date": "2026-11-03",
+                "lines": [{"account_id": payroll, "amount": 4_000}],
+                "number": "PR-7",
+            },
+            at=NOV,
+        )
         assert made.status == "committed", made
         bid = str(made.result["bill_id"])
         assert act(c, OWNER, "bill_approve", {"bill_id": bid}, at=NOV).status == "committed"
@@ -306,12 +404,30 @@ def test_a_gateway_key_allocation_never_recovers_a_settled_payroll_charge_for_a_
     with books.transaction() as c:
         budget_id = _other_budget(c, at=AT)
         _october_debit_paid_by_a_november_payroll_bill(c)
-        assert act(c, OWNER, "allocation_set", {"budget_id": budget_id, "target_kind": "gateway_key",
-                                                "target_id": "gw-1", "amount": 5_000}, at=AT).status == "committed"
+        assert (
+            act(
+                c,
+                OWNER,
+                "allocation_set",
+                {"budget_id": budget_id, "target_kind": "gateway_key", "target_id": "gw-1", "amount": 5_000},
+                at=AT,
+            ).status
+            == "committed"
+        )
         entry = str(c.execute("SELECT entry_id FROM fin_feed_txns WHERE provider_id='txn-pay'").fetchone()[0])
         currency = load(c, AT).book.base_currency
-        held = budgeting.hold_place(c, budget_scope=budget_id, amount=4_000, currency=currency, source="run",
-                                    source_id="run-1", expires_at=None, target="gateway_key:gw-1", at=AT, by=OWNER)
+        held = budgeting.hold_place(
+            c,
+            budget_scope=budget_id,
+            amount=4_000,
+            currency=currency,
+            source="run",
+            source_id="run-1",
+            expires_at=None,
+            target="gateway_key:gw-1",
+            at=AT,
+            by=OWNER,
+        )
         assert held.allowed and held.hold_id, held
         assert budgeting.hold_settle(c, str(held.hold_id), 4_000, entry, at=AT)
     with books.read() as c:
@@ -342,28 +458,54 @@ def _card_charge_in_october_paid_by_a_november_payroll_bill(store, fake, holder:
     P&L grant from the start; in November a 4,000 payroll bill is paid from that charge's feed row, closing October
     first, so the "Pays bill" reclass posts in November. `between(store)` runs once the card exists, before its charge."""
     with store.transaction() as c:
-        made = act(c, OWNER, "budget_create", {"name": "Other expenses", "account_id": account(c, "6900"),
-                                               "amount": 10_000})
+        made = act(
+            c, OWNER, "budget_create", {"name": "Other expenses", "account_id": account(c, "6900"), "amount": 10_000}
+        )
         assert made.status == "committed", made
         budget_id = str(made.result["budget_id"])
-        card = act(c, OWNER, "card_create", {"holder": holder, "budget_id": budget_id, "amount": 5_000,
-                                             "provider_user_id": "user-" + holder.split(":")[1]})
+        card = act(
+            c,
+            OWNER,
+            "card_create",
+            {
+                "holder": holder,
+                "budget_id": budget_id,
+                "amount": 5_000,
+                "provider_user_id": "user-" + holder.split(":")[1],
+            },
+        )
         assert card.status == "committed", card
         assert act(c, OWNER, "view_grant", {"subject": holder, "what": "pnl"}).status == "committed"
-    sync_once(store, fake)                  # Mercury makes the card (card-eve); its allocation follows the sync
+    sync_once(store, fake)  # Mercury makes the card (card-eve); its allocation follows the sync
     if between is not None:
         between(store)
     fake.txns["txn-card-oct"] = {**MERCURY["txn_card_posted"], "id": "txn-card-oct", "amount": -40.0}
-    fake.events_list.append({"id": "evt-card-oct", "resourceType": "transaction", "resourceId": "txn-card-oct",
-                             "operationType": "create", "resourceVersion": 1})
+    fake.events_list.append(
+        {
+            "id": "evt-card-oct",
+            "resourceType": "transaction",
+            "resourceId": "txn-card-oct",
+            "operationType": "create",
+            "resourceVersion": 1,
+        }
+    )
     sync_once(store, fake, LATER)
     with store.transaction() as c:
         payroll = _payroll_line(c)
         assert close_month(c, "2026-10", at=NOV).status == "committed"
         vendor = act(c, OWNER, "contact_create", {"name": "Acme Payroll", "kind": "vendor"}, at=NOV)
-        made = act(c, OWNER, "bill_create", {"vendor_id": str(vendor.result["contact_id"]), "bill_date": "2026-11-03",
-                                             "lines": [{"account_id": payroll, "amount": 4_000}], "number": "PR-8"},
-                   at=NOV)
+        made = act(
+            c,
+            OWNER,
+            "bill_create",
+            {
+                "vendor_id": str(vendor.result["contact_id"]),
+                "bill_date": "2026-11-03",
+                "lines": [{"account_id": payroll, "amount": 4_000}],
+                "number": "PR-8",
+            },
+            at=NOV,
+        )
         assert made.status == "committed", made
         bid = str(made.result["bill_id"])
         assert act(c, OWNER, "bill_approve", {"bill_id": bid}, at=NOV).status == "committed"
@@ -394,8 +536,13 @@ def test_a_refusal_read_by_id_names_the_budget_figure_only_where_the_reader_sees
     with books.transaction() as c:
         budget_id = _other_budget(c, at=AT)
         _october_debit_paid_by_a_november_payroll_bill(c)
-        refused = act(c, OWNER, "allocation_set", {"budget_id": budget_id, "target_kind": "gateway_key",
-                                                   "target_id": "gw-1", "amount": 8_000}, at=AT)
+        refused = act(
+            c,
+            OWNER,
+            "allocation_set",
+            {"budget_id": budget_id, "target_kind": "gateway_key", "target_id": "gw-1", "amount": 8_000},
+            at=AT,
+        )
         assert refused.code == "invalid" and refused.action_id, refused
     with books.read() as c:
         assert "6000" not in str(SX.by_id(c, refused.action_id)["reason"])
@@ -409,8 +556,9 @@ def test_cash_flow_for_a_balance_sheet_grantee_is_the_bank_total_with_no_payroll
     connect(books, FakeMercury())
     with books.transaction() as c:
         _october_debit_paid_by_a_november_payroll_bill(c)
-        assert act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "balance_sheet"},
-                   at=NOV).status == "committed"
+        assert (
+            act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "balance_sheet"}, at=NOV).status == "committed"
+        )
     with books.read() as c:
         window = {"start": "2026-10-01", "end": "2026-11-30", "period": "month", "at": NOV}
         mine = FR.report(c, "human:gus", "cash_flow", **window)
@@ -430,14 +578,22 @@ def test_a_card_limit_refusal_names_the_card_figure_only_where_the_reader_sees_i
     connect(books, fake)
     _card_charge_in_october_paid_by_a_november_payroll_bill(books, fake, "human:gus")
     with books.transaction() as c:
-        card_id, budget_id = (str(x) for x in c.execute(
-            "SELECT id, budget_id FROM fin_cards WHERE holder='human:gus'").fetchone())
-        assert act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.cards"}, at=OCT_END).status == \
-            "committed"
+        card_id, budget_id = (
+            str(x) for x in c.execute("SELECT id, budget_id FROM fin_cards WHERE holder='human:gus'").fetchone()
+        )
+        assert (
+            act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.cards"}, at=OCT_END).status
+            == "committed"
+        )
         owner = act(c, OWNER, "card_update_limit", {"card_id": card_id, "amount": 1_000}, at=OCT_END)
         held = act(c, "human:gus", "card_update_limit", {"card_id": card_id, "amount": 1_000}, at=OCT_END)
-        asked = act(c, "human:gus", "allocation_set", {"budget_id": budget_id, "target_kind": "card",
-                                                       "target_id": card_id, "amount": 1_000}, at=OCT_END)
+        asked = act(
+            c,
+            "human:gus",
+            "allocation_set",
+            {"budget_id": budget_id, "target_kind": "card", "target_id": card_id, "amount": 1_000},
+            at=OCT_END,
+        )
     assert "40.00" in owner.reason, owner
     assert held.status == "needs_approval" and "40.00" not in held.reason, held
     assert asked.status == "needs_approval" and "40.00" not in asked.reason, asked
@@ -452,10 +608,18 @@ def test_a_pnl_grantee_gets_one_outcome_for_every_set_aside_amount(books):
         budget_id = _other_budget(c, at=AT)
         _october_debit_paid_by_a_november_payroll_bill(c)
         assert act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "pnl"}, at=AT).status == "committed"
-        outcomes = {amount: act(c, "human:gus", "allocation_set", {"budget_id": budget_id, "target_kind": "gateway_key",
-                                                                   "target_id": "gw-1", "amount": amount},
-                                f"dry-{amount}", dry_run=True, at=AT).status
-                    for amount in (3_000, 9_000, 9_001, 12_000)}
+        outcomes = {
+            amount: act(
+                c,
+                "human:gus",
+                "allocation_set",
+                {"budget_id": budget_id, "target_kind": "gateway_key", "target_id": "gw-1", "amount": amount},
+                f"dry-{amount}",
+                dry_run=True,
+                at=AT,
+            ).status
+            for amount in (3_000, 9_000, 9_001, 12_000)
+        }
     assert set(outcomes.values()) == {"needs_approval"}, outcomes
 
 
@@ -467,11 +631,22 @@ def test_a_card_limit_change_gets_one_outcome_for_every_amount_the_holder_cannot
     _card_charge_in_october_paid_by_a_november_payroll_bill(books, fake, "human:gus")
     with books.transaction() as c:
         card_id = str(c.execute("SELECT id FROM fin_cards WHERE holder='human:gus'").fetchone()[0])
-        assert act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.cards"}, at=OCT_END).status == \
-            "committed"
-        outcomes = {amount: act(c, "human:gus", "card_update_limit", {"card_id": card_id, "amount": amount},
-                                f"limit-{amount}", dry_run=True, at=OCT_END)
-                    for amount in (500, 3_999, 4_000, 4_001, 5_000, 9_000)}
+        assert (
+            act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.cards"}, at=OCT_END).status
+            == "committed"
+        )
+        outcomes = {
+            amount: act(
+                c,
+                "human:gus",
+                "card_update_limit",
+                {"card_id": card_id, "amount": amount},
+                f"limit-{amount}",
+                dry_run=True,
+                at=OCT_END,
+            )
+            for amount in (500, 3_999, 4_000, 4_001, 5_000, 9_000)
+        }
     assert {r.status for r in outcomes.values()} == {"needs_approval"}, {a: r.status for a, r in outcomes.items()}
     assert not any(ch.isdigit() for r in outcomes.values() for ch in r.reason), outcomes
 
@@ -484,12 +659,22 @@ def test_a_card_creation_gets_one_outcome_for_every_amount_the_reader_cannot_che
         budget_id = _other_budget(c, at=AT)
         _october_debit_paid_by_a_november_payroll_bill(c)
         assert act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "pnl"}, at=AT).status == "committed"
-        assert act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.cards"}, at=AT).status == \
-            "committed"
-        outcomes = {amount: act(c, "human:gus", "card_create", {"holder": "human:eve", "budget_id": budget_id,
-                                                                "amount": amount, "provider_user_id": "user-eve"},
-                                f"card-{amount}", dry_run=True, at=AT).status
-                    for amount in (3_000, 6_000, 6_001, 8_000, 12_000)}
+        assert (
+            act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.cards"}, at=AT).status
+            == "committed"
+        )
+        outcomes = {
+            amount: act(
+                c,
+                "human:gus",
+                "card_create",
+                {"holder": "human:eve", "budget_id": budget_id, "amount": amount, "provider_user_id": "user-eve"},
+                f"card-{amount}",
+                dry_run=True,
+                at=AT,
+            ).status
+            for amount in (3_000, 6_000, 6_001, 8_000, 12_000)
+        }
     assert set(outcomes.values()) == {"needs_approval"}, outcomes
 
 
@@ -501,11 +686,22 @@ def test_a_budget_change_gets_one_outcome_for_every_amount_the_reader_cannot_che
         budget_id = _other_budget(c, at=AT)
         _october_debit_paid_by_a_november_payroll_bill(c)
         assert act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "pnl"}, at=AT).status == "committed"
-        assert act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.budgets"}, at=AT).status == \
-            "committed"
-        outcomes = {amount: act(c, "human:gus", "budget_update", {"budget_id": budget_id, "amount": amount},
-                                f"budget-{amount}", dry_run=True, at=AT)
-                    for amount in (3_000, 6_000, 6_001, 7_000, 12_000)}
+        assert (
+            act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.budgets"}, at=AT).status
+            == "committed"
+        )
+        outcomes = {
+            amount: act(
+                c,
+                "human:gus",
+                "budget_update",
+                {"budget_id": budget_id, "amount": amount},
+                f"budget-{amount}",
+                dry_run=True,
+                at=AT,
+            )
+            for amount in (3_000, 6_000, 6_001, 7_000, 12_000)
+        }
     assert {r.status for r in outcomes.values()} == {"needs_approval"}, {a: r.status for a, r in outcomes.items()}
     assert not any(ch.isdigit() for r in outcomes.values() for ch in r.reason), outcomes
 
@@ -519,11 +715,22 @@ def test_a_budget_lowered_below_its_cards_gets_one_outcome_for_a_reader_who_cann
     _card_charge_in_october_paid_by_a_november_payroll_bill(books, fake, "human:gus")
     with books.transaction() as c:
         budget_id = str(c.execute("SELECT budget_id FROM fin_cards WHERE holder='human:gus'").fetchone()[0])
-        assert act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.budgets"},
-                   at=NOV).status == "committed"
-        outcomes = {amount: act(c, "human:gus", "budget_update", {"budget_id": budget_id, "amount": amount},
-                                f"low-{amount}", dry_run=True, at=NOV)
-                    for amount in (1_000, 3_000, 4_000, 6_000)}
+        assert (
+            act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.budgets"}, at=NOV).status
+            == "committed"
+        )
+        outcomes = {
+            amount: act(
+                c,
+                "human:gus",
+                "budget_update",
+                {"budget_id": budget_id, "amount": amount},
+                f"low-{amount}",
+                dry_run=True,
+                at=NOV,
+            )
+            for amount in (1_000, 3_000, 4_000, 6_000)
+        }
     assert {r.status for r in outcomes.values()} == {"needs_approval"}, {a: r.status for a, r in outcomes.items()}
     assert not any(ch.isdigit() for r in outcomes.values() for ch in r.reason), outcomes
 
@@ -539,29 +746,52 @@ def test_a_card_limit_approval_that_no_longer_fits_stores_no_figure(books):
 
     def ask_before_the_charge(store):
         with store.transaction() as c:
-            assert act(c, OWNER, "right_grant", {"teammate": "human:cara", "right": "finance.cards"}, at=AT).status == \
-                "committed"
+            assert (
+                act(c, OWNER, "right_grant", {"teammate": "human:cara", "right": "finance.cards"}, at=AT).status
+                == "committed"
+            )
             pnl = act(c, OWNER, "view_grant", {"subject": "human:cara", "what": "pnl"}, at=AT)
             assert pnl.status == "committed", pnl
-            assert act(c, OWNER, "rule_create", {
-                "kind": "gate", "name": "Card limits", "when": {"kind": "card_update_limit"},
-                "outcome": {"outcome": "needs_approval", "who": "finance_admin"},
-                "examples": [{"input": {"kind": "card_update_limit"}, "expect": "needs_approval"}]},
-                at=AT).status == "committed"
+            assert (
+                act(
+                    c,
+                    OWNER,
+                    "rule_create",
+                    {
+                        "kind": "gate",
+                        "name": "Card limits",
+                        "when": {"kind": "card_update_limit"},
+                        "outcome": {"outcome": "needs_approval", "who": "finance_admin"},
+                        "examples": [{"input": {"kind": "card_update_limit"}, "expect": "needs_approval"}],
+                    },
+                    at=AT,
+                ).status
+                == "committed"
+            )
             card_id = str(c.execute("SELECT id FROM fin_cards WHERE holder='human:gus'").fetchone()[0])
             held = act(c, "human:cara", "card_update_limit", {"card_id": card_id, "amount": 1_000}, "limit-ask", at=AT)
             assert (held.status, held.approver) == ("needs_approval", OWNER), held
             asked.update(card_id=card_id, held=held, grant=str(pnl.result["grant_id"]))
+
     _card_charge_in_october_paid_by_a_november_payroll_bill(books, fake, "human:gus", between=ask_before_the_charge)
     held = asked["held"]
     with books.transaction() as c:
-        assert act(c, OWNER, "private_lines_set", {"account_id": account(c, "6200"), "others_see": "totals",
-                                                   "full_detail": ["human:cara"]}, at=OCT_END).status == "committed"
-        H.approval_decide(c, OWNER, held.approval_id, "approved")
+        assert (
+            act(
+                c,
+                OWNER,
+                "private_lines_set",
+                {"account_id": account(c, "6200"), "others_see": "totals", "full_detail": ["human:cara"]},
+                at=OCT_END,
+            ).status
+            == "committed"
+        )
+        give(c, OWNER, held.approval_id)
         done = FA.approval_decided(c, held.approval_id, OCT_END)
         assert done.status in ("failed", "denied") and done.code == "invalid", done
-        reason, result = c.execute("SELECT reason, result FROM fin_actions WHERE id=?",
-                                   (str(held.action_id),)).fetchone()
+        reason, result = c.execute(
+            "SELECT reason, result FROM fin_actions WHERE id=?", (str(held.action_id),)
+        ).fetchone()
         assert not any(ch.isdigit() for ch in str(reason)) and asked["card_id"] in str(result), (reason, result)
         for reader in (OWNER, "human:cara"):
             assert "40.00" in FR.action_for(c, reader, held.action_id, at=OCT_END)["reason"], reader
@@ -577,22 +807,45 @@ def test_a_payroll_journal_entry_is_netted_from_a_budget_for_a_reader_without_pa
     (spec §7.5): their figure is not the true 6,000, so every amount they ask for gets the same outcome."""
     connect(books, FakeMercury())
     with books.transaction() as c:
-        payroll = str(act(c, OWNER, "account_create", {"code": "6910", "name": "Payroll", "type": "expense",
-                                                       "parent_id": account(c, "6900")}).result["account_id"])
+        payroll = str(
+            act(
+                c,
+                OWNER,
+                "account_create",
+                {"code": "6910", "name": "Payroll", "type": "expense", "parent_id": account(c, "6900")},
+            ).result["account_id"]
+        )
         assert act(c, OWNER, "private_lines_set", {"account_id": payroll, "others_see": "totals"}).status == "committed"
         budget_id = _other_budget(c, at=AT)
-        posted = act(c, OWNER, "journal", {"date": "2026-10-03", "memo": "Payroll", "lines": [
-            {"account_id": payroll, "amount": 4_000, "tags": {"teammate": "human:eve"}},
-            {"account_id": account(c, "1000"), "amount": -4_000}]}, at=AT)
+        posted = act(
+            c,
+            OWNER,
+            "journal",
+            {
+                "date": "2026-10-03",
+                "memo": "Payroll",
+                "lines": [
+                    {"account_id": payroll, "amount": 4_000, "tags": {"teammate": "human:eve"}},
+                    {"account_id": account(c, "1000"), "amount": -4_000},
+                ],
+            },
+            at=AT,
+        )
         assert posted.status == "committed", posted
         assert act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "pnl"}, at=AT).status == "committed"
-        assert act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.budgets"},
-                   at=AT).status == "committed"
+        assert (
+            act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.budgets"}, at=AT).status
+            == "committed"
+        )
         ask = {"budget_id": budget_id, "target_kind": "gateway_key", "target_id": "gw-1"}
-        owner = {amount: act(c, OWNER, "allocation_set", {**ask, "amount": amount}, at=AT, dry_run=True).status
-                 for amount in (6_000, 6_001)}
-        gus = [act(c, "human:gus", "allocation_set", {**ask, "amount": amount}, at=AT, dry_run=True)
-               for amount in (6_000, 6_001)]
+        owner = {
+            amount: act(c, OWNER, "allocation_set", {**ask, "amount": amount}, at=AT, dry_run=True).status
+            for amount in (6_000, 6_001)
+        }
+        gus = [
+            act(c, "human:gus", "allocation_set", {**ask, "amount": amount}, at=AT, dry_run=True)
+            for amount in (6_000, 6_001)
+        ]
         true = budgeting.state(load(c, AT), budget_id, date(2026, 10, 15))
         gus_view = load(c, AT).view("human:gus")
         seen = budgeting.state(load(c, AT), budget_id, date(2026, 10, 15), read=budgeting.Netted(gus_view))
@@ -612,29 +865,51 @@ def test_a_card_limit_refusal_keeps_a_private_charge_hidden_when_read_in_a_later
     with books.transaction() as c:
         payroll = _payroll_line(c)
         budget_id = _other_budget(c, at=AT)
-        card = act(c, OWNER, "card_create", {"holder": "human:eve", "budget_id": budget_id, "amount": 5_000,
-                                             "provider_user_id": "user-eve"}, at=AT)
+        card = act(
+            c,
+            OWNER,
+            "card_create",
+            {"holder": "human:eve", "budget_id": budget_id, "amount": 5_000, "provider_user_id": "user-eve"},
+            at=AT,
+        )
         assert card.status == "committed", card
     sync_once(books, fake)
     fake.txns["txn-card-oct"] = {**MERCURY["txn_card_posted"], "id": "txn-card-oct", "amount": -40.0}
-    fake.events_list.append({"id": "evt-card-oct", "resourceType": "transaction", "resourceId": "txn-card-oct",
-                             "operationType": "create", "resourceVersion": 1})
+    fake.events_list.append(
+        {
+            "id": "evt-card-oct",
+            "resourceType": "transaction",
+            "resourceId": "txn-card-oct",
+            "operationType": "create",
+            "resourceVersion": 1,
+        }
+    )
     sync_once(books, fake, LATER)
     with books.transaction() as c:
         feed = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id='txn-card-oct'").fetchone()[0])
-        spent = act(c, OWNER, "categorize", {"feed_id": feed, "account_id": payroll,
-                                             "tags": {"teammate": "human:eve"}}, at=LATER)
+        spent = act(
+            c,
+            OWNER,
+            "categorize",
+            {"feed_id": feed, "account_id": payroll, "tags": {"teammate": "human:eve"}},
+            at=LATER,
+        )
         assert spent.status == "committed", spent
         assert act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "pnl"}, at=OCT_END).status == "committed"
-        assert act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.budgets"},
-                   at=OCT_END).status == "committed"
-        assert act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.cards"},
-                   at=OCT_END).status == "committed"
+        assert (
+            act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.budgets"}, at=OCT_END).status
+            == "committed"
+        )
+        assert (
+            act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.cards"}, at=OCT_END).status
+            == "committed"
+        )
         card_id = str(c.execute("SELECT id FROM fin_cards WHERE holder='human:eve'").fetchone()[0])
-        asked = act(c, "human:gus", "card_update_limit", {"card_id": card_id, "amount": 3_000}, at=OCT_END,
-                    key="gus-limit")
+        asked = act(
+            c, "human:gus", "card_update_limit", {"card_id": card_id, "amount": 3_000}, at=OCT_END, key="gus-limit"
+        )
         assert asked.status == "needs_approval" and asked.action_id and asked.approval_id, asked
-        H.approval_decide(c, str(asked.approver), asked.approval_id, "approved")
+        give(c, str(asked.approver), asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, OCT_END)
     assert done is not None and (done.status, done.code) == ("failed", "invalid"), done and done.reason
     with books.read() as c:
@@ -650,12 +925,19 @@ def test_a_once_budget_over_a_private_payroll_account_reads_for_a_viewer_without
     connect(books, FakeMercury())
     with books.transaction() as c:
         _payroll_line(c)
-        made = act(c, OWNER, "budget_create", {"name": "Once", "account_id": account(c, "6000"), "amount": 10_000,
-                                               "period": "once"}, at=AT)
+        made = act(
+            c,
+            OWNER,
+            "budget_create",
+            {"name": "Once", "account_id": account(c, "6000"), "amount": 10_000, "period": "once"},
+            at=AT,
+        )
         assert made.status == "committed", made
         assert act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "pnl"}, at=AT).status == "committed"
-        assert act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.budgets"},
-                   at=AT).status == "committed"
+        assert (
+            act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.budgets"}, at=AT).status
+            == "committed"
+        )
         rows = FR.budgets(c, "human:gus", at=AT)["budgets"]
         FR.budget_vs_actual(c, "human:gus", at=AT)
     assert [r["name"] for r in rows if r["name"] == "Once"] == ["Once"], rows
@@ -668,15 +950,32 @@ def _gateway_hold_on_the_october_debit(c, budget_id: str) -> None:
     """A 40.00 Gateway key hold on Other expenses, settled by the October debit (the feed row a private payroll bill
     paid). The owner's Gateway reserve for October holds it; a reader without payroll detail nets it out."""
     debit = str(c.execute("SELECT entry_id FROM fin_feed_txns WHERE provider_id='txn-pay'").fetchone()[0])
-    placed = FA.hold_place(c, budget_scope=budget_id, amount=4_000, currency="USD", source="run",
-                           source_id="gw-run", expires_at=None, target="gateway_key:gw-1", at=AT)
+    placed = FA.hold_place(
+        c,
+        budget_scope=budget_id,
+        amount=4_000,
+        currency="USD",
+        source="run",
+        source_id="gw-run",
+        expires_at=None,
+        target="gateway_key:gw-1",
+        at=AT,
+    )
     assert placed.allowed, placed
     assert FA.hold_settle(c, str(placed.hold_id), 4_000, debit, at=AT)
 
 
 def _gateway_allocation(c, budget_id: str, amount: int = 1) -> None:
-    assert act(c, OWNER, "allocation_set", {"budget_id": budget_id, "target_kind": "gateway_key", "target_id": "gw-1",
-                                            "amount": amount}, at=AT).status == "committed"
+    assert (
+        act(
+            c,
+            OWNER,
+            "allocation_set",
+            {"budget_id": budget_id, "target_kind": "gateway_key", "target_id": "gw-1", "amount": amount},
+            at=AT,
+        ).status
+        == "committed"
+    )
 
 
 def _readers_grants(c, *rights: str) -> None:
@@ -698,8 +997,22 @@ def test_a_child_budget_under_a_parent_with_a_hidden_figure_gets_one_outcome_for
         _readers_grants(c, "finance.budgets")
 
         def child(amount: int, who: str, key: str) -> FA.ActionResult:
-            return act(c, who, "budget_create", {"name": "Sales meals", "account_id": account(c, "6900"), "team": "sales",
-                                                 "parent_id": budget_id, "amount": amount}, key, dry_run=True, at=AT)
+            return act(
+                c,
+                who,
+                "budget_create",
+                {
+                    "name": "Sales meals",
+                    "account_id": account(c, "6900"),
+                    "team": "sales",
+                    "parent_id": budget_id,
+                    "amount": amount,
+                },
+                key,
+                dry_run=True,
+                at=AT,
+            )
+
         owner = {amount: child(amount, OWNER, f"own-{amount}") for amount in (6_000, 6_001)}
         gus = {amount: child(amount, "human:gus", f"gus-{amount}") for amount in (3_000, 6_000, 6_001, 12_000)}
     assert owner[6_000].status == "committed", owner[6_000]
@@ -708,7 +1021,9 @@ def test_a_child_budget_under_a_parent_with_a_hidden_figure_gets_one_outcome_for
     assert not any(ch.isdigit() for r in gus.values() for ch in r.reason), gus
 
 
-def test_a_retroactive_budget_change_is_refused_the_same_way_for_a_reader_whose_figure_for_that_period_is_not_true(books):
+def test_a_retroactive_budget_change_is_refused_the_same_way_for_a_reader_whose_figure_for_that_period_is_not_true(
+    books,
+):
     """§12: only future periods are editable. A P&L grantee with the budgets right changes Other expenses back to
     October, in December: every amount is refused the same way for the owner and for that reader, and the reason names
     no figure, so the reader learns nothing from which amount was refused."""
@@ -721,8 +1036,16 @@ def test_a_retroactive_budget_change_is_refused_the_same_way_for_a_reader_whose_
         _readers_grants(c, "finance.budgets")
 
         def change(amount: int, who: str, key: str) -> FA.ActionResult:
-            return act(c, who, "budget_update", {"budget_id": budget_id, "amount": amount, "effective_from": "2026-10-01"},
-                       key, dry_run=True, at=DEC)
+            return act(
+                c,
+                who,
+                "budget_update",
+                {"budget_id": budget_id, "amount": amount, "effective_from": "2026-10-01"},
+                key,
+                dry_run=True,
+                at=DEC,
+            )
+
         owner = [change(amount, OWNER, f"own-{amount}") for amount in (3_999, 4_000)]
         gus = [change(amount, "human:gus", f"gus-{amount}") for amount in (3_999, 4_000, 4_001, 9_000)]
     results = owner + gus
@@ -741,22 +1064,42 @@ def test_every_budget_and_card_fit_gives_a_reader_who_cannot_check_one_outcome_a
         _october_debit_paid_by_a_november_payroll_bill(c)
         _gateway_allocation(c, budget_id)
         _gateway_hold_on_the_october_debit(c, budget_id)
-        assert act(c, OWNER, "card_create", {"holder": "human:gus", "budget_id": budget_id, "amount": 1_000,
-                                             "provider_user_id": "user-gus"}, at=AT).status == "committed"
+        assert (
+            act(
+                c,
+                OWNER,
+                "card_create",
+                {"holder": "human:gus", "budget_id": budget_id, "amount": 1_000, "provider_user_id": "user-gus"},
+                at=AT,
+            ).status
+            == "committed"
+        )
         card_id = str(c.execute("SELECT id FROM fin_cards WHERE holder='human:gus'").fetchone()[0])
         _readers_grants(c, "finance.budgets", "finance.cards")
 
         def walk(kind: str, body: dict[str, object], amounts: tuple[int, ...]) -> list[FA.ActionResult]:
-            return [act(c, "human:gus", kind, {**body, "amount": amount}, f"{kind}-{amount}", dry_run=True, at=AT)
-                    for amount in amounts]
+            return [
+                act(c, "human:gus", kind, {**body, "amount": amount}, f"{kind}-{amount}", dry_run=True, at=AT)
+                for amount in amounts
+            ]
+
         walks = {
-            "budget_create": walk("budget_create", {"name": "Sales meals", "account_id": account(c, "6900"),
-                                                    "team": "sales", "parent_id": budget_id}, (3_000, 6_000, 6_001, 12_000)),
+            "budget_create": walk(
+                "budget_create",
+                {"name": "Sales meals", "account_id": account(c, "6900"), "team": "sales", "parent_id": budget_id},
+                (3_000, 6_000, 6_001, 12_000),
+            ),
             "budget_update": walk("budget_update", {"budget_id": budget_id}, (3_000, 6_000, 6_001, 12_000)),
-            "allocation_set": walk("allocation_set", {"budget_id": budget_id, "target_kind": "gateway_key",
-                                                      "target_id": "gw-1"}, (3_000, 9_000, 9_001, 12_000)),
-            "card_create": walk("card_create", {"holder": "human:eve", "budget_id": budget_id,
-                                                "provider_user_id": "user-eve"}, (3_000, 6_000, 6_001, 12_000)),
+            "allocation_set": walk(
+                "allocation_set",
+                {"budget_id": budget_id, "target_kind": "gateway_key", "target_id": "gw-1"},
+                (3_000, 9_000, 9_001, 12_000),
+            ),
+            "card_create": walk(
+                "card_create",
+                {"holder": "human:eve", "budget_id": budget_id, "provider_user_id": "user-eve"},
+                (3_000, 6_000, 6_001, 12_000),
+            ),
             "card_update_limit": walk("card_update_limit", {"card_id": card_id}, (500, 3_999, 4_000, 4_001, 9_000)),
         }
     for kind, results in walks.items():
@@ -776,14 +1119,24 @@ def test_a_hidden_child_budget_is_judged_on_the_true_figures_when_its_owner_appr
         _readers_grants(c, "finance.budgets")
         asked = {}
         for amount in (6_001, 6_000):
-            asked[amount] = act(c, "human:gus", "budget_create", {"name": f"Sales {amount}",
-                                                                  "account_id": account(c, "6900"), "team": "sales",
-                                                                  "parent_id": budget_id, "amount": amount},
-                                f"ask-{amount}", at=AT)
+            asked[amount] = act(
+                c,
+                "human:gus",
+                "budget_create",
+                {
+                    "name": f"Sales {amount}",
+                    "account_id": account(c, "6900"),
+                    "team": "sales",
+                    "parent_id": budget_id,
+                    "amount": amount,
+                },
+                f"ask-{amount}",
+                at=AT,
+            )
             assert (asked[amount].status, asked[amount].approver) == ("needs_approval", OWNER), asked[amount]
-        H.approval_decide(c, OWNER, asked[6_001].approval_id, "approved")
+        give(c, OWNER, asked[6_001].approval_id)
         too_big = FA.approval_decided(c, asked[6_001].approval_id, AT)
         assert too_big.status in ("failed", "denied") and too_big.code == "invalid", too_big
-        H.approval_decide(c, OWNER, asked[6_000].approval_id, "approved")
+        give(c, OWNER, asked[6_000].approval_id)
         fits = FA.approval_decided(c, asked[6_000].approval_id, AT)
         assert fits.status == "committed", fits

@@ -12,8 +12,8 @@ from backend import identity_proxy, oidc, owner_link
 from backend.app import create_app
 from backend.config import Settings
 from backend.store import digest
-from backend.tests.test_api import api, post  # noqa: F401  (the api fixture)
-from backend.tests.test_oidc import CLIENT, SECRET, provider, signin  # noqa: F401  (the fixtures)
+from backend.tests.helpers.api import post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.oidc import CLIENT, SECRET, provider, signin  # noqa: F401  (the fixtures)
 
 URL = "https://acme.hosted.example"
 OWNER = "ana@acme.example"
@@ -92,9 +92,9 @@ def test_with_the_issuer_down_from_startup_sessions_keep_working_and_the_owner_l
     hosted.fake.server.shutdown()
     hosted.fake.server.server_close()
     with hosted.auth.store.read() as c:
-        assert c.execute("SELECT count(*) FROM owner_links").fetchone()[0] == 0    # no link placed yet
+        assert c.execute("SELECT count(*) FROM owner_links").fetchone()[0] == 0  # no link placed yet
     with TestClient(create_app(dataclasses.replace(hosted.settings)), base_url=hosted.settings.public_url) as app:
-        app.app.state.auth.warm()           # what startup runs: the installer's link goes in although the issuer is down
+        app.app.state.auth.warm()  # what startup runs: the installer's link goes in although the issuer is down
         for name, value, actor in (("owner", owner_cookie, "human:ana"), ("member", member_cookie, "human:ben")):
             kept = app.get("/api/v2/me", headers={"cookie": "__Host-tico_session=" + value})
             assert kept.status_code == 200 and kept.json()["actor"] == actor, name
@@ -131,7 +131,7 @@ def test_the_owner_link_is_off_unless_the_install_is_hosted_and_was_given_one(si
     signin.auth.warm()
     with signin.auth.store.read() as c:
         assert c.execute("SELECT count(*) FROM owner_links").fetchone()[0] == 0
-    with signin.auth.store.transaction() as c:      # even a link that is in the table opens nothing
+    with signin.auth.store.transaction() as c:  # even a link that is in the table opens nothing
         owner_link.place(c, digest(token), OWNER)
     browser = TestClient(signin.api.app, base_url=signin.settings.public_url)
     assert browser.get(owner_link.LINK_PATH).status_code == 404
@@ -153,16 +153,30 @@ def test_wrong_break_glass_links_are_rate_limited_per_address(hosted):
 
 
 def base(tmp_path, **kw):
-    return dict(db_path=tmp_path / "hub.db", registry_dir=tmp_path, auth_proxy="oidc", oidc_issuer="https://id.example",
-                oidc_client_id=CLIENT, oidc_client_secret=SECRET, public_url=URL, **kw)
+    return dict(
+        db_path=tmp_path / "hub.db",
+        registry_dir=tmp_path,
+        auth_proxy="oidc",
+        oidc_issuer="https://id.example",
+        oidc_client_id=CLIENT,
+        oidc_client_secret=SECRET,
+        public_url=URL,
+        **kw,
+    )
 
 
-@pytest.mark.parametrize("changes, message", [
-    ({"oidc_label": "x" * 41}, "TICO_OIDC_LABEL"),
-    ({"oidc_label": "Tico <b>"}, "TICO_OIDC_LABEL"),
-    ({"hosted": "invited", "owner_email": OWNER, "owner_link_hash": "abc"}, "64-character sha256"),
-    ({"hosted": "invited", "owner_link_hash": digest("t" * 40), "public_url": "https://203.0.113.7"}, "not an IP address"),
-])
+@pytest.mark.parametrize(
+    "changes, message",
+    [
+        ({"oidc_label": "x" * 41}, "TICO_OIDC_LABEL"),
+        ({"oidc_label": "Tico <b>"}, "TICO_OIDC_LABEL"),
+        ({"hosted": "invited", "owner_email": OWNER, "owner_link_hash": "abc"}, "64-character sha256"),
+        (
+            {"hosted": "invited", "owner_link_hash": digest("t" * 40), "public_url": "https://203.0.113.7"},
+            "not an IP address",
+        ),
+    ],
+)
 def test_startup_refuses_a_bad_label_or_a_bad_break_glass_link(tmp_path, changes, message):
     Settings(**base(tmp_path, oidc_label=LABEL, hosted="invited", owner_email=OWNER, owner_link_hash=digest("t" * 40)))
     with pytest.raises(RuntimeError, match=message):

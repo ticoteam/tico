@@ -5,16 +5,16 @@ Inputs: the task, the team tree, the goals, and the Librarian's answer on the re
 cycle plan, the rating scale and the probation list, a first weekly tracker, and the first routine checked.
 
 Done when the five answers are in `state.md`, the three knowledge files are written, the first tracker is attached to the task
-labelled as a first draft, the routine is checked and logged in `memory/decisions.md`, and `hub bot setup-done` has run.
+labelled as a first draft, the routine is checked and logged in `memory/decisions.md`, and `tico bot setup-done` has run.
 
 ---
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub team show
-    hub goal list --all
-    hub doc ask "What does our performance review process say?"
+    tico task show <id>
+    tico team show
+    tico goal list --all
+    tico doc ask "What does our performance review process say?"
 
 Check the reporting lines, the goals reviews can point at, and whatever review guidelines the Librarian can cite. Do not ask what
 these already say.
@@ -53,16 +53,16 @@ Send nothing to managers. Label it "First draft, not yet reviewed" and attach it
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off, `hub automation update <id>
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off, `tico automation update <id>
 --enable`) and tell the human in one line what it does: "I will write this tracker every Wednesday at 09:00 for the HR owner
 only." They can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave it
-off, adjust `knowledge/` and the routine to match (`hub automation update <id>`, with `--disable` to turn it off).
+off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the routine run; until then nothing you
 have runs on its own. Run it once the answers and the first result are recorded, not before.

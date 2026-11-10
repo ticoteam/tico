@@ -1,12 +1,13 @@
 """Revision 8 provenance: disposable synthetic meetings; no bot jobs or provider calls."""
+
 import json
 import sqlite3
 
 import pytest
 
 from backend import hubdb as H
-from backend.tests.test_api import get, post, headers
-from backend.tests.test_live_meetings import api, live, chunk  # noqa: F401
+from backend.tests.helpers.api import get, post, headers
+from backend.tests.helpers.live_meetings import live, chunk  # noqa: F401
 
 
 def test_client_validation_and_legacy_idempotency(live):
@@ -47,8 +48,10 @@ def test_recorder_private_pause_end_finalize_approve_and_count(live):
         assert tuple(c.execute(query).fetchone()) == ("tico-recorder", 1, 0)
     # A synthetic event proves the reporting predicate; this never attaches or runs a bot.
     with live.app.state.store.transaction() as c:
-        c.execute("INSERT INTO live_meeting_events(meeting_id,event_id,type,payload,created_at) VALUES(?,?,?,?,?)",
-                  (mid, 100, "meeting.bot_reply", "{}", H.now()))
+        c.execute(
+            "INSERT INTO live_meeting_events(meeting_id,event_id,type,payload,created_at) VALUES(?,?,?,?,?)",
+            (mid, 100, "meeting.bot_reply", "{}", H.now()),
+        )
         assert tuple(c.execute(query).fetchone()) == ("tico-recorder", 1, 1)
 
 

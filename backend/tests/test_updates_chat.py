@@ -8,8 +8,8 @@ import json
 
 from backend import updates
 from backend.store import H
-from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
-from backend.tests.test_strategy_bot_chat import strategy_bot
+from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.strategy_bot_chat import strategy_bot
 
 
 def bot_id(c, slug):
@@ -25,18 +25,25 @@ def claim(api, r, bot, text, token, place="updates"):
     sent = ask(api, text, token, place)
     attempt = post(api, "jobs/claim", {"bot": bot}, token=r["token"])["attempt"]
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t-" + attempt["id"]}, token=r["token"])
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Done", "last_seq": 0},
-         token=r["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "text": "Done", "last_seq": 0},
+        token=r["token"],
+    )
     return sent, attempt
 
 
 def test_a_question_from_updates_is_handed_only_the_updates_the_person_may_read_and_open(api, monkeypatch):
-    from backend.tests.test_api import restrict
-    from backend.tests.test_bot_contact import bot
+    from backend.tests.helpers.api import restrict
+    from backend.tests.helpers.bot_contact import bot
+
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     for slug, name in (("sales", "Sales"), ("fixer", "Fixer")):
         bot(api, slug, name)
-    hidden = post(api, "tasks", {"title": "Quietly let the agency go", "body": "See notes", "owner": "fixer", "private": True})
+    hidden = post(
+        api, "tasks", {"title": "Quietly let the agency go", "body": "See notes", "owner": "fixer", "private": True}
+    )
     with api.app.state.store.transaction() as c:
         restrict(c, "finance", people=["ana"], bots=["coo"])
         updates.post(c, bot_id(c, "sales"), "- Closed the Acme renewal", day="2026-09-29")
@@ -62,16 +69,25 @@ def test_a_question_from_updates_is_handed_only_the_updates_the_person_may_read_
     # no party to.
     strategy_bot(api)
     _, owner = claim(api, r, "coo", "What's the top update today?", "ana-test")
-    assert sorted(u["text"] for u in owner["updates"]["updates"]) == ["- Closed the Acme renewal", "- Runway is nine months"]
+    assert sorted(u["text"] for u in owner["updates"]["updates"]) == [
+        "- Closed the Acme renewal",
+        "- Runway is nine months",
+    ]
 
 
 def test_the_default_order_is_a_goal_then_waits_on_you_then_newest(api, monkeypatch):
-    from backend.tests.test_bot_contact import bot, token
+    from backend.tests.helpers.bot_contact import bot, token
+
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     for slug, name in (("boss", "Manager"), ("analyst", "Analyst"), ("writer", "Writer"), ("crier", "Crier")):
         bot(api, slug, name)
     post(api, "goals", {"owner": "boss", "title": "Launch in October"})
-    post(api, "tasks", {"title": "Approve the market sizing", "body": "See notes", "owner": "human:cara"}, token=token(api, "analyst"))
+    post(
+        api,
+        "tasks",
+        {"title": "Approve the market sizing", "body": "See notes", "owner": "human:cara"},
+        token=token(api, "analyst"),
+    )
     with api.app.state.store.transaction() as c:
         updates.post(c, bot_id(c, "boss"), "- Planned the launch", day="2026-09-28")
         updates.post(c, bot_id(c, "analyst"), "- Sized the market", day="2026-09-29")
@@ -82,30 +98,39 @@ def test_the_default_order_is_a_goal_then_waits_on_you_then_newest(api, monkeypa
     ready(api, r, ["coo"])
     _, attempt = claim(api, r, "coo", "hi", "cara-test")
     ranked = [(u["author"], u["rank"], u["goals"], u["waits_on_you"]) for u in attempt["updates"]["updates"]]
-    assert ranked == [("Manager", 1, ["Launch in October"], False), ("Crier", 2, [], True),
-                      ("Analyst", 3, [], True), ("Writer", 4, [], False)]
+    assert ranked == [
+        ("Manager", 1, ["Launch in October"], False),
+        ("Crier", 2, [], True),
+        ("Analyst", 3, [], True),
+        ("Writer", 4, [], False),
+    ]
     assert attempt["updates"]["updates"][0]["day"] == "2026-09-28", "the latest earlier day is there to offer"
 
 
 def test_private_references_in_links_and_prose_never_reach_an_updates_chat_turn(api, monkeypatch):
-    from backend.tests.test_api import restrict
-    from backend.tests.test_bot_contact import bot
+    from backend.tests.helpers.api import restrict
+    from backend.tests.helpers.bot_contact import bot
+
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     bot(api, "fixer", "Fixer")
-    hidden = post(api, "tasks", {"title": "Private market plan", "body": "See notes", "owner": "fixer", "private": True})
-    rows = [("short_id", hidden["id"][:8]),
-            ("singular_short_link", f"[task](#/task/{hidden['id'][:8]})"),
-            ("plural_short_link", f"[task](#/tasks/{hidden['id'][:8]})"),
-            ("plural_number_link", None),
-            ("number_hash", None),
-            ("number_words", None),
-            ("dev_number", None),
-            ("private_bot_slug", "privatebot"),
-            ("private_bot_name", "Private Bot"),
-            ("private_bot_link", "#/bot/privatebot"),
-            ("secret_bot_slug", "secretbot"),
-            ("secret_bot_name", "Secret Bot"),
-            ("secret_bot_link", "#/bot/secretbot")]
+    hidden = post(
+        api, "tasks", {"title": "Private market plan", "body": "See notes", "owner": "fixer", "private": True}
+    )
+    rows = [
+        ("short_id", hidden["id"][:8]),
+        ("singular_short_link", f"[task](#/task/{hidden['id'][:8]})"),
+        ("plural_short_link", f"[task](#/tasks/{hidden['id'][:8]})"),
+        ("plural_number_link", None),
+        ("number_hash", None),
+        ("number_words", None),
+        ("dev_number", None),
+        ("private_bot_slug", "privatebot"),
+        ("private_bot_name", "Private Bot"),
+        ("private_bot_link", "#/bot/privatebot"),
+        ("secret_bot_slug", "secretbot"),
+        ("secret_bot_name", "Secret Bot"),
+        ("secret_bot_link", "#/bot/secretbot"),
+    ]
     bot(api, "privatebot", "Private Bot")
     bot(api, "secretbot", "Secret Bot")
     bot(api, "source-public", "Public source")
@@ -118,11 +143,23 @@ def test_private_references_in_links_and_prose_never_reach_an_updates_chat_turn(
         # Cara can read Private Bot, but her Assistant cannot; Secret Bot is hidden from both.
         restrict(c, "privatebot", people=["cara"])
         restrict(c, "secretbot", people=["ana"])
-        rows = [(slug, (f"[task](#/tasks/{number})" if slug == "plural_number_link" else
-                        f"Task #{number}" if slug == "number_hash" else
-                        f"task {number}" if slug == "number_words" else
-                        f"Dev {number}" if slug == "dev_number" else ref))
-                for slug, ref in rows]
+        rows = [
+            (
+                slug,
+                (
+                    f"[task](#/tasks/{number})"
+                    if slug == "plural_number_link"
+                    else f"Task #{number}"
+                    if slug == "number_hash"
+                    else f"task {number}"
+                    if slug == "number_words"
+                    else f"Dev {number}"
+                    if slug == "dev_number"
+                    else ref
+                ),
+            )
+            for slug, ref in rows
+        ]
         for slug, body in rows:
             source = "source-" + slug.replace("_", "-")
             updates.post(c, bot_id(c, source), "- Reviewed " + body, day="2026-09-29")

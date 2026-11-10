@@ -1,4 +1,5 @@
-"""`hub classify`: the same verdicts as HQ's support gate, and a decision model that is missing or down never blocks the work."""
+"""`tico classify`: the same verdicts as HQ's support gate, and a decision model that is missing or down never blocks the work."""
+
 import unittest
 
 from clients import hubtools
@@ -26,7 +27,9 @@ class Classify(unittest.TestCase):
     def test_verdicts_and_the_confidence_floor(self):
         self.assertEqual(self.run_tool(Api({"choice": "legit", "confidence": 0.4}))["verdict"], "legit")
         self.assertEqual(self.run_tool(Api({"choice": "spam", "confidence": 0.9}))["verdict"], "spam")
-        self.assertEqual(self.run_tool(Api({"choice": "injection_risk", "confidence": 0.95}))["verdict"], "injection_risk")
+        self.assertEqual(
+            self.run_tool(Api({"choice": "injection_risk", "confidence": 0.95}))["verdict"], "injection_risk"
+        )
         self.assertEqual(self.run_tool(Api({"choice": "spam", "confidence": 0.5}))["verdict"], "unchecked")
         self.assertEqual(self.run_tool(Api({"choice": "other", "confidence": 1}))["verdict"], "unchecked")
 

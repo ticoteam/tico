@@ -1,4 +1,5 @@
 """DNS: find who is authoritative, plan the records, and wait until public resolvers see them."""
+
 from __future__ import annotations
 
 import ipaddress
@@ -64,7 +65,7 @@ def _name(data: bytes, pos: int) -> tuple[str, int]:
                 end = pos + 2
             pos, jumped = ptr, True
             continue
-        labels.append(data[pos + 1:pos + 1 + n].decode("ascii", "replace"))
+        labels.append(data[pos + 1 : pos + 1 + n].decode("ascii", "replace"))
         pos += 1 + n
     else:
         raise ValueError("name loop")
@@ -80,9 +81,9 @@ def _parse_answers(data: bytes, want: int) -> list[str]:
     out = []
     for _ in range(an):
         _, pos = _name(data, pos)
-        rtype, _, _, rdlen = struct.unpack(">HHIH", data[pos:pos + 10])
+        rtype, _, _, rdlen = struct.unpack(">HHIH", data[pos : pos + 10])
         pos += 10
-        rd = data[pos:pos + rdlen]
+        rd = data[pos : pos + rdlen]
         if rtype == want:
             if rtype in (NS, CNAME):
                 out.append(_name(data, pos)[0])
@@ -104,12 +105,27 @@ class Provider:
 # (regex on the nameserver host, provider). First match wins.
 _SUFFIXES = [
     (r"awsdns-", Provider("route53", "Amazon Route 53", "Route 53 > Hosted zones")),
-    (r"ns\.cloudflare\.com$", Provider("cloudflare", "Cloudflare", "Cloudflare dashboard > your domain > DNS > Records")),
-    (r"nsone\.net$", Provider("netlify", "Netlify DNS (NS1 nameservers)",
-                           "Netlify > Domains > your domain > DNS records (or NS1, if you use it directly)")),
+    (
+        r"ns\.cloudflare\.com$",
+        Provider("cloudflare", "Cloudflare", "Cloudflare dashboard > your domain > DNS > Records"),
+    ),
+    (
+        r"nsone\.net$",
+        Provider(
+            "netlify",
+            "Netlify DNS (NS1 nameservers)",
+            "Netlify > Domains > your domain > DNS records (or NS1, if you use it directly)",
+        ),
+    ),
     (r"vercel-dns\.com$", Provider("vercel", "Vercel", "Vercel > Domains > your domain > DNS Records")),
-    (r"googledomains\.com$", Provider("google", "Google Cloud DNS / Google Domains",
-                                   "Google Cloud console > Cloud DNS > your zone (or Squarespace Domains)")),
+    (
+        r"googledomains\.com$",
+        Provider(
+            "google",
+            "Google Cloud DNS / Google Domains",
+            "Google Cloud console > Cloud DNS > your zone (or Squarespace Domains)",
+        ),
+    ),
     (r"domaincontrol\.com$", Provider("godaddy", "GoDaddy", "GoDaddy > My Products > Domains > DNS")),
     (r"registrar-servers\.com$", Provider("namecheap", "Namecheap", "Namecheap > Domain List > Manage > Advanced DNS")),
     (r"azure-dns\.", Provider("azure", "Azure DNS", "Azure portal > DNS zones")),
@@ -163,7 +179,9 @@ class Record:
     ttl: int = 300
 
 
-def plan_records(domain: str, front_door: str, ipv4: str = "", ipv6: str = "", tunnel_id: str = "", runner_host: str = "") -> list[Record]:
+def plan_records(
+    domain: str, front_door: str, ipv4: str = "", ipv6: str = "", tunnel_id: str = "", runner_host: str = ""
+) -> list[Record]:
     """The domain's record comes first: the DNS wait and check look at it."""
     if front_door == "cloudflared":
         target = f"{tunnel_id or '<tunnel-id>'}.cfargotunnel.com"
@@ -183,8 +201,10 @@ def relative_name(fqdn: str, zone: str) -> str:
 
 
 def manual_instructions(records: list[Record], zone: Zone) -> list[str]:
-    lines = [f"Your domain's DNS is served by {zone.provider.name} (nameservers: {', '.join(zone.nameservers)}).",
-             f"Add these records there ({zone.provider.where}), in the zone {zone.name}:"]
+    lines = [
+        f"Your domain's DNS is served by {zone.provider.name} (nameservers: {', '.join(zone.nameservers)}).",
+        f"Add these records there ({zone.provider.where}), in the zone {zone.name}:",
+    ]
     for r in records:
         note = "  (proxied / orange cloud)" if r.proxied else ""
         lines.append(f"  {r.type:<6} name {relative_name(r.name, zone.name):<12} value {r.value}  ttl {r.ttl}{note}")
@@ -214,9 +234,17 @@ def resolves_to(domain: str, records: list[Record], res: Resolver) -> bool:
     return (not want4 or want4 <= set(v4)) and (not want6 or want6 <= set(v6))
 
 
-def wait_until_live(domain: str, records: list[Record], resolvers: list[tuple[str, Resolver]], *, timeout: float,
-                    interval: float = 10.0, say: Callable[[str], None] = print,
-                    sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic) -> bool:
+def wait_until_live(
+    domain: str,
+    records: list[Record],
+    resolvers: list[tuple[str, Resolver]],
+    *,
+    timeout: float,
+    interval: float = 10.0,
+    say: Callable[[str], None] = print,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> bool:
     """True once every public resolver agrees. Certificates fail if we start before this."""
     start = clock()
     while True:
@@ -226,11 +254,12 @@ def wait_until_live(domain: str, records: list[Record], resolvers: list[tuple[st
             return True
         if clock() - start >= timeout:
             waiting = ", ".join(k for k, v in seen.items() if not v)
-            say(f"  Still not resolving on {waiting} after {int(timeout // 60)} min. Records can take longer at some "
-                "providers; check they are in the provider named above, then re-run `tico setup` (it resumes).")
+            say(
+                f"  Still not resolving on {waiting} after {int(timeout // 60)} min. Records can take longer at some "
+                "providers; check they are in the provider named above, then re-run the setup wizard (it resumes)."
+            )
             return False
-        say(f"  waiting for DNS ({int(clock() - start)}s): not yet on "
-            f"{', '.join(k for k, v in seen.items() if not v)}")
+        say(f"  waiting for DNS ({int(clock() - start)}s): not yet on {', '.join(k for k, v in seen.items() if not v)}")
         sleep(interval)
 
 

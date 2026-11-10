@@ -12,10 +12,10 @@ again in live mode with a second Tico webhook.
 
 ## 1. Make the incoming webhook in Tico
 
-In Settings → Webhooks → Incoming, add a webhook named *Stripe* with the id `stripe`. Or:
+In Automations → Incoming webhooks, add a webhook named *Stripe* with the id `stripe`. Or:
 
 ```
-hub trigger create Stripe --id stripe
+tico trigger create Stripe --id stripe
 ```
 
 Copy the address, `https://tico.example.com/api/v2/hooks/stripe/<secret>`. It is shown once.
@@ -23,7 +23,7 @@ Copy the address, `https://tico.example.com/api/v2/hooks/stripe/<secret>`. It is
 Stripe sends names, emails and amounts. Keep the calls for less time than the 7-day default:
 
 ```
-hub trigger update stripe --keep-days 2
+tico trigger update stripe --keep-days 2
 ```
 
 ## 2. Add the endpoint in Stripe
@@ -39,7 +39,7 @@ When you save, Stripe shows a **Signing secret** that starts `whsec_`. Reveal it
 ## 3. Turn on signature checking
 
 ```
-hub trigger sign stripe --preset stripe --secret whsec_your_stripe_signing_secret
+tico trigger sign stripe --preset stripe --secret whsec_your_stripe_signing_secret
 ```
 
 Paste Stripe's secret as it is. Tico now checks the `Stripe-Signature` header on every call and refuses one that is wrong, or
@@ -51,7 +51,7 @@ whose time is more than 5 minutes off, with 401. The type of each call is read f
 On the Automations page, **New automation**, pick the Webhook trigger *Stripe* and add a Bot turn step for `billing`. Or:
 
 ```
-hub automation create --file - <<'EOF'
+tico automation create --file - <<'EOF'
 {"name": "Stripe event", "owner": "bot:billing", "enabled": true,
  "trigger": {"type": "webhook", "id": "stripe"},
  "steps": [{"id": "handle", "type": "bot_turn", "enabled": true, "bot": "billing",
@@ -82,7 +82,7 @@ For a type that needs a quick nudge, not a task, use an automation with a filter
 for a failed payment and for nothing else:
 
 ```
-hub automation create --file - <<'EOF'
+tico automation create --file - <<'EOF'
 {"name": "Stripe payment failed", "owner": "bot:billing", "enabled": true,
  "trigger": {"type": "webhook", "id": "stripe",
              "filters": [{"field": "webhook.type", "op": "is", "value": "invoice.payment_failed"}]},

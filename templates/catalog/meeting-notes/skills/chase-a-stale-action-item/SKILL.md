@@ -8,16 +8,16 @@ When to use: an action item is past its stated date, or a question to a person h
 reply.
 
 Steps:
-1. Re-check the task with `hub task show <id>`. If it has moved, update the row in `knowledge/actions.md` and stop.
+1. Re-check the task with `tico task show <id>`. If it has moved, update the row in `knowledge/actions.md` and stop.
 2. Classify the item: late (past its stated date), stale (an ask open more than a day with no reply), or no date (never
    stated, so it cannot be late). A no-date item is not chased; it is asked about once in the status page.
 3. For a late item, draft one chase to the owner: the item, the meeting with the short quote and its timestamp, the date it
    was due, and one question, "new date?" or "blocked on whom?". Put the chase on the task for a human's yes, and send it only after that yes, as `playbooks/chase-open-actions.md` step 5 says. For a stale ask, draft the one re-ask on the same task and send it with
-   `hub task ask <id>` only after the same yes.
+   `tico task ask <id> --to <person> "<question>" --version N` only after the same yes.
 4. Chase the same owner no more than once a week. A second late week goes to the person who ran the meeting, with the
    number of weeks it has been late.
 5. When the owner says that someone else must act, do not file a new ask. Leave the original task with its owner,
-   `hub task update <id> --status waiting --on <owner>`, and say in one line what it waits for.
+   `tico task ask <id> --to <owner> "<what you need from them>" --version N`, and say in one line what it waits for.
 6. An ask still unanswered after the re-ask is closed on its task with a note that says so and the date:
    "closed: no reply after one re-ask on <date>". The row stays in `knowledge/actions.md` with its last chased date.
 

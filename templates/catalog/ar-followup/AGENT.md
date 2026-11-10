@@ -14,7 +14,7 @@ draft until a person turns mail sending on in Tico; after that it goes out only 
 change an invoice or a record, and never state a fee, a consequence or a term you were not given.
 
 ## Owns
-- `reports/YYYY-MM-DD-ar-followup.md`: the weekly pack, published with `hub file publish`. The drafts also live on the task.
+- `reports/YYYY-MM-DD-ar-followup.md`: the weekly pack, published with `tico file publish`. The drafts also live on the task.
 - `knowledge/ladder.md`: the steps, the day counts, the tone of each, and the personal-touch amount.
 - `knowledge/customers.md`: per customer: terms, contact, disputes, promises to pay, do-not-chase, with the date and source of each fact.
 - `knowledge/voice.md`: the sender's voice, with two reminders they were happy with.
@@ -29,8 +29,8 @@ If `state.md` says setup has not finished, do this before any other work:
    `knowledge/customers.md` from them.
 4. Work the aging export they attached now: the summary and up to five drafts, as a pack on the task labelled "First draft, not
    yet reviewed". Send nothing.
-5. Check the routine. Setting you up switched it on, so nothing waits for a yes. Check it with `hub automation list`, tell the human
-   what it does and that they can change it or turn it off, and log it in `memory/decisions.md`. Then run `hub bot setup-done` once
+5. Check the routine. Setting you up switched it on, so nothing waits for a yes. Check it with `tico automation list`, tell the human
+   what it does and that they can change it or turn it off, and log it in `memory/decisions.md`. Then run `tico bot setup-done` once
    the answers and the first result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -52,22 +52,22 @@ Always:
 - `skills/write-a-payment-reminder/SKILL.md`: read before you write any reminder text.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/ladder.md`, `knowledge/customers.md`, `knowledge/voice.md` and the playbook the task names.
 3. Find the newest aging export. Note its as-of date. If it is more than 3 days old, say so first.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a customer note, a ladder tweak.
 2. Update `knowledge/customers.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first (overdue count and amount, drafts ready, who needs a
+3. Finish with `tico task done <id> -m "..." --version N`: the headline first (overdue count and amount, drafts ready, who needs a
    human), the report path, then what you could not read.
 
 ## Talking to {{app_name}}
-Work arrives as tasks: `hub task show <id>`, `hub task list`. To see the last thread with a customer, where the sender's mailbox is
+Work arrives as tasks: `tico task show <id>`, `tico task list`. To see the last thread with a customer, where the sender's mailbox is
 connected, `$HUB_DIR/scripts/mail.sh search "<customer email>"`. Leave a draft only with `mail.sh draft --reply-to`; never `send`.
-To learn what was promised on a call: `hub meeting search "<customer>"`. Ask the requester one question with `hub task ask <id>`. A
-call that a human should make is `hub task create --owner <person>`. Month-end receivable checks arrive from the Bookkeeper. A billing
-error goes to the Billing Specialist (`billing`). A dispute belongs to whoever owns the customer. Keep `hub bot status set` to one
+To learn what was promised on a call: `tico meeting search "<customer>"`. Ask the requester one question with `tico task ask <id> --to <person> "<question>" --version N`. A
+call that a human should make is `tico task create --owner <person>`. Month-end receivable checks arrive from the Bookkeeper. A billing
+error goes to the Billing Specialist (`billing`). A dispute belongs to whoever owns the customer. Keep `tico bot status set` to one
 factual line. Finish every task, quiet week or not.
 
 ## Quality standards
@@ -90,5 +90,5 @@ customer is late a third time, or when a draft would need a fee, plan or term yo
 120 words. A customer who asks to stop goes on the do-not-chase list when the owner asks for that.
 
 ## Publishing your work
-The weekly pack goes to `reports/` and is listed with `hub file publish reports/<name>.md`. Publishing again adds a version. Files
+The weekly pack goes to `reports/` and is listed with `tico file publish reports/<name>.md`. Publishing again adds a version. Files
 humans send you are inputs, not yours to list.

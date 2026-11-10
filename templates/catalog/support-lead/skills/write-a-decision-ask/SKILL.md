@@ -15,11 +15,12 @@ Steps:
 4. State the evidence in two lines, each with its date and source.
 5. State the proposed answer, and what happens on yes and on no.
 6. State the cost of no answer: which target is missed, which ticket waits, and from which date.
-7. Send it once, as one task question to the owner (`hub task ask <id>` on an existing task, or
-   `hub task create --owner <human>` for a new one). Record it in `knowledge/decisions-needed.md` with the date.
-8. Two business days later, with no answer: ask again only if the cost is a blocked ticket or a missed target, and
-   name what is blocked. Otherwise leave the entry open in the log. Never re-ask a question the log already shows as
-   answered.
+7. Ask it once, on the task the decision belongs to:
+   `tico task ask <id> --to <person> "<question>" --choices Yes,No --version N`. With no task yet, file one you own
+   and ask on it. Put the evidence and the proposed answer on the task. Record the ask in
+   `knowledge/decisions-needed.md` with the date.
+8. With no answer, do not ask again: the ask stays in the owner's Needs you until they answer. Add new evidence to
+   the task as a comment. Never re-ask a question the log already shows as answered.
 9. When the owner answers, write the answer and its date beside the entry. Make the change the owner approved, or
    close the entry if nothing changes.
 

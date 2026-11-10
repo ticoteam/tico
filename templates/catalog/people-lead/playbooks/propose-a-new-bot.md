@@ -2,8 +2,8 @@
 
 Triggered from the weekly summary, or by a task, when recurring people work has no owner. Budget 15 minutes.
 
-Inputs: the unowned requests of one kind from the last 30 days (`hub task list`, the routing log); `hub template list`;
-`hub team show`; and the card of the candidate template.
+Inputs: the unowned requests of one kind from the last 30 days (`tico task list`, the routing log); `tico template list`;
+`tico team show`; and the card of the candidate template.
 
 Outcome: one specific proposal the owner can say yes or no to. When the work requests it, one task for BotOps as well.
 
@@ -19,10 +19,10 @@ bot; route it to a human.
 
 ## 2. Pick the template
 
-    hub template list
-    hub team show
+    tico template list
+    tico team show
 
-Choose one template from `team_templates` in this bot's card that owns exactly that work and is not already in `hub team show`.
+Choose one template from `team_templates` in this bot's card that owns exactly that work and is not already in `tico team show`.
 Read its card: its summary, its first routine and what it needs to start.
 
 ## 3. Propose
@@ -33,6 +33,6 @@ task below directly. Ask only if the role or scope is missing.
 
 ## 4. Carry out the requested hire
 
-    hub task create --owner botops --title "Set up <template>" --body "<why, the evidence, its first routine, reports to people-lead>"
+    tico task create --owner botops --title "Set up <template>" --body "<why, the evidence, its first routine, reports to people-lead>"
 
 Record the decision in `memory/decisions.md`. On a no, record why, so the same proposal is not made again next week.

@@ -8,12 +8,12 @@ When to use: before you quote any handbook or policy page in an answer, a checkl
 Librarian cites.
 
 Steps:
-1. Open the page the Librarian cited (`hub doc read <path>`), read it whole, and note its title, its date and its owner, if the page
+1. Open the page the Librarian cited (`tico doc read <path>`), read it whole, and note its title, its date and its owner, if the page
    names one.
 2. Check `knowledge/stale-pages.md`. If the page is listed there, the result is "stale". Do not quote it.
 3. Check the page's date against any policy change named in the task or the roster. If the page predates a change a human has
    mentioned, the result is "stale".
-4. Search for another page on the same topic (`hub doc search "<topic>"`). If it says something different, the result is
+4. Search for another page on the same topic (`tico doc search "<topic>"`). If it says something different, the result is
    "conflicting". Keep both, with their dates.
 5. If the page has no date, or cannot be read in full, the result is "unknown". Say what was checked.
 6. If none of the above applies, the result is "current". Quote the sentence you need, with the title and date.

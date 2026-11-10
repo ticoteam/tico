@@ -3,7 +3,7 @@
 from backend.auth import Identity
 from backend.models import Claim
 from backend.store import H
-from backend.tests.test_api import api, assign, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, post, ready, runner  # noqa: F401
 
 
 def test_company_waiter_reads_a_computer_with_two_waits_once(api):
@@ -14,7 +14,9 @@ def test_company_waiter_reads_a_computer_with_two_waits_once(api):
     ready(api, other, ["finance", "doc-updater"])
     store = api.app.state.store
     with store.transaction() as c:
-        jobs = [r[0] for r in c.execute("SELECT id FROM jobs WHERE state='queued' AND bot_id IN ('finance','doc-updater')")]
+        jobs = [
+            r[0] for r in c.execute("SELECT id FROM jobs WHERE state='queued' AND bot_id IN ('finance','doc-updater')")
+        ]
         c.executemany("INSERT INTO org_turn_waits(job_id,created_at) VALUES(?,?)", [(job, H.now()) for job in jobs])
     assert len(jobs) >= 2
     statements = []

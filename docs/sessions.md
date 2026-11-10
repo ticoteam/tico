@@ -2,7 +2,7 @@
 
 A **session** is one model conversation a bot resumes: a Claude Code or Codex thread on its computer.
 A bot has more than one. Its Home is one session, and every task it owns is another.
-This page explains how they fit together. [Tasks](tasks.md#subtasks-and-prs) has the exact rules.
+This page explains how they fit together. [Tasks](tasks.md#sub-tasks) has the exact rules.
 
 ## The main chat and task sessions
 
@@ -33,13 +33,6 @@ When you ask a bot for something in a thread and it files a task, the work moves
 quiet line, "Started task: <title>". Tap that line, or any task row in the bot's Home, to open the task's thread.
 Messages you write there go to that task's session.
 
-## Reports in the main chat
-
-The Home hears where each task got to in one quiet line: **started**, **blocked**, **done**, **declined** or
-**stuck**, with the start of the note. These lines start no run. The main session reads them the next time
-something wakes it. The same state is not reported twice in a row, and a private task is reported only where every
-reader of the Home may read it.
-
 ## Subtasks
 
 A subtask someone else files for a bot under its task continues the parent's session by default: same thread, same
@@ -47,8 +40,9 @@ worktree, same checkpoint. The bot's turns on the parent and that subtask take t
 itself is new work, so it starts its own session and runs beside the parent. A subtask whose parent belongs to
 someone else, or has different readers, also starts its own session.
 
-When a bot is blocked on a person, it files a subtask for that person under its task. When the person finishes,
-declines or closes it, the bot wakes on the parent, in the same session, and picks up where it stopped.
+When a bot needs a person's answer or OK, it asks on the task ([Asks and OKs](tasks.md#asks-and-oks)). When it needs
+real work from a person, it files a subtask for that person under its task. When the answer comes or the subtask
+ends, the bot wakes on the parent, in the same session, and picks up where it stopped.
 
 Set `subtask_session: own` to give every subtask its own session instead.
 
@@ -107,16 +101,18 @@ a runner from this release or later; an older runner keeps resuming the old thre
 
 In a long DM with a bot, when you change subject, Tico may start a fresh session, as if you pressed **Clear**,
 and shows a quiet **Topic changed** line above your message. The bot no longer carries the old conversation, which keeps
-long DMs cheaper and on topic. An owner or an admin turns this on or off in **Settings > System**, **Start fresh when
+long DMs cheaper and on topic. An owner or an admin turns this on or off in **Automations > System jobs**, **Start fresh when
 the topic changes** (off by default). It never happens in task threads or group threads, and there is no undo. If Tico isn't
 sure, or the check takes over 1.5 seconds, nothing changes and your message goes to the same session.
 
-Nothing closes on its own. A quiet task is never closed or asked about: a bot's quiet task is a line on its roundup.
-See [Picking work back up](tasks.md#picking-work-back-up).
+Nothing closes on its own. A bot that stops with its task not finished is woken again
+([When a bot stops early](tasks.md#when-a-bot-stops-early)).
 
 ## Task progress
 
-Tico does not check running work one task at a time. A task with no progress shows in its bot's task roundup, once per run (three times a day by default). A Dev ticket long at a working step is listed on its manager's task roundup, and again every seven days while it stays late.
+Every 10 seconds the never-stuck check asks, for each open task, what is missing, who has it and whether they are
+on it. A bot that stopped early gets 3 tries, then its manager bot, then a person
+([When a bot stops early](tasks.md#when-a-bot-stops-early)). A task past its stage's expected time is Late.
 
 Human messages still wake the bot as before ([details](hub-sql.md#what-woke-each-run-and-what-it-did)).
 
@@ -125,7 +121,7 @@ Human messages still wake the bot as before ([details](hub-sql.md#what-woke-each
 With `task_goal: on`, a bot works each task it owns as a goal: keep going until the task's title and acceptance
 criteria hold, then mark it done. On Claude Code and Codex this is the harness's native goal (`/goal`, Codex goals),
 set in the task's thread; other harnesses get it as a line in the prompt. A met goal marks the task done. A paused or
-stopped goal leaves the task open, with a **blocked** or **stuck** line in the Home.
+stopped goal leaves the task open, and the never-stuck check wakes the bot again.
 
 A `goal:on` or `goal:off` label on a task overrides the bot's setting. A person who clears or edits the goal in the
 task's thread takes it over, and Tico leaves it alone after that. Goals in chat work the same way:
@@ -165,7 +161,7 @@ upstream: a checkout with no remote gives it a copy of its own `HEAD`.
 ## Linked sessions
 
 You can link other sessions to a task to track them: a Bot Desk or Orca thread URL, a `claude --resume <id>` or
-`codex resume <id>` command. Use **Sessions +** on the task or `hub task link <task> <value> --session`. Linked
+`codex resume <id>` command. Use **Sessions +** on the task or `tico task link <task> <value> --session`. Linked
 sessions are for tracking only. Task thread and comments always go to the owning bot's primary session.
 
 The task's ⋯ menu has **Copy session ID** for the primary session, to resume it by hand.
@@ -177,24 +173,24 @@ The task's ⋯ menu has **Copy session ID** for the primary session, to resume i
 | `session` | unset (default), `task`, `bot` | Unset and `task`: each task and each thread is its own session. `bot`: one shared session for public threads and non-private tasks; private tasks and private threads keep their own. See [the table above](#the-main-chat-and-task-sessions). |
 | `subtask_session` | `parent` (default), `own` | Whether a subtask someone else files continues its parent's session or gets its own; one the bot files for itself always gets its own. |
 | `task_goal` | `off` (default), `on` | Work each task as a native goal until it is met. |
-| `review_model` | `own` (default), `check` | Run a subtask handed to it under another's task on the company's check model ([Tasks](tasks.md#a-subtask-on-a-check-model)). |
+| `review_model` | `own` (default), `check` | Run a subtask handed to it under another's task on the company's check model ([Tasks](tasks.md#a-sub-task-on-a-check-model)). |
 | `goal:on`, `goal:off` | task labels | Override `task_goal` for one task. |
 | `capture_stream` | `off` (default), `on` | Keep each run's raw provider stream, both ways, for a week (owner only; see below). |
 
-Set them with `hub bot update <slug> --session task`, `--subtask-session own`, `--task-goal on` or `--capture-stream on`, or `hub_bot_update`.
+Set them with `tico bot update <slug> --session task`, `--subtask-session own`, `--task-goal on` or `--capture-stream on`, or `hub_bot_update`.
 
 ### Capturing a run for a replay test
 
 With `capture_stream: on`, the runner records every frame it sends a Claude or Codex harness and every frame it reads
 back, with the turn's secrets masked, up to about 5 MB per run (a frame that no longer fits is left out with a `skipped` record). Other harnesses
-are not captured yet. Tico keeps each capture for 7 days; turning capture off deletes the bot's captures, and a run that had a secret taken out while it was going keeps none. `hub run export <attempt> --fixture` writes it as a folder of
+are not captured yet. Tico keeps each capture for 7 days; turning capture off deletes the bot's captures, and a run that had a secret taken out while it was going keeps none. `tico run export <attempt> --fixture` writes it as a folder of
 three files: `input.json` (the message and model settings), `<provider>_transcript.ndjson` (the raw frames) and
 `output.json` (the events and result Tico recorded). A raw stream can hold customer text, so only owners turn it on,
 and only owners and engineering bots read it, for runs they can already see in the bot's run list. The MCP tool answers only whether a run was captured and its size; the CLI writes the files.
 
 ### Why a run stopped or stalled
 
-`hub run list <bot>` includes `end_reason`, `ended_at`, `last_event`, `last_event_at` and
+`tico run list <bot>` includes `end_reason`, `ended_at`, `last_event`, `last_event_at` and
 `last_heartbeat_at`. Reasons distinguish a finished run, a model error (with its reported code and message),
 a process exit (code or signal), a named timeout limit, cancellation and its actor, a lost heartbeat,
 and a runner restart. An explicit runner OOM report is identified as OOM; a kill signal or words in stderr alone do not prove an OOM kill.
@@ -204,7 +200,7 @@ It marks them `stalled` in the run list and Health, with their last event and ti
 the attempt or change its lease. Fresh activity clears it.
 
 The runner also keeps up to 200 lines / 64 KiB of scrubbed harness stderr per attempt for seven days,
-even with provider stream capture off. `hub run export <attempt> --fixture` adds `stderr.log` when present,
+even with provider stream capture off. `tico run export <attempt> --fixture` adds `stderr.log` when present,
 and works with stderr alone when no provider stream exists. Its access rules remain the same as raw stream
 exports. The MCP summary reports the stderr byte count and end reason without returning the log text.
 An older runner can report only the failure evidence it has; historical runs are not assigned a guessed cause.
@@ -212,8 +208,7 @@ An older runner can report only the failure evidence it has; historical runs are
 ## FAQ
 
 **Why didn't my Home see what I said in a task?**
-Each task has its own session. The Home sees only a one-line report when the task starts, is blocked, done,
-declined or stuck. To give the task more to go on, write in the task's thread.
+Each task has its own session. To give the task more to go on, write in the task's thread.
 
 **Can a bot work on two of my tasks at once?**
 Yes. Each task runs in its own session and worktree, side by side. Two messages on the same task take turns. On a Codex ChatGPT sign-in, the task lanes run side by side too and share the plan's usage allowance ([how it works](how-it-works.md#one-turn-per-chatgpt-login)).

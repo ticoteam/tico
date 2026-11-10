@@ -1,0 +1,23 @@
+{
+  "//": "Compiler options for the TypeScript Node runs directly (type stripping: .cts/.mts scripts and their .d.ts files). No include: each leaf config (ui/tests, scripts, recorder) extends this and names its own files. scripts/check_node_types.py and rule 10 of scripts/check_ui_strict.py read the effective options.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "moduleDetection": "force",
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "allowJs": false,
+    "checkJs": false,
+    "noEmit": true,
+    "skipLibCheck": true
+  }
+}

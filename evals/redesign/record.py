@@ -5,6 +5,7 @@ answer as recordings/<key>.json, which ReplayJudge reads back. It needs live cre
 
 The key is a hash of (state, questions, level): a replay of the same call finds its recording. An answer that does not
 match its question types is never saved. With no credentials nothing is sent and the exit code is 2."""
+
 import argparse
 import datetime as dt
 import json
@@ -17,13 +18,18 @@ from .fakes import RECORDINGS, recording_key
 INPUTS = RECORDINGS / "inputs"
 REQUIRED = ("id", "kind", "questions", "level", "state", "note")
 # Which question sets an input of each kind may use: a mail is judged by mail-triage, and so on.
-KINDS = {"mail": ("mail-triage",), "slack": ("slack-route",), "listening": ("listening-item", "listening-card"),
-         "task": ("stale-review",)}
+KINDS = {
+    "mail": ("mail-triage",),
+    "slack": ("slack-route",),
+    "listening": ("listening-item", "listening-card"),
+}
 # The engines from judge.from_env() take no level and answer at the default, Low (judge.py documents it as the default
 # model). A higher level is refused rather than saved under a label the engine did not answer at, until one takes it.
 ENGINE_LEVELS = ("low",)
-NO_CREDENTIALS = ("No live judge: set HUB_API_URL and HUB_TOKEN (the hub decides, and its key stays on the server), "
-                  "or TYPESAFE_API_KEY (direct to TypeSafe). Nothing was sent.")
+NO_CREDENTIALS = (
+    "No live judge: set HUB_API_URL and HUB_TOKEN (the hub decides, and its key stays on the server), "
+    "or TYPESAFE_API_KEY (direct to TypeSafe). Nothing was sent."
+)
 
 
 def input_problems(data, stem):
@@ -106,7 +112,7 @@ def record(engine, inputs_dir, out_dir, force=False, only=None):
             rows.append(_row(stem, "skipped", key, "recording exists"))
             continue
         try:
-            judge.validate(state, questions, qset["label"])   # refuse before the engine does
+            judge.validate(state, questions, qset["label"])  # refuse before the engine does
             answer = engine(state, questions, label=qset["label"], level=level)
             if not isinstance(answer, dict):
                 raise judge.JudgeError("shape", "the engine returned no object")
@@ -114,10 +120,21 @@ def record(engine, inputs_dir, out_dir, force=False, only=None):
         except Exception as exc:  # any failure is a row, not a crash: the other inputs still run
             rows.append(_row(stem, "failed", key, _why(exc)))
             continue
-        save(out_dir, key, {"key": key, "input": stem, "questions_id": data["questions"], "level": level,
-                            "model": answer.get("model"), "usage": judge.clean_usage(answer.get("usage")),
-                            "ms": answer.get("ms", 0), "answers": answers,
-                            "recorded": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")})
+        save(
+            out_dir,
+            key,
+            {
+                "key": key,
+                "input": stem,
+                "questions_id": data["questions"],
+                "level": level,
+                "model": answer.get("model"),
+                "usage": judge.clean_usage(answer.get("usage")),
+                "ms": answer.get("ms", 0),
+                "answers": answers,
+                "recorded": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+            },
+        )
         rows.append(_row(stem, "recorded", key, f"{answer.get('model')}, {answer.get('ms', 0)} ms"))
     return rows
 
@@ -131,9 +148,13 @@ def live_engine(env=None):
 
     def ask(state, questions, label=None, level=None):
         if level not in ENGINE_LEVELS:
-            raise judge.JudgeError("unconfigured", f"a {level} decision needs an engine that takes a level, and "
-                                   "judge.from_env() does not yet (TESTING gap c)")
+            raise judge.JudgeError(
+                "unconfigured",
+                f"a {level} decision needs an engine that takes a level, and "
+                "judge.from_env() does not yet (TESTING gap c)",
+            )
         return engine(state, questions, label=label)
+
     return ask
 
 

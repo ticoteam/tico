@@ -11,7 +11,7 @@ sheet has five to ten discussion items, the sheet is attached to the task, and t
 
 ## 1. Read the definitions first
 
-`knowledge/rating-scale.md` and the level expectations (`hub doc ask "What do our level expectations say for <level>?"`). If
+`knowledge/rating-scale.md` and the level expectations (`tico doc ask "What do our level expectations say for <level>?"`). If
 the scale has no written meaning per point, say so on the task: calibration without definitions is an argument.
 
 ## 2. Build the grid
@@ -34,9 +34,9 @@ Five to ten discussion items, most consequential first.
 ## 4. Write the sheet
 
 A one-page summary (spread, items to discuss, the definitions) and the grid as an appendix. Attach it with
-`hub task attach <id> <file>` and delete the local copy. Nothing goes into `knowledge/` or `reports/`.
+`tico task attach <id> <file>` and delete the local copy. Nothing goes into `knowledge/` or `reports/`.
 
 ## 5. After the session
 
 Record in `knowledge/review-cycle.md` only process lessons (which definition caused debate, which phase ran late), never an
-outcome about a person. Then `hub task update <id> --status done --note`.
+outcome about a person. Then `tico task done <id> -m "..." --version N`.

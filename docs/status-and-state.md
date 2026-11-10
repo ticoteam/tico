@@ -57,18 +57,15 @@ On a fresh file the migration runs before the module schema code creates most ta
 
 - `attempts.state` `expired` (the lease ran out, nothing reported) and `interrupted` (the runner reported it stopped
   partway, and it can resume). `execution.py` treats them differently.
-- `tasks.status` `done` (finished work) and `closed` (filed under Closed). `declined` is a third meaning (will not be done).
+- `tasks.status` `done` (finished work) and `closed` (will not be done, with a why).
 - Finance `unknown` (a payment or transfer whose send got no answer; reconciliation pending) and `withheld`
   (`fin_outbox.status`: a rehearsal copy did not send). `withheld` is not in the payment or transfer lists.
-- `approvals.decision` `declined` (a person refused an approval request) and `goal_proposals.status` `rejected` (a
-  person refused a proposed goal). Different records, so not merged. The integration owner may unify them later.
 
 ## Summary of the stable set
 
 | Column | Kind | Enforcement | NULL | Growing or user-defined set? |
 |---|---|---|---|---|
-| `tasks.status` | status | trigger | allowed (no default) | no, fixed in code |
-| `task_holds.from_status` | saved status | trigger | allowed (NULL on a snooze) | no, same list as `tasks.status` |
+| `tasks.status` | status | trigger | NOT NULL | no, fixed in code |
 | `jobs.state` | state | trigger | NOT NULL, default `queued` | no |
 | `attempts.state` | state | trigger | NOT NULL | no |
 | `automation_runs.status` | status | trigger | NOT NULL | no |
@@ -82,19 +79,17 @@ On a fresh file the migration runs before the module schema code creates most ta
 | `goals.suggest_status` | suggestion | check | allowed | no |
 | `goal_proposals.status` | status | check | NOT NULL, default `pending` | no |
 | `bot_files.state` | state | check | NOT NULL, default `ready` | no |
-| `approvals.decision` | decision | check | allowed (NULL = open) | no |
 | `doc_sources.status` | status | check | NOT NULL, default `link_only` | no |
 | `model_subscriptions.status` | status | check | NOT NULL, default `new` | no |
 | `strategy_actions.state` | state | check | NOT NULL | no |
 | `google_connects.status` | status | check | NOT NULL | no |
 | `fin_payments.status` | status | check | NOT NULL, default `queued` | no |
 | `fin_transfers.status` | status | check | NOT NULL, default `queued` | no |
-| `task_steps.status` | status | check (already in the schema) | NOT NULL | no, see below |
 | `meetings.review_state` | state | check (already in the schema) | NOT NULL, default `live` | no |
 | `bot_status_history.state` | state (history) | none | allowed | no, see below |
 
-No column in the stable set holds a user-defined value. Team-defined task steps (`task_steps.status`) pick from
-`TASK_STATUSES`; a team can add a step with any of those statuses, never a new one. The Growth and Finance tables that a
+No column in the stable set holds a user-defined value. A pipeline's stages are rows, not statuses: a task's status
+stays `open` in every stage. The Growth and Finance tables that a
 user shapes (channels, budgets, rules) have their own columns, listed under "Outside the stable set".
 
 ## Detail
@@ -103,34 +98,15 @@ user shapes (channels, budgets, rules) have their own columns, listed under "Out
 
 Values (`TASK_STATUSES`):
 
-- `open`: not started. Owners may set it.
-- `doing`: being worked on.
-- `waiting`: parked on something else (`waiting_on`). The task stays in its working step and shows a Waiting tag.
-- `review`: work is finished and waiting for review or QA. Owners may set it.
-- `ready`: the hub has learned the work is ready, for example its pull request merged. Set by movers and the keeper, never by an owning bot.
-- `done`: finished work. Shown under Done.
-- `closed`: filed under Closed. Not the same as done.
-- `declined`: will not be done. It goes to the type's closed step.
+- `open`: in a stage of its pipeline. What it waits on is read, never stored (`backend/waiting_on.py`).
+- `done`: it left the last stage. Only Done counts as output.
+- `closed`: it will not be done, with a why.
 
-Transitions:
+Transitions: only the engine writes it (`backend/task_engine.py` `move`), inside the guard the `tasks_move_only` trigger
+reads. A task is inserted `open` and entered in the first stage of its pipeline in the same transaction. Done, Close and
+Reopen are moves. See [Tasks](tasks.md#done-closed-and-reopen) and [the spec](pipelines-v3.md#how-a-task-moves).
 
-- Set on insert by the task creators. The column has no default.
-- `open` to `doing`: a bot starts the task (`backend/auto_tasks.py`).
-- Any to `open`: reopening (`auto_tasks.py`, `milestone_waits.py`).
-- `open` or `doing` to `waiting`, and `waiting` to `open`: `backend/reconnects.py`.
-- Any to `ready`: a merge or release milestone lands (`backend/github.py`, `backend/app.py`, `hubdb.py` `task_milestone_waits`).
-- Owners set `open`, `doing`, `waiting`, `review`, `done`, `declined` (`hubdb.py` `OWNER_STATUSES`). Movers and the keeper may set any value.
-- `closed`: movers and the keeper; a bot may close only a task it requested (`hubdb.py` task close rule).
-- Holds: `backend/task_blocked.py` writes the status in force to the blocked hold's `task_holds.from_status` when a hold starts, and restores it when the hold clears.
-
-Enforcement: trigger on insert and on update of `status`. NULL is accepted because the column is nullable. Whether NULL
-should be refused is an open decision (see "Decisions").
-
-### task_holds.from_status (trigger)
-
-The status a task returns to when its blocked hold clears. Same list as `tasks.status`. NULL on a snooze. It was
-`tasks.blocked_from_status` until a task's holds became `task_holds` rows (migration 0075). Written by
-`backend/task_blocked.py`, read by `hubdb.py` when a hold clears.
+Enforcement: trigger on insert and on update of `status`. NULL is refused.
 
 ### jobs.state (trigger)
 
@@ -145,7 +121,7 @@ Values (`JOB_STATES`):
 - `completed`: answered.
 - `failed`: the attempt failed.
 - `uncertain`: the outcome cannot be known (the runner was lost, or the hub restarted mid-run). Looked at before any retry.
-- `canceled`: stopped before it finished (a person stopped it, the task closed or was declined, a duplicate wake
+- `canceled`: stopped before it finished (a person stopped it, the task closed, a duplicate wake
   replaced it, or the owner's rule dropped it). Spelled `cancelled` before migration 0002.
 
 Transitions:
@@ -158,8 +134,8 @@ Transitions:
 - `leased`, `running` or `input` to `queued` or `uncertain`: the attempt's lease expires or the attempt ends without a result. `queued` when nothing was done yet, `uncertain` otherwise (`execution.py` expiry and end-of-attempt paths).
 - On an attempt's end, each job takes the attempt's outcome state, or `canceled` for jobs a stop canceled (`execution.py`).
 - `running` or `input` to `uncertain`, and `leased` to `queued`: hub restart (`backend/backup.py`).
-- `queued` to `completed`: a person answers before any bot runs (`backend/app.py`, `UPDATE jobs SET state='completed' WHERE ... AND state='queued'`).
-- Any open state to `canceled`: stop, task closed or declined, duplicate wake, quota or wake presets (`app_delivery.py`, `delivery.py`, `demo.py`, `chat_goals.py`, `execution.py`).
+- `queued` to `completed`: a person answers before any bot runs (`backend/bot_status_routes.py`, `UPDATE jobs SET state='completed' WHERE ... AND state='queued'`).
+- Any open state to `canceled`: stop, task closed, duplicate wake, quota or wake presets (`app_delivery.py`, `delivery.py`, `demo.py`, `chat_goals.py`, `execution.py`).
 
 Enforcement: trigger on insert and update of `state`. NOT NULL, default `queued`.
 
@@ -189,7 +165,7 @@ Enforcement: trigger on insert and update of `state`. NOT NULL.
 
 ### Runs
 
-API v2, the live events, webhooks, the MCP tools, the hub CLI and the web app call an attempt a run until Release 2
+API v2, the live events, webhooks, the MCP tools, the tico CLI and the web app call an attempt a run until Release 2
 moves the table: a field is `run_id` (the attempt's id), an object is `run`, a list is `runs`. `run.state` comes from
 `attempts.state` by one fixed map (`backend/runs.py`, `STATE`):
 
@@ -277,7 +253,8 @@ Transitions:
 - `planned` to `active`: setup finishes (`backend/agents.py`, `shared_bots.py`, `settings_admin.py`).
 - `active` and `paused`: `app.py` pause and resume actions.
 - `active` to `quarantined`: `hubdb.py` `quarantine`.
-- `quarantined` to `active`: `hubdb.py` `status_set(state="active")` by a person, or by the keeper or BotOps under its rule.
+- `quarantined` to `active`: `hubdb.py` `status_set(state="active")` by a person, or by Tico's own upkeep or BotOps
+  under its rule.
 - `active` or `paused` to `archived`: `shared_bots.py`, `settings_admin.py`.
 - `archived` to the previous state: restore (`shared_bots.py`, `settings_admin.py`).
 
@@ -371,18 +348,6 @@ on this base after `not_synced`, so a re-synced file stays `not_synced` until it
 
 Enforcement: CHECK. NOT NULL, default `ready`.
 
-### approvals.decision (check)
-
-Values: NULL (open, no decision yet), `approved`, `declined`, `withdrawn`.
-
-Transitions (`backend/hubdb.py`):
-
-- NULL to `approved` or `declined`: a person or a bot with the right decides (`decided_by`, `decided_via`).
-- NULL to `withdrawn`: an undecided approval nobody needs any more, after the 14-day expiry, when its task ended, or when a release of its version or a newer one shipped in its channel (a release publish ask only).
-- Any to NULL: reopen, which clears `decided_by` and `decided_at`.
-
-Enforcement: CHECK (installed by this branch; the base schema had none). Nullable, because NULL is the open state.
-
 ### doc_sources.status (check)
 
 Values:
@@ -460,7 +425,7 @@ starts (`banking.py`); a send that gets no answer goes to `unknown` (`payments.p
 
 Enforcement: CHECK (the retired `cancelled` is mapped during the table copy). NOT NULL, default `queued`.
 
-The OpenAPI v2 enum (`docs/openapi/v2.json`) uses the same list, so the public payment status changes from `cancelled` to `canceled`.
+The OpenAPI v2 enum (`GET /api/v2/openapi.json`) uses the same list, so the public payment status changes from `cancelled` to `canceled`.
 
 ### fin_transfers.status (check)
 
@@ -472,10 +437,6 @@ Transitions (`backend/finance/transfers.py`, `backend/finance/store/banking.py`)
 retried or reconciled; a stopped transfer goes to `canceled`.
 
 Enforcement: CHECK (as for payments). NOT NULL, default `queued`.
-
-### task_steps.status (check, already in the schema)
-
-Same list as `tasks.status`. Already constrained in the base schema, left as it was.
 
 ### meetings.review_state (check, already in the schema)
 
@@ -522,7 +483,7 @@ Without a CHECK (not constrained here; values are whatever the code writes):
   `seats.request_state`, `seat_requests.state`, `service_jobs.state`, `slack_events.state`, `slack_posts.state`,
   `worktree_waits.state`, `check_waits.state`, `calendar_actions.status`, `intake_items.status`, `support_tickets.status`,
   `rule_suggestions.status`, `runner_versions.update_state`, `runner_harness_actions.state`, `update_queue.state`,
-  `mail_items.state`, `mail_items.status`, `market_*.status`, `memory_tidy_cards.status`, `inbound_inboxes.state`, `bills_inbound.state`,
+  `mail_items.state`, `mail_items.status`, `market_*.status`, `inbound_inboxes.state`, `bills_inbound.state`,
   `learning_runs.status`, `lens_runs.status`, `listen_runs.status`, `flight_slow.status`, `redesign_migrations.state`,
   `task_trash.status`, `assistant_actions.status`, `automation_mail_actions.state`, `ask_ingest_items.outcome`,
   `batches.state`, `attempts.outcome`, `schedule_occurrences.outcome`, `stale_suggestions.verdict`, `stall_triage.outcome`,
@@ -538,9 +499,9 @@ Spellings still outside the stable set:
 ## Tables named in the plan without a status column on this base
 
 - `principals`: no status column. Its `kind` (human, bot, agent, service, system) is a type, enforced by a CHECK.
-- `pages`, `humans`, `runners`, `cards`, `docs`, `task_types`, `automations`: no status or state column (`automations`
+- `pages`, `humans`, `runners`, `cards`, `docs`, `automations`: no status or state column (`automations`
   keeps its state in `automation_versions.status` and `automation_runs.status`).
-- `conversations.kind` (chat, ask, task, notice) and `messages.kind` (say, ask, answer, notice, steer): types, not statuses.
+- `conversations.kind` (chat, ask, task, notice) and `messages.kind` (say, notice, steer; old `ask` and `answer` rows are history only): types, not statuses.
 - `kpis.stage`, `goal_kpis.kind`, `kpi_readings`: the KPI tree's stage and kind; not statuses, not constrained here.
 - `attempts.state` is NULL on a run recorded with no lease (the demo seed, a run from before leases; migration 0072 moved
   the old `turns` rows onto `attempts`); its value triggers allow NULL.
@@ -549,12 +510,17 @@ Spellings still outside the stable set:
 
 These are open for the integration owner.
 
-1. **`tasks.status` NULL.** The column is nullable and the trigger allows NULL, which matches the base schema. Refusing NULL would need a backfill of any NULL rows first.
-2. **`attempts.state` `input`.** Listed, but no code path writes it. Keep it (harmless, matches the list the upgrade accepts) or drop it in a later change with a migration.
-3. **`bot_status_history.state` unconstrained.** Old history rows may hold values from older code. A CHECK would make the upgrade refuse them.
-4. **`bot_files.state`.** No code moves a file from `not_synced` back to `ready`. Confirm whether that is intended before a sync feature relies on it.
-5. **`complete` outside the stable set.** The live-meeting tables use `complete` where other lists say `completed`. Unify in a follow-up, with a migration.
-6. **`approvals.declined` and `goal_proposals.rejected`.** Kept apart on purpose (different records). Unify only if the product wants one word for "refused".
-7. **Public API.** `docs/openapi/v2.json` changes the `cancelled` enum values for webhook sends, payments, transfers and finance cards to `canceled`. Any client that matches the old spelling breaks.
-8. **`needs_onboarding` readers.** `backend/statuses.py` still accepts it for one release. Remove that acceptance in a later release, after this migration has run everywhere.
-9. **Removing a list value later.** Needs a migration that maps or refuses stored rows first (see "How the lists are enforced").
+1. **`attempts.state` `input`.** Listed, but no code path writes it. Keep it (harmless, matches the list the upgrade
+   accepts) or drop it in a later change with a migration.
+2. **`bot_status_history.state` unconstrained.** Old history rows may hold values from older code. A CHECK would make
+   the upgrade refuse them.
+3. **`bot_files.state`.** No code moves a file from `not_synced` back to `ready`. Confirm whether that is intended
+   before a sync feature relies on it.
+4. **`complete` outside the stable set.** The live-meeting tables use `complete` where other lists say `completed`.
+   Unify in a follow-up, with a migration.
+5. **Public API.** The v2 spec (`GET /api/v2/openapi.json`) changes the `cancelled` enum values for webhook sends,
+   payments, transfers and finance cards to `canceled`. Any client that matches the old spelling breaks.
+6. **`needs_onboarding` readers.** `backend/statuses.py` still accepts it for one release. Remove that acceptance in a
+   later release, after this migration has run everywhere.
+7. **Removing a list value later.** Needs a migration that maps or refuses stored rows first (see "How the lists are
+   enforced").

@@ -7,12 +7,8 @@ reads: []                        # other bot repositories this one may clone rea
 reasoning_effort: high
 max_run_minutes: 60
 
-# Nothing addressed to anyone outside the team leaves until an owner turns this on. Until then
-# the bot puts every draft on the task and drafts until a person turns mail sending on in Tico.
-outbound_send: false
-
 # The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
-# (Start setup, go-live). `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
 routines:
   - id: weekly-usage-readout
     title: Weekly product usage readout
@@ -25,7 +21,7 @@ routines:
 # What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
 # arrives in, never the value; declaring access here does not create it. Changing access is an
 # owner decision, so the bot files a task for the owner rather than editing this file.
-# Team databases are read through Tico (`hub db`), with the rights the owner granted there.
+# Team databases are read through Tico (`tico db`), with the rights the owner granted there.
 # Optional, uncomment when an analytics export or warehouse is connected. Read only, always.
 # tools:
 #   - service: warehouse

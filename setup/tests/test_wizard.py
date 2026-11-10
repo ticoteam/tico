@@ -1,35 +1,28 @@
 import json
 
-import pytest
 
-from setup import cli, dns, state, verify
+from setup import dns, state, verify
 from setup.remote import Result
 from setup.tests import fakes
-from setup.tests.fakes import CaptureIO, FakeShell, aws_clients
-
-SECRET = "GOCSPX-supersecret"
-BASE = ["--non-interactive", "--domain", "tico.example.com", "--auth", "google", "--client-id", "cid.apps.googleusercontent.com",
-        "--company", "Acme", "--owner-email", "me@example.com"]
-
-
-@pytest.fixture(autouse=True)
-def secret_env(monkeypatch):
-    monkeypatch.setenv("TICO_OIDC_CLIENT_SECRET", SECRET)
-    monkeypatch.setattr(verify, "run_all", lambda **kw: [verify.Check("stub", True, "ok")])
-
-
-def go(argv, deps=None, io=None):
-    io = io or CaptureIO()
-    code = cli.main(argv, deps=deps or fakes.deps(), io=io)
-    return code, io.text
+from setup.tests.fakes import FakeShell, aws_clients
+from setup.tests.helpers.wizard import BASE, SECRET, go, secret_env
 
 
 def test_dry_run_aws_caddy_google_prints_the_plan_and_changes_nothing(tmp_path):
     code, out = go(["--dry-run", "--target", "aws", "--front-door", "caddy", *BASE])
     assert code == 0
-    for want in ("EC2 t4g.small", "no SSH key, no port 22", "hop limit 1", "Elastic IP", "Netlify DNS (NS1 nameservers)",
-                 "A tico.example.com -> <elastic-ip>", "https://tico.example.com/auth/callback", "Estimated cost", "ManagedBy=tico-setup",
-                 "Bots run on computers you add afterwards"):
+    for want in (
+        "EC2 t4g.small",
+        "no SSH key, no port 22",
+        "hop limit 1",
+        "Elastic IP",
+        "Netlify DNS (NS1 nameservers)",
+        "A tico.example.com -> <elastic-ip>",
+        "https://tico.example.com/auth/callback",
+        "Estimated cost",
+        "ManagedBy=tico-setup",
+        "Bots run on computers you add afterwards",
+    ):
         assert want in out
     assert SECRET not in out and "TICO_OIDC_CLIENT_SECRET=********" in out
     assert "Team 'Acme', owner me@example.com" in out
@@ -79,12 +72,19 @@ def test_private_inbox_values_are_scrubbed_from_failed_server_command_output(mon
 
 
 def test_cloudflare_tunnel_flow_creates_tunnel_and_uses_its_token(monkeypatch):
-    from setup.tests.test_cloudflare import Api
-    api = Api({("GET", "/zones?name=tico.example.com"): [],
-               ("GET", "/zones?name=example.com"): [{"id": "z1", "name": "example.com", "account": {"id": "a1"}}],
-               ("GET", "/accounts/a1/cfd_tunnel?"): [], ("POST", "/accounts/a1/cfd_tunnel"): {"id": "t9", "token": "TUNTOK"},
-               ("PUT", "/accounts/a1/cfd_tunnel/t9/configurations"): {},
-               ("GET", "/zones/z1/dns_records?"): [], ("POST", "/zones/z1/dns_records"): {}})
+    from setup.tests.helpers.cloudflare import Api
+
+    api = Api(
+        {
+            ("GET", "/zones?name=tico.example.com"): [],
+            ("GET", "/zones?name=example.com"): [{"id": "z1", "name": "example.com", "account": {"id": "a1"}}],
+            ("GET", "/accounts/a1/cfd_tunnel?"): [],
+            ("POST", "/accounts/a1/cfd_tunnel"): {"id": "t9", "token": "TUNTOK"},
+            ("PUT", "/accounts/a1/cfd_tunnel/t9/configurations"): {},
+            ("GET", "/zones/z1/dns_records?"): [],
+            ("POST", "/zones/z1/dns_records"): {},
+        }
+    )
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cf-secret-token")
     shell = FakeShell()
     r = fakes.FakeResolver({("tico.example.com", dns.A): ["104.16.0.1"]}, {"example.com": ["a.ns.cloudflare.com"]})
@@ -96,12 +96,25 @@ def test_cloudflare_tunnel_flow_creates_tunnel_and_uses_its_token(monkeypatch):
     env = next(i for c, i in shell.calls if i and b"TICO_DOMAIN" in i).decode()
     assert "CLOUDFLARE_TUNNEL_TOKEN=TUNTOK" in env and "COMPOSE_PROFILES=cloudflared,updater" in env
     assert "cf-secret-token" not in out and "TUNTOK" not in out and "cf-secret-token" not in env
-    assert any(m == "POST" and p == "/zones/z1/dns_records" and b["content"] == "t9.cfargotunnel.com" for m, p, b in api.calls)
+    assert any(
+        m == "POST" and p == "/zones/z1/dns_records" and b["content"] == "t9.cfargotunnel.com" for m, p, b in api.calls
+    )
 
 
 def test_destroy_dry_run_and_confirmation():
-    ec2, iam, ssm, factory = aws_clients(fakes.FakeEC2(extra_instances=[{"InstanceId": "i-mine", "Tags": [
-        {"Key": "ManagedBy", "Value": "tico-setup"}, {"Key": "tico-setup-name", "Value": "tico-example-com"}]}]))
+    ec2, iam, ssm, factory = aws_clients(
+        fakes.FakeEC2(
+            extra_instances=[
+                {
+                    "InstanceId": "i-mine",
+                    "Tags": [
+                        {"Key": "ManagedBy", "Value": "tico-setup"},
+                        {"Key": "tico-setup-name", "Value": "tico-example-com"},
+                    ],
+                }
+            ]
+        )
+    )
     d = fakes.deps()
     d.aws_clients = factory
     code, out = go(["destroy", "--domain", "tico.example.com", "--dry-run"], deps=d)
@@ -112,20 +125,40 @@ def test_destroy_dry_run_and_confirmation():
     assert code == 0 and ec2.called("terminate_instances")
 
 
-ACCESS = ["--non-interactive", "--domain", "tico.example.com", "--auth", "cloudflare", "--access-issuer", "https://team.cloudflareaccess.com",
-          "--access-audience", "aud1", "--company", "Acme", "--owner-email", "me@example.com"]
+ACCESS = [
+    "--non-interactive",
+    "--domain",
+    "tico.example.com",
+    "--auth",
+    "cloudflare",
+    "--access-issuer",
+    "https://team.cloudflareaccess.com",
+    "--access-audience",
+    "aud1",
+    "--company",
+    "Acme",
+    "--owner-email",
+    "me@example.com",
+]
 
 
 def _tunnel_run(argv, runner_record=None, tunnels=()):
-    from setup.tests.test_cloudflare import Api
-    api = Api({("GET", "/zones/z1/dns_records?name=tico-runner.example.com"): [runner_record] if runner_record else [],
-               ("PUT", "/zones/z1/dns_records/r1"): {},
-               ("GET", "/zones?name=tico.example.com"): [],
-               ("GET", "/zones?name=example.com"): [{"id": "z1", "name": "example.com", "account": {"id": "a1"}}],
-               ("GET", "/accounts/a1/cfd_tunnel/t9/token"): "TUNTOK",
-               ("GET", "/accounts/a1/cfd_tunnel?"): list(tunnels), ("POST", "/accounts/a1/cfd_tunnel"): {"id": "t9", "token": "TUNTOK"},
-               ("PUT", "/accounts/a1/cfd_tunnel/t9/configurations"): {},
-               ("GET", "/zones/z1/dns_records?"): [], ("POST", "/zones/z1/dns_records"): {}})
+    from setup.tests.helpers.cloudflare import Api
+
+    api = Api(
+        {
+            ("GET", "/zones/z1/dns_records?name=tico-runner.example.com"): [runner_record] if runner_record else [],
+            ("PUT", "/zones/z1/dns_records/r1"): {},
+            ("GET", "/zones?name=tico.example.com"): [],
+            ("GET", "/zones?name=example.com"): [{"id": "z1", "name": "example.com", "account": {"id": "a1"}}],
+            ("GET", "/accounts/a1/cfd_tunnel/t9/token"): "TUNTOK",
+            ("GET", "/accounts/a1/cfd_tunnel?"): list(tunnels),
+            ("POST", "/accounts/a1/cfd_tunnel"): {"id": "t9", "token": "TUNTOK"},
+            ("PUT", "/accounts/a1/cfd_tunnel/t9/configurations"): {},
+            ("GET", "/zones/z1/dns_records?"): [],
+            ("POST", "/zones/z1/dns_records"): {},
+        }
+    )
     shell = FakeShell()
     r = fakes.FakeResolver({("tico.example.com", dns.A): ["104.16.0.1"]}, {"example.com": ["a.ns.cloudflare.com"]})
     d = fakes.deps()
@@ -133,7 +166,9 @@ def _tunnel_run(argv, runner_record=None, tunnels=()):
     d.cloudflare = lambda tok: __import__("setup.cloudflare", fromlist=["x"]).Cloudflare(tok, api)
     code, out = go(["--target", "ssh", "--ssh", "root@h", "--front-door", "cloudflared", "--yes", *argv], deps=d)
     env = next((i for c, i in shell.calls if i and b"TICO_DOMAIN" in i), b"").decode()
-    ingress = next((b["config"]["ingress"] for m, p, b in api.calls if m == "PUT" and p.endswith("/configurations")), [])
+    ingress = next(
+        (b["config"]["ingress"] for m, p, b in api.calls if m == "PUT" and p.endswith("/configurations")), []
+    )
     cnames = [b["name"] for m, p, b in api.calls if m in ("POST", "PUT") and p.startswith("/zones/z1/dns_records")]
     return code, out, env, ingress, cnames
 
@@ -164,16 +199,37 @@ def test_runner_hostname_is_opt_in_without_access_and_none_turns_it_off(monkeypa
 
 
 def test_runner_hostname_flag_is_refused_where_it_cannot_work(monkeypatch):
-    code, out = go(["--dry-run", "--target", "aws", "--front-door", "caddy", "--runner-hostname", "r.example.com", *BASE])
+    code, out = go(
+        ["--dry-run", "--target", "aws", "--front-door", "caddy", "--runner-hostname", "r.example.com", *BASE]
+    )
     assert code == 2 and "--runner-hostname needs --front-door cloudflared" in out
-    for bad, why in (("tico.example.com", "must differ from --domain"), ("runner.other.org", "zone, example.com"), ("not a host", "is not valid")):
-        code, out = go(["--dry-run", "--target", "ssh", "--ssh", "root@h", "--front-door", "cloudflared", "--runner-hostname", bad, *ACCESS])
+    for bad, why in (
+        ("tico.example.com", "must differ from --domain"),
+        ("runner.other.org", "zone, example.com"),
+        ("not a host", "is not valid"),
+    ):
+        code, out = go(
+            [
+                "--dry-run",
+                "--target",
+                "ssh",
+                "--ssh",
+                "root@h",
+                "--front-door",
+                "cloudflared",
+                "--runner-hostname",
+                bad,
+                *ACCESS,
+            ]
+        )
         assert code == 2 and why in out, (bad, out)
 
 
 def test_dry_run_with_access_plans_the_runner_record_and_env():
-    code, out = go(["--dry-run", "--target", "ssh", "--ssh", "root@h", "--front-door", "cloudflared", *ACCESS],
-                   deps=fakes.deps(ns={"tico.example.com": ["a.ns.cloudflare.com"]}))
+    code, out = go(
+        ["--dry-run", "--target", "ssh", "--ssh", "root@h", "--front-door", "cloudflared", *ACCESS],
+        deps=fakes.deps(ns={"tico.example.com": ["a.ns.cloudflare.com"]}),
+    )
     assert code == 0, out
     assert "CNAME runner.tico.example.com -> <tunnel-id>.cfargotunnel.com (proxied)" in out
     assert "TICO_RUNNER_URL=https://runner.tico.example.com" in out
@@ -181,71 +237,127 @@ def test_dry_run_with_access_plans_the_runner_record_and_env():
 
 def test_the_default_runner_hostname_never_takes_over_a_record_that_points_elsewhere(monkeypatch, tmp_path):
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cf-secret-token")
-    elsewhere = {"id": "r1", "type": "CNAME", "name": "tico-runner.example.com", "content": "app.other.net", "proxied": True}
+    elsewhere = {
+        "id": "r1",
+        "type": "CNAME",
+        "name": "tico-runner.example.com",
+        "content": "app.other.net",
+        "proxied": True,
+    }
     code, out, env, ingress, cnames = _tunnel_run(ACCESS, runner_record=elsewhere)
-    assert code == 2 and "tico-runner.example.com, the default runner hostname, already has a CNAME record pointing at app.other.net" in out
+    assert (
+        code == 2
+        and "tico-runner.example.com, the default runner hostname, already has a CNAME record pointing at app.other.net"
+        in out
+    )
     assert "--runner-hostname tico-runner.example.com" in out
     assert env == "" and ingress == [] and cnames == [] and not (tmp_path / "home" / "tico.example.com").exists()
     # Already this tunnel's (a re-run): kept, and the run goes on.
-    code, out, env, ingress, cnames = _tunnel_run(ACCESS, runner_record={**elsewhere, "content": "t9.cfargotunnel.com"},
-                                                  tunnels=[{"id": "t9"}])
+    code, out, env, ingress, cnames = _tunnel_run(
+        ACCESS, runner_record={**elsewhere, "content": "t9.cfargotunnel.com"}, tunnels=[{"id": "t9"}]
+    )
     assert code == 0, out
-    assert "Cloudflare DNS CNAME tico-runner.example.com: unchanged" in out and "TICO_RUNNER_URL=https://tico-runner.example.com" in env
+    assert (
+        "Cloudflare DNS CNAME tico-runner.example.com: unchanged" in out
+        and "TICO_RUNNER_URL=https://tico-runner.example.com" in env
+    )
     # Named with the flag: repointed, and the output says so.
-    code, out, env, ingress, cnames = _tunnel_run(["--runner-hostname", "tico-runner.example.com", *ACCESS], runner_record=elsewhere)
+    code, out, env, ingress, cnames = _tunnel_run(
+        ["--runner-hostname", "tico-runner.example.com", *ACCESS], runner_record=elsewhere
+    )
     assert code == 0, out
-    assert "Cloudflare DNS CNAME tico-runner.example.com: repointed from app.other.net" in out and "tico-runner.example.com" in cnames
+    assert (
+        "Cloudflare DNS CNAME tico-runner.example.com: repointed from app.other.net" in out
+        and "tico-runner.example.com" in cnames
+    )
 
 
 def test_invalid_or_credential_runtime_choices_stop_before_any_mutation(monkeypatch, tmp_path):
     from setup import wizard
     from setup.settings import Settings
+
     calls = []
     monkeypatch.setattr(wizard, 'provision_backup', lambda *a: calls.append('backup'))
     monkeypatch.setattr(wizard, '_tunnel', lambda *a: calls.append('tunnel'))
     monkeypatch.setattr(state, 'save', lambda *a: calls.append('state'))
     monkeypatch.setattr(wizard.hosted, 'new_link', lambda *a: calls.append('link'))
-    d = fakes.deps(); d.cloudflare = lambda *a: calls.append('cloud')
-    cases = [(['--hq-url', 'https://fictional-secret@hq.acme.example'], 'TICO_HQ_URL'),
-             (['--visual-origin', 'https://files.acme.example?fictional-secret'], 'TICO_VISUAL_ORIGIN'),
-             (['--public-url', 'https://different.acme.example'], 'TICO_PUBLIC_URL'),
-             (['--cors-origins', '*'], 'TICO_CORS_ORIGINS'),
-             (['--cors-origins', 'http://external.acme.example'], 'TICO_CORS_ORIGINS'),
-             (['--cors-origins', 'https://frontend.acme.example/'], 'TICO_CORS_ORIGINS'),
-             (['--domain-aliases', 'old.example.com', '--cors-origins', 'https://old.example.com'], 'cloudflared'),
-             (['--caddy-visuals', '1'], 'separate visual origin'),
-             (['--front-door','cloudflared','--domain-aliases','old.example.com'], 'explicitly list each app alias'),
-             (['--front-door','cloudflared','--domain-aliases','old.example.com','--cors-origins','https://old.example.com',
-               '--visual-origin','https://old.example.com'], 'restricted runner, visual and reader')]
+    d = fakes.deps()
+    d.cloudflare = lambda *a: calls.append('cloud')
+    cases = [
+        (['--hq-url', 'https://fictional-secret@hq.acme.example'], 'TICO_HQ_URL'),
+        (['--visual-origin', 'https://files.acme.example?fictional-secret'], 'TICO_VISUAL_ORIGIN'),
+        (['--public-url', 'https://different.acme.example'], 'TICO_PUBLIC_URL'),
+        (['--cors-origins', '*'], 'TICO_CORS_ORIGINS'),
+        (['--cors-origins', 'http://external.acme.example'], 'TICO_CORS_ORIGINS'),
+        (['--cors-origins', 'https://frontend.acme.example/'], 'TICO_CORS_ORIGINS'),
+        (['--domain-aliases', 'old.example.com', '--cors-origins', 'https://old.example.com'], 'cloudflared'),
+        (['--caddy-visuals', '1'], 'separate visual origin'),
+        (['--front-door', 'cloudflared', '--domain-aliases', 'old.example.com'], 'explicitly list each app alias'),
+        (
+            [
+                '--front-door',
+                'cloudflared',
+                '--domain-aliases',
+                'old.example.com',
+                '--cors-origins',
+                'https://old.example.com',
+                '--visual-origin',
+                'https://old.example.com',
+            ],
+            'restricted runner, visual and reader',
+        ),
+    ]
     for extra, reason in cases:
-        code, out = go(['--target','ssh','--ssh','root@h','--server-ip','203.0.113.7','--yes',*BASE,*extra], deps=d)
+        code, out = go(
+            ['--target', 'ssh', '--ssh', 'root@h', '--server-ip', '203.0.113.7', '--yes', *BASE, *extra], deps=d
+        )
         assert code == 2 and reason in out and 'fictional-secret' not in out
-        assert calls == [] and not (tmp_path/'home').exists()
+        assert calls == [] and not (tmp_path / 'home').exists()
     # Private legacy URL values are validated too, before they can be classified as public state.
-    legacy = Settings(domain='tico.example.com', target='ssh', auth='google', client_id='cid', owner_email='me@example.com')
-    saved = legacy.public(); saved.pop('hq_url')
+    legacy = Settings(
+        domain='tico.example.com', target='ssh', auth='google', client_id='cid', owner_email='me@example.com'
+    )
+    saved = legacy.public()
+    saved.pop('hq_url')
     monkeypatch.setattr(state, 'load', lambda domain: (saved, 'TICO_HQ_URL=https://fictional-secret@hq.acme.example\n'))
-    code, out = go(['--target','ssh','--ssh','root@h','--yes',*BASE], deps=d)
+    code, out = go(['--target', 'ssh', '--ssh', 'root@h', '--yes', *BASE], deps=d)
     assert code == 2 and 'TICO_HQ_URL' in out and 'fictional-secret' not in out and calls == []
 
 
 def test_passive_runner_and_visual_secret_survive_real_fake_tunnel_rerun_without_dns_authority(monkeypatch):
     from setup.settings import Settings
     from setup import envfile
+
     monkeypatch.setenv('CLOUDFLARE_API_TOKEN', 'cf-fictional-token')
     verified = []
+
     def record_checks(**kwargs):
         verified.append(kwargs)
         return [verify.Check('stub', True, 'ok')]
+
     monkeypatch.setattr(verify, 'run_all', record_checks)
-    saved = Settings(domain='tico.example.com', front_door='cloudflared', auth='cloudflare', access_issuer='https://acme.cloudflareaccess.com',
-                     access_audience='aud', company='Acme', owner_email='me@example.com', runner_url='http://legacy.other.example:8080/helper/',
-                     visual_origin='https://files.acme.example', visual_secret='fictional-visual-secret')
+    saved = Settings(
+        domain='tico.example.com',
+        front_door='cloudflared',
+        auth='cloudflare',
+        access_issuer='https://acme.cloudflareaccess.com',
+        access_audience='aud',
+        company='Acme',
+        owner_email='me@example.com',
+        runner_url='http://legacy.other.example:8080/helper/',
+        visual_origin='https://files.acme.example',
+        visual_secret='fictional-visual-secret',
+    )
     state.save(saved.domain, saved.public(), envfile.render(saved.to_env()))
     code, out, env, ingress, cnames = _tunnel_run(ACCESS)
     assert code == 0, out
     assert 'TICO_RUNNER_URL=http://legacy.other.example:8080/helper/' in env
-    assert [r.get('hostname') for r in ingress] == ['tico.example.com','legacy.other.example','files.acme.example',None]
+    assert [r.get('hostname') for r in ingress] == [
+        'tico.example.com',
+        'legacy.other.example',
+        'files.acme.example',
+        None,
+    ]
     assert cnames == ['tico.example.com'] and 'fictional-visual-secret' not in out
     assert state.load(saved.domain)[0]['runner_host'] == ''
     assert verified[-1]['runner_host'] == ''  # No invented managed HTTPS443 probe of the passive HTTP endpoint.
@@ -253,22 +365,34 @@ def test_passive_runner_and_visual_secret_survive_real_fake_tunnel_rerun_without
     doctor_deps.ssh_shell = lambda *args: FakeShell()
     code, out = go(['doctor', '--non-interactive', '--domain', saved.domain], deps=doctor_deps)
     assert code == 0 and verified[-1]['runner_host'] == ''
-    code, out, env, ingress, cnames = _tunnel_run(['--runner-hostname','none',*ACCESS])
+    code, out, env, ingress, cnames = _tunnel_run(['--runner-hostname', 'none', *ACCESS])
     assert code == 0 and 'TICO_RUNNER_URL' not in env
-    assert [r.get('hostname') for r in ingress] == ['tico.example.com','files.acme.example',None]
+    assert [r.get('hostname') for r in ingress] == ['tico.example.com', 'files.acme.example', None]
     code, out, env, ingress, cnames = _tunnel_run(ACCESS)
     assert code == 0 and 'TICO_RUNNER_URL' not in env  # Explicit none remains durable on another run.
 
     # Explicit app aliases require their own CORS trust; neither this choice nor visuals grant DNS authority.
-    code, out, env, ingress, cnames = _tunnel_run(['--domain-aliases','Old.Example.Com,tico.example.com',
-        '--cors-origins','https://old.example.com','--public-url','https://tico.example.com',
-        '--hq-url','https://hq.acme.example','--visual-same-origin','0',*ACCESS])
+    code, out, env, ingress, cnames = _tunnel_run(
+        [
+            '--domain-aliases',
+            'Old.Example.Com,tico.example.com',
+            '--cors-origins',
+            'https://old.example.com',
+            '--public-url',
+            'https://tico.example.com',
+            '--hq-url',
+            'https://hq.acme.example',
+            '--visual-same-origin',
+            '0',
+            *ACCESS,
+        ]
+    )
     assert code == 0, out
     parsed = envfile.parse(env)
     assert parsed['TICO_DOMAIN_ALIASES'] == 'old.example.com' and parsed['TICO_HQ_URL'] == 'https://hq.acme.example'
     assert parsed['TICO_PUBLIC_URL'] == 'https://tico.example.com' and parsed['TICO_VISUAL_SAME_ORIGIN'] == '0'
     assert parsed['TICO_CORS_ORIGINS'] == 'https://old.example.com' and 'TICO_CADDY_VISUALS' not in parsed
-    assert [r.get('hostname') for r in ingress] == ['tico.example.com','old.example.com','files.acme.example',None]
+    assert [r.get('hostname') for r in ingress] == ['tico.example.com', 'old.example.com', 'files.acme.example', None]
     assert cnames == ['tico.example.com']
 
 
@@ -278,30 +402,44 @@ def test_public_origin_spelling_preserves_exact_callback_before_any_mutation(mon
     from setup import contract, envfile, signin, wizard
     from setup.settings import Settings, from_saved, gather_runtime
     from setup.cli import parser
+
     mutations = []
     monkeypatch.setattr(wizard, 'provision_backup', lambda *args: mutations.append('backup'))
     monkeypatch.setattr(wizard, '_tunnel', lambda *args: mutations.append('tunnel'))
     monkeypatch.setattr(state, 'save', lambda *args: mutations.append('state'))
-    original = Settings(domain='tico.example.com', target='ssh', auth='google', client_id='fictional-client', owner_email='me@example.com').public()
+    original = Settings(
+        domain='tico.example.com',
+        target='ssh',
+        auth='google',
+        client_id='fictional-client',
+        owner_email='me@example.com',
+    ).public()
     for value in ('https://tico.example.com:443', 'HTTPS://TICO.EXAMPLE.COM'):
         for retained in (False, True):
             saved = {**original, 'public_url': value} if retained else original
             monkeypatch.setattr(state, 'load', lambda domain: (saved, ''))
             flags = [] if retained else ['--public-url', value]
-            code, out = go(['--target','ssh','--ssh','root@h','--yes',*BASE,*flags])
+            code, out = go(['--target', 'ssh', '--ssh', 'root@h', '--yes', *BASE, *flags])
             assert code == 2 and 'TICO_PUBLIC_URL' in out and value not in out
             assert mutations == []
     for value in ('https://tico.example.com', 'https://tico.example.com/'):
         settings = Settings(domain='tico.example.com')
-        gather_runtime(parser().parse_args(['--public-url',value]), settings, final=True)
+        gather_runtime(parser().parse_args(['--public-url', value]), settings, final=True)
         emitted = settings.to_env()['TICO_PUBLIC_URL']
-        backend = BackendSettings(db_path=tmp_path/'not-opened.sqlite', public_url=emitted, owner_email='owner@acme.example',
-            auth_proxy='oidc', oidc_issuer='https://id.acme.example', oidc_client_id='fictional-client',
-            oidc_client_secret='fictional-secret', session_secret='fictional-session-secret-0123456789')
+        backend = BackendSettings(
+            db_path=tmp_path / 'not-opened.sqlite',
+            public_url=emitted,
+            owner_email='owner@acme.example',
+            auth_proxy='oidc',
+            oidc_issuer='https://id.acme.example',
+            oidc_client_id='fictional-client',
+            oidc_client_secret='fictional-secret',
+            session_secret='fictional-session-secret-0123456789',
+        )
         # Actual config normalization and OIDC constructor; no discovery, network, file secret or DB is used.
         assert Oidc(backend, None).redirect_uri == signin.redirect_uri(settings.domain)
         assert emitted == value  # Retained or newly supplied strings are never silently rewritten.
-        assert from_saved({**original,'public_url':value}, '').to_env()['TICO_PUBLIC_URL'] == value
-    local = from_saved({**original,'public_url':'http://[::1]:8765/'}, '')
+        assert from_saved({**original, 'public_url': value}, '').to_env()['TICO_PUBLIC_URL'] == value
+    local = from_saved({**original, 'public_url': 'http://[::1]:8765/'}, '')
     assert local.to_env()['TICO_PUBLIC_URL'] == 'http://[::1]:8765/'
-    assert not (tmp_path/'not-opened.sqlite').exists() and not (tmp_path/'tico-session-secret').exists()
+    assert not (tmp_path / 'not-opened.sqlite').exists() and not (tmp_path / 'tico-session-secret').exists()

@@ -15,13 +15,33 @@ Standard library only, except that `from_yaml` needs PyYAML. Self-contained so i
 (ticoteam/tico-services) serves the setup page from a copy taken from a published Tico release
 (`scripts/build_catalog_json.py --out DIR`), with the actions, catalogue and company models for the page's browser planner.
 """
+
 from .actions import Refusal, Turn, apply_action, undo
 from .draft import LIMITS, MODELS, ROLES, SEATS, SPEC, DraftError, blank, blank_strategy
 from .keys import scrub, scrub_all
 from .yamlfile import FORMAT, FORMATS, from_yaml, to_yaml
 
-__all__ = ["DraftError", "FORMAT", "FORMATS", "LIMITS", "MODELS", "ROLES", "Refusal", "SEATS", "SPEC", "Turn", "apply_action",
-           "blank", "blank_strategy", "from_yaml", "scrub", "scrub_all", "to_yaml", "undo", "validate"]
+__all__ = [
+    "DraftError",
+    "FORMAT",
+    "FORMATS",
+    "LIMITS",
+    "MODELS",
+    "ROLES",
+    "Refusal",
+    "SEATS",
+    "SPEC",
+    "Turn",
+    "apply_action",
+    "blank",
+    "blank_strategy",
+    "from_yaml",
+    "scrub",
+    "scrub_all",
+    "to_yaml",
+    "undo",
+    "validate",
+]
 
 
 def validate(draft):

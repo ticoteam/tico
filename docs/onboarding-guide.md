@@ -1,7 +1,7 @@
 # Setup guide: your first bots
 
 A practical guide to getting real work out of your first bots. The screens themselves are in [Finish setup](onboarding.md); what each of
-the 98 role templates does is in [Starter bots](starter-bots.md). BotOps and the Librarian can answer questions from this page.
+the 119 role templates does is in [Starter bots](starter-bots.md). BotOps and the Librarian can answer questions from this page.
 
 ## Pick your first bots
 
@@ -44,15 +44,18 @@ Whether it is a first message, a task or a change to what a bot does:
 - **Say what done looks like** and what it must not touch. One line on the format is worth a paragraph of hope.
 - **Point at the source.** The mailbox, the folder, the doc, the meeting series. If it is not in Tico, say where it is.
 - **Give an example of good.** Two real replies, a past report you liked. Never a customer's private details.
-- **Name the limits.** Who may be contacted, which topics are off limits (pay, legal, HR matters), what needs your approval.
+- **Name the limits.** Who may be contacted, which topics are off limits (pay, legal, HR matters), what needs your OK.
 - **One request at a time.** Ask for a second thing after the first is right.
 
 If a bot gets it wrong twice, change its instructions, not your message: ask BotOps to tailor it, or edit its `AGENT.md` and playbooks.
 
 ## Sending and access
 
-A bot drafts messages to outsiders until a person who manages it turns mail sending on in Tico (bot.yaml's `outbound_send` only asks). Once it is on, it sends
-within the requested work, its Instructions and granted Tools, with no approval for each message.
+Sending is set in Tico: a person who manages the bot picks **On their own**, **Ask first** or **Never** (Settings → Bots →
+<bot> → Email sending, or the company or inbox sending policy). Every send goes through Tico's send queue with an undo
+window. Under Ask first a person OKs each one in Tico, from its preview; under On their own the bot sends within the
+requested
+work, its Instructions and granted Tools, with no OK for each message.
 You may explicitly ask it to bring particular drafts to you for review.
 
 A Slack post needs the channel to allow posting, and the QA Engineer needs the corresponding GitHub write access
@@ -61,7 +64,7 @@ roster-only invitations. The list per template is in
 [Starter bots](starter-bots.md#what-stops-a-starter-sending-things-outside-the-team).
 
 Spending, publishing, changing records, deleting or archiving bots, adding outside humans and updating Tico
-need no separate Confirm step. A bot may ask about an uncertain action; an optional approval covers only that
+need no separate Confirm step. A bot may ask about an uncertain action: an OK on its task covers only that
 exact action and does not turn sending on. See [Permissions](permissions.md).
 
 ## What good looks like

@@ -8,7 +8,7 @@ When to use: when a quarterly access review reaches a tool, before any line is m
 
 Steps:
 1. Record the export's date and the tool. If the export is older than the quarter's first day, ask for a new one and stop.
-2. Match each account to a person on the roster from `hub team show`. Match on the person, not the display name. An account that matches no one is marked "unknown owner" and the owner is asked.
+2. Match each account to a person on the roster from `tico team show`. Match on the person, not the display name. An account that matches no one is marked "unknown owner" and the owner is asked.
 3. Mark admin accounts first. Each admin gets its own line and the reason the role is needed. Keep them at the top of the table.
 4. Mark **left** when an active account belongs to someone not on the roster. Put it at the top with the admins, and tell the Operations Manager at once, as `AGENT.md` says.
 5. Mark **role changed** when the role is broader than the person's current job on the roster, or than the owner's rule in `knowledge/controls.md`.

@@ -1,18 +1,19 @@
 """Feedback on bot work: a person's thumbs up or down, with an optional reason, on something a bot made.
 
-- Subjects: a message a bot wrote (Assistant chat, threads, DMs, task comments), a task a bot filed (its requester is a
-  bot) and an approval a bot asked for. Anything else is refused (422).
+- Subjects: a message a bot wrote (Assistant chat, threads, DMs, task comments) and a task a bot filed (its requester
+  is a bot). Anything else is refused (422). An ask (a bot's requirement on a task, an OK among them) is a third
+  subject, rated through backend/answers.py and read back here; it is as readable as its task.
 - One row per person and subject (`feedbacks`, migration 0041): rating again replaces it. The row names the bot and,
   where the work links to a runner attempt, the attempt, its model and harness, for training. It keeps no copy of the
   rated words: deleting a message erases them, and the reason is the person's own.
 - Privacy: every read, write, count and list asks whether the viewer reads the subject, with the checks the subject's
-  own pages use (`threads._reactable` for a message, `Auth.task` for a task, the approval route's checks for an
-  approval). An unreadable subject answers 404, and its feedback is left out of every answer, so a private Assistant
+  own pages use (`threads._reactable` for a message, `Auth.task` for a task and an ask). An unreadable subject answers 404, and its feedback is left out of every answer, so a private Assistant
   chat's feedback is its person's alone. Only people rate; a bot or a computer never does.
 - 👎 can tell the bot (a quiet note for its next run, tied to the rated message so a private conversation's feedback
   stays in that conversation's session, threads.note_fits_run) or make a rule (an internal org rule drafted from the
   reason, added as the person through backend/org_rules.py, so it is active or suggested as their rights say).
 """
+
 import json
 import sqlite3
 from typing import Literal
@@ -24,28 +25,29 @@ from pydantic import BaseModel, Field
 from . import hubdb as H
 from . import org_rules as O
 from . import threads
-from . import task_privacy as privacy
 from .models import Contract
 from .store import Problem
 
-SUBJECTS = ("message", "task", "approval")
+SUBJECTS = ("message", "task", "ask")
+SUBJECTS_SAID = "subject_type is message, task or ask"
 RATINGS = ("up", "down")
 REASON_MAX = 1000
-IDS_MAX = 200                   # the subjects one markers read names
+IDS_MAX = 200  # the subjects one markers read names
 LIST_DEFAULT = 50
 LIST_MAX = 100
-LIST_BYTES = 200_000            # one list page's serialized size; a page always holds at least one row
-LIST_SCAN = 1000                # rows one list page reads past unreadable ones before it hands back a cursor
+LIST_BYTES = 200_000  # one list page's serialized size; a page always holds at least one row
+LIST_SCAN = 1000  # rows one list page reads past unreadable ones before it hands back a cursor
 RECENT_REASONS = 5
-RATED_TEXT_MAX = 1500           # the rated words a rule draft is given, at most
-RULE_IF_BROKEN = "warn"         # a rule from one 👎 goes through with a note until a person makes it stricter
+RATED_TEXT_MAX = 1500  # the rated words a rule draft is given, at most
+RULE_IF_BROKEN = "warn"  # a rule from one 👎 goes through with a note until a person makes it stricter
 # The drafter, for tests: `write(system, user) -> {"rule": "..."}`. None reads the server's writer at the call.
 WRITER = None
 
 DRAFT_SYSTEM = (
     "You turn a person's complaint about a bot's work into one org rule for that bot: one plain sentence, an "
     "instruction the bot can follow every time, at most 200 characters, with no names of people and nothing copied "
-    "from the work beyond what the rule needs. Reply with one JSON object and nothing else: {\"rule\": \"...\"}.")
+    "from the work beyond what the rule needs. Reply with one JSON object and nothing else: {\"rule\": \"...\"}."
+)
 
 
 class Nothing(BaseModel):
@@ -53,7 +55,7 @@ class Nothing(BaseModel):
 
 
 class FeedbackGive(Contract):
-    subject_type: Literal["message", "task", "approval"]
+    subject_type: Literal["message", "task"]
     subject_id: str = Field(min_length=1, max_length=128)
     rating: Literal["up", "down"]
     reason: str = Field(default="", max_length=REASON_MAX)
@@ -80,17 +82,19 @@ def _attempt(c, attempt_id):
     if not attempt_id:
         return None, None, None
     try:
-        row = c.execute("SELECT id, coalesce(handed_model, model) AS model, handed_runtime FROM attempts WHERE id=?",
-                        (attempt_id,)).fetchone()
-    except sqlite3.OperationalError:       # a hub with no runs has no attempts table
+        row = c.execute(
+            "SELECT id, coalesce(handed_model, model) AS model, handed_runtime FROM attempts WHERE id=?", (attempt_id,)
+        ).fetchone()
+    except sqlite3.OperationalError:  # a hub with no runs has no attempts table
         row = None
     return (row["id"], row["model"], row["handed_runtime"]) if row else (attempt_id, None, None)
 
 
 def _made_in(c, action, target):
-    """The run a task or approval was made in, as hubdb.event stamped it."""
-    row = c.execute("SELECT detail FROM events WHERE action=? AND target=? ORDER BY created_at, id LIMIT 1",
-                    (action, target)).fetchone()
+    """The run a task was made in, as hubdb.event stamped it."""
+    row = c.execute(
+        "SELECT detail FROM events WHERE action=? AND target=? ORDER BY created_at, id LIMIT 1", (action, target)
+    ).fetchone()
     return (H._json(row["detail"], {}) or {}).get("attempt_id") if row else None
 
 
@@ -106,15 +110,28 @@ def _readable_task(c, auth, who, task_id):
         raise _missing("task") from None
 
 
-def _readable_approval(c, auth, who, approval_id):
-    """The approval, when the viewer reads it as GET /api/v2/approvals/{id} lets them."""
+def _readable_ask(c, auth, who, subject_id):
+    """The ask (answers.ask_of) with its task, when the viewer reads the task."""
+    from .answers import ask_of
+
+    ask = ask_of(c, subject_id)
+    if not ask:
+        raise _missing("ask")
     try:
-        row = auth.approval(c, who, approval_id)
-        privacy.require_payload(c, who, row)
-        privacy.require_message(c, who, H.message(c, row["message_id"]))
+        task = auth.task(c, who, ask["task_id"])
     except Problem:
-        raise _missing("approval") from None
-    return row
+        raise _missing("ask") from None
+    return {**ask, "task": task}
+
+
+def _latest_message(c, conversation_id):
+    """The newest message of a conversation, which a note to the bot is tied to."""
+    latest = c.execute(
+        "SELECT id FROM messages WHERE conversation_id=? AND deleted_at IS NULL "
+        "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        (conversation_id,),
+    ).fetchone()
+    return latest[0] if latest else None
 
 
 def subject(c, auth, who, subject_type, subject_id):
@@ -129,35 +146,48 @@ def subject(c, auth, who, subject_type, subject_id):
         refs = message.get("refs") if isinstance(message.get("refs"), dict) else H._json(message.get("refs"), {}) or {}
         run = (refs.get("run") or {}) if isinstance(refs.get("run"), dict) else {}
         revision = c.execute("SELECT revision FROM messages WHERE id=?", (message["id"],)).fetchone()
-        return {"bot_id": bot, "conversation_id": message.get("conversation_id"),
-                "attempt": _attempt(c, run.get("attempt_id")), "revision": revision[0] if revision else None,
-                "note_message_id": message["id"],
-                "link": "/#/thread/%s?m=%s" % (quote(message["conversation_id"] or "", safe=""), quote(message["id"], safe="")),
-                "text": message.get("body") or ""}
+        return {
+            "bot_id": bot,
+            "conversation_id": message.get("conversation_id"),
+            "attempt": _attempt(c, run.get("attempt_id")),
+            "revision": revision[0] if revision else None,
+            "note_message_id": message["id"],
+            "link": "/#/thread/%s?m=%s"
+            % (quote(message["conversation_id"] or "", safe=""), quote(message["id"], safe="")),
+            "text": message.get("body") or "",
+        }
     if subject_type == "task":
         task = _readable_task(c, auth, who, subject_id)
         bot = task.get("requester_id")
         if not H.is_bot(bot):
             raise Problem("not_bot", "Only a task a bot filed takes feedback", 422)
-        latest = c.execute("SELECT id FROM messages WHERE conversation_id=? AND deleted_at IS NULL "
-                           "ORDER BY created_at DESC, rowid DESC LIMIT 1", (task.get("conversation_id"),)).fetchone()
-        return {"bot_id": bot, "conversation_id": task.get("conversation_id"),
-                "attempt": _attempt(c, _made_in(c, "task.create", task["id"])), "revision": task.get("version"),
-                "note_message_id": latest[0] if latest else None, "link": "/#/task/" + quote(task["id"], safe=""),
-                "text": f"{task.get('title') or ''}\n\n{task.get('body') or ''}".strip()}
-    if subject_type == "approval":
-        row = _readable_approval(c, auth, who, subject_id)
-        bot = row.get("requested_by_id")
-        if not H.is_bot(bot):
-            raise Problem("not_bot", "Only an approval a bot asked for takes feedback", 422)
-        message = H.message(c, row["message_id"]) or {}
-        link = ("/#/task/" + quote(row["task_id"], safe="")) if row.get("task_id") else \
-            "/#/thread/%s?m=%s" % (quote(message.get("conversation_id") or "", safe=""), quote(row["message_id"], safe=""))
-        return {"bot_id": bot, "conversation_id": message.get("conversation_id"),
-                "attempt": _attempt(c, _made_in(c, "approval.request", row["id"])), "revision": None,
-                "note_message_id": row["message_id"], "link": link,
-                "text": f"{row.get('kind')}: " + json.dumps(row.get("payload") or {}, sort_keys=True, default=str)}
-    raise Problem("validation", "subject_type is message, task or approval", 422)
+        return {
+            "bot_id": bot,
+            "conversation_id": task.get("conversation_id"),
+            "attempt": _attempt(c, _made_in(c, "task.create", task["id"])),
+            "revision": task.get("version"),
+            "note_message_id": _latest_message(c, task.get("conversation_id")),
+            "link": "/#/task/" + quote(task["id"], safe=""),
+            "text": f"{task.get('title') or ''}\n\n{task.get('body') or ''}".strip(),
+        }
+    if subject_type == "ask":
+        # Rated through backend/answers.py, never through give(); read back here for a removal, a rule draft and the
+        # audit event, which targets the task.
+        from .task_requirements import name_of
+
+        ask = _readable_ask(c, auth, who, subject_id)
+        task = ask["task"]
+        return {
+            "bot_id": ask["bot"],
+            "conversation_id": task.get("conversation_id"),
+            "attempt": (None, None, None),
+            "revision": task.get("version"),
+            "note_message_id": _latest_message(c, task.get("conversation_id")),
+            "link": "/#/task/" + quote(task["id"], safe=""),
+            "text": f"{task.get('title') or ''}\n\n{name_of(ask['requirement'])}".strip(),
+            "target": task["id"],
+        }
+    raise Problem("validation", SUBJECTS_SAID, 422)
 
 
 def readable(c, auth, who, subject_type, subject_id, memo=None):
@@ -165,7 +195,11 @@ def readable(c, auth, who, subject_type, subject_id, memo=None):
     key = (subject_type, subject_id)
     if memo is not None and key in memo:
         return memo[key]
-    check = {"message": _readable_message, "task": _readable_task, "approval": _readable_approval}.get(subject_type)
+    check = {
+        "message": _readable_message,
+        "task": _readable_task,
+        "ask": _readable_ask,
+    }.get(subject_type)
     try:
         found = bool(check) and check(c, auth, who, subject_id) is not None
     except Problem:
@@ -190,13 +224,27 @@ def note_status(c, note_id):
 
 def view(c, row):
     row = dict(row)
-    rule = c.execute("SELECT status FROM org_rules WHERE id=?", (row["org_rule_id"],)).fetchone() \
-        if row.get("org_rule_id") else None
-    return {"id": row["id"], "person_id": row["person_id"], "subject_type": row["subject_type"],
-            "subject_id": row["subject_id"], "bot_id": row["bot_id"], "rating": row["rating"], "reason": row["reason"],
-            "outcome": row["outcome"], "note_id": row["note_id"], "note_status": note_status(c, row["note_id"]),
-            "org_rule_id": row["org_rule_id"], "rule_status": rule["status"] if rule else None,
-            "created_at": row["created_at"], "updated_at": row["updated_at"]}
+    rule = (
+        c.execute("SELECT status FROM org_rules WHERE id=?", (row["org_rule_id"],)).fetchone()
+        if row.get("org_rule_id")
+        else None
+    )
+    return {
+        "id": row["id"],
+        "person_id": row["person_id"],
+        "subject_type": row["subject_type"],
+        "subject_id": row["subject_id"],
+        "bot_id": row["bot_id"],
+        "rating": row["rating"],
+        "reason": row["reason"],
+        "outcome": row["outcome"],
+        "note_id": row["note_id"],
+        "note_status": note_status(c, row["note_id"]),
+        "org_rule_id": row["org_rule_id"],
+        "rule_status": rule["status"] if rule else None,
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
 
 
 def _row(c, feedback_id):
@@ -214,10 +262,10 @@ def own_row(c, auth, who, feedback_id):
 
 
 # ----------------------------------------------------------------------------- writes
-def _cancel_waiting(c, who, note_id):
+def _cancel_waiting(c, actor, note_id):
     """Take back a note no run has carried yet: the feedback it said is gone or replaced."""
     if note_status(c, note_id) == "waiting":
-        H.note_cancel(c, who.actor, note_id)
+        H.note_cancel(c, actor, note_id)
         return True
     return False
 
@@ -230,8 +278,10 @@ def _tell(c, who, row, subj):
     name = H.actor_name(c, who.actor)
     reason = row["reason"]
     said = f': "{reason}"' if reason else ""
-    body = (f"👎 from {name} on {subj['link']}{said}. Fix this going forward. If it is a lasting lesson, record it in "
-            "your memory; a personal preference belongs with that person.")
+    body = (
+        f"👎 from {name} on {subj['link']}{said}. Fix this going forward. If it is a lasting lesson, record it in "
+        "your memory; a personal preference belongs with that person."
+    )
     note = H.note_create(c, who.actor, row["bot_id"], body)
     c.execute("UPDATE notes SET message_id=? WHERE id=?", (subj["note_message_id"], note["id"]))
     return note["id"]
@@ -244,50 +294,80 @@ def give(c, auth, who, body):
     H._writer(c, who.actor)
     if body["tell_bot"] and body["rating"] != "down":
         raise Problem("validation", "tell_bot goes with a 👎", 422)
+    if body["subject_type"] == "ask":
+        raise Problem("validation", "Rate an ask on its task", 422)
     subj = subject(c, auth, who, body["subject_type"], body["subject_id"])
+    tell = (lambda row: _tell(c, who, row, subj)) if body["tell_bot"] else None
+    row = rate(c, who.actor, body["subject_type"], body["subject_id"], subj, body["rating"], body.get("reason"), tell)
+    # Kinds only: the reason is the person's words and stays in its row.
+    _event(
+        c,
+        auth,
+        who,
+        "feedback.given",
+        row,
+        subj,
+        {"rating": row["rating"], "bot": row["bot_id"], "told_bot": bool(body["tell_bot"])},
+    )
+    return view(c, _row(c, row["id"]))
+
+
+def rate(c, person, subject_type, subject_id, subj, rating, reason, tell=None):
+    """Write one person's 👍 or 👎 on one subject: their row for it is made or replaced. The one writer of `feedbacks`
+    rows; the caller has checked the person may rate it. `subj` is what `subject` gives (`bot_id`, `conversation_id`,
+    `attempt`, `revision`). A replaced row's note that no run carried yet is taken back; `tell(row)` leaves a new one and
+    returns its id. Returns the row as written. Asks on tasks are rated through here by backend/answers.py."""
     attempt_id, model, harness = subj["attempt"]
     now = H.now()
-    reason = str(body.get("reason") or "").strip()[:REASON_MAX]
-    old = c.execute("SELECT * FROM feedbacks WHERE person_id=? AND subject_type=? AND subject_id=?",
-                    (who.actor, body["subject_type"], body["subject_id"])).fetchone()
+    reason = str(reason or "").strip()[:REASON_MAX]
+    old = c.execute(
+        "SELECT * FROM feedbacks WHERE person_id=? AND subject_type=? AND subject_id=?",
+        (person, subject_type, subject_id),
+    ).fetchone()
     old = dict(old) if old else None
-    row = {"person_id": who.actor, "subject_type": body["subject_type"], "subject_id": body["subject_id"],
-           "bot_id": subj["bot_id"], "conversation_id": subj["conversation_id"], "attempt_id": attempt_id,
-           "model": model, "harness": harness, "subject_revision": subj["revision"], "rating": body["rating"],
-           "reason": reason, "updated_at": now}
+    row = {
+        "person_id": person,
+        "subject_type": subject_type,
+        "subject_id": subject_id,
+        "bot_id": subj["bot_id"],
+        "conversation_id": subj["conversation_id"],
+        "attempt_id": attempt_id,
+        "model": model,
+        "harness": harness,
+        "subject_revision": subj["revision"],
+        "rating": rating,
+        "reason": reason,
+        "updated_at": now,
+    }
     if old is None:
         row.update({"id": H.new_id(), "outcome": "none", "note_id": None, "org_rule_id": None, "created_at": now})
     else:
         row.update({k: old[k] for k in ("id", "outcome", "note_id", "org_rule_id", "created_at")})
-        if _cancel_waiting(c, who, old["note_id"]):
+        if _cancel_waiting(c, person, old["note_id"]):
             row["note_id"] = None
             row["outcome"] = "rule" if old["org_rule_id"] else "none"
-    if body["tell_bot"]:
-        row["note_id"] = _tell(c, who, row, subj)
+    if tell is not None:
+        row["note_id"] = tell(row)
         row["outcome"] = "told_bot"
-    c.execute("INSERT INTO feedbacks(id,person_id,subject_type,subject_id,bot_id,conversation_id,attempt_id,model,harness,"
-              "subject_revision,rating,reason,outcome,note_id,org_rule_id,created_at,updated_at) VALUES(:id,:person_id,"
-              ":subject_type,:subject_id,:bot_id,:conversation_id,:attempt_id,:model,:harness,:subject_revision,:rating,"
-              ":reason,:outcome,:note_id,:org_rule_id,:created_at,:updated_at) ON CONFLICT(person_id,subject_type,"
-              "subject_id) DO UPDATE SET bot_id=excluded.bot_id,conversation_id=excluded.conversation_id,"
-              "attempt_id=excluded.attempt_id,model=excluded.model,harness=excluded.harness,"
-              "subject_revision=excluded.subject_revision,rating=excluded.rating,reason=excluded.reason,"
-              "outcome=excluded.outcome,note_id=excluded.note_id,updated_at=excluded.updated_at", row)
-    # Kinds only: the reason is the person's words and stays in its row.
-    _event(c, auth, who, "feedback.given", row, subj, {"rating": row["rating"], "bot": row["bot_id"],
-                                                 "told_bot": bool(body["tell_bot"])})
-    return view(c, _row(c, row["id"]))
+    c.execute(
+        "INSERT INTO feedbacks(id,person_id,subject_type,subject_id,bot_id,conversation_id,attempt_id,model,harness,"
+        "subject_revision,rating,reason,outcome,note_id,org_rule_id,created_at,updated_at) VALUES(:id,:person_id,"
+        ":subject_type,:subject_id,:bot_id,:conversation_id,:attempt_id,:model,:harness,:subject_revision,:rating,"
+        ":reason,:outcome,:note_id,:org_rule_id,:created_at,:updated_at) ON CONFLICT(person_id,subject_type,"
+        "subject_id) DO UPDATE SET bot_id=excluded.bot_id,conversation_id=excluded.conversation_id,"
+        "attempt_id=excluded.attempt_id,model=excluded.model,harness=excluded.harness,"
+        "subject_revision=excluded.subject_revision,rating=excluded.rating,reason=excluded.reason,"
+        "outcome=excluded.outcome,note_id=excluded.note_id,updated_at=excluded.updated_at",
+        row,
+    )
+    return row
 
 
 def _private(c, subject_type, subject_id, subj):
     """Whether the rated work is narrower than the company: a private thread (an Assistant chat, a members or
     participants thread), a message tied to a private task or meeting, or a private task."""
-    if subject_type == "task" and H.task_private(c, H.task(c, subject_id) or {}):
+    if subject_type in ("task", "ask") and H.task_private(c, H.task(c, subj.get("target") or subject_id) or {}):
         return True
-    if subject_type == "approval":
-        approval = c.execute("SELECT task_id FROM approvals WHERE id=?", (subject_id,)).fetchone()
-        if approval and approval["task_id"] and H.task_private(c, H.task(c, approval["task_id"]) or {}):
-            return True
     source, thread, root = threads._note_source(c, {"message_id": subj["note_message_id"]})
     return source is not None and threads._source_private(c, source, thread, root)
 
@@ -300,12 +380,15 @@ def _event(c, auth, who, action, row, subj, detail):
         subj = subject(c, auth, who, row["subject_type"], row["subject_id"])
     if _private(c, row["subject_type"], row["subject_id"], subj):
         return
-    H.event(c, who.actor, action, row["subject_id"], {"feedback": row["id"], "subject_type": row["subject_type"], **detail})
+    detail = {"feedback": row["id"], "subject_type": row["subject_type"], **detail}
+    if subj.get("target"):
+        detail["subject_id"] = row["subject_id"]
+    H.event(c, who.actor, action, subj.get("target") or row["subject_id"], detail)
 
 
 def remove(c, auth, who, feedback_id):
     row = own_row(c, auth, who, feedback_id)
-    _cancel_waiting(c, who, row["note_id"])
+    _cancel_waiting(c, who.actor, row["note_id"])
     c.execute("DELETE FROM feedbacks WHERE id=?", (row["id"],))
     _event(c, auth, who, "feedback.removed", row, None, {"bot": row["bot_id"]})
     return {"ok": True, "id": row["id"]}
@@ -318,8 +401,12 @@ def make_rule(c, auth, who, feedback_id, body):
     if row["rating"] != "down":
         raise Problem("validation", "A rule comes from a 👎", 422)
     scope = {"all_bots": True} if body.get("all_bots") else {"bots": [row["bot_id"]]}
-    rule = O.add_rule(c, auth, who, {"kind": "internal", "text": body["text"], "who": scope, "if_broken": RULE_IF_BROKEN})
-    c.execute("UPDATE feedbacks SET outcome='rule', org_rule_id=?, updated_at=? WHERE id=?", (rule["id"], H.now(), row["id"]))
+    rule = O.add_rule(
+        c, auth, who, {"kind": "internal", "text": body["text"], "who": scope, "if_broken": RULE_IF_BROKEN}
+    )
+    c.execute(
+        "UPDATE feedbacks SET outcome='rule', org_rule_id=?, updated_at=? WHERE id=?", (rule["id"], H.now(), row["id"])
+    )
     _event(c, auth, who, "feedback.rule", row, None, {"rule": rule["id"], "status": rule.get("status")})
     return {"feedback": view(c, _row(c, row["id"])), "rule": rule}
 
@@ -331,7 +418,7 @@ def markers(c, auth, who, subject_type, subject_ids):
     one subject with hundreds of ratings costs one count row."""
     auth.domain(who)
     if subject_type not in SUBJECTS:
-        raise Problem("validation", "subject_type is message, task or approval", 422)
+        raise Problem("validation", SUBJECTS_SAID, 422)
     ids = [i.strip() for i in str(subject_ids or "").split(",") if i.strip()]
     ids = list(dict.fromkeys(ids))
     if len(ids) > IDS_MAX:
@@ -340,11 +427,16 @@ def markers(c, auth, who, subject_type, subject_ids):
     if not seen:
         return {"items": [], "counts": []}
     marks = ",".join("?" * len(seen))
-    rows = c.execute("SELECT * FROM feedbacks WHERE person_id=? AND subject_type=? AND subject_id IN (%s) "
-                     "ORDER BY created_at, id" % marks, [who.actor, subject_type, *seen]).fetchall()
-    counts = c.execute("SELECT subject_id, sum(rating='up') AS up, sum(rating='down') AS down FROM feedbacks "
-                       "WHERE subject_type=? AND subject_id IN (%s) GROUP BY subject_id ORDER BY subject_id" % marks,
-                       [subject_type, *seen]).fetchall()
+    rows = c.execute(
+        "SELECT * FROM feedbacks WHERE person_id=? AND subject_type=? AND subject_id IN (%s) "
+        "ORDER BY created_at, id" % marks,
+        [who.actor, subject_type, *seen],
+    ).fetchall()
+    counts = c.execute(
+        "SELECT subject_id, sum(rating='up') AS up, sum(rating='down') AS down FROM feedbacks "
+        "WHERE subject_type=? AND subject_id IN (%s) GROUP BY subject_id ORDER BY subject_id" % marks,
+        [subject_type, *seen],
+    ).fetchall()
     return {"items": [view(c, r) for r in rows], "counts": [dict(r) for r in counts]}
 
 
@@ -359,6 +451,7 @@ def listing(c, auth, who, args):
     """Feedback newest first, a page at a time, of the subjects the viewer reads: `bot_id`, `rating` and `since` (an ISO
     time or a duration such as 7d) narrow it. A page stops at `limit` rows, LIST_BYTES, or LIST_SCAN rows read."""
     from .views import since_time
+
     auth.domain(who)
     limit = args.get("limit") or LIST_DEFAULT
     if not 1 <= limit <= LIST_MAX:
@@ -379,8 +472,11 @@ def listing(c, auth, who, args):
         created, ident = _cursor(args["cursor"])
         where.append("(created_at<? OR (created_at=? AND id<?))")
         params += [created, created, ident]
-    sql = "SELECT * FROM feedbacks" + (" WHERE " + " AND ".join(where) if where else "") + \
-        " ORDER BY created_at DESC, id DESC LIMIT ?"
+    sql = (
+        "SELECT * FROM feedbacks"
+        + (" WHERE " + " AND ".join(where) if where else "")
+        + " ORDER BY created_at DESC, id DESC LIMIT ?"
+    )
     rows = c.execute(sql, [*params, LIST_SCAN + 1]).fetchall()
     items, size, memo, consumed = [], 0, {}, -1
     for index, r in enumerate(rows):
@@ -405,12 +501,16 @@ def recent_reasons(c, who):
     rows = c.execute(
         "SELECT lower(trim(reason)) AS norm, MAX(updated_at) AS last, COUNT(*) AS n FROM feedbacks "
         "WHERE person_id=? AND trim(reason)<>'' GROUP BY norm ORDER BY last DESC, norm LIMIT ?",
-        (who.actor, RECENT_REASONS)).fetchall()
+        (who.actor, RECENT_REASONS),
+    ).fetchall()
     out = []
     for r in rows:
         # The words as the person last wrote them, not the lowered key.
-        shown = c.execute("SELECT trim(reason) FROM feedbacks WHERE person_id=? AND lower(trim(reason))=? "
-                          "ORDER BY updated_at DESC, id DESC LIMIT 1", (who.actor, r["norm"])).fetchone()[0]
+        shown = c.execute(
+            "SELECT trim(reason) FROM feedbacks WHERE person_id=? AND lower(trim(reason))=? "
+            "ORDER BY updated_at DESC, id DESC LIMIT 1",
+            (who.actor, r["norm"]),
+        ).fetchone()[0]
         out.append({"text": shown, "count": r["n"]})
     return {"reasons": out}
 
@@ -421,6 +521,7 @@ def _writer(c, store):
         return WRITER
     from .judge import over_spend_cap
     from .updates import writer_for
+
     # The decision engine (backend/judge.py) answers fixed questions and writes no sentence, so a draft is written by
     # the server's writer (the daily-update drafts' model), held to Decide's monthly spend cap all the same.
     if over_spend_cap(c, store.settings) is not None:
@@ -435,35 +536,47 @@ def draft_input(c, auth, who, feedback_id):
     if row["rating"] != "down":
         raise Problem("validation", "A rule comes from a 👎", 422)
     subj = subject(c, auth, who, row["subject_type"], row["subject_id"])
-    return {"reason": row["reason"], "bot": H.actor_name(c, row["bot_id"]), "subject_type": row["subject_type"],
-            "rated": (subj["text"] or "")[:RATED_TEXT_MAX]}
+    return {
+        "reason": row["reason"],
+        "bot": H.actor_name(c, row["bot_id"]),
+        "subject_type": row["subject_type"],
+        "rated": (subj["text"] or "")[:RATED_TEXT_MAX],
+    }
 
 
 def draft(write, given):
     """One sentence, or None when the model did not give one."""
-    user = (f"Bot: {given['bot']}\nWhat was rated: a {given['subject_type']}\nThe person's reason: "
-            f"{given['reason'] or '(none given)'}\nThe rated work:\n{given['rated']}")
+    user = (
+        f"Bot: {given['bot']}\nWhat was rated: a {given['subject_type']}\nThe person's reason: "
+        f"{given['reason'] or '(none given)'}\nThe rated work:\n{given['rated']}"
+    )
     try:
         answer = write(DRAFT_SYSTEM, user)
     except Exception:  # noqa: BLE001 - a draft that fails leaves the person's own reason as the rule text
         return None
     text = " ".join(str((answer or {}).get("rule") or "").split())
-    return text[:O.TEXT_MAX] or None
+    return text[: O.TEXT_MAX] or None
 
 
 # ----------------------------------------------------------------------------- routes
 def install(app, store, auth, mutate):
     @app.post("/api/v2/feedback")
     def feedback_give(request: Request, body: FeedbackGive):
-        """Rate a message, task or approval a bot made: 👍 or 👎 with an optional reason. Rating again replaces it.
+        """Rate a message or task a bot made: 👍 or 👎 with an optional reason. Rating again replaces it.
         `tell_bot` (a 👎 only) leaves the bot a note for its next run in that conversation."""
         who = request.state.identity
         return mutate(request, body, lambda c: give(c, auth, who, body.model_dump()))
 
     # Declared before /api/v2/feedback/{feedback_id} routes so these words are never read as an id.
     @app.get("/api/v2/feedback/list")
-    def feedback_list(request: Request, bot_id: str | None = None, rating: str | None = None, since: str | None = None,
-                      cursor: str | None = None, limit: int = LIST_DEFAULT):
+    def feedback_list(
+        request: Request,
+        bot_id: str | None = None,
+        rating: str | None = None,
+        since: str | None = None,
+        cursor: str | None = None,
+        limit: int = LIST_DEFAULT,
+    ):
         """Feedback newest first, paged, on the subjects the caller reads."""
         args = {"bot_id": bot_id, "rating": rating, "since": since, "cursor": cursor, "limit": limit}
         with store.read() as c:
@@ -506,4 +619,15 @@ def install(app, store, auth, mutate):
         return mutate(request, body, lambda c: make_rule(c, auth, who, feedback_id, body.model_dump()))
 
 
-__all__ = ["install", "give", "remove", "make_rule", "markers", "listing", "recent_reasons", "subject", "readable"]
+__all__ = [
+    "install",
+    "give",
+    "rate",
+    "remove",
+    "make_rule",
+    "markers",
+    "listing",
+    "recent_reasons",
+    "subject",
+    "readable",
+]

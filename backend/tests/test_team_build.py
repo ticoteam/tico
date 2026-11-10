@@ -1,6 +1,7 @@
 """Build a team (backend/team_build.py): a briefing suggests the roles a team needs, and the picks are hired into the team
 in one step. Each pick is a seat then a bot, as a seat's own pick makes them (backend/tests/test_recruiting.py). The cloud
 agents module (backend/cloud_agents.py) may or may not be there, so the suggestion is checked both ways."""
+
 import json
 import sys
 import types
@@ -11,25 +12,57 @@ import backend
 from backend import groups as Groups
 from backend import recruiting
 from backend.store import H, Problem
-from backend.tests.test_api import api, as_member, get, headers, post  # noqa: F401
-from backend.tests.test_strategy_bot import as_bot
+from backend.tests.helpers.api import as_member, get, headers, post  # noqa: F401
+from backend.tests.helpers.strategy_bot import as_bot
 
 BRIEF = "A Rust API and a React web app, deployed on AWS, with GitHub pull requests and flaky tests"
 CLOUD_ROLE = "Second pair of hands"
 # Out of order on purpose: the role offers the agents Tico connects first, then the rest, each group in listing order.
-CLOUDS = [{"id": "devin", "name": "Devin", "maker": "Cognition", "site": "devin.ai", "line": "A cloud engineer.",
-           "supported": False, "connect_id": None},
-          {"id": "claude", "name": "Claude Code", "maker": "Anthropic", "site": "claude.com", "line": "Codes in your repo.",
-           "supported": True, "connect_id": "claude"},
-          {"id": "droids", "name": "Droids", "maker": "Factory", "site": "factory.ai", "line": "Turns tickets into PRs.",
-           "supported": False, "connect_id": None},
-          {"id": "codex", "name": "Codex", "maker": "OpenAI", "site": "openai.com", "line": "Works in a sandbox.",
-           "supported": True, "connect_id": "codex"}]
+CLOUDS = [
+    {
+        "id": "devin",
+        "name": "Devin",
+        "maker": "Cognition",
+        "site": "devin.ai",
+        "line": "A cloud engineer.",
+        "supported": False,
+        "connect_id": None,
+    },
+    {
+        "id": "claude",
+        "name": "Claude Code",
+        "maker": "Anthropic",
+        "site": "claude.com",
+        "line": "Codes in your repo.",
+        "supported": True,
+        "connect_id": "claude",
+    },
+    {
+        "id": "droids",
+        "name": "Droids",
+        "maker": "Factory",
+        "site": "factory.ai",
+        "line": "Turns tickets into PRs.",
+        "supported": False,
+        "connect_id": None,
+    },
+    {
+        "id": "codex",
+        "name": "Codex",
+        "maker": "OpenAI",
+        "site": "openai.com",
+        "line": "Works in a sandbox.",
+        "supported": True,
+        "connect_id": "codex",
+    },
+]
 NOBODY = {"everyone": False, "people": [], "teams": [], "bots": []}
 
 
-@pytest.fixture(params=[(False, False), (False, True), (True, False), (True, True)],
-                ids=["absent", "absent-cached", "listed", "listed-cached"])
+@pytest.fixture(
+    params=[(False, False), (False, True), (True, False), (True, True)],
+    ids=["absent", "absent-cached", "listed", "listed-cached"],
+)
 def cloud(request, monkeypatch):
     """backend/cloud_agents.py missing (its import fails) or there, listing its agents; and an earlier import of it either left
     on the package (`cached`) or not. `from . import cloud_agents` reads the package's attribute before the module table,
@@ -46,15 +79,21 @@ def cloud(request, monkeypatch):
         monkeypatch.setitem(sys.modules, "backend.cloud_agents", module)
         monkeypatch.setattr(backend, "cloud_agents", module, raising=False)
     else:
-        monkeypatch.setitem(sys.modules, "backend.cloud_agents", None)     # the import fails
+        monkeypatch.setitem(sys.modules, "backend.cloud_agents", None)  # the import fails
         monkeypatch.delattr(backend, "cloud_agents", raising=False)
     return listed
 
 
 def providers(api, *enabled):
     current = get(api, "providers")
-    assert api.put("/api/v2/providers", headers=headers(), json={
-        "enabled": list(enabled), "expected_revision": current["revision"]}).status_code == 200
+    assert (
+        api.put(
+            "/api/v2/providers",
+            headers=headers(),
+            json={"enabled": list(enabled), "expected_revision": current["revision"]},
+        ).status_code
+        == 200
+    )
 
 
 def engineering(api):
@@ -68,16 +107,19 @@ def suggest(api, team, briefing=BRIEF, token="ana-test", expected=200):
 
 
 def hire(api, team, picks, token="ana-test", expected=200, reports_to=""):
-    r = api.post("/api/v2/team-build/hire", headers=headers(token),
-                 json={"team": team, "reports_to": reports_to, "picks": picks})
+    r = api.post(
+        "/api/v2/team-build/hire", headers=headers(token), json={"team": team, "reports_to": reports_to, "picks": picks}
+    )
     assert r.status_code == expected, r.text
     return r.json()
 
 
 def counts(api):
     with api.app.state.store.read() as c:
-        return (c.execute("SELECT COUNT(*) FROM seats WHERE closed_at IS NULL").fetchone()[0],
-                c.execute("SELECT COUNT(*) FROM bots").fetchone()[0])
+        return (
+            c.execute("SELECT COUNT(*) FROM seats WHERE closed_at IS NULL").fetchone()[0],
+            c.execute("SELECT COUNT(*) FROM bots").fetchone()[0],
+        )
 
 
 def bot_id(api, slug):
@@ -103,8 +145,8 @@ def test_the_suggestion_is_the_departments_roles_head_first_with_compact_candida
     templates = [role for role in roles if role["pick"]["source"] == "template"]
     clouds = [role for role in roles if role["pick"]["source"] == "cloud"]
     assert found["department"] == "engineering" and 2 <= len(templates) <= 8
-    assert roles[:len(templates)] == templates
-    assert len(clouds) == (1 if cloud else 0) and roles[len(templates):] == clouds
+    assert roles[: len(templates)] == templates
+    assert len(clouds) == (1 if cloud else 0) and roles[len(templates) :] == clouds
     for role in clouds:
         # The pick is the first agent Tico connects (added as a bot); the others follow under Change, connected first.
         assert role["role"] == CLOUD_ROLE and role["pick"]["id"] == "claude" and role["pick"]["supported"]
@@ -118,13 +160,23 @@ def test_the_suggestion_is_the_departments_roles_head_first_with_compact_candida
     picked = [role["pick"]["template"] for role in templates]
     for role in templates:
         pick = role["pick"]
-        assert set(pick) == {"template", "name", "icon", "department", "line", "tags", "owns", "prerequisites", "match",
-                             "source"}
+        assert set(pick) == {
+            "template",
+            "name",
+            "icon",
+            "department",
+            "line",
+            "tags",
+            "owns",
+            "prerequisites",
+            "match",
+            "source",
+        }
         assert pick["source"] == "template" and pick["department"] == "engineering"
         assert pick["match"] in ("strong", "good", "") and len(pick["line"]) <= 90 and "\n" not in pick["line"]
         assert len(role["alternatives"]) <= 6
-        assert not {alt["template"] for alt in role["alternatives"]} & set(picked)      # never a role's own pick
-    assert any(role["pick"]["match"] == "strong" for role in templates)                 # the briefing names GitHub work
+        assert not {alt["template"] for alt in role["alternatives"]} & set(picked)  # never a role's own pick
+    assert any(role["pick"]["match"] == "strong" for role in templates)  # the briefing names GitHub work
     # A team that is not a department (a name no template family has) suggests nothing, rather than someone else's roles.
     custom = post(api, "groups", {"name": "Ops crew"})["id"]
     assert suggest(api, custom) == {"team": custom, "department": "", "roles": []}
@@ -153,8 +205,11 @@ def test_a_bot_the_caller_cannot_see_is_neither_named_nor_counted_on_the_team(ap
         c.execute("UPDATE bots SET display_name=? WHERE slug=?", ("Rhea Quill", slug))
     name = "Rhea Quill"
     current = get(api, f"bots/{slug}/access")
-    r = api.put(f"/api/v2/bots/{slug}/access", headers=headers(), json={
-        "see": NOBODY, "read": NOBODY, "write": NOBODY, "revision": current["revision"]})
+    r = api.put(
+        f"/api/v2/bots/{slug}/access",
+        headers=headers(),
+        json={"see": NOBODY, "read": NOBODY, "write": NOBODY, "revision": current["revision"]},
+    )
     assert r.status_code == 200, r.text
     # The owner sees the bot on the team, by its name. Cara is on none of its lists: the role is open, the bot hidden.
     owners = lead_of(suggest(api, team))
@@ -176,8 +231,9 @@ def test_a_bot_the_permissions_do_not_name_is_hidden_from_the_team_even_for_the_
     auth = api.app.state.auth
     real = auth.bot_accesses
     hidden = bot_id(api, slug)
-    monkeypatch.setattr(auth, "bot_accesses",
-                        lambda c, who, slugs=None: {k: v for k, v in real(c, who, slugs).items() if k != hidden})
+    monkeypatch.setattr(
+        auth, "bot_accesses", lambda c, who, slugs=None: {k: v for k, v in real(c, who, slugs).items() if k != hidden}
+    )
     found = suggest(api, team)
     head = lead_of(found)
     assert not head["on_team"] and head["bot"] is None and head["checked"]
@@ -199,9 +255,10 @@ def test_the_team_and_the_callers_access_are_read_as_one_snapshot(api, monkeypat
         out = real(c, who, slugs)
         if not moved:
             moved.append(slug)
-            with store.transaction() as writer:           # another connection commits while this answer is being read
+            with store.transaction() as writer:  # another connection commits while this answer is being read
                 Groups._set_bot(writer, bid, "")
         return out
+
     monkeypatch.setattr(auth, "bot_accesses", then_leave_the_team)
     before = lead_of(suggest(api, team))
     assert moved == [slug]
@@ -216,9 +273,15 @@ def test_hiring_makes_one_seat_per_pick_in_the_team_with_the_head_first_and_fill
     team = engineering(api)
     seats_before, bots_before = counts(api)
     # Picked out of order on purpose: the head is hired first, and the others hang from its bot.
-    hired = hire(api, team, [{"role": "DevOps engineer", "template": "devops-engineer"},
-                             {"role": "Head of Engineering", "template": "engineering-lead"},
-                             {"role": "Security engineer", "template": "security-engineer"}])
+    hired = hire(
+        api,
+        team,
+        [
+            {"role": "DevOps engineer", "template": "devops-engineer"},
+            {"role": "Head of Engineering", "template": "engineering-lead"},
+            {"role": "Security engineer", "template": "security-engineer"},
+        ],
+    )
     bots = {bot["template"]: bot for bot in hired["bots"]}
     assert [bot["template"] for bot in hired["bots"]] == ["engineering-lead", "devops-engineer", "security-engineer"]
     assert {bot["stage"] for bot in hired["bots"]} == {"onboarding"}
@@ -226,8 +289,8 @@ def test_hiring_makes_one_seat_per_pick_in_the_team_with_the_head_first_and_fill
     assert get(api, f"bots/{head}")["reports_to"] == "human:ana"
     for template in ("devops-engineer", "security-engineer"):
         assert get(api, f"bots/{bots[template]['slug']}")["reports_to"] == bot_id(api, head)
-    assert team_bots(api, team) == {bot["id"] for bot in hired["bots"]}      # the team's group is theirs
-    assert counts(api) == (seats_before, bots_before + 3)                       # every seat filled, none left open
+    assert team_bots(api, team) == {bot["id"] for bot in hired["bots"]}  # the team's group is theirs
+    assert counts(api) == (seats_before, bots_before + 3)  # every seat filled, none left open
     assert not any(seat["title"] in {"Head of Engineering", "DevOps Engineer"} for seat in get(api, "seats")["seats"])
     # The same team's suggestion now has those roles on the team.
     on = {role["pick"]["template"] for role in suggest(api, team)["roles"] if role["on_team"]}
@@ -238,7 +301,7 @@ def test_a_pick_outside_the_team_a_repeat_or_none_is_refused_and_nothing_is_made
     providers(api, "anthropic", "openai")
     team = engineering(api)
     before = counts(api)
-    hire(api, team, [{"role": "x", "template": "sales-lead"}], expected=422)          # another department's template
+    hire(api, team, [{"role": "x", "template": "sales-lead"}], expected=422)  # another department's template
     hire(api, team, [{"role": "x", "template": "pr-reviewer"}, {"role": "y", "template": "pr-reviewer"}], expected=422)
     hire(api, team, [], expected=422)
     assert counts(api) == before
@@ -254,8 +317,11 @@ def test_a_refused_pick_partway_through_leaves_no_seat_and_no_bot(api, monkeypat
     def second_refused(auth, onboarding, c, who, seat_id, body):
         calls.append(body.template)
         if len(calls) == 2:
-            raise Problem("botops", "BotOps builds this bot, and this team has no BotOps; add it from Templates first", 409)
+            raise Problem(
+                "botops", "BotOps builds this bot, and this team has no BotOps; add it from Templates first", 409
+            )
         return real(auth, onboarding, c, who, seat_id, body)
+
     monkeypatch.setattr(recruiting, "hire", second_refused)
     hire(api, team, [{"role": "a", "template": "pr-reviewer"}, {"role": "b", "template": "docs-writer"}], expected=409)
     assert counts(api) == before and team_bots(api, team) == set()
@@ -280,8 +346,11 @@ def test_only_a_person_suggests_and_hires(api):
     bot = as_bot(api, "coo")
     r = api.post("/api/v2/team-build/suggest", headers=bot, json={"team": team, "briefing": BRIEF})
     assert r.status_code == 403
-    r = api.post("/api/v2/team-build/hire", headers=bot,
-                 json={"team": team, "reports_to": "", "picks": [{"role": "x", "template": "pr-reviewer"}]})
+    r = api.post(
+        "/api/v2/team-build/hire",
+        headers=bot,
+        json={"team": team, "reports_to": "", "picks": [{"role": "x", "template": "pr-reviewer"}]},
+    )
     assert r.status_code == 403
 
 
@@ -293,6 +362,7 @@ def test_an_unknown_team_is_not_found(api):
 def test_the_head_and_every_role_the_team_fills_are_shown_however_many(api, monkeypatch):
     """A team that already fills more roles than the suggestion shows still sees each of them, and the head it lacks."""
     from backend import team_build
+
     providers(api, "anthropic", "openai")
     team = engineering(api)
     others = [role["pick"]["template"] for role in suggest(api, team)["roles"] if role["pick"].get("template")]
@@ -309,12 +379,19 @@ def test_the_head_and_every_role_the_team_fills_are_shown_however_many(api, monk
 
 def test_a_filled_niche_role_is_shown_even_when_the_briefing_does_not_name_it(api, monkeypatch):
     from backend import team_build
+
     providers(api, "anthropic", "openai")
     team = engineering(api)
     dept = suggest(api, team)["department"]
-    niche = next(card["template"] for card in team_build.recruit.catalog(api.app.state.onboarding.settings)["cards"]
-                 if card["department"] == dept and card["suggest"] == "niche")
+    niche = next(
+        card["template"]
+        for card in team_build.recruit.catalog(api.app.state.onboarding.settings)["cards"]
+        if card["department"] == dept and card["suggest"] == "niche"
+    )
     monkeypatch.setattr(team_build, "_filled", lambda c, group: {niche: "ghost-" + niche})
-    roles = {role["pick"]["template"]: role["on_team"] for role in suggest(api, team, briefing="")["roles"]
-             if role["pick"].get("template")}
+    roles = {
+        role["pick"]["template"]: role["on_team"]
+        for role in suggest(api, team, briefing="")["roles"]
+        if role["pick"].get("template")
+    }
     assert roles.get(niche) is True

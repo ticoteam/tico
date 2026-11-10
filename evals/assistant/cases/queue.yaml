@@ -1,8 +1,10 @@
 # The queue: Needs you, bot-made tasks, the sources that file them, and undo. Case 1 is the real Nov 3 chat (split into
-# its four asks). The fictional company is Acme; the owner is Dana. Canned hub outputs are shaped like the real routes
-# (backend/hubdb.py needs_you, task_origin; clients/hubcli.py for the commands).
+# its four asks), on Pipelines v3: tasks are open, done or closed; a bot asks a person through an ask on its task (an OK
+# or a question), and what waits on the person is `tico needs-you show`. The fictional company is Acme; the owner is
+# Dana. Canned hub outputs are shaped like the real routes (backend/views.py needs-you, docs/dev/pipelines-v3-cutover.md
+# "The task as JSON"; clients/hubcli.py for the commands).
 #
-# Shared fixtures: the open board, read in several cases through the YAML anchor q_tasks.
+# Shared fixtures, read in several cases through YAML anchors: the tasks (q_tasks) and Dana's Needs you (q_needs).
 
 - id: queue-clear-old-tasks
   group: queue
@@ -11,34 +13,150 @@
     - match: '^task list'
       out: &q_tasks
         tasks:
-          - {id: 1a0c5e27-1000-4000-8000-000000000001, title: "Docs for v0.5.20 release notes", status: done, owner: "human:dana", requester: "bot:technical-writer", note: "Shipped. Notes are on the Company page.", created: "2026-11-02T23:10:00Z", updated: "2026-11-03T08:02:00Z"}
-          - {id: 2b1d6f38-1000-4000-8000-000000000002, title: "Docs for v0.5.19 release notes", status: done, owner: "human:dana", requester: "bot:technical-writer", note: "", created: "2026-11-02T15:12:00Z", updated: "2026-11-02T16:40:00Z"}
-          - {id: 3c2e7a49-1000-4000-8000-000000000003, title: "Docs for v0.5.18 release notes", status: done, owner: "human:dana", requester: "bot:technical-writer", note: "", created: "2026-11-01T23:08:00Z", updated: "2026-11-02T09:00:00Z"}
-          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
-          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
-          - {id: 6f5b0d7c-1000-4000-8000-000000000006, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
-          - {id: b1c2d3e4-1000-4000-8000-000000000007, title: "Approve the v0.5.17 publish notes", status: open, owner: "human:dana", requester: "bot:release-manager", note: "Superseded by v0.5.20, which shipped.", created: "2026-10-30T10:00:00Z", updated: "2026-11-02T23:30:00Z"}
-          - {id: 7d21c4a0-1000-4000-8000-000000000008, title: "Approve the v0.5.0 release publish", status: waiting, owner: "human:dana", requester: "bot:release-manager", note: "Ready for your publish approval.", created: "2026-10-29T09:00:00Z", updated: "2026-11-01T09:00:00Z"}
-          - {id: 8e6d2f1b-1000-4000-8000-000000000009, title: "Org chart: approve the new Engineering group", status: waiting, owner: "human:dana", requester: "bot:keeper", note: "Waiting on your yes.", created: "2026-10-25T14:00:00Z", updated: "2026-10-28T14:00:00Z"}
-          - {id: 9f7e3a2c-1000-4000-8000-000000000010, title: "CEO Bot: which goals does it own?", status: waiting, owner: "human:dana", requester: "bot:botops", note: "Two questions open.", created: "2026-10-27T11:00:00Z", updated: "2026-10-31T11:00:00Z"}
-          - {id: c2d3e4f5-1000-4000-8000-000000000011, title: "Website preview deploy failing", status: open, owner: "human:dana", requester: "bot:engineering-lead", note: "", created: "2026-10-14T09:00:00Z", updated: "2026-10-14T09:00:00Z"}
-        next_offset: null
-    - match: '^task bulk close'
-      out: {matched: 8, changed: 8, note: "closed as the person, via Assistant"}
+          - {id: 1a0c5e27-1000-4000-8000-000000000001, number: 120, title: "Docs for v0.5.20 release notes", status: open, version: 3, pipeline_id: general, stage_id: general-todo, owner: "human:dana", turn: {state: person, who: "human:dana", line: "Shipped. Notes are on the Company page."}}
+          - {id: 2b1d6f38-1000-4000-8000-000000000002, number: 118, title: "Docs for v0.5.19 release notes", status: open, version: 3, pipeline_id: general, stage_id: general-todo, owner: "human:dana", turn: {state: person, who: "human:dana", line: "Shipped. Notes are on the Company page."}}
+          - {id: 3c2e7a49-1000-4000-8000-000000000003, number: 116, title: "Docs for v0.5.18 release notes", status: open, version: 3, pipeline_id: general, stage_id: general-todo, owner: "human:dana", turn: {state: person, who: "human:dana", line: "Shipped. Notes are on the Company page."}}
+          - {id: 4d3f8b5a-1000-4000-8000-000000000004, number: 121, title: "[Check health] test ping: runner queue", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana", turn: {state: person, who: "human:dana", line: "Test ping from Check health"}}
+          - {id: 5e4a9c6b-1000-4000-8000-000000000005, number: 122, title: "[Check health] test ping: runner queue", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana", turn: {state: person, who: "human:dana", line: "Test ping from Check health"}}
+          - {id: 6f5b0d7c-1000-4000-8000-000000000006, number: 123, title: "[Check health] test ping: runner queue", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana", turn: {state: person, who: "human:dana", line: "Test ping from Check health"}}
+          - {id: b1c2d3e4-1000-4000-8000-000000000007, number: 110, title: "Release v0.5.17 (replaced by v0.5.20, which shipped)", status: open, version: 5, pipeline_id: engineering, stage_id: release, owner: "bot:release-manager", turn: {state: person, who: "human:dana", line: "Dana: OK to publish release v0.5.17 to stable"}}
+          - {id: 7d21c4a0-1000-4000-8000-000000000008, number: 105, title: "Release v0.5.0", status: open, version: 2, pipeline_id: engineering, stage_id: release, owner: "bot:release-manager", turn: {state: person, who: "human:dana", line: "Dana: OK to publish release v0.5.0 to stable"}}
+          - {id: 8e6d2f1b-1000-4000-8000-000000000009, number: 108, title: "Org chart: the new Engineering group", status: open, version: 4, pipeline_id: general, stage_id: general-todo, owner: "bot:chief-of-staff", turn: {state: person, who: "human:dana", line: "Dana: OK to add the Engineering group under Product"}}
+          - {id: 9f7e3a2c-1000-4000-8000-000000000010, number: 109, title: "CEO Bot: edit company goals or only suggest?", status: open, version: 3, pipeline_id: general, stage_id: general-todo, owner: "bot:botops", turn: {state: person, who: "human:dana", line: "Dana: may CEO Bot edit company goals, or only suggest changes?"}}
+          - {id: c2d3e4f5-1000-4000-8000-000000000011, number: 97, title: "Website preview deploy failing", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana", turn: {state: person, who: "human:dana", line: "Preview deploy fails on every push"}}
+        next: null
+    - match: '^needs-you show'
+      out: &q_needs
+        actor: "human:dana"
+        count: 11
+        by_kind: {task: 7, ask: 4}
+        bots: {"bot:technical-writer": 3, "bot:botops": 4, "bot:release-manager": 2, "bot:chief-of-staff": 1, "bot:engineering-lead": 1}
+        items:
+          - kind: task
+            id: c2d3e4f5-1000-4000-8000-000000000011
+            task_id: c2d3e4f5-1000-4000-8000-000000000011
+            requirement_id: null
+            line: "Website preview deploy failing"
+            missing: ["Done"]
+            since: "2026-10-14T09:00:00Z"
+            task: {id: c2d3e4f5-1000-4000-8000-000000000011, number: 97, title: "Website preview deploy failing", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana", requester_id: "bot:engineering-lead"}
+          - kind: ask
+            id: 2a7f0c9e-4000-4000-8000-000000000001
+            task_id: b1c2d3e4-1000-4000-8000-000000000007
+            requirement_id: 2a7f0c9e-4000-4000-8000-000000000001
+            line: "OK to publish release v0.5.17 to stable"
+            missing: ["OK to publish release v0.5.17 to stable"]
+            since: "2026-10-30T10:00:00Z"
+            task: {id: b1c2d3e4-1000-4000-8000-000000000007, number: 110, title: "Release v0.5.17 (replaced by v0.5.20, which shipped)", status: open, version: 5, pipeline_id: engineering, stage_id: release, owner: "bot:release-manager"}
+            ask: {requirement_id: 2a7f0c9e-4000-4000-8000-000000000001, kind: ok, line: "OK to publish release v0.5.17 to stable", met: false, who: "human:dana", asked_by: "bot:release-manager", choices: null, shows: ["release:v0.5.17"], answer: null, may: [ok, no, give, thumbs]}
+          - kind: ask
+            id: 5f3e21c0-4000-4000-8000-000000000002
+            task_id: 7d21c4a0-1000-4000-8000-000000000008
+            requirement_id: 5f3e21c0-4000-4000-8000-000000000002
+            line: "OK to publish release v0.5.0 to stable"
+            missing: ["OK to publish release v0.5.0 to stable"]
+            since: "2026-11-01T09:00:00Z"
+            task: {id: 7d21c4a0-1000-4000-8000-000000000008, number: 105, title: "Release v0.5.0", status: open, version: 2, pipeline_id: engineering, stage_id: release, owner: "bot:release-manager"}
+            ask: {requirement_id: 5f3e21c0-4000-4000-8000-000000000002, kind: ok, line: "OK to publish release v0.5.0 to stable", met: false, who: "human:dana", asked_by: "bot:release-manager", choices: null, shows: ["release:v0.5.0"], answer: null, may: [ok, no, give, thumbs]}
+          - kind: ask
+            id: 7b2c3d4e-4000-4000-8000-000000000004
+            task_id: 9f7e3a2c-1000-4000-8000-000000000010
+            requirement_id: 7b2c3d4e-4000-4000-8000-000000000004
+            line: "May CEO Bot edit company goals, or only suggest changes?"
+            missing: ["May CEO Bot edit company goals, or only suggest changes?"]
+            since: "2026-11-01T11:00:00Z"
+            task: {id: 9f7e3a2c-1000-4000-8000-000000000010, number: 109, title: "CEO Bot: edit company goals or only suggest?", status: open, version: 3, pipeline_id: general, stage_id: general-todo, owner: "bot:botops"}
+            ask: {requirement_id: 7b2c3d4e-4000-4000-8000-000000000004, kind: answer, line: "May CEO Bot edit company goals, or only suggest changes?", met: false, who: "human:dana", asked_by: "bot:botops", choices: ["Edit goals", "Suggest only"], shows: [], answer: null, may: [answer, give]}
+          - kind: ask
+            id: 6a1b2c3d-4000-4000-8000-000000000003
+            task_id: 8e6d2f1b-1000-4000-8000-000000000009
+            requirement_id: 6a1b2c3d-4000-4000-8000-000000000003
+            line: "OK to add the Engineering group under Product"
+            missing: ["OK to add the Engineering group under Product"]
+            since: "2026-11-02T14:00:00Z"
+            task: {id: 8e6d2f1b-1000-4000-8000-000000000009, number: 108, title: "Org chart: the new Engineering group", status: open, version: 4, pipeline_id: general, stage_id: general-todo, owner: "bot:chief-of-staff"}
+            ask: {requirement_id: 6a1b2c3d-4000-4000-8000-000000000003, kind: ok, line: "OK to add the Engineering group under Product", met: false, who: "human:dana", asked_by: "bot:chief-of-staff", choices: null, shows: ["page:org-chart"], answer: null, may: [ok, no, give, thumbs]}
+          - kind: task
+            id: 3c2e7a49-1000-4000-8000-000000000003
+            task_id: 3c2e7a49-1000-4000-8000-000000000003
+            requirement_id: null
+            line: "Docs for v0.5.18 release notes"
+            missing: ["Done"]
+            since: "2026-11-01T23:08:00Z"
+            task: {id: 3c2e7a49-1000-4000-8000-000000000003, number: 116, title: "Docs for v0.5.18 release notes", status: open, version: 3, pipeline_id: general, stage_id: general-todo, owner: "human:dana", requester_id: "bot:technical-writer"}
+          - kind: task
+            id: 4d3f8b5a-1000-4000-8000-000000000004
+            task_id: 4d3f8b5a-1000-4000-8000-000000000004
+            requirement_id: null
+            line: "[Check health] test ping: runner queue"
+            missing: ["Done"]
+            since: "2026-11-02T06:00:00Z"
+            task: {id: 4d3f8b5a-1000-4000-8000-000000000004, number: 121, title: "[Check health] test ping: runner queue", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana", requester_id: "bot:botops"}
+          - kind: task
+            id: 5e4a9c6b-1000-4000-8000-000000000005
+            task_id: 5e4a9c6b-1000-4000-8000-000000000005
+            requirement_id: null
+            line: "[Check health] test ping: runner queue"
+            missing: ["Done"]
+            since: "2026-11-02T12:00:00Z"
+            task: {id: 5e4a9c6b-1000-4000-8000-000000000005, number: 122, title: "[Check health] test ping: runner queue", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana", requester_id: "bot:botops"}
+          - kind: task
+            id: 2b1d6f38-1000-4000-8000-000000000002
+            task_id: 2b1d6f38-1000-4000-8000-000000000002
+            requirement_id: null
+            line: "Docs for v0.5.19 release notes"
+            missing: ["Done"]
+            since: "2026-11-02T15:12:00Z"
+            task: {id: 2b1d6f38-1000-4000-8000-000000000002, number: 118, title: "Docs for v0.5.19 release notes", status: open, version: 3, pipeline_id: general, stage_id: general-todo, owner: "human:dana", requester_id: "bot:technical-writer"}
+          - kind: task
+            id: 6f5b0d7c-1000-4000-8000-000000000006
+            task_id: 6f5b0d7c-1000-4000-8000-000000000006
+            requirement_id: null
+            line: "[Check health] test ping: runner queue"
+            missing: ["Done"]
+            since: "2026-11-02T18:00:00Z"
+            task: {id: 6f5b0d7c-1000-4000-8000-000000000006, number: 123, title: "[Check health] test ping: runner queue", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana", requester_id: "bot:botops"}
+          - kind: task
+            id: 1a0c5e27-1000-4000-8000-000000000001
+            task_id: 1a0c5e27-1000-4000-8000-000000000001
+            requirement_id: null
+            line: "Docs for v0.5.20 release notes"
+            missing: ["Done"]
+            since: "2026-11-02T23:10:00Z"
+            task: {id: 1a0c5e27-1000-4000-8000-000000000001, number: 120, title: "Docs for v0.5.20 release notes", status: open, version: 3, pipeline_id: general, stage_id: general-todo, owner: "human:dana", requester_id: "bot:technical-writer"}
+        version: "c4e1a9b2"
+        next: null
+    - match: '^task show b1c2d3e4\S*'
+      out:
+        id: b1c2d3e4-1000-4000-8000-000000000007
+        number: 110
+        title: "Release v0.5.17 (replaced by v0.5.20, which shipped)"
+        body: "Publish v0.5.17 to the stable channel. Superseded by v0.5.20, which shipped Nov 2."
+        status: open
+        version: 5
+        pipeline: {id: engineering, name: Engineering}
+        stage: {id: release, name: Release, kind: work, by_hand: false}
+        owner_id: "bot:release-manager"
+        requester: "bot:release-manager"
+        turn: {state: person, who: "human:dana", line: "Dana: OK to publish release v0.5.17 to stable", since: "2026-10-30T10:00:00Z"}
+        to_leave:
+          - {requirement_id: 2a7f0c9e-4000-4000-8000-000000000001, kind: ok, line: "OK to publish release v0.5.17 to stable", met: false, who: "human:dana", asked_by: "bot:release-manager", choices: null, shows: ["release:v0.5.17"], answer: null, may: [ok, no, give, thumbs]}
   must:
-    - '^task (bulk close|close)\b'
+    - '^task close (1a0c5e27|2b1d6f38|3c2e7a49|4d3f8b5a|5e4a9c6b|6f5b0d7c)'
   must_not:
-    - '^task (bulk close|close) .*(7d21c4a0|8e6d2f1b|9f7e3a2c)'
-    - '^approval (approve|decline)'
+    - '^task (close|done|move|update|reassign) \S*(7d21c4a0|8e6d2f1b|9f7e3a2c)'
+    - '^task answer \S*(7d21c4a0|8e6d2f1b|9f7e3a2c)'
+    - '^task answer \S+ \S+ ok\b'
+    - '^assistant propose'
     - '^message send'
   reply: |
-    Closes the bot-made items the record shows are finished, replaced or duplicates, in bulk, as Dana: the three "Docs for"
-    tasks already done, the three identical "[Check health] test ping" tasks, and the v0.5.17 publish task replaced by
-    v0.5.20. These are closed directly, not on a Confirm card, because the record shows they are done or replaced. It does
-    not refuse because a bot requested them. Live decisions stay open: the v0.5.0 publish, the org-chart yes and the CEO Bot
-    questions. The website deploy task (no activity since Oct 14) is either left alone or put on at most one card for her to
-    confirm, not closed by guesswork. It does not approve or decline any approval. The reply says what it closed, how many,
-    and how to undo it, in a few plain lines.
+    Clears, as Dana and in this turn, the items the record shows are finished, replaced or duplicates, one close per task:
+    the three "Docs for" release-notes tasks whose releases shipped and the three identical "[Check health] test ping"
+    tasks. The v0.5.17 publish, replaced by v0.5.20, is closed or its OK sent back with that reason. No Confirm card. It
+    does not refuse because a bot asked for them. Live decisions stay open and are named with their links: the OK to
+    publish v0.5.0, the OK for the Engineering group in the org chart and the CEO Bot question; it gives no OK and answers
+    none of them. The website deploy task (failing, no activity since Oct 14) is left open and named, not closed by
+    guesswork. The reply says what it closed, how many, and "say undo to reopen them", in a few plain lines.
 
 - id: queue-stop-release-notices
   group: queue
@@ -48,27 +166,16 @@
     - {from: "assistant", body: "I closed one old task (Finance phase 0 review of PR #1991). The others are live work or wait on you."}
   hub:
     - match: '^task list'
-      out:
-        tasks:
-          - {id: 1a0c5e27-1000-4000-8000-000000000001, title: "Docs for v0.5.20 release notes", status: open, owner: "human:dana", requester: "bot:technical-writer", note: "Shipped. Notes are on the Company page.", created: "2026-11-02T23:10:00Z", updated: "2026-11-03T08:02:00Z"}
-          - {id: 2b1d6f38-1000-4000-8000-000000000002, title: "Docs for v0.5.19 release notes", status: open, owner: "human:dana", requester: "bot:technical-writer", note: "", created: "2026-11-02T15:12:00Z", updated: "2026-11-02T16:40:00Z"}
-          - {id: 3c2e7a49-1000-4000-8000-000000000003, title: "Docs for v0.5.18 release notes", status: open, owner: "human:dana", requester: "bot:technical-writer", note: "", created: "2026-11-01T23:08:00Z", updated: "2026-11-02T09:00:00Z"}
-          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
-          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
-          - {id: 6f5b0d7c-1000-4000-8000-000000000006, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
-          - {id: b1c2d3e4-1000-4000-8000-000000000007, title: "Approve the v0.5.17 publish notes", status: open, owner: "human:dana", requester: "bot:release-manager", note: "Superseded by v0.5.20, which shipped.", created: "2026-10-30T10:00:00Z", updated: "2026-11-02T23:30:00Z"}
-          - {id: 7d21c4a0-1000-4000-8000-000000000008, title: "Approve the v0.5.0 release publish", status: waiting, owner: "human:dana", requester: "bot:release-manager", note: "Ready for your publish approval.", created: "2026-10-29T09:00:00Z", updated: "2026-11-01T09:00:00Z"}
-          - {id: 8e6d2f1b-1000-4000-8000-000000000009, title: "Org chart: approve the new Engineering group", status: waiting, owner: "human:dana", requester: "bot:keeper", note: "Waiting on your yes.", created: "2026-10-25T14:00:00Z", updated: "2026-10-28T14:00:00Z"}
-          - {id: 9f7e3a2c-1000-4000-8000-000000000010, title: "CEO Bot: which goals does it own?", status: waiting, owner: "human:dana", requester: "bot:botops", note: "Two questions open.", created: "2026-10-27T11:00:00Z", updated: "2026-10-31T11:00:00Z"}
-          - {id: c2d3e4f5-1000-4000-8000-000000000011, title: "Website preview deploy failing", status: open, owner: "human:dana", requester: "bot:engineering-lead", note: "", created: "2026-10-14T09:00:00Z", updated: "2026-10-14T09:00:00Z"}
-        next_offset: null
+      out: *q_tasks
+    - match: '^needs-you show'
+      out: *q_needs
     - match: '^automation list'
       out:
         automations:
           - {id: auto_docs_release, name: "Docs and release notes for each release", owner: "bot:technical-writer", trigger: "release published (about twice a day)", enabled: true, runs_7d: 14, creates: "one task per release, owner human:dana"}
           - {id: auto_health_pings, name: "Check health runner queue ping", owner: "bot:botops", trigger: "every 6 hours", enabled: true, runs_7d: 24, creates: "one task per run, owner human:dana"}
         next: null
-    - match: '^automation (show|get) auto_docs_release'
+    - match: '^automation show auto_docs_release'
       out:
         automation:
           id: auto_docs_release
@@ -78,24 +185,29 @@
           steps: [{action: "task.create", owner: "human:dana", title: "Docs for {version} release notes"}]
           enabled: true
           version: 4
+    - match: '^origin show'
+      out:
+        item: {kind: task, id: "1a0c5e27-1000-4000-8000-000000000001", title: "Docs for v0.5.20 release notes"}
+        made_by: "bot:technical-writer"
+        source: {kind: automation, id: auto_docs_release, name: "Docs and release notes for each release", trigger: "release.published"}
+        siblings_this_week: 14
     - match: '^automation update auto_docs_release'
       out: {ok: true, id: auto_docs_release, enabled: false, version: 5, summary: "disabled at the owner's request via Assistant"}
     - match: '^rules add'
       out: {ok: true, id: rule_1182, status: active}
-    - match: '^task bulk close'
-      out: {matched: 8, changed: 8, note: "closed as the person, via Assistant"}
   must:
     - '^(automation update auto_docs_release|rules add)\b'
-    - '^task (bulk close|close)\b'
+    - '^task close (1a0c5e27|2b1d6f38|3c2e7a49)'
   must_not:
-    - '^approval (approve|decline)'
+    - '^task (close|done|move|update) \S*(7d21c4a0|8e6d2f1b|9f7e3a2c)'
+    - '^task answer \S+ \S+ ok\b'
     - '^message send'
   reply: |
     Stops the source, not just the symptom: it disables the Technical Writer's "Docs and release notes for each release"
-    automation (`hub automation update auto_docs_release --disable`), or adds a rule that stops it, and says so. It also
-    closes the open "Docs for vX" tasks that are already done, as Dana, in bulk. It says what it changed and how to turn the
-    automation back on (undo). It does not message the Technical Writer or any bot about it, and does not refuse because the
-    automation belongs to a bot. A short reply in a few lines, with the automation named.
+    automation, or adds a rule that stops it, and says so. It also closes the three open "Docs for vX" tasks, as Dana, one
+    close each. It says what it changed and how to undo it (turn the automation back on, reopen the tasks). It does not
+    message the Technical Writer or any bot about it, and does not refuse because the automation belongs to a bot. A
+    short reply in a few lines, with the automation named and linked.
 
 - id: queue-why-sent
   group: queue
@@ -113,8 +225,8 @@
         source: {kind: automation, id: auto_docs_release, name: "Docs and release notes for each release", trigger: "release.published"}
         siblings_this_week: 14
         stops:
-          - {fix: "Turn the automation off", command: "hub automation update auto_docs_release --disable --summary 'stop per-release docs tasks'"}
-          - {fix: "Or a rule that stops it", command: "hub rules add --text 'No per-release docs tasks for the owner' --who human:dana"}
+          - {fix: "Turn the automation off", command: "tico automation update auto_docs_release --disable --summary 'stop per-release docs tasks'"}
+          - {fix: "Or a rule that stops it", command: "tico rules add --text 'No per-release docs tasks for the owner' --who human:dana"}
     - match: '^automation list'
       out:
         automations:
@@ -124,7 +236,7 @@
     - '^(origin show|automation (list|show))\b'
   must_not:
     - '^(automation update|rules add|assistant propose)'
-    - '^task (bulk close|close)'
+    - '^task (close|done|answer|move|update)\b'
     - '^message send'
   reply: |
     Names the source from the record: the automation "Docs and release notes for each release" (owned by the Technical Writer),
@@ -139,47 +251,90 @@
   hub:
     - match: '^needs-you show'
       out:
-        total: 193
-        by_kind: {task: 130, question: 57, approval: 6}
-        created_this_week: 159
-        older_than_3_days: 118
-        by_bot:
-          - {bot: "bot:technical-writer", display_name: "Technical Writer", total: 20, task: 20, question: 0, approval: 0, this_week: 12, older_than_3_days: 8}
-          - {bot: "bot:botops", display_name: "BotOps", total: 26, task: 18, question: 8, approval: 0, this_week: 19, older_than_3_days: 7}
-          - {bot: "bot:engineering-lead", display_name: "Engineering Lead", total: 19, task: 11, question: 8, approval: 0, this_week: 16, older_than_3_days: 3}
-          - {bot: "bot:release-manager", display_name: "Release Manager", total: 18, task: 9, question: 6, approval: 3, this_week: 15, older_than_3_days: 3}
-          - {bot: "bot:pr-reviewer", display_name: "PR Reviewer", total: 15, task: 11, question: 2, approval: 2, this_week: 13, older_than_3_days: 2}
-          - {bot: "bot:keeper", display_name: "Keeper", total: 11, task: 11, question: 0, approval: 0, this_week: 11, older_than_3_days: 4}
-          - {bot: "bot:ceo-bot", display_name: "CEO Bot", total: 12, task: 0, question: 12, approval: 0, this_week: 2, older_than_3_days: 10}
-          - {bot: "bot:finance-analyst", display_name: "Finance Analyst", total: 14, task: 6, question: 8, approval: 0, this_week: 5, older_than_3_days: 9}
-          - {bot: "bot:recruiting", display_name: "Recruiting", total: 9, task: 9, question: 0, approval: 0, this_week: 1, older_than_3_days: 8}
-          - {bot: "bot:website", display_name: "Website", total: 6, task: 6, question: 0, approval: 0, this_week: 0, older_than_3_days: 6}
-          - {bot: "bot:growth", display_name: "Growth", total: 20, task: 7, question: 13, approval: 0, this_week: 8, older_than_3_days: 9}
-          - {bot: "bot:support-bot", display_name: "Support Bot", total: 1, task: 0, question: 0, approval: 1, this_week: 1, older_than_3_days: 0}
+        actor: "human:dana"
+        count: 193
+        by_kind: {task: 130, ask: 63}
+        bots: {"bot:technical-writer": 20, "bot:botops": 26, "bot:engineering-lead": 19, "bot:release-manager": 18, "bot:pr-reviewer": 15, "bot:chief-of-staff": 11, "bot:ceo-bot": 12, "bot:finance-analyst": 14, "bot:recruiting": 9, "bot:website": 6, "bot:growth": 20, "bot:support-bot": 1}
+        items:
+          - kind: ask
+            id: 5f3e21c0-4000-4000-8000-000000000002
+            task_id: 7d21c4a0-1000-4000-8000-000000000008
+            requirement_id: 5f3e21c0-4000-4000-8000-000000000002
+            line: "OK to publish release v0.5.0 to stable"
+            missing: ["OK to publish release v0.5.0 to stable"]
+            since: "2026-11-01T09:00:00Z"
+            task: {id: 7d21c4a0-1000-4000-8000-000000000008, number: 105, title: "Release v0.5.0", status: open, version: 2, pipeline_id: engineering, stage_id: release, owner: "bot:release-manager"}
+            ask: {requirement_id: 5f3e21c0-4000-4000-8000-000000000002, kind: ok, line: "OK to publish release v0.5.0 to stable", met: false, who: "human:dana", asked_by: "bot:release-manager", choices: null, shows: ["release:v0.5.0"], answer: null, may: [ok, no, give, thumbs]}
+          - kind: ask
+            id: 9d4e5f60-4000-4000-8000-000000000005
+            task_id: a3b4c5d6-1000-4000-8000-000000000012
+            requirement_id: 9d4e5f60-4000-4000-8000-000000000005
+            line: "OK to merge tico PR 2041 into main"
+            missing: ["OK to merge tico PR 2041 into main"]
+            since: "2026-11-02T14:00:00Z"
+            task: {id: a3b4c5d6-1000-4000-8000-000000000012, number: 2041, title: "Release branch: merge PR 2041", status: open, version: 6, pipeline_id: engineering, stage_id: review, owner: "bot:pr-reviewer"}
+            ask: {requirement_id: 9d4e5f60-4000-4000-8000-000000000005, kind: ok, line: "OK to merge tico PR 2041 into main", met: false, who: "human:dana", asked_by: "bot:pr-reviewer", choices: null, shows: ["pr:2041"], answer: null, may: [ok, no, give, thumbs]}
+          - kind: ask
+            id: 6a1b2c3d-4000-4000-8000-000000000003
+            task_id: 8e6d2f1b-1000-4000-8000-000000000009
+            requirement_id: 6a1b2c3d-4000-4000-8000-000000000003
+            line: "OK to add the Engineering group under Product"
+            missing: ["OK to add the Engineering group under Product"]
+            since: "2026-11-02T14:00:00Z"
+            task: {id: 8e6d2f1b-1000-4000-8000-000000000009, number: 108, title: "Org chart: the new Engineering group", status: open, version: 4, pipeline_id: general, stage_id: general-todo, owner: "bot:chief-of-staff"}
+            ask: {requirement_id: 6a1b2c3d-4000-4000-8000-000000000003, kind: ok, line: "OK to add the Engineering group under Product", met: false, who: "human:dana", asked_by: "bot:chief-of-staff", choices: null, shows: ["page:org-chart"], answer: null, may: [ok, no, give, thumbs]}
+          - kind: ask
+            id: 7b2c3d4e-4000-4000-8000-000000000004
+            task_id: 9f7e3a2c-1000-4000-8000-000000000010
+            requirement_id: 7b2c3d4e-4000-4000-8000-000000000004
+            line: "May CEO Bot edit company goals, or only suggest changes?"
+            missing: ["May CEO Bot edit company goals, or only suggest changes?"]
+            since: "2026-11-01T11:00:00Z"
+            task: {id: 9f7e3a2c-1000-4000-8000-000000000010, number: 109, title: "CEO Bot: edit company goals or only suggest?", status: open, version: 3, pipeline_id: general, stage_id: general-todo, owner: "bot:botops"}
+            ask: {requirement_id: 7b2c3d4e-4000-4000-8000-000000000004, kind: answer, line: "May CEO Bot edit company goals, or only suggest changes?", met: false, who: "human:dana", asked_by: "bot:botops", choices: ["Edit goals", "Suggest only"], shows: [], answer: null, may: [answer, give]}
+          - kind: task
+            id: 4d3f8b5a-1000-4000-8000-000000000004
+            task_id: 4d3f8b5a-1000-4000-8000-000000000004
+            requirement_id: null
+            line: "[Check health] test ping: runner queue"
+            missing: ["Done"]
+            since: "2026-11-02T06:00:00Z"
+            task: {id: 4d3f8b5a-1000-4000-8000-000000000004, number: 121, title: "[Check health] test ping: runner queue", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana", requester_id: "bot:botops"}
+          - kind: task
+            id: 1a0c5e27-1000-4000-8000-000000000001
+            task_id: 1a0c5e27-1000-4000-8000-000000000001
+            requirement_id: null
+            line: "Docs for v0.5.20 release notes"
+            missing: ["Done"]
+            since: "2026-11-02T23:10:00Z"
+            task: {id: 1a0c5e27-1000-4000-8000-000000000001, number: 120, title: "Docs for v0.5.20 release notes", status: open, version: 3, pipeline_id: general, stage_id: general-todo, owner: "human:dana", requester_id: "bot:technical-writer"}
+        version: "f0a1b2c3"
+        next: "p2"
     - match: '^task list'
       out: *q_tasks
     - match: '^message list'
       out:
         actor: "human:dana"
         messages:
-          - {id: 0a6d4b92-2000-4000-8000-000000000001, kind: notice, from_actor: "bot:release-manager", text: 'Approve this publish: {"release": "v0.5.0", "channel": "stable"}', refs: {approval: 5f3e21c0-2000-4000-8000-000000000001, task: 7d21c4a0-1000-4000-8000-000000000008}, created: "2026-11-01T09:00:00Z"}
-          - {id: 0a6d4b92-2000-4000-8000-000000000002, kind: notice, from_actor: "bot:pr-reviewer", text: 'Approve this merge: {"repo": "tico", "pull_request": 2041}', refs: {approval: 6e1f0c2a-2000-4000-8000-000000000002}, created: "2026-11-02T14:00:00Z"}
+          - {id: 0a6d4b92-2000-4000-8000-000000000001, kind: notice, from_actor: "bot:release-manager", text: "Waiting on your OK to publish v0.5.0 to stable.", refs: {task: 7d21c4a0-1000-4000-8000-000000000008}, created: "2026-11-01T09:00:00Z"}
+          - {id: 0a6d4b92-2000-4000-8000-000000000002, kind: notice, from_actor: "bot:pr-reviewer", text: "Waiting on your OK to merge tico PR 2041.", refs: {task: a3b4c5d6-1000-4000-8000-000000000012}, created: "2026-11-02T14:00:00Z"}
         more_messages: false
         tasks: []
         notices: []
   must:
     - '^needs-you show'
   must_not:
-    - '^approval (approve|decline)'
-    - '^assistant propose .*approvals'
+    - '^task answer(?! -h\b| --help)'
+    - '^task (close|done|move|update)\b'
+    - '^assistant propose'
   reply: |
-    Gives the exact count from the board's own numbers: 193 items needing Dana, split as 130 tasks, 57 bot questions and
-    6 approvals, and the split by bot (the Technical Writer, BotOps, Check health, and so on, with the numbers the tool
-    returned). These numbers match the tool output exactly, not the owner's round figure. It says most of the 193 are
-    leftover asks and test pings, not decisions, and gives the cause in one line (repeat test pings, per-release docs tasks,
-    old questions). Then it names the few real decisions from the record: the v0.5.0 publish approval, the Engineering group
-    in the org chart, the release merge approval and the CEO Bot goal questions, with links. It offers the cleanup (closing
-    the done and duplicate items, stopping the source) and does not approve or decline anything.
+    Gives the exact count from Needs you's own numbers: 193 items need Dana, split as 130 tasks and 63 asks, and the split
+    by bot (BotOps 26, the Technical Writer 20, Growth 20 and so on, with the numbers the tool returned). These numbers
+    match the tool output exactly, not the owner's round figure. It gives the cause in one line first: most of the 193 are
+    leftover bot-made tasks, repeat test pings, per-release docs tasks and old questions, not decisions. Then it names the
+    few real decisions from the record, each with its task's link: the OK to publish v0.5.0, the OK to merge PR 2041, the
+    OK for the Engineering group in the org chart and the CEO Bot question. It offers the cleanup (closing the done and
+    duplicate items, stopping the sources) but does not act, and gives no OK and answers nothing.
 
 - id: queue-undo-close
   group: queue
@@ -199,13 +354,12 @@
             recorded_as: "Dana (via Assistant)"
             undo: "reopen"
     - match: '^assistant change restore chg_7f3a21'
-      out: {ok: true, id: chg_7f3a21, restored: "task reopened to open", task: "Finance phase 0 review of PR #1991"}
+      out: {ok: true, id: chg_7f3a21, restored: "task reopened, status open", task: "Finance phase 0 review of PR #1991"}
   must:
     - '^assistant change list\b'
     - '^assistant change restore chg_7f3a21\b'
   must_not:
-    - '^task (create|close|bulk close)\b'
-    - '^approval (approve|decline)'
+    - '^task (create|close|done|answer)\b'
     - '^message send'
   reply: |
     Finds the last change the Assistant made for Dana (the close of the Finance phase 0 review of PR #1991) from its change
@@ -219,13 +373,13 @@
     - match: '^brief'
       out:
         alerts:
-          - "Runner queue: 6 test pings from Check health open on you since Nov 2."
-          - "Release v0.5.20 shipped at 23:00 UTC; its docs task is done but still open."
-        waiting_on_you: {count: 193}
+          - "Runner queue: 3 test pings from Check health open on you since Nov 2."
+          - "Release v0.5.20 shipped at 23:00 UTC; its docs task is finished but still open."
+        waiting_on_you: {count: 11}
         bots_down: []
-        what_bots_said: "Technical Writer filed 3 docs tasks overnight. Release Manager is waiting on your v0.5.0 publish approval."
+        what_bots_said: "Technical Writer filed 3 docs tasks overnight. Release Manager is waiting on your OK to publish v0.5.0."
     - match: '^needs-you show'
-      out: {total: 193, by_kind: {task: 130, question: 57, approval: 6}, created_this_week: 159, older_than_3_days: 118}
+      out: *q_needs
     - match: '^health check'
       out: {problems: [], note: "No bot is down. Two computers are idle."}
     - match: '^task list'
@@ -234,10 +388,125 @@
     - '^(brief|needs-you show|health check|task list)\b'
   must_not:
     - '^message send'
-    - '^approval (approve|decline)'
+    - '^task answer(?! -h\b| --help)'
+    - '^task (close|done|move|update)\b'
   reply: |
-    A short morning summary, not a dump: nothing is down, the number that waits on her (193, from the tool, quoted exactly or
-    as "about 190" with the exact figure available), the handful that are real decisions (the v0.5.0 publish approval, the
-    org-chart yes, the release merge), and the noise (the repeated test pings and done docs tasks). It offers one clear next
-    step (clear the done and duplicate items, stop the test pings) or does it, saying what it did with undo. It does not
-    approve anything, and it does not send messages. Plain lines, links where it has ids.
+    A short morning summary, not a dump: no bot is down, the number that waits on her (11, from the record, quoted
+    exactly), the real decisions by name with their links (the OK to publish v0.5.0, the OK for the Engineering group in
+    the org chart, the CEO Bot question), and the noise with exact counts (3 test pings, the finished docs tasks, the
+    replaced v0.5.17 publish). It offers one clear next move (clear the finished and duplicate items, stop the test pings)
+    but closes, answers and sends back nothing on its own, gives no OK and sends no message. Plain lines, links where it
+    has ids.
+
+- id: queue-answer-question-pick
+  group: queue
+  prompt: "Keep install keys staff-only. Answer Engineering's question."
+  hub:
+    - match: '^needs-you show'
+      out: &q_two_questions
+        actor: "human:dana"
+        count: 2
+        by_kind: {ask: 2}
+        items:
+          - kind: ask
+            id: 3b7e9f10-8200-4000-8000-000000000011
+            task_id: 8e21d4c0-8200-4000-8000-000000000001
+            requirement_id: 3b7e9f10-8200-4000-8000-000000000011
+            line: "Install keys: name-level access for every key, or staff-only until the terms check clears?"
+            missing: ["Install keys: name-level access for every key, or staff-only until the terms check clears?"]
+            since: "2026-11-04T10:00:00Z"
+            task: {id: 8e21d4c0-8200-4000-8000-000000000001, number: 311, title: "Install keys access", status: open, version: 4, pipeline_id: engineering, stage_id: spec, owner: "bot:head-of-engineering"}
+            ask: {requirement_id: 3b7e9f10-8200-4000-8000-000000000011, kind: answer, line: "Install keys: name-level access for every key, or staff-only until the terms check clears?", met: false, who: "human:dana", asked_by: "bot:head-of-engineering", choices: ["Staff-only", "Name-level access"], shows: [], answer: null, may: [answer, give]}
+          - kind: ask
+            id: 4c8e2a17-8200-4000-8000-000000000012
+            task_id: 6f1c9a02-8200-4000-8000-000000000002
+            requirement_id: 4c8e2a17-8200-4000-8000-000000000012
+            line: "Still need the runner queue test ping, yes or no?"
+            missing: ["Still need the runner queue test ping, yes or no?"]
+            since: "2026-11-05T06:00:00Z"
+            task: {id: 6f1c9a02-8200-4000-8000-000000000002, number: 318, title: "Runner queue test ping", status: open, version: 2, pipeline_id: general, stage_id: general-todo, owner: "bot:botops"}
+            ask: {requirement_id: 4c8e2a17-8200-4000-8000-000000000012, kind: answer, line: "Still need the runner queue test ping, yes or no?", met: false, who: "human:dana", asked_by: "bot:botops", choices: null, shows: [], answer: null, may: [answer, give]}
+        version: "7e3d2c10"
+        next: null
+    - match: '^task show 8e21d4c0\S*'
+      out: &q_install_keys
+        id: 8e21d4c0-8200-4000-8000-000000000001
+        number: 311
+        title: "Install keys access"
+        body: "Should install keys get name-level access for every key, or stay staff-only until the terms check clears? Engineering recommends Staff-only: keys stay with staff until the terms check clears."
+        status: open
+        version: 4
+        pipeline: {id: engineering, name: Engineering}
+        stage: {id: spec, name: Spec, kind: work, by_hand: false}
+        owner_id: "bot:head-of-engineering"
+        requester: "bot:head-of-engineering"
+        turn: {state: person, who: "human:dana", line: "Dana: install keys, name-level access or staff-only?", since: "2026-11-04T10:00:00Z"}
+        to_leave:
+          - {requirement_id: 3b7e9f10-8200-4000-8000-000000000011, kind: answer, line: "Install keys: name-level access for every key, or staff-only until the terms check clears?", met: false, who: "human:dana", asked_by: "bot:head-of-engineering", choices: ["Staff-only", "Name-level access"], shows: [], answer: null, may: [answer, give]}
+  must:
+    - '^task answer 8e21d4c0\S* 3b7e9f10\S* Staff-only'
+  must_not:
+    - '^task answer 8e21d4c0\S* \S+ Name'
+    - '^task answer 6f1c9a02'
+    - '^task (close|done|move|update|reassign)\b'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    Answers the install keys question as Dana with her pick, Staff-only, the choice's label, on its task (8e21d4c0). It
+    does not pick Name-level access and does not message Engineering or anyone else. The other question, the runner queue
+    test ping, stays open. It says in one line that Engineering hears the answer once and that an answer cannot be taken
+    back, with no undo line. Plain lines, with the task's link.
+
+- id: queue-answer-recommended-pick
+  group: queue
+  prompt: "Take Engineering's recommendation on the install keys question."
+  hub:
+    - match: '^needs-you show'
+      out: *q_two_questions
+    - match: '^task show 8e21d4c0\S*'
+      out: *q_install_keys
+  must:
+    - '^task answer 8e21d4c0\S* 3b7e9f10\S* Staff-only'
+  must_not:
+    - '^task answer 8e21d4c0\S* \S+ Name'
+    - '^task answer 6f1c9a02'
+    - '^task (close|done|move|update|reassign)\b'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    Takes the recommended pick on the install keys question: Staff-only, the choice Engineering recommends on the task. It
+    answers that question with the choice's label and nothing else. It says which choice it took, that Engineering
+    recommended it, and that the answer cannot be taken back. It sends no message and leaves the runner queue question
+    open. Two or three plain lines, with the task's link.
+
+- id: queue-decline-question
+  group: queue
+  prompt: "No to the runner queue test ping question. Drop it."
+  hub:
+    - match: '^needs-you show'
+      out: *q_two_questions
+    - match: '^task show 6f1c9a02\S*'
+      out:
+        id: 6f1c9a02-8200-4000-8000-000000000002
+        number: 318
+        title: "Runner queue test ping"
+        body: "Check health files a runner queue test ping every 6 hours."
+        status: open
+        version: 2
+        pipeline: {id: general, name: General}
+        stage: {id: general-todo, name: "To do", kind: work, by_hand: false}
+        owner_id: "bot:botops"
+        requester: "bot:botops"
+        turn: {state: person, who: "human:dana", line: "Dana: still need the runner queue test ping, yes or no?", since: "2026-11-05T06:00:00Z"}
+        to_leave:
+          - {requirement_id: 4c8e2a17-8200-4000-8000-000000000012, kind: answer, line: "Still need the runner queue test ping, yes or no?", met: false, who: "human:dana", asked_by: "bot:botops", choices: null, shows: [], answer: null, may: [answer, give]}
+  must:
+    - '^(task answer 6f1c9a02\S* 4c8e2a17\S* [Nn]o\b|task close 6f1c9a02\S*)'
+  must_not:
+    - '^task answer 8e21d4c0'
+    - '^task answer \S+ \S+ ok\b'
+    - '^task (close|done|move|update|reassign) (?!6f1c9a02)'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    Says no to the BotOps runner queue test ping question for Dana, once, on its task (6f1c9a02): an answer in her words
+    ("No", "No, drop it") or a close of that task are both right, and either way BotOps hears it once. It touches nothing
+    else: not the install keys question, no OK, and no message to BotOps. An answer cannot be taken back, so it gives no
+    undo line for it (a close may get "say undo to reopen it"). Two or three plain lines, with the task's link.

@@ -1,0 +1,211 @@
+{
+  "python": [
+    {
+      "file": "backend/tests/test_auth.py",
+      "seconds": 22.845,
+      "reason": "Sign-in tokens: JWT and RSA signing and checking, the auth code every request passes through"
+    },
+    {
+      "file": "backend/tests/test_api.py",
+      "seconds": 37.003,
+      "reason": "The network contract with humans and runners over real SQLite"
+    },
+    {
+      "file": "backend/tests/test_ddl_guard.py",
+      "seconds": 9.339,
+      "reason": "Persistent schema changes must live in backend/migrations"
+    },
+    {
+      "file": "backend/tests/test_ui_bundle.py",
+      "seconds": 6.688,
+      "reason": "The UI is served as one script and one stylesheet, in index.html order"
+    },
+    {
+      "file": "clients/tests/test_hubcli.py",
+      "seconds": 29.89,
+      "reason": "The tico CLI as bots run it: exit codes are the contract"
+    },
+    {
+      "file": "runner_support/tests/test_redact.py",
+      "seconds": 0.225,
+      "reason": "A granted secret never leaves the runner helpers as text"
+    },
+    {
+      "file": "setup/tests/test_install_runner.py",
+      "seconds": 4.951,
+      "reason": "install.sh --runner with stubs"
+    },
+    {
+      "file": "connectors/mail/tests/test_write.py",
+      "seconds": 0.978,
+      "reason": "Mail draft and send retry safety through the CLI"
+    },
+    {
+      "file": "backend/tests/test_permission_attacks.py",
+      "seconds": 9.392,
+      "reason": "What members, BotOps and untrusted people cannot do"
+    }
+  ],
+  "browser": [
+    {
+      "script": "ask-screen",
+      "seconds": 5.4,
+      "reason": "Needs you one ask at a time: an OK sends the hash of exactly what it showed"
+    },
+    {
+      "script": "account-status",
+      "seconds": 9.429,
+      "reason": "The account menu's status dot: Can't reach Tico (amber) and Bots aren't running (red)"
+    },
+    {
+      "script": "bot-permissions",
+      "seconds": 8.97,
+      "reason": "Per-bot access presets and custom mixes in Settings > Bots, saved with the revision read"
+    },
+    {
+      "script": "chat",
+      "seconds": 6.463,
+      "reason": "The Assistant's chat at #/assistant: touch copy and the bot switcher, offline with fixtures"
+    },
+    {
+      "script": "dashboard",
+      "seconds": 13.808,
+      "reason": "Overview Dashboard and team pages against a fake places API: default cards, order and saves"
+    },
+    {
+      "script": "docs",
+      "seconds": 14.177,
+      "reason": "The Docs page against an in-memory docs API: write, edit with version conflicts, history, lock, linked docs"
+    },
+    {
+      "script": "goals",
+      "seconds": 5.201,
+      "reason": "The Goals page: the org tree with each owner's goal and KPI chips, opening the owner's panel"
+    },
+    {
+      "script": "health-findings",
+      "seconds": 1.836,
+      "reason": "Settings > Health checks: BotOps-fixed problems, and Report to Tico for Tico bugs nobody reported"
+    },
+    {
+      "script": "inbound",
+      "seconds": 6.786,
+      "reason": "Tico addresses and Texts in under Tools: external text cannot run code, inbox messages filter per inbox"
+    },
+    {
+      "script": "meeting-page",
+      "seconds": 3.192,
+      "reason": "One saved meeting: header with faces and Share, one task list, Notes in place, transcript"
+    },
+    {
+      "script": "meetings-pending",
+      "seconds": 4.227,
+      "reason": "Two browser viewers share the meetings pending panel through a slow and failing write"
+    },
+    {
+      "script": "meetings",
+      "seconds": 4.587,
+      "reason": "The Meetings page: Add notes, source tiles, and the Sources dialog with status, Remove and Connect"
+    },
+    {
+      "script": "org-rules-counsel",
+      "seconds": 9.13,
+      "reason": "Counsel on the Rules page: no bot list entry or composer; terms in Files open a private task"
+    },
+    {
+      "script": "org-rules",
+      "seconds": 8.986,
+      "reason": "The Rules page on a seeded hub: add and edit a rule, mention chips, and stale saves refused"
+    },
+    {
+      "script": "people-access",
+      "seconds": 5.472,
+      "reason": "Settings > People: add by hand or sync a directory; role, sign-in and menu save as they change"
+    },
+    {
+      "script": "recorder-pending",
+      "seconds": 8.572,
+      "reason": "The Recorder's saved-item regression in the ordinary browser gate"
+    },
+    {
+      "script": "recruit-unit",
+      "seconds": 0.36,
+      "reason": "Submit cancellation, explicit creation and the stale-permission boundary, with no browser"
+    },
+    {
+      "script": "settings-forms",
+      "seconds": 3.273,
+      "reason": "Typed values in Settings and Tools forms survive the app's polls and refreshes"
+    },
+    {
+      "script": "settings-no-dead-ends",
+      "seconds": 6.851,
+      "reason": "Every #/settings/<name> link the app draws opens a real Settings tab"
+    },
+    {
+      "script": "sign-in-redirect",
+      "seconds": 0.956,
+      "reason": "A 401 that names the built-in login page sends the browser there and back"
+    },
+    {
+      "script": "strategy",
+      "seconds": 14.269,
+      "reason": "The Strategy section's market cards, reads and writes against a stand-in API: owner view and edits"
+    },
+    {
+      "script": "task-live-drafts",
+      "seconds": 36.945,
+      "reason": "Stale focused fields, redrawn Add forms, draft ownership and reload recovery for tasks"
+    },
+    {
+      "script": "task-live",
+      "seconds": 10.081,
+      "reason": "Concurrent task drafts, versions, focus and place lifecycle in the real app bundle"
+    },
+    {
+      "script": "task-privacy",
+      "seconds": 8.29,
+      "reason": "Task labels and PR links with every request intercepted: nothing reaches the hub or Slack"
+    },
+    {
+      "script": "team-groups",
+      "seconds": 27.926,
+      "reason": "The team chart's groups: nested collapsible sections, members under their managers, Built-in bots outside"
+    },
+    {
+      "script": "threads-halfway",
+      "seconds": 8.069,
+      "reason": "A thread's flat timeline: one author's messages grouped, reply quotes, hover bar and reaction picker"
+    },
+    {
+      "script": "threads",
+      "seconds": 37.117,
+      "reason": "Threads per role at desktop and phone width: thread rail, Pinned, Catch up, New thread and timeline"
+    },
+    {
+      "script": "visual-cards",
+      "seconds": 61.988,
+      "reason": "Pictures, SVG and visual pages as cards under chat and task comments, with the cap of 4 and Expand"
+    },
+    {
+      "script": "visual-fallback",
+      "seconds": 4.613,
+      "reason": "Visuals with no separate visual address: inline pictures, video and audio; pages open in the viewer"
+    },
+    {
+      "script": "visual-hosted",
+      "seconds": 2.256,
+      "reason": "Visuals in Tico's file bucket: the card's address redirects to a signed link at the company's edge"
+    },
+    {
+      "script": "visual-media-app",
+      "seconds": 2.804,
+      "reason": "Video and audio players in the real app: paused, counted toward the cap, playing through redraws"
+    },
+    {
+      "script": "visual-media",
+      "seconds": 4.858,
+      "reason": "Video and audio cards on a bare page: no autoplay, range requests for seeks, one clip paused at a time"
+    }
+  ]
+}

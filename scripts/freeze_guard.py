@@ -15,8 +15,7 @@ such commit) and reports, naming the pull request or commit each time:
    review receipt from its ticket naming that commit. An approval of an earlier head counts only when the change at
    that head is the same as the change at the final head, line for line with whitespace (a merge of main into the
    branch, say).
-3. NO PR: a commit that landed without a pull request and has no receipt. Commits that only touch CHANGELOG.md
-   (release notes) are exempt.
+3. NO PR: a commit that landed without a pull request and has no receipt.
 
 Review receipts come from the tickets when GitHub reviews aren't used, as a JSON list:
 
@@ -29,6 +28,7 @@ uses, say); every other revert that pull request makes is still reported.
 
 Exit status: 0 when nothing is found, 1 with findings, 2 when it cannot check.
 """
+
 import argparse
 import json
 import re
@@ -42,8 +42,6 @@ from pathlib import Path
 # the meaningful lines an earlier change added or deleted, and at least MIN_LINES of them.
 REVERT_SHARE = 0.6
 MIN_LINES = 5
-# Release notes move between sections at every cut; they are never evidence of a revert or need a review.
-NOTES_FILES = {"CHANGELOG.md"}
 # Cutting tests is routine here (the suite is kept small), so only product code counts toward a revert.
 TEST_PATH = re.compile(r"(^|/)(tests?|testdata|fixtures)/|(^|/)test_[^/]*$|_test\.[a-z]+$|\.test\.[a-z]+$")
 PR_SUBJECT = (re.compile(r"^Merge pull request #(\d+)\b"), re.compile(r"\(#(\d+)\)\s*$"))
@@ -71,7 +69,7 @@ def parse_log(text):
     per file, and every path it touched."""
     commits, parts = [], text.split("\0")
     for i in range(1, len(parts) - 4, 5):
-        sha, parents, subject, body, diff = parts[i:i + 5]
+        sha, parents, subject, body, diff = parts[i : i + 5]
         files, path = {}, None
         for line in diff.splitlines():
             if line.startswith("diff --git "):
@@ -81,16 +79,25 @@ def parse_log(text):
             elif line.startswith("+++ "):
                 # A deleted file names itself only on its "---" line.
                 path = line[6:] if line.startswith("+++ b/") else path
-            elif line[:1] in "+-" and line and path is not None and path not in NOTES_FILES \
-                    and not TEST_PATH.search(path):
+            elif line[:1] in "+-" and line and path is not None and not TEST_PATH.search(path):
                 text = line[1:].strip()
                 if text:
                     added, removed = files.setdefault(path, (Counter(), Counter()))
                     (added if line[0] == "+" else removed)[text] += 1
-        commits.append({"sha": sha.strip(), "parents": parents.split(), "subject": subject, "body": body,
-                        "files": files, "meaningful": {path: tuple(Counter({k: v for k, v in c.items() if meaningful(k)})
-                                                                   for c in pair) for path, pair in files.items()},
-                        "touched": _touched(diff)})
+        commits.append(
+            {
+                "sha": sha.strip(),
+                "parents": parents.split(),
+                "subject": subject,
+                "body": body,
+                "files": files,
+                "meaningful": {
+                    path: tuple(Counter({k: v for k, v in c.items() if meaningful(k)}) for c in pair)
+                    for path, pair in files.items()
+                },
+                "touched": _touched(diff),
+            }
+        )
     return commits
 
 
@@ -104,8 +111,19 @@ def _touched(diff):
 
 
 def first_parent_log(repo, rev_range):
-    out = git(repo, "log", "--first-parent", "--diff-merges=first-parent", "-p", "-U0", "--no-renames",
-              "--no-color", "--no-ext-diff", "--format=%x00%H%x00%P%x00%s%x00%b%x00", rev_range)
+    out = git(
+        repo,
+        "log",
+        "--first-parent",
+        "--diff-merges=first-parent",
+        "-p",
+        "-U0",
+        "--no-renames",
+        "--no-color",
+        "--no-ext-diff",
+        "--format=%x00%H%x00%P%x00%s%x00%b%x00",
+        rev_range,
+    )
     return parse_log(out)
 
 
@@ -161,10 +179,13 @@ def reverts(change, earlier):
     """The share of `earlier` that `change` undoes when it is a net revert, else None."""
     added_undone, added_total, removed_undone, removed_total = undone(change, earlier)
     if added_total + removed_total and (added_undone, removed_undone) == (added_total, removed_total):
-        return 1.0   # an exact inverse, whatever its size
+        return 1.0  # an exact inverse, whatever its size
     added_undone, added_total, removed_undone, removed_total = undone(change, earlier, "meaningful")
-    shares = [(n, total) for n, total in ((added_undone, added_total), (removed_undone, removed_total))
-              if n >= MIN_LINES and n >= REVERT_SHARE * total]
+    shares = [
+        (n, total)
+        for n, total in ((added_undone, added_total), (removed_undone, removed_total))
+        if n >= MIN_LINES and n >= REVERT_SHARE * total
+    ]
     if not shares:
         return None
     return max(n / total for n, total in shares)
@@ -192,12 +213,18 @@ def net_reverts(repo, changes, shipped):
                 if share is None:
                     continue
                 paths = sorted(set(earlier["files"]) & set(change["files"]))
-                findings.append({
-                    "kind": "NET REVERT", "commit": change["sha"], "pr": pr_number(repo, change),
-                    "reverts": earlier["sha"], "reverts_pr": pr_number(repo, earlier),
-                    "text": f"{label(repo, change)} undoes {share:.0%} of {label(repo, earlier)}, shipped in "
-                            f"{shipped_in(repo, earlier['sha'])}: {', '.join(paths[:4])}"
-                            + (f" and {len(paths) - 4} more" if len(paths) > 4 else "")})
+                findings.append(
+                    {
+                        "kind": "NET REVERT",
+                        "commit": change["sha"],
+                        "pr": pr_number(repo, change),
+                        "reverts": earlier["sha"],
+                        "reverts_pr": pr_number(repo, earlier),
+                        "text": f"{label(repo, change)} undoes {share:.0%} of {label(repo, earlier)}, shipped in "
+                        f"{shipped_in(repo, earlier['sha'])}: {', '.join(paths[:4])}"
+                        + (f" and {len(paths) - 4} more" if len(paths) > 4 else ""),
+                    }
+                )
     return findings
 
 
@@ -230,7 +257,9 @@ class GitHub:
 
 
 def has_object(repo, sha):
-    return subprocess.run(["git", "-C", repo, "cat-file", "-e", f"{sha}^{{commit}}"], capture_output=True).returncode == 0
+    return (
+        subprocess.run(["git", "-C", repo, "cat-file", "-e", f"{sha}^{{commit}}"], capture_output=True).returncode == 0
+    )
 
 
 def change_id(repo, base, head):
@@ -278,20 +307,28 @@ def unreviewed(repo, changes, receipts, github, fetch=True):
     for commit in changes:
         number = pr_number(repo, commit)
         if number is None:
-            if not set(commit["touched"]) - NOTES_FILES:
-                continue
             if any(r.get("commit") and commit["sha"].startswith(r["commit"]) for r in receipts):
                 continue
-            findings.append({"kind": "NO PR", "commit": commit["sha"], "pr": None,
-                             "text": f"{label(repo, commit)} landed without a pull request and no receipt names it"})
+            findings.append(
+                {
+                    "kind": "NO PR",
+                    "commit": commit["sha"],
+                    "pr": None,
+                    "text": f"{label(repo, commit)} landed without a pull request and no receipt names it",
+                }
+            )
             continue
         head, why = final_head(repo, commit, number, github)
         if head is None:
-            findings.append({"kind": "UNREVIEWED", "commit": commit["sha"], "pr": number,
-                             "text": f"PR #{number}: {why}"})
+            findings.append(
+                {"kind": "UNREVIEWED", "commit": commit["sha"], "pr": number, "text": f"PR #{number}: {why}"}
+            )
             continue
-        approved = [(r["head"], r.get("source") or "ticket receipt") for r in receipts
-                    if r.get("pr") == number and len(r.get("head", "")) >= 7]
+        approved = [
+            (r["head"], r.get("source") or "ticket receipt")
+            for r in receipts
+            if r.get("pr") == number and len(r.get("head", "")) >= 7
+        ]
         approval_error = None
         if github is not None:
             try:
@@ -331,7 +368,7 @@ def previous_release(repo, head):
     """
     tags = git(repo, "tag", "--list", "v[0-9]*", "--sort=-v:refname").split()
     own = set(git(repo, "tag", "--points-at", head, "--list", "v[0-9]*").split())
-    below = tags[max(tags.index(t) for t in own) + 1:] if own else tags
+    below = tags[max(tags.index(t) for t in own) + 1 :] if own else tags
     for tag in below:
         contains = subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", head, tag], capture_output=True)
         if contains.returncode == 1:
@@ -353,25 +390,39 @@ def check(repo, head, previous=None, receipts=(), github=None, releases=None, fe
     # A shallow checkout cuts history off at its depth: the previous tag looks parentless, the range runs back to the
     # cut, and every old pull request in it is looked up on GitHub before anything is reported.
     if git(repo, "rev-parse", "--is-shallow-repository").strip() == "true":
-        raise GuardError("this checkout has shallow history, so the range to the previous release would be wrong; "
-                         "run `git fetch --unshallow --tags origin` and check again")
+        raise GuardError(
+            "this checkout has shallow history, so the range to the previous release would be wrong; "
+            "run `git fetch --unshallow --tags origin` and check again"
+        )
     previous = previous or previous_release(repo, head)
     # A release branch that was never merged back still forks from main; no shared commit means missing history.
     if not git(repo, "merge-base", previous, head, check=False).strip():
-        raise GuardError(f"{previous} and {head[:12]} share no history in this checkout; fetch the full history "
-                         f"(`git fetch --unshallow --tags origin`) or name the right release with --previous")
+        raise GuardError(
+            f"{previous} and {head[:12]} share no history in this checkout; fetch the full history "
+            f"(`git fetch --unshallow --tags origin`) or name the right release with --previous"
+        )
     changes = first_parent_log(repo, f"{previous}..{head}")
     if not changes:
-        raise GuardError(f"nothing between {previous} and {head[:12]}: {previous} is not an earlier release of this "
-                         f"candidate; name the right one with --previous")
+        raise GuardError(
+            f"nothing between {previous} and {head[:12]}: {previous} is not an earlier release of this "
+            f"candidate; name the right one with --previous"
+        )
     base = lookback_base(repo, previous, releases)
     shipped = first_parent_log(repo, f"{base}..{previous}" if base else previous)
     meant = [(r["pr"], r["reverts"]) for r in receipts if r.get("pr") and len(r.get("reverts") or "") >= 7]
-    findings = [f for f in net_reverts(repo, changes, shipped)
-                if not any(f["pr"] == pr and f["reverts"].startswith(sha) for pr, sha in meant)]
+    findings = [
+        f
+        for f in net_reverts(repo, changes, shipped)
+        if not any(f["pr"] == pr and f["reverts"].startswith(sha) for pr, sha in meant)
+    ]
     findings += unreviewed(repo, changes, list(receipts), github, fetch=fetch)
-    return {"head": head, "previous": previous, "changes": len(changes), "compared_since": base or "the first commit",
-            "findings": findings}
+    return {
+        "head": head,
+        "previous": previous,
+        "changes": len(changes),
+        "compared_since": base or "the first commit",
+        "findings": findings,
+    }
 
 
 def repo_slug(repo):
@@ -388,8 +439,9 @@ def main(argv=None):
     parser.add_argument("--repo", default=".", help="the git checkout (default .)")
     parser.add_argument("--github", help="owner/name on GitHub (default: from the origin remote)")
     parser.add_argument("--no-github", action="store_true", help="don't read GitHub; heads and receipts only")
-    parser.add_argument("--releases", type=int,
-                        help="compare against only the last N earlier releases (default: all history)")
+    parser.add_argument(
+        "--releases", type=int, help="compare against only the last N earlier releases (default: all history)"
+    )
     parser.add_argument("--json", action="store_true", help="print the result as JSON")
     args = parser.parse_args(argv)
     try:
@@ -400,7 +452,9 @@ def main(argv=None):
         if not args.no_github:
             slug = args.github or repo_slug(args.repo)
             if not slug or not shutil.which("gh"):
-                raise GuardError("GitHub can't be read (no gh or no GitHub origin); pass --no-github to use receipts only")
+                raise GuardError(
+                    "GitHub can't be read (no gh or no GitHub origin); pass --no-github to use receipts only"
+                )
             github = GitHub(slug)
         result = check(args.repo, args.head, args.previous, receipts, github, args.releases)
     except (GuardError, OSError, ValueError) as error:
@@ -411,8 +465,10 @@ def main(argv=None):
     else:
         for finding in result["findings"]:
             print(f"{finding['kind']:<11} {finding['text']}")
-        print(f"freeze guard: {result['previous']}..{result['head'][:12]}, {result['changes']} changes compared "
-              f"with history since {result['compared_since']}, {len(result['findings'])} findings")
+        print(
+            f"freeze guard: {result['previous']}..{result['head'][:12]}, {result['changes']} changes compared "
+            f"with history since {result['compared_since']}, {len(result['findings'])} findings"
+        )
     return 1 if result["findings"] else 0
 
 

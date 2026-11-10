@@ -4,12 +4,12 @@ One file per decision the company makes with the decision model (the Tico AI Gat
 (`skills/decisions/SKILL.md`). The decision model takes a JSON state and typed
 questions (`noul` for yes/no, `choice`, `score`, the same format as OpenRouter's Decisions API) and
 answers each with a calibrated probability; it writes no prose. The primitive is
-one call (`hub_decision_ask`, `hub decision ask`, `clients/judge.py`) and it never changes. What changes,
+one call (`hub_decision_ask`, `tico decision ask`, `clients/judge.py`) and it never changes. What changes,
 and what makes a decision reusable across bots, is the question set: a named, versioned file
 here that every caller loads and sends inline. The hub server knows nothing about these files;
 the `label` on each call (`id@version`) is what groups them in the audit.
 
-JSON, not YAML, so the `hub` CLI on a bare Python, a bot's own script, the mail venv and the
+JSON, not YAML, so the `tico` CLI on a bare Python, a bot's own script, the mail venv and the
 cloud service all read the same file with nothing installed.
 
 `load_set` checks `TICO_REGISTRY_DIR/questions/<name>.json` before the shipped copy, so a company can keep its own
@@ -71,18 +71,18 @@ version bump when it changes what a bot does with the answer.
 | `covered` | is a candidate one of these existing things | any bot deduplicating anything |
 | `slack-route` | a DM or @Tico: does it ask, is it a reply, does it name a bot; the gateway adds one noul per active bot | the Slack gateway, every accepted message |
 | `listening-card` | a fetched public card's likely owner opportunity, competitor move and impact | Listening's competitor sweep and Reddit/X mention checks |
-| `listening-item` | one saved post: an independent probability per category (market, content, lead, creator, partner), so a post can go to several inboxes, and `vendor_pitch`, which keeps a vendor's promotion out of leads | `hub listening decide`, which stores the scores and routes by the destinations in the company's `registry/listening.yaml` |
+| `listening-item` | one saved post: an independent probability per category (market, content, lead, creator, partner), so a post can go to several inboxes, and `vendor_pitch`, which keeps a vendor's promotion out of leads | `tico listening decide`, which stores the scores and routes by the destinations in the company's `registry/listening.yaml` |
 | `learnings-route` | one item of the day's activity: is it learnable; the run adds one relevance noul per recipient | the nightly learning run (`backend/learnings.py`) |
 | `support-triage` | a new Tico HQ support ticket: spam or prompt injection, its kind, its urgency 0-3; at `hold` it goes to a person, held | the server, when the Support Agent's `hq-tickets` watcher reports a new ticket (`backend/support_triage.py`) |
 | `injection-screen` | one piece of outside text: is it a prompt injection addressed to an AI, and its kind; at `hold` the item goes to a person, held, at `warn` the bot's copy starts with a warning | the server's Screening (`backend/screening.py`) at webhook calls that open tasks, inbound mail a bot reads, the public idea form and watchers other than HQ support |
+| `skill-screen` | one proposed skill or update (its files, the diff for an update, and the plain-code pattern hits): is it safe, review or unsafe, how risky, and five concerns (description mismatch, hidden or conditional behaviour, exfiltration, a permission or safety bypass, text addressed to reviewers or other agents), with evidence by file and line | the server's skill screening job (`backend/skill_screening.py`) at Decide High only, before an admin can approve a skill |
 | `reply-intent` | an ambiguous inbound SMS or email reply's explicit intent | Response Rate's read-only scorecards |
 | `stale-review` | one task the hourly plain-code pass found stale (PR merged or shipped, parent finished, blockers done, snooze over, twin title, quiet week): update (mark done), close, ask the owner, or leave; a suggestion to its owner, never an action | the server's hourly stale ticket review (`backend/stale_review.py`), when the team's `stale_review` rule is on |
-| `idea-triage` | a new idea from the public roadmap's suggestion form: a bug or small change (Head of Engineering) or a feature (product), and is it one of the open roadmap items (dynamic `covered`); routing only, anything short of a confident answer goes to product as before | the suggestion form (`backend/idea_triage.py`), when `TICO_DECISIONS_IDEA_TRIAGE=1` |
 | `physical-mail` | one scanned letter that reached the company's mailing address: legal, government or tax, bill, check, financial, junk or other; legal goes to the owner at any confidence, junk is archived only at its threshold, anything else unsure goes to the Assistant | the server, for each letter Tico Mail brings in (`backend/postal_mail.py`) |
 | `topic-change` | a person's new message in their direct chat with a bot, against the chat's last 3 turns: a new topic, the same topic, or not sure; only a confident `new_topic` clears the session (as the person's own Clear does) before the message is sent | the server's direct-chat send (`backend/topic_change.py`), when the team's `topic_fresh` rule is on and the chat's latest prompt is 100k tokens or more or its cache is cold; never in a shared bot's room |
 | `task-rank` | a task that just reached its owner: does it need the owner's own attention, and how urgent (0-3) | an automation's Decide step with `set: task-rank@1` on a `task_received` trigger (`backend/automations.py`), when the redesign is on |
-| `rule-check` | one bot output against the org rules that apply to it: one noul per matched rule, built from the `rule` template; at `broken` the rule's If broken applies (Block holds it, Escalate also files a review task, Warn delivers it with a warning line); any failure lets it through marked unchecked, and an output too large to send is held | the server, before a bot's message, comment, task change, completion reply, note, automation write or mail goes out (`backend/org_rule_check.py`), and `hub rules check` for a draft |
+| `rule-check` | one bot output against the org rules that apply to it: one noul per matched rule, built from the `rule` template; at `broken` the rule's If broken applies (Block holds it, Escalate also files a review task, Warn delivers it with a warning line); any failure lets it through marked unchecked, and an output too large to send is held | the server, before a bot's message, comment, task change, completion reply, note, automation write or mail goes out (`backend/org_rule_check.py`), and `tico rules check` for a draft |
 
 Adding a set is a pull request here: the file, a line in this table, and the change in the
 caller that reads it. Read a month of one set's calls back with
-`hub sql "SELECT target, detail FROM events WHERE action='judge.call' AND target='mail-triage@1'"`.
+`tico sql "SELECT target, detail FROM events WHERE action='judge.call' AND target='mail-triage@1'"`.

@@ -110,6 +110,7 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
 .sub-who{display:inline-flex;flex:none}
 .sub-who .av{width:16px!important;height:16px!important;font-size:7px!important}
 .sub-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.sub-chip{flex:none}
 .sub-row.finished>.sub-line .sub-title{color:var(--muted)}
 .sub-add{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px;margin:4px 0 0}
 .sub-add input{width:100%;min-width:0;font-size:var(--t-base);padding:3px 6px}
@@ -121,12 +122,6 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
 .pr-badge.run{background:var(--run-bg);color:var(--run)}
 .pr-badge.ok{background:var(--ok-bg);color:var(--ok)}
 .pr-badge.fail{background:var(--fail-bg);color:var(--fail)}
-.verdict-chip{flex:none;display:inline-flex;gap:3px;align-items:baseline;font-size:var(--t-2xs);font-weight:600;line-height:14px;padding:0 4px;border-radius:7px;white-space:nowrap}
-.verdict-chip.ok{background:var(--ok-bg);color:var(--ok)}
-.verdict-chip.fail{background:var(--fail-bg);color:var(--fail)}
-.verdict-chip.waived{background:var(--wait-bg);color:var(--wait-ink)}
-.prop[data-prop-row="qa-waiver"] .prop-vwrap{flex-wrap:wrap;gap:4px 8px}
-.verdict-chip code{font:inherit;font-family:var(--mono);font-weight:400;opacity:.85}
 .pr-badge.waiting{background:var(--wait-bg);color:var(--wait-ink)}
 #pane-tasks .trow[data-task-version] :is(summary,.trow-head) .pr-badge{grid-area:pr}
 

@@ -3,11 +3,12 @@ change what, and what a teammate who may not See someone reads. Acme is the fict
 
 The org: Ana owns it, Ben is an admin, Cara leads Support, Fay is in Support Tier 2 (under Support) with the Finance bot,
 Eve is on no team and owns the Helper bot."""
+
 import json
 
 from backend import bot_settings as BS
 from backend.store import encode
-from backend.tests.test_api import api, get, headers  # noqa: F401  (the api fixture)
+from backend.tests.helpers.api import get, headers  # noqa: F401  (the api fixture)
 import pytest
 
 
@@ -19,17 +20,26 @@ def nearby_default(monkeypatch):
 
 def org(api):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode({
-            "people": [
-                {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
-                {"id": "ben", "email": "ben@acme.example"},
-                {"id": "cara", "email": "cara@acme.example", "team": "support", "name": "Cara"},
-                {"id": "eve", "email": "eve@acme.example", "name": "Eve"},
-                {"id": "fay", "email": "fay@acme.example", "team": "support-tier-2", "name": "Fay"},
-            ],
-            "org_groups": {"support": {"name": "Support", "lead": "person:cara"},
-                           "support-tier-2": {"name": "Support Tier 2", "parent": "support"}},
-        }),))
+        c.execute(
+            "UPDATE registry_metadata SET value=? WHERE key='people'",
+            (
+                encode(
+                    {
+                        "people": [
+                            {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
+                            {"id": "ben", "email": "ben@acme.example"},
+                            {"id": "cara", "email": "cara@acme.example", "team": "support", "name": "Cara"},
+                            {"id": "eve", "email": "eve@acme.example", "name": "Eve"},
+                            {"id": "fay", "email": "fay@acme.example", "team": "support-tier-2", "name": "Fay"},
+                        ],
+                        "org_groups": {
+                            "support": {"name": "Support", "lead": "person:cara"},
+                            "support-tier-2": {"name": "Support Tier 2", "parent": "support"},
+                        },
+                    }
+                ),
+            ),
+        )
         for pid, name in (("ben", "Ben"), ("cara", "Cara"), ("eve", "Eve"), ("fay", "Fay")):
             c.execute("INSERT OR IGNORE INTO humans(id, name, email) VALUES(?,?,?)", (pid, name, pid + "@acme.example"))
         c.execute("UPDATE bot_config SET team='support-tier-2' WHERE bot='finance'")
@@ -77,8 +87,12 @@ def test_each_field_comes_from_the_nearest_party_that_sets_it_then_everyone_then
     saved = put_setting(api, "bot:finance", {"tasks_per_day": 5})
     assert saved["effective"]["tasks_per_day"] == 5
     found = reach(api)["effective"]
-    assert found["bot:finance"] == {"mode": "closed", "chats_per_day": 50, "tasks_per_day": 5,
-                                    "from": {"mode": "*", "chats_per_day": "group:support", "tasks_per_day": "bot:finance"}}
+    assert found["bot:finance"] == {
+        "mode": "closed",
+        "chats_per_day": 50,
+        "tasks_per_day": 5,
+        "from": {"mode": "*", "chats_per_day": "group:support", "tasks_per_day": "bot:finance"},
+    }
     # A team takes it from the teams above it; someone on no team from Everyone, then the default.
     assert found["group:support-tier-2"]["chats_per_day"] == 50
     assert found["group:support-tier-2"]["from"]["chats_per_day"] == "group:support"
@@ -89,23 +103,27 @@ def test_each_field_comes_from_the_nearest_party_that_sets_it_then_everyone_then
     assert reach(api)["effective"]["human:fay"]["chats_per_day"] == 10
     cleared = put_setting(api, "bot:finance", {"tasks_per_day": None})
     assert cleared["setting"] == {"party": "bot:finance", "mode": None, "chats_per_day": None, "tasks_per_day": None}
-    assert "bot:finance" not in {s["party"] for s in reach(api)["settings"]}      # nothing left set: the row goes
+    assert "bot:finance" not in {s["party"] for s in reach(api)["settings"]}  # nothing left set: the row goes
     assert reach(api)["effective"]["bot:finance"]["tasks_per_day"] == 999
 
 
 def test_a_setting_change_is_audited_and_bad_values_and_unknown_parties_are_refused(api):
     org(api)
     put_setting(api, "group:support", {"chats_per_day": 50})
-    put_setting(api, "group:support", {"mode": "closed"})                      # a field not sent stays
+    put_setting(api, "group:support", {"mode": "closed"})  # a field not sent stays
     rows = audit(api, "reach_setting:group:support")
     assert [r["before"] is None for r in rows] == [True, False]
-    assert json.loads(rows[1]["after"]) == {"party": "group:support", "mode": "closed", "chats_per_day": 50,
-                                            "tasks_per_day": None}
+    assert json.loads(rows[1]["after"]) == {
+        "party": "group:support",
+        "mode": "closed",
+        "chats_per_day": 50,
+        "tasks_per_day": None,
+    }
     put_setting(api, "group:support", {"mode": "sometimes"}, expected=422)
     put_setting(api, "group:support", {"chats_per_day": 100001}, expected=422)
     put_setting(api, "group:nowhere", {"mode": "open"}, expected=404)
     put_setting(api, "human:nobody", {"mode": "open"}, expected=404)
-    put_setting(api, "ana", {"mode": "open"}, expected=422)                    # a party says what it is
+    put_setting(api, "ana", {"mode": "open"}, expected=422)  # a party says what it is
 
 
 def test_the_map_has_the_contract_shape(api):
@@ -119,16 +137,28 @@ def test_the_map_has_the_contract_shape(api):
     assert {"mode", "chats_per_day", "tasks_per_day", "from"} <= set(found["effective"]["*"])
     line = next(row for row in found["lines"] if row["id"] == made["id"])
     assert {"id", "sender", "receiver", "per_day", "rule", "may_edit"} <= set(line)
-    assert (line["sender"], line["receiver"], line["per_day"], line["rule"], line["may_edit"]) == \
-        ("bot:finance", "human:eve", 3, None, True)
+    assert (line["sender"], line["receiver"], line["per_day"], line["rule"], line["may_edit"]) == (
+        "bot:finance",
+        "human:eve",
+        3,
+        None,
+        True,
+    )
     assert {"*", "group:support", "human:cara", "bot:finance"} <= set(found["may_edit"])
-    assert "human:ana" not in found["may_edit"]                                # the owner is never limited
+    assert "human:ana" not in found["may_edit"]  # the owner is never limited
 
 
 def test_a_lines_rule_is_an_internal_org_rule_made_edited_and_retired_with_it(api):
     org(api)
-    line = add_line(api, {"sender": "bot:finance", "receiver": "group:support", "per_day": 0,
-                          "rule": "Send Support only refunds over $500."})["line"]
+    line = add_line(
+        api,
+        {
+            "sender": "bot:finance",
+            "receiver": "group:support",
+            "per_day": 0,
+            "rule": "Send Support only refunds over $500.",
+        },
+    )["line"]
     rule = rule_row(api, line["rule"]["id"])
     assert line["rule"]["text"] == "Send Support only refunds over $500."
     assert (rule["kind"], rule["if_broken"], rule["status"]) == ("internal", "warn", "active")
@@ -137,7 +167,7 @@ def test_a_lines_rule_is_an_internal_org_rule_made_edited_and_retired_with_it(ap
     add_line(api, {"sender": "bot:finance", "receiver": "group:support"}, expected=409)
     add_line(api, {"sender": "bot:finance", "receiver": "bot:finance"}, expected=422)
     edited = edit_line(api, line["id"], {"rule": "Send Support only refunds over $900."})["line"]
-    assert edited["rule"]["id"] == line["rule"]["id"] and edited["per_day"] == 0      # per_day not sent: kept
+    assert edited["rule"]["id"] == line["rule"]["id"] and edited["per_day"] == 0  # per_day not sent: kept
     assert rule_row(api, line["rule"]["id"])["text"] == "Send Support only refunds over $900."
     dropped = edit_line(api, line["id"], {"rule": None, "per_day": 4})["line"]
     assert dropped["rule"] is None and dropped["per_day"] == 4
@@ -160,7 +190,7 @@ def test_everyone_as_sender_or_receiver(api):
     assert json.loads(rule["who"])["everyone"] is True
     to_all = add_line(api, {"sender": "human:eve", "receiver": "*", "rule": "Keep it short."})["line"]
     with_scope = json.loads(rule_row(api, to_all["rule"]["id"])["with_scope"])
-    assert not (with_scope["people"] or with_scope["groups"] or with_scope["bots"])     # With empty: anyone
+    assert not (with_scope["people"] or with_scope["groups"] or with_scope["bots"])  # With empty: anyone
 
 
 def test_a_lead_changes_their_teams_and_their_people_and_bots_but_never_their_own(api):
@@ -168,11 +198,14 @@ def test_a_lead_changes_their_teams_and_their_people_and_bots_but_never_their_ow
     put_setting(api, "group:support-tier-2", {"mode": "closed"}, token="cara-test")
     put_setting(api, "human:fay", {"chats_per_day": 30}, token="cara-test")
     put_setting(api, "bot:finance", {"tasks_per_day": 3}, token="cara-test")
-    add_line(api, {"sender": "bot:finance", "receiver": "human:ana", "per_day": 2, "rule": "Only escalations."},
-             token="cara-test")
-    put_setting(api, "human:cara", {"chats_per_day": 1000}, token="cara-test", expected=403)   # their own
-    put_setting(api, "human:eve", {"chats_per_day": 1}, token="cara-test", expected=403)       # not on their team
-    put_setting(api, "*", {"mode": "closed"}, token="cara-test", expected=403)                 # Everyone: admins
+    add_line(
+        api,
+        {"sender": "bot:finance", "receiver": "human:ana", "per_day": 2, "rule": "Only escalations."},
+        token="cara-test",
+    )
+    put_setting(api, "human:cara", {"chats_per_day": 1000}, token="cara-test", expected=403)  # their own
+    put_setting(api, "human:eve", {"chats_per_day": 1}, token="cara-test", expected=403)  # not on their team
+    put_setting(api, "*", {"mode": "closed"}, token="cara-test", expected=403)  # Everyone: admins
     add_line(api, {"sender": "human:cara", "receiver": "human:ana"}, token="cara-test", expected=403)
     add_line(api, {"sender": "human:eve", "receiver": "human:fay"}, token="cara-test", expected=403)
     mine = reach(api, "cara-test")
@@ -191,7 +224,7 @@ def test_a_lead_changes_their_teams_and_their_people_and_bots_but_never_their_ow
 
 def test_a_bots_manager_changes_that_bot(api):
     org(api)
-    put_setting(api, "bot:helper", {"mode": "closed"}, token="eve-test")            # Eve owns Helper
+    put_setting(api, "bot:helper", {"mode": "closed"}, token="eve-test")  # Eve owns Helper
     add_line(api, {"sender": "bot:helper", "receiver": "human:eve", "per_day": 10}, token="eve-test")
     assert "bot:helper" in reach(api, "eve-test")["may_edit"]
     put_setting(api, "bot:finance", {"mode": "closed"}, token="eve-test", expected=403)
@@ -202,8 +235,11 @@ def test_settings_and_lines_naming_someone_the_viewer_may_not_see_are_left_out(a
     put_setting(api, "human:fay", {"chats_per_day": 30})
     add_line(api, {"sender": "bot:finance", "receiver": "human:fay", "per_day": 1})
     add_line(api, {"sender": "bot:finance", "receiver": "human:eve", "per_day": 2})
-    r = api.put("/api/v2/humans/fay/access", headers=headers(), json={
-        "see": {"people": ["cara"]}, "read": {"people": ["cara"]}, "write": {"people": ["cara"]}, "revision": 0})
+    r = api.put(
+        "/api/v2/humans/fay/access",
+        headers=headers(),
+        json={"see": {"people": ["cara"]}, "read": {"people": ["cara"]}, "write": {"people": ["cara"]}, "revision": 0},
+    )
     assert r.status_code == 200, r.text
     eve = reach(api, "eve-test")
     named = {s["party"] for s in eve["settings"]} | set(eve["effective"]) | set(eve["may_edit"])
@@ -217,8 +253,9 @@ def test_settings_and_lines_naming_someone_the_viewer_may_not_see_are_left_out(a
 def test_an_edit_may_flip_a_line_and_its_rule_follows_but_never_onto_a_pair_that_has_one(api):
     org(api)
     line = add_line(api, {"sender": "bot:finance", "receiver": "human:eve", "per_day": 2, "rule": "Be brief."})["line"]
-    flipped = edit_line(api, line["id"], {"sender": "human:eve", "receiver": "bot:finance", "per_day": 2,
-                                          "rule": "Be brief."})["line"]
+    flipped = edit_line(
+        api, line["id"], {"sender": "human:eve", "receiver": "bot:finance", "per_day": 2, "rule": "Be brief."}
+    )["line"]
     assert (flipped["id"], flipped["sender"], flipped["receiver"]) == (line["id"], "human:eve", "bot:finance")
     rule = rule_row(api, flipped["rule"]["id"])
     assert json.loads(rule["who"])["people"] == ["eve"] and json.loads(rule["with_scope"])["bots"] == ["finance"]
@@ -227,5 +264,5 @@ def test_an_edit_may_flip_a_line_and_its_rule_follows_but_never_onto_a_pair_that
     # A lead may not move a line onto a sender that is not theirs to change.
     mine = add_line(api, {"sender": "human:fay", "receiver": "human:ana"}, token="cara-test")["line"]
     edit_line(api, mine["id"], {"sender": "human:eve"}, token="cara-test", expected=403)
-    assert edit_line(api, flipped["id"], {"rule": ""})["line"]["rule"] is None             # "" retires it too
+    assert edit_line(api, flipped["id"], {"rule": ""})["line"]["rule"] is None  # "" retires it too
     assert rule_row(api, flipped["rule"]["id"])["status"] == "retired"

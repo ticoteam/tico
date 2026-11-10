@@ -8,6 +8,7 @@ There is no privileged path: whatever a bot may not do over HTTP it may not do h
 Stateless on purpose: no session id, no server-initiated stream (GET answers 405). A
 notification such as `notifications/initialized` is accepted with 202 and no body.
 """
+
 import asyncio
 import base64
 import hashlib
@@ -61,22 +62,34 @@ def response_content(response):
     disposition["content-disposition"] = response.headers.get("content-disposition", "")
     if content_type == "application/octet-stream" and (filename := disposition.get_filename()):
         from clients.bot_files import TYPES
+
         content_type = TYPES.get(PurePosixPath(filename).suffix.lower(), content_type)
     is_text = content_type.startswith("text/") or content_type.split(";", 1)[0] in (
-        "application/json", "application/xml", "application/javascript")
-    return {"content_type": content_type, "bytes": len(data),
-            "truncated": len(response.content) > MAX_CONTENT_BYTES,
-            **({"text": data.decode(response.encoding or "utf-8", errors="replace")} if is_text else
-               {"base64": base64.b64encode(data).decode("ascii")})}
+        "application/json",
+        "application/xml",
+        "application/javascript",
+    )
+    return {
+        "content_type": content_type,
+        "bytes": len(data),
+        "truncated": len(response.content) > MAX_CONTENT_BYTES,
+        **(
+            {"text": data.decode(response.encoding or "utf-8", errors="replace")}
+            if is_text
+            else {"base64": base64.b64encode(data).decode("ascii")}
+        ),
+    }
 
 
 class ApiProblem(Exception):
     """What an internal request's error body says, in the shape `hub` prints."""
 
-    def __init__(self, code, detail, status, retryable=False, operation_id=None):
+    def __init__(self, code, detail, status, retryable=False, operation_id=None, extra=None):
         super().__init__(detail)
         self.code, self.detail, self.status = code, detail, status
         self.retryable, self.operation_id = retryable, operation_id
+        # What the error put beside code and detail: a task refusal's `missing`, `next` and `version`.
+        self.extra = extra or {}
 
 
 class InProcessApi:
@@ -85,12 +98,15 @@ class InProcessApi:
     Runs on a worker thread; each call is a coroutine handed to the server's event loop.
     """
 
-    docs_wait_max = 20     # Return recoverable ids well before the HTTP proxy times out.
+    docs_wait_max = 20  # Return recoverable ids well before the HTTP proxy times out.
 
     def __init__(self, app, loop, authorization, base_url):
         self.app, self.loop, self.base_url = app, loop, base_url
-        self.headers = {"Authorization": authorization, "Accept": "application/json",
-                        "User-Agent": "Tico-MCP/" + hubtools.SERVER_INFO["version"]}
+        self.headers = {
+            "Authorization": authorization,
+            "Accept": "application/json",
+            "User-Agent": "Tico-MCP/" + hubtools.SERVER_INFO["version"],
+        }
 
     def _send(self, method, path, body=None, key=None, query=None, delegate=False, raw=None):
         """One request through the app (its middleware and routes, with the caller's own Authorization), as a response.
@@ -102,25 +118,28 @@ class InProcessApi:
         timeout = gmail_read_timeout(method, path, timeout)
         content, raw_headers = raw_body(raw) if raw is not None else (None, {})
         if raw is not None and hasattr(raw, "read"):
-            timeout = max(timeout, STREAM_WAIT)      # a file streamed from disk: stored after its last block
+            timeout = max(timeout, STREAM_WAIT)  # a file streamed from disk: stored after its last block
+
         async def go():
             transport = httpx.ASGITransport(app=self.app)
-            async with httpx.AsyncClient(transport=transport, base_url=self.base_url,
-                                         timeout=timeout) as client:
+            async with httpx.AsyncClient(transport=transport, base_url=self.base_url, timeout=timeout) as client:
                 headers = {**self.headers, **raw_headers}
                 if delegate:
                     headers["X-Tico-On-Behalf-Of"] = delegate if isinstance(delegate, str) else "turn"
                 if raw is not None or method.upper() in ("POST", "PUT", "PATCH", "DELETE"):
                     headers["Idempotency-Key"] = key or hubtools_key()
-                return await client.request(method, path, json=body, content=content,
-                                            headers=headers, params=query or None)
+                return await client.request(
+                    method, path, json=body, content=content, headers=headers, params=query or None
+                )
+
         future = asyncio.run_coroutine_threadsafe(go(), self.loop)
         try:
             response = future.result(timeout + FUTURE_MARGIN_S)
         except TimeoutError:
             future.cancel()
-            raise ApiProblem("unavailable", "Tico did not answer before the request deadline", 504,
-                             retryable=True, operation_id=key) from None
+            raise ApiProblem(
+                "unavailable", "Tico did not answer before the request deadline", 504, retryable=True, operation_id=key
+            ) from None
         return response
 
     def _run(self, method, path, body=None, key=None, query=None, delegate=False, raw=None):
@@ -142,7 +161,7 @@ class InProcessApi:
         answered through the same app and middleware as every other call here."""
         if not path.startswith("/api/v2/"):
             raise ValueError("Use a versioned Tico API path")
-        path, _, query = path[len("/api/v2/"):].partition("?")
+        path, _, query = path[len("/api/v2/") :].partition("?")
         if not binary:
             return self.call(method, path, body, key, dict(parse_qsl(query)), delegate, raw=raw)
         response = self._send(method.upper(), path, body, key, dict(parse_qsl(query)) or None, delegate, raw=raw)
@@ -154,8 +173,9 @@ class InProcessApi:
             raise problem(payload, response.status_code, key)
         if response.status_code != 200:
             # A picture, video or audio file sent on a link to Tico file hosting (file_delivery.serve): not text.
-            raise ApiProblem("file_integrity", "This file is a picture, video or audio file: it is not read as text",
-                             415)
+            raise ApiProblem(
+                "file_integrity", "This file is a picture, video or audio file: it is not read as text", 415
+            )
         data = response.content
         if len(data) > 20_000_000 or hashlib.sha256(data).hexdigest() != response.headers.get("X-Content-SHA256"):
             raise ApiProblem("file_integrity", "Tico file response failed its size or integrity check", 502)
@@ -172,18 +192,38 @@ class InProcessApi:
 
     def call(self, method, path, body=None, key=None, query=None, delegate=False, raw=None):
         method = method.upper()
-        return self._run(method, path.lstrip("/"), body=body if body is not None or method != "GET" else None,
-                         key=key, query={k: v for k, v in (query or {}).items() if v is not None}, delegate=delegate,
-                         raw=raw)
+        return self._run(
+            method,
+            path.lstrip("/"),
+            body=body if body is not None or method != "GET" else None,
+            key=key,
+            query={k: v for k, v in (query or {}).items() if v is not None},
+            delegate=delegate,
+            raw=raw,
+        )
 
 
 def problem(payload, status, key):
-    """An error response's body as an ApiProblem."""
+    """An error response's body as an ApiProblem: `{"error": {code, detail, ...}}`, or a flat refusal whose `error` is
+    the code and whose other fields (`detail`, a task refusal's `missing`, `next`, `version`) sit beside it, as
+    `clients/tico.py` reads them."""
     error = payload.get("error", {}) if isinstance(payload, dict) else {}
+    if isinstance(error, str):
+        error = {
+            "code": error,
+            "detail": payload.get("detail") or payload.get("message") or "",
+            **{k: v for k, v in payload.items() if k not in ("error", "message", "detail")},
+        }
     if not isinstance(error, dict):
         error = {}
-    return ApiProblem(error.get("code", "http_error"), error.get("detail") or f"HTTP {status}", status,
-                      status == 429 or status >= 500, key)
+    return ApiProblem(
+        error.get("code", "http_error"),
+        error.get("detail") or f"HTTP {status}",
+        status,
+        status == 429 or status >= 500,
+        key,
+        {k: v for k, v in error.items() if k not in ("code", "detail", "retryable")},
+    )
 
 
 def caller_kind(auth, who):
@@ -192,6 +232,7 @@ def caller_kind(auth, who):
     Counsel is `counsel`: its own tool list (`hubtools.COUNSEL_TOOLS`). The checks are the server's own: `auth.bot_admin`,
     `Identity.agent`, `Identity.via`."""
     from . import hubdb as H
+
     if who.via == "assistant":
         return "assistant"
     if who.role == "owner":
@@ -199,13 +240,21 @@ def caller_kind(auth, who):
     if who.role == "human":
         return "admin" if auth.bot_admin(who) else "member"
     if who.role == "bot":
-        return "agent" if who.agent else "botops" if who.actor == H.bot_actor(H.FLEET_MAINTAINER) else \
-            "counsel" if who.actor == "bot:" + H.COUNSEL else "bot"
+        return (
+            "agent"
+            if who.agent
+            else "botops"
+            if who.actor == H.bot_actor(H.FLEET_MAINTAINER)
+            else "counsel"
+            if who.actor == "bot:" + H.COUNSEL
+            else "bot"
+        )
     return None
 
 
 def hubtools_key():
     import uuid
+
     return str(uuid.uuid4())
 
 
@@ -221,12 +270,14 @@ def install_mcp(app, settings):
         try:
             message = json.loads(await request.body() or b"null")
         except ValueError:
-            return JSONResponse({"jsonrpc": "2.0", "id": None,
-                                 "error": {"code": -32700, "message": "Parse error"}}, status_code=400)
+            return JSONResponse(
+                {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}, status_code=400
+            )
         if not isinstance(message, dict):
-            return JSONResponse({"jsonrpc": "2.0", "id": None,
-                                 "error": {"code": -32600, "message": "Send one JSON-RPC message"}},
-                                status_code=400)
+            return JSONResponse(
+                {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Send one JSON-RPC message"}},
+                status_code=400,
+            )
         api = InProcessApi(app, asyncio.get_running_loop(), request.headers.get("authorization", ""), base_url)
         who = getattr(request.state, "identity", None)
         kind = caller_kind(app.state.auth, who) if who else None
@@ -246,42 +297,61 @@ def record_call(app, request, message, reply, seconds):
     arguments and the answer are never stored, only their sizes. A failure to record never fails the
     call."""
     from . import hubdb as H
+
     try:
         who = getattr(request.state, "identity", None)
         if not who:
             return
         params = message.get("params") or {}
         result = reply.get("result") or {}
-        error = reply.get("error") or (result.get("isError") and (result.get("content") or [{}])[0].get("text", "")[:200])
-        detail = {"tool": str(params.get("name") or "")[:80], "ms": round(seconds * 1000),
-                  "bytes": len(json.dumps(result)), "args_bytes": len(json.dumps(params.get("arguments") or {})),
-                  "via": getattr(who, "token_label", "") or getattr(who, "agent", "") or "",
-                  "error": bool(error), "error_text": str(error)[:200] if error else ""}
+        error = reply.get("error") or (
+            result.get("isError") and (result.get("content") or [{}])[0].get("text", "")[:200]
+        )
+        detail = {
+            "tool": str(params.get("name") or "")[:80],
+            "ms": round(seconds * 1000),
+            "bytes": len(json.dumps(result)),
+            "args_bytes": len(json.dumps(params.get("arguments") or {})),
+            "via": getattr(who, "token_label", "") or getattr(who, "agent", "") or "",
+            "error": bool(error),
+            "error_text": str(error)[:200] if error else "",
+        }
         with app.state.store.transaction() as c:
             H.event(c, who.actor, "mcp.call", detail["tool"], detail)
     except Exception:
         pass
 
 
+GENERAL = "general"  # the pipeline a task goes to when none is named (backend/pipeline_settings.py PRESETS)
+
+
 def task_dry_run(c, auth, who, body):
     """The checks `task_create` would refuse on, without writing or counting a refusal."""
     from . import hubdb as H
+
+    from . import pipeline_settings
+
     problems, warnings = [], []
     title, text = str(body.title or "").strip(), str(body.body or "")
-    typ = H.type_get(c, body.type or H.GENERAL_TYPE)
-    general = bool(typ) and typ["id"] == H.GENERAL_TYPE      # the lints shape asks, not a custom type's tickets
+    pipeline_id = getattr(body, "pipeline", None) or GENERAL
+    pipeline = pipeline_settings.read(c, pipeline_id)
+    general = pipeline_id == GENERAL  # the lints shape asks in General, not another pipeline's tasks
+    # The task that files it (`parent`); other relations are notes and never a parent.
+    named_parent = getattr(body, "parent", None)
+    related_refs = [r.task for r in getattr(body, "relations", None) or [] if r.kind != "parent"]
     target = H.resolve_actor(c, body.owner)
     if target and H.is_bot(target) and not auth.bot_access(c, who, H.actor_id(target))["see"]:
-        target = None       # a bot the caller cannot see is not one they can name
+        target = None  # a bot the caller cannot see is not one they can name
     if not target or target == H.KEEPER:
         problems.append(f"{body.owner} is not a bot or a person on the roster")
     else:
         from . import reach
-        parents = [r.task for r in body.relations if r.kind == "parent"]
+
         try:
-            parent = auth.resolve_task(c, who, parents[0]) if parents else None
-        except Problem:        # an unknown parent is the create's own refusal, not reach's
+            parent = auth.resolve_task(c, who, named_parent) if named_parent else None
+        except Problem:  # an unknown parent is the create's own refusal, not reach's
             parent = None
+        parent_id = parent
         try:
             reach.check(c, who, target, "task", task_id=parent)
         except reach.Refused as exc:
@@ -289,15 +359,19 @@ def task_dry_run(c, auth, who, body):
         if H.is_bot(target):
             state = (H.bot(c, H.actor_id(target)) or {}).get("state")
             if state in H.INACTIVE_STATES:
-                problems.append(H.target_inactive(c, H.actor_id(target), state))
+                problems.append(H.target_inactive(c, H.actor_id(target), state, who))
             elif state != "active":
                 problems.append(f"{H.actor_name(c, target)} is {state}, not active")
             if not auth.bot_access(c, who, H.actor_id(target))["write"]:
-                problems.append(f"you can see {H.actor_name(c, target)} but may not give it work; "
-                                "ask the person who runs it for Write access")
+                problems.append(
+                    f"you can see {H.actor_name(c, target)} but may not give it work; "
+                    "ask the person who runs it for Write access"
+                )
             if not auth.bot_contact(c, who, H.actor_id(target)):
-                problems.append(f"{H.actor_name(c, target)} does not take tasks from other bots; ask its "
-                                "manager or a person to pass this on")
+                problems.append(
+                    f"{H.actor_name(c, target)} does not take tasks from other bots; ask its "
+                    "manager or a person to pass this on"
+                )
         if not title:
             problems.append("give it a title that says what you are asking for")
         elif H.is_human(target) and general and H.STYLE_LINT != "off":
@@ -309,39 +383,58 @@ def task_dry_run(c, auth, who, body):
         if H.is_bot(who.actor) and H.TITLE_LINT != "off" and general:
             # plain-English titles: recorded on the task this week, refused once TICO_TITLE_LINT=refuse
             problems += [f"{p} (title lint, {H.TITLE_LINT})" for p in H.lint_title(title)]
-        dup = H._one(c, "SELECT id FROM tasks WHERE requester_id=? AND owner_id=? AND title=? "
-                        f"AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))})",
-                     (who.actor, target, title, *H.ACTIVE_STATUSES))
-        if dup and H.task_private_readable(c, who.actor, H.task(c, dup["id"])) and (
-                not who.task_actor or H.task_private_readable(c, who.task_actor, H.task(c, dup["id"]))):
+        dup = H._one(
+            c,
+            "SELECT id FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status='open'",
+            (who.actor, target, title),
+        )
+        if (
+            dup
+            and H.task_private_readable(c, who.actor, H.task(c, dup["id"]))
+            and (not who.task_actor or H.task_private_readable(c, who.task_actor, H.task(c, dup["id"])))
+        ):
             problems.append(f"{dup['id']} already asks {H.actor_name(c, target)} for this")
         # The create's own privacy refusals, word for word (task_privacy.require_create): private work handed to
-        # someone who cannot read it, or a private task's guest refused.
+        # someone who cannot read it, or a private task's reach refused.
         from . import task_privacy as privacy
+
         try:
-            parents = [r.task for r in body.relations if r.kind == "parent"]
-            parent = H.task(c, auth.task(c, who, auth.resolve_task(c, who, parents[0]))["id"]) if parents else None
-            related = [auth.resolve_task(c, who, r.task) for r in body.relations if r.kind != "parent"]
-            privacy.require_create(c, who, body.private, target, parent, title=body.title, body=body.body,
-                                   from_private_work=body.from_private, texts=privacy.create_texts(body),
-                                   related=related)
+            parent = (
+                H.task(c, auth.task(c, who, auth.resolve_task(c, who, named_parent))["id"]) if named_parent else None
+            )
+            related = [auth.resolve_task(c, who, ref) for ref in related_refs]
+            privacy.require_create(
+                c,
+                who,
+                body.private,
+                target,
+                parent,
+                title=body.title,
+                body=body.body,
+                from_private_work=body.from_private,
+                texts=privacy.create_texts(body),
+                related=related,
+            )
         except Problem as exc:
             problems.append(exc.detail)
+        if body.readers:
+            # The create's reader refusals (hubdb.new_readers, task_privacy.require_readers), none of them counted.
+            probe = H.CLOSE_PROBE.set(True)
+            try:
+                parties = {"owner_id": target, "requester_id": who.actor, "readers": None}
+                privacy.require_readers(c, who, None, H.new_readers(c, who.actor, parties, body.readers), parent_id)
+            except (Problem, H.Refused) as exc:
+                problems.append(exc.detail)
+            finally:
+                H.CLOSE_PROBE.reset(probe)
     if body.roles:
         from . import task_roles as TRo
+
         try:
             for people in (TRo.clean(body.roles) or {}).values():
                 problems += [f"{p} is not a bot or a person on the roster" for p in people if not H.resolve_actor(c, p)]
         except ValueError as exc:
             problems.append(str(exc))
-    if not typ:
-        problems.append("No such task type")
-    elif body.step:
-        step = next((s for s in typ["steps"] if s["id"] == body.step or s["name"] == body.step), None)
-        if not step:
-            problems.append("No such step in this task type")
-        elif step["status"] == "ready" and H.is_bot(who.actor):
-            problems.append("Ready to ship is set when the pull request merges, not by the bot")
-        elif step["status"] == "waiting" and who.actor == target and H.is_bot(target):
-            problems.append("A self-requested task needs something to wait on first")
+    if not pipeline or pipeline.get("retired_at"):
+        problems.append(f"No pipeline {pipeline_id}")
     return {"ok": not problems, "owner": target, "problems": problems, **({"warnings": warnings} if warnings else {})}

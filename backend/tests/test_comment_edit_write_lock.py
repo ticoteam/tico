@@ -4,6 +4,7 @@ On a 665k-row `idempotency` table, rewriting the answers that quote an edited co
 transaction: 35-37 s, and other writers timed out at BEGIN. The answers that quote a message are now found by index
 (backend/idempotency_messages.py), and the edit and delete statements read no table whole.
 """
+
 import json
 import sqlite3
 import threading
@@ -14,7 +15,7 @@ import pytest
 
 from backend import idempotency_messages as IM
 from backend.store import H
-from backend.tests.test_tasks_board import api, post  # noqa: F401
+from backend.tests.helpers.tasks_board import api, post  # noqa: F401
 
 BIG = 20000
 
@@ -27,6 +28,7 @@ def _comment(api, text="Words to withdraw", title="Review the report"):
 def _answers(c, count, quoting=None):
     """`count` stored answers, most quoting some other message, as a busy server keeps them for 48 hours; with
     `quoting`, every 500th quotes that message."""
+
     def answer(i):
         if quoting and i % 500 == 0:
             return json.dumps({"comment": dict(quoting, body="old words"), "comments": [dict(quoting, body="old")]})
@@ -34,8 +36,11 @@ def _answers(c, count, quoting=None):
             other = {"id": str(uuid.uuid4()), "from_actor": "bot:ops", "body": "x" * 200, "kind": "say"}
             return json.dumps({"comment": other, "task": {"id": str(uuid.uuid4())}})
         return json.dumps({"ok": True, "id": str(uuid.uuid4()), "detail": "y" * 300})
-    c.executemany("INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)",
-                  [(f"bot:b{i % 40}", "/api/v2/x", str(uuid.uuid4()), "h", answer(i), H.now()) for i in range(count)])
+
+    c.executemany(
+        "INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)",
+        [(f"bot:b{i % 40}", "/api/v2/x", str(uuid.uuid4()), "h", answer(i), H.now()) for i in range(count)],
+    )
 
 
 def _steps(c, work):
@@ -45,6 +50,7 @@ def _steps(c, work):
     def tick():
         count[0] += 1
         return 0
+
     c.set_progress_handler(tick, 100)
     try:
         work()
@@ -81,8 +87,11 @@ def test_the_work_under_the_lock_does_not_grow_with_the_stored_answers(api, chan
         with api.app.state.store.transaction() as c:
             _answers(c, extra)
         with api.app.state.store.transaction() as c:
-            work = (lambda: H.task_comment_edit(c, "human:ana", task["id"], said["id"], "New words")) \
-                if change == "edit" else (lambda: H.task_comment_delete(c, "human:ana", task["id"], said["id"]))
+            work = (
+                (lambda: H.task_comment_edit(c, "human:ana", task["id"], said["id"], "New words"))
+                if change == "edit"
+                else (lambda: H.task_comment_delete(c, "human:ana", task["id"], said["id"]))
+            )
             steps.append(_steps(c, work))
     small, big = steps
     # Reading every answer costs several steps per answer: 20,000 answers would add hundreds of these hundreds.
@@ -134,22 +143,22 @@ def test_a_writer_waiting_on_an_edit_does_not_time_out(api, tmp_path):
 
 
 SHAPES = (
-    lambda m: {"comment": m},                                           # the answer to the comment itself
-    lambda m: {"comments": [m, dict(m, id="other", body="kept")]},       # a list of comments
-    lambda m: {"task": {"thread": [{"items": [m]}]}},                    # deep inside
-    lambda m: [m, {"id": m["id"]}],                                       # an answer that is a list
-    lambda m: {"comment": dict(m, sender_id=None)},                     # from_actor present but null
-    lambda m: {"ref": {"id": m["id"], "title": "not a message"}},         # the id without from_actor: kept
-    lambda m: {"id": m["id"], "from_actor": "bot:ops", "body": "old"},   # the answer is the message
-    lambda m: {"note": json.dumps(m)},                                    # quoted inside a string: kept
-    lambda m: {"comment": dict(m, id=[m["id"]])},                         # an id that is not a string: kept
-    lambda m: {"comment": dict(m, id="someone-else")},                    # another message
+    lambda m: {"comment": m},  # the answer to the comment itself
+    lambda m: {"comments": [m, dict(m, id="other", body="kept")]},  # a list of comments
+    lambda m: {"task": {"thread": [{"items": [m]}]}},  # deep inside
+    lambda m: [m, {"id": m["id"]}],  # an answer that is a list
+    lambda m: {"comment": dict(m, sender_id=None)},  # from_actor present but null
+    lambda m: {"ref": {"id": m["id"], "title": "not a message"}},  # the id without from_actor: kept
+    lambda m: {"id": m["id"], "from_actor": "bot:ops", "body": "old"},  # the answer is the message
+    lambda m: {"note": json.dumps(m)},  # quoted inside a string: kept
+    lambda m: {"comment": dict(m, id=[m["id"]])},  # an id that is not a string: kept
+    lambda m: {"comment": dict(m, id="someone-else")},  # another message
 )
 
 
 def _read(text):
     try:
-        return json.loads(text, parse_constant=str)        # NaN as text, so it equals itself
+        return json.loads(text, parse_constant=str)  # NaN as text, so it equals itself
     except ValueError:
         return text
 
@@ -157,17 +166,20 @@ def _read(text):
 @pytest.mark.parametrize("change", ["edit", "delete"])
 def test_retry_answers_are_rewritten_as_reading_every_answer_did(api, change, monkeypatch):
     task, said = _comment(api)
-    monkeypatch.setattr(H, "now", lambda: "2026-10-18T14:19:00.000000Z")     # both runs edit at the same moment
+    monkeypatch.setattr(H, "now", lambda: "2026-10-18T14:19:00.000000Z")  # both runs edit at the same moment
     with api.app.state.store.transaction() as c:
         rows = [json.dumps(shape(dict(said, body="old"))) for shape in SHAPES]
         # Answers SQLite does not read as JSON: not JSON at all, and Python's NaN.
         rows += ["not json " + said["id"], '{"n": NaN, "comment": {"id": "%s", "from_actor": "x"}}' % said["id"]]
-        c.executemany("INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)",
-                      [("human:ana", "/api/v2/shapes", f"k{i}", "h", row, H.now()) for i, row in enumerate(rows)])
+        c.executemany(
+            "INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)",
+            [("human:ana", "/api/v2/shapes", f"k{i}", "h", row, H.now()) for i, row in enumerate(rows)],
+        )
 
     def outcome(indexed):
         class Undo(Exception):
             pass
+
         found = {}
         with pytest.raises(Undo), api.app.state.store.transaction() as c:
             if not indexed:
@@ -177,37 +189,41 @@ def test_retry_answers_are_rewritten_as_reading_every_answer_did(api, change, mo
                 H.task_comment_edit(c, "human:ana", task["id"], said["id"], "New words")
             else:
                 H.task_comment_delete(c, "human:ana", task["id"], said["id"])
-            found.update((r[0], r[1]) for r in c.execute("SELECT key,response FROM idempotency "
-                                                         "WHERE operation='/api/v2/shapes'"))
+            found.update(
+                (r[0], r[1]) for r in c.execute("SELECT key,response FROM idempotency WHERE operation='/api/v2/shapes'")
+            )
             raise Undo
         return found
 
     indexed, whole = outcome(True), outcome(False)
     # The same stored answers, read as a retry reads them; one that is not JSON compares as text.
     assert {k: _read(v) for k, v in indexed.items()} == {k: _read(v) for k, v in whole.items()}
-    assert indexed[f"k{len(SHAPES)}"] == "{}"                                   # as reading every answer left it
+    assert indexed[f"k{len(SHAPES)}"] == "{}"  # as reading every answer left it
     assert "old" not in json.loads(indexed[f"k{len(SHAPES) + 1}"], parse_constant=str)["comment"]["body"]
-    assert "old" not in json.loads(indexed["k0"])["comment"]["body"]       # the rewrite did happen
+    assert "old" not in json.loads(indexed["k0"])["comment"]["body"]  # the rewrite did happen
     assert json.loads(indexed["k5"])["ref"] == {"id": said["id"], "title": "not a message"}
 
 
 def test_answers_written_before_the_index_are_found_after_the_backfill(api):
     task, said = _comment(api)
     with api.app.state.store.transaction() as c:
-        for statement in ("DROP TRIGGER idempotency_messages_insert", "DROP TRIGGER idempotency_messages_update",
-                          "DROP TRIGGER idempotency_messages_delete", "DROP TABLE idempotency_messages"):
+        for statement in (
+            "DROP TRIGGER idempotency_messages_insert",
+            "DROP TRIGGER idempotency_messages_update",
+            "DROP TRIGGER idempotency_messages_delete",
+            "DROP TABLE idempotency_messages",
+        ):
             c.execute(statement)
         c.execute("DELETE FROM registry_metadata WHERE key=?", (IM.READY,))
-        _answers(c, 3000, quoting=said)        # an older server's answers, 6 of them quoting the comment
-        quoted = {r[0] for r in c.execute("SELECT rowid FROM idempotency WHERE instr(response, ?)>0",
-                                          (said["id"],))}
-    assert len(quoted) == 7                     # and the answer to the request that wrote the comment
+        _answers(c, 3000, quoting=said)  # an older server's answers, 6 of them quoting the comment
+        quoted = {r[0] for r in c.execute("SELECT rowid FROM idempotency WHERE instr(response, ?)>0", (said["id"],))}
+    assert len(quoted) == 7  # and the answer to the request that wrote the comment
     with api.app.state.store.read() as c:
         IM.ensure(c)
-        assert IM.quoting(c, said["id"]) is None                 # not ready: an edit reads every answer
+        assert IM.quoting(c, said["id"]) is None  # not ready: an edit reads every answer
         stopped = threading.Event()
         stopped.set()
-        assert IM.backfill(c, span=400, stop=stopped) == 0       # the server stopping: the next start goes again
+        assert IM.backfill(c, span=400, stop=stopped) == 0  # the server stopping: the next start goes again
         assert IM.quoting(c, said["id"]) is None
         writes, real_write = [], IM._write
 
@@ -218,34 +234,36 @@ def test_answers_written_before_the_index_are_found_after_the_backfill(api):
         def counted(conn, work):
             writes.append(1)
             real_write(conn, work)
+
         IM._write = counted
         try:
-            assert IM.backfill(c, batch=50, span=3000, stop=StopAfterFirstWrite()) == 50   # stops mid-span
+            assert IM.backfill(c, batch=50, span=3000, stop=StopAfterFirstWrite()) == 50  # stops mid-span
         finally:
             IM._write = real_write
-        assert writes == [1] and IM.quoting(c, said["id"]) is None   # one write, not ready
+        assert writes == [1] and IM.quoting(c, said["id"]) is None  # one write, not ready
         writes.clear()
         IM._write = counted
         try:
-            assert IM.backfill(c, batch=1000, span=10**6, stop=StopAfterFirstWrite()) == 601   # every batch, then stop
+            assert IM.backfill(c, batch=1000, span=10**6, stop=StopAfterFirstWrite()) == 601  # every batch, then stop
         finally:
             IM._write = real_write
-        assert writes == [1] and IM.quoting(c, said["id"]) is None   # the ready mark is not written either
-        assert IM.backfill(c, batch=50, span=400) == 601         # the answers that may quote a message
+        assert writes == [1] and IM.quoting(c, said["id"]) is None  # the ready mark is not written either
+        assert IM.backfill(c, batch=50, span=400) == 601  # the answers that may quote a message
         assert {r[0] for r in IM.quoting(c, said["id"])} == quoted
-        assert IM.backfill(c) == 0                               # once
+        assert IM.backfill(c) == 0  # once
     with api.app.state.store.transaction() as c:
         H.task_comment_edit(c, "human:ana", task["id"], said["id"], "New words")
-        assert {r[0] for r in IM.quoting(c, said["id"])} == quoted      # rewritten, still quoting it
+        assert {r[0] for r in IM.quoting(c, said["id"])} == quoted  # rewritten, still quoting it
         H.task_comment_delete(c, "human:ana", task["id"], said["id"])
         # The deleted comment leaves the lists; each answer keeps its record of the comment, now empty.
         assert {r[0] for r in IM.quoting(c, said["id"])} == quoted
-        assert all(json.loads(r[1]).get("comments") == [] for r in IM.quoting(c, said["id"])
-                   if "comments" in json.loads(r[1]))
+        assert all(
+            json.loads(r[1]).get("comments") == [] for r in IM.quoting(c, said["id"]) if "comments" in json.loads(r[1])
+        )
         some = sorted(quoted)[0]
-        c.execute("UPDATE idempotency SET response='{}' WHERE rowid=?", (some,))   # a rewrite that drops the quote
+        c.execute("UPDATE idempotency SET response='{}' WHERE rowid=?", (some,))  # a rewrite that drops the quote
         assert {r[0] for r in IM.quoting(c, said["id"])} == quoted - {some}
-        c.execute("DELETE FROM idempotency")                    # the retention sweep
+        c.execute("DELETE FROM idempotency")  # the retention sweep
         assert c.execute("SELECT count(*) FROM idempotency_messages").fetchone()[0] == 0
 
 
@@ -254,13 +272,18 @@ def test_the_server_indexes_an_older_servers_answers_after_it_starts(tmp_path):
     from backend.app import create_app
     from backend.config import Settings
     from backend.store import Store
+
     settings = Settings(db_path=tmp_path / "hub.db")
     store = Store(settings)
     store.initialize(seed_market=False)
     message = {"id": "m-older", "from_actor": "bot:ops", "body": "old words"}
     with store.transaction() as c:
-        for statement in ("DROP TRIGGER idempotency_messages_insert", "DROP TRIGGER idempotency_messages_update",
-                          "DROP TRIGGER idempotency_messages_delete", "DROP TABLE idempotency_messages"):
+        for statement in (
+            "DROP TRIGGER idempotency_messages_insert",
+            "DROP TRIGGER idempotency_messages_update",
+            "DROP TRIGGER idempotency_messages_delete",
+            "DROP TABLE idempotency_messages",
+        ):
             c.execute(statement)
         c.execute("DELETE FROM registry_metadata WHERE key=?", (IM.READY,))
         _answers(c, 1000, quoting=message)
@@ -275,6 +298,7 @@ def test_the_server_indexes_an_older_servers_answers_after_it_starts(tmp_path):
 def test_a_new_file_is_ready_without_a_backfill(tmp_path):
     from backend.config import Settings
     from backend.store import Store
+
     store = Store(Settings(db_path=tmp_path / "hub.db"))
     store.initialize(seed_market=False)
     with store.read() as c:

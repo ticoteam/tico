@@ -1,141 +1,177 @@
-"""A batch: what needs a person, frozen and walked; responses collected, applied together on commit;
-the assistant's per-item report opening the next batch. backend/batch.py."""
+"""A batch (backend/batch.py): Needs you, frozen, walked one item at a time, applied on commit with the person's own
+identity through the task calls. OK and Send back on a bot's ask, an answer to its question, Done or Close on a task
+it filed for the person. An OK bound to what it lets go is never given on a walk. On a store with no app."""
 
-import json
+import pytest
 
-from backend import hubdb as H
-from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
+from backend import batch as B
+from backend import task_asks
+from backend.auth import Identity
+from backend.store import H, Problem
+from backend.tests.helpers import engine as X
 
-
-def ask_ana(api, bot, text, title="Pick the outbound tool", token=None):
-    """A bot that owns a task Ana filed asks him its one question."""
-    task = post(api, "tasks", {"title": title, "body": "Decide", "owner": bot})
-    token = token or setup_attempt(api, bot)[2]["token"]
-    return post(api, f"tasks/{task['id']}/ask", {"text": text}, token=token)
-
-
-def approval_for_ana(api, bot="finance", kind="spend", payload=None, task=None, token=None):
-    attempt = {"token": token} if token else setup_attempt(api, bot)[2]
-    body = {"kind": kind, "payload": payload or {"amount": 1200, "account": "ads", "what": "LinkedIn ads"}}
-    if task:
-        body["task_id"] = task
-    return post(api, "approvals", body, token=attempt["token"])
+ANA = Identity("human:ana", "human")
+FINANCE = "bot:finance"
 
 
-def test_responses_are_recorded_not_applied_and_commit_applies_them_with_the_persons_identity(api):
-    _, _, finance = setup_attempt(api, "finance")
-    # Both decisive items trace back to Ana, so the approval leads on its kind.
-    ads = post(api, "tasks", {"title": "Run the LinkedIn ads", "body": "Q4", "owner": "bot:finance"})
-    approval = approval_for_ana(api, token=finance["token"], task=ads["id"])
-    ask = ask_ana(api, "finance", "Close or Apollo?", token=finance["token"])
-    chore = post(api, "tasks", {"title": "Sign the lease", "body": "Ready", "owner": "human:ana"},
-                 token=finance["token"])
-    junk = post(api, "tasks", {"title": "Drop the old draft to Yair", "body": "Obsolete", "owner": "human:ana"},
-                token=finance["token"])
-    b = post(api, "batch", {})
-    bid = b["id"]
-    assert b["item"]["key"] == "approval:" + approval["id"]
-
-    # Responding records; nothing changes yet.
-    r = post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "approve", "text": "Go ahead", "heard": "yeah go ahead"})
-    assert r["recorded"] and r["n"] == 1 and r["response"]["heard"] == "yeah go ahead"
-    assert post(api, "batch", {})["item"]["response"] == [r["response"]], "the current item shows its responses"
-    assert get(api, f"approvals/{approval['id']}")["decision"] is None
-    post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "done"}, expected=422)      # an approval is approved or declined
-    post(api, f"batch/{bid}/respond", {"kind": "needs_info"}, expected=422)                      # a question needs its text
-    nxt = post(api, f"batch/{bid}/next", {})
-    assert nxt["item"]["kind"] == "question" and nxt["item"]["question"] == "Close or Apollo?"
-    post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "approve"}, expected=422)   # a question is not an approval
-    post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "answer", "text": "Close. Keep the trial seats."})
-    # A response can name another item by position, and the last response to an item wins.
-    post(api, f"batch/{bid}/respond", {"kind": "skip", "item": 1})
-    post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "approve", "item": 1, "text": "Go ahead"})
-    nxt = post(api, f"batch/{bid}/next", {})
-    assert nxt["item"]["key"] == "task:" + chore["id"]
-    post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "done", "text": "Signed this morning"})
-    nxt = post(api, f"batch/{bid}/next", {})
-    assert nxt["item"]["key"] == "task:" + junk["id"]
-    post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "close", "text": "Not needed any more."})
-    post(api, f"batch/{bid}/respond", {"kind": "rule", "text": "Always archive postcard complaints.", "item": 4})
-    end = post(api, f"batch/{bid}/next", {})
-    assert end["end"] and end["summary"]["approving"] == ["Pay 1200: LinkedIn ads"]
-    assert end["summary"]["counts"] == {"approve": 1, "answer": 1, "done": 1, "close": 1, "rule": 1}
-    assert end["summary"]["responses"] == 5 and end["summary"]["items"] == 4, "a rule beside a decision is two responses"
-    assert get(api, f"tasks/{chore['id']}")["task"]["status"] == "open", "still nothing applied"
-
-    done = post(api, f"batch/{bid}/commit", {})
-    assert done["committed"] and done["errors"] == []
-    assert done["sent"] == {"finance": 1} and done["recorded"] == {"finance": 4}
-    assert get(api, f"approvals/{approval['id']}")["decision"] == "approved"
-    assert get(api, f"tasks/{chore['id']}")["task"]["status"] == "done"
-    assert get(api, f"tasks/{junk['id']}")["task"]["status"] == "closed"
-    with api.app.state.store.read() as c:
-        reply = c.execute("SELECT body,sender_id FROM messages WHERE in_reply_to=?", (ask["id"],)).fetchone()
-        coo = c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:coo' OR sender_id='bot:coo'").fetchone()[0]
-        event = c.execute("SELECT detail FROM events WHERE action='batch.committed'").fetchone()
-    assert reply["body"] == "Close. Keep the trial seats." and reply["sender_id"] == "human:ana"
-    assert coo == 0, "nothing is written to the assistant's room"
-    assert "Rule for finance: Always archive postcard complaints." in json.loads(event["detail"])["applied"]
-    assert get(api, "batch")["batch"] is None
-    post(api, f"batch/{bid}/commit", {}, expected=409)
-    post(api, f"batch/{bid}/respond", {"kind": "skip"}, expected=409)
+@pytest.fixture
+def c(company):
+    with company.transaction() as conn:
+        X.bot(conn, "finance")
+        yield conn
 
 
-def test_a_batch_belongs_to_a_person_and_a_failed_item_does_not_stop_the_commit(api):
-    _, _, attempt = setup_attempt(api, "finance")
-    approval = approval_for_ana(api, token=attempt["token"])
-    b = post(api, "batch", {})
-    post(api, f"batch/{b['id']}/next", {}, token="ben-test", expected=404)
-    post(api, "batch", {}, token=attempt["token"], expected=403)
-    post(api, f"batch/{b['id']}/respond", {"kind": "decide", "decision": "approve"})
-    # Someone decides the approval by hand before the commit: that item fails, the batch still commits.
-    post(api, f"approvals/{approval['id']}", {"decision": "declined"})
-    done = post(api, f"batch/{b['id']}/commit", {})
-    assert done["committed"] and len(done["errors"]) == 1 and "already declined" in done["errors"][0]
-    assert get(api, "batch")["batch"] is None
+def _work(c, title="Run the LinkedIn ads"):
+    return H.task_create(c, "human:ana", title, "Q4 campaign.", FINANCE, lint=False)
 
 
+def _sent(log):
+    def send(c, who, text, refs, to):
+        log.append((to, text, refs))
+        return {"id": H.new_id()}
 
-def test_done_on_a_bots_request_needs_no_words_and_the_bot_hears_who_finished_it(api):
-    _, _, finance = setup_attempt(api, "finance")
-    chore = post(api, "tasks", {"title": "Sign the lease", "body": "Ready", "owner": "human:ana"}, token=finance["token"])
-    b = post(api, "batch", {})
-    assert b["item"]["key"] == "task:" + chore["id"]
-    post(api, f"batch/{b['id']}/respond", {"kind": "decide", "decision": "done"})
-    assert post(api, f"batch/{b['id']}/commit", {})["errors"] == []
-    assert get(api, f"tasks/{chore['id']}")["task"]["status"] == "done"
-    with api.app.state.store.read() as c:
-        told = [r["body"] for r in c.execute("SELECT body FROM messages WHERE recipient_id='bot:finance'")]
-    assert "Ana marked this done: Sign the lease" in told
+    return send
 
 
-def test_what_a_person_asked_for_leads_unless_a_bots_item_presses(api):
-    """Needs you, Decide and the lineup put work that traces back to a person (through a bot's subtask too) ahead
-    of what bots made for themselves; a bot's overdue or long-waiting item still goes first."""
-    _, _, finance = setup_attempt(api, "finance")
-    _, _, ops = setup_attempt(api, "ops")
-    approval = approval_for_ana(api, token=finance["token"])
-    chore = post(api, "tasks", {"title": "Rotate the report template", "body": "Housekeeping", "owner": "human:ana"},
-                 token=finance["token"])
-    todo = post(api, "tasks", {"title": "Book the venue", "body": "For the offsite", "owner": "human:ana"})
-    quote = post(api, "tasks", {"title": "Quote for Acme", "body": "A customer", "owner": "bot:ops"}, token="ben-test")
-    confirm = post(api, "tasks", {"title": "Confirm the Acme discount", "body": "For the quote", "owner": "human:ana",
-                                  "relations": [{"task": quote["id"], "kind": "parent"}]}, token=ops["token"])
-    items = {i["id"]: i for i in get(api, "needs-you")["items"]}
-    order = list(items)
-    assert order.index(confirm["id"]) < order.index(approval["id"]) < order.index(chore["id"])
-    assert order.index(approval["id"]) < order.index(todo["id"]), "a person's own to-do does not lift over a bot's ask"
-    assert items[confirm["id"]]["from_person"] == "human:ben", "a bot's subtask keeps the person its parent came from"
-    assert not items[approval["id"]]["from_person"] and not items[chore["id"]]["from_person"]
-    b = post(api, "batch", {})
-    assert b["item"]["key"] == "task:" + confirm["id"]
-    assert [g["who"] for g in b["lineup"]] == ["bot:ops", "bot:finance"]
+def _ask_id(c, task, asked):
+    """An ask's batch key past "ask:": the task's visit and the requirement (waiting_on.ask_id)."""
+    visit = c.execute("SELECT id FROM visits WHERE task_id=? AND left_at IS NULL", (task["id"],)).fetchone()[0]
+    return f"{visit}:{asked['requirement_id']}"
 
-    # Overdue, or waiting (a day for an approval, which holds its bot up): a bot's item goes ahead again.
-    overdue = post(api, "tasks", {"title": "Renew the domain", "body": "Lapsed", "owner": "human:ana",
-                                  "due": H.shift(H.now(), days=-1)}, token=finance["token"])
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE approvals SET created_at=? WHERE id=?", (H.shift(H.now(), days=-2), approval["id"]))
-    order = [i["id"] for i in get(api, "needs-you")["items"]]
-    # Anything with a due date leads, then a pressing item.
-    assert order[:2] == [overdue["id"], approval["id"]] and order.index(overdue["id"]) < order.index(chore["id"])
+
+def _start(c):
+    return B.start(c, ANA.actor, {}, reader=ANA.actor)
+
+
+def test_a_batch_holds_what_bots_ask_and_commit_applies_it_through_the_task_calls(c):
+    ads = _work(c)
+    ok = H.task_ask(
+        c, FINANCE, ads["id"], "human:ana", "Spend the Q4 ads budget?", kind="ok", seen_version=ads["version"]
+    )
+    other = _work(c, "Pick the launch day")
+    question = H.task_ask(
+        c,
+        FINANCE,
+        other["id"],
+        "human:ana",
+        "Monday or Friday?",
+        choices=["Monday", "Friday"],
+        seen_version=other["version"],
+    )
+    chore = H.task_create(c, FINANCE, "Sign the lease", "Sign it today.", "human:ana", lint=False)
+    batch = _start(c)
+    keys = [B._items(c.execute("SELECT * FROM batches WHERE id=?", (batch["id"],)).fetchone())]
+    assert batch["total"] == 3 and batch["item"]["key"] == "ask:" + _ask_id(c, ads, ok)
+    assert {i["key"] for i in keys[0]} == {
+        "ask:" + _ask_id(c, ads, ok),
+        "ask:" + _ask_id(c, other, question),
+        "task:" + chore["id"],
+    }
+    B.respond(c, ANA.actor, batch["id"], "decide", "Go ahead.", n=1, decision="ok")
+    B.respond(c, ANA.actor, batch["id"], "decide", "Friday", n=2, decision="answer")
+    B.respond(c, ANA.actor, batch["id"], "decide", "", n=3, decision="done")
+    assert H.task(c, chore["id"])["status"] == "open"  # nothing is applied while the person talks
+    log = []
+    out = B.commit(c, ANA, batch["id"], _sent(log))
+    assert out["errors"] == []
+    view = H.task_view(c, ads["id"], "human:ana")
+    assert next(r for r in view["to_leave"] if r["requirement_id"] == ok["requirement_id"])["met"]
+    asked = H.task_view(c, other["id"], "human:ana")["to_leave"]
+    assert next(r for r in asked if r["requirement_id"] == question["requirement_id"])["answer"]["value"] == "Friday"
+    assert H.task(c, chore["id"])["status"] == "done"
+    assert [to for to, _, _ in log] == [FINANCE]
+
+
+def test_send_back_needs_notes_and_an_ok_or_a_close_only_fits_its_kind(c):
+    ads = _work(c)
+    ok = H.task_ask(
+        c, FINANCE, ads["id"], "human:ana", "Spend the Q4 ads budget?", kind="ok", seen_version=ads["version"]
+    )
+    batch = _start(c)
+    with pytest.raises(Problem, match="what to change"):
+        B.respond(c, ANA.actor, batch["id"], "decide", "", decision="send_back")
+    with pytest.raises(Problem, match="ok or send_back"):
+        B.respond(c, ANA.actor, batch["id"], "decide", "", decision="close")
+    B.respond(c, ANA.actor, batch["id"], "decide", "Halve it.", decision="send_back")
+    B.commit(c, ANA, batch["id"], _sent([]))
+    found = next(
+        r for r in H.task_view(c, ads["id"], "human:ana")["to_leave"] if r["requirement_id"] == ok["requirement_id"]
+    )
+    assert (found["met"], found["answer"]["value"], found["answer"]["note"]) == (False, "no", "Halve it.")
+
+
+def test_a_stage_ok_on_two_tasks_is_two_items_each_answered_on_its_own_task(c):
+    """A stage's OK is one requirement on every task in the stage, each task's own ask through its visit: two tasks
+    there are two items, and each decision answers its own task."""
+    stage_ok = X.requirement(c, "general-todo", "ok", person="human:ana", line="OK the spend")
+    ads, launch = _work(c), _work(c, "Run the launch ads")
+    batch = _start(c)
+    rows = B._items(c.execute("SELECT * FROM batches WHERE id=?", (batch["id"],)).fetchone())
+    asks = [r for r in rows if r["key"].startswith("ask:")]
+    assert sorted(r["task"] for r in asks) == sorted([ads["id"], launch["id"]]) and len({r["key"] for r in asks}) == 2
+    for n, row in enumerate(rows, 1):
+        if row["task"] == ads["id"] and row["key"].startswith("ask:"):
+            B.respond(c, ANA.actor, batch["id"], "decide", "", n=n, decision="ok")
+        elif row["key"].startswith("ask:"):
+            B.respond(c, ANA.actor, batch["id"], "decide", "Halve it.", n=n, decision="send_back")
+    out = B.commit(c, ANA, batch["id"], _sent([]))
+    assert out["errors"] == []
+
+    def mine(task):
+        return next(r for r in H.task_view(c, task["id"], "human:ana")["to_leave"] if r["requirement_id"] == stage_ok)
+
+    assert mine(ads)["met"] and mine(ads)["answer"]["value"] == "ok"
+    assert (mine(launch)["met"], mine(launch)["answer"]["value"]) == (False, "no")
+
+
+def test_a_bound_ok_is_never_given_on_a_walk(c):
+    asked = task_asks.ask_ok(
+        c, FINANCE, "human:ana", "Send this email?", shows=["email:e1"], subject="email_send:e1", content={"to": "x"}
+    )
+    batch = _start(c)
+    assert batch["item"]["preview_only"]
+    with pytest.raises(Problem, match="preview"):
+        B.respond(c, ANA.actor, batch["id"], "decide", "", decision="ok")
+    assert task_asks.standing(c, asked["requirement_id"]) == task_asks.WAITING
+
+
+def test_an_assistant_walking_the_list_may_send_back_but_never_ok(c):
+    ads = _work(c)
+    ok = H.task_ask(
+        c, FINANCE, ads["id"], "human:ana", "Spend the Q4 ads budget?", kind="ok", seen_version=ads["version"]
+    )
+    batch = _start(c)
+    B.respond(c, ANA.actor, batch["id"], "decide", "", decision="ok")
+    out = B.commit(c, Identity("human:ana", "human", via="assistant", confirmed=True), batch["id"], _sent([]))
+    assert out["errors"] and "own" in out["errors"][0]
+    found = next(
+        r for r in H.task_view(c, ads["id"], "human:ana")["to_leave"] if r["requirement_id"] == ok["requirement_id"]
+    )
+    assert not found["met"] and found["answer"] is None
+
+
+def test_a_batch_belongs_to_a_person_and_later_keeps_an_item_out_for_a_day(c):
+    ads = _work(c)
+    H.task_ask(c, FINANCE, ads["id"], "human:ana", "Spend the Q4 ads budget?", kind="ok", seen_version=ads["version"])
+    batch = _start(c)
+    with pytest.raises(Problem, match="not found"):
+        B.respond(c, "human:ben", batch["id"], "skip")
+    B.respond(c, ANA.actor, batch["id"], "later")
+    B.commit(c, ANA, batch["id"], _sent([]))
+    assert _start(c)["total"] == 0
+
+
+def test_a_comment_that_fails_halfway_leaves_nothing_of_itself_and_the_batch_goes_on(c, monkeypatch):
+    """A bot the person may not message gets its lines as task comments; one that writes and then fails is rolled back to
+    before it, so the batch's commit never carries half a comment."""
+    task = _work(c)
+    before = c.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+
+    def half(conn, actor, task_id, text):
+        H.event(conn, actor, "comment.half", task_id, {})
+        raise RuntimeError("the comment failed after writing")
+
+    monkeypatch.setattr(H, "task_comment", half)
+    applied, errors = B._comment_instead(c, ANA, FINANCE, [(f"task:{task['id']}", "Run the ads\nGo.")], "test")
+    assert applied == [] and "failed after writing" in errors[0]
+    assert c.execute("SELECT COUNT(*) FROM events").fetchone()[0] == before

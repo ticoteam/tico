@@ -25,12 +25,12 @@ Steps:
    read in one sitting.
 8. Read the whole file as the bot would, with no other context. Mark each sentence it could act on wrongly, and fix or
    cut it.
-9. Run `hub bot check <slug>`, fix each failure, and commit with one line that says what changed.
+9. Run `tico bot check <slug>`, fix each failure, and commit with one line that says what changed.
 
 Checks before you finish:
 - Every line is true for this team. A guess is written as an open question in `knowledge/`, not as a rule.
 - No credential value, customer name, personal address or account id appears in the file.
-- The bot cannot send outside the team unless a person turned sending on. `outbound_send` in `bot.yaml` stays false here.
+- The bot cannot send outside the team unless a person allowed it in Tico (its sending policy). `bot.yaml` carries no sending setting.
 - A rule that appears in two places says the same thing in both.
 - Every playbook the file names exists, and the file says when to read each one.
 

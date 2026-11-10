@@ -16,6 +16,7 @@ It reports counts by sender → receiver, how many land on people, and totals by
 one a system flow made in the bot's name (a routine posting as the bot): it errs toward reporting. Use a copy
 (`python -m backend.devcopy`) or the live file; it never writes either.
 """
+
 import argparse
 import json
 from contextlib import closing
@@ -28,12 +29,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from backend import reach as R  # noqa: E402
-from backend import groups as G  # noqa: E402
-from backend.store import H  # noqa: E402
-from backend.updates import ZONE  # noqa: E402
+from backend import reach as R
+from backend import groups as G
+from backend.store import H
+from backend.updates import ZONE
 
-CHECKED = ("dm", "mention", "ask", "assign", "addressed", "home")    # what threads.post's reach check covers
+CHECKED = ("dm", "mention", "ask", "assign", "addressed", "home")  # what threads.post's reach check covers
 TS = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 
@@ -51,8 +52,16 @@ def context(c):
     """reach.context, or the same with no settings and lines on a hub from before the reach tables."""
     if has(c, "reach_settings"):
         return R.context(c)
-    return {"c": c, "roster": G._roster(c), "configs": G._configs(c), "settings": {}, "lines": [], "owner": R.owner(c),
-            "led": {}, "bots": {b["id"]: b for b in H.bots(c)}}
+    return {
+        "c": c,
+        "roster": G._roster(c),
+        "configs": G._configs(c),
+        "settings": {},
+        "lines": [],
+        "owner": R.owner(c),
+        "led": {},
+        "bots": {b["id"]: b for b in H.bots(c)},
+    }
 
 
 def day(ts):
@@ -63,19 +72,41 @@ def task_writes(c, since):
     if not has(c, "task_cap_log"):
         return []
     out = []
-    parent = ("(SELECT to_task FROM task_relations WHERE from_task=s.task_id AND kind='parent' LIMIT 1)"
-              if has(c, "task_relations") else "NULL")
-    for r in c.execute(f"SELECT s.task_id, s.sender, s.receiver, s.sent_at, t.requester_id, {parent} AS parent_id, "
-                       "t.created_at FROM task_cap_log s LEFT JOIN tasks t ON t.id=s.task_id "
-                       "WHERE s.sender LIKE 'bot:%' AND s.sent_at>=? ORDER BY s.sent_at", (since,)):
-        # Made by this bot when its creation and this send are the same write: within a couple of seconds, not the
-        # same second (the clock can tick between the task row and its send log).
-        made = (r["requester_id"] == r["sender"] and bool(r["created_at"])
-                and abs((H.parse_ts(r["sent_at"]) - H.parse_ts(r["created_at"])).total_seconds()) < 2)
+    parent = (
+        "(SELECT to_task FROM task_relations WHERE from_task=s.task_id AND kind='parent' LIMIT 1)"
+        if has(c, "task_relations")
+        else "NULL"
+    )
+    for r in c.execute(
+        f"SELECT s.task_id, s.sender, s.receiver, s.sent_at, t.requester_id, {parent} AS parent_id, "
+        "t.created_at FROM task_cap_log s LEFT JOIN tasks t ON t.id=s.task_id "
+        "WHERE s.sender LIKE 'bot:%' AND s.sent_at>=? ORDER BY s.sent_at",
+        (since,),
+    ):
+        # Made by this bot when its creation and this send are the same write. A new task's send carries the task's
+        # own `created_at` (backend/task_caps.py `record`), however long the write took; a send logged before it did
+        # carries the clock at the end of the write, read as made within a couple of seconds.
+        made = (
+            r["requester_id"] == r["sender"]
+            and bool(r["created_at"])
+            and (
+                r["sent_at"] == r["created_at"]
+                or abs((H.parse_ts(r["sent_at"]) - H.parse_ts(r["created_at"])).total_seconds()) < 2
+            )
+        )
         # A new task is checked against its parent (what the route does); a hand-off against the task itself.
-        out.append({"kind": "task", "at": r["sent_at"], "sender": r["sender"], "receiver": r["receiver"],
-                    "task_id": r["parent_id"] if made else r["task_id"], "what": "made" if made else "handed",
-                    "conversation_id": None, "in_reply_to": None})
+        out.append(
+            {
+                "kind": "task",
+                "at": r["sent_at"],
+                "sender": r["sender"],
+                "receiver": r["receiver"],
+                "task_id": r["parent_id"] if made else r["task_id"],
+                "what": "made" if made else "handed",
+                "conversation_id": None,
+                "in_reply_to": None,
+            }
+        )
     return out
 
 
@@ -85,18 +116,29 @@ def chat_writes(c, since):
     out = []
     marks = ",".join("?" * len(CHECKED))
     for r in c.execute(
-            "SELECT m.id, m.sender_id, m.created_at, m.conversation_id, m.in_reply_to, v.task_id, v.owner_id, "
-            "group_concat(DISTINCT d.recipient) AS receivers FROM messages m "
-            "JOIN message_deliveries d ON d.message_id=m.id LEFT JOIN conversations v ON v.id=m.conversation_id "
-            f"WHERE m.sender_id LIKE 'bot:%' AND m.created_at>=? AND d.reason IN ({marks}) "
-            "AND d.recipient<>m.sender_id AND (d.recipient LIKE 'bot:%' OR d.recipient LIKE 'human:%') "
-            "GROUP BY m.id ORDER BY m.created_at", (since, *CHECKED)):
+        "SELECT m.id, m.sender_id, m.created_at, m.conversation_id, m.in_reply_to, v.task_id, v.owner_id, "
+        "group_concat(DISTINCT d.recipient) AS receivers FROM messages m "
+        "JOIN message_deliveries d ON d.message_id=m.id LEFT JOIN conversations v ON v.id=m.conversation_id "
+        f"WHERE m.sender_id LIKE 'bot:%' AND m.created_at>=? AND d.reason IN ({marks}) "
+        "AND d.recipient<>m.sender_id AND (d.recipient LIKE 'bot:%' OR d.recipient LIKE 'human:%') "
+        "GROUP BY m.id ORDER BY m.created_at",
+        (since, *CHECKED),
+    ):
         if r["owner_id"] == r["sender_id"]:
-            continue                                    # the bot's own Home: its own place to talk
+            continue  # the bot's own Home: its own place to talk
         for receiver in sorted(set(r["receivers"].split(","))):
-            out.append({"kind": "chat", "at": r["created_at"], "sender": r["sender_id"], "receiver": receiver,
-                        "task_id": r["task_id"], "what": "message", "conversation_id": r["conversation_id"],
-                        "in_reply_to": r["in_reply_to"]})
+            out.append(
+                {
+                    "kind": "chat",
+                    "at": r["created_at"],
+                    "sender": r["sender_id"],
+                    "receiver": receiver,
+                    "task_id": r["task_id"],
+                    "what": "message",
+                    "conversation_id": r["conversation_id"],
+                    "in_reply_to": r["in_reply_to"],
+                }
+            )
     return out
 
 
@@ -115,9 +157,15 @@ def replay(c, ctx, writes):
 
         found = R.decide(ctx, w["sender"], w["receiver"], w["kind"], count=count)
         if not found.allowed:
-            shared = w["task_id"] and R.on_task(c, w["task_id"], w["sender"], w["receiver"], before=w["at"])
-            asked = shared or R.solicited(c, w["sender"], w["receiver"], w["conversation_id"], w["in_reply_to"],
-                                          before=w["at"])
+            if w["receiver"].startswith("human:"):
+                asked = R.person_asked(
+                    c, w["sender"], w["receiver"], w["task_id"], w["conversation_id"], w["in_reply_to"], before=w["at"]
+                )
+            else:
+                shared = w["task_id"] and R.on_task(c, w["task_id"], w["sender"], w["receiver"], before=w["at"])
+                asked = shared or R.solicited(
+                    c, w["sender"], w["receiver"], w["conversation_id"], w["in_reply_to"], before=w["at"]
+                )
             if not asked:
                 refused.append({**w, "code": found.why, "via": found.via})
         sent[(w["sender"], w["kind"], today)] += 1
@@ -139,14 +187,25 @@ def report(ctx, writes, refused, days, top):
         "by_kind": dict(by_kind),
         "by_code": dict(Counter(r["code"] for r in refused)),
         "senders": dict(Counter(R.name(ctx, r["sender"]) for r in refused).most_common(top)),
-        "pairs": [{"sender": s, "receiver": rcv, "sender_name": R.name(ctx, s), "receiver_name": R.name(ctx, rcv),
-                   "count": n, "via": R._managers(ctx).get(s)} for (s, rcv), n in pairs.most_common(top)],
+        "pairs": [
+            {
+                "sender": s,
+                "receiver": rcv,
+                "sender_name": R.name(ctx, s),
+                "receiver_name": R.name(ctx, rcv),
+                "count": n,
+                "via": R._managers(ctx).get(s),
+            }
+            for (s, rcv), n in pairs.most_common(top)
+        ],
     }
 
 
 def text(out):
-    lines = [f"Last {out['days']} days: {out['checked']} bot writes to teammates checked, {out['refused']} would be "
-             f"refused ({out['refused_to_people']} to {out['people_hit']} people)."]
+    lines = [
+        f"Last {out['days']} days: {out['checked']} bot writes to teammates checked, {out['refused']} would be "
+        f"refused ({out['refused_to_people']} to {out['people_hit']} people)."
+    ]
     if out["by_kind"]:
         lines.append("By kind: " + ", ".join(f"{k} {n}" for k, n in sorted(out["by_kind"].items())))
         lines.append("By code: " + ", ".join(f"{k} {n}" for k, n in sorted(out["by_code"].items())))

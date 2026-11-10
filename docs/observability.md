@@ -171,7 +171,7 @@ contained so analytics failures cannot fail an application operation.
 
 The UI's `SERVICE_NAMES.posthog` entry names a bot tool; it is not application
 analytics. `TICO_RELEASE` is reused as the release label. Cloud installs use the same Docker configuration below. Native checkout
-installs put these variables in the environment's `server.env`, then use `scripts/tico -e <slug> server restart`. For the identity
+installs put these variables in the environment's `server.env`, then use `scripts/tico-computer -e <slug> server restart`. For the identity
 secret, use 32-256 URL-safe letters, digits, underscores or hyphens. Keep it stable across releases and out of command arguments and logs.
 
 ### Docker configuration
@@ -249,7 +249,7 @@ flight recorder's background thread through autocommit reads, finished before th
 Opening Health or metrics reads recorded samples and does not trigger a page scan.
 
 Owners, admins and the team's bots read it at `GET /api/v2/system/metrics?minutes=60&section=all` (a bot's slow requests
-leave out who made them; `section`: any of `requests,slow,process,sql,db,events`), with `hub health metrics` or `hub_health_metrics`, and see the
+leave out who made them; `section`: any of `requests,slow,process,sql,db,events`), with `tico health metrics` or `hub_health_metrics`, and see the
 last hour under **Performance** on the Health page. `GET /api/v2/ops/timing` still answers with the last 300 requests per
 route since the start.
 
@@ -289,7 +289,7 @@ named in a `recorder_gap` event (`minutes`, `count`), so the tables never lose a
 
 ```bash
 python -m backend.flight summary --since 30m          # Docker: docker compose exec server python -m backend.flight summary
-scripts/tico -e ENV server flight summary --since 2h   # a local install
+scripts/tico-computer -e ENV server flight summary --since 2h   # a local install
 ```
 
 The summary shows server starts, stalls with their class and stacks, the slowest routes (count, total, p95, max, SQL time,

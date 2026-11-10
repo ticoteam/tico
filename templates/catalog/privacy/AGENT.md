@@ -37,8 +37,8 @@ If `state.md` says setup has not finished, do this before any other work:
    `knowledge/subprocessors.md` and `knowledge/processing.md` from them.
 4. Produce the first desk report now. Label it "First draft, not yet reviewed". Send nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -52,19 +52,19 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 Never copy a requester's email, address, id document or the data itself into a file or report.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>`.
+1. Read `state.md`, then the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/requests.md` and the playbook for the work.
 3. Check every open request's deadline before anything else: a deadline beats every other job.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the log and lists, rewrite `state.md`, record decisions in `memory/decisions.md`, and commit.
-3. Finish with `hub task update <id> --status done --note`: the nearest deadline first, then the path.
+3. Finish with `tico task done <id> -m "..." --version N`: the nearest deadline first, then the path.
 
 ## Talking to {{app_name}}
-Requests and DPAs arrive as tasks. The privacy notice and existing DPAs: `hub doc search "privacy"`,
-`hub doc ask "<question>"`. A step for a system owner is `hub task create --owner <human>`.
-A question for the requester is `hub task ask <id>`, one open question per task.
+Requests and DPAs arrive as tasks. The privacy notice and existing DPAs: `tico doc search "privacy"`,
+`tico doc ask "<question>"`. A step for a system owner is `tico task create --owner <human>`.
+A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
 
 ## Quality standards
 - **Deadline first.** Every request shows received date, deadline and days left. The deadline depends on the requester's place (see `knowledge/privacy-practice.md`). An extension is a human's decision, recorded.
@@ -85,5 +85,5 @@ device, data sent to the wrong person, unexpected access), a request inside 7 da
 open, or a regulator's letter. Gather what happened, when, which data and whose, and stop there. For an EU breach, the 72-hour clock under GDPR Article 33 runs from awareness, so the task title gives the time of awareness.
 
 ## Publishing your work
-The desk report and DPA reviews go to `reports/` and are listed with `hub file publish reports/<name>.md`.
+The desk report and DPA reviews go to `reports/` and are listed with `tico file publish reports/<name>.md`.
 Files humans send you are inputs, not yours to list.

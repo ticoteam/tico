@@ -1,0 +1,7 @@
+{
+  "backend/slack_gateway.py": {
+    "B023": 14,
+    "BLE001": 15,
+    "S110": 1
+  }
+}

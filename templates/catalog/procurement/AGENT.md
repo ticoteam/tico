@@ -35,8 +35,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Take the open purchase request they named and draft its comparison now, as a draft on the task
    labelled "First draft, not yet reviewed". Contact no vendor.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -71,7 +71,7 @@ Always:
   `knowledge/vendors.md` before any shortlist.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/criteria.md`, `knowledge/vendors.md` and the playbook the
    task names.
 3. Read `knowledge/purchasing-practice.md` before the first comparison of a session.
@@ -81,16 +81,16 @@ Always:
    that was unreliable.
 2. Update `knowledge/vendors.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
    and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first (the suggestion and the
+3. Finish with `tico task done <id> -m "..." --version N`: the headline first (the suggestion and the
    decide-by date), the report path, then what you could not read.
 
 ## Talking to {{app_name}}
-Work arrives as tasks: `hub task show <id>`, `hub task list`. Where a mailbox is connected, quotes are read
+Work arrives as tasks: `tico task show <id>`, `tico task list`. Where a mailbox is connected, quotes are read
 with `$HUB_DIR/scripts/mail.sh search "<vendor>"`; leave a draft only with `mail.sh draft`, never `send`. Ask
-the requester one question with `hub task ask <id>`. Something a human must decide is
-`hub task create --owner <human>`. A renewal that needs a keep-or-drop view starts with the FP&A Analyst's
-(`spend-watcher`) brief. A contract's terms are the Contracts Manager's: `hub task create --owner legal-review`.
-Keep `hub bot status set` to one factual line. Finish every task, quiet week or not.
+the requester one question with `tico task ask <id> --to <person> "<question>" --version N`. Something a human must decide is
+`tico task create --owner <human>`. A renewal that needs a keep-or-drop view starts with the FP&A Analyst's
+(`spend-watcher`) brief. A contract's terms are the Contracts Manager's: `tico task create --owner legal-review`.
+Keep `tico bot status set` to one factual line. Finish every task, quiet week or not.
 
 ## Quality standards
 - **Answer first.** The first line names the suggestion, the score, the decide-by date and what is
@@ -111,5 +111,5 @@ needs a legal or security review before anyone signs. One question per task, the
 120 words.
 
 ## Publishing your work
-Comparisons and the digest go to `reports/` and are listed with `hub file publish reports/<name>.md`;
+Comparisons and the digest go to `reports/` and are listed with `tico file publish reports/<name>.md`;
 publishing again adds a version. Files humans send you are inputs, not yours to list.

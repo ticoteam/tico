@@ -10,8 +10,8 @@ in two layers.
   there acts as them. The vision and the goals are changed where they live, on Goals. Only the owner's Assistant uses
   it, in the owner's chat; nobody else's Assistant sees it.
 
-Teaching happens in chat: the bot saves one short line with `hub assistant learn` (POST /api/v2/assistant/learned) and
-says so. The person edits and deletes entries on "What it has learned" (ui/app/learned.js). Nothing is cached: each turn
+Teaching happens in chat: the bot saves one short line with `tico assistant learn` (POST /api/v2/assistant/learned) and
+says so. The person edits and deletes entries on "What it has learned" (ui/app/learned.ts). Nothing is cached: each turn
 in a person's chat is handed both layers as they are when it starts (`for_turn`, backend/execution.py), so an entry
 deleted now is gone from the next turn. A deleted entry is deleted, not kept: its audit event names it by id only, as do
 the others, so no entry's words are in the audit log.
@@ -31,9 +31,9 @@ from .store import H, Problem
 
 log = logging.getLogger("tico.learned")
 
-TEXT_MAX = 280            # one short line
-LAYER_MAX = 100           # entries in one layer: every turn in the chat is handed all of them
-PRIORITIES_MAX = 10       # live company goals in the company layer, in their order on Goals
+TEXT_MAX = 280  # one short line
+LAYER_MAX = 100  # entries in one layer: every turn in the chat is handed all of them
+PRIORITIES_MAX = 10  # live company goals in the company layer, in their order on Goals
 LAYERS = ("personal", "company")
 
 SCHEMA = """
@@ -49,11 +49,18 @@ def _person(who, settings):
     """The person whose layers these are: a person, on their own or through a turn of their own Assistant (backend/auth.py
     assistant_principal). Never a bot, nor a bot that borrows the person's rights for other work: BotOps doing what they
     asked is not their chat."""
-    own_turn = (who.via == "assistant" and not who.confirmed and bool(who.attempt_id)
-                and who.task_actor == "bot:" + settings.assistant_bot)
+    own_turn = (
+        who.via == "assistant"
+        and not who.confirmed
+        and bool(who.attempt_id)
+        and who.task_actor == "bot:" + settings.assistant_bot
+    )
     if who.role not in ("owner", "human") or not H.is_human(who.actor) or (who.via and not own_turn):
-        raise Problem("forbidden", "What a chat bot has learned belongs to its person: only they, or their own chat's "
-                      "turn, read or change it", 403)
+        raise Problem(
+            "forbidden",
+            "What a chat bot has learned belongs to its person: only they, or their own chat's turn, read or change it",
+            403,
+        )
     return who.actor
 
 
@@ -65,37 +72,61 @@ def company_reader(c, who, settings):
     row = H.bot(c, strategy_bot.SLUG)
     if not row or row["state"] in ("archived", "planned"):
         return False
-    return not who.via or (who.via == "assistant" and not who.confirmed and bool(who.attempt_id)
-                           and who.task_actor == "bot:" + settings.assistant_bot)
+    return not who.via or (
+        who.via == "assistant"
+        and not who.confirmed
+        and bool(who.attempt_id)
+        and who.task_actor == "bot:" + settings.assistant_bot
+    )
 
 
 def _view(row):
-    return {"id": row["id"], "layer": row["layer"], "text": row["text"], "created_at": row["created_at"],
-            "updated_at": row["updated_at"], "taught_in_chat": bool(row["via"])}
+    return {
+        "id": row["id"],
+        "layer": row["layer"],
+        "text": row["text"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "taught_in_chat": bool(row["via"]),
+    }
 
 
 def entries(c, layer, person=""):
-    return [_view(r) for r in c.execute("SELECT * FROM learned_entries WHERE layer=? AND person=? ORDER BY created_at",
-                                        (layer, person if layer == "personal" else ""))]
+    return [
+        _view(r)
+        for r in c.execute(
+            "SELECT * FROM learned_entries WHERE layer=? AND person=? ORDER BY created_at",
+            (layer, person if layer == "personal" else ""),
+        )
+    ]
 
 
 def priorities(c):
-    return [{"id": g["id"], "title": g["title"], "status": g.get("status")}
-            for g in G.goals(c, owner=G.COMPANY, live_only=True)[:PRIORITIES_MAX]]
+    return [
+        {"id": g["id"], "title": g["title"], "status": g.get("status")}
+        for g in G.goals(c, owner=G.COMPANY, live_only=True)[:PRIORITIES_MAX]
+    ]
 
 
 def company_layer(c):
     """The owner's alone (`company_reader`), so the vision is their strategy draft's (backend/strategy.py)."""
     from . import strategy
+
     profile = C.profile(c)
-    return {"vision": strategy.vision(c, editor=True), "description": profile["description"], "priorities": priorities(c),
-            "entries": entries(c, "company")}
+    return {
+        "vision": strategy.vision(c, editor=True),
+        "description": profile["description"],
+        "priorities": priorities(c),
+        "entries": entries(c, "company"),
+    }
 
 
 def view(c, who, settings):
     person = _person(who, settings)
-    return {"personal": entries(c, "personal", person),
-            "company": company_layer(c) if company_reader(c, who, settings) else None}
+    return {
+        "personal": entries(c, "personal", person),
+        "company": company_layer(c) if company_reader(c, who, settings) else None,
+    }
 
 
 def for_turn(c, settings, conversation, bot):
@@ -104,6 +135,7 @@ def for_turn(c, settings, conversation, bot):
     Every turn, whoever it is for, also carries the team's published strategy as `strategy` (the text of GET
     /api/v2/strategy/summary, backend/strategy.py) once one is published; None when there is nothing to hand over."""
     from . import strategy
+
     layers = _layers(c, settings, conversation, bot)
     text = strategy.summary_text(c)
     if text:
@@ -111,6 +143,7 @@ def for_turn(c, settings, conversation, bot):
     if growth_facing(c, bot):
         # The brand, for the bots whose words reach customers (backend/brand.py).
         from . import brand
+
         text = brand.summary_text(c)
         if text:
             layers = {**(layers or {}), "brand": text}
@@ -125,6 +158,7 @@ def growth_facing(c, bot):
     growth or partnerships."""
     try:
         from . import people, views
+
         label = (H.bot(c, bot) or {}).get("slug") or str(bot or "")
         if any(word in label.lower() for word in GROWTH_TEAMS):
             return True
@@ -152,9 +186,11 @@ def _layers(c, settings, conversation, bot):
         return None
     layers = {"personal": [e["text"] for e in entries(c, "personal", owner)]}
     if _is_owner(c, settings, owner):
-        layers["company"] = {**{k: v for k, v in company_layer(c).items() if k != "entries"},
-                             "priorities": [g["title"] for g in priorities(c)],
-                             "taught": [e["text"] for e in entries(c, "company")]}
+        layers["company"] = {
+            **{k: v for k, v in company_layer(c).items() if k != "entries"},
+            "priorities": [g["title"] for g in priorities(c)],
+            "taught": [e["text"] for e in entries(c, "company")],
+        }
     return layers
 
 
@@ -162,6 +198,7 @@ def _is_owner(c, settings, actor):
     """Whether this person is the owner now, with the Strategy Bot there (the company layer's reader, `company_reader`):
     a turn in a former owner's chat is handed no company layer."""
     from . import access
+
     row = H.bot(c, strategy_bot.SLUG)
     if not row or row["state"] in ("archived", "planned"):
         return False
@@ -182,8 +219,12 @@ def _clean(text):
 def _may_write(c, who, layer, settings):
     person = _person(who, settings)
     if layer == "company" and not company_reader(c, who, settings):
-        raise Problem("forbidden", "Only the owner teaches their " + settings.assistant_name + " about the company, on "
-                      "their own or in their own chat with it; an admin or a member cannot", 403)
+        raise Problem(
+            "forbidden",
+            "Only the owner teaches their " + settings.assistant_name + " about the company, on "
+            "their own or in their own chat with it; an admin or a member cannot",
+            403,
+        )
     return person if layer == "personal" else ""
 
 
@@ -193,17 +234,32 @@ def add(c, who, layer, text, settings):
     person = _may_write(c, who, layer, settings)
     text = _clean(text)
     H._writer(c, who.actor)
-    same = c.execute("SELECT * FROM learned_entries WHERE layer=? AND person=? AND text=?",
-                     (layer, person, text)).fetchone()
+    same = c.execute(
+        "SELECT * FROM learned_entries WHERE layer=? AND person=? AND text=?", (layer, person, text)
+    ).fetchone()
     if same:
-        return _view(same)                # taught twice is one entry
-    if c.execute("SELECT count(*) FROM learned_entries WHERE layer=? AND person=?", (layer, person)).fetchone()[0] \
-            >= LAYER_MAX:
-        raise Problem("too_many", f"That layer holds {LAYER_MAX} entries: delete some on What it has learned first", 409)
-    row = {"id": H.new_id(), "layer": layer, "person": person, "text": text, "created_at": H.now(),
-           "created_by": who.actor, "via": (who.task_actor or "") if who.via else None}
-    c.execute("INSERT INTO learned_entries(id,layer,person,text,created_at,created_by,via) "
-              "VALUES(:id,:layer,:person,:text,:created_at,:created_by,:via)", row)
+        return _view(same)  # taught twice is one entry
+    if (
+        c.execute("SELECT count(*) FROM learned_entries WHERE layer=? AND person=?", (layer, person)).fetchone()[0]
+        >= LAYER_MAX
+    ):
+        raise Problem(
+            "too_many", f"That layer holds {LAYER_MAX} entries: delete some on What it has learned first", 409
+        )
+    row = {
+        "id": H.new_id(),
+        "layer": layer,
+        "person": person,
+        "text": text,
+        "created_at": H.now(),
+        "created_by": who.actor,
+        "via": (who.task_actor or "") if who.via else None,
+    }
+    c.execute(
+        "INSERT INTO learned_entries(id,layer,person,text,created_at,created_by,via) "
+        "VALUES(:id,:layer,:person,:text,:created_at,:created_by,:via)",
+        row,
+    )
     H.event(c, who.actor, "learned.added", row["id"], {"layer": layer})
     return _view({**row, "updated_at": None})
 
@@ -215,8 +271,11 @@ def _own_entry(c, who, eid, settings):
         raise Problem("forbidden", "The person edits and deletes what it learned, on What it has learned", 403)
     person = _person(who, settings)
     row = c.execute("SELECT * FROM learned_entries WHERE id=?", (eid,)).fetchone()
-    if not row or (row["layer"] == "personal" and row["person"] != person) \
-            or (row["layer"] == "company" and not company_reader(c, who, settings)):
+    if (
+        not row
+        or (row["layer"] == "personal" and row["person"] != person)
+        or (row["layer"] == "company" and not company_reader(c, who, settings))
+    ):
         raise Problem("not_found", "No such entry", 404)
     return row
 
@@ -225,7 +284,9 @@ def edit(c, who, eid, text, settings):
     row = _own_entry(c, who, eid, settings)
     text = _clean(text)
     H._writer(c, who.actor)
-    c.execute("UPDATE learned_entries SET text=?, updated_at=?, updated_by=? WHERE id=?", (text, H.now(), who.actor, eid))
+    c.execute(
+        "UPDATE learned_entries SET text=?, updated_at=?, updated_by=? WHERE id=?", (text, H.now(), who.actor, eid)
+    )
     H.event(c, who.actor, "learned.edited", eid, {"layer": row["layer"]})
     return _view(c.execute("SELECT * FROM learned_entries WHERE id=?", (eid,)).fetchone())
 
@@ -251,23 +312,29 @@ def install(app, store, auth, mutate):
     def learned_add(request: Request, body: M.LearnedAdd):
         """Save one thing the person taught their chat bot, in their personal layer or (the owner only) the company's."""
         who = request.state.identity
+
         def work(c):
             auth.domain(who)
             return {"entry": add(c, who, body.layer, body.text, store.settings)}
+
         return mutate(request, body, work)
 
     @app.patch("/api/v2/assistant/learned/{eid}")
     def learned_edit(request: Request, eid: str, body: M.LearnedEdit):
         who = request.state.identity
+
         def work(c):
             auth.domain(who)
             return {"entry": edit(c, who, eid, body.text, store.settings)}
+
         return mutate(request, body, work)
 
     @app.delete("/api/v2/assistant/learned/{eid}")
     def learned_delete(request: Request, eid: str):
         who = request.state.identity
+
         def work(c):
             auth.domain(who)
             return delete(c, who, eid, store.settings)
+
         return mutate(request, M.Empty(), work)

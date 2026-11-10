@@ -9,19 +9,12 @@ import pytest
 
 from backend import automations, cloud_access, company_billing, routines
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_company_billing import ANSWER, KEY, URL, FakeHQ
-from backend.tests.test_gateway_enroll import fake_hq
-from backend.tests.test_gateway_enroll import setup as enroll_setup
-from backend.tests.test_gateway_enroll import tick
-
-BILLING_URL = "https://app.tico.dev/billing/boatyard"
-
-
-def signals(access="open", reason=None, **extra):
-    return {"plan": "trial", "access": access, "reason": reason, "balance_micros": 0 if access != "open" else 2_000_000,
-            "trial_ends": "2026-11-12T00:00:00Z", "trial_days_left": 14, "card": None, "auto_recharge": False,
-            "period_end": None, "price_micros": 20_000_000, "billing_url": BILLING_URL, **extra}
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.company_billing import ANSWER, KEY, URL, FakeHQ
+from backend.tests.helpers.gateway_enroll import fake_hq
+from backend.tests.helpers.gateway_enroll import setup as enroll_setup
+from backend.tests.helpers.gateway_enroll import tick
+from backend.tests.helpers.cloud_access import BILLING_URL, signals
 
 
 @pytest.fixture
@@ -47,15 +40,23 @@ def test_billing_passes_cloud_through_and_keeps_it(api, hq):  # noqa: F811
     # An answer without `cloud` (self-host, EC2 hosted): nothing kept, nothing shown.
     assert get(api, "billing")["cloud"] is None
     assert api.get("/api/status", headers=headers()).json()["cloud_access"] is None
-    hq.answers["/billing"] = (200, {**ANSWER, "state": "paused", "cloud": signals("frozen", "out_of_credit")},
-                              "application/json")
+    hq.answers["/billing"] = (
+        200,
+        {**ANSWER, "state": "paused", "cloud": signals("frozen", "out_of_credit")},
+        "application/json",
+    )
     shown = get(api, "billing")
     assert shown["state"] == "paused" and shown["cloud"]["access"] == "frozen"
     assert shown["cloud"]["billing_url"] == BILLING_URL and shown["cloud"]["reason"] == "out_of_credit"
     # Kept at once: every page's status poll says so, with no call to /cloud.
     status = api.get("/api/status", headers=headers()).json()
-    assert status["cloud_access"] == {"access": "frozen", "reason": "out_of_credit", "plan": "trial",
-                                      "trial_days_left": 14, "billing_url": BILLING_URL}
+    assert status["cloud_access"] == {
+        "access": "frozen",
+        "reason": "out_of_credit",
+        "plan": "trial",
+        "trial_days_left": 14,
+        "billing_url": BILLING_URL,
+    }
     assert not [url for url, _ in hq.calls if url.endswith("/cloud")]
     # Credit added: the page's next answer opens it again.
     hq.answers["/billing"] = (200, {**ANSWER, "cloud": signals("open")}, "application/json")
@@ -71,7 +72,7 @@ def test_an_odd_cloud_answer_is_refused_and_the_last_word_kept(api, hq):  # noqa
     hq.answers["/billing"] = (200, {**ANSWER, "cloud": {"access": "open", "reason": "gift"}}, "application/json")
     assert get(api, "billing")["state"] == "unreachable"
     hq.answers["/cloud"] = (503, {"error": "down"}, "")
-    assert sync(api)["access"] == "frozen"                     # HQ down keeps the last word
+    assert sync(api)["access"] == "frozen"  # HQ down keeps the last word
     # A billing page that is not https is dropped, never linked.
     hq.answers["/cloud"] = (200, signals("open", billing_url="javascript:alert(1)"), "application/json")
     assert sync(api)["billing_url"] is None
@@ -116,15 +117,17 @@ def test_locked_refuses_people_except_billing_and_the_download_and_opens_again_b
     get(api, "tasks")
     assert claim(api, r, "ops") is not None
     with api.app.state.store.read() as c:
-        moves = [json.loads(row[0]) for row in c.execute(
-            "SELECT detail FROM events WHERE action='cloud.access' ORDER BY rowid")]
+        moves = [
+            json.loads(row[0])
+            for row in c.execute("SELECT detail FROM events WHERE action='cloud.access' ORDER BY rowid")
+        ]
     assert [(m["from"], m["to"]) for m in moves] == [(None, "locked"), ("locked", "open")]
 
 
 def test_a_restart_keeps_the_lock_until_hq_answers(api, hq):  # noqa: F811
     say(api, hq, "locked", "unpaid")
     store = api.app.state.store
-    del store._cloud_access                                    # a new process: read from the database
+    del store._cloud_access  # a new process: read from the database
     assert cloud_access.current(store)["access"] == "locked"
     assert api.get("/api/v2/tasks", headers=headers()).status_code == 402
 
@@ -134,15 +137,16 @@ def test_frozen_holds_tico_model_turns_and_lets_a_bot_on_its_own_model_run(api, 
     assign(api, r, "ops")
     ready(api, r, ["ops"])
     say(api, hq, "frozen", "out_of_credit")
-    get(api, "tasks")                                          # frozen keeps the app usable
+    get(api, "tasks")  # frozen keeps the app usable
     post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
-    assert claim(api, r, "ops") is not None                    # its own model spends no Tico credit
+    assert claim(api, r, "ops") is not None  # its own model spends no Tico credit
 
 
 def test_frozen_holds_a_bot_on_a_tico_model_until_credit_lands(api, monkeypatch, hq):  # noqa: F811
     from backend import health
-    from backend.tests.test_claim_refusals import health_admin, held
-    from backend.tests.test_models_preset import choose, connected, on_tico
+    from backend.tests.helpers.claim_refusals import health_admin, held
+    from backend.tests.helpers.models_preset import choose, connected, on_tico
+
     connected(api, monkeypatch)
     choose(api, "", enabled=("anthropic", "openai", "tico"))
     machine = runner(api)
@@ -157,26 +161,29 @@ def test_frozen_holds_a_bot_on_a_tico_model_until_credit_lands(api, monkeypatch,
         assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 0
     assert row["why"].startswith("Out of credit") and row["fix"]["tab"] == "billing"
     cloud_access.apply(api.app.state.store, cloud_access.parse(signals("open")))
-    assert claim(api, machine, "ops")["config"]["model"] == "tico-general-medium-1.0"
+    assert claim(api, machine, "ops")["config"]["model"] == "tico-medium-1.0"
 
 
 @pytest.mark.parametrize("access", ["frozen", "locked", "open"])
 def test_routines_pass_over_while_frozen_or_locked(api, access):  # noqa: F811
     store = api.app.state.store
     with store.transaction() as c:
-        routines.create(c, H.KEEPER, "ops", {"title": "Morning check", "cron": "0 7 * * *", "timezone": "UTC"},
-                        key="morning")
+        routines.create(
+            c, H.KEEPER, "ops", {"title": "Morning check", "cron": "0 7 * * *", "timezone": "UTC"}, key="morning"
+        )
         aid = routines.row(c, "ops:morning")["automation"]
         c.execute("UPDATE automations SET next_due_at=? WHERE id=?", ("2026-11-03T07:00:00.000000Z", aid))
-    automations.tick(store, datetime(2026, 11, 2, 6, tzinfo=timezone.utc))      # the first tick: the built-ins
+    automations.tick(store, datetime(2026, 11, 2, 6, tzinfo=timezone.utc))  # the first tick: the built-ins
     cloud_access.apply(store, cloud_access.parse(signals(access, None if access == "open" else "out_of_credit")))
     with store.transaction() as c:
         c.execute("UPDATE automations SET next_due_at=? WHERE id=?", ("2026-11-02T07:00:00.000000Z", aid))
     automations.tick(store, datetime(2026, 11, 2, 8, tzinfo=timezone.utc))
     with store.read() as c:
         runs = c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=?", (aid,)).fetchone()[0]
-        skipped = [json.loads(row[0])["reason"] for row in c.execute(
-            "SELECT detail FROM events WHERE action='automation.skipped' AND target=?", (aid,))]
+        skipped = [
+            json.loads(row[0])["reason"]
+            for row in c.execute("SELECT detail FROM events WHERE action='automation.skipped' AND target=?", (aid,))
+        ]
     if access == "open":
         assert (runs, skipped) == (1, [])
     else:
@@ -213,7 +220,7 @@ def test_a_cloud_cell_with_no_answer_yet_asks_every_sync_not_every_unknown(api, 
     assert cloud_access.current(store) is None
     assert not cloud_access.due(store, last + timedelta(seconds=59), last)
     assert cloud_access.due(store, last + cloud_access.SYNC, last)
-    say(api, hq, "open")                                              # once HQ has answered, the same cadence holds
+    say(api, hq, "open")  # once HQ has answered, the same cadence holds
     assert cloud_access.due(store, last + cloud_access.SYNC, last)
 
 
@@ -226,11 +233,19 @@ def test_a_self_hosted_or_ec2_install_keeps_the_hourly_ask(api, monkeypatch):  #
     assert not cloud_access.due(store, last + timedelta(seconds=60), last)
     assert not cloud_access.due(store, last + timedelta(minutes=59), last)
     assert cloud_access.due(store, last + cloud_access.UNKNOWN, last)
-    assert cloud_access.due(store, last, None)                       # the first check of a start always runs
+    assert cloud_access.due(store, last, None)  # the first check of a start always runs
 
 
-@pytest.mark.parametrize("env, cell", [({"TICO_CELL": "1"}, True), ({"TICO_UPDATES": "tico"}, True),
-                                       ({"TICO_CELL": "0"}, False), ({"TICO_CELL": ""}, False), ({}, False)])
+@pytest.mark.parametrize(
+    "env, cell",
+    [
+        ({"TICO_CELL": "1"}, True),
+        ({"TICO_UPDATES": "tico"}, True),
+        ({"TICO_CELL": "0"}, False),
+        ({"TICO_CELL": ""}, False),
+        ({}, False),
+    ],
+)
 def test_a_cell_is_known_by_its_marker_or_an_older_cores_env(monkeypatch, env, cell):
     # A cell company now has an updater URL like any hosted server, so the URL cannot say "cell"; TICO_CELL=1 does.
     # TICO_UPDATES=tico is what an older core wrote, until that company's next `cell update` rewrites its .env.

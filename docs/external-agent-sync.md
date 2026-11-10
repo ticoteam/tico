@@ -42,7 +42,7 @@ but Tico does not dispatch webhook calls through this sync integration.
   dispatched to these bots, except a Grok Bot [delivered through the Grok Mac app](#deliver-through-the-grok-mac-app).
 
 The tool is `hub_external_sync` with `provider` `grokbot` or `dots` (`POST /api/v2/external/sync`;
-`hub external sync --provider … --file …`). `hub_grokbot_sync` and `POST /api/v2/grokbot/sync` are the same with
+`tico external sync --provider … --file …`). `hub_grokbot_sync` and `POST /api/v2/grokbot/sync` are the same with
 `provider: grokbot` and no inbox, for routines set up before.
 
 ## Grok Bot

@@ -8,7 +8,7 @@ is a proposed category for every uncategorised row and a short list of questions
 
 ## 1. Read the export and the rules
 
-    hub task show <id>
+    tico task show <id>
 
 Read the export, `knowledge/categories.md` and `knowledge/vendors.md`. Note the date range and row
 count. Work only from rows that have no category, or that the task names.
@@ -39,6 +39,6 @@ row, never recomputed by hand. Add confirmed patterns to `knowledge/vendors.md` 
 
 ## 5. Finish
 
-Attach the table to the task. `hub task ask <id>` once with the numbered questions. Commit, then
-`hub task update <id> --status done --note`: rows worked, rows proposed, rows asked about, and any
+Attach the table to the task. `tico task ask <id> --to <person> "<question>" --version N` once with the numbered questions. Commit, then
+`tico task done <id> -m "..." --version N`: rows worked, rows proposed, rows asked about, and any
 export you could not read. When the file would not open, say so; an unread export is not an empty one.

@@ -14,7 +14,7 @@ applications were summarised and which could not be read.
 
 ## 1. Read the role file first
 
-`knowledge/roles/<role>.md`. If it has no written criteria, stop and ask the manager one question with `hub task ask <id>`.
+`knowledge/roles/<role>.md`. If it has no written criteria, stop and ask the manager one question with `tico task ask <id> --to <person> "<question>" --version N`.
 
 ## 2. Read the application
 
@@ -41,7 +41,7 @@ into a file.
 
 ## 6. Finish
 
-Attach the summary to the task. Close it with `hub task update <id> --status done --note "..."`: how many were summarised,
+Attach the summary to the task. Close it with `tico task done <id> -m "..." --version N`: how many were summarised,
 which could not be read, and who is waiting past the agreed wait. A reply to the candidate is a draft on the task. It is
 sent only when a person has turned mail sending on in Tico and the task asks for it.
 

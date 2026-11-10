@@ -13,7 +13,7 @@ Done when: every budget line has its actual and variance, each material variance
 
 ## 1. Check the inputs are final
 
-    hub task show <id>
+    tico task show <id>
 
 Read `knowledge/forecast.md` (the budget and the current forecast, by line and month) and the
 variance rule in `knowledge/thresholds.md`. Get the month's actuals: the profit-and-loss export
@@ -44,6 +44,6 @@ budget: budget, forecast, difference.
 
 `reports/YYYY-MM-budget-vs-actual.md`: the headline first ("August: costs 4 percent over budget, two
 material variances; full-year outlook 1.2 percent over"), then the material variances, then the
-full table as a linked file, then "Could not read". `hub file publish` it, commit, and
-`hub task update <id> --status done --note` with the headline and the path. The Head of Finance reads
+full table as a linked file, then "Could not read". `tico file publish` it, commit, and
+`tico task done <id> -m "..." --version N` with the headline and the path. The Head of Finance reads
 it before anyone else.

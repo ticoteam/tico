@@ -1,4 +1,5 @@
 """Personal paging's privacy, opt-out, durable reservations and actual event producers against a fake HQ."""
+
 import json
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
@@ -8,7 +9,7 @@ import pytest
 
 from backend import hubdb as H, personal_alerts as A
 from backend.auth import Identity
-from backend.tests.test_api import api, get, post, put, headers  # noqa: F401
+from backend.tests.helpers.api import get, post, put, headers  # noqa: F401
 
 PHONE = "+14155550123"
 OTHER = "+14155550124"
@@ -33,9 +34,16 @@ class HQ:
         if self.down:
             return httpx.Response(503, json={"error": "unconfigured"})
         if path.endswith("/phones") and req.method == "GET":
-            return httpx.Response(200, json={"phones": [{**r, "opted_out": self.stopped}
-                                                       for r in self.phones.values() if r["person_ref"] == person],
-                                              "person_ref": person if not self.old else None, "opt_out_sync": not self.old})
+            return httpx.Response(
+                200,
+                json={
+                    "phones": [
+                        {**r, "opted_out": self.stopped} for r in self.phones.values() if r["person_ref"] == person
+                    ],
+                    "person_ref": person if not self.old else None,
+                    "opt_out_sync": not self.old,
+                },
+            )
         if path.endswith("/phones") and req.method == "POST":
             self.pending[person] = data
             return httpx.Response(200, json={"status": "code_sent", "expires_in": 600})
@@ -67,7 +75,9 @@ class HQ:
 def hq(api, monkeypatch):
     fake = HQ()
     monkeypatch.setattr(A, "TRANSPORT", httpx.MockTransport(fake))
-    monkeypatch.setattr(A.gateway_connection, "target", lambda *args: ("tgw_test", "https://hq.acme.example/v1/gateway", "test"))
+    monkeypatch.setattr(
+        A.gateway_connection, "target", lambda *args: ("tgw_test", "https://hq.acme.example/v1/gateway", "test")
+    )
     monkeypatch.setattr(H, "now", lambda: NOW)
     return fake
 
@@ -81,7 +91,10 @@ def test_only_the_person_reads_changes_and_removes_their_phone(api, hq):
     connect(api)
     assert get(api, "alerts/me")["phone"] == PHONE
     assert get(api, "alerts/me", "ben-test")["phone"] is None
-    assert post(api, "alerts/me/phone", {"phone": PHONE, "sms_consent": True}, "ben-test", expected=409)["error"]["code"] == "phone_in_use"
+    assert (
+        post(api, "alerts/me/phone", {"phone": PHONE, "sms_consent": True}, "ben-test", expected=409)["error"]["code"]
+        == "phone_in_use"
+    )
     api.delete("/api/v2/alerts/me/phone", headers=headers("ben-test")).raise_for_status()
     assert get(api, "alerts/me")["status"] == "verified"
     # Unknown SQL tables are refused even to the owner; generic SQL cannot reveal another person's number.
@@ -90,8 +103,12 @@ def test_only_the_person_reads_changes_and_removes_their_phone(api, hq):
     assert PHONE not in response.text
     with api.app.state.store.read() as c:
         assert PHONE not in " ".join(r[0] for r in c.execute("SELECT detail FROM events"))
-    for who in (Identity("bot:botops", "bot"), Identity("human:ana", "owner", via="botops"),
-                Identity("human:ana", "owner", via="assistant"), Identity("runner:r", "runner")):
+    for who in (
+        Identity("bot:botops", "bot"),
+        Identity("human:ana", "owner", via="botops"),
+        Identity("human:ana", "owner", via="assistant"),
+        Identity("runner:r", "runner"),
+    ):
         with pytest.raises(A.Problem):
             A.person(who)
 
@@ -156,38 +173,34 @@ def test_restart_retries_uncertain_acceptance_without_a_second_charge(api, hq):
 
 def due_task(api, owner="human:ana", private=True):
     with api.app.state.store.transaction() as c:
-        return H.task_create(c, "human:ana", "Review the Acme filing", "Review the filing before its deadline.",
-                             owner, due=H.shift(NOW, hours=-1), private=private, lint=False, deduplicate=False)
-
-
-def test_real_overdue_task_is_deduped_and_urgent_call_is_opt_in(api, hq):
-    connect(api)
-    put(api, "alerts/me", {"urgent_needs": True, "urgent_calls": True, "quiet_start": "", "quiet_end": ""})
-    task = due_task(api)
-    service = api.app.state.personal_alerts
-    service.collect()
-    service.collect()
-    with api.app.state.store.read() as c:
-        rows = c.execute("SELECT * FROM personal_alerts WHERE kind='urgent_needs'").fetchall()
-        assert len(rows) == 1 and rows[0]["subject_id"] == task["id"]
-    assert service.dispatch(rows[0]["id"])["status"] == "accepted"
-    assert hq.accepted[0]["channel"] == "call"
-    service.collect()
-    assert len(hq.accepted) == 1
+        return H.task_create(
+            c,
+            "human:ana",
+            "Review the Acme filing",
+            "Review the filing before its deadline.",
+            owner,
+            due=H.shift(NOW, hours=-1),
+            private=private,
+            lint=False,
+            deduplicate=False,
+        )
 
 
 def test_quiet_hours_defer_and_closed_tasks_do_not_page(api, hq):
     connect(api)
-    put(api, "alerts/me", {"urgent_needs": True, "timezone": "America/Los_Angeles", "quiet_start": "09:00", "quiet_end": "12:00"})
+    put(
+        api,
+        "alerts/me",
+        {"legal_mail": True, "timezone": "America/Los_Angeles", "quiet_start": "09:00", "quiet_end": "12:00"},
+    )
     task = due_task(api)
     service = api.app.state.personal_alerts
-    service.collect()
-    with api.app.state.store.read() as c:
-        alert = c.execute("SELECT id FROM personal_alerts").fetchone()[0]
+    with api.app.state.store.transaction() as c:
+        alert = A.enqueue(c, "ana", "legal_mail", task["id"], "legal-mail:quiet")
     assert service.dispatch(alert)["status"] == "quiet_hours"
     assert hq.accepted == []
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
+        H.task_done(c, "human:ana", task["id"], "Filed it.")
     put(api, "alerts/me", {"emergency_exception": True})
     assert service.dispatch(alert)["status"] == "canceled"
     assert hq.accepted == []
@@ -195,12 +208,11 @@ def test_quiet_hours_defer_and_closed_tasks_do_not_page(api, hq):
 
 def test_opt_out_blocks_calls_and_sms_and_old_hq_fails_closed(api, hq):
     connect(api)
-    put(api, "alerts/me", {"urgent_needs": True, "urgent_calls": True, "emergency_exception": True})
-    due_task(api)
+    put(api, "alerts/me", {"legal_mail": True, "urgent_calls": True, "emergency_exception": True})
+    task = due_task(api)
     service = api.app.state.personal_alerts
-    service.collect()
-    with api.app.state.store.read() as c:
-        alert = c.execute("SELECT id FROM personal_alerts").fetchone()[0]
+    with api.app.state.store.transaction() as c:
+        alert = A.enqueue(c, "ana", "legal_mail", task["id"], "legal-mail:opt-out", True)
     hq.stopped = True
     assert get(api, "alerts/me")["status"] == "opted_out"
     assert service.dispatch(alert)["error"] == "opted_out"
@@ -263,55 +275,6 @@ def test_rehearsal_refuses_verification_and_paid_sends(api, hq, monkeypatch):
     assert hq.calls == []
 
 
-def test_stalled_task_alerts_only_a_manager_and_cancels_when_recovered(api, hq):
-    connect(api)
-    put(api, "alerts/me", {"bot_stuck": True, "quiet_start": "", "quiet_end": ""})
-    task = due_task(api, owner="bot:ops")
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='completed'")
-        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(NOW, hours=-2), task["id"]))
-    service = api.app.state.personal_alerts
-    service.collect()
-    with api.app.state.store.read() as c:
-        alert = c.execute("SELECT * FROM personal_alerts WHERE kind='bot_stuck'").fetchone()
-        assert alert is not None
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
-    assert service.dispatch(alert["id"])["status"] == "canceled"
-    assert hq.accepted == []
-
-
-def test_future_offset_deadline_is_not_deduped_before_it_is_due(api, hq):
-    connect(api)
-    put(api, "alerts/me", {"urgent_needs": True})
-    task = due_task(api)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET due_at=? WHERE id=?", ("2026-11-04T14:00:00-08:00", task["id"]))
-    api.app.state.personal_alerts.collect()
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM personal_alerts").fetchone()[0] == 0
-
-
-def test_quiet_alerts_and_future_deadlines_wake_a_sleeping_install(api, hq):
-    from backend import sleep_idle
-    connect(api)
-    put(api, "alerts/me", {"urgent_needs": True, "timezone": "America/Los_Angeles", "quiet_start": "09:00", "quiet_end": "12:00"})
-    due_task(api)
-    service = api.app.state.personal_alerts
-    service.collect()
-    with api.app.state.store.read() as c:
-        alert = c.execute("SELECT id FROM personal_alerts").fetchone()[0]
-    assert service.dispatch(alert)["status"] == "quiet_hours"
-    at = H.parse_ts(NOW).timestamp()
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='completed'")
-        assert c.execute("SELECT next_attempt_at FROM personal_alerts").fetchone()[0] == "2026-11-04T20:00:00Z"
-        assert H.parse_ts("2026-11-04T20:00:00Z").timestamp() in sleep_idle.later_sends(c, at)
-        future = H.task_create(c, "human:ana", "Review the next filing", "Review the next filing.", "human:ana",
-                               due="2026-11-05T18:00:00Z", lint=False, deduplicate=False)
-        assert H.parse_ts(future["due_at"]).timestamp() in A.future_deadlines(c, at)
-
-
 def test_hq_confirmed_provider_refusal_releases_the_dollar_reservation(api, hq):
     connect(api)
     put(api, "alerts/me", {"monthly_cap": 1})
@@ -342,11 +305,20 @@ def test_a_refused_gateway_key_does_not_sign_the_person_out_of_tico(api, hq):
 def test_private_legal_alert_audit_is_recipient_only_and_keeps_task_provenance(api, hq):
     import json
     from backend import sql as SQL, task_privacy
+
     connect(api, OTHER, "ben-test")
     put(api, "alerts/me", {"legal_mail": True, "quiet_start": "", "quiet_end": ""}, "ben-test")
     with api.app.state.store.transaction() as c:
-        task = H.task_create(c, "human:ben", "Private legal filing", "Private to Ben.", "human:ben",
-                             private=True, lint=False, deduplicate=False)
+        task = H.task_create(
+            c,
+            "human:ben",
+            "Private legal filing",
+            "Private to Ben.",
+            "human:ben",
+            private=True,
+            lint=False,
+            deduplicate=False,
+        )
         A.legal_mail(c, api.app.state.auth, task["id"], "private-letter")
         alert = c.execute("SELECT id FROM personal_alerts WHERE person_id='ben'").fetchone()[0]
     assert api.app.state.personal_alerts.dispatch(alert)["status"] == "accepted"
@@ -367,7 +339,7 @@ def test_private_legal_alert_audit_is_recipient_only_and_keeps_task_provenance(a
         assert not task_privacy.event_readable(c, ("human:ben", "human:ana"), event)
     # Even a reader of the task cannot read someone else's alert activity.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET guest='human:ana' WHERE id=?", (task["id"],))
+        c.execute("UPDATE tasks SET readers=json_array('human:ana') WHERE id=?", (task["id"],))
     assert post(api, "sql", {"sql": query})["rows"] == []
     assert post(api, "sql", {"sql": "SELECT id FROM events WHERE action='alerts.verified'"})["rows"] == []
 
@@ -376,9 +348,17 @@ def test_recent_alerts_filter_all_non_test_states_after_task_access_is_revoked(a
     connect(api, OTHER, "ben-test")
     put(api, "alerts/me", {"legal_mail": True, "quiet_start": "", "quiet_end": ""}, "ben-test")
     with api.app.state.store.transaction() as c:
-        task = H.task_create(c, "human:ana", "Private legal filing", "Private to Ana.", "human:ana",
-                             private=True, lint=False, deduplicate=False)
-        c.execute("UPDATE tasks SET guest='human:ben' WHERE id=?", (task["id"],))
+        task = H.task_create(
+            c,
+            "human:ana",
+            "Private legal filing",
+            "Private to Ana.",
+            "human:ana",
+            private=True,
+            lint=False,
+            deduplicate=False,
+        )
+        c.execute("UPDATE tasks SET readers=json_array('human:ben') WHERE id=?", (task["id"],))
         A.legal_mail(c, api.app.state.auth, task["id"], "private-letter")
         alert = c.execute("SELECT id FROM personal_alerts WHERE person_id='ben'").fetchone()[0]
         for state in ("pending", "sending", "accepted", "canceled", "failed"):
@@ -387,7 +367,7 @@ def test_recent_alerts_filter_all_non_test_states_after_task_access_is_revoked(a
         test = A.enqueue(c, "ben", "test", "", "test:visible")
     assert len(get(api, "alerts/me", "ben-test")["recent"]) == 7
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET guest=NULL WHERE id=?", (task["id"],))
+        c.execute("UPDATE tasks SET readers=NULL WHERE id=?", (task["id"],))
     assert api.app.state.personal_alerts.dispatch(alert)["status"] == "canceled"
     recent = get(api, "alerts/me", "ben-test")["recent"]
     assert [row["id"] for row in recent] == [test]

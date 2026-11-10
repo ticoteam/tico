@@ -1,4 +1,4 @@
-"""`hub docs fetch` (clients/doc_fetch.py): what it refuses and what it never sends. No network, no DNS:
+"""`tico docs fetch` (clients/doc_fetch.py): what it refuses and what it never sends. No network, no DNS:
 names resolve through a table and connections are scripted byte streams."""
 
 import io
@@ -39,6 +39,7 @@ class Net:
 
             def close(self):
                 pass
+
         return Sock()
 
     def fetch(self, url, **kw):
@@ -54,9 +55,14 @@ def test_a_public_address_is_public():
     assert F.public_address(PUBLIC) and F.public_address("2606:4700:4700::1111")
 
 
-@pytest.mark.parametrize("url,code", [
-    ("file:///etc/passwd", "scheme"), ("https://user:pw@example.com/", "userinfo"),
-    ("http://169.254.169.254/latest/meta-data/", "private_address")])
+@pytest.mark.parametrize(
+    "url,code",
+    [
+        ("file:///etc/passwd", "scheme"),
+        ("https://user:pw@example.com/", "userinfo"),
+        ("http://169.254.169.254/latest/meta-data/", "private_address"),
+    ],
+)
 def test_an_unsafe_address_is_refused_before_any_connection(url, code):
     net = Net({})
     with pytest.raises(F.FetchError) as refused:
@@ -82,13 +88,15 @@ def test_the_connection_goes_to_the_address_that_was_checked():
 
 
 def test_a_redirect_to_an_internal_address_is_refused_and_never_connected_to():
-    for target, addresses in (("https://evil.example.com/steal", ["10.0.0.9"]),
-                              ("http://169.254.169.254/latest/meta-data/", None)):
+    for target, addresses in (
+        ("https://evil.example.com/steal", ["10.0.0.9"]),
+        ("http://169.254.169.254/latest/meta-data/", None),
+    ):
         net = Net({"docs.example.com": [PUBLIC], "evil.example.com": addresses}, reply(302, location=target))
         with pytest.raises(F.FetchError) as refused:
             net.fetch("https://docs.example.com/a")
         assert refused.value.code == "private_address"
-        assert net.connected == [(PUBLIC, 443, True, "docs.example.com")]      # only the first hop was ever made
+        assert net.connected == [(PUBLIC, 443, True, "docs.example.com")]  # only the first hop was ever made
 
 
 def test_at_most_five_redirects_are_followed():
@@ -113,18 +121,27 @@ def test_a_page_over_five_megabytes_is_cut_and_says_so():
 
 def test_a_credential_is_sent_only_to_the_host_it_belongs_to():
     env = {"GH_TOKEN": "ghs_secret", "GOOGLE_ACCESS_TOKEN": "ya29.secret"}
-    net = Net({"docs.example.com": [PUBLIC], "api.github.com": [PUBLIC], "docs.google.com": [PUBLIC]},
-              reply(302, location="https://api.github.com/repos/o/r"),   # a redirect from elsewhere carries nothing
-              reply(ctype="application/json", body=b"{}"),
-              reply(ctype="text/plain", body=b"hello"))
+    net = Net(
+        {"docs.example.com": [PUBLIC], "api.github.com": [PUBLIC], "docs.google.com": [PUBLIC]},
+        reply(302, location="https://api.github.com/repos/o/r"),  # a redirect from elsewhere carries nothing
+        reply(ctype="application/json", body=b"{}"),
+        reply(ctype="text/plain", body=b"hello"),
+    )
     net.fetch("https://docs.example.com/a", env=env)
     net.fetch("https://docs.google.com/document/d/abc123/edit", env=env)
     sent = [text for _, text in net.sent]
     assert "Authorization" not in sent[0] and "ghs_secret" not in sent[0]
-    assert "Authorization: Bearer ghs_secret" in sent[1]      # the hop to api.github.com gets GitHub's token
+    assert "Authorization: Bearer ghs_secret" in sent[1]  # the hop to api.github.com gets GitHub's token
     assert "ya29.secret" not in sent[0] + sent[1] and "Authorization: Bearer ya29.secret" in sent[2]
     assert F.credential_headers("api.github.com", env)["Authorization"] == "Bearer ghs_secret"
-    for host in ("github.com", "raw.githubusercontent.com", "api.github.com.evil.example.com", "example.com",
-                 "docs.google.com.evil.example.com", "notgoogleapis.com", "drive.google.com"):
+    for host in (
+        "github.com",
+        "raw.githubusercontent.com",
+        "api.github.com.evil.example.com",
+        "example.com",
+        "docs.google.com.evil.example.com",
+        "notgoogleapis.com",
+        "drive.google.com",
+    ):
         assert F.credential_headers(host, env) == {}
     assert F.credential_headers("sheets.googleapis.com", env) == {"Authorization": "Bearer ya29.secret"}

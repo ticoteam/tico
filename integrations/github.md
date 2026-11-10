@@ -24,7 +24,7 @@ owner has connected the company's GitHub App (Tools, GitHub; `docs/github-app.md
 each bot gets a short-lived token for its own repository only, and commits and PRs are made
 by the app on that bot's behalf. With no app connected, the computer's own git access is used,
 and everything shows as whoever is signed in on that computer. Work does not live in GitHub
-Issues; it lives in the hub (`hub task ...`).
+Issues; it lives in the hub (`tico task ...`).
 
 ## What data it has
 
@@ -48,16 +48,17 @@ gh pr create -R <org>/bot-<slug> --base main --head <branch> --title "..." --bod
 gh pr merge -R <org>/bot-<slug> <number> --merge --delete-branch  # your own repo, checks passed
 ```
 
-For a repository whose merge still needs human review, request that exact action:
-`hub approval request --kind merge --payload '{"repo": "<org>/<repo>", "pr": 123,
-"head_sha": "..."}'`.
+For a repository whose merge still needs a person (a docs-only pull request does not; see policies/approvals.md), ask
+for an OK on the task with the pull request shown:
+`tico task ask <id> --to <person> "<one sentence>" --kind ok --show <pr url> --version N`.
+The OK covers the head they saw. Merge only that head; after a new commit, ask again.
 
 ## Rules
 
-- GitHub Issues are disabled for work. Never `gh issue`; tasks, asks and approvals go through
-  `hub`.
+- GitHub Issues are disabled for work. Never `gh issue`; tasks, asks and OKs go through
+  `tico`.
 - A bot may merge a PR into its own `bot-<slug>` repository after relevant tests and required
-  checks pass, without human approval. Other repositories follow their scoped review and approval
+  checks pass, without a person's OK. Other repositories follow their scoped review and approval
   rules; never bypass branch protection. Deleting, archiving or changing repository visibility
   remains gated.
 - Never push to another repository's default branch. Changes go on a branch as a draft or review
@@ -67,7 +68,7 @@ For a repository whose merge still needs human review, request that exact action
   that checkout before the next one. Use a separate worktree for a PR branch, or return the runner
   checkout to an up-to-date `main` before ending the turn. Do not clone another bot's repository
   into your own. Ask its owner to improve it with a Hub task (`policies/handoffs.md`).
-- Creating a bot repository (BotOps, or the owner): `hub bot repo-create <slug>` from a
+- Creating a bot repository (BotOps, or the owner): `tico bot repo-create <slug>` from a
   template, or `--empty` for a bot whose repository already exists on a computer
   (`docs/github-app.md`). It needs the app's administration permission, and the name is always
   `bot-<slug>` in the connected organization, private.
@@ -78,7 +79,7 @@ For a repository whose merge still needs human review, request that exact action
   base64 -d`.
 - A review PR for a repository that still needs human review: branch from the default branch,
   commit, `gh pr create --draft`, put the PR URL on the Hub task, and stop for review.
-- A bot built locally with no repository on GitHub yet: `hub bot repo-create <slug>
+- A bot built locally with no repository on GitHub yet: `tico bot repo-create <slug>
   --empty`, then set the bot's repository to `<org>/bot-<slug>` (`docs/github-app.md`). Do not push
   it yourself: the bot's next turn publishes its history with its own token.
 
@@ -96,14 +97,14 @@ For a repository whose merge still needs human review, request that exact action
 
 ## Learnings
 
-What bots and people learn about this integration is added with `hub tool learn github "…"` and
+What bots and people learn about this integration is added with `tico tool learn github "…"` and
 shown under this page; a person folds it into the page over time. The page is the rule.
 
 ### Authorized reviewer identity
 
 An operator may configure a second GitHub App for selected reviewer bots, leaving the Builder on the primary
 App. Per-bot tokens retain their existing repository grants. A bot authorized to submit reviews uses
-`hub repo review OWNER/REPO NUMBER --head FULL_SHA --verdict approve|changes --body-file REVIEW.txt`.
+`tico repo review OWNER/REPO NUMBER --head FULL_SHA --verdict approve|changes --body-file REVIEW.txt`.
 The server appends VERDICT and pins `commit_id`; the reviewer identity sends APPROVE/REQUEST_CHANGES, while
 shared-App mode sends COMMENT. Keep the GitHub receipt on the review task. Setup, exact main ruleset settings
 and rollback: [GitHub App](../docs/github-app.md#separate-identity-for-reviewers).

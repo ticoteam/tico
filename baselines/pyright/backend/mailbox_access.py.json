@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/mailbox_access.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 7,
+                    "endColumn": 10,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

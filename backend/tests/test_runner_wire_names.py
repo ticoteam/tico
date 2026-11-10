@@ -1,4 +1,5 @@
 """A runner in the release window reads the names the wire had before the column renames (backend/runner_wire.py)."""
+
 from backend import runner_wire as RW
 
 
@@ -13,7 +14,7 @@ def test_a_task_and_a_worktree_link_go_out_under_their_old_names():
     t = RW.task({"id": "t1", "labels": "[]", "created_at": "a", "updated_at": "b"})
     assert t == {"id": "t1", "labels_json": "[]", "created": "a", "updated": "b"}
     link = RW.worktree({"id": "l1", "detail": "{}", "updated_at": "u"})
-    assert link["detail_json"] == "{}" and link["updated"] == "u"     # runner-rs worktrees.rs reads row["updated"]
+    assert link["detail_json"] == "{}" and link["updated"] == "u"  # runner-rs worktrees.rs reads row["updated"]
 
 
 def test_a_worktree_link_keeps_its_owner_for_a_runner_that_reads_the_old_name():

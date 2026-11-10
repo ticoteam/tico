@@ -1,7 +1,8 @@
 """Threads for a bot made after ids: its id is not its slug, so home, members and mentions all hold the id."""
+
 from backend.store import H
-from backend.tests.test_api import api, headers, post  # noqa: F401
-from backend.tests.test_bot_access import bot, bot_id
+from backend.tests.helpers.api import headers, post  # noqa: F401
+from backend.tests.helpers.bot_access import bot, bot_id
 
 
 def test_a_bot_whose_id_is_not_its_slug_has_a_home_members_and_mentions(api):

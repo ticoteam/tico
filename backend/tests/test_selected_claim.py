@@ -1,4 +1,5 @@
 """Selected-job revalidation stays bounded without trusting the earlier read."""
+
 import json
 
 import pytest
@@ -7,7 +8,7 @@ from backend import execution
 from backend.auth import Identity
 from backend.models import Claim
 from backend.store import H, encode
-from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401
 from backend import bot_settings as BS
 
 
@@ -89,14 +90,18 @@ def test_selected_claim_rechecks_changes_after_read_and_takes_the_next_job(api, 
                 elif change == 'readiness':
                     readiness = json.loads(target['readiness'])
                     readiness['bots']['ops']['ready'] = False
-                    writer.execute('UPDATE runner_states SET readiness=? WHERE runner_id=?',
-                                   (encode(readiness), machine['runner_id']))
+                    writer.execute(
+                        'UPDATE runner_states SET readiness=? WHERE runner_id=?',
+                        (encode(readiness), machine['runner_id']),
+                    )
                 else:
                     # A currently active turn fences the bot even when it was
                     # absent from the earlier read's global active-attempt set.
-                    writer.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,lane) "
-                                   "VALUES('other-turn',?,'ops',?,1,'synthetic','running',?,?,'main')",
-                                   (row['id'], machine['runner_id'], H.shift(H.now(), minutes=2), H.now()))
+                    writer.execute(
+                        "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,lane) "
+                        "VALUES('other-turn',?,'ops',?,1,'synthetic','running',?,?,'main')",
+                        (row['id'], machine['runner_id'], H.shift(H.now(), minutes=2), H.now()),
+                    )
         return row
 
     monkeypatch.setattr(engine, 'candidate', changes_after_read)

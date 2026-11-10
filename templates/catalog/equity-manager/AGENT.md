@@ -24,8 +24,8 @@ If `state.md` says setup has not finished, do this before any other work:
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
 3. Record each answer in `state.md` the moment it arrives, dated, and write the `knowledge/` files.
 4. Produce the first result now from what the human shares, labelled "First draft, not yet reviewed".
-5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with `hub automation list`, tell the human what it does and that they can
-   change it or turn it off, and log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first result are recorded: it clears your
+5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with `tico automation list`, tell the human what it does and that they can
+   change it or turn it off, and log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first result are recorded: it clears your
    "Needs setup" mark.
 
 ## Sending
@@ -37,17 +37,17 @@ Draft messages to outsiders until a person turns mail sending on for this bot in
 - `skills/build-a-round-scenario/SKILL.md`: read before you draft ownership after a raise.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>` and anything attached.
+1. Read `state.md`, then the task with `tico task show <id>` and anything attached.
 2. Read `memory/learnings.md`, the `knowledge/` files above and the playbook.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a source you could not read, a figure that had to be assumed.
 2. Update `knowledge/`, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: what was checked, what is open, what waits for a person.
+3. Finish with `tico task done <id> -m "..." --version N`: what was checked, what is open, what waits for a person.
 
 ## Talking to {{app_name}}
-Exports arrive as task attachments. Ask one question at a time with `hub task ask <id>`. When a result is ready,
-`hub message send --fyi <person> "<one line and the link>"` tells the person who acts on it.
+Exports arrive as task attachments. Ask one question at a time with `tico task ask <id> --to <person> "<question>" --version N`. When a result is ready,
+`tico message send --fyi <person> "<one line and the link>"` tells the person who acts on it.
 
 ## Quality standards
 - **Answer first.** Line one: the headline figure and what needs a person.
@@ -61,4 +61,4 @@ Exports arrive as task attachments. Ask one question at a time with `hub task as
 Tell the Head of Finance and the owner at once when a grant has no board approval, a grant was made on an expired 409A, the option pool is below what was promised in an offer, or the cap table and a signed document disagree.
 
 ## Publishing your work
-The report goes to `reports/` and is listed with `hub file publish reports/<name>.md`.
+The report goes to `reports/` and is listed with `tico file publish reports/<name>.md`.

@@ -177,7 +177,7 @@ fn freeze(options: &HashMap<String, String>, path: &PathBuf) -> Result<()> {
         writer_task: None,
     }
     .save(path)?;
-    println!("Frozen. Run publish to validate and tag this commit; release notes are written after publication.");
+    println!("Frozen. Run publish to validate and tag this commit; its release notes are on the release-approval issue.");
     Ok(())
 }
 fn publish(options: &HashMap<String, String>, path: &PathBuf) -> Result<()> {
@@ -376,9 +376,9 @@ fn file_writer_task(
         .unwrap_or("docs-writer");
     let range = format!("{}..{}", state.previous, state.version);
     let body = format!(
-        "{version} is published. Write its section in CHANGELOG.md from the pull requests merged in {range} \
-         (https://github.com/{repo}/compare/{range}), moving their lines out of ## [Unreleased]. Land it as a \
-         CHANGELOG-only pull request whose commits carry the trailer `Changelog-Release: {version}`.",
+        "{version} is published. Its release notes are on its release-approval issue (label release-approval), built \
+         from the pull requests merged in {range} (https://github.com/{repo}/compare/{range}). There is no notes file \
+         to update.",
         version = state.version,
         repo = state.repo,
     );
@@ -398,7 +398,7 @@ fn file_writer_task(
     let task = ["short_id", "id"]
         .iter()
         .find_map(|key| filed["task"][key].as_str().or(filed[key].as_str()))
-        .ok_or("hub task create returned no task id")?
+        .ok_or("tico task create returned no task id")?
         .to_owned();
     state.writer_task = Some(task.clone());
     state.writer_filing = false;
@@ -407,7 +407,7 @@ fn file_writer_task(
     Ok(())
 }
 fn hub_json(args: &[&str]) -> Result<Value> {
-    serde_json::from_str(&command("hub", args)?).map_err(|e| format!("Invalid hub response: {e}"))
+    serde_json::from_str(&command("tico", args)?).map_err(|e| format!("Invalid tico response: {e}"))
 }
 fn run() -> Result<()> {
     let mut args = env::args().skip(1);

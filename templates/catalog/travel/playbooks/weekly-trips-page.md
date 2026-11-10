@@ -10,7 +10,7 @@ Outcome: `reports/YYYY-MM-DD-trips.md`: every trip in the next 30 days with its 
 advance-booking window that are still unbooked, and booked spend against policy.
 
 Done when: every trip in the next 30 days has a status; every unbooked trip inside the window is flagged with the days
-left; spend is listed against policy; the page is published with `hub file publish`; and the task note carries the
+left; spend is listed against policy; the page is published with `tico file publish`; and the task note carries the
 headline: trips in 30 days, unbooked inside the window, and waiting on facts or Tools.
 
 ---
@@ -38,5 +38,5 @@ person. A pattern, such as hotels in one city always over the limit, becomes a p
 
 ## 4. Write and hand over
 
-Write `reports/YYYY-MM-DD-trips.md`, publish it with `hub file publish reports/YYYY-MM-DD-trips.md`, commit, then
-finish the task with `hub task update <id> --status done --note` and the headline.
+Write `reports/YYYY-MM-DD-trips.md`, publish it with `tico file publish reports/YYYY-MM-DD-trips.md`, commit, then
+finish the task with `tico task done <id> -m "..." --version N` and the headline.

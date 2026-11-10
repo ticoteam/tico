@@ -19,11 +19,11 @@ def _transaction(store):
                 c = stack.enter_context(store.transaction())
                 break
             except sqlite3.OperationalError as exc:
-                code = getattr(exc, "sqlite_errorcode", 0) & 0xff
+                code = getattr(exc, "sqlite_errorcode", 0) & 0xFF
                 busy = code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or str(exc) == "database is locked"
                 if not busy or time.monotonic() >= deadline:
                     raise
-                time.sleep(.1)
+                time.sleep(0.1)
         yield c
 
 
@@ -33,16 +33,16 @@ def run(store, onboarding, telemetry):
     # A company from before the Librarian was built in gets it on update, once it can run it. Only an update
     # adds them; until this runs, a page shows the company as it was before the update.
     try:
+        # What completes a company (the built-ins it can run, the Assistant's routines, General's manager, BotOps'
+        # sweep): the same function the end of a first run calls. A failed step is captured and the next one runs.
         with _transaction(store) as c:
-            onboarding.ensure_librarian(c)
-            onboarding.ensure_goal_manager(c)
-            onboarding.ensure_task_manager(c)
-            onboarding.ensure_counsel(c)
+            onboarding.complete_company(c, failed=telemetry.capture)
     except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
-        telemetry.capture("librarian", exc)
+        telemetry.capture("complete_company", exc)
     # The Librarian gets the market posts from Listening, once (Settings > Listening). After the Librarian exists.
     try:
         from . import listening
+
         with _transaction(store) as c:
             listening.seed_market(c, settings)
     except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
@@ -51,6 +51,7 @@ def run(store, onboarding, telemetry):
     # it is. A backfill: the bot works unlinked meanwhile, as it did before.
     try:
         from . import message_bots
+
         with _transaction(store) as c:
             message_bots.backfill(c)
     except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
@@ -60,6 +61,7 @@ def run(store, onboarding, telemetry):
     # still shows merged until it runs.
     try:
         from .github import ship_deployed
+
         with _transaction(store) as c:
             ship_deployed(c, settings)
     except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs

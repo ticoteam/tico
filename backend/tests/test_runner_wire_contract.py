@@ -16,8 +16,8 @@ import uuid
 
 from backend import models as M
 from backend.store import H
-from backend.tests.test_api import api, assign, headers, post, runner  # noqa: F401  (the api fixture)
-from backend.tests.test_events import live  # noqa: F401  (a listening server for the event stream)
+from backend.tests.helpers.api import assign, headers, post, runner  # noqa: F401  (the api fixture)
+from backend.tests.helpers.events import live  # noqa: F401  (a listening server for the event stream)
 from scripts import check_wire_contract as W
 
 CONTRACT = W.load()
@@ -46,8 +46,11 @@ def normalized(value):
             if key == "token":
                 return "turn-token"
             item = TIME.sub("2026-01-01T00:00:00.000000Z", item)
-            return UUID.sub(lambda m: ids.setdefault(m.group(0), "00000000-0000-4000-8000-%012d" % (len(ids) + 1)), item)
+            return UUID.sub(
+                lambda m: ids.setdefault(m.group(0), "00000000-0000-4000-8000-%012d" % (len(ids) + 1)), item
+            )
         return item
+
     return walk(value)
 
 
@@ -69,8 +72,9 @@ def shape_differences(golden, actual, schema, root, where="$"):
         if set(golden) != set(actual):
             found.append("%s: fields %s became %s" % (where, sorted(golden), sorted(actual)))
         for key in set(golden) & set(actual):
-            found += shape_differences(golden[key], actual[key], schema.get("properties", {}).get(key, {}), root,
-                                       where + "." + key)
+            found += shape_differences(
+                golden[key], actual[key], schema.get("properties", {}).get(key, {}), root, where + "." + key
+            )
         return found
     if isinstance(golden, dict):
         # An open object may gain fields, never lose one: a runner in the window may still read it (a renamed
@@ -139,37 +143,64 @@ def exchange(api, name, token, body, case, aid="", key=None, expected=200):
 
 def readiness(bot):
     """The structured readiness report runner-rs/src/readiness.rs sends, for one ready bot on the fake runtime."""
-    return {"schema_version": 1, "worktrees": True,
-            "runtimes": {"fake": {"installed": True, "authenticated": "ready", "version": "1.0.0"}},
-            "bots": {bot: {"ready": True, "runtime": "fake", "repository_present": True, "configuration_valid": True,
-                           "published": True}}}
+    return {
+        "schema_version": 1,
+        "worktrees": True,
+        "runtimes": {"fake": {"installed": True, "authenticated": "ready", "version": "1.0.0"}},
+        "bots": {
+            bot: {
+                "ready": True,
+                "runtime": "fake",
+                "repository_present": True,
+                "configuration_valid": True,
+                "published": True,
+            }
+        },
+    }
 
 
 def heartbeat_body(bot):
     """A heartbeat as runner-rs/src/runner.rs `maintain` builds it on a Docker runner following a release."""
-    return {"version": "0.5.0", "platform": "Linux-6.8-x86_64", "capacity": 4,
-            "capabilities": ["task_lanes_v2", "session_roots_v1", "task_goals_v1", "capacity_continue_v1",
-                             "source_continue_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1",
-                             "model_remove_v1", "model_switch_to_key_v1", "turns_at_once_v1", "private_lanes_v1"],
-            "readiness": readiness(bot), "mail_agent_instructions": {}, "agent_instructions": {},
-            "release": "0.5.0", "kind": "docker", "update": {"state": "idle", "target": "", "error": ""},
-            "profiles": [], "worktrees": []}
+    return {
+        "version": "0.5.0",
+        "platform": "Linux-6.8-x86_64",
+        "capacity": 4,
+        "capabilities": [
+            "task_lanes_v2",
+            "session_roots_v1",
+            "task_goals_v1",
+            "capacity_continue_v1",
+            "source_continue_v1",
+            "model_sign_out_v1",
+            "model_keys_v1",
+            "model_switch_type_v1",
+            "model_remove_v1",
+            "model_switch_to_key_v1",
+            "turns_at_once_v1",
+            "private_lanes_v1",
+        ],
+        "readiness": readiness(bot),
+        "mail_agent_instructions": {},
+        "agent_instructions": {},
+        "release": "0.5.0",
+        "kind": "docker",
+        "update": {"state": "idle", "target": "", "error": ""},
+        "profiles": [],
+        "worktrees": [],
+    }
 
 
 CLAIM = {"next_run": True, "busy_bots": [], "busy_lanes": [], "start_places": True}
 SNAPSHOT = {"at": 1767225600.0, "cpu_pct": 12.5, "mem_pct": 40.0, "running_turns": 1}
 
 
-def test_packet_capability_heartbeat_is_accepted_and_recorded_for_admission(api):
+def test_the_retired_packet_capability_is_still_accepted_on_a_heartbeat(api):
     computer = runner(api)
     assign(api, computer, "ops")
     body = heartbeat_body("ops")
-    body["capabilities"].append("memory_tidy_packets_v1")
+    body["capabilities"].append("memory_tidy_packets_v1")  # the retired Nightly memory tidy pilot's; runners send it
     assert not W.errors(body, ref("Heartbeat"), REQUESTS)
     post(api, "runners/heartbeat", body, token=computer["token"])
-    from backend import memory_tidy_runs
-    with api.app.state.store.read() as c:
-        assert memory_tidy_runs.packet_runner(c, "ops")
 
 
 def turn(api, bot="ops"):
@@ -187,22 +218,37 @@ def test_the_turn_path_sends_and_takes_what_the_contract_says(api):
     computer, attempt = turn(api)
     token, aid = computer["token"], attempt["id"]
     assert exchange(api, "start_place", token, {}, "reserved", aid=aid)["reserved"] is True
-    exchange(api, "started", token, {"thread_id": "thread-1", "load_snapshot": SNAPSHOT}, "ok", aid=aid,
-             key="started:" + aid)
-    events = {"events": [
-        {"seq": 1, "kind": "status", "payload": {"waiting": ""}},
-        {"seq": 2, "kind": "tool", "payload": {"name": "Read", "tool": "Read", "phase": "tool_execution_start"}},
-        {"seq": 3, "kind": "delta", "payload": {"text": "Acme's summary", "delta_kind": "text"}},
-        {"seq": 4, "kind": "tokens", "payload": {"input": 120, "output": 30, "total": 150}},
-        {"seq": 5, "kind": "diagnostic", "payload": {"text": "Compacting the saved session before this turn."}},
-        {"seq": 6, "kind": "message", "payload": {"text": "Acme's summary is ready", "final": False}},
-    ]}
+    exchange(
+        api, "started", token, {"thread_id": "thread-1", "load_snapshot": SNAPSHOT}, "ok", aid=aid, key="started:" + aid
+    )
+    events = {
+        "events": [
+            {"seq": 1, "kind": "status", "payload": {"waiting": ""}},
+            {"seq": 2, "kind": "tool", "payload": {"name": "Read", "tool": "Read", "phase": "tool_execution_start"}},
+            {"seq": 3, "kind": "delta", "payload": {"text": "Acme's summary", "delta_kind": "text"}},
+            {"seq": 4, "kind": "tokens", "payload": {"input": 120, "output": 30, "total": 150}},
+            {"seq": 5, "kind": "diagnostic", "payload": {"text": "Compacting the saved session before this turn."}},
+            {"seq": 6, "kind": "message", "payload": {"text": "Acme's summary is ready", "final": False}},
+        ]
+    }
     assert exchange(api, "events", token, events, "ok", aid=aid, key="events:%s:1:6" % aid)["ack_seq"] == 6
     exchange(api, "renew", token, {}, "ok", aid=aid)
-    completion = {"outcome": "completed", "text": "Acme's summary is ready", "last_seq": 6, "load_snapshot": SNAPSHOT,
-                  "usage": {"input_tokens": 120, "cached_tokens": 0, "output_tokens": 30, "model": "fake-1",
-                            "runtime": "fake", "harness": "fake", "billing": "api"},
-                  "session": {"kind": "new", "why": "first"}}
+    completion = {
+        "outcome": "completed",
+        "text": "Acme's summary is ready",
+        "last_seq": 6,
+        "load_snapshot": SNAPSHOT,
+        "usage": {
+            "input_tokens": 120,
+            "cached_tokens": 0,
+            "output_tokens": 30,
+            "model": "fake-1",
+            "runtime": "fake",
+            "harness": "fake",
+            "billing": "api",
+        },
+        "session": {"kind": "new", "why": "first"},
+    }
     answer = exchange(api, "complete", token, completion, "ok", aid=aid, key="complete:" + aid)
     assert answer["outcome"] == "completed" and answer["message"]
 
@@ -218,8 +264,9 @@ def test_refusals_on_the_turn_path_carry_the_error_envelope(api):
     post(api, "bots/ops/stop", {})
     assert exchange(api, "renew", token, {}, "stop", aid=aid)["stop"] is True
     # The runner's own refusal ladder reads 422 details: an unknown field is named in them.
-    refused = exchange(api, "heartbeat", token, {**heartbeat_body("ops"), "from_the_future": True}, "unknown-field",
-                       expected=422)
+    refused = exchange(
+        api, "heartbeat", token, {**heartbeat_body("ops"), "from_the_future": True}, "unknown-field", expected=422
+    )
     assert refused["error"]["code"] == "validation" and "from_the_future" in refused["error"]["detail"]
     # A lease that lapsed: the runner stops the turn (lease.rs, a definite answer).
     with api.app.state.store.transaction() as c:
@@ -244,6 +291,7 @@ def test_late_output_is_historical_and_a_late_result_is_still_taken(api):
 def test_a_too_old_runner_is_told_why_in_the_claim_answer(api):
     """The server's floor (runner_versions.MIN_RUNNER_RELEASE) pauses an older runner through the claim answer."""
     from backend import runner_versions
+
     computer = runner(api)
     assign(api, computer, "ops")
     exchange(api, "heartbeat", computer["token"], {**heartbeat_body("ops"), "release": "0.0.9"}, "old-release")
@@ -267,8 +315,9 @@ def test_the_runner_event_stream_frames_follow_the_contract(api, live):
 
 
 def test_the_committed_requests_are_the_servers_models():
-    assert W.stripped(REQUESTS) == W.stripped(W.generate_requests()), \
+    assert W.stripped(REQUESTS) == W.stripped(W.generate_requests()), (
         "contracts/runner/requests.json is stale: run python scripts/check_wire_contract.py --write-requests"
+    )
 
 
 def test_every_fixture_request_is_one_the_server_model_takes():
@@ -284,6 +333,7 @@ def test_every_fixture_request_is_one_the_server_model_takes():
 
 # --- version skew --------------------------------------------------------------------------------------------------
 
+
 def kept():
     return [path for _, path in W.window(W.releases())]
 
@@ -295,8 +345,15 @@ def test_the_contract_is_compatible_both_ways_with_every_release_in_the_window()
 
 
 # The recorded requests of one turn, in the order a runner sends them.
-TURN = [("heartbeat", "ok"), ("claim", "attempt"), ("start_place", "reserved"), ("started", "ok"), ("events", "ok"),
-        ("renew", "ok"), ("complete", "ok")]
+TURN = [
+    ("heartbeat", "ok"),
+    ("claim", "attempt"),
+    ("start_place", "reserved"),
+    ("started", "ok"),
+    ("events", "ok"),
+    ("renew", "ok"),
+    ("complete", "ok"),
+]
 
 
 def test_an_old_runners_requests_still_drive_this_server(api):
@@ -311,8 +368,11 @@ def test_an_old_runners_requests_still_drive_this_server(api):
             recorded = json.loads((path / W.FIXTURES / ("%s.%s.json" % (name, case))).read_text())
             if name == "claim":
                 post(api, "chat/ops", {"text": "Please summarize the current work."})
-            response = api.post(WIRE["endpoints"][name]["path"].replace("{aid}", aid), json=recorded["request"],
-                                headers=headers(computer["token"], "%s:%s:%s" % (name, aid, uuid.uuid4())))
+            response = api.post(
+                WIRE["endpoints"][name]["path"].replace("{aid}", aid),
+                json=recorded["request"],
+                headers=headers(computer["token"], "%s:%s:%s" % (name, aid, uuid.uuid4())),
+            )
             assert response.status_code == 200, (path.name, name, response.text[:400])
             answer = response.json()
             problems = lenient_errors(answer, ref(old["endpoints"][name]["answer"]), old)
@@ -341,8 +401,14 @@ def opened(schema, root, depth=0):
             schema["additionalProperties"] = True
         if schema.get("x-open-enum"):
             schema.pop("enum", None)
-        return {k: (opened(v, root, depth + 1) if k not in W.CHILD_MAPS else
-                    {n: opened(s, root, depth + 1) for n, s in v.items()}) for k, v in schema.items()}
+        return {
+            k: (
+                opened(v, root, depth + 1)
+                if k not in W.CHILD_MAPS
+                else {n: opened(s, root, depth + 1) for n, s in v.items()}
+            )
+            for k, v in schema.items()
+        }
     if isinstance(schema, list):
         return [opened(s, root, depth + 1) for s in schema]
     return schema
@@ -363,6 +429,7 @@ def test_this_runner_reads_every_answer_a_kept_release_recorded():
 
 # --- the check itself ----------------------------------------------------------------------------------------------
 
+
 def changed(edit):
     new = copy.deepcopy(CONTRACT)
     edit(new["wire"]["$defs"], new["requests"]["$defs"], new["wire"])
@@ -372,37 +439,47 @@ def changed(edit):
 def test_the_check_refuses_what_breaks_a_runner_or_server_in_either_direction():
     def drop_answer_field(answers, requests, wire):
         answers["EventsAnswer"]["required"].remove("ack_seq")
+
     assert any(p.startswith("old runner, new server: events.answer") for p in changed(drop_answer_field))
 
     def require_new_answer_field(answers, requests, wire):
         answers["RenewAnswer"]["properties"]["renewed_at"] = {"type": "string"}
         answers["RenewAnswer"]["required"].append("renewed_at")
+
     assert any(p.startswith("new runner, old server: renew.answer") for p in changed(require_new_answer_field))
 
     def new_optional_answer_field(answers, requests, wire):
         answers["RenewAnswer"]["properties"]["renewed_at"] = {"type": "string"}
+
     assert changed(new_optional_answer_field) == []
 
     def new_closed_enum_value(answers, requests, wire):
         answers["CompleteAnswer"]["properties"]["outcome"]["enum"].append("yielded")
-    assert any(p.endswith('outcome="yielded": the reader does not know this value') for p in changed(new_closed_enum_value))
+
+    assert any(
+        p.endswith('outcome="yielded": the reader does not know this value') for p in changed(new_closed_enum_value)
+    )
 
     def new_open_enum_value(answers, requests, wire):
         answers["RunnerFrame"]["properties"]["kind"]["enum"].append("moved")
+
     assert changed(new_open_enum_value) == []
 
     def answer_turns_nullable(answers, requests, wire):
         answers["EventsAnswer"]["properties"]["ack_seq"]["type"] = ["integer", "null"]
+
     assert any("may send null" in p for p in changed(answer_turns_nullable))
 
     def server_takes_a_new_request_field(answers, requests, wire):
         requests["Claim"]["properties"]["urgent_only"] = {"type": "boolean"}
+
     found = changed(server_takes_a_new_request_field)
     assert found and all(p.startswith("new runner, old server") and "urgent_only" in p for p in found)
 
     def gated_new_request_field(answers, requests, wire):
         requests["Claim"]["properties"]["urgent_only"] = {"type": "boolean"}
         wire["gated"]["claim.request.urgent_only"] = "sent once the heartbeat answer says urgent_only"
+
     assert changed(gated_new_request_field) == []
 
     # A field of an optional value (the heartbeat's readiness is `anyOf` object/null): gated by its own path, while a
@@ -410,23 +487,28 @@ def test_the_check_refuses_what_breaks_a_runner_or_server_in_either_direction():
     def gated_readiness_field(answers, requests, wire):
         requests["StructuredReadiness"]["properties"]["sleepy"] = {"type": "boolean"}
         wire["gated"]["heartbeat.request.readiness.sleepy"] = "sent once the config answer says readiness_sleepy"
+
     assert changed(gated_readiness_field) == []
 
     def gated_and_ungated_readiness_fields(answers, requests, wire):
         gated_readiness_field(answers, requests, wire)
         requests["StructuredReadiness"]["properties"]["dozy"] = {"type": "boolean"}
+
     found = changed(gated_and_ungated_readiness_fields)
     assert found and all("readiness.dozy" in p for p in found), found
 
     def server_requires_a_request_field(answers, requests, wire):
         requests["Claim"]["properties"]["urgent_only"] = {"type": "boolean"}
         requests["Claim"].setdefault("required", []).append("urgent_only")
+
     assert any(p.startswith("old runner, new server: claim.request") for p in changed(server_requires_a_request_field))
 
     def server_drops_an_event_kind(answers, requests, wire):
         requests["Event"]["properties"]["kind"]["enum"].remove("goal")
+
     assert any(p.startswith("old runner, new server: events.request") for p in changed(server_drops_an_event_kind))
 
     def endpoint_removed(answers, requests, wire):
         del wire["endpoints"]["renew"]
+
     assert any("renew is gone" in p for p in changed(endpoint_removed))

@@ -5,8 +5,9 @@
 `recovered`. `webhooks.filter` is `{"departments": [], "bots": [], "types": []}` (an empty list is all);
 `headers` is a list of `{"name", "value", "secret"}` whose secret values are sealed with the credential vault;
 `disabled_at` and `disabled_reason` say Tico switched the endpoint off after days of failures. `webhook_events.only_id`
-names the one endpoint a targeted send (a rule, `hub webhook send`) was for, so "replay missing" never copies it elsewhere.
+names the one endpoint a targeted send (a rule, `tico webhook send`) was for, so "replay missing" never copies it elsewhere.
 """
+
 SCHEMA = """
 ALTER TABLE trigger_bodies ADD COLUMN outcome TEXT NOT NULL DEFAULT 'accepted';
 ALTER TABLE webhooks ADD COLUMN filter TEXT NOT NULL DEFAULT '{}';

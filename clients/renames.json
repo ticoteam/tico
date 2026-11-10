@@ -40,7 +40,8 @@
     "2b",
     "3",
     "4",
-    "5"
+    "5",
+    "directory"
   ],
   "columns": {
     "acceptance_json": "acceptance",
@@ -243,26 +244,6 @@
     {
       "fixable": true,
       "new": [
-        "question",
-        "ask"
-      ],
-      "old": [
-        "ask"
-      ]
-    },
-    {
-      "fixable": true,
-      "new": [
-        "question",
-        "answer"
-      ],
-      "old": [
-        "answer"
-      ]
-    },
-    {
-      "fixable": true,
-      "new": [
         "note",
         "list"
       ],
@@ -288,17 +269,6 @@
       ],
       "old": [
         "board"
-      ]
-    },
-    {
-      "fixable": false,
-      "new": [
-        "task",
-        "list"
-      ],
-      "old": [
-        "task",
-        "stuck"
       ]
     },
     {
@@ -3205,5 +3175,11 @@
         ]
       }
     }
+  },
+  "table_renames": {
+    "market_edges": "entity_links",
+    "market_entities": "entities",
+    "market_entity_keys": "entity_identifiers",
+    "market_watches": "entity_watches"
   }
 }

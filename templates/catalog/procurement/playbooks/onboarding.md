@@ -7,7 +7,7 @@ The outcome is five recorded answers, a real comparison for one open purchase re
 
 ## 1. Read before you ask
 
-    hub task show <id>
+    tico task show <id>
 
 Check what you can already reach: a purchase request on a task, quotes in a mailbox you can read, a docs folder of
 contracts. Do not ask for what these already show. If nothing is open, ask for one real purchase to start with.
@@ -41,17 +41,17 @@ labelled "First draft, not yet reviewed". Attach it to the task. Nothing is sent
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off, `hub automation update <id>
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off, `tico automation update <id>
 --enable`) and tell the human in one line: "I will send you a digest of open purchase requests every Monday at 09:00,
 and a person contacts any vendor."
 
 They can change it or turn it off any time. Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`.
-If they asked for a different schedule or to leave it off, change the routine to match (`hub automation update <id>`, with
+If they asked for a different schedule or to leave it off, change the routine to match (`tico automation update <id>`, with
 `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the routine run; until then nothing
 you have runs on its own. Run it once the answers and the first result are recorded, not before.

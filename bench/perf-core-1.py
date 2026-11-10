@@ -7,6 +7,7 @@ yields (equal digests mean equal rows in equal order). "cold" clears every proce
 (assigned_start's ATTEMPTED where the tree still has it, and the store's provenance cache) before each run; "warm"
 keeps them and times the calls after one priming call.
 """
+
 import hashlib
 import itertools
 import random
@@ -17,9 +18,7 @@ import uuid
 
 from backend import assigned_start as A, auto_tasks, bot_settings as BS, provenance_clock, queue_refusals as Q
 from backend.store import H, encode
-from backend.tests import test_api
 
-api = test_api.api                                   # the fixture, bound so that tests can take it
 BOTS = [f"bot{n:02d}" for n in range(20)]
 TASKS = 200
 RUNS = 50
@@ -32,8 +31,11 @@ def seed_overdue(store, monkeypatch):
     counter = itertools.count(1)
     monkeypatch.setattr(H, "new_id", lambda: f"{next(counter):012d}")
     with store.transaction() as c:
-        H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in BOTS},
-                        {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
+        H.sync_registry(
+            c,
+            {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in BOTS},
+            {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]},
+        )
         for slug in BOTS:
             c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,?)", (slug, "ana"))
             BS.write(c, slug, {"name": slug, "runtime": "fake"})
@@ -41,14 +43,28 @@ def seed_overdue(store, monkeypatch):
             H.task_create(c, "human:ana", f"Overdue {n:03d}", "Please do it.", "bot:" + BOTS[n % len(BOTS)], lint=False)
     with store.transaction() as c:
         now = H.now()
-        rows = c.execute("SELECT id,owner_id,created_at FROM tasks WHERE owner_id LIKE 'bot:bot%' AND status='open' "
-                         "ORDER BY id").fetchall()
+        rows = c.execute(
+            "SELECT id,owner_id,created_at FROM tasks WHERE owner_id LIKE 'bot:bot%' AND status='open' ORDER BY id"
+        ).fetchall()
         for tid, _owner, created in rows:
-            key = c.execute("SELECT coalesce((SELECT id FROM history_events WHERE subject_type='task' AND subject_id=t.id AND kind='owner' "
-                            "ORDER BY created_at DESC,rowid DESC LIMIT 1),t.owner_id||':'||t.created_at) "
-                            "FROM tasks t WHERE t.id=?", (tid,)).fetchone()[0]
-            H.event(c, H.KEEPER, A.EVENT, tid, {"assignment": key, "assigned_at": created,
-                                                "rewoken_at": H.shift(created, hours=1), "refusal": "no_queued_wake"})
+            key = c.execute(
+                "SELECT coalesce((SELECT id FROM history_events WHERE subject_type='task' AND subject_id=t.id AND kind='owner' "
+                "ORDER BY created_at DESC,rowid DESC LIMIT 1),t.owner_id||':'||t.created_at) "
+                "FROM tasks t WHERE t.id=?",
+                (tid,),
+            ).fetchone()[0]
+            H.event(
+                c,
+                H.KEEPER,
+                A.EVENT,
+                tid,
+                {
+                    "assignment": key,
+                    "assigned_at": created,
+                    "rewoken_at": H.shift(created, hours=1),
+                    "refusal": "no_queued_wake",
+                },
+            )
     # Runs of the assigned bots that carried the attempted tasks (task_privacy.attempt_tasks reads `carried_by`). Foreign
     # keys are off for this seed only: a run needs a job and a computer that this fixture does not build.
     raw = sqlite3.connect(str(store.settings.db_path), isolation_level=None)
@@ -58,9 +74,11 @@ def seed_overdue(store, monkeypatch):
     attempted = [row for n, row in enumerate(rows) if (n // len(BOTS)) % 2 == 0]
     for tid, owner, _created in attempted:
         aid = H.new_id()
-        raw.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
-                    "VALUES(?,?,?,?,?,?,?,?,?)",
-                    (aid, H.new_id(), H.actor_id(owner), "bench", 0, H.new_id(), "completed", now, now))
+        raw.execute(
+            "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (aid, H.new_id(), H.actor_id(owner), "bench", 0, H.new_id(), "completed", now, now),
+        )
         raw.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, tid))
     raw.execute("COMMIT")
     raw.close()
@@ -91,23 +109,28 @@ def measure(api, label, call):
     store = api.app.state.store
     for mode in ("cold", "warm"):
         if mode == "warm":
-            timed(store, call)                      # the first pass fills whatever memo the tree keeps
+            timed(store, call)  # the first pass fills whatever memo the tree keeps
         walls, statements, rows = [], None, None
         for _ in range(RUNS):
             if mode == "cold":
                 go_cold(store)
             rows, statements, wall = timed(store, call)
             walls.append(wall)
-        print(f"{label:<34} {mode:<4} statements={statements:<5} rows={len(rows):<4} "
-              f"median_ms={statistics.median(walls) * 1000:8.2f} digest={digest(rows)}")
+        print(
+            f"{label:<34} {mode:<4} statements={statements:<5} rows={len(rows):<4} "
+            f"median_ms={statistics.median(walls) * 1000:8.2f} digest={digest(rows)}"
+        )
 
 
 def test_candidates_and_assigned_check(api, monkeypatch):
     at = seed_overdue(api.app.state.store, monkeypatch)
     settings = api.app.state.store.settings
     for recorded in (None, True):
-        measure(api, f"candidates recorded={recorded}",
-                lambda c, recorded=recorded: [row["title"] for row, *_ in A.candidates(c, at, recorded=recorded)])
+        measure(
+            api,
+            f"candidates recorded={recorded}",
+            lambda c, recorded=recorded: [row["title"] for row, *_ in A.candidates(c, at, recorded=recorded)],
+        )
 
     def health_check(c):
         overdue = list(A.overdue(c, at))
@@ -129,21 +152,25 @@ def refuse(api, values):
     """Each of these bots' queues refused for over 12 hours, as the sweep leaves them."""
     with api.app.state.store.transaction() as c:
         for slug, value in values.items():
-            c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (Q.KEY + slug, encode(
-                {**value, "since": "2026-10-23T00:00:00.000000Z", "observed_at": H.now()})))
+            c.execute(
+                "INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
+                (Q.KEY + slug, encode({**value, "since": "2026-10-23T00:00:00.000000Z", "observed_at": H.now()})),
+            )
 
 
 def test_health_statements_by_refused_queues(api, monkeypatch):
-    from backend.tests.test_api import headers
-    from backend.tests.test_health_queries import counted
-    from backend.tests.test_run_backoff import at, setup
-    from backend.tests.test_status_reads import busy
+    from backend.tests.helpers.api import headers
+    from backend.tests.helpers.health_queries import counted
+    from backend.tests.helpers.run_backoff import at, setup
+    from backend.tests.helpers.status_reads import busy
+
     rng = random.Random(7)
 
     def seeded_id():
         """Ids from one seeded generator, so which bots are refused is the same on every run and tree (the ids order
         the queued jobs, and random ones change that each run). Uniform bits, unlike a counter: short prefixes stay unique."""
         return str(uuid.UUID(int=rng.getrandbits(128), version=4))
+
     monkeypatch.setattr(H, "new_id", seeded_id)
     monkeypatch.setattr(H, "uuid7", seeded_id)
     machine = setup(api, monkeypatch, tasks=2)
@@ -164,5 +191,7 @@ def test_health_statements_by_refused_queues(api, monkeypatch):
             start = time.perf_counter()
             assert api.get("/api/v2/health", headers=headers("ana-test")).status_code == 200
             walls.append(time.perf_counter() - start)
-        print(f"GET /api/v2/health refused={count:<3} statements={statements:<5} rows={len(shown):<4} "
-              f"median_ms={statistics.median(walls) * 1000:8.2f} digest={digest([row['bot'] + '|' + row['text'] for row in shown])}")
+        print(
+            f"GET /api/v2/health refused={count:<3} statements={statements:<5} rows={len(shown):<4} "
+            f"median_ms={statistics.median(walls) * 1000:8.2f} digest={digest([row['bot'] + '|' + row['text'] for row in shown])}"
+        )

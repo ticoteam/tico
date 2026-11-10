@@ -3,32 +3,37 @@ release schedule, the Task Manager, stalled task check, the team's run budget, t
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """
-from backend.tests.test_api import api, post  # noqa: F401  (fixture)
-from backend.tests.test_botops_parity import act
-from backend.tests.test_mcp import call as mcp
-from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixtures)
+
+from backend.tests.helpers.api import post  # noqa: F401  (fixture)
+from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.mcp import call as mcp
+from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixtures)
 
 
 def test_an_owner_changes_team_settings_through_botops_and_a_member_is_refused(api, botops):
     ana = turn(api, botops, person="ana-test", text="Turn the daily release off and set the team budget")
-    for name, args in (("hub_release_schedule", {"on": False}), ("hub_team_budget", {"hour": 5}),
-                       ("hub_maintenance_set", {"paused": True}), ("hub_task_manager_set", {"on": True})):
+    for name, args in (
+        ("hub_release_schedule", {"on": False}),
+        ("hub_team_budget", {"hour": 5}),
+        ("hub_maintenance_set", {"paused": True}),
+        ("hub_task_manager_set", {"on": True}),
+    ):
         err, result = mcp(api, name, args, ana["token"])
         assert not err, (name, result)
+    # Pipelines v3: a pipeline's settings are a person's, on its page; no bot makes one, even for an owner.
     err, made = mcp(api, "hub_task_type_create", {"name": "Ops", "default_visibility": "private"}, ana["token"])
-    assert not err and made["type"]["default_visibility"] == "private", made
-    with api.app.state.store.read() as c:
-        row = c.execute("SELECT actor,detail FROM events WHERE action='task_type.create' ORDER BY rowid DESC "
-                        "LIMIT 1").fetchone()
-        assert row["actor"] == "human:ana", dict(row)            # hers, via BotOps
+    assert err and made["error"] == "removed", made
     finish(api, botops, ana)
 
     cara = turn(api, botops, person="cara-test", text="Turn the daily release on")
-    for name, args in (("hub_release_schedule", {"on": True}), ("hub_team_budget", {"hour": 9}),
-                       ("hub_maintenance_set", {"paused": False}), ("hub_task_type_delete", {"id": "Ops"})):
+    for name, args in (
+        ("hub_release_schedule", {"on": True}),
+        ("hub_team_budget", {"hour": 9}),
+        ("hub_maintenance_set", {"paused": False}),
+    ):
         err, result = mcp(api, name, args, cara["token"])
         assert err, (name, result)
-    # The same through a plain `hub api` call with no on_behalf_of: the route still checks Cara, not BotOps.
+    # The same through a plain `tico api` call with no on_behalf_of: the route still checks Cara, not BotOps.
     assert act(api, cara, "PATCH", "release-schedule", {"on": True}, ref=None).status_code == 403
 
 
@@ -37,8 +42,11 @@ def test_a_member_cannot_change_another_persons_trigger_through_botops(api, boto
     cara = turn(api, botops, person="cara-test", text="Rename the shop trigger")
     err, result = mcp(api, "hub_trigger_update", {"id": "shop", "name": "Cara's"}, cara["token"])
     assert err, result
-    for path, body in (("triggers/shop", {"name": "Cara's"}), ("triggers/shop/delete", {}),
-                       ("triggers/shop/relay/wake", {"wake": True})):
+    for path, body in (
+        ("triggers/shop", {"name": "Cara's"}),
+        ("triggers/shop/delete", {}),
+        ("triggers/shop/relay/wake", {"wake": True}),
+    ):
         assert act(api, cara, "POST", path, body, ref=None).status_code == 403, path
     # Her own trigger, made through BotOps, is hers.
     err, mine = mcp(api, "hub_trigger_create", {"name": "Cara orders"}, cara["token"])

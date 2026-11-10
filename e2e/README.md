@@ -12,10 +12,10 @@ Run every kind and print one verdict per kind:
 Each kind is one pytest run with the `slow` tests included; the default `pytest` run leaves those out. Running a
 single file the same way: `python3 -m pytest -q -o addopts= -m "" -p no:cacheprovider e2e/tests/test_upgrade.py`.
 
-PR checks run the slow MCP sweep, CLI sweep and API golden contract in a separate parallel `contracts` job when
-`backend/`, `clients/`, `e2e/`, `templates/`, `skills/` or roles/company inputs change. Shared CI/configuration changes,
-deleted or uncertain inputs, and every main push run them too. The default suite still excludes other slow tests;
-release validation runs every test. To run the PR contracts locally:
+The merge queue runs the slow MCP sweep, CLI sweep and API golden contract in a separate parallel `contracts` job when
+`backend/`, `clients/`, `e2e/`, `templates/`, `skills/` or roles/company inputs change. Shared CI/configuration changes and
+deleted or uncertain inputs run only the smoke set; release validation runs them all. A pull request's own pushes run lint only. The default suite still excludes
+other slow tests; release validation runs every test. To run the contracts locally:
 
     python3 -m pytest -q -n 4 -m slow backend/tests/test_e2e_mcp.py backend/tests/test_e2e_cli.py e2e/tests/test_contract.py
 
@@ -97,14 +97,14 @@ not from these kinds.
 
 | Plan kind | Where it lives | Not covered |
 |---|---|---|
-| Browser journeys | `scripts/ui-tests.cjs --group e2e` (`ui/tests/e2e-*.cjs`), on RunsOn | No rollback smoke journey |
+| Browser journeys | `scripts/ui-tests.cts --group e2e` (`ui/tests/e2e-*.cts`; the Automations, Meetings and sign-in journeys run inside `redesign-e2e-automations`, `meeting-linked-tasks` and `model-login`), on RunsOn | No rollback smoke journey |
 | Bots end-to-end | `backend/tests/test_e2e_bots.py`, `test_e2e_bot_rename.py` | A real Rust runner on a demo computer |
 | MCP | `backend/tests/test_e2e_mcp.py` (every remote tool) | Claude Code and Codex sessions that run a scripted task (need real harnesses and model access) |
-| CLI | `backend/tests/test_e2e_cli.py` (every hub command in templates and skills) | |
+| CLI | `backend/tests/test_e2e_cli.py` (every tico command in templates and skills) | |
 | Webhooks and triggers | `backend/tests/test_e2e_webhooks.py` (generic JSON, signed delivery) | No Make-shaped payload: no backend code names Zapier or Make, so it would run the same path |
 | Integrations | `backend/tests/test_vendor_contracts.py` (HQ billing and storage, Stripe, QuickBooks, Xero, Slack, GitHub), `test_granola_recorded_shapes.py`, `test_mail_api.py`, `test_google_connect.py` | Mail and Google only against their unit fakes |
 | Templates | `backend/tests/test_e2e_templates.py` | |
-| `hub sql` | `backend/tests/test_sql_parity.py` (each caller sees what the API shows it; a reassigned bot is refused), `test_sql_scale.py` | Not an e2e kind; the stable query set is not run against an upgraded backup copy |
+| `tico sql` | `backend/tests/test_sql_parity.py` (each caller sees what the API shows it; a reassigned bot is refused), `test_sql_scale.py` | Not an e2e kind; the stable query set is not run against an upgraded backup copy |
 | Upgrade, interrupted | Unit: `backend/tests/test_migrations.py` (a failed migration rolls back and runs once fixed), `test_upgrade.py` | No process killed partway through an upgrade of a real backup |
 | Hosted | not built | Needs staging HQ |
 | Mac app | not built | macOS GUI, pairing |
@@ -114,11 +114,13 @@ public API references, not live captures. Each names its source. A renamed field
 
 ## Not in this package
 
-Browser UI journeys (`scripts/ui-tests.cjs`), the Docker install journey (`scripts/journey-test.sh`), bot, MCP and CLI
-checks, and the factory evals (`evals/factory/`) run from their own scripts and kinds, not from `python -m e2e.run`.
+Browser UI journeys (`scripts/ui-tests.cts`), the Docker install journey (`scripts/journey-test.sh`), bot, MCP and CLI
+checks, and the never-stuck rig (`evals/never_stuck/`) run from their own scripts and kinds, not from `python -m e2e.run`.
 
 ## On RunsOn
 
 Push the branch, then run from the worktree:
 
     python3 scripts/remote.py --setup python --minutes 20 -- python3 -m e2e.run
+
+At most 4 remote runs of the repository go at once (`TICO_REMOTE_MAX` changes that, 0 for none); a run past the cap waits up to 20 minutes for a slot.

@@ -1,6 +1,6 @@
 """Per-person preferences (POST/GET /api/v2/preferences/{key}) whose values the server checks."""
 
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
 
 
 def test_send_way_keeps_only_a_way_the_web_menu_offers(api):

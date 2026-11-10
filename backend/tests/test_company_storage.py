@@ -1,4 +1,5 @@
 """A company's own S3 bucket (backend/company_storage.py): owner only, secret sealed, files keep opening."""
+
 import json
 import threading
 
@@ -8,9 +9,9 @@ from botocore.exceptions import ClientError
 
 from backend import company_storage
 from backend.blobs import Blobs
-from backend.tests.test_api import api, headers, post  # noqa: F401
-from backend.tests.test_backup_bundle import ObjectStore
-from backend.tests.test_storage_delivery import S3, attach, task
+from backend.tests.helpers.api import headers, post  # noqa: F401
+from backend.tests.helpers.backup_bundle import ObjectStore
+from backend.tests.helpers.storage_delivery import S3, attach, task
 
 SECRET = "example-secret-access-key-0001"
 
@@ -22,6 +23,7 @@ class Denied(S3):
 
 class NoList(S3):
     """Keys without s3:ListBucket: S3 answers a missing file with AccessDenied, not NoSuchKey."""
+
     reads = 0
 
     def get_object(self, **kw):
@@ -33,6 +35,7 @@ class NoList(S3):
 
 class NoAbort(S3):
     """Writes, but cannot cancel an upload: the server's write probe would fail after the save."""
+
     def abort_multipart_upload(self, **kw):
         raise ClientError({'Error': {'Code': 'AccessDenied', 'Message': SECRET}}, 'AbortMultipartUpload')
 
@@ -40,20 +43,34 @@ class NoAbort(S3):
 @pytest.fixture
 def buckets(monkeypatch):
     """One fake S3 per access key ID; each records the bucket it was asked for."""
-    made = {'AKIAEXAMPLEGOOD0001': NoList(), 'AKIAEXAMPLEGOOD0002': NoList(), 'AKIAEXAMPLEDENY0001': Denied(), 'AKIAEXAMPLENOAB0001': NoAbort(), 'server': S3()}
+    made = {
+        'AKIAEXAMPLEGOOD0001': NoList(),
+        'AKIAEXAMPLEGOOD0002': NoList(),
+        'AKIAEXAMPLEDENY0001': Denied(),
+        'AKIAEXAMPLENOAB0001': NoAbort(),
+        'server': S3(),
+    }
     for s3 in made.values():
         s3.close = lambda: None
+
     def client(service, **options):
         if 'aws_access_key_id' not in options:
             return made['server']
         assert options['aws_secret_access_key'] == SECRET
         return made[options['aws_access_key_id']]
+
     monkeypatch.setattr(boto3, 'client', client)
     return made
 
 
 def body(bucket='acme-files', key='AKIAEXAMPLEGOOD0001', secret=SECRET, prefix='tico'):
-    return {'bucket': bucket, 'region': 'us-west-2', 'prefix': prefix, 'access_key_id': key, 'secret_access_key': secret}
+    return {
+        'bucket': bucket,
+        'region': 'us-west-2',
+        'prefix': prefix,
+        'access_key_id': key,
+        'secret_access_key': secret,
+    }
 
 
 def download(api, fid):
@@ -64,7 +81,7 @@ def download(api, fid):
 
 def test_owner_sets_bucket_secret_stays_sealed_and_every_file_keeps_opening(api, buckets):
     blobs = api.app.state.blobs
-    blobs._loop = None                     # copies run below, in this thread
+    blobs._loop = None  # copies run below, in this thread
     tid = task(api)
     before = attach(api, tid, 'before.txt', b'stored on the server disk')
     assert api.put('/api/v2/system/storage', json=body(), headers=headers('ben-test')).status_code == 403
@@ -77,7 +94,9 @@ def test_owner_sets_bucket_secret_stays_sealed_and_every_file_keeps_opening(api,
 
     saved = api.put('/api/v2/system/storage', json=body(), headers=headers())
     assert saved.status_code == 200, saved.text
-    assert saved.json()['active']['location'] == 'acme-files/tico' and saved.json()['active']['access_key_id'] == '…0001'
+    assert (
+        saved.json()['active']['location'] == 'acme-files/tico' and saved.json()['active']['access_key_id'] == '…0001'
+    )
     first = buckets['AKIAEXAMPLEGOOD0001']
     assert api.app.state.downloads.s3 is buckets['server'], 'desktop app builds keep the server credentials'
     with api.app.state.store.read() as c:
@@ -95,9 +114,11 @@ def test_owner_sets_bucket_secret_stays_sealed_and_every_file_keeps_opening(api,
 
     # The scheduled backup reads files from the company bucket with the company's keys.
     from backend.operations import backup
+
     class Metrics:
         def put_metric_data(self, **kw):
             pass
+
     vault = ObjectStore()
     report = backup(api.app.state.store, vault, Metrics(), 'backup-bucket')
     assert report['objects'] == 2 and b'stored in the company bucket' in vault.objects.values()
@@ -108,8 +129,12 @@ def test_owner_sets_bucket_secret_stays_sealed_and_every_file_keeps_opening(api,
     assert again.bucket == 'acme-files' and again.s3_key('0' * 64).startswith('tico/blobs/')
 
     # Another bucket: the first is still read from; turning it off goes back to the disk and reads both.
-    assert api.put('/api/v2/system/storage', json=body('acme-files-2', 'AKIAEXAMPLEGOOD0002', prefix=''),
-                   headers=headers()).status_code == 200
+    assert (
+        api.put(
+            '/api/v2/system/storage', json=body('acme-files-2', 'AKIAEXAMPLEGOOD0002', prefix=''), headers=headers()
+        ).status_code
+        == 200
+    )
     second = attach(api, tid, 'second.txt', b'in the second bucket')
     assert b'in the second bucket' in buckets['AKIAEXAMPLEGOOD0002'].objects.values()
     assert download(api, after) == b'stored in the company bucket'
@@ -117,8 +142,11 @@ def test_owner_sets_bucket_secret_stays_sealed_and_every_file_keeps_opening(api,
     assert off.status_code == 200 and off.json()['active'] is None
     assert [p['location'] for p in off.json()['earlier']] == ['acme-files-2', 'acme-files/tico']
     assert not blobs.bucket
-    for fid, data in ((before, b'stored on the server disk'), (after, b'stored in the company bucket'),
-                      (second, b'in the second bucket')):
+    for fid, data in (
+        (before, b'stored on the server disk'),
+        (after, b'stored in the company bucket'),
+        (second, b'in the second bucket'),
+    ):
         assert download(api, fid) == data
     assert download(api, second) == b'in the second bucket', 'a miss answered AccessDenied is not an outage'
 

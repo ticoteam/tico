@@ -1,4 +1,5 @@
 """Revocation covers copied context, signed delegates, raw transports and roster reuse."""
+
 import json
 
 import pytest
@@ -7,13 +8,13 @@ from backend import counsel, events, files, sql as S, threads, visuals
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_counsel import counsel_on, counsel_run, source, store_file
-from backend.tests.test_groups import send
-from backend.tests.test_org_rules import as_bot, org
-from backend.tests.test_files import turn
-from backend.tests.test_pages import page
-from backend.tests.test_page_audience import edit, promoted, read
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.counsel import counsel_on, counsel_run, source, store_file
+from backend.tests.helpers.groups import send
+from backend.tests.helpers.org_rules import as_bot, org
+from backend.tests.helpers.files import turn
+from backend.tests.helpers.pages import page
+from backend.tests.helpers.page_audience import edit, promoted, read
 
 
 @pytest.mark.parametrize("running", [False, True], ids=["queued", "running"])
@@ -27,8 +28,11 @@ def test_counsel_copy_revoked_after_ask(api, running, removed):
     before = get(api, "tasks/" + task, token="cara-test")
     assert "42 deals" in before["task"]["body"]
     attempt = counsel_run(api)[1] if running else None
-    edit(api, fid, {"people": [] if removed == "asker" else ["cara"],
-                    "bots": [] if removed == "counsel" else [H.COUNSEL]})
+    edit(
+        api,
+        fid,
+        {"people": [] if removed == "asker" else ["cara"], "bots": [] if removed == "counsel" else [H.COUNSEL]},
+    )
     with api.app.state.store.read() as c:
         assert c.execute("SELECT body FROM tasks WHERE id=?", (task,)).fetchone()[0] == counsel.REMOVED_PAGE
     if attempt is None:
@@ -49,6 +53,7 @@ def test_counsel_copy_is_rechecked_when_group_membership_changes(api):
     # Simulate an independent roster writer: the read gate must not rely on set_audience scrubbing alone.
     with api.app.state.store.transaction() as c:
         from backend import views
+
         roster = views.roster(c)
         roster["people"] = [dict(p, team="") if p["id"] == "cara" else p for p in roster["people"]]
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
@@ -105,6 +110,7 @@ def test_visual_token_keeps_both_principals_and_rejects_legacy_tokens(api):
     import hashlib
     import hmac
     import time
+
     key = api.app.state.visual_key
     body = visuals._b64(json.dumps(["human:cara", fid, 1, "", int(time.time()) + 60]).encode())
     legacy = body + "." + visuals._b64(hmac.new(key, body.encode(), hashlib.sha256).digest())
@@ -139,6 +145,7 @@ def test_removed_person_and_archived_bot_lose_explicit_page_grants(api):
     assert post(api, "access/people", {"name": "Replacement", "email": "new-member@acme.example"})["person"] == pid
     with api.app.state.store.transaction() as c:
         from backend.settings_admin import archive_bot
+
         archive_bot(c, "human:ana", "finance")
         audience = json.loads(c.execute("SELECT audience FROM pages WHERE file_id=?", (fid,)).fetchone()[0])
         assert audience["people"] == audience["bots"] == [] and not audience["everyone"]
@@ -149,7 +156,9 @@ def test_review_refs_are_denied_on_sql_timeline_and_undecorated_events(api):
     tid = task["id"]
     _, attempt = turn(api)
     fid = page(api, attempt, task=tid, title="Audience secret").json()["page"]["file_id"]
-    comment = post(api, f"tasks/{tid}/comments", {"text": "Review this", "attachments": [f"{fid}@1"]}, token="ben-test")["comment"]
+    comment = post(
+        api, f"tasks/{tid}/comments", {"text": "Review this", "attachments": [f"{fid}@1"]}, token="ben-test"
+    )["comment"]
     mid, cid = comment["id"], comment["conversation_id"]
     # A page ref outside attachments must use the same gate as the attachment object.
     with api.app.state.store.transaction() as c:
@@ -161,8 +170,10 @@ def test_review_refs_are_denied_on_sql_timeline_and_undecorated_events(api):
         before = events.latest(c)
         c.execute("UPDATE messages SET body='Review this now',revision=revision+1 WHERE id=?", (mid,))
     as_bot(api, "finance", "finance-test")
-    for who, token in ((Identity("human:cara", "human", "cara@acme.example"), "cara-test"),
-                       (Identity("bot:finance", "bot", agent="test"), "finance-test")):
+    for who, token in (
+        (Identity("human:cara", "human", "cara@acme.example"), "cara-test"),
+        (Identity("bot:finance", "bot", agent="test"), "finance-test"),
+    ):
         with api.app.state.store.read() as c:
             timeline = threads.timeline(c, threads.Viewer(api.app.state.auth, who), cid)
         with api.app.state.store.read() as c:
@@ -187,10 +198,23 @@ def test_events_recheck_page_references_in_detail(api):
         H.event(c, "human:ben", "message.visual", tid, {"file": fid, "version": 1, "kind": "page"})
         for detail in ({"file": fid}, {"files": [{"file_id": fid}]}, {"page_id": fid}, {"item": "page:" + fid}):
             assert not files.page_event_readable(c, api.app.state.auth, who, tid, detail)
-        event = dict(c.execute("SELECT * FROM events WHERE action='message.visual' AND target=? ORDER BY rowid DESC", (tid,)).fetchone())
+        event = dict(
+            c.execute(
+                "SELECT * FROM events WHERE action='message.visual' AND target=? ORDER BY rowid DESC", (tid,)
+            ).fetchone()
+        )
         from backend import task_privacy
+
         assert not task_privacy.event_readable(c, who.actor, event)
-    assert post(api, "sql", {"sql": f"SELECT detail FROM events WHERE target='{tid}' AND action='message.visual'"}, token="cara-test")["rows"] == []
+    assert (
+        post(
+            api,
+            "sql",
+            {"sql": f"SELECT detail FROM events WHERE target='{tid}' AND action='message.visual'"},
+            token="cara-test",
+        )["rows"]
+        == []
+    )
 
 
 def test_sql_ordinary_files_do_not_add_per_file_audience_queries(api):

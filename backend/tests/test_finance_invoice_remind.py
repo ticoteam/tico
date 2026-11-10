@@ -5,13 +5,13 @@ refused with the reason. A stage is for an invoice that is that many days past i
 day: no due date, a due date not yet passed, and a stage not yet reached are each refused before any stage is used."""
 
 from backend import bot_settings as BS
+from backend import mailbox_access as MA
 from backend.finance.core.errors import CONFLICT
-from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, OWNER, account, act, books, finance_template, store)
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, store
 
 EMAIL = "ap@acme-retail.example"
 BOX = "books@acme.example"
-ISSUED = "2026-08-01"           # AT is 2026-10-15: due 2026-08-31 is 45 days late, so the stages 1, 7 and 30 are reached
+ISSUED = "2026-08-01"  # AT is 2026-10-15: due 2026-08-31 is 45 days late, so the stages 1, 7 and 30 are reached
 DUE = "2026-08-31"
 
 
@@ -19,6 +19,9 @@ def _mailbox(c) -> None:
     """The Bookkeeper's stored gmail tool that can send (what a real install is given)."""
     tools = [{"service": "gmail", "identity": BOX, "can": ["read", "send"]}]
     BS.write(c, "bookkeeper", {"team": "eng", "tools": tools})
+    row = MA.ensure_mailbox(c, BOX, kind="shared", created_by=OWNER)
+    MA.grant(c, OWNER, row["id"], "bot", "bookkeeper", "read_write")
+    MA.grant(c, OWNER, row["id"], "person", "ana", "read_write")
 
 
 def _invoice(c, *, emails=(EMAIL,), due=DUE, issued=ISSUED, link="") -> tuple[str, str]:
@@ -26,8 +29,11 @@ def _invoice(c, *, emails=(EMAIL,), due=DUE, issued=ISSUED, link="") -> tuple[st
     id, customer name)."""
     made = act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer", "emails": list(emails)})
     customer = str(made.result["contact_id"])
-    payload: dict[str, object] = {"customer_id": customer, "invoice_date": issued,
-                                  "lines": [{"account_id": account(c, "4000"), "amount": 30_000}]}
+    payload: dict[str, object] = {
+        "customer_id": customer,
+        "invoice_date": issued,
+        "lines": [{"account_id": account(c, "4000"), "amount": 30_000}],
+    }
     if due is not None:
         payload["due_date"] = due
     if link:
@@ -58,9 +64,19 @@ def test_a_stage_reminder_is_recorded_once_with_the_fixed_text_and_the_payment_l
 def test_only_an_unpaid_sent_invoice_is_reminded(books):
     with books.transaction() as c:
         made = act(c, OWNER, "contact_create", {"name": "Acme Draft", "kind": "customer", "emails": [EMAIL]})
-        draft = str(act(c, OWNER, "invoice_create", {
-            "customer_id": str(made.result["contact_id"]), "invoice_date": "2026-10-01", "due_date": "2026-10-31",
-            "lines": [{"account_id": account(c, "4000"), "amount": 30_000}]}).result["invoice_id"])
+        draft = str(
+            act(
+                c,
+                OWNER,
+                "invoice_create",
+                {
+                    "customer_id": str(made.result["contact_id"]),
+                    "invoice_date": "2026-10-01",
+                    "due_date": "2026-10-31",
+                    "lines": [{"account_id": account(c, "4000"), "amount": 30_000}],
+                },
+            ).result["invoice_id"]
+        )
         refused = act(c, OWNER, "invoice_remind", {"invoice_id": draft, "stage": 1})
         assert refused.status != "committed" and refused.code == CONFLICT, refused
         iid, _ = _invoice(c)
@@ -127,7 +143,7 @@ def test_an_invoice_due_today_is_not_yet_past_due_until_the_next_day(books):
 
 def test_a_stage_not_yet_reached_is_refused_and_uses_no_stage_until_it_is_reached(books):
     with books.transaction() as c:
-        iid, _ = _invoice(c, due="2026-10-10", issued="2026-10-01")          # 5 days late on AT
+        iid, _ = _invoice(c, due="2026-10-10", issued="2026-10-01")  # 5 days late on AT
         _mailbox(c)
         early = act(c, OWNER, "invoice_remind", {"invoice_id": iid, "stage": 7})
         assert early.status == "failed" and early.code == CONFLICT and "waits until 2026-10-17" in early.reason, early

@@ -8,10 +8,10 @@ the necessary Tools. Apply requested changes when those Tools are available.
 
 ## 1. Read the request
 
-    hub task show <id>
+    tico task show <id>
 
 Find the goal (more leads, a launch, lower cost), the budget and the date. If the goal or the budget
-is missing, ask once with `hub task ask <id>` and stop.
+is missing, ask once with `tico task ask <id> --to <person> "<question>" --version N` and stop.
 
 ## 2. Check it against the targets
 
@@ -38,4 +38,4 @@ Apply requested spending changes within the budget and your Tools; public copy s
 
 Apply the requested change with your connected account Tool. Record who applied
 it and when in `knowledge/changes.md`, and add the two-week check to next review's list.
-`hub task update <id> --status done --note`.
+`tico task done <id> -m "..." --version N`.

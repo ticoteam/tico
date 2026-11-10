@@ -2,6 +2,7 @@
 passes its checks, and the checker refuses the answers it should. The live runner (evals/botops_automations/run.py) asks
 a real model and never runs here.
 """
+
 import copy
 import importlib.util
 import json
@@ -81,8 +82,14 @@ def test_a_disabled_step_does_not_count():
 
 def test_an_either_bot_step_is_accepted():
     observed = saved("nightly-summary")
-    observed["created"][0]["steps"][0] = {"id": "summarize", "type": "llm", "enabled": True,
-                                          "as": "assistant:dana", "prompt": "Summarize.", "out": "summary"}
+    observed["created"][0]["steps"][0] = {
+        "id": "summarize",
+        "type": "llm",
+        "enabled": True,
+        "as": "assistant:dana",
+        "prompt": "Summarize.",
+        "out": "summary",
+    }
     assert checker.check_case(BY_ID["nightly-summary"], observed)["passed"]
 
 
@@ -125,10 +132,21 @@ def test_a_new_automation_is_on_only_when_the_request_says_so():
 
 
 def test_a_refusal_fails_when_a_saved_flow_names_the_forbidden_inbox():
-    observed = {"created": [{"name": "Priya", "owner": "person:dana", "enabled": False,
-                             "trigger": {"type": "message", "inbox": "priya@acme.example"}, "steps": []}]}
-    assert failed(checker.check_case(BY_ID["priya-inbox-refuse"], observed)) == {"nothing saved",
-                                                                                 "forbidden inbox not named"}
+    observed = {
+        "created": [
+            {
+                "name": "Priya",
+                "owner": "person:dana",
+                "enabled": False,
+                "trigger": {"type": "message", "inbox": "priya@acme.example"},
+                "steps": [],
+            }
+        ]
+    }
+    assert failed(checker.check_case(BY_ID["priya-inbox-refuse"], observed)) == {
+        "nothing saved",
+        "forbidden inbox not named",
+    }
 
 
 def _actions(node):
@@ -161,8 +179,10 @@ def test_a_rule_sent_to_another_destination_fails_the_match():
 def test_a_destination_missing_from_the_saved_flow_fails():
     observed = saved("legal-subpoena")
     del observed["created"][0]["destinations"]
-    assert failed(checker.check_case(BY_ID["legal-subpoena"], observed)) == {"valid flow (the save check)",
-                                                                             "destinations"}
+    assert failed(checker.check_case(BY_ID["legal-subpoena"], observed)) == {
+        "valid flow (the save check)",
+        "destinations",
+    }
 
 
 def test_the_change_check_sees_destinations():
@@ -199,12 +219,12 @@ def test_the_flow_shape_names_every_trigger_step_and_action():
 
 
 def test_the_guide_carries_the_flow_shape_from_the_code():
-    """BotOps reads `hub automation guide`: the shape is swapped in at read time, so it cannot go stale in a file."""
+    """BotOps reads `tico automation guide`: the shape is swapped in at read time, so it cannot go stale in a file."""
     assert F.GUIDE.count("{{flow_shape}}") == 1
     guide = F.guide_text()
     assert F.shape_text() in guide and "{{" not in guide.replace("{{summary}}", "")
     agent = (Path(__file__).resolve().parents[2] / "templates" / "catalog" / "botops" / "AGENT.md").read_text()
-    assert "`hub automation guide`" in agent
+    assert "`tico automation guide`" in agent
 
 
 def test_the_live_runner_lists_its_requests():

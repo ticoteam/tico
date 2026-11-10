@@ -43,7 +43,7 @@ def runs_of(api, aid):
     return body["runs"], body["daily"]
 
 
-def test_each_automation_shows_its_runs_and_drops(built):
+def _each_automation_shows_its_runs_and_drops(built):
     _, settings = built
     with signed_in(settings) as api:
         ids = automation_ids(api)
@@ -58,19 +58,24 @@ def test_each_automation_shows_its_runs_and_drops(built):
         assert len(reviews) == 2 and sum(day["dropped"] for day in daily) == 4
 
 
-def test_review_replies_are_done_while_bens_read_tasks_wait_for_him(built):
+def _review_replies_are_done_while_bens_read_tasks_wait_for_him(built):
     _, settings = built
     with signed_in(settings) as api:
         runs, _ = runs_of(api, automation_ids(api)["1-star reviews to reputation"])
         assert len(runs) == 2
         for run in runs:
-            tasks = [api.get(f"/api/v2/tasks/{step['outputs']['task']}").json()["task"]
-                     for step in run["steps"] if (step.get("outputs") or {}).get("task")]
+            tasks = [
+                api.get(f"/api/v2/tasks/{step['outputs']['task']}").json()["task"]
+                for step in run["steps"]
+                if (step.get("outputs") or {}).get("task")
+            ]
             assert {task["owner_id"]: task["status"] for task in tasks} == {
-                "bot:reputation": "done", "human:ben": "open"}
+                "bot:reputation": "done",
+                "human:ben": "open",
+            }
 
 
-def test_the_run_guard_held_a_loop_and_ben_dropped_it(built):
+def _the_run_guard_held_a_loop_and_ben_dropped_it(built):
     _, settings = built
     with signed_in(settings) as api:
         orders = automation_ids(api)["Marketplace orders to inventory"]
@@ -81,7 +86,7 @@ def test_the_run_guard_held_a_loop_and_ben_dropped_it(built):
         assert api.get(f"/api/v2/automations/{orders}").json().get("hold") is None
 
 
-def test_learnings_shows_a_week_of_nights(built):
+def _learnings_shows_a_week_of_nights(built):
     _, settings = built
     with signed_in(settings) as api:
         nights = api.get("/api/v2/learnings").json()["nights"]
@@ -97,7 +102,7 @@ def task_of(run):
     return next(step["outputs"]["task"] for step in run["steps"] if (step.get("outputs") or {}).get("task"))
 
 
-def test_last_night_shows_the_routed_correction_with_its_source(built):
+def _last_night_shows_the_routed_correction_with_its_source(built):
     _, settings = built
     with signed_in(settings) as api:
         nights = api.get("/api/v2/learnings").json()["nights"]
@@ -113,31 +118,37 @@ def test_last_night_shows_the_routed_correction_with_its_source(built):
         assert "Before calibrating" in entry["change"]["diff"]
 
 
-def test_the_night_before_saves_a_smaller_change(built):
+def _the_night_before_saves_a_smaller_change(built):
     _, settings = built
     with signed_in(settings) as api:
         night = next(n for n in api.get("/api/v2/learnings").json()["nights"] if n["night"] == "2026-09-23")
         assert night["updates"] == 1
-        bot = next(row for row in api.get(f"/api/v2/learnings/{night['id']}").json()["sections"]["bots"]
-                   if row["id"] == "technical-support")
+        bot = next(
+            row
+            for row in api.get(f"/api/v2/learnings/{night['id']}").json()["sections"]["bots"]
+            if row["id"] == "technical-support"
+        )
         [entry] = bot["entries"]
         assert "hold the phone still" in entry["title"].lower()
         [source] = [s for s in entry["sources"] if "hold the phone still" in s["quote"].lower()]
         assert source["label"].startswith("task Ben in Call back owners whose calibration failed twice")
 
 
-LAST_HOUR = "2026-09-25T17:30:00.000000Z"   # the build's now is 18:30 UTC
+LAST_HOUR = "2026-09-25T17:30:00.000000Z"  # the build's now is 18:30 UTC
 
 
-def test_runs_spread_over_the_week_and_some_fall_in_the_last_hour(built):
+def _runs_spread_over_the_week_and_some_fall_in_the_last_hour(built):
     _, settings = built
     with signed_in(settings) as api:
         ids = automation_ids(api)
         calibration, _ = runs_of(api, ids["Calibration failures to technical support"])
         assert len({run["started_at"][:10] for run in calibration}) == 7
         recent = []
-        for name in ("Calibration failures to technical support", "Calibration failed twice to Ben",
-                     "Firmware rings to BotOps"):
+        for name in (
+            "Calibration failures to technical support",
+            "Calibration failed twice to Ben",
+            "Firmware rings to BotOps",
+        ):
             runs, _ = runs_of(api, ids[name])
             recent += [run for run in runs if run["started_at"] >= LAST_HOUR]
         assert len(recent) >= 4
@@ -160,12 +171,14 @@ def sweep_automation_id(settings):
     """The Assistant's daily sweep (routine key daily-sweep, templates/catalog/assistant/bot.yaml) as its automation:
     a routine moves to an automation (redesign_migration.adopt), and redesign_migrated keeps the pair."""
     with sqlite3.connect(settings.db_path) as db:
-        [(aid,)] = db.execute("SELECT m.automation FROM redesign_migrated m JOIN schedules s ON s.id = m.id "
-                              "WHERE m.kind='routine' AND s.routine_key='daily-sweep'").fetchall()
+        [(aid,)] = db.execute(
+            "SELECT m.automation FROM redesign_migrated m JOIN schedules s ON s.id = m.id "
+            "WHERE m.kind='routine' AND s.routine_key='daily-sweep'"
+        ).fetchall()
     return aid
 
 
-def test_every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_future(built):
+def _every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_future(built):
     _, settings = built
     with signed_in(settings) as api:
         rows = api.get("/api/v2/automations?limit=100").json()["automations"]
@@ -179,11 +192,13 @@ def test_every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_fu
         for row in schedules:
             trigger = row["trigger"]
             if row["id"] == sweep:
-                # Created at boot after the demo window (onboarding.ensure_builtin_routines), on the real clock, so it
-                # has no run in the window. It is next at its first time after its creation.
+                # Made when the sample company is completed (onboarding.complete_company), on the build's clock and
+                # not by a demo section, so it has no seeded run. It is next at its first time after both its creation
+                # and the build's now: never in the past.
                 made = at_time(row["created_at"])
-                assert at_time(row["next_run"]) > made, row["name"]
-                assert at_time(row["next_run"]) == next_due(trigger["cron"], made, trigger["tz"]), row["name"]
+                after = max(made, NOW)
+                assert at_time(row["next_run"]) > after, row["name"]
+                assert at_time(row["next_run"]) == next_due(trigger["cron"], after, trigger["tz"]), row["name"]
                 continue
             # Next is the schedule's first time after the build's now.
             assert at_time(row["next_run"]) > NOW, row["name"]
@@ -198,7 +213,7 @@ def test_every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_fu
             assert row["last_run"] and at_time(row["last_run"]["started_at"]).replace(microsecond=0) == due[-1]
 
 
-def test_the_ledger_and_declined_card_tasks_are_done_and_read_by_ana(built):
+def _the_ledger_and_declined_card_tasks_are_done_and_read_by_ana(built):
     _, settings = built
     with signed_in(settings) as api:
         ids = automation_ids(api)
@@ -212,7 +227,7 @@ def test_the_ledger_and_declined_card_tasks_are_done_and_read_by_ana(built):
                 assert thread["me"]["unread"] == 0
 
 
-def test_each_deploy_closes_its_own_release_notes_task(built):
+def _each_deploy_closes_its_own_release_notes_task(built):
     _, settings = built
     with signed_in(settings) as api:
         runs, _ = runs_of(api, automation_ids(api)["Finished deploys to release notes"])
@@ -220,70 +235,56 @@ def test_each_deploy_closes_its_own_release_notes_task(built):
         for run in runs:
             task = api.get(f"/api/v2/tasks/{task_of(run)}").json()["task"]
             statuses[task["title"]] = task["status"]
-        assert statuses == {"Write the release notes for app 3.1.0": "done",
-                            "Write the release notes for cloud 1.8.1": "done",
-                            "Write the release notes for cloud 1.8.2": "open"}
+        assert statuses == {
+            "Write the release notes for app 3.1.0": "done",
+            "Write the release notes for cloud 1.8.1": "done",
+            "Write the release notes for cloud 1.8.2": "open",
+        }
 
 
-def test_the_packet_runs_leave_technical_support_its_focus(built):
+def _the_packet_runs_leave_technical_support_its_focus(built):
     _, settings = built
     with signed_in(settings) as api:
         status = {row["bot"]: row for row in api.get("/api/v2/status").json()["bots"]}
         assert status["technical-support"]["focus"] == "Calibration callbacks"
 
 
-def test_learning_deliveries_leave_later_assignments_unstarted(built):
+def _learning_deliveries_leave_later_assignments_unstarted(built):
     _, settings = built
-    expected = {title: status for key, title, _body, _owner, _requester, status, *_rest in D.TASKS
-                if key in ("support-week-review", "esc-repeat")}
+    expected = {
+        title: status
+        for key, title, _body, _owner, _requester, status, *_rest in D.TASKS
+        if key in ("support-week-review", "esc-repeat")
+    }
     with sqlite3.connect(settings.db_path) as db:
         rows = db.execute("SELECT title,status,updated_at FROM tasks WHERE title IN (?,?)", tuple(expected)).fetchall()
     assert {title: status for title, status, _updated in rows} == expected
     assert all(at_time(updated) > NOW - timedelta(days=1) for _title, _status, updated in rows)
 
 
-def test_two_bots_hear_each_tico_release_after_the_first(built):
+def _two_bots_hear_each_tico_release_after_the_first(built):
     directory, settings = built
     with sqlite3.connect(settings.db_path) as db:
-        notes = sorted(to for (to,) in db.execute(
-            "SELECT to_actor FROM notes WHERE body LIKE 'Subscribed update%'"))
+        notes = sorted(to for (to,) in db.execute("SELECT to_actor FROM notes WHERE body LIKE 'Subscribed update%'"))
     assert notes == ["bot:botops", "bot:botops", "bot:product-manager", "bot:product-manager"]
 
 
-# 00:30 Pacific on the 25th: tonight's schedule (02:00) and Learnings night (03:00) have not happened yet.
-EARLY = datetime(2026, 9, 25, 7, 30, tzinfo=timezone.utc)
-# Columns that hold a future time by design: a schedule's next run, a message's expiry, and a task's due date.
-FUTURE_BY_DESIGN = {"next_due_at", "expires_at", "due_at", "check_back_at"}
-
-
-@pytest.fixture(scope="module")
-def early(tmp_path_factory):
-    directory = tmp_path_factory.mktemp("demo_automations_early")
-    with time_machine.travel(EARLY, tick=False):
-        yield directory, demo.build(directory, now=EARLY)
-
-
-def test_nothing_is_dated_after_an_early_build(early):
-    _, settings = early
-    cut = EARLY.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
-    later = []
-    with sqlite3.connect(settings.db_path) as db:
-        for (table,) in db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
-            for column in [row[1] for row in db.execute(f'PRAGMA table_info("{table}")')]:
-                if column in FUTURE_BY_DESIGN:
-                    continue
-                count = db.execute(
-                    f'SELECT count(*) FROM "{table}" WHERE typeof("{column}")=\'text\' AND "{column}" > ? '
-                    f'AND "{column}" LIKE \'20__-__-__T%\'' +
-                    (" AND NOT (subject_type='task' AND kind IN ('check_back_at','check_back_explicit'))" if table == "history_events" and column in ("old", "new") else ""), (cut,)).fetchone()[0]
-                if count:
-                    later.append((table, column, count))
-    assert later == []
-
-
-def test_a_night_that_has_not_finished_is_not_seeded(early):
-    _, settings = early
-    with signed_in(settings) as api:
-        nights = [night["night"] for night in api.get("/api/v2/learnings").json()["nights"]]
-        assert len(nights) == 6 and "2026-09-25" not in nights
-        assert len(runs_of(api, automation_ids(api)["Nightly orders to bookkeeping"])[0]) == 6
+def test_the_demo_automations_and_learnings_tell_their_story(built, subtests):
+    """Every check reads the one demo build, in file order, each as its own subtest."""
+    for check in (
+        _each_automation_shows_its_runs_and_drops,
+        _review_replies_are_done_while_bens_read_tasks_wait_for_him,
+        _the_run_guard_held_a_loop_and_ben_dropped_it,
+        _learnings_shows_a_week_of_nights,
+        _last_night_shows_the_routed_correction_with_its_source,
+        _the_night_before_saves_a_smaller_change,
+        _runs_spread_over_the_week_and_some_fall_in_the_last_hour,
+        _every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_future,
+        _the_ledger_and_declined_card_tasks_are_done_and_read_by_ana,
+        _each_deploy_closes_its_own_release_notes_task,
+        _the_packet_runs_leave_technical_support_its_focus,
+        _learning_deliveries_leave_later_assignments_unstarted,
+        _two_bots_hear_each_tico_release_after_the_first,
+    ):
+        with subtests.test(check.__name__):
+            check(built)

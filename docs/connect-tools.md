@@ -35,15 +35,15 @@ maintain the MCP connection, a REST skill with a supported API credential is an 
      Its own secrets file and credential profiles are legacy migration sources; new runs do not load them.
      Nothing from the runner's own environment is used. A server whose variable is not
      granted is left out, and the run's log says which.
-   - From a shell or a chat: `hub tool add <bot> linear --can read,write --env LINEAR_API_KEY --mcp-url https://mcp.linear.app/mcp
-     --header 'Authorization: Bearer ${LINEAR_API_KEY}'`. `hub tool update` takes the same three flags.
+   - From a shell or a chat: `tico tool add <bot> linear --can read,write --env LINEAR_API_KEY --mcp-url https://mcp.linear.app/mcp
+     --header 'Authorization: Bearer ${LINEAR_API_KEY}'`. `tico tool update` takes the same three flags.
 2. **Otherwise a small client or skill in the bot's own repository** (`skills/<service>/SKILL.md`, or a script under
    `software/`) that calls the vendor's REST API with a key from `env`. See [A REST skill](#a-rest-skill) below.
-3. **The credential.** `hub credential request <VAR> --for-bot <bot> ...` opens a card in the chat, or
-   `printf '%s' "$VALUE" | hub credential set <VAR> --for-bot <bot>`, which also grants it to that bot. A value is never
+3. **The credential.** `tico credential request <VAR> --for-bot <bot> ...` opens a card in the chat, or
+   `printf '%s' "$VALUE" | tico credential set <VAR> --for-bot <bot>`, which also grants it to that bot. A value is never
    written into a file, a task or a commit ([credential-vault.md](credential-vault.md)).
 4. **A read-only call** proves it (list one project, read one issue). The Tools tab shows the tool as `mcp`
-   with the server's host, and whether the runner reached it: reachable, auth failed, or unreachable. `hub tool list --bot <bot>` says the same.
+   with the server's host, and whether the runner reached it: reachable, auth failed, or unreachable. `tico tool list --bot <bot>` says the same.
 
 ### Which harnesses take MCP servers
 
@@ -203,8 +203,8 @@ Then prove it with one read-only call.
 Start with a question, such as "What cleanings are scheduled for our office this week?", and review the answer in
 Tico. Some TIDY tools can book a job, including one that takes a request in plain language, and `can:` does not stop it:
 Tico does not filter a vendor's tools by `can:`. Use a read-only key or endpoint if TIDY offers one. Otherwise, have the
-bot ask with an approval (`hub approval request --kind spend`) and send a booking or anything that costs money only after a person
-approves it, and write that rule in the bot's instructions and the tool's `note:`.
+bot ask a person to OK it (`tico task ask --kind ok`) and send a booking or anything that costs money only after the
+person OKs it, and write that rule in the bot's instructions and the tool's `note:`.
 
 Tico doesn't run TIDY's workers or track what you spend with TIDY. It has no TIDY connector of its own: TIDY is a Tool,
 like Linear.
@@ -237,7 +237,7 @@ To bring one into your work:
 
 1. Define the role and the result you expect, and name the person or bot that owns the relationship.
 2. Agree what the provider may do, when it must ask a person, and what service and usage costs you accept. A booking
-   or payment your bot makes waits for a person's approval, as [with TIDY](#work-with-a-specialist-outside-tico).
+   or payment your bot makes waits for a person's OK, as [with TIDY](#work-with-a-specialist-outside-tico).
 3. Connect an interface the provider documents, as a Tool, or bring its reports and results into your tasks. Confirm
    the account, the access and how requests and results travel before you count on automation.
 4. Keep requests, results, escalations and decisions on the task. The provider runs its service; the owner in Tico
@@ -265,20 +265,31 @@ none, or it is OAuth-only, write [a REST skill](#a-rest-skill) that calls its RE
 When a custom tool's last declaration is removed, its saved learnings remain in Tools as a read-only page.
 The Owner can still delete a learning there.
 
-## Connections
+## Tools list
 
-**Library → Connections** (`#/library/connections`) lists every way the outside world reaches the company: Slack, the
-GitHub App, the mail bots' mailboxes, Tico addresses and numbers, meeting importers, incoming and outgoing webhooks, physical
-mail and Listening. Each row shows its status, whose it is (company, a team or a person), who reads what it brings in,
-the bots on it, and **Configure**, which opens the card that changes it (Slack and GitHub under Tools, the others in
-Settings, Meetings or Strategy).
+**Tools** (`#/tools`) lists every way the company reaches the outside world: API tools (a service bots call with a key),
+mailboxes, Tico addresses and numbers, physical mail, Slack, the GitHub App, meeting importers, Listening, outgoing
+webhooks, and tools bots declare in `bot.yaml` that have no API tool yet. Each row shows its status, how it is reached,
+who can use it, and whether it needs you. Incoming webhooks and triggers live in Automations, not here.
 
 The owner and admins see every row. Anyone else sees their own (their mailbox, webhooks they made) and the company's rows
-they may read: Slack and GitHub once connected, Tico addresses and numbers in their audience, meeting importers if they read
-meetings, incoming webhooks except Finance's, physical mail, and Listening when they receive or read a destination. Bots
-named are only those you may see.
+they may read: an API tool they were given a level on, Slack and GitHub once connected, Tico addresses and numbers in
+their audience, meeting importers if they read meetings, physical mail, and Listening when they receive or read a
+destination. Bots named are only those you may see.
 
-`GET /api/v2/connections?limit=&cursor=` answers `{connections: [{id, kind, name, detail, status, scope, readers, bots,
-more_bots, configure, can_configure}], next}`, at most 100 rows and 96 KB a page; follow `next` with `cursor` (an
-opaque place in the list: rows you may not see never fill a page). CLI:
-`hub connections list`; MCP: `hub_connections_list` (BotOps reads it with the rights of the person who asked).
+`GET /api/v2/tool-index?limit=&cursor=` answers `{rows: [{id, kind, name, detail, way, status: {tone, text}, who,
+who_total, needs_you, href}], counts, next}`, at most 500 rows and 192 KB a page; follow `next` with `cursor`. CLI:
+`tico tool index`; MCP: `hub_tool_index` (BotOps reads it with the rights of the person who asked).
+
+### API tools
+
+An API tool (`/api/v2/api-tools`) is a service's base URL, how its key goes on a request, and a cheap check path; known
+services (backend/tool_services.py) fill these in from the name. It holds at most one key per level, **Read** or **Read
+and write**, each a vault credential, and **Who can use it** gives a person or bot a level: Read uses the Read key when
+there is one, else the full key at Read. Only credential administrators add keys or set levels; a person with a level
+reads the tool's page.
+
+Status: **Working**, **Key rejected** (the check got 401 or 403), **Check failed**, **Expires in N days** (14 or fewer),
+**Not checked**, or **Key on computers** (the key still goes to each run's environment, as every key stored before API
+tools did; move it to the proxy on the tool's page). Tico checks each proxied tool every 30 minutes; `tico tool check
+<id>` (MCP `hub_tool_check`) checks now. Checks and calls older than 90 days are deleted.

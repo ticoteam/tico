@@ -1,5 +1,6 @@
 """A second start of the server rewrites almost none of the database. Litestream uploads the pages a start changes, so a
 start that rewrites most of the file uploads most of it on every restart (scripts/page_churn.py)."""
+
 import importlib.util
 import os
 import shutil
@@ -11,7 +12,7 @@ from contextlib import closing
 import pytest
 
 from backend.config import ROOT
-from backend.tests.test_replication import prepare
+from backend.tests.helpers.replication import prepare
 
 spec = importlib.util.spec_from_file_location("page_churn", ROOT / "scripts" / "page_churn.py")
 page_churn = importlib.util.module_from_spec(spec)
@@ -31,15 +32,29 @@ with TestClient(create_app(Settings.from_env())):
 
 
 def start(data, backups):
-    env = {"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", ""), "PYTHONPATH": str(ROOT),
-           "TICO_DATA_DIR": str(data), "TICO_DB": str(data / "hub.sqlite"), "TICO_REGISTRY_DIR": str(data / "registry"),
-           "TICO_BLOB_DIR": str(data / "blobs"), "TICO_BACKUP_DIR": str(backups),
-           "TICO_TEAM_NAME": "Acme", "TICO_OWNER_EMAIL": "owner@example.com", "TICO_APP_NAME": "Acme",
-           "TICO_ASSISTANT_NAME": "Assistant", "TICO_ENVIRONMENT_ID": ENVIRONMENT_ID,
-           "TICO_PUBLIC_URL": "http://127.0.0.1:8765", "TICO_LOCAL_OWNER_TOKEN_FILE": str(data / "local-owner.token"),
-           "TICO_UPDATE_CHECK": "off", "TICO_TELEMETRY": "off", "TICO_SUPPORT": "off"}
-    result = subprocess.run([sys.executable, "-c", LIFESPAN], cwd=ROOT, env=env, capture_output=True, text=True,
-                            timeout=300)
+    env = {
+        "PATH": os.environ["PATH"],
+        "HOME": os.environ.get("HOME", ""),
+        "PYTHONPATH": str(ROOT),
+        "TICO_DATA_DIR": str(data),
+        "TICO_DB": str(data / "hub.sqlite"),
+        "TICO_REGISTRY_DIR": str(data / "registry"),
+        "TICO_BLOB_DIR": str(data / "blobs"),
+        "TICO_BACKUP_DIR": str(backups),
+        "TICO_TEAM_NAME": "Acme",
+        "TICO_OWNER_EMAIL": "owner@example.com",
+        "TICO_APP_NAME": "Acme",
+        "TICO_ASSISTANT_NAME": "Assistant",
+        "TICO_ENVIRONMENT_ID": ENVIRONMENT_ID,
+        "TICO_PUBLIC_URL": "http://127.0.0.1:8765",
+        "TICO_LOCAL_OWNER_TOKEN_FILE": str(data / "local-owner.token"),
+        "TICO_UPDATE_CHECK": "off",
+        "TICO_TELEMETRY": "off",
+        "TICO_SUPPORT": "off",
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", LIFESPAN], cwd=ROOT, env=env, capture_output=True, text=True, timeout=300
+    )
     assert result.returncode == 0, result.stderr[-3000:]
 
 

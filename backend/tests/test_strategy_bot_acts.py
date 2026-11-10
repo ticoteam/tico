@@ -5,16 +5,217 @@ becomes a proposal in their Needs you, and so does a change a bot offline can't 
 
 from urllib.parse import quote
 
-from backend.store import H, encode
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_strategy_bot_level import level
-from backend.tests.test_strategy_bot_suggests import bot_task
-from backend.tests.test_company import bot, with_strategy_bot
-from backend.tests.test_kpis import goal_with_kpi
+import pytest
+
+from backend.auth import Identity
+from backend.store import H
+from backend.tests.helpers import engine as X
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.goal_asks import goal_manager
+from backend.tests.helpers.strategy_bot_level import level
+from backend.tests.helpers.kpis import goal_with_kpi
 from backend import bot_settings as BS
 from backend import mailbox_access
+from backend import strategy_acts as SA
+from backend import strategy_bot
 
 OWNER, STRATEGY_BOT = "human:ana", "bot:goal-manager"
+
+
+def bot(api, slug):
+    """The bot itself, as an agent credential."""
+    token = slug + "-test"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
+        c.execute(
+            "INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) "
+            "VALUES(?,'hermes',?,?,'human:ana')",
+            (slug, "x-" + slug, H.now()),
+        )
+    api.app.state.store.settings.test_identities[token] = Identity("bot:" + slug, "bot", agent="hermes")
+    return token
+
+
+def with_strategy_bot(api, level=1):
+    """The Strategy Bot at `level`, as its own agent credential."""
+    goal_manager(api, level)
+    return bot(api, "goal-manager")
+
+
+def bot_task(api, slug, title):
+    """A task a bot filed for itself."""
+    with api.app.state.store.transaction() as c:
+        return H.task_create(c, "bot:" + slug, title, "Work it.", "bot:" + slug, lint=False)["id"]
+
+
+# ----------------------------------------------------------------------------- below the routes
+@pytest.fixture
+def c(company):
+    with company.transaction() as conn:
+        for slug in ("ops", "finance", "goal-manager"):
+            X.bot(conn, slug)
+        strategy_bot.set_level(conn, OWNER, 3)
+        yield conn
+
+
+def _decide(c, changes, reason="Activation is red; setup work goes first"):
+    """A decision as the route makes it, for a Strategy Bot that reads every task and may give work to every bot."""
+    action = SA.decide(
+        c, STRATEGY_BOT, reason, changes, visible="1", give=lambda owner, task_id=None: None, sees=lambda actor: True
+    )
+    return SA.entry(c, action, "1")
+
+
+def _filed(c, slug, title, by=None):
+    return H.task_create(c, by or "bot:" + slug, title, "Work it.", "bot:" + slug, lint=False)["id"]
+
+
+def test_a_decision_works_bot_tasks_through_the_task_calls_and_undo_puts_them_back(c):
+    """Each change is one task call made as the Strategy Bot at the version it read: a reorder and a reassign raise
+    the version once, a close ends the task in Closed. Undo reopens what it closed, closes what it made, and keeps a
+    person's later reassign."""
+    first = _filed(c, "ops", "Write the onboarding email")
+    second = _filed(c, "ops", "Clean up old reports")
+    stale = _filed(c, "ops", "Draft the old pricing page")
+    versions = {t: H.task(c, t)["version"] for t in (first, second, stale)}
+    made = _decide(
+        c,
+        [
+            {"do": "create", "owner": "ops", "title": "Fix the setup step that drops new accounts"},
+            {"do": "reorder", "task_id": second},
+            {"do": "reassign", "task_id": first, "owner": "finance"},
+            {"do": "close", "task_id": stale, "note": "Pricing moved to next quarter"},
+        ],
+    )
+    assert made["state"] == "done" and not made["left"] and len(made["done"]) == 4, made["left"]
+    assert H.task(c, first)["owner_id"] == "bot:finance"
+    closed = H.task(c, stale)
+    assert (closed["status"], closed["stage_id"], closed["closed_by_id"]) == ("closed", "general-closed", STRATEGY_BOT)
+    assert {t: H.task(c, t)["version"] for t in versions} == {t: v + 1 for t, v in versions.items()}
+    stamped = {
+        r[0]
+        for r in c.execute(
+            "SELECT DISTINCT subject_id FROM history_events WHERE subject_type='task' AND action_id=?", (made["id"],)
+        )
+    }
+    assert {first, second, stale} <= stamped
+    new = made["done"][0]["task_id"]
+    H.task_reassign(c, OWNER, first, "bot:ops", "Ops has the copy")
+    H.task_reassign(c, OWNER, first, "bot:finance", "Finance after all")
+    SA.undo(c, OWNER, made["id"])
+    undone = SA.entry(c, made["id"], "1")
+    assert undone["state"] == "undone"
+    back = H.task(c, stale)
+    assert (back["status"], back["stage_id"], back["closed_at"]) == ("open", "general-todo", None)
+    assert H.task(c, new)["status"] == "closed"
+    assert H.task(c, first)["owner_id"] == "bot:finance"
+    assert "was changed since by" in undone["undo"]["text"], undone["undo"]["text"]
+
+
+def test_undo_gives_a_task_back_to_its_bot_and_tells_both_bots_quietly(c):
+    """The reassign goes back to the bot that had it. The engine wakes whoever has the turn; Undo's own words to the
+    two bots are news, not runs."""
+    work = _filed(c, "ops", "Reconcile the vendor invoices")
+    made = _decide(c, [{"do": "reassign", "task_id": work, "owner": "finance"}])
+    SA.undo(c, OWNER, made["id"])
+    assert H.task(c, work)["owner_id"] == "bot:ops"
+    told = c.execute(
+        "SELECT recipient_id, json_extract(refs,'$.quiet') FROM messages WHERE body LIKE '%undid a decision%'"
+    ).fetchall()
+    assert {(r[0], r[1]) for r in told} == {("bot:ops", 1), ("bot:finance", 1)}
+
+
+def test_the_strategy_bot_does_not_close_a_task_a_person_asked_for_it_proposes_it(c):
+    """A bot does not close what a person asked for: the close is refused by the engine and becomes the owner's
+    proposal; the task stays open."""
+    asked = _filed(c, "ops", "Call the landlord back", by=OWNER)
+    made = _decide(c, [{"do": "close", "task_id": asked, "note": "Not needed now"}])
+    assert made["state"] == "proposed" and not made["done"], made
+    assert made["left"][0]["rule"] == "task_needs_person"
+    assert H.task(c, asked)["status"] == "open"
+
+
+def test_undo_leaves_a_task_alone_when_anything_happened_to_it_since(c):
+    """Undo restores only a task nothing happened to since the decision. A task it made that someone asked about,
+    snoozed or filed a sub-task under stays open, the sub-task with it; a task it gave away that its new owner
+    snoozed stays with them. Each says why."""
+    made = _decide(
+        c,
+        [{"do": "create", "owner": "ops", "title": title} for title in ("Call the vendor", "Plan Q3", "Fix signup")],
+    )
+    asked, snoozed, parent = (x["task_id"] for x in made["done"])
+    H.task_ask(c, OWNER, asked, OWNER, "Which vendor do you mean?")
+    H.task_snooze(c, OWNER, snoozed, "After the board meeting")
+    sub = H.task_create(c, OWNER, "Write the signup test", "Work it.", "bot:ops", parent_id=parent, lint=False)["id"]
+    given = _filed(c, "ops", "Reconcile the vendor invoices")
+    moved = _decide(c, [{"do": "reassign", "task_id": given, "owner": "finance"}])
+    H.task_snooze(c, "bot:finance", given, "Waiting on the bank statement", seen_version=H.task(c, given)["version"])
+    SA.undo(c, OWNER, made["id"])
+    SA.undo(c, OWNER, moved["id"])
+    assert [H.task(c, t)["status"] for t in (asked, snoozed, parent, sub)] == ["open"] * 4
+    assert H.task(c, given)["owner_id"] == "bot:finance"
+    text = SA.entry(c, made["id"], "1")["undo"]["text"] + SA.entry(c, moved["id"], "1")["undo"]["text"]
+    assert text.count("changed since") == 4, text
+
+
+def test_undo_reopens_every_task_a_close_closed_under_it(c):
+    """Closing a task closes the open tasks under it. The decision keeps every task its close ended, and Undo reopens
+    them all."""
+    top = _filed(c, "ops", "Launch the referral program")
+    middle = H.task_create(c, "bot:ops", "Design the cards", "Work it.", "bot:ops", parent_id=top, lint=False)["id"]
+    low = H.task_create(c, "bot:ops", "Print the cards", "Work it.", "bot:ops", parent_id=middle, lint=False)["id"]
+    made = _decide(c, [{"do": "close", "task_id": top, "note": "Referrals wait for next quarter"}])
+    assert [H.task(c, t)["status"] for t in (top, middle, low)] == ["closed"] * 3
+    SA.undo(c, OWNER, made["id"])
+    assert [H.task(c, t)["status"] for t in (top, middle, low)] == ["open"] * 3
+
+
+def test_undo_of_a_close_gives_the_task_back_to_the_owner_it_had_in_its_place(c):
+    """In a stage Ops owns, a task given to Finance before the decision closed it is reopened with Finance, not the
+    stage's owner, at the place in Finance's queue it had."""
+    X.pipeline(c, "invoices", "Invoices", stages=({"name": "Check", "owner": "bot:ops"},))
+    _filed(c, "finance", "Pay the cleaners")
+    work = H.task_create(c, "bot:ops", "Reconcile the vendor invoices", "Work it.", "bot:ops", pipeline="invoices")
+    work = work["id"]
+    _filed(c, "finance", "File the quarterly return")
+    H.task_reassign(c, OWNER, work, "bot:finance", "Finance owns invoices")
+    H.task_update(c, OWNER, work, rank=-5, mover=True)
+    before = H.task(c, work)
+    made = _decide(c, [{"do": "close", "task_id": work, "note": "Done by the bank"}])
+    SA.undo(c, OWNER, made["id"])
+    back = H.task(c, work)
+    assert (back["status"], back["owner_id"], back["rank"]) == ("open", "bot:finance", before["rank"])
+
+
+def test_undo_never_makes_a_task_private_giving_it_back_to_a_bot_that_now_keeps_its_tasks_private(c):
+    """Ops keeps its tasks private now: giving the task back would make it private, which the decision never did, so
+    Undo leaves it with Finance and says why."""
+    work = _filed(c, "ops", "Reconcile the vendor invoices")
+    made = _decide(c, [{"do": "reassign", "task_id": work, "owner": "finance"}])
+    BS.write(c, "ops", {"name": "ops", "runtime": "fake", "status": "active", "private_tasks_default": True})
+    SA.undo(c, OWNER, made["id"])
+    back = H.task(c, work)
+    assert (back["owner_id"], back["private"]) == ("bot:finance", 0)
+    text = SA.entry(c, made["id"], "1")["undo"]["text"]
+    assert "keeps its tasks private" in text, text
+
+
+def test_undo_of_a_reassign_gives_back_each_followers_level(c):
+    """The owner had muted the task for Ops, its owner; given back, Ops follows it muted again, and Finance no longer
+    follows it."""
+    from backend import task_followers as TF
+
+    work = _filed(c, "ops", "Reconcile the vendor invoices")
+    TF.change(c, OWNER, work, "bot:ops", notify="muted", mover=True)
+    made = _decide(c, [{"do": "reassign", "task_id": work, "owner": "finance"}])
+    SA.undo(c, OWNER, made["id"])
+    back = H.task(c, work)
+    assert back["owner_id"] == "bot:ops"
+    following = {f["actor"]: f["notify"] for f in TF.listed(c, back)}
+    assert following.get("bot:ops") == "muted" and "bot:finance" not in following, following
+
+
+# ----------------------------------------------------------------------------- through the routes
 
 
 def decide(api, token, changes, reason="Activation is red; setup work goes first", expected=200):
@@ -28,55 +229,69 @@ def task(api, task_id):
 
 def proposals(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE requester_id=? AND owner_id=? AND title LIKE 'Decide %' "
-                                           "ORDER BY created_at", (STRATEGY_BOT, OWNER))]
+        return [
+            dict(r)
+            for r in c.execute(
+                "SELECT * FROM tasks WHERE requester_id=? AND owner_id=? AND title LIKE 'Decide %' ORDER BY created_at",
+                (STRATEGY_BOT, OWNER),
+            )
+        ]
 
 
 def test_at_level_3_one_decision_changes_bot_tasks_under_one_action_id_and_the_owner_undoes_it(api):
     """Spec test 12: a decision made alone is one entry in the log with its reason, every task event it wrote carries
-    its action id, and Undo puts the tasks back and tells their bots; a field a person changed since keeps their
-    change, and the owner is told what wasn't restored. Below level 3, or for any other bot, nothing is decided."""
+    its action id, and Undo puts the tasks back and tells their bots; a task a person changed since stays as they
+    left it, and the owner is told what wasn't restored. Below level 3, or for any other bot, nothing is decided."""
     strategy_token = with_strategy_bot(api)
     bot(api, "ops")
     bot(api, "finance")
     first = bot_task(api, "ops", "Write the onboarding email")
     second = bot_task(api, "ops", "Clean up old reports")
     stale = bot_task(api, "ops", "Draft the old pricing page")
-    changes = [{"do": "create", "owner": "ops", "title": "Fix the setup step that drops new accounts"},
-               {"do": "reorder", "task_id": second},
-               {"do": "reassign", "task_id": first, "owner": "finance"},
-               {"do": "close", "task_id": stale, "note": "Pricing moved to next quarter"}]
+    changes = [
+        {"do": "create", "owner": "ops", "title": "Fix the setup step that drops new accounts"},
+        {"do": "reorder", "task_id": second},
+        {"do": "reassign", "task_id": first, "owner": "finance"},
+        {"do": "close", "task_id": stale, "note": "Pricing moved to next quarter"},
+    ]
     level(api, 2)
-    decide(api, strategy_token, changes, expected=422)                     # level 2 suggests; it decides nothing alone
+    decide(api, strategy_token, changes, expected=422)  # level 2 suggests; it decides nothing alone
     level(api, 3)
-    decide(api, bot(api, "ops"), changes, expected=403)        # only the Strategy Bot decides alone
+    decide(api, bot(api, "ops"), changes, expected=403)  # only the Strategy Bot decides alone
     made = decide(api, strategy_token, changes)
     assert made["state"] == "done" and not made["left"] and len(made["done"]) == 4
     assert task(api, first)["owner_id"] == "bot:finance" and task(api, stale)["status"] == "closed"
     new = made["done"][0]["task_id"]
     with api.app.state.store.read() as c:
-        stamped = {r[0] for r in c.execute("SELECT DISTINCT subject_id AS task_id FROM history_events WHERE subject_type='task' AND action_id=?", (made["id"],))}
+        stamped = {
+            r[0]
+            for r in c.execute(
+                "SELECT DISTINCT subject_id AS task_id FROM history_events WHERE subject_type='task' AND action_id=?",
+                (made["id"],),
+            )
+        }
     assert {first, second, stale} <= stamped
 
     log = get(api, "strategy-bot/log")
     assert log["items"][0]["id"] == made["id"] and log["items"][0]["reason"].startswith("Activation is red")
     assert log["can_undo"] is True
-    post(api, f"strategy-bot/log/{made['id']}/undo", {}, token=strategy_token, expected=403)     # never the bot itself
+    post(api, f"strategy-bot/log/{made['id']}/undo", {}, token=strategy_token, expected=403)  # never the bot itself
 
     # A person moves the reassigned task on after the decision: Undo keeps their change and says so.
     with api.app.state.store.transaction() as c:
-        H.task_update(c, OWNER, first, owner="bot:ops", mover=True)
-        H.task_update(c, OWNER, first, owner="bot:finance", mover=True)
+        H.task_reassign(c, OWNER, first, "bot:ops", "Ops has the copy")
+        H.task_reassign(c, OWNER, first, "bot:finance", "Finance after all")
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
     assert undone["state"] == "undone"
     assert task(api, stale)["status"] == "open" and task(api, new)["status"] == "closed"
-    assert task(api, first)["owner_id"] == "bot:finance"                  # the person's later edit stays
-    assert "owner was changed since" in undone["undo"]["text"]
+    assert task(api, first)["owner_id"] == "bot:finance"  # the person's later edit stays
+    assert '"Write the onboarding email" was changed since by' in undone["undo"]["text"]
     with api.app.state.store.read() as c:
-        told = c.execute("SELECT COUNT(*) FROM messages m WHERE m.sender_id=? AND m.body LIKE '%undid a decision%'",
-                         (H.KEEPER,)).fetchone()[0]
+        told = c.execute(
+            "SELECT COUNT(*) FROM messages m WHERE m.sender_id=? AND m.body LIKE '%undid a decision%'", (H.KEEPER,)
+        ).fetchone()[0]
     assert told >= 2
-    post(api, f"strategy-bot/log/{made['id']}/undo", {}, expected=422)       # once
+    post(api, f"strategy-bot/log/{made['id']}/undo", {}, expected=422)  # once
     # The same reorder or close again is the owner's: their Undo stands, as a proposal, not a second decision.
     again = decide(api, strategy_token, [{"do": "reorder", "task_id": second}, {"do": "close", "task_id": stale}])
     assert again["state"] == "proposed" and not again["done"] and len(again["left"]) == 2
@@ -93,9 +308,15 @@ def test_a_change_a_bot_offline_or_a_person_would_take_becomes_one_proposal_neve
     with api.app.state.store.transaction() as c:
         H.task_create(c, "bot:finance", "Close the books", "Work it.", "bot:finance", lint=False)
         c.execute("UPDATE bots SET state='paused' WHERE slug='finance'")
-    made = decide(api, strategy_token, [{"do": "reorder", "task_id": paused},
-                             {"do": "create", "owner": "finance", "title": "Pause the signup campaign"},
-                             {"do": "create", "owner": OWNER, "title": "Call the three biggest customers"}])
+    made = decide(
+        api,
+        strategy_token,
+        [
+            {"do": "reorder", "task_id": paused},
+            {"do": "create", "owner": "finance", "title": "Pause the signup campaign"},
+            {"do": "create", "owner": OWNER, "title": "Call the three biggest customers"},
+        ],
+    )
     assert made["state"] == "done" and len(made["done"]) == 1 and len(made["left"]) == 2
     asked = proposals(api)
     assert len(asked) == 1 and asked[0]["id"] == made["proposal_task"]
@@ -111,25 +332,45 @@ def test_everything_on_the_owners_list_is_refused_on_the_server_and_proposed_ins
     bot(api, "ops")
     level(api, 3)
     goal, kpi = goal_with_kpi(api)
-    with api.app.state.store.transaction() as c:          # a task it asked for, so it may otherwise change it
+    with api.app.state.store.transaction() as c:  # a task it asked for, so it may otherwise change it
         mine = H.task_create(c, STRATEGY_BOT, "Write the onboarding email", "Work it.", "bot:ops", lint=False)["id"]
         # Ana gave it her calendar (Read and write on her mailbox), so the invitation reaches the owner's list.
-        mailbox_access.give(c, mailbox_access.ensure_mailbox(c, "ana@acme.example"), "bot", STRATEGY_BOT[4:],
-                            "read_write", "person:ana")
+        mailbox_access.give(
+            c, mailbox_access.ensure_mailbox(c, "ana@acme.example"), "bot", STRATEGY_BOT[4:], "read_write", "person:ana"
+        )
     tries = [
         ("cost", "bots/ops/model", {"model": "opus", "expected_revision": 1}),
-        ("publish", "tasks", {"title": "Share the roadmap", "body": "Publish it.", "owner": "bot:ops",
-                              "visibility": "public", "public_title": "Our roadmap"}),
-        ("send", "calendar/appointments", {"calendar": "ana@acme.example", "title": "Intro call",
-                                           "start": "2099-01-01T09:00:00+00:00", "end": "2099-01-01T09:30:00+00:00",
-                                           "attendees": ["buyer@other.example"]}),
+        (
+            "publish",
+            "tasks",
+            {
+                "title": "Share the roadmap",
+                "body": "Publish it.",
+                "owner": "bot:ops",
+                "visibility": "public",
+                "public_title": "Our roadmap",
+            },
+        ),
+        (
+            "send",
+            "calendar/appointments",
+            {
+                "calendar": "ana@acme.example",
+                "title": "Intro call",
+                "start": "2099-01-01T09:00:00+00:00",
+                "end": "2099-01-01T09:30:00+00:00",
+                "attendees": ["buyer@other.example"],
+            },
+        ),
         ("bots", "bots/ops/archive", {"expected_revision": 1}),
-        ("target", f"goals/{goal['id']}/kpis/{kpi['id']}", {"kind": "improve", "baseline": 40, "target": 50,
-                                                           "deadline": "2099-12-31"}),
+        (
+            "target",
+            f"goals/{goal['id']}/kpis/{kpi['id']}",
+            {"kind": "improve", "baseline": 40, "target": 50, "deadline": "2099-12-31"},
+        ),
         ("vision", "company", {"vision": "Rule the world"}),
-        ("instructions", "bots/ops/definition", {"description": "Only ever work on growth",
-                                                   "expected_revision": 1}),
-        ("person_task", f"tasks/{mine}", {"owner": OWNER, "version": task(api, mine)["version"]}),
+        ("instructions", "bots/ops/definition", {"description": "Only ever work on growth", "expected_revision": 1}),
+        ("person_task", f"tasks/{mine}/owner", {"owner": OWNER, "version": task(api, mine)["version"]}),
     ]
     for kind, path, body in tries:
         r = api.post("/api/v2/" + path, json=body, headers=headers(strategy_token))
@@ -157,68 +398,76 @@ def test_everything_on_the_owners_list_is_refused_on_the_server_and_proposed_ins
 
 def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
     """Spec test 12, Undo's edges: a later move in the queue (even one back to where the decision put it), a task it
-    made that a person took on, two changes to one task, a close on a steps-only ticket from its second open step with
-    a note, and a task whose restore is refused. Each later edit stays and is named; the rest goes back; a form holding
+    made that a person took on, two changes to one task, a close of a task with a note, and a task whose restore is
+    refused. A task someone changed since stays whole as they left it and is named; the rest goes back; a form holding
     the task from before the decision or the Undo gets a version conflict."""
     strategy_token = with_strategy_bot(api)
     for slug in ("ops", "finance", "coo"):
         bot(api, slug)
     level(api, 3)
-    typ = post(api, "task-types", {"name": "Dev ticket", "steps_only": True, "bots": "work", "steps": [
-        {"name": "Backlog", "status": "open"}, {"name": "On Deck", "status": "open"},
-        {"name": "Done", "status": "closed"}]})["type"]
-    ticket = post(api, "tasks", {"owner": "ops", "title": "Fix the guest message times", "body": "Please.",
-                                 "type": typ["id"], "step": "On Deck"})["id"]
+    ticket = bot_task(api, "ops", "Fix the guest message times")
     with api.app.state.store.transaction() as c:
         H.task_update(c, OWNER, ticket, note="Waiting on the copy")
-    moved, back, twice, refused = (bot_task(api, "ops", t) for t in (
-        "Write the onboarding email", "Clean up old reports", "Draft the pricing page", "Plan the launch"))
+    moved, back, twice, refused = (
+        bot_task(api, "ops", t)
+        for t in ("Write the onboarding email", "Clean up old reports", "Draft the pricing page", "Plan the launch")
+    )
     bot_task(api, "ops", "Answer the support inbox")
     bot_task(api, "coo", "Review the budget")
     with api.app.state.store.transaction() as c:
-        H.task_update(c, OWNER, refused, owner="bot:coo", mover=True)
+        H.task_reassign(c, OWNER, refused, "bot:coo", "Coo plans launches")
     start = {t: task(api, t) for t in (moved, back, twice, refused, ticket)}
-    made = decide(api, strategy_token, [{"do": "reassign", "task_id": moved, "owner": "finance"},
-                             {"do": "reassign", "task_id": back, "owner": "finance"},
-                             {"do": "reorder", "task_id": twice}, {"do": "reorder", "task_id": twice},
-                             {"do": "reassign", "task_id": refused, "owner": "finance"},
-                             {"do": "close", "task_id": ticket},
-                             {"do": "create", "owner": "ops", "title": "Fix the setup step that drops new accounts"}])
+    made = decide(
+        api,
+        strategy_token,
+        [
+            {"do": "reassign", "task_id": moved, "owner": "finance"},
+            {"do": "reassign", "task_id": back, "owner": "finance"},
+            {"do": "reorder", "task_id": twice},
+            {"do": "reorder", "task_id": twice},
+            {"do": "reassign", "task_id": refused, "owner": "finance"},
+            {"do": "close", "task_id": ticket},
+            {"do": "create", "owner": "ops", "title": "Fix the setup step that drops new accounts"},
+        ],
+    )
     assert made["state"] == "done" and len(made["done"]) == 7, made["left"]
-    post(api, f"tasks/{moved}", {"version": start[moved]["version"], "due": "2099-01-01T00:00:00+00:00"},
-         expected=409)
+    post(api, f"tasks/{moved}", {"version": start[moved]["version"], "due": "2099-01-01T00:00:00+00:00"}, expected=409)
     new = made["done"][-1]["task_id"]
     with api.app.state.store.transaction() as c:
-        H.task_update(c, OWNER, moved, rank=-50, mover=True)                       # a person reorders it
+        H.task_update(c, OWNER, moved, rank=-50, mover=True)  # a person reorders it
         decided = H.task(c, back)["rank"]
-        H.task_update(c, OWNER, back, rank=-60, mover=True)                        # ...and away and back
+        H.task_update(c, OWNER, back, rank=-60, mover=True)  # ...and away and back
         H.task_update(c, OWNER, back, rank=decided, mover=True)
-        H.task_update(c, OWNER, new, owner=OWNER, status="doing", mover=True)      # a person takes on what it made
+        H.task_reassign(c, OWNER, new, OWNER, "I will take this one")  # a person takes on what it made
         BS.write(c, 'coo', {'harness': 'dots'})
     held = task(api, ticket)["version"]
-    post(api, f"strategy-bot/log/{made['id']}/undo", {}, token="ben-test", expected=403)        # an admin doesn't undo
+    post(api, f"strategy-bot/log/{made['id']}/undo", {}, token="ben-test", expected=403)  # an admin doesn't undo
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
     post(api, f"tasks/{ticket}", {"version": held, "due": "2099-01-01T00:00:00+00:00"}, expected=409)
     text = undone["undo"]["text"]
     now = {t: task(api, t) for t in (moved, back, twice, refused, ticket, new)}
-    # The person's place in the queue stays, and the owner still goes back.
-    assert now[moved]["owner_id"] == "bot:ops" and now[moved]["rank"] == -50
-    assert now[back]["owner_id"] == "bot:ops" and now[back]["rank"] == decided
-    assert '"Write the onboarding email": its place in the queue was changed since by' in text
-    assert '"Clean up old reports": its place in the queue was changed since by' in text
+    # A task a person moved in the queue since stays with the bot it was given to, where they put it.
+    assert now[moved]["owner_id"] == "bot:finance" and now[moved]["rank"] == -50
+    assert now[back]["owner_id"] == "bot:finance" and now[back]["rank"] == decided
+    assert '"Write the onboarding email" was changed since by' in text
+    assert '"Clean up old reports" was changed since by' in text
     # Two moves of one task go back to where it started, with no later edit claimed.
     assert now[twice]["rank"] == start[twice]["rank"] and '"Draft the pricing page": its' not in text.split("Not")[-1]
-    # The ticket is back in its own step, place and note.
-    assert (now[ticket]["status"], now[ticket]["step_id"], now[ticket]["note"]) == (
-        "open", start[ticket]["step_id"], "Waiting on the copy")
-    assert now[ticket]["step_rank"] == start[ticket]["step_rank"] and not now[ticket]["closed_at"]
+    # The closed task is open again, with its note.
+    assert (now[ticket]["status"], now[ticket]["note"]) == ("open", "Waiting on the copy")
+    assert not now[ticket]["closed_at"]
     # What a person took on stays theirs and open; a refused restore is said and the rest still went back.
-    assert (now[new]["owner_id"], now[new]["status"]) == (OWNER, "doing") and "which it made, was changed since" in text
+    assert (now[new]["owner_id"], now[new]["status"]) == (OWNER, "open") and "which it made, was changed since" in text
     assert now[refused]["owner_id"] == "bot:finance" and '"Plan the launch" could not be put back' in text
     with api.app.state.store.read() as c:
-        told = {r[0] for r in c.execute("SELECT recipient_id FROM messages WHERE sender_id=? AND body LIKE "
-                                        "'%undid a decision%'", (H.KEEPER,))}
-    assert {"bot:ops", "bot:finance"} <= told
+        told = {
+            r[0]
+            for r in c.execute(
+                "SELECT recipient_id FROM messages WHERE sender_id=? AND body LIKE '%undid a decision%'", (H.KEEPER,)
+            )
+        }
+    # Ops gets back what Undo restored; every task Finance still holds stayed as it was, so Finance hears nothing.
+    assert "bot:ops" in told and "bot:finance" not in told
 
 
 def test_a_private_task_never_reaches_the_strategy_bot_log_or_the_owners_proposal(api):
@@ -228,22 +477,31 @@ def test_a_private_task_never_reaches_the_strategy_bot_log_or_the_owners_proposa
     strategy_token = with_strategy_bot(api)
     bot(api, "ops")
     level(api, 3)
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
+
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
     with api.app.state.store.transaction() as c:
-        hidden = H.task_create(c, OWNER, "Fire the vendor quietly", "Secret body", OWNER, private=True,
-                               lint=False)["id"]
-        unseen = H.task_create(c, "bot:ops", "Acquire Initech", "Secret plan", "bot:ops", private=True,
-                               lint=False)["id"]
-        mine = H.task_create(c, STRATEGY_BOT, "Merge with Globex", "Secret terms", "bot:ops", private=True,
-                             lint=False)["id"]
+        hidden = H.task_create(c, OWNER, "Fire the vendor quietly", "Secret body", OWNER, private=True, lint=False)[
+            "id"
+        ]
+        unseen = H.task_create(c, "bot:ops", "Acquire Initech", "Secret plan", "bot:ops", private=True, lint=False)[
+            "id"
+        ]
+        mine = H.task_create(c, STRATEGY_BOT, "Merge with Globex", "Secret terms", "bot:ops", private=True, lint=False)[
+            "id"
+        ]
     since = H.now()
     for name in (hidden, unseen):
-        r = api.post("/api/v2/strategy-bot/decisions", headers=headers(strategy_token), json={
-            "reason": "Activation is red", "changes": [{"do": "reorder", "task_id": name},
-                                                       {"do": "create", "owner": "ops", "title": "Fix setup"}]})
-        assert r.status_code == 422 and r.json()["error"]["code"] == "not-found", r.text
+        r = api.post(
+            "/api/v2/strategy-bot/decisions",
+            headers=headers(strategy_token),
+            json={
+                "reason": "Activation is red",
+                "changes": [{"do": "reorder", "task_id": name}, {"do": "create", "owner": "ops", "title": "Fix setup"}],
+            },
+        )
+        assert r.status_code == 404 and r.json()["error"]["code"] == "not-found", r.text
         assert "Fire the vendor" not in r.text and "Acquire Initech" not in r.text
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM strategy_actions").fetchone()
@@ -255,10 +513,15 @@ def test_a_private_task_never_reaches_the_strategy_bot_log_or_the_owners_proposa
     # A private task the Strategy Bot can read is still not changed alone: its close note would reach the company-wide
     # log, and Undo, made as the owner, could not write it back. Each change becomes the owner's proposal instead.
     before = task(api, mine)
-    made = decide(api, strategy_token, [
-        {"do": "reorder", "task_id": mine},
-        {"do": "reassign", "task_id": mine, "owner": OWNER},
-        {"do": "close", "task_id": mine, "note": "Globex walked away from the merger"}])
+    made = decide(
+        api,
+        strategy_token,
+        [
+            {"do": "reorder", "task_id": mine},
+            {"do": "reassign", "task_id": mine, "owner": OWNER},
+            {"do": "close", "task_id": mine, "note": "Globex walked away from the merger"},
+        ],
+    )
     assert made["state"] == "proposed" and not made["done"] and len(made["left"]) == 3
     after = task(api, mine)
     assert (after["status"], after["owner_id"], after["rank"]) == (before["status"], before["owner_id"], before["rank"])
@@ -274,8 +537,14 @@ def test_undo_leaves_open_a_task_it_made_whose_title_or_body_was_edited_since(ap
     strategy_token = with_strategy_bot(api)
     bot(api, "ops")
     level(api, 3)
-    made = decide(api, strategy_token, [{"do": "create", "owner": "ops", "title": "Fix the setup step"},
-                             {"do": "create", "owner": "ops", "title": "Write the release note"}])
+    made = decide(
+        api,
+        strategy_token,
+        [
+            {"do": "create", "owner": "ops", "title": "Fix the setup step"},
+            {"do": "create", "owner": "ops", "title": "Write the release note"},
+        ],
+    )
     titled, bodied = (x["task_id"] for x in made["done"])
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:ops", titled, title="Fix the setup step and the signup form")
@@ -294,7 +563,10 @@ def test_a_decision_never_makes_a_task_private_and_undo_puts_back_one_made_priva
         bot(api, slug)
     level(api, 3)
     with api.app.state.store.transaction() as c:
-        config = H._json(c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='finance'").fetchone()[0], {})
+        config = H._json(
+            c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='finance'").fetchone()[0],
+            {},
+        )
         BS.write(c, 'finance', {**config, 'private_tasks_default': True})
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
     held = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "finance"}])
@@ -303,9 +575,9 @@ def test_a_decision_never_makes_a_task_private_and_undo_puts_back_one_made_priva
 
     bot(api, "coo")
     made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "coo"}])
-    assert made["state"] == "done" and "before" not in made["done"][0]        # the owner's log keeps the fields
+    assert made["state"] == "done" and "before" not in made["done"][0]  # the owner's log keeps the fields
     assert get(api, "strategy-bot/log")["items"][0]["done"][0]["before"]["private"] == 0
-    with api.app.state.store.transaction() as c:          # made private since, by someone else
+    with api.app.state.store.transaction() as c:  # made private since, by someone else
         c.execute("UPDATE tasks SET private=1, visibility='private' WHERE id=?", (work,))
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
     assert task(api, work)["owner_id"] == "bot:ops", undone["undo"]["text"]
@@ -320,7 +592,10 @@ def test_a_decision_never_creates_a_task_for_a_bot_that_keeps_its_tasks_private(
     bot(api, "finance")
     level(api, 3)
     with api.app.state.store.transaction() as c:
-        config = H._json(c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='finance'").fetchone()[0], {})
+        config = H._json(
+            c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='finance'").fetchone()[0],
+            {},
+        )
         BS.write(c, 'finance', {**config, 'private_tasks_default': True})
     held = decide(api, strategy_token, [{"do": "create", "owner": "finance", "title": "Review the vendor contract"}])
     assert held["state"] == "proposed" and not held["done"]
@@ -338,9 +613,16 @@ def test_the_strategy_bot_publishes_only_with_a_real_approval_whatever_the_team_
     post(api, "roadmaps/settings", {"bot_public_approval": False})
     with api.app.state.store.transaction() as c:
         mine = H.task_create(c, STRATEGY_BOT, "Write the onboarding email", "Work it.", "bot:ops", lint=False)["id"]
-    r = api.post(f"/api/v2/tasks/{mine}", headers=headers(strategy_token), json={
-        "visibility": "public", "public_title": "Onboarding", "approval_id": "made-up",
-        "version": task(api, mine)["version"]})
+    r = api.post(
+        f"/api/v2/tasks/{mine}",
+        headers=headers(strategy_token),
+        json={
+            "visibility": "public",
+            "public_title": "Onboarding",
+            "approval_id": "made-up",
+            "version": task(api, mine)["version"],
+        },
+    )
     assert r.status_code >= 400 and "approval" in r.text, r.text
     assert task(api, mine)["visibility"] != "public"
 
@@ -354,15 +636,19 @@ def test_only_the_owner_reads_the_log_and_it_names_a_task_as_it_is_now(api):
     strategy_token = with_strategy_bot(api)
     bot(api, "ops")
     level(api, 3)
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
+
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
     with api.app.state.store.transaction() as c:
         merge = H.task_create(c, STRATEGY_BOT, "Merge with Globex", "Secret terms", "bot:ops", lint=False)["id"]
         report = H.task_create(c, STRATEGY_BOT, "Write the board report", "Numbers", "bot:ops", lint=False)["id"]
-    made = decide(api, strategy_token, [{"do": "reorder", "task_id": merge},
-                             {"do": "close", "task_id": report, "note": "Moved to next month"}])
-    assert made["state"] == "done" and "Merge with Globex" in str(made)     # the Strategy Bot reads its own work
+    made = decide(
+        api,
+        strategy_token,
+        [{"do": "reorder", "task_id": merge}, {"do": "close", "task_id": report, "note": "Moved to next month"}],
+    )
+    assert made["state"] == "done" and "Merge with Globex" in str(made)  # the Strategy Bot reads its own work
     assert not any("before" in x or "after" in x for x in made["done"])
     for token in ("ben-test", "cara-test", strategy_token, bot(api, "ops")):
         r = api.get("/api/v2/strategy-bot/log", headers=headers(token))
@@ -383,8 +669,11 @@ def test_the_log_pages_through_entries_made_in_the_same_instant(api):
     at = H.now()
     with api.app.state.store.transaction() as c:
         for n in range(53):
-            c.execute("INSERT INTO strategy_actions (id, created_at, actor, kind, reason, state, changes) "
-                      "VALUES (?, ?, ?, 'decision', 'Same instant', 'proposed', '{}')", (f"a{n:02d}", at, STRATEGY_BOT))
+            c.execute(
+                "INSERT INTO strategy_actions (id, created_at, actor, kind, reason, state, changes) "
+                "VALUES (?, ?, ?, 'decision', 'Same instant', 'proposed', '{}')",
+                (f"a{n:02d}", at, STRATEGY_BOT),
+            )
     seen, before = [], None
     while True:
         page = get(api, "strategy-bot/log" + (f"?before={quote(before)}" if before else ""))
@@ -395,8 +684,8 @@ def test_the_log_pages_through_entries_made_in_the_same_instant(api):
     assert sorted(seen) == [f"a{n:02d}" for n in range(53)] and len(seen) == len(set(seen))
 
 
-def test_undo_keeps_a_guest_given_the_task_since_and_says_why_its_owner_stays(api):
-    """A new owner drops a task's guest, so a reassign whose task has a guest now keeps its owner, and Undo says so."""
+def test_undo_puts_the_owner_back_and_keeps_readers_given_the_task_since(api):
+    """Readers survive a new owner, so Undo gives the task back to its owner and the readers stay."""
     strategy_token = with_strategy_bot(api)
     for slug in ("ops", "coo"):
         bot(api, slug)
@@ -404,11 +693,12 @@ def test_undo_keeps_a_guest_given_the_task_since_and_says_why_its_owner_stays(ap
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
     made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "coo"}])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET private=1, visibility='private', guest='human:ben' WHERE id=?", (work,))
+        c.execute(
+            """UPDATE tasks SET private=1, visibility='private', readers=json_array('human:ben') WHERE id=?""", (work,)
+        )
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
     after = task(api, work)
-    assert after["owner_id"] == "bot:coo" and after["guest"] == "human:ben"
-    assert "has a guest now, so its owner stays" in undone["undo"]["text"], undone["undo"]["text"]
+    assert after["owner_id"] == "bot:ops" and H.task_readers(after) == ["human:ben"], (after, undone["undo"])
 
 
 def test_a_decision_never_touches_a_company_task_hidden_from_the_strategy_bot_by_its_bots_access(api):
@@ -420,16 +710,24 @@ def test_a_decision_never_touches_a_company_task_hidden_from_the_strategy_bot_by
     bot(api, "finance")
     level(api, 3)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET access=? WHERE bot='finance'",
-                  ('{"see":{"everyone":true},"read":{"people":["ana"]},"write":{"people":["ana"]}}',))
+        c.execute(
+            "UPDATE bot_config SET access=? WHERE bot='finance'",
+            ('{"see":{"everyone":true},"read":{"people":["ana"]},"write":{"people":["ana"]}}',),
+        )
         hidden = H.task_create(c, OWNER, "Restructure the payroll", "Secret salaries", "bot:finance", lint=False)["id"]
     assert not task(api, hidden)["private"]
     before = task(api, hidden)
-    for change in ({"do": "reorder", "task_id": hidden}, {"do": "reassign", "task_id": hidden, "owner": "ops"},
-                   {"do": "close", "task_id": hidden, "note": "Not needed"}):
-        r = api.post("/api/v2/strategy-bot/decisions", headers=headers(strategy_token),
-                     json={"reason": "Activation is red", "changes": [change]})
-        assert r.status_code == 422 and r.json()["error"]["code"] == "not-found", (change, r.text)
+    for change in (
+        {"do": "reorder", "task_id": hidden},
+        {"do": "reassign", "task_id": hidden, "owner": "ops"},
+        {"do": "close", "task_id": hidden, "note": "Not needed"},
+    ):
+        r = api.post(
+            "/api/v2/strategy-bot/decisions",
+            headers=headers(strategy_token),
+            json={"reason": "Activation is red", "changes": [change]},
+        )
+        assert r.status_code == 404 and r.json()["error"]["code"] == "not-found", (change, r.text)
         assert "Restructure the payroll" not in r.text and "Secret salaries" not in r.text
     after = task(api, hidden)
     assert (after["owner_id"], after["status"], after["rank"]) == (before["owner_id"], before["status"], before["rank"])
@@ -437,8 +735,14 @@ def test_a_decision_never_touches_a_company_task_hidden_from_the_strategy_bot_by
         assert not c.execute("SELECT 1 FROM strategy_actions").fetchone()
 
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
-    held = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "finance"},
-                             {"do": "create", "owner": "finance", "title": "Review the payroll"}])
+    held = decide(
+        api,
+        strategy_token,
+        [
+            {"do": "reassign", "task_id": work, "owner": "finance"},
+            {"do": "create", "owner": "finance", "title": "Review the payroll"},
+        ],
+    )
     assert held["state"] == "proposed" and not held["done"] and len(held["left"]) == 2
     assert task(api, work)["owner_id"] == "bot:ops"
     with api.app.state.store.read() as c:
@@ -455,13 +759,21 @@ def test_a_bot_the_strategy_bot_cant_see_is_answered_as_a_bot_that_isnt_there(ap
     level(api, 3)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET display_name='Payroll Vault' WHERE slug='finance'")
-        c.execute("UPDATE bot_config SET access=? WHERE bot='finance'",
-                  ('{"see":{"people":["ana"]},"read":{"people":["ana"]},"write":{"people":["ana"]}}',))
+        c.execute(
+            "UPDATE bot_config SET access=? WHERE bot='finance'",
+            ('{"see":{"people":["ana"]},"read":{"people":["ana"]},"write":{"people":["ana"]}}',),
+        )
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
 
     def left(owner):
-        made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": owner},
-                                 {"do": "create", "owner": owner, "title": "Review the payroll"}])
+        made = decide(
+            api,
+            strategy_token,
+            [
+                {"do": "reassign", "task_id": work, "owner": owner},
+                {"do": "create", "owner": owner, "title": "Review the payroll"},
+            ],
+        )
         assert made["state"] == "proposed" and not made["done"], made
         body = task(api, made["proposal_task"])["body"]
         return made, [(x["text"], x["why"]) for x in made["left"]], body
@@ -469,9 +781,9 @@ def test_a_bot_the_strategy_bot_cant_see_is_answered_as_a_bot_that_isnt_there(ap
     hidden, hidden_left, hidden_body = left("finance")
     assert "Payroll Vault" not in str(hidden) and "Payroll Vault" not in hidden_body
     assert "Unknown recipient" not in str(hidden) and "Unknown recipient" not in hidden_body
-    with api.app.state.store.transaction() as c:          # answered, so the next one is asked again
+    with api.app.state.store.transaction() as c:  # answered, so the next one is asked again
         H.task_close(c, OWNER, hidden["proposal_task"], "Seen")
-    _, missing_left, missing_body = left("nobody")       # the same words for a slug no bot has
+    _, missing_left, missing_body = left("nobody")  # the same words for a slug no bot has
     assert hidden_left == [(t.replace("nobody", "finance"), w.replace("nobody", "finance")) for t, w in missing_left]
     assert hidden_body == missing_body.replace("nobody", "finance"), (hidden_body, missing_body)
     assert task(api, work)["owner_id"] == "bot:ops"
@@ -483,6 +795,7 @@ def test_undo_puts_back_a_decision_logged_before_a_tasks_column_was_renamed(api,
     # under the old one it could not find what to put back.
     import json
     from backend.migrations import renames
+
     strategy_token = with_strategy_bot(api)
     bot(api, "ops")
     bot(api, "finance")

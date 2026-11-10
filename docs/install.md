@@ -42,6 +42,12 @@ a local server, with no Open link.
 - The Gateway is enrolled from an invite whoever runs the install puts in the environment, `TICO_GATEWAY_INVITE`; you
   never type it, and the installer never prints it. With one, the Gateway connects on Tico's first start; without one
   the install still runs, on your subscriptions, and says the Gateway is not set up.
+- A server Tico hosts can be finished by the owner's own coding agent with no one signed in. Whoever runs the install
+  puts a one-time setup secret in the environment, `TICO_SETUP_HANDOFF` (32 to 128 letters, digits, `-` and `_`); like
+  the Gateway invite it is never typed, never printed and never saved: the server gets only its sha256 as
+  `TICO_SETUP_HANDOFF_HASH`, and it needs the https domain and `TICO_OWNER_EMAIL`. Tico's team, which runs these installs,
+  passes the secret to the customer's agent, which trades it once for a personal token of the owner
+  ([Handed over from setup](connect-an-agent.md#handed-over-from-setup)). Without the variable, nothing changes.
 - If the server computer cannot start, Tico keeps running and the installer says how to add it from **Settings >
   Computers > Add computer**.
 - It writes `TICO_INSTALL_PRESET=recommended`, `TICO_SAMPLE_COMPANY=on`, `TICO_MODELS_PRESET=subscriptions-gateway` and
@@ -97,14 +103,14 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    ([the four choices](ai-gateway.md#choose-how-bots-get-their-models)). To choose later, select
    **Your company's plans or API keys**, untick its providers and press **Skip for now**. Bots need a provider
    to run; until then each bot says "Add an AI provider", and **Settings > Models** adds it.
-   With a gateway key from Tico, the [Tico AI Gateway](ai-gateway.md) card there adds the Tico picks (department, level, Fast, version).
+   With a gateway key from Tico, the [Tico AI Gateway](ai-gateway.md) card there adds the Tico picks (level, Fast, version).
    With no provider yet, the Bets step needs one bet and one line under **What we won't do**; any short sentence works.
 2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result
    below, pick **Marketing** and keep **Content Marketer** (`content`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
    It joins the server's own Docker network, so it needs no domain, and the computer shows online in a few seconds.
-4. **Create my team.** Seven built-in bots are created automatically: Assistant, BotOps, Librarian, Strategy Bot, Task Manager,
-   Bookkeeper and Counsel. Each other role you picked waits as a Recruiting seat;
+4. **Create my team.** Ten built-in bots are created automatically: Assistant, BotOps, Librarian, Strategy Owner, Task Manager,
+   Finance Owner, Rules Owner, Brand Owner, Updates Owner and Automations Owner. Each other role you picked waits as a Recruiting seat;
    recruiting one creates a bot in **Needs setup** until you talk to it. A switched-on Inbox Manager is the exception: it is made as a bot linked to its mailbox.
 5. **Sign in to your models.** For either Claude and ChatGPT subscription choice, sign in to each model subscription you chose:
    Claude Code and Codex (ChatGPT through Codex). One signed-in model is enough for the first result; Health lists the others
@@ -127,8 +133,9 @@ like the one above.
 **You need** the install above with its computer online, and one model sign-in on that computer: a ChatGPT sign-in for Codex,
 a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No GitHub account, outside Tool or real company data.
 
-1. **Check the AI provider is ready** before any real work. Open **Settings > Health**: **Models** should read "Codex is signed
-   in." (or Claude Code). "No AI provider is chosen yet" or "No online computer is signed in to your model" means stop and follow
+1. **Check the AI provider is ready** before any real work. Open **Settings > General > Health > Details**: **Models** should read "Codex is signed
+   in." (or Claude Code), or "Bots run on Tico AI Gateway until Claude Code is signed in." while the Gateway runs the bots
+   meanwhile. "No AI provider is chosen yet" or "No online computer is signed in to your model" means stop and follow
    [First-result recovery](#first-result-recovery). Runs cost what your provider charges; [Usage](usage.md) shows the estimate.
    With no spending limit set (the default) there is no cap. A bot that reaches an hourly, daily, weekly or monthly limit (its own, its group's or the team's) takes no new work
    ("Paused: over its daily limit") until the period turns over or someone raises it; a run already in progress finishes.
@@ -138,13 +145,13 @@ a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No 
    Content Marketer's page, press **Start onboarding**. Paste the [sample answers](#sample-answers-for-content-marketer)
    and answer anything else it asks. It posts a first draft in the same DM, labelled "First draft, not yet reviewed".
    Outbound sending stays off until you turn it on for that bot.
-3. **Give it one task.** On **Tasks > New task**, assign Content Marketer: “Draft a 200-word blog post introducing our example app to project teams from these facts:
+3. **Give it one task.** On **Tasks**, press **+** (New task) and assign Content Marketer: “Draft a 200-word blog post introducing our example app to project teams from these facts:
    our example app keeps tasks and meeting notes together; readers can try it locally; use a plain, friendly voice and invent
    no claims. Return a draft on this task.”
 4. **Review the draft.** When it finishes, the bot marks the task **Done** with a note, and the draft file (`post.md`, from its
    `reports/` folder) is on the task. Read it. To change something, comment on the task and the bot revises it.
 5. **Close the task.** The bot marks its work Done; it cannot accept its own result. You asked for it, so you close it:
-   press **Close task** at the top of the task (it is also in its **…** menu).
+   press **Close** at the top of the task (it is also in its **…** menu).
 
 Success: a draft file on the task, read by a person, and a task its requester closed, with the computer online and no blocking
 Health issue.
@@ -204,7 +211,7 @@ The server answers on this computer only: compose publishes the port on `127.0.0
 sign-in refuses to start. A public address always needs sign-in.
 
 Bots' pages and SVG show as **Open** cards here: they need a separate address to show inline. Turn on
-[Tico file hosting](files.md#tico-file-hosting) on the Gateway page and they show inline from your `ticofiles.com`
+[Tico file hosting](files.md#tico-file-hosting) in **Settings → Models → Tico Gateway** and they show inline from your `ticofiles.com`
 address; nothing has to reach this computer ([Visuals](visuals.md#self-hosting)).
 
 ### Add a domain and sign-in later
@@ -250,7 +257,7 @@ check the provider before you commit):
 Whatever you pick, allow inbound 80 and 443 in the provider's firewall (not needed with a tunnel), and add an SSH
 key or console access so you can reach a shell. The installer does not touch the firewall.
 
-**Shortcut.** If you would rather not click through a provider's console, `tico setup --cloud hetzner|digitalocean|aws`
+**Shortcut.** If you would rather not click through a provider's console, `python3 -m setup --cloud hetzner|digitalocean|aws`
 creates the server for you from your laptop, through your own `hcloud`, `doctl` or AWS credentials, and the new server
 runs this same installer as its first boot step (`infra/cloud-init/`). Run it from a clone of the repository:
 `python3 -m setup --cloud hetzner --domain tico.example.com`. It is optional; everything below is what it automates.
@@ -273,7 +280,7 @@ It asks for `sudo` if you are not root, and it prints each step. In order it:
    repository on Debian and Ubuntu, and with Docker's convenience script (`get.docker.com`) on other distributions.
 3. **Downloads that release's compose bundle** (`tico-bundle-vX.Y.Z.tar.gz`) and checks it against the release's
    `SHA256SUMS`. A bundle that does not match is refused and nothing is installed.
-4. **Runs the `tico setup` wizard** on the server, interactively, with the release pinned in `.env` as `TICO_TAG`.
+4. **Runs the setup wizard** (`python3 -m setup`) on the server, interactively, with the release pinned in `.env` as `TICO_TAG`.
 
 Everything lives in `/opt/tico` (`compose.yaml`, `.env`, the wizard). Options, after `sh install.sh`:
 
@@ -284,7 +291,7 @@ Everything lives in `/opt/tico` (`compose.yaml`, `.env`, the wizard). Options, a
 | `--yes` | Do not ask for confirmation |
 | `--tunnel` | Cloudflare Tunnel: no public ports, so 80 and 443 are not checked |
 | `--docker-only` | Only install Docker and Compose (runner computers) |
-| `-- FLAGS` | Everything after `--` goes to `tico setup` (see Automation below) |
+| `-- FLAGS` | Everything after `--` goes to the setup wizard, `python3 -m setup` (see Automation below) |
 
 Exit codes: 0 done, 2 bad usage, 3 the computer does not qualify, 4 download or checksum failed, 5 Docker or Python
 could not be set up, 6 the wizard or the health check failed.
@@ -351,7 +358,7 @@ Credentials never appear on the command line, in the plan, in logs or in the rep
 ### When something fails
 
 - **The certificate does not appear.** DNS was not live when Caddy first asked. Check the record is at the provider
-  `tico setup` named (a Route 53 zone can exist while another provider serves the domain), then
+  the setup wizard named (a Route 53 zone can exist while another provider serves the domain), then
   `docker compose restart caddy` in `/opt/tico`.
 - **"redirect_uri_mismatch" at sign-in.** The OAuth client must list exactly `https://<domain>/auth/callback`.
 - **Sign-in says you are not on the roster.** The owner email must match the account you sign in with.
@@ -366,7 +373,7 @@ Credentials never appear on the command line, in the plan, in logs or in the rep
 ### Automation
 
 Run the installer with no terminal (a provisioning script, cloud-init, CI) and the wizard never prompts: a missing
-value is an error that names the flag. Flags after `--` go to `tico setup`; credentials come from the environment only, so
+value is an error that names the flag. Flags after `--` go to the setup wizard; credentials come from the environment only, so
 they never appear in a process list:
 
 ```
@@ -388,7 +395,7 @@ plans and diagnostics, and stay in setup's 0600 private environment copy for ret
 excluded from public setup state and runner settings. An explicit nonempty environment value replaces its saved value.
 
 For an existing workspace with an Inbox key, a signed-in owner or admin can connect its Inbox to a company in the
-customer portal. In **Settings > Inboxes > Settings > Email**, open **Join your company's shared Inbox** and follow the
+customer portal. In **Tools > Settings > Email**, open **Join your company's shared Inbox** and follow the
 portal link to obtain a five-minute connection code. Paste it into the workspace, preview the company name and ID,
 then confirm sharing in both directions: existing workspace inboxes and messages join the company's shared Inbox,
 and the workspace's agents can read that shared Inbox. The key stays on the server; no agent receives it. A saved
@@ -410,7 +417,7 @@ life of the server: use a client secret you can rotate. Progress is in `/var/log
 |---|---|---|
 | `oidc` | `TICO_OIDC_ISSUER`, `TICO_OIDC_CLIENT_ID`, `TICO_OIDC_CLIENT_SECRET`; optionally `TICO_OIDC_ALLOWED_DOMAINS` (comma-separated, such as `acme.com`) and `TICO_OIDC_LABEL` (the provider's name: a signed-out browser then gets a page with one "Sign in with <label>" button instead of going straight to the provider) | Google, Okta, Microsoft Entra or any OpenID Connect provider. Register `https://<TICO_DOMAIN>/auth/callback` as the redirect URI with the provider. The setup wizard's `--auth oidc --issuer <url> --client-id <id>` takes any issuer, with the secret from `TICO_OIDC_CLIENT_SECRET` in the environment and `--signin-label` for the button. On a server Tico hosts (`--hosted`), the owner sign-in link below stays as break-glass beside it (`TICO_OWNER_LINK_HASH`): it never calls the issuer, so the owner gets in while the issuer is down, and people already signed in stay signed in. |
 | `cloudflare` | `TICO_ACCESS_ISSUER`, `TICO_ACCESS_AUDIENCE` | Cloudflare Access in front of the tunnel |
-| `owner-link` | `TICO_HOSTED` (`own` or `invited`), `TICO_OWNER_EMAIL`; `TICO_OWNER_LINK_HASH` for the first link | Only for a server Tico hosts, on an https domain name (the server refuses to start on an IP address). The owner signs in once with a link our team sends (`/auth/owner-link#<secret>`): it works once, and for a week at most. The setup wizard writes it with `--hosted own|invited --hosted-zone <zone>` (the domain must be under that zone) to a 0600 file and never prints it; `python3 -m setup owner-link --domain <domain> [--sign-out]` makes a new one, the old unused one stops working, and `--sign-out` also ends the owner's sessions. `--preset recommended` adds the [recommended setup](#recommended-setup)'s choices and the server's own computer; the Gateway invite comes from `TICO_GATEWAY_INVITE` on each run and goes only to the server, never into setup's saved copy of the `.env`. |
+| `owner-link` | `TICO_HOSTED` (`own` or `invited`), `TICO_OWNER_EMAIL`; `TICO_OWNER_LINK_HASH` for the first link | Only for a server Tico hosts, on an https domain name (the server refuses to start on an IP address). The owner signs in once with a link our team sends (`/auth/owner-link#<secret>`): it works once, and for a week at most. The setup wizard writes it with `--hosted own|invited --hosted-zone <zone>` (the domain must be under that zone) to a 0600 file and never prints it; `python3 -m setup owner-link --domain <domain> [--sign-out]` makes a new one, the old unused one stops working, and `--sign-out` also ends the owner's sessions. `--preset recommended` adds the [recommended setup](#recommended-setup)'s choices and the server's own computer; the Gateway invite comes from `TICO_GATEWAY_INVITE` on each run and goes only to the server, never into setup's saved copy of the `.env`. The same holds for the setup handoff: `TICO_SETUP_HANDOFF` in the installer's environment (Tico's team passes it) reaches the server only as its hash, `TICO_SETUP_HANDOFF_HASH`, and the owner's agent trades the secret once for a token ([connect-an-agent.md](connect-an-agent.md#handed-over-from-setup)). |
 | unset (or `none`) | nothing; leave `TICO_DOMAIN` unset | The quick start. The server answers on `http://127.0.0.1:8765` and the owner signs in with the token from `docker compose exec server cat /data/local-owner.token` (`Authorization: Bearer <token>`, or `GET /api/v2/local-signin?token=...`). With `TICO_DOMAIN` set, the server refuses to start. |
 
 The owner is the first human on the roster; add the others in the app. The wizard writes these settings; to change
@@ -592,14 +599,14 @@ minutes:
 {"type": "tico.wake", "install": "acme", "pending": 3, "oldest_received_at": "2026-10-25T10:00:00Z"}
 ```
 
-Set it as the owner, with the Tico Gateway connected in Settings → Gateway:
+Set it as the owner, with the Tico Gateway connected in Settings → Models:
 
 ```
-hub relay wake-url set https://wake.acme.example/start-tico
+tico relay wake-url set https://wake.acme.example/start-tico
 ```
 
-The answer shows a signing secret (`whsec_...`) once. Tico does not keep it. `hub relay wake-url show` shows the address, who set
-it and when; `hub relay wake-url off` stops the calls. The address must be public https with no user or password.
+The answer shows a signing secret (`whsec_...`) once. Tico does not keep it. `tico relay wake-url show` shows the address, who set
+it and when; `tico relay wake-url off` stops the calls. The address must be public https with no user or password.
 
 The call is signed as [Standard Webhooks](https://www.standardwebhooks.com) (`webhook-id`, `webhook-timestamp`,
 `webhook-signature`) with that secret. Check it before you start anything, so a stranger who finds the address cannot start your
@@ -637,7 +644,7 @@ Tool Credentials need a grant per bot; `hub_credential_grant` targets a bot.
 
 Only that model credential comes this way: a bot's own credentials stay with that bot, and a computer never receives them.
 
-A subscription login (a ChatGPT or Claude plan) cannot be copied. If that is how your team signs in, Settings > Health shows
+A subscription login (a ChatGPT or Claude plan) cannot be copied. If that is how your team signs in, Settings > General > Health > Details shows
 "*computer name*: sign in to Codex" (or Claude Code) for each new computer that needs it. Sign it in from Settings > Computers, or ask
 BotOps to start it, then finish the sign-in in your browser.
 
@@ -662,7 +669,7 @@ curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh 
   sh install.sh --runner --url https://tico.example.com --code <code> --label "Build computer"
 ```
 
-`vX.Y.Z` is your server's release (Settings and Settings > Health show it); `--runner` exists from v0.2.1.
+`vX.Y.Z` is your server's release (Settings and Settings > General > Health > Details show it); `--runner` exists from v0.2.1.
 
 `install.sh --runner` installs Docker if it is missing, puts that release's `runner.compose.yaml` and a `.env`
 (`TICO_URL`, `TICO_CODE`, `TICO_RUNNER_LABEL`, and `TICO_TAG` and `TICO_UPDATER_TAG` pinned to the release) in
@@ -729,7 +736,7 @@ docker run -d --name tico-runner --restart unless-stopped -v tico-runner:/home/r
 
 The `--user 0` and capabilities are what keep the runner's own login out of the bots' reach (below); without them the
 container runs as one user, as it did before. It has no updater: it stays on the release you pinned until you pull a newer image and recreate the container, and
-Settings > Health says so.
+Settings > General > Health > Details says so.
 
 **Who runs what.** The container's entrypoint starts as root, with five capabilities and nothing else, only to prepare
 the volume; the runner itself is the `ticorun` user that owns `/home/runner/runner.json`, its state and the tools
@@ -842,7 +849,7 @@ instance metadata hop limit at 1 for runner computers too.
 A Linux runner can offer its screen to the web app, so people can watch bots work in a headed browser and, if
 allowed, take control. The computer itself decides whether it offers one:
 
-- Docker: a new runner offers it. `install.sh --runner` (and `tico setup runner`, and the cloud-init template) writes
+- Docker: a new runner offers it. `install.sh --runner` (and `python3 -m setup runner`, and the cloud-init template) writes
   `TICO_SCREEN=1` in the runner's `.env`; `--no-screen` (or `TICO_SCREEN=0` in the cloud-init inputs) writes `0`
   instead. A runner installed before this default has no such line and keeps its screen off until you turn it on.
   To turn it on later, run this in the runner's folder; it takes effect live, with no restart, so no running turn is
@@ -854,7 +861,7 @@ allowed, take control. The computer itself decides whether it offers one:
   once the computer is idle, since that recreates the runner's container and cuts off a running turn.
   `install.sh --runner --screen` writes `TICO_SCREEN=1` too. The `$([ -f runner.override.yaml ] && ...)` part adds the
   override file a named or `--server-network` runner has, as every compose call for that runner must.
-- A Linux checkout: `sudo apt-get install xvfb x11vnc matchbox-window-manager`, then `scripts/tico screen on`
+- A Linux checkout: `sudo apt-get install xvfb x11vnc matchbox-window-manager`, then `scripts/tico-computer screen on`
   (`screen off` and `screen status` too; a running runner follows within seconds).
 
 In **Bot → Settings → Screen**, use the switch to enable or disable screen access. If setup is needed, the switch
@@ -890,8 +897,12 @@ Native release checkouts download the matching checksummed binary. Development c
 it with Rust 1.92 or newer. `TICO_SCREEN_RELAY_BIN` can supply a matching executable; its source
 fingerprint is checked before startup. Use `CARGO_HOME`, `CARGO_TARGET_DIR`, `RUSTUP_HOME` and
 `TMPDIR` on your work disk to keep build files there. Docker ships the binary and needs no compiler.
+A checkout also compiles the web UI's TypeScript files: install Node 22 and run `npm ci` once, and
+`python -m backend.server` runs `npm run build:ui` itself when the build is missing or stale, with the Node on
+PATH or, for a launchd or systemd job whose PATH lacks it, one in /opt/homebrew/bin, /usr/local/bin, Volta or nvm's
+default. Without them it refuses to start and says what is missing (ui/README.md, "TypeScript"). The Docker image ships the compiled UI.
 
-Existing native launchd/systemd server jobs need a one-time `scripts/tico -e <env> server install`
+Existing native launchd/systemd server jobs need a one-time `scripts/tico-computer -e <env> server install`
 after updating, so they run `backend.server` rather than a direct Uvicorn listener. New jobs already
 use that entry point. The server creates a fresh private control secret and allocated loopback ports
 on every start; no relay option or manually managed secret is required. The public listener refuses
@@ -933,14 +944,14 @@ TICO_SCREEN_RELAY_BIN=/path/on/work-disk/to/tico-screen-relay \
 
 The native runner is unchanged and fully supported: a Mac keeps its own logins, desktop apps and files. Choose **Mac**
 in Add computer and **Use a Tico checkout instead**, then in the Tico checkout on that Mac run the command it prints
-(`scripts/setup-runner.sh "$HOME/Downloads/<setup-file>.json"`, or `scripts/tico -e <env> enroll --code-file <file>
---label "Studio Mac"`, then `scripts/tico -e <env> install bot`; see the README). It connects to
+(`scripts/setup-runner.sh "$HOME/Downloads/<setup-file>.json"`, or `scripts/tico-computer -e <env> enroll --code-file <file>
+--label "Studio Mac"`, then `scripts/tico-computer -e <env> install bot`; see the README). It connects to
 `https://<TICO_DOMAIN>`, runs under launchd, and reconnects on its own after the server restarts.
 
 **Mac updates.** The runner follows the server's release by itself ([updates.md](updates.md#a-mac-or-linux-checkout)).
 After a healthy update it also restarts the side jobs installed beside it (`connectors`, `close-calls`, `importers`), and
 each side job exits and restarts when it sees the checkout move to another revision (checked about once a minute), so no job
-keeps old code in memory. `scripts/tico restart` does the same by hand.
+keeps old code in memory. `scripts/tico-computer restart` does the same by hand.
 
 ### Windows PC (WSL 2)
 
@@ -965,13 +976,13 @@ Docker Desktop is not needed; if its WSL integration is on for Ubuntu, the runne
 
 ### A Linux checkout (systemd)
 
-A Linux computer can also run the native runner from a Tico checkout, the way a Mac does. `scripts/tico` drives it with
+A Linux computer can also run the native runner from a Tico checkout, the way a Mac does. `scripts/tico-computer` drives it with
 systemd **user** units instead of launchd; no root is needed:
 
 ```
-scripts/tico -e <env> enroll --code-file <file> --label "Build box"     # or scripts/setup-runner.sh
-scripts/tico -e <env> install            # tico-bot, tico-connectors, tico-close-calls, tico-importers: Restart=always
-scripts/tico -e <env> status
+scripts/tico-computer -e <env> enroll --code-file <file> --label "Build box"     # or scripts/setup-runner.sh
+scripts/tico-computer -e <env> install            # tico-bot, tico-connectors, tico-close-calls, tico-importers: Restart=always
+scripts/tico-computer -e <env> status
 ```
 
 `install` writes `~/.config/systemd/user/tico-<job>.service` (`tico-<env>-<job>.service` with `-e`), enables and starts
@@ -979,8 +990,8 @@ each, and tells you to run `loginctl enable-linger $USER` when linger is off (ot
 does not start at boot). It needs a user session: over a bare ssh login that has none, set
 `XDG_RUNTIME_DIR=/run/user/$(id -u)` first. `restart`, `logs`, `doctor`, `uninstall` and `update` behave as on a Mac.
 Run `install` once: it is also what lets the runner update itself when the server does
-([updates.md](updates.md#linux-from-a-checkout-run-scriptstico-install-once)); until then Settings > Computers and Health say
-"run `scripts/tico install` once".
+([updates.md](updates.md#linux-from-a-checkout-run-scriptstico-computer-install-once)); until then Settings > Computers and Health say
+"run `scripts/tico-computer install` once".
 
 ## Slack
 
@@ -988,7 +999,7 @@ Add `slack` to `COMPOSE_PROFILES` to run the Slack service, then paste the app's
 
 ## Update
 
-Use **Update now** (Settings, or Health → Version for the owner), or run the target release's installer again to update both the pinned image tag and compose bundle, preserving `.env`.
+Use **Update now** (in the sidebar's new-version notice, or on the Version row under Settings → General → Health → Details for the owner), or run the target release's installer again to update both the pinned image tag and compose bundle, preserving `.env`.
 
 ![Health Version row with Update now beside Check for updates](images/settings-stage1/settings-health-version-context.png)
 
@@ -1019,7 +1030,7 @@ With `updater` in `COMPOSE_PROFILES` and `TICO_UPDATER_URL=http://updater:8080` 
   server generates into the `tico-control` volume on first start, which only the server and updater mount;
 - `POST /update {"version": "vX.Y.Z" | "latest"}` downloads and verifies that release's compose bundle and replaces the files in it (never `.env`), pulls that image, recreates the server, waits up to 3 minutes for
   `/healthz`, rolls back the image and the bundle if it does not come back, and otherwise writes `TICO_TAG` into `.env`;
-- `GET /status` returns `{"state": "idle|pulling|restarting|healthy|rolled_back|failed", "from", "to", "message"}`;
+- `GET /status` returns `{"state": "idle|pulling|snapshotting|restarting|uncertain|healthy|rolled_back|failed", "from", "to", "message"}`;
 - both calls need `Authorization: Bearer <token>`. The server gets `TICO_UPDATER_URL` and `TICO_UPDATER_TOKEN`, and
   the running version as `TICO_VERSION` (also the image label `org.opencontainers.image.version`).
 

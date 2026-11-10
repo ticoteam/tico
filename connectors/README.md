@@ -30,11 +30,11 @@ not a shortcut.
   The CLI installs with `curl -fsSL https://releases.aside.com/install.sh | bash`.
 
 Each connector has a page in `integrations/` (what it is, how a bot uses it, the rules,
-recipes, gotchas, and the learnings bots add): `hub tool show slack`, `hub tool show mail`,
-`hub tool show aside`, or the **Integrations** page. Other outside systems the company uses
+recipes, gotchas, and the learnings bots add): `tico tool show slack`, `tico tool show mail`,
+`tico tool show aside`, or the **Integrations** page. Other outside systems the company uses
 get pages in its own config (`integrations/README.md`).
 
-Which channels bots may use is the list under Settings > Tools > Slack (`hub slack channel list`), kept in Tico's database; a bot may post to any of them unless an owner or admin turned posting off for it. A run reads the list from the hub; `registry/slack-channels.yaml` is only read until someone imports it there.
+Which channels bots may use is the list under Settings > Tools > Slack (`tico slack channel list`), kept in Tico's database; a bot may post to any of them unless an owner or admin turned posting off for it. A run reads the list from the hub; `registry/slack-channels.yaml` is only read until someone imports it there.
 What the mail rules do to new messages is `registry/mail-rules.yaml`. Which employee may post at
 all, and which mailbox it may act as, is the `access:` block in its own `employee.yaml`
 (`policies/access.md`). All of it is checked in code on every call.
@@ -77,7 +77,7 @@ all, and which mailbox it may act as, is the `access:` block in its own `employe
 
    It prints the workspace, the bot user, and every channel the bot is a member of, and exits 1 if
    anything is wrong. Then list the channels the bots use: Settings > Tools > Slack channels (an
-   owner or admin), or `hub slack channel add '#name' --reader <bot>`. A channel listed by name gets its id from Slack.
+   owner or admin), or `tico slack channel add '#name' --reader <bot>`. A channel listed by name gets its id from Slack.
 
 ## Using it (bots)
 

@@ -4,6 +4,7 @@ the threads wake and loop rules) join this file once the threads core lands.
 
 Build the binary first (`cd runner-rs && cargo build --release`) or point TICO_RUNNER_BIN at one, then run
 `python3 -m pytest -m slow -n 0 backend/tests/test_threads_e2e_runner.py`. The file is slow, so the default run skips it."""
+
 import json
 import os
 import subprocess
@@ -13,7 +14,7 @@ import pytest
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.live import live  # noqa: F401  (a listening server; `live` is its origin)
-from backend.tests.test_api import api, post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.api import post  # noqa: F401  (the api fixture)
 
 pytestmark = pytest.mark.slow
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,8 +34,19 @@ def run(binary, home, *args):
 
 
 def enroll_args(url, code_file, projects, config, label=LABEL):
-    return ["--config", str(config), "enroll", "--url", url, "--code-file", str(code_file),
-            "--label", label, "--projects", str(projects)]
+    return [
+        "--config",
+        str(config),
+        "enroll",
+        "--url",
+        url,
+        "--code-file",
+        str(code_file),
+        "--label",
+        label,
+        "--projects",
+        str(projects),
+    ]
 
 
 def test_a_real_runner_enrolls_with_a_one_time_code_and_the_server_holds_its_registration(api, live, tmp_path):

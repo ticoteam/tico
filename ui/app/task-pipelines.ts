@@ -1,0 +1,264 @@
+/* ui/app/task-pipelines.ts — One pipeline on the Tasks page (docs/pipelines-v3.md S7, S8, S17.3): its open tasks as
+   columns, one per work stage, or as a list grouped by stage in the same order; on a phone, one stage at a time under a
+   row of stage tabs. Done and Closed are not columns: they sit behind the page's archive button with Snoozed.
+   A stage's header is its name and its number ("Build 2/3" where it has a limit); tapping it opens the stage's settings
+   for whoever may change the pipeline. The page (tasks-page.ts) owns the header, loading the pipeline and its tasks,
+   search, filter, the archive and opening a task (any [data-task] element); it calls the hooks set at the end of this
+   file. Moving a task between columns is task-board.ts; a refused move shows the engine's reason above the stages.
+   Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
+'use strict';
+
+interface PvOpts { layout: 'list' | 'columns'; phone: boolean; q: string; filters: TaskFilters }
+/** A move the engine refused, shown above the stages: a push past to confirm with a why, or the engine's reason. */
+interface PvBar { taskId: string; to: string; push: boolean; text: string }
+interface PvState {
+  rec: PipelineRec; tasks: TaskAny[]; opts: PvOpts;
+  /** Where the page put the view; drawn again here after a move or a tab. */
+  root: HTMLElement | null;
+  /** The stage shown on a phone. */
+  stage: string;
+  /** Moves drawn before the engine answers: task id -> the stage it was moved to. */
+  moving: Map<string, string>;
+  bar: PvBar | null;
+}
+
+let PV: PvState | null = null;
+const PV_BOUND = new WeakSet<HTMLElement>();
+const PV_STAGE_KEY = 'tico.pipeline.stage';
+
+/** The stage each pipeline last showed on a phone. Throws where storage is blocked. */
+const pvStagesKept = (): Record<string, string> => JSON.parse(localStorage.getItem(PV_STAGE_KEY) || '{}') as Record<string, string>;
+function pvStageKept(pipelineId: string): string {
+  try { return pvStagesKept()[pipelineId] ?? ''; } catch { return ''; }
+}
+function pvStageKeep(pipelineId: string, stage: string): void {
+  try {
+    const all = pvStagesKept();
+    all[pipelineId] = stage;
+    localStorage.setItem(PV_STAGE_KEY, JSON.stringify(all));
+  } catch { /* storage blocked: not kept */ }
+}
+
+/** The view's state for a pipeline: the same one while the page draws the same pipeline again. */
+function pvStateFor(rec: PipelineRec): PvState {
+  if (PV && PV.rec.id === rec.id) return PV;
+  PV = {rec, tasks: [], opts: {layout: 'columns', phone: false, q: '', filters: {}}, root: null,
+    stage: pvStageKept(rec.id), moving: new Map(), bar: null};
+  return PV;
+}
+
+/** The open tasks the manager's rail reads, when the view shows that pipeline. */
+const pvTasksOf = (pipelineId: string): TaskAny[] => PV && PV.rec.id === pipelineId ? PV.tasks : [];
+
+// ---------------------------------------------------------------- drawing
+
+/** A task as the view draws it: in the stage a move put it in while the engine has not answered. */
+const pvShown = (state: PvState, t: TaskAny): TaskAny => {
+  const to = state.moving.get(t.id);
+  return to ? {...t, stage_id: to} : t;
+};
+
+/** "Ideas 12", "Spec 2/2": the stage's name and its number of open tasks, out of its limit when it has one. */
+function pvStageCount(state: PvState, stage: PipelineStageRec): string {
+  const n = state.tasks.filter(t => pvShown(state, t).stage_id === stage.id).length;
+  return stage.task_limit ? `${n}/${stage.task_limit}` : String(n);
+}
+
+/** S8: a stage's header. It opens the stage's settings for whoever may change the pipeline, and is plain text otherwise. */
+function pvStageHeadHTML(state: PvState, stage: PipelineStageRec): string {
+  const inner = `<span class="pv-stage-name">${esc(stage.name)}</span><span class="pv-stage-n tnum">${esc(pvStageCount(state, stage))}</span>`;
+  return state.rec.may_change
+    ? `<button type="button" class="pv-stage-h" data-pv-settings="${esc(stage.id ?? '')}">${inner}</button>`
+    : `<span class="pv-stage-h">${inner}</span>`;
+}
+
+/** The tasks of one stage that the search and the filters let through, in the order the page gave them. */
+function pvInStage(state: PvState, stageId: string): TaskAny[] {
+  return state.tasks.map(t => pvShown(state, t))
+    .filter(t => t.stage_id === stageId && taskFilterMatch(t, state.opts.q, state.opts.filters));
+}
+
+const pvSearching = (opts: PvOpts): boolean => !!opts.q.trim() || taskFiltersOn(opts.filters);
+
+function pvColumnsHTML(state: PvState): string {
+  const cols = state.rec.stages.map(stage => {
+    const id = stage.id ?? '';
+    const cards = pvInStage(state, id).map(t => taskCardHTML(t)).join('');
+    return `<section class="pv-col" data-pv-col="${esc(id)}" aria-label="${esc(stage.name)}"><header class="pv-col-head">${pvStageHeadHTML(state, stage)}</header>
+      <div class="pv-col-body">${cards}</div></section>`;
+  }).join('');
+  return `<div class="pv-cols" data-pv-drag>${cols}</div>`;
+}
+
+function pvListHTML(state: PvState): string {
+  const searching = pvSearching(state.opts);
+  const groups = state.rec.stages.map(stage => {
+    const rows = pvInStage(state, stage.id ?? '');
+    if (!rows.length && searching) return '';
+    return `<section class="pv-group" aria-label="${esc(stage.name)}"><h2 class="pv-group-head">${pvStageHeadHTML(state, stage)}</h2>
+      <div class="pv-rows">${rows.map(t => taskRowHTML(t, {look: 'list'})).join('')}</div></section>`;
+  }).join('');
+  return groups || '<p class="pv-empty muted">Nothing found</p>';
+}
+
+/** S17.3: a row of stage tabs, then the chosen stage's tasks. */
+function pvPhoneHTML(state: PvState): string {
+  const stages = state.rec.stages, ids = stages.map(s => s.id ?? '');
+  const shown = ids.includes(state.stage) ? state.stage : ids.find(id => pvInStage(state, id).length) ?? ids[0] ?? '';
+  state.stage = shown;
+  const tabs = stages.map(stage => {
+    const on = stage.id === shown;
+    return `<button type="button" role="tab" class="pv-tab${on ? ' on' : ''}" data-pv-tab="${esc(stage.id ?? '')}" aria-selected="${on}">`
+      + `${esc(stage.name)} <span class="tnum">${esc(pvStageCount(state, stage))}</span></button>`;
+  }).join('');
+  const rows = pvInStage(state, shown).map(t => taskRowHTML(t, {look: 'list'})).join('');
+  return `<div class="pv-tabs" role="tablist" aria-label="Stages">${tabs}</div><div class="pv-rows pv-phone">${rows}</div>`;
+}
+
+function pvBarHTML(bar: PvBar | null): string {
+  if (!bar) return '';
+  if (bar.push) {
+    return `<form class="pv-bar" data-pv-push role="alert"><span class="pv-bar-text">${esc(bar.text)}</span>
+      <input name="why" required maxlength="500" placeholder="Why" aria-label="Why" autocomplete="off">
+      <button type="submit" class="primary">Move</button>
+      <button type="button" class="ghost" data-pv-bar-x aria-label="Close">✕</button></form>`;
+  }
+  return `<div class="pv-bar" role="alert"><span class="pv-bar-text">${esc(bar.text)}</span>
+    <button type="button" class="ghost" data-pv-bar-x aria-label="Close">✕</button></div>`;
+}
+
+function pvHTML(state: PvState): string {
+  const body = state.opts.phone ? pvPhoneHTML(state) : state.opts.layout === 'columns' ? pvColumnsHTML(state) : pvListHTML(state);
+  return `<div class="pv${state.opts.phone ? ' pv-is-phone' : ''}">${pvBarHTML(state.bar)}${body}</div>`;
+}
+
+/** Draws the view again where the page put it, keeping a why being typed. */
+function pvDraw(state: PvState): void {
+  const root = state.root;
+  if (PV !== state || !root?.isConnected) return;
+  const field = root.querySelector<HTMLInputElement>('[data-pv-push] input[name="why"]');
+  const text = field?.value ?? '', typing = !!field && document.activeElement === field;
+  root.innerHTML = pvHTML(state);
+  const next = root.querySelector<HTMLInputElement>('[data-pv-push] input[name="why"]');
+  if (next) { next.value = text; if (typing) next.focus(); }
+}
+
+// ---------------------------------------------------------------- what a person does here
+
+function pvClick(state: PvState, ev: MouseEvent): void {
+  const target = eventElement(ev);
+  if (!target) return;
+  const settings = target.closest<HTMLElement>('[data-pv-settings]');
+  if (settings) { void openPipelineEditor(state.rec.id, settings.dataset['pvSettings'] ?? ''); return; }
+  const tab = target.closest<HTMLElement>('[data-pv-tab]');
+  if (tab) { pvStageShow(state, tab.dataset['pvTab'] ?? ''); return; }
+  if (target.closest('[data-pv-bar-x]')) { state.bar = null; pvDraw(state); }
+}
+
+function pvStageShow(state: PvState, stage: string): void {
+  if (!stage || stage === state.stage) return;
+  state.stage = stage;
+  pvStageKeep(state.rec.id, stage);
+  pvDraw(state);
+  state.root?.querySelector('.pv-tab.on')?.scrollIntoView({inline: 'center', block: 'nearest'});
+}
+
+/** A phone swipe steps to the next (1) or the previous (-1) stage. */
+function pvStageStep(state: PvState, by: number): void {
+  const ids = state.rec.stages.map(s => s.id ?? '');
+  const to = ids[ids.indexOf(state.stage) + by];
+  if (to) pvStageShow(state, to);
+}
+
+let PV_SWIPE: {x: number; y: number} | null = null;
+document.addEventListener('touchstart', (ev: TouchEvent) => {
+  const target = ev.target instanceof Element ? ev.target : null, first = ev.touches[0];
+  PV_SWIPE = first && target?.closest('.pv-is-phone') ? {x: first.clientX, y: first.clientY} : null;
+}, {passive: true});
+document.addEventListener('touchend', (ev: TouchEvent) => {
+  const start = PV_SWIPE, end = ev.changedTouches[0];
+  PV_SWIPE = null;
+  if (!start || !end || !PV) return;
+  const dx = end.clientX - start.x, dy = end.clientY - start.y;
+  if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) pvStageStep(PV, dx < 0 ? 1 : -1);
+}, {passive: true});
+
+function pvSubmit(state: PvState, ev: SubmitEvent): void {
+  const form = ev.target instanceof HTMLFormElement && ev.target.hasAttribute('data-pv-push') ? ev.target : null;
+  const bar = state.bar;
+  if (!form || !bar) return;
+  ev.preventDefault();
+  const why = String(new FormData(form).get('why') ?? '').trim();
+  if (!why) return;
+  state.bar = null;
+  const t = state.tasks.find(x => x.id === bar.taskId);
+  if (t) pvMove(state, t, bar.to, why);
+}
+
+/** Moves a task to a stage of this pipeline: `next` when it is the stage after its own, else the stage's id. The task is
+    drawn there at once; the page's live read shows where the engine put it. A refusal puts it back and says what the
+    engine said: what is missing, with a why to push past it when it can be pushed past. */
+function pvMove(state: PvState, t: TaskAny, stageId: string, why = ''): void {
+  const stages = state.rec.stages;
+  const from = stages.findIndex(s => s.id === t.stage_id), to = stages.findIndex(s => s.id === stageId);
+  const target = stages[to];
+  if (to < 0 || !target || from === to) return;
+  const where = to === from + 1 ? 'next' : stageId;
+  state.moving.set(t.id, stageId);
+  state.bar = null;
+  pvDraw(state);
+  void (async () => {
+    try {
+      const moved = await taskMove(t.id, where, t.version, why || undefined);
+      if (PV !== state) return;
+      // The engine's answer is the task as it is now: draw it there until the page's next read.
+      state.moving.delete(t.id);
+      state.tasks = state.tasks.map(x => x.id === moved.task.id ? moved.task : x).filter(x => x.status === 'open');
+      pvDraw(state);
+    } catch (error) {
+      if (PV !== state) return;
+      state.moving.delete(t.id);
+      state.bar = pvRefusedBar(t, stageId, target.name, error, !why);
+      pvDraw(state);
+    }
+  })();
+}
+
+/** What the view says about a refused move: the engine's own words. A move that misses requirements a person may push
+    past asks for the why ("Move to Review without Checks pass?"); anything else is the engine's reason. */
+function pvRefusedBar(t: TaskAny, stageId: string, stageName: string, error: unknown, mayPush: boolean): PvBar {
+  const refused = taskRefusedOf(error);
+  const missing = refused?.missing ?? [];
+  if (refused?.error === 'task_not_met' && mayPush && missing.length) {
+    return {taskId: t.id, to: stageId, push: true, text: `Move to ${stageName} without ${missing.join(', ')}?`};
+  }
+  const words = refused ? [refused.detail, missing.length ? `Missing: ${missing.join(', ')}.` : ''].filter(Boolean).join(' ')
+    : errorMessage(error, 'Not moved.');
+  return {taskId: t.id, to: stageId, push: false, text: `${t.title}: ${words}`};
+}
+
+// ---------------------------------------------------------------- the page's hooks
+
+TASK_PAGE_HOOKS.pipeline = {
+  html(rec, tasks, opts) {
+    const state = pvStateFor(rec);
+    state.rec = rec;
+    state.opts = {layout: opts.layout, phone: opts.phone, q: opts.q, filters: opts.filters};
+    state.tasks = tasks.filter(t => t.pipeline_id === rec.id && t.status === 'open');
+    // A move the read already shows is no longer drawn by hand.
+    for (const [id, to] of state.moving) if (state.tasks.find(t => t.id === id)?.stage_id === to) state.moving.delete(id);
+    return pvHTML(state);
+  },
+  bind(root, rec) {
+    const state = pvStateFor(rec);
+    state.root = root;
+    if (PV_BOUND.has(root)) return;
+    PV_BOUND.add(root);
+    // Bound once per element; each event reads the view drawn there now.
+    root.addEventListener('click', ev => { if (PV?.root === root) pvClick(PV, ev); });
+    root.addEventListener('submit', ev => { if (PV?.root === root) pvSubmit(PV, ev); });
+    taskBoardBind(root);
+  },
+  rail(host, rec) { pipelineRailSync(host, rec); },
+  edit(rec) { void openPipelineEditor(rec.id); },
+};

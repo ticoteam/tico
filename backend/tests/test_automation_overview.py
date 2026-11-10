@@ -1,10 +1,11 @@
 """The Automations overview (backend/automation_overview.py): runs and counts across every automation the caller may see.
 Seeing a run follows seeing its automation, so these are a privacy boundary."""
+
 import json
 
 from backend.store import H
-from backend.tests.test_api import api, get  # noqa: F401
-from backend.tests.test_automation_api import as_bot
+from backend.tests.helpers.api import get  # noqa: F401
+from backend.tests.helpers.automation_api import as_bot
 
 
 def _make(api, name, owner, kind="event"):
@@ -12,9 +13,11 @@ def _make(api, name, owner, kind="event"):
     aid = "auto_" + H.new_id()
     flow = {"name": name, "owner": owner, "enabled": True, "builtin": False, "trigger": trigger, "steps": []}
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO automations(id,name,owner_id,trigger_type,enabled,flow,version,created_at,created_by_id,"
-                  "updated_at) VALUES(?,?,?,?,1,?,1,?,?,?)",
-                  (aid, name, owner, trigger["type"], json.dumps(flow), H.now(), "human:ana", H.now()))
+        c.execute(
+            "INSERT INTO automations(id,name,owner_id,trigger_type,enabled,flow,version,created_at,created_by_id,"
+            "updated_at) VALUES(?,?,?,?,1,?,1,?,?,?)",
+            (aid, name, owner, trigger["type"], json.dumps(flow), H.now(), "human:ana", H.now()),
+        )
     return aid
 
 
@@ -23,8 +26,11 @@ def _run(api, aid, status, minutes_ago, payload=None, steps=None, cost=0.0):
     started = H.shift(H.now(), minutes=-minutes_ago)
     state = {"status": status, "steps": steps or [], "payload": payload or {}}
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,finished_at,status,cost,"
-                  "saved_state) VALUES(?,?,1,'',?,?,?,?,?)", (rid, aid, started, started, status, cost, json.dumps(state)))
+        c.execute(
+            "INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,finished_at,status,cost,"
+            "saved_state) VALUES(?,?,1,'',?,?,?,?,?)",
+            (rid, aid, started, started, status, cost, json.dumps(state)),
+        )
     return rid
 
 
@@ -50,7 +56,7 @@ def test_runs_show_only_what_the_caller_may_see(api):
 def test_runs_page_by_cursor_within_the_range(api):
     aid = _make(api, "Busy", "person:ana")
     inside = [_run(api, aid, "ok", m) for m in range(1, 8)]
-    _run(api, aid, "ok", 90)                                    # outside 1h
+    _run(api, aid, "ok", 90)  # outside 1h
     seen, before = [], ""
     for _ in range(5):
         page = get(api, f"automations/runs?range=1h&limit=3&before={before}")
@@ -58,7 +64,7 @@ def test_runs_page_by_cursor_within_the_range(api):
         before = page["next"]
         if not before:
             break
-    assert seen == inside                                       # newest first, none twice, none outside
+    assert seen == inside  # newest first, none twice, none outside
     assert len(get(api, "automations/runs?range=24h")["runs"]) == 8
     get(api, "automations/runs?range=30d", expected=422)
     get(api, "automations/runs?range=1h&status=nope", expected=422)
@@ -66,10 +72,22 @@ def test_runs_page_by_cursor_within_the_range(api):
 
 def test_runs_say_what_started_them_and_how_they_ended(api):
     aid = _make(api, "Mail", "person:ana")
-    _run(api, aid, "failed", 1, {"message": {"from": "dana@acme.example", "from_name": "Dana", "subject": "Invoice"}},
-         [{"id": "s1", "type": "llm", "status": "failed", "outputs": {"error": "timed out"}}])
-    _run(api, aid, "ok", 2, {"manual": True},
-         [{"id": "s1", "type": "action", "status": "ok", "outputs": {"do": "archive"}}])
+    _run(
+        api,
+        aid,
+        "failed",
+        1,
+        {"message": {"from": "dana@acme.example", "from_name": "Dana", "subject": "Invoice"}},
+        [{"id": "s1", "type": "llm", "status": "failed", "outputs": {"error": "timed out"}}],
+    )
+    _run(
+        api,
+        aid,
+        "ok",
+        2,
+        {"manual": True},
+        [{"id": "s1", "type": "action", "status": "ok", "outputs": {"do": "archive"}}],
+    )
     failed, done = get(api, "automations/runs?range=1h")["runs"]
     assert failed["started_by"] == "From Dana · Invoice" and failed["outcome"] == "LLM failed: timed out"
     assert done["started_by"] == "Run by hand" and done["outcome"] == "Archived" and done["step_count"] == 1
@@ -84,7 +102,7 @@ def test_stats_count_runs_and_failures_per_bucket(api):
     _run(api, a, "failed", 1)
     _run(api, a, "ok", 50)
     _run(api, b, "failed", 30)
-    _run(api, b, "ok", 120)                                     # outside 1h
+    _run(api, b, "ok", 120)  # outside 1h
     stats = get(api, "automations/stats?range=1h")
     assert stats["bucket_seconds"] == 300 and len(stats["totals"]["buckets"]) == 12
     per = {s["id"]: s for s in stats["automations"]}
@@ -97,20 +115,34 @@ def test_stats_count_runs_and_failures_per_bucket(api):
 
 
 def test_system_job_runs_show_under_their_built_in(api):
-    flow = {"name": "KPI stale asks", "owner": "person:ana", "builtin": True, "readonly": True, "enabled": True,
-            "trigger": {"type": "event", "name": "tico.builtin.job.kpi_asks"}, "steps": [],
-            "controls": {"on": True}, "source": {"kind": "system_job", "id": "job:kpi_asks"}}
+    flow = {
+        "name": "KPI stale asks",
+        "owner": "person:ana",
+        "builtin": True,
+        "readonly": True,
+        "enabled": True,
+        "trigger": {"type": "event", "name": "tico.builtin.job.kpi_asks"},
+        "steps": [],
+        "controls": {"on": True},
+        "source": {"kind": "system_job", "id": "job:kpi_asks"},
+    }
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO automations(id,name,owner_id,trigger_type,enabled,builtin,flow,version,created_at,"
-                  "created_by_id,updated_at) VALUES('auto_sys','KPI stale asks','person:ana','event',1,1,?,1,?,?,?)",
-                  (json.dumps(flow), H.now(), "human:ana", H.now()))
+        c.execute(
+            "INSERT INTO automations(id,name,owner_id,trigger_type,enabled,builtin,flow,version,created_at,"
+            "created_by_id,updated_at) VALUES('auto_sys','KPI stale asks','person:ana','event',1,1,?,1,?,?,?)",
+            (json.dumps(flow), H.now(), "human:ana", H.now()),
+        )
         for i, ok in enumerate((1, 0)):
             at = H.shift(H.now(), minutes=-(i + 1))
-            c.execute("INSERT INTO system_runs(id,job,started_at,finished_at,ok,result,runs) VALUES(?,?,?,?,?,?,1)",
-                      (f"sr{i}", "kpi_asks", at, at, ok, "Asked 2" if ok else "Mail down"))
+            c.execute(
+                "INSERT INTO system_runs(id,job,started_at,finished_at,ok,result,runs) VALUES(?,?,?,?,?,?,1)",
+                (f"sr{i}", "kpi_asks", at, at, ok, "Asked 2" if ok else "Mail down"),
+            )
     runs = get(api, "automations/runs?range=1h&trigger=system")["runs"]
-    assert [(r["id"], r["status"], r["outcome"]) for r in runs] == [("sys_sr0", "ok", "Asked 2"),
-                                                                    ("sys_sr1", "failed", "Mail down")]
+    assert [(r["id"], r["status"], r["outcome"]) for r in runs] == [
+        ("sys_sr0", "ok", "Asked 2"),
+        ("sys_sr1", "failed", "Mail down"),
+    ]
     stats = {s["id"]: s for s in get(api, "automations/stats?range=1h")["automations"]}
     assert (stats["auto_sys"]["runs"], stats["auto_sys"]["failed"]) == (2, 1)
     own = get(api, "automations/auto_sys/runs?limit=1")
@@ -128,42 +160,146 @@ def test_folded_system_runs_count_each_repeat_where_it_happened(api):
     import sqlite3
 
     from backend import system_routines as SR
-    flow = {"name": "Health", "owner": "person:ana", "builtin": True, "readonly": True, "enabled": True,
-            "trigger": {"type": "event", "name": "tico.builtin.job.health_monitor"}, "steps": [],
-            "source": {"kind": "system_job", "id": "job:health_monitor"}}
+
+    flow = {
+        "name": "Health",
+        "owner": "person:ana",
+        "builtin": True,
+        "readonly": True,
+        "enabled": True,
+        "trigger": {"type": "event", "name": "tico.builtin.job.health_monitor"},
+        "steps": [],
+        "source": {"kind": "system_job", "id": "job:health_monitor"},
+    }
     now = H.now()
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO automations(id,name,owner_id,trigger_type,enabled,builtin,flow,version,created_at,"
-                  "created_by_id,updated_at) VALUES('auto_hm','Health','person:ana','event',1,1,?,1,?,?,?)",
-                  (json.dumps(flow), now, "human:ana", now))
+        c.execute(
+            "INSERT INTO automations(id,name,owner_id,trigger_type,enabled,builtin,flow,version,created_at,"
+            "created_by_id,updated_at) VALUES('auto_hm','Health','person:ana','event',1,1,?,1,?,?,?)",
+            (json.dumps(flow), now, "human:ana", now),
+        )
         # Saved through the job registry: a fold keeps first_started and moves started.
-        first = SR.save(c, SR.Run("health_monitor", started=H.shift(now, hours=-30)).did("All well", quiet=True),
-                        finished=H.shift(now, hours=-30))
-        assert SR.save(c, SR.Run("health_monitor", started=H.shift(now, hours=-29)).did("All well", quiet=True),
-                       finished=H.shift(now, hours=-29)) == first
+        first = SR.save(
+            c,
+            SR.Run("health_monitor", started=H.shift(now, hours=-30)).did("All well", quiet=True),
+            finished=H.shift(now, hours=-30),
+        )
+        assert (
+            SR.save(
+                c,
+                SR.Run("health_monitor", started=H.shift(now, hours=-29)).did("All well", quiet=True),
+                finished=H.shift(now, hours=-29),
+            )
+            == first
+        )
         row = c.execute("SELECT first_started_at, started_at, runs FROM system_runs WHERE id=?", (first,)).fetchone()
-        assert (row["first_started_at"], row["runs"]) == (H.shift(now, hours=-30), 2) and row["started_at"] > row["first_started_at"]
+        assert (row["first_started_at"], row["runs"]) == (H.shift(now, hours=-30), 2) and row["started_at"] > row[
+            "first_started_at"
+        ]
         # One a hour for a day: 24 repeats from 23h ago to 30 s ago.
         last = H.shift(now, seconds=-30)
-        c.execute("INSERT INTO system_runs(id,job,started_at,first_started_at,finished_at,ok,result,runs) "
-                  "VALUES('hm1','health_monitor',?,?,?,1,'All well',24)", (last, H.shift(last, hours=-23), last))
+        c.execute(
+            "INSERT INTO system_runs(id,job,started_at,first_started_at,finished_at,ok,result,runs) "
+            "VALUES('hm1','health_monitor',?,?,?,1,'All well',24)",
+            (last, H.shift(last, hours=-23), last),
+        )
         # Three failures folded over 20 minutes, and an older row without first_started (counts once).
-        c.execute("INSERT INTO system_runs(id,job,started_at,first_started_at,finished_at,ok,result,runs) "
-                  "VALUES('hm2','health_monitor',?,?,?,0,'Mail down',3)",
-                  (H.shift(now, minutes=-2), H.shift(now, minutes=-22), H.shift(now, minutes=-2)))
-        c.execute("INSERT INTO system_runs(id,job,started_at,finished_at,ok,result,runs) "
-                  "VALUES('hm3','health_monitor',?,?,1,'All well',5)", (H.shift(now, hours=-3), H.shift(now, hours=-3)))
+        c.execute(
+            "INSERT INTO system_runs(id,job,started_at,first_started_at,finished_at,ok,result,runs) "
+            "VALUES('hm2','health_monitor',?,?,?,0,'Mail down',3)",
+            (H.shift(now, minutes=-2), H.shift(now, minutes=-22), H.shift(now, minutes=-2)),
+        )
+        c.execute(
+            "INSERT INTO system_runs(id,job,started_at,finished_at,ok,result,runs) "
+            "VALUES('hm3','health_monitor',?,?,1,'All well',5)",
+            (H.shift(now, hours=-3), H.shift(now, hours=-3)),
+        )
     hour = get(api, "automations/stats?range=1h")["automations"]
     hm = next(s for s in hour if s["id"] == "auto_hm")
-    assert (hm["runs"], hm["failed"]) == (4, 3)                 # one hourly repeat, three failures
+    assert (hm["runs"], hm["failed"]) == (4, 3)  # one hourly repeat, three failures
     day = next(s for s in get(api, "automations/stats?range=24h")["automations"] if s["id"] == "auto_hm")
-    assert (day["runs"], day["failed"]) == (28, 3)              # 24 + 3 + 1; the 30h-old row is outside
+    assert (day["runs"], day["failed"]) == (28, 3)  # 24 + 3 + 1; the 30h-old row is outside
     assert max(b["ok"] for b in day["buckets"]) <= 3, "spread over the day, not piled in the last hour"
     # The Runs tab keeps one row per folded record, with its count.
     runs = {r["id"]: r for r in get(api, "automations/runs?range=1h&trigger=system")["runs"]}
     assert runs["sys_hm1"]["count"] == 24 and runs["sys_hm2"]["count"] == 3
     # A database made before first_started gains it.
     old = sqlite3.connect(":memory:")
-    old.execute("CREATE TABLE system_runs(id TEXT PRIMARY KEY, job TEXT NOT NULL, started_at TEXT NOT NULL, runs INTEGER)")
+    old.execute(
+        "CREATE TABLE system_runs(id TEXT PRIMARY KEY, job TEXT NOT NULL, started_at TEXT NOT NULL, runs INTEGER)"
+    )
     SR.ensure(old)
     assert "first_started_at" in {r[1] for r in old.execute("PRAGMA table_info(system_runs)")}
+
+
+def _maint_run(api, minutes_ago, ok=1, trigger="schedule", cost=0.0, finished=True):
+    rid = H.new_id()
+    started = H.shift(H.now(), minutes=-minutes_ago)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO maintenance_runs(id,occurrence_key,trigger,started_at,heartbeat_at,finished_at,ok,result,cost_usd) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                rid,
+                "k-" + rid,
+                trigger,
+                started,
+                started,
+                started if finished else None,
+                ok if finished else None,
+                "2 ran" if ok else "Find stuck failed",
+                cost,
+            ),
+        )
+    return rid
+
+
+def test_maintenance_runs_are_listed_and_counted_under_its_row(api):
+    ops = _make(api, "Ops", "bot:ops")
+    _run(api, ops, "ok", 3)
+    ran = _maint_run(api, 1, cost=0.25)
+    bad = _maint_run(api, 2, ok=0, trigger="run_now")
+    live = _maint_run(api, 0, finished=False)
+    rows = {r["id"]: r for r in get(api, "automations/runs?range=1h")["runs"]}
+    assert rows["mnt_" + ran]["automation_id"] == "maintenance" and rows["mnt_" + ran]["status"] == "ok"
+    assert rows["mnt_" + ran]["outcome"] == "2 ran" and rows["mnt_" + ran]["cost"] == 0.25
+    assert rows["mnt_" + bad]["status"] == "failed" and rows["mnt_" + bad]["started_by"] == "Run now"
+    assert rows["mnt_" + live]["status"] == "running"
+    member = get(api, "automations/runs?range=1h", "ben-test")["runs"]
+    assert {r["id"] for r in member} >= {"mnt_" + ran, "mnt_" + bad}, "anyone signed in sees Maintenance"
+    failed = get(api, "automations/runs?range=1h&status=failed")["runs"]
+    assert [r["id"] for r in failed if r["automation_id"] == "maintenance"] == ["mnt_" + bad]
+    running = get(api, "automations/runs?range=1h&status=running")["runs"]
+    assert [r["id"] for r in running if r["automation_id"] == "maintenance"] == ["mnt_" + live]
+    assert not [
+        r for r in get(api, "automations/runs?range=1h&status=waiting")["runs"] if r["automation_id"] == "maintenance"
+    ]
+    assert not [
+        r for r in get(api, f"automations/runs?range=1h&ids={ops}")["runs"] if r["automation_id"] == "maintenance"
+    ]
+    assert [r for r in get(api, "automations/runs?range=1h&ids=maintenance")["runs"]] and all(
+        r["automation_id"] == "maintenance" for r in get(api, "automations/runs?range=1h&ids=maintenance")["runs"]
+    )
+    assert not [
+        r for r in get(api, "automations/runs?range=1h&trigger=event")["runs"] if r["automation_id"] == "maintenance"
+    ]
+    assert [
+        r for r in get(api, "automations/runs?range=1h&trigger=system")["runs"] if r["automation_id"] == "maintenance"
+    ]
+    assert not [
+        r for r in get(api, "automations/runs?range=1h&owner=bot:ops")["runs"] if r["automation_id"] == "maintenance"
+    ]
+    # Pages cross both logs in one order.
+    seen, before = [], ""
+    for _ in range(10):
+        page = get(api, "automations/runs?range=1h&limit=1" + (f"&before={before}" if before else ""))
+        seen += [r["id"] for r in page["runs"]]
+        if not page["next"]:
+            break
+        before = page["next"]
+    assert seen == [r["id"] for r in get(api, "automations/runs?range=1h")["runs"]]
+    stats = get(api, "automations/stats?range=1h")
+    mt = next(s for s in stats["automations"] if s["id"] == "maintenance")
+    assert mt["runs"] == 3 and mt["failed"] == 1 and mt["cost"] == 0.25
+    assert sum(b["ok"] + b["failed"] for b in mt["buckets"]) == 3
+    assert stats["totals"]["runs"] == sum(s["runs"] for s in stats["automations"])

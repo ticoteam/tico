@@ -10,6 +10,7 @@ all K. After a claim the computer completes that run and its bot gets a new chat
 The idle claim is a computer whose K bots have nothing queued. "older" is a computer that does not advertise
 browser_exit_v1, so the claim reads each bot's browser exit; "current" advertises it, as the runner does.
 """
+
 import contextlib
 import hashlib
 import statistics
@@ -17,14 +18,21 @@ import time
 
 from backend import bot_settings as BS
 from backend.store import H
-from backend.tests import test_api
-from backend.tests.test_api import assign, headers, post, ready, runner
+from backend.tests.helpers.api import assign, headers, post, ready, runner
 
-api = test_api.api                                   # the fixture, bound so that tests can take it
 KS = (5, 20, 50)
 RUNS = 50
-CURRENT = ["task_lanes_v2", "session_roots_v1", "task_goals_v1", "capacity_continue_v1", "source_continue_v1",
-           "turns_at_once_v1", "private_lanes_v1", "browser_exit_v1", "threads_v1"]
+CURRENT = [
+    "task_lanes_v2",
+    "session_roots_v1",
+    "task_goals_v1",
+    "capacity_continue_v1",
+    "source_continue_v1",
+    "turns_at_once_v1",
+    "private_lanes_v1",
+    "browser_exit_v1",
+    "threads_v1",
+]
 OLDER = [cap for cap in CURRENT if cap != "browser_exit_v1"]
 
 
@@ -32,8 +40,11 @@ def seed(api, prefix, count, capabilities, queued):
     store = api.app.state.store
     slugs = [f"{prefix}-{n:02d}" for n in range(count)]
     with store.transaction() as c:
-        H.sync_registry(c, {s: {"name": s, "runtime": "fake", "status": "active"} for s in slugs},
-                        {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
+        H.sync_registry(
+            c,
+            {s: {"name": s, "runtime": "fake", "status": "active"} for s in slugs},
+            {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]},
+        )
         for s in slugs:
             c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (s,))
             BS.write(c, s, {"name": s, "runtime": "fake"})
@@ -65,6 +76,7 @@ def traced(api):
                 yield c
             finally:
                 c.set_trace_callback(None)
+
     store.read = borrowed
     try:
         yield seen
@@ -79,8 +91,9 @@ def claim(api, machine, cold=False):
         store.roster_rows.clear()
     with traced(api) as seen:
         start = time.perf_counter()
-        response = api.post("/api/v2/jobs/claim", json={"bot": None, "start_places": True},
-                            headers=headers(machine["token"]))
+        response = api.post(
+            "/api/v2/jobs/claim", json={"bot": None, "start_places": True}, headers=headers(machine["token"])
+        )
         wall = time.perf_counter() - start
     assert response.status_code == 200, response.text
     return response.json(), len(seen), wall
@@ -109,8 +122,11 @@ def measure(api, label, machine, slugs, runs):
         else:
             chat(api, handed[-1])
     digest = hashlib.sha1(" ".join(handed).encode()).hexdigest()[:12]
-    print(f"{label:<26} statements={min(counts)}..{max(counts)} median_ms={statistics.median(walls) * 1000:8.2f} "
-          f"handed={runs - len(empty):<3} digest={digest}", flush=True)
+    print(
+        f"{label:<26} statements={min(counts)}..{max(counts)} median_ms={statistics.median(walls) * 1000:8.2f} "
+        f"handed={runs - len(empty):<3} digest={digest}",
+        flush=True,
+    )
     if empty:
         print(f"  {len(empty)} claims handed nothing; first answer: {str(empty[0])[:300]}", flush=True)
     return counts
@@ -121,11 +137,14 @@ def test_claim_statements_and_time_by_assigned_bots(api):
         for k in KS:
             machine, slugs = seed(api, f"{kind[0]}{k}", k, capabilities, queued=True)
             answer, statements, _ = claim(api, machine, cold=True)
-            assert answer.get("attempt"), answer            # the work path hands out a run, not an idle answer
+            assert answer.get("attempt"), answer  # the work path hands out a run, not an idle answer
             chat(api, finish(api, machine, answer))
             measure(api, f"work {kind} K={k}", machine, slugs, RUNS)
             idle, idle_slugs = seed(api, f"i{kind[0]}{k}", k, capabilities, queued=False)
             _, idle_statements, _ = claim(api, idle, cold=True)
             idle_walls = [claim(api, idle)[2] for _ in range(RUNS)]
-            print(f"{'idle ' + kind + ' K=' + str(k):<26} statements={idle_statements:<5} "
-                  f"median_ms={statistics.median(idle_walls) * 1000:8.2f}", flush=True)
+            print(
+                f"{'idle ' + kind + ' K=' + str(k):<26} statements={idle_statements:<5} "
+                f"median_ms={statistics.median(idle_walls) * 1000:8.2f}",
+                flush=True,
+            )

@@ -9,19 +9,19 @@ in step 1 instead of the server's own address.
 
 ## 1. Make the incoming webhook in Tico
 
-In Settings → Webhooks → Incoming, add a webhook named *GitHub issues* with the id `github`. Or:
+In Automations → Incoming webhooks, add a webhook named *GitHub issues* with the id `github`. Or:
 
 ```
-hub trigger create "GitHub issues" --id github
+tico trigger create "GitHub issues" --id github
 ```
 
 Copy the address it shows, `https://tico.example.com/api/v2/hooks/github/<secret>`. It is shown once. (For the Gateway address:
-`hub trigger relay create github`.)
+`tico trigger relay create github`.)
 
 ## 2. Turn on signature checking
 
 ```
-hub trigger sign github --preset github
+tico trigger sign github --preset github
 ```
 
 Tico prints a signing secret once. Copy it. This makes Tico refuse any call that GitHub did not sign with that secret.
@@ -46,7 +46,7 @@ GitHub puts the kind of event in a header (`Issues`) and what happened in the bo
 preset reads the header. To act on *opened* only, read the body instead:
 
 ```
-hub trigger update github --type-from /action
+tico trigger update github --type-from /action
 ```
 
 Because this webhook only gets Issues events, the type is now one of `opened`, `closed`, `reopened`, `edited`, `labeled` and so on.
@@ -56,7 +56,7 @@ Because this webhook only gets Issues events, the type is now one of `opened`, `
 On the Automations page, add an automation with the Webhook trigger *GitHub issues*, or:
 
 ```
-hub automation create --file - <<'EOF'
+tico automation create --file - <<'EOF'
 {"name": "New GitHub issue", "owner": "bot:ops", "enabled": true,
  "trigger": {"type": "webhook", "id": "github",
              "filters": [{"field": "webhook.type", "op": "is", "value": "opened"}]},
@@ -77,7 +77,7 @@ and, fenced as data, the start of the call. If it does not wake:
 
 - Open **Recent calls**. No row means GitHub never reached Tico. A refused row means the signature or address is wrong.
 - A row marked accepted with no result means nothing matched. Open it with **View payload** and compare `type` to the
-  automation's filter (`hub automation runs <id>` shows its runs).
+  automation's filter (`tico automation runs <id>` shows its runs).
 - Fix the automation, then use **Run again** on that row. Do not use GitHub's *Redeliver*: it reuses the delivery id, which Tico treats
   as a duplicate for 30 days.
 
@@ -87,4 +87,4 @@ and, fenced as data, the start of the call. If it does not wake:
   webhook on the repository instead of the organization.
 - Start a task instead of a wake: use a Bot turn step instead of the action. See [Routines](routines.md). Without a filter it
   opens a task for every call, so keep the GitHub event list short.
-- Read a long body: the bot runs `hub trigger delivery github <delivery> --part 2`.
+- Read a long body: the bot runs `tico trigger delivery github <delivery> --part 2`.

@@ -1,11 +1,9 @@
 """The stall verdicts a quiet task's last read left: the table, and the class the Task Manager shows for a task.
 
 Decide used to read a quiet task once per stand and record what it was (waiting on someone, finished but unmarked,
-stuck, or unsure). Nothing reads tasks that way now: the task roundup (backend/task_roundup.py) lists quiet work, so no
-verdict is written. Existing verdicts stay for the Task Manager, which shows one only while the task still stands as it
-did when it was read (class_of).
+stuck, or unsure). Nothing reads tasks that way now, and no verdict is written: the never-stuck check says what a
+quiet task waits on.
 """
-from .store import H
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS stall_triage(
@@ -22,12 +20,6 @@ def verdict_of(c, task_id):
 
 
 def class_of(c, row):
-    """The class Decide gave this task at the way it stands now (`unsure` or `stuck`, the two a person may still have to
-    act on), or None: no verdict, or the task changed since. For the Task Manager's quiet-task items."""
-    try:
-        found = verdict_of(c, row["id"])
-        if found and found["class"] in (UNSURE, STUCK) and found["stand"] == H._stall_stand(c, row):
-            return found["class"]
-    except Exception:       # noqa: BLE001 - a missing table or an unreadable task is no class
-        pass
+    """None: a verdict was kept only while the task stood as it did when it was read, and the engine's tasks are never
+    read that way (the never-stuck check says what a quiet task waits on). Kept until the Task Manager stops asking."""
     return None
