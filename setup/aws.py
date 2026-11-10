@@ -865,8 +865,21 @@ class Deployer:
             self.say(f"  launched {iid}")
         self.ec2.get_waiter("instance_running").wait(InstanceIds=[iid])
         if prep["alloc"]:
-            self.ec2.associate_address(AllocationId=prep["alloc"], InstanceId=iid, AllowReassociation=True)
+            self.associate(prep["alloc"], iid)
         return iid, created
+
+    def associate(self, alloc: str, iid: str) -> None:
+        if not self.n.install_id:  # an install saved before ids: as before
+            self.ec2.associate_address(AllocationId=alloc, InstanceId=iid, AllowReassociation=True)
+            return
+        rows = self.ec2.describe_addresses(Filters=self.n.filters(self.p.name))["Addresses"]
+        at = next((a.get("InstanceId") or "" for a in rows if a["AllocationId"] == alloc), "")
+        if at and at != iid:  # never taken from another server: AWS refuses the call too, without AllowReassociation
+            raise MissingInput(
+                f"Elastic IP {alloc} is attached to {at}, which is not this install's server; refusing to move it."
+            )
+        if not at:
+            self.ec2.associate_address(AllocationId=alloc, InstanceId=iid)
 
     def wait_ready(self, timeout: int = 1200) -> bool:
         """Waits for the SSM agent and the bootstrap script to finish."""
@@ -966,26 +979,34 @@ def addresses(ec2, name: str, names: Names = DEFAULT_NAMES) -> set[str]:
     return out
 
 
-def foreign_volumes(ec2, instance_ids: list[str], name: str, names: Names = DEFAULT_NAMES) -> list[str]:
-    """The volumes that terminating these instances would delete (DeleteOnTermination) but that lack both tags: someone
-    attached them, so terminating would delete what setup did not make."""
+def foreign_attached(ec2, instance_ids: list[str], name: str, names: Names) -> list[str]:
+    """The volumes and network interfaces that terminating these instances would delete (DeleteOnTermination) but that
+    lack this install's tags: someone attached them, so terminating would delete what setup did not make."""
     if not instance_ids:
         return []
-    r = ec2.describe_volumes(Filters=[{"Name": "attachment.instance-id", "Values": list(instance_ids)}])
-    return [
+    flt = [{"Name": "attachment.instance-id", "Values": list(instance_ids)}]
+    vols = [
         v["VolumeId"]
-        for v in r["Volumes"]
+        for v in ec2.describe_volumes(Filters=flt)["Volumes"]
         if any(a.get("InstanceId") in instance_ids and a.get("DeleteOnTermination") for a in v.get("Attachments", []))
         and not names.is_ours(v.get("Tags"), name)
     ]
+    enis = [
+        n["NetworkInterfaceId"]
+        for n in ec2.describe_network_interfaces(Filters=flt)["NetworkInterfaces"]
+        if (n.get("Attachment") or {}).get("InstanceId") in instance_ids
+        and n["Attachment"].get("DeleteOnTermination")
+        and not names.is_ours(n.get("TagSet"), name)
+    ]
+    return vols + enis
 
 
-def refuse_foreign_volumes(ec2, instance_ids: list[str], name: str, names: Names = DEFAULT_NAMES) -> None:
-    vols = foreign_volumes(ec2, instance_ids, name, names)
-    if vols:
+def refuse_foreign_attached(ec2, instance_ids: list[str], name: str, names: Names) -> None:
+    found = foreign_attached(ec2, instance_ids, name, names)
+    if found:
         raise MissingInput(
-            f"Terminating {', '.join(instance_ids)} would also delete {', '.join(vols)}, which this setup did not make "
-            "(attached with DeleteOnTermination, without its tags); refusing. Detach it, or turn off its "
+            f"Terminating {', '.join(instance_ids)} would also delete {', '.join(found)}, which this setup did not make "
+            "(attached with DeleteOnTermination, without this install's tags); refusing. Detach it, or turn off its "
             "DeleteOnTermination, then run destroy again."
         )
 
@@ -1000,28 +1021,89 @@ def destroy(
     dns_done: bool = False,
     names: Names = DEFAULT_NAMES,
     name: str = "",
+    ids: dict | None = None,
 ) -> None:
+    """Deletes what discover found. With an install id, each resource is read again right before its delete, in order,
+    and deleted only while it carries the install's tags and is the one the install recorded (ids); anything else is
+    left alone and named. Without one (an install saved before ids, or none on this computer): as before."""
+    if names.install_id:
+        _destroy_install(ec2, iam, ssm, found, say, sleep, names, name, ids or {})
+        say("  done." if dns_done else "  done. DNS records were not touched; remove them at your DNS provider.")
+        return
     if found.get("instance"):
-        if name:  # read again right before the terminate call
-            refuse_foreign_volumes(ec2, found["instance"], name, names)
         ec2.terminate_instances(InstanceIds=found["instance"])
         say("  waiting for the instance to terminate ...")
         ec2.get_waiter("instance_terminated").wait(InstanceIds=found["instance"])
     for a in found.get("elastic-ip", []):
         ec2.release_address(AllocationId=a)
     for g in found.get("security-group", []):
-        for attempt in range(6):  # the network interface lingers briefly after termination
-            try:
-                ec2.delete_security_group(GroupId=g)
-                break
-            except Exception:
-                if attempt == 5:
-                    raise
-                sleep(5)
+        _delete_sg(ec2, g, sleep)
+    for n in found.get("iam-role", []):
+        try:
+            iam.remove_role_from_instance_profile(InstanceProfileName=n, RoleName=n)
+            iam.delete_instance_profile(InstanceProfileName=n)
+        except iam.exceptions.NoSuchEntityException:
+            pass
+        iam.detach_role_policy(RoleName=n, PolicyArn=SSM_CORE)
+        iam.delete_role_policy(RoleName=n, PolicyName=names.role_policy)
+        iam.delete_role(RoleName=n)
+    for p in found.get("ssm-parameter", []):
+        ssm.delete_parameter(Name=p)
+    say("  done." if dns_done else "  done. DNS records were not touched; remove them at your DNS provider.")
+
+
+def _delete_sg(ec2, g: str, sleep) -> None:
+    for attempt in range(6):  # the network interface lingers briefly after termination
+        try:
+            ec2.delete_security_group(GroupId=g)
+            return
+        except Exception:
+            if attempt == 5:
+                raise
+            sleep(5)
+
+
+def _destroy_install(ec2, iam, ssm, found, say, sleep, names: Names, name: str, ids: dict) -> None:
+    def left(what: str, why: str = "is no longer this install's (its tags or id changed since it was listed)") -> None:
+        say(f"  left alone: {what} {why}.")
+
+    def still(kind: str, rid: str, rows: list[dict], key: str) -> dict | None:
+        """The row for rid, read just now, while it carries the install's tags and is the one recorded."""
+        row = next((r for r in rows if r.get(key) == rid), None)
+        ok = row is not None and names.is_ours(row.get("Tags"), name) and ids.get(kind, rid) == rid
+        return row if ok else None
+
+    live = ["pending", "running", "stopping", "stopped"]
+    flt = names.filters(name)
+    insts = []
+    if found.get("instance"):
+        r = ec2.describe_instances(Filters=flt + [{"Name": "instance-state-name", "Values": live}])
+        rows = [i for res in r["Reservations"] for i in res["Instances"]]
+        for i in found["instance"]:
+            (insts.append(i) if still("instance", i, rows, "InstanceId") else left(f"instance {i}"))
+    if insts:
+        refuse_foreign_attached(ec2, insts, name, names)
+        ec2.terminate_instances(InstanceIds=insts)
+        say("  waiting for the instance to terminate ...")
+        ec2.get_waiter("instance_terminated").wait(InstanceIds=insts)
+    for a in found.get("elastic-ip", []):
+        row = still("eip", a, ec2.describe_addresses(Filters=flt)["Addresses"], "AllocationId")
+        if not row:
+            left(f"Elastic IP {a}")
+        elif row.get("InstanceId") and row["InstanceId"] not in insts:
+            left(f"Elastic IP {a}", f"is attached to {row['InstanceId']}, which is not this install's server")
+        else:
+            ec2.release_address(AllocationId=a)
+    for g in found.get("security-group", []):
+        if still("sg", g, ec2.describe_security_groups(Filters=flt)["SecurityGroups"], "GroupId"):
+            _delete_sg(ec2, g, sleep)
+        else:
+            left(f"security group {g}")
     for n in found.get("iam-role", []):
         prof = instance_profile(iam, n)
-        if prof is not None and not profile_is_ours(prof, n, names):
-            say(f"  left alone: IAM instance profile {n} was not made by this setup; the role {n} stays with it.")
+        pid = (prof or {}).get("InstanceProfileId", "")
+        if prof is not None and not (profile_is_ours(prof, n, names) and ids.get("profile", pid) == pid):
+            left(f"IAM instance profile {n}", f"was not made by this install; the role {n} stays with it")
             continue
         try:
             if prof and any(r.get("RoleName") == n for r in prof.get("Roles") or []):
@@ -1030,18 +1112,32 @@ def destroy(
                 iam.delete_instance_profile(InstanceProfileName=n)
         except iam.exceptions.NoSuchEntityException:
             pass
-        try:  # read again right before the deletes: a role replaced since it was listed is left alone
-            now = iam.list_role_tags(RoleName=n)["Tags"]
-            mine = {t["Key"]: t["Value"] for t in now or []}.get(names.managed_tag[0]) == names.managed_tag[1]
-            still = names.is_ours(now, name) if name else mine
-        except iam.exceptions.NoSuchEntityException:
-            continue
-        if not still:
-            say(f"  left alone: IAM role {n} changed since it was listed and is no longer this setup's.")
-            continue
-        iam.detach_role_policy(RoleName=n, PolicyArn=SSM_CORE)
-        iam.delete_role_policy(RoleName=n, PolicyName=names.role_policy)
-        iam.delete_role(RoleName=n)
+        steps = (
+            (iam.detach_role_policy, {"RoleName": n, "PolicyArn": SSM_CORE}),
+            (iam.delete_role_policy, {"RoleName": n, "PolicyName": names.role_policy}),
+            (iam.delete_role, {"RoleName": n}),
+        )
+        for call, kw in steps:
+            # IAM has no conditional delete: the role is read again, by its tags and recorded RoleId, right before each.
+            try:
+                role = iam.get_role(RoleName=n)["Role"]
+            except iam.exceptions.NoSuchEntityException:
+                break
+            if not (
+                names.is_ours(role.get("Tags"), name) and ids.get("role", role.get("RoleId")) == role.get("RoleId")
+            ):
+                left(f"IAM role {n}")
+                break
+            try:
+                call(**kw)
+            except iam.exceptions.NoSuchEntityException:  # an interrupted install: the policy was never put or attached
+                pass
     for p in found.get("ssm-parameter", []):
-        ssm.delete_parameter(Name=p)
-    say("  done." if dns_done else "  done. DNS records were not touched; remove them at your DNS provider.")
+        try:  # read again right before the delete: a parameter replaced since it was listed is left alone
+            tags = ssm.list_tags_for_resource(ResourceType="Parameter", ResourceId=p)["TagList"]
+        except ssm.exceptions.InvalidResourceId:
+            continue
+        if names.is_ours(tags, name):
+            ssm.delete_parameter(Name=p)
+        else:
+            left(f"SSM parameter {p}")

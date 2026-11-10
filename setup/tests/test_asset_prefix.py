@@ -281,6 +281,8 @@ def test_backup_storage_for_an_install_saved_before_the_flag_keeps_its_old_backu
 HUB = aws.Names("hub")
 TICO_TAGS = [{"Key": "ManagedBy", "Value": "tico-setup"}, {"Key": "tico-setup-name", "Value": "hotmic"}]
 HUB_TAGS = [{"Key": "ManagedBy", "Value": "hub-setup"}, {"Key": "hub-setup-name", "Value": "hotmic"}]
+INSTALL = "0123456789abcdef"
+HUB_ID, TICO_ID = aws.Names("hub", INSTALL), aws.Names("tico", INSTALL)  # a new install's: tags carry its id
 
 
 def test_the_prefix_is_checked_and_a_saved_one_wins():
@@ -833,12 +835,10 @@ def test_a_name_other_than_the_domains_saved_one_is_refused_before_any_aws_call(
         code, out = go(argv, deps=d)
         assert code == 2 and msg in out and "Leave --name out or pass --name hotmic" in out, out
     assert (len(log), len(opened)) == before
-    # Saved before --name existed: an AWS install was named from its domain.
+    # Saved before install ids: destroy takes --name as it always has.
     state.save("old.example.com", {"domain": "old.example.com", "target": "aws", "aws_instance_id": "i-1"})
     code, out = go(["destroy", "--domain", "old.example.com", "--name", "hotmic", "--yes"], deps=d)
-    assert code == 2 and "old.example.com is set up with --name old-example-com" in out, out
-    code, out = go(["destroy", "--domain", "old.example.com", "--name", "old-example-com", "--yes"], deps=d)
-    assert code == 0 and "Nothing tagged" in out, out
+    assert code == 0 and "Nothing tagged ManagedBy=tico-setup, tico-setup-name=hotmic" in out, out
 
 
 READS = ("describe_", "list_", "get_", "head_")
@@ -891,14 +891,25 @@ def test_an_instance_profile_setup_did_not_make_is_refused_and_never_deleted(tmp
     iam.profiles["hub-hotmic"] = {"Tags": HUB_TAGS, "Roles": ["production-app"]}
     with pytest.raises(MissingInput, match="IAM instance profile hub-hotmic"):
         dep.ensure_role()
-    # Destroy deletes the role it made but leaves a profile it did not make.
-    for tags in ([], PRODUCTION, HUB_TAGS):
+    # Destroy leaves a profile its install did not make, and the role with it.
+    iam.roles["hub-hotmic"] = HUB_ID.tags("hotmic")
+    for tags in ([], PRODUCTION, HUB_TAGS, HUB_ID.tags("hotmic")):
         iam.calls.clear()
-        iam.profiles["hub-hotmic"] = {"Tags": tags, "Roles": ["production-app"] if tags == HUB_TAGS else []}
+        held = ["production-app"] if tags == HUB_ID.tags("hotmic") else []
+        iam.profiles["hub-hotmic"] = {"Tags": tags, "Roles": held}
         out = []
-        aws.destroy(ec2, iam, ssm, {"iam-role": ["hub-hotmic"]}, say=out.append, sleep=lambda s: None, names=HUB)
+        aws.destroy(
+            ec2,
+            iam,
+            ssm,
+            {"iam-role": ["hub-hotmic"]},
+            say=out.append,
+            sleep=lambda s: None,
+            names=HUB_ID,
+            name="hotmic",
+        )
         assert not iam.called("delete_instance_profile") and not iam.called("remove_role_from_instance_profile")
-        assert "left alone: IAM instance profile hub-hotmic was not made by this setup" in "\n".join(out)
+        assert "left alone: IAM instance profile hub-hotmic was not made by this install" in "\n".join(out)
 
 
 def test_a_profile_setup_made_without_its_role_gets_it_on_a_rerun():
@@ -1045,17 +1056,16 @@ def test_an_install_keeps_its_aws_account_and_region_and_destroy_never_guesses_t
     assert not [c for c, _ in log if not c.startswith(READS)]
 
 
-def test_destroy_without_a_saved_install_deletes_only_what_the_flags_name_in_full():
+def test_destroy_without_a_saved_install_id_works_as_before():
+    # Codex review 3, case 11: an older install's destroy, and HQ's state-free day-7 command, refused (dry run too).
+    # Without a saved install id, destroy fills in the name, prefix and region as it always has, and the dry run lists.
     d, ec2, iam, ssm = two_installs()
-    code, out = go(["destroy", "--name", "hotmic", "--yes"], deps=d)
-    assert code == 2 and "--asset-prefix, --name and --aws-region" in out, out
     state.save("old.example.com", {"domain": "old.example.com", "aws_name": "hotmic", "target": "aws"})  # no account
-    code, out = go(["destroy", "--domain", "old.example.com", "--yes"], deps=d)
-    assert code == 2 and "--asset-prefix, --name and --aws-region" in out, out
+    code, out = go(["destroy", "--domain", "old.example.com", "--dry-run"], deps=d)
+    assert code == 0 and "instance: i-tico" in out and "Dry run: nothing was deleted." in out, out
     assert deleted(ec2, iam, ssm)["instances"] == []
-    argv = ["destroy", "--name", "hotmic", "--asset-prefix", "tico", "--aws-region", "us-east-1", "--yes"]
-    code, out = go(argv, deps=d)
-    assert code == 0 and deleted(ec2, iam, ssm)["instances"] == ["i-tico"], out
+    code, out = go(["destroy", "--name", "hotmic", "--yes"], deps=d)
+    assert code == 0 and deleted(ec2, iam, ssm)["instances"] == ["i-tico"], out  # the default prefix's, never i-hub
 
 
 def test_an_install_saved_before_the_account_was_adopts_it_once_after_the_tag_proof(tmp_path):
@@ -1149,23 +1159,38 @@ def test_a_boto3_too_old_to_tag_a_bucket_at_creation_stops_before_making_one():
     assert "tico-setup-plans-x" not in s3.tagsets
 
 
-def test_destroy_never_terminates_an_instance_that_would_take_a_volume_setup_did_not_make():
+def saved_install(domain="x.example.com", prefix="tico", **extra):
+    """A whole install saved with an install id, as a new install saves it."""
+    rec = {"domain": domain, "target": "aws", "aws_name": "hotmic", "aws_region": "us-east-1", "asset_prefix": prefix}
+    state.save(domain, {**rec, "aws_account_id": ACCOUNT, "install_id": INSTALL, **extra})
+    return ["destroy", "--domain", domain, "--yes"]
+
+
+@pytest.mark.parametrize("kind", ["volume", "network interface"])
+def test_destroy_never_terminates_an_instance_that_would_take_something_setup_did_not_make(kind):
+    # Codex review 3, case 9: foreign network interfaces attached with DeleteOnTermination go with the instance too.
     d, ec2, iam, ssm = two_installs()
-    attached = lambda dot: [{"InstanceId": "i-tico", "DeleteOnTermination": dot}]  # noqa: E731
-    ec2.volumes = [
-        {"VolumeId": "vol-root", "Tags": TICO_TAGS, "Attachments": attached(True)},
-        {"VolumeId": "vol-prod", "Tags": PRODUCTION, "Attachments": attached(True)},
-        {"VolumeId": "vol-kept", "Tags": PRODUCTION, "Attachments": attached(False)},  # survives termination
-    ]
-    argv = ["destroy", "--name", "hotmic", "--asset-prefix", "tico", "--aws-region", "us-east-1", "--yes"]
-    code, out = go(argv, deps=d)
-    assert code == 2 and "vol-prod" in out and "vol-kept" not in out and "vol-root" not in out, out
-    assert deleted(ec2, iam, ssm)["instances"] == []
-    with pytest.raises(MissingInput, match="vol-prod"):  # and again right before the terminate call itself
-        aws.destroy(ec2, iam, ssm, {"instance": ["i-tico"]}, say=print, name="hotmic")
-    assert deleted(ec2, iam, ssm)["instances"] == []
-    ec2.volumes[1]["Attachments"] = attached(False)
-    assert go(argv, deps=d)[0] == 0 and deleted(ec2, iam, ssm)["instances"] == ["i-tico"]
+    ec2.instances[0]["Tags"] = TICO_ID.tags("hotmic")
+    attach = lambda dot: {"InstanceId": "i-tico", "DeleteOnTermination": dot}  # noqa: E731
+    ec2.volumes = [{"VolumeId": "vol-root", "Tags": TICO_ID.tags("hotmic"), "Attachments": [attach(True)]}]
+    ec2.enis = [{"NetworkInterfaceId": "eni-root", "TagSet": TICO_ID.tags("hotmic"), "Attachment": attach(True)}]
+    for dot, tags in ((True, PRODUCTION), (False, PRODUCTION), (True, TICO_TAGS)):  # TICO_TAGS: no install id
+        if kind == "volume":
+            ec2.volumes.append({"VolumeId": "vol-prod", "Tags": tags, "Attachments": [attach(dot)]})
+        else:
+            ec2.enis.append({"NetworkInterfaceId": "eni-prod", "TagSet": tags, "Attachment": attach(dot)})
+        argv = saved_install()
+        code, out = go(argv, deps=d)
+        prod = "vol-prod" if kind == "volume" else "eni-prod"
+        if dot:
+            assert code == 2 and prod in out and "root" not in out.split("would also delete")[-1], out
+            assert deleted(ec2, iam, ssm)["instances"] == []
+            with pytest.raises(MissingInput, match=prod):  # and again right before the terminate call itself
+                aws.destroy(ec2, iam, ssm, {"instance": ["i-tico"]}, say=print, names=TICO_ID, name="hotmic")
+        else:
+            assert code == 0 and deleted(ec2, iam, ssm)["instances"] == ["i-tico"], out
+            ec2.calls.clear()
+        ec2.volumes, ec2.enis = ec2.volumes[:1], ec2.enis[:1]
 
 
 def test_a_role_or_backup_user_replaced_between_the_proof_and_the_write_is_never_written():
@@ -1321,14 +1346,16 @@ def test_an_old_install_re_saved_keeps_the_backup_user_backup_storage_made_for_i
 
 def test_a_role_without_a_profile_or_beside_someone_elses_is_modelled_and_handled_apart():
     ec2, ssm = fakes.FakeEC2(), fakes.FakeSSM()
-    iam = fakes.FakeIAM(role_tags=HUB_TAGS, profile_tags=None)  # setup's role; its profile was never made
+    ours = HUB_ID.tags("hotmic")
+    iam = fakes.FakeIAM(role_tags=ours, profile_tags=None)  # setup's role; its profile was never made
     assert aws.instance_profile(iam, "hub-hotmic") is None
-    aws.destroy(ec2, iam, ssm, {"iam-role": ["hub-hotmic"]}, say=print, sleep=lambda s: None, names=HUB, name="hotmic")
+    kw = dict(say=print, sleep=lambda s: None, names=HUB_ID, name="hotmic")
+    aws.destroy(ec2, iam, ssm, {"iam-role": ["hub-hotmic"]}, **kw)
     assert iam.called("delete_role") == [{"RoleName": "hub-hotmic"}] and not iam.called("delete_instance_profile")
     with pytest.raises(fakes._Exc.NoSuchEntityException):
         iam.get_instance_profile(InstanceProfileName="hub-hotmic")  # still none: never made up from the role's tags
-    iam = fakes.FakeIAM(role_tags=HUB_TAGS, profile_tags=PRODUCTION)  # someone else's profile of that name
-    aws.destroy(ec2, iam, ssm, {"iam-role": ["hub-hotmic"]}, say=print, sleep=lambda s: None, names=HUB, name="hotmic")
+    iam = fakes.FakeIAM(role_tags=ours, profile_tags=PRODUCTION)  # someone else's profile of that name
+    aws.destroy(ec2, iam, ssm, {"iam-role": ["hub-hotmic"]}, **kw)
     assert not iam.called("delete_role") and not iam.called("delete_instance_profile")
     p = aws.plan_aws(domain=DOMAIN, front_door="caddy", region="us-west-2", name="hotmic", prefix="hub")
     dep = aws.Deployer(p, ec2, iam, ssm, ACCOUNT, say=print, sleep=lambda s: None)
@@ -1475,3 +1502,101 @@ def test_route53_refuses_a_delete_that_does_not_carry_the_whole_record_set():
             route53.delete(r53, "Z1", [partial])
     route53.delete(r53, "Z1", [{**rs, "Name": DOMAIN}])
     assert r53.records == []
+
+
+def id_install():
+    """two_installs, with the tico one made by a new install: every resource carries its install id."""
+    d, ec2, iam, ssm = two_installs()
+    ours = TICO_ID.tags("hotmic")
+    for rows in (ec2.instances, ec2.sgs, ec2.eips):
+        rows[0]["Tags"] = ours
+    iam.roles["tico-hotmic"], iam.profiles["tico-hotmic"]["Tags"] = ours, ours
+    ssm.params["/tico/hotmic/env"] = ours
+    return d, ec2, iam, ssm
+
+
+def test_destroy_reads_each_resource_again_right_before_deleting_it():
+    # Codex review 3, case 5: a parameter replaced after it was listed was deleted. Each resource is read again right
+    # before its delete, in order, and deleted only while it carries the install's tags and recorded id.
+    d, ec2, iam, ssm = id_install()
+    found = aws.discover(ec2, iam, ssm, "hotmic", TICO_ID)
+    assert found == {
+        "instance": ["i-tico"],
+        "elastic-ip": ["eip-tico"],
+        "security-group": ["sg-tico"],
+        "iam-role": ["tico-hotmic"],
+        "ssm-parameter": ["/tico/hotmic/env"],
+    }
+    ssm.params["/tico/hotmic/env"] = PRODUCTION  # replaced since it was listed
+    ec2.sgs[0]["Tags"] = TICO_TAGS  # retagged without the install id
+    out = []
+    ids = {"eip": "eip-other"}  # the install recorded another allocation
+    aws.destroy(ec2, iam, ssm, found, say=out.append, sleep=lambda s: None, names=TICO_ID, name="hotmic", ids=ids)
+    gone = deleted(ec2, iam, ssm)
+    assert gone["params"] == gone["sgs"] == gone["eips"] == [] and gone["instances"] == ["i-tico"]
+    assert gone["roles"] == ["tico-hotmic"]
+    said = "\n".join(out)
+    for what in ("SSM parameter /tico/hotmic/env", "security group sg-tico", "Elastic IP eip-tico"):
+        assert f"left alone: {what}" in said, said
+    # A role replaced (same tags, another RoleId) after the first delete step keeps its policies.
+    d, ec2, iam, ssm = id_install()
+    real = iam.detach_role_policy
+
+    def replaced(**kw):
+        real(**kw)
+        iam.roles["tico-hotmic"] = {"RoleId": "AROAPRODUCTION", "Tags": TICO_ID.tags("hotmic")}
+
+    iam.detach_role_policy = replaced
+    out = []
+    ids = {"role": "AROAtico-hotmic"}
+    aws.destroy(ec2, iam, ssm, {"iam-role": ["tico-hotmic"]}, say=out.append, names=TICO_ID, name="hotmic", ids=ids)
+    assert not iam.called("delete_role_policy") and not iam.called("delete_role")
+    assert "left alone: IAM role tico-hotmic" in "\n".join(out)
+
+
+def test_destroy_finishes_an_install_interrupted_before_its_inline_policy():
+    # Codex review 3, case 14: deleting an inline policy the role never got raises NoSuchEntity, as IAM does.
+    d, ec2, iam, ssm = id_install()
+    iam.no_policy.add("tico-hotmic")
+    with pytest.raises(fakes._Exc.NoSuchEntityException):
+        iam.delete_role_policy(RoleName="tico-hotmic", PolicyName="tico-env")
+    code, out = go(saved_install(), deps=d)
+    assert code == 0 and deleted(ec2, iam, ssm)["roles"] == ["tico-hotmic"], out
+    assert deleted(ec2, iam, ssm)["params"] == ["/tico/hotmic/env"]
+
+
+def test_an_elastic_ip_attached_to_another_server_is_never_moved_or_released():
+    # Codex review 3, case 10: a setup-tagged address since attached to a production server was taken back with
+    # AllowReassociation=True. Its attachment is checked; the call never forces it.
+    p = aws.plan_aws(domain="a.example", front_door="caddy", region="us-east-1", name="hotmic", install_id=INSTALL)
+    ec2 = fakes.FakeEC2()
+    ec2.eips = [{"AllocationId": "eip-tico", "PublicIp": "203.0.113.9", "Tags": TICO_ID.tags("hotmic")}]
+    ec2.eips[0]["InstanceId"] = "i-production"
+    dep = aws.Deployer(p, ec2, fakes.FakeIAM(), fakes.FakeSSM(), ACCOUNT, say=print, sleep=lambda s: None)
+    with pytest.raises(MissingInput, match="attached to i-production"):
+        dep.associate("eip-tico", "i-tico")
+    assert not ec2.called("associate_address")
+    del ec2.eips[0]["InstanceId"]
+    dep.associate("eip-tico", "i-tico")
+    assert ec2.called("associate_address") == [{"AllocationId": "eip-tico", "InstanceId": "i-tico"}]
+    # Destroy leaves it too.
+    d, ec2, iam, ssm = id_install()
+    ec2.eips[0]["InstanceId"] = "i-production"
+    code, out = go(saved_install(), deps=d)
+    assert code == 0 and "left alone: Elastic IP eip-tico is attached to i-production" in out, out
+    assert deleted(ec2, iam, ssm)["eips"] == []
+
+
+def test_a_role_replaced_with_the_same_tags_gets_no_write_on_a_re_run(tmp_path):
+    # Codex review 3, case 7: the RoleId captured in preflight was dropped with its Deployer. It is saved with the
+    # install now, and every run and destroy compares it.
+    d, ec2, iam, ssm, s3, log = hub_world()
+    argv = hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic")
+    assert go(argv, deps=d)[0] == 0
+    saved = state.load(DOMAIN)[0]
+    assert saved["aws_ids"]["role"] == "AROANEWhub-hotmic" and saved["aws_ids"]["instance"] == "i-1"
+    iam.roles["hub-hotmic"] = {"RoleId": "AROAREPLACED", "Tags": iam.roles["hub-hotmic"]["Tags"]}
+    before = len(iam.called("put_role_policy"))
+    code, out = go(argv, deps=d)
+    assert code == 2 and "IAM role hub-hotmic" in out, out
+    assert len(iam.called("put_role_policy")) == before and not iam.called("attach_role_policy")[1:]

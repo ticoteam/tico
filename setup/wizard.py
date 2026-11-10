@@ -1448,21 +1448,20 @@ def destroy(args, io: IO, deps: Deps) -> int:
     if saved.get("target") in cloudmod.PROVIDERS:
         return _destroy_hint(io, saved)
     domain = (args.domain or "").lower()
-    if domain:
+    install_id = saved.get("install_id", "")
+    names = awsmod.Names(awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved), install_id)
+    if install_id:  # a whole saved install: its own name, prefix, region, account and ids, nothing else
         awsmod.check_name(args.name, awsmod.saved_name(saved), domain)
-    given_prefix = getattr(args, "asset_prefix", None)
-    names = awsmod.Names(awsmod.asset_prefix(given_prefix, saved), saved.get("install_id", ""))
-    had_account = saved.get("aws_account_id", "")
-    if had_account:  # a whole saved install: its own name, prefix, region and account, nothing else
         awsmod.check_region(saved.get("aws_region", ""), args.aws_region, domain)
         name, region = awsmod.saved_name(saved), saved["aws_region"]
-    else:
+    else:  # an install saved before ids, or none on this computer: as before
         name = args.name or awsmod.saved_name(saved) or (awsmod.slug(domain) if domain else "")
         region = args.aws_region or saved.get("aws_region") or os.environ.get("AWS_REGION") or "us-east-1"
     if not name:
         raise MissingInput("Pass --domain or --name")
     ec2, iam, ssm, account = deps.aws_clients(region, args.aws_profile or saved.get("aws_profile", ""))
-    awsmod.check_account(had_account, account, domain)
+    if install_id:
+        awsmod.check_account(saved.get("aws_account_id", ""), account, domain)
     found = awsmod.discover(ec2, iam, ssm, name, names)
     if not found:
         io.say(f"Nothing tagged {names.managed_tag[0]}={names.managed_tag[1]}, {names.name_tag}={name} in {region}.")
@@ -1471,14 +1470,8 @@ def destroy(args, io: IO, deps: Deps) -> int:
     for kind, ids in found.items():
         for i in ids:
             io.say(f"  {kind}: {i}")
-    awsmod.refuse_foreign_volumes(ec2, found.get("instance", []), name, names)
-    if not had_account and not (args.name and given_prefix and args.aws_region):
-        # No saved install says which account, region, prefix and name are its own: never filled in by a default.
-        raise MissingInput(
-            ("No saved install for " + domain + " records" if domain else "No saved install records")
-            + " its AWS account and region, so setup will not guess what to delete. Pass --asset-prefix, --name and "
-            "--aws-region naming exactly the install to delete; only what carries its tags is deleted."
-        )
+    if install_id:
+        awsmod.refuse_foreign_attached(ec2, found.get("instance", []), name, names)
     records = None
     if getattr(args, "dns", False):
         records = _dns_to_delete(io, args, saved, deps, awsmod.addresses(ec2, name, names))
@@ -1501,7 +1494,16 @@ def destroy(args, io: IO, deps: Deps) -> int:
         route53.delete(client, zid, sets, names)  # first: the name never points at an address AWS may give someone else
         io.say("  DNS records deleted.")
     awsmod.destroy(
-        ec2, iam, ssm, found, say=io.say, sleep=deps.sleep, dns_done=records is not None, names=names, name=name
+        ec2,
+        iam,
+        ssm,
+        found,
+        say=io.say,
+        sleep=deps.sleep,
+        dns_done=records is not None,
+        names=names,
+        name=name,
+        ids=saved.get("aws_ids") or {},
     )
     return 0
 

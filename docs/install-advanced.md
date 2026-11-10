@@ -85,11 +85,19 @@ python3 -m setup destroy --domain tico.example.com             # asks you to typ
 ```
 
 An install keeps the AWS account and region it was made in: a later run, `runner`, `backup-storage` or `destroy` with
-credentials for another account, or another `--aws-region`, is refused before anything changes (an install saved
-before this takes the account it runs in once its tags check out). Without a saved install that records them, destroy
-fills nothing in by default: it deletes only with `--asset-prefix`, `--name` and `--aws-region` all given.
+credentials for another account, or another `--aws-region`, is refused before anything changes. Without a saved
+install id (an install from before them, or a destroy run on another computer), destroy finds what carries the two
+tags for `--name` (or the domain's name), the prefix and `--aws-region` (default `us-east-1`), as it always has.
 
-Destroy deletes the instance and its data with it, and leaves your DNS records alone. It refuses to terminate an instance that would take with it a volume someone attached without setup's tags (DeleteOnTermination on). With `--dns` (and `--domain`) it
+With a saved install id, destroy reads each resource again right before deleting it, in order, and deletes it only while
+it carries the install's tags and is the one the install recorded; anything else is left alone and named. It refuses to
+terminate an instance that would take with it a volume or network interface someone attached without the install's
+tags (DeleteOnTermination on), leaves an Elastic IP since attached to another server (setup never moves one off another
+server), and finishes an install interrupted before its role got its inline policy. IAM and SSM have no conditional
+writes or deletes: that re-read right before each call is the bar, and a replacement made in the instant after it is
+not caught.
+
+Destroy deletes the instance and its data with it, and leaves your DNS records alone. With `--dns` (and `--domain`) it
 first deletes the domain's A and AAAA records in Route 53 too, but only a record set exactly equal to one this install
 saved creating; anything else is left and named. (Without a saved install id, as for an older install or a destroy run
 from another computer, it deletes those that point only at this server's tagged addresses, as before.) If Route 53 can't be read, nothing at all is

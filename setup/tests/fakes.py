@@ -102,6 +102,7 @@ class FakeEC2:
     def __init__(self, extra_instances=(), extra_sgs=()):
         self.calls, self.instances, self.sgs, self.eips = [], list(extra_instances), list(extra_sgs), []
         self.volumes = []  # {"VolumeId", "Tags", "Attachments": [{"InstanceId", "DeleteOnTermination"}]}
+        self.enis = []  # {"NetworkInterfaceId", "TagSet", "Attachment": {"InstanceId", "DeleteOnTermination"}}
 
     def _rec(self, name, **kw):
         self.calls.append((name, kw))
@@ -121,6 +122,10 @@ class FakeEC2:
     def describe_volumes(self, Filters):
         (ids,) = [f["Values"] for f in Filters if f["Name"] == "attachment.instance-id"]
         return {"Volumes": [v for v in self.volumes if any(a["InstanceId"] in ids for a in v["Attachments"])]}
+
+    def describe_network_interfaces(self, Filters):
+        (ids,) = [f["Values"] for f in Filters if f["Name"] == "attachment.instance-id"]
+        return {"NetworkInterfaces": [n for n in self.enis if n["Attachment"]["InstanceId"] in ids]}
 
     def describe_vpcs(self, Filters):
         return {"Vpcs": [{"VpcId": "vpc-1"}]}
@@ -152,7 +157,13 @@ class FakeEC2:
         return self.eips[-1]
 
     def associate_address(self, **kw):
+        """As EC2 does: one attached elsewhere moves only with AllowReassociation."""
         self._rec("associate_address", **kw)
+        for a in self.eips:
+            if a["AllocationId"] == kw["AllocationId"]:
+                if a.get("InstanceId") not in (None, kw["InstanceId"]) and not kw.get("AllowReassociation"):
+                    raise RuntimeError("Resource.AlreadyAssociated")
+                a["InstanceId"] = kw["InstanceId"]
 
     def run_instances(self, **kw):
         self.raw_user_data = kw.get("UserData")
@@ -165,6 +176,10 @@ class FakeEC2:
         vol = [t["Tags"] for t in kw["TagSpecifications"] if t["ResourceType"] == "volume"]
         attached = [{"InstanceId": "i-1", "DeleteOnTermination": True}]
         self.volumes.append({"VolumeId": "vol-1", "Tags": vol[0] if vol else [], "Attachments": attached})
+        eni = [t["Tags"] for t in kw["TagSpecifications"] if t["ResourceType"] == "network-interface"]
+        self.enis.append(
+            {"NetworkInterfaceId": "eni-1", "TagSet": eni[0] if eni else [], "Attachment": {**attached[0]}}
+        )
         return {"Instances": [{"InstanceId": "i-1"}]}
 
     def get_waiter(self, name):
@@ -189,6 +204,8 @@ class FakeIAM:
         # profiles: the ones made here or set by a test (a role as its tags, or {"RoleId", "Tags"}); gone: deleted.
         self.calls, self.role_tags, self.profiles, self.roles, self.gone = [], role_tags, {}, {}, set()
         self.profile_tags = role_tags if profile_tags is ... else profile_tags
+        # Inline policies: a role made here has one once put; a role a test set up has one unless named in `no_policy`.
+        self.policies, self.no_policy = set(), set()
 
     def _rec(self, name, **kw):
         self.calls.append((name, kw))
@@ -224,6 +241,22 @@ class FakeIAM:
             self.roles[kw["RoleName"]] = {"RoleId": f"AROANEW{kw['RoleName']}", "Tags": kw.get("Tags", [])}
             return {"Role": {"RoleName": kw["RoleName"], "RoleId": self.roles[kw["RoleName"]]["RoleId"]}}
         raise _Exc.EntityAlreadyExistsException()
+
+    def put_role_policy(self, **kw):
+        self._rec("put_role_policy", **kw)
+        self.policies.add((kw["RoleName"], kw["PolicyName"]))
+        self.no_policy.discard(kw["RoleName"])
+
+    def delete_role_policy(self, **kw):
+        """As IAM does: NoSuchEntity for a policy the role does not have."""
+        self._rec("delete_role_policy", **kw)
+        made_here = (
+            isinstance(self.roles.get(kw["RoleName"]), dict) and "AROANEW" in self.roles[kw["RoleName"]]["RoleId"]
+        )
+        if (kw["RoleName"], kw["PolicyName"]) in self.policies:
+            self.policies.discard((kw["RoleName"], kw["PolicyName"]))
+        elif made_here or kw["RoleName"] in self.no_policy:
+            raise _Exc.NoSuchEntityException()
 
     def delete_role(self, **kw):
         self._rec("delete_role", **kw)
