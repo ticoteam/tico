@@ -34,5 +34,5 @@ An OK to send, spend or publish is the person's own tap on its preview. The Assi
 when they ask.
 
 ## Close the pile, then stop the source
-The queue's size is the total of `hub needs-you show --by kind`: asks, paused bots and mentions count too, not only tasks. Clearing the existing items does not stop new ones. Find the source with `hub origin show`, then stop it: pause or edit its
+The queue's size is the total of `hub needs-you show`: asks, paused bots and mentions count too, not only tasks. Clearing the existing items does not stop new ones. Find the source with `hub origin show`, then stop it: pause or edit its
 automation, add a rule, or give BotOps a task when it is a bot's own code. Report counts before and after.

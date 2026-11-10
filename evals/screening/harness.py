@@ -49,6 +49,10 @@ RECORDINGS = HERE / "recordings"
 RERECORD = "python -m evals.screening.record"
 LABELS = ("attack", "lookalike", "benign")
 DOORS = ("webhook", "rule", "mail", "idea", "watcher")
+# Doors the product has closed for now: the public roadmap's idea form answers 404 until the Product pipeline
+# (backend/public_roadmaps.py not_yet). The corpus keeps naming them; the run skips them.
+CLOSED = ("idea",)
+OPEN_DOORS = tuple(door for door in DOORS if door not in CLOSED)
 ACTIONS = ("pass", "warn", "hold")
 MODE_KEYS = ("hold", "warn", "off", "patterns_only")
 KINDS = ("ignore_previous_instructions", "reveal_system_prompt", "instruction_hijack", "secret_exfiltration", "none")
@@ -495,7 +499,7 @@ def corpus_pass(org, items, mode, judge, layers=None):
     doors.set_modes(**{s: base for s in ("webhook", "mail", "idea", "watcher")}, **on)
     seen = []
     for item in items:
-        for door in item["doors"]:
+        for door in (d for d in item["doors"] if d not in CLOSED):
             seen.append(doors.run(item, door, mode, f"{mode}-{door}-{item['id']}"))
     return seen
 

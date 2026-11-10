@@ -1,7 +1,7 @@
 # Redesign scenarios
 
-PLAN §7 scenarios for the redesign, written before the code. Each check is a real API call against the factory's
-in-process hub on a fake clock (`evals/factory/world.py`). Nothing is stubbed: a check the product cannot pass yet
+PLAN §7 scenarios for the redesign, written before the code. Each check is a real API call against an
+in-process hub on a fake clock (`evals/redesign/world.py`). Nothing is stubbed: a check the product cannot pass yet
 fails as `not built yet: <wave>`, and a check the CONTRACT cannot back fails as untestable (CONTRACT section 6 lists
 the gaps).
 

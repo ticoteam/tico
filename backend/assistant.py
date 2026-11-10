@@ -1282,19 +1282,45 @@ def covers(row, method, path):
     return row["method"] == method and row["path"] == path
 
 
+# Where a task is and who has it are not field edits (models.TaskUpdate): a card that says close, done or a new owner goes
+# through the task's own route, /move or /owner, as that route's body.
+_MOVES = {"closed": "closed", "done": "done", "open": "reopen", "reopen": "reopen"}
+
+
 def runnable(c, method, path, body):
-    """A task change as the route takes it. "closed" is not a status a task update sets: closing is `close`, so a card
-    that says `{"status": "closed"}` closes (every Confirm of one failed with "body.status: Input should be ..."). One
-    without the task's version gets the one it has now (and failed with "body.version: Field required"); a change to
-    the task after that is still a conflict, not a silent overwrite."""
-    m = re.fullmatch(r"/api/v2/tasks/([^/]+)", path or "")
+    """A task change as the routes take it: `(path, body)`. A close, a done or a new owner on `POST /api/v2/tasks/{id}`
+    (`{"close": true}`, `{"status": "closed"}`, `{"owner": ...}`, as cards were written) goes to `/move` or `/owner`;
+    a card that also edits fields is refused, one change per card. It carries the version the Assistant saw: one
+    without it is refused, never given the task's version now, or a change made from an older read would pass over
+    changes made since."""
+    m = re.fullmatch(r"/api/v2/tasks/([^/]+)(/move|/owner|/done)?", path or "")
     if method != "POST" or not m or m.group(1) == "dry-run" or not isinstance(body, dict):
-        return body
-    if body.get("status") == "closed":
-        body = {**{k: v for k, v in body.items() if k != "status"}, "close": True}
-    if "version" not in body and (t := H.task(c, m.group(1))):
-        body = {**body, "version": t["version"]}
-    return body
+        return path, body
+    if body.get("version") is None:
+        raise Problem("version", "A task change carries the version you saw: run `hub task show <id>` first", 422)
+    if m.group(2):
+        return path, body
+    to = "closed" if body.get("close") else _MOVES.get(str(body.get("status") or ""))
+    if not to and "owner" not in body:
+        return path, body
+    rest = {k for k in body if k not in ("close", "status", "owner", "why", "note", "version", "on_behalf_of")}
+    if rest or (to and "owner" in body):
+        raise Problem(
+            "one_change",
+            "A card changes one thing on a task: propose the field edits, the move and the new owner as separate steps",
+            422,
+        )
+    why = {"why": body.get("why") or body.get("note")} if body.get("why") or body.get("note") else {}
+    task = "/api/v2/tasks/" + m.group(1)
+    if to:
+        return task + "/move", {"to": to, **why, "version": body["version"]}
+    return task + "/owner", {"owner": body["owner"], **why, "version": body["version"]}
+
+
+def runnable_step(c, step):
+    """One step of a bulk card, made runnable (`runnable`): its path may change with its body."""
+    path, body = runnable(c, step.get("method") or "POST", step.get("path"), step.get("body") or {})
+    return {**step, "path": path, "body": body}
 
 
 def refuse_unrunnable(routes, method, path, body):
@@ -1382,9 +1408,9 @@ def create_proposal(
         raise Problem("too_many", "Too many proposals are waiting; confirm or cancel some first", 409)
     body = {k: v for k, v in (body or {}).items() if k != "on_behalf_of"}
     if path == BATCH_PATH:
-        body = {"actions": [{**s, "body": runnable(c, s["method"], s["path"], s["body"])} for s in batch_steps(body)]}
+        body = {"actions": [runnable_step(c, s) for s in batch_steps(body)]}
     else:
-        body = runnable(c, method, path, body)
+        path, body = runnable(c, method, path, body)
     if routes is not None:
         refuse_unrunnable(routes, method, path, body)
     body, routine = (
@@ -1747,7 +1773,10 @@ def outcome(response):
     detail = None
     try:
         payload = response.json()
-        detail = (payload.get("error") or {}).get("detail") if isinstance(payload, dict) else None
+        if isinstance(payload, dict):
+            # Either {"error": {"code", "detail"}} or a refusal's flat {"error": code, "detail": words}.
+            error = payload.get("error")
+            detail = error.get("detail") if isinstance(error, dict) else payload.get("detail") or error
     except ValueError:
         pass
     return {"status_code": response.status_code, "error": str(detail or f"HTTP {response.status_code}")[:300]}
@@ -2442,18 +2471,14 @@ def install(app, store, auth, mutate, onboarding):
                 )
                 # A card stored before its task change was made runnable (`runnable`) still runs, read as it is now.
                 sent = json.loads(row["body"] or "{}")
-                if row["path"] == BATCH_PATH and isinstance(sent, dict) and isinstance(sent.get("actions"), list):
-                    sent = {
-                        "actions": [
-                            {**s, "body": runnable(c, s.get("method") or "POST", s.get("path"), s.get("body") or {})}
-                            if isinstance(s, dict)
-                            else s
-                            for s in sent["actions"]
-                        ]
-                    }
+                path = row["path"]
+                if path == BATCH_PATH and isinstance(sent, dict) and isinstance(sent.get("actions"), list):
+                    sent = {"actions": [runnable_step(c, s) if isinstance(s, dict) else s for s in sent["actions"]]}
                 else:
-                    sent = runnable(c, row["method"], row["path"], sent)
-                return {**row, "body": json.dumps(sent)}
+                    path, sent = runnable(c, row["method"], path, sent)
+                # Stored as it runs: the route checks the call against the card it was confirmed from.
+                c.execute("UPDATE assistant_actions SET path=?, body=? WHERE id=?", (path, json.dumps(sent), aid))
+                return {**row, "path": path, "body": json.dumps(sent)}
 
         row = await asyncio.to_thread(claim)
         if row is None:

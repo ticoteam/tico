@@ -4,8 +4,8 @@
 # owner: the person (by the name they have in Tico) who OKs stages whose mover is owner. Empty until setup
 #   names them; until then the bot uses the person who opened the project task and passes --owner.
 # budget_usd: the most the self-moved stages of one project may spend, in USD, summed from the cost_usd in each
-#   file's provenance sidecar. Over it, the owner is asked to OK a raise; an OK'd raise is recorded in
-#   projects/<slug>/budget.json and adds to this number.
+#   file's provenance sidecar. Over it, the owner is asked to OK a raise of that project and amount;
+#   once Tico takes that OK, the raise is recorded in projects/<slug>/budget.json and adds to this number.
 #
 # mover says who moves a stage's files on:
 #   owner           the owner OKs them on the project's task (an ask on it)

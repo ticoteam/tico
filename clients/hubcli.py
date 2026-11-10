@@ -63,10 +63,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            run reads it (with --defer, a run starts by then if none came)
     hub note list [--to me|X] [--from me|X] [--since 24h|ISO] [--waiting]   notes, newest first
     hub note delete <id>                   take back a note no run has carried yet
-    hub feedback give message|task|approval <id> up|down [--reason R] [--tell-bot]   a person's 👍/👎 on a bot's work;
+    hub feedback give message|task <id> up|down [--reason R] [--tell-bot]   a person's 👍/👎 on a bot's work;
                                            again replaces it; --tell-bot (👎) leaves the bot a note
     hub feedback remove <id>               take back your feedback (and its note, if no run carried it)
-    hub feedback markers message|task|approval <id> [<id>...]   your feedback on these and everyone's up/down counts
+    hub feedback markers message|task|ask <id> [<id>...]   your feedback on these and everyone's up/down counts
     hub feedback list [--bot B] [--rating up|down] [--since 7d] [--cursor C] [--limit N]   newest first
     hub feedback reasons                   your five latest distinct reasons
     hub feedback rule-draft <id>           a one-sentence rule drafted from your 👎; stores nothing
@@ -79,11 +79,14 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            next with -m pushes past what is not met; back to a stage by its name
     hub task close <id> -m "why" --version N   never refused for what is missing; its open sub-tasks close with it
     hub task ask <id> --to <person> "line" [--choices a,b] [--show page:12] [--kind ok] --version N
+    hub task ask <id> --to <person> "line" --for KIND:ID --content JSON --version N   an OK of exactly that content
+    hub ok use <requirement> --for KIND:ID --content JSON [-m "what was done"]   use it once, just before you act
                                            ask a person on this task; it waits for their answer, which wakes you once
     hub task ask <id> --withdraw [--requirement R] [-m "why"]   take your open ask back
     hub task answer <id> <requirement> ok|no|again|<answer> [-m "note"] --version N
                                            a bot named on an OK or a question answers it (no needs a note)
     hub task give <id> <requirement> --to <person> --version N   hand what you are asked to another person
+    hub task thumbs <id> <requirement> up|down [--note "what was wrong"]   was this ask worth asking (the person asked)
     hub task file --parent <id> [--pipeline general] [--owner X] "title" [--body "..."]
                                            a task this one waits on; yours unless --owner
     hub task snooze <id> [--until DATE] -m "why" --version N
@@ -701,6 +704,21 @@ ASKED = (
 
 class CliError(Exception):
     """Anything the arguments or the environment got wrong: exit 1."""
+
+
+def thumb(value):
+    """up or down, as the thumbs route's `up`."""
+    if value not in ("up", "down"):
+        raise argparse.ArgumentTypeError("up or down")
+    return value == "up"
+
+
+def json_value(value):
+    """`--content`: any JSON value, read exactly; a plain word that is not JSON is refused."""
+    try:
+        return json.loads(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("--content is JSON, for example '{\"usd\": \"10.00\"}'") from None
 
 
 def choice_list(value):
@@ -1599,9 +1617,8 @@ def parser():
     feedback = sub.add_parser(
         "feedback", help="a person's 👍/👎 on a bot's work: give, list, make a rule"
     ).add_subparsers(dest="sub")
-    subjects = ("message", "task", "approval")
-    s = feedback.add_parser("give", help="rate a message, task or approval a bot made; again replaces it")
-    s.add_argument("subject_type", choices=subjects)
+    s = feedback.add_parser("give", help="rate a message or task a bot made; again replaces it (an ask: task thumbs)")
+    s.add_argument("subject_type", choices=("message", "task"))
     s.add_argument("subject_id")
     s.add_argument("rating", choices=("up", "down"))
     s.add_argument("--reason")
@@ -1611,7 +1628,7 @@ def parser():
     s.add_argument("id")
     s.set_defaults(fn="feedback remove")
     s = feedback.add_parser("markers", help="your feedback on these subjects and everyone's up/down counts")
-    s.add_argument("subject_type", choices=subjects)
+    s.add_argument("subject_type", choices=("message", "task", "ask"), help="an ask's id: <visit-id>:<requirement-id>")
     s.add_argument("subject_ids", nargs="+")
     s.set_defaults(fn="feedback markers")
     s = feedback.add_parser("list", help="feedback newest first, a page at a time")
@@ -2065,11 +2082,19 @@ def parser():
     )
     s.add_argument("--choices", type=choice_list, help="the answers to pick from, a,b")
     s.add_argument("--show", action="append", metavar="REF", help="what they look at: page:12, file:ID@N; repeat")
+    s.add_argument("--for", dest="subject", metavar="KIND:ID", help="an OK bound to what you will do, with --content")
+    s.add_argument("--content", type=json_value, help="with --for: exactly what the OK covers, as JSON")
     s.add_argument("--withdraw", action="store_true", default=None, help="take back your open ask instead")
     s.add_argument("--requirement", help="with --withdraw: the ask's requirement id, when several may be withdrawn")
     s.add_argument("-m", "--why", help="with --withdraw: why")
     s.add_argument("--version", type=int, help=version_help)
     s.set_defaults(fn="task ask")
+    s = task.add_parser("thumbs", help="was this ask worth asking: up or down; a down sends an open ask back")
+    s.add_argument("id")
+    s.add_argument("requirement", help="the ask's requirement id, from hub task show")
+    s.add_argument("up", metavar="up|down", type=thumb, help="up: worth asking; down: what was wrong goes in --note")
+    s.add_argument("--note", help="what was wrong, in a few words")
+    s.set_defaults(fn="task thumbs")
     s = task.add_parser("answer", help="answer what you are asked on a task: ok, no, again or your answer")
     s.add_argument("id")
     s.add_argument("requirement", help="the requirement's id, from hub task show")
@@ -3651,6 +3676,15 @@ def parser():
     )
     s.set_defaults(fn="sleep set")
 
+    oks = sub.add_parser("ok", help="an OK you asked for with --for: use it once, just before you act").add_subparsers(
+        dest="sub"
+    )
+    s = oks.add_parser("use", help="use an OK once; refused unless it was given for exactly this")
+    s.add_argument("requirement", help="the OK's requirement id, as hub task ask --for printed it")
+    s.add_argument("--for", dest="subject", required=True, metavar="KIND:ID", help="the subject it was asked for")
+    s.add_argument("--content", type=json_value, required=True, help="exactly the content it was asked for, as JSON")
+    s.add_argument("-m", "--note", help="what was done, in a sentence")
+    s.set_defaults(fn="ok use")
     notice = sub.add_parser("notice", help="notices from Tico Team").add_subparsers(dest="sub")
     s = notice.add_parser("list", help="the notices Tico Team sent, newest first")
     s.set_defaults(fn="notice list")

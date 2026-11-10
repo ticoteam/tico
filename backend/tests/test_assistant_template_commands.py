@@ -18,18 +18,6 @@ from clients import hubcli
 
 ASSISTANT = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "assistant"
 
-# Commands the template names that land with the track C branch (chris/assistant-tools). Remove each entry once that
-# branch is merged, so the test then checks it like every other command.
-EXPECTED_TO_EXIST = [
-    ("needs-you", "show"),
-    ("origin", "show"),
-    ("assistant", "change", "list"),
-    ("assistant", "change", "restore"),
-]
-# Flags the template uses that land with track B (chris/assistant-acts-as-you): `hub assistant propose --for` names the
-# person of a background run's card. Remove this once that branch is merged.
-EXPECTED_FLAGS = ["--for"]
-
 SPAN = re.compile(r"`(hub [^`]+)`")
 PLACEHOLDER = re.compile(r"<[^<>]+>")
 VERSION = re.compile(r"--version N\b")  # the version the bot was shown, written as the plan writes it
@@ -100,12 +88,6 @@ def parse_error(argv, parser=None):
     return None
 
 
-def expected_to_exist(argv):
-    if any(flag in argv for flag in EXPECTED_FLAGS):
-        return True
-    return any(tuple(argv[: len(prefix)]) == prefix for prefix in EXPECTED_TO_EXIST)
-
-
 def cases():
     out = []
     for path in sorted(ASSISTANT.rglob("*")):
@@ -127,14 +109,11 @@ def test_the_template_names_commands_to_check():
 def test_every_hub_command_in_the_template_parses():
     """One parser, every command: the failures are all listed, each as file:line and the command."""
     parser = hubcli.parser()
-    failures, pending = [], []
+    failures = []
     for path, number, text, argv in cases():
         where = f"{path.relative_to(ASSISTANT.parents[2])}:{number}"
         if argv == ["\x00unbalanced quotes"]:
             failures.append(f"{where}: unbalanced quotes in `{text}`")
-            continue
-        if expected_to_exist(argv):
-            pending.append(where)  # lands with chris/assistant-tools
             continue
         # A bare mention ("`hub task create`" in prose, two words) only has to name a real command: a missing argument is fine.
         bare = len(argv) <= 2
@@ -145,8 +124,6 @@ def test_every_hub_command_in_the_template_parses():
             if error is not None:
                 failures.append(f"{where}: `{' '.join(option)}` does not parse: {error}")
     assert not failures, "\n".join(failures)
-    if pending:
-        pytest.skip(f"{len(pending)} commands land with chris/assistant-tools: {', '.join(pending[:5])} ...")
 
 
 # Refresh copies only AGENT.md, playbooks/ and skills/ to a live Assistant (clients/catalog.py PRODUCT_OWNED). Anything the

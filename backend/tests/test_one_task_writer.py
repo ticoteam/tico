@@ -27,11 +27,7 @@ JOINTS = re.compile(r"""["']\s*(?:\n\s*)?f?["']""")
 # task's stage: refused by the trigger"). They never change a row.
 REFUSED_ON_PURPOSE = {"evals/never_stuck/scenarios.py": 1}
 
-OLD_WRITERS = {
-    "backend/hubdb.py": 1,
-    "backend/shared_bots.py": 1,
-    "evals/factory/cases/source_outages.py": 1,
-}
+OLD_WRITERS: dict[str, int] = {}  # empty since the cut-over: a writer anywhere outside the engine fails
 
 
 def writers(text):
