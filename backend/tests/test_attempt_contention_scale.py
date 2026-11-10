@@ -14,7 +14,8 @@ from backend import execution, flight, worktrees
 from backend.scheduler import Scheduler
 from backend.store import H, encode, _pooled
 from backend.tests.helpers.api import headers  # noqa: F401
-from backend.tests.helpers.attempt_contention import fleet
+from backend import task_engine as E
+from backend.tests.helpers.attempt_contention import fleet, on_engine
 from backend.enqueue import enqueue_stored
 
 
@@ -66,8 +67,12 @@ def test_busy_install_routes(api, monkeypatch):
                 (f'queued-{i}', f'room-{i}', now, encode({'task': f'task-{i}'})),
             )
             enqueue_stored(c, f'queued-{i}')
+        # Ten checkouts belong to another bot's tasks; an owner changes only through the engine.
+        for i in range(100, 110):
+            row = on_engine(c, f'task-{i}')
+            E.reassign(c, f'task-{i}', 'bot:finance', 'human:ana', seen_version=row['version'])
         c.execute(
-            "UPDATE tasks SET updated_at=?,owner_id='bot:finance',private=0 WHERE id IN (" + ','.join('?' * 10) + ")",
+            "UPDATE tasks SET updated_at=?,private=0 WHERE id IN (" + ','.join('?' * 10) + ")",
             (H.shift(now, hours=-2), *(f'task-{i}' for i in range(100, 110))),
         )
         # Fixture construction is not part of the lease workload. Start the real lease

@@ -28,9 +28,11 @@ def test_a_task_change_reaches_another_person_signed_and_never_a_non_party(api, 
     secret = post(
         api, "tasks", {"owner": "ben", "title": "Review the salary bands", "body": "Please.", "private": True}
     )
-    moved = post(api, "tasks/" + task["id"], {"version": task["version"], "status": "doing"}, token="ben-test")
+    moved = post(api, f"tasks/{task['id']}/done", {"note": "Reviewed."}, token="ben-test")
     seen = cara.until(
-        lambda e: e["event"] == "tasks" and e["data"]["id"] == task["id"] and e["data"]["task"]["status"] == "doing"
+        lambda e: (
+            e["event"] == "tasks" and e["data"]["id"] == task["id"] and e["data"]["task"]["version"] == moved["version"]
+        )
     )
     assert seen["data"]["task"]["version"] == moved["version"]
     assert seen["data"]["actor"] == "human:ben" and int(seen["id"]) == seen["data"]["seq"]
@@ -62,7 +64,9 @@ def test_task_and_party_send_only_those_tasks_and_a_partys_including_one_moved_a
     bens = post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
     caras = post(api, "tasks", {"owner": "cara", "title": "Book the room", "body": "Please."})
     handed = post(api, "tasks", {"owner": "ben", "title": "Order the lunch", "body": "Please."})
-    handed = post(api, "tasks/" + handed["id"], {"version": handed["version"], "owner": "cara"})
+    handed = post(
+        api, f"tasks/{handed['id']}/owner", {"version": handed["version"], "owner": "cara", "why": "Cara orders"}
+    )
     last = post(api, "tasks", {"owner": "cara", "title": "Print the badges", "body": "Please."})
     party = live("ana-test", f"?topics=tasks&after={cursor}&party=human:ben")
     party.until(

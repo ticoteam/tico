@@ -212,10 +212,12 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     read_version = get(api, "tasks/" + read_task, token="reader-test")["task"]["version"]
     post(api, "tasks/" + read_task, {"version": read_version, "private": False}, token="reader-test")
     assert "Canary confidential quote." in json.dumps(get(api, "tasks/" + read_task, token="cara-test"))
-    # A bound OK of the folio, asked of the reader: its preview names the file, so it follows the page's audience.
+    # A bound OK of the folio, asked of the reader: its preview names the file, so it follows the page's audience. It
+    # shows only to the OK's parties (task_asks.may_see): the reader sees it; Cara, who reads the task, never does.
     file_ok = review_ask(api, "ops-test", [{"file": fid}], on="reader", parent=tid, question="Is the folio ready?")
     review_answer(api, file_ok, "Approve", token="reader-test")
-    assert fid in json.dumps(get(api, "oks/" + file_ok["requirement_id"], token="cara-test"))
+    assert fid in json.dumps(get(api, "oks/" + file_ok["requirement_id"], token="reader-test"))
+    get(api, "oks/" + file_ok["requirement_id"], token="cara-test", expected=404)
     assert fid in json.dumps(get(api, f"tasks/{tid}/comments", token="cara-test"))
     # Version uploads and blob archives use the same production writers as the task's Files panel.
     uploaded = post(api, f"tasks/{tid}/files", {"name": name, "text": document.decode() + "<p>Revised</p>"})
@@ -476,6 +478,14 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     assert recreated.status_code == 200, recreated.text
     replacement = recreated.json()["page"]["file_id"]
     assert replacement != fid
+    # The bot has one ask on the task (C15): it withdraws the given, unused OK of the deleted folio before asking again.
+    withdrawn = api.request(
+        "DELETE",
+        f"/api/v2/tasks/{tid}/asks/{file_ok['requirement_id']}",
+        json={"why": "The folio was deleted"},
+        headers=headers("ops-test"),
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
     remake = review_ask(api, "ops-test", [{"file": replacement}], on="ana", parent=tid, question="Is it ready?")
     review_answer(api, remake, "Approve")
     assert approved(api, "ana-test", file=replacement)["approved"] is True
