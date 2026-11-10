@@ -3,6 +3,7 @@
 // the stream would. Each list is counted: no list read after many events, a row changes in place, a row that no longer
 // belongs leaves, and the 2-minute refresh catches up with a changed_after delta from the list's cursor.
 //  - a bot's page: its Open rows and its filter tabs (Assigned to others), decided by each tab's rows client-side;
+//  - a person's page: the tasks they own, open and finished (a snoozed one is off it);
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
@@ -48,7 +49,7 @@ const gone = (id: string) => { SERVER.delete(id); return {id, kind: 'delete', ki
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, registered: true});
     if (p === '/api/employees') return json(BOTS);
-    if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
+    if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam'}]});
     if (p === '/api/v2/status') return json({bots: BOTS.map(b => ({bot: b.name, state: 'idle'}))});
     if (p === '/api/v2/needs-you') return json({items: [], count: 0, version: 'v0'});
     if (p === '/api/v2/events') return;                                                  // held open: events come by liveEmit
@@ -110,6 +111,33 @@ const gone = (id: string) => { SERVER.delete(id); return {id, kind: 'delete', ki
   await page.locator('#t-open', {hasText: 'Send the release mail'}).waitFor();
   assert.deepEqual(reads.changed, ['12.a']);
   assert.equal(reads.tasks, listed, 'the refresh reads no whole task list');
+
+  // ---- a person's page
+  put(task('t6', 'Order the badges', 'spec', {owner_id: 'human:sam'}));
+  put(task('t7', 'Call the venue', 'spec', {owner_id: 'human:sam'}));
+  reads.changed = [];
+  await page.evaluate(() => { location.hash = '#/person/sam'; });
+  await page.locator('#person-tasks', {hasText: 'Call the venue'}).waitFor({timeout: t(8000)});
+  const personListed = reads.tasks;
+  await emit('tasks', ...Array.from({length: 20}, (_, i) => event(task('t6', `Order the badges ${i + 1}`, 'spec', {owner_id: 'human:sam', version: 4 + i}))));
+  await page.locator('#person-tasks', {hasText: 'Order the badges 20'}).waitFor();
+  // Done: still Sam's, under Finished. Snoozed and handed to Ana: off the list. New for Sam: on it.
+  await emit('tasks', event(task('t6', 'Order the badges 20', 'done', {owner_id: 'human:sam'})),
+    event(task('t7', 'Call the venue', 'spec', {owner_id: 'human:sam', snoozed: true})),
+    event(task('t8', 'Print the menus', 'spec', {owner_id: 'human:sam'}), 'insert'));
+  await page.locator('#person-tasks', {hasText: 'Print the menus'}).waitFor();
+  await page.waitForFunction(() => !document.querySelector('#person-tasks')?.textContent?.includes('Call the venue'));
+  assert.match(await text('.person-tasks-done'), /Order the badges 20/);
+  await emit('tasks', event(task('t8', 'Print the menus', 'spec', {owner_id: 'human:ana'})));
+  await page.waitForFunction(() => !document.querySelector('#person-tasks')?.textContent?.includes('Print the menus'));
+  await settled();
+  assert.equal(reads.tasks, personListed, 'no task list read follows a task event');
+  delta = {tasks: [task('t9', 'Book the bus', 'spec', {owner_id: 'human:sam'})], gone: ['t6']};
+  await page.evaluate(() => refresh(false));
+  await page.locator('#person-tasks', {hasText: 'Book the bus'}).waitFor();
+  await page.waitForFunction(() => !document.querySelector('#person-tasks')?.textContent?.includes('Order the badges'));
+  assert.deepEqual(reads.changed, ['12.a']);
+  assert.equal(reads.tasks, personListed, 'the refresh reads no whole task list');
 
   assert.deepEqual(errors, []);
   await browser.close();

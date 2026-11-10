@@ -43,6 +43,7 @@ async function refresh(force = false): Promise<void> {
     if (TASKS_ST && isTasksRoute(S.route)) void (force ? tasksLoad(TASKS_ST) : tasksCatchUp(TASKS_ST));   // a delta from the list's cursor
     // A bot's tasks catch up from their cursor too (bot-tasks.ts); a forced refresh reads them whole.
     if (BOT && BOT.loaded.has('tasks')) void (force ? loadBotTasksV2(BOT.slug) : botTasksCatchUp(BOT.slug));
+    if (typeof PERSON_TASKS !== 'undefined' && PERSON_TASKS) void personTasksReload();
   }
 }
 
@@ -82,10 +83,8 @@ function liveTasksApply(events: LiveTaskEvent[]): void {
   if (events.length) tasksLiveApply(events);
   // A bot's page puts each in place too (bot-tasks.ts); it reads nothing.
   if (BOT) botTasksLive(BOT.slug, events);
-  if (typeof PERSON_TASKS !== 'undefined' && PERSON_TASKS) {
-    const me = 'human:' + PERSON_TASKS;
-    if (events.some(d => d.bulk || d.gone || d.task?.owner_id === me)) liveThrottle('person-tasks', personTasksReload);
-  }
+  // And a person's page (person-page.ts).
+  if (typeof PERSON_TASKS !== 'undefined' && PERSON_TASKS) personTasksLive(events);
   const open = TASK_CHAT;   // read again: a stop above may have cleared it
   if (open && events.some(d => d.bulk || String(d.id) === String(open.id))) taskChatLive(open);
 }
