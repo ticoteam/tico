@@ -34,7 +34,7 @@ Nothing on GitHub changes.
 6. **Write three fix plans.** Choose by time saved times people blocked: the slowest merge-gating job, the runner or
    workflow fault that stopped the most runs, the most common failure cause. For each: the file and job, the change, the
    expected effect, and how to verify it. A change to a test is a hand-off to the QA Owner, not one of the three.
-7. **Write and hand over.** Write the report, `hub file publish` it, commit, then run `hub task update <id> --status done
+7. **Write and hand over.** Write the report, `hub file publish` it, commit, then run `hub task done <id> -m "..." --version N
    --note` with the headline and the path.
 
 ## Output

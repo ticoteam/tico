@@ -22,11 +22,11 @@ negotiation, or the prospect replied or asked about price, it belongs to a human
 
 ## 3. Propose
 
-On the task, in three lines: the owner, the reason, and what the owner should produce and by when. Ask with `hub task question "<question>" --on <person> --parent <id>` only when the intended role or owner is missing; otherwise carry out the requested work with your Tools.
+On the task, in three lines: the owner, the reason, and what the owner should produce and by when. Ask with `hub task ask <id> --to <person> "<question>" --version N` only when the intended role or owner is missing; otherwise carry out the requested work with your Tools.
 
 ## 4. Carry out the requested work
 
     hub task create --owner <slug> --title "<what and for whom>" --body "<the request, the account, the source>" --parent <id>
 
 Record the routing and its source request in `knowledge/routing.md`. On a no, record the correction as a
-rule in `knowledge/routing.md` so the next proposal is right. `hub task update <id> --status done --note`.
+rule in `knowledge/routing.md` so the next proposal is right. `hub task done <id> -m "..." --version N`.

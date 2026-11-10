@@ -47,6 +47,6 @@ File three to eight. More than eight is a list, not a proposal.
 
 ## 4. Finish
 
-    hub task update <id> --status done --note "<count> ideas filed; top three: <titles>; refused: <what and why>"
+    hub task done <id> -m "<count> ideas filed; top three: <titles>; refused: <what and why>" --version N
 
 Ideas stay in Ideas until the weekly meeting moves one to Running.

@@ -42,7 +42,7 @@ on in Tico for messages to outsiders. Otherwise it stays a draft for a person.
 
 ## 5. Finish
 
-Note any page that looked out of date. Then `hub task update <id> --status done --note`: the answer's page, or the hand-off and its
+Note any page that looked out of date. Then `hub task done <id> -m "..." --version N`: the answer's page, or the hand-off and its
 owner.
 
 ## When a source fails

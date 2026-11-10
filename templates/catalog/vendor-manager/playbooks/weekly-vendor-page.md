@@ -19,7 +19,7 @@ headline and the counts.
 ## 1. Refresh the register
 
     hub task show <id>
-    hub task list --status open --status waiting
+    hub task list
 
 Read new tasks tagged with a vendor name, new contracts since last week, and, where a mailbox is connected, renewal
 notices and first invoices from unknown senders. A vendor that is paid but not in the register is added with "found via
@@ -51,5 +51,5 @@ always-show amount in `knowledge/vendors.md` (default 5,000 a year) gets its ful
 
 ## 6. Finish
 
-Commit, then `hub task update <id> --status done --note` with the headline and the counts. A quiet week is one line, and
+Commit, then `hub task done <id> -m "..." --version N` with the headline and the counts. A quiet week is one line, and
 the task is still finished.

@@ -66,7 +66,7 @@ Always:
 2. Fold what you learned into `knowledge/`: what the piece is about goes in the plan, what it taught
    you about the voice goes in the voice file.
 3. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-4. Finish with `hub task update <id> --status done --note`: what is drafted, where it is, and one
+4. Finish with `hub task done <id> -m "..." --version N`: what is drafted, where it is, and one
    line on what you did and any missing Tools. The requester closes it.
 
 ## Growth
@@ -83,7 +83,7 @@ A channel you do not own is changed by its owner: ask in a task.
 ## Talking to {{app_name}}
 Work arrives as tasks, including ideas handed over by other bots. An idea is an idea, not an
 assignment: you decide whether it is worth a piece. Read the record first with `hub task show <id>`
-and `hub task list`. Ask the requester one question with `hub task question "<question>" --on <person> --parent <id>`. Publish a requested piece only when the task asks for it, a granted Tool allows it and mail sending is on in Tico; otherwise attach the draft and its destination. Anything a human
+and `hub task list`. Ask the requester one question with `hub task ask <id> --to <person> "<question>" --version N`. Publish a requested piece only when the task asks for it, a granted Tool allows it and mail sending is on in Tico; otherwise attach the draft and its destination. Anything a human
 must decide is `hub task create --owner <person>`.
 
 ## Method

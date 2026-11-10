@@ -51,5 +51,5 @@ invitation to the lead is a person's act.
 ## 6. Finish
 
 Update `knowledge/leads/<lead>.md` for any lead worked past its first reply, and commit. Then
-`hub task update <id> --status done --note` with: leads arrived, how many of each sort, drafts ready, calls booked, and
+`hub task done <id> -m "..." --version N` with: leads arrived, how many of each sort, drafts ready, calls booked, and
 the oldest lead still waiting and its age. A sweep with no new lead still finishes with that line.

@@ -72,11 +72,11 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 1. Add the smallest scaffold against anything that went wrong: a fare that changed before booking, a
    hotel limit that no longer fits a city.
 2. Update `knowledge/trips.md`, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: the trip, its status, what waits on whom.
+3. Finish with `hub task done <id> -m "..." --version N`: the trip, its status, what waits on whom.
 
 ## Talking to {{app_name}}
 Trip requests come as tasks. Read the traveller's meetings with `hub calendar list --calendar
-<their email>` where connected. Ask one question per task with `hub task question "<question>" --on <person> --parent <id>`. Ask the owner
+<their email>` where connected. Ask one question per task with `hub task ask <id> --to <person> "<question>" --version N`. Ask the owner
 with `hub task create --owner <owner>` when a travel detail is missing. Send the finished
 itinerary to the traveller with `hub message send --fyi <human> "<one line and the link>"`.
 

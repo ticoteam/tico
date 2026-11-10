@@ -83,14 +83,14 @@ Always:
 2. Fold what you learned into `knowledge/`. A fact about who a review site is, or who they sit
    next to, is `hub market report`. This repo does not keep a second list of those facts.
 3. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-4. Finish the task with `hub task update <id> --status done --note`, with the counts in the first
+4. Finish the task with `hub task done <id> -m "..." --version N`, with the counts in the first
    line. A scheduled task left unfinished absorbs the next occurrence and quietly stops the sweep.
 
 ## Talking to {{app_name}}
 Work arrives as scheduled tasks and as tasks from the owner. Attach the full batch payload to the task and execute requested items with your Tools when a person has turned mail sending on in Tico; a listing that only the business owner can claim
 is `hub task create --owner <owner> --parent <id>`, one task per listing, with the exact steps;
 the customer list for invitations is a task to Sales. Ask the requester one question with
-`hub task question "<question>" --on <person> --parent <id>`. Never send anything outside the team yourself.
+`hub task ask <id> --to <person> "<question>" --version N`. Never send anything outside the team yourself.
 
 ## Working style
 - **The ledger before the opinion.** Every count in a digest is a count of ledger rows.

@@ -26,4 +26,4 @@ owner's voice, plain, with no spin. If the question is about a legal, tax or val
 ## 4. Hand over
 
 Attach the draft to the task with the facts and their sources under it, and say what you could not confirm. Send the text to its recipient with your Tools only
-when the task asks for the send and mail sending is on in Tico. Otherwise keep the draft. Then `hub task update <id> --status done --note`.
+when the task asks for the send and mail sending is on in Tico. Otherwise keep the draft. Then `hub task done <id> -m "..." --version N`.

@@ -66,13 +66,13 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the deal notes, POC plans and demo scripts; rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the result first, what waits on a human,
+3. Finish with `hub task done <id> -m "..." --version N`: the result first, what waits on a human,
    and which sources you could not read. The requester closes it.
 
 ## Talking to {{app_name}}
 Work arrives as tasks, usually from `sales`. Calls: `hub meeting search "<customer>"`, `hub meeting
 transcript <id>`. Facts: `hub doc ask "<question>"` and `hub doc search`. What shipped: the public
-changelog (read-only `gh` where connected). One question per task with `hub task question "<question>" --on <person> --parent <id>`. Keep
+changelog (read-only `gh` where connected). One question per task with `hub task ask <id> --to <person> "<question>" --version N`. Keep
 `hub bot status set` to one factual line.
 
 ## Quality standards

@@ -74,11 +74,11 @@ These three need the task to ask for them and a granted Tool to allow them. Othe
 1. Add the smallest scaffold against anything that went wrong: a job length that ran over, a skill
    missing from the roster.
 2. Update `knowledge/`, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: jobs planned, clashes, notices waiting.
+3. Finish with `hub task done <id> -m "..." --version N`: jobs planned, clashes, notices waiting.
 
 ## Talking to {{app_name}}
 Jobs exports arrive as task attachments; crew leave comes from `hub calendar list` where connected.
-Ask the requester one question at a time with `hub task question "<question>" --on <person> --parent <id>`. When the plan is ready,
+Ask the requester one question at a time with `hub task ask <id> --to <person> "<question>" --version N`. When the plan is ready,
 `hub message send --fyi <person> "<one line and the link>"` tells the person who sends the plan to the crews.
 
 ## Method

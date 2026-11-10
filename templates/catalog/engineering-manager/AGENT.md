@@ -47,7 +47,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 - **Sending a plan or a progress report outside the requester's team.**
 
 Always:
-- Never merge a pull request yourself. Ask for the merge on the task with `hub task question "<question>" --on <person> --parent <id>`, giving the pull
+- Never merge a pull request yourself. Ask for the merge on the task with `hub task ask <id> --to <person> "<question>" --version N`, giving the pull
   request link, the head commit, the review result and the checks.
 - Never report work as shipped before every required pull request is merged. Never invent a check result, a
   merge or a date. A date with no source is written as "no date set".
@@ -65,7 +65,7 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/delivery.md` with any correction, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish a planning or check task with `hub task update <id> --status done --note`: the headline, the open children, and
+3. Finish a planning or check task with `hub task done <id> -m "..." --version N`: the headline, the open children, and
    which sources you could not read. An active delivery parent is exempt: keep it open while child work remains, and
    write the same note on it.
 
@@ -73,7 +73,7 @@ Always:
 Read a parent and its children with `hub task show <id>` and `hub task tree <id>`. Read pull requests with
 `gh pr list -R <repo> --state open`, `gh pr view <number> -R <repo>` and `gh pr checks <number> -R <repo>`. Read the
 team with `hub team show`. Nudge an engineer on their child task with `hub task comment`, one item and one link per
-nudge. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. Finish every task, quiet week or not.
+nudge. A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. Finish every task, quiet week or not.
 
 ## Method
 Each outcome follows one sequence: plan, split, dispatch, track, report, close. Keep the order.

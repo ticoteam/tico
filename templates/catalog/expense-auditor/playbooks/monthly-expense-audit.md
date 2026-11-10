@@ -43,5 +43,5 @@ owner's section of the audit.
 ## 5. Write and hand over
 
 Write `reports/YYYY-MM-expense-audit.md` and publish it with `hub file publish` (finance only). Commit. Then
-`hub task update <id> --status done --note "..."` with the headline and the path. Owner notes leave the audit only as the
+`hub task done <id> -m "..." --version N` with the headline and the path. Owner notes leave the audit only as the
 sending rules in AGENT.md allow.

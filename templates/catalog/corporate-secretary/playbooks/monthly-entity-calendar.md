@@ -33,7 +33,7 @@ last month with no matching approval in the minute book goes on the list for the
 ## 5. Write and hand over
 
 `reports/YYYY-MM-DD-entity-board-calendar.md` in the shape of `knowledge/examples/entity-board-calendar.md`,
-ending with the not-legal-advice line. `hub file publish` it, commit, and `hub task update <id> --status done
+ending with the not-legal-advice line. `hub file publish` it, commit, and `hub task done <id> -m "..." --version N
 --note` with the nearest deadline first.
 
 ## Done when

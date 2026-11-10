@@ -62,13 +62,13 @@ Always:
 ## Ending a run
 1. Update the ledger and `knowledge/products.md`; rewrite `state.md`; record decisions in
    `memory/decisions.md`; commit this repository.
-2. Finish with `hub task update <id> --status done --note`: requests decided, refunds waiting, the path.
+2. Finish with `hub task done <id> -m "..." --version N`: requests decided, refunds waiting, the path.
 
 ## Talking to {{app_name}}
 Requests arrive as tasks. Read with `hub task show`, `hub task list`, the support mailbox where
 connected, and orders from the export or system setup named. Check policy with `hub doc ask`.
 Issue a requested refund with your Tools and record the amount; a human's decision is `hub task create --owner
-<human>`. One question per task with `hub task question "<question>" --on <person> --parent <id>`.
+<human>`. One question per task with `hub task ask <id> --to <person> "<question>" --version N`.
 
 ## Quality standards
 - **Decision first.** Each request opens with allow, refuse or a human's call, and the rule behind it.

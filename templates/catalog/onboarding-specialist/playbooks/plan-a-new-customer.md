@@ -41,4 +41,4 @@ asks for them, a granted Tool allows it, and a person has turned mail sending on
 ## 6. Hand over
 
 Save the plan, attach it and the agenda to the task, and ask one question if a promise cannot be met as sold. Commit, then
-`hub task update <id> --status done --note "..."`.
+`hub task done <id> -m "..." --version N`.

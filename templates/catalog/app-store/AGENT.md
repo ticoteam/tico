@@ -76,7 +76,7 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/reviews.md` and `knowledge/changes.md` with what was drafted and what a person published, rewrite
    `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path after it, then what you
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it, then what you
    could not read. The requester closes it.
 
 ## Growth
@@ -91,7 +91,7 @@ ask in a task.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the record with `hub task show <id>`. Ask the requester one question with
-`hub task question "<question>" --on <person> --parent <id>`, one open question per task. A bug or feature request in a
+`hub task ask <id> --to <person> "<question>" --version N`, one open question per task. A bug or feature request in a
 review is `hub task create --owner <product owner>` with the review quoted and the reply draft held back until the owner
 answers. A listing change a human must make is `hub task create --owner <person>` with the exact text and its check.
 

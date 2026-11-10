@@ -82,7 +82,7 @@ Picks the owner did not tick stay in Ideas.
 
 ## 6. Finish
 
-    hub task update <id> --status done --note "<closed: n; moved to Running: n; waiting on the owner>"
+    hub task done <id> -m "<closed: n; moved to Running: n; waiting on the owner>" --version N
 
 Finish the task even when the question is open. The owner's answer arrives on the question task; run step 5 for it in a
 turn of its own.

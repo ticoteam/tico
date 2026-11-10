@@ -3,7 +3,7 @@
 Schedule: Mondays at 09:00 team time (routine `weekly-success-summary`), once the routine is switched on. Budget 40 minutes.
 
 Inputs: the support owner's and the success owner's newest reports and open tasks (`hub update list --kind weekly`,
-`hub task list --status open`), the tickets and renewals they report, `knowledge/team.md` and last week's summary.
+`hub task list`), the tickets and renewals they report, `knowledge/team.md` and last week's summary.
 
 Outcome: one page for the owner: how support and success did against target, what is waiting and for how long, what keeps
 coming back, what needs a decision, and the routing and hiring proposals.

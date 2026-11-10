@@ -10,7 +10,7 @@ shared or changed.
 ## 1. Read where things stand
 
     hub task show <id>
-    hub task list --label segment:<slug> --status open --status doing --status waiting
+    hub task list --label segment:<slug>
 
 Then `knowledge/segment.md`, `knowledge/problems.md`, `knowledge/briefs.md` and last week's review. Note the date of the
 last review: step 3 reads from it.
@@ -22,7 +22,7 @@ retention cohorts with `skills/read-a-segment-retention-cohort/SKILL.md`. Write 
 its cohort dates, and say "not yet" for a cohort too young to read.
 
 If no export is attached, say which one is missing and for which dates, ask once with
-`hub task question "<question>" --on <person> --parent <id>`, and finish the rest of the review. Never fill the gap from
+`hub task ask <id> --to <person> "<question>" --version N`, and finish the rest of the review. Never fill the gap from
 last week's reading.
 
 ## 3. Read the problems since the last review
@@ -57,7 +57,7 @@ review, and the review says so.
 
 Write `reports/YYYY-MM-DD-segment-product-review.md` in the shape of `knowledge/examples/segment-product-review.md`, then
 `hub file publish reports/YYYY-MM-DD-segment-product-review.md`. Update `knowledge/briefs.md`, commit this repository, and
-finish with `hub task update <id> --status done --note`: the headline, the path, the briefs filed and what you could not read.
+finish with `hub task done <id> -m "..." --version N`: the headline, the path, the briefs filed and what you could not read.
 
 Done when: the review is published with the number against target and its window; each problem has its accounts and its
 sources; every brief filed has its task id; and each decision waiting is named with who owes it.

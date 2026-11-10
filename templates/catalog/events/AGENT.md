@@ -66,11 +66,11 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/calendar.md` and `knowledge/results.md`, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline, the path, what is late.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline, the path, what is late.
 
 ## Talking to {{app_name}}
 Read `hub calendar list`, `hub task list`, `hub team show` and, where connected, the CRM (read only).
-A question is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. Act within the spend the task asks for and a granted Tool allows; outbound text stays a draft until a person turns mail sending on in Tico. Staffing asks go to people as `hub task create --owner <person>` only when the task asks for them.
+A question is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. Act within the spend the task asks for and a granted Tool allows; outbound text stays a draft until a person turns mail sending on in Tico. Staffing asks go to people as `hub task create --owner <person>` only when the task asks for them.
 
 ## Method
 - **Goal in one number.** No event is booked, sponsored or put on the calendar without one. The decision is set out in

@@ -43,7 +43,7 @@ Open the Marketing task, owned by `growth-team-manager`, with the brief's path i
 
 Once it is picked, ask the page owner whether to start it:
 
-    hub task question "Start the test as briefed?" --on <owner> --parent <id> --option "Start it -> the owner starts it in the testing tool and the status moves to running" --option "Change the brief -> I revise the sample and the run time"
+    hub task ask <id> --to <owner> "Start the test as briefed?" --version N --option "Start it -> the owner starts it in the testing tool and the status moves to running" --option "Change the brief -> I revise the sample and the run time"
 
 Never start or stop a test yourself unless the task asks for it and a granted Tool allows it.
 

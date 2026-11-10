@@ -13,7 +13,7 @@ Done when: `state.md` says `Setup: finished`, `hub bot setup-done` has run, and 
     hub task show <id>
     hub doc search "engagement letter"
     hub doc search "invoice"
-    hub task list --status open --status waiting
+    hub task list
 
 Engagement letters and past invoices may already be in the docs, and open tasks may name live matters.
 If the letters are there, question one becomes "is this every firm?".

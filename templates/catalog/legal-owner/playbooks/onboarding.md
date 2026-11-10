@@ -13,7 +13,7 @@ Done when: `state.md` says `Setup: finished`, `hub bot setup-done` has run, and 
 
     hub task show <id>
     hub team show
-    hub task list --status open --status doing --status waiting
+    hub task list
     hub doc search "policy"
     hub doc search "agreement"
 

@@ -47,10 +47,10 @@ Done when: the change is made as the requester and read back, or the refusal is 
 - `hub task comment <id> "<text>"`: a comment on the task, with your name. Add `--defer never` for a quiet note that wakes nobody;
   only whoever you @mention reaches it.
 - `hub task follow <id>` and `hub task unfollow <id>`: follow a task you care about, or stop when you are done with it.
-- `hub task question "<question>" --on <person> --parent <id>`: a question on the task.
+- `hub task ask <id> --to <person> "<question>" --version N`: a question on the task.
 - `hub task update <id> --status waiting --on <person> --note "<text>"`: set a task waiting on a person, with the one thing they
   must do.
-- `hub task update <id> --status done --note "<result>"`: finish a task you own.
+- `hub task done <id> -m "<result>" --version N`: finish a task you own.
 - `hub task close <id> --note "Done: <one line>"`: close a task whose condition is now true.
 
 ## Build and change a bot

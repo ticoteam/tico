@@ -48,4 +48,4 @@ in one run. Any other version or commit asks again. A failed step stops the roll
 
 Update `knowledge/versioning.md` with the release, its date and commit, and record the release in `state.md`. The task gets one
 comment: the version and commit, the release link, the notes' path, the readiness outcome, and per install before and after with
-its outcome. Then `hub task update <id> --status done --note`, with the version in the first line.
+its outcome. Then `hub task done <id> -m "..." --version N`, with the version in the first line.

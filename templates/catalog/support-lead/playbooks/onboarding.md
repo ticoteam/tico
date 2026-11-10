@@ -9,7 +9,7 @@ and the first routine checked.
 ## 1. Read before you ask
 
     hub team show --team support
-    hub task list --status open
+    hub task list
     hub update list --kind weekly --limit 10
 
 Note which support bots exist, who owns them and what they last reported. Check whether a support

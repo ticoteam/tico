@@ -27,5 +27,5 @@ difference is at the top of the report), the report is published, and the task i
 
 ## 2. Write and hand over
 
-Write `reports/YYYY-MM-DD-raise-review.md`, `hub file publish` it, commit, and `hub task update <id> --status done --note`
+Write `reports/YYYY-MM-DD-raise-review.md`, `hub file publish` it, commit, and `hub task done <id> -m "..." --version N`
 with the headline.

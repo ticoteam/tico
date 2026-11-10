@@ -41,4 +41,4 @@ write the exact text (under 120 words, one clear ask, their goal in the first li
 Write `reports/YYYY-MM-DD-onboarding-board.md` in the shape of `knowledge/examples/onboarding-board.md`, then
 `hub file publish reports/YYYY-MM-DD-onboarding-board.md`. Put the messages on the task as separate items so each can be checked on
 its own. A customer who reached go-live gets a handover task to `customer-success`. Commit, then
-`hub task update <id> --status done --note "..."` with the counts and the path.
+`hub task done <id> -m "..." --version N` with the counts and the path.

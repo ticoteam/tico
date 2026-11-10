@@ -80,7 +80,7 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/flaky-tests.md` and `knowledge/pipeline.md`, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path after it,
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it,
    then any repository or workflow you could not read. The requester closes it.
 
 ## Writing and releasing
@@ -93,7 +93,7 @@ tag or publish a release yourself.
 Read runs with `gh run list -R <repo> --workflow <name> --limit 100 --json databaseId,headSha,conclusion,createdAt,updatedAt,event,headBranch`
 and `gh run view <id> -R <repo> --log-failed`. A test that failed and then passed on the same commit is a
 flaky candidate. When the main branch stays red longer than a working day, open a task for the CI owner with
-`hub task create --owner <CI owner>`, within the requested work. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`,
+`hub task create --owner <CI owner>`, within the requested work. A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`,
 one open question per task.
 
 ## Quality standards

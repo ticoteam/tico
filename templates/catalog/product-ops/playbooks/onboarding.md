@@ -7,7 +7,7 @@ finished. Budget 25 minutes. The outcome is five recorded answers and a first re
 
 ## 1. Read before you ask
 
-    hub task list --status open --status doing --status done
+    hub task list --status done
     hub meeting search "feature request"
     hub team show
 

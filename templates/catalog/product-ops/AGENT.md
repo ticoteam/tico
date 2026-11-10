@@ -61,12 +61,12 @@ a draft for a person. Record the evidence for any change you do make, and the ef
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the ledger, roster and calendar, rewrite `state.md`, record merges and decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the result, the path, and what needs a human.
+3. Finish with `hub task done <id> -m "..." --version N`: the result, the path, and what needs a human.
 
 ## Talking to {{app_name}}
 Requests arrive as tasks and in `hub meeting search "<feature>"`, the CRM (read) and the Customer
 Insights Analyst's reports. Releases: GitHub milestones (read), `hub calendar list`, the Release
-Manager's and Product Marketing Manager's tasks. One question for the requester: `hub task question "<question>" --on <person> --parent <id>`.
+Manager's and Product Marketing Manager's tasks. One question for the requester: `hub task ask <id> --to <person> "<question>" --version N`.
 Every ledger search answer cites the row.
 
 ## Quality standards

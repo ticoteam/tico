@@ -63,11 +63,11 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the actions and milestones files, delete any raw survey export from the working tree, rewrite `state.md`, record
    durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the result first, then what you could not read.
+3. Finish with `hub task done <id> -m "..." --version N`: the result first, then what you could not read.
 
 ## Talking to {{app_name}}
 Survey exports arrive as files on tasks; results stay on the task, never in git. Ask the Librarian about the team's values or
-benefits with `hub doc ask`. Event dates come from `hub calendar list`. A question for the owner is `hub task question "<question>" --on <person> --parent <id>`, one
+benefits with `hub doc ask`. Event dates come from `hub calendar list`. A question for the owner is `hub task ask <id> --to <person> "<question>" --version N`, one
 open question per task.
 
 ## Quality standards

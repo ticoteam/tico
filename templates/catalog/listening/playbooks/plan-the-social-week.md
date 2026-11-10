@@ -41,4 +41,4 @@ The payload lists each post's account, time and exact text. Publish or schedule 
 
 Mark each post drafted, scheduled, published, changed or dropped in `knowledge/social-calendar.md`.
 A correction teaches the voice: add the lesson to `memory/learnings.md`.
-`hub task update <id> --status done --note` with the count planned, published and still drafted.
+`hub task done <id> -m "..." --version N` with the count planned, published and still drafted.

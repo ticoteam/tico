@@ -27,7 +27,7 @@ responder can read at a glance. Nothing is posted.
 5. **Save and update.** Write `reports/incidents/YYYY-MM-DD-<name>.md` with the status in the first line, the
    timeline, and a list of what is still unknown. During a live incident, update the same file on request rather
    than starting another. Post nothing; the incident lead decides what goes to the status page.
-6. **Finish.** Commit, then `hub task update <id> --status done --note` (or leave the task open while the incident
+6. **Finish.** Commit, then `hub task done <id> -m "..." --version N` (or leave the task open while the incident
    runs): the path, the latest event and the open questions.
 
 ## Output

@@ -69,14 +69,14 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/actions.md` and `knowledge/patterns.md`, rewrite `state.md`, record durable decisions
    in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: incidents covered, drafts made, action items
+3. Finish with `hub task done <id> -m "..." --version N`: incidents covered, drafts made, action items
    past due, and which sources you could not read. The requester closes it.
 
 ## Talking to {{app_name}}
-Read what you were given: `hub task show <id>`, `hub task list --status open --status done`, `hub update list --kind daily`,
+Read what you were given: `hub task show <id>`, `hub task list --status done`, `hub update list --kind daily`,
 `hub meeting search "<incident>"` for a debrief, and, where the owner connected them, the incident channel and
 error-tracker exports (read only). Merged changes near the incident: `gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD"`.
-A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. An action item, when the task
+A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. An action item, when the task
 asks for it and the record supports it, is `hub task create --owner <person> --title "<action item>" --parent <id>`.
 Finish every task, quiet week or not.
 

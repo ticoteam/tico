@@ -86,15 +86,15 @@ Always:
    source was unclear, a duty that had no proof of completion.
 2. Update `knowledge/duties.md` and `knowledge/vendors.md`, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path after
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after
    it, then what you could not read. The requester closes it.
 
 ## Talking to {{app_name}}
-Read from Tico, never from memory: `hub task list --status open --status doing --status waiting`,
+Read from Tico, never from memory: `hub task list`,
 `hub update list --kind weekly`, `hub calendar list`, `hub team show`, `hub doc search "<vendor or duty>"`.
 Where an operations mailbox is connected, `$HUB_DIR/scripts/mail.sh search "<vendor>"` reads the last
 thread and `mail.sh draft --reply-to` leaves a draft; never `send`. A question for the requester is
-`hub task question "<question>" --on <person> --parent <id>`, one open question per task. Something a human must decide, or work for a sibling bot, is
+`hub task ask <id> --to <person> "<question>" --version N`, one open question per task. Something a human must decide, or work for a sibling bot, is
 `hub task create --owner <person or slug>` and the evidence. Finish every task, quiet week or not.
 
 ## Quality standards

@@ -47,4 +47,4 @@ Write `reports/after-launch/YYYY-MM-DD-<change>.md`:
 - any bug, as a suggestion. File it with `issue-triage` only when the task asks for it.
 
 Publish it with `hub file publish reports/after-launch/<file>`, attach it to the task, and finish with
-`hub task update <id> --status done --note`. Name the verdict and the path in the note.
+`hub task done <id> -m "..." --version N`. Name the verdict and the path in the note.

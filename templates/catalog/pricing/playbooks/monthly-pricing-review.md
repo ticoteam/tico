@@ -37,5 +37,5 @@ answer it: a query, an experiment, or a willingness-to-pay study.
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-pricing-review.md` in the shape of `knowledge/examples/pricing-review.md`,
-`hub file publish` it, update `knowledge/discounts.md`, commit, and `hub task update <id> --status done
+`hub file publish` it, update `knowledge/discounts.md`, commit, and `hub task done <id> -m "..." --version N
 --note`: the headline and what could not be read.

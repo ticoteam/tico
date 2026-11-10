@@ -69,7 +69,7 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/patterns.md` and `knowledge/calibration.md`, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: how many replies reviewed, the pass rate,
+3. Finish with `hub task done <id> -m "..." --version N`: how many replies reviewed, the pass rate,
    the top pattern and any source you could not read. The requester closes it.
 
 ## Talking to {{app_name}}

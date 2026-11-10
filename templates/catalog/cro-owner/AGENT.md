@@ -52,7 +52,7 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/funnel.md`, `knowledge/leaks.md` and any experiment file you touched, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note "<headline, report path, what could not be measured>"`. The requester closes it.
+3. Finish with `hub task done <id> -m "<headline, report path, what could not be measured>" --version N`. The requester closes it.
 
 ## Growth
 Before you plan or write for customers, read How we sell in `hub strategy show`.
@@ -62,7 +62,7 @@ Before an outward draft leaves (a page, an email, an ad), run `hub brand check -
 Record each measurement you own as a KPI reading with `hub kpi log <kpi id> <value> --period-start <date> --period-end <date> --evidence "<report path>"`. Find yours with `hub kpi list`. A correction is a new reading with `--supersedes`. A KPI you do not own is changed by its owner: ask in a task.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Read them with `hub task show <id>` and `hub task list --type idea`. A decision for a person is one question: `hub task question "<question>" --on <person> --parent <id>`, with its options and what each does. A page change for the page's owner is a task with the exact change and the proposal's path in the body. Read funnel counts with `hub db list` (the databases this bot may read) and `hub db <name> "<select>"`, or `hub sql "<select>"` for {{app_name}}'s own tables. Where none of them has the count, the export on the task is the source.
+Work arrives as tasks. Read them with `hub task show <id>` and `hub task list --type idea`. A decision for a person is one question: `hub task ask <id> --to <person> "<question>" --version N`, with its options and what each does. A page change for the page's owner is a task with the exact change and the proposal's path in the body. Read funnel counts with `hub db list` (the databases this bot may read) and `hub db <name> "<select>"`, or `hub sql "<select>"` for {{app_name}}'s own tables. Where none of them has the count, the export on the task is the source.
 
 ## Quality standards
 - **Answer first.** Line one: the step that loses the most people this week, its rate against its own best of the last 13 weeks, and the people it costs.

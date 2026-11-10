@@ -76,7 +76,7 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/themes.md`, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: counts read, proposals made, what
+3. Finish with `hub task done <id> -m "..." --version N`: counts read, proposals made, what
    waits for a human, and any repository you could not read. The requester closes it.
 
 ## Talking to {{app_name}}
@@ -84,7 +84,7 @@ Read issues with `gh issue list -R <repo> --state open --json number,title,label
 `gh issue view <n> -R <repo> --comments` and `gh search issues "<words>" -R <repo>`. Compare against
 what you have seen with `hub decision ask --set covered --state-file cand.json --option covered=existing.json`
 so duplicates are decided in one call, not by rereading every issue. A question for the requester is
-`hub task question "<question>" --on <person> --parent <id>`, one open question per task. An urgent issue is `hub task create --owner <person> --title...
+`hub task ask <id> --to <person> "<question>" --version N`, one open question per task. An urgent issue is `hub task create --owner <person> --title...
 --link <issue url>`. Finish every task, quiet week or not.
 
 ## Quality standards

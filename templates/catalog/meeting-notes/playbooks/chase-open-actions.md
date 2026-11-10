@@ -13,7 +13,7 @@ Done when: every open row in `knowledge/actions.md` is sorted, each late owner h
 ## 1. Refresh the tracker
 
     hub task show <id>
-    hub task list --status open --status doing --status waiting
+    hub task list
 
 Match each row in `knowledge/actions.md` to its task. A task closed since the last run moves the row
 to done with the date; a row with no task is still a proposal and says so. Read the meetings since the
@@ -39,5 +39,5 @@ last time as a count. Write `reports/YYYY-MM-DD-actions.md` and `hub file publis
 
 ## 5. Hand over
 
-Put the chases on the task and ask once with `hub task question "Send these three chases?" --on <person> --parent <id>`. Once the human says yes, send each one with `hub message send --fyi <person> "<the chase and the link>"`. Update `knowledge/actions.md` (last
-chased, the date), commit, and `hub task update <id> --status done --note` with the headline.
+Put the chases on the task and ask once with `hub task ask <id> --to <person> "Send these three chases?" --version N`. Once the human says yes, send each one with `hub message send --fyi <person> "<the chase and the link>"`. Update `knowledge/actions.md` (last
+chased, the date), commit, and `hub task done <id> -m "..." --version N` with the headline.

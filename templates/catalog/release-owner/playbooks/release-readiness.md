@@ -37,7 +37,7 @@ not green: a line you could not check says so. A line marked not checked is not 
 ## 4. Hand over
 
 Write `reports/releases/<version>-readiness.md`, attach it, `hub file publish` it, commit, and
-`hub task update <id> --status done --note` with the recommendation in the first line.
+`hub task done <id> -m "..." --version N` with the recommendation in the first line.
 
 ## Shared release checklist
 

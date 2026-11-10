@@ -38,7 +38,7 @@ one; do not leave a menu. Cite the entity so the evidence stays one click away. 
 
 ## 4. Finish
 
-`hub task update <id> --status done --note "<bets weighed; proposals filed or none>"`. Add one line to `state.md` and
+`hub task done <id> -m "<bets weighed; proposals filed or none>" --version N`. Add one line to `state.md` and
 commit this repository. Reply in 1 to 3 short lines, one per bet weighed: the bet by its statement, whether it holds or a
 proposal was filed, and why in one short sentence, under 30 words per line. No bullets. Do not say the task is closed or that state.md or a commit was written; nothing else.
 

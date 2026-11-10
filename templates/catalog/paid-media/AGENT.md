@@ -66,7 +66,7 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/changes.md` with what was requested and applied, rewrite `state.md`, record
    durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline, the report path, what you
+3. Finish with `hub task done <id> -m "..." --version N`: the headline, the report path, what you
    could not read.
 
 ## Growth
@@ -81,7 +81,7 @@ Record each measurement as a KPI reading with `hub kpi log <kpi id> <value> --pe
 A channel you do not own is changed by its owner: ask in a task.
 
 ## Talking to {{app_name}}
-Work arrives as tasks with exports attached. A question is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. A
+Work arrives as tasks with exports attached. A question is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. A
 change a human must make is `hub task create --owner <person>` with the exact edit. Apply requested spend with your Tools; new public copy stays a draft until a person turns mail sending on in Tico. Read the funnel with `hub goal list` and, where connected, the
 CRM (read only).
 

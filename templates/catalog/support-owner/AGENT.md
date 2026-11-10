@@ -119,14 +119,14 @@ work, how often it came up and what it cost or risked, and send the note to `suc
    one task for every doc gap this run found: a third ticket on a question the docs never answer is
    the strongest reason to write it.
 3. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-4. Finish with `hub task update <id> --status done --note`: how many came in, how many you drafted,
+4. Finish with `hub task done <id> -m "..." --version N`: how many came in, how many you drafted,
    what needs a human and why, and any source you could not read. The requester closes it.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: read the record first (`hub task show <id>`, `hub task list`, `hub task list --all`).
 Mail, where you have it: `$HUB_DIR/scripts/mail.sh inbox --untriaged --format brief`, then
 `mail.sh thread <id> --format md` for one thread you are about to answer (docs/mail.md). Research the answer
-with `hub doc ask "<the customer's question in plain words>"` before you draft. Ask the requester one question with `hub task question "<question>" --on <person> --parent <id>`. Something a
+with `hub doc ask "<the customer's question in plain words>"` before you draft. Ask the requester one question with `hub task ask <id> --to <person> "<question>" --version N`. Something a
 human must decide is `hub task create --owner <human>`; a repeated product problem is one such task
 for whoever `knowledge/escalation.md` names. A bot that cannot run, or a source that will not connect, is a task to
 `botops`. Finish every task, quiet day or not. A `hub doc ask` that does not

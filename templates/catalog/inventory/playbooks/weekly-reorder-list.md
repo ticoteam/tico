@@ -12,7 +12,7 @@ headline and the export dates used.
 ## 1. Get this week's data
 
 The sales and stock exports on the task. If they are missing or older than 7 days, ask once with
-`hub task question "<question>" --on <person> --parent <id>` and build the list from the last exports, saying so in the first line.
+`hub task ask <id> --to <person> "<question>" --version N` and build the list from the last exports, saying so in the first line.
 
 ## 2. Update the item plan
 
@@ -42,4 +42,4 @@ allows it. Otherwise name the missing access on the page.
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-reorder.md` in the shape of `knowledge/examples/reorder-list.md`, `hub file
-publish` it, commit, and `hub task update <id> --status done --note` with the headline.
+publish` it, commit, and `hub task done <id> -m "..." --version N` with the headline.

@@ -55,7 +55,7 @@ Never copy a credential, a tax id or a bank detail into a file; name where it is
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the register and proof, rewrite `state.md`, record decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: overdue and urgent items first, then the path.
+3. Finish with `hub task done <id> -m "..." --version N`: overdue and urgent items first, then the path.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Formation documents and last year's filings: `hub doc search "<authority> annual

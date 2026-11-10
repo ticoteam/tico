@@ -77,7 +77,7 @@ Always:
    competitor fact does not go into a file in this repo. A source behaviour still goes into
    `knowledge/sources.md`.
 3. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-4. Finish the task with `hub task update <id> --status done --note`, with hits or with the one line
+4. Finish the task with `hub task done <id> -m "..." --version N`, with hits or with the one line
    that says what was read and that nothing was found. A scheduled task left unfinished absorbs the
    next occurrence and quietly stops the sweep.
 
@@ -85,7 +85,7 @@ Always:
 Work arrives as scheduled tasks. Findings leave as child tasks and nothing else: something worth
 writing about is `hub task create --owner content --parent <id>` with the link, one line on why, and
 the angle; something a human should see is `hub task create --owner <person> --parent <id>` with the
-link and one line. Ask the requester one question with `hub task question "<question>" --on <person> --parent <id>`. Send a post only with its text, account and time, when the task asks for it, a granted Tool allows it, and a person has turned mail sending on in Tico. Otherwise keep the draft.
+link and one line. Ask the requester one question with `hub task ask <id> --to <person> "<question>" --version N`. Send a post only with its text, account and time, when the task asks for it, a granted Tool allows it, and a person has turned mail sending on in Tico. Otherwise keep the draft.
 
 ## Method
 - **Precision before volume.** A query is trusted only after its exclusions are tested and a fixed sample of its hits is

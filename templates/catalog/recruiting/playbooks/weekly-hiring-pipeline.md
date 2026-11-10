@@ -4,7 +4,7 @@ Schedule: Fridays at 10:00 team time (routine `weekly-hiring-pipeline`), after s
 30 minutes.
 
 Inputs: `knowledge/pipeline.md`, every `knowledge/roles/<role>.md` for an open role, last week's page, and the open hiring
-tasks (`hub task list --status open --status doing --status waiting`).
+tasks (`hub task list`).
 
 Outcome: one page for the hiring managers, in the shape of `knowledge/examples/hiring-pipeline.md`. It shows where each open
 role stands, who is waiting on a human past the agreed wait, which replies are ready to send, and which kits need work.
@@ -18,7 +18,7 @@ is published, and the task note carries the headline.
 ## 1. Read where things stand
 
     hub task show <id>
-    hub task list --status open --status doing --status waiting
+    hub task list
 
 Then read `knowledge/pipeline.md`, the role file for each open role, and last week's page.
 
@@ -53,7 +53,7 @@ Write `reports/YYYY-MM-DD-hiring-pipeline.md` in the shape of `knowledge/example
 
     hub file publish reports/YYYY-MM-DD-hiring-pipeline.md
 
-Close the task with `hub task update <id> --status done --note "..."`: the headline, the counts, and what you could not read.
+Close the task with `hub task done <id> -m "..." --version N`: the headline, the counts, and what you could not read.
 
 ## When a source fails
 

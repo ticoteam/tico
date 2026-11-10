@@ -34,5 +34,5 @@ under "Left out" with its reason. Count the items you read and check the count a
 ## 5. Write and hand over
 
 Write `reports/YYYY-MM-DD-spec-review.md` in the shape of `knowledge/examples/spec-review.md`, then
-`hub file publish reports/YYYY-MM-DD-spec-review.md`. Commit, and `hub task update <id> --status done
+`hub file publish reports/YYYY-MM-DD-spec-review.md`. Commit, and `hub task done <id> -m "..." --version N
 --note`: the headline, the blocking questions and their owners, and what you could not read.

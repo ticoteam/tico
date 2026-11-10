@@ -29,4 +29,4 @@ Is it on the roadmap, specced, shipped or declined? Link the spec or the decisio
 
 On the task: the row it went to, how many accounts now ask, and its status, in words the sender can
 repeat without a promise: "Logged with 12 other accounts; not on the current roadmap." Then
-`hub task update <id> --status done --note`.
+`hub task done <id> -m "..." --version N`.

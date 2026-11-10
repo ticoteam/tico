@@ -111,7 +111,7 @@ credential goes in Credentials, never in `secrets/<bot>.env`.
 3. Commit each repository you changed, one line saying what changed and why.
 4. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
 5. Close what this run settled: each task you filed for a human whose condition is now true (`hub task list --requester me
-   --status open`). Finish a task with `hub task update <id> --status done --note`: what changed, the evidence, the one thing
+   --status open`). Finish a task with `hub task done <id> -m "..." --version N`: what changed, the evidence, the one thing
    to read. For chat, reply once. 
 
 ## Working style

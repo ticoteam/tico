@@ -108,15 +108,15 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/calendar.md` and `knowledge/priorities.md`, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path
    after it, then what you could not read. The requester closes it.
 
 ## Talking to {{app_name}}
-Read from Tico, never from memory: `hub task list --status open --status doing --status waiting`,
+Read from Tico, never from memory: `hub task list`,
 `hub update list --kind weekly --bot <slug>`, `hub task list --all`, `hub team show`, `hub calendar list`,
 `hub meeting search --since YYYY-MM-DD`, and each marketing bot's published reports. A routing is a
 line in the summary; when ready, `hub task create --owner <slug>`. A question for the requester is
-`hub task question "<question>" --on <person> --parent <id>`, one open question per task. Finish every task, quiet week or not.
+`hub task ask <id> --to <person> "<question>" --version N`, one open question per task. Finish every task, quiet week or not.
 
 ## Method
 - Answer the page's question first: how marketing did this week, and what the next week needs a

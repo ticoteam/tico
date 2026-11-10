@@ -48,4 +48,4 @@ When an idea follows a test that has closed, relate the new idea to the closed o
 ## 6. Finish
 
 List each idea filed, with its task id, in the weekly review. If this playbook was the task, finish it with
-`hub task update <id> --status done --note "<ideas filed: n; ids>"`.
+`hub task done <id> -m "<ideas filed: n; ids>" --version N`.

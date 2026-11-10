@@ -65,7 +65,7 @@ Write `reports/YYYY-MM-DD-account-review.md` in the shape of `knowledge/examples
 
 Commit, then:
 
-    hub task update <id> --status done --note "..."
+    hub task done <id> -m "..." --version N
 
 The note holds the notice deadlines within 30 days, the packs waiting on a price, and the sources you could not read. Always
 finish the task.

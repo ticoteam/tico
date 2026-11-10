@@ -32,5 +32,5 @@ changes, with date and the source request, in `knowledge/routing-rules.md`.
 
 ## 5. Finish
 
-Commit and `hub task update <id> --status done --note`: leads routed or proposed, rule gaps found, what
+Commit and `hub task done <id> -m "..." --version N`: leads routed or proposed, rule gaps found, what
 waits on a human.

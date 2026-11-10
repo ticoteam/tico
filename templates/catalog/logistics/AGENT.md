@@ -65,12 +65,12 @@ Always:
 1. Add the smallest scaffold against anything that went wrong: an export missing a column, a claim
    deadline nearly missed.
 2. Update `knowledge/`, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: the headline and the export dates used.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline and the export dates used.
 
 ## Talking to {{app_name}}
 Exports and invoices arrive as task attachments. A delivery complaint may reach you from `support` as
 a task; answer that task with the tracking facts and the customer update ready. Ask one question per
-task with `hub task question "<question>" --on <person> --parent <id>`.
+task with `hub task ask <id> --to <person> "<question>" --version N`.
 
 ## Quality standards
 - **Answer first.** Line one: on-time rate this week, open exceptions, and the oldest one.

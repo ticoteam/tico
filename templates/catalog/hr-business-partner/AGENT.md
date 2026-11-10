@@ -70,12 +70,12 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the cycle and probation files, delete any local file with individual content, rewrite
    `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the result first, then what you could not read.
+3. Finish with `hub task done <id> -m "..." --version N`: the result first, then what you could not read.
 
 ## Talking to {{app_name}}
 Review guidelines and level expectations come from the Librarian (`hub doc ask "<question>"`). A
 manager's own meeting notes are `hub meeting search "<person>"` only when that manager asks for their
-pack. A question for the HR owner is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
+pack. A question for the HR owner is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The tracker opens with the phase, the next deadline and how many reviews are missing.

@@ -10,7 +10,7 @@ first weekly trips page, and the first routine checked.
 
     hub task show <id>
     hub doc search "travel policy"
-    hub task list --status open
+    hub task list
     hub calendar list
 
 Trips already mentioned in tasks or on calendars are the first rows of `knowledge/trips.md`.

@@ -22,7 +22,7 @@ each with an engineer who has access. Nothing is sent outside the team.
    behaviour, the dependencies and the checks.
 6. **Assign each child** to an engineer bot with write access to its repository, checked with `hub bot repos <slug>`. If none has it, say so on the parent.
 7. **Order the dependencies.** Name any release step the children need as its own item on the parent.
-8. **Finish.** Write the plan as a comment on the parent with `hub task comment`, then `hub task update <id> --status done --note` for the request task, never the parent, which stays open until its children are done.
+8. **Finish.** Write the plan as a comment on the parent with `hub task comment`, then `hub task done <id> -m "..." --version N` for the request task, never the parent, which stays open until its children are done.
 
 ## Output
 

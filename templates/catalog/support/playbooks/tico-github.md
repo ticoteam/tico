@@ -53,7 +53,7 @@ and paste the draft. You only read GitHub: you never comment, label, close or ed
 
 ## 4. Finish
 
-`hub task update <id> --status done --note`: the bucket, whether a draft is on the task, and the engineering task if any. When a
+`hub task done <id> -m "..." --version N`: the bucket, whether a draft is on the task, and the engineering task if any. When a
 "closed on GitHub" note arrives on an open task, finish it. When someone writes on a thread you have finished, a new note or task
 arrives: read the thread again.
 

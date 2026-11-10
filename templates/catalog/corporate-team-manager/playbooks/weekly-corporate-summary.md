@@ -3,7 +3,7 @@
 Schedule: Mondays at 09:00 team time (routine `weekly-corporate-summary`), once the routine is switched on. Budget 40 minutes.
 
 Inputs: `knowledge/deadlines.md` and `knowledge/team.md`; the legal, finance and partnership owners' newest reports and open
-tasks (`hub update list --kind weekly`, `hub task list --status open`); the Finance Owner's latest headline from its report.
+tasks (`hub update list --kind weekly`, `hub task list`); the Finance Owner's latest headline from its report.
 
 Outcome: one page for the owner: the deadlines in the next 30 days with their owners, the open legal requests and how long
 they have waited, the books' headline, the partner work waiting, the decisions needed, and the routing proposals.

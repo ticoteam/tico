@@ -63,10 +63,10 @@ These three need the task to ask for them and a granted Tool to allow them. Othe
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a plan alias, a policy question.
 2. Update the schedule, rewrite `state.md`, record decisions in `memory/decisions.md`, and commit.
-3. Finish with `hub task update <id> --status done --note`: reconciled or the difference, the path.
+3. Finish with `hub task done <id> -m "..." --version N`: reconciled or the difference, the path.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Ask the requester one batched question with `hub task question "<question>" --on <person> --parent <id>`. A contract that only a human has is
+Work arrives as tasks. Ask the requester one batched question with `hub task ask <id> --to <person> "<question>" --version N`. A contract that only a human has is
 asked for on the task; closed-won deals where the CRM is readable show contracts before the first invoice. Keep
 `hub bot status set` to one line with no figures.
 

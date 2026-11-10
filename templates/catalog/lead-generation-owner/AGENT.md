@@ -57,7 +57,7 @@ A hand-off is a task to the sales owner, not a message to the lead: `hub task cr
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/sources.md`, the lists you touched, and `knowledge/lead-method.md` if a rule needed correcting. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note "..."`: the qualified count with its window, the hand-offs made and any not yet picked up, and what could not be counted. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the qualified count with its window, the hand-offs made and any not yet picked up, and what could not be counted. The requester closes it.
 
 ## Growth
 Before you plan a source or write for customers, read How we sell in `hub strategy show`.
@@ -66,7 +66,7 @@ Record each measurement you own as a KPI reading with `hub kpi log <kpi id> <val
 Before an outward draft leaves (a page, an email, an ad, a listing), run `hub brand check -` on it, fix every hit, then check each claim against `hub brand show --section claims` yourself. Before you spend or contact anyone for a channel, read `hub rules list --mine`; a rule that blocks the work stops it.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Read them with `hub task show <id>` and `hub task list`. A decision for a person is one question: `hub task question "<question>" --on <person> --parent <id>`, with its options and what each does. Read leads with their source, stage, owner and first-touch time from the CRM where it is connected (`hub db list`, then `hub db <name> "<select>"`), or with `hub sql "<select>"` for the team's own tables. Where none has the data, the export on the task is the source. Segments come from `hub market segment tree`, and team targets from `hub goal list`: never keep a second list.
+Work arrives as tasks. Read them with `hub task show <id>` and `hub task list`. A decision for a person is one question: `hub task ask <id> --to <person> "<question>" --version N`, with its options and what each does. Read leads with their source, stage, owner and first-touch time from the CRM where it is connected (`hub db list`, then `hub db <name> "<select>"`), or with `hub sql "<select>"` for the team's own tables. Where none has the data, the export on the task is the source. Segments come from `hub market segment tree`, and team targets from `hub goal list`: never keep a second list.
 
 ## Quality standards
 - **Answer first.** Line one: the qualified leads last week, with their window, and the change against the four-week average.

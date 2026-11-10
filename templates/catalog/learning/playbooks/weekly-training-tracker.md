@@ -41,7 +41,7 @@ on any course request that has no answer yet.
 
 Write `reports/YYYY-MM-DD-training-tracker.md` in the shape of `knowledge/examples/training-tracker.md` (counts by team), then
 `hub file publish reports/YYYY-MM-DD-training-tracker.md --scope task --task <id>`. Put the per-manager lists on the task for
-review. Delete the export, commit, and `hub task update <id> --status done --note`.
+review. Delete the export, commit, and `hub task done <id> -m "..." --version N`.
 
 ## When a source fails
 

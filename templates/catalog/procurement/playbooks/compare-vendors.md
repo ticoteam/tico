@@ -22,7 +22,7 @@ published, and the task note carries the suggestion.
 
 Restate the need in one line: the job, for whom, how many seats or units, by when. Check `knowledge/vendors.md` for a tool
 the team already owns that does the job. If one exists, compare it too. Ask the requester one question with
-`hub task question "<question>" --on <person> --parent <id>` only if the need is unclear.
+`hub task ask <id> --to <person> "<question>" --version N` only if the need is unclear.
 
 ## 2. Shortlist three to five
 
@@ -63,7 +63,7 @@ here.
 ## 7. Finish
 
     hub file publish reports/R-<id>-comparison.md
-    hub task update <id> --status done --note "..."
+    hub task done <id> -m "..." --version N
 
 Attach the draft email to the task. The note holds the suggestion, the decide-by date and what could not be read. A page
 that failed to load makes its score provisional, and the report says so. The human contacts vendors and decides.

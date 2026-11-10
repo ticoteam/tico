@@ -14,7 +14,7 @@ named a decision for the owner, check whether it was made; say so in the first s
 
 ## 2. Collect the week's requests
 
-`hub task list --status open --status doing --status waiting` and any new task that is legal in kind (a
+`hub task list` and any new task that is legal in kind (a
 contract, an NDA, a notice, a privacy or employment question). Add each new one to `knowledge/requests.md`
 with its kind, urgency (a date or "none"), risk in one line and proposed owner. Close rows whose task is done.
 

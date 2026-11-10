@@ -27,5 +27,5 @@ Use `skills/write-an-owner-review-note/SKILL.md`. Keep it under 150 words.
 
 ## 4. Hand over
 
-Put the note on the task for the owner, then `hub task update <id> --status done --note "..."` with "Pass" or the count of
+Put the note on the task for the owner, then `hub task done <id> -m "..." --version N` with "Pass" or the count of
 questions. If the owner grants an exception, record it in `knowledge/exceptions.md` with who granted it and when.

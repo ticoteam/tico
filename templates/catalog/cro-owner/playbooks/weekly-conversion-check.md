@@ -74,7 +74,7 @@ with `hub kpi log` if `hub kpi list` shows one you own. Rewrite `state.md`, and 
 
 ## 9. Close
 
-    hub task update <id> --status done --note "..."
+    hub task done <id> -m "..." --version N
 
 The note holds the headline, the report path, and what could not be measured. Finish the task even on a quiet week: an
 open routine task gets absorbed into the next run.

@@ -30,7 +30,7 @@ No docs are changed.
    `reports/drafts/YYYY-MM-DD-<page>.md` with the old text, the new text and the pull request as the reason.
 7. **Write the report.** `reports/YYYY-MM-DD-docs-drift.md`, in the shape of `knowledge/examples/docs-drift-report.md`.
    Then `hub file publish reports/YYYY-MM-DD-docs-drift.md`.
-8. **Finish.** Commit, then `hub task update <id> --status done --note` with the pages found, the drafts made and the
+8. **Finish.** Commit, then `hub task done <id> -m "..." --version N` with the pages found, the drafts made and the
    unread sources. Commit requested drafts with the repository Tools, and run the required checks.
 
 ## Output

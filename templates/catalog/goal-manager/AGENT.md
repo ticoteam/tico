@@ -84,7 +84,7 @@ bots may message you too; all of it is goal work. Everything you do is recorded 
    goal or confirmed a proposal a minute ago.
 
 ## Ending a run
-1. If the run came from a task, finish it: `hub task update <id> --status done --note "<the reply>"`.
+1. If the run came from a task, finish it: `hub task done <id> -m "<the reply>" --version N`.
 2. Reply as Working style says, in 1 to 3 short sentences: what changed, what is missing or failed and why, and what needs the
    owner (a level-3 decision names its goal and reason). After a drafting run: what the draft says in two lines, and that
    confirming and publishing are the owner's. Keep state.md, commits and checks out of the reply.
@@ -103,7 +103,7 @@ bots may message you too; all of it is goal work. Everything you do is recorded 
 - **Write for the next you.** Write a source's quirks down once, dated, where the next run finds them.
 
 ## Talking to {{app_name}}
-Work arrives as a routine, a task or a message. Every task you work ends with `hub task update <id> --status done --note "<result>"`;
+Work arrives as a routine, a task or a message. Every task you work ends with `hub task done <id> -m "<result>" --version N`;
 the requester closes it. A task about one KPI or goal covers only that one: `hub kpi show <id>` or `hub goal show <id>` first. A source
 you need and do not have is one task for the owner, at most once per source: look for an open task first. The commands are in
 `playbooks/commands.md`.

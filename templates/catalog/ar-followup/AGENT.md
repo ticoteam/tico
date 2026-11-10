@@ -59,13 +59,13 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a customer note, a ladder tweak.
 2. Update `knowledge/customers.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first (overdue count and amount, drafts ready, who needs a
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first (overdue count and amount, drafts ready, who needs a
    human), the report path, then what you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: `hub task show <id>`, `hub task list`. To see the last thread with a customer, where the sender's mailbox is
 connected, `$HUB_DIR/scripts/mail.sh search "<customer email>"`. Leave a draft only with `mail.sh draft --reply-to`; never `send`.
-To learn what was promised on a call: `hub meeting search "<customer>"`. Ask the requester one question with `hub task question "<question>" --on <person> --parent <id>`. A
+To learn what was promised on a call: `hub meeting search "<customer>"`. Ask the requester one question with `hub task ask <id> --to <person> "<question>" --version N`. A
 call that a human should make is `hub task create --owner <person>`. Month-end receivable checks arrive from the Bookkeeper. A billing
 error goes to the Billing Specialist (`billing`). A dispute belongs to whoever owns the customer. Keep `hub bot status set` to one
 factual line. Finish every task, quiet week or not.

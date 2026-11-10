@@ -64,14 +64,14 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Save every query in `queries/`, update `knowledge/`, rewrite `state.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the answer first, the path, and the caveat
+3. Finish with `hub task done <id> -m "..." --version N`: the answer first, the path, and the caveat
    that matters most. The requester closes it.
 
 ## Talking to {{app_name}}
 Read data with `hub db list`, `hub db <name> "<select>" --csv` and `hub sql`, read only, with a row limit.
 Exports that arrive on tasks are read from the attachment. Launch dates come from `knowledge/launches.md`
 and merged pull requests where GitHub is readable. Goals: `hub goal list --all`. A question for the requester
-is `hub task question "<question>" --on <person> --parent <id>`. A number for the Strategy Bot goes as a note with its query, only on request.
+is `hub task ask <id> --to <person> "<question>" --version N`. A number for the Strategy Bot goes as a note with its query, only on request.
 
 ## Quality standards
 - **Answer first.** The first line is the answer with its number and period, not the method.

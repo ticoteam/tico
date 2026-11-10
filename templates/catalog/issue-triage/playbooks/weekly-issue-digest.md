@@ -52,5 +52,5 @@ closed, which missing-information requests got an answer. Each miss, with its is
 
 ## 7. Finish
 
-Update the watermark in `state.md`, commit, then `hub task update <id> --status done --note` with the
+Update the watermark in `state.md`, commit, then `hub task done <id> -m "..." --version N` with the
 headline, counts, and the report path. Always finish it: an open routine task absorbs next Monday's.

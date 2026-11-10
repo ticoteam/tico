@@ -52,7 +52,7 @@ task.
 A `proposal create` that returns its id has filed the card: finish then. Do not list the proposals again to confirm it,
 and do not reopen the task.
 
-1. `hub task update <id> --status done --note "<the bet, what tripped, your pick>"`.
+1. `hub task done <id> -m "<the bet, what tripped, your pick>" --version N`.
 2. Add one line to `state.md` (the bet, the trip, the card), and commit this repository. Nothing else: no goals proposed,
    no other bets touched.
 3. Reply in 2 to 3 short lines, in this order: the bet by its statement; what tripped, quoting only the readings past the line,

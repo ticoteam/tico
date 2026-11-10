@@ -62,7 +62,7 @@ If `state.md` says setup has not finished, do this before any other work:
    date (`hub task later <id> --at <date>` with the reason in a comment), release a hold whose reason is gone
    (`hub task unsnooze <id>`), open a BotOps task for a broken bot or tool (`hub task create --owner botops`), forward it to
    the right seat (`hub task update <id> --owner`), or propose a rule change to the pipeline's owner as a task. Say which one and why.
-5. Finish with `hub task update <id> --status done --note "<the headline>"` on the task that woke you, or leave it open with
+5. Finish with `hub task done <id> -m "<the headline>" --version N` on the task that woke you, or leave it open with
    the question you put to its requester.
 
 ## Sending

@@ -133,12 +133,12 @@ stays local until then. Never create a repository for a slug other than this bot
 
 If you filed a task for a human about this bot ("Create the record", "Add Sam", "Paste the key") and you have
 now done that work yourself, or it is already true, close it with one line: `hub task close <id> --note "Done:
-<what>"`. Find them with `hub task list --requester me --status open`. A task left open after the work is
+<what>"`. Find them with `hub task list --requester me`. A task left open after the work is
 done sends the human to do something that is finished.
 
 ## 6. Finish the task
 
-    hub task update <id> --status done --note "..."
+    hub task done <id> -m "..." --version N
 
 The note says, in this order:
 

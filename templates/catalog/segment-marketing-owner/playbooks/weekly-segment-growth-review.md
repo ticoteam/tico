@@ -9,7 +9,7 @@ customer against goal and ceiling, its tests, its asks and its message. Nothing 
 ## 1. Read where things stand
 
     hub task show <id>
-    hub task list --label segment:<slug> --status open --status doing --status waiting
+    hub task list --label segment:<slug>
 
 Then `knowledge/segment.md`, `knowledge/message.md`, `knowledge/asks.md` and last week's review. Note the date of the
 last review: steps 3 and 4 read from it.
@@ -56,7 +56,7 @@ development or Live for this segment is not filed again.
 
 Write `reports/YYYY-MM-DD-segment-growth-review.md` in the shape of `knowledge/examples/segment-growth-review.md`, then
 `hub file publish reports/YYYY-MM-DD-segment-growth-review.md`. Update `knowledge/asks.md` and `knowledge/message.md`,
-commit this repository, and finish with `hub task update <id> --status done --note`: the number against goal and
+commit this repository, and finish with `hub task done <id> -m "..." --version N`: the number against goal and
 ceiling, the tests, the asks, the ideas filed and what you could not read.
 
 Done when: the number is written with its split methods and month; every Live test has a line; every open ask has its

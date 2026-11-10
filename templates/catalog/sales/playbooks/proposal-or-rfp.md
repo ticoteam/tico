@@ -11,7 +11,7 @@ with a gap list on top. Prices, terms and undocumented answers are gaps with an 
     hub task show <id>
 
 Read `knowledge/deals/<deal>.md` and the discovery call. Note the deadline, the required format and who
-signs off internally. If there is no call and no note, ask once with `hub task question "<question>" --on <person> --parent <id>` for the buyer's
+signs off internally. If there is no call and no note, ask once with `hub task ask <id> --to <person> "<question>" --version N` for the buyer's
 three priorities.
 
 ## 2. A proposal
@@ -37,4 +37,4 @@ gap list at the top: the gap, the human, the day it is needed by.
 ## 5. Hand over
 
 Write `reports/YYYY-MM-DD-<deal>-proposal.md` (or `-rfp.md`), `hub file publish` it and attach it. Fill gaps from the stated terms. Send the final file to the recipient only when the task asks, mail sending is on in Tico, and a granted Tool allows it; otherwise keep it as a draft. Add each newly documented answer to `knowledge/library/` with its owner and date.
-`hub task update <id> --status done --note`: counts reused, adapted, new; open gaps and owners.
+`hub task done <id> -m "..." --version N`: counts reused, adapted, new; open gaps and owners.

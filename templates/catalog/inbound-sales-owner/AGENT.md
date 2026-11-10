@@ -75,7 +75,7 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Append each lead this run touched to `knowledge/lead-log.md`, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first (leads arrived, sorted, drafts ready,
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first (leads arrived, sorted, drafts ready,
    calls booked), then the leads waiting on a person, then any source you could not read. The requester closes it.
 
 ## Growth
@@ -93,7 +93,7 @@ A channel you do not own is changed by its owner: ask in a task.
 Work arrives as tasks, or from the sweep. Read with `hub task show <id>` and `hub task list`. To see what a lead said
 on a call, run `hub meeting search "<lead>"`, then `hub meeting read <id>`. `hub calendar list` shows the bookings on the
 company calendar: offer two times that fit the seller's working hours and do not clash with a booking. A decision for a
-person is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. A booked call goes to
+person is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. A booked call goes to
 whoever takes calls as `hub task create --owner <who takes calls> --title "<lead> call booked" --body-file <note>`. Keep
 `hub bot status set` to one factual line. Finish every task, quiet sweep or not.
 

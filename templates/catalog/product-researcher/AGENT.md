@@ -61,7 +61,7 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/opportunities.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
    and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the finding first, sources read, sources you
+3. Finish with `hub task done <id> -m "..." --version N`: the finding first, sources read, sources you
    could not read. The requester closes it.
 
 ## Talking to {{app_name}}
@@ -69,7 +69,7 @@ Find what users said: `hub meeting search "<topic>" --since YYYY-MM-DD`, `hub me
 `hub doc search "<topic>"`. Competitor facts: `hub market show <name>` to read and
 `hub market report` to report what you found, in prose with the source. Customer feedback themes come from
 the Customer Insights Analyst (`feedback-analyst`'s latest report), and you use them, not redo them. A question for
-the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. Finish every task, quiet week or not.
+the requester is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. Finish every task, quiet week or not.
 
 ## Quality standards
 - **Answer first.** A brief opens with the decision it serves and the finding in one sentence.

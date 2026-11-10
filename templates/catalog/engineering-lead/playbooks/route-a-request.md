@@ -10,7 +10,7 @@ the request and the Tools allow.
 
 - The request: `hub task show <id>`.
 - `knowledge/routing.md` (earlier decisions) and `knowledge/areas.md` (owners).
-- Each candidate owner's open load: `hub task list --owner <person or bot> --status open --status doing`.
+- Each candidate owner's open load: `hub task list --owner <person or bot>`.
 
 ## Steps
 
@@ -32,11 +32,11 @@ the request and the Tools allow.
    per owner: a team choice, not a benchmark. Above it, say so in the proposal.
 4. **Write the proposal** on the task, under 120 words: **Route to** <owner>, **why** (the area and any earlier
    decision), **urgency** and the date it matters, **what they need** (links), and an **alternative** owner. Ask with
-   `hub task question "<question>" --on <person> --parent <id>` only if the owner or scope is unclear. Otherwise continue.
+   `hub task ask <id> --to <person> "<question>" --version N` only if the owner or scope is unclear. Otherwise continue.
 5. **Carry out the requested work** only when the task asks for it and a Tool allows it:
    `hub task create --owner <slug> --title "<the ask>" --parent <id>` with the links. On a no or a change, write the
    correction into `knowledge/routing.md` as a present-tense rule, dated. Commit, then
-   `hub task update <id> --status done --note` with the owner chosen or the question still open.
+   `hub task done <id> -m "..." --version N` with the owner chosen or the question still open.
 
 ## Output
 

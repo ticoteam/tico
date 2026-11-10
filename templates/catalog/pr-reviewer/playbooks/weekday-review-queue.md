@@ -55,7 +55,7 @@ Add a mistake to `knowledge/patterns.md` when it appeared in a second pull reque
 
 ## 7. Finish
 
-Commit, then `hub task update <id> --status done --note`: pull requests read, drafts made, how many block a
+Commit, then `hub task done <id> -m "..." --version N`: pull requests read, drafts made, how many block a
 merge, and which you could not read. Always finish it.
 
 ## When a source fails

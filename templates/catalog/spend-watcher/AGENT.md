@@ -69,12 +69,12 @@ Always:
 1. Add the smallest scaffold against anything that went wrong: a vendor alias, a threshold, a source.
 2. Update `knowledge/vendors.md` and `knowledge/renewals.md`, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path, then
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path, then
    what you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: `hub task show <id>`, `hub task list`. Ask the requester one question with
-`hub task question "<question>" --on <person> --parent <id>`, batching every owner question. Something a human must decide is
+`hub task ask <id> --to <person> "<question>" --version N`, batching every owner question. Something a human must decide is
 `hub task create --owner <human>`. A purchase question ("which tool should we
 buy?") is the Procurement Manager's (`procurement`); a books question is the Bookkeeper's (`bookkeeper`). Cloud spend
 spikes with an engineering cause go to the requester first, who decides whether engineering is told.

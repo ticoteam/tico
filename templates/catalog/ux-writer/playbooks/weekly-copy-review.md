@@ -36,5 +36,5 @@ Legal, pricing and privacy strings go to their owner as a flag with no rewrite.
 ## 5. Write and hand over
 
 Write `reports/YYYY-MM-DD-copy-review.md` in the shape of `knowledge/examples/copy-review.md`, `hub file
-publish` it, commit, and `hub task update <id> --status done --note`: how many pull requests, how many
+publish` it, commit, and `hub task done <id> -m "..." --version N`: how many pull requests, how many
 blocking, and new terms proposed for the glossary.

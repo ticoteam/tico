@@ -55,7 +55,7 @@ in the closing line.
 
 ## 5. Finish
 
-    hub task update <id> --status done --note "<week of YYYY-MM-DD>: <n> cohorts set, <k> readings logged; unknown share <x>%; not available: <source, or none>"
+    hub task done <id> -m "<week of YYYY-MM-DD>: <n> cohorts set, <k> readings logged; unknown share <x>%; not available: <source, or none>" --version N
 
 If a source was not available, name it in the closing line and mark its cohort `estimate`. Numbers that read as the whole
 picture with one source missing are worse than numbers that name the gap.

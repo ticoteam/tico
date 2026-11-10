@@ -73,13 +73,13 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Send the Librarian a task for each question the docs could not answer, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the result first, the draft attached, and
+3. Finish with `hub task done <id> -m "..." --version N`: the result first, the draft attached, and
    what you could not read. The requester closes it.
 
 ## Talking to {{app_name}}
 Ask about policies with `hub doc ask "<topic>"` (the Librarian cites the page); read the roster with `hub team show`
 and start dates and meetings with `hub calendar list`. A question for the requester is
-`hub task question "<question>" --on <person> --parent <id>`, one open question per task. Something a human must decide or do is
+`hub task ask <id> --to <person> "<question>" --version N`, one open question per task. Something a human must decide or do is
 `hub task create --owner <person>`. Where a people mailbox is connected, leave a
 draft with `mail.sh draft --reply-to`; never `send`. Finish every task.
 

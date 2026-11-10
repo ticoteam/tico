@@ -38,7 +38,7 @@ source counts. Competitor names and features go to `hub market report` with the 
 
 ## 5. Finish
 
-Commit, then `hub task update <id> --status done --note`: the snapshot path, the one thing that surprised you,
+Commit, then `hub task done <id> -m "..." --version N`: the snapshot path, the one thing that surprised you,
 and what you could not read. You contact no one.
 
 ## When the source is thin

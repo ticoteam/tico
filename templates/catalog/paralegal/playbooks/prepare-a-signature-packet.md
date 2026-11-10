@@ -29,7 +29,7 @@ Put the packet on the task. A requested packet goes out with its file, recipient
 When the fully signed copy comes back on the task: check every signature block is complete and the dates are
 filled; list anything missing instead of filing. Then add a row to `knowledge/executed-index.md` (parties, kind,
 date signed, confidentiality period and its end date, where the file lives), commit, and
-`hub task update <id> --status done --note`.
+`hub task done <id> -m "..." --version N`.
 
 ## Done when
 - The packet is saved in `reports/packets/`, published, and on the task, with the exact version named.

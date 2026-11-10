@@ -15,7 +15,7 @@ Then the knowledge files above and last week's page. If last week flagged an act
 
 ## 2. Gather the week, by workstream
 
-For each workstream in `knowledge/workstreams.md`, read what its owner produced since last Friday: `hub task list --status open --status doing --status waiting`, `hub update list --kind weekly --bot <slug>`, the owner's newest published report, and imported meetings that mention it. A bot or human with nothing this week is "no report", never "on track".
+For each workstream in `knowledge/workstreams.md`, read what its owner produced since last Friday: `hub task list`, `hub update list --kind weekly --bot <slug>`, the owner's newest published report, and imported meetings that mention it. A bot or human with nothing this week is "no report", never "on track".
 
 ## 3. Read the pipeline
 
@@ -51,7 +51,7 @@ For each new lead, account or request with no owner, propose the owner in one li
 
 ## 11. Write the page and hand it over
 
-Write `reports/YYYY-MM-DD-growth-week.md` in the shape of `knowledge/examples/growth-week.md`, then `hub file publish reports/YYYY-MM-DD-growth-week.md`. Commit, then `hub task update <id> --status done --note`: the headline, the path, what you could not read. Always finish it: an open scheduled task absorbs the next.
+Write `reports/YYYY-MM-DD-growth-week.md` in the shape of `knowledge/examples/growth-week.md`, then `hub file publish reports/YYYY-MM-DD-growth-week.md`. Commit, then `hub task done <id> -m "..." --version N`: the headline, the path, what you could not read. Always finish it: an open scheduled task absorbs the next.
 
 ## When a source fails
 

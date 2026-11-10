@@ -46,5 +46,5 @@ about price or dates stay marked, as `[price: Account Manager]` or `[date: accou
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-renewal-brief.md` in the shape of `knowledge/examples/renewal-brief.md`, then
-`hub file publish reports/YYYY-MM-DD-renewal-brief.md`. Commit the files, then `hub task update <id> --status done --note "..."`
+`hub file publish reports/YYYY-MM-DD-renewal-brief.md`. Commit the files, then `hub task done <id> -m "..." --version N`
 with the headline, the path, and what you could not read. Always finish the task.

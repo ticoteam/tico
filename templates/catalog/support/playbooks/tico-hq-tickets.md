@@ -97,7 +97,7 @@ saying it was posted.
 
 ## 5. Finish
 
-`hub task update <id> --status done --note`: the bucket, that the reply was posted (or is waiting on whom), and any task
+`hub task done <id> -m "..." --version N`: the bucket, that the reply was posted (or is waiting on whom), and any task
 you created. Add the ticket to `knowledge/follow-ups.md` if it waits on the person. If the person writes again, a new note
 arrives on this task or a new task opens: read the whole thread with `show` and repeat from step 2.
 

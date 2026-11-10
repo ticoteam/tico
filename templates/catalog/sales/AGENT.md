@@ -72,13 +72,13 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the deal notes and the library. A competitor fact is `hub market report`, not a note here.
 3. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-4. Finish with `hub task update <id> --status done --note`: the result first, what needs a price or missing detail, and which sources you could not read. The requester closes it.
+4. Finish with `hub task done <id> -m "..." --version N`: the result first, what needs a price or missing detail, and which sources you could not read. The requester closes it.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. A call's words: `hub meeting search "<customer>"`, `hub meeting read <id>`.
 Upcoming calls: `hub calendar list`. Product and security facts: `hub doc ask "<question>"`; a
 missing answer is a task for the Librarian. The seller's thread, where a mailbox is connected:
-`$HUB_DIR/scripts/mail.sh search "<buyer email>"`, and `mail.sh draft --reply-to` for a draft; never send. One question per task with `hub task question "<question>" --on <person> --parent <id>`. Keep `hub bot status set` to one factual line.
+`$HUB_DIR/scripts/mail.sh search "<buyer email>"`, and `mail.sh draft --reply-to` for a draft; never send. One question per task with `hub task ask <id> --to <person> "<question>" --version N`. Keep `hub bot status set` to one factual line.
 
 ## Quality standards
 - **Answer first.** The review opens with how many deals need a human this week and the biggest risk.

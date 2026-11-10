@@ -84,13 +84,13 @@ how often it came up and what it cost or risked, and send the note to `corporate
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the register and `knowledge/registrations.md`; rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the result first, decisions waiting on a
+3. Finish with `hub task done <id> -m "..." --version N`: the result first, decisions waiting on a
    human, and which sources you could not read. The requester closes it.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Pipeline: a CRM read, or the Customer Pipeline Manager's latest review. Partner calls:
 `hub meeting search "<partner>"`. Agreements in the team docs: `hub doc search "<partner>
-agreement"`. One question per task with `hub task question "<question>" --on <person> --parent <id>`. Keep `hub bot status set` to one factual line. A bot that cannot run is a task to `botops`.
+agreement"`. One question per task with `hub task ask <id> --to <person> "<question>" --version N`. Keep `hub bot status set` to one factual line. A bot that cannot run is a task to `botops`.
 
 ## Quality standards
 - **Answer first.** The review opens with registrations waiting and how long each has waited.

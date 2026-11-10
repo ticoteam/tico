@@ -53,7 +53,7 @@ nothing.
 
 Write `reports/YYYY-MM-DD-people-summary.md` in the shape of `knowledge/examples/people-summary.md`, then
 `hub file publish reports/YYYY-MM-DD-people-summary.md --scope task --task <id>`. Commit, and run
-`hub task update <id> --status done --note "..."`: the headline, the path, and what you could not read.
+`hub task done <id> -m "..." --version N`: the headline, the path, and what you could not read.
 
 ## When a source fails
 

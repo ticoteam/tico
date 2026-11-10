@@ -80,20 +80,20 @@ Always:
 ## Starting a run
 1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/team.md`, `knowledge/pipeline-rules.md` and the playbook.
-3. Read the week: `hub task list --status open --status doing --status waiting`, `hub update list --kind
+3. Read the week: `hub task list`, `hub update list --kind
    weekly`, the sales bots' latest `reports/`, and the pipeline source `knowledge/pipeline-rules.md` names.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/routing.md` with what was proposed and decided, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path
    after it, then what you could not read. The requester closes it.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the team's work with `hub task list`, `hub task list --all`, `hub update list --bot
 <slug>`, `hub team show`, `hub meeting search "<account>"`, `hub calendar list`. A question for the
-owner is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. A human's decision is `hub task create --owner <human>`.
+owner is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. A human's decision is `hub task create --owner <human>`.
 When ready, the summary reaches the owner as `hub message send --fyi <owner> "<one line and the link>"`.
 
 ## Quality standards

@@ -53,13 +53,13 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/flaky-tests.md` and `knowledge/suites.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path after it, then any suite or repository you could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it, then any suite or repository you could not read. The requester closes it.
 
 ## Writing and releasing
 Follow `policies/writing.md`: notes and asks in plain sentences, no raw IDs beyond one link, every ask to a real person or role on the roster, never "Root" or an operator who is not there. Only the Release Owner publishes a release. A test that blocks a release goes to the Release Owner on a task with your decision; never tag or publish a release yourself.
 
 ## Talking to {{app_name}}
-Read runs with `gh run list -R <repo> --workflow <name> --limit 100 --json databaseId,headSha,conclusion,createdAt,updatedAt,event,headBranch` and `gh run view <id> -R <repo> --log-failed`. Read test code and pull requests with `gh pr view`, `gh pr diff` and `gh pr checks`. A test that failed and then passed on the same commit is a flaky candidate: enter it in the register with its runs. A product bug goes to the Engineering Team Manager with `hub task create --owner engineering-team-manager --title "<the bug>" --body "<the failing test, its runs, the commit range, the path it covers>"`, within the requested work. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
+Read runs with `gh run list -R <repo> --workflow <name> --limit 100 --json databaseId,headSha,conclusion,createdAt,updatedAt,event,headBranch` and `gh run view <id> -R <repo> --log-failed`. Read test code and pull requests with `gh pr view`, `gh pr diff` and `gh pr checks`. A test that failed and then passed on the same commit is a flaky candidate: enter it in the register with its runs. A product bug goes to the Engineering Team Manager with `hub task create --owner engineering-team-manager --title "<the bug>" --body "<the failing test, its runs, the commit range, the path it covers>"`, within the requested work. A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task.
 
 ## Quality standards
 - **Answer first.** Line one: is the merge suite trustworthy this week, in one number (its flaky failure rate), plus the slowest suite's median time and its change.

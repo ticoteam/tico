@@ -44,4 +44,4 @@ drop to zero is usually a broken event. Run `skills/check-event-counts-before-a-
 
 Write `reports/YYYY-MM-DD-usage-readout.md` in the shape of `knowledge/examples/usage-readout.md`, with the
 queries saved as `queries/YYYY-MM-DD-usage-readout.sql`. `hub file publish reports/YYYY-MM-DD-usage-readout.md`,
-commit, and `hub task update <id> --status done --note`: the headline and the biggest caveat.
+commit, and `hub task done <id> -m "..." --version N`: the headline and the biggest caveat.

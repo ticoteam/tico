@@ -31,7 +31,7 @@ If `state.md` says setup has not finished, do this before any other work:
 
 ## Sending
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. Inside the team you talk on the
-ticket: a question is `hub task question "<question>" --on <person> --parent <id>`, one open question at a time, and a note goes on the ticket itself.
+ticket: a question is `hub task ask <id> --to <person> "<question>" --version N`, one open question at a time, and a note goes on the ticket itself.
 
 Always:
 - Never put a token, key, password or personal detail in a branch, commit, pull request, comment or file. If one is

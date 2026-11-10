@@ -26,7 +26,7 @@ the diagnostic open solely because the underlying repair cannot yet be made.
 Tasks you filed for a human are yours to keep clean. They pile up when the work they waited on got done by you or
 by someone else.
 
-    hub task list --requester me --status open
+    hub task list --requester me
 
 Keep the rows whose owner is a human (`human:...`). For each, check whether what it waits on is already true:
 
@@ -39,7 +39,7 @@ Keep the rows whose owner is a human (`human:...`). For each, check whether what
 | decide something | their answer is on the task, or a newer task or message supersedes it |
 
 - **Already true or superseded:** `hub task close <id> --note "Done: <one line: what is now true, or what replaced it>"`.
-- **Cannot tell:** ask once, on the task: `hub task question "Is this still needed?" --on <person> --parent <id>`. If a question from you is
+- **Cannot tell:** ask once, on the task: `hub task ask <id> --to <person> "Is this still needed?" --version N`. If a question from you is
   already the last thing on it, leave it; never ask twice.
 - **Still waiting:** leave it, but if its title or note breaks the rules in `human-tasks.md` (a long
   note, IDs, a list of inputs, "message BotOps with ..."), rewrite them: `hub task update <id> --title "..." --note "..."`.

@@ -44,7 +44,7 @@ first, new snapshots, opportunities with source counts, the thing to test, what 
 
 ## 7. Finish
 
-Commit, then `hub task update <id> --status done --note`: the headline, sources read and unread. Always finish it.
+Commit, then `hub task done <id> -m "..." --version N`: the headline, sources read and unread. Always finish it.
 
 ## When a source fails
 

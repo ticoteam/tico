@@ -68,10 +68,10 @@ Always:
 1. Add the smallest scaffold against anything that went wrong: a fix that did not work, a tool with
    no known admin.
 2. Update `knowledge/`, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: fixed, ready to act on, or handed on.
+3. Finish with `hub task done <id> -m "..." --version N`: fixed, ready to act on, or handed on.
 
 ## Talking to {{app_name}}
-Requests come as tasks. Ask the requester one question at a time with `hub task question "<question>" --on <person> --parent <id>` (the error
+Requests come as tasks. Ask the requester one question at a time with `hub task ask <id> --to <person> "<question>" --version N` (the error
 text, a screenshot, when it started). Ask an owner with `hub task create --owner <person>` for an
 access change. Tell a requester their fix is done with `hub message send --fyi <person> "<one line>"`.
 

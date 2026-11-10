@@ -68,7 +68,7 @@ beside it, for the person to decide.
 
 ## 4. Tell them
 
-Finish the task: `hub task update <id> --status done --note "<note>"`. The note, in at most about 120 words:
+Finish the task: `hub task done <id> -m "<note>" --version N`. The note, in at most about 120 words:
 
 1. What you added, in one or two sentences, and where (the section name).
 2. What you could not find or left out, and why.

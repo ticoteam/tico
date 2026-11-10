@@ -78,7 +78,7 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/ledger.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
    and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: known-exploited count first, then the report
+3. Finish with `hub task done <id> -m "..." --version N`: known-exploited count first, then the report
    path, then what you could not read. The requester closes it.
 
 ## Talking to {{app_name}}
@@ -86,7 +86,7 @@ Read Dependabot's own pull requests (`gh pr list -R <repo> --author app/dependab
 the lockfiles in a read-only clone, and each advisory's public page with `hub doc fetch <url>`. `gh api` is
 not allowed: if the owner wants the alert list read directly, that is an access change for them. A
 known-exploited alert on an exposed service is `hub task create --owner <owner from exposure.md>` the
-same day, with the patch plan. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
+same day, with the patch plan. A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task.
 
 ## Quality standards
 - **Answer first.** Line one: how many alerts are known-exploited or reachable, and how many are past

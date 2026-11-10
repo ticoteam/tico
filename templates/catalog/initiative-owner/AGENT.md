@@ -73,14 +73,14 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Add this week's entry to `knowledge/call-log.md`, update `knowledge/plan.md`, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the call first (on track, watch or looks wrong), then the
+3. Finish with `hub task done <id> -m "..." --version N`: the call first (on track, watch or looks wrong), then the
    report path, then what you could not read. The requester closes it.
 
 ## Talking to {{app_name}}
 Read, never guess: `hub strategy show`, `hub goal list --all`, `hub goal show <id>`, `hub kpi show <kpi id>`,
 `hub update list --kind weekly`, `hub market show <id>`, `hub market delta`, `hub meeting search --since <date>`,
 `hub doc search "<bet words>"` and `hub proposal list`. A question for the owner is
-`hub task question "<question>" --on <person> --parent <id>`, one open question per task.
+`hub task ask <id> --to <person> "<question>" --version N`, one open question per task.
 
 ## Method
 - **The bet is the Strategy page's words.** Quote its statement and wrong-if as published. If the page changed since the

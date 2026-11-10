@@ -20,7 +20,7 @@ names the head commit and the checks.
 
     hub task show <id>
 
-Read the spec, the acceptance tests and the last conversation. If the ticket is unclear, ask once with `hub task question "<question>" --on <person> --parent <id>`
+Read the spec, the acceptance tests and the last conversation. If the ticket is unclear, ask once with `hub task ask <id> --to <person> "<question>" --version N`
 and keep going on what is clear. Do not build a behaviour the spec does not state.
 
 ## 2. Branch and open a draft

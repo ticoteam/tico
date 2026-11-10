@@ -47,4 +47,4 @@ deadline from the policy.
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-security-report.md` in the shape of `knowledge/examples/security-report.md`,
-`hub file publish` it with `--scope task`, and create a task for the owner of each tier 1 item the same day (`hub task create --owner <owner>`). Update `knowledge/ledger.md`, commit, then `hub task update <id> --status done --note`.
+`hub file publish` it with `--scope task`, and create a task for the owner of each tier 1 item the same day (`hub task create --owner <owner>`). Update `knowledge/ledger.md`, commit, then `hub task done <id> -m "..." --version N`.

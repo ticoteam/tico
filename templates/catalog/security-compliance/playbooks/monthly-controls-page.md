@@ -52,7 +52,7 @@ Write `reports/YYYY-MM-DD-controls.md` in the shape of `knowledge/examples/contr
 For each control owner who must act, create one task with the exact evidence, the control reference and the due date:
 `hub task create --owner <human>`. Commit, then:
 
-    hub task update <id> --status done --note "..."
+    hub task done <id> -m "..." --version N
 
 The note holds the headline (controls missing for a closed period, controls due this month), the page path, and what could not
 be read.

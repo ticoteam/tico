@@ -65,14 +65,14 @@ ask anyone for their names.
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/docs-map.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
    and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: pages found drifted, drafts made, and which
+3. Finish with `hub task done <id> -m "..." --version N`: pages found drifted, drafts made, and which
    pages or repositories you could not read. The requester closes it.
 
 ## Talking to {{app_name}}
 Read merged changes with `gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD" --json number,title,files,url`
 and `gh pr diff <n> -R <repo>`. Read the docs in the repositories as far as your access reaches. For anything about how the team works
 (a process a README links to), ask the Librarian: `hub doc ask "<question>"`. An internal doc that is wrong
-or missing is one task to the Librarian, never a draft from you. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`,
+or missing is one task to the Librarian, never a draft from you. A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`,
 one open question per task. A page that needs a subject-matter answer is a task for the person who knows it:
 `hub task create --owner <person> --title "<the question>" --link <pull request url>`.
 Finish every task, quiet week or not.

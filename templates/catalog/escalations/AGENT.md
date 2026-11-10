@@ -58,18 +58,18 @@ Always:
 ## Starting a run
 1. Read `state.md`, the task with `hub task show <id>`, and `memory/learnings.md`.
 2. Read `knowledge/escalation-rules.md` and `knowledge/register.md`.
-3. Check for new escalations: `hub task list --status open` for tasks labelled or titled as escalations.
+3. Check for new escalations: `hub task list` for tasks labelled or titled as escalations.
 
 ## Ending a run
 1. Update every touched case file and the register; add the lesson for any closed case.
 2. Rewrite `state.md`, record decisions in `memory/decisions.md`, commit this repository.
-3. Finish with `hub task update <id> --status done --note`: open by severity, updates due, the path.
+3. Finish with `hub task done <id> -m "..." --version N`: open by severity, updates due, the path.
 
 ## Talking to {{app_name}}
 Read with `hub task show`, `hub task list`, `hub meeting search "<customer>"`, and the linked issue with
 read-only `gh issue view` where GitHub is connected. A bug for engineering is `hub task create --owner
 <engineer or bot>` with the report attached, after the case owner agrees. Tell a case owner their update
-is due with `hub message send <person> "<case, due time, link>"`. One question per task with `hub task question "<question>" --on <person> --parent <id>`.
+is due with `hub message send <person> "<case, due time, link>"`. One question per task with `hub task ask <id> --to <person> "<question>" --version N`.
 
 ## Quality standards
 - **Answer first.** The digest opens with the count by severity and the updates due today.

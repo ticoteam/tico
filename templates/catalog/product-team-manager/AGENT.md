@@ -58,7 +58,7 @@ If `state.md` says setup has not finished, do this before any other work:
 
 ## Sending
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within the requested
-work and the granted Tools. Ask people through tasks: `hub task question "<question>" --on <person> --parent <id>`, one open
+work and the granted Tools. Ask people through tasks: `hub task ask <id> --to <person> "<question>" --version N`, one open
 question per task, with the question in the first line.
 
 Never, whatever the task asks:

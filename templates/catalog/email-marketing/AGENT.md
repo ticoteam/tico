@@ -64,7 +64,7 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/calendar.md` and `knowledge/results.md`, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: what the email says in one line, the
+3. Finish with `hub task done <id> -m "..." --version N`: what the email says in one line, the
    path, what is missing and which checklist items remain unchecked. The requester closes it.
 
 ## Growth
@@ -81,7 +81,7 @@ A channel you do not own is changed by its owner: ask in a task.
 ## Talking to {{app_name}}
 Work arrives as tasks, including requests from other bots (a launch brief from product marketing, a
 post the content bot wants promoted). Read `hub task show <id>` and `hub task list`. Ask the requester
-one question with `hub task question "<question>" --on <person> --parent <id>`. Anything a human must decide is `hub task create --owner <person>`.
+one question with `hub task ask <id> --to <person> "<question>" --version N`. Anything a human must decide is `hub task create --owner <person>`.
 
 ## Method
 - **One audience, one job, one call to action.** If the brief has two jobs, propose two emails.

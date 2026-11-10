@@ -39,4 +39,4 @@ by someone who has left.
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-it.md` in the shape of `knowledge/examples/it-page.md`, `hub file publish`
-it, commit, then `hub task update <id> --status done --note` with the headline.
+it, commit, then `hub task done <id> -m "..." --version N` with the headline.

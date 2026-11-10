@@ -47,7 +47,7 @@ source, the source stays the source.
 
 1. Rewrite `state.md` (what the docs cover, what is thin, which sources failed). Record anything durable about
    reading these kinds of sources in `memory/learnings.md`. Commit this repository.
-2. Finish the task: `hub task update <id> --status done --note "<the update>"`. The person reads this note.
+2. Finish the task: `hub task done <id> -m "<the update>" --version N`. The person reads this note.
    Under ten lines, sources by name and domain, not full links:
    - what you read: each source and how many pages or files;
    - what Docs now has: the map, and the topics it covers;

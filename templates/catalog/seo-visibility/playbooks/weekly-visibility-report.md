@@ -72,7 +72,7 @@ Add the dated checks to `knowledge/prompts.md` and `knowledge/pages.md`, rewrite
 
 ## 7. Close
 
-    hub task update <id> --status done --note "..."
+    hub task done <id> -m "..." --version N
 
 The note holds the headline, the report path, and what you could not read. Finish the task even on a quiet week: an open
 routine task gets absorbed into the next run.

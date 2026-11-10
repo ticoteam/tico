@@ -62,7 +62,7 @@ keeping, `hub file publish reports/YYYY-MM-DD-mail-brief.md`.
 
 ## 7. Finish
 
-Prove the pass with another untriaged read. Commit, then `hub task update <id> --status done --note`:
+Prove the pass with another untriaged read. Commit, then `hub task done <id> -m "..." --version N`:
 counts (rules settled, decisions by kind, drafts, routed), the needs-owner ids with one line each, or one
 line that the untriaged list was empty. Always finish it: an open scheduled task absorbs the next
 occurrence and quietly stops the pass.

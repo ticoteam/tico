@@ -39,4 +39,4 @@ On the task, four lines:
 
 - The cause is named, or the log is named as unreadable with the reason.
 - The first bad run and commit are linked, or the commit range is given with the reason it could not be narrowed.
-- The task is closed with `hub task update <id> --status done --note`.
+- The task is closed with `hub task done <id> -m "..." --version N`.

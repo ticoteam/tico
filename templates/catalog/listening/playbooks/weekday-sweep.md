@@ -64,7 +64,7 @@ move or a thread a human should see goes to that human, under 200 words.
 
 ## 6. Finish the task
 
-Commit, then `hub task update <id> --status done --note`. With findings: one line each and the path
+Commit, then `hub task done <id> -m "..." --version N`. With findings: one line each and the path
 to the digest. Without findings: one line naming the sources that returned and how many results you
 reviewed. Always finish it. A scheduled task left open absorbs the next occurrence and quietly stops
 the sweep.

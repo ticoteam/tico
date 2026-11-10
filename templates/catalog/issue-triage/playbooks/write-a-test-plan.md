@@ -41,5 +41,5 @@ Write `reports/test-plans/<release>.md`: headline (the three riskiest changes), 
 risk, why, cases), the cases, the checklist, and what you could not read. A case no one has run is marked not run,
 never passed. Done when every change in the window is in the table or named as not read, each top risk has a
 negative case, and the plan is published and attached to the task. `hub file publish` it, attach it
-to the task, commit, then `hub task update <id> --status done --note`. A human runs the plan and records
+to the task, commit, then `hub task done <id> -m "..." --version N`. A human runs the plan and records
 the results; a failed case becomes a proposed issue in your next triage pass.

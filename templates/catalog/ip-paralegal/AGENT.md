@@ -53,7 +53,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the register, rewrite `state.md`, record decisions in `memory/decisions.md`, and commit.
-3. Finish with `hub task update <id> --status done --note`: the nearest deadline first, then the path.
+3. Finish with `hub task done <id> -m "..." --version N`: the nearest deadline first, then the path.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read public records with `hub doc fetch <url>` (a trademark office's search, a domain

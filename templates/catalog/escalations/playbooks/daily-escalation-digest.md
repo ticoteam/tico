@@ -42,4 +42,4 @@ what is next, and when they will hear again. Name the recipient and the case own
 Write `reports/YYYY-MM-DD-escalations.md` in the shape of `knowledge/examples/escalation-digest.md`, then
 `hub file publish reports/YYYY-MM-DD-escalations.md`. Put each update on the task as its own item for review. Tell an owner
 whose update is overdue with `hub message send <person> "<case, due time, link>"`. For closed cases, add the lesson to
-`knowledge/lessons.md`. Commit, then `hub task update <id> --status done --note "..."` with the counts and the path.
+`knowledge/lessons.md`. Commit, then `hub task done <id> -m "..." --version N` with the counts and the path.

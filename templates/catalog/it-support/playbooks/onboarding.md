@@ -13,7 +13,7 @@ and labelled, the routine is checked and logged in `memory/decisions.md`, and `h
 
     hub task show <id>
     hub team show
-    hub task list --status open
+    hub task list
     hub doc ask "Which tools does the team use, and how do people get access to them?"
 
 Open tasks about laptops, passwords, access or Wi-Fi are your first requests. Log them with their

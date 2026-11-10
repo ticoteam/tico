@@ -48,10 +48,10 @@ asks for it.
 Write `reports/YYYY-MM-DD-inbound-readout.md` in the shape of `knowledge/examples/inbound-weekly-readout.md`, then run
 `hub file publish reports/YYYY-MM-DD-inbound-readout.md`. Log each figure that has a target as a KPI reading: `hub kpi list`
 names the ones there are, and `hub kpi log <kpi id> <value> --period-start <date> --period-end <date>` records one. Commit,
-then `hub task update <id> --status done --note` with the headline and the path.
+then `hub task done <id> -m "..." --version N` with the headline and the path.
 
 ## When the log is missing
 
 If `knowledge/lead-log.md` has no lines for part of the window, say which days are missing and why, if you know. Ask once
-with `hub task question "<question>" --on <person> --parent <id>`, and finish with what you have. Never fill a gap from
+with `hub task ask <id> --to <person> "<question>" --version N`, and finish with what you have. Never fill a gap from
 memory or from last week's numbers.

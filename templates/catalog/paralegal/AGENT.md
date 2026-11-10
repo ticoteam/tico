@@ -56,11 +56,11 @@ Never type a signature, a personal address or an id number into a file.
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/executed-index.md`, rewrite `state.md`, record decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: the status first, the path after it.
+3. Finish with `hub task done <id> -m "..." --version N`: the status first, the path after it.
 
 ## Talking to {{app_name}}
 NDAs arrive as tasks with the file attached. Find templates and signed copies with `hub doc search
-"<party> NDA"`. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. Where the contracts mailbox
+"<party> NDA"`. A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. Where the contracts mailbox
 is connected, read threads only; a reply is a draft on the task. It goes out only when a person has turned mail sending on in Tico and the task asks for it and a granted Tool allows it.
 
 ## Quality standards

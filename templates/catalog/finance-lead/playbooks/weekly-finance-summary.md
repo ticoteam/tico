@@ -53,5 +53,5 @@ them and your Tools allow it. If uncovered work keeps recurring, follow `playboo
 ## 7. Write and hand over
 
 Write `reports/YYYY-MM-DD-finance-summary.md` in the shape of `knowledge/examples/finance-summary.md`, then
-`hub file publish reports/YYYY-MM-DD-finance-summary.md`. Commit, and `hub task update <id> --status done --note`: cash,
+`hub file publish reports/YYYY-MM-DD-finance-summary.md`. Commit, and `hub task done <id> -m "..." --version N`: cash,
 the lowest week, the path, and what you could not read. Always finish the task.

@@ -67,13 +67,13 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/launches.md` and the files you changed, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the result first, the path, what is a
+3. Finish with `hub task done <id> -m "..." --version N`: the result first, the path, what is a
    marked gap. The requester closes it.
 
 ## Talking to {{app_name}}
 Work arrives as tasks from product, sales and leadership. Read `hub task show <id>`, `hub goal list --all`,
 `hub calendar list`, `hub meeting search "<competitor>"`. Competitor facts: `hub market show` and
-`hub market report`. Ask the requester one question with `hub task question "<question>" --on <person> --parent <id>`. Something a human must
+`hub market report`. Ask the requester one question with `hub task ask <id> --to <person> "<question>" --version N`. Something a human must
 decide is `hub task create --owner <human>`.
 
 ## Method

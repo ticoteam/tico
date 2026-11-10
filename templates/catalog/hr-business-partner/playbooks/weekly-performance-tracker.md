@@ -14,7 +14,7 @@ missing count or is marked "not read", every probation end in the next 30 days i
 
     hub task show <id>
     hub team show
-    hub task list --status open --status doing --status waiting
+    hub task list
 
 Then `knowledge/review-cycle.md`, `knowledge/probation.md` and last week's tracker.
 
@@ -42,7 +42,7 @@ of the scale, ratings with no evidence cited. Individual detail stays in the cal
 
 Write `reports/YYYY-MM-DD-performance-tracker.md` in the shape of `knowledge/examples/performance-tracker.md`, then
 `hub file publish reports/YYYY-MM-DD-performance-tracker.md --scope task --task <id>`. Reminders for managers go on the task as
-one-line texts for review. Commit, and `hub task update <id> --status done --note`.
+one-line texts for review. Commit, and `hub task done <id> -m "..." --version N`.
 
 ## When a source fails
 

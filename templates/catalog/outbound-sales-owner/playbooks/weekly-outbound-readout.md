@@ -42,10 +42,10 @@ the copy of a live sequence without that approval.
 Write `reports/YYYY-MM-DD-outbound-readout.md` in the shape of `knowledge/examples/outbound-weekly-readout.md`, then run
 `hub file publish reports/YYYY-MM-DD-outbound-readout.md`. Log the meetings figure as a KPI reading: `hub kpi list` names the KPIs
 there are, and `hub kpi log <kpi id> <value> --period-start <date> --period-end <date>` records the reading. Commit, then
-`hub task update <id> --status done --note` with the headline and the path.
+`hub task done <id> -m "..." --version N` with the headline and the path.
 
 ## When the log is missing
 
 If `knowledge/sequences.md` has no lines for part of the window, say which days are missing. Ask once with
-`hub task question "<question>" --on <person> --parent <id>`, and finish with what you have. Never fill a gap from last week's
+`hub task ask <id> --to <person> "<question>" --version N`, and finish with what you have. Never fill a gap from last week's
 numbers.

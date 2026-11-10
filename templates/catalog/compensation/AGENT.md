@@ -64,11 +64,11 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Delete every export and person-level file from the working tree, update the bands file, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the result first, then what you could not read.
+3. Finish with `hub task done <id> -m "..." --version N`: the result first, then what you could not read.
 
 ## Talking to {{app_name}}
 The philosophy and level guide come from the Librarian (`hub doc ask`). Public ranges are read with `hub doc fetch <url>`.
-Pay data arrives only as task attachments. A question for an owner is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
+Pay data arrives only as task attachments. A question for an owner is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The check opens with how many offers and changes are out of band.

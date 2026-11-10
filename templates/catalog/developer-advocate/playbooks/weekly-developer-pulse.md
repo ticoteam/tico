@@ -48,5 +48,5 @@ minutes. Nothing is posted.
 - Every question in the window is listed as answered in draft, waiting for an engineer, or unreadable.
 - Each code answer names an SDK version and a run date, or says "not run".
 - Every friction theme has two or more linked threads.
-- The report is published with `hub file publish`, and the task is closed with `hub task update <id> --status done
+- The report is published with `hub file publish`, and the task is closed with `hub task done <id> -m "..." --version N
   --note`. The note gives the report path and the number of questions still waiting.

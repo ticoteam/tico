@@ -10,7 +10,7 @@ and the first routine checked.
 
     hub goal list --all
     hub team show
-    hub task list --status open --status doing --status waiting
+    hub task list
 
 Do not ask what these already say. If there are no goals at all, say so, and propose three
 drawn from the open tasks and updates instead of asking the human to invent them.

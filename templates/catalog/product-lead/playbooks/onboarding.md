@@ -10,7 +10,7 @@ the real roadmap, and the first routine checked.
 
     hub goal list --all
     hub team show
-    hub task list --status open --status doing --status waiting
+    hub task list
     hub update list --kind weekly --limit 6
 
 Check which product bots exist and whether GitHub or the roadmap doc is readable. Do not ask what these

@@ -46,4 +46,4 @@ Write `reports/YYYY-MM-brand-audit.md` in the shape of `knowledge/examples/brand
 
 Commit this repository, then:
 
-    hub task update <id> --status done --note "<verdict>; reports/YYYY-MM-brand-audit.md; not checked: <list or none>"
+    hub task done <id> -m "<verdict>; reports/YYYY-MM-brand-audit.md; not checked: <list or none>" --version N

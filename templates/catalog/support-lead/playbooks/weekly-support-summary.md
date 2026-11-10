@@ -17,8 +17,8 @@ The window is the last seven full days, and the week before it for comparison. R
 
 ## 2. Gather, from the record
 
-    hub task list --owner <support bot> --status open
-    hub task list --owner <support bot> --status waiting
+    hub task list --owner <support bot>
+    hub task list --owner <support bot>
     hub update list --kind weekly --bot <support bot> --limit 2
     hub file list
 
@@ -60,7 +60,7 @@ proposals, what you could not read, sources. Then:
 
 ## 6. Finish
 
-Commit, then `hub task update <id> --status done --note`: the headline, the report path, the decisions
+Commit, then `hub task done <id> -m "..." --version N`: the headline, the report path, the decisions
 asked for and any source you could not read. Always finish it: an open routine task absorbs the next.
 
 ## When a source fails

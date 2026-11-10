@@ -83,11 +83,11 @@ work, how often it came up and what it cost or risked, and send the note to `suc
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the account notes and `knowledge/renewals.md`, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path
    after it, then what you could not read. The requester closes it.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Read with `hub task show <id>`, `hub task list`, `hub team show`, `hub calendar list`. A question for the account owner is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. A human's decision is
+Work arrives as tasks. Read with `hub task show <id>`, `hub task list`, `hub team show`, `hub calendar list`. A question for the account owner is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. A human's decision is
 `hub task create --owner <person>`. Renewal terms and quotes are the Account Manager's: route them as
 a task to the account's seller (named in `knowledge/renewals.md`) after the owner agrees. Keep `hub bot status set` to one line.
 

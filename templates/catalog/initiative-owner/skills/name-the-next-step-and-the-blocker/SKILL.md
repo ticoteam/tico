@@ -11,7 +11,7 @@ Steps:
 2. Give it one owner (a person or a seat) and one date. If no owner is known, the owner is the owner of the bet, and say so.
 3. For each blocker, write: what is stuck, who can move it, how many days it has been stuck (from the first dated mention),
    and whether a task already asks for it.
-4. If no task asks for a blocker, ask in one question on the check-in's task: `hub task question "<question>" --on <person> --parent <id>`.
+4. If no task asks for a blocker, ask in one question on the check-in's task: `hub task ask <id> --to <person> "<question>" --version N`.
    One open question per task. Do not chase the blocker person in a second channel.
 5. If a blocker is past a week with no reply, say so in the next check-in and name it as the owner's to clear.
 

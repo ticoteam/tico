@@ -56,12 +56,12 @@ Otherwise they stay drafts for a person.
 
 ## Ending a run
 1. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-2. Finish with `hub task update <id> --status done --note`: the headline first, the report path after it, then what you
+2. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it, then what you
    could not read.
 
 ## Talking to {{app_name}}
-Read from Tico, never from memory: `hub task list --owner <success bot> --status open`, `hub update list --kind weekly`,
-`hub team show --team success`, `hub file list`. Ask the owner one question with `hub task question "<question>" --on <person> --parent <id>`.
+Read from Tico, never from memory: `hub task list --owner <success bot>`, `hub update list --kind weekly`,
+`hub team show --team success`, `hub file list`. Ask the owner one question with `hub task ask <id> --to <person> "<question>" --version N`.
 
 ## Quality standards
 - **Answer first.** The first line says how success did this week against target, in one sentence a person can act on.

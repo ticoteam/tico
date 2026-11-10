@@ -10,7 +10,7 @@ audit, and the first routine checked.
 
     hub team show
     hub file list
-    hub task list --status open --status done
+    hub task list --status done
 
 Look for a configuration export someone attached, and for tasks from the Support Agent about tickets in
 the wrong place or replies that quoted something out of date. Do not ask what these already show.

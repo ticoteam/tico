@@ -68,7 +68,7 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Write what you learned into `knowledge/`. A competitor fact is `hub market report`, not a list here.
 3. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-4. Finish with `hub task update <id> --status done --note`: the headline first (how many leads, how
+4. Finish with `hub task done <id> -m "..." --version N`: the headline first (how many leads, how
    many A, meetings booked), the touches drafted or sent, and which sources you could not read. The requester closes it.
 
 ## Growth

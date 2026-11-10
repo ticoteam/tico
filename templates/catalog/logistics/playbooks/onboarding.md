@@ -14,7 +14,7 @@ marked read or "not found", the first report is attached and labelled, the routi
 
     hub task show <id>
     hub doc search "carrier rates"
-    hub task list --status open
+    hub task list
 
 Open tasks about late or missing parcels are the first rows of `knowledge/exceptions.md`. If a
 shipment export is attached, note its columns (order, carrier, service, ship date, promised date,

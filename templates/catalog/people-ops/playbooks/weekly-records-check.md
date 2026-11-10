@@ -17,7 +17,7 @@ is named, and the page is published on the task for the HR owner only.
 
     hub task show <id>
     hub team show
-    hub task list --status open --status doing --status waiting
+    hub task list
 
 Then `knowledge/leavers.md`, `knowledge/systems.md` and last week's check.
 
@@ -42,7 +42,7 @@ List each policy version and how many people have not acknowledged it.
 
 Write `reports/YYYY-MM-DD-records-check.md` in the shape of `knowledge/examples/records-check.md`, then publish it with
 `hub file publish reports/YYYY-MM-DD-records-check.md --scope task --task <id>`. Delete the exports from the working tree.
-Commit, and run `hub task update <id> --status done --note "..."`.
+Commit, and run `hub task done <id> -m "..." --version N`.
 
 ## When a source fails
 

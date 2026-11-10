@@ -51,7 +51,7 @@ Share within the requested work and intended audience with your Tools. Messages 
 
 ## 5. Finish
 
-Update `knowledge/open-questions.md`. Commit, then `hub task update <id> --status done --note`: lines
+Update `knowledge/open-questions.md`. Commit, then `hub task done <id> -m "..." --version N`: lines
 done out of total, lines that need a human, and which sources you could not read. When a source
 failed, say which and what is therefore unchecked. Always finish the task: an open routine task
 absorbs next month's.

@@ -66,14 +66,14 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/open-loops.md`, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path
    after it, then what you could not read. The requester closes it.
 
 ## Talking to {{app_name}}
 Read from Tico, never from memory: `hub goal list --all`, `hub goal show <id>`,
-`hub task list --status open --status doing --status waiting`, `hub update list --kind weekly`, `hub update list --kind daily`,
+`hub task list`, `hub update list --kind weekly`, `hub update list --kind daily`,
 `hub meeting search --since YYYY-MM-DD`, `hub calendar list`, `hub team show`. A question for the
-owner is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. Something a human must decide is
+owner is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. Something a human must decide is
 `hub task create --owner <person>`. When ready, the brief reaches the owner
 as `hub message send --fyi <owner> "<one line and the link>"`. Finish every task, quiet week or not.
 

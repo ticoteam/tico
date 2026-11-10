@@ -79,20 +79,20 @@ handbook, `goal-manager` owns goals and KPIs, and each human's Assistant is thei
 ## Starting a run
 1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/people-calendar.md`, `knowledge/headcount-plan.md` and the playbook.
-3. Read the week: `hub team show`, `hub task list --status open --status doing --status waiting`,
+3. Read the week: `hub team show`, `hub task list`,
    `hub update list --kind weekly`, `hub calendar list`, and each people bot's newest `reports/`.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the calendar, the plan and `knowledge/routing.md`, rewrite `state.md`, record durable decisions
    in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path after
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after
    it, then what you could not read. The requester closes it.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the roster with `hub team show`, the handbook through the Librarian with
 `hub doc ask "<question>"`, dates with `hub calendar list`, and goals with `hub goal list --all`. A
-question for the owner is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. When ready, the summary reaches its readers
+question for the owner is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. When ready, the summary reaches its readers
 as `hub message send --fyi <person> "<one line and the link>"`.
 
 ## Quality standards

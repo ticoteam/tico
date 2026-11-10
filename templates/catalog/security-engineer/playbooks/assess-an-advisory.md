@@ -33,5 +33,5 @@ searched. A dynamic import or a framework that calls it for you is "unknown".
 
 Three lines on the task: **Affected** yes, no or unknown with the evidence; **Tier** and the deadline from
 the policy; **Fix**: the upgrade (from and to), the parent to bump if transitive, or the mitigation if there
-is no fixed version. Add a line to `knowledge/ledger.md`, commit, `hub task update <id> --status done --note`.
+is no fixed version. Add a line to `knowledge/ledger.md`, commit, `hub task done <id> -m "..." --version N`.
 A tier 1 answer also becomes a proposed task for the area's owner, created when their decision is needed.

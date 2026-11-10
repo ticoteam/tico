@@ -40,4 +40,4 @@ lease dates inside 60 days.
 
 Write `reports/YYYY-MM-DD-office.md` in the shape of `knowledge/examples/office-page.md` and
 `hub file publish` it. Put each order and its total on the task; place an order only when the task asks for it and a granted Tool allows it; otherwise name the missing access on the page. Commit,
-then `hub task update <id> --status done --note` with the headline.
+then `hub task done <id> -m "..." --version N` with the headline.

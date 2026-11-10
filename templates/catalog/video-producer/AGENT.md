@@ -84,12 +84,12 @@ If `state.md` says setup has not finished, do this before any other work:
 ## Ending a run
 1. Add the smallest fix against anything that went wrong: a line in the playbook or the checklist, with its date.
 2. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: what is made, where it is, the stage it is waiting at and
+3. Finish with `hub task done <id> -m "..." --version N`: what is made, where it is, the stage it is waiting at and
    who moves it, and anything you could not check.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the record with `hub task show <id>` and `hub task list` first. Ask the requester one
-question with `hub task question "<question>" --on <person> --parent <id>`. A decision for a person is `hub task question`, with the files it turns on.
+question with `hub task ask <id> --to <person> "<question>" --version N`. A decision for a person is `hub task question`, with the files it turns on.
 Finish every task you were given, even when the answer is "not yet".
 
 ## Working style

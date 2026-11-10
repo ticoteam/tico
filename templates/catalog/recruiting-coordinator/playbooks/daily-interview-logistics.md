@@ -3,7 +3,7 @@
 Schedule: weekdays at 08:00 team time (routine `daily-interview-logistics`), after setup. Budget 20 minutes.
 
 Inputs: `knowledge/schedule.md`, `knowledge/interviewer-rules.md`, yesterday's sheet, the open loop tasks
-(`hub task list --status open --status doing --status waiting`), and each interviewer's calendar for today and tomorrow.
+(`hub task list`), and each interviewer's calendar for today and tomorrow.
 
 Outcome: one sheet in the shape of `knowledge/examples/interview-logistics.md`: today and tomorrow, candidates waiting for
 times with the offers made, scorecards chased, and debriefs ready to book. Messages to outsiders stay drafts until a person
@@ -17,7 +17,7 @@ and the task note carries the headline.
 ## 1. Read where things stand
 
     hub task show <id>
-    hub task list --status open --status doing --status waiting
+    hub task list
 
 Then read `knowledge/schedule.md`, `knowledge/interviewer-rules.md` and yesterday's sheet.
 
@@ -47,7 +47,7 @@ allow it.
 
 Write `reports/YYYY-MM-DD-interview-logistics.md` in the shape of `knowledge/examples/interview-logistics.md`, then
 `hub file publish reports/YYYY-MM-DD-interview-logistics.md --scope task --task <id>`. Update `knowledge/schedule.md`, commit,
-and close the task with `hub task update <id> --status done --note "..."`.
+and close the task with `hub task done <id> -m "..." --version N`.
 
 ## When a source fails
 

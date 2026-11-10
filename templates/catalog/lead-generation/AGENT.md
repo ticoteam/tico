@@ -79,7 +79,7 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/sources.md`, `knowledge/handoff.md` and the lists with the dated checks, rewrite `state.md`, record
    durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first (qualified leads this week, by source),
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first (qualified leads this week, by source),
    the review path after it, then what you could not read. The requester closes it.
 
 ## Growth
@@ -96,7 +96,7 @@ A channel you do not own is changed by its owner: ask in a task.
 ## Talking to {{app_name}}
 Work arrives as tasks. Read with `hub task show <id>` and `hub task list`. Sales' accept and reject feedback is read from
 the lead's record on the task. A decision for a human is `hub task create --owner <human>`, and a question is
-`hub task question "<question>" --on <person> --parent <id>`. Keep `hub bot status set` to one factual line.
+`hub task ask <id> --to <person> "<question>" --version N`. Keep `hub bot status set` to one factual line.
 
 ## Method
 - **One definition of qualified.** Count only leads that meet the definition in `knowledge/qualified.md`. A change to that

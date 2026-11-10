@@ -13,7 +13,7 @@ Done when: the five answers are in `state.md`, the milestones file and the first
 ## 1. Read before you ask
 
     hub team show
-    hub task list --status open --status doing --status waiting
+    hub task list
     hub meeting search "kickoff"
 
 Find the customers signed in the last 60 days and any kickoff or training calls. If a CRM is in your

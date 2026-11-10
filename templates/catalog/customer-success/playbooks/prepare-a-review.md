@@ -36,4 +36,4 @@ renewal timeline with a gap for any commercial term. Draft the follow-up note th
 
 ## 5. Hand over
 
-Write `reports/YYYY-MM-DD-<account>-review.md`, `hub file publish` it, attach it to the task, and `hub task update <id> --status done --note "..."`: the pack's headline and what you could not read.
+Write `reports/YYYY-MM-DD-<account>-review.md`, `hub file publish` it, attach it to the task, and `hub task done <id> -m "..." --version N`: the pack's headline and what you could not read.

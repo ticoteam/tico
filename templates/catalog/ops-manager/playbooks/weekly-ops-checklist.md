@@ -20,7 +20,7 @@ the recipient has its one-line message; and the task is done with its counts.
 Then `knowledge/rhythm.md`, `knowledge/duties.md`, `knowledge/vendors.md` and last week's page in
 `reports/`. Read live sources, not memory:
 
-    hub task list --status open --status doing --status waiting
+    hub task list
     hub update list --kind weekly
     hub calendar list
 
@@ -75,7 +75,7 @@ Update `knowledge/duties.md` and `knowledge/vendors.md` with what you learned. O
 
 ## 8. Finish
 
-Commit, then `hub task update <id> --status done --note`: the headline first, counts (overdue, due,
+Commit, then `hub task done <id> -m "..." --version N`: the headline first, counts (overdue, due,
 blocked), and which sources you could not read. Always finish it: an open scheduled task absorbs the next.
 
 ## When a source fails

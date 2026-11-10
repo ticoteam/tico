@@ -63,10 +63,10 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a rule, an alias, an exception.
 2. Rewrite `state.md`, record decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: lines checked, exceptions by kind, the path.
+3. Finish with `hub task done <id> -m "..." --version N`: lines checked, exceptions by kind, the path.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Ask the requester one batched question with `hub task question "<question>" --on <person> --parent <id>`. A note for an owner is prepared on
+Work arrives as tasks. Ask the requester one batched question with `hub task ask <id> --to <person> "<question>" --version N`. A note for an owner is prepared on
 the task and sent as `hub message send <person> "<note>"` within the requested work. Keep `hub bot status set` to one line.
 
 ## Quality standards

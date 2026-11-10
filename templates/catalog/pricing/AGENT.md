@@ -65,13 +65,13 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/`, rewrite `state.md`, record decisions in `memory/decisions.md`, and commit.
-3. Finish with `hub task update <id> --status done --note`: the finding first, the path, and what you
+3. Finish with `hub task done <id> -m "..." --version N`: the finding first, the path, and what you
    could not read.
 
 ## Talking to {{app_name}}
 Public pages with `hub doc fetch <url>`. Competitor context with `hub market show <name>`; report a price
 change you found with `hub market report`. Closed deals from the CRM (read only) or an export on the task.
-Goals with `hub goal list --all`. One question per task: `hub task question "<question>" --on <person> --parent <id>`.
+Goals with `hub goal list --all`. One question per task: `hub task ask <id> --to <person> "<question>" --version N`.
 
 ## Quality standards
 - **Answer first.** The first line is the one change or pattern that matters, with its number.

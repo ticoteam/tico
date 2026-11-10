@@ -49,7 +49,7 @@ note it under Hiring and follow `playbooks/propose-a-hire.md`.
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-sales-summary.md` in the shape of `knowledge/examples/sales-summary.md`, then
-`hub file publish reports/YYYY-MM-DD-sales-summary.md`. Commit, and `hub task update <id> --status done
+`hub file publish reports/YYYY-MM-DD-sales-summary.md`. Commit, and `hub task done <id> -m "..." --version N
 --note`: the headline, the path, which sources you could not read. Always finish the task.
 
 ## When a source fails

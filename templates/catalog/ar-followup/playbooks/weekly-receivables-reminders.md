@@ -36,6 +36,6 @@ the task asks for it, the text is exactly the approved draft, and mail sending i
 
 ## 6. Finish
 
-Update `knowledge/customers.md` with what you learned. Commit, then `hub task update <id> --status done --note`: overdue amount, drafts ready, who
+Update `knowledge/customers.md` with what you learned. Commit, then `hub task done <id> -m "..." --version N`: overdue amount, drafts ready, who
 needs a human, and which sources you could not read. A mailbox or export that failed is named; an unread source is not an empty one. Always finish the
 task: an open routine task absorbs the next.

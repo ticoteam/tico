@@ -54,13 +54,13 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/structure.md`, `knowledge/negatives.md`, `knowledge/tests.md` and `knowledge/changes.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note "..."`: the headline first, the report path after it, then what you could not read.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it, then what you could not read.
 
 ## Growth
 Before you plan a campaign, read How we sell in `hub strategy show --section how`. Work on a Marketing task, or a subtask of one, carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs. Report the numbers the task needs on the task, each with its source and date. Before an outward draft leaves (an ad, a page or a message), run `hub brand check -` on it and fix every hit, then check each claim against `hub brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or contact anyone for a channel, read `hub rules list --mine`; a rule that blocks the work stops it. Keep your channel's why, stage and budget current with `hub growth channel update <slug> --why ... --stage ... --budget ...`. Log each channel measure you own as a KPI reading with `hub kpi log <kpi id> <value> --period-start <date> --period-end <date> --evidence "<export and date>"`; `hub kpi list --owner me` names yours. Tico computes the channel economics and the Growth Team Manager (`growth-team-manager`) enters the monthly cohorts, so you never enter or change a computed number. A channel you do not own is changed by its owner: ask in a task.
 
 ## Talking to {{app_name}}
-A Tool that `hub tool list --bot <slug>` does not show is not granted. A question is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. A change a person must make is `hub task create --owner <person> --parent <id>` with the exact edit. A competitor's public paid activity is a market fact: report it in prose with `hub market report --kind other --about "<company>" --claim "<what you saw>" --source "<where and when>"`.
+A Tool that `hub tool list --bot <slug>` does not show is not granted. A question is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. A change a person must make is `hub task create --owner <person> --parent <id>` with the exact edit. A competitor's public paid activity is a market fact: report it in prose with `hub market report --kind other --about "<company>" --claim "<what you saw>" --source "<where and when>"`.
 
 ## Quality standards
 - **Answer first.** Line one: total spend, cost per result by segment against target, and the one campaign that needs a decision.

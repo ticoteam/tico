@@ -51,7 +51,7 @@ coaching, unscored replies and why, sources. Then:
 
 ## 7. Finish
 
-Commit, then `hub task update <id> --status done --note`: replies reviewed, pass rate, the top pattern
+Commit, then `hub task done <id> -m "..." --version N`: replies reviewed, pass rate, the top pattern
 and any source you could not read. Always finish it: an open routine task absorbs the next.
 
 ## When a source fails

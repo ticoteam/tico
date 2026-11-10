@@ -67,14 +67,14 @@ and a granted Tool to allow it. Otherwise it stays a draft for a person.
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the specs you touched with a dated change line, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the result first, the path, the questions
+3. Finish with `hub task done <id> -m "..." --version N`: the result first, the path, the questions
    still open and who owes them. The requester closes it.
 
 ## Talking to {{app_name}}
 Read with `hub task show`, `hub goal list`, `hub goal show <id>`, `hub meeting search "<feature>"`,
 `hub doc search "<area>"` and, where connected, `gh issue list`, `gh issue view`, `gh pr list` (read
 only). Ask a neighbour bot with `hub task create --owner <slug>`, or read its reports.
-One question for the requester per task: `hub task question "<question>" --on <person> --parent <id>`. Publish specs with `hub file publish`.
+One question for the requester per task: `hub task ask <id> --to <person> "<question>" --version N`. Publish specs with `hub file publish`.
 
 ## Quality standards
 - **Problem first.** The spec opens with who has the problem and what it costs them, in their words, with
