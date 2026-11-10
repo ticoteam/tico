@@ -13,14 +13,6 @@ interface TasksPageState extends TaskState {
 // The kept list of the last visit (S.lastRead.tasks) and the saved view preference (S.lastRead.tasksPref).
 interface KeptTasksRead { key: string; tasks: TaskRow[]; labels: string[]; tags: import('../types/api').Tag[]; filtered?: unknown; since?: string | null; fullAt?: number; }
 type TasksPref = { type?: unknown; view?: unknown; views?: unknown; };
-// The new-task form's named controls. The form's own title is an HTMLElement attribute, so the form type intersects it.
-interface TaskCreateForm {
-  title: HTMLInputElement; owner: HTMLSelectElement; body: HTMLTextAreaElement; labels: HTMLInputElement;
-  top: HTMLInputElement; link: HTMLInputElement; goal?: HTMLSelectElement; elements: TaskCreateControls;
-}
-interface TaskCreateControls extends PipelineCreateElements { private: HTMLInputElement; follow: HTMLInputElement; files?: HTMLInputElement; }
-type TaskCreatePayload = {title: string; body: string; owner: string; private?: boolean; labels?: string[]; top?: boolean;
-  follow?: boolean; links?: string[]; relations?: {task: string; kind: string}[]; goal_id?: string};
 // The ask of a task or of a need item (companyNeedActor reads the sender, which the need item carries too).
 type NeedAsk = {body?: string | null; recipient_id?: string | null; older?: boolean; sender_id?: string | null} | null;
 // The company queue grouped by the actor who holds it (companyNeedGroups).
@@ -286,94 +278,63 @@ function taskCreateModal() {
   document.body.appendChild(d);
   return d;
 }
-// The new-task form's file input also takes files dropped on the form and images pasted into it, and lists what it
-// holds, so the submit reads one FileList.
-function taskFormFiles(form: HTMLFormElement) {
-  const input = form.querySelector<HTMLInputElement>('input[type=file]'), label = input?.closest<HTMLLabelElement>('label');
-  if (!input || !label) return;
-  const list = document.createElement('div');
-  list.className = 'files';
-  label.after(list);
-  const show = () => { list.innerHTML = [...(input.files ?? [])].map(f => `<span>${esc(f.name)}</span>`).join(''); };
-  const add = (files: File[]) => {
-    if (!files.length) return;
-    const merged = new DataTransfer();
-    [...(input.files ?? []), ...files].forEach(f => merged.items.add(f));
-    input.files = merged.files; show();
-  };
-  input.addEventListener('change', show);
-  fileDropTarget(form, add);
-  pasteImages(form, add);
+// New task (S6): a title, the details, and one row: who it is for, the pipeline, Create. No due date here; it is added on
+// the task. A new task starts in its pipeline's first stage. `parent` files it from that task, which then waits on it.
+interface TaskCreateOptions {
+  parent?: (Pick<TaskRow, 'id' | 'title'> & Partial<Pick<TaskRow, 'private'>>) | null | undefined;
+  labels?: unknown[] | undefined;
+  /** The pipeline it goes in, by id: General when none is named. */
+  pipeline?: string | null | undefined;
 }
-function openTaskCreate(owner = '', opts: {parent?: (Pick<TaskRow, 'id' | 'title'> & Partial<Pick<TaskRow, 'private'>>) | null | undefined; labels?: unknown[] | undefined; type?: string | null | undefined} = {}) {
+let TASK_CREATE_PIPELINES: PipelineRec[] | null = null;
+function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
   const d = taskCreateModal();
   const parent = opts.parent || null;
-  d.innerHTML = `<div class="tmodal-head"><h2 class="tmodal-title" style="margin:0">${parent ? 'New subtask' : 'New task'}</h2>
-      <span class="spacer"></span>
+  const forWho = owner && !owner.includes(':') && botRow(owner) ? 'bot:' + owner : owner;
+  d.innerHTML = `<div class="tmodal-head"><span class="spacer"></span>
       <button class="ghost tmodal-x" type="button" data-modal-close aria-label="Close">✕</button></div>
     <div class="tmodal-body">
-      <form class="task" id="task-create-form">
-        ${parent ? `<p class="muted">Part of <b>${esc(parent.title)}</b></p>` : ''}
-        <div class="r1" style="grid-template-columns:1fr"><input type="text" name="title" required aria-label="Title" placeholder="Email Dana the renewal brief"></div>
-        <label>For <select name="owner" required aria-label="Who this task is for">${taskOwnerOptions(owner)}</select></label>
-        <label class="task-private"><span class="privacy-row"><input type="checkbox" name="private" ${parent?.private ? 'checked' : ''}> Private</span><small>Only the requester and assignee can see this task.</small></label>
-        <div class="r3">
-          <label>Tags <input type="text" name="labels" list="task-label-list-new" placeholder="bug, pricing-page" aria-label="Tag keys, comma separated" size="18" value="${esc((opts.labels || []).join(', '))}"><datalist id="task-label-list-new">${(TASKS_ST?.labels || []).map(l => `<option value="${esc(l)}">`).join('')}</datalist></label>
-          <label><input type="checkbox" name="top"> Top of their queue</label>
-          <label><input type="checkbox" name="follow"> Follow</label>
+      <form class="task tc-form" id="task-create-form">
+        <input type="text" name="title" required aria-label="Title" placeholder="Title" maxlength="300">
+        <textarea name="body" required aria-label="Details" placeholder="Details" rows="6"></textarea>
+        <div class="tc-row">
+          <label class="tc-pick"><span>For:</span><select name="owner" required aria-label="For">${taskOwnerOptions(forWho, '…')}</select></label>
+          <label class="tc-pick"><select name="pipeline" aria-label="Pipeline"><option value="">General</option></select></label>
+          <span class="spacer"></span>
+          <button class="primary" type="submit">Create</button>
         </div>
-        <label>Serves <select name="goal" aria-label="The goal this task serves"><option value="">No goal</option></select></label>
-        <label>Details (required)<textarea name="body" required aria-label="Details" placeholder="Details"></textarea></label>
-        <input type="url" name="link" inputmode="url" autocomplete="off" spellcheck="false" placeholder="Link (pull request, doc)" aria-label="Link">
-        <label class="attach">Attach files <input type="file" name="files" multiple aria-label="Task attachments"></label><span class="muted"> or drop them on this form, or paste a screenshot</span>
-        <div class="r3"><button class="primary" type="submit">Create task</button><span class="muted" id="task-create-msg"></span></div>
-        <p class="muted hint">You close it. For a human, start the title with a verb.</p>
+        <p class="err" id="task-create-msg" role="alert" hidden></p>
       </form>
     </div>`;
   $('[data-modal-close]', d).onclick = () => d.close();
-  const creation = $('#task-create-form', d);
-  let privateTouched = false;
-  creation.elements.private.addEventListener('change', () => { privateTouched = true; });
-  const privateDefault = () => {
-    const bot = botRow(creation.elements.owner.value);
-    if (parent?.private || !privateTouched)
-      creation.elements.private.checked = !!parent?.private || !!bot?.private_tasks_default;
-    creation.elements.private.disabled = !!parent?.private;
+  const form: HTMLFormElement = $("#task-create-form", d);
+  const field = <T extends Element>(name: string) => form.elements.namedItem(name) as T;
+  const pick = field<HTMLSelectElement>('pipeline');
+  const fill = (list: PipelineRec[]) => {
+    const live = list.filter(p => !p.retired_at);
+    const want = opts.pipeline || '';
+    pick.innerHTML = live.map(p => `<option value="${esc(p.id)}"${p.id === want || (!want && p.preset === 'general') ? ' selected' : ''}>${esc(p.name)}</option>`).join('')
+      || '<option value="">General</option>';
   };
-  creation.elements.owner.addEventListener('change', privateDefault); privateDefault();
-  goalOptions().then(goals => {
-    const sel = $('#task-create-form select[name=goal]'); if (!sel || !goals.length) return;
-    sel.innerHTML = '<option value="">No goal</option>' + goals.map(g =>
-      `<option value="${esc(g.id)}">${esc(g.title)} · ${esc(goalOwnerInfo(g.owner_id).name)}</option>`).join('');
-  });
-  taskFormFiles(creation);
-  void taskPipelineCreate($('#task-create-form'), opts.type || TASKS_ST?.type);
-  $('#task-create-form').onsubmit = async (ev: SubmitEvent) => {
+  if (TASK_CREATE_PIPELINES) fill(TASK_CREATE_PIPELINES);
+  void pipelinesAll().then(list => { TASK_CREATE_PIPELINES = list; if (d.open && form.isConnected) fill(list); }).catch(() => {});
+  form.onsubmit = async (ev: SubmitEvent) => {
     ev.preventDefault();
-    const form = ev.target as HTMLFormElement & TaskCreateForm, btn = form.querySelector<HTMLButtonElement>('[type=submit]'), msg = $('#task-create-msg');
-    const title = form.title.value.trim(), owner = form.owner.value, body = form.body.value.trim();
-    if (!title || !owner) { msg.textContent = 'Choose who this is for.'; return; }
-    if (!body) { msg.textContent = 'Add details.'; form.body.focus(); return; }
-    if (!btn) return;
-    btn.disabled = true; msg.textContent = 'Creating…';
-    const payload: TaskCreatePayload = {title, body, owner: owner.includes(':') ? owner : 'bot:' + owner};
-    payload.private = form.elements.private.checked;
-    taskPipelineCreatePayload(form, payload);
-    const labels = form.labels.value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-    if (labels.length) payload.labels = labels;
-    if (form.top.checked) payload.top = true;
-    if (form.elements.follow.checked) payload.follow = true;
-    if (form.link.value.trim()) payload.links = [form.link.value.trim()];
-    if (parent) payload.relations = [{task: parent.id, kind: 'parent'}];
+    const btn = form.querySelector<HTMLButtonElement>('[type=submit]'), msg = $('#task-create-msg', d);
+    const title = field<HTMLInputElement>('title').value.trim(), body = field<HTMLTextAreaElement>('body').value.trim();
+    const who = field<HTMLSelectElement>('owner').value;
+    if (!title || !who || !body || !btn) return;
+    btn.disabled = true; msg.hidden = true;
+    const labels = (opts.labels || []).map(String).filter(Boolean);
     try {
-      const goal = form.goal?.value || '';
-      if (goal) payload.goal_id = goal;
-      await cloudCompose('/v2/tasks', payload, Array.from(form.elements.files?.files || []));
+      const made = await taskCreate({title, body, owner: who.includes(':') ? who : 'bot:' + who,
+        ...(pick.value ? {pipeline: pick.value} : {}), ...(parent ? {parent: parent.id} : {}),
+        ...(labels.length ? {labels} : {}), ...(parent?.private ? {private: true} : {})});
       d.close();
-      toast('Task created');
       if (TASKS_ST) await tasksLoad(TASKS_ST);
       await v2Refresh();
-    } catch (e) { msg.innerHTML = `<span class="err">${esc(errorMessage(e, ''))}</span>`; btn.disabled = false; }
+      if (made?.id) taskModalOpen('t' + made.id);
+    } catch (e) { msg.textContent = errorMessage(e, ''); msg.hidden = false; btn.disabled = false; }
   };
   if (!d.open) d.showModal();
   formFocus(d);

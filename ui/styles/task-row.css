@@ -32,3 +32,9 @@
 @media (max-width:640px){
   .tk-row .tk-after,.tk-row .tk-who{display:none}
 }
+
+/* New task (S6): Title, Details, then one row: For, the pipeline, Create. */
+.tc-form{display:flex;flex-direction:column;gap:10px}
+.tc-form textarea{min-height:120px}
+.tc-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tc-pick{display:inline-flex;align-items:center;gap:4px}
