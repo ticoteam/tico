@@ -68,20 +68,18 @@ def _link(base, task_id, title, route=None):
 
 def _tasks(c, auth, who, attrs, base):
     from .store import H
-    from . import question_tasks as QT
+    from . import waiting_on
 
     if attrs.get("waiting-on") != "viewer":
         return ""
-    # The same rules as Needs you: waiting on the viewer (an open question task of theirs under it or blocking it), not
-    # snoozed, and a task the reader may see (task_sql).
+    # Needs you itself (waiting_on.needs: what waits on the viewer, never a snoozed task), and a task the reader may see
+    # (task_sql).
+    waiting = sorted({item["task_id"] for item in waiting_on.needs(c, who.actor) if item.get("task_id")})
+    if not waiting:
+        return '<p class="tico-live-empty">Nothing waiting on you</p>'
     clauses, args = (
-        [
-            QT.waits_sql("tasks", "=?"),
-            "NOT EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=tasks.id AND sh.kind='snoozed' "
-            "AND sh.released_at IS NULL AND sh.until_at>?)",
-            "(" + auth.task_sql(c, who) + ")",
-        ],
-        [who.actor, H.now()],
+        ["id IN (" + ",".join("?" * len(waiting)) + ")", "(" + auth.task_sql(c, who) + ")"],
+        list(waiting),
     )
     if attrs.get("bot"):
         bot = (H.resolve_bot(c, attrs["bot"]) or {}).get("id", attrs["bot"])
@@ -120,9 +118,9 @@ def _task(c, auth, who, attrs, base):
     ).fetchone()
     if not row:
         return ""
-    if row["status"] == "waiting":
-        # Their own open question task under it says so; no one else's is named here.
-        label = "Waiting on you" if H._waits_on(c, dict(row), who.actor) else "Waiting"
+    turn = (H.task_waits(c, [row["id"]]).get(row["id"]) or [None])[0] if row["status"] == "open" else None
+    if turn and getattr(turn, "who", None) == who.actor:
+        label = "Waiting on you"  # whose turn it is; no one else is named here
     else:
         label = (row["status"] or "").replace("_", " ").capitalize()
     return (
