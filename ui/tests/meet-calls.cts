@@ -314,7 +314,7 @@ let browser: import('playwright').Browser | null = null;
     calls.set('c6', meetCall('c6', 't-alerts', 'human:bea', {ring: true}));
     // In launch-plan: a Meet nothing reports on (live) and one nobody was seen in (missed).
     calls.set('c8', meetCall('c8', 't-plan', 'human:ana'));
-    calls.set('c9', meetCall('c9', 't-plan', 'human:bea', {state: 'ended', ended_at: at(500), duration_s: null}));
+    calls.set('c9', meetCall('c9', 't-plan', 'human:bea', {state: 'ended', ended_at: at(500), duration_s: null, status_source: 'google'}));
     timeline['t-plan']!.push(msg('card-c9', 2, 'human:bea', 'Call', 't-plan', {refs: {call: {id: 'c9', card: true}}}),
       msg('card-c8', 3, 'human:ana', 'Call', 't-plan', {refs: {call: {id: 'c8', card: true}}}));
     await page.goto('https://tico-ui.test/#/thread/t-plan');
@@ -410,17 +410,18 @@ let browser: import('playwright').Browser | null = null;
     await tab.waitForURL(u => u.href.startsWith(MEET));
     assert.deepEqual(await order(), ['open ', 'POST /api/v2/calls/c1/join']);
     await tab.close();
-    // Ana ends it from its card before anyone was seen in it: the card shows the missed mark, no length.
+    // Ana ends it from its card; nothing watched it, so the card is a plain ended call: no missed mark, no length.
     await page.reload();
     const card = page.locator('.th-msg[data-mid="card-c1"] .call-card');
     await card.locator('.call-card-end').waitFor();
     assert.equal(timeline['t-plan']!.length, 2);
     page.once('dialog', d => void d.accept());
     await card.locator('.call-card-end').click();
-    await card.locator('.call-card-ic.missed').waitFor();
+    await card.locator('.call-card-end').waitFor({state: 'detached'});
     assert.equal(calls.get('c1')!.state, 'ended');
+    assert.equal(await card.locator('.call-card-ic.missed').count(), 0);
     assert.equal(await card.locator('.call-card-n, .call-card-join, .call-card-end').count(), 0);
-    await themed(page, 'card-missed');
+    await themed(page, 'card-ended-blind');
     assert.deepEqual(seen.errors, []);
     await context.close();
   }

@@ -548,8 +548,8 @@ function callRecorderOpen(call: CallRecord): void {
 
 // ----------------------------------------------------------------- the card
 // A call's card in its thread (a message with refs.call.card): live, the phone, who is in it, how long, Join, and End for
-// whoever started a Google Meet; ended, how long it was and its transcript, or the missed mark for a Google Meet nobody
-// was seen in. The red dot says a Recorder is recording it. A Google Meet nothing reports on shows only the call.
+// whoever started a Google Meet; ended, how long it was and its transcript, or the missed mark for a Google Meet that
+// Google or a Recorder watched and saw nobody in. The red dot says a Recorder is recording it. A Google Meet nothing reports on shows only the call.
 function callCardHTML(m: ThvMessage): string {
   const id = String(m.refs?.call?.id || '');
   const v = id ? CALL_VIEWS.get(id) : undefined;
@@ -567,7 +567,8 @@ function callCardHTML(m: ThvMessage): string {
       since ? `<span class="call-card-n muted tnum" data-call-since="${esc(since)}">${esc(callClock(since))}</span>` : ''}${rec}
       <span class="spacer"></span>${end}<button type="button" class="primary small call-card-join" data-call-join="${esc(id)}">Join</button></div>`;
   }
-  const missed = v.provider === 'google_meet' && v.duration_s == null;
+  // Missed only when something watched the call (Google or a Recorder) and saw nobody; a call nothing watched just ended.
+  const missed = v.provider === 'google_meet' && v.duration_s == null && !!v.status_source;
   const len = callLength(v.duration_s);
   const tid = v.thread_id || m.thread_id || '';
   return `<div class="call-card${missed ? ' missed' : ''}" data-call-card="${esc(id)}">${missed ? head(' missed', CALL_MISSED_SVG, 'Missed') : head('')}${
