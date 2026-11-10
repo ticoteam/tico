@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-import sqlite3
 
 import yaml
 
@@ -15,27 +14,8 @@ from .archive import import_text_archives
 from .backup import inspect, snapshot, upload_bundle
 from .blobs import Blobs
 from .config import ROOT, Settings
-from .store import H, P, Problem, Store, encode, repo_url
+from .store import H, Problem, Store, repo_url
 from . import bot_settings as BS
-
-
-CORE_HISTORY = (
-    "conversations",
-    "messages",
-    "tasks",
-    "task_events",
-    "turns",
-    "meetings",
-    "meeting_versions",
-    "meeting_deliveries",
-)
-# A legacy source's task_events rows are the new database's task rows in history_events
-# (backend/migrations/0064_history_events.py); the report keeps the source's name for them. A legacy turn is an attempts
-# row with a run record (migration 0072), so a turns count reads those.
-HISTORY_COUNTS = {
-    "task_events": "SELECT count(*) FROM history_events WHERE subject_type='task'",
-    "turns": "SELECT count(*) FROM attempts WHERE job_id IS NULL OR trigger IS NOT NULL",
-}
 
 
 def registry_dir():
@@ -88,81 +68,6 @@ def resolved_registry(projects, registry_dir):
     return entries
 
 
-def migrate_legacy(source, destination, runtime, projects, *, queue_backlog=False):
-    """Create a new cloud database from a read-only legacy source snapshot."""
-    source, destination = Path(source).resolve(), Path(destination).resolve()
-    runtime, projects = Path(runtime).resolve(), Path(projects).resolve()
-    if not source.is_file() or source == destination:
-        raise ValueError("Migrate from an existing legacy database into a distinct new file")
-    with sqlite3.connect(source.as_uri() + "?mode=ro", uri=True) as c:
-        tables = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    required = {"bots", "humans", "conversations", "messages", "tasks", "turns", "meetings"}
-    if not required.issubset(tables) or tables & {"cloud_migrations", "bot_config", "runners"}:
-        raise ValueError("Source must be the legacy Hub database, not an initialized cloud database")
-    source_report = snapshot(source, destination)
-    store = Store(Settings(db_path=destination, registry_dir=registry_dir()))
-    store.initialize(adopt_legacy=True)
-    entries = resolved_registry(projects, store.settings.registry_dir)
-    with store.read() as c:
-        seeded = bool(c.execute("SELECT 1 FROM bot_config LIMIT 1").fetchone())
-    if not seeded:
-        store.seed(entries=entries)
-    with store.transaction() as c:
-        # Legacy provider sessions are local history, never cloud execution credentials. The bot's machine path,
-        # its host and any token are no longer stored on bots at all (migration 0043).
-        c.execute("DELETE FROM rate_limits")
-        H.event(c, H.KEEPER, "legacy.execution_fenced", "database", {"source_sha256": source_report["sha256"]})
-    with store.read() as c:
-        pending_messages = c.execute(
-            "SELECT count(*) FROM messages WHERE recipient_id LIKE 'bot:%' AND delivered_at IS NULL"
-        ).fetchone()[0]
-    if queue_backlog:
-        store.enqueue_existing()
-    archives = import_text_archives(store, runtime)
-    with store.transaction() as c:
-        counts = {
-            table: c.execute(HISTORY_COUNTS.get(table) or 'SELECT count(*) FROM "' + table + '"').fetchone()[0]
-            for table in CORE_HISTORY
-        }
-        expected = {table: source_report["tables"].get(table, 0) for table in CORE_HISTORY}
-        if counts != expected:
-            raise RuntimeError("Core history counts changed during migration")
-        state = {
-            "pending_messages": pending_messages,
-            "backlog_activated": bool(queue_backlog),
-            "queued_jobs": c.execute("SELECT count(*) FROM jobs WHERE state='queued'").fetchone()[0],
-            "assignments": c.execute("SELECT count(*) FROM assignments").fetchone()[0],
-            "runners": c.execute("SELECT count(*) FROM runners").fetchone()[0],
-            "bots_by_operator": bots_by_operator(c),
-        }
-        if state["assignments"] or state["runners"]:
-            raise RuntimeError("Legacy execution authority was not fully fenced")
-        manifest = {
-            "format": "tico-legacy-import-v1",
-            "source": str(source),
-            "source_sha256": source_report["sha256"],
-            "history": counts,
-            "archives": archives,
-            "execution": state,
-        }
-        c.execute(
-            "INSERT INTO registry_metadata VALUES('legacy-import',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (encode(manifest),),
-        )
-    # Produce one portable file for transfer. The cloud server will return it to WAL mode on
-    # first startup, but no accepted migration write may remain only in a local sidecar.
-    with sqlite3.connect(destination) as c:
-        checkpoint = c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-        if checkpoint and (checkpoint[0] or checkpoint[1] != checkpoint[2]):
-            raise RuntimeError("Could not checkpoint the migrated database for transfer")
-        if c.execute("PRAGMA journal_mode=DELETE").fetchone()[0].lower() != "delete":
-            raise RuntimeError("Could not make the migrated database a portable single file")
-    final = inspect(destination)
-    if final["integrity"] != ["ok"] or final["foreign_key_violations"]:
-        raise RuntimeError("Migrated database failed final integrity verification")
-    return {"source": source_report, "destination": final, "history": counts, "archives": archives, "execution": state}
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -201,16 +106,6 @@ def main(argv=None):
     p = sub.add_parser("import-history")
     p.add_argument("database", type=Path)
     p.add_argument("--runtime", type=Path, required=True)
-    p = sub.add_parser("migrate-legacy")
-    p.add_argument("source", type=Path)
-    p.add_argument("destination", type=Path)
-    p.add_argument("--runtime", type=Path, required=True)
-    p.add_argument("--projects", type=Path, default=ROOT.parent)
-    p.add_argument(
-        "--queue-legacy-backlog",
-        action="store_true",
-        help="Explicitly make old undelivered bot messages claimable after import",
-    )
     p = sub.add_parser("hosting-enrollment")
     p.add_argument("database", type=Path)
     p.add_argument("--owner", required=True)
@@ -403,10 +298,6 @@ def main(argv=None):
         store = Store(Settings(db_path=args.database))
         store.initialize()
         report = import_text_archives(store, args.runtime)
-    elif args.command == "migrate-legacy":
-        report = migrate_legacy(
-            args.source, args.destination, args.runtime, args.projects, queue_backlog=args.queue_legacy_backlog
-        )
     else:
         import boto3
 
