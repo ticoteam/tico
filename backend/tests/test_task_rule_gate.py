@@ -366,6 +366,8 @@ def test_a_held_hand_off_of_a_private_task_keeps_its_text_off_the_hold(ruled):
     assert got["held"], got
     stored = json.loads(hold_row(api, got["held"]["id"])["payload"])
     assert "favorite color" not in stored["text"] and "Palette plan" not in stored["text"]
+    # Nor who is on it: the reviewer may not read the task, so the hold lists no one it reaches.
+    assert get(api, f"rule-holds/{got['held']['id']}", token="ben-test")["to"] == []
     assert row(api, task["id"])["owner_id"] == "bot:ops"
 
 
@@ -570,6 +572,34 @@ def test_a_bulk_close_whose_why_breaks_a_rule_is_held_and_closes_nothing(ruled):
     got = post(api, "task-bulk", bulk)
     assert got["held"] and "changed" not in got, got
     assert [row(api, t["id"])["status"] for t in tasks] == ["open", "open"]
+
+
+def test_a_held_bulk_why_shows_a_reviewer_nothing_of_a_private_task_they_cannot_read(ruled):
+    api, _ = ruled
+    rule(
+        api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "if_broken": "escalate", "reviewer": "ben"}
+    )
+    open_task = task_for_ops(api, "Write the launch note")
+    with api.app.state.store.transaction() as c:
+        hidden = H.task_create(c, "human:ana", "Palette plan", "Secret.", "bot:finance", lint=False, private=True)
+    assert api.get(f"/api/v2/tasks/{hidden['id']}", headers=headers("ben-test")).status_code == 404
+    bulk = {"filter": {"ids": [open_task["id"], hidden["id"]]}, "action": "close", "why": "Our favorite color is red."}
+    got = post(api, "task-bulk", bulk)
+    assert got["held"], got
+    # The judge read everyone the why reaches, the private task's owner too.
+    assert "bot:finance" in json.loads(hold_row(api, got["held"]["id"])["destinations"])
+    finance = sql(api, "SELECT display_name FROM bots WHERE slug='finance'")[0]["display_name"]
+    view = get(api, f"rule-holds/{got['held']['id']}", token="ben-test")
+    listed = get(api, "rule-holds", token="ben-test")
+    for shown in (view, listed):
+        text = json.dumps(shown)
+        assert finance not in text and "bot:finance" not in text and hidden["id"] not in text, text
+        assert "Palette plan" not in text and "Secret." not in text, text
+    [listed_row] = [h for h in listed["holds"] if h["id"] == got["held"]["id"]]
+    assert view["to"] == ["ops"] and listed_row["to_count"] == 1, (view, listed_row)
+    # The author reads both tasks: their own view names everyone.
+    assert finance in json.dumps(get(api, f"rule-holds/{got['held']['id']}"))
+    assert [row(api, t["id"])["status"] for t in (open_task, hidden)] == ["open", "open"]
 
 
 def test_a_warned_bulk_why_carries_the_line_on_each_task(ruled):

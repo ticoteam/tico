@@ -116,17 +116,29 @@ def register(app, auth, mover, mutate, store, task_filters, task_idents, task_vi
         rules = request.app.state.task_rules
         said = [("Why", body.why or "")]
 
-        def reach(c):
-            out = [rules.rule_target(c, caller, body.owner)] if body.action == "owner" and body.owner else []
+        def reached(c):
+            """Each selected task with the people the why reaches through it: its owner, its requester, a new owner."""
+            new = [rules.rule_target(c, caller, body.owner)] if body.action == "owner" and body.owner else []
             for tid in bulk_select(c, caller, body.filter):
                 row = H.task(c, tid)
-                out += [row["owner_id"], row["requester_id"]]
-            return [a for a in dict.fromkeys(out) if a]
+                yield row, [a for a in (*new, row["owner_id"], row["requester_id"]) if a]
+
+        def reach(c):
+            return list(dict.fromkeys(a for _, people in reached(c) for a in people))
+
+        def private_to(c):
+            # The judge reads everyone (`reach`); a hold lists a private task's people only to whoever may read it.
+            tasks = list(reached(c))
+            seen = {a for row, people in tasks if not H.task_private(c, row) for a in people}
+            hidden = {
+                row["id"]: [a for a in people if a not in seen] for row, people in tasks if H.task_private(c, row)
+            }
+            return {tid: people for tid, people in hidden.items() if people}
 
         verdict = None if body.dry_run else rules.check_words(caller, "task_bulk", said, reach)
 
         def work(c):
-            gate = rules.apply_words(c, caller, verdict, said, reach)
+            gate = rules.apply_words(c, caller, verdict, said, reach, private_to=private_to)
             if task_rule_gate.held(gate):
                 return org_rule_check.answer(gate)
             if gate and gate.get("warn"):

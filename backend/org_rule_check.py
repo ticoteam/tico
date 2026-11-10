@@ -752,7 +752,7 @@ def _warn_structured(c, verdict, warned, tell):
     return {"warn": line, "warned": {"rules": [{"id": r["id"], "text": r["text"]} for r in warned], "text": told}}
 
 
-def _structured_apply(c, verdict, payload, replay, tell, judged_text=None):
+def _structured_apply(c, verdict, payload, replay, tell, judged_text=None, private_to=None):
     """A structured verdict inside the write. The Directory's check runs again here on the same input (it calls no engine,
     so it runs under the write's lock), and what it finds now holds the write. A check that cannot complete holds it too
     (fail closed; its class is the reason). A judged block the verdict was checked with (`judged`) holds it with the
@@ -813,6 +813,7 @@ def _structured_apply(c, verdict, payload, replay, tell, judged_text=None):
         check="structured",
         error=now["error"],
         judged=judged_text,
+        private_to=private_to,
     )
 
 
@@ -1291,7 +1292,9 @@ def _people(recipients, author):
     return sorted({r for r in recipients or () if r and r != author})
 
 
-def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audience_now=None, judged=None):
+def apply(
+    c, verdict, payload=None, replay=None, tell=False, obj_now=None, audience_now=None, judged=None, private_to=None
+):
     """The verdict inside the write. Returns None to deliver as is; {"warn": line, ...} to deliver with the warning
     line on the recipient's copy; {"held": view} to write nothing and answer with the hold. `payload` is the text the
     reviewer reads, `replay` what Send anyway needs to run the normal write. `tell` also leaves the bot a note (a
@@ -1303,7 +1306,8 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     so a different one comes back as {"moved": True}. A refused verdict
     (`refused`) raises its error here, so the write fails with it. `judged`: the whole text the check judged, when the
     reviewer's `payload` leaves some of it out (a private task's words): a hold keeps it where only Send anyway's
-    recheck reads it (`hold_input`), never shown."""
+    recheck reads it (`hold_input`), never shown. `private_to`: {private task id: the recipients the write reaches only
+    through that task}; a hold lists them only to a reader who may read one of those tasks (`_shown_to`)."""
     if verdict and "refused" in verdict:
         raise verdict["refused"]
     if verdict and "applied" in verdict:
@@ -1316,7 +1320,7 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     if audience_now is not None and _people(audience_now, author) != list(verdict["recipients"]):
         return {"moved": True}
     if verdict.get("check") == "structured":
-        return _structured_apply(c, verdict, payload, replay, tell, judged)
+        return _structured_apply(c, verdict, payload, replay, tell, judged, private_to)
     if verdict["outcome"] in ("broken", "too_large"):
         # The rules in force now must be the ones checked: a rule edited, retired or added since is a new check, which
         # cannot run here (no engine under the write lock), so the output goes through unchecked.
@@ -1395,7 +1399,20 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
         if tell:
             _tell_bot(c, author, told)
         return {"warn": line, "warned": {"rules": [{"id": r["id"], "text": r["text"]} for r in broken], "text": told}}
-    return _write_hold(c, verdict, broken, strictest, mode, repeat, too_large, payload, replay, tell, judged=judged)
+    return _write_hold(
+        c,
+        verdict,
+        broken,
+        strictest,
+        mode,
+        repeat,
+        too_large,
+        payload,
+        replay,
+        tell,
+        judged=judged,
+        private_to=private_to,
+    )
 
 
 def _write_hold(
@@ -1413,6 +1430,7 @@ def _write_hold(
     check="judged",
     error=None,
     judged=None,
+    private_to=None,
 ):
     """The hold a write is held in, written and told. `broken` are the rules that hold it, `strictest` the one the hold
     is on and `mode` its outcome (`block` or `escalate`; an escalation with no reviewer is a block). `check` is the check
@@ -1479,6 +1497,8 @@ def _write_hold(
             # `recheck` reads it: never a hold's view, its list, its events or its answer.
             **({"text": judged} if judged else {}),
         },
+        # Recipients reached only through a private task, by task: never shown, read by `_shown_to` alone.
+        **({"private_to": {t: sorted(set(a)) for t, a in private_to.items() if a}} if private_to else {}),
     }
     matched = (
         verdict["matched"]
@@ -1740,14 +1760,17 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
         )
     if not (author or reviewer or stands_in):
         raise Problem("not_found", "There is no hold " + hold["id"], 404)
-    stored = {} if summary else json.loads(hold["payload"] or "{}")
+    stored = json.loads(hold["payload"] or "{}")
+    hidden = _hidden_from(c, who, stored.get("private_to"))
+    stored = {} if summary else stored
     if not summary:
         from .files import readable_page_refs
 
         stored = readable_page_refs(c, auth, who, stored)
     verdict = json.loads(hold["verdict"] or "{}")
     rule_ids = json.loads(hold["rule_ids"] or "[]")
-    destinations = json.loads(hold["destinations"] or "[]")
+    destinations = [a for a in json.loads(hold["destinations"] or "[]") if a not in hidden]
+    to_count = len(destinations)
     if summary:
         # A list row is bounded whatever the hold names: a few short rule previews and names, and the counts.
         rule_ids, destinations = rule_ids[:SUMMARY_RULES], destinations[:SUMMARY_NAMES]
@@ -1781,7 +1804,7 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
     if summary:
         out["appealed"] = bool(hold["why"])
         out["rules_count"] = len(json.loads(hold["rule_ids"] or "[]"))
-        out["to_count"] = len(json.loads(hold["destinations"] or "[]"))
+        out["to_count"] = to_count
         return out
     text = stored.get("text") or ""
     out["text"] = text[:HOLD_TEXT_CHARS]
@@ -1795,6 +1818,22 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
         if hold["state"] == "held":
             out["nonce"] = hold["nonce"]
     return out
+
+
+def _hidden_from(c, who, private_to):
+    """The recipients a hold leaves out for `who`: those it reaches only through private tasks `who` may not read. The
+    judge read them all (the hold's `destinations`); a reader who may not read a private task learns nothing of who is
+    on it, nor that it exists."""
+    if not private_to:
+        return set()
+    from . import task_privacy
+
+    readable = {}
+    for tid in private_to:
+        row = H.task(c, tid)
+        readable[tid] = bool(row) and task_privacy.task_readable(c, who, row)
+    shown = {a for tid, actors in private_to.items() if readable[tid] for a in actors}
+    return {a for actors in private_to.values() for a in actors} - shown
 
 
 def hold_view(c, who, hold_id, auth=None):

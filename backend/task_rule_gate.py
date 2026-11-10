@@ -249,10 +249,20 @@ class TaskRules:
         self._refused(c, who, verdict, ask)
         # The reviewer reads the write without a private task's words; the hold keeps what was judged for Send
         # anyway's recheck alone (`judged`).
-        payload = said_text(row, said, hands_over, hide_task=bool(row and H.task_private(c, row)))
+        # Nor its people: everyone the write reaches is reached through the private task.
+        private = bool(row and H.task_private(c, row))
+        payload = said_text(row, said, hands_over, hide_task=private)
         judged = said_text(row, said, hands_over)
+        private_to = {row["id"]: list(verdict.get("recipients") or [])} if private else None
         gate = org_rule_check.apply(
-            c, verdict, payload, replay, obj_now=obj_now, audience_now=audience_now, judged=judged
+            c,
+            verdict,
+            payload,
+            replay,
+            obj_now=obj_now,
+            audience_now=audience_now,
+            judged=judged,
+            private_to=private_to,
         )
         if gate and gate.get("moved"):
             raise Problem("task_changed", CHANGED, 409, retryable=True)
@@ -294,9 +304,10 @@ class TaskRules:
             LOG.exception("Task rule check failed")
             return org_rule_check.refused(Problem("rule_check", FAILED, 503, retryable=True))
 
-    def apply_words(self, c, who, verdict, said, reach, ask=False):
+    def apply_words(self, c, who, verdict, said, reach, ask=False, private_to=None):
         """`check_words`'s verdict inside the write: a refusal, a 409 when the audience moved since the check, or the
-        gate (`org_rule_check.apply`)."""
+        gate (`org_rule_check.apply`). `private_to(c)`: {private task id: the people the write reaches only through
+        it}, whom a hold lists only to a reader of that task."""
         if not verdict:
             return None
         if "refused" in verdict:
@@ -305,7 +316,14 @@ class TaskRules:
         if audience_now is not None and not org_rule_check.holds(verdict) and stale(verdict, None, audience_now):
             raise Problem("task_changed", CHANGED, 409, retryable=True)
         self._refused(c, who, verdict, ask)
-        gate = org_rule_check.apply(c, verdict, said_text(None, said), None, audience_now=audience_now)
+        gate = org_rule_check.apply(
+            c,
+            verdict,
+            said_text(None, said),
+            None,
+            audience_now=audience_now,
+            private_to=private_to(c) if private_to else None,
+        )
         if gate and gate.get("moved"):
             raise Problem("task_changed", CHANGED, 409, retryable=True)
         return gate
