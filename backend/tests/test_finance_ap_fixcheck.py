@@ -27,6 +27,7 @@ from backend.tests.helpers.finance_fixtures import (
     sync_once,
 )
 from backend.tests.helpers.finance_payments import HOURS, _checking, _payee
+from backend.tests.helpers.finance_oks import give, send_back
 
 NOV = "2026-11-05T12:00:00.000000Z"
 DEC = "2026-12-03T12:00:00.000000Z"
@@ -392,7 +393,7 @@ def test_an_approved_over_budget_bill_payment_sends_and_a_later_drop_does_not_ho
             },
         )
         assert (asked.status, asked.rule) == ("needs_approval", f"budget:{budget.result['budget_id']}"), asked
-        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        give(c, OWNER, asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done.status == "committed", done
         pid = str(done.result["payment_id"])
@@ -449,7 +450,7 @@ def test_an_approval_for_one_budget_never_covers_another_now_over(books):  # noq
             },
         )
         assert (asked.status, asked.rule) == ("needs_approval", f"budget:{a}"), asked
-        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        give(c, OWNER, asked.approval_id)
         pid = str(FA.approval_decided(c, asked.approval_id, AT).result["payment_id"])
         assert FP.recheck(load(c, AT), SK.get(c, "fin_payments", pid)) == ""
         act(c, OWNER, "budget_update", {"budget_id": a, "amount": 100_000})  # A recovers
@@ -480,7 +481,7 @@ def test_a_bot_marking_a_bill_paid_past_a_budget_waits_for_a_person_as_its_payme
         asked = act(c, "bot:seller", "bill_mark_paid", {"bill_id": bid})
         assert (asked.status, asked.rule) == want, asked
         assert FR.bill(c, OWNER, bid)["status"] == "open"
-        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        give(c, OWNER, asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done.status == "committed", done
         assert FR.bill(c, OWNER, bid)["status"] == "paid"
@@ -562,7 +563,7 @@ def test_a_bill_pays_once_across_a_declined_ask_a_second_ask_and_its_approval(bo
         act(c, OWNER, "view_grant", {"subject": "bot:seller", "what": "everything"})
         first = _pay_bill(c, rid, bid)
         assert first.status == "needs_approval", first
-        H.approval_decide(c, OWNER, first.approval_id, "declined")
+        send_back(c, OWNER, first.approval_id)
         assert FA.approval_decided(c, first.approval_id, AT).status != "committed"
         assert FR.bill(c, OWNER, bid)["status"] == "open"
         second = _pay_bill(c, rid, bid)
@@ -570,7 +571,7 @@ def test_a_bill_pays_once_across_a_declined_ask_a_second_ask_and_its_approval(bo
         third = _pay_bill(c, rid, bid)
         assert (third.status, third.code) == ("failed", CONFLICT), third
         assert "waiting for approval" in third.reason
-        H.approval_decide(c, OWNER, second.approval_id, "approved")
+        give(c, OWNER, second.approval_id)
         done = FA.approval_decided(c, second.approval_id, AT)
         assert done.status == "committed", done
         again = _pay_bill(c, rid, bid)
@@ -621,7 +622,7 @@ def test_a_bill_with_a_scheduled_pay_and_a_payment_both_waiting_is_paid_once_whi
             status = c.execute("SELECT status FROM fin_actions WHERE id=?", (ask.action_id,)).fetchone()[0]
             if status != "needs_approval":
                 continue  # the schedule withdrew the payment's ask: its approval is gone
-            H.approval_decide(c, OWNER, ask.approval_id, "approved")
+            give(c, OWNER, ask.approval_id)
             FA.approval_decided(c, ask.approval_id, AT)
         assert c.execute("SELECT status FROM fin_actions WHERE id=?", (pay.action_id,)).fetchone()[0] == (
             "committed" if first == "payment" else "withdrawn"
@@ -643,7 +644,7 @@ def test_a_bill_with_a_scheduled_pay_and_a_payment_both_waiting_is_paid_once_whi
         paid = c.execute("SELECT COUNT(*) FROM fin_payments WHERE obligation=?", (obligation,)).fetchone()[0]
         assert paid + len(asks) == 1, (paid, asks)
         for _, approval in asks:
-            H.approval_decide(c, OWNER, approval, "approved")
+            give(c, OWNER, approval)
             assert FA.approval_decided(c, approval, AT).status == "committed"
     sync_once(books, fake, "2026-11-05T14:00:00.000000Z")
     assert [b["amount"] for b in fake.sent("request_send_money")] == [150]

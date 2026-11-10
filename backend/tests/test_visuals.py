@@ -230,23 +230,6 @@ def test_a_chat_visual_is_refused_to_everyone_outside_the_chat(api):
         assert api.get("/visuals/" + V.mint(api.app.state.visual_key, "human:cara", fid, 1)).status_code == 404
 
 
-def test_the_public_roadmap_never_shows_a_private_tasks_visual(api):
-    """Spec 19: nothing of a private task's visual (file id, title, address) reaches a public roadmap response."""
-    tid, fid, comment = visual_on_task(api, private=True)
-    assert comment["refs"]["attachments"][0]["src"].startswith(VISUALS + "/visuals/")  # a reader does see it
-    from backend import public_roadmaps
-    from backend.store import H
-
-    with api.app.state.store.transaction() as c:
-        # Even marked public and on a task made public, the comment's visual does not travel.
-        c.execute("UPDATE messages SET public=1 WHERE id=?", (comment["id"],))
-        c.execute("UPDATE tasks SET visibility='public', public_title='Chart' WHERE id=?", (tid,))
-        row = H.task(c, tid)
-        shown = repr(public_roadmaps.comments(c, row)) + repr(public_roadmaps.output(c, row))
-    assert comment["id"] in shown
-    assert fid not in shown and "/visuals/" not in shown and "chart.html" not in shown
-
-
 def snapshot_item(api, cid, mid, who):
     got = api.get(f"/api/v2/conversations/{cid}/snapshot", headers=headers(who))
     if got.status_code != 200:

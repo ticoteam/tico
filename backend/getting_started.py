@@ -197,7 +197,7 @@ def checklist(c, who, settings, github):
     mine = own_bots(c, settings)
     building = c.execute(
         "SELECT id FROM tasks WHERE owner_id=? AND title LIKE 'Build a bot:%' "
-        "AND status NOT IN ('done','closed','declined') ORDER BY created_at DESC LIMIT 1",
+        "AND status='open' ORDER BY created_at DESC LIMIT 1",
         ("bot:" + BOTOPS,),
     ).fetchone()
     installed = bool(github and github["installation_id"])
@@ -349,13 +349,13 @@ def _botops(c):
 
 
 def _market_title(c, owner, actor):
-    """A title this request can still open: the hub refuses a second live task with the same one."""
-    marks = ",".join("?" * len(H.LIVE_STATUSES))
+    """A title this request can still open: Tico refuses a second open task with the same one."""
+    marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     for n in range(1, 20):
         title = MARKET_TASK if n == 1 else f"{MARKET_TASK} ({n})"
         if not c.execute(
             f"SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status IN ({marks})",
-            (actor, owner, title, *H.LIVE_STATUSES),
+            (actor, owner, title, *H.ACTIVE_STATUSES),
         ).fetchone():
             return title
     return f"{MARKET_TASK} ({n})"

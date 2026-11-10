@@ -9,16 +9,16 @@ class Outcomes(unittest.TestCase):
         self.conn.row_factory = sqlite3.Row
         self.addCleanup(self.conn.close)
         self.conn.execute('CREATE TABLE tasks (id,title,status,owner_id,requester_id,note,updated_at,created_at)')
-        self.conn.execute('CREATE TABLE task_relations (from_task,to_task,kind,created_by,created_at)')
+        self.conn.execute('CREATE TABLE links (from_task_id,to_task_id,kind,created_at)')
         self.conn.execute(
             "INSERT INTO tasks VALUES ('review','Review meeting','done','bot:coo','human:ana','Created follow-up tasks.','today','today')"
         )
-        for id, status in [('a', 'done'), ('b', 'waiting')]:
+        for id, status in [('a', 'done'), ('b', 'open')]:
             self.conn.execute(
                 'INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?)',
                 (id, 'Follow-up', status, 'bot:cmo', 'bot:coo', '', 'today', 'today'),
             )
-            self.conn.execute("INSERT INTO task_relations VALUES (?,'review','parent',NULL,'today')", (id,))
+            self.conn.execute("INSERT INTO links VALUES ('review',?,'sub_task','today')", (id,))
         self.record = {'sent': {'task': 'review', 'slug': 'coo'}}
 
     def test_private_task_details_are_not_returned(self):

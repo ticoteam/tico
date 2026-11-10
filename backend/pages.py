@@ -349,7 +349,7 @@ class Pages:
         task = str(fields.get("task") or "").strip()
         spec = str(fields.get("spec") or "").lower() in ("1", "true", "yes")
         if spec:
-            # A spec is a page on a Product roadmap card; its styles are inlined so the stored page reads the same anywhere.
+            # A spec is a page on a task in a Product pipeline; its styles are inlined so the stored page reads the same anywhere.
             with self.store.read() as c:
                 visual_specs.check_publish(c, task)
             data = visual_specs.inline_styles(data)

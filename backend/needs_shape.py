@@ -1,25 +1,24 @@
 """One item shape for everything in a person's Needs you (OpenAPI `NeedsYouItem`).
 
-Each producer builds its item with what its card needs (a task's view, a question, an approval row, a card's rows); `item`
+Each producer builds its item with what it needs (a task, an ask on a task, a Paused cause, an @, a goal's ask); `item`
 adds the fields every item has, whatever its kind, so a client lists, orders and acts on them without a branch per kind:
 
 - `id`, `kind`, `title`, `created_at` (when it began waiting on the person);
 - `body`: its text, or null when the card has none;
-- `subject`: `{type, id}`, the one thing it is about (a task, a message, an approval, a proposal, a KPI), or null for
-  a card that stands for several things or a setting;
+- `subject`: `{type, id}`, the one thing it is about (a task, a proposal, a KPI), or null for an item that stands for
+  several things or a setting;
 - `actions`: the writes that settle it, from `ACTIONS`.
 """
 
 # Each action, and the write it is (the v2 spec, backend/openapi_v2.py, has them all).
 ACTIONS = {
-    "update": "POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; a question task is "
-    "answered by its close (a pick: POST /api/v2/tasks/{task id}/answers with target {task})",
-    "decide": "the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or "
-    "/api/v2/stale-review/{row id} for each row",
+    "update": "work the task: POST /api/v2/tasks/{task id}/done, /move or /try-again, or comment on it",
+    "answer": "POST /api/v2/tasks/{task id}/asks/{requirement id}/answer (or /give to hand it to someone else)",
+    "decide": "the proposal's decision: POST /api/v2/proposals/{id}/decide",
     "add_reading": "POST /api/v2/kpis/{kpi id}/readings",
     "open": "nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)",
 }
-TASK_KINDS = ("task", "question", "waiting", "declined")
+TASK_KINDS = ("task", "paused")  # a task the person owns, or a Paused cause they can fix
 # The Goals page's own asks (backend/goal_asks.py): what each is about, and what settles it.
 GOAL_SUBJECTS = {
     "vision": "strategy",
@@ -49,14 +48,12 @@ def item(x, subject, actions, body=None):
 def needs_item(x, reader):
     """An item of `GET /api/v2/needs-you` (views.needs_items) in the common shape."""
     kind = x["kind"]
+    task_id = x.get("task_id") or x["id"]
     if kind in TASK_KINDS:
-        # A question task's answer is its close, an update (backend/question_tasks.py).
-        return item(x, {"type": "task", "id": x["id"]}, ("update",), x.get("body"))
-    if kind == "approval":
-        return item(x, {"type": "approval", "id": x["id"]}, ("decide",))
-    if kind == "stale":
-        return item(x, None, ("decide",))
-    return item(x, None, ("open",), x.get("first_line") or None)
+        return item(x, {"type": "task", "id": task_id}, ("update",), x.get("body"))
+    if kind == "ask":
+        return item(x, {"type": "task", "id": task_id}, ("answer",), x.get("body"))
+    return item(x, None, ("open",), x.get("first_line") or None)  # an @ of them: it opens where it was said
 
 
 def goal_item(x, title, body, created):

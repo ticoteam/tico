@@ -750,7 +750,7 @@ class Onboarding:
         sample company spreads its bots over two subscriptions); a model whose provider is off is ignored.
 
         A new company's first completion ends with the finish every setup path shares (company_import.finish_new_company:
-        the live seats' bots and company_default's pipelines). With no role picked at all, its chart is the default one
+        the live seats' bots). With no role picked at all, its chart is the default one
         (company_import.default_chart), the chart the site's file gives a company that picked nothing. `finish` False
         leaves both to the caller: a company file's import lays out its own chart after this, then finishes."""
         from . import company_import

@@ -92,7 +92,7 @@ def test_raw_task_attachments_and_blob_history_are_scrubbed_after_narrowing(api)
         version = c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone()
         blob = dict(c.execute("SELECT * FROM blobs WHERE id=?", (version["blob_id"],)).fetchone())
         c.execute("INSERT OR IGNORE INTO task_assets VALUES(?,?)", (tid, blob["id"]))
-        from backend.task_review import file_added
+        from backend.files import file_added
 
         file_added(c, Identity("bot:ops", "bot"), tid, blob, 1)
     edit(api, fid, {"people": ["ben"]})

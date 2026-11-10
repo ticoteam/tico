@@ -288,7 +288,7 @@ def _open_check(c, name=TITLE):
     return H._one(
         c,
         f"SELECT * FROM {H.TASKS} tasks WHERE owner_id=? AND requester_id=? AND title LIKE ? "
-        "AND status IN ('open','doing','waiting','review','ready') ORDER BY created_at DESC LIMIT 1",
+        "AND status='open' ORDER BY created_at DESC LIMIT 1",
         (ACTOR, H.KEEPER, name + " (%"),
     )
 

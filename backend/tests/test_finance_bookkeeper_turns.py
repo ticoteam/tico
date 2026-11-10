@@ -19,6 +19,7 @@ from backend.tests.helpers.api import assign, claim, get, post, ready, runner  #
 from backend.tests.helpers.finance_fixtures import MERCURY, OWNER, FakeMercury, account, act, connect, sync_once  # noqa: F401
 from backend.tests.helpers.mcp import call, rpc
 from backend.tests.helpers.finance_bookkeeper_turns import CONFIG, _library_file, ask, chart, hire, mercury  # noqa: F401
+from backend.tests.helpers.finance_oks import give
 
 PAYEE = {
     "name": "Northwind Hosting",
@@ -185,7 +186,7 @@ def test_invoices_turn(api):
     assert not err and sent["status"] == "needs_approval" and sent["rule"] == "default:bot-invoice-email", sent
     assert sent["approver"] == OWNER, sent
     with api.app.state.store.transaction() as c:
-        H.approval_decide(c, OWNER, sent["approval_id"], "approved")
+        give(c, OWNER, sent["approval_id"])
         done = FA.approval_decided(c, sent["approval_id"])
     assert done is not None and done.status == "committed", done
     err, found = call(api, "hub_finance_search", {"kind": "invoice", "q": "INV-1042"}, token=token)
