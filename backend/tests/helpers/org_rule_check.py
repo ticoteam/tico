@@ -2,7 +2,7 @@
 
 import json
 import pytest
-from backend.tests.helpers.api import headers
+from backend.tests.helpers.api import headers, post
 from backend.tests.helpers.org_rules import org, rule
 
 
@@ -74,3 +74,15 @@ def chat(api, text, to="finance", token="ops-test"):
     r = api.post(f"/api/v2/chat/{to}", json={"text": text}, headers=headers(token))
     assert r.status_code == 200, r.text
     return r.json()
+
+
+@pytest.fixture(autouse=True)
+def not_a_friday(monkeypatch):
+    """Autouse wherever it is imported. A Friday's update must be a week in review (updates.kind_for); these tests post daily ones, so pin a Tuesday."""
+    from backend import updates as _updates
+
+    monkeypatch.setattr(_updates, "today", lambda at=None: "2026-09-29")
+
+
+def task_for_ops(api, title="Write the launch note"):
+    return post(api, "tasks", {"owner": "ops", "title": title, "body": "Draft it."})

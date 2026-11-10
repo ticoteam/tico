@@ -6,10 +6,10 @@ import json
 
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post
-from backend.tests.test_org_rule_check import (  # noqa: F401 - fixtures
-    _not_a_friday,
+from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     color_rule,
     hold_row,
+    not_a_friday,
     ruled,
     sql,
     task_for_ops,
