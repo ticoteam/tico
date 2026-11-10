@@ -126,7 +126,7 @@ computer and a model exist. Its template is `templates/catalog/goal-manager/`; i
 
 There is no On/Off switch. How much it does is the [level](strategy-bot.md) the owner picks, and a new install starts at
 **Suggests actions**. Its first job is the team's [strategy](strategy.md): it proposes the Strategy page to the owner and, when a
-bet's wrong-if trips, puts one Decide card in front of them; the owner writes and publishes, never the bot.
+bet's wrong-if trips, puts one proposal in front of them; the owner writes and publishes, never the bot.
 On goals and KPIs it does five things:
 
 1. **Goals make sense.** It flags vague or duplicate goals and may suggest a measure once or clearer wording, as proposals on
@@ -185,7 +185,7 @@ recovery, and posts a comment on the goal saying what it did and why; you undo a
 you undid is never made alone again: tried again, it becomes an item in your Needs you.
 
 When several bots ask you the same thing, the Strategy Bot can make them **one item** (`POST /api/v2/strategy-bot/merge`), a
-question task for you. Their tasks leave your Needs you while it is open, and your one answer goes to every bot that asked. If the item ends
+task for you in General with one question on it. Their questions leave your Needs you while it is open, and your one answer goes to every bot that asked. If the item ends
 without an answer, they come back as they were. A merged item counts toward the 5 a day.
 
 After 10 recoveries in a row approved with its pick unchanged, the Monday note offers **Acts on its own** once, and at most once

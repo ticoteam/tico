@@ -107,7 +107,7 @@ Read, never guess: `hub strategy show`, `hub goal list --all`, `hub goal show <i
 
 ## Escalating
 When the call is looks wrong, say so in the check-in with its evidence. If the wrong-if has tripped, the server has already
-filed a trip task to the Strategy Bot (`goal-manager`), which files the owner's decision card. Then file nothing else for
+filed a trip task to the Strategy Bot (`goal-manager`), which puts the decision to the owner. Then file nothing else for
 the owner and send no message. Only when the evidence points against the bet and nothing has formally tripped, tell the
 Strategy Bot with `hub message send goal-manager "Bet <id>: <evidence in one line, with its date>" --needs-action`. You do
 not write the proposal yourself. When the bet's owner or the blocker's owner is unclear, ask the owner in the task. One

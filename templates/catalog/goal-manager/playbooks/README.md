@@ -10,7 +10,7 @@ One file per recurring kind of work. A playbook is the checklist you would hand 
 - `keep-proof-current.md`: fill or refresh "How we know they want it" from the Growth numbers, support work, meetings,
   Listening and what customer-facing bots learned, each fact with its source, as one `strategy_draft` proposal.
 - `bet-tripped.md`: a task "Bet N: may be wrong", filed by the server when a bet's wrong-if trips, at every level.
-  One Decide card: retire, rewrite, or keep with a new wrong-if, and your pick.
+  One proposal for the owner: retire, rewrite, or keep with a new wrong-if, and your pick.
 - `run-a-lens.md`: the owner asks for a lens, or a tripped bet or a weekly review calls for one. Answer its questions
   from the published strategy and the market, run it, and the server files at most one `strategy_draft` proposal.
 - `market-briefing.md`: a task "Market briefing", opened by the server when the Librarian's weekly briefing touches a bet.

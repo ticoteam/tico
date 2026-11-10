@@ -87,7 +87,7 @@ CREATE INDEX messages_origin ON messages(origin_id) WHERE origin_id IS NOT NULL;
 CREATE INDEX messages_thread_seq ON messages(conversation_id, seq);
 ```
 
-A **carrier** is a keeper notice that starts a run for a second woken bot (§4.4). It has `refs.carries=<message id>`
+A **carrier** is a Tico notice that starts a run for a second woken bot (§4.4). It has `refs.carries=<message id>`
 and **no `seq`**: timelines, counters, search and SSE thread views never show it.
 
 ### 1.3 New tables
@@ -261,7 +261,7 @@ threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_mes
 - `thread_id`: the thread written to. With `parent_message_id`, the post goes to that message's sub-thread, created
   if it has none (§3.2), and `thread_id` must be the message's thread.
 - `kind`: `say|notice|steer`; `ask` and `answer` are refused (422 `kind`, with the replacement named), and their old rows are
-  history only (`H.OLD_MESSAGE_KINDS`). A question to a person is a question task, not a message. `to_actor`: the
+  history only (`H.OLD_MESSAGE_KINDS`). A question to a person is an ask on a task, not a message. `to_actor`: the
   explicit addressee (optional); otherwise the first in-audience mention, otherwise NULL.
 - `via`: who really acts (`assistant`, `botops`, `slack`), recorded in `refs.via`. `origin`:
   `{"origin_id", "revision", "actor"}` for replicated inbound (Slack); a repeat
@@ -381,7 +381,7 @@ post's transaction, plus outside destinations linked to the thread (`slack:<chan
   joining a task's thread follows nobody. An ask or an answer on a task reaches only whom it is for, no follower.
 - Every recipient but an in-audience mention must still read the thread (and a private task): a past reader keeps its
   rows (a follow, a post, a message replied to) but is not reached.
-- A **system line** (D10: the keeper's task news and notices, roundups (`refs.no_mentions`), follow-up nudges and cards)
+- A **system line** (D10: Tico's task news and notices, roundups (`refs.no_mentions`), follow-up nudges and cards)
   reaches only whom it addresses, never the followers (`threads.system_line`).
 - The mode comes from the message's way (`refs.send_way`, `refs.send_defer_for`; none named is Steer, D13): a bot gets
   `steer`, `queue` or `defer` (until the deadline: 24h by default on a task's thread, never on a chat), a person
@@ -389,10 +389,9 @@ post's transaction, plus outside destinations linked to the thread (`slack:<chan
   queued; when it is only the default for a reader off the task (`refs.send_people`), it binds the bots alone and people
   are notified as their level says. A deferred `to_actor` the list leaves out (a task's owner bot, on a task filed into
   a shared chat) is deferred all the same, with its deadline, and the bot a message is written to (a DM's, a Home's)
-  takes a Defer never as a Defer: only the other bots it addresses are queued. A person's answer to a question task
-  reaches its bot once (on its parent task through `hubdb._subtask_wake`, else as the task's requester), a
-  reviewer's verdict goes to the bot that filed the review, and the Strategy Bot's relayed answer goes to the bot that
-  asked. On a task's own thread the first bot given a turn is the message's `to_actor` (its job, ride-along and
+  takes a Defer never as a Defer: only the other bots it addresses are queued. A person's answer to an ask reaches
+  the bot that asked once, and the Strategy Bot's relayed answer goes to the bot that asked. On a task's own thread the
+  first bot given a turn is the message's `to_actor` (its job, ride-along and
   `task_delegations` key off it); every other woken bot gets a carrier (§4.4).
 - `GET /api/v2/threads/{thread_id}/reach` (`threads.reaches`) answers the same list for a message not yet sent, given
   `text`, `delivery`, `defer_for` and `in_reply_to`, writing nothing.
@@ -429,7 +428,7 @@ Per (message, bot) that §4.1 reaches, deduplicated, first match wins:
 Routing is retired (D14): a chat message that names nobody reaches only the thread's live followers, and nothing asks
 a model whom it is for. A DM still always reaches its bot.
 
-Rule 5 is batched (`backend/thread_bot_digest.py`): every hour plain code writes one keeper notice per bot with `digest`
+Rule 5 is batched (`backend/thread_bot_digest.py`): every hour plain code writes one Tico notice per bot with `digest`
 deliveries waiting, naming the threads and their counts and none of their words, and settles those deliveries with it as
 their `carrier_id`. No model is called unless a batch has content. A delivery the bot can no longer read goes `moot`; a
 paused or quarantined bot keeps its deliveries; a new batch waits while the last batch's run has not started. The run
@@ -444,7 +443,7 @@ and `wake_rules.judge` still run per delivery and may turn `queue` into `defer`.
 
 ### 4.4 Runs
 The primary bot recipient (`to_actor`) is queued by `backend/enqueue.py`, called by the writer in the same transaction as the message (job id = message id).
-Each further woken bot gets a **carrier**: a keeper notice to that bot in the same thread, `refs={"carries": <id>,
+Each further woken bot gets a **carrier**: a Tico notice to that bot in the same thread, `refs={"carries": <id>,
 "wake": "thread", "reason": ...}`, no `seq`; its job starts the run, and the delivery's `carrier_id` names it.
 `jobs.message_id` stays unique. No carrier is written when the bot may not read the message (audience and the
 per-message check); the delivery is `moot`. The per-message check reads a carrier as the message it carries, and a
@@ -456,7 +455,7 @@ outside a members thread are not asked.
 A note copied from a message (a bot's plain mention held for the bot's next run, or a mention deferred at the cap) goes
 only into a session inside its source's boundary (`threads.note_fits_run`): a private source's note goes into a private
 session of the same root. A note with no source, a public source, or a source in a direct room of bots only goes with
-any run. A run that leaves notes writes one keeper notice per root (`refs.wake: "thread_notes"`, `refs.carries`: the
+any run. A run that leaves notes writes one Tico notice per root (`refs.wake: "thread_notes"`, `refs.carries`: the
 oldest note's message; never folded into a running turn), so the bot's next run starts at most one more in each such
 thread, and the notes wait until then. That run's session is always private, even in a public thread. A notice refused
 or dropped because its message is gone or closed to the bot is replaced, anchored to a note the bot still reads
@@ -466,7 +465,7 @@ rights, a bot's run by what its session holds.
 
 Every message write fans out the same way, through `post` or a legacy writer (`hubdb.say`, runner replies, old
 routes, `hubdb.task_comment`): §4.1's addressed and followers and outside destinations, under the loop guard. A legacy
-notice or keeper write wakes no further bot.
+notice or Tico's own write wakes no further bot.
 
 ### 4.5 Loop guard
 `threads.LOOP_GUARD_PER_HOUR` (default 6, `TICO_THREAD_LOOP_GUARD`): bot-caused wakes (`cause='bot'`, bot
@@ -481,10 +480,10 @@ post lets them all go at their original times.
 The inbox (`H.inbox_pages`, `H.inbox`, `H.undelivered`), `H.mark_delivered`/`mark_read`, `_reach` and the
 unsolicited cap (per delivery), task-comment target resolution, `rules.judge` and `wake_rules.gate`, and the runner
 claim path read `message_deliveries`. `to_actor` keeps meaning "addressed to" for the readers that ask exactly
-that (open asks to a person, approvals).
+that (open asks to a person).
 
 ### 4.7 Solicited vs unsolicited (C2)
-In a DM the person opened, every bot post is solicited; posts carrying a task or approval ref stay solicited. In a
+In a DM the person opened, every bot post is solicited; posts carrying a task ref stay solicited. In a
 person's Home or an unaddressed post, a bot counts as solicited only when it answers that person (a mention, ask
 or reply to them), judged for each person on the post (`threads.solicited`). Otherwise today's cap
 (`UNSOLICITED_PER_DAY`) applies, counted per delivery (`message_deliveries.unsolicited`). Past the cap an addressed post
@@ -570,13 +569,13 @@ threads.unread(c, viewer, thread_id) -> {"unread": n, "activity": bool}
 ```
 - Join: read up to now. Deletes and backfill (imports, migration, replays) are never unread. Losing access: the
   follower row is dropped on the next read. A task's own thread is read up to now by its maker when the task is made
-  (`threads.task_opened`). Task news (a keeper message with `refs.task`, `hubdb.task_news`) is the task's own history:
+  (`threads.task_opened`). Task news (Tico's message with `refs.task`, `hubdb.task_news`) is the task's own history:
   it is written to the task's conversation and no person gets a delivery for it, so the requester who did not make the
   task hears nothing in the thread (no unread, Inbox row, digest or push). Bots still get it as a delivery.
   A bot's say, notice or steer in a task's own thread (`hubdb.task_post_sql`, the thread is some task's
   `conversation_id`) is the same: the message is written and shown on the task, and a person gets a delivery for it only
   when its body @-mentions them (`threads.mentions`, reason `mention`). Without the mention no person is unread for it,
-  it is in no Inbox row, digest or push. A question task still lists its task in Needs you (that reads tasks, not
+  it is in no Inbox row, digest or push. An ask still lists its task in Needs you (that reads tasks, not
   deliveries). Old deliveries of such posts stop counting by the same rule (`hubdb.delivery_counts_sql`), with no
   migration.
 - Unread count for a viewer = messages in the thread with `seq > last_read_seq` that are human-authored or

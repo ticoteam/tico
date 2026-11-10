@@ -183,3 +183,30 @@ def test_a_check_in_says_whose_words_it_is_and_who_recorded_it(api):
     assert for_ben["sender_id"] == "human:ben" and for_ben["author"] == "human:ana"
     listed = get(api, f"goals/{goal['id']}/checkins")["checkins"]
     assert {c["sender_id"] for c in listed} == {"human:ana", "human:ben"}
+
+
+def test_a_closed_task_earns_a_goal_no_credit_only_a_done_one_does(company):
+    """A goal coloured by its tasks counts a task as finished when it is done. A closed task was dropped: it is not
+    work done, so a goal whose only tasks were closed has nothing to show, and one closed beside an open one does not
+    make it green."""
+    from backend import goals as GL
+    from backend.store import H
+    from backend.tests.helpers import engine as X
+
+    with company.transaction() as c:
+        X.bot(c, "ops")
+        dropped = GL.create(c, "human:ana", "Open a second city", "human:ana")
+        mixed = GL.create(c, "human:ana", "Win back lapsed customers", "human:ana")
+        shipped = GL.create(c, "human:ana", "Ship the booking page", "human:ana")
+
+        def filed(goal, title):
+            return H.task_create(c, "human:ana", title, "Work it.", "bot:ops", goal_id=goal["id"], lint=False)["id"]
+
+        H.task_close(c, "human:ana", filed(dropped, "Scout Denver"), "Not this year")
+        H.task_close(c, "human:ana", filed(mixed, "Email lapsed customers"), "Wrong list")
+        filed(mixed, "Call lapsed customers")
+        H.task_done(c, "human:ana", filed(shipped, "Build the booking page"), "Live")
+        scores = {g["title"]: GL.score(c, GL.goal(c, g["id"])) for g in (dropped, mixed, shipped)}
+    assert scores["Open a second city"]["basis"] != "tasks" and scores["Open a second city"]["status"] != "green"
+    assert scores["Win back lapsed customers"]["status"] != "green", scores
+    assert scores["Ship the booking page"] == {"status": "green", "basis": "tasks", "reason": "All 1 tasks done"}

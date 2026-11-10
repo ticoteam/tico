@@ -25,8 +25,8 @@ and open the pull requests.
 
 ## Team
 - **Builder** (`builder`): writes the code for an engineering task and carries it to merge. One per repository or area.
-- **Reviewer 1 and Reviewer 2** (`pr-reviewer`): the review pool for the Engineering board's review steps.
-- **QA Owner** (`qa-owner`): owns every automated test, unit through end to end. Files fixes into Engineering. Not a board step.
+- **Reviewer 1 and Reviewer 2** (`pr-reviewer`): the review pool for Engineering's review stages.
+- **QA Owner** (`qa-owner`): owns every automated test, unit through end to end. Files fixes into Engineering. Not a stage of it.
 - **Security Owner** (`security-owner`): dependency alerts, committed credentials and patch plans.
 - **Infrastructure Owner** (`infrastructure-owner`): CI, runners, workflows and deploy health.
 - **Release Owner** (`release-owner`): release readiness, release notes and the rollout of a version the owner approved.

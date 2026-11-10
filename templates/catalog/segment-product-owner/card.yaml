@@ -20,7 +20,7 @@ pains:
 owns:
   - "The segment's activation and retention: the definitions, the cohort readings and their change against target, read every week from the usage export or a connected report"
   - "The ranked problem list for the segment: each problem with the accounts it touches, its evidence and sources, and what it costs activation or retention"
-  - "One-page product board briefs: the problem, the evidence, what done looks like and how we will know. Each goes to its manager to approve, change or decline, and an approved one gets its Spec page from this bot"
+  - "One-page product briefs: the problem, the evidence, what done looks like and how we will know. Each goes to its manager to approve, change or decline, and an approved one gets its Spec page from this bot"
   - "The weekly segment product review: the number against target, the top problems, the briefs filed and the decisions waiting"
   - "The segment's definition: who the segment is, the rule that counts a customer in it, and where each number comes from"
 never:

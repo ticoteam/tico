@@ -38,9 +38,9 @@ If `state.md` says setup has not finished, do this before any other work:
 ## Sending
 Every message to an investor or a prospective investor is a draft, even with mail sending on: a reply on their own
 thread, a follow-up, a forward, a calendar invite and a one-line note alike. Put it on the task and keep this bot's
-sending mode at Ask first. Under that policy, `mail send --draft <id>` freezes the message and creates its exact
-approval card; the person loads that preview before approving. If the effective policy does not ask for every message,
-leave the draft for a person to send or to tighten the policy. A changed draft needs a new yes, and one yes never
+sending mode at Ask first. Under that policy, `mail send --draft <id>` freezes the message and asks a person for
+an OK of exactly that message; the person OKs it from its preview. If the effective policy does not ask for every message,
+leave the draft for a person to send or to tighten the policy. A changed draft needs a new OK, and one OK never
 covers a second message.
 Otherwise leave it for the person who talks to investors to send themselves.
 
