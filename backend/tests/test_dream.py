@@ -3,15 +3,14 @@ without ask ingest, their answer wakes the bot, and the commit it makes is that 
 
 import json
 
-import pytest
-
 from backend import bot_settings as BS
+from backend import dream as dream_module
 from backend import hubdb as H
 from backend.tests.helpers import ask_ingest as ingest
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, restrict, runner  # noqa: F401
 from backend.tests.helpers.ask_ingest import gate, plate  # noqa: F401  (the ask ingest fixture)
 
-# What dream.INSTRUCTIONS step 4 tells the bot to ask: up to 3 numbered questions in ONE ask.
+# Two numbered questions in one ask: what dream.INSTRUCTIONS asked for before v3, which the one-decision ask rule refuses.
 QUESTIONS = (
     "1. Should weekly reports go to Ana or the team? Suggested: the team\n2. Drop the old deploy rule? Suggested: yes"
 )
@@ -156,16 +155,32 @@ def test_asking_answering_and_the_dreams_own_commit(api):
         assert done["closed_at"][:10] in H.task(c, again["task"])["body"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="v3 conflict: dream.INSTRUCTIONS step 4 says ask up to 3 numbered questions in ONE hub_task_ask, but the "
-    "v3 ask rule (hubdb.require_person_ask) refuses an ask that asks more than one thing; owner: asks",
-)
-def test_the_numbered_questions_the_dream_tells_the_bot_to_ask_are_taken(api):
+def test_the_dream_asks_one_question_per_ask_and_waits_for_each_answer(api):
+    """The v3 ask rule takes one decision per ask, and a bot has one open ask on a task (C15): the dream's instructions
+    say both, numbered questions in one ask are refused, and each question asked in turn is taken and shown."""
+    for auto in (False, True):
+        text = dream_module.instructions("Ben", "Oct 20", auto=auto)
+        assert "one question per ask" in text and "one ask at a time" in text and "At most 3 asks" in text
+        assert "in ONE" not in text and "Number them" not in text
     tid = dream(api)["dream"]["task"]
     with api.app.state.store.transaction() as c:
-        H.task_ask(c, "bot:ops", tid, "human:ben", QUESTIONS, seen_version=H.task(c, tid)["version"])
-    assert current(api)["questions"]["text"] == QUESTIONS
+        try:
+            H.task_ask(c, "bot:ops", tid, "human:ben", QUESTIONS, seen_version=H.task(c, tid)["version"])
+            raise AssertionError("an ask with two questions was taken")
+        except H.Refused:
+            pass
+    for line in (QUESTION, "Drop the old deploy rule? Suggested: yes"):
+        with api.app.state.store.transaction() as c:
+            H.task_ask(c, "bot:ops", tid, "human:ben", line, seen_version=H.task(c, tid)["version"])
+        shown = current(api)["questions"]
+        assert shown["text"] == line
+        r = api.post(
+            f"/api/v2/tasks/{tid}/asks/{shown['requirement_id']}/answer",
+            json={"value": "Yes"},
+            headers=headers("ben-test"),
+        )
+        assert r.status_code == 200, r.text
+        assert current(api)["questions"] is None
 
 
 def test_someone_who_may_give_work_but_not_read_never_gets_another_persons_open_dream(api):

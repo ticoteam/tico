@@ -29,13 +29,27 @@ def actor(who):
     return (who.actor, other) if other and other != who.actor else who.actor
 
 
+def principals_read(c, principals, row):
+    """Whether every one of `principals` (one actor, or a person and whom they act as) reads the task row. The
+    person's own Assistant also reads the task filed for an OK asked of her (task_asks.assistant_reads_own_ok)."""
+    principals = principals if isinstance(principals, tuple) else (principals,)
+    if all(H.task_private_readable(c, a, row) for a in principals):
+        return True
+    if not row or len(principals) != 2:
+        return False
+    from .task_asks import assistant_for, assistant_reads_own_ok
+
+    return (
+        assistant_for(*principals)
+        and H.task_private_readable(c, principals[0], row)
+        and assistant_reads_own_ok(c, principals[0], principals[1], dict(row)["id"])
+    )
+
+
 def task_readable(c, who, row):
     if snapshot(c) and row:
         row = _task(c, row["id"])
-    principals = actor(who)
-    return all(
-        H.task_private_readable(c, a, row) for a in (principals if isinstance(principals, tuple) else (principals,))
-    )
+    return principals_read(c, actor(who), row)
 
 
 def reference_strings(value):
@@ -444,7 +458,7 @@ def readable(c, actor, ids, who=None):
     rows = _task_rows(c, set(ids))
 
     def reads(row):
-        return all(H.task_private_readable(c, a, row) for a in principals)
+        return principals_read(c, principals, row)
 
     return all(row is not None and reads(row) for row in rows.values())
 
