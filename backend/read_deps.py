@@ -11,9 +11,11 @@ every task treated as private, and records every node it touched:
   a:<id>      a run it read
   c:<id>      a room it read
 
-A row is settled (`read_index`) when the walk finished with no meeting provenance and no error. A reader then reads
-a settled row exactly when no `t:` node is one of their denied tasks: the walk's private sources are its `t:` nodes
-that are private, and denied tasks are private. Everything else, and every row not settled yet, keeps the walk.
+A row is settled (`read_index`) when the walk finished with no meeting provenance, no error, and no message it read
+naming a file (`names_file`: a reply inherits the file refusals above it, and a run those of its messages, which are
+per reader). A reader then reads a settled row exactly when no `t:` node is one of their denied tasks: the walk's
+private sources are its `t:` nodes that are private, and denied tasks are private. Everything else, and every row not
+settled yet, keeps the walk.
 
 Triggers keep it current from every writer: a change to a node's source rows (the same columns the provenance clock
 watches, backend/provenance_clock.py) unsettles every row that touched it and queues it, and a new message or run is
@@ -31,10 +33,23 @@ import time
 from . import hubdb as H
 from .store import Problem
 
+# A walk that read a message naming a file records this node; such a row is not settled, and the node is not kept.
+FILE = "file:"
 BATCH = 100
 SPAN = 20000
 HOLD_MS = 200  # a sweep write gives the lock back once a row ends past this long, and queues again behind any waiter
 RUN_EVENTS = "('task.next-run.carried','attempt.input.moved')"
+
+
+def names_file(refs):
+    """Whether stored `refs` may name a file (task_privacy.PAGE_MESSAGE_KEYS), read as the SQL page gate reads them: any
+    key's quoted name, or an escape, counts. Wider than the file check itself, so a row it misses names no file."""
+    from .task_privacy import PAGE_MESSAGE_KEYS
+
+    text = refs if isinstance(refs, str) or refs is None else H._dump(refs)
+    if text in (None, "", "{}"):
+        return False
+    return "\\" in text or any(f'"{key}"' in text for key in PAGE_MESSAGE_KEYS)
 
 
 def _touch(node):
@@ -214,7 +229,10 @@ class Walk:
 
     def _message(self, mid):
         self.nodes.add("m:" + str(mid))
-        return H.message(self.c, mid, include_deleted=True)
+        found = H.message(self.c, mid, include_deleted=True)
+        if found and names_file(found.get("refs")):
+            self.nodes.add(FILE)
+        return found
 
     def _attempt(self, aid):
         known = self.runs.get(aid)
@@ -255,7 +273,14 @@ class Walk:
             meeting = bool(self.index.meetings.message(msg))
         except (ValueError, Problem):
             meeting = True
-        return not meeting, set(self.nodes)
+        return self._result(meeting)
+
+    def _result(self, meeting):
+        """(settled, nodes): not settled with meeting provenance or a message read that names a file."""
+        nodes = set(self.nodes)
+        file = FILE in nodes
+        nodes.discard(FILE)
+        return not meeting and not file, nodes
 
     def attempt(self, aid):
         self.nodes.clear()
@@ -264,7 +289,7 @@ class Walk:
             meeting = bool(self.index.meetings.attempt(aid))
         except (ValueError, Problem):
             meeting = True
-        return not meeting, set(self.nodes)
+        return self._result(meeting)
 
 
 def settle(conn, keys, walk=None):

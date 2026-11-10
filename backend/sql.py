@@ -750,8 +750,6 @@ SETS = (
     "denied_reads",
 )
 RUN_EVENTS = "('task.next-run.carried','attempt.input.moved')"
-# Replied-to messages whose file refusal a settled row checks in SQL (materialize's reply_pages).
-REPLY_LEVELS = 3
 
 
 class Gates:
@@ -962,44 +960,15 @@ def materialize(conn, index, tables, inner, function, private):
     message = function("message") + "(id,conversation_id,refs,in_reply_to)"
     attempt = function("attempt") + "(id)"
 
-    def reply_pages(alias):
-        """ReadIndex.reply_pages in SQL: the first REPLY_LEVELS messages on `alias`'s in_reply_to chain have no refused
-        file, and the chain ends within them. A longer chain is not settled here, so Python reads it. Unrolled rather
-        than recursive: SQLite names a recursive CTE as the view context and the authorizer refuses its column reads."""
-        levels, expr = [], f"{alias}.in_reply_to"
-        for _ in range(REPLY_LEVELS):
-            levels.append(expr)
-            expr = f"(SELECT q.in_reply_to FROM {inner('messages')} q WHERE q.id={expr})"
-        checks = [
-            f"NOT EXISTS (SELECT 1 FROM {inner('messages')} p WHERE p.id={level} AND NOT {page_gate('p.refs')})"
-            for level in levels
-        ]
-        return f"({' AND '.join(checks)} AND coalesce({expr},'')='')"
-
-    def settled(prefix, pages=None):
-        """A settled row that touched no denied task is read at once; any other row keeps the gate and its walk.
-        Settled provenance does not see file references, so `pages` (when given) also has to hold."""
+    def settled(prefix):
+        """A settled row that touched no denied task is read at once; any other row keeps the gate and its walk. A row
+        whose walk read a message naming a file is never settled (read_deps.names_file): its file refusals are per
+        reader, so ReadIndex reads it."""
         key = f"'{prefix}:'||source.id"
         return (
             f"{key} IN (SELECT key FROM {inner('read_index')}) AND {key} NOT IN "
-            f'(SELECT id FROM "{private("denied_reads")}")' + (f" AND {pages}" if pages else "")
+            f'(SELECT id FROM "{private("denied_reads")}")'
         )
-
-    # A message is settled with its replied-to messages' file refusals checked here (ReadIndex.reply_pages). A run
-    # is settled with its message's and inputs' messages' file refusals checked (ReadIndex.attempt_pages).
-    message_pages = f"(coalesce(source.in_reply_to,'')='' OR {reply_pages('source')})"
-    run_messages = (
-        f"SELECT 1 FROM {inner('attempts')} run JOIN {inner('jobs')} job ON job.id=run.job_id "
-        f"JOIN {inner('messages')} root ON root.id=job.message_id WHERE run.id=source.id"
-    )
-    run_inputs = (
-        f"SELECT 1 FROM {inner('attempt_inputs')} input JOIN {inner('messages')} root "
-        f"ON root.id=input.message_id WHERE input.attempt_id=source.id"
-    )
-    root_pages = f"{page_gate('root.refs')} AND (coalesce(root.in_reply_to,'')='' OR {reply_pages('root')})"
-    attempt_pages = (
-        f"NOT EXISTS ({run_messages} AND NOT ({root_pages})) AND NOT EXISTS ({run_inputs} AND NOT ({root_pages}))"
-    )
 
     # CASE evaluates only the chosen branch. A fast yes skips the Python callback altogether; OR can evaluate
     # the function first, and passing the fast answer to a function still calls Python for every history row.
@@ -1007,12 +976,11 @@ def materialize(conn, index, tables, inner, function, private):
         table: (
             predicate.replace(
                 message,
-                f"(CASE WHEN {settled('m', message_pages)} THEN 1 WHEN {gates.message()} THEN 1 ELSE {message} END)",
+                f"(CASE WHEN {settled('m')} THEN 1 WHEN {gates.message()} THEN 1 ELSE {message} END)",
             )
             .replace(
                 attempt,
-                f"(CASE WHEN {settled('a', attempt_pages)} THEN 1 WHEN {gates.attempt('source.id')} THEN 1 "
-                f"ELSE {attempt} END)",
+                f"(CASE WHEN {settled('a')} THEN 1 WHEN {gates.attempt('source.id')} THEN 1 ELSE {attempt} END)",
             )
             .replace(page, page_gate("refs")),
             hidden,

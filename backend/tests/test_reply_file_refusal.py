@@ -118,3 +118,34 @@ def test_a_reply_with_too_many_ancestors_is_hidden_on_every_path(api, world, set
     expected = set(ids) if ancestors < 100 else set(ids[:-1])
     assert visible_everywhere(api, room, ids, 'cara-test') == expected
     assert visible_everywhere(api, room, ids, 'ana-test') == expected
+
+
+def test_rows_an_older_server_settled_below_a_file_are_read_again_after_the_upgrade(api, world):
+    """An older server settled a reply below a refused file in read_index; the migration requeues it, so the reply
+    hides again instead of being read from the stored index."""
+    import importlib
+
+    made = page(api, world['attempt'])
+    assert made.status_code == 200, made.text
+    fid = made.json()['page']['file_id']
+    edit(api, fid, {'people': ['ana']}, token='ana-test')
+    room = world['coo_task']['conversation_id']
+    ids = chain(api, room, [{'target': fid}, None, None])
+    store = api.app.state.store
+    with store.read() as c:
+        read_deps.sweep(c)
+    with store.transaction() as c:
+        assert not c.execute('SELECT 1 FROM read_index WHERE key IN (?,?)', ('m:' + ids[1], 'm:' + ids[2])).fetchall()
+        # As the older server left them: settled.
+        c.executemany('INSERT OR IGNORE INTO read_index VALUES(?)', [('m:' + mid,) for mid in ids])
+    assert visible_sql(api, ids[1:], 'cara-test') == set(ids[1:])
+    migration = importlib.import_module('backend.migrations.20261110230000_requeue_rows_below_files')
+    with store.transaction() as c:
+        migration.up(c)
+        queued = {r[0] for r in c.execute('SELECT key FROM read_dirty')}
+    assert {'m:' + ids[1], 'm:' + ids[2]} <= queued
+    assert visible_everywhere(api, room, ids, 'cara-test') == set()
+    with store.read() as c:
+        read_deps.sweep(c)
+    assert visible_everywhere(api, room, ids, 'cara-test') == set()
+    assert visible_everywhere(api, room, ids, 'ana-test') == set(ids)
