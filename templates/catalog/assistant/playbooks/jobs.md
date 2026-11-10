@@ -6,11 +6,11 @@ first 8 characters. Do not add `--on-behalf-of` except where a command requires 
 
 ## Look and find
 
-Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner`, `--requester`, `--member` and `--all`; `--where-status` belongs to `hub task bulk`. People: `hub team show`, or `hub team show --person <id>`.
+Task filters: `hub task list` takes `--owner`, `--requester`, `--member` and `--all`. Every row and `hub task show <id>` print the task's version: pass it as `--version N` with every change to that task. People: `hub team show`, or `hub team show --person <id>`.
 
-1. **"What needs me?" / "what is waiting on me?"**: `hub approval list`, `hub message list` (bots' questions), `hub task list`. Say the count, then the few that are real decisions, with links.
-2. **"Which really need me?"**: `hub needs-you show` (exact counts by kind and by the bot that asked). List EVERY approval and question that is a real decision, by name and with its link, after `hub task show <id>` where needed. Approvals: `hub approval list --limit 100`, again with `--offset <next>` until `next` is null; `hub approval show <id>` only for an item its row does not name. If they said a kind "doesn't need my approval" (AGENT, Replies), read those ids back in ONE call as the turn's last call, then stop with "The list is in your chat; reply yes to approve." Put the real decisions found (by name, in plain words: the read-back shows no links) in `--note`, because the read-back is the whole reply and text after it is not posted: `hub approval read-back <id> <id> --note "<the decision, with its link>"`. "Those don't need me" is a decline instead: `hub approval decline`, no read-back. Then the noise groups with exact counts. Why is an item on Needs you: name the sources that put items there, with counts, from `hub needs-you show --by bot` and `hub origin show <task id>`. Record numbers are exact: never call them unverified.
-3. **"What is my board?" / "what is open?"**: `hub task list --all`, `hub task list`. "Is it moving?": `hub task show <id>`, then say its last activity date from the record.
+1. **"What needs me?" / "what is waiting on me?"**: `hub needs-you show`, `hub message list` (bots' messages). Say the count, then the few that are real decisions, with links.
+2. **"Which really need me?"**: `hub needs-you show` (exact counts by kind and by the bot that asked). List EVERY ask that is a real decision, by name and with its link, after `hub task show <id>` where needed. An OK to send, spend or publish is their own tap on its preview: link it, never answer it. Then the noise groups with exact counts. Why is an item on Needs you: name the sources that put items there, with counts, from `hub needs-you show --by bot` and `hub origin show <task id>`. Record numbers are exact: never call them unverified.
+3. **"What is open?"**: `hub task list --all`, `hub task list`. "Is it moving?": `hub task show <id>`, then say what it waits on and when it last changed.
 4. **"What did bot X do today?"**: `hub replay show --bot <slug> --from <start of today, ISO 8601 with its zone>`, what happened in time order. Then `hub run list <slug> --since <same ISO>` for its runs. Say what it did, with links, and what it is waiting on.
 5. **"Is anything broken?"**: `hub health check`. Say what is wrong and its fix; each line is a finding, not a guess.
 6. **"Catch me up" / the morning summary.**: `hub brief`. Say plainly what the brief shows is down or not down: "No bot is down" when `bots_down` is empty. List EVERY real decision by name with its link, merges included, then the noise groups with exact counts. Never say "nothing changed" when the brief lists changes.
@@ -22,20 +22,19 @@ Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner
 ## Queue, close, reopen
 
 11. **"Clear my queue," or any size target**: follow "Clearing to a target" below, and "Clearing a queue" in `playbooks/assistant-chat.md`.
-12. **"Close these" (items you identified by id: done but still open, duplicates, replaced).**: One: `hub task close <id> --note "<why>"`. Several: ONE `hub task bulk close --where-id <id> --where-id <id> --note "<why>"` (up to 100 ids per call; a `--dry-run` of the same first is fine). Never close them one at a time. Undo: reopen each with `hub task update <id> --status doing`.
-12a. **"Close everything" / "close all the done ones" / "close all team tasks, keep mine" (a filter: status, pipeline, owner, "not mine").**: Build the filter from the words they used, and only those: `--where-status <status>` (repeat per status), `--where-type <pipeline>`, `--where-owner <slug or id>`, `--where-snoozed all` when snoozed tasks count (they are left out otherwise). Keep mine is the default: add `--where-not-owner me` to every call, unless they say to include their own ("mine too", "everything"); a filter must name something, so with no other filter left use the open statuses (`--where-status open --where-status doing --where-status waiting --where-status review --where-status ready`). Count first: `hub task bulk close <the same filters> --dry-run`. Say the count in one line with what it covers, then ask "Close N? Say yes." End the turn. Close only on their yes: the same command without `--dry-run`. Bot-owned tasks are in it when the filter takes them: they asked for that. Over 200 (refused whole, `too_many`): split the filter into parts by the status they asked for (one status at a time, never a wider one), then by owner or pipeline, each part keeping `--where-not-owner me` unless they included their own, until each part is 200 or fewer. A part still over 200 is closed by id chunks: list its ids with `hub task list` and the part's filters (page through until the list ends), leave out their own unless they included them, then one chunk per call: `hub task bulk close --where-id <id> --where-id <id> --where-not-owner me --dry-run` (no `--where-not-owner me` when they included their own), up to 100 `--where-id` per call, with the part's status and owner filters added as in its count. Count every part and every chunk, give the total, and close chunk by chunk on the yes, the same commands without `--dry-run`; then run once more each part that skipped a parent with `subtasks_left_out`, now that its subtasks are closed. Reply: the counts, the links to anything kept, and "say undo to reopen them". A close is never a rule (`hub rules add`), a pause (`hub bot pause`) or a learned line (`hub assistant learn`). If they also want bots stopped, pause nothing: ask that as one separate question.
-13. **"Mark X done" / "close X."**: `hub task done <id> -m "<why>" --version N`, or `hub task close <id> --note "<why>"`. Undo: `hub task update <id> --status doing`.
-14. **"Reopen X."**: `hub task update <id> --status doing --note "<why>"`.
-15. **"Give X to Support."**: `hub task update <id> --owner <slug>`. Say who it went to.
+12. **"Close these" (items you identified by id: done but still open, duplicates, replaced).**: `hub task close <id> -m "<why>" --version N` for each, with the version its row printed. Undo: `hub task move <id> reopen -m "<why>" --version N`.
+12a. **"Close everything" / "close all the done ones" / "close all team tasks, keep mine" (a filter: owner, "not mine").**: Build the list from the words they used, and only those: `hub task list` with `--owner`, `--requester` or `--member`. Keep mine is the default: leave out their own tasks unless they say to include them ("mine too", "everything"). Count first: say the count in one line with what it covers, then ask "Close N? Say yes." End the turn. Close only on their yes, each with `hub task close <id> -m "<why>" --version N`. Bot-owned tasks are in it when the list takes them: they asked for that. Reply: the counts, the links to anything kept, and "say undo to reopen them". A close is never a rule (`hub rules add`), a pause (`hub bot pause`) or a learned line (`hub assistant learn`). If they also want bots stopped, pause nothing: ask that as one separate question.
+13. **"Mark X done" / "close X."**: `hub task done <id> -m "<why>" --version N`, or `hub task close <id> -m "<why>" --version N`. Undo: `hub task move <id> reopen -m "<why>" --version N`.
+14. **"Reopen X."**: `hub task move <id> reopen -m "<why>" --version N`.
+15. **"Give X to Support."**: link the task and say they can reassign it there; you cannot.
 16. **"Comment on X: ..."**: `hub task comment <id> "<text>"`.
 17. **"Undo that."**: `hub assistant change list --days 7`, then `hub assistant change restore <id>` for the one they mean. Do not search tasks for it. Say what came back. No change record: reverse it directly, `hub automation update <id> --enable` or `--disable` for a switch, `hub automation restore <id> <n>` for a version.
-18. **"Decline the old approvals."**: `hub approval list` for the waiting ids (narrow with `--from <actor>` or `--before`), then `hub approval decline <id> --note "<reason>"` for each one they named or that the group rule covers. Direct, no card, one command per approval.
-19. **"Answer the bot's question."**: `hub needs-you show` for the question's task id, then `hub task close <task id> --note "<the person's exact words>"`. Never a shortened yes: "yes, go ahead" stays "yes, go ahead". A question with picks takes the pick's label. Only when their words give what the question asks; words that give none of it answer nothing, so leave the question open.
-20. **"Approve X."** (only when they named it and the setting is on): `hub approval read-back <id>` (add `--note "<the real decision you found, in plain words>"` when you found one). End the turn there. On a plain yes when your previous message listed the approvals: `hub approval approve <id> --on-behalf-of turn` for each id on it. Never read back or ask again. Reply with one line per item: "Approved <item> as you, through the Assistant. Say undo to put it back."
-21. **"Decline X."** (named exactly): `hub approval decline <id> --note "<reason>"`. No read-back needed. Reply: "Declined [<item>](<its link>) as you, through the Assistant. Say undo to put it back." At most one more line: an approval still waiting on them, with its link.
-22. **"Turn on / off my approvals setting."**: the Assistant cannot change this one. Reply with the link `[Settings > General](#/settings/general)` and say where the switch is.
-23. **"Decide my approvals for me from now on."**: the same switch, so give the link in job 22 and say in one line that approvals still wait for their named yes.
-24. **"Ask the owner for a price / a yes."**, or a customer's discount, price or exception: `hub team show` for who decides (by role or title), then `hub task question "<question>" --on <their id> --option "A -> what happens" --option "B -> what happens"`. Draft no customer reply that agrees to anything; reply with the task link.
+18. **"Send back the old asks."**: `hub needs-you show` for the asks, then `hub task answer <id> <requirement> no -m "<reason>" --version N` for each one they named or that the group rule covers. Direct, no card.
+19. **"Answer the bot's question."**: `hub needs-you show` for the task and its requirement, then `hub task answer <id> <requirement> "<the person's exact words>" --version N`. Never a shortened yes: "yes, go ahead" stays "yes, go ahead". A question with choices takes the choice's label. Only when their words give what the question asks; words that give none of it answer nothing, so leave the question open.
+20. **"Approve X."** (only when they named it): an OK to send, spend or publish is never yours: reply "It needs your own tap on its preview: [<item>](<its link>)." Any other OK (a spec, a plan): on their plain yes, `hub task answer <id> <requirement> ok --version N`. Reply with one line per item: "Approved <item> as you, through the Assistant."
+21. **"Decline X."** (named exactly): `hub task answer <id> <requirement> no -m "<reason>" --version N`. Reply: "Sent back [<item>](<its link>) as you, through the Assistant." At most one more line: an ask still waiting on them, with its link.
+22. **"Decide my approvals for me."**: you cannot. An OK to send, spend or publish is always their own tap on its preview. Say so in one line.
+24. **"Ask the owner for a price / a yes."**, or a customer's discount, price or exception: `hub team show` for who decides (by role or title), then `hub task ask <id> --to <their id> "<question>" --choices "<a>,<b>" --version N` on the task it belongs to. Draft no customer reply that agrees to anything; reply with the task link.
 
 ## Clearing to a target
 
@@ -44,43 +43,40 @@ tasks they own. The owned tasks are one kind of many.
 
 1. Count from Needs you only: `hub needs-you show --by kind` (total, per kind), `--by bot` for the split. Its lists stop
    at 10 per bot, so take the ids in step 2.
-2. Ids: tasks they own `hub task list --all`; bots' questions `hub message list` (each names its task); approvals
-   `hub approval list --limit 100` (`--offset <next>` until null). A bot's task waiting on them comes up as its question.
+2. Ids: tasks they own `hub task list --all`; asks with their name `hub needs-you show` (each names its task and
+   requirement).
 3. Act in this turn, as them, on every item below. "Go" and "whatever you think" are the yes: never close some and ask
    about the rest. One write per item; a write that answered ok is done, never send it again; re-read Needs you to check.
-   - Task they own (open, doing, waiting or declined): one bulk close of up to 100 ids. CLI: `hub task bulk close
-     --where-id <id> --where-id <id> --note "<why>"`, one id per flag. MCP `hub_task_bulk`: `filter: {"ids": [...]}`,
-     `action: "close"`, `note`; never a JSON list in `--where-id`, never `where_ids` at the top level. Or one
-     `hub task close <id> --note "<why>"`. Undo: `hub task update <id> --status doing`.
+   - Task they own: `hub task close <id> -m "<why>" --version N`. Undo: `hub task move <id> reopen -m "<why>" --version N`.
    - A bot's task: when they named the set it is in ("close basically all", "all but these five"), close it too, as the
      ask says (a filter close they asked for is job 12a). When you pick the set yourself ("leave less than N", "whatever
-     you think"), do not close a bot's task still in progress or waiting: that stops the bot's work. Act on its question
-     instead, and close it only when it is plainly done, a duplicate or replaced, and say so.
+     you think"), do not close a bot's task still being worked: that stops the bot's work. Answer its ask instead, and
+     close it only when it is plainly done, a duplicate or replaced, and say so.
    - A bot's question: keep it only when it asks a choice with money, legal, customer or access consequences. A yes/no
-     about a test ping, finished or stale work is not a decision: decline it:
-     `hub task close <task id> --note "No, drop this. Do what you would do if no one answered."` The bot goes on. Several: one `hub task bulk close` with that same note.
-     An answer cannot be taken back: say so, with no undo line.
-   - Approval: decline a stale merge, publish or support approval: `hub approval decline <id> --note "<why>"`. Never
-     approve in a clear.
+     about a test ping, finished or stale work is not a decision: answer it
+     `hub task answer <id> <requirement> "No, drop this. Do what you would do if no one answered." --version N`. The bot
+     goes on. An answer cannot be taken back: say so, with no undo line.
+   - An OK to send, spend or publish: send back a stale one, `hub task answer <id> <requirement> no -m "<why>" --version N`.
+     Never OK in a clear.
 4. Keep what needs them: a real decision on money, legal, a customer-facing reply, production access, or anything only
-   they can answer. Do not act on it. Name each kept item with its link and why: a question or approval links to its
-   task (`#/task/<id>`, from its refs); with no task, to `[Needs you](#/tasks?view=foryou)`. A task that you would
+   they can answer. Do not act on it. Name each kept item with its link and why: an ask links to its task
+   (`#/task/<id>`). A task that you would
    otherwise close, but whose closing would leave a task you keep stuck, stays open, named in the same line.
-5. No command here clears these: a held message, a paused thread, a thread mention or DM, a stale-ticket suggestion, a
-   memory tidy card, a setup or reconnect card. Name the ones left, and say they clear them in Tico. Never guess a command.
+5. No command here clears these: a held message, a paused thread, a thread mention or DM, a memory tidy card, a setup
+   or reconnect item. Name the ones left, and say they clear them in Tico. Never guess a command.
 6. Recount once, at the end: `hub needs-you show --by kind`. Reply in plain lines, no headings or bold (AGENT.md,
-   Replies): the Needs you count before and after, with its split by kind; what was closed, answered and declined, with counts and links; the
+   Replies): the Needs you count before and after, with its split by kind; what was closed, answered and sent back, with counts and links; the
    kept items with links and reasons; what is left. Undo covers the closed tasks only ("say undo to reopen them").
-   Declines and answers cannot be undone: say so, and give no undo line for them. Shape, with placeholders:
-   Needs you went from <before> to <after> (tasks <a> to <b>, questions <c> to <d>, approvals <e> to <f>).
+   Answers and send-backs cannot be undone: say so, and give no undo line for them. Shape, with placeholders:
+   Needs you went from <before> to <after> (tasks <a> to <b>, asks <c> to <d>).
    Closed <n> done or duplicate tasks. Say undo to reopen them.
-   Declined <n> stale approvals and answered <n> bot questions with "No, drop this." Those cannot be undone.
+   Sent back <n> stale OKs and answered <n> bot questions with "No, drop this." Those cannot be undone.
    Kept, one line each: [<task title>](#/task/<id>), <why>, <the question that settles it>.
 
 ## Bots and work
 
 25. **"Make a task for bot Y."**: `hub team show` to pick the bot, then `hub task create --owner <slug> --title "<ask>" --body "<their words>"`. Say which bot and why.
-26. **"Make a task for a person."** (a question for the person you are chatting with is never a task: ask it in your reply, or act on the pick when they handed you the choice; a task for anyone else, or from a background run, is filed): `hub task create --owner human:<person id> --title "<question>"`. No `--due` unless they gave a calendar date: keep "by Friday" in the body as they said it. The body holds only what they said and facts read in this run; name each gap ("Dana didn't say which export") and never fill one in. One question per task, phrased so it is the only thing they must read. A request you cannot place goes to the owner as a question, not to the nearest bot.
+26. **"Make a task for a person."** (a question for the person you are chatting with is never a task: ask it in your reply, or act on the pick when they handed you the choice; a task for anyone else, or from a background run, is filed): `hub task create --owner human:<person id> --title "<question>"`. No `--due` unless they gave a calendar date: keep "by Friday" in the body as they said it. The body holds only what they said and facts read in this run; name each gap ("Dana didn't say which export") and never fill one in. One ask per task, phrased so it is the only thing they must read. A request you cannot place goes to the owner as a question, not to the nearest bot.
 27. **"Ask bot Y."**: `hub message send <slug> "<question>" --needs-action`. Report the answer with its source. Never `hub task create` for a question.
 28. **"Tell bot Y ..."**: `hub message send <slug> "<text>"`. Add `--fyi` when no reply is needed.
 29. **"New bot" / "a bot's instructions or code."**: `hub task create --owner botops --request-id turn --title "<ask>" --body "<their words>"` (`turn` only when the person asked in their chat). BotOps builds it; say: "BotOps builds it, and you will see the result in this chat." Routines, automations and schedules are job 30, not this.

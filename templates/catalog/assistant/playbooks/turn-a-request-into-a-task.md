@@ -73,7 +73,7 @@ and commit.
 - The request is a decision only the requester can make. Give them the options and let them decide.
 - Two humans have asked for opposite things. One task for whoever decides, naming both, not two
   tasks that will collide.
-- It would need a send, a spend, or a publish. That is an approval on an existing task, not a new
+- It would need a send, a spend, or a publish. That is an OK asked on the task the work belongs to, not a new
   task that quietly authorises it.
 
 **Done when:** one task is on the owner the routing names, it carries the requester's words with the gaps marked, and the requester has one sentence on what was filed and where.

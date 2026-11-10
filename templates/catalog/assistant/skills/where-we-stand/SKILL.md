@@ -28,7 +28,7 @@ Read only. Change nothing, and ask no one.
    - has no `bet_id` while a strategy is published;
    - has no KPI, or only `stale` ones: say "no fresh number", never guess one.
 4. **Turned down.** `hub proposal list --status rejected`. Never suggest one of these again, in any words.
-5. **Marketing.** `hub task list --type Marketing --step Live`. A task with no update for 14 days is stalled. It is its
+5. **Marketing.** `hub task list --label idea:live` and `hub task list --label growth:running`. A test with no update for 14 days is stalled. It is its
    bot's to move, never the person's: in a chat say it is stalled, with its link; the morning run comments for the bot.
 6. **Budgets.** `hub finance report budget_vs_actual`, once. A line over its budget is worth one item (amounts are in
    cents: 452000 is $4,520). Refused or empty: say nothing about budgets.

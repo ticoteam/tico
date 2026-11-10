@@ -25,7 +25,6 @@ EXPECTED_TO_EXIST = [
     ("origin", "show"),
     ("assistant", "change", "list"),
     ("assistant", "change", "restore"),
-    ("approval", "list"),  # chris/approval-list
 ]
 # Flags the template uses that land with track B (chris/assistant-acts-as-you): `hub assistant propose --for` names the
 # person of a background run's card. Remove this once that branch is merged.
@@ -33,6 +32,7 @@ EXPECTED_FLAGS = ["--for"]
 
 SPAN = re.compile(r"`(hub [^`]+)`")
 PLACEHOLDER = re.compile(r"<[^<>]+>")
+VERSION = re.compile(r"--version N\b")  # the version the bot was shown, written as the plan writes it
 
 
 def commands_in(path):
@@ -79,7 +79,7 @@ def argv_of(text):
     """The argv after `hub`, with placeholders filled, or None when the line is prose rather than a command."""
     if "<group>" in text or "--help" in text or text.endswith("..."):
         return None
-    filled = PLACEHOLDER.sub("1", text)
+    filled = VERSION.sub("--version 1", PLACEHOLDER.sub("1", text))
     try:
         tokens = shlex.split(filled)
     except ValueError:
