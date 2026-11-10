@@ -7664,14 +7664,14 @@ TASK_SQL = f"SELECT * FROM {TASKS} tasks WHERE id=?"
 
 def prime_tasks(conn, ids, with_tags=True):
     """Read these tasks and their tags in one query each per 500, for the task() lookups that follow in this snapshot
-    (a Needs you card reads its task, its ancestors and what they block, one at a time). `with_tags=False`: the rows only."""
+    (a list that reads each task, its ancestors and its relations one at a time). `with_tags=False`: the rows only."""
     from .read_cache import cache, prime, prime_rows
 
     values = cache(conn)
     if values is None:
         return
     wanted = {tid for tid in ids if tid}
-    # A row already read in this snapshot (prime_task_rows) is not read again; only its missing tags are.
+    # A row already read in this snapshot is not read again; only its missing tags are.
     unread = sorted(tid for tid in wanted if ("one", TASK_SQL, (tid,)) not in values)
     for part in chunks(unread):
         marks = ",".join("?" * len(part))
@@ -7960,87 +7960,6 @@ def task_history(conn, task_id, *, provenance=False):
             (task_id,),
         )
     )
-
-
-# How long a declined task stays on its requester's Needs you (the UI's taskNeedsViewer in ui/app/tasks.ts holds the same
-# number: change both together).
-DECLINED_NEEDS_HOURS = 24
-
-
-def needs_you(conn, who):
-    """The "Needs you" list: my open tasks (the question tasks bots put to me among them), bot tasks waiting on me,
-    approvals, declined-to-me.
-
-    A task on a numbered type is a ticket on that type's board, worked through there: it is on
-    the list only while it carries a question for the person, and a declined one stays off its
-    requester's list, as does a declined one on a steps-only type."""
-    actor = who if actor_kind(who) else human_actor(who)
-    pending = _rows(conn.execute("SELECT * FROM approvals WHERE decision IS NULL ORDER BY created_at"))
-    # approval_wait may resolve decision_owner via message(); prime those rows once for Needs you.
-    prime_messages(conn, [row["message_id"] for row in pending if row.get("message_id")])
-    at = now()
-    for row in pending:
-        row["payload"] = _json(row.get("payload"), {}) or {}
-        approval_wait(conn, row, at)
-    # The person's queue: their own tasks in rank order, each question a bot put to them a task they own.
-    # Product-lane work is a backlog a developer works through on the Product board, not a
-    # decision owed today: it counts here only when it carries a question for the person.
-    # The same goes for a numbered type's tickets, a board of its own.
-    # A snoozed task is nobody's to act on before its date (backend/task_snooze.py).
-    # Every one: a person's list does not stop at a page of their tasks (the caller pages the items).
-    # A question task is on the list whatever its lane or type: the board that holds it does not hide a question the
-    # person has to answer. Without a question, a product-lane or numbered-type task stays off.
-    from . import question_tasks
-
-    numbered = {r["id"] for r in conn.execute("SELECT id FROM task_types WHERE numbered=1")}
-    owned = [
-        t
-        for t in tasks(conn, owner=actor, status=ACTIVE_STATUSES, snoozed="hide", limit=None)
-        if question_tasks.is_open(t) or ((t.get("lane") or "company") != "product" and t.get("type_id") not in numbered)
-    ]
-    seen = {t["id"] for t in owned}
-    # A bot's task stopped on an account this person fixes (backend/reconnects.py): its card, as a wait on them. A
-    # bot's task set waiting on this person is a question task they own, so it is in `owned`.
-    from . import reconnects
-
-    waited = [t for t in reconnects.tasks_for(conn, actor) if t["id"] not in seen and not TS.snoozed(t)]
-    # What the Strategy Bot merged into one item of its own is that item here, not each original
-    # (backend/strategy_merge.py).
-    from . import strategy_merge
-
-    merged = strategy_merge.hidden(conn, actor)
-    # A declined task on a steps-only type (the Product roadmap) stays on its Declined step, where the board and
-    # the public roadmap show it: closing it off the list would take it off both, so it is not on the list.
-    by_step = {r["id"] for r in conn.execute("SELECT id FROM task_types WHERE steps_only=1")}
-    # A declined one leaves its requester's list DECLINED_NEEDS_HOURS after its last change: it stays on the board
-    # and in the task's own read, but a notice from weeks ago is nothing the requester still has to act on.
-    declined = tasks(
-        conn,
-        requester=actor,
-        status="declined",
-        tickets=False,
-        snoozed="hide",
-        limit=None,
-        updated_since=shift(now(), hours=-DECLINED_NEEDS_HOURS),
-    )
-    # The rows just read are this snapshot's task rows: a card's task, its ancestors and what they block are primed
-    # from them (prime_tasks), not read again by id. Copies, so nothing the caller adds to a row reaches the cache.
-    prime_task_rows(conn, [*owned, *waited, *declined])
-    return {
-        "actor": actor,
-        "tasks": [t for t in owned if t["id"] not in merged],
-        "waiting": [t for t in waited if t["id"] not in merged],
-        "approvals": pending,
-        "declined": [t for t in declined if (t.get("type_id") or GENERAL_TYPE) not in by_step],
-    }
-
-
-def prime_task_rows(conn, rows):
-    """Seed the snapshot's task reads (`task`, `prime_tasks`) with rows already read from `tasks` in this snapshot,
-    as stored: the tags `tasks()` hydrated are left out, as a read by id would have them."""
-    from .read_cache import prime
-
-    prime(conn, TASK_SQL, {(row["id"],): {k: v for k, v in row.items() if k != "tags"} for row in rows})
 
 
 def status(conn, bot_slug):
