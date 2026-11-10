@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from backend import question_tasks as QT, read_cache, sql as SQL, task_privacy, views
+from backend import read_cache, sql as SQL, task_privacy, views
 from backend.auth import Identity
 from backend.store import H, Problem, encode
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
@@ -154,14 +154,10 @@ def test_private_relations_tags_and_events_do_not_leak_to_owner(api):
         )
         c.execute(
             "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,?,'now')",
-            (hidden["id"], public["id"], "blocks"),
-        )
-        c.execute(
-            "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,?,'now')",
             (*sorted((hidden["id"], public["id"])), "related"),
         )
         H.event(c, "human:ana", "task.inspect", hidden["id"], {"title": hidden["title"]})
-    for suffix in ("", "/comments", "/links", "/files", "/answers", "/tree"):
+    for suffix in ("", "/comments", "/links", "/files", "/tree"):
         get(api, "tasks/" + hidden["id"] + suffix, expected=404)
     page = get(api, "tasks/" + public["id"])
     assert not page["children"] and page["task"]["parts"]["total"] == 0
@@ -172,7 +168,7 @@ def test_private_relations_tags_and_events_do_not_leak_to_owner(api):
     assert not sql(api, "SELECT id FROM tags WHERE key='sensitive-only'")
     assert not sql(api, "SELECT detail FROM events WHERE action='task.inspect'")
     assert sql(api, "SELECT from_task FROM task_relations") == []
-    assert len(sql(api, "SELECT from_task FROM task_relations", "ben-test")) == 3
+    assert len(sql(api, "SELECT from_task FROM task_relations", "ben-test")) == 2
     assert any(t[0] == hidden["id"] for t in sql(api, "SELECT id FROM tasks", "ben-test"))
 
 
@@ -652,63 +648,34 @@ def test_task_page_reads_a_fixed_number_of_statements_and_hides_private_provenan
 
 
 def test_needs_you_reads_a_fixed_number_of_statements_and_hides_private_items(api):
-    """Each Needs you card reads its task, asks, origin and the tasks above and behind it. Those rows are read for all
-    cards together, so a long list costs what a short one does, and a private task its reader is not a party to stays
-    off the list and out of every card that holds it up."""
+    """Needs you reads its tasks' brief rows and asks for the whole list together, so a long list costs what a short
+    one does, and a private task its reader is not a party to stays off the list."""
     store = api.app.state.store
     with store.transaction() as c:
-        # Cara's private task, waiting, which Ben's steps hold up; Ben is no party to it.
         hidden = H.task_create(c, "human:cara", "Private plan", "Secret", "human:cara", private=True, lint=False)
-        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (hidden["id"],))
 
     def cards(size):
         with store.transaction() as c:
-            parent = H.task_create(c, "human:ana", f"Release {size}", "Checklist", "bot:ops", lint=False)
             for n in range(size):
-                step = H.task_create(
-                    c,
-                    "bot:ops",
-                    f"Step {size}-{n}",
-                    "Do it.",
-                    "human:ben",
-                    parent_id=parent["id"],
-                    due=H.shift(H.now(), days=3),
-                    lint=False,
-                )
-                c.execute(
-                    "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks','now')",
-                    (step["id"], hidden["id"]),
-                )
-                H.event(c, H.KEEPER, "task.origin", step["id"], {"bot": "bot:ops"})
-                # Its own tree, so each wait files Ben a question task of its own (one card per tree otherwise).
-                wait = H.task_create(c, "human:ana", f"Wait {size}-{n}", "x", "bot:ops", lint=False)
-                H.task_update(
-                    c,
-                    "bot:ops",
-                    wait["id"],
-                    status="waiting",
-                    waiting_on="human:ben",
-                    note="Pick the region? I'll deploy after.",
-                )
-        return parent
+                H.task_create(c, "bot:ops", f"Step {size}-{n}", "Do it.", "human:ben", lint=False)
+                work = H.task_create(c, "human:ana", f"Release {size}-{n}", "Checklist", "human:ana", lint=False)
+                H.task_ask(c, "human:ana", work["id"], "human:ben", f"Which region for {n}?")
 
     counts, total = {}, 0
     for size in (3, 30):
-        parent = cards(size)
+        cards(size)
         total += 2 * size
         page, counts[size] = traced_get(api, "needs-you", "ben-test")
         assert len(page["items"]) == total
-        assert {x["holds_up"]["title"] for x in page["items"] if x["title"].startswith(f"Step {size}-")} == {
-            parent["title"]
-        }
+        assert {x["kind"] for x in page["items"]} == {"task", "ask"}
         assert hidden["id"] not in json.dumps(page) and "Private plan" not in json.dumps(page)
     assert counts[30] <= counts[3] + 5
 
 
 def test_task_list_reads_a_fixed_number_of_statements_and_hides_private_tasks(api):
-    """A board reads each row's origin (the person up its chain of parents), quiet state and question for the whole
-    page together, so 300 tasks cost what 30 do. A private task stays off another member's list and stops the chain:
-    a bot's subtask under it names no person to a reader who cannot open it."""
+    """A list reads each row's origin (the person up its chain of parents) and its turn for the whole page together,
+    so 300 tasks cost what 30 do. A private task stays off another member's list and stops the chain: a bot's
+    sub-task under it names no person to a reader who cannot open it."""
     store = api.app.state.store
     with store.transaction() as c:
         hidden = H.task_create(c, "human:cara", "Private plan", "Secret", "human:cara", private=True, lint=False)
@@ -717,17 +684,17 @@ def test_task_list_reads_a_fixed_number_of_statements_and_hides_private_tasks(ap
     def tasks_for(size):
         with store.transaction() as c:
             for n in range(size):
-                row = H.task_create(
-                    c, "bot:ops", f"Step {size}-{n}", "Do it.", "bot:ops", lint=False, next_run=n % 3 == 0
+                H.task_create(
+                    c,
+                    "human:cara" if n % 2 else "bot:ops",
+                    f"Step {size}-{n}",
+                    "Do it.",
+                    "bot:ops",
+                    parent_id=(hidden if n % 2 else shared)["id"],
+                    lint=False,
                 )
-                c.execute(
-                    "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'parent','now')",
-                    (row["id"], (hidden if n % 2 else shared)["id"]),
-                )
-                if n % 5 == 0:
-                    QT.ask_plain(c, "bot:ops", "human:ben", "Which region?", parent=row)
 
-    path, counts = "tasks?status=open,doing,waiting,declined", {}
+    path, counts = "tasks?status=open", {}
     for size in (30, 300):
         tasks_for(size)
         for brief in ("&brief=true", ""):
@@ -740,11 +707,8 @@ def test_task_list_reads_a_fixed_number_of_statements_and_hides_private_tasks(ap
                 for t in ben["tasks"]
                 if t["title"].startswith("Step ")
             }
-            assert under == {1: None, 0: "human:ana"}
-            assert {t["from_person"] for t in cara["tasks"] if t["title"].startswith("Step ")} == {
-                "human:ana",
-                "human:cara",
-            }
+            assert under == {0: "human:ana"}  # a sub-task of a private task is private too
+            assert all(t["turn"] for t in ben["tasks"] if t["title"].startswith("Step "))
     for key in ("ben", "cara"):
         for brief in ("&brief=true", ""):
             assert counts[300, key, brief] <= counts[30, key, brief] + 5, counts
@@ -835,9 +799,6 @@ def test_bot_list_reads_a_fixed_number_of_statements_and_seeks_each_bots_last_ru
         response, statements = traced(api, lambda: api.get("/api/employees", headers=headers(token)))
         assert response.status_code == 200
         assert len(statements) <= len(before[token]) + 5, (len(before[token]), len(statements))
-        flows = {e["name"]: e.get("task_flow") for e in response.json()}
-        assert {flows.get(f"crew{n}")["waiting"] for n in range(40) if flows.get(f"crew{n}")} == {1}
-        assert {flows.get(f"crew{n}")["waiting"] for n in range(40, 80) if flows.get(f"crew{n}")} == {0}
     with store.read() as c:
         latest = dict(
             c.execute(
@@ -1067,7 +1028,8 @@ def test_person_origin_rows_are_checked_in_one_row_and_match_the_one_row_read(ap
     ]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET readers=json_array('human:cara') WHERE id=?", (rows[3]["id"],))
-        c.execute("UPDATE tasks SET status='done' WHERE id IN (?,?)", (rows[1]["id"], rows[5]["id"]))
+        for done in (rows[1], rows[5]):
+            H.task_close(c, H.KEEPER, done["id"], "Finished for the test")
         c.execute(
             "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'parent','now')",
             (rows[1]["id"], rows[4]["id"]),
