@@ -110,7 +110,6 @@
  "task ask": "usage",
  "task close": "usage",
  "task done": "usage",
- "task label": "usage",
  "task move": "usage",
  "task reassign": "usage",
  "task relate": "kind",

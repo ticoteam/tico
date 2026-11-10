@@ -95,12 +95,96 @@ def test_claim_hands_out_the_real_notice_behind_an_obsolete_one_that_health_says
         assert c.execute("SELECT state FROM jobs WHERE id=?", (obsolete_job,)).fetchone()[0] == "canceled"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="v3 mismatch: a person-caused Tico notice on a Done task is kept by obsolete_notices_sql and counted as "
-    "handed out by Health (queued_reasons), but task_wakes.may_start holds it (nothing wakes a bot about a Done task), "
-    "so the claim answers nothing",
-)
 def test_health_and_the_claim_agree_on_a_person_caused_notice_on_a_done_task(api):
+    """Nothing wakes a bot about a Done task (docs/pipelines-v3.md, check rule 7), a person-caused Tico notice
+    included: task_wakes.may_start holds it, so it is obsolete as any notice on a finished task is
+    (obsolete_notices_sql). Health counts both queued notices as handed out, as it does every obsolete one, and the
+    claim cancels both before it chooses: nothing is left queued that the claim would not hand out. The person's own
+    words still get their answer; only Tico's notice of them is dropped."""
     machine, obsolete_job, real_job = finished_with_notices(api, real_on_open_task=False)
-    assert claimed_after_health(api, machine)["job_id"] == real_job
+    body = {"next_run": True, "busy_bots": [], "busy_lanes": [], "start_places": True}
+    with api.app.state.store.read() as c:
+        reasons = list(queued_reasons(c, api.app.state.store.settings, machine["runner_id"], "ops"))
+    assert [why for _, why in reasons] == [None, None]
+    assert post(api, "jobs/claim", body, token=machine["token"])["attempt"] is None
+    with api.app.state.store.read() as c:
+        for job in (obsolete_job, real_job):
+            assert c.execute("SELECT state FROM jobs WHERE id=?", (job,)).fetchone()[0] == "canceled"
+        assert list(queued_reasons(c, api.app.state.store.settings, machine["runner_id"], "ops")) == []
+
+
+def test_a_person_caused_notice_on_a_done_task_does_not_keep_the_claim_from_the_work_behind_it(api):
+    """The held notice on the Done task is the oldest queued job; the claim drops it and hands out the person-caused
+    notice on the open task behind it, as Health says, instead of answering nothing."""
+    machine, task, original = task_attempt(api)
+    other = post(api, "tasks", {"owner": "ops", "title": "Count the lines", "body": "Count them."})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='completed',finished_at=? WHERE id=?", (H.now(), original["id"]))
+        c.execute("UPDATE jobs SET state='completed' WHERE id=?", (original["job_id"],))
+        c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+        H.task_move(c, "human:ana", task["id"], "done", "Finished.")
+        sent = {}
+        for name, on in (("done", task), ("open", other)):
+            sent[name] = H.say(
+                c,
+                H.KEEPER,
+                "bot:ops",
+                "A comment from human:ana",
+                kind="notice",
+                conversation_id=on["conversation_id"],
+                refs={"task": on["id"], "trigger": "other", "wake": "update", "caused_by": "human:ana"},
+            )
+        c.execute("UPDATE jobs SET created_at=? WHERE message_id=?", (H.shift(H.now(), minutes=-5), sent["done"]["id"]))
+        W.tick(c, H.shift(H.now(), minutes=2))
+        done_job, open_job = (
+            c.execute("SELECT id FROM jobs WHERE message_id=?", (sent[k]["id"],)).fetchone()[0]
+            for k in ("done", "open")
+        )
+    body = {"next_run": True, "busy_bots": [], "busy_lanes": [], "start_places": True}
+    attempt = post(api, "jobs/claim", body, token=machine["token"])["attempt"]
+    assert attempt is not None and attempt["job_id"] == open_job
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (done_job,)).fetchone()[0] == "canceled"
+
+
+def test_a_head_job_the_engine_holds_at_start_does_not_keep_the_claim_from_the_work_behind_it(api, monkeypatch):
+    """The start cancels the oldest job (task_wakes.may_start says no: no turn or 7 runs); the same claim goes on to
+    the job behind it instead of answering nothing until the next poll."""
+    from backend import task_wakes
+
+    machine, task, original = task_attempt(api)
+    other = post(api, "tasks", {"owner": "ops", "title": "Count the lines", "body": "Count them."})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='completed',finished_at=? WHERE id=?", (H.now(), original["id"]))
+        c.execute("UPDATE jobs SET state='completed' WHERE state IN ('queued','running')")
+        sent = {}
+        for name, on in (("held", task), ("open", other)):
+            sent[name] = H.say(
+                c,
+                H.KEEPER,
+                "bot:ops",
+                "A comment from human:ana",
+                kind="notice",
+                conversation_id=on["conversation_id"],
+                refs={"task": on["id"], "trigger": "other", "wake": "update", "caused_by": "human:ana"},
+            )
+        c.execute("UPDATE jobs SET created_at=? WHERE message_id=?", (H.shift(H.now(), minutes=-5), sent["held"]["id"]))
+        held_job, open_job = (
+            c.execute("SELECT id FROM jobs WHERE message_id=?", (sent[k]["id"],)).fetchone()[0]
+            for k in ("held", "open")
+        )
+    real = task_wakes.may_start
+
+    def may_start(conn, message, attempt=None):
+        found = message if isinstance(message, str) else message["id"]
+        if found != sent["held"]["id"]:
+            return real(conn, message, attempt=attempt)
+        conn.execute("UPDATE jobs SET state='canceled' WHERE message_id=? AND state='queued'", (found,))
+        return False  # as may_start answers for a bot with no turn on the task, or at its 7 runs
+
+    monkeypatch.setattr(task_wakes, "may_start", may_start)
+    body = {"next_run": True, "busy_bots": [], "busy_lanes": [], "start_places": True}
+    attempt = post(api, "jobs/claim", body, token=machine["token"])["attempt"]
+    assert attempt is not None and attempt["job_id"] == open_job
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (held_job,)).fetchone()[0] == "canceled"

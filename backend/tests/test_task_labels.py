@@ -1,7 +1,7 @@
 """Who changes a task's labels: a mover any label; a bot a classification label on a task it manages (its own, one
 it asked for, or one in a pipeline it manages); a label on a public roadmap or one Tico acts on keeps its gate. The
-publish approval that once let a bot add a public label went with the old engine: the refusal still names it, and the
-publication preview answers 404 until it returns (backend/roadmaps.py NOT_YET)."""
+publish approval that once let a bot add a public label went with the old engine: the refusal says a person adds it and
+names no removed command, and the publication preview answers 404 until it returns (backend/roadmaps.py NOT_YET)."""
 
 import json
 
@@ -87,7 +87,8 @@ def _a_public_roadmap_label_is_refused_both_ways_and_never_applied_silently(api)
     item = post(api, "tasks", {"owner": "cpo", "title": "Research search", "body": "x", "pipeline": "product"})
     refused = label(api, item["id"], ["roadmap", "area-search"], token, expected=403)["error"]
     assert refused["code"] == "label"
-    assert "roadmap is a public roadmap label" in refused["detail"] and "publication-preview" in refused["detail"]
+    assert "roadmap is a public roadmap label" in refused["detail"] and "publication-preview" not in refused["detail"]
+    assert "a person on the leadership, product, engineering teams changes it" in refused["detail"]
     assert "area-search you may change on its own" in refused["detail"]
     assert get(api, "tasks/" + item["id"])["task"]["labels"] == []
     # Taking it off the roadmap is checked the same way.
@@ -258,8 +259,11 @@ def test_a_bot_creates_no_task_with_a_public_roadmap_label_and_is_told_the_way_t
     before = written(api)
     refused = post(api, "tasks", body, token=token, expected=403)["error"]
     assert refused["code"] == "label" and "roadmap is a public roadmap label" in refused["detail"]
-    assert "create the task without it, then add it on the task" in refused["detail"]
-    assert "--approval-id" in refused["detail"] and "area-search you may set on its own" in refused["detail"]
+    assert (
+        "create the task without it, and a person on the leadership, product, engineering teams adds it"
+        in refused["detail"]
+    )
+    assert "--approval-id" not in refused["detail"] and "area-search you may set on its own" in refused["detail"]
     assert created(api, "cpo", "Research search") == 0
     post(api, "roadmaps/settings", {"bot_public_approval": False})
     refused = post(api, "tasks", body, token=token, expected=403)["error"]

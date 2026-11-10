@@ -5559,7 +5559,7 @@ def remove_outside_member(c, principal, thread_id, actor):
             raise Problem("forbidden", "Only someone who manages this thread, or an admin, can do that", 403)
     else:
         if who != H.KEEPER:
-            raise Problem("forbidden", "Only the keeper changes a thread's outside links without a viewer", 403)
+            raise Problem("forbidden", "Only Tico itself changes a thread's outside links without a viewer", 403)
         row = thread_row(c, thread_id)
         if row is None:
             raise Problem("not_found", "Thread not found", 404)

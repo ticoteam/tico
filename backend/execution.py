@@ -2843,8 +2843,9 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
 
 def obsolete_notices_sql(c):
     """FROM and WHERE of the Tico notices a claim cancels, for one runner (?), Tico's actor (?) and now (?): any queued
-    on a task already finished, unless a person's own act caused it (H._write_message: it still owes that person its
-    answer), a pull request's checks result for a head no open pull request on the task is at any more (a newer push
+    on a task already finished (on a task off the engine, unless a person's own act caused it: H._write_message, it
+    still owes that person its answer; on the engine nothing wakes a bot about a Done or Closed task, and
+    task_wakes.may_start holds it, so Health and the claim say the same), a pull request's checks result for a head no open pull request on the task is at any more (a newer push
     supersedes it), and a self-filed task's "New task" notice while the task is snoozed and its filing turn has ended.
     A turn that started and yielded (a drain's time limit, a shared login's hold cap) is never one of them: it is the
     rest of a turn already under way, often the one that finished the task, and canceling it left the bot's status on
@@ -2860,7 +2861,7 @@ def obsolete_notices_sql(c):
         f"WHERE x.runner_id=? AND j.bot_id=x.bot AND j.state='queued' AND {H.unheld_sql()} AND m.id=j.message_id "
         "AND m.sender_id=? AND m.kind='notice' "
         "AND ((t.status IN ('done','closed') "
-        "AND coalesce(json_extract(m.refs,'$.caused_by'),'') NOT LIKE 'human:%') "
+        "AND (t.pipeline_id IS NOT NULL OR coalesce(json_extract(m.refs,'$.caused_by'),'') NOT LIKE 'human:%')) "
         "OR (m.body LIKE 'New task from %' AND m.recipient_id=t.owner_id "
         "AND json_extract(m.refs,'$.filed_in') IS NOT NULL "
         "AND EXISTS (SELECT 1 FROM snoozes sz WHERE sz.task_id=t.id AND sz.ended_at IS NULL "
@@ -2894,7 +2895,12 @@ def clear_stop_status(c, job):
     continue" for a turn that yielded and was the bot's last (Dev 684)."""
     from .repositories import metadata
 
-    aid, bot = job["attempt_id"], job["bot_id"]
+    bot = job["bot_id"]
+    try:
+        aid = job["attempt_id"]
+    except (KeyError, IndexError):  # a claim's candidate row carries no attempt: read the job's own
+        found = c.execute("SELECT attempt_id FROM jobs WHERE id=?", (job["id"],)).fetchone()
+        aid = found[0] if found else None
     if not aid or (H.status(c, bot) or {}).get("state") != "idle":
         return
     stopped = metadata(c, LAST_STOP + bot).get("attempt_id") == aid
@@ -4732,7 +4738,7 @@ class Execution:
         for old in obsolete:
             if not prepared:
                 selected = None
-            suppress_notice(c, old, old['task_id'], 'Task finished or acted on before keeper notice delivery')
+            suppress_notice(c, old, old['task_id'], 'Task finished or acted on before Tico\'s notice was delivered')
         company = org_turns.observe(c, self.store.settings, detailed=False)
         if company['at_stop']:
             return {'attempt': None, 'waiting': org_turns.REASON}
@@ -4800,7 +4806,10 @@ class Execution:
             return {"attempt": None}
         # The job's preparation runs in a savepoint of its own. An error rolls back its writes: a check of one bot
         # passes that bot over, and a job's own error holds the job. The claim takes the next candidate until
-        # CLAIM_HOLDS jobs are held. A team's check and a storage error fail the claim, as they always did.
+        # CLAIM_HOLDS jobs are held. A team's check and a storage error fail the claim, as they always did. A job the
+        # start cancels (unreadable now, or the engine holds its wake) is passed over the same way: the work queued
+        # behind it starts in this call, never a whole poll later. At most CLAIM_PICKS are dropped so.
+        dropped = 0
         while True:
             c.execute("SAVEPOINT claim_start")
             try:
@@ -4824,6 +4833,13 @@ class Execution:
                     return {"attempt": None}
                 continue
             c.execute("RELEASE claim_start")
+            if answer.pop("dropped", False) and dropped < CLAIM_PICKS:
+                dropped += 1
+                passed.append(row["id"])
+                row = self.pick(c, who, body, runner, now, people_only=people_only, failed=failed, passed=passed)
+                if not row:
+                    return {"attempt": None}
+                continue
             if answer.get("attempt"):
                 # The run is handed out: a retry that starts clears its hold and its bot's Health finding.
                 claim_holds.started(c, row["id"])
@@ -4845,7 +4861,7 @@ class Execution:
             threads.moot_delivery(c, msg, "bot:" + row["bot_id"])
             threads.replace_note_wake(c, msg, "bot:" + row["bot_id"])
             H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "unreadable"})
-            return {"attempt": None}
+            return {"attempt": None, "dropped": True}
         from . import task_wakes
 
         if not task_wakes.may_start(c, row["message_id"]):
@@ -4854,7 +4870,7 @@ class Execution:
             # writes a lost wake again for a bot that still has a turn, and hands a task at 7 runs to a person.
             clear_stop_status(c, row)
             H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "no_turn_or_runs"})
-            return {"attempt": None}
+            return {"attempt": None, "dropped": True}
         # The bot's budget and back-off: an error in them passes the bot over, and holds no run.
         with shared_check():
             if turn_budgets.enforce(c, self.store.settings, row, msg):

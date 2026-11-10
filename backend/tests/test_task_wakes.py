@@ -89,6 +89,30 @@ def test_a_wake_may_start_only_for_a_bot_whose_turn_it_is(c, general):
     assert not task_wakes.may_start(c, start) and _state(c, start) == "canceled"  # a snoozed task wakes nobody
 
 
+def test_a_bots_word_to_another_bot_about_a_persons_task_starts_no_run(c, general):
+    """docs/pipelines-v3.md "It only wakes whoever has the turn": a task a person owns wakes no bot, so a bot's message
+    to another bot about it starts no run. It stays in the task's chat for that bot's next run, and the check owes the
+    other bot nothing (rule 2 holds: it has no turn)."""
+    from backend import never_stuck as NS
+
+    row = X.new_task(c, ANA, "Write the launch note")
+    said = H.say(
+        c,
+        BUILDER,
+        REVIEWER,
+        "The draft is in the folder.",
+        conversation_id=row["conversation_id"],
+        refs={"task": row["id"]},
+    )
+    job = c.execute("SELECT id FROM jobs WHERE message_id=?", (said["id"],)).fetchone()
+    assert not task_wakes.may_start(c, said)
+    if job:
+        assert _state(c, job[0]) == "canceled"
+    NS.check(c, H.shift(H.now(), minutes=30))
+    assert _queued(c, row["id"]) == []
+    assert H.message(c, said["id"])
+
+
 def _occurrence(c, task_id):
     """A schedule's notice to the bot that the next occurrence was absorbed into this open task
     (automations.absorb_into_open_task): automatic, about the task, and not one of the engine's wakes."""
@@ -194,7 +218,7 @@ def test_a_claim_starts_no_run_the_engine_holds_and_the_check_takes_the_task_on(
 
     other = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
     stray = task_wakes.add(c, other, REVIEWER, other["visit"], "Look at this.", wake_key=f"{other['id']}:stray")
-    assert _start(company, c, stray) == {"attempt": None}  # the reviewer has no turn on that task
+    assert _start(company, c, stray)["attempt"] is None  # the reviewer has no turn on that task
     assert _state(c, stray) == "canceled"
     assert c.execute("SELECT COUNT(*) FROM attempts WHERE job_id=?", (stray,)).fetchone()[0] == 0
     mine = X.new_task(c, ANA, "Plan the week", assignee=BUILDER)
@@ -205,7 +229,7 @@ def test_a_claim_starts_no_run_the_engine_holds_and_the_check_takes_the_task_on(
     for _ in range(task_wakes.RUNS):  # seven runs since the change, and its wake is queued again
         X.ran(c, mine["id"], BUILDER)
         c.execute("UPDATE jobs SET state='queued' WHERE id=?", (start,))
-    assert _start(company, c, start) == {"attempt": None}  # an eighth run never starts
+    assert _start(company, c, start)["attempt"] is None  # an eighth run never starts
     assert _state(c, start) == "canceled"
     assert c.execute("SELECT COUNT(*) FROM attempts WHERE job_id=?", (start,)).fetchone()[0] == task_wakes.RUNS
     at = H.now()
@@ -555,13 +579,10 @@ def _run_plans(c, read, row):
     ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="task_wakes._ON_TASK (backend/task_wakes.py:342) ORs a.task_id with terms on messages, so last_run (:364) "
-    "and lost (:532) seek attempts by bot_id alone and read every run the bot ever had; attempts_task is never used",
-)
 def test_last_run_and_lost_seek_the_tasks_runs_not_every_run_of_the_bot(c, general):
-    """A bot's runs grow forever; a task's few. last_run and lost read the task's runs through attempts_task."""
+    """A bot's runs grow forever; a task's few. last_run and lost read the task's runs through attempts_task and the
+    task's messages, never every run of the bot (attempts_bot_*) or every run (SCAN): asked as one OR across the joined
+    tables they did, and a pass over 10,000 tasks took 148 s."""
     from backend import task_engine as E
 
     row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
@@ -572,13 +593,15 @@ def test_last_run_and_lost_seek_the_tasks_runs_not_every_run_of_the_bot(c, gener
     assert plans
     for text in plans:
         assert "attempts_task" in text, text
+        assert "attempts_bot" not in text and "SCAN a " not in f"{text} " and "SCAN x" not in text, text
+        assert "SCAN y" not in text and "SCAN messages" not in text and "SCAN attempts" not in text, text
 
 
 def test_a_run_count_reads_the_runs_since_the_change_and_looks_up_each_ones_start(c, general):
     """The never-stuck pass counts runs for every task that is due: the count must not gather every start in the
-    company since the task's change into a list (`LIST SUBQUERY`) or read every run there ever was (`SCAN a`). It reads
-    the attempts from a row bound (the attempt mark, or the oldest run started since the start mark) and looks up each
-    one's start by its unique attempt id."""
+    company since the task's change or read every run there ever was (`SCAN a`). It reads the task's own runs (each
+    found by an index from the task: attempts_task, its wakes, its messages) and looks up each one's start by its unique
+    attempt id."""
     from backend import task_engine as E
 
     row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
@@ -598,6 +621,12 @@ def test_a_run_count_reads_the_runs_since_the_change_and_looks_up_each_ones_star
         c.set_trace_callback(None)
     (counted,) = [s for s in statements if s.lstrip().startswith("SELECT COUNT(*) FROM attempts")]
     plan = [str(step[3]) for step in c.execute(f"EXPLAIN QUERY PLAN {counted}").fetchall()]
-    assert "SEARCH a USING INTEGER PRIMARY KEY (rowid>?)" in plan, plan
-    assert not [step for step in plan if "LIST SUBQUERY" in step or step.startswith("SCAN")], plan
+    assert "SEARCH a USING INTEGER PRIMARY KEY (rowid=?)" in plan and any("attempts_task" in s for s in plan), plan
+    # Only the one-row table of the task's values and the list of its runs are scanned.
+    assert not [
+        s
+        for s in plan
+        if s.startswith("SCAN") and s not in ("SCAN p", "SCAN CONSTANT ROW") and not s.startswith("SCAN (subquery")
+    ], plan
+    assert not [s for s in plan if "run_starts" in s and "(attempt_id=?)" not in s], plan
     assert any("run_starts" in step and "(attempt_id=?)" in step for step in plan), plan

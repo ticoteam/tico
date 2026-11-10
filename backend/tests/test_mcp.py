@@ -295,7 +295,7 @@ def test_tools_write_through_the_same_rules_as_http(api):
     assert not err and sorted(t["id"] for t in listed["result"]) == sorted([task["task"]["id"], wordy_task])
 
     err, out = call(api, "hub_task_close", {"id": task["task"]["id"], "why": "Not needed"}, token=token)
-    assert err and out["detail"] == f"Run `hub task show {task['task']['id']}` first.", "a bot sends the version it saw"
+    assert err and out["detail"] == hubtools.version_needed(task["task"]["id"]), "a bot sends the version it saw"
     version = shown["task"]["version"]
     err, out = call(
         api, "hub_task_close", {"id": task["task"]["id"], "why": "Not needed", "version": version}, token=token

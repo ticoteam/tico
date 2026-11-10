@@ -236,7 +236,6 @@
  "hub_task_create": "422 validation",
  "hub_task_done": "usage",
  "hub_task_give": "usage",
- "hub_task_label": "usage",
  "hub_task_link": "422 kind",
  "hub_task_manager_set": "usage",
  "hub_task_model": "usage",

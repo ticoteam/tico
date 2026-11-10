@@ -449,7 +449,7 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
             read_cache.prime(conn, one_sql, {(task_id,): found.get(task_id) for task_id in unread})
     rows = [row for row in (E.task(conn, task_id) for task_id in ids) if row]
     R.prime(conn, rows)
-    task_wakes.prime_holds(conn, ids)  # each task's worktree wait, for a bot's turn that may be Paused on it
+    task_wakes.prime_holds(conn, ids)  # each task's worktree wait and held run: a bot's turn may be Paused on it
     # "Can this bot run" for each bot whose turn a task may be: its owner, or its pipeline's manager.
     bots: list[str] = []
     for row in rows:
@@ -535,6 +535,8 @@ def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
         for wait in waits:
             if wait.state != PAUSED or not wait.who:
                 continue
+            if wait.line.endswith(task_wakes.RUN_HELD) and _botops_reviews(conn, wait.who):
+                continue  # BotOps has the held run's review task (execution._hand_to_maintainer): no person row
             if wait.who not in fixers:
                 fixers[wait.who] = _fixer(conn, wait.who, seen.get(actor_id(wait.who)))
             fixer = fixers[wait.who]
@@ -555,6 +557,14 @@ def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
         person: sorted(items, key=lambda item: (item["since"] or "", item.get("task_id") or "", item["line"]))
         for person, items in out.items()
     }
+
+
+def _botops_reviews(conn: "sqlite3.Connection", bot: str) -> bool:
+    """Whether BotOps reviews this bot's held runs: it is in the company and the bot is not BotOps itself."""
+    from . import hubdb
+
+    maintainer = str(hubdb.FLEET_MAINTAINER)
+    return actor_id(bot) != maintainer and bool(read_cache.one(conn, "SELECT 1 FROM bots WHERE id=?", (maintainer,)))
 
 
 def _fixer(conn: "sqlite3.Connection", bot: str, cause: str | None) -> str | None:

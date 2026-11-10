@@ -135,7 +135,8 @@ def wake_kind(c: sqlite3.Connection, job_id: str) -> str:
 
 def fingerprint(c: sqlite3.Connection) -> dict[str, tuple[Any, ...]]:
     """For each task on the engine, what counts as a change (docs/pipelines-v3.md, C4, as R1 settles it): its visit,
-    status and owner (a move, a reassign), the answers, added requirements and filed tasks of its open visit. Not a
+    status and owner (a move, a reassign), the answers, added requirements and who each is asked of (a person giving an
+    ask to someone else is a person acting, so a change) and filed tasks of its open visit. Not a
     snooze or its end (setting a task aside earns no runs), and not the task's version (a field edit raises it). Read
     by the rig itself, not through the engine's own progress mark. The last part says a person has it now (the ladder
     or Late got to a person)."""
@@ -145,6 +146,8 @@ def fingerprint(c: sqlite3.Connection) -> dict[str, tuple[Any, ...]]:
         "(SELECT COUNT(*) FROM answers a WHERE a.visit_id = v.id AND a.undone_at IS NOT NULL), "
         "(SELECT COUNT(*) FROM requirements r WHERE r.visit_id = v.id), "
         "(SELECT COUNT(*) FROM requirements r WHERE r.visit_id = v.id AND r.withdrawn_at IS NOT NULL), "
+        "(SELECT group_concat(r.id || '=' || COALESCE(r.person_id, ''), ',') FROM (SELECT id, person_id FROM "
+        "requirements WHERE visit_id = v.id ORDER BY id) r), "
         "(SELECT COUNT(*) FROM links l WHERE l.visit_id = v.id), "
         "(SELECT COUNT(*) FROM links l LEFT JOIN tasks k ON k.id = l.to_task_id "
         " WHERE l.visit_id = v.id AND COALESCE(k.status, 'gone') <> 'open'), "

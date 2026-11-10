@@ -127,3 +127,22 @@ def test_incident_label_and_plain_rule_words_are_listed(api):
         assert R.judge(c, H.KEEPER, 'bot:cpo', 'notice', {'task': task['id']}, 'Moved', None).rule == 'incident_news'
         row = {r['id']: r for r in R.BUILTINS}['incident_news']
         assert row['protected'] and row['then'] == 'wake' and row['words']
+
+
+def test_incident_news_to_a_requester_bot_without_the_turn_starts_no_run(api):
+    """docs/pipelines-v3.md "It only wakes whoever has the turn": urgent only skips the digest. News about an incident
+    whose turn is its owner's starts no run for the bot that asked for it; the news stays on the task for its next
+    look, and the owner's turn is untouched."""
+    r = runner(api)
+    assign(api, r, 'cpo')
+    ready(api, r, ['cpo'])
+    with api.app.state.store.transaction() as c:
+        incident = H.task_create(c, 'bot:cpo', 'Restore sign-in', 'Repair the outage', 'bot:ops', labels=['incident'])
+        c.execute('DELETE FROM jobs')
+        msg, job = sent_job(c, incident, 'bot:cpo', 'Sign-in works again for most people')
+        assert msg['refs']['rule'] == 'incident_news'
+    assert claim(api, r, 'cpo') is None
+    with api.app.state.store.read() as c:
+        if job is not None:
+            assert c.execute('SELECT state FROM jobs WHERE id=?', (job['id'],)).fetchone()[0] == 'canceled'
+        assert c.execute('SELECT 1 FROM messages WHERE id=?', (msg['id'],)).fetchone()

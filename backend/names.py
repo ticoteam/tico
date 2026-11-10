@@ -5,7 +5,8 @@ every one up, so an answer on a stable route also carries the names, added besid
 instead of them:
 
 - an object with an `owner_id`, `requester_id`, `sender_id`, `recipient_id` or `actor` id gets `owner_name` and so on;
-- a read (GET) answer that is an object gets `actors`: {id: name} for every id it names, one lookup for the whole page;
+- a read (GET) answer that is an object gets `actors`: {id: name} for every id it names (and for the `who`, `asked_by`
+  and `by` of a task's waits and requirements, LISTED_KEYS), one lookup for the whole page;
 - for a person, a notice the hub wrote for bots to read ("New task from bot:x: ...") is shown with names
   (the original is kept in `body_raw`). Bots and other callers get the text as written.
 
@@ -31,6 +32,9 @@ ACTOR_KEYS = (
     "status_by",
     "proposed_by",
 )
+# Keys whose actor ids go into `actors` only, with no `_name` beside them: a task's waits and requirements name who
+# they wait on (`who`), who asked (`asked_by`) and who answered (`by`), and `hub task show` prints those names.
+LISTED_KEYS = ("who", "asked_by", "by")
 ID = re.compile(r"\b(human|bot):([A-Za-z0-9._-]*[A-Za-z0-9_])")
 # Tico support in a session a person opened (backend/support_access.py): no roster row, always this name.
 SUPPORT_ACTOR, SUPPORT_NAME = "human:tico-support", "Tico support"
@@ -48,7 +52,7 @@ def _is_id(value):
 def _collect(node, found, notices):
     if isinstance(node, dict):
         for key, value in node.items():
-            if key in ACTOR_KEYS and _is_id(value):
+            if (key in ACTOR_KEYS or key in LISTED_KEYS) and _is_id(value):
                 found.add(value)
             elif key in ("participants", "owners", "participant_ids") and isinstance(value, list):
                 found.update(v for v in value if _is_id(v))

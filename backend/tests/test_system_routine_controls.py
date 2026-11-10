@@ -209,6 +209,6 @@ def test_every_row_reads_when_then_with_one_department_from_the_chart_and_search
         )
     jobs = {j["key"]: j for j in data["jobs"]}
     assert jobs["kpi_asks"]["when"] == ["every hour"]
-    assert jobs["kpi_asks"]["then"][0] == "ask a KPI's keeper for a reading when it goes out of date"
+    assert jobs["kpi_asks"]["then"][0] == "ask a KPI's owner for a reading when it goes out of date"
     assert jobs["topic_fresh"]["when"] == ["a message in a direct chat changes the topic"]
     assert "never stuck" in jobs["heartbeat"]["search"] and "stuck" in jobs["never_stuck_reading"]["search"]

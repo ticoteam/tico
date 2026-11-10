@@ -1008,8 +1008,8 @@ def typed_words(argv):
     return words
 
 
-def unknown_flag_hint(p, argv, unknown):
-    """The closest flag of the command the line names, for a flag it does not take (`--where-status` is `--status`)."""
+def named_command(p, argv):
+    """The parser of the command a line names (`hub task relate`), and its words."""
     node, words = p, []
     for a in argv:
         sub = next((act for act in node._actions if isinstance(act, argparse._SubParsersAction)), None)
@@ -1017,6 +1017,12 @@ def unknown_flag_hint(p, argv, unknown):
             continue
         node = sub.choices[a]
         words.append(a)
+    return node, words
+
+
+def unknown_flag_hint(p, argv, unknown):
+    """The closest flag of the command the line names, for a flag it does not take (`--where-status` is `--status`)."""
+    node, words = named_command(p, argv)
     flags = []
     for flag in unknown:
         if flag.startswith("--"):
@@ -1059,6 +1065,12 @@ class HubParser(argparse.ArgumentParser):
             hint = did_you_mean(typed_words(argv), names)
         elif argv is not None and message.startswith("unrecognized arguments: "):
             hint = unknown_flag_hint(self, argv, message[len("unrecognized arguments: ") :].split())
+            # The usage and name of the command the line names (`hub task relate`), not of the whole CLI: a flag the
+            # command does not take (`--version` on relate) is that command's error.
+            node, words = named_command(self, argv)
+            if words:
+                node.print_usage(sys.stderr)
+                self.exit(2, f"{node.prog}: error: {message}{hint}\n")
         elif "invalid choice" in message and self.prog != "hub":  # a bad word under a command, e.g. `task lst`
             bad = message.split("invalid choice: '", 1)[-1].split("'", 1)[0]
             under = self.prog.split()[1:]
