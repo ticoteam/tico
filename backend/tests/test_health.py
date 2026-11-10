@@ -818,6 +818,64 @@ def test_a_bot_the_gateway_runs_while_claude_code_is_signed_out_is_not_an_alarm(
     keeps_its_alarms()
 
 
+def test_queued_work_the_gateway_runs_is_not_held_behind_a_sign_in(environment, monkeypatch):
+    """A claude bot whose only readiness problem is a Claude Code sign-in the Tico AI Gateway covers
+    (models_preset.waiting, the claim's own rule) is not "Claude login required": its young queue is no alarm, and an
+    old one is named with the claim's own reason. Under the subscriptions choice the same queue is "Claude login
+    required" at once, as before."""
+    api = environment()
+    setup(api, monkeypatch)
+    with fake_gateway() as fake:
+        fake.active(KEY, 0.1)
+        save(api, fake, token=TOKEN)
+
+    def choose(preset):
+        revision = api.get("/api/v2/providers", headers=signed_in()).json()["revision"]
+        body = {
+            "enabled": ["openai", "anthropic"],
+            "runtime": "claude",
+            "model": "claude-opus-5-5",
+            "preset": preset,
+            "expected_revision": revision,
+        }
+        assert api.put("/api/v2/providers", headers=signed_in(), json=body).status_code == 200
+
+    choose(models_preset.RECOMMENDED)
+    runner = enrolled(api)
+    add_bot(api, "writer")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET label='Team box' WHERE id=?", (runner,))
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('writer','ana')")
+        BS.write(c, "writer", {"runtime": "claude", "model": "claude-opus-5-5"})
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('writer',?,1,?,'t')",
+            (runner, H.now()),
+        )
+        owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
+        conversation = H.open_conversation(c, owner, [owner, "bot:writer"], kind="chat")
+        H._write_message(c, owner, "bot:writer", "ship it", conversation, "say", {}, None, None)
+    _claude_signed_out_on_an_isolated_computer(api, runner, isolated=True)
+
+    body, checks = health_of(api)
+    assert body["stuck"] == [] and checks["queue"]["status"] != "bad"
+    assert "login required" not in json.dumps(checks["queue"])
+
+    # An old queue is still named, with the claim's reason rather than the sign-in.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='writer'", (H.shift(H.now(), minutes=-240),))
+    body, checks = health_of(api)
+    assert "login required" not in json.dumps(checks["queue"]).lower()
+    [row] = body["stuck"]  # the claim holds nothing here, so the runner not taking it is the problem
+    assert row["reason"] == "slow" and row["why"] == "Not started after 15 min"
+    assert row["queue_reasons"] == [{"reason": "slow", "queued": 1, "oldest": row["oldest"]}]
+
+    # Not covered by the Gateway: the sign-in holds the work, as before.
+    choose("subscriptions")
+    body, checks = health_of(api)
+    [row] = body["stuck"]
+    assert row["bot"] == "writer" and row["why"] == "Claude login required on Team box"
+
+
 def test_a_bot_over_the_daily_token_threshold_is_flagged(environment):
     """Uncached input only: cache reads are cheap and would dominate the count."""
     api = environment()
