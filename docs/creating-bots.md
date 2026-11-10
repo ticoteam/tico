@@ -23,7 +23,7 @@ For another template, a task goes to BotOps to build the repository, apply the r
 You can also ask BotOps for a custom bot in a DM; it takes the bot through placement and setup as you.
 Assistant, BotOps, Librarian, Strategy Owner, Task Manager, Finance Owner and Brand Owner are Built-in bots; they cannot be archived or deleted.
 
-The 119 role templates, in nine groups with a Leadership extra, are described in
+The 124 role templates, in eleven groups with a Leadership extra, are described in
 [Starter bots](starter-bots.md), with the card fields and the quality bar this page's advice is
 measured against.
 
@@ -221,7 +221,7 @@ A bot is **one durable git repository plus one row in the server**. Three parts:
   slug is renamed (ids, slugs and folders: docs/how-it-works.md).
 - The runner on a registered computer claims the bot's work, does each run inside that checkout with a
   model CLI signed in on that computer, and streams the reply back. Subscriptions never leave the computer.
-- The server holds the record: tasks, threads, approvals, routines, runs and the bot's
+- The server holds the record: tasks and their asks, threads, routines, runs and the bot's
   settings. It is also the clock: it turns a due routine into a task.
 
 | The server owns (change it in **Settings → Bots**) | The repository owns (change it in git) |
@@ -231,7 +231,7 @@ A bot is **one durable git repository plus one row in the server**. Three parts:
 | Record status: `planned`, `active`, `paused`, `quarantined` | `knowledge/`, what is true in the domain |
 | Display name, reporting line, owner and primary human | `memory/`, dated learnings and decisions |
 | The repository link recorded on the bot | `state.md`, where the bot is right now |
-| Tasks, approvals, runs, routines, sending policy and their history | `bot.yaml`: `tools:` |
+| Tasks, asks, runs, routines, sending policy and their history | `bot.yaml`: `tools:` |
 
 A one-off request is a **task**, not an edit. Only change the repository when the change should
 hold next month too.
@@ -325,13 +325,13 @@ Every run is the same shape, and `AGENT.md` should say so plainly:
 4. **Do the work**, updating `knowledge/` as it learns rather than at the end.
 5. **Report in the task thread.** The result goes in the task's completion note, first line
    first. A chart or a mockup can go with the comment as a titled [visual](visuals.md); every bot's instructions already say when to add one ([When a bot adds a visual](visuals.md#when-a-bot-adds-a-visual)), so `AGENT.md` needn't. Put the ask first and stay under 120 words. The lint checks that the first line is not empty; it does not judge its meaning.
-6. **When blocked, ask through the task**, having read the record first, since most questions a bot
-   wants to ask are already answered there. One open question per topic (`--topic`), phrased so the
-   question is the only thing the human has to read. Internal routing, reminders, task closure,
-   branches and draft pull requests are the bot's work, not questions for a human. An optional approval
-   request can clarify an uncertain action; granted Tools and the outbound send switch govern access.
-7. **Commit, then mark the task done with a result note.** The requester closes it; the bot never
-   closes a task it did not request.
+6. **When it needs a person, ask on the task** (`hub task ask`), having read the record first, since most
+   questions a bot wants to ask are already answered there. One sentence, readable on its own: it is the only thing
+   the person has to read. A bot has one open ask per task; asking again replaces it. Internal routing, task closure,
+   branches and draft pull requests are the bot's work, not questions for a person. An OK (`--kind ok`) can clarify
+   an uncertain action; granted Tools and the outbound send switch govern access.
+7. **Commit, then mark the stage's work done with a result note** (`hub task done <id> -m "..."`). A bot never
+   closes a task a person asked for: it asks that person.
 
 ### Where a line belongs
 
@@ -452,10 +452,10 @@ sideways, and notes it in `memory/learnings.md`. A playbook untouched for months
 that fires daily, is either perfect or unread.
 
 **Say what the bot may do.** A playbook carries out the authorized request with its granted Tools;
-spending, publishing, merging, record changes and deletion have no blanket approval step.
+spending, publishing, merging, record changes and deletion need no blanket OK.
 Sending is set in Tico, never in bot.yaml: a person who manages the bot picks **On their own**, **Ask first** or **Never** (Settings → Bots → <bot> → Email sending, or the company or inbox sending policy). Every email goes through Tico's send queue with an undo window; under Ask first a person approves it in Tico.
-An approval can still be requested for an uncertain action, with the exact action attached;
-it is optional, decided by a human and used once. See [Permissions](permissions.md).
+A bot can still ask a person to OK an uncertain action, with the exact action shown;
+it is optional, given by a person and used once. See [Permissions](permissions.md).
 
 ## 5. Routines
 
@@ -663,9 +663,9 @@ Levers set in **Settings → Bots**, not in the repository:
   A Doer holds nonblocking news (a request it asked for finished, a person's review comments) and
   sends it as one wake at most every 15 minutes, and runs an enabled routine at most every 15 minutes; a
   Lead hears the same news once a day, at the hour in **Digest at**. A bot that was on **Token saver** is a Doer with a 30-minute
-  window (2 hours between sweeps); **Performance** became the plain Doer. In every profile, a person's message, a question,
-  an approval and a gate verdict wake the bot at once, and only once when the same event repeats before its run is over.
-  Bots with sweeps on get their quiet tasks in one task roundup per run (three times a day by default, 6am, noon and 6pm company time), not one wake each.
+  window (2 hours between sweeps); **Performance** became the plain Doer. In every profile, a task that is the bot's turn, a person's message,
+  an ask, an answer and an OK asked or given wake the bot at once, and only once when the same event repeats before its
+  run is over.
   **Custom** adds **Pulls**, **Takes** and **Sweeps**, and copies the profile's rows into the bot's **What wakes**
   automation to edit; choosing a named profile again deletes them after a confirm that
   says how many. A profile turns on no routine, hook, subscription or permission, and leaves
@@ -826,7 +826,7 @@ See [Tags and release checklists](using-tico.md#tags-and-release-checklists).
 
 ## Task pipelines
 
-A bot can keep using task statuses with any task type. Tico maps each status change to the type's
-matching step, or shows the plain status when no step matches. `hub task types` lists definitions;
-`hub task update <id> --step "Legal review"` chooses a named step explicitly. Types are optional,
-managed by movers in Settings → Tasks. See [Task types and steps](tasks.md).
+Every task sits in a pipeline, at one stage. In this release there is one pipeline, General, with one stage, To do: a
+bot's `hub task done` finishes it. A bot works a task with `hub task done`, `move`, `ask`, `file`, `snooze` and `close`,
+each with the version `hub task show` printed. See [Tasks](tasks.md#pipelines-and-stages) and
+[CLI and MCP](tasks.md#cli-and-mcp).

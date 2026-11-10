@@ -33,7 +33,7 @@ Three activities make one loop:
 |---|---|---|
 | Craft the strategy | the owner, with the Strategy Bot proposing | the Strategy page: summary, bets, sections |
 | Craft the market | the Librarian | the market graph and pages under the Market tab |
-| Keep it honest | the Strategy Bot | a Decide card when a bet's wrong-if trips |
+| Keep it honest | the Strategy Bot | a task to decide when a bet's wrong-if trips |
 
 Results close the loop: a goal links to a bet, and the bet's health is the colour of its KPI-backed goals and nothing
 else. A goal opens to the reason it exists: "bet 2, which cites this market entity and is wrong if churn passes 4%".
@@ -269,7 +269,7 @@ from it. Then:
   ([Agent context](agent-context.md)). There is no note to each bot.
 - **A `strategy.published` routine event**, subject `v{n}`, for a routine that should run at once
   ([Routines](routines.md)).
-- **One realignment card** in the owner's Needs you, when a bet was retired or its statement changed: it lists the
+- **One realignment task** in the owner's Needs you, when a bet was retired or its statement changed: it lists the
   goals tied to those bets, with **retire goal**, **move to bet N** or **keep** for each. Bot instructions that still
   say the old positioning are the owner's to fix for now.
 
@@ -280,9 +280,9 @@ change to a cited market entity or page (from market events), or a sentence bet'
 trips, once per bet per version, it files a task for the Strategy Bot, "Bet N: may be wrong", with the evidence.
 
 The Strategy Bot's `bet-tripped.md` playbook reads the bet, the evidence, the readings or `hub market show <id>`, and the
-goals linked to the bet, and writes **one Decide card** for the owner: a `strategy_draft` proposal that retires the
-bet, rewrites it, or keeps it with a new wrong-if, with its pick and why in a few lines. It never edits goals. This
-runs at every level: at Passive the server still files the task, and the Strategy Bot only writes the card.
+goals linked to the bet, and writes **one proposal** for the owner to decide: a `strategy_draft` that retires the bet,
+rewrites it, or keeps it with a new wrong-if, with its pick and why in a few lines. It never edits goals. This
+runs at every level: at Passive the server still files the task, and the Strategy Bot only writes the proposal.
 
 The Librarian's [weekly briefing](market-briefing.md) feeds the same check from the other side: when it touches an active
 bet, the Strategy Bot weighs that bet and, only when it is no longer right, files one proposal marked as from the briefing. The
