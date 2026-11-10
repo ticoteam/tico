@@ -173,7 +173,7 @@ DEFAULT_DB = ROOT / "runtime" / "hub.db"
 
 
 def task_news(sender_id, refs):
-    """A keeper message about a task: started, finished, a still-wanted question. It is the task's own history,
+    """A keeper message about a task: started, finished. It is the task's own history,
     shown on the task, and it never reaches a person (no delivery, so no unread, Inbox row, digest or push): people are
     not chatted about their own tasks. Bots still get it, as before."""
     return sender_id == KEEPER and isinstance(refs, dict) and bool(refs.get("task"))
@@ -238,11 +238,11 @@ STUCK_HOURS = 24  # an open bot task untouched this long is stuck
 BOT_STATES = SV.BOT_STATES
 STATUS_STATES = SV.BOT_STATUS_STATES
 MESSAGE_KINDS = ("say", "notice", "steer")
-# Kinds old rows may still have, read as history only: nothing writes an ask or an answer since step 6c (a question
-# to a person is a question task, `hub task question`; to a bot, a DM flagged needs-action).
+# Kinds old rows may still have, read as history only: nothing writes an ask or an answer in a message (a question
+# to a person is an ask on a task, `hub task ask`; to a bot, a DM flagged needs-action).
 OLD_MESSAGE_KINDS = ("ask", "answer")
 ASK_GONE = (
-    "asks are gone: ask a person with hub task question \"<question>\" --on <person> [--parent <task>]; "
+    "asks are gone: ask a person on a task with hub task ask <task> --to <person> \"<question>\" --version N; "
     "ask a bot with hub message send <bot> \"<question>\" --needs-action"
 )
 CONVERSATION_KINDS = ("chat", "ask", "task", "notice")
@@ -1227,15 +1227,9 @@ def sourced_text(text, sources=(), refs=None):
 
 
 def answer_question(conn, target):
-    """The stored question behind any kind of structured answer target: a comment ask, a file version's, or a
-    question task (backend/question_tasks.py) read as an ask."""
+    """The stored question behind a structured answer target: a comment ask, or a file version's."""
     if target.get("comment"):
         return message(conn, target["comment"])
-    if target.get("task"):
-        from . import question_tasks
-
-        row = task(conn, target["task"])
-        return question_tasks.as_ask(row) if question_tasks.is_question(row) else None
     row = conn.execute(
         "SELECT ask_message_id FROM task_file_reviews WHERE file_id=? AND version=?",
         (target.get("file"), target.get("version")),
@@ -3751,13 +3745,6 @@ def assistant_turn_person(who):
     return getattr(who, "via", "") == "assistant" and who.role in ("owner", "human")
 
 
-def own_question_for_assistant(who, row):
-    """A question task the person owns, read on their own Assistant's turn. The turn's bot is no party to a private
-    task, so its private boundary keeps every other private task from the turn (test_assistant). The person's own
-    question is theirs to read and answer, and the Assistant speaks for them: this is the only carve-out."""
-    return bool(row and assistant_turn_person(who) and row.get("owner_id") == who.actor and row.get("questions"))
-
-
 # ----------------------------------------------------------------------------- a private task's readers
 # Who can see a private task: its requester and owner, and its reader list (`tasks.readers`, a JSON list of people,
 # bots and `group:<id>`s). A group reader names everyone in it and in the groups under it, decided at each check, so
@@ -3899,7 +3886,7 @@ MAX_TASK_READERS = 50
 
 # A private task with no person on it (a bot's task for another bot, or for itself) would have no way to reach anyone:
 # every hand-off from its runs is refused because nobody it could go to reads it. Its owning bot may bring in ONE
-# person by handing them work: a subtask under it, a question on it, or waiting on them. That person becomes a reader
+# person by handing them work: a subtask under it, or an ask on it. That person becomes a reader
 # of that task and nothing else: not its parent, its other subtasks, or anything the run also carries. Once a person
 # reads it, a hand-off to anyone else is refused: a person on the task widens it (Who can see), not the bot.
 
@@ -3916,7 +3903,7 @@ def bot_only(row):
 
 def task_reach_refusal(conn, actor, row, person):
     """Why `actor` may not make `person` a reader of private task `row`, or None when it may (or they already read
-    it). The words are the refusal a create, a question or a wait gives, and a dry-run gives the same."""
+    it). The words are the refusal a create or an ask gives, and a dry-run gives the same."""
     if not row or not task_private(conn, row) or task_private_readable(conn, person, row):
         return None
     row = task(conn, row["id"]) or row
@@ -3951,7 +3938,7 @@ def task_reach_refusal(conn, actor, row, person):
 
 def subtask_flows_up(conn, row, parent):
     """Whether private subtask `row`'s words may reach readers of `parent`, its private parent, who cannot read the
-    subtask: every party and reader of the subtask reads the parent. The person a bot handed a subtask or a question
+    subtask: every party and reader of the subtask reads the parent. The person a bot handed a subtask or an ask
     under its task reads that task, so their answer comes back to the task it was asked for, and to nobody that task
     does not already have."""
     if not row or not parent or not task_private(conn, parent) or TR.parent_of(conn, row["id"]) != parent["id"]:
@@ -4266,16 +4253,6 @@ def steps_only(conn, row):
     (`_task_state`), else an empty list."""
     typ = type_get(conn, row.get("type_id") or GENERAL_TYPE) or {}
     return [s["name"] for s in typ["steps"]] if typ.get("steps_only") else []
-
-
-def ask_clock(message):
-    """When this ask was last put to the person: when it was written, or when the bot last asked it again and it was
-    folded in (before step 6a; a question task folds with question_tasks.fold). Its age, its "older" move and its
-    default's days run from here."""
-    refs = (message or {}).get("refs")
-    if not isinstance(refs, dict):
-        refs = _json((message or {}).get("refs"), {}) or {}
-    return refs.get("asked_again_at") or (message or {}).get("created_at")
 
 
 def _number_free(conn, actor, number):
@@ -5414,9 +5391,8 @@ def task_comment(
     their level says). `delegate`: whether a person's comment delegates the task to the bots it wakes (default: `wake`;
     only one who may direct the task does). `reach`: the bot's Identity when this is its own write through the API, so
     whoever the comment reaches is checked against the bot's reach as a thread post is (reach.check_thread). `to`: the
-    bot it is written to besides (a relayed answer, strategy_merge); a reviewer's verdict on a task a bot filed goes to
-    that bot, whose task the result returns to (say, _deliver_subtask_result). A question is a question task, never a
-    comment (step 6c)."""
+    bot it is written to besides (a relayed answer, strategy_merge). A question to a person is an ask on the task
+    (task_ask), never a comment."""
     _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
@@ -5672,14 +5648,6 @@ def review_answers(conn, message_id, *, actor=None):
         refs = _json(row["refs"], {}) or {}
         out.append(refs.get("answer") or {"by": row["sender_id"], "text": row["body"], "at": row["created_at"]})
     return out
-
-
-def open_tasks_asks(conn, task_rows, *, actor=None):
-    """{task id: [its question]} for many tasks: a question task (backend/question_tasks.py) is its own ask, in the
-    card shape (question_tasks.as_ask); any other task has none. No query: the question is on the row."""
-    from . import question_tasks
-
-    return {row["id"]: [question_tasks.as_ask(row)] if question_tasks.is_open(row) else [] for row in task_rows}
 
 
 def comment_on(conn, task_row, message_id):
@@ -6671,9 +6639,6 @@ def task_update(
     return {**after, "warnings": plain} if plain else after
 
 
-BLOCKED_ON = "Blocked on {name}: {ask}"
-
-
 def person_name(conn, person):
     return (human(conn, person) or {}).get("name") or actor_id(person)
 
@@ -6687,117 +6652,6 @@ def actor_name(conn, actor):
         if row:
             return row.get("display_name") or row.get("slug") or key
     return (human(conn, key) or {}).get("name") or key
-
-
-def _ask_title(ask):
-    """A subtask's title from the ask: its first question, else its first sentence."""
-    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", str(ask).strip()) if s.strip()]
-    return next((s for s in sentences if s.endswith("?")), sentences[0] if sentences else str(ask).strip())
-
-
-ASK_CARD = "task.ask_subtask"
-
-
-def ask_card(conn, card):
-    """The person `card` asks for this rule (_ask_in_subtask), or None: a subtask it filed for them, or a bot's own
-    question to them that a task of the bot was blocked on. Marked by an event the bot that asked wrote on the card."""
-    row = _one(
-        conn,
-        "SELECT detail FROM events WHERE actor=? AND action=? AND target=? ORDER BY created_at LIMIT 1",
-        (card["requester_id"], ASK_CARD, card["id"]),
-    )
-    return _json(row["detail"], {}).get("to") if row else None
-
-
-def person_card(conn, row, person):
-    """The open card this rule already put in front of `person` in this task's tree, or None. Only a card it made
-    (ask_card) is joined, never another task the person was given, and never across privacy: a private task's ask
-    stays on its own private card, one per task, and a public task never joins a private one."""
-    for tid in TR.blocker_ids(conn, row["id"]):
-        card = task(conn, tid)
-        if (
-            card
-            and card["status"] in ACTIVE_STATUSES
-            and card["owner_id"] == person
-            and ask_card(conn, card) == person
-            and bool(task_private(conn, card)) == bool(task_private(conn, row))
-        ):
-            return card
-    if task_private(conn, row):
-        return None
-    above = TR.ancestors(conn, row["id"])
-    root = above[-1] if above else row["id"]
-    skip = {row["id"], *above}
-    for tid in TR.descendant_ids(conn, root):
-        card = task(conn, tid)
-        if (
-            tid in skip
-            or not card
-            or card["status"] not in ACTIVE_STATUSES
-            or task_private(conn, card)
-            or card["owner_id"] != person
-            or ask_card(conn, card) != person
-        ):
-            continue
-        return card
-    return None
-
-
-def own_question(conn, actor, row, person):
-    """A question `actor` already put to `person` under this task: a question task of theirs with no topic
-    (question_tasks.open_for). That is the card, so no second one is filed."""
-    from . import question_tasks
-
-    return question_tasks.open_for(conn, actor, person, parent=row["id"], private=task_private(conn, row))
-
-
-QUESTION_FOLDED = "task.question_folded"
-EARLIER_ASKS_KEPT = 10  # earlier wordings a folded question keeps; older ones are still in the task's history
-
-
-def question_topic(value):
-    """A topic key as compared: its letters and digits in any script, case folded, words joined by single hyphens
-    ("Backup model" == "backup-model", "预算" stays "预算"). None only when there is no letter or digit in it."""
-    return "-".join(re.findall(r"[^\W_]+", str(value or "").casefold()))[:80] or None
-
-
-def _withdraw_waits(conn, actor, row):
-    """Close, quietly, the open question tasks with no options that the owner filed under `row` for a person (what
-    `--on <person>` files): the wait is taken back, so nobody is asked and nothing wakes."""
-    from . import question_tasks
-
-    for card in _rows(
-        conn.execute(
-            "SELECT q.* FROM task_relations r JOIN tasks q ON q.id=r.from_task WHERE r.to_task=? AND r.kind='parent' "
-            "AND q.requester_id=? AND q.owner_id LIKE 'human:%' AND q.questions IS NOT NULL AND q.answer IS NULL "
-            f"AND q.status IN ({','.join('?' * len(ACTIVE_STATUSES))}) ORDER BY q.created_at",
-            (row["id"], row["owner_id"], *ACTIVE_STATUSES),
-        )
-    ):
-        if all(not q.get("options") for q in question_tasks.fields(card)["questions"] or []):
-            # Closed as part of the task's own change, which its owner made: no subtask notice or answer wakes it.
-            task_close(
-                conn,
-                actor,
-                card["id"],
-                note="Withdrawn: the task no longer waits on this",
-                quiet=True,
-                with_parent=row["id"],
-                closing_tasks=(row["id"],),
-            )
-
-
-def _waits_on(conn, row, person):
-    """Whether task `row` is waiting on `person`: an open question task of theirs is one of its subtasks or blockers
-    (question_tasks.waiting_on, derived)."""
-    from . import question_tasks
-
-    return bool(
-        person
-        and _one(
-            conn, f"SELECT 1 FROM tasks t WHERE t.id=? AND {question_tasks.waits_sql('t', '=?')}", (row["id"], person)
-        )
-    )
 
 
 def _task_party(conn, actor, row):
@@ -7173,13 +7027,6 @@ OPEN_CHILDREN_SQL = (
     f"SELECT id,owner_id,title FROM tasks WHERE id IN ({TR.CHILD_IDS}) AND status NOT IN ('done','closed','declined') "
     "ORDER BY created_at,id"
 )
-OPEN_PERSON_QUESTIONS_SQL = (
-    f"SELECT id,owner_id,title FROM tasks WHERE id IN ({TR.CHILD_IDS}) "
-    "AND status NOT IN ('done','closed','declined') AND questions IS NOT NULL AND answer IS NULL "
-    "AND owner_id LIKE 'human:%' AND requester_id=? ORDER BY created_at,id"
-)
-
-
 def _mirror_task_note(conn, actor, task_row, note):
     """Copy a task note into the chat room a person's task lives in so people and later turns can read it.
     A bot's task has its own room and reports its milestones to the bot's main chat (task_report) instead."""
@@ -8805,8 +8652,7 @@ def inbox_pages(conn, actor, at=None, size=100):
 
 
 def mark_answered(conn, rows):
-    """Set each message's `answered_at`, kept on the inbox shape: always None, since nothing asks in a message now
-    (step 6c)."""
+    """Set each message's `answered_at`, kept on the inbox shape: always None, since nothing asks in a message now."""
     for row in rows:
         row["answered_at"] = None
     return rows
@@ -9183,55 +9029,6 @@ def task_history(conn, task_id, *, provenance=False):
             (task_id,),
         )
     )
-
-
-ASKED_SQL = (
-    "SELECT wq.id FROM task_relations wr JOIN tasks wq ON wq.id=wr.from_task WHERE wr.to_task=? "
-    "AND wr.kind IN ('parent','blocks') AND wq.questions IS NOT NULL AND wq.answer IS NULL "
-    f"AND wq.status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) ORDER BY wq.created_at, wq.rowid"
-)
-
-
-def prime_asks(conn, rows):
-    """unanswered_ask's question reads for these tasks and their live blockers, one read a 500 tasks (read_cache), so a
-    loop of one-task checks (the stuck and stalled lists, own_stuck_blockers) reads none of them again."""
-    from .read_cache import cache, prime_rows
-
-    rows = [r for r in rows if r]
-    if cache(conn) is None or not rows:
-        return
-    ids = {r["id"] for r in rows}
-    for blocks in TR.live_blockers_many(conn, sorted(ids), ACTIVE_STATUSES).values():
-        ids.update(b["id"] for b in blocks)
-    found = {(tid,): [] for tid in ids}
-    for part in chunks(sorted(ids)):
-        for to_task, card in conn.execute(
-            "SELECT wr.to_task, wq.id FROM task_relations wr JOIN tasks wq ON wq.id=wr.from_task "
-            f"WHERE wr.to_task IN ({','.join('?' * len(part))}) AND wr.kind IN ('parent','blocks') "
-            "AND wq.questions IS NOT NULL AND wq.answer IS NULL "
-            f"AND wq.status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) ORDER BY wq.created_at, wq.rowid",
-            part,
-        ):
-            found[(to_task,)].append((card,))
-    prime_rows(conn, ASKED_SQL, found)
-
-
-def unanswered_ask(conn, task_row, *, actor=None):
-    """The open question this task waits on, in the card shape (question_tasks.as_ask), or None: its own, when it is a
-    question task, else the oldest open question task under it or blocking it (question_tasks.waits_sql) that `actor`
-    may read."""
-    from . import question_tasks
-    from .read_cache import rows as cached_rows
-
-    if not task_row:
-        return None
-    if question_tasks.is_open(task_row):
-        return question_tasks.as_ask(task_row)
-    for found in cached_rows(conn, ASKED_SQL, (task_row["id"],)):
-        card = task(conn, found[0])
-        if card and (actor is None or task_private_readable(conn, actor, card)):
-            return question_tasks.as_ask(card)
-    return None
 
 
 # How long a declined task stays on its requester's Needs you (the UI's taskNeedsViewer in ui/app/tasks.ts holds the same
