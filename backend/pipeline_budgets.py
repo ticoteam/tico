@@ -250,7 +250,7 @@ def decision_closed(c: sqlite3.Connection, actor: str, task_id: str, status: str
         return
     if actor != found["owner_id"]:
         return
-    choice = str(note or "").strip().splitlines()[0].rstrip(".! ").casefold()
+    choice = (str(note or "").strip().splitlines() or [""])[0].rstrip(".! ").casefold()
     if status != "done" or choice != "ask chris to raise" or found["request_task_id"]:
         return
     from . import question_tasks

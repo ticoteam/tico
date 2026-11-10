@@ -1,6 +1,6 @@
 """Per-pipeline spend caps (backend/pipeline_budgets.py)."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -10,7 +10,11 @@ from backend.tests.helpers.api import get, headers
 from backend.tests.helpers.pipeline_settings_j import make_pipeline, settings
 
 COPY = "Enter an amount above zero, or leave it blank."
-AT = datetime(2026, 11, 9, 12, 0, tzinfo=timezone.utc)
+AT = datetime.now(timezone.utc).replace(microsecond=0)
+
+
+def stamp(at):
+    return at.strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def pipeline_task(c, pipeline_id, name="Run"):
@@ -66,16 +70,16 @@ def test_spend_read_is_pipeline_private_and_counts_finished_model_and_priced_ci_
     with api.app.state.store.transaction() as c:
         task = pipeline_task(c, pipeline)
         other_task = pipeline_task(c, other, "Other run")
-        finished_run(c, task["id"], "model-now", 3.25, "2026-11-09T11:00:00")
-        finished_run(c, task["id"], "model-yesterday", 80, "2026-11-08T23:59:59")
-        finished_run(c, other_task["id"], "other-model", 50, "2026-11-09T11:30:00")
+        finished_run(c, task["id"], "model-now", 3.25, stamp(AT))
+        finished_run(c, task["id"], "model-yesterday", 80, stamp(AT - timedelta(days=1)))
+        finished_run(c, other_task["id"], "other-model", 50, stamp(AT))
         c.execute(
             "INSERT INTO ci_runs(kind,status,task_id,cost_cents,seen_at,created_at) VALUES(?,?,?,?,?,?)",
-            ("builder", "recorded", task["id"], 475, "2026-11-09T11:45:00", "2026-11-09T11:45:00"),
+            ("builder", "recorded", task["id"], 475, stamp(AT), stamp(AT)),
         )
         c.execute(
             "INSERT INTO ci_runs(kind,status,task_id,cost_cents,seen_at,created_at) VALUES(?,?,?,?,?,?)",
-            ("builder", "recorded", task["id"], 900, "", "2026-11-09T11:50:00"),
+            ("builder", "recorded", task["id"], 900, "", stamp(AT)),
         )
 
     spend = get(api, f"pipelines/{pipeline}/spend", token="cara-test")
@@ -100,7 +104,7 @@ def test_threshold_notices_and_decisions_are_once_per_cap_and_only_hold_that_pip
     with api.app.state.store.transaction() as c:
         task = pipeline_task(c, pipeline)
         other_task = pipeline_task(c, other)
-        finished_run(c, task["id"], "at-80", 8, "2026-11-09T11:00:00")
+        finished_run(c, task["id"], "at-80", 8, stamp(AT))
         pipeline_budgets.after_run(c, task["id"], AT)
         pipeline_budgets.after_run(c, task["id"], AT)
         notice = c.execute(
@@ -109,7 +113,7 @@ def test_threshold_notices_and_decisions_are_once_per_cap_and_only_hold_that_pip
         ).fetchone()[0]
         assert notice == 1
 
-        finished_run(c, task["id"], "at-100", 2, "2026-11-09T11:30:00")
+        finished_run(c, task["id"], "at-100", 2, stamp(AT))
         pipeline_budgets.after_run(c, task["id"], AT)
         pipeline_budgets.after_run(c, task["id"], AT)
         decisions = decision_tasks(c, "Alerts")
@@ -145,7 +149,7 @@ def test_lowering_cap_holds_at_once_and_ask_chris_keeps_hold_until_owner_raises(
     settings(api, pipeline, {"daily_cap_usd": 20, "manager_id": "ops"})
     with api.app.state.store.transaction() as c:
         task = pipeline_task(c, pipeline)
-        finished_run(c, task["id"], "over-new-cap", 8, "2026-11-09T11:00:00")
+        finished_run(c, task["id"], "over-new-cap", 8, stamp(AT))
 
     settings(api, pipeline, {"daily_cap_usd": 5})
     with api.app.state.store.transaction() as c:
@@ -165,6 +169,28 @@ def test_lowering_cap_holds_at_once_and_ask_chris_keeps_hold_until_owner_raises(
     with api.app.state.store.transaction() as c:
         assert pipeline_budgets.hold_reason(c, task["id"], AT) is None
         assert H.task(c, decisions[0]["id"])["status"] == "done"
+
+
+@pytest.mark.parametrize("status", ("done", "declined"))
+def test_closing_cap_decision_without_note_does_not_create_raise_request(api, status):
+    pipeline = make_pipeline(api, f"No note {status}")
+    settings(api, pipeline, {"daily_cap_usd": 5, "manager_id": "ops"})
+    with api.app.state.store.transaction() as c:
+        task = pipeline_task(c, pipeline)
+        finished_run(c, task["id"], f"at-cap-{status}", 5, stamp(AT))
+        pipeline_budgets.after_run(c, task["id"], AT)
+        decision = decision_tasks(c, f"No note {status}")[0]
+        task_ids_before_close = {row[0] for row in c.execute("SELECT id FROM tasks")}
+
+        H.task_update(c, "bot:ops", decision["id"], status=status)
+
+        alert = c.execute(
+            "SELECT request_task_id FROM pipeline_budget_alerts WHERE pipeline_id=? AND level=100", (pipeline,)
+        ).fetchone()
+        task_ids_after_close = {row[0] for row in c.execute("SELECT id FROM tasks")}
+        assert H.task(c, decision["id"])["status"] == status
+        assert alert["request_task_id"] is None
+        assert task_ids_after_close == task_ids_before_close
 
 
 def test_daily_and_monthly_windows_turn_over_on_utc_boundaries(api):
@@ -197,7 +223,7 @@ def test_no_manager_gets_one_notice_at_the_team_owner_and_ci_pricing_runs_the_th
     settings(api, ci_pipeline, {"daily_cap_usd": 0.1, "manager_id": "ops"})
     with api.app.state.store.transaction() as c:
         fallback_task = pipeline_task(c, fallback, "Fallback run")
-        finished_run(c, fallback_task["id"], "fallback-80", 8, "2026-11-09T11:00:00")
+        finished_run(c, fallback_task["id"], "fallback-80", 8, stamp(AT))
         pipeline_budgets.after_run(c, fallback_task["id"], AT)
         assert (
             c.execute(
@@ -210,20 +236,20 @@ def test_no_manager_gets_one_notice_at_the_team_owner_and_ci_pricing_runs_the_th
         ci_task = pipeline_task(c, ci_pipeline, "CI task")
         c.execute(
             "INSERT INTO ci_runs(kind,status,github_run_id,task_id,created_at) VALUES('ci','recorded','77',?,?)",
-            (ci_task["id"], "2026-11-09T11:00:00"),
+            (ci_task["id"], stamp(AT)),
         )
         ci_runs._record(
             c,
             {"id": 77, "path": ".github/workflows/ci.yml", "event": "push"},
             [
                 {
-                    "started_at": "2026-11-09T11:00:00Z",
-                    "completed_at": "2026-11-09T11:50:00Z",
+                    "started_at": stamp(AT - timedelta(minutes=50)) + "Z",
+                    "completed_at": stamp(AT) + "Z",
                     "labels": ["runs-on=1/runner=4cpu-linux-x64"],
                 }
             ],
             0.0016,
-            "2026-11-09T12:00:00Z",
+            stamp(AT) + "Z",
         )
         assert pipeline_budgets.spend(c, ci_pipeline, "daily", AT) == pytest.approx(0.08)
         assert (
