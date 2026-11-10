@@ -449,7 +449,7 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
             read_cache.prime(conn, one_sql, {(task_id,): found.get(task_id) for task_id in unread})
     rows = [row for row in (E.task(conn, task_id) for task_id in ids) if row]
     R.prime(conn, rows)
-    task_wakes.prime_holds(conn, ids)  # each task's worktree wait, for a bot's turn that may be Paused on it
+    task_wakes.prime_holds(conn, ids)  # each task's worktree wait and held run: a bot's turn may be Paused on it
     # "Can this bot run" for each bot whose turn a task may be: its owner, or its pipeline's manager.
     bots: list[str] = []
     for row in rows:
@@ -460,7 +460,6 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
     unread = [visit_id for visit_id in visits if ("filed_open", visit_id) not in values]
     for visit_id, filed in _filed_open_of(conn, unread).items():
         values.setdefault(("filed_open", visit_id), filed)
-    task_wakes.prime_holds(conn, ids)  # what holds a bot on one task (task_wakes.task_cause)
     return {str(row["id"]): row for row in rows}
 
 
