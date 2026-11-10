@@ -534,16 +534,13 @@ function callMac(): boolean {
   return /Mac/.test(navigator.platform || '') && !(navigator.maxTouchPoints > 1);
 }
 // Starting or joining a Google Meet call on a Mac opens the Tico Recorder on it, to record it into the call. The desktop
-// app opens it itself (no browser prompt); a browser follows the Recorder's link without leaving the page.
+// app opens it itself (`recordCall`, no browser prompt; it answers false when no Recorder is installed); a browser follows
+// the Recorder's link without leaving the page. An app without `recordCall` opens nothing: its `openRecorder` only opens
+// the Recorder on the org.
 function callRecorderOpen(call: CallRecord): void {
   if (call.provider !== 'google_meet' || !call.id) return;
-  if (typeof nativeHas === 'function' && nativeHas('openRecorder')) {
-    void (async () => {
-      try {
-        const has = call.recorder?.installed || await nativeHandler('hasRecorder')?.postMessage(null) === true;
-        if (has) await nativeHandler('openRecorder')?.postMessage({call: call.id});
-      } catch {}
-    })();
+  if (window.ticoNative) {
+    if (nativeHas('recordCall')) try { void Promise.resolve(nativeHandler('recordCall')?.postMessage({call: call.id})).catch(() => {}); } catch {}
     return;
   }
   if (!call.recorder?.installed || !callMac()) return;

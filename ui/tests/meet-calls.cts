@@ -10,7 +10,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
-declare const window: Window & typeof globalThis & {__chirps: number};
+declare const window: Window & typeof globalThis & {__chirps: number; __native: [string, unknown][];
+  ticoNative?: (name: string) => {postMessage(m: unknown): unknown}; ticoNativeFeatures?: string[]};
 
 type Page = import('playwright').Page;
 type Call = Record<string, unknown> & {id: string; thread_id: string; state: string; ring: boolean};
@@ -33,7 +34,8 @@ const meetCall = (id: string, thread: string, connector: string, extra: Record<s
   seen_at: null, started_at: at(30), ended_at: null, duration_s: null, ring: false, card_message_id: 'card-' + id, transcript_message_id: null,
   recorder: {source: null, installed: true}, participants: [{actor: connector, joined_at: at(30), left_at: null, removed_at: null, in_call: 0}], ...extra});
 
-async function open(browser: import('playwright').Browser, {phone = false}: {phone?: boolean} = {}) {
+// `native`: the desktop app's bridge (app/src/bridge.rs), recording what the page asks of it.
+async function open(browser: import('playwright').Browser, {phone = false, native = false}: {phone?: boolean; native?: boolean} = {}) {
   const context = await browser.newContext({viewport: phone ? {width: 390, height: 844} : {width: 1280, height: 800}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
   const page = await context.newPage();
@@ -51,6 +53,11 @@ async function open(browser: import('playwright').Browser, {phone = false}: {pho
     window.AudioContext = class extends Real {
       override createOscillator() { window.__chirps++; return super.createOscillator(); }
     } as typeof AudioContext;
+  });
+  if (native) await context.addInitScript(() => {
+    window.__native = [];
+    window.ticoNativeFeatures = ['openRecorder', 'hasRecorder', 'recordCall'];
+    window.ticoNative = (name: string) => ({postMessage: (m: unknown) => { window.__native.push([name, m]); return true; }});
   });
   // The Meet tab lands on a stand-in for Google's page.
   await context.route('https://meet.google.com/**', route => route.fulfill({contentType: 'text/html', body: '<title>Meet</title>'}));
@@ -296,6 +303,19 @@ let browser: import('playwright').Browser | null = null;
     assert.equal(await page.evaluate(() => RING_SOUND.timer), 0, 'no ring for a link');
     await page.locator('.thv-head .thv-call.on').waitFor();
     await themed(page, 'header-live', true);
+    assert.deepEqual(seen.errors, []);
+    await context.close();
+  }
+  // ---- the desktop app: the Recorder is asked to record the call through its bridge, never by a link
+  {
+    const {context, page, seen} = await open(browser, {native: true});
+    await page.goto('https://tico-ui.test/#/thread/t-plan');
+    const tabOpened = context.waitForEvent('page');
+    await page.locator('.thv-head .thv-call[data-call="start"]').click();
+    await (await tabOpened).waitForURL(u => u.href.startsWith(MEET));
+    await page.waitForFunction(() => window.__native.some(([name]) => name === 'recordCall'));
+    assert.deepEqual(await page.evaluate(() => window.__native.filter(([name]) => name === 'recordCall' || name === 'openRecorder')), [['recordCall', {call: 'c1'}]]);
+    assert.equal(await page.locator('iframe.call-recorder-link').count(), 0);
     assert.deepEqual(seen.errors, []);
     await context.close();
   }
