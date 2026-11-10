@@ -43,13 +43,13 @@ def engineering_bot(c):
     return None
 
 
-def open_items(c, product_type):
-    """{option name: (task id, title)} for the open roadmap items an idea can be covered by. Private tasks stay out:
-    the new task's readers would see the link."""
+def open_items(c, pipeline_id):
+    """{option name: (task id, title)} for the open tasks of the roadmap's pipeline an idea can be covered by. Private
+    tasks stay out: the new task's readers would see the link."""
     rows = c.execute(
-        "SELECT id,title FROM tasks WHERE type_id=? AND private=0 "
-        "AND status NOT IN ('done','closed','declined') ORDER BY updated_at DESC,id LIMIT ?",
-        (product_type, MAX_ITEMS),
+        "SELECT id,title FROM tasks WHERE pipeline_id=? AND private=0 "
+        "AND status='open' ORDER BY updated_at DESC,id LIMIT ?",
+        (pipeline_id, MAX_ITEMS),
     ).fetchall()
     return {f"item-{n}": (row[0], row[1] or "") for n, row in enumerate(rows, 1)}
 
@@ -89,7 +89,7 @@ def _summary(answers, questions):
         return {}
 
 
-def triage(store, primary, product_type, title, summary):
+def triage(store, primary, pipeline_id, title, summary):
     """Where a new idea goes: {"route": "engineering" | "product", "reason", "covered": None | {"task", "title",
     "confidence"}, "engineering_bot" (with route engineering), "kind": (choice, confidence)}. Never raises; anything
     short of a confident answer routes to product, as before."""
@@ -108,7 +108,7 @@ def triage(store, primary, product_type, title, summary):
         if used_today(c, H.KEEPER) >= daily_cap(settings, "bot"):
             return _product("budget")
         engineer = engineering_bot(c)
-        items = open_items(c, product_type) if product_type else {}
+        items = open_items(c, pipeline_id) if pipeline_id else {}
     questions = {"kind": qset["questions"]["kind"]}
     if items:
         questions["covered"] = J.with_options(

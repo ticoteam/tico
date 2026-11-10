@@ -262,13 +262,10 @@ def candidates(conn, task_id, cid):
         if not frontier:
             break
         about |= frontier
-    # Runs that took the task in: one started by or reading such a message, one it was carried to, one whose
-    # moved input had it. Messages reporting on those runs inherit it.
+    # Runs that took the task in: one started by or reading such a message, or one whose moved input had it.
+    # Messages reporting on those runs inherit it.
     runs = _in(conn, "SELECT a.id FROM jobs j JOIN attempts a ON a.job_id=j.id WHERE j.message_id IN (%s)", about)
     runs |= _in(conn, "SELECT attempt_id FROM attempt_inputs WHERE message_id IN (%s)", about)
-    runs.update(
-        r[0] for r in conn.execute("SELECT carried_by FROM tasks WHERE id=? AND carried_by IS NOT NULL", (task_id,))
-    )
     runs.update(
         r[0]
         for r in conn.execute(
