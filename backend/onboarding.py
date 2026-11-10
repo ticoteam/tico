@@ -751,8 +751,9 @@ class Onboarding:
 
         A new company's first completion ends with the finish every setup path shares (company_import.finish_new_company:
         the live seats' bots). With no role picked at all, its chart is the default one
-        (company_import.default_chart), the chart the site's file gives a company that picked nothing. `finish` False
-        leaves both to the caller: a company file's import lays out its own chart after this, then finishes."""
+        (company_import.default_chart), the chart the site's file gives a company that picked nothing. Every completion
+        ends with what a start does to complete a company (complete_company), so nothing waits for a restart. `finish`
+        False leaves all three to the caller: a company file's import lays out its own chart after this, then finishes."""
         from . import company_import
 
         self._owner(who)
@@ -830,6 +831,8 @@ class Onboarding:
         # Setting the team up here is one of the two ways out Health offers for a setup file that wasn't imported.
         company_import.clear_failure(c)
         H.event(c, who.actor, "onboarding.completed", "", {"bots": sorted(plan), "seats": sorted(roles)})
+        if finish:
+            self.complete_company(c)  # what the next start would do, now (a file's import does it when it finishes)
         return self.view(c, who)
 
     def _link_bets(self, c, record, before):
@@ -1145,6 +1148,44 @@ class Onboarding:
         """The same for the built-in Strategy Bot (docs/strategy-bot.md)."""
         return self._turn_on(c, who, GOAL_MANAGER, GOAL_MANAGER, strategy_bot.name(c), "goal_manager.turned_on")
 
+    def complete_company(self, c, failed=None):
+        """What makes a set-up company whole once its bots can run: the built-ins it is missing (`_ensure_builtin`: the
+        Librarian, the Strategy Bot, the Task Manager, Counsel, the Brand Owner, and the Bookkeeper once Finance is set
+        up), the Assistant's routines it never had, General's manager once the Task Manager exists
+        (pipeline_settings.ensure_presets) and BotOps' daily "Sweep stuck tasks" once BotOps is active. Every start
+        runs it (start_jobs), and so do the end of every first run (complete(), a company file's import, the sample
+        company) and a computer's enrollment, so none of it waits for the next start. Each step is idempotent and leaves
+        what a person changed alone.
+
+        Each step runs in its own savepoint. `failed(step, exc)` takes a step's failure and the next step runs; with no
+        `failed` the failure is raised (the caller's transaction then keeps nothing)."""
+        from . import bookkeeper, pipeline_settings
+
+        # In order: a later step reads a bot an earlier one makes (General's manager is the Task Manager).
+        steps = (
+            ("librarian", self.ensure_librarian),
+            ("goal_manager", self.ensure_goal_manager),
+            ("task_manager", self.ensure_task_manager),
+            ("counsel", self.ensure_counsel),
+            ("brand_owner", self.ensure_brand_owner),
+            ("bookkeeper", lambda c: bookkeeper.ensure(c, self, self.auth)),
+            ("builtin_routines", self.ensure_builtin_routines),
+            ("pipelines", pipeline_settings.ensure_presets),
+            ("task_sweep", routines.ensure_task_sweep),
+        )
+        for name, step in steps:
+            c.execute("SAVEPOINT complete_company")
+            try:
+                step(c)
+            except Exception as exc:
+                c.execute("ROLLBACK TO complete_company")
+                c.execute("RELEASE complete_company")
+                if failed is None:
+                    raise
+                failed(name, exc)
+                continue
+            c.execute("RELEASE complete_company")
+
     def ensure_librarian(self, c):
         """A company set up before the Librarian was built in gets it without anyone clicking, once
         it can run: the owner is on the roster, a model is chosen and a computer is enrolled. Called
@@ -1424,14 +1465,7 @@ class Onboarding:
         record = load(c)
         if not record["completed"]:
             return branches
-        self.ensure_librarian(c)  # a company from before it was built in
-        self.ensure_goal_manager(c)
-        self.ensure_task_manager(c)
-        from . import bookkeeper
-
-        bookkeeper.ensure(c, self, self.auth)
-        self.ensure_counsel(c)
-        self.ensure_brand_owner(c)
+        self.complete_company(c)  # the built-ins it can run now, and what they complete
         placed = self._wire(c, record, "human:" + operator, runner_id)
         self._store(c, record, "human:" + operator)
         return branches + placed
