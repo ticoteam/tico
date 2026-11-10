@@ -417,3 +417,29 @@ def test_the_key_check_proves_the_meet_scope_without_changing_what_tico_may_do(m
     answers["meet"] = 404  # a space that cannot exist, answered as missing: the scope and the API both work
     ok, _, _, proven = W._probe(meet.app.state.store, row_, "ana@acme.example")
     assert ok and proven == W.scope_urls()
+
+
+def test_the_declared_meet_call_answers_match_the_live_ones(google, meet):
+    from backend.tests.helpers.openapi_v2 import conforms
+
+    document = meet.get("/api/v2/openapi.json", headers=headers("ana-test")).json()
+    by_id = {op["operationId"]: op for ops in document["paths"].values() for op in ops.values()}
+
+    def send(method, path, operation, body=None, token="ana-test"):
+        response = meet.request(method, path, json=body, headers=headers(token))
+        assert response.status_code == 200, (path, response.text)
+        schema = by_id[operation]["responses"]["200"]["content"]["application/json"]["schema"]
+        assert conforms(response.json(), schema, document) is None, (operation, response.text[:300])
+        return response.json()
+
+    cid = thread(meet)
+    call_id = send("POST", f"/api/v2/threads/{cid}/calls", "startCall", {"title": "Acme standup"})["id"]
+    assert send("GET", f"/api/v2/threads/{cid}/calls", "listCalls")["calls"]
+    send("GET", f"/api/v2/calls/{call_id}", "getCall")
+    send("GET", "/api/v2/calls/ringing", "listRingingCalls", token="ben-test")
+    send("GET", f"/api/v2/threads/{cid}", "getThread", token="ben-test")
+    send("POST", f"/api/v2/calls/{call_id}/join", "joinCall", {}, token="ben-test")
+    send("POST", f"/api/v2/calls/{call_id}/recorder", "claimCallRecorder", {})
+    send("POST", f"/api/v2/calls/{call_id}/presence", "reportCallPresence", {"names": ["Ana Alvarez"]})
+    send("DELETE", f"/api/v2/calls/{call_id}/recorder", "releaseCallRecorder", {})
+    send("POST", f"/api/v2/calls/{call_id}/end", "endCall", {})
