@@ -2640,18 +2640,21 @@ def _claimed_oks_check(c):
 
     try:
         waiting = len(support.claimed(c))
+        refused = support.refused_lately(c)
     except sqlite3.OperationalError:  # an install that never made the tables: nothing was claimed
-        waiting = 0
-    if not waiting:
+        waiting = refused = 0
+    said = []
+    if waiting:
+        said.append(
+            f"{_plural(waiting, 'report')} to Tico support OK'd and not sent yet; Maintenance tries again each run."
+        )
+    if refused:
+        said.append(f"{_plural(refused, 'report')} OK'd this week could not be sent; its task says why.")
+    if not said:
         check = _check("claimed_oks", "OK'd sends", "ok", "Nothing OK'd waits to be sent.")
     else:
-        check = _check(
-            "claimed_oks",
-            "OK'd sends",
-            "warn",
-            f"{_plural(waiting, 'report')} to Tico support OK'd and not sent yet; Maintenance tries again each run.",
-        )
-    check["counts"] = {"claimed_not_delivered": waiting}
+        check = _check("claimed_oks", "OK'd sends", "warn", " ".join(said))
+    check["counts"] = {"claimed_not_delivered": waiting, "claimed_refused": refused}
     return check
 
 

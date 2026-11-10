@@ -385,11 +385,13 @@ def ok_given(c, grant, ctx=None):
 
 
 # Reports a person's click claimed that have no ticket yet and were not given up on (task_asks.not_done): what
-# Maintenance still has to deliver, and the number Health shows.
+# Maintenance still has to deliver, and the number Health shows. A ticket the same report got under the team rule
+# (its key is `approval:` and the report's own key, the subject's id after "support:") is that report's one send.
 CLAIMED_SQL = (
     "SELECT g.requirement_id, g.asked_by_id FROM ok_grants g WHERE g.subject LIKE 'support:%' "
     "AND g.used_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM support_tickets t WHERE t.request_key IN "
-    "('approval:' || g.requirement_id, 'draft:' || g.requirement_id)) AND NOT EXISTS (SELECT 1 FROM events e "
+    "('approval:' || g.requirement_id, 'draft:' || g.requirement_id, 'approval:' || substr(g.subject, 9))) "
+    "AND NOT EXISTS (SELECT 1 FROM events e "
     "WHERE e.action='ok.not_done' AND e.target=g.requirement_id) ORDER BY g.used_at"
 )
 
@@ -397,6 +399,16 @@ CLAIMED_SQL = (
 def claimed(c):
     """[{requirement_id, asked_by_id}] of the reports claimed and not delivered yet (CLAIMED_SQL)."""
     return [dict(r) for r in c.execute(CLAIMED_SQL).fetchall()]
+
+
+def refused_lately(c, days=7):
+    """How many reports a person's click claimed were given up on in the last `days` (task_asks.not_done: the stored
+    report no longer matched its hash, or whoever OK'd it could no longer): the number Health shows."""
+    return c.execute(
+        "SELECT count(DISTINCT g.requirement_id) FROM ok_grants g JOIN events e ON e.target=g.requirement_id "
+        "AND e.action='ok.not_done' WHERE g.subject LIKE 'support:%' AND e.created_at>?",
+        (H.shift(H.now(), days=-days),),
+    ).fetchone()[0]
 
 
 def _key_of(by, payload):
@@ -656,19 +668,25 @@ class Support:
         from . import lifecycle
 
         problems = H.lint_support(payload) if isinstance(payload, dict) else ["a report is an object"]
+        if not problems and not payload.get("content_sha256"):
+            problems = ["a report needs content_sha256: the SHA-256 of the exact message, as hex"]
         if problems or not H.support_text_matches(payload):
             raise Problem("validation", "; ".join(problems) or "The message does not match its hash", 422)
         key = "approval:" + _key_of(who.actor, payload)
         with self.sending:
+            claimed_rid = None
             with self.store.transaction() as c:
                 validate_identity(c, who)
                 lifecycle.refuse_send(c, who, None, what="anything")
                 done = c.execute(
-                    "SELECT * FROM support_tickets WHERE request_key=? ORDER BY created_at LIMIT 1", (key,)
+                    "SELECT * FROM support_tickets WHERE request_key=? OR request_key IN (SELECT p.prefix || "
+                    "g.requirement_id FROM ok_grants g, (SELECT 'approval:' AS prefix UNION ALL SELECT 'draft:') p "
+                    "WHERE g.subject=? AND g.asked_by_id=? AND g.used_at IS NOT NULL) ORDER BY created_at LIMIT 1",
+                    (key, SUBJECT + _key_of(who.actor, payload), who.actor),
                 ).fetchone()
                 if done:
-                    # This very report already went under the team rule: a retry gets its ticket, whatever the rule
-                    # says now, and no person is asked to OK a report HQ already has.
+                    # This very report already went, under the team rule or on a person's OK: a retry gets its ticket,
+                    # whatever the rule says now, and no person is asked to OK a report HQ already has.
                     return {
                         "ticket": view(done),
                         "sent": True,
@@ -686,7 +704,19 @@ class Support:
                         direct = False  # this send is not allowed for its source: a person OKs it
                 if direct and not person:
                     raise Problem("identity", "This install has no person to file a report for yet.", 409)
-                if not direct:
+                # A person already OK'd this very report and their click claimed it, and Maintenance has not delivered
+                # it yet: that OK is the one send, whichever path gets here first.
+                claimed_rid = next(
+                    (
+                        r["requirement_id"]
+                        for r in claimed(c)
+                        if r["asked_by_id"] == who.actor
+                        and (task_asks.grant(c, r["requirement_id"]) or {}).get("subject")
+                        == SUBJECT + _key_of(who.actor, payload)
+                    ),
+                    None,
+                )
+                if not direct and not claimed_rid:
                     asked = ask_report(c, who.actor, payload, task_id=task_id or None)
                     return {
                         **asked,
@@ -695,12 +725,25 @@ class Support:
                         "status": "pending",
                     }
                 # An OK this bot asked for the same report, still waiting, is not needed now it goes under the rule.
-                for (rid,) in c.execute(
-                    "SELECT requirement_id FROM ok_grants WHERE subject=? AND asked_by_id=? AND used_at IS NULL",
-                    (SUBJECT + _key_of(who.actor, payload), who.actor),
-                ).fetchall():
+                for (rid,) in (
+                    ()
+                    if claimed_rid
+                    else c.execute(
+                        "SELECT requirement_id FROM ok_grants WHERE subject=? AND asked_by_id=? AND used_at IS NULL",
+                        (SUBJECT + _key_of(who.actor, payload), who.actor),
+                    ).fetchall()
+                ):
                     if task_asks.standing(c, rid) == task_asks.WAITING:
                         task_asks.withdraw(c, rid, "Sent to Tico support under the team rule")
+            if claimed_rid:
+                sent = self._file_approved(who, claimed_rid)
+                return {
+                    "ticket": sent["ticket"],
+                    "sent": True,
+                    "filed_as": sent["filed_as"],
+                    "status": "sent",
+                    "task_id": task_id or None,
+                }
             ticket = self._send(Identity(H.human_actor(person), "human"), payload, "bot_report", key)
             return {
                 "ticket": ticket,
@@ -737,7 +780,18 @@ class Support:
             raise Problem("forbidden", "A quarantined bot sends nothing until a person clears it.", 403)
         payload = found["content"] or {}
         if H.lint_support(payload) or not H.support_text_matches(payload):
-            raise Problem("approval", "The OK'd message no longer matches its hash; nothing was sent.", 409)
+            words = (
+                "The OK'd report has no content_sha256; nothing was sent."
+                if not payload.get("content_sha256")
+                else "The OK'd message no longer matches its hash; nothing was sent."
+            )
+            if standing == task_asks.USED:
+                # Claimed and never deliverable: refused once, for good. It leaves the queue (not_done), the task of
+                # the person who OK'd it says why, and Health counts it (health._claimed_oks_check).
+                with self.store.transaction() as c:
+                    if not c.execute("SELECT 1 FROM events WHERE action='ok.not_done' AND target=?", (rid,)).fetchone():
+                        task_asks.not_done(c, rid, words)
+            raise Problem("approval", words, 409)
         person = Identity(found["ok_by_id"], "human") if found["ok_by_id"] else None
         # Who asked decides whose ticket it is. A Health Monitor report (health_reports names the OK, whoever asked)
         # is the monitor's; a bot's report a person OK'd is the bot's; a report a person asked for and sent is theirs,
@@ -768,6 +822,16 @@ class Support:
         done = kept()
         if done:
             return {"ticket": view(done), "approval": rid, "filed_as": found["ok_by_id"], "again": True}
+        with self.store.read() as c:
+            # The same report already went under the team rule (`report`, its own key): one report, one send.
+            ruled = c.execute(
+                "SELECT * FROM support_tickets WHERE request_key=? ORDER BY created_at LIMIT 1",
+                ("approval:" + _key_of(found["asked_by_id"], payload),),
+            ).fetchone()
+        if ruled and found["subject"] == SUBJECT + _key_of(found["asked_by_id"], payload):
+            with self.store.transaction() as c:
+                task_asks.settle(c, rid, "Sent the report to Tico support.")
+            return {"ticket": view(ruled), "approval": rid, "filed_as": ruled["actor"], "again": True}
         if found["used_by_id"] != who.actor:
             raise Problem("approval", f"This OK was already used at {found['used_at']}.", 409)
         # Claimed, with no ticket yet: the first send, or a retry after a crash or HQ out of reach, under the same
