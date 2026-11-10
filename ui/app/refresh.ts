@@ -41,9 +41,8 @@ async function refresh(force = false): Promise<void> {
   const reviewing = $('#main .req[open]') || [...document.querySelectorAll('#main .issue-compose:not([hidden])')].some(form => !form.closest('details:not([open])'));
   if (force || !reviewing) {
     if (TASKS_ST && isTasksRoute(S.route)) void (force ? tasksLoad(TASKS_ST) : tasksCatchUp(TASKS_ST));   // a delta from the list's cursor
-    // The Active column beside the chat was loaded once and never again, so a task the bot closed
-    // stayed listed until a reload. The poll redraws it too.
-    if (BOT && BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
+    // A bot's tasks catch up from their cursor too (bot-tasks.ts); a forced refresh reads them whole.
+    if (BOT && BOT.loaded.has('tasks')) void (force ? loadBotTasksV2(BOT.slug) : botTasksCatchUp(BOT.slug));
   }
 }
 
@@ -81,14 +80,8 @@ function liveTasksApply(events: LiveTaskEvent[]): void {
   }
   // The Tasks page puts each event's task in place (tasks-page.ts); it reads nothing.
   if (events.length) tasksLiveApply(events);
-  // These read whole lists, so at most every 15 s and not in a hidden tab (liveThrottle).
-  if (BOT) {
-    const me = 'bot:' + BOT.slug;
-    if (events.some(d => d.bulk || d.gone || d.task?.owner_id === me || d.task?.requester_id === me)) liveThrottle('bot-tasks', () => {
-      if (!BOT || BOT.slug !== me.slice(4)) return;
-      if (BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
-    });
-  }
+  // A bot's page puts each in place too (bot-tasks.ts); it reads nothing.
+  if (BOT) botTasksLive(BOT.slug, events);
   if (typeof PERSON_TASKS !== 'undefined' && PERSON_TASKS) {
     const me = 'human:' + PERSON_TASKS;
     if (events.some(d => d.bulk || d.gone || d.task?.owner_id === me)) liveThrottle('person-tasks', personTasksReload);
