@@ -171,9 +171,6 @@ def test_an_ok_that_was_the_last_thing_the_stage_needed_moves_the_task_and_stays
 
 
 # ----------------------------------------------------------------------------- finding 7: a plain answer is not one
-@pytest.mark.xfail(
-    strict=True, reason="answers.py calls task_asks.refuses_plain_ok on the wakes branch, not merged yet"
-)
 def test_a_plain_ok_answer_never_gives_a_bound_ok_whoever_sends_it(api):
     bot = as_bot(api)
     api.app.state.auth.settings.test_identities["ben-token"] = Identity(

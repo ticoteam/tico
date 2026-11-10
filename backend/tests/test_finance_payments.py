@@ -13,7 +13,6 @@ import pytest
 
 from backend import hubdb as H
 from backend import rules as TR
-from backend import task_asks
 from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance import context as FC
@@ -2663,7 +2662,6 @@ def test_approving_a_finance_action_commits_synced(api, monkeypatch):
         return real(c, *args, **kwargs)
 
     monkeypatch.setattr(FA, "approval_decided", watched)
-    monkeypatch.setitem(task_asks.ON_OK, "finance", "backend.finance.actions:ok_given")  # until task_asks has it
     click(api, asked["approval_id"], key="approve-sync")
     assert seen == [2], seen
 

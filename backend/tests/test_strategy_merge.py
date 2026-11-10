@@ -51,3 +51,14 @@ def test_only_bots_open_questions_to_the_person_merge_and_one_withdrawn_since_is
     H.task_withdraw_ask(c, "bot:support", ask_two, "Decided it myself.")
     assert SM.on_answer(c, ANA, item, "Europe").startswith("Answered; passed to 1 bot(s). 1 could not be")
     assert [o["state"] for o in SM.originals(c, item)] == ["answered", "released"]
+
+
+def test_a_persons_comment_on_the_merged_item_is_only_a_comment(c):
+    """The answer is what passes on (answers.answer calls on_answer); a comment on the Strategy Bot's item is written
+    like any other, and nothing calls the removed on_reply."""
+    one, ask_one = _asked(c, "bot:sales", "Plan the sales launch")
+    two, _ = _asked(c, "bot:support", "Plan the support launch")
+    item = SM.merge(c, SM.STRATEGY_BOT, ANA, "Which region goes first?", "Which region goes first?", [one, two])
+    H.task_comment(c, ANA, item["task"]["id"], "Thinking about it.")
+    found = next(r for r in H.task_view(c, one, ANA)["to_leave"] if r["requirement_id"] == ask_one)
+    assert found["met"] is False

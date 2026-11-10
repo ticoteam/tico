@@ -5023,11 +5023,6 @@ def task_comment(
     if public:
         conn.execute('UPDATE messages SET public=1 WHERE id=?', (msg['id'],))
         msg = message(conn, msg['id'])
-    if is_human(actor) and row["owner_id"] == "bot:goal-manager":
-        from . import strategy_merge
-
-        # a person's answer to the Strategy Bot's merged item goes to each asker
-        strategy_merge.on_reply(conn, actor, row, text, text_sources=refs.get("body_sources", []))
     if is_human(actor):
         from . import ask_ingest
 
