@@ -3625,8 +3625,13 @@ def create_app(settings=None):
 
     @app.post("/api/v2/tasks")
     def create_task(request: Request, body: M.TaskCreate):
-        cap_before_preflight(request, request.state.identity, body.owner, body.parent)
         who = request.state.identity
+        if who.via == "botops" and who.role == "bot" and H.is_bot(who.task_actor) and who.task_actor != who.actor:
+            # BotOps filing for a bot that asked it: a bot's request lends nothing, so BotOps files the task as itself,
+            # with its own rights, and is its requester (who filed it).
+            who = Identity(who.task_actor, "bot", runner_id=who.runner_id, attempt_id=who.attempt_id, agent=who.agent)
+            request.state.identity = who
+        cap_before_preflight(request, who, body.owner, body.parent)
         rc = rule_check(
             who,
             "task_create",
