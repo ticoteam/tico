@@ -31,6 +31,13 @@ def read(api, cid, token="ana-test", **query):
     return r.json()
 
 
+NAMES = ("sender_name", "recipient_name", "source")
+
+
+def stored(message):
+    return {k: v for k, v in message.items() if k not in NAMES}
+
+
 def message_ids(c, cid):
     return [r[0] for r in c.execute("SELECT id FROM messages WHERE conversation_id=? ORDER BY rowid", (cid,))]
 
@@ -129,7 +136,9 @@ def test_a_chat_pages_back_by_limit_and_by_bytes_and_every_message_is_read_once(
         query = {**CHAT_PAGE, **({"before": cursor} if cursor else {})}
         page = read(api, cid, **query)
         pages += 1
-        sizes = [len(json.dumps(m, default=str).encode()) for m in page["messages"]]
+        # The cap counts the stored message (task_privacy.page); the route adds the names the reader may see after
+        # it (sender_name, recipient_name, source: about 100 bytes a message), so those are left out here.
+        sizes = [len(json.dumps(stored(m), default=str).encode()) for m in page["messages"]]
         assert len(page["messages"]) == 1 or sum(sizes) <= CHAT_PAGE["max_bytes"], sizes
         seen = [m["id"] for m in page["messages"]] + seen
         if not page["has_more"]:

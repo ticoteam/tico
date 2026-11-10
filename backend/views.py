@@ -2048,7 +2048,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
     person may read is listed. Each item has `kind` (task, ask, paused, mention), `id`, `line`, `since` and the brief
     `task`; an ask also has the fields of its requirement in `to_leave` (`ask`). `count_only` leaves out the brief
     task and the ask's fields: a count needs neither. `task_view` is the callers' and not read here."""
-    from . import strategy_merge, waiting_on
+    from . import strategy_merge, teammate_access, waiting_on
 
     if not H.is_human(who.actor):
         return []
@@ -2095,6 +2095,8 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
                 **({"merged": merged[it["task_id"]]} if it["task_id"] in merged else {}),
             }
         )
+    # A person the reader may not see is named only to someone in the same conversation (teammate_access.Known).
+    known = teammate_access.Known(c, who, auth) if mentions else None
     for m in mentions:
         if m.get("task_id") and m["task_id"] not in readable:
             continue
@@ -2107,7 +2109,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
                 "conversation_id": m["conversation_id"],
                 "root_id": m["root_id"],  # the thread a rail row stands for: a sub-thread's mention moves its root's
                 "task_id": m.get("task_id"),
-                "from_id": m["sender_id"],
+                "from_id": known.name(m["sender_id"], m["conversation_id"]),
                 "line": _clip(first[0] if first else "", 160),
                 "since": m["created_at"],
                 "task": briefs.get(m.get("task_id")),
