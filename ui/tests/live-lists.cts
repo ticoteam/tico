@@ -22,6 +22,7 @@ declare const LIVE_SOON: Map<string, unknown>;
 declare function liveEmit(topic: string, data: unknown): void;
 declare function refresh(force: boolean): Promise<void>;
 declare function botNeedsChanged(slug: string): void;
+declare const BOT_TASK_FILTERED: Map<string, {tabs: Record<string, {next: string | null}>}>;
 declare const S: {v2: {needs: ({id: string} & Record<string, unknown>)[]; needsCount?: number; needsVersion?: string | null; needsNext?: string | null}};
 declare let v2Get: (path: string) => Promise<unknown>;
 declare function v2NeedsMend(d: unknown): Promise<unknown>;
@@ -142,6 +143,14 @@ const holdNext = (match: Held['match']): Held => {
   await emit('tasks', gone('t1'), event(task('t3', 'Pick the release day', 'spec', {owner_id: 'human:ana', requester_id: 'bot:ops'})));
   await page.waitForFunction(() => !document.querySelector('#t-open')?.textContent?.includes('Draft the release notes')
     && !document.querySelector('#t-c3')?.textContent?.includes('Pick the release day'));
+  // A tab with more pages: a task that joins it and may already be on a later page leaves its count; a new one adds.
+  await page.evaluate(() => { BOT_TASK_FILTERED.get('ops')!.tabs['c3']!.next = 'p2'; });
+  await emit('tasks', event(task('t31', 'Order the launch cake', 'spec', {owner_id: 'bot:pm', requester_id: 'bot:ops'})));
+  await settled();
+  assert.equal((await text('#cnt-c3')).trim(), '1');
+  await emit('tasks', event(task('t32', 'Print the launch flyers', 'spec', {owner_id: 'bot:pm', requester_id: 'bot:ops'}), 'insert'));
+  await page.waitForFunction(() => document.querySelector('#cnt-c3')?.textContent?.trim() === '2');
+  await page.evaluate(() => { BOT_TASK_FILTERED.get('ops')!.tabs['c3']!.next = null; });
   // Needs you changing draws the tab from the list the app holds; nothing is read for it. An ask of the bot's comes: on
   // the tab, its count one more. Answered: off it again.
   const ask = brief(put(task('t30', 'Approve the launch copy', 'spec', {owner_id: 'bot:ops'})));

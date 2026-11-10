@@ -206,7 +206,9 @@ function botTaskFilterLive(slug: string, events: LiveTaskEvent[]): boolean {
         const created = String(t.created_at || ''), byCreated = (x: string) => String((got.tasks.get(x) as {created_at?: string} | undefined)?.created_at || '');
         const before = tab.ids.findIndex(x => byCreated(x) < created);
         if (before >= 0 || !tab.next) { tab.ids.splice(before >= 0 ? before : tab.ids.length, 0, id); got.tasks.set(id, t); }
-        tab.count = Number(tab.count) + 1;
+        // Counted only when it is surely new to the tab: every row is held, it sorts among them, or it was just made. One
+        // that may already be on a later page leaves the count to the next read.
+        if (before >= 0 || !tab.next || (Array.isArray(d.kinds) && d.kinds.includes('insert'))) tab.count = Number(tab.count) + 1;
         moved = true;
       }
     }
