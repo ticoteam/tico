@@ -22,7 +22,7 @@ def fleet(api, attempts=100, trees=50):
             )
             c.execute(
                 "INSERT INTO tasks(id,title,body,requester_id,owner_id,status,conversation_id,created_at,updated_at) "
-                "VALUES(?,?,'Synthetic workload','human:ana','bot:ops','doing',?,?,?)",
+                "VALUES(?,?,'Synthetic workload','human:ana','bot:ops','open',?,?,?)",
                 (tid, tid, cid, now, now),
             )
             if i < attempts:
