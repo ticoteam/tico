@@ -55,7 +55,7 @@ class World:
                 requester, owner = self.rng.choice(READERS), self.rng.choice(READERS + ("bot:ops",))
                 c.execute(
                     "INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
-                    "VALUES(?,?,?,?,'doing',?,'t','t')",
+                    "VALUES(?,?,?,?,'open',?,'t','t')",
                     (tid, tid, requester, owner, self.rng.random() < 0.5),
                 )
                 self.tasks.append(tid)
@@ -135,10 +135,10 @@ class World:
             mid = self.say(c, reply=self.rng.choice(earlier))
         elif kind in ("answer", "input"):
             mid = self.say(c, {kind + "s": self.rng.sample(earlier, min(2, len(earlier)))})
-        elif kind == "carried":
+        elif kind == "carried":  # a run on the task (attempts.task_id) carries its text
             aid = self.run(c, self.say(c))
             mid = self.say(c, report(aid))
-            c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, tid))
+            c.execute("UPDATE attempts SET task_id=? WHERE id=?", (tid, aid))
         elif kind == "moved":
             aid = self.run(c, self.say(c))
             mid = self.say(c, report(aid))
@@ -200,8 +200,8 @@ class World:
             )
         elif what == "late-carry" and self.attempts:
             c.execute(
-                "UPDATE tasks SET carried_by=? WHERE id=?",
-                (self.rng.choice(self.attempts), self.rng.choice(self.tasks)),
+                "UPDATE attempts SET task_id=? WHERE id=?",
+                (self.rng.choice(self.tasks), self.rng.choice(self.attempts)),
             )
         elif what == "late-move" and self.attempts:
             H.event(

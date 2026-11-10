@@ -278,13 +278,15 @@ def test_write_without_read_shows_only_your_own_threads_and_tasks(world):
             "owner": "human:dee",
             "title": "Sign the contract",
             "body": "Sign it.",
-            "relations": [{"task": others_task["id"], "kind": "parent"}],
+            "parent": others_task["id"],
         },
         token=post(api, "bots/counsel/agent-credential", {})["token"],
     )
     assert get(api, "tasks/" + child["id"], "dee-test")["task"]["from_person"] is None
     assert [t["from_person"] for t in get(api, "tasks", "dee-test")["tasks"] if t["id"] == child["id"]] == [None]
-    assert [i["from_person"] for i in get(api, "needs-you", "dee-test")["items"] if i["id"] == child["id"]] == [None]
+    # Needs you carries the brief task, with no person origin: nothing in Dee's item names Cara.
+    needs = [i for i in get(api, "needs-you", "dee-test")["items"] if i.get("task_id") == child["id"]]
+    assert needs and "human:cara" not in str(needs)
     assert get(api, "tasks/" + child["id"], "cara-test")["task"]["from_person"] == "human:cara"
 
 

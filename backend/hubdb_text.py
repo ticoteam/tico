@@ -851,9 +851,9 @@ def lint_plain(text):
 
 def person_ask_of_body(body, title=""):
     """The ask in a task given to a person: the body's first paragraph, after a first line that only repeats the
-    title. The rest of the body is details."""
+    title. The rest of the body is details. A body that is only the title is that ask."""
     lines = str(body or "").strip().splitlines()
-    if lines and str(title or "").strip() and lines[0].strip() == str(title).strip():
+    if len(lines) > 1 and str(title or "").strip() and lines[0].strip() == str(title).strip():
         lines = lines[1:]
     return re.split(r"\n\s*\n", "\n".join(lines).strip(), maxsplit=1)[0].strip()
 

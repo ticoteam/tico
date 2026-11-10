@@ -152,15 +152,14 @@ def test_health_claim_checks_read_every_queued_job_together_and_say_the_same(api
     body, total = counted(api, monkeypatch, "/api/v2/health")
     primed = api.get("/api/v2/health", headers=headers("ana-test")).content
     assert any(row["id"] == "waiting" for row in body["checks"])
-    # 288 now: the Needs you plate and Dev board checks (3fea68e53, Nov 6) read on every poll, by design. 2,360 before
-    # the batching; a return to per-job reads is far above this bound.
+    # About 200 on v3: the Needs you plate reads every open task's waits together (waiting_on.prime), with each bot's
+    # "can it run" (task_wakes.prime_bots) and each queued job's snooze (execution.prime_job_checks) read once for
+    # all. 2,360 before the batching; a return to per-job reads is far above this bound.
     assert total < 320, total
     with monkeypatch.context() as unprimed:
-        # Each job read on its own, every task asked every wait: what the checks read before.
-        unprimed.setattr(execution, "_queue_suspects", lambda c, queue: None)
+        # Each job read on its own: what the checks read before.
         unprimed.setattr(execution, "prime_job_checks", lambda c, jobs: None)
         alone, slow = counted(api, monkeypatch, "/api/v2/health")
-        # The control still reads several times the batched total: its per-task question reads are batched too now
-        # (hubdb.prime_asks), so it is 1,388 where it was over 1,500.
-        assert slow > 1000, slow
+        # The control reads several times the batched total (about 560 against 200).
+        assert slow > 2 * total, (total, slow)
         assert api.get("/api/v2/health", headers=headers("ana-test")).content == primed

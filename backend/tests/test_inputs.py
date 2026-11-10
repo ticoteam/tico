@@ -63,7 +63,7 @@ def test_botops_continuation_keeps_the_requester_and_quiet_progress_stays_on_the
     post(
         api,
         "tasks/" + task["id"],
-        {"version": task["version"], "note": "QA detailed progress", "quiet": True},
+        {"version": task["version"], "note": "QA detailed progress"},
         active["token"],
     )
     with api.app.state.store.read() as c:
