@@ -25,7 +25,6 @@ from . import (
     providers,
     releases,
     replication,
-    roadmaps,
     runner_versions,
     setup_stuck,
     sleep_idle,
@@ -2122,34 +2121,6 @@ def _sealed_secrets(c, settings, github):
 KEY_LOST = " The credential key, which opens every saved credential, is on this server's disk only."
 
 
-def _roadmap_suggestions(c):
-    """A public roadmap whose suggestions reach no bot, or not the bot the owner chose. It reads the one rule that
-    routes suggestions (roadmaps.suggestions_receiver), so this line and the visitor's refusal never disagree, and
-    it clears by itself once a bot is receiving them again. Without an enabled label nobody can suggest anything."""
-    if not roadmaps.settings(c)['labels']:
-        return None
-    receiver = roadmaps.settings_view(c)['suggestions_receiver']
-    fix = [_fix("Open Public roadmap", "#/settings/roadmap")]
-    if not receiver['bot']:
-        return _check(
-            "roadmap_suggestions",
-            "No bot receives roadmap suggestions",
-            "warn",
-            "Visitors who suggest a feature on your public roadmap are being turned away.",
-            fix,
-        )
-    why = {'chosen_archived': "is archived", 'chosen_inactive': "isn't active"}.get(receiver['source'])
-    if why:
-        return _check(
-            "roadmap_suggestions",
-            f"The bot chosen for roadmap suggestions {why}; suggestions now go to {receiver['name']}",
-            "warn",
-            "To clear this, make the chosen bot active again, or choose another bot or Automatic.",
-            fix,
-        )
-    return None
-
-
 def _signin(settings):
     kind = settings.proxy_kind
     if kind:
@@ -3621,8 +3592,6 @@ def view(c, who, settings, auth, github, config):
                 [_fix("Open Computers", "#/settings", "devices")],
             )
         )
-    if full and (suggestions := _roadmap_suggestions(c)):
-        checks.append(suggestions)
     if full:
         checks.append(_github(c, github, settings))
         if repo_create := _github_repo_create(c, github):

@@ -1076,19 +1076,18 @@ def report(c_factory, support, auth, settings, who, key):
     if filed and filed["approval_id"]:
         return {"signature": row["signature"], "approval": filed["approval_id"], "again": True}
     if not allowed:
-        # The owner reads the report first: an OK bound to exactly this message, on a task (backend/task_asks.py).
+        # The owner reads the report first: an OK bound to exactly this message (support.ask_report), on a task.
+        from .support import ask_report
+
+        text = message.strip()
+        payload = {
+            "message": text,
+            "content_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "include_ids": True,
+        }
         now = H.now()
         with store.transaction() as c:
-            asked = task_asks.ask_ok(
-                c,
-                who.actor,
-                owner.actor,
-                "OK sending this Health report to the Tico team",
-                shows=[f"health:{row['signature']}"],
-                subject="support:health:" + row["signature"],
-                content=message,
-                title="Send a Health report to the Tico team",
-            )
+            asked = ask_report(c, who.actor, payload, person=owner.actor)
             approval_id = asked["requirement_id"]
             c.execute(
                 "INSERT INTO health_reports(signature,approval_id,created_at,reported_occurrences,reported_at) "
@@ -1169,14 +1168,14 @@ def file_reports(store, auth, settings, support, signatures):
 
 
 def _send_approved(store, support):
-    """Reports the owner OK'd, sent once as BotOps, who asked (support.file_approved uses the OK: task_asks.use). A failed
+    """Reports the owner OK'd, sent once as whoever asked (support.file_approved uses the OK: task_asks.use). A failed
     or over-cap send stays queued. Its ticket and current occurrence baseline are kept on its health report. Returns
     {signature: answer}."""
     from . import task_asks
 
     with store.read() as c:
         waiting = [
-            {**dict(r), "requested_by_id": "bot:" + BOTOPS}
+            {**dict(r), "requested_by_id": (task_asks.grant(c, r["approval_id"]) or {}).get("asked_by_id")}
             for r in c.execute(
                 "SELECT signature, approval_id FROM health_reports WHERE ticket_id IS NULL AND approval_id IS NOT NULL "
                 "ORDER BY created_at"

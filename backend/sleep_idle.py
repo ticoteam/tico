@@ -187,10 +187,6 @@ def routine_times(c, at):
     if table(c, "maintenance_runs") and (due := maintenance.next_due(c, when)) is not None:
         out.append(due.timestamp())
     out.extend(later_sends(c, at))
-    if table(c, "alert_preferences"):
-        from . import personal_alerts
-
-        out.extend(personal_alerts.future_deadlines(c, at))
     # A deferred item's deadline wakes its bot like a schedule (backend/delivery.py); one past is due now.
     from . import delivery
 
