@@ -1237,6 +1237,9 @@ def publish(c, who, edition_id, approval_id=None):
             "The edition, its disclosure or its rules changed after this was approved: ask for approval again",
             409,
         )
+    if not task_asks.passes(c, row["approval_id"], _subject(edition_id), payload, found["asked_by_id"]):
+        # Not OK'd yet, sent back, taken back, or its giver may not OK it any more: the page's own word for it.
+        raise Problem("approval", "This edition has no OK to publish on: ask for approval again", 409)
     task_asks.use(c, row["approval_id"], _subject(edition_id), payload, found["asked_by_id"])
     task_asks.settle(c, row["approval_id"], "Published the edition.")
     at = H.now()
