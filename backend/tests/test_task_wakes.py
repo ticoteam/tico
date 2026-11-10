@@ -167,3 +167,14 @@ def test_a_run_counts_for_the_task_it_names_and_by_its_conversation_only_when_on
     assert (runs(first), runs(second)) == (0, 1)
     E.move(c, second["id"], E.CLOSED, ANA, "Not needed")
     assert runs(E.task(c, first["id"])) == 1  # now the conversation is one open task's
+
+
+def test_a_private_task_with_no_owner_wakes_its_pipelines_manager_bot_who_then_reads_it(c, general):
+    stages = ({"name": "Triage", "requirements": [{"kind": "owner_done"}]},)  # nobody owns a task in this stage
+    X.pipeline(c, "ops", "Ops", stages, manager=MANAGER)
+    made = H.task_create(c, ANA, "Sort the March invoices", "Who takes it?", ANA, pipeline="ops", private=True, lint=False)
+    row = c.execute("SELECT owner_id, private, readers FROM tasks WHERE id=?", (made["id"],)).fetchone()
+    assert row[0] is None and row[1]
+    assert _queued(c, made["id"]) == [MANAGER]  # told to pick an owner, not skipped because it could not read it
+    assert H.task_readers({"readers": row[2]}) == [MANAGER]  # it reads the task now, as a task event says
+    assert not H.task_private_readable(c, BUILDER, H.task(c, made["id"]))  # nobody else is brought in
