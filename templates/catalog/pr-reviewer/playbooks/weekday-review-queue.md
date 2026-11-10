@@ -24,7 +24,8 @@ has not changed since you last read it.
 
     gh pr list -R <repo> --state open --json number,title,author,createdAt,additions,deletions,reviewDecision,isDraft,statusCheckRollup
 
-Leave out drafts and pull requests that are not against a branch in scope. For each, record the age in working
+Leave out drafts, pull requests that are not against a branch in scope, and pull requests on an Engineering
+task (`tico task list --q "<title words>"` finds one): those get their review in the pipeline. For each, record the age in working
 days, changed lines, files touched (`gh pr view <n> -R <repo> --json files`), review state and whether checks pass.
 
 ## 3. Order the queue

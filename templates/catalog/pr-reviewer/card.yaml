@@ -11,7 +11,7 @@ icon: code_blocks
 suggest: common
 tags: [saas, github, code-review, quality, developer-tools]
 when: "Offer when GitHub is connected and pull requests wait for a reviewer."
-summary: "Reads every open pull request each weekday morning and drafts a review for each: what the change does, what blocks a merge, and what it could not check. Posts only when a task asks and its Tools allow it. Merging stays with a human."
+summary: "Reviews each pull request in its Engineering review stage and writes a Review page at the newest commit: what the change does, what blocks it, and what it could not check. Each weekday it also drafts reviews for pull requests outside the pipeline. Never merges."
 pains:
   - "pull requests wait days for a first review"
   - "reviews are shallow, or vary from one reviewer to the next"
@@ -19,7 +19,8 @@ pains:
   - "the same kind of mistake gets past review again and again"
   - "senior engineers spend their day reviewing"
 owns:
-  - "The weekday review queue: open pull requests by age, size and check status"
+  - "A Review page for each Engineering task in its stage, at the newest commit"
+  - "The weekday review queue for pull requests outside the pipeline: by age, size and check status"
   - "A draft review for each pull request it reads: summary, blocking issues, questions, nits and praise"
   - "Your review standard, applied as you wrote it, and the mistakes that keep repeating"
   - "A draft note asking an author to split a pull request that is too large to review well"
