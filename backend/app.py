@@ -3587,11 +3587,9 @@ def create_app(settings=None):
         # The parent it was filed under is a relation written here too, and reads back first.
         filed_under = TR.parent_of(c, row["id"])
         readback = TR.readback(c, row["id"], filed_under, "parent") if filed_under else []
-        own_subtask = []
         for other, kind in others:
             changed = TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
             readback += TR.readback(c, row["id"], other, kind, changed=changed)
-            own_subtask.append(TR.own_subtask_warning(c, row["id"], other, kind))
         if body.readers:
             # Who else sees it, before a meeting's audience is checked against everyone who will.
             H.set_task_readers(
@@ -3625,7 +3623,6 @@ def create_app(settings=None):
                 None,
                 (
                     usage_limits.warning(c, owner) or bot_stops.warning(c, owner) or H.setup_hold(c, owner),
-                    *own_subtask,
                 ),
             )
         )

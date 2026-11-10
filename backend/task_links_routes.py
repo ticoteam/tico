@@ -106,11 +106,9 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
                 c, who.actor, task_id, other_id, body.kind, remove=body.remove, mover=mover(c, who) or None
             )
             # The stored direction in words, from both ends (Dev 256): a reversed write shows in the reply.
-            note = None if body.remove else TR.own_subtask_warning(c, task_id, other_id, body.kind)
             return {
                 "readback": TR.readback(c, task_id, other_id, body.kind, remove=body.remove, changed=changed),
                 "task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who),
-                **({"warning": note} if note else {}),
             }
 
         return mutate(request, body, work)
