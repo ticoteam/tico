@@ -236,6 +236,28 @@ def test_a_bot_that_cannot_run_is_not_woken_and_its_tasks_show_one_row_for_the_c
     assert _ladder(c, first) == ("owner", 1)
 
 
+def test_a_run_held_for_a_check_pauses_its_task_and_says_so_to_the_bots_owner(c, general, later):
+    """A run whose lease lapsed after it may have acted (a tool call or a write, even before it started) is held for a
+    check (execution.auto_reconcile, `job.held`), and the bot claims nothing more on that task until someone resumes or
+    dismisses it (execution.unfenced_sql). The task said it was still the bot's turn, Needs you was empty and the
+    never-stuck pass kept writing wakes the bot could not take: a silent hold for up to 4 hours. Now it is Paused with
+    the cause, on the bot's owner's Needs you when no BotOps reviews it, and carries on once the run is settled."""
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    X.ran(c, task_id, BUILDER, state="expired")  # its job is uncertain
+    attempt, job = c.execute("SELECT id, job_id FROM attempts WHERE task_id=?", (task_id,)).fetchone()
+    H.event(c, H.KEEPER, "job.held", attempt, {"job_id": job, "tools": ["Bash"]})
+    line = "builder has a run held for a check"
+    assert [(w.state, w.line) for w in W.waiting_on(c, task_id)] == [("paused", line)]
+    assert later(hours=2) == {} and _queued(c, task_id) == []  # nobody is woken meanwhile
+    paused = [n for n in W.needs(c, ANA) if n["kind"] == "paused"]
+    assert [(n["line"], n["bots"], n["tasks"]) for n in paused] == [(line, [BUILDER], [task_id])]
+    X.bot(c, "botops")  # BotOps reviews held runs (its review task): no person row then
+    assert [n for n in W.needs(c, ANA) if n["kind"] == "paused"] == []
+    c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job,))  # dismissed (POST jobs/{id}/reconcile)
+    assert _states(c, task_id) == [("bot", BUILDER)]
+    assert later(seconds=10) == {"woken": 1}
+
+
 def test_with_no_manager_bot_that_can_run_the_task_goes_straight_to_a_person(c, general, later):
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     c.execute("UPDATE visits SET tries=3, next_try_at=? WHERE task_id=?", (H.now(), task_id))

@@ -274,15 +274,23 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
 # wakes the task once the worktree is ready (backend/worktree_waits.py), so until then it is Paused, not the bot's turn.
 WORKTREE_WAITING = "is waiting for a free worktree"
 WORKTREE_RESERVED = "is waiting for its worktree to be set up"
+# Or a run of it on the task stopped after it may have acted, and Tico holds the task's work until someone checks it
+# (execution.auto_reconcile records `job.held`; `POST jobs/{id}/reconcile` resumes or dismisses it). Until then the bot
+# claims nothing more on the task (execution.unfenced_sql), so it is Paused, not the bot's turn: never a silent hold.
+RUN_HELD = "has a run held for a check"
 
 
 def task_cause(
     conn: "sqlite3.Connection", task_id: str, actor: str | None, waits: dict[str, str] | None = None
 ) -> str | None:
-    """Why this bot cannot run on this task though it can run: an open worktree wait of this task's, or None. `waits`
-    is `worktree_holds` read once for a pass over many tasks."""
-    if not _h().is_bot(actor):
+    """Why this bot cannot run on this task though it can run: a run of it on the task held for a check, an open
+    worktree wait of this task's, or None. `waits` is `worktree_holds` read once for a pass over many tasks."""
+    H = _h()
+    if not H.is_bot(actor):
         return None
+    held = _read(conn, _held_runs_sql(), (task_id,))
+    if held and held[0] and str(H.actor_id(actor)) in str(held[0]).split(","):
+        return RUN_HELD
     if waits is None:
         from . import worktree_waits
 
@@ -291,6 +299,19 @@ def task_cause(
     else:
         state = waits.get(task_id)
     return None if state is None else WORKTREE_RESERVED if state == "reserved" else WORKTREE_WAITING
+
+
+def _held_runs_sql(many: bool = False) -> str:
+    """The bots (slugs, comma-joined) with a run held for a check on one task (`RUN_HELD`): a job still uncertain whose
+    attempt auto_reconcile held. With `many`, (task, bots) for every task that has one. Few rows: jobs_uncertain holds
+    only those."""
+    task = str(_h().MESSAGE_TASK_SQL).replace("cv.", "uc.")
+    return (
+        f"SELECT {task + ', ' if many else ''}group_concat(DISTINCT u.bot_id) FROM jobs u "
+        "JOIN messages m ON m.id = u.message_id JOIN conversations uc ON uc.id = m.conversation_id "
+        "WHERE u.state = 'uncertain' AND EXISTS (SELECT 1 FROM events e WHERE e.action = 'job.held' AND "
+        f"e.target = u.attempt_id) {'GROUP BY 1' if many else f'AND {task} = ?'}"
+    )
 
 
 # One task's open worktree wait ("waiting" before "reserved"), as `worktree_holds` reads them for many.
@@ -420,12 +441,16 @@ def _runs_of(k: str) -> str:
         extra = alone if n == 2 else ""
         found = f"SELECT {k}.t, x.rowid FROM {k} CROSS JOIN messages y ON {way} CROSS JOIN "
         out.append(f"{found}attempts x ON x.message_id = y.id{extra}")
-        out.append(f"{found}jobs z ON z.message_id = y.id CROSS JOIN attempts x ON x.job_id = z.id AND +x.message_id IS NULL{extra}")
+        out.append(
+            f"{found}jobs z ON z.message_id = y.id CROSS JOIN attempts x ON x.job_id = z.id AND +x.message_id IS NULL{extra}"
+        )
     return " UNION ".join(out)
 
 
 # A run (`a`) is on the task: bound by `_on_task`'s six values.
-_ON_TASK = f"a.rowid IN (WITH p(t, lo, hi, t2, alone, conv) AS (SELECT ?, ?, ?, ?, ?, ?) SELECT rid FROM ({_runs_of('p')}))"
+_ON_TASK = (
+    f"a.rowid IN (WITH p(t, lo, hi, t2, alone, conv) AS (SELECT ?, ?, ?, ?, ?, ?) SELECT rid FROM ({_runs_of('p')}))"
+)
 # How many other open tasks share a task's conversation (`_on_task`).
 _SHARING = "SELECT COUNT(*) FROM tasks WHERE conversation_id=? AND status='open' AND id<>?"
 
@@ -917,7 +942,11 @@ def prime_holds(conn: "sqlite3.Connection", task_ids: list[str]) -> None:
     from . import read_cache, worktree_waits
 
     RC: Any = read_cache
-    if not task_ids or RC.cache(conn) is None or not cast("Any", worktree_waits)._exists(conn):
+    if not task_ids or RC.cache(conn) is None:
+        return
+    held = dict(conn.execute(_held_runs_sql(many=True)).fetchall())
+    RC.prime(conn, _held_runs_sql(), {(t,): (held.get(t),) for t in task_ids})
+    if not cast("Any", worktree_waits)._exists(conn):
         return
     holds = worktree_holds(conn, task_ids)
     RC.prime(conn, _TASK_WAIT, {(t,): (holds.get(t),) for t in task_ids})
