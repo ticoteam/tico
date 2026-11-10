@@ -20,7 +20,7 @@ Done when: the profile is paired and its bot reports a heartbeat, and the human 
   preference), `daily`, or `off` if they will prompt it themselves. It is the profile's own schedule: Tico never starts
   it, and a faster schedule means faster answers and more model use. They give it to the connection script as `--sync <interval>`.
 - **The code.** On that computer they run, in a terminal, the two commands you give them, the second one after the first
-  has downloaded the connection script (use the Tico address from `hub api GET agent-skill`, its `mcp_url` without the path):
+  has downloaded the connection script (use the Tico address from `tico api GET agent-skill`, its `mcp_url` without the path):
 
       curl -fsSL https://<Tico address>/api/v2/agents/setup-script -o hermes_agent.py
       python3 hermes_agent.py pair --profile <name> --url https://<Tico address> --sync <interval>
@@ -30,21 +30,21 @@ Done when: the profile is paired and its bot reports a heartbeat, and the human 
 
 ## 2. Register the bot if it is new
 
-Skip this when the bot exists (`hub api GET bots`). Otherwise do not ask: name it after the profile, describe it from what
+Skip this when the bot exists (`tico api GET bots`). Otherwise do not ask: name it after the profile, describe it from what
 they said, and have it report to them (AGENT.md, Defaults, not questions), then:
 
-    hub bot create --record-only --model hermes --name "<Name>" --description "<what it does>" --reports-to <bot or human:id>
+    tico bot create --record-only --model hermes --name "<Name>" --description "<what it does>" --reports-to <bot or human:id>
 
 `--model hermes` (`--model openclaw` for an OpenClaw profile) is what makes it an external bot: it gets a credential, not a computer. Approving its pairing activates a planned bot automatically.
 
 ## 3. Pair the profile
 
-    hub agent pair show <code>
+    tico agent pair show <code>
 
 Read the profile, host and harness before replacing the bot's credential. Match them to the human's request;
-if they do not match, decline the code with `hub agent pair decline <code>` and explain why. When they match:
+if they do not match, decline the code with `tico agent pair decline <code>` and explain why. When they match:
 
-    hub agent pair approve <code> --bot <slug>
+    tico agent pair approve <code> --bot <slug>
 
 Say "Paired profile <name> on <host>; waiting for its heartbeat." Approving replaces the credential and activates a
 planned bot. The connection Tool can retrieve the credential again if its download is interrupted, until its first heartbeat.
@@ -55,10 +55,10 @@ Only the bot's owner or an admin may approve; say who can if their rights refuse
 
 The connection script installs itself when the code is approved and posts a heartbeat every minute. Within two minutes:
 
-    hub api GET bots/<slug>
+    tico api GET bots/<slug>
 
 `agent.last_seen_at` is recent and `online` is true. Then send one small message and tell the human to expect the answer
-on the profile's own schedule, not at once: `hub message send <slug> "Hello from <human>: reply with one line so we know you read this."`
+on the profile's own schedule, not at once: `tico message send <slug> "Hello from <human>: reply with one line so we know you read this."`
 In Tico the message waits until the agent reads it. Say what you saw in one line: connected, last heard from a minute ago.
 If it is not online after five minutes, use the troubleshooting below.
 
@@ -75,22 +75,22 @@ To change the interval later they run, on that computer, `python3 ~/.config/tico
 
 ## Troubleshooting: a Hermes bot that is not reporting in
 
-Start with `hub health check` and `hub api GET bots/<slug>`. Then the first row that fits:
+Start with `tico health check` and `tico api GET bots/<slug>`. Then the first row that fits:
 
 | What you see | Cause | You do |
 | --- | --- | --- |
-| The bot is archived (`state: archived`), or Health says its Hermes agent is still reporting in but the bot is archived | Someone archived it; the profile keeps trying | `hub bot restore <slug>` if they want it back (its routines do not come back; say so). If its answer shows `agent.credential: false` the credential was revoked: pair again (steps 1 and 3). Otherwise revoke the credential: `hub api POST bots/<slug>/agent-credential/revoke` |
+| The bot is archived (`state: archived`), or Health says its Hermes agent is still reporting in but the bot is archived | Someone archived it; the profile keeps trying | `tico bot restore <slug>` if they want it back (its routines do not come back; say so). If its answer shows `agent.credential: false` the credential was revoked: pair again (steps 1 and 3). Otherwise revoke the credential: `tico api POST bots/<slug>/agent-credential/revoke` |
 | The profile's heartbeat is refused with 401 ("revoked") | The credential was revoked or replaced | Pair again: steps 1 and 3. A new pairing makes a new credential and replaces the old one |
-| The bot is planned, paused or quarantined | The server refuses its heartbeat (409) | `hub bot go-live <slug> --no-setup` for planned; `hub bot resume <slug>` for paused (unless they paused it on purpose); quarantined only after you read why (`playbooks/health-check.md`) |
+| The bot is planned, paused or quarantined | The server refuses its heartbeat (409) | `tico bot go-live <slug> --no-setup` for planned; `tico bot resume <slug>` for paused (unless they paused it on purpose); quarantined only after you read why (`playbooks/health-check.md`) |
 | Active, credential exists, no recent heartbeat | The timer on their computer is not running, or the computer is off | Ask them to run `python3 ~/.config/tico/agents/hermes_agent.py status --profile <name>` and paste the output; it shows the last reply. `doctor --profile <name>` (same file) says what is wrong. If it shows no timer or an old version, `update --profile <name>` (it fetches the current connection script and reinstalls the timer). If the computer is asleep or off, say so: nothing here can wake it |
-| Nothing works and the credential is lost | The token cannot be shown again | `hub api POST bots/<slug>/agent-credential` replaces it; the new token is not shown to you, so pair again (steps 1 and 3) |
+| Nothing works and the credential is lost | The token cannot be shown again | `tico api POST bots/<slug>/agent-credential` replaces it; the new token is not shown to you, so pair again (steps 1 and 3) |
 
 Rotating or revoking is yours to do as them, with no card. Archive a Hermes bot directly when requested; say
 the profile will stop, and keep the default that revokes its credential.
 
 ## Close
 
-Close any task you filed about this bot once its heartbeat is recent (`hub task close <id> --note "Connected: last heard from a minute ago."`).
+Close any task you filed about this bot once its heartbeat is recent (`tico task close <id> -m "Connected: last heard from a minute ago." --version N`).
 
 ## Checks and the Gateway
 For a Hermes or OpenClaw profile's questions: it checks Tico hourly by default (`--sync 15m` for faster checks), and its

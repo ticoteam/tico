@@ -2,7 +2,7 @@
 
 Such a bot is a full bot record (org tree, chat, tasks, routines) with no computer. Nothing
 dispatches to it: a message addressed to it lands in its inbox and stays there until the agent
-reads it through Tico's MCP endpoint or the `hub` CLI, with the one bot credential minted
+reads it through Tico's MCP endpoint or the `tico` CLI, with the one bot credential minted
 here. Presence is a plain heartbeat the agent's box posts on a timer; that is all Tico knows
 about whether the agent is alive, and the pages say exactly that (docs/hermes-agents.md).
 

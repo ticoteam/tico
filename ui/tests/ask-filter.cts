@@ -1,22 +1,17 @@
 import type * as Tasks from './tasks-page.cts';
-// What bots may put on you: chores use ordinary Needs you rows, refused asks have no kept-items section,
+// What bots may put on you: a chore is an ordinary Do row of Needs you, refused asks have no kept-items section,
 // and Settings saves mode, the main budget and criteria. NEEDS_SHOTS=<dir> saves screenshots.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {open} = require('./tasks-page.cts') as Tasks.Api;
-// Page globals read inside page.evaluate (types: tasks-page.cts).
-declare var TASKS_ST: Tasks.Globals['TASKS_ST'];
-declare var tasksLoad: Tasks.Globals['tasksLoad'];
-declare var v2Refresh: Tasks.Globals['v2Refresh'];
+const {open, task, brief} = require('./tasks-page.cts') as Tasks.Api;
 const SHOTS = process.env.NEEDS_SHOTS || '';
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
 
-const base = (id: string, title: string, over: Record<string, unknown> = {}) => ({id, title, body: 'Details.', owner_id: 'human:ana', requester_id: 'bot:botops', status: 'open',
-  lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created_at: ago(600), updated_at: ago(60), ...over});
-const TASKS = [base('t-access', 'Grant ops read access to the billing repo'), base('t-pick', 'Gusto or Rippling for payroll?')];
-const NEEDS = [{...TASKS[1], kind: 'task', need: 'decide'}, {...TASKS[0], kind: 'task', need: 'do'}];
+// A chore a bot filed for Ana: an ordinary Do row of Needs you (NeedsYouItem kind task).
+const TASKS = [task('t-access', 'Grant ops read access to the billing repo', 'todo', {owner_id: 'human:ana', requester_id: 'bot:botops'})];
+const NEEDS: Tasks.Need[] = [{kind: 'task', id: 'task:t-access', task_id: 't-access', line: TASKS[0]!.title, since: ago(60), task: brief(TASKS[0]!)}];
 async function shot(target: {screenshot(options: {path: string}): Promise<unknown>}, name: string) {
   if (!SHOTS) return;
   fs.mkdirSync(SHOTS, {recursive: true});
@@ -26,21 +21,15 @@ async function shot(target: {screenshot(options: {path: string}): Promise<unknow
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    const {page, errors} = await open(browser, {hash: '#/tasks', byNeed: true, baseTasks: TASKS});
     const retiredRequests: string[] = [], saved: unknown[] = [];
-    await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items: NEEDS})}));
-    await page.route('**/api/v2/ask-ingest/filtered*', route => {
+    const {page, errors} = await open(browser, {hash: '#/tasks', tasks: TASKS, needs: NEEDS, beforeGoto: page => page.route('**/api/v2/ask-ingest/filtered*', route => {
       retiredRequests.push(route.request().url());
       return route.fulfill({status: 404, body: '{}'});
-    });
-    await page.evaluate(async () => { await v2Refresh(); await tasksLoad(TASKS_ST); });
-    await page.locator('#task-scope').click(); await page.locator('#task-filter-pop [data-scope="you"]').click();
-    await page.evaluate(async () => { await tasksLoad(TASKS_ST); });
-
-    const ordinary = page.locator('#task-body [data-group="need:do"]');
-    await ordinary.waitFor();
-    assert.ok((await ordinary.textContent())!.includes('Grant ops read access to the billing repo'));
-    assert.equal(await page.locator('#task-body [data-group="need:hands"], #task-body [data-group="filtered"], [data-let-through]').count(), 0);
+    })});
+    assert.deepEqual(await page.locator('#task-body .tk-group').evaluateAll(els => els.map(e => e.firstChild?.textContent?.trim())), ['Do'],
+      'an ordinary Do row, no kept-items section');
+    assert.ok((await page.locator('#task-body .tk-section').innerText()).includes('Grant ops read access to the billing repo'));
+    assert.equal(await page.locator('[data-let-through]').count(), 0);
     assert.deepEqual(retiredRequests, [], 'Needs you never reads the retired endpoint');
     for (const width of [1440, 390]) {
       await page.setViewportSize({width, height: 900});

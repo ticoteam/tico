@@ -8,8 +8,9 @@ const {html, uiFile} = require('./support/page.cts') as import('./support/page.c
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 const {threadsFake} = require('./support/threads-fake.cts') as import('./support/threads-fake.cts').Api;
 
-declare const TASKS_ST: {tasks: {id: string}[]; loading?: boolean};
-declare function taskModalShow(task: {id: string} | undefined): void;
+declare const TASKS_ST: {loading?: boolean};
+declare function taskModalShow(task: unknown): Promise<void>;
+declare function v2Get(path: string): Promise<unknown>;
 declare function $(selector: string): {tfOpen?: {id: string; n: number}};
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000' + '1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex');
@@ -23,7 +24,7 @@ const A = (id: string, name: string, content_type: string, kind: string, title: 
   const messages = [{id: 'm1', sender_id: 'bot:designer', body: 'This week.', created_at: now, refs: {attachments: [
     A('f-chart', 'chart.png', 'image/png', 'image', 'Weekly signups'), A('f-page', 'local.html', 'text/html', 'page', 'Embedded pair'),
     A('f-csv', 'data.csv', 'text/csv', 'file', 'data.csv')]}}];
-  const task = {id: 't1', title: 'Metrics', owner_id: 'bot:designer', requester_id: 'human:ana', status: 'review', lane: 'company', rank: 1, labels: [], links: [],
+  const task = {id: 't1', title: 'Metrics', owner_id: 'bot:designer', requester_id: 'human:ana', status: 'open', lane: 'company', rank: 1, labels: [], links: [],
     parts: {total: 0, done: 0}, version: 1, created_at: now, updated_at: now, body: 'Metrics.', attachments: []};
   const tver = (id: string, mime: string) => ({n: 1, size: 1000, mime, sha256: 'x', created_at: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
     width: null, height: null, duration_ms: null, media_state: 'none', url: `/api/v2/files/${id}?v=1`, poster_url: null, thumb_url: null});
@@ -78,9 +79,9 @@ const A = (id: string, name: string, content_type: string, kind: string, title: 
   assert.equal(await m1.locator('.chat-files > *').count(), 3, 'one chip or thumbnail per file');
 
   // ---- task comments: the same, at that version
-  await page.goto('https://tico-ui.test/#/tasks?view=board');
+  await page.goto('https://tico-ui.test/#/tasks');
   await page.waitForFunction(() => typeof TASKS_ST !== 'undefined' && TASKS_ST && !TASKS_ST.loading);
-  await page.evaluate(() => taskModalShow(TASKS_ST.tasks.find(t => t.id === 't1')));
+  await page.evaluate(async () => { const r = await v2Get('/v2/tasks/t1') as {task: unknown}; await taskModalShow(r.task); });
   const c1 = page.locator('#task-modal .tcomment', {hasText: 'Metrics attached.'});
   await c1.locator('.tc-thumb[data-tf-jump="f-metrics"]').waitFor();
   assert.equal(await c1.locator('figure.vcard').count(), 0, 'no visual address: no cards');

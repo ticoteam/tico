@@ -4,7 +4,7 @@ One story over eight weeks, from one daily model, so every figure adds up: a wee
 days the month rows add up. Each Monday the marketing lead's "Weekly numbers" routine sets the month rows through the
 Sunday before and logs the week's readings. Those runs are history, so they are written as the runs would have left
 them, played through the engine as the scheduler fires them: each run's bot turn opens the routine's task, and the turn's end charges the run. Creator videos drive store sales and scale up. Paid ads cost more
-per unit than a unit earns, so they pause, and their test closes as Failed.
+per unit than a unit earns, so they pause, and Cara closes their test.
 
 The growth model counts revenue per customer per month. A unit's sale is spread over the months it counts (a $299 unit
 is about $25 a month over a year, and a Scene Library plan adds about $6), so each channel's monthly revenue stands for
@@ -15,12 +15,14 @@ import json
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from .. import automations, goals, growth, hubdb, marketing_tasks, models, providers, routines
-from ..demo_seed import TOKENS
+from .. import automations, goals, growth, hubdb, models, providers, routines
+from ..demo_seed import TOKENS, say_done, version
 from ..scheduler import next_due, stamp
 
 ZONE = ZoneInfo("America/Los_Angeles")
 UNKNOWN = growth.UNKNOWN
+# A growth idea's labels (the growth team's playbooks read them): filed, then its test running.
+IDEAS, RUNNING = "growth:ideas", "growth:running"
 
 CONTENT = {
     "unit": "units",
@@ -238,7 +240,10 @@ CONTENT = {
             "definition": "Share of the week's orders that came back.",
         },
     ],
-    # Marketing ideas: type Marketing, filed by Cara, moved by the bot that owns each. `days` count back from the last run.
+    # Growth ideas: General tasks filed by Cara with the label growth:ideas and their channel's, worked by the bot that
+    # owns each. Each move is the owner's (`running` relabels it growth:running with a note, `note` a note alone,
+    # `snooze` sets it aside with the note as the reason) or Cara's (`close` drops it with the note as the reason).
+    # `days` count back from the last run.
     "ideas": [
         {
             "title": "Twelve creators film their own holiday show",
@@ -246,10 +251,10 @@ CONTENT = {
             "owner": "bot:creators",
             "body": "Each creator films one 30-second clip on their own house, with the unit's code in the caption.",
             "created_days": 40,
-            "steps": [
-                {"step": "Live", "days": 38, "note": "Ten creators have their units. First clips go up on Monday."},
-                {"step": "Working", "days": 18, "note": "Code orders are steady. Adding creators for the holidays."},
-                {"step": "Paused", "days": 17, "note": "Holding at ten creators until the holiday list is confirmed."},
+            "moves": [
+                {"do": "running", "days": 38, "note": "Ten creators have their units. First clips go up on Monday."},
+                {"do": "note", "days": 18, "note": "Code orders are steady. Adding creators for the holidays."},
+                {"do": "snooze", "days": 17, "note": "Holding at ten creators until the holiday list is confirmed."},
             ],
         },
         {
@@ -258,14 +263,9 @@ CONTENT = {
             "owner": "bot:paid-media",
             "body": "A small test aimed at homes with a big facade. It wins if a unit costs less than its margin.",
             "created_days": 40,
-            "steps": [
-                {"step": "Live", "days": 36, "note": "Test budget is live. Cost per unit checked each morning."},
-                {
-                    "step": "Failed",
-                    "days": 11,
-                    "close": True,
-                    "note": "Cost per unit stayed above the margin. Ads paused, test closed.",
-                },
+            "moves": [
+                {"do": "running", "days": 36, "note": "Test budget is live. Cost per unit checked each morning."},
+                {"do": "close", "days": 11, "note": "Cost per unit stayed above the margin. Ads paused, test closed."},
             ],
         },
         {
@@ -274,13 +274,9 @@ CONTENT = {
             "owner": "bot:marketplace",
             "body": "Home Starter with the mounting kit, listed for the marketplace only at a small discount.",
             "created_days": 14,
-            "steps": [
-                {"step": "Live", "days": 9, "note": "Bundle listed. Stock checked with inventory each Monday."},
-                {
-                    "step": "Paused",
-                    "days": 6,
-                    "note": "Holding the listing until inventory confirms the holiday stock.",
-                },
+            "moves": [
+                {"do": "running", "days": 9, "note": "Bundle listed. Stock checked with inventory each Monday."},
+                {"do": "snooze", "days": 6, "note": "Holding the listing until inventory confirms the holiday stock."},
             ],
         },
         {
@@ -289,8 +285,8 @@ CONTENT = {
             "owner": "bot:retail",
             "body": "A display of Home Pro units at the end of two aisles. The partner sells them through on its own terms.",
             "created_days": 4,
-            "steps": [
-                {"step": "Paused", "days": 3, "note": "Waiting on homeworks.example to answer on the display terms."}
+            "moves": [
+                {"do": "snooze", "days": 3, "note": "Waiting on homeworks.example to answer on the display terms."}
             ],
         },
     ],
@@ -300,8 +296,8 @@ CONTENT = {
         "title": "Weekly numbers",
         "cron": "0 7 * * 1",
         "timezone": "America/Los_Angeles",
-        "text": "Each Monday: set this month's rows for every channel and Unknown with `hub growth cohort set`, "
-        "log last week's readings for the KPIs you own with `hub kpi log`, read `hub growth numbers` back, "
+        "text": "Each Monday: set this month's rows for every channel and Unknown with `tico growth cohort set`, "
+        "log last week's readings for the KPIs you own with `tico kpi log`, read `tico growth numbers` back, "
         "and close this task with a short note.",
     },
     "run": "Week of {week}: {units} units. {split}. Logged {readings} readings and set {rows} month rows.",
@@ -464,7 +460,7 @@ def later_stage(b, ch):
 
 
 def file_idea(b, s, idea):
-    """Cara files the idea as a Marketing task on its channel."""
+    """Cara files the idea as a task on its channel, labelled as a growth idea."""
     made = b.call(
         "POST",
         "tasks",
@@ -472,21 +468,28 @@ def file_idea(b, s, idea):
             "title": idea["title"],
             "body": idea["body"],
             "owner": idea["owner"],
-            "type": marketing_tasks.TYPE_ID,
-            "labels": ["channel:" + idea["channel"]],
+            "labels": ["channel:" + idea["channel"], IDEAS],
         },
         token=TOKENS["human:cara"],
     )
     s["ideas"][idea["title"]] = made["task"]["id"]
 
 
-def move_idea(b, s, idea, step):
-    """The owner moves the idea to its next step, or Cara closes it when the test is called."""
-    tid = s["ideas"][idea["title"]]
-    if step.get("close"):
-        b.write(lambda c: hubdb.task_close(c, "human:cara", tid, note=step["note"], step=step["step"]))
-    else:
-        b.write(lambda c: hubdb.task_update(c, idea["owner"], tid, step=step["step"], note=step["note"]))
+def move_idea(b, s, idea, move):
+    """The owner moves the idea on (its test is running, a note, set aside), or Cara drops it when the test fails."""
+    tid, note, owner = s["ideas"][idea["title"]], move["note"], idea["owner"]
+
+    def work(c):
+        if move["do"] == "close":
+            return hubdb.task_close(c, "human:cara", tid, note)
+        if move["do"] == "snooze":
+            return hubdb.task_snooze(c, owner, tid, note, None, version(c, tid))
+        labels = None
+        if move["do"] == "running":
+            labels = [label for label in hubdb.task_labels(hubdb.task(c, tid)) if label != IDEAS] + [RUNNING]
+        return hubdb.task_update(c, owner, tid, note=note, labels=labels, seen_version=version(c, tid))
+
+    b.write(work)
 
 
 def weekly(b, s, days, runs, k, monday):
@@ -594,7 +597,7 @@ def weekly(b, s, days, runs, k, monday):
                 "billing": billing,
             },
         )
-        hubdb.task_update(c, "bot:" + routine["bot"], ref, status="done", note=summary)
+        say_done(c, "bot:" + routine["bot"], ref, summary)
         c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job["job_id"],))
         # The turn's end, as the runner reports it: the run takes the turn's answer and cost, and its day counts.
         automations.turn_done(c, {"id": turn["id"], "job_id": job["job_id"]}, "completed", summary)
@@ -632,11 +635,11 @@ def seed(b):
             )
     for idea in CONTENT["ideas"]:
         steps.append((moment(last - timedelta(days=idea["created_days"]), 10), lambda idea=idea: file_idea(b, s, idea)))
-        for step in idea["steps"]:
+        for move in idea["moves"]:
             steps.append(
                 (
-                    moment(last - timedelta(days=step["days"]), 10),
-                    lambda idea=idea, step=step: move_idea(b, s, idea, step),
+                    moment(last - timedelta(days=move["days"]), 10),
+                    lambda idea=idea, move=move: move_idea(b, s, idea, move),
                 )
             )
     for k, monday in enumerate(runs):

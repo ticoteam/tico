@@ -40,7 +40,7 @@ grid is one column.
 
 | Card | Shows | Settings |
 |---|---|---|
-| Tasks by status | Open, doing, waiting, done this week | team |
+| Tasks by status | Open, and done this week | team |
 | Done per week | Tasks done each week | team, weeks (4 to 26, 8 by default) |
 | Needs you | The reader's own count and top three; with a team, the items its bots are behind | team |
 | Spend | This month's spend against the monthly budget | team |
@@ -55,7 +55,7 @@ grid is one column.
 | Growth funnel | The five funnel stages' KPIs, their conversion, and the North Star | none |
 | Growth channels | Each channel's new customers, CAC and LTV:CAC for the month, with its open tests | count (1 to 20) |
 | Growth retention | Cohort retention at 30, 90 and 180 days | months (3 to 12) |
-| Growth board | Open marketing tests by stage: Live, Working, In development, On deck | count per lane (1 to 5) |
+| Growth board | Open growth ideas by their label: Live, Working, Measuring, In development, On deck | count per lane (1 to 5) |
 
 The growth cards go on the Growth page only; a growth card at any other place is refused.
 
@@ -75,8 +75,8 @@ Unlinking is for whoever linked it, the task's owner or requester, or the org ow
 A bot's sidebar pins are its sidebar widgets: `page:<file id>` and `card:<id>` beside Tasks, Updates and Files, any
 number, and the built-ins may be hidden so the sidebar is only pages. The Assistant's sidebar keeps its own widgets.
 
-People change cards from the ⋯ menu; bots and BotOps (with the rights of the person who asked) use `hub card
-list|add|update|remove` and `hub pin add|update|remove`, the `hub_card_*` and `hub_pin_*` tools, or the API:
+People change cards from the ⋯ menu; bots and BotOps (with the rights of the person who asked) use `tico card
+list|add|update|remove` and `tico pin add|update|remove`, the `hub_card_*` and `hub_pin_*` tools, or the API:
 `GET|PUT /api/v2/places/{place}`, `POST /api/v2/places/{place}/order`, `POST /api/v2/pins`,
 `PATCH|DELETE /api/v2/pins/{id}`, `GET|POST /api/v2/cards`, `PATCH|DELETE /api/v2/cards/{id}` and
 `GET /api/v2/cards/choices`. `GET /api/v2/places/growth?month=YYYY-MM` reads the Growth page for one month and answers
@@ -89,7 +89,7 @@ Every visible computer becomes a building in a small solarpunk office campus. Bo
 
 Buildings have open cutaway offices, rear garden terraces, solar canopies, glass sides and warm lighting. A recessed, illuminated Loop connects the buildings, with small moving pods. Pods and tunnels are decorative scenery, not bot traffic or execution telemetry. Every teammate is represented; larger teams use additional floors. Select a building to step inside, then select a person or bot to see their permitted status and open their existing page. Tap outside or press Escape to return. Drag to rotate and scroll to zoom. Keyboard-accessible building and teammate buttons appear when focused; the Campus button is available inside a building.
 
-The scene uses the existing `/employees`, `/humans`, `/v2/status` and `/v2/computers` responses. Bots with queued work that is not starting are listed above the campus with their reason and one fix, from the Health answer the app already polls (`/v2/health` `stuck`); a stuck bot's teammate card says why. A bot left in setup (`needs_setup`) for over a day is listed there too, with how long, and a person who may manage it gets **Finish with defaults**: the same setup-done call as `hub bot setup-done`, so the bot starts claiming its work and its template's first routine is turned on, as Start setup would have. Nothing finishes setup on its own. The person the "Finish setting up" reminder goes to gets one message about it, once per bot, unless that reminder is still open (`backend/setup_stuck.py`). Below them one line says how many bots are running on a fallback provider because their plan ran out, since when, and how many are limited (`on_fallback` and `limited` in the same answer). Computer inventory loads only while Campus is open and follows the existing refresh clock. Readable bot assignments also identify buildings, so inventory failure does not remove their offices. Authorized computers with no bots remain visible as empty offices. Revoked computers are excluded from inventory. Human placement uses visible operators, users, owners and reporting chains, with one representation per person per building.
+The scene uses the existing `/employees`, `/humans`, `/v2/status` and `/v2/computers` responses. Bots with queued work that is not starting are listed above the campus with their reason and one fix, from the Health answer the app already polls (`/v2/health` `stuck`); a stuck bot's teammate card says why. A bot left in setup (`needs_setup`) for over a day is listed there too, with how long, and a person who may manage it gets **Finish with defaults**: the same setup-done call as `tico bot setup-done`, so the bot starts claiming its work and its template's first routine is turned on, as Start setup would have. Nothing finishes setup on its own. The person the "Finish setting up" reminder goes to gets one message about it, once per bot, unless that reminder is still open (`backend/setup_stuck.py`). Below them one line says how many bots are running on a fallback provider because their plan ran out, since when, and how many are limited (`on_fallback` and `limited` in the same answer). Computer inventory loads only while Campus is open and follows the existing refresh clock. Readable bot assignments also identify buildings, so inventory failure does not remove their offices. Authorized computers with no bots remain visible as empty offices. Revoked computers are excluded from inventory. Human placement uses visible operators, users, owners and reporting chains, with one representation per person per building.
 
 Hidden people, invisible or retired bots and other people's personal branches are excluded. A bot without Read access has no machine or activity details and is placed in the Shared pavilion; its location is never inferred from computer inventory. The pavilion also includes unassigned bots, external agents without a known computer, and people with no placed bots. Free-text task focus and raw inventory details never cross the renderer boundary. Human presence is not tracked. A bot's desk follows its status as soon as it changes while live updates are connected; otherwise it catches up at the next refresh (every 30 seconds without live updates, every 2 minutes with them). If status refresh fails, bots become unknown and stop their activity animation.
 
@@ -155,6 +155,14 @@ The numbers come from `GET /api/v2/overview/bot-hours` (`backend/bot_hours.py`),
 
 **Replay last 24h** (under the layout switch) turns the campus into a recap of the day. The page reads `GET /api/v2/replay` for the last 24 hours with the viewer's own rights, the same history and visibility rules as the Replay page, and hands the campus only what it shows: who, to whom, task titles, bot states and the first line of each message. Bot focus text and run summaries are not passed in, as for the live campus.
 
-While it plays, each readable bot's desk shows its state at the replay time: working, needs a person (waiting on a human, blocked, crashed or held for review: an amber light) or idle. A bot without Read access stays restricted. A message between two teammates, or a task handed from one to another, draws an arc from one desk to the other with a light travelling along it; a person who sits in several buildings is linked from the nearest seat. Captions list the last few events. Play/pause, 60×, 600× and 3600× speeds and a scrubber with the time control it; quiet stretches are shortened so the day keeps moving. Scrubbing replays states without drawing old arcs. Live status changes that arrive meanwhile wait: the desks keep their replayed states. **Back to live**, or the replay playing to its end on its own, restores the current status; scrubbing to the end keeps the replay open. With reduced motion the arcs appear whole, without the travelling light or hops.
+While it plays, each readable bot's desk shows its state at the replay time: working, needs a person (waiting on a
+person, can't run, crashed or held for review: an amber light) or idle. A bot without Read access stays restricted. A
+message between two teammates, or a task handed from one to another, draws an arc from one desk to the other with a
+light travelling along it; a person who sits in several buildings is linked from the nearest seat. Captions list the
+last few events. Play/pause, 60×, 600× and 3600× speeds and a scrubber with the time control it; quiet stretches are
+shortened so the day keeps moving. Scrubbing replays states without drawing old arcs. Live status changes that arrive
+meanwhile wait: the desks keep their replayed states. **Back to live**, or the replay playing to its end on its own,
+restores the current status; scrubbing to the end keeps the replay open. With reduced motion the arcs appear whole,
+without the travelling light or hops.
 
 The browser test `ui/tests/overview-live.cts` checks that a live status event moves a desk without another status read. `ui/tests/overview-replay.cts` checks the 24-hour request, the bot-to-bot link, the replayed desks, that private text stays out of the campus and the return to live, with a recording stand-in for the 3D renderer. The campus's own WebGL scripts timed out under release load and were removed. Run `python -m backend.demo --port 18766` for visual review at `http://localhost:18766/#/overview`; the demo uses fictional sample data.

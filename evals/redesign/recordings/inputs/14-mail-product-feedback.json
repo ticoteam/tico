@@ -18,7 +18,10 @@
     "is_calendar_invite": false,
     "labels": [
       "INBOX"
-    ]
+    ],
+    "from_domain": "acme.example",
+    "category": "",
+    "known_sender": false
   },
   "note": "Customer product feedback: it goes to product, not to the owner."
 }

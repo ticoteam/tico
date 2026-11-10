@@ -1,4 +1,4 @@
-"""Company skills: the bundle rules, the canonical sha, and the packing of a skill folder for `hub skill submit`.
+"""Company skills: the bundle rules, the canonical sha, and the packing of a skill folder for `tico skill submit`.
 
 The rules live here, not in the server, so the command refuses a bad folder on the computer before it uploads anything;
 backend/skills.py enforces the same rules on every upload (it imports them from here). The sha is the identity of a
@@ -236,7 +236,7 @@ def pack(folder, name):
 
 
 def run_submit(person, args):
-    """`hub skill submit`: the folder on this computer, checked here and sent as a proposal the server records (backend/skills.py).
+    """`tico skill submit`: the folder on this computer, checked here and sent as a proposal the server records (backend/skills.py).
     The server decides what happens next: a new skill or an update, the screening, and the approval by an admin."""
     from clients.tico import APIError
 

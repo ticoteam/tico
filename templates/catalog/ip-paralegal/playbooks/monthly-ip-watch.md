@@ -11,7 +11,7 @@ filed, renewed or sent.
 For each mark in `knowledge/register.md`, compute the next deadline and its window from the registration date
 and the office's rule (cite the office's page and the date read), and the end of any grace period. For each
 domain: expiry, auto-renew on or off, and whether the account holder named at setup is still at the
-team (`hub team show`). Re-check each mark's status on the office's public record every six months.
+team (`tico team show`). Re-check each mark's status on the office's public record every six months.
 
 ## 2. Look-alikes
 
@@ -23,15 +23,15 @@ classes, status, filing date, the opposition window if it is published, and one 
 
 ## 3. Assignments
 
-From `knowledge/assignments.md` and `hub team show`: anyone new who created code, designs or content since last month,
+From `knowledge/assignments.md` and `tico team show`: anyone new who created code, designs or content since last month,
 and anyone still "does not" or "not seen".
 
 ## 4. Write and hand over
 
 `reports/YYYY-MM-DD-ip-watch.md` in the shape of `knowledge/examples/ip-watch.md`: the headline, deadlines inside
 12 months, domains inside 90 days, look-alikes, assignments, what you could not search, then the not-legal-advice
-line. `hub file publish` it, commit, and `hub task update <id> --status done --note` with the nearest deadline first.
-A deadline inside 60 days becomes a task for the decision-maker, with `hub task create --owner <person>`.
+line. `tico file publish` it, commit, and `tico task done <id> -m "..." --version N` with the nearest deadline first.
+A deadline inside 60 days becomes a task for the decision-maker, with `tico task create --owner <person>`.
 
 ## Done when
 - Every mark and domain in `knowledge/register.md` has its next deadline, window and rule, cited to the office page with the date read.

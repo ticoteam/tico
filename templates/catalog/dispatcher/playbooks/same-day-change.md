@@ -8,7 +8,7 @@ the customer messages it needs, in front of the dispatcher.
 
 ## 1. What changed
 
-    hub task show <id>
+    tico task show <id>
 
 Who or what, from when, and which jobs it touches. Read the day's current plan.
 

@@ -93,17 +93,17 @@ Every PR this skill opens gets a second pair of eyes. Right after `gh pr create`
 the reviewer for the repo and stop:
 
 ```
-hub task create --owner <reviewer> --title "Review: <PR title>" \
+tico task create --owner <reviewer> --title "Review: <PR title>" \
   --body "<PR URL>. Done when: <the acceptance line from the task or issue>."
 ```
 
 `<reviewer>` is the reviewer bot the team assigned to that repo (for example `backend-reviewer` or
 `frontend-reviewer`). The reviewer fixes mechanical
 things itself on your branch as a "Review fixes" commit and sends back only design-level changes,
-each with a one-line reason; address those, push, and update the review task with `--note`.
+each with a one-line reason; address those, push, and say so on the review task with `tico task comment <id> "..."`.
 Never mark the PR ready yourself; a human merges.
 
-In a thread there is no `hub`: file the same task, with the same owner, title and body, through Bot
+In a thread there is no `tico`: file the same task, with the same owner, title and body, through Bot
 Desk's `create_task` tool, unless the human has said they will get it reviewed themselves.
 
 When running as a branch (`shared_from`), use your branch's bot slug for tasks and status. The original repository holds shared lessons; keep private chats and personal preferences out of it.

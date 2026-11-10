@@ -8,9 +8,9 @@ audit, and the first routine checked.
 
 ## 1. Read before you ask
 
-    hub team show
-    hub file list
-    hub task list --status open --status done
+    tico team show
+    tico file list
+    tico task list --updated-since <ISO-8601 time with a timezone>   each row says whether it is done
 
 Look for a configuration export someone attached, and for tasks from the Support Agent about tickets in
 the wrong place or replies that quoted something out of date. Do not ask what these already show.
@@ -44,17 +44,17 @@ Label it "First draft, not yet reviewed".
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will run this audit on the first Monday of each month." They
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will run this audit on the first Monday of each month." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub automation update <id>`, with `--disable` to turn it off).
+(`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

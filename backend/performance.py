@@ -984,7 +984,7 @@ def install(app, store, auth, mutate, execution):
             raise Problem(
                 "not_found",
                 f"No computer named {name!r}"
-                + ("; more than one has that label, use its id" if hit else "; hub computer list names them"),
+                + ("; more than one has that label, use its id" if hit else "; tico computer list names them"),
                 404,
             )
         return hit[0]

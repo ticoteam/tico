@@ -2,7 +2,7 @@
 slug, and keeps working after it is renamed (backend/hubdb.py resolve_bot, rename_bot; docs/how-it-works.md).
 
 Every surface that names a bot is driven through the API the way its client drives it: the web app's routes, the
-runner's claim, the MCP tool table and the `hub` CLI (clients/hubtools.py, clients/remotecli.py). Stored references
+runner's claim, the MCP tool table and the `tico` CLI (clients/hubtools.py, clients/remotecli.py). Stored references
 must hold the id; reads give both the id and the slug.
 """
 
@@ -149,8 +149,8 @@ def test_tasks_are_assigned_taken_and_closed_by_slug_or_id(api, sales):
     by_id = post(api, "tasks", {"owner": sales, "title": "Send the deck", "body": "To Acme."})
     assert {by_slug["owner_id"], by_actor["owner_id"], by_id["owner_id"]} == {"bot:" + sales}
     # handed to another bot and back, by slug
-    moved = post(api, "tasks/" + by_slug["id"], {"owner": "ops", "version": by_slug["version"]})
-    back = post(api, "tasks/" + by_slug["id"], {"owner": "sales-helper", "version": moved["version"]})
+    moved = post(api, f"tasks/{by_slug['id']}/owner", {"owner": "ops", "version": by_slug["version"]})
+    back = post(api, f"tasks/{by_slug['id']}/owner", {"owner": "sales-helper", "version": moved["version"]})
     assert back["owner_id"] == "bot:" + sales
     # the list filters by either
     for owner in ("sales-helper", "bot:sales-helper", sales, "bot:" + sales):
@@ -161,9 +161,10 @@ def test_tasks_are_assigned_taken_and_closed_by_slug_or_id(api, sales):
     made = tool(api, token, "hub_task_create", {"owner": "me", "title": "Follow up with Acme", "body": "Next week."})
     assert column(api, "SELECT owner_id FROM tasks WHERE title='Follow up with Acme'") == ["bot:" + sales], made
     own = column(api, "SELECT id FROM tasks WHERE title='Follow up with Acme'")[0]
-    tool(api, token, "hub_task_close", {"id": own, "note": "Sent"})
+    version = column(api, "SELECT version FROM tasks WHERE id=?", own)[0]
+    tool(api, token, "hub_task_close", {"id": own, "why": "Sent", "version": version})
     assert column(api, "SELECT status FROM tasks WHERE id=?", own) == ["closed"]
-    tool(api, "ana-test", "hub_task_close", {"id": by_id["id"], "note": "Sent"})
+    tool(api, "ana-test", "hub_task_close", {"id": by_id["id"], "why": "Sent", "version": by_id["version"]})
     assert column(api, "SELECT status FROM tasks WHERE id=?", by_id["id"]) == ["closed"]
     listed = tool(api, "ana-test", "hub_task_list", {"owner": "sales-helper"})
     rows = listed["tasks"] if isinstance(listed, dict) else listed

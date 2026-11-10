@@ -12,7 +12,7 @@ Done when: every open tier 2 ticket is listed with its verdict and what it waits
 
 ## 1. List the queue
 
-Every open tier 2 task (`hub task list --owner technical-support --status open --status waiting`) with
+Every open tier 2 task (`tico task list --owner technical-support`) with
 its age, verdict so far and what it waits on: the customer, engineering, or you.
 
 ## 2. Check engineering status
@@ -34,4 +34,4 @@ for review. In the report, list each of those tickets with its verdict and the s
 ## 5. Write and hand over
 
 Write `reports/YYYY-MM-DD-tier2.md` in the shape of `knowledge/examples/tier2-report.md` and
-`hub file publish` it. Commit, and finish the task with the counts and the path.
+`tico file publish` it. Commit, and finish the task with the counts and the path.

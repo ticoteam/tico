@@ -8,8 +8,8 @@ drafted on the task, and both routines checked.
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub goal list
+    tico task show <id>
+    tico goal list
 
 Check what you can already reach: the sequence mailbox, a CRM entry in your access, imported calls, any target list on
 the task. Note any goal that names meetings, pipeline or outbound, because it sets the number you are measured on. Do not
@@ -54,8 +54,8 @@ draft, not yet reviewed". Nothing is sent and no one is enrolled.
 
 ## 6. Check the routines
 
-Setting you up switched on your first routine, the weekday outbound run. Check it with `hub automation list`; if it shows off,
-run `hub automation update <id> --enable`. Then turn on the weekly read-out the same way: `hub automation update <id> --enable`
+Setting you up switched on your first routine, the weekday outbound run. Check it with `tico automation list`; if it shows off,
+run `tico automation update <id> --enable`. Then turn on the weekly read-out the same way: `tico automation update <id> --enable`
 for `weekly-outbound-readout`, using the id from that list.
 
 Tell the human in one line each: "I will run outbound every weekday at 08:00: replies sorted, stops applied, touches drafted for
@@ -63,10 +63,10 @@ your review." and "I will publish the outbound read-out every Monday at 08:30." 
 there is nothing to approve.
 
 Record both in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave
-one off, adjust `knowledge/outbound-method.md` and the routine to match (`hub automation update <id>`, with `--disable` to turn
+one off, adjust `knowledge/outbound-method.md` and the routine to match (`tico automation update <id>`, with `--disable` to turn
 it off).
 
-Last, once the answers and the first pack are recorded, not before, run `hub bot setup-done`. It tells {{app_name}} your setup
+Last, once the answers and the first pack are recorded, not before, run `tico bot setup-done`. It tells {{app_name}} your setup
 is done: it clears your "Needs setup" mark and lets the routines run. Until then nothing you have runs on its own.
 
-    hub bot setup-done
+    tico bot setup-done

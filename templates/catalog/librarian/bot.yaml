@@ -8,8 +8,8 @@ reasoning_effort: medium
 max_run_minutes: 45
 
 # The routines this bot starts with. The server seeds them once, when the Librarian is built in; from
-# then on they are Automations: `hub automation list` lists them and
-# `hub automation update <id>` changes one (docs/routines.md).
+# then on they are Automations: `tico automation list` lists them and
+# `tico automation update <id>` changes one (docs/routines.md).
 routines:
   - id: refresh-the-map
     title: Refresh the map of the docs
@@ -34,7 +34,7 @@ routines:
     timezone: America/Los_Angeles
     template: playbooks/customer-themes.md
 
-# What this bot may touch. It reads the docs through `hub doc` and public links through `hub doc fetch`,
+# What this bot may touch. It reads the docs through `tico doc` and public links through `tico doc fetch`,
 # and needs no Credential of its own. A GitHub token stored in Credentials and granted to it lets it read private
 # repositories that are linked as docs; it is only ever sent to api.github.com. Web search is for the market setup,
 # research and deep research tasks a person files: public facts in, public pages read, nothing written outside.

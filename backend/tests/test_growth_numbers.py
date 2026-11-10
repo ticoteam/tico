@@ -1,10 +1,15 @@
 """The Growth page's numbers (backend/growth_numbers.py): the months' totals and each channel's, the KPI tree with its
-readings, and the marketing tests that started or finished. Examples use Acme, a home-cleaning company."""
+readings, and the marketing ideas whose test started or that finished. Examples use Acme, a home-cleaning company."""
 
 from backend import growth as G
+from backend import growth_numbers as GN
+from backend.auth import Identity
+from backend.store import H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import get, headers, post, put  # noqa: F401
-from backend.tests.helpers.company import bot
 from backend.tests.helpers.openapi_v2 import conforms
+
+ANA = "human:ana"
 
 ECONOMICS = (
     "spend",
@@ -34,10 +39,28 @@ def add_fay(api):
         c.execute("INSERT INTO humans(id,name,email) VALUES('fay','Fay','fay@acme.example')")
 
 
-def move(api, task_id, step, token="ana-test"):
-    """A task's step moved the way its page moves it: at the version it was read at."""
+def bot(api, slug):
+    """The bot itself, as an agent credential."""
+    token = slug + "-test"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
+        c.execute(
+            "INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) "
+            "VALUES(?,'hermes',?,?,'human:ana')",
+            (slug, "x-" + slug, H.now()),
+        )
+    api.app.state.store.settings.test_identities[token] = Identity("bot:" + slug, "bot", agent="hermes")
+    return token
+
+
+def label(api, task_id, labels, token="ana-test"):
+    """An idea's labels set the way its page sets them: at the version it was read at."""
     version = get(api, "tasks/" + task_id, token)["task"]["version"]
-    return post(api, "tasks/" + task_id, {"version": version, "step": step}, token)
+    return post(api, "tasks/" + task_id, {"version": version, "labels": labels}, token)
+
+
+def idea(api, title, labels=("growth:ideas",), **more):
+    return post(api, "tasks", {"title": title, "body": "Try it.", "owner": "ops", "labels": list(labels), **more})["id"]
 
 
 def marked(api, token="ana-test"):
@@ -226,44 +249,64 @@ def test_a_kpi_series_is_the_sparkline_rule_one_value_per_period_without_partial
     ]
 
 
+class _ReadsAll:
+    """auth as the markers read it, for a reader who may read every task."""
+
+    def task_sql(self, c, who):
+        return "1"
+
+
+def test_an_idea_marks_when_its_test_starts_and_when_it_is_kept_or_dropped(company):
+    """A start is a label change that adds growth:running or idea:live; a finish is a move to Done (kept) or Closed
+    (dropped) of a task with a growth label. Another label change, or a task that is not an idea, marks nothing."""
+    with company.transaction() as c:
+        X.bot(c, "ops")
+        made = lambda title, labels: H.task_create(c, ANA, title, "Try it.", "bot:ops", lint=False, labels=labels)["id"]
+        kept = made("Weekend discount", ["growth:ideas", "channel:seo"])
+        dropped = made("Door hangers in Elm Park", ["idea:on-deck"])
+        plain = made("Fix the login page", [])
+        H.task_update(c, ANA, kept, labels=["growth:running", "channel:seo"])
+        H.task_update(c, ANA, kept, labels=["growth:measuring", "channel:seo"])
+        H.task_done(c, ANA, kept, "Bookings rose 8%")
+        H.task_close(c, ANA, dropped, "Inconclusive: too few replies")
+        H.task_close(c, ANA, plain, "Not needed")
+        found = GN._markers(c, _ReadsAll(), None, "2000-01-01T00:00:00")
+    assert sorted((m["kind"], m["outcome"], m["task_id"], tuple(m["channels"])) for m in found) == sorted(
+        [
+            ("started", None, kept, ("seo",)),
+            ("finished", "kept", kept, ("seo",)),
+            ("finished", "dropped", dropped, ()),
+        ]
+    )
+    assert [m["at"] for m in found] == sorted((m["at"] for m in found), reverse=True)
+
+
 def test_a_test_gives_a_started_and_a_finished_marker_newest_first(api):
-    tid = post(
-        api, "tasks", {"title": "Weekend discount", "body": "10% off Saturdays.", "owner": "ops", "type": "idea"}
-    )["id"]
-    move(api, tid, "idea-doing")
-    move(api, tid, "idea-won")
+    tid = idea(api, "Weekend discount")
+    label(api, tid, ["growth:running"])
+    version = get(api, "tasks/" + tid)["task"]["version"]
+    post(api, f"tasks/{tid}/done", {"note": "Bookings rose 8%", "version": version})
     found = get(api, "growth/numbers")["markers"]
     assert [(m["kind"], m["outcome"], m["task_id"], m["title"]) for m in found] == [
-        ("finished", "won", tid, "Weekend discount"),
+        ("finished", "kept", tid, "Weekend discount"),
         ("started", None, tid, "Weekend discount"),
     ]
     assert found[0]["at"] > found[1]["at"] and found[0]["channels"] == [] and found[0]["goal_id"] is None
 
 
-def test_a_task_moved_twice_gives_two_markers_with_its_channel_and_goal(api):
+def test_an_idea_started_twice_gives_two_markers_with_its_channel_and_goal(api):
     goal = post(api, "goals", {"title": "Raise activation", "owner": "ana"})["goal"]["id"]
-    tid = post(
-        api,
-        "tasks",
-        {
-            "title": "Door hangers in Elm Park",
-            "body": "Print and place them.",
-            "owner": "ops",
-            "type": "idea",
-            "labels": ["channel:seo"],
-            "goal_id": goal,
-        },
-    )["id"]
-    move(api, tid, "idea-doing")
-    move(api, tid, "idea-paused")
-    move(api, tid, "idea-doing")
+    tid = idea(api, "Door hangers in Elm Park", ("growth:ideas", "channel:seo"), goal_id=goal)
+    label(api, tid, ["growth:running", "channel:seo"])
+    label(api, tid, ["idea:paused", "channel:seo"])
+    label(api, tid, ["growth:running", "channel:seo"])
     found = get(api, "growth/numbers")["markers"]
     assert [(m["kind"], m["task_id"], m["channels"], m["goal_id"]) for m in found] == [
         ("started", tid, ["seo"], goal)
     ] * 2
 
 
-def test_a_private_marketing_task_is_marked_only_for_a_reader_who_may_see_it(api):
+def test_a_private_idea_is_marked_only_for_a_reader_who_may_see_it(api):
     add_fay(api)
     tid = post(
         api,
@@ -272,12 +315,11 @@ def test_a_private_marketing_task_is_marked_only_for_a_reader_who_may_see_it(api
             "title": "Cold email to dentists",
             "body": "Test a cold email.",
             "owner": "cara",
-            "type": "idea",
             "private": True,
-            "labels": ["channel:email"],
+            "labels": ["growth:ideas", "channel:email"],
         },
     )["id"]
-    move(api, tid, "idea-doing", token="cara-test")
+    label(api, tid, ["growth:running", "channel:email"])  # labels are a mover's: Ana, who asked for it
     assert tid in marked(api, "cara-test")
     get(api, "tasks/" + tid, "fay-test", expected=404)
     for token in ("ana-test", "ben-test", "cara-test", "fay-test"):
@@ -287,10 +329,8 @@ def test_a_private_marketing_task_is_marked_only_for_a_reader_who_may_see_it(api
 
 
 def test_a_deleted_task_leaves_the_markers(api):
-    tid = post(
-        api, "tasks", {"title": "Flyers at the farmers market", "body": "Try it.", "owner": "ops", "type": "idea"}
-    )["id"]
-    move(api, tid, "idea-doing")
+    tid = idea(api, "Flyers at the farmers market")
+    label(api, tid, ["growth:running"])
     assert tid in marked(api)
     post(api, f"tasks/{tid}/delete", {})
     assert tid not in marked(api)
@@ -323,13 +363,72 @@ def test_the_live_answer_matches_the_declared_contract(api):
     north = post(api, "kpis", {"name": "Active customers"})["kpi"]
     post(api, f"kpis/{north['id']}", {"growth_role": "north_star"})
     post(api, f"kpis/{north['id']}/readings", {"value": 412, "period_end": "2026-10-31T00:00:00Z"})
-    tid = post(
-        api, "tasks", {"title": "Weekend discount", "body": "10% off Saturdays.", "owner": "ops", "type": "idea"}
-    )["id"]
-    move(api, tid, "idea-doing")
+    tid = idea(api, "Weekend discount")
+    label(api, tid, ["growth:running"])
     document = api.get("/api/v2/openapi.json", headers=headers()).json()
     operation = document["paths"]["/api/v2/growth/numbers"]["get"]["responses"]["200"]
     schema = operation["content"]["application/json"]["schema"]
     answer = get(api, "growth/numbers")
     assert answer["kpis"]["north_star"]["series"] and answer["markers"] and answer["channels"][1]["series"]
     assert conforms(answer, schema, document) is None
+
+
+def _idea(c, title, labels):
+    return H.task_create(c, ANA, title, "Try it.", "bot:ops", lint=False, labels=labels)["id"]
+
+
+def test_an_idea_already_running_starts_no_new_test_when_it_takes_the_other_running_label(company):
+    """growth:running and idea:live say the same thing: a test starts when an idea takes the first of them, not when
+    it adds or swaps to the other while it runs."""
+    with company.transaction() as c:
+        X.bot(c, "ops")
+        tid = _idea(c, "Weekend discount", ["growth:ideas"])
+        H.task_update(c, ANA, tid, labels=["growth:running"])
+        H.task_update(c, ANA, tid, labels=["growth:running", "idea:live"])
+        H.task_update(c, ANA, tid, labels=["idea:live"])
+        H.task_update(c, ANA, tid, labels=["idea:live", "channel:seo"])
+        found = GN._markers(c, _ReadsAll(), None, "2000-01-01T00:00:00")
+    assert [m["kind"] for m in found] == ["started"]
+
+
+def test_only_a_real_ending_marks_a_finish_and_it_stays_when_the_ideas_labels_go(company):
+    """A done or closed move is a finish. A task restored from the trash as it ended did not finish again; an idea that
+    finished keeps its finish when its labels are cleared later; one reopened and done again finished twice."""
+    from backend import task_delete
+
+    with company.transaction() as c:
+        X.bot(c, "ops")
+        restored = _idea(c, "Weekend discount", ["growth:ideas"])
+        H.task_done(c, ANA, restored, "Bookings rose 8%")
+        assert task_delete.delete_tasks(c, [restored], apply=True, actor=ANA, keep_work=True)["applied"]
+        assert task_delete.restore_tasks(c, [restored], actor=ANA)["restored"] == [restored]
+        cleared = _idea(c, "Door hangers in Elm Park", ["idea:on-deck"])
+        H.task_close(c, ANA, cleared, "Too few replies")
+        H.task_update(c, ANA, cleared, labels=[])
+        twice = _idea(c, "Referral cards", ["growth:ideas"])
+        H.task_done(c, ANA, twice, "Worked")
+        H.task_move(c, ANA, twice, "reopen", "Try a second round")
+        H.task_done(c, ANA, twice, "Worked again")
+        found = GN._markers(c, _ReadsAll(), None, "2000-01-01T00:00:00")
+    assert sorted((m["task_id"], m["outcome"]) for m in found) == sorted(
+        [(restored, "kept"), (cleared, "dropped"), (twice, "kept"), (twice, "kept")]
+    )
+
+
+def test_the_markers_read_no_more_rows_than_they_show(company, monkeypatch):
+    """The newest markers are picked in SQL: label changes that start nothing are never read into Python."""
+    monkeypatch.setattr(GN, "MARKERS_MAX", 2)
+    with company.transaction() as c:
+        X.bot(c, "ops")
+        busy = _idea(c, "Weekend discount", ["growth:ideas"])
+        H.task_update(c, ANA, busy, labels=["growth:running"])
+        for n in range(5):  # still running: no new start
+            H.task_update(c, ANA, busy, labels=["growth:running", f"channel:c{n}"])
+        newest = [_idea(c, title, ["growth:ideas"]) for title in ("Flyers", "Radio spot")]
+        for tid in newest:
+            H.task_update(c, ANA, tid, labels=["idea:live"])
+        read, rows = [], H._rows
+        monkeypatch.setattr(H, "_rows", lambda found: read.append(r := rows(found)) or r)
+        found = GN._markers(c, _ReadsAll(), None, "2000-01-01T00:00:00")
+    assert [m["task_id"] for m in found] == newest[::-1]
+    assert max(len(r) for r in read) <= 2

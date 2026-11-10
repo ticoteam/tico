@@ -87,23 +87,26 @@ async function seedKpis(page: Page) {
   await kpi('Site visits', 'visits', 40000, null, null, 'reach', [14200, 15100, 15800, 17200, 18400, 19900, 21100, 23800, 24600, 26900, 28200, 31000]);
   return {nsId, inpId, goalId};
 }
-// Marketing tasks moved through their steps; one left open, in Testing, on Google Ads.
+// Marketing ideas (backend/marketing_tasks.py): General tasks whose label says where they are. Each starts its test (it
+// takes growth:running), then a win is done and the rest are closed; one is left open, in Testing, on Google Ads.
 async function seedTasks(page: Page, goalId: string) {
-  const task = async (title: string, channel: string | null, steps: string[], goal: string | null = null) => {
-    const made = await ok<{task?: {id: string}; id?: string}>(page, 'POST', 'tasks', {title, body: title, owner: 'bot:engineering-lead', type: 'idea', labels: channel ? [`channel:${channel}`] : [], ...(goal ? {goal_id: goal} : {})});
+  const task = async (title: string, channel: string | null, end: 'done' | 'closed' | null, goal: string | null = null) => {
+    const channels = channel ? [`channel:${channel}`] : [];
+    const made = await ok<{task?: {id: string}; id?: string}>(page, 'POST', 'tasks', {title, body: title, owner: 'bot:engineering-lead', ...(goal ? {goal_id: goal} : {})});
     const id = (made.task?.id || made.id)!;
-    for (const step of steps) {
-      const read = await ok<{task?: {version: number}; version?: number}>(page, 'GET', `tasks/${id}`);
-      await ok(page, 'POST', `tasks/${id}`, {version: (read.task || read).version, step});
-    }
+    const version = async () => { const read = await ok<{task?: {version: number}; version?: number}>(page, 'GET', `tasks/${id}`); return (read.task || read).version; };
+    await ok(page, 'POST', `tasks/${id}`, {version: await version(), labels: [...channels, 'growth:ideas']});
+    await ok(page, 'POST', `tasks/${id}`, {version: await version(), labels: [...channels, 'growth:running']});
+    if (end === 'done') await ok(page, 'POST', `tasks/${id}/done`, {version: await version(), note: 'It worked; we keep it.'});
+    if (end === 'closed') await ok(page, 'POST', `tasks/${id}/move`, {version: await version(), to: 'closed', why: 'It did not work.'});
     return id;
   };
-  const won = await task('Referral credit $100 to $200', 'referrals', ['idea-doing', 'idea-won'], goalId);
-  await task('Search ads for move-out cleans', 'google-ads', ['idea-doing', 'idea-lost'], goalId);
-  await task('Door hangers near new builds', 'door-hangers', ['idea-doing', 'idea-inconclusive']);
-  await task('Before-and-after photos on the site', null, ['idea-doing', 'idea-won'], goalId);
-  await task('Post in neighbourhood groups', 'referrals', ['idea-doing', 'idea-dropped']);
-  const open = await task('Landing page for office cleans', 'google-ads', ['idea-doing'], goalId);
+  const won = await task('Referral credit $100 to $200', 'referrals', 'done', goalId);
+  await task('Search ads for move-out cleans', 'google-ads', 'closed', goalId);
+  await task('Door hangers near new builds', 'door-hangers', 'closed');
+  await task('Before-and-after photos on the site', null, 'done', goalId);
+  await task('Post in neighbourhood groups', 'referrals', 'closed');
+  const open = await task('Landing page for office cleans', 'google-ads', null, goalId);
   return {won, open};
 }
 
@@ -140,7 +143,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   assert.equal(await page.locator('#dash-grid .dash-none').count(), CARDS.length, `${tag}: each says it has nothing yet`);
   assert.equal(await page.locator('.dash-head [data-gr-ns]').isVisible(), false, `${tag}: no North Star line`);
   assert.equal(await page.locator('.dash-head .grh-month').isVisible(), false, `${tag}: no month picker`);
-  assert.equal(await page.locator('.dash-head [data-gr-board]').getAttribute('href'), '#/tasks?view=board&type=idea&who=all', `${tag}: the Growth board link`);
+  assert.equal(await page.locator('.dash-head [data-gr-board]').getAttribute('href'), '#/tasks?pipeline=general&who=all', `${tag}: the Growth board link`);
   assert.equal(await page.locator('.dash-actions').isVisible(), true, `${tag}: the owner arranges`);
   await flat(page, `${tag}: empty`);
   await themed(page, `growth-${width}-empty`);

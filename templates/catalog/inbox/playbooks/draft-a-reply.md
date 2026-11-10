@@ -10,7 +10,7 @@ minutes. The outcome is one draft in the human's voice, a note of anything it le
     $HUB_DIR/scripts/mail.sh thread <id> --format md
 
 Read the whole conversation, not just the last message, and the human's calendar if a time is
-involved (`hub calendar list`). Never copy a token, key or private detail into the task.
+involved (`tico calendar list`). Never copy a token, key or private detail into the task.
 
 ## 2. Decide what the reply must do
 
@@ -40,5 +40,5 @@ When `Sending` is On and a rule there covers this message, send it as a reply to
 and nobody else: `$HUB_DIR/scripts/mail.sh reply --thread <thread> --body-file out/reply.txt --issue <task id>`.
 A forward to an address the rules name is a new message to that address: `mail.sh draft --to <address> --subject "..."`,
 then `mail.sh send --draft <id>`. Tico decides every send: the answer says `"queued": true` (it goes after the undo
-window, or once a person approves it in Tico), or `"downgraded": "draft"` with Tico's reason: then leave the draft on
+window, or once a person OKs it in Tico), or `"downgraded": "draft"` with Tico's reason: then leave the draft on
 the task and say why. Everything the rules do not cover stays a request for review.

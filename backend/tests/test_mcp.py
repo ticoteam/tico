@@ -1,4 +1,4 @@
-"""The hub's MCP door: same tools as the `hub` CLI, same rules, no privileged path."""
+"""The hub's MCP door: same tools as the `tico` CLI, same rules, no privileged path."""
 
 import asyncio
 import base64
@@ -210,55 +210,27 @@ def test_a_group_dm_needs_at_least_one_member(api):
     assert payload["error"] == "validation" and "members" in payload["detail"]
 
 
-def test_task_update_status_choices_follow_the_api_and_bot_restrictions():
-    from typing import Literal, get_args, get_origin
+def test_a_task_refusal_reads_the_same_from_the_in_process_api_as_from_http():
+    """The in-process door keeps what a task refusal carries beside its rule: what is missing, the commands allowed
+    next and the version the task has now, from either shape of error body."""
+    from backend.mcp import problem
 
-    from backend.hubdb import OWNER_STATUSES
-    from backend.models import TaskUpdate
-
-    literal = next(arg for arg in get_args(TaskUpdate.model_fields["status"].annotation) if get_origin(arg) is Literal)
-    # HTTP accepts closed as close:true. CLI/MCP keep their dedicated close action.
-    assert "closed" in get_args(literal)
-    statuses = tuple(status for status in get_args(literal) if status != "closed")
-    assert hubcli.TASK_UPDATE_STATUSES == statuses
-    assert hubtools.TASK_UPDATE_STATUSES == tuple(status for status in statuses if status != "ready")
-    schema = hubtools.BY_NAME["hub_task_update"]["inputSchema"]
-    assert schema["properties"]["status"]["enum"] == list(hubtools.TASK_UPDATE_STATUSES)
-    assert "ready" not in OWNER_STATUSES
-    assert set(OWNER_STATUSES) <= set(hubtools.TASK_UPDATE_STATUSES)
-
-
-def test_renamed_task_flags_still_take_their_older_names():
-    """`brief` (update, done) and `wake: false` (close) were both `quiet`; an older caller's `quiet` still sends the
-    same request, through the MCP schema check and the CLI."""
-
-    class Api:
-        def __init__(self):
-            self.bodies = []
-
-        def get(self, path, **query):
-            return {"actor": "human:ana", "role": "human"} if path == "me" else {"task": {"version": 3}}
-
-        def post(self, path, body=None, key=None):
-            self.bodies.append(body)
-            return {"task": {"id": "t1"}}
-
-    def sent(name, args):
-        args = {"id": "t1", **args}
-        assert hubtools.argument_error(args, hubtools.BY_NAME[name]["inputSchema"]) is None, args
-        api = Api()
-        hubtools.BY_NAME[name]["fn"](api, args)
-        return api.bodies[-1].get("quiet", False)
-
-    for name in ("hub_task_update", "hub_task_done"):
-        assert sent(name, {"brief": True}) is sent(name, {"quiet": True}) is True
-        assert sent(name, {}) is False
-    assert sent("hub_task_close", {"wake": False}) is sent("hub_task_close", {"quiet": True}) is True
-    assert sent("hub_task_close", {"wake": True}) is sent("hub_task_close", {}) is False
-    cli = hubcli.parser()
-    assert cli.parse_args(["task", "update", "t1", "--quiet"]).brief is True
-    assert cli.parse_args(["task", "done", "t1", "--quiet"]).brief is True
-    assert cli.parse_args(["task", "create", "--owner", "ops", "--title", "T", "--quiet"]).next_run is True
+    refusal = {"error": "task_not_met", "detail": "Not moved.", "missing": ["Owner says done"], "next": ["x"]}
+    flat = problem(refusal, 409, "k1")
+    nested = problem(
+        {"error": {"code": "task_changed", "detail": "Changed since you looked.", "version": 13}}, 409, "k2"
+    )
+    assert (flat.code, flat.detail, flat.status, flat.extra) == (
+        "task_not_met",
+        "Not moved.",
+        409,
+        {"missing": ["Owner says done"], "next": ["x"]},
+    )
+    assert (nested.code, nested.extra) == ("task_changed", {"version": 13})
+    assert (
+        hubtools.error_payload(flat)["missing"] == ["Owner says done"]
+        and hubtools.error_payload(nested)["version"] == 13
+    )
 
 
 def test_tools_write_through_the_same_rules_as_http(api):
@@ -322,7 +294,12 @@ def test_tools_write_through_the_same_rules_as_http(api):
     err, listed = call(api, "hub_task_list", {"requester": "me"}, token=token)
     assert not err and sorted(t["id"] for t in listed["result"]) == sorted([task["task"]["id"], wordy_task])
 
-    err, out = call(api, "hub_task_close", {"id": task["task"]["id"], "note": "Not needed"}, token=token)
+    err, out = call(api, "hub_task_close", {"id": task["task"]["id"], "why": "Not needed"}, token=token)
+    assert err and out["detail"] == hubtools.version_needed(task["task"]["id"]), "a bot sends the version it saw"
+    version = shown["task"]["version"]
+    err, out = call(
+        api, "hub_task_close", {"id": task["task"]["id"], "why": "Not needed", "version": version}, token=token
+    )
     assert not err and out["task"]["status"] == "closed"
     err, out = call(api, "hub_task_show", {"id": "no-such-task"}, token=token)
     assert err and out["error"] == "not_found" and out["retryable"] is False
@@ -383,156 +360,30 @@ def test_malformed_mcp_params_are_json_rpc_errors(api, method, params):
     assert response.status_code == 200 and response.json()["error"]["code"] == -32602
 
 
-def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
-    _, _, attempt = setup_attempt(api)
-    ask = {"question": "Ship the September brief today?", "on": "ana", "operation_id": "q-1"}
-    err, out = call(api, "hub_task_question", ask, token=attempt["token"])
-    assert not err, out
-    err, again = call(api, "hub_task_question", ask, token=attempt["token"])
-    assert not err and again["task"]["id"] == out["task"]["id"], "a retry is the same question"
-    # A question the person could not read is refused whole: no task is left behind.
-    secret = post(
-        api, "tasks", {"owner": "ops", "title": "Draft the settlement terms", "body": "Only us.", "private": True}
-    )
-    err, refused = call(
-        api,
-        "hub_task_question",
-        {"question": "Sign the settlement today?", "on": "ben", "private": True, "parent": secret["id"]},
-        token=attempt["token"],
-    )
-    assert err and refused["error"] == "privacy"
-    # Nor to a person who may not read this bot's work: the question would reach them, the task would not.
-    with api.app.state.store.transaction() as c:
-        restrict(c, "ops", people=["ana"])
-    err, hidden = call(
-        api, "hub_task_question", {"question": "Renew the vendor contract today?", "on": "cara"}, token=attempt["token"]
-    )
-    assert err and hidden["error"] == "privacy"
-    # With a file, the same refusal comes before any bytes are stored.
-    png = base64.b64encode(b"\x89PNG never stored").decode()
-    picture = {
-        "question": "Which banner?",
-        "on": "cara",
-        "options": [
-            {"label": "A", "then": "Go with A", "file": {"name": "a.png", "content_base64": png}},
-            {"label": "B", "then": "Go with B"},
-        ],
-    }
-    r = api.post("/api/v2/task-questions", json=picture, headers=headers(attempt["token"]))
-    assert r.status_code == 403 and not any(
-        api.app.state.blobs.directory.rglob(hashlib.sha256(b"\x89PNG never stored").hexdigest())
-    )
-    r = api.post("/api/v2/task-questions", json={**picture, "on": "ana"}, headers=headers(attempt["token"], "pic-1"))
-    assert r.status_code == 200 and r.json()["question"]["refs"]["questions"][0]["options"][0]["file"]
-    again = api.post(
-        "/api/v2/task-questions", json={**picture, "on": "ana"}, headers=headers(attempt["token"], "pic-1")
-    )
-    assert again.status_code == 200 and again.json()["task"]["id"] == r.json()["task"]["id"]
-    # A private question refused in the write's checks stores no bytes either.
-    secret_png = base64.b64encode(b"\x89PNG private, never stored").decode()
-    hidden_pick = {
-        "question": "Which settlement banner?",
-        "on": "cara",
-        "private": True,
-        "parent": secret["id"],
-        "options": [
-            {"label": "A", "then": "Go with A", "file": {"name": "a.png", "content_base64": secret_png}},
-            {"label": "B", "then": "Go with B"},
-        ],
-    }
-    r = api.post("/api/v2/task-questions", json=hidden_pick, headers=headers(attempt["token"]))
-    assert r.status_code == 403 and r.json()["error"]["code"] == "privacy", r.text
-    assert not any(api.app.state.blobs.directory.rglob(hashlib.sha256(b"\x89PNG private, never stored").hexdigest()))
-    with api.app.state.store.read() as c:
-        assert (
-            c.execute(
-                "SELECT count(*) FROM tasks WHERE title LIKE 'Which settlement banner%' "
-                "OR title LIKE 'Sign the settlement%' OR title LIKE 'Renew the vendor%'"
-            ).fetchone()[0]
-            == 0
-        )
-    with api.app.state.store.read() as c:
-        assert (
-            c.execute(
-                "SELECT count(*) FROM tasks WHERE title LIKE 'Sign the settlement%' OR title LIKE 'Renew the vendor%'"
-            ).fetchone()[0]
-            == 0
-        )
-    made = out["task"]
-    # A question task: the person owns it, the bot asked it (backend/question_tasks.py).
-    assert (made["owner_id"], made["requester_id"]) == ("human:ana", "bot:ops")
-    assert [o["label"] for o in out["question"]["refs"]["questions"][0]["options"]] == ["Yes", "No"]
-    item = next(i for i in get(api, "needs-you")["items"] if i["id"] == made["id"])
-    assert item["kind"] == "question" and item["ask"]["sender_id"] == "bot:ops"
-
-
-def test_a_private_question_goes_to_any_person_and_only_they_and_the_bot_read_it(api):
-    """`private: true` is a private task whose two parties are the bot and the person asked, whoever started the run."""
-    from backend.tests.helpers.api import unrelated_task_managers
-
-    with api.app.state.store.transaction() as c:
-        unrelated_task_managers(c)
-    _, _, attempt = setup_attempt(api)  # Ana started this run; the question goes to Ben
-    png = base64.b64encode(b"\x89PNG for ben").decode()
-    ask = {
-        "question": "Approve the Q3 bonus pool?",
-        "on": "ben",
-        "private": True,
-        "options": [
-            {"label": "Yes", "then": "Go with Yes", "file": {"name": "pool.png", "content_base64": png}},
-            {"label": "No", "then": "Go with No"},
-        ],
-    }
-    r = api.post("/api/v2/task-questions", json=ask, headers=headers(attempt["token"], "private-ben"))
-    assert r.status_code == 200, r.text
-    made = r.json()["task"]
-    assert made["private"] and (made["owner_id"], made["requester_id"]) == ("human:ben", "bot:ops")
-    assert get(api, f"tasks/{made['id']}", token="ben-test")["task"]["id"] == made["id"]
-    get(api, f"tasks/{made['id']}", token="cara-test", expected=404)
-    get(api, f"tasks/{made['id']}", token="ana-test", expected=404)  # who started the run is not a party
-    item = next(i for i in get(api, "needs-you", "ben-test")["items"] if i["id"] == made["id"])
-    assert item["kind"] == "question"
-
-
-def test_a_private_run_cannot_put_its_work_to_someone_outside_it(api):
-    """A run on Ana's private task cannot put a question to Ben: it would carry what only Ana may read."""
-    r = runner(api, "ana")
-    assign(api, r, "ops")
-    ready(api, r, ["ops"])
-    post(api, "tasks", {"owner": "ops", "title": "Plan the reorg", "body": "Only us.", "private": True})
-    attempt = claim(api, r)
-    err, refused = call(
-        api,
-        "hub_task_question",
-        {"question": "Move the design team under product?", "on": "ben", "private": True},
-        token=attempt["token"],
-    )
-    assert err and refused["error"] == "privacy", refused
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Move the design team%'").fetchone()[0] == 0
-
-
-def test_a_question_asked_from_a_run_on_the_bots_own_task_is_filed_under_it(api):
-    """One question, one card: no second top-level task just to ask. The bot's task stays the bot's."""
+def test_a_bot_asks_a_person_on_its_own_task_and_the_ask_is_in_their_needs_you(api):
+    """One ask, on the task: no second task just to ask. It carries the version the bot was shown; a stale one is
+    refused with the version the task has now; the ask is one line in the person's Needs you, and the bot takes it
+    back with --withdraw."""
     r = runner(api, "ana")
     assign(api, r, "ops")
     ready(api, r, ["ops"])
     work = post(api, "tasks", {"owner": "ops", "title": "Assess the vendor agent", "body": "Is it worth a test?"})
     attempt = claim(api, r)
-    asked = api.post(
-        "/api/v2/task-questions",
-        json={"question": "Run the vendor trial once?", "on": "ana"},
-        headers=headers(attempt["token"], "under-own-task"),
-    )
-    assert asked.status_code == 200, asked.text
-    made = asked.json()["task"]
+    err, shown = call(api, "hub_task_show", {"id": work["id"]}, token=attempt["token"])
+    assert not err and "version" in shown["text"], shown
+    version = shown["task"]["version"]
+    ask = {"id": work["id"], "to": "ana", "line": "Run the vendor trial once?", "choices": ["Yes", "No"]}
+    err, refused = call(api, "hub_task_ask", {**ask, "version": version - 1}, token=attempt["token"])
+    assert err and refused["error"] == "task_changed" and refused["version"] == version, refused
+    err, asked = call(api, "hub_task_ask", {**ask, "version": version}, token=attempt["token"])
+    assert not err, asked
     with api.app.state.store.read() as c:
-        from backend import hubdb as H, task_relations as TR
-
-        assert TR.parent_of(c, made["id"]) == work["id"]
-        assert H.task(c, work["id"])["owner_id"] == "bot:ops"
-    cards = [i["id"] for i in get(api, "needs-you")["items"]]
-    assert made["id"] in cards and work["id"] not in cards
+        assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == 1, "an ask is not a task"
+    item = next(i for i in get(api, "needs-you")["items"] if i["kind"] == "ask")
+    assert item["line"] == "Run the vendor trial once?"
+    err, out = call(api, "hub_task_ask", {"id": work["id"], "withdraw": True}, token=attempt["token"])
+    assert not err, out
+    assert not [i for i in get(api, "needs-you")["items"] if i["kind"] == "ask"]
 
 
 # ------------------------------------------------------------------ the computer list
@@ -858,7 +709,7 @@ def test_a_raw_body_and_a_json_body_are_one_or_the_other():
 
 
 def test_a_query_field_named_path_reaches_the_query_string(api, door):
-    """`get(path, **query)` takes the URL path positionally, so a query field may be called `path` (`hub file approved
+    """`get(path, **query)` takes the URL path positionally, so a query field may be called `path` (`tico file approved
     <path>` asks file-approvals that way). The server answers from the query: no file has these bytes, so not approved,
     with the digest echoed back. A path it did not receive would be a 422 instead."""
     _, _, attempt = setup_attempt(api)

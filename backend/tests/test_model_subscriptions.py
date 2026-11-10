@@ -658,6 +658,7 @@ def test_a_computer_with_only_a_codex_subscription_runs_codex_checks_and_their_l
     parent = post(api, "tasks", {"owner": "ops", "title": "Ship the import fix", "body": "Open the PR."})
     turn = claim(api, m)
     assert turn["task"]["id"] == parent["id"]
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-parent"}, m["token"])
     sub = post(
         api,
         "tasks",
@@ -667,11 +668,10 @@ def test_a_computer_with_only_a_codex_subscription_runs_codex_checks_and_their_l
             "body": "Read it.",
             "check_model": "codex",
             "check_role": "review",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
         turn["token"],
     )
-    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-parent"}, m["token"])
     post(api, f"attempts/{turn['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."}, m["token"])
     check = claim(api, m)  # handed out though Codex is not signed in on the computer
     assert check and check["task"]["id"] == sub["id"] and check["config"]["runtime"] == "codex"

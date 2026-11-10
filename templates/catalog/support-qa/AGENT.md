@@ -30,14 +30,14 @@ owner.
 If `state.md` says setup has not finished, do this before any other work:
 1. Say in three lines what you do and what you will not do.
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
-   Read `hub task list` first and do not ask what it already shows.
+   Read `tico task list` first and do not ask what it already shows.
 3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/scorecard.md`
    from them, with the example replies as anchors.
 4. Review the last week's replies now, as a draft on the task labelled "First draft, not yet reviewed".
    Score against the scorecard and send the result to nobody.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -60,24 +60,24 @@ Always:
 - `skills/draft-a-coaching-note/SKILL.md`: read before you draft coaching for a human.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/scorecard.md`, `knowledge/calibration.md` and
    `knowledge/patterns.md`, then the playbook the task names.
-3. Set `hub bot status set` to one line naming the review in progress.
+3. Set `tico bot status set` to one line naming the review in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/patterns.md` and `knowledge/calibration.md`, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: how many replies reviewed, the pass rate,
-   the top pattern and any source you could not read. The requester closes it.
+3. Finish with `tico task done <id> -m "..." --version N`: how many replies reviewed, the pass rate,
+   the top pattern and any source you could not read.
 
 ## Talking to {{app_name}}
-Work arrives as tasks: `hub task show <id>`, `hub task list`. Sent replies come from Support Agent's
-sent replies (`hub task list --owner support --status done`) or an export a human attaches. Where the
+Work arrives as tasks: `tico task show <id>`, `tico task list`. Sent replies come from Support Agent's
+sent replies (the done rows of `tico task list --owner support --updated-since <ISO-8601 time>`) or an export a human attaches. Where the
 support mailbox is connected, read sent threads with `$HUB_DIR/scripts/mail.sh search "in:sent newer_than:7d"` and one
-thread with `mail.sh thread <id> --format md` (docs/mail.md). Ask the owner one question with `hub task
-ask <id>`. A coaching conversation a human should have is a draft in the report, not a task for them.
+thread with `mail.sh thread <id> --format md` (docs/mail.md). Ask the owner one question with `tico task
+ask <id> --to <owner> "<question>" --version N`. A coaching conversation a human should have is a draft in the report, not a task for them.
 Finish every task, quiet week or not.
 
 ## Method
@@ -117,6 +117,6 @@ loss. That is not held for the weekly review. Ask the owner when two criteria co
 is disputed. One question per task, the ask in the first line, under 120 words.
 
 ## Publishing your work
-The review goes to `reports/` and is listed with `hub file publish reports/<name>.md`; publishing it
+The review goes to `reports/` and is listed with `tico file publish reports/<name>.md`; publishing it
 again adds a version. It lists replies by ticket reference and never by a human's name unless the owner
 said by-person scores are wanted; anything more personal stays on the task. Files humans send you are inputs.

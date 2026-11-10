@@ -19,7 +19,7 @@ import time
 import uuid
 from collections import namedtuple
 from concurrent.futures import Future
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 from urllib.parse import quote, urlencode, urlparse
@@ -212,6 +212,27 @@ def links(row):
         "permissions_url": base + "/permissions",
         "install_url": INSTALL_PATH,
         "uninstall_url": installations,
+    }
+
+
+def create_url(org, name=""):
+    """GitHub's new-repository page with the owner, name and private visibility filled in."""
+    query = {"owner": org, "visibility": "private"}
+    if name:
+        query["name"] = name
+    return "https://github.com/new?" + urlencode(query)
+
+
+def fixes(c, row, slug=""):
+    """The two ways out when Tico may not create a bot's repository, as links: create the repository (prefilled), or
+    let BotOps create repositories. In a personal account the second is authorizing Tico to create empty repositories
+    there."""
+    name = H.bot_repository_name(c, slug) if slug else ""  # named for the bot, id or slug in
+    return {
+        "repository": f"{row['org']}/{name}" if name else "",
+        "account_type": account_kind(row),
+        "create_url": create_url(row["org"], name),
+        "permissions_url": links(row)["permissions_url"],
     }
 
 
@@ -507,10 +528,7 @@ class GitHubApp:
                 return ""
 
     def forget(self, c):
-        from .repo_waits import forget
-
         c.execute("DELETE FROM github_app")
-        forget(c)
         c.execute("UPDATE repositories SET reachable=0 WHERE reachable<>0")
         c.execute("DELETE FROM github_app_states")
         c.execute("DELETE FROM github_user_token")
@@ -1216,7 +1234,7 @@ class GitHubApp:
         )  # a bot's repository may be either
         if self.can_create_repos():
             create = (
-                f"Create it with BotOps: `hub bot repo-create {slugs.split(', ')[0]}` "
+                f"Create it with BotOps: `tico bot repo-create {slugs.split(', ')[0]}` "
                 "(add `--empty` for a bot built locally, whose history its runner then pushes)"
             )
         elif (row := self.row()) and account_kind(row) == PERSONAL:
@@ -1262,7 +1280,7 @@ class GitHubApp:
 
     def repository_history(self, repository):
         """Whether GitHub's `repository` holds any commit: True, False (empty or missing), or None when it cannot
-        be learned. A repository `hub bot create` made is empty until the computer that built the bot publishes it."""
+        be learned. A repository `tico bot create` made is empty until the computer that built the bot publishes it."""
         if not repository or not self.row():
             return None
         try:
@@ -1297,8 +1315,6 @@ class GitHubApp:
                     raise
                 ready = False
         if not ready:
-            from .repo_waits import fixes
-
             with self.store.read() as c:
                 found = fixes(c, row, slug)
             how = (
@@ -1420,10 +1436,7 @@ class GitHubApp:
                 "detail": "Could not verify the installation's current Administration permission. No repository has been created.",
             }
         if permissions.get("administration") != "write":
-            from .repo_waits import permissions_url
-
-            with self.store.read() as c:
-                url = permissions_url(c, row)
+            url = links(row)["permissions_url"]
             return {
                 "status": "missing",
                 "detail": (
@@ -1715,7 +1728,7 @@ def install_github_app(app, settings, store):
             raise Problem(
                 "forbidden",
                 f"{name} is a bot repository name. Bots create product repositories only; a new "
-                "bot's repository is made with `hub bot repo-create`",
+                "bot's repository is made with `tico bot repo-create`",
                 403,
             )
 
@@ -1775,20 +1788,7 @@ def install_github_app(app, settings, store):
         scopes = [scope for scope, _ in found]
         return (set.intersection(*scopes) if scopes else set()), [run for _, run in found]
 
-    def fixer(c):
-        """Who can change the app's permissions on GitHub: the owner, else an Admin; "" when neither is on the
-        roster (Health still shows the alert)."""
-        auth = app.state.auth
-        if auth.owner_id(c):
-            return auth.owner_id(c)
-        for row in c.execute("SELECT id,email FROM humans ORDER BY rowid"):
-            if str(row["email"] or "").lower() in auth.bot_admins:
-                return row["id"]
-        return ""
-
     def status_view(refresh=False):
-        from .repo_waits import fixes, waits
-
         row = service.row()
         if not row:
             return {"connected": False}
@@ -1797,15 +1797,6 @@ def install_github_app(app, settings, store):
         authorized = service.user_authorized() if personal else False
         with store.read() as c:
             fix = fixes(c, row)
-            waiting = [
-                {
-                    "bot": bot,
-                    "repository": wait.get("repository") or "",
-                    "task_id": wait.get("task_id"),
-                    "create_url": fixes(c, row, bot)["create_url"],
-                }
-                for bot, wait in sorted(waits(c).items())
-            ]
         page = links(row)
         return {
             "connected": True,
@@ -1822,7 +1813,6 @@ def install_github_app(app, settings, store):
             "settings_url": page["settings_url"],
             "permissions_url": fix["permissions_url"],
             "create_url": fix["create_url"],
-            "waiting": waiting,
             "uninstall_url": page["uninstall_url"],
         }
 
@@ -1833,20 +1823,12 @@ def install_github_app(app, settings, store):
 
     @app.post("/api/v2/github/app/check-permissions")
     def check_permissions(request: Request):
-        """After the owner accepts Administration on GitHub: read the installation's permissions again and finish
-        any bot whose repository was waiting for them."""
+        """After the owner accepts Administration on GitHub: read the installation's permissions again."""
         owner(request)
-        from .repo_waits import resume
-
         service.live.pop("turn-reads", None)
         for raised in RAISES:
             service.live.pop(raised.refused_key, None)
-        view = status_view(refresh=True)
-        if view.get("connected"):
-            view["resumed"] = resume(service)
-            if view["resumed"]:
-                view = {**status_view(), "resumed": view["resumed"]}
-        return view
+        return status_view(refresh=True)
 
     @app.get("/api/v2/github/app/manifest")
     def manifest_form(request: Request, org: str, name: str = "", administration: bool = True, html: bool = False):
@@ -2110,18 +2092,11 @@ def install_github_app(app, settings, store):
         return found
 
     def saved_authorization(actor, row, login, github_id, tokens):
-        """Keeps the owner's authorization for the account, under the lock a refresh takes, and lets the bots waiting for
-        their repository in it go on. Returns Tools' redirect."""
+        """Keeps the owner's authorization for the account, under the lock a refresh takes. Returns Tools' redirect."""
         with service.user_lock:  # the lock a refresh takes: no refresh runs against the pair this replaces
             with store.transaction() as c:
                 service.save_user_token(c, actor, login, github_id, tokens)
                 H.event(c, actor, "github.user_authorized", row["slug"], {"login": login})
-        from .repo_waits import resume
-
-        try:
-            resume(service)  # a bot waiting for its empty repository in this account goes on now
-        except (Problem, ValueError):
-            log.warning("Checking waiting bots after the authorization failed")
         return RedirectResponse("/#/tools/github?github=authorized", status_code=302)
 
     def installed_without_state(who, installation_id: str, code: str):
@@ -2583,21 +2558,11 @@ def install_github_app(app, settings, store):
         except Problem as problem:
             if problem.code not in ("github_permission_missing", "github_user_token"):
                 raise
-            # A person must act. One Needs-you task per bot, however often this is retried; the bot keeps its
-            # local build and finishes on its own once the repository or the permission appears (repo_waits).
-            from .repo_waits import raise_item
-
-            with store.transaction() as c:
-                bot = H.resolve_bot(c, slug)
-                if builder:
-                    built_on.remember(c, (bot or {}).get("id", slug), builder)
-                if bot and bot.get("state") != "archived" and service.row(c):
-                    found = raise_item(c, bot["id"], service.row(c), fixer(c), "" if body.empty else template)
-                    problem.extra = {**problem.extra, "needs_you_task": found["task_id"]}
-                    problem.detail += (
-                        " The owner has a Needs-you task with both fixes; the bot keeps its local "
-                        "build and finishes on its own once either is done."
-                    )
+            # A person must act: the refusal names both fixes. The bot keeps its local build; BotOps asks again
+            # once either is done.
+            if builder:
+                with store.transaction() as c:
+                    built_on.remember(c, (H.resolve_bot(c, slug) or {}).get("id", slug), builder)
             raise
         with store.transaction() as c:
             if builder:

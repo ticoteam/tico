@@ -52,24 +52,24 @@
             {
                 "code": "reportOptionalSubscript",
                 "range": {
-                    "startColumn": 88,
-                    "endColumn": 91,
+                    "startColumn": 89,
+                    "endColumn": 92,
                     "lineCount": 1
                 }
             },
             {
                 "code": "reportOptionalSubscript",
                 "range": {
-                    "startColumn": 53,
-                    "endColumn": 56,
+                    "startColumn": 54,
+                    "endColumn": 57,
                     "lineCount": 1
                 }
             },
             {
                 "code": "reportOptionalSubscript",
                 "range": {
-                    "startColumn": 96,
-                    "endColumn": 99,
+                    "startColumn": 98,
+                    "endColumn": 101,
                     "lineCount": 1
                 }
             },

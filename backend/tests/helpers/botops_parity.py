@@ -6,7 +6,7 @@ from backend.store import H
 
 
 def act(api, attempt, method, path, body=None, ref="turn"):
-    """One `hub api` call: the request BotOps makes, asking to be answered as the person it works for."""
+    """One `tico api` call: the request BotOps makes, asking to be answered as the person it works for."""
     kwargs = {"headers": {**headers(attempt["token"]), **({"X-Tico-On-Behalf-Of": ref} if ref else {})}}
     if body is not None:
         kwargs["json"] = body

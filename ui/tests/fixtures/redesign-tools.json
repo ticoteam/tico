@@ -54,7 +54,7 @@
     "title": "Acme Postgres",
     "kind": "sql",
     "summary": "The product database, read only",
-    "access": "hub db",
+    "access": "tico db",
     "credentials": [
      "DB_ACME_URL"
     ],
@@ -237,7 +237,7 @@
     }
    ],
    "queries": [],
-   "body": "## What it is\n\nAcme's CRM for leads and deals.\n\n## What data it has\n\nLeads, contacts, opportunities.\n\n## How a bot uses it\n\nRead with `hub tool`. Join leads to accounts in [Acme Postgres](postgres.md).\n\n## Rules\n\nNever email a lead from here.\n\n## Recipes\n\nNone yet.\n\n## Gotchas\n\nThe API pages at 100.\n\n## Learnings\n\nSee below.\n",
+   "body": "## What it is\n\nAcme's CRM for leads and deals.\n\n## What data it has\n\nLeads, contacts, opportunities.\n\n## How a bot uses it\n\nRead with `tico tool`. Join leads to accounts in [Acme Postgres](postgres.md).\n\n## Rules\n\nNever email a lead from here.\n\n## Recipes\n\nNone yet.\n\n## Gotchas\n\nThe API pages at 100.\n\n## Learnings\n\nSee below.\n",
    "learnings": [
     {
      "id": "l2",
@@ -260,7 +260,7 @@
    "title": "Acme Postgres",
    "kind": "sql",
    "summary": "The product database, read only",
-   "access": "hub db",
+   "access": "tico db",
    "credentials": [
     "DB_ACME_URL"
    ],
@@ -285,7 +285,7 @@
      "params": []
     }
    ],
-   "body": "## What it is\n\nThe Acme product database.\n\n## What data it has\n\nAccounts and orders.\n\n## How a bot uses it\n\n`hub db acme`.\n\n## Rules\n\nRead only.\n\n## Recipes\n\nSee the queries.\n\n## Gotchas\n\nTimestamps are UTC.\n\n## Learnings\n\nSee below.\n",
+   "body": "## What it is\n\nThe Acme product database.\n\n## What data it has\n\nAccounts and orders.\n\n## How a bot uses it\n\n`tico db acme`.\n\n## Rules\n\nRead only.\n\n## Recipes\n\nSee the queries.\n\n## Gotchas\n\nTimestamps are UTC.\n\n## Learnings\n\nSee below.\n",
    "learnings": []
   },
   "mail": {

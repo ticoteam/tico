@@ -18,7 +18,7 @@ its test and decision date, each draft is saved, the review is published, and th
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Read last week's review, `knowledge/sources.md` and `knowledge/handoff.md`. For each source plan last week, note whether its
 test ran, its decision date, and what it showed.
@@ -65,13 +65,13 @@ Write `reports/YYYY-MM-DD-lead-generation.md` in the shape of `knowledge/example
 
 Then:
 
-    hub file publish reports/YYYY-MM-DD-lead-generation.md
+    tico file publish reports/YYYY-MM-DD-lead-generation.md
 
 Add the dated figures to `knowledge/sources.md` and `knowledge/handoff.md`, rewrite `state.md`, and commit this repository.
 
 ## 8. Close
 
-    hub task update <id> --status done --note "..."
+    tico task done <id> -m "..." --version N
 
 The note holds the headline, the review path, and what you could not read. Finish the task even on a quiet week: an open
 routine task gets absorbed into the next run.

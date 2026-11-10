@@ -10,46 +10,21 @@ announcement is required.
 
 **One release path.** On a team that runs Tico with a Release Manager bot, only the Release Manager publishes
 releases. A Claude Code session or any other outside session that finishes work hands it to the Release Manager on a
-task ("Release vX.Y.Z: <what>") instead of pushing the tag itself; the Release Manager tags, rolls out and records it,
-so the tasks waiting on the release learn it shipped. Tico itself never moves a task on a tag, release or deploy; it
-only marks the merged PR links the running release contains as Shipped (backend/github.py).
+task ("Release vX.Y.Z: <what>") instead of pushing the tag itself; the Release Manager tags, rolls out and records it.
+Tico itself never moves a task on a tag, release or deploy; it only marks the merged PR links the running release
+contains as Shipped (backend/github.py). Routines can run `on: release_published` for one task per release.
 
 Tico's own repository is the exception: it releases itself through [the release train](#the-release-train) in
-GitHub Actions. No bot tags or rolls out Tico releases. Getting reviewed work merged is Tico's and the Engineering
-pipeline manager's ([Tico merges](#tico-merges)).
+GitHub Actions. No bot tags or rolls out Tico releases. Reviewed work reaches main through the
+[merge queue](#merge-queue).
 
-**When releases are cut.** The Release Manager hears about Dev tickets at Pending Release once, as one task:
-"Release: <n> tickets at Pending Release". It arrives once a day at a set hour (10:00 company time by default;
-an owner or admin changes the hour, adds a second one or turns it off in Settings, or with `hub release schedule`),
-and not at all when nothing is pending. A ticket arriving at Pending Release wakes no one. For a hotfix or a
-midday release, a person who moves Dev tickets (or the Release Manager or Head of Engineering bot) runs `hub release now [--note ...]`;
-it sends the same task at once, or wakes the Release task the Release Manager already has open. With nothing at
-Pending Release, a person's `--note` still asks (work often reaches main as pull requests that were never Dev tickets):
-the task, "Release: requested by <name>", carries the note and no ticket list. A bot's request, or a person's with no
-note, sends nothing. The Release
-Manager is the bot the schedule setting names, else the one built from the `release-notes` starter; with neither,
-nothing is sent.
-
-**After a release is published**, Tico acts on the Dev tickets the release carries (at Pending Release with a
-pull request merged in the release repository; prereleases excepted). It wakes each ticket's QA owner (tickets
-tagged `qa` only: the post-release tests), leaves each ticket a quiet "Shipped in vX.Y.Z" note, and files the
-Technical Writer ONE task for the release, "Docs for vX.Y.Z: N tickets", listing each ticket with its pull request.
-A private ticket the writer or the Release Manager may not open is named by its public title (and public summary) when
-it has one. Without one it is only counted: the task says to leave it out of the docs and release notes, and nobody is
-asked for its name. A ticket the reader may open is listed by its title as usual.
-The writer links its open PR on that General task. Tico sends it through the company's ticket review pools
-(Review 1, then Review 2 if configured), recording each verdict at the PR head. A push needs a new review.
-Current-head approvals and green checks wake the writer to merge under the repo's rules, or send the merge to
-an existing repo writer when the writer lacks access. Changes and a conflict return to the writer.
-Older open bot PRs enter this same route at a limited rate; Health names PRs waiting over 24 hours without a review.
-It is separate from the release command's "Release notes for vX.Y.Z" task. Docs and release notes are not part of
-the pre-release checklist. Only the owner, a person who moves Dev tickets, the Release Manager and the bot that
-manages the Dev tickets type run `hub release now`. Routines can run `on: release_published` for one task per release.
+The Engineering pipeline, whose Merge and Release stages queue the PRs and wait for a published release, comes in a
+later 0.6 phase ([Engineering](pipelines-v3.md#engineering)).
 
 ## The release train
 
 Tico's own releases (ticoteam/tico) go out on their own, at any hour, run by `.github/workflows/train.yml` and
-`scripts/release_train.py`. There are no release windows. No one tags by hand.
+`scripts/release_train.py`. There are no release windows. No one tags by hand, except a new line's first release ([A new line](#a-new-line)).
 
 - **When.** A candidate is cut whenever main has merged work past the newest release and no candidate is in flight
   (no validation running, and the newest tag is published). No new commit, no release. Nothing is stored: every run works
@@ -83,6 +58,16 @@ Tico's own releases (ticoteam/tico) go out on their own, at any hour, run by `.g
 - **By hand.** `gh workflow run train.yml --ref main` runs one step now (promote, then ship or validate, validating a
   red or cancelled head again), even with `RELEASE_TRAINS` off. `python3 scripts/release_train.py status` (with
   `GITHUB_TOKEN`, and the install variables to see them) shows the next step, the approvals and what each install runs.
+
+### A new line
+
+The train cuts patches of one line, `LINE` in `scripts/release_train.py` (now 0.6). While the newest release is on an
+older line, it cuts nothing and says so on the `release-train` issue: the line's first release (v0.6.0, and its rcs
+before it) is tagged by hand. After that tag it cuts v0.6.1 and on as usual.
+
+0.6 starts fresh (see [Updates](updates.md#from-05-to-06-every-company-starts-over)). The train never updates an install
+that runs 0.5 to 0.6 or later: promotion skips it, and a hotfix or ship to it fails. Move such an install by hand, on a
+new database.
 
 Triggers: every push to main, every finished Release validation run, a manual run, and a backstop every 20 minutes (at
 :05, :25 and :45) for a missed event, a release waiting for stable and a release waiting for latest. A small read-only
@@ -118,7 +103,7 @@ The train validates a head in one of two ways. A **full** validation is the whol
   its own. Until then a release can wait up to a day, so a person who needs it sooner runs it by hand.
 - **Incremental candidate.** A later head runs only: what `scripts/pr_checks.py` selection picks for anchor..head (the
   merge queue's rules before its light plan's two-level cut, never the full suite; so it runs the tests a queue group
-  left out), the browser smoke set, the factory part when its inputs changed, the
+  left out), the browser smoke set, the
   product part (the upgrade journey and the Docker smoke checks) when the candidate's previous release is not the
   anchor's, and the tests that failed in the open red runs (below). A failed file that marks slow tests also runs in the
   contracts lane (`-m slow`). The plan is `scripts/release_increment.py`.
@@ -282,12 +267,10 @@ Release 1 is the contract release: the column renames and retired spellings (`ca
 come from that tag together. Each install upgrades on its own, one at a time: Acme Team first, as the canary, then
 Acme Ops. An install starts the next one only when the first is healthy and its computers have followed.
 
-Stored work carries over. Approvals keep their payloads and hashes, because the renames touch column names and no
-payload key. Queued jobs, webhook sends and automation definitions are rows the new release reads. Rule conditions and
+Stored work carries over. Queued jobs, webhook sends and automation definitions are rows the new release reads. Rule conditions and
 task-received automations that name `owner` or `requester` keep matching, because those names are read through the
 rename map. A webhook send queued before the cutover goes out with its body named as the new API names it.
-`backend/tests/test_inflight_cutover.py` pins the approval path on a database from before the renames, and the webhook,
-rule and automation cases on rows as they were saved.
+`backend/tests/test_inflight_cutover.py` pins the webhook, rule and automation cases on rows as they were saved.
 
 Per install, in this order:
 
@@ -348,7 +331,7 @@ checkout's Git metadata. `publish` dispatches Release validation with the frozen
 event, main branch, exact run title, candidate SHA and successful conclusion, checks main still equals the frozen
 commit and tags it. Main moving at any checkpoint refuses the release. It then waits for the GitHub release to be
 published and files one task, "Release notes for vX.Y.Z", for the Technical Writer (`--writer <bot>`, default
-`docs-writer`) with the release's commit range. The command needs `gh` and a `hub` login that can create tasks.
+`docs-writer`) with the release's commit range. The command needs `gh` and a `tico` login that can create tasks.
 The command does not replace the release's publishing approval, evidence checklist or rollout.
 
 Run `publish` in the background while validation runs. A validation run that ends canceled is rerun by `publish` (same
@@ -374,13 +357,13 @@ new commit to borrow an old run. Roll back this tooling change by reverting it; 
 Open the pull request as a draft and run tests on your computer while you work: a draft runs no checks, so pushes are
 free. When the change is done, `python3 scripts/pr_checks.py local --ready` runs the tests the plan selects for the
 branch (the same selection a pull request's run makes, through `scripts/heavy.sh`), prints a receipt line naming the full
-head sha and the result for the ticket's review gate, and marks the draft ready after a pass; without `--ready` it only
-runs and prints. It names what only CI runs (Rust conformance, the factory simulation). A change that reaches most of
+head sha and the result for the task's review, and marks the draft ready after a pass; without `--ready` it only
+runs and prints. It names what only CI runs (Rust conformance). A change that reaches most of
 the suite (a catalog template, a shared module) selects most of it: with `TICO_HEAVY_REMOTE=1` each part runs on a RunsOn
 VM against the pushed head instead. Mark a pull request ready once:
 each later push runs its checks again. A push to a ready pull request runs the cheap checks on free GitHub-hosted runners:
 lint, the generated UI types, the runner wire contract, the migration names, shell scripts and workflows, and whether
-the recorder changed. A ready pull request from this repository also runs the tests and the factory sim its plan selects, on GitHub-hosted runners; the required check `checks` aggregates them all. A fork's pull request runs the cheap checks
+the recorder changed. A ready pull request from this repository also runs the tests its plan selects, on GitHub-hosted runners; the required check `checks` aggregates them all. A fork's pull request runs the cheap checks
 only. The merge queue runs the tests again: once per queue group,
 it selects them from the group's merged change (base to group head) with the measured static dependency map: what each
 tracked file imports (transitively), runs by path (scripts, `-m` modules, shell and JavaScript) and reads by path (data
@@ -439,12 +422,12 @@ slow tests and every browser script, and release candidate validation covers tha
 ## Merge queue
 
 Main takes changes only through its merge queue. Mark the pull request ready for review, wait for its `checks` to pass,
-then enqueue it with `gh pr merge <N> --merge` (a bot's Dev ticket is queued by Tico: [Tico merges](#tico-merges)). The queue adds the pull request to a group, merges the group onto the current main, runs the selected
+then enqueue it with `gh pr merge <N> --merge`. The queue adds the pull request to a group, merges the group onto the current main, runs the selected
 checks on that merge commit, and moves main only when they pass.
 
 - **Each push to a pull request** (GitHub-hosted, free): plan, static checks and the `checks` gate. A draft runs nothing.
-- **A ready pull request from this repository** (GitHub-hosted): the selected Python and browser tests, the factory
-  sim, and every other job a queue group runs under the same conditions (the Caddy image, Rust lint, the desktop app and
+- **A ready pull request from this repository** (GitHub-hosted): the selected Python and browser tests, and every other
+  job a queue group runs under the same conditions (the Caddy image, Rust lint, the desktop app and
   the macOS recorder tests when the change reaches them), on each push, so a failure shows before the change is enqueued.
   The plan decides which of those the change reaches, so a job it does not reach starts no VM. Only the cosmetic timing
   receipt is queue-only. A failed leg cancels the run (`gh run cancel`), so `checks` fails within minutes. A fork's pull
@@ -454,10 +437,6 @@ checks on that merge commit, and moves main only when they pass.
   not reach starts no VM. The group's base is the head of the group ahead of it, so it selects from its own pull
   request's change. Its tests pack toward 19 test VMs at most (`NARROW`, and `CEILING` in
   `scripts/pr_checks.py`), each planned at the 330-second job target including setup; the organisation allows 500 concurrent hosted jobs, so a larger selection takes more VMs, up to `TICO_CI_MAX_JOBS`.
-- **The factory simulation** (GitHub-hosted, one 4-vCPU runner per group): seed 1 of every scenario, in a queue group or on a ready
-  pull request, only when the change
-  reaches what the sim runs (`evals/factory/call_path.json`, measured; see `evals/factory/README.md`). A failed scenario
-  check fails the group. Release validation runs seeds 1-3 as before.
 - **Quarantined tests**: a test that failed and passed on the same commit (a rerun attempt, or two runs of one commit)
   is flaky. Its entry in `ci/quarantine/` (one JSON file per test: test id, first seen, run urls, ticket) makes PR checks
   and queue groups run it as a non-strict xfail (`scripts/pr_checks.py run --quarantine`), so it cannot fail them.
@@ -472,8 +451,7 @@ queue runs the selected set once per group.
 **Enqueue once.** A pull request needs no rebase to be current: the queue merges it onto the current main. Rebase only when
 GitHub reports a conflict. `--admin` and the REST merge endpoint skip the queue; do not use them.
 
-**A red queue run** removes the failing pull request from the queue, and the queue retests the entries behind it. For a
-pull request Tico queued, the pipeline manager gets it ([Tico merges](#tico-merges)). Otherwise, fix the failure on the branch, push, mark the PR ready again if it went back to draft, and enqueue it again. A failing test shows on
+**A red queue run** removes the failing pull request from the queue, and the queue retests the entries behind it. Fix the failure on the branch, push, mark the PR ready again if it went back to draft, and enqueue it again. A failing test shows on
 the pull request's own run first when the change reaches it directly: a ready pull request runs a light set (the tests
 that import, name or read a changed file, the smoke set, at most ten VMs), and its queue group goes one level further (at
 most nineteen VMs). Each plan's job summary lists what it left out; release validation's incremental runs select the full
@@ -483,33 +461,6 @@ checks before enqueuing again.
 **Hotfixes do not bypass the queue.** Land the fix through the queue like any change, then dispatch `hotfix.yml` once it
 has landed (see Hotfixes above). The queue itself is a repository ruleset (`merge_queue`, and `checks` as the required
 check), set by a maintainer.
-
-## Tico merges
-
-Nobody merges a bot's Dev ticket by hand. Once the last check before the merge approved the pull request's current head
-and CI is green there, Tico merges it itself, as the company's GitHub App, at that exact head (backend/merge_arm.py).
-It runs in the heartbeat's GitHub sync, at most once a minute, for any repository the App reaches:
-
-- **Arm.** A branch with a merge queue gets the pull request queued (auto-merge, or an enqueue when auto-merge is off).
-  A branch with none gets it merged, as a merge commit, else a squash, else a rebase. A person's card and a repository
-  the App does not reach keep the old way: the owner is woken to merge.
-- **Arm again.** A head that GitHub has not queued 10 minutes after it was armed (auto-merge turned off, a refused
-  request) is armed again, at most three times per head.
-- **A queue removal** of a head Tico armed is read first. One that is not the change's fault (a cancelled or
-  superseded queue run, a cleared queue, a timeout, a group that failed because of another PR) is armed again once per
-  head. Tico tells them apart by the queue run's jobs: a failed leg with nothing cancelled, or two failed jobs, is a real
-  failure; cancelled legs with at most one failed gate job are not.
-- **The pipeline manager fixes the rest.** A real failure, a second removal at one head, a conflict with the base
-  branch, or a head GitHub refused three times becomes one task for the card's pipeline manager (`Fix PR #N for
-  merge`, a subtask of the card): the failing jobs with their log links, the head, and the reason. A second problem
-  with the same pull request wakes that task instead of filing another. The builder is not woken and the card stays
-  at its stage. The task closes when the pull request merges.
-- **Merged.** The card goes to its merged step (Pending Release), also when Tico read the merge instead of getting its
-  webhook.
-- **Removed by hand.** A removal with the reason `MANUAL` stops Tico arming that head. A new push starts over.
-
-The state is on the pull request's link (`detail.merge_arm`: the head, when, how many tries, and whether it was handed
-to the manager or stopped).
 
 ## Hosted release validation
 
@@ -538,7 +489,7 @@ frozen can check that candidate without changing it. The candidate's `scripts/re
 It can also run one slice of the gate (`--part product|browser|python|desktop`, with `--shard K/N` splitting the Python test
 files, or the browser scripts, into N groups balanced by the times in `scripts/test-timings.json`; refresh the browser
 times with `--record-browser-timings` from a validation's browser logs). The hosted workflow selects product, four browser
-shards, 36 Python shards, desktop and twelve factory-sim groups (the sim's own VMs). Every part starts with the candidate and runs its setup while the Linux
+shards, 36 Python shards, desktop. Every part starts with the candidate and runs its setup while the Linux
 binaries build. Product, desktop and Python shards 1–2 wait for those binaries; the other shards start their tests
 immediately. Only product needs the images and waits for the image builds;
 without `--part`, the command runs the whole gate, with desktop only where the Linux app builds. The desktop
@@ -559,9 +510,6 @@ two-minute binary wait rather than adding collection to the critical Python shar
 default collection in `scripts/pr_checks.py`, before affected-file filtering, so the guard adds no collection or job.
 Both guards fail if a collected file is missing from the filesystem plan; extra empty or deselected candidates are
 allowed. The existing no-test-passed check still rejects a release shard that proves nothing.
-Beside the gate, twelve `factory-sim` jobs run the factory simulation (`evals/factory`) on seeds 1-3, packed into twelve
-groups by `evals/factory/timings.json`. A failed check fails the release; NOTE lines
-(tickets over 24 h, a step over 12 h) go in the job summary for the Release Manager to read.
 Native runner/relay prerequisites are the run's own builds, and their fingerprints are checked before tests. Python and
 Node Playwright browsers (Chromium and WebKit) are installed explicitly. The run records both SHAs, source-tree identity,
 architecture, capacity, worker settings, phase exits and bounded log tails as a three-day artifact; the candidate must
@@ -577,34 +525,34 @@ computer acceptance still need the corresponding Mac environment. The full Docke
 
 ## Before you tag
 
-Build the release task's evidence checklist from the candidate's merged PRs and their linked Dev tickets:
+Build the release task's evidence checklist from the candidate's merged PRs and their linked tasks:
 
 ```sh
 python scripts/release_checklist.py --head <candidate> --previous vX.Y.Z > checklist.md
 python scripts/release_checklist.py --head <candidate> --previous vX.Y.Z --json > checklist.json
 ```
 
-Run in a checkout with fetched release tags, a `gh` login for the repository and a scoped `hub` login for
+Run in a checkout with fetched release tags, a `gh` login for the repository and a scoped `tico` login for
 the shared team API. No local team database is opened. Without `--previous`, it selects the earlier release
 tag using the freeze guard's rule. `--github owner/repository` overrides the checkout's origin.
 Attach the Markdown checklist to the release task; the JSON companion retains structured evidence and source
 message IDs. The checklist includes every PR found in the first-parent candidate range, each visible linked
-Dev ticket's current step, Review 1/2 verdicts and their full heads, test receipts, `qa` tag, QA verdicts and
+task's stage, Review 1/2 verdicts and their full heads, test receipts, `qa` tag, QA verdicts and
 Technical Writer tasks and links. Security is outside the release pipeline; no Security result is required.
 
-Evidence comes from the ticket owner's messages and the owners of step children titled `Review 1:`,
+Evidence comes from the task owner's messages and the owners of sub-tasks titled `Review 1:`,
 `Review 2:`, `QA:`, `Docs:`, `Documentation:` or `Technical Writer:`. Review 1 always requires a verdict;
-Review 2 requires one when its step child exists, and `qa` tickets require a QA approval. Docs are not
-checked here: the Technical Writer starts after the release (below). The latest verdict must approve the merged PR head; older heads are flagged for the Release Manager
+Review 2 requires one when its sub-task exists, and `qa` tasks require a QA pass. Docs are not
+checked here. The latest verdict must approve the merged PR head; older heads are flagged for the Release Manager
 to resolve with the recorded review delta. A passing test receipt names the full PR head, tests and a passing
 result on the same line (for example, `Tests: head <full-sha>: 12 passed, 0 failed`). The latest receipt for that
 head must pass; a newer pending result remains a gap. Any recorded failure at that head stays a gap for the Release
-Manager to resolve, including after a passing rerun. Other test messages remain visible as evidence. Unrecorded reviews, legacy evidence elsewhere and unreadable tickets stay gaps rather
+Manager to resolve, including after a passing rerun. Other test messages remain visible as evidence. Unrecorded reviews, legacy evidence elsewhere and unreadable tasks stay gaps rather
 than being inferred as passes.
 
 Exit 0 means no evidence gaps were found, 1 means the report lists gaps, and 2 means collection failed
 (including incomplete pagination). This is a visible-evidence snapshot for the Release Manager to read;
-it does not run tests, authorize a release, move tickets, dispatch workflows or replace the freeze guard.
+it does not run tests, authorize a release, move tasks, dispatch workflows or replace the freeze guard.
 
 At freeze, before asking for Release validation, check what the candidate carries since the previous tag:
 
@@ -615,14 +563,14 @@ python scripts/freeze_guard.py --head <candidate> --receipts receipts.json
 It names every change that undoes a pull request an earlier release shipped (a stale tree committed over newer work,
 or a reverted fix put back): all of it, however small, or most of its meaningful product lines; tests
 don't count. It compares against all history unless `--releases N` limits it (about 15 seconds for a release of 60
-pull requests). It also names every merged pull request whose final head has no approving GitHub review or ticket
+pull requests). It also names every merged pull request whose final head has no approving GitHub review or task
 review receipt at that commit (an approval of an earlier head counts only when the change is the same line for line),
 and every commit that landed without a pull request. With no `--previous`, it takes the newest release tag that doesn't
 already contain the candidate, and refuses to check an empty range. `receipts.json` lists the heads
-the tickets' reviewers approved (`[{"pr": 639, "head": "<sha>", "source": "<ticket>"}]`); the script's docstring has
+the tasks' reviewers approved (`[{"pr": 639, "head": "<sha>", "source": "<task>"}]`); the script's docstring has
 the format. It exits 1 with findings: settle each one before the candidate goes on, with a review of the final head
 or, for an intended revert, a receipt naming the pull request and the change it undoes
-(`{"pr": 640, "reverts": "<sha>", "source": "<ticket>"}`).
+(`{"pr": 640, "reverts": "<sha>", "source": "<task>"}`).
 
 ```
 python scripts/release_checks.py --release                     # this checkout is the candidate (v9.9.9)
@@ -665,7 +613,12 @@ at the same time, each with its own Docker names; the journey proceeds once thos
   the candidate server, move the computer to the candidate runner and check the variable, the session, the worktree
   and the rows survived and that a turn still answers once the harness's saved session is gone, roll back an update that migrates the database and never turns healthy (the pre-update
   snapshot is restored, with the server's real entrypoint running Litestream), and update once more to a third build
-  so the replaced updater has to pull its image, refresh the bundle and replace itself again.
+  so the replaced updater has to pull its image, refresh the bundle and replace itself again. When the previous
+  release is below 0.6 and the candidate is 0.6 or later (`scripts/journey_plan.py` says `fresh-start`), the seeded
+  install is not upgraded: the candidate's own start on its data volume must exit non-zero with the fresh-start
+  message and leave every database file byte-for-byte the same, the previous release must start on it again with its
+  tasks, and "Update now" to the candidate must be refused or roll back. A new previous install with no tasks is
+  then upgraded in place, and the rest of the journey runs on it.
 
 It prints a phase table with each check's start offset, duration and exit code, plus total time and starting/ending
 load. It keeps the logs in a temporary directory and prints the end of any failed log. If any build fails, the
@@ -821,9 +774,10 @@ under `<prefix>/releases/app/` when a prefix is configured.
 
 ## The Release Manager's rollout
 
-A team that runs several installs can hand the whole rollout to its Release Manager bot. The owner's approval of a
-named release on its release task is the only gate: an approval card the bot requested (`hub approval request --kind
-publish`) that the owner approved, or the owner's own message on the task naming the version. From there the bot runs
+A team that runs several installs can hand the whole rollout to its Release Manager bot. The owner's OK of a named
+release on its release task is the only gate: an OK the bot asked of the owner on that task
+(`tico task ask <id> --to <owner> --kind ok "Release vX.Y.Z?"`), or the owner's own message on the task naming the
+version. From there the bot runs
 `playbooks/rollout.md` (`software/rollout.py` in its repository) without waiting on anyone:
 
 1. it creates the tag `vX.Y.Z` at the approved commit through the GitHub API, with its own write grant on the
@@ -842,10 +796,10 @@ leaves the other installs untouched, and the bot asks the owner what to do next.
 Setup, once:
 
 - **Write on the repository.** An owner or admin ticks the repository in Settings → General → Repositories and gives the bot
-  write on it: `hub bot repos <slug> --chosen <owner>/<repo>:write` (list the bot's other chosen repositories in the
+  write on it: `tico bot repos <slug> --chosen <owner>/<repo>:write` (list the bot's other chosen repositories in the
   same command; `--chosen` replaces them), or the same in the bot's settings ([Repositories](repositories.md)).
 - **An update key per install.** The owner of each install, the team's own included, runs
-  `hub service-key create --label "<team> Release Manager" --scope update` there ([Service keys](service-keys.md#update-keys)).
+  `tico service-key create --label "<team> Release Manager" --scope update` there ([Service keys](service-keys.md#update-keys)).
   Each key is stored in Tools → Credentials on the Release Manager's install, granted to the bot, with the variable
   named in its config.
 - **The list of installs.** `knowledge/rollout.json` in the bot's repository: the repository, and each install's

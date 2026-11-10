@@ -13,7 +13,6 @@ type BotEditRow = Employee & {
   model?: string | null;
   revision?: number;
   compact_at?: number | null;
-  keep_tasks_going?: number | null;
   turns_at_once?: number | null;
   manages_reports?: boolean;
   browser_exit?: string | null;
@@ -56,7 +55,6 @@ function settingsBotEditorRows(e: BotEditRow) {
     <div class="sb-row"><span>Owners</span><div class="settings-owner-list" data-bot-owners>${chips(e.bot_owners) || '<span class="muted">Its owner</span>'}</div>${change('data-edit-bot-owners', 'owners')}</div>
     ${manage ? `<div class="sb-row"><span>Mail sending</span><span class="muted" data-mail-summary="${esc(e.id)}">…</span>${change('data-edit-mail', 'mail sending')}</div>` : ''}
     ${profileRowHTML(e)}
-    ${settingsKeepTasksRow(e)}
     ${settingsTurnsAtOnceRow(e)}
     ${settingsManagesReportsRow(e)}
     ${budgetRowHTML(e)}
@@ -106,18 +104,6 @@ function settingsBrowserExitRun(select: HTMLSelectElement): BotRun {
 function settingsCompactRun(select: HTMLSelectElement): BotRun {
   const slug = String(select.dataset.botCompact), compact_at = Number(select.value);
   return async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/compact-at`, {compact_at, expected_revision: rev}))?.revision ?? rev + 1;
-}
-function settingsKeepTasksRow(e: BotEditRow) {
-  if (e.agent) return '';
-  const current = e.keep_tasks_going == null ? '' : String(e.keep_tasks_going);
-  return `<div class="sb-row"><span>Keep N tasks going</span><input type="number" min="0" max="1000" step="1" class="settings-inline-select"
-    data-bot-keep-tasks="${esc(e.id)}" data-current="${esc(current)}" value="${esc(current)}" placeholder="No limit"
-    aria-label="Keep N tasks going for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}><span></span></div>
-    <div class="sb-sub muted">Blank: start assigned work whenever a turn is free. 0: off. Waiting work frees a place; reviews have no cap.</div>`;
-}
-function settingsKeepTasksRun(input: HTMLInputElement): BotRun {
-  const slug = String(input.dataset.botKeepTasks), keep_tasks_going = input.value === '' ? null : Number(input.value);
-  return async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/keep-tasks-going`, {keep_tasks_going, expected_revision: rev}))?.revision ?? rev + 1;
 }
 // The most turns a bot runs at once across all its computers. The server takes 1 to 256, and empty is no limit.
 function settingsTurnsAtOnceRow(e: BotEditRow) {
@@ -371,12 +357,6 @@ function settingsEditBot(slug = '', inline = false) {
       if (exit) stage('browser-exit', 'browse through', changed(exit) && settingsBrowserExitRun(exit));
       const profile = eventElement(event)?.closest<HTMLElement>('[data-bot-profile], [data-profile-key]');
       if (profile) stage('profile', 'profile', profileStaged(profile));
-      const keep = eventElement(event)?.closest<HTMLInputElement>('[data-bot-keep-tasks]');
-      if (keep) {
-        settingsFieldClear(keep);
-        if (!keep.checkValidity()) settingsFieldError(keep, keep.validationMessage || 'Enter a whole number from 0 to 1000, or leave it blank.');
-        stage('keep', 'keep tasks going', changed(keep) && keep.checkValidity() && settingsKeepTasksRun(keep));
-      }
       const turns = eventElement(event)?.closest<HTMLInputElement>('[data-bot-turns-at-once]');
       if (turns) {
         settingsFieldClear(turns);

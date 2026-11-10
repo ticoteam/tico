@@ -8,11 +8,11 @@ rates, the reason each lost lead was lost, and one or two changes for a person t
 
 ## 1. Read where things stand
 
-    hub task show <id>
-    hub goal list
+    tico task show <id>
+    tico goal list
 
 Then `knowledge/inbound-method.md`, last week's read-out, and `knowledge/lead-log.md`. Find the number this role is
-measured on (in `hub goal list`, or in the setup answers) and name it at the top of the read-out.
+measured on (in `tico goal list`, or in the setup answers) and name it at the top of the read-out.
 
 ## 2. Count the leads
 
@@ -46,12 +46,12 @@ asks for it.
 ## 6. Write and publish
 
 Write `reports/YYYY-MM-DD-inbound-readout.md` in the shape of `knowledge/examples/inbound-weekly-readout.md`, then run
-`hub file publish reports/YYYY-MM-DD-inbound-readout.md`. Log each figure that has a target as a KPI reading: `hub kpi list`
-names the ones there are, and `hub kpi log <kpi id> <value> --period-start <date> --period-end <date>` records one. Commit,
-then `hub task update <id> --status done --note` with the headline and the path.
+`tico file publish reports/YYYY-MM-DD-inbound-readout.md`. Log each figure that has a target as a KPI reading: `tico kpi list`
+names the ones there are, and `tico kpi log <kpi id> <value> --period-start <date> --period-end <date>` records one. Commit,
+then `tico task done <id> -m "..." --version N` with the headline and the path.
 
 ## When the log is missing
 
 If `knowledge/lead-log.md` has no lines for part of the window, say which days are missing and why, if you know. Ask once
-with `hub task question "<question>" --on <person> --parent <id>`, and finish with what you have. Never fill a gap from
+with `tico task ask <id> --to <person> "<question>" --version N`, and finish with what you have. Never fill a gap from
 memory or from last week's numbers.

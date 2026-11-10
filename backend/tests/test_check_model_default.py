@@ -82,7 +82,7 @@ def test_a_check_with_no_model_skips_every_maker_of_the_parents_work(api):
             "title": "Check the import fix",
             "body": "Read the PR.",
             "check_model": "auto",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
         turn["token"],
     )
@@ -97,7 +97,7 @@ def test_a_check_with_no_model_skips_every_maker_of_the_parents_work(api):
             "title": "Check it on another",
             "body": "Read the PR.",
             "check_model": "auto",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
         turn["token"],
     )
@@ -116,7 +116,7 @@ def test_a_check_with_no_model_skips_every_maker_of_the_parents_work(api):
             "title": "Check it again",
             "body": "Read the PR.",
             "check_model": "auto",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
         turn["token"],
     )
@@ -139,7 +139,7 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
             "owner": "cpo",
             "title": "Review PR 700",
             "body": "https://github.com/ticoteam/tico/pull/700",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
     )
     assert check_row(api, plain["id"]) is None, "a bot not set to review on the check model keeps its own"
@@ -162,7 +162,7 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
             "owner": "cpo",
             "title": "Review PR 701",
             "body": "https://github.com/ticoteam/tico/pull/701",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
     )
     assert tuple(check_row(api, review["id"])) == ("grok", "grok-4.6", "review")
@@ -177,7 +177,7 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
             "owner": "cpo",
             "title": "Split the notes",
             "body": "Two parts.",
-            "relations": [{"task": own["id"], "kind": "parent"}],
+            "parent": own["id"],
         },
     )
     assert check_row(api, mine["id"]) is None
@@ -195,7 +195,7 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
             "owner": "cpo",
             "title": "Review my draft",
             "body": "Please.",
-            "relations": [{"task": person["id"], "kind": "parent"}],
+            "parent": person["id"],
         },
     )
     assert check_row(api, unknown["id"]) is None
@@ -234,6 +234,8 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
         "grok",
         "grok-4.6",
     )
+    # The parent waits on everything it filed: with the plain review closed, this one is the last.
+    post(api, "tasks/" + plain["id"] + "/move", {"to": "closed", "why": "Not needed."})
     finish(
         api,
         machine,
@@ -241,14 +243,8 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
         GROK,
         during=lambda: post(
             api,
-            "tasks/" + review["id"],
-            {
-                "status": "done",
-                "note": "Verdict: ok to merge.",
-                "verdict": "approve",
-                "verdict_head": "a" * 40,
-                "version": run["task"]["version"],
-            },
+            "tasks/" + review["id"] + "/done",
+            {"note": "Verdict: ok to merge.", "version": run["task"]["version"]},
             run["token"],
         ),
     )
@@ -257,12 +253,10 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
     with api.app.state.store.read() as c:
         notices = [
             r[0]
-            for r in c.execute(
-                "SELECT body FROM messages WHERE recipient_id='bot:ops' AND kind='notice' "
-                "AND body LIKE '%Review PR 701%'"
-            )
+            for r in c.execute("SELECT body FROM messages WHERE recipient_id='bot:ops' AND body LIKE '%Review PR 701%'")
         ]
-    assert len(notices) == 1 and "Review done (ran on grok-4.6)" in notices[0], notices
+    # The parent's owner is woken once with how what it filed ended (docs/pipelines-v3.md); v3 has no verdict fields.
+    assert len(notices) == 1 and "Review PR 701: Done" in notices[0], notices
     review_model("own")
     after = post(
         api,
@@ -271,7 +265,7 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
             "owner": "cpo",
             "title": "Review PR 702",
             "body": "https://github.com/ticoteam/tico/pull/702",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
     )
     assert check_row(api, after["id"]) is None, "turned off, its reviews run on its own model again"
@@ -289,7 +283,7 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
             "owner": "cpo",
             "title": "Review PR 703",
             "body": "https://github.com/ticoteam/tico/pull/703",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
     )
     assert tuple(check_row(api, alone["id"]))[:2] == ("claude", "claude-sonnet-5-5")

@@ -11,7 +11,7 @@ wherever the team's own order differs.
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/close-checklist.md`, `knowledge/open-questions.md` and last month's status. Find this
 month's exports; note date range and row count for each.
@@ -28,7 +28,7 @@ For each line write done, open or blocked, who owes it, and the evidence:
    matches the statement's if both are given.
 6. Payroll entries against the payroll report, if given. If not, "unchecked", never "fine".
 7. Recurring and adjusting entries a human should make (prepaids, accruals, depreciation): list them.
-8. Receivables aging: invoices over 30 days go to `hub task create --owner ar-followup`.
+8. Receivables aging: invoices over 30 days go to `tico task create --owner ar-followup`.
 9. Payables: bills that arrived but are not in the export.
 10. Compare draft income and expense totals with last month; name any category that moved by more than
     the threshold in `knowledge/close-checklist.md` (default 25 percent and 500 in the currency) with the
@@ -45,13 +45,13 @@ tax, payroll, capital or personal treatment, with the facts and no recommendatio
 Write `reports/YYYY-MM-close-status.md` in the shape of `knowledge/examples/close-status.md`: headline,
 checklist, proposed categories, owner questions, accountant list, could not read, sources. Then:
 
-    hub file publish reports/YYYY-MM-close-status.md
+    tico file publish reports/YYYY-MM-close-status.md
 
 Share within the requested work and intended audience with your Tools. Messages to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ## 5. Finish
 
-Update `knowledge/open-questions.md`. Commit, then `hub task update <id> --status done --note`: lines
+Update `knowledge/open-questions.md`. Commit, then `tico task done <id> -m "..." --version N`: lines
 done out of total, lines that need a human, and which sources you could not read. When a source
 failed, say which and what is therefore unchecked. Always finish the task: an open routine task
 absorbs next month's.

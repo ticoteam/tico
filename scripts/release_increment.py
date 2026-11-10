@@ -8,8 +8,7 @@ with unnamed failures (a build, a VM, a startup failure), is no anchor, and it a
 waits, and a person runs Release train by hand to validate again (a manual run dispatches as it does today). Once the
 full run is a day old, the train may dispatch one again. A candidate after the anchor runs only what its diff from the
 anchor selects (scripts/pr_checks.py selection, the merge queue's rules, never the full suite), the browser smoke set,
-the factory checks when their inputs changed, the product part (the upgrade journey and the Docker smoke checks) when its
-previous release differs from the anchor's, the image builds (every candidate: the Dockerfile copies the whole tree), and
+the product part (the upgrade journey and the Docker smoke checks) when its previous release differs from the anchor's, the image builds (every candidate: the Dockerfile copies the whole tree), and
 the failures carried: a red anchor's, and the newest red validation's since it. A red validation is not run again until
 a commit since it selects one of its failures; until then the train waits. A green validation after it (full or
 incremental, of a commit main still contains) supersedes it.
@@ -33,7 +32,7 @@ import pr_checks  # beside this module; stdlib only
 
 ROOT = Path(__file__).resolve().parents[1]
 ANCHOR_AGE = timedelta(hours=24)
-FACTORY, PRODUCT, DESKTOP = "factory", "product", "desktop"
+PRODUCT, DESKTOP = "product", "desktop"
 DESKTOP_INPUTS = ("app/",)  # the Tauri desktop app: its part of the gate tests it
 IGNORED_JOBS = {"release-check", "test-timings"}  # a consequence of a failed part, or optional
 FAILED = {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
@@ -59,9 +58,7 @@ def failed_tokens(jobs):
     for name, log in jobs:
         if name in IGNORED_JOBS:
             continue
-        if name.startswith("factory-sim"):
-            tokens.add(FACTORY)
-        elif name in (PRODUCT, DESKTOP):
+        if name in (PRODUCT, DESKTOP):
             tokens.add(name)
         elif re.fullmatch(r"(python|browser)-\d+", name):
             found = failure_tokens(log)
@@ -192,7 +189,7 @@ def red_rule(red, head, since_red):
     )
 
 
-def selection_tokens(selected, changed, factory_root=pr_checks.ROOT):
+def selection_tokens(selected, changed):
     """What a selection runs, as the same tokens failure_tokens reads from a log. Smoke scripts are not included: they
     run on every incremental validation, so they cannot be the commit that fixes a failure."""
     tokens = set(selected["python"]) | {f"ui/tests/{name}.cjs" for name in selected["browser"]}
@@ -204,8 +201,6 @@ def selection_tokens(selected, changed, factory_root=pr_checks.ROOT):
         tokens.add(PRODUCT)
     if any(name.startswith(DESKTOP_INPUTS) for name in changed):
         tokens.add(DESKTOP)
-    if pr_checks.factory_reason(list(changed), root=factory_root) is not None:
-        tokens.add(FACTORY)
     return tokens
 
 
@@ -285,7 +280,6 @@ def plan_for(
     tables,
     has_slow=lambda path: False,
     previous_changed=False,
-    factory_root=pr_checks.ROOT,
 ):
     """The incremental plan: what the selection runs, the browser smoke set, and the carried failures (`carried`, a set
     of tokens from the newest red validation since the anchor). `exists(path)` tells whether a path is in the candidate's
@@ -302,7 +296,7 @@ def plan_for(
     dropped = []
     carried_python = set()
     for token in sorted(carried):
-        if token in (FACTORY, PRODUCT, DESKTOP):
+        if token in (PRODUCT, DESKTOP):
             continue
         if token.startswith("ui/tests/") and token.endswith(".cjs"):
             browser.add(token[len("ui/tests/") : -len(".cjs")])
@@ -325,7 +319,6 @@ def plan_for(
     browser = sorted(name for name in browser if exists(f"ui/tests/{name}.cjs"))
     product = bool(selected.get("caddy")) or PRODUCT in carried or bool(previous_changed)
     desktop = any(name.startswith(DESKTOP_INPUTS) for name in changed) or DESKTOP in carried
-    factory = pr_checks.factory_reason(list(changed), root=factory_root) is not None or FACTORY in carried
     jobs = build_jobs(
         python, browser, contract_files, conformance, selected.get("rust") or [], product, desktop, tables
     )
@@ -336,7 +329,6 @@ def plan_for(
         "conformance": conformance,
         "product": product,
         "desktop": desktop,
-        "factory": factory,
         "carried": sorted(carried),
         "dropped": dropped,
         "reason": selected.get("reason", ""),
@@ -488,7 +480,7 @@ class Checkout:
             changed, selected = self.selected(base, head)
         except Exception:  # noqa: BLE001 - an unreadable diff is a fact the train logs, not a crash
             return None
-        return selection_tokens(selected, changed, self.root)
+        return selection_tokens(selected, changed)
 
     def plan(self, base, head, carried, previous_changed=False):
         """The incremental plan for base..head with the carried failures, as JSON text. Raises when it cannot be made (a
@@ -506,7 +498,6 @@ class Checkout:
             tables,
             has_slow=lambda path: has_slow_tests(self.root / path),
             previous_changed=previous_changed,
-            factory_root=self.root,
         )
         return plan_json(plan)
 

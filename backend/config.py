@@ -360,13 +360,10 @@ class Settings:
     # TypeSafe's published price, output free. Both 0 is unknown: the call's tokens are kept, its cost not counted.
     decisions_jev_usd_per_mtok_input: float = 0.042
     decisions_jev_usd_per_mtok_output: float = 0.0
-    # Org rule checks (backend/org_rule_check.py) spend from Decide's monthly cap above. How many `hub rules check` drafts
+    # Org rule checks (backend/org_rule_check.py) spend from Decide's monthly cap above. How many `tico rules check` drafts
     # one bot may check in a UTC day, and how many checks run at once (past that, an output goes through unchecked, `busy`).
     rules_check_daily_drafts: int = 200
     rule_check_concurrency: int = 8
-    # Idea triage on the public roadmap's suggestion form (backend/idea_triage.py, questions/idea-triage.json): off by
-    # default; when on, a confident bug or small change goes to Head of Engineering, everything else to product as before.
-    decisions_idea_triage: bool = False
     # TICO_SAMPLE_COMPANY=on: a new company starts as Tico's sample company (backend/sample_company.py,
     # docs/sample-company.md), loaded once on the first start whose owner is on the roster. A set-up company is never
     # touched. Only `on` turns it on (the recommended install's contract); unset or any other value leaves it off.
@@ -693,7 +690,6 @@ class Settings:
             ),
             rules_check_daily_drafts=max(0, int(os.environ.get("TICO_RULES_CHECK_DAILY", "") or 200)),
             rule_check_concurrency=max(1, int(os.environ.get("TICO_RULE_CHECK_CONCURRENCY", "") or 8)),
-            decisions_idea_triage=not rehearsal and os.environ.get("TICO_DECISIONS_IDEA_TRIAGE", "0") == "1",
             sample_company=not rehearsal and os.environ.get("TICO_SAMPLE_COMPANY", "").strip().lower() == "on",
             **_company_file_fields(rehearsal),
             enabled_providers=tuple(

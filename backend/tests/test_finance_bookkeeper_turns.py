@@ -19,6 +19,7 @@ from backend.tests.helpers.api import assign, claim, get, post, ready, runner  #
 from backend.tests.helpers.finance_fixtures import MERCURY, OWNER, FakeMercury, account, act, connect, sync_once  # noqa: F401
 from backend.tests.helpers.mcp import call, rpc
 from backend.tests.helpers.finance_bookkeeper_turns import CONFIG, _library_file, ask, chart, hire, mercury  # noqa: F401
+from backend.tests.helpers.finance_oks import give, the_ok
 
 PAYEE = {
     "name": "Northwind Hosting",
@@ -156,7 +157,7 @@ def test_pay_turn(api):
     assert not err and asked["status"] == "needs_approval" and asked["kind"] == "payment_create", asked
     assert asked["approver"] == OWNER, asked  # money out waits for one person: the owner here
     assert fake.sent("request_send_money") == []  # nothing was sent to the bank
-    assert get(api, f"approvals/{asked['approval_id']}")["kind"] == "spend"
+    assert the_ok(api, asked["approval_id"])["subject"].startswith("finance:")
 
 
 # ----------------------------------------------------------------------------- invoices (playbook: invoice-overdue.md)
@@ -185,7 +186,7 @@ def test_invoices_turn(api):
     assert not err and sent["status"] == "needs_approval" and sent["rule"] == "default:bot-invoice-email", sent
     assert sent["approver"] == OWNER, sent
     with api.app.state.store.transaction() as c:
-        H.approval_decide(c, OWNER, sent["approval_id"], "approved")
+        give(c, OWNER, sent["approval_id"])
         done = FA.approval_decided(c, sent["approval_id"])
     assert done is not None and done.status == "committed", done
     err, found = call(api, "hub_finance_search", {"kind": "invoice", "q": "INV-1042"}, token=token)
@@ -271,12 +272,12 @@ def test_attach_files_only_a_library_file_the_bot_may_read(api):
 
 
 def test_the_bot_reads_a_file_with_hub_file_read(api):
-    """AGENT.md's bill and receipt steps read a Library file with `hub file read` (clients/hubcli.py): the tool is
-    offered to the bot, and the instructions name no command the hub does not have (`hub file get` was one)."""
+    """AGENT.md's bill and receipt steps read a Library file with `tico file read` (clients/hubcli.py): the tool is
+    offered to the bot, and the instructions name no command the hub does not have (`tico file get` was one)."""
     token = hire(api)
     names = {t["name"] for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
     agent = (Path(__file__).resolve().parents[2] / "templates" / "catalog" / "bookkeeper" / "AGENT.md").read_text()
-    assert "hub_file_read" in names and "hub file read" in agent and "hub file get" not in agent
+    assert "hub_file_read" in names and "tico file read" in agent and "tico file get" not in agent
 
 
 # ----------------------------------------------------------------------------- reconcile (Books check 6)
@@ -341,7 +342,7 @@ def test_close_period_takes_the_month_and_nothing_else(api):
     err, asked = ask(api, token, "close_period", {"month": "2026-10"}, "close:2026-10")
     assert not err and asked["status"] == "needs_approval" and asked["rule"] == "default:close", asked
     assert asked["approver"] == OWNER, asked
-    assert get(api, f"approvals/{asked['approval_id']}")["kind"] == "finance"
+    assert the_ok(api, asked["approval_id"])["subject"].startswith("finance:")
     err, noted = ask(
         api, token, "close_period", {"month": "2026-10", "note": "Software over plan by 12%"}, "close:2026-10:note"
     )

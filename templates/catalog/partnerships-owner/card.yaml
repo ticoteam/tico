@@ -19,7 +19,7 @@ pains:
 owns:
   - "The partner register: each partner's type, terms, contact owner, deals sourced and revenue, and last business review (knowledge/partners/)"
   - "Deal registrations: each checked against the rules of engagement and the existing pipeline, with a proposed approve or decline and the reason"
-  - "The partner-sourced pipeline: every registered deal's stage, owner and next step, and the ones going quiet, worked with the Customer Pipeline Manager"
+  - "The partner-sourced pipeline: every registered deal's stage, owner and next step, and the ones going quiet, worked with the seller who owns each deal"
   - "Partner prospecting: a short sourced fit note per candidate partner and an outreach ready to use"
   - "The monthly list of referral fees and commissions owed, with the deal, the agreement clause and the amount for a human to pay"
   - "Proposals on the task when a person changes a partner's terms or a rule of engagement by hand; it never changes one silently"

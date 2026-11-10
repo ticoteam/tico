@@ -1,5 +1,8 @@
 # Assistant baseline (main checkout, 2 samples per case)
 
+These scores are for the 0.5 cases. The Pipelines v3 cut-over rewrote the cases for asks and OKs, renamed or deleted
+some of the ids below, and has no baseline of its own yet.
+
 Run on `main` (`emp-tico-open-source/ticoteam-tico`, the template and the parser both from main), with
 `evals/assistant/run.py --samples 2 -j 6`, judge `claude-opus-5-5`. Per model, the headline is the share of sample runs that
 pass every check (must, must_not, invalid command, and the judge's rubric).
@@ -30,7 +33,7 @@ Changes to the cases landed while the baseline was running (the case files are r
 ## Known harness issue, found in this run
 
 `--help` lookups were counted as calls in the must_not checks and the judge's call list. The background case failed on
-`hub task close --help` and `hub message send --help`, and the judge read those lookups as attempted writes. Fixed in
+`tico task close --help` and `tico message send --help`, and the judge read those lookups as attempted writes. Fixed in
 `run.py` after this baseline (help lookups are now left out). The recorded baseline numbers keep the old scoring; the only
 case whose recorded result this touches is `background-daily-sweep`, which still needs a rerun.
 

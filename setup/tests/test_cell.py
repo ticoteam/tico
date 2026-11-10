@@ -1389,7 +1389,7 @@ CARRIED = (
     "# from hub.tico.team's .env\n"
     "TICO_RUNNER_URL=https://runner.tico.team\nTICO_VISUAL_ORIGIN=https://hub.ticofiles.com\n"
     "TICO_BLOB_BUCKET=tico-team-blobs\nTICO_BLOB_REGION=us-west-2\nTICO_INBOUND_KEY=inbound-" + "k" * 30 + "\n"
-    "TYPESAFE_API_KEY=ts-" + "y" * 30 + "\nTICO_STALE_REVIEW=48\nTICO_SUPPORT_ACCESS=on\n"
+    "TYPESAFE_API_KEY=ts-" + "y" * 30 + "\nTICO_TOPIC_FRESH=48\nTICO_SUPPORT_ACCESS=on\n"
     "TICO_MIGRATE_TO_AUTOMATIONS=1\nTICO_OIDC_ALLOWED_DOMAINS=tico.team\n"
     # the cell's own, or a single-company install's: never kept
     "TICO_DOMAIN=old.example.com\nTICO_OIDC_LABEL=Google\nTICO_TAG=v0.0.1\nTICO_PORT=8765\nCOMPOSE_PROFILES=caddy\n"
@@ -1432,15 +1432,15 @@ def test_carried_settings_are_kept_and_the_cells_own_win(ready):
     assert {p.name: p.read_bytes() for p in d.iterdir() if p.is_file()} == files
     assert ready("update", "--company", "ticoteam", "--version", "v1.3.0")["ok"]
     env = envfile.parse((d / ".env").read_text())
-    assert env["TICO_TAG"] == "v1.3.0" and env["TICO_BLOB_REGION"] == "us-west-2" and env["TICO_STALE_REVIEW"] == "48"
+    assert env["TICO_TAG"] == "v1.3.0" and env["TICO_BLOB_REGION"] == "us-west-2" and env["TICO_TOPIC_FRESH"] == "48"
 
 
 def test_a_new_env_file_replaces_the_carried_settings(ready):
     ready(*move_args(ready, "--env-file", secret_file(ready.tmp, "old.env", CARRIED)))
-    answer = ready(*move_args(ready, "--env-file", secret_file(ready.tmp, "new.env", "TICO_STALE_REVIEW=24")))
+    answer = ready(*move_args(ready, "--env-file", secret_file(ready.tmp, "new.env", "TICO_TOPIC_FRESH=24")))
     assert answer["changed"] is True and answer["ignored"] == []
     env = envfile.parse((ready.root / "companies" / "ticoteam" / ".env").read_text())
-    assert env["TICO_STALE_REVIEW"] == "24" and "TICO_BLOB_BUCKET" not in env and "TICO_RUNNER_URL" not in env
+    assert env["TICO_TOPIC_FRESH"] == "24" and "TICO_BLOB_BUCKET" not in env and "TICO_RUNNER_URL" not in env
 
 
 @pytest.mark.parametrize(

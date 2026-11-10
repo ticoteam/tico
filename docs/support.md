@@ -126,30 +126,35 @@ A bot that hits a Tico bug (or a person's token, through MCP) reports it to the 
 copy-and-paste task. Whether a person says yes first is the team's rule **Bots send reports to the Tico team without
 asking** (`bot_reports_direct`, Settings > General > Team, owner only; on by default).
 
-**On.** `hub support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) is drafted as below and then decided and sent at once by the team rule: no card is made, and the command prints the ticket. The draft is decided as the install's default person (the one a drafted report would ask), with the note "team rule: bots send reports without asking", so it never shows in Needs you. The ticket is filed as that person and counts toward their 10 a day, but it is not in their Support chat: its replies
-are kept for the team and the bot, not shown to the person. The checks are a drafted report's, and they run first: the message is checked as `lint_approval` checks it, a quarantined bot is refused, and the privacy check for this send must pass. The day limit, the HQ call and the source are the same. The bot sends an `Idempotency-Key`, as every write does: a retry with the same key is the same ticket and nothing more reaches HQ, and the same key with other content is refused (409) and sends nothing. A retry after the owner turns direct reports off is still the same ticket, and a report already sent stays sent. If the rule is off when a report is sent, the draft waits for a person (below); a retry after the owner turns the rule on sends that draft once. If the send fails, the rule's decision is taken back and the draft waits the same way. The version and install ID go with it unless `--no-ids`.
+**On.** `tico support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) is checked as below and
+then sent at once: no ask is made, and the command prints the ticket. The ticket is filed as the install's default
+person and counts toward their 10 a day, but it is not in their Support chat: its replies are kept for the team and the
+bot, not shown to the person. The checks come first: the message is checked as a drafted report's is, a quarantined
+bot is refused, and the privacy check for this send must pass (when it does not, a person OKs the report, below). The
+day limit, the HQ call and the source are the same. The bot sends an `Idempotency-Key`, as every write does: a retry
+with the same key is the same ticket and nothing more reaches HQ, and the same key with other content is refused (409)
+and sends nothing. A report already sent stays sent. The version and install ID go with it unless `--no-ids`.
 
 A copy run from source (version `dev`) with no `TICO_HQ_URL` never sends by the rule: the report waits for a person's
 yes, as below.
 
-**Off.** The report waits for a person's yes:
+**Off.** The report waits for a person's OK:
 
-1. `hub support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) drafts the report as a
-   `support` approval: the `message` (up to 4000 characters, plain text), its `content_sha256`, and `include_ids`
-   (default true: the version and install ID go with it; `--no-ids` sends only the message). It prints the approval id.
-   Nothing is sent, and the draft is refused while support is off (demo, rehearsal, `TICO_SUPPORT=off`).
-2. The person the approval goes to sees **Send this to Tico support?** in Needs you and Decide, with the whole message,
-   what goes with it and the host it goes to, and approves or declines it in their own browser. Their Assistant may
-   approve it too, after its read-back and their plain yes, as with any approval ([The Assistant](assistant.md#letting-it-decide-your-approvals)).
-   A token may not approve it. Declining sends nothing, so anyone who may decide it may decline it. A bot's report goes
-   where any approval goes: the owner of its task, else the default person. A person's own report (drafted with their
-   token) goes to them.
-3. After a yes, `hub support send --approval <id>` (MCP `hub_support_send`, `POST /api/v2/support/tickets/from-approval`)
-   files it **as the person who approved it**: the ticket is kept under their name and counts
-   toward their 10 a day, but it is not in their Support chat (a bot's report is not shown there, and its replies are
-   not either). Only whoever asked for the approval may send it, and only once it is approved and its message
-   still matches its hash. The approval is spent in the same step that keeps the ticket, so if HQ refuses or cannot be
-   reached nothing is spent and the send can be tried again; sending again after it worked answers with the same ticket.
+1. `tico support report --message "..."` (or `--file report.md`; MCP `hub_support_report`) drafts the report: the
+   `message` (up to 4000 characters, plain text), its `content_sha256`, and `include_ids` (default true: the version
+   and install ID go with it; `--no-ids` sends only the message). It asks a person for an OK on a task, "Send this
+   report to Tico support?", and prints the OK's id. Nothing is sent, and the draft is refused while support is off
+   (demo, rehearsal, `TICO_SUPPORT=off`).
+2. The person asked sees the ask in [Needs you](tasks.md#needs-you), with the whole message, what goes with it and the
+   host it goes to, and OKs it with their own click in Tico. Their Assistant and a token cannot give this OK. Saying
+   no sends nothing. The ask goes to the person whose token or Assistant drafted the report, else the owner of its task
+   when that is a person, else the install's default person.
+3. After the OK, `tico support send --approval <id>` (MCP `hub_support_send`,
+   `POST /api/v2/support/tickets/from-approval`) files it **as the person who OK'd it**: the ticket is kept under their
+   name and counts toward their 10 a day. A bot's report is not in their Support chat, and its replies are not either.
+   Only whoever asked for the OK may send it, and only once it is OK'd and its message still matches its hash. The OK
+   is used in the same step that keeps the ticket, so if HQ refuses or cannot be reached nothing is used and the send
+   can be tried again; sending again after it worked answers with the same ticket.
 
 No email and no diagnostics bundle go this way: diagnostics need a person to preview them on the form.
 
@@ -164,7 +169,7 @@ start it, it always starts from your open conversation with the team, and it end
    - **App only**: what an admin sees (settings, Health, computers, bots, tasks and run history), and changes to setup only: a
      bot's model, fallback and context size; a computer's runner restart; asking a computer to read its subscriptions'
      allowance again. Support cannot start a model sign-in or read the link and code of one you start (whoever enters the
-     code first chooses the account a computer runs on), see a credential's value or a raw run stream, approve anything for you, send a message, start or run a task or
+     code first chooses the account a computer runs on), see a credential's value or a raw run stream, OK anything for you, send a message, start or run a task or
      bot, publish, spend, or change people, access or credentials.
    - **Full access** (the owner only): what the owner can do in Tico. Even then support cannot make or see personal tokens,
      service keys or credential values, sign a person in or out of Tico, hand the install to someone else, or change these sessions.
@@ -296,7 +301,7 @@ so the decision model can be tuned. The human who filed a ticket sees nothing di
 
 The same check is `POST /v1/staff/judge` (`{"text": "..."}` answers `{verdict, reason}`, nothing kept), which `software/gh-support`
 calls, with the staff key already in its secrets, for each new issue, Discussion and outside comment: `spam` is not filed and is
-counted in its output line, `injection_risk` is filed with a warning. A message bot checks email with `hub classify` (text on
+counted in its output line, `injection_risk` is filed with a warning. A message bot checks email with `tico classify` (text on
 standard input or `--file`), which asks the server's own decision model the same question.
 
 On HQ, `HQ_JUDGE_KEY` is that provider's key (`HQ_JUDGE_URL` only to point elsewhere). Without it every verdict is
@@ -315,7 +320,7 @@ watcher's report is answered at once; the ticket's task opens a few seconds late
 
 An ordinary note to a person, such as "please ignore this test", counts as legitimate text.
 Words such as "ignore", "test", and "please" do not make it a prompt injection by themselves.
-The check looks for instructions addressed to an AI, bot, or assistant. `hub classify` uses the same distinction.
+The check looks for instructions addressed to an AI, bot, or assistant. `tico classify` uses the same distinction.
 
 | Answer | What happens |
 |---|---|

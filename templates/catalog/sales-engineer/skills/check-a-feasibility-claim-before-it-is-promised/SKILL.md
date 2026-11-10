@@ -8,7 +8,7 @@ When to use: a buyer asks whether the product connects to a system, supports a w
 
 Steps:
 1. Write the claim exactly as the buyer asked it, with the system or feature it names.
-2. Look for it in the product docs (`hub doc ask`), the public changelog and the status page. A roadmap item, a request on the board or a colleague's remark is not a source.
+2. Look for it in the product docs (`tico doc ask`), the public changelog and the status page. A roadmap item, a request on the board or a colleague's remark is not a source.
 3. Check the source's date and whether the release it describes is in production. A changelog entry for a release not yet out is "not shipped".
 4. Classify the claim: works today (documented and shipped); works with a workaround (name the steps and the limits); not possible today (only a dated source or the product owner says so); not shipped (give a date only if the product owner gave one in the record); unknown (no source answers it: say so, and do not call it impossible).
 5. If a trial or sandbox test was run, record the test, its date and who ran it. A test is evidence for that setup only.

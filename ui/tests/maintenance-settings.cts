@@ -1,7 +1,7 @@
 // Maintenance on the Automations page (ui/app/automations-maintenance.ts) against the fake hub's maintenance routes
 // (support/automations-fake.cts, `maintenance: true`). Maintenance leads the list as a built-in system row, and the
-// mirrors of the jobs it replaced are gone from it. Its screen lists the eight steps in run order with their switches
-// (Collect is always on), beta and consent pills; a row opens How often and, for Find stuck and Dream, the
+// mirrors of the jobs it replaced are gone from it. Its screen lists the seven steps in run order with their switches
+// (Collect is always on), beta and consent pills; a row opens How often and, for Dream, the
 // number of bots; Learn shows its beta numbers. Each control saves one PATCH; Run now posts and follows the run; Runs
 // lists the run history and a tap opens each step's line. A member reads it with every control off; a phone fits.
 import type * as AutomationsFakeSupport from './support/automations-fake.cts';
@@ -72,12 +72,12 @@ async function themed(page: Page, name: string) {
       assert.equal(await page.locator('#au-root').getAttribute('data-screen'), 'detail');
       assert.equal(await page.locator('.au-hd .au-name').innerText(), 'Maintenance');
       assert.match(await page.locator('[data-mt-meta]').innerText(), /^Last run .+ · next .+/);
-      assert.deepEqual(await steps(page), ['collect', 'clean_up', 'check_health', 'find_stuck', 'learn', 'suggest', 'update', 'dream']);
-      assert.deepEqual(await page.locator('.mt-step .mt-n').allInnerTexts(), ['1', '2', '3', '4', '5', '6', '7', '8']);
+      assert.deepEqual(await steps(page), ['collect', 'clean_up', 'check_health', 'learn', 'suggest', 'update', 'dream']);
+      assert.deepEqual(await page.locator('.mt-step .mt-n').allInnerTexts(), ['1', '2', '3', '4', '5', '6', '7']);
       const step = (k: string) => page.locator(`.mt-step[data-mt-step="${k}"]`);
       assert.equal(await step('collect').locator('input[role="switch"]').count(), 0, 'Collect has no switch');
       assert.match(await step('collect').innerText(), /Always/);
-      assert.equal(await page.locator('.mt-step [data-mt-on]').count(), 7);
+      assert.equal(await page.locator('.mt-step [data-mt-on]').count(), 6);
       assert.match(await step('learn').locator('.pill.beta').innerText(), /Beta/);
       assert.equal(await step('learn').locator('[data-mt-on]').isChecked(), false, 'Learn is off by default');
       const suggest = db.maint!.steps.find(x => x.key === 'suggest')!;
@@ -87,14 +87,14 @@ async function themed(page: Page, name: string) {
       assert.equal(await step('suggest').locator('[data-mt-consent]').count(), 0, 'consent granted');
       suggest.consent = false;
       await page.evaluate(() => auMaintLoad(AU));
-      assert.match(await step('find_stuck').locator('.mt-when').innerText(), /Every 6 hours/);
-      assert.match(await step('dream').locator('.mt-when').innerText(), /Once a day/);
+      assert.match(await step('dream').locator('.mt-when').innerText(), /Every 6 hours/);
+      assert.match(await step('update').locator('.mt-when').innerText(), /Once a day/);
 
       // The run's schedule: no "Once a week".
       const sched = await page.locator('[data-mt-schedule] option').evaluateAll(o => o.map(x => x.textContent));
       assert.deepEqual(sched, ['Every hour', 'Every 2 hours', 'Every 3 hours', 'Every 6 hours', 'Every 12 hours', 'Once a day']);
-      await step('find_stuck').locator('[data-mt-open]').click();
-      await page.waitForSelector('.mt-step[data-mt-step="find_stuck"] [data-mt-bots]');
+      await step('dream').locator('[data-mt-open]').click();
+      await page.waitForSelector('.mt-step[data-mt-step="dream"] [data-mt-bots]');
       const release = hold('maintenance');
       await page.selectOption('[data-mt-schedule]', '3h');
       await until(() => writes.length === 1, 'the schedule save');
@@ -109,7 +109,7 @@ async function themed(page: Page, name: string) {
       release();
       await idle(page);
       assert.equal(await page.locator('[data-mt-schedule]').inputValue(), '3h');
-      await step('find_stuck').locator('[data-mt-open]').click();
+      await step('dream').locator('[data-mt-open]').click();
 
       // A switch.
       await step('check_health').locator('[data-mt-on]').click();
@@ -118,29 +118,29 @@ async function themed(page: Page, name: string) {
       await page.waitForSelector('.mt-step.off[data-mt-step="check_health"]');
       await idle(page);
 
-      // Find stuck: How often is custom; its number of bots saves on change; a number past 20 saves nothing.
-      await step('find_stuck').locator('[data-mt-open]').click();
-      await page.waitForSelector('.mt-step.open[data-mt-step="find_stuck"] .mt-detail');
-      assert.equal(await step('find_stuck').locator('[data-mt-often]').inputValue(), 'custom');
-      assert.equal(await step('find_stuck').locator('[data-mt-every]').inputValue(), '6');
-      assert.match(await step('find_stuck').locator('.mt-detail').innerText(), /Most bots woken per run/i);
-      const bots = step('find_stuck').locator('[data-mt-bots]');
+      // Dream: How often is custom; its number of bots saves on change; a number past 20 saves nothing.
+      await step('dream').locator('[data-mt-open]').click();
+      await page.waitForSelector('.mt-step.open[data-mt-step="dream"] .mt-detail');
+      assert.equal(await step('dream').locator('[data-mt-often]').inputValue(), 'custom');
+      assert.equal(await step('dream').locator('[data-mt-every]').inputValue(), '6');
+      assert.match(await step('dream').locator('.mt-detail').innerText(), /Most bots per run/i);
+      const bots = step('dream').locator('[data-mt-bots]');
       assert.equal(await bots.inputValue(), '10');
       await bots.fill('5'); await bots.press('Tab');
       await until(() => writes.length === 3, 'the bots save');
-      assert.deepEqual(writes.at(-1)!.body, {steps: [{key: 'find_stuck', max_bots: 5}]});
+      assert.deepEqual(writes.at(-1)!.body, {steps: [{key: 'dream', max_bots: 5}]});
       await idle(page);
-      assert.equal(await step('find_stuck').locator('[data-mt-bots]').inputValue(), '5');
-      await step('find_stuck').locator('[data-mt-bots]').fill('25');
-      await step('find_stuck').locator('[data-mt-bots]').press('Tab');
+      assert.equal(await step('dream').locator('[data-mt-bots]').inputValue(), '5');
+      await step('dream').locator('[data-mt-bots]').fill('25');
+      await step('dream').locator('[data-mt-bots]').press('Tab');
       await page.waitForTimeout(300);
       assert.equal(writes.length, 3, 'past 20 bots saves nothing');
-      const every = step('find_stuck').locator('[data-mt-every]');
+      const every = step('dream').locator('[data-mt-every]');
       await every.fill('12'); await every.press('Tab');
       await until(() => writes.length === 4, 'the custom save');
-      assert.deepEqual(writes.at(-1)!.body, {steps: [{key: 'find_stuck', frequency: 'custom', custom_every: 12, custom_unit: 'hours'}]});
+      assert.deepEqual(writes.at(-1)!.body, {steps: [{key: 'dream', frequency: 'custom', custom_every: 12, custom_unit: 'hours'}]});
       await idle(page);
-      assert.match(await step('find_stuck').locator('.mt-when').innerText(), /Every 12 hours/);
+      assert.match(await step('dream').locator('.mt-when').innerText(), /Every 12 hours/);
 
       // Update: How often to once a week, then custom (two hours to start).
       await step('update').locator('[data-mt-open]').click();
@@ -215,10 +215,10 @@ async function themed(page: Page, name: string) {
       assert.match(await page.locator('tr.au-rr').first().innerText(), /Run now/);
       assert.equal(await page.locator('tr.au-rr .au-dot.fail').count(), 1);
       const failed = page.locator('tr.au-rr[data-mt-run="mrun_98"]');
-      assert.match(await failed.innerText(), /1 failed, 2 ran, 4 skipped[\s\S]*Schedule/);
+      assert.match(await failed.innerText(), /1 failed, 2 ran, 3 skipped[\s\S]*Schedule/);
       await failed.click();
       await page.waitForSelector('tr.au-rx .au-sl');
-      assert.equal(await page.locator('tr.au-rx .au-sl').count(), 8);
+      assert.equal(await page.locator('tr.au-rx .au-sl').count(), 7);
       assert.match(await page.locator('tr.au-rx [data-mt-line="dream"]').innerText(), /failed[\s\S]*Dream · model timed out/i);
       assert.equal(await page.locator('tr.au-rx [data-mt-line="dream"] .au-tag.mt-bad').count(), 1);
       assert.match(await page.locator('tr.au-rx [data-mt-line="collect"]').innerText(), /120 checked · 14 found/);
@@ -259,7 +259,7 @@ async function themed(page: Page, name: string) {
       await page.waitForSelector('tr.au-rr[data-mt-run="mrun_live"] .au-dot.ok');
       assert.equal(await page.locator('tr.au-rr').count(), 31);
       assert.equal(await page.locator('tr.au-rr.open[data-mt-run="mrun_98"]').count(), 1);
-      assert.equal(await page.locator('tr.au-rx .au-sl').count(), 8);
+      assert.equal(await page.locator('tr.au-rx .au-sl').count(), 7);
       assert.equal(await page.locator('[data-mt-more]').count(), 0);
       assert.equal(await page.locator('.au-pane').evaluate(p => p.scrollTop), 80);
       assert.deepEqual(writes, []);
@@ -280,8 +280,8 @@ async function themed(page: Page, name: string) {
       await page.locator('[data-mt-now]').click();
       await page.waitForSelector('[data-mt-now][disabled]');
       const step = (k: string) => page.locator(`.mt-step[data-mt-step="${k}"]`);
-      await step('find_stuck').locator('[data-mt-open]').click();
-      const bots = step('find_stuck').locator('[data-mt-bots]');
+      await step('dream').locator('[data-mt-open]').click();
+      const bots = step('dream').locator('[data-mt-bots]');
       await bots.fill('7');
       await page.waitForTimeout(3500);   // one follow refresh
       assert.equal(await bots.inputValue(), '7');
@@ -319,10 +319,10 @@ async function themed(page: Page, name: string) {
     {
       const {page, errors} = await openAutomations(browser, {viewport: PHONE, maintenance: true, hash: '#/automations/maintenance'});
       await page.waitForSelector('.mt-step');
-      await page.locator('.mt-step[data-mt-step="find_stuck"] [data-mt-open]').click();
-      await page.waitForSelector('.mt-step[data-mt-step="find_stuck"] [data-mt-bots]');
+      await page.locator('.mt-step[data-mt-step="dream"] [data-mt-open]').click();
+      await page.waitForSelector('.mt-step[data-mt-step="dream"] [data-mt-bots]');
       assert.equal(await sideways(page), false);
-      assert.match(await page.locator('.mt-step[data-mt-step="find_stuck"] .mt-what').innerText(), /Every 6 hours/);
+      assert.match(await page.locator('.mt-step[data-mt-step="dream"] .mt-what').innerText(), /Every 6 hours/);
       await themed(page, 'maintenance-settings-phone');
       await page.getByRole('tab', {name: 'Runs'}).click();
       await page.waitForSelector('tr.au-rr[data-mt-run]');

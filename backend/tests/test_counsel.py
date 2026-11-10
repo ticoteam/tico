@@ -301,7 +301,7 @@ def test_a_long_document_is_named_not_pasted_and_counsel_reads_the_whole_version
         body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
     assert len(body) < 2_000
     assert "Filler clause" not in body and "Keep a record of each consent" not in body
-    assert f"hub file read {file_id} --version {version}" in body
+    assert f"tico file read {file_id} --version {version}" in body
     assert "UNTRUSTED DOCUMENT" in body
     # Counsel's run reads the version it was asked about, in full.
     got = api.get(f"/api/v2/files/{file_id}/versions/{version}", headers=read_run(api))
@@ -317,7 +317,7 @@ def test_a_short_document_is_fenced_inside_the_task(api):
     with api.app.state.store.read() as c:
         body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
     assert "Keep a record of each consent for five years." in body
-    assert "hub file read" not in body
+    assert "tico file read" not in body
 
 
 def test_only_the_run_asked_reads_a_file_and_no_other_counsel_run_does(api):
@@ -385,7 +385,7 @@ def test_the_run_asked_reads_a_long_file_on_a_private_task(api):
     assert same_file == file_id and newer == version + 1
     with api.app.state.store.read() as c:
         body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
-    assert f"hub file read {file_id} --version {version}" in body
+    assert f"tico file read {file_id} --version {version}" in body
     assert "Filler clause" not in body
     run = read_run(api)
     got = api.get(f"/api/v2/files/{file_id}/versions/{version}", headers=run)
@@ -448,7 +448,8 @@ def test_counsel_reaches_no_route_outside_its_own_and_others_keep_theirs(api):
         ("GET", f"files/{file_id}/meta?v=2"),
         ("GET", f"tasks/{read['task_id']}/answers"),
         ("GET", "rules/stats"),
-        ("POST", "task-questions"),
+        ("POST", f"tasks/{read['task_id']}/asks"),
+        ("POST", f"tasks/{read['task_id']}/oks"),
         ("POST", "pages"),
         ("POST", "files/uploads?name=plan.md"),
         ("POST", "files/imports?name=plan.md"),
@@ -574,8 +575,8 @@ def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monk
     assert ("GET", f"/api/v2/files/{file_id}/versions/{newer}", counsel.READ_SCOPE) in seen
     seen[:] = [s for s in seen if s[2] is None]
     finish(api, r, attempt)
-    # A question's run: the rules in force, one rule and a note on its task. Closing it reaches the route, which says
-    # only the person who asked closes it.
+    # A question's run: the rules in force, one rule and a note on its task. Closing it is not Counsel's: moving a task
+    # is outside its routes, so only the person who asked closes it.
     ask = post(api, "rules/ask", {"question": "Can I keep consent records?"}, token="cara-test")
     token = next_counsel_run(api, r)["token"]
     tools(
@@ -585,8 +586,12 @@ def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monk
         ("hub_rules_get", {"id": rule_id}),
         ("hub_task_comment", {"id": ask["task_id"], "text": "No rule covers it."}),
     )
-    with pytest.raises(Exception, match="only they or their managers close it"):
-        hubtools.task_close(Turn(api, token), {"id": ask["task_id"], "note": "Answered."})
+    shown = api.get(f"/api/v2/tasks/{ask['task_id']}", headers=headers(token)).json()["task"]["version"]
+    with pytest.raises(Exception, match="Counsel reads only"):
+        hubtools.task_close(Turn(api, token), {"id": ask["task_id"], "why": "Answered.", "version": shown})
+    move = f"/api/v2/tasks/{ask['task_id']}/move"
+    assert ("POST", move, counsel.READ_SCOPE) in seen
+    seen[:] = [s for s in seen if s[1] != move]
     assert seen and all(reason is None for _, _, reason in seen), [s for s in seen if s[2]]
     paths = {re.sub(r"/(tasks|files|rules)/[^/]+", r"/\1/{id}", path) for _, path, _ in seen}
     assert {
@@ -598,7 +603,6 @@ def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monk
         "/api/v2/tasks/{id}/comments",
         "/api/v2/files/{id}/versions/1",
     } <= paths, paths
-    assert ("POST", "/api/v2/tasks/" + ask["task_id"], None) in seen
 
 
 def test_counsel_attaches_no_file_and_is_given_no_visual_address(api, monkeypatch):
@@ -1257,7 +1261,7 @@ def test_a_hostile_page_title_stays_fenced_when_the_document_is_too_long_for_the
     r = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
     row = task_row(api, r["task_id"])
     assert hostile in row["body"] and hostile not in outside_fence(row["body"])
-    assert f"hub file read {r['file']['id']} --version 1" in row["body"]
+    assert f"tico file read {r['file']['id']} --version 1" in row["body"]
 
 
 def test_a_link_read_is_private_to_its_requester_and_counsel(api, monkeypatch):
@@ -1325,9 +1329,9 @@ def test_an_identical_reread_returns_the_open_task_and_a_closed_one_opens_a_new_
     one = read_document(api, file_id)
     two = read_document(api, file_id)
     assert one["existing"] is False and two["existing"] is True and two["task_id"] == one["task_id"]
-    # Once Counsel's task is closed, a re-read on purpose opens a new one.
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET closed_at=?, status='done' WHERE id=?", (H.now(), first["task_id"]))
+    # Once Counsel's task is closed (the person who asked closes it), a re-read on purpose opens a new one.
+    shown = task_state(api, first["task_id"])["version"]
+    post(api, f"tasks/{first['task_id']}/move", {"to": "closed", "version": shown})
     third = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
     assert third["existing"] is False and third["task_id"] != first["task_id"]
     assert third["file"]["version"] == 1
@@ -1364,7 +1368,7 @@ def test_read_identity_includes_source_and_receipts_match_persisted_reads(api, m
             assert receipt["file"]["id"] == persisted["file_id"]
             assert receipt["file"]["version"] == persisted["version"]
             assert f"From: {source_row['name']} ({source_row['kind']})" in task["body"]
-            assert task["closed_at"] is None and task["status"] not in ("done", "closed", "declined")
+            assert task["closed_at"] is None and task["status"] == "open"
 
 
 def test_the_server_refuses_counsel_outward_routes_and_comments_only_on_its_own_task(api, monkeypatch):
@@ -1426,7 +1430,7 @@ def test_counsel_still_completes_its_own_attempt(api):
 
 def task_state(api, task_id):
     with api.app.state.store.read() as c:
-        return dict(c.execute("SELECT status, private FROM tasks WHERE id=?", (task_id,)).fetchone())
+        return dict(c.execute("SELECT status, private, version FROM tasks WHERE id=?", (task_id,)).fetchone())
 
 
 def test_counsel_suggests_from_its_private_read_run_and_publishes_nothing_else(api):
@@ -1477,6 +1481,18 @@ def test_counsel_suggests_from_its_private_read_run_and_publishes_nothing_else(a
     assert note.status_code < 300, note.text
 
 
+def done_notes(api, task_id):
+    """The notes on the task's done answers: what its owner said when it said the work was finished."""
+    with api.app.state.store.read() as c:
+        rows = c.execute(
+            "SELECT a.notes FROM answers a JOIN requirements r ON r.id=a.requirement_id "
+            "JOIN visits v ON v.id=a.visit_id WHERE v.task_id=? AND r.kind='owner_done' AND a.answer='done' "
+            "ORDER BY a.created_at",
+            (task_id,),
+        ).fetchall()
+    return [row[0] or "" for row in rows]
+
+
 def test_a_completed_counsel_turn_finishes_its_read_task_and_a_failed_one_does_not(api):
     org(api)
     counsel_on(api)
@@ -1494,15 +1510,7 @@ def test_a_completed_counsel_turn_finishes_its_read_task_and_a_failed_one_does_n
         token=r["token"],
     )
     assert task_state(api, first["task_id"])["status"] == "done"
-    with api.app.state.store.read() as c:
-        notes = [
-            x[0]
-            for x in c.execute(
-                "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' AND new='done'",
-                (first["task_id"],),
-            )
-        ]
-    assert notes == ["Wrote 3 suggestions, 0 quotes dropped; read, nothing else for us."]
+    assert done_notes(api, first["task_id"]) == ["Wrote 3 suggestions, 0 quotes dropped; read, nothing else for us."]
     # A failed run leaves its read task to the normal retry.
     second = read_document(api, store_file(api, CONTRACT, title="Globex Terms")[0])
     attempt = post(api, "jobs/claim", {"bot": "tico-counsel", "start_places": True}, token=r["token"])["attempt"]
@@ -1513,7 +1521,7 @@ def test_a_completed_counsel_turn_finishes_its_read_task_and_a_failed_one_does_n
         {"outcome": "failed", "text": "Model error.", "last_seq": 0},
         token=r["token"],
     )
-    assert task_state(api, second["task_id"])["status"] in ("open", "doing")
+    assert task_state(api, second["task_id"])["status"] == "open"
 
 
 def next_counsel_run(api, r):
@@ -1549,10 +1557,9 @@ def test_a_leftover_counsel_task_does_not_block_a_read_and_the_read_sees_only_it
 
     org(api)
     counsel_on(api)
-    # A declined "Can I" stays in the person's list with Counsel: the next read's notice names it, without its text.
+    # A "Can I" left open with Counsel: the next read's notice names it, without its text.
     asked = post(api, "rules/ask", {"question": "Can I text customers on Sunday about the secret Globex launch?"})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='declined' WHERE id=?", (asked["task_id"],))
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='tico-counsel'")
     file_id, version = store_file(api, CONTRACT)
     other_file, _ = store_file(api, "Globex launch plan: secret.", title="Globex Plan")
@@ -1596,18 +1603,11 @@ def test_a_run_carrying_a_second_private_task_neither_publishes_nor_finishes_the
     )
     r, attempt = counsel_run(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], asked["task_id"]))
+        H.event(c, "bot:tico-counsel", "task.next-run.carried", attempt["id"], {"task_id": asked["task_id"]})
     assert run_suggests(api, attempt, file_id, version).status_code == 403
     finish(api, r, attempt, text="Read it. Globex price list is secret.")
     assert task_state(api, read["task_id"])["status"] != "done"
-    with api.app.state.store.read() as c:
-        notes = [
-            x[0] or ""
-            for x in c.execute(
-                "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=?", (read["task_id"],)
-            )
-        ]
-    assert not any("Globex" in note for note in notes)
+    assert not any("Globex" in note for note in done_notes(api, read["task_id"]))
 
 
 def test_two_people_reading_one_version_each_suggest_and_each_finish(api):

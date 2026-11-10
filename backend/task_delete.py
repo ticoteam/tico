@@ -44,38 +44,28 @@ TASK_ROWS = (
     "task_tags",
     "task_delegations",
     "task_reminders",
-    "task_check_back_wakes",
     "service_key_tasks",
     "task_roles",
     "task_assets",
     "task_requesters",
-    "task_milestone_waits",
     "task_check_models",
     "task_run_models",
-    "task_holds",
     "meeting_task_links",
     "maintenance_listings",
     "maintenance_handoffs",
     "quarantine_holds",
-    # Where the ticket stands in its pipeline (backend/pipeline_engine.py): its stage stays, judgements, evidence, claims.
-    "stage_visits",
-    "stage_decisions",
-    "requirement_attachments",
-    "review_claims",
-    "pipeline_handoffs",
-    "pipeline_check_runs",
 )
+# Where a task stands in its pipeline is not kept: its visits, answers, asks and snooze go with it
+# (task_engine.on_delete), and a restore starts it on a new visit (task_engine.restore). The tasks it filed, and the
+# task that filed it, keep their link to it: a deleted task counts as closed for the work that waited on it.
 # A table whose rows name the task other than by `task_id`: its column and the rows of it that are a task's. A task's
 # history is the shared history table's task rows (backend/migrations/0064_history_events.py).
-# A handoff names two tasks, so either one takes its row ("a|b": a row of either column).
 TASK_KEYS = {
     "history_events": ("subject_id", "subject_type='task'"),
-    "pipeline_handoffs": ("source_task_id|target_task_id", None),
 }
 # Rows that are work done on the task: any one of them refuses the run.
 TASK_WORK = (
     "attempts",
-    "approvals",
     "bot_tool_requests",
     "meeting_deliveries",
     "schedule_occurrences",
@@ -104,7 +94,6 @@ MESSAGE_WORK = (
     "attempts",
     "jobs",
     "attempt_inputs",
-    "approvals",
     "credential_requests",
     "bot_transition_checkpoints",
     "batches",
@@ -130,29 +119,11 @@ CONVERSATION_ROWS = (("slack_digests", "conversation_id"), ("slack_threads", "co
 # Rows that point at the task but belong to something else, by their key: restored only if still unset.
 POINTERS = (("market_insights", "id", "filed_task"), ("meeting_items", "id", "proposed_task_id"))
 LINKS = ("conversation_id",)
-# Trash rows written before task_relations kept a task's parent and blocker on the task row itself.
-LEGACY_LINKS = {"parent_id": ("parent", False), "blocked_by": ("blocks", True)}
 CORE = ("tasks", "conversations", "messages")
-# Keys a trashed row holds that are not columns: the rowid the snapshot read it with, and the task links kept on the
-# task row before task_relations (LEGACY_LINKS, restored as relations).
+# A key a trashed row holds that is not a column: the rowid the snapshot read it with.
 NOT_COLUMNS = {"_rowid"}
-# A task trashed before its holds were rows (migration 0075) kept them as columns of its own row: a restore opens them
-# as task_holds rows (`_legacy_holds`). {kind: {old column: task_holds column}}, with the one that marks it open first.
-LEGACY_HOLDS = {
-    "snoozed": {"snoozed_until": "until_at", "snoozed_by_id": "by_id", "snoozed_note": "reason"},
-    "blocked": {
-        "blocked_since": "created_at",
-        "blocked_reason": "reason",
-        "blocked_kind": "cause",
-        "blocked_from_step": "from_step_id",
-        "blocked_from_status": "from_status",
-        "blocked_gate": "gate",
-        "holds_cleared_at": "cleared_at",
-    },
-}
-# A task trashed before 20261106112609_derived_waiting kept who it waited on (`waiting_on`); who a task waits on is
-# derived now (question_tasks.waiting_on), so a restore leaves it behind.
-HANDLED = {"tasks": set(LEGACY_LINKS) | {k for cols in LEGACY_HOLDS.values() for k in cols} | {"waiting_on"}}
+# What a restore does not put back as it was: the engine places the task (task_engine.restore).
+PLACED = ("status", "pipeline_id", "stage_id", "owner_id", "assignee_id", "done_at", "closed_at", "closed_by_id")
 
 
 def ensure(c):
@@ -391,8 +362,10 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
     ensure(c)
     actor = actor or H.KEEPER
     now = H.now()
+    from . import task_engine
+
+    task_engine.on_delete(c, ids, actor)  # a deleted task's snooze ends: nothing waits for its date
     relations = {tid: TR.snapshot_rows(c, tid) for tid in ids}
-    found_rows = {tid: H.task(c, tid) for tid in ids}
     for tid in ids:
         rows, convs, msgs, pointers = _snapshot(c, tid, relations[tid])
         if tid in kept:
@@ -425,13 +398,6 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
             c.execute(
                 "INSERT OR IGNORE INTO task_trash_assets(task_id, blob_id) "
                 "SELECT task_id, blob_id FROM task_assets WHERE task_id=?",
-                (tid,),
-            )
-        if _has(c, "requirement_attachments", "task_id"):
-            # Evidence a stage requirement counts is the ticket's too: the trash keeps its bytes past a purge.
-            c.execute(
-                "INSERT OR IGNORE INTO task_trash_assets(task_id, blob_id) "
-                "SELECT task_id, blob_id FROM requirement_attachments WHERE task_id=? AND blob_id IS NOT NULL",
                 (tid,),
             )
         for table in TASK_ROWS:
@@ -470,24 +436,8 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
             },
         )
     H.recount(c, parties)  # what a bot waited on a person for leaves with the task
-    from .roadmap_flow import sync
-
-    # A roadmap item counts its children and the Dev tickets it is blocked by.
-    for parent in {r["to_task"] for edges in relations.values() for r in edges if r["kind"] in ("parent", "blocks")}:
-        sync(c, parent)
-    # A deleted child or blocker is a hold cleared on the task it held (backend/task_holds.py).
-    from . import task_holds
-
-    held = {
-        r["to_task"]: r["from_task"]
-        for edges in relations.values()
-        for r in edges
-        if r["kind"] in ("parent", "blocks") and r["from_task"] in ids and r["to_task"] not in ids
-    }
-    for tid, gone in held.items():
-        t = found_rows[gone]
-        live = t["status"] not in ("done", "closed", "declined")
-        task_holds.refresh(c, tid, f"{task_holds.title(c, t)} was deleted" if live else None)
+    # A task that waited on one of these (it filed it) is not told here: a deleted task counts as closed for it, and
+    # the never-stuck check sees that on its next pass.
     report["applied"] = True
     return report
 
@@ -553,46 +503,9 @@ def _current(snap):
         pointers[f"{table}.{renames.current_column(table, key)}.{renames.current_column(table, column)}"] = keys
     return {
         **snap,
-        "rows": _guest_rows(_history_rows(renames.current_rows(snap.get("rows") or {}))),
+        "rows": renames.current_rows(snap.get("rows") or {}),
         "pointers": pointers,
     }
-
-
-def _guest_rows(rows):
-    """A task trashed while it had a `guest` (before its reader list) comes back with that person as its reader."""
-    for task in rows.get("tasks") or ():
-        if isinstance(task, dict) and "guest" in task:
-            guest = task.pop("guest")
-            if guest and not task.get("readers"):
-                task["readers"] = json.dumps([guest])
-    return rows
-
-
-def _history_rows(rows):
-    """A snapshot saved before the task's history moved to history_events (its `task_events` rows) under the new table,
-    so a restore puts that history back rather than skipping a dropped table."""
-    old = rows.pop("task_events", None)
-    if not old:
-        return rows
-    moved = [
-        {
-            "_rowid": row.get("_rowid"),
-            "id": row.get("id"),
-            "subject_type": "task",
-            "subject_id": row.get("task_id"),
-            "actor_id": row.get("actor_id", row.get("actor")),
-            "kind": row.get("kind", row.get("field")) or "",
-            "old": row.get("old"),
-            "new": row.get("new"),
-            "note": row.get("note"),
-            "action_id": row.get("action_id"),
-            "via": row.get("via"),
-            "created_at": row.get("created_at") or "",
-        }
-        for row in old
-        if isinstance(row, dict)
-    ]
-    return {**rows, "history_events": [*rows.get("history_events", []), *moved]}
 
 
 def _unplaced(c, snap):
@@ -607,26 +520,10 @@ def _unplaced(c, snap):
         present = set(_columns(c, table))
         if not present:
             continue
-        keys = {k for row in found for k in row} - present - NOT_COLUMNS - HANDLED.get(table, set())
+        keys = {k for row in found for k in row} - present - NOT_COLUMNS
         if keys:
             out[table] = sorted(keys)
     return out
-
-
-def _legacy_holds(c, task):
-    """The holds a task trashed before migration 0075 kept on its row, back as its open task_holds rows."""
-    if "snoozed_until" not in task and "blocked_since" not in task:
-        return
-    for kind, columns in LEGACY_HOLDS.items():
-        first = next(iter(columns))
-        if not task.get(first):
-            continue
-        values = {new: task.get(old) for old, new in columns.items()}
-        values.setdefault("created_at", task.get("updated_at") or H.now())
-        c.execute(
-            f"INSERT INTO task_holds(task_id, kind, {', '.join(values)}) VALUES (?, ?, {_marks(list(values))})",
-            (task["id"], kind, *values.values()),
-        )
 
 
 def restore_tasks(c, ids, actor=None):
@@ -634,7 +531,12 @@ def restore_tasks(c, ids, actor=None):
     back (its id in use again) refuses the whole restore with `conflict`; links to a task or room that
     is gone come back unset, and the report says which. A snapshot saved before a column was renamed is read under
     the new names; one holding a value this database has no column for refuses the whole restore with `unplaced`
-    and stays in the trash, since restoring would lose that value for good."""
+    and stays in the trash, since restoring would lose that value for good.
+
+    The row goes back open and in no stage, then its thread, messages and links, and last the engine places it
+    (task_engine.restore): an open task on a new visit in the stage it was in while that stage may take it, else the
+    first one; a done or closed one as it ended. A private task no stage may take is not restored (`not_shared`, with
+    its cause and fix) and stays in the trash. What it was asked, and the wakes written for it, are not replayed."""
     ensure(c)
     actor = actor or H.KEEPER
     entries = []
@@ -649,6 +551,7 @@ def restore_tasks(c, ids, actor=None):
     unplaced = {e["task_id"]: found for e, snap in snapshots if (found := _unplaced(c, snap))}
     if unplaced:
         return {"restored": [], "unplaced": unplaced}
+    c.execute("SAVEPOINT trash_restore_all")
     c.execute("SAVEPOINT trash_restore")
     try:
         for e, snap in snapshots:
@@ -657,72 +560,31 @@ def restore_tasks(c, ids, actor=None):
             if number is not None and c.execute("SELECT 1 FROM tasks WHERE number=?", (number,)).fetchone():
                 task["number"] = None
                 unlinked.setdefault(e["task_id"], []).append("number")
-            if (
-                task.get("type_id")
-                and not c.execute("SELECT 1 FROM task_types WHERE id=?", (task["type_id"],)).fetchone()
-            ):
-                # Its type was deleted while it sat in the trash: it comes back on General, without a step.
-                task["type_id"] = H.GENERAL_TYPE
-                task["step_id"] = None
-                task["step_rank"] = None
-                unlinked.setdefault(e["task_id"], []).append("type")
-            if (
-                task.get("step_id")
-                and not c.execute("SELECT 1 FROM task_steps WHERE id=?", (task["step_id"],)).fetchone()
-            ):
-                # Its step was retired (Waiting and Won't do are no longer steps): it comes back without one.
-                task["step_id"] = None
-                task["step_rank"] = None
-            _insert(c, "tasks", task, skip=LINKS)
-            _legacy_holds(c, task)
+            # Open and in no stage, as any new row: the engine places it once its thread and links are back.
+            _insert(c, "tasks", {**task, "status": "open"}, skip=(*LINKS, *PLACED[1:]))
         messages = []
-        for e, snap in snapshots:
+        for _e, snap in snapshots:
             for conv in snap["rows"].get("conversations", []):
                 _insert(c, "conversations", conv)
             for msg in snap["rows"].get("messages", []):
                 _insert(c, "messages", msg)
                 messages.append(msg["id"])
     except sqlite3.IntegrityError as error:
-        c.execute("ROLLBACK TO trash_restore")
-        c.execute("RELEASE trash_restore")
+        c.execute("ROLLBACK TO trash_restore_all")
+        c.execute("RELEASE trash_restore_all")
         return {"restored": [], "conflict": str(error)}
     c.execute("RELEASE trash_restore")
     # The messages were read long ago: putting them back must not wake a bot on them again. The insert above does not
     # call backend/enqueue.py, so it makes no job for them; the snapshot's own jobs come back below, as they were.
     _delete(c, "jobs", "message_id", messages)
-    for e, snap in snapshots:
+    for _e, snap in snapshots:
         for table, found in snap["rows"].items():
             if table not in CORE and table != "task_relations":
                 for row in found:
                     _try_insert(c, table, row, skipped)
     for e, snap in snapshots:
         tid = e["task_id"]
-        relations = [r for r in snap["rows"].get("task_relations", []) if "kind" in r]
-        task = snap["rows"]["tasks"][0]
-        for column, (kind, inward) in LEGACY_LINKS.items():
-            if task.get(column):
-                ends = (task[column], tid) if inward else (tid, task[column])
-                relations.append(
-                    {
-                        "from_task": ends[0],
-                        "to_task": ends[1],
-                        "kind": kind,
-                        "created_at": task.get("updated_at") or H.now(),
-                    }
-                )
         for row in snap["rows"].get("task_relations", []):
-            if "related_id" in row:  # draft #110's related-only rows
-                a, b = sorted((row["task_id"], row["related_id"]))
-                relations.append(
-                    {
-                        "from_task": a,
-                        "to_task": b,
-                        "kind": "related",
-                        "created_by": row.get("added_by"),
-                        "created_at": row["created_at"],
-                    }
-                )
-        for row in relations:
             if TR.restore_row(c, row) is False:
                 unlinked.setdefault(tid, []).append(row["kind"])
     for e, snap in snapshots:
@@ -752,14 +614,46 @@ def restore_tasks(c, ids, actor=None):
             e["task_id"],
             {"title": e["title"], "deleted_by": e["deleted_by"], "unlinked": unlinked.get(e["task_id"], [])},
         )
-    from .roadmap_flow import changed
+    from . import task_engine
 
-    for e in entries:
-        changed(c, e["task_id"])
+    for e, snap in snapshots:
+        was = snap["rows"]["tasks"][0]
+        try:
+            task_engine.restore(c, e["task_id"], actor, {k: was.get(k) for k in PLACED})
+        except H.Refused as refused:
+            # No stage may take it (a private task none of its owners could read): nothing comes back.
+            c.execute("ROLLBACK TO trash_restore_all")
+            c.execute("RELEASE trash_restore_all")
+            extra = refused.extra or {}
+            return {
+                "restored": [],
+                "not_shared": {e["task_id"]: {"cause": extra.get("cause"), "fix": extra.get("fix")}},
+            }
+    c.execute("RELEASE trash_restore_all")
+    _mirror_parents(c, [e["task_id"] for e in entries])
     H.recount(c, [t for e in entries for t in (e["owner"], e["requester"])])
     # A task restorer may not read its meetings, so skipped links must not reveal their count.
     skipped.pop("meeting_task_links", None)
     return {"restored": [e["task_id"] for e in entries], "unlinked": unlinked, "skipped": skipped}
+
+
+def _mirror_parents(c, ids):
+    """A task's parent is kept twice: the engine's link (what it waits on) and the `parent` relation (the tree, and who
+    may read what). A link outlives a deleted task; a relation to a task that is gone does not come back with a
+    restore. So after a restore, every link with both ends here has its relation again, whichever end came back
+    last."""
+    for tid in ids:
+        for parent, child, at in c.execute(
+            "SELECT l.from_task_id, l.to_task_id, l.created_at FROM links l "
+            "JOIN tasks p ON p.id = l.from_task_id JOIN tasks k ON k.id = l.to_task_id "
+            "WHERE l.from_task_id=? OR l.to_task_id=?",
+            (tid, tid),
+        ).fetchall():
+            if not c.execute("SELECT 1 FROM task_relations WHERE from_task=? AND kind='parent'", (child,)).fetchone():
+                c.execute(
+                    "INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,'parent',NULL,?)",
+                    (child, parent, at),
+                )
 
 
 def _files_left(c, tid):

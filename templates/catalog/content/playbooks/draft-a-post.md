@@ -12,7 +12,7 @@ Done when: the draft and its short versions are in the folder, every claim has i
 
 ## 1. Decide it is worth writing
 
-    hub task show <id>
+    tico task show <id>
 
 An idea from another bot is an idea, not an assignment. It is worth a piece when it answers a
 question a real reader has, it is something {{company_name}} can say truthfully and specifically,
@@ -49,7 +49,7 @@ sound like the team or like a machine? Rewrite the generic sentences and add the
 
 ## 5. Hand it over
 
-Commit, then `hub task update <id> --status done --note`: what the piece says in one line, the path
+Commit, then `tico task done <id> -m "..." --version N`: what the piece says in one line, the path
 to the folder, what is still missing, and one line on what you did and any missing Tools. Publish or schedule the content at the named destination only when the task asks for it, a granted Tool allows it and mail sending is on in Tico; otherwise keep the draft.
 
 ## 6. Keep the plan honest

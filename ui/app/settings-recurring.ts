@@ -1,11 +1,10 @@
-/* ui/app/settings-recurring.ts — Automations > System jobs (#/automations/system-jobs): what Tico runs on its own, and task rules
+/* ui/app/settings-recurring.ts — Automations > System jobs (#/automations/system-jobs): what Tico runs on its own
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// One job as GET /api/v2/system-routines lists it (backend/system_routines.py), or a task rule (kind task_rule).
+// One job as GET /api/v2/system-routines lists it (backend/system_routines.py).
 interface SysRoutineJob {
   key: string;
-  kind?: string;
   name: string;
   what?: string;
   note?: string | null;
@@ -35,11 +34,9 @@ interface SysRoutineJob {
   actions?: string[];
 }
 
-// What GET /api/v2/system-routines answers: the jobs, and what the task rule editor needs.
+// What GET /api/v2/system-routines answers: the jobs, and the departments the webhook editor reads.
 interface SysRoutinesData {
   jobs: SysRoutineJob[];
-  can_create_task_rule?: boolean;
-  task_rule_department?: string | null;
   task_rule_departments?: { id: string; name: string }[];
 }
 
@@ -47,11 +44,6 @@ interface SysRoutinesData {
 interface SysRoutineWrite {
   job: SysRoutineJob;
   running?: boolean;
-}
-
-// The rule form's named controls: `elements.ruleName` is the name input the editor draws.
-interface TaskRuleControls extends HTMLFormControlsCollection {
-  readonly ruleName: HTMLInputElement;
 }
 
 // "What Tico runs on its own": every job Tico runs on its own (backend/system_routines.py) in one flat list,
@@ -107,7 +99,6 @@ function systemRoutineControlHTML(j: SysRoutineJob) {
     return `<span class="sysr-state" data-sysr-state>${j.on ? 'On' : 'Off'}</span>${j.owner_only && settingsIsAdmin() ? '<span class="muted sysr-owner" data-sysr-owner>Only the owner changes this</span>' : ''}`;
   }
   return `<label class="sysr-switch">${peopleSwitch('data-sysr-on', j.on, busy, j.name)}<span>${j.on ? 'On' : 'Off'}</span></label>
-    ${j.kind === 'task_rule' ? `<button type="button" class="ghost" data-task-rule-edit${busy ? ' disabled' : ''}>Edit</button>` : ''}
     ${j.controllable && !SYSTEM_ROUTINE_ON_EVENT.has(j.key) ? `<button type="button" class="ghost" data-sysr-run${busy || !j.on || j.run_unavailable ? ' disabled' : ''}${j.run_unavailable ? ` title="${esc(j.run_unavailable)}"` : j.on ? '' : ' title="Switch it on to run it"'}>${busy ? 'Running…' : 'Run now'}</button>${j.run_unavailable ? `<span class="muted">${esc(j.run_unavailable)}</span>` : ''}` : ''}`;
 }
 function systemRoutineRowHTML(j: SysRoutineJob) {
@@ -125,7 +116,7 @@ function systemRoutineRowsHTML(data: SysRoutinesData) {
   return jobs.length ? jobs.map(systemRoutineRowHTML).join('') : '<div class="empty" data-sysr-none>No job matches.</div>';
 }
 function systemRoutinesHTML(data: SysRoutinesData) {
-  return `<div class="settings-bots-filters">${data.can_create_task_rule ? '<button type="button" class="primary" data-task-rule-new>New task rule</button>' : ''}<input class="settings-filter-search sysr-search" type="search" autocomplete="off" data-sysr-search
+  return `<div class="settings-bots-filters"><input class="settings-filter-search sysr-search" type="search" autocomplete="off" data-sysr-search
       value="${esc(SYSTEM_ROUTINES_Q)}" placeholder="Search jobs" aria-label="Search jobs"></div>
     <div class="sysr-list" data-sysr-list>${systemRoutineRowsHTML(data)}</div>`;
 }
@@ -170,15 +161,13 @@ function systemRoutineFollow(key: string, n: number) {
   }, 5000);
 }
 function systemRoutinesBind(el: Element) {
-  const add = el.querySelector<HTMLElement>('[data-task-rule-new]');
-  if (add) add.onclick = () => taskRuleEditor();
   const search = el.querySelector<HTMLInputElement>('[data-sysr-search]');
   if (search) search.oninput = () => { SYSTEM_ROUTINES_Q = search.value; const list = el.querySelector<HTMLElement>('[data-sysr-list]'); if (list) list.innerHTML = systemRoutineRowsHTML(loadedRoutines()); };
   const list = el.querySelector<HTMLElement>('[data-sysr-list]'); if (!list) return;
   list.onchange = ev => {
     const target = eventElement(ev), row = target?.closest<HTMLElement>('[data-system-routine]'); if (!row) return;
-    const key = row.dataset.systemRoutine ?? '', job = loadedRoutines().jobs.find(j => j.key === key);
-    const path = (job?.kind === 'task_rule' ? '/v2/task-rules/' : '/v2/system-routines/') + encodeURIComponent(key);
+    const key = row.dataset.systemRoutine ?? '';
+    const path = '/v2/system-routines/' + encodeURIComponent(key);
     if (target instanceof HTMLInputElement && target.matches('[data-sysr-on]')) void systemRoutineWrite(key, () => put(path, {on: target.checked}));
     else if (target instanceof HTMLSelectElement && target.matches('[data-sysr-preset]')) {
       const body: {preset: string; at?: string} = {preset: target.value};
@@ -193,8 +182,7 @@ function systemRoutinesBind(el: Element) {
     const row = input.closest<HTMLElement>('[data-system-routine]')!, key = row.dataset.systemRoutine ?? '';
     const job = loadedRoutines().jobs.find(j => j.key === key);
     if (!input.value || input.value === job?.at) { if (SYSTEM_ROUTINES_HELD) systemRoutinesPaint(); return; }
-    const path = (job?.kind === 'task_rule' ? '/v2/task-rules/' : '/v2/system-routines/') + encodeURIComponent(key);
-    void systemRoutineWrite(key, () => put(path, {at: input.value}));
+    void systemRoutineWrite(key, () => put('/v2/system-routines/' + encodeURIComponent(key), {at: input.value}));
   };
   // There is no onfocusout property, so it is a listener, added once: the list element outlives its redraws.
   if (!list.dataset.sysrBound) {
@@ -204,8 +192,6 @@ function systemRoutinesBind(el: Element) {
   list.onkeydown = ev => { const target = eventElement(ev); if (ev.key === 'Enter' && target instanceof HTMLInputElement && target.matches('[data-sysr-at]')) target.blur(); };
   list.onclick = ev => {
     const target = eventElement(ev);
-    const edit = target?.closest<HTMLButtonElement>('[data-task-rule-edit]');
-    if (edit && !edit.disabled) { taskRuleEditor(loadedRoutines().jobs.find(j => j.key === edit.closest<HTMLElement>('[data-system-routine]')!.dataset.systemRoutine)); return; }
     const run = target?.closest<HTMLButtonElement>('[data-sysr-run]'); if (!run || run.disabled) return;
     const key = run.closest<HTMLElement>('[data-system-routine]')!.dataset.systemRoutine ?? '';
     void systemRoutineWrite(key, () => post('/v2/system-routines/' + encodeURIComponent(key) + '/run', {}));
@@ -220,36 +206,4 @@ async function renderSystemRoutines(force?: boolean | undefined) {
   catch (e) { if (!SYSTEM_ROUTINES) el.innerHTML = `<div class="empty">Couldn't load the jobs: ${esc(errorMessage(e, 'try again'))}</div>`; return; }
   if (SYSTEM_ROUTINE_BUSY.size || formBusy(el.querySelector('[data-sysr-list]'))) return;
   systemRoutinesPaint();
-}
-
-
-function taskRuleEditor(job?: SysRoutineJob) {
-  const data = loadedRoutines(), dialog = document.createElement('dialog');
-  dialog.className = 'tmodal task-rule-dialog';
-  const department = job?.department?.id || data.task_rule_department || '';
-  const options = (data.task_rule_departments || []).map(d => `<option value="${esc(d.id)}"${d.id === department ? ' selected' : ''}>${esc(d.name)}</option>`).join('');
-  dialog.innerHTML = `<form class="task-rule-form"><header><h2>${job ? 'Edit task rule' : 'New task rule'}</h2><button type="button" class="ghost" data-close>Cancel</button></header>
-    <label>Name<input name="ruleName" maxlength="120" required value="${esc(job?.name || 'Close after done')}"></label>
-    <label>Department<select name="department" required><option value="">Choose a department</option>${options}</select></label>
-    <label>WHEN a task has been done and untouched for <input name="hours" type="number" min="1" max="8760" required value="${job?.triggers?.[0]?.hours || 24}"> hours</label>
-    <p><b>THEN</b> close it. Reopen the task to undo.</p>
-    <p class="muted">Skips tasks waiting on a person, snoozed, pinned, or with an open question or pending approval. Closes at most 50 tasks per pass across all rules.</p>
-    <label><input type="checkbox" name="enabled"${job?.on === false ? '' : ' checked'}> On</label>
-    <p class="err" role="status" data-task-rule-error></p><footer><button type="submit" class="primary">Save rule</button></footer></form>`;
-  const form = dialog.querySelector<HTMLFormElement>('form')!;
-  dialog.querySelector<HTMLButtonElement>('[data-close]')!.onclick = () => dialog.close();
-  dialog.addEventListener('close', () => dialog.remove());
-  form.onsubmit = async ev => {
-    ev.preventDefault(); const button = form.querySelector<HTMLButtonElement>('[type="submit"]')!; button.disabled = true;
-    const values = new FormData(form), hours = Number(values.get('hours'));
-    const body = {name: values.get('ruleName'), department: values.get('department'), on: values.has('enabled'),
-      triggers: [{key: 'done_untouched', hours}, ...(job?.triggers || []).slice(1)], actions: job?.actions || ['close']};
-    try {
-      const out: SysRoutineWrite = job ? await put('/v2/task-rules/' + encodeURIComponent(job.key), body) : await post('/v2/task-rules', body);
-      if (job) systemRoutineReplace(out.job); else loadedRoutines().jobs.push(out.job);
-      dialog.close(); systemRoutinesPaint(); toast('Saved');
-    } catch (e) { dialog.querySelector<HTMLElement>('[data-task-rule-error]')!.textContent = errorMessage(e, 'Could not save the rule'); }
-    finally { button.disabled = false; }
-  };
-  document.body.appendChild(dialog); dialog.showModal(); (form.elements as TaskRuleControls).ruleName.focus();
 }

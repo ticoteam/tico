@@ -55,11 +55,23 @@ def _recruit_offers_templates_for_each_open_seat(built):
         assert "dispatcher" in [row["template"] for row in install["candidates"]]
 
 
-def _applicants_are_recruiter_tasks_at_four_stages(built):
+def _applicants_are_open_recruiter_tasks_one_asking_ana_and_one_snoozed(built):
     with owner_api(built) as api:
-        tasks = api.get("/api/v2/tasks", params={"owner": "bot:recruiter", "limit": 100}).json()["tasks"]
-        applicants = [task for task in tasks if task["title"].startswith("Applicant for Install Crew Coordinator")]
-        assert sorted(task["status"] for task in applicants) == ["doing", "open", "review", "waiting"]
+        tasks = api.get("/api/v2/tasks", params={"owner": "bot:recruiter", "snoozed": "all", "limit": 100}).json()[
+            "tasks"
+        ]
+        applicants = {
+            task["title"].rsplit(": ", 1)[1]: task
+            for task in tasks
+            if task["title"].startswith("Applicant for Install Crew Coordinator")
+        }
+        assert sorted(applicants) == ["Jordan Park", "Luis Ortega", "Maya Osei", "Priya Nair"]
+        assert {task["status"] for task in applicants.values()} == {"open"}
+        assert (applicants["Maya Osei"]["turn"]["state"], applicants["Maya Osei"]["turn"]["who"]) == (
+            "person",
+            "human:ana",
+        )
+        assert applicants["Luis Ortega"]["snoozed"]
 
 
 def _the_cloud_agent_request_is_in_flight_with_its_first_task(built):
@@ -90,7 +102,7 @@ def test_the_demo_recruit_tells_its_story(built, subtests):
     for check in (
         _open_seats_sit_under_their_managers,
         _recruit_offers_templates_for_each_open_seat,
-        _applicants_are_recruiter_tasks_at_four_stages,
+        _applicants_are_open_recruiter_tasks_one_asking_ana_and_one_snoozed,
         _the_cloud_agent_request_is_in_flight_with_its_first_task,
         _the_hire_last_week_closed_its_seat_and_kept_the_bot,
     ):

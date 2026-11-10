@@ -18,7 +18,7 @@ Nothing in the product repositories changes in this run.
 
 ## Steps
 
-1. **Read where things stand.** `hub task show <id>`, then the inputs above. For each hand-off in last week's report,
+1. **Read where things stand.** `tico task show <id>`, then the inputs above. For each hand-off in last week's report,
    record whether it was taken up, still open, or dropped.
 2. **Measure the path to users.** Follow `skills/time-the-merge-to-release-path/SKILL.md`: merge wait and merge to production,
    each as a median over the window, with the window before.
@@ -34,7 +34,7 @@ Nothing in the product repositories changes in this run.
    deploys (step 6). If a seat does not exist on the team, the hand-off goes to the owner as a task.
 6. **Draft a rollback request if one is open.** When the last deploy that reached users is bad and no good release has followed,
    follow `playbooks/rollback.md`: a drafted request for the person who runs deploys, on a task. Never run it.
-7. **Write and hand over.** Write the report, `hub file publish` it, commit this repository, then close the task with the headline and the path.
+7. **Write and hand over.** Write the report, `tico file publish` it, commit this repository, then close the task with the headline and the path.
 
 ## Output
 

@@ -1,7 +1,8 @@
 // Reads the live stream makes unneeded (ui/app/threads.ts threadsSync):
 //  - each stream connect names the Needs you version; a reconnect that carried `threads` over naming the version the
 //    threads list was read at reads nothing again; a version that moved reads it, also when another read already took
-//    the new version; a connect that did not carry `threads` (the first, or the one adding it) reads it.
+//    the new version; a connect that did not carry `threads` (the first, or the one adding it) reads it;
+//  - a Needs you change while connected never reads the threads list (Nov 3).
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
@@ -80,6 +81,11 @@ declare function threadsLoad(): void;
   await page.evaluate(() => liveEmit('needs', {version: 'v1', connect: true, carried: ['needs', 'threads']}));
   await page.waitForTimeout(t(3500));
   assert.deepEqual(reads, before, 'the version held reads neither Needs you nor the threads list');
+  // Needs you changing while connected (Nov 3): the threads list is not read for it, however many come.
+  before = {...reads};
+  await page.evaluate(() => { for (let i = 0; i < 20; i++) liveEmit('needs', {version: 'v1', changed: ['n' + i]}); });
+  await page.waitForTimeout(t(3500));
+  assert.equal(reads.threads, before.threads, 'no threads list read follows a Needs you change');
   // A version that moved: Needs you and the threads list are read.
   reads.version = 'v2';
   await page.evaluate(() => liveEmit('needs', {version: 'v2', connect: true, carried: ['needs', 'threads']}));

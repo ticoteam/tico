@@ -14,7 +14,7 @@ COMMANDS = ("run", "doctor", "destroy", "runner", "backup-storage", "support", "
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="tico setup",
+        prog="python3 -m setup",
         description="Set up Tico on one Docker server, from a domain to a signed-in app.",
         epilog="Secrets are never taken as flags: set TICO_OIDC_CLIENT_SECRET, CLOUDFLARE_API_TOKEN, "
         "CLOUDFLARE_TUNNEL_TOKEN, TICO_INBOUND_KEY or OPENAI_API_KEY (ANTHROPIC_/GEMINI_) "
@@ -367,7 +367,7 @@ def main(argv: list[str] | None = None, deps: Deps | None = None, io: IO | None 
             "owner-link": hosted.rotate,
         }[args.command](args, io, deps)
     except KeyboardInterrupt:
-        io.say("\nInterrupted. Re-run `tico setup`; it resumes.")
+        io.say("\nInterrupted. Re-run the setup wizard; it resumes.")
         return 130
     except MissingInput as e:
         io.say(str(e))

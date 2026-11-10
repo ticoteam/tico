@@ -7,7 +7,7 @@ read access only on a private task sent from a private meeting. A person may hol
 the owner may hold any of them too. What a role means downstream (which column waits on whom, a dependency
 monitor) is the client's to decide.
 
-`set_roles` writes ordinary role changes (task update and create, the task page, `hub task update --role`,
+`set_roles` writes ordinary role changes (task update and create, the task page, `tico task update --role`,
 the MCP tools). A checked private meeting send grants its audience through `meeting_audience.grant`.
 Whoever may change the task's other fields may change who is on it.
 

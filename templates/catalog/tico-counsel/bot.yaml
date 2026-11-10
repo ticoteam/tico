@@ -17,6 +17,6 @@ max_run_minutes: 60
 routines: []
 
 # What this bot may touch: nothing outside Tico. It has no credentials and sends nothing: it reads the document its task
-# gives it and the rules in force, and writes suggestions through `hub rules`. Tico fetches a link itself, with no
+# gives it and the rules in force, and writes suggestions through `tico rules`. Tico fetches a link itself, with no
 # credential, before Counsel's task exists; Counsel never fetches.
 tools: []

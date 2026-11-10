@@ -11,7 +11,7 @@ Messages to outsiders stay drafts until a person turns mail sending on in Tico. 
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/inbound-method.md`, `knowledge/do-not-contact.md`, and the last ten lines of `knowledge/lead-log.md`.
 Note the time. Every speed figure starts from a lead's arrival, not from this sweep.
@@ -45,11 +45,11 @@ gap as a gap. Never fill it.
 ## 5. Hand over booked calls
 
 When a lead accepts a time, write a one-page note: who they are, why now, what they asked, the timing signal, and the
-open questions. Then run `hub task create --owner <who takes calls> --title "<lead> call booked" --body-file <note>`. The calendar
+open questions. Then run `tico task create --owner <who takes calls> --title "<lead> call booked" --body-file <note>`. The calendar
 invitation to the lead is a person's act.
 
 ## 6. Finish
 
 Update `knowledge/leads/<lead>.md` for any lead worked past its first reply, and commit. Then
-`hub task update <id> --status done --note` with: leads arrived, how many of each sort, drafts ready, calls booked, and
+`tico task done <id> -m "..." --version N` with: leads arrived, how many of each sort, drafts ready, calls booked, and
 the oldest lead still waiting and its age. A sweep with no new lead still finishes with that line.

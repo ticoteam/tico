@@ -70,7 +70,8 @@ def test_covering_a_queued_notice_clears_its_status_and_notifies_open_headers(ap
     lapse(api, lapsed)
     task = post(api, "tasks", {"owner": "human:ana", "title": "Already handled", "body": "Handled elsewhere."})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
+        H.task_done(c, "human:ana", task["id"], "Handled elsewhere.")
+        assert H.task(c, task["id"])["status"] == "done"
         c.execute(
             "UPDATE messages SET sender_id=?,kind='notice',refs=? WHERE id=?",
             (H.KEEPER, json.dumps({"task": task["id"]}), message["id"]),

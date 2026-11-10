@@ -1,5 +1,5 @@
-"""Share the roster's whole-table reads, every bot, every bot's settings and the task step definitions, between requests
-until one of them changes.
+"""Share the roster's whole-table reads, every bot and every bot's settings, between requests until one of them
+changes.
 
 Most requests read all of `bots` and `bot_config` (with `bot_settings`) once in their snapshot (backend/read_cache.py), and those rows change
 a few times an hour at most: on a busy server the two reads were a tenth of all SQL time. SQLite triggers count every
@@ -11,10 +11,8 @@ import sqlite3
 
 from . import bot_settings as BS
 
-TABLES = ("bots", "bot_config", "bot_settings", "task_steps")
-STATEMENTS = frozenset(
-    {BS.ROW_SQL, "SELECT * FROM bots ORDER BY slug", "SELECT * FROM task_steps ORDER BY position,id"}
-)
+TABLES = ("bots", "bot_config", "bot_settings")
+STATEMENTS = frozenset({BS.ROW_SQL, "SELECT * FROM bots ORDER BY slug"})
 
 
 def ensure(c):

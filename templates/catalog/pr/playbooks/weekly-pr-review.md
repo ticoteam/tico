@@ -7,8 +7,8 @@ coming, and what is waiting on a human. Nothing is sent.
 
 ## 1. Read where things stand
 
-    hub task show <id>
-    hub calendar list
+    tico task show <id>
+    tico calendar list
 
 Then `knowledge/stories.md`, `knowledge/rules.md` and last week's review. Check which pitches were
 sent, and whether any reporter replied (from the mailbox Tool or the task).
@@ -33,8 +33,7 @@ launch, two for smaller news), what is missing (a customer, data, a spokesperson
 ## 5. Write and hand over
 
 Write `reports/YYYY-MM-DD-pr.md` in the shape of `knowledge/examples/pr-review.md`, then
-`hub file publish reports/YYYY-MM-DD-pr.md`. Commit, and `hub task update <id> --status done
---note`: the headline, the path, what is waiting on a human.
+`tico file publish reports/YYYY-MM-DD-pr.md`. Commit, and `tico task done <id> -m "..." --version N`: the headline, the path, what is waiting on a human.
 
 Done when: coverage since the last review is logged with dates and tone, each inaccurate article has a correction
 request drafted, the story pipeline has start dates, and every blocked source is named.

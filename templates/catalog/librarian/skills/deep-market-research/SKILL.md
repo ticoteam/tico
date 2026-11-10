@@ -28,7 +28,7 @@ collectors, merge, check, write, decide what's next. The state lives in files, s
 last one stopped, even in a fresh session.
 
 **Model.** This task should run on a high model (the person who files it sets **Runs on**, for example Opus at high
-effort). You cannot change it. If `hub task show <id>` says it runs on a small model, do the work anyway, keep
+effort). You cannot change it. If `tico task show <id>` says it runs on a small model, do the work anyway, keep
 rounds smaller, and say so in the note.
 
 **Sub-agents.** Start them with your Agent tool and `model: "haiku"`, several in one message so they run at the same
@@ -73,10 +73,10 @@ growth rate, a count), `channel`, `person`, `event`, `rule`. `status` starts `ra
 ## 1. Start (first turn only)
 
 1. Read the task: the question, any sources the person named, any scope ("only North America", "only B2B").
-2. Read what Tico already knows, so you don't buy it twice: `hub strategy show`, `hub market page overview`,
-   `coverage-universe`, `theses`, `open-questions`, `customer-themes`, `hub market briefing latest`, and the
-   graph around the question (`hub market find`, `hub market show`). Read `hub listening item list --destination
-   market` for buyer posts already collected. Sizing already on file: `hub market spend`.
+2. Read what Tico already knows, so you don't buy it twice: `tico strategy show`, `tico market page overview`,
+   `coverage-universe`, `theses`, `open-questions`, `customer-themes`, `tico market briefing latest`, and the
+   graph around the question (`tico market find`, `tico market show`). Read `tico listening item list --destination
+   market` for buyer posts already collected. Sizing already on file: `tico market spend`.
 3. Make the folder and its `.gitignore` (one line: `sources/`). Write `notes.md`: the question in one sentence; what "answered" means (two to four things the report must say);
    what Tico already knows, with where; what's missing.
 4. Write the **source plan**: batches of sources, each a job one collector finishes in 15 fetches. Cover each kind
@@ -89,7 +89,7 @@ growth rate, a count), `channel`, `person`, `event`, `rule`. `status` starts `ra
      documents, big players' job posts. What they tell investors is often the opposite of what they tell buyers.
    - **Numbers**: the sources in `playbooks/size-the-market.md` (public statistics, filings, trade groups).
    - **Channels and people**: where buyers are reached, and who shapes them.
-5. Say what you're doing in the task, once: `hub task update <id> --note "Researching: <question>. First results in
+5. Say what you're doing in the task, once: `tico task comment <id> "Researching: <question>. First results in
    about an hour."` Then start round 1.
 
 ## 2. Send a round
@@ -120,13 +120,13 @@ growth rate, a count), `channel`, `person`, `event`, `rule`. `status` starts `ra
 
 Every round, so the person sees progress and a cut-off turn loses little:
 
-- **The graph.** New entities and edges from checked claims, after `hub market find` for each name. Several at once:
-  write them to one JSONL file and run `hub market import <file> --dry-run --note "Deep research: <question>"`,
-  read what it would do, then run it without `--dry-run`. One at a time: `hub market report` then `hub market apply`
+- **The graph.** New entities and edges from checked claims, after `tico market find` for each name. Several at once:
+  write them to one JSONL file and run `tico market import <file> --dry-run --note "Deep research: <question>"`,
+  read what it would do, then run it without `--dry-run`. One at a time: `tico market report` then `tico market apply`
   (`playbooks/market-setup.md`, step 4). Tiers from `knowledge/market/evidence.md`. Never `competes_with` from a name.
 - **The market pages** the findings change (`overview`, `structure-and-size`, `channels`, `people-who-matter`,
   `theses`, `open-questions`, `regulation-and-catalysts`): read the page, add to it in its own voice, write it whole
-  with `hub market page <name> --body-file <file>`. Every sentence about the market ends with its source link.
+  with `tico market page <name> --body-file <file>`. Every sentence about the market ends with its source link.
   Something that contradicts the page is reported as a conflict, not quietly replaced.
 - **Size figures** go through `playbooks/size-the-market.md` as proposals, never into a page as your own number.
 - **The report**: rewrite `_librarian/research/<slug>.md` with what's checked so far.
@@ -159,10 +159,9 @@ Stop when any is true:
 - The budget (rounds, fetches, searches, hours) is spent.
 - The person said to stop.
 
-To continue: update `notes.md` (round done, budget spent, next batches), commit, then
-`hub task check-back <id> --in 5m --for "Deep research round <n+1>: <next batches in a few words>"`. End the turn
-with a short reply of where it stands (it becomes the task's checkpoint): rounds done, claims checked, the headline so
-far, next round.
+To continue: update `notes.md` (round done, budget spent, next batches), commit, and end the turn with a short reply
+of where it stands (it becomes the task's checkpoint): rounds done, claims checked, the headline so far, next round. The
+task stays open and your commit is a change, so you are woken again for the next round.
 
 If a turn is cut off, the next one starts from `notes.md` and the claims file. Re-run a batch only if its collector
 wrote nothing.
@@ -174,7 +173,7 @@ wrote nothing.
 2. What you could not read goes in `_librarian/missing.md` under **Sources I could not read**. Durable lessons
    about where good sources are for this kind of market go in `memory/learnings.md`.
 3. Rewrite `state.md`. Commit this repository.
-4. `hub task update <id> --status done --note "<the update>"`. Under twelve lines, sources by domain, covering:
+4. `tico task done <id> -m "<the update>" --version N`. Under twelve lines, sources by domain, covering:
    - the answer in one or two sentences;
    - what you read (counts by kind) and what you wrote (report link, entities added, pages changed);
    - what you could not do: unreadable sources, questions still open;

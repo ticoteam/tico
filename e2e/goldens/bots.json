@@ -30,11 +30,9 @@
       "harness": "fake",
       "host": "keeper",
       "id": "coo",
-      "keep_tasks_going": null,
       "last_turn_at": null,
       "manages_reports": true,
       "model": "",
-      "next_run": 0,
       "notes": 0,
       "onboarding_state": "",
       "online": false,
@@ -96,14 +94,14 @@
           "A person's message or request",
           "An assignment",
           "A direct question",
-          "An awaited dependency resolving (a blocker done, an awaited review, a release)",
-          "An actionable blocker",
-          "A review, QA or Security request"
+          "A task to work",
+          "An awaited result (a sub-task finished, a worktree ready, an account reconnected)",
+          "An actionable blocker"
         ],
         "label": "Performance",
         "preset": "performance",
         "profile": "lead",
-        "summary": "The rest of the news arrives once a day, at 09:00 team time. People, escalations and approvals wake it at once.",
+        "summary": "The rest of the news arrives once a day, at 09:00 team time. People, escalations and asks wake it at once.",
         "sweep_seconds": "<volatile>"
       }
     },
@@ -137,11 +135,9 @@
       "harness": "fake",
       "host": "keeper",
       "id": "cpo",
-      "keep_tasks_going": null,
       "last_turn_at": null,
       "manages_reports": true,
       "model": "",
-      "next_run": 0,
       "notes": 0,
       "onboarding_state": "",
       "online": false,
@@ -208,14 +204,14 @@
           "A person's message or request",
           "An assignment",
           "A direct question",
-          "An awaited dependency resolving (a blocker done, an awaited review, a release)",
-          "An actionable blocker",
-          "A review, QA or Security request"
+          "A task to work",
+          "An awaited result (a sub-task finished, a worktree ready, an account reconnected)",
+          "An actionable blocker"
         ],
         "label": "Performance",
         "preset": "performance",
         "profile": "lead",
-        "summary": "The rest of the news arrives once a day, at 09:00 team time. People, escalations and approvals wake it at once.",
+        "summary": "The rest of the news arrives once a day, at 09:00 team time. People, escalations and asks wake it at once.",
         "sweep_seconds": "<volatile>"
       }
     },
@@ -249,11 +245,9 @@
       "harness": "fake",
       "host": "keeper",
       "id": "doc-updater",
-      "keep_tasks_going": null,
       "last_turn_at": null,
       "manages_reports": true,
       "model": "",
-      "next_run": 0,
       "notes": 0,
       "onboarding_state": "",
       "online": false,
@@ -315,14 +309,14 @@
           "A person's message or request",
           "An assignment",
           "A direct question",
-          "An awaited dependency resolving (a blocker done, an awaited review, a release)",
-          "An actionable blocker",
-          "A review, QA or Security request"
+          "A task to work",
+          "An awaited result (a sub-task finished, a worktree ready, an account reconnected)",
+          "An actionable blocker"
         ],
         "label": "Performance",
         "preset": "performance",
         "profile": "doer",
-        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
+        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results and blockers wake it at once.",
         "sweep_seconds": "<volatile>"
       }
     },
@@ -356,11 +350,9 @@
       "harness": "fake",
       "host": "keeper",
       "id": "finance",
-      "keep_tasks_going": null,
       "last_turn_at": null,
       "manages_reports": true,
       "model": "",
-      "next_run": 0,
       "notes": 0,
       "onboarding_state": "",
       "online": false,
@@ -422,14 +414,14 @@
           "A person's message or request",
           "An assignment",
           "A direct question",
-          "An awaited dependency resolving (a blocker done, an awaited review, a release)",
-          "An actionable blocker",
-          "A review, QA or Security request"
+          "A task to work",
+          "An awaited result (a sub-task finished, a worktree ready, an account reconnected)",
+          "An actionable blocker"
         ],
         "label": "Performance",
         "preset": "performance",
         "profile": "doer",
-        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
+        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results and blockers wake it at once.",
         "sweep_seconds": "<volatile>"
       }
     },
@@ -463,11 +455,9 @@
       "harness": "fake",
       "host": "keeper",
       "id": "inbox",
-      "keep_tasks_going": null,
       "last_turn_at": null,
       "manages_reports": true,
       "model": "",
-      "next_run": 0,
       "notes": 0,
       "onboarding_state": "",
       "online": false,
@@ -529,14 +519,14 @@
           "A person's message or request",
           "An assignment",
           "A direct question",
-          "An awaited dependency resolving (a blocker done, an awaited review, a release)",
-          "An actionable blocker",
-          "A review, QA or Security request"
+          "A task to work",
+          "An awaited result (a sub-task finished, a worktree ready, an account reconnected)",
+          "An actionable blocker"
         ],
         "label": "Performance",
         "preset": "performance",
         "profile": "doer",
-        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
+        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results and blockers wake it at once.",
         "sweep_seconds": "<volatile>"
       }
     },
@@ -578,11 +568,9 @@
       "harness": "fake",
       "host": "keeper",
       "id": "ops",
-      "keep_tasks_going": null,
       "last_turn_at": "<time>",
       "manages_reports": true,
       "model": "",
-      "next_run": 0,
       "notes": 0,
       "onboarding_state": "",
       "online": true,
@@ -615,7 +603,7 @@
         "sweeps": true,
         "takes": "all"
       },
-      "queued": 5,
+      "queued": 3,
       "repo": "emp-ops",
       "repo_url": "",
       "reports_to": null,
@@ -661,14 +649,14 @@
           "A person's message or request",
           "An assignment",
           "A direct question",
-          "An awaited dependency resolving (a blocker done, an awaited review, a release)",
-          "An actionable blocker",
-          "A review, QA or Security request"
+          "A task to work",
+          "An awaited result (a sub-task finished, a worktree ready, an account reconnected)",
+          "An actionable blocker"
         ],
         "label": "Performance",
         "preset": "performance",
         "profile": "doer",
-        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
+        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results and blockers wake it at once.",
         "sweep_seconds": "<volatile>"
       }
     },
@@ -702,11 +690,9 @@
       "harness": "fake",
       "host": "keeper",
       "id": "product-design",
-      "keep_tasks_going": null,
       "last_turn_at": null,
       "manages_reports": true,
       "model": "",
-      "next_run": 0,
       "notes": 0,
       "onboarding_state": "",
       "online": false,
@@ -773,14 +759,14 @@
           "A person's message or request",
           "An assignment",
           "A direct question",
-          "An awaited dependency resolving (a blocker done, an awaited review, a release)",
-          "An actionable blocker",
-          "A review, QA or Security request"
+          "A task to work",
+          "An awaited result (a sub-task finished, a worktree ready, an account reconnected)",
+          "An actionable blocker"
         ],
         "label": "Performance",
         "preset": "performance",
         "profile": "doer",
-        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results, blockers and review requests wake it at once.",
+        "summary": "Performance: finished requests and a person's review comments wait up to 15 min; an enabled routine runs at most every 15 min. People, assignments, questions, awaited results and blockers wake it at once.",
         "sweep_seconds": "<volatile>"
       }
     }

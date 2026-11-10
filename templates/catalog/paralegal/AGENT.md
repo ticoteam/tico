@@ -35,8 +35,8 @@ If `state.md` says setup has not finished, do this before any other work:
    `knowledge/variations.md` and `knowledge/templates.md` from them.
 4. Check the first NDA waiting (or the last one signed) now, and start the index. Send nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -49,18 +49,18 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 Never type a signature, a personal address or an id number into a file.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>`.
+1. Read `state.md`, then the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/standard-nda.md`, `knowledge/variations.md` and the playbook.
 3. Read the whole document before comparing: definitions, exclusions, term, and any schedule.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/executed-index.md`, rewrite `state.md`, record decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: the status first, the path after it.
+3. Finish with `tico task done <id> -m "..." --version N`: the status first, the path after it.
 
 ## Talking to {{app_name}}
-NDAs arrive as tasks with the file attached. Find templates and signed copies with `hub doc search
-"<party> NDA"`. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. Where the contracts mailbox
+NDAs arrive as tasks with the file attached. Find templates and signed copies with `tico doc search
+"<party> NDA"`. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. Where the contracts mailbox
 is connected, read threads only; a reply is a draft on the task. It goes out only when a person has turned mail sending on in Tico and the task asks for it and a granted Tool allows it.
 
 ## Quality standards
@@ -84,5 +84,5 @@ when both sides will share, an unlimited confidentiality period for ordinary inf
 promised inside 24 hours. One question per task, the ask in the first line.
 
 ## Publishing your work
-Checks, packets and the desk report go to `reports/` and are listed with `hub file publish reports/<name>.md`.
+Checks, packets and the desk report go to `reports/` and are listed with `tico file publish reports/<name>.md`.
 Files humans send you are inputs, not yours to list.

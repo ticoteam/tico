@@ -219,12 +219,12 @@ def test_the_flow_shape_names_every_trigger_step_and_action():
 
 
 def test_the_guide_carries_the_flow_shape_from_the_code():
-    """BotOps reads `hub automation guide`: the shape is swapped in at read time, so it cannot go stale in a file."""
+    """BotOps reads `tico automation guide`: the shape is swapped in at read time, so it cannot go stale in a file."""
     assert F.GUIDE.count("{{flow_shape}}") == 1
     guide = F.guide_text()
     assert F.shape_text() in guide and "{{" not in guide.replace("{{summary}}", "")
     agent = (Path(__file__).resolve().parents[2] / "templates" / "catalog" / "botops" / "AGENT.md").read_text()
-    assert "`hub automation guide`" in agent
+    assert "`tico automation guide`" in agent
 
 
 def test_the_live_runner_lists_its_requests():

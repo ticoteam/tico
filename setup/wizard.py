@@ -418,7 +418,7 @@ def provision_backup(io: IO, s: Settings, deps: Deps, cf: Cloudflare | None) -> 
     except Exception as e:
         io.say(
             f"\nCould not create the backup storage: {envfile.scrub(str(e), s.secrets())}\n"
-            "Fix that and re-run `tico setup` (finished steps are skipped), or use `--backup local` to continue without off-server backups.\n"
+            "Fix that and re-run the setup wizard (finished steps are skipped), or use `--backup local` to continue without off-server backups.\n"
             "On a server with no AWS credentials (the usual case), create the bucket from your laptop instead:\n"
             f"  python3 -m setup backup-storage --domain {s.domain} --aws-region {s.aws_region or '<region>'}"
             + (
@@ -1029,7 +1029,7 @@ def run(args, io: IO, deps: Deps) -> int:
             live = ensure_dns(io, s, deps, zone, records, timeout=timeout, skip_wait=args.skip_dns_wait, cf=cf)
             if not live:
                 io.say(
-                    "Not starting Tico yet: Caddy would request its certificate before DNS is live. Re-run `tico setup` "
+                    "Not starting Tico yet: Caddy would request its certificate before DNS is live. Re-run the setup wizard "
                     "when the records resolve; everything so far is kept."
                 )
                 return 2
@@ -1048,7 +1048,7 @@ def run(args, io: IO, deps: Deps) -> int:
             try:
                 step.run()
             except remote.StepFailed as e:
-                io.say(f"\nFailed: {e}\nRe-run `tico setup` after fixing it; finished steps are skipped.")
+                io.say(f"\nFailed: {e}\nRe-run the setup wizard after fixing it; finished steps are skipped.")
                 offer_support(io, args, s, f"tico setup ({s.target})", error=f"{step.description}: {e}")
                 return 1
         if s.front_door == "cloudflared":
@@ -1240,7 +1240,7 @@ def _aws(
                 return None
             io.say(
                 "The server keeps waiting for DNS for about 20 minutes after boot; if you fix DNS later, run "
-                "`tico setup doctor` (or re-run `tico setup`)."
+                "`python3 -m setup doctor` (or re-run the setup wizard)."
             )
     elif s.front_door == "cloudflared":
         io.say("\nDNS")
@@ -1363,7 +1363,7 @@ def _cloud(io: IO, args, s: Settings, deps: Deps, zone, cf, env_text: str, timeo
             keys,
         )
     except cloudmod.CloudError as e:
-        io.say(f"\nFailed: {e}\nRe-run `tico setup` after fixing it; what already exists is reused.")
+        io.say(f"\nFailed: {e}\nRe-run the setup wizard after fixing it; what already exists is reused.")
         return 1
     s.server_ip = made.ip if s.front_door == "caddy" else ""
     state.save(s.domain, {**s.public(), "cloud_name": name}, env_text)
@@ -1521,7 +1521,7 @@ def doctor(args, io: IO, deps: Deps) -> int:
         domain = known[0]
     saved, env_text = state.load(domain)
     if not saved:
-        raise MissingInput(f"No saved setup for {domain}; run `tico setup` first.")
+        raise MissingInput(f"No saved setup for {domain}; run the setup wizard first.")
     prefix = awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved, read_only=True)  # refuses a different one
     if owned.strict(prefix):
         owned.check_mode(domain, awsmod.saved_name(saved), prefix, saved)
@@ -1560,7 +1560,7 @@ def _destroy_hint(io: IO, saved: dict) -> int:
     """Not automated: deleting a server also deletes its data, so the commands are shown for the user to run."""
     n = saved.get("cloud_name") or "tico-" + awsmod.slug(saved.get("domain", ""))
     io.say(
-        f"`tico setup destroy` does not delete {cloudmod.PROVIDERS[saved['target']].label} resources. Deleting the server deletes "
+        f"`python3 -m setup destroy` does not delete {cloudmod.PROVIDERS[saved['target']].label} resources. Deleting the server deletes "
         "the tico-data volume with it: back it up first. To remove what setup created:"
     )
     if saved["target"] == "hetzner":

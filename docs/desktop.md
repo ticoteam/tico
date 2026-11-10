@@ -190,7 +190,7 @@ current company `.app` before any install, restore it to its original path if th
 or relaunch, and keep the bundle identity and app data unchanged.
 
 Owners can set the public team logo in **Settings → General → Choose icon**, or with
-`hub team icon logo.png`, using their owner credential
+`tico team icon logo.png`, using their owner credential
 (`HUB_API_URL` and `HUB_TOKEN`). The API is `POST /api/v2/team/icon`, with an opaque binary PNG,
 JPEG or WebP body up to 1 MB and an `Idempotency-Key`. Images up to 16 megapixels are normalized
 to a square PNG, at most 1024 pixels per side and 1 MB, with transparent padding and metadata removed.

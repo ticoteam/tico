@@ -10,7 +10,7 @@ Sample output for Acme, a fictional creator tools company. Nothing has been shar
 ## The number (October 2026)
 | Measure | Reading | Goal or ceiling | Source |
 |---|---|---|---|
-| New creators | 84 | goal 90 a month | `hub growth cohort list --month 2026-10`, sign-up export on task 4402 |
+| New creators | 84 | goal 90 a month | `tico growth cohort list --month 2026-10`, sign-up export on task 4402 |
 | Spend on creators | $4,300 | budget $4,500 (96% used) | Search Ads actual; Social Ads estimate |
 | Bot cost on creators | $380 | | estimate, split by new customers |
 | Cost per creator | $56 ($4,680 ÷ 84) | ceiling $60 | computed |
@@ -34,21 +34,21 @@ Reconciled: 84 creators + 57 other segments + 9 with no segment = 150 new custom
 - Task 4399 to the Search Ads Owner: quote for two more creator-only ad groups. Answered 2026-10-29: about $900 a month, estimated. The quote goes to the growth meeting as an idea. It does not start from the quote.
 
 ## Message
-- Creator message v3 (`knowledge/message.md`, changed 2026-10-30). "Set up your page in 10 minutes": approved (`hub brand show --section claims`, source: onboarding timing study, 2026-10-14). "Used by 300 creators": not approved, removed. The Brand Owner was asked on task 4406 whether it can be added with its source.
+- Creator message v3 (`knowledge/message.md`, changed 2026-10-30). "Set up your page in 10 minutes": approved (`tico brand show --section claims`, source: onboarding timing study, 2026-10-14). "Used by 300 creators": not approved, removed. The Brand Owner was asked on task 4406 whether it can be added with its source.
 
 ## Decisions waiting
 - Marketing lead (`marketing-lead`): decide on task 4418 at the Monday 2026-11-09 growth meeting.
 - Marketing lead (`marketing-lead`): confirm the November creator budget of $4,500.
 
 ## Could not read
-- The sign-up export for 2026-10-29 to 2026-10-31 was not attached. October counts come from `hub growth cohort list` and may move when the last three days land.
+- The sign-up export for 2026-10-29 to 2026-10-31 was not attached. October counts come from `tico growth cohort list` and may move when the last three days land.
 
 ## Left out
 - Three support messages about invoices in the creator inbox: left for the Support Owner.
 
 ## Sources
-- `hub growth cohort list --month 2026-10`, read 2026-11-03.
-- Spend for Search Ads and Social Ads for October, from the source named in `hub growth source list`, read 2026-11-03.
+- `tico growth cohort list --month 2026-10`, read 2026-11-03.
+- Spend for Search Ads and Social Ads for October, from the source named in `tico growth source list`, read 2026-11-03.
 - Sign-up export on task 4402, 2026-11-02.
 - Tasks 4399, 4406, 4410, 4418 and 4421, read 2026-11-03.
 ```

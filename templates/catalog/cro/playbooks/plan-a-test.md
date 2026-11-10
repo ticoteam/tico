@@ -41,7 +41,7 @@ starts, not after.
 
 Write the exact new copy, layout note or field change in `knowledge/drafts/<step-slug>-<date>.md`, with the page, the
 control, the variant, the person who builds it, and the check that confirms it is live and split correctly. Run every
-claim in the copy through `hub brand check -` and the claims list before it is handed over.
+claim in the copy through `tico brand check -` and the claims list before it is handed over.
 
 ## 7. Log it
 

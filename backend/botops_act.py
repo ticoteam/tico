@@ -39,7 +39,6 @@ OTHERS_WORDS = ("comment", "via", "assistant", "slack", "routing", "live_meeting
 # How long a person's request lends their rights after they last spoke on its task (created it, sent the message it
 # carries, commented on it), however long the task stays open.
 LEND_MAX_DAYS = 30
-TERMINAL = ("done", "closed", "declined")
 
 
 def own_run(c, auth, attempt_id):
@@ -189,19 +188,28 @@ def _is_owner(c, auth, actor):
         return False
 
 
+def reopened_by(c, task_id):
+    """Each time the task was reopened after it was done or closed, oldest first: {"actor", "via"} (the engine's move
+    rows, backend/task_engine.py)."""
+    return [
+        dict(row)
+        for row in c.execute(
+            "SELECT actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? "
+            "AND kind='move' AND json_extract(data, '$.move')='reopen' ORDER BY rowid",
+            (task_id,),
+        )
+    ]
+
+
 def lend_lapsed(c, task):
     """Why a person's task no longer lends their rights, whatever its status says, or "" while it does: someone other
-    than the requester moved it back from done, closed or declined (the request it carried was finished), or the
+    than the requester reopened it after it was done or closed (the request it carried was finished), or the
     requester last spoke on it more than LEND_MAX_DAYS ago."""
     from .store import H
 
     requester = task["requester_id"]
-    for row in c.execute(
-        "SELECT actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? "
-        "AND kind='status' AND old IN (?,?,?) AND new NOT IN (?,?,?)",
-        (task["id"], *TERMINAL, *TERMINAL),
-    ):
-        if row["actor"] != requester or dict(row).get("via"):
+    for row in reopened_by(c, task["id"]):
+        if row["actor"] != requester or row.get("via"):
             # Re-asking on the same task can't clear this: the reopening stays in its history. The person's own new
             # words start a run with their rights anyway (a comment on the open task, or their BotOps chat).
             return (
@@ -327,7 +335,8 @@ DO = _routes(
     ("POST", r"tasks"),
     ("POST", r"tasks/dry-run"),
     ("POST", rf"tasks/{_S}"),
-    ("POST", rf"tasks/{_S}/(comments|links|ask|run-now)"),
+    # A task's moves and owner (task_moves_routes.py): what `POST tasks/{id}` with a status or owner did before.
+    ("POST", rf"tasks/{_S}/(comments|links|ask|run-now|move|owner|done|snooze)"),
     # Another bot's task worktrees: a person who moves tasks may add one or ask for one to be cleaned up (the route
     # checks); the computer removes it once the bot is idle.
     ("POST", rf"tasks/{_S}/worktrees(/attach)?"),
@@ -408,11 +417,8 @@ DO = _routes(
     ("POST", rf"triggers/{_S}/(rotate|signing|recover|delete)"),
     ("POST", rf"triggers/{_S}/deliveries/.+/replay"),
     ("POST", rf"triggers/{_S}/relay(/(rotate|wake|delete))?"),
-    # Task types and tags (movers, a tag's owner), the release schedule and Release now, screening's modes and Test,
-    # the team's run budget and Tico's own jobs (an owner or an admin): each route checks the person.
-    ("POST", r"task-types"),
-    ("POST", rf"task-types/{_S}(/delete)?"),
-    ("DELETE", rf"task-types/{_S}"),
+    # Tags (a tag's owner), the release schedule and Release now, screening's modes and Test, the team's run budget
+    # and Tico's own jobs (an owner or an admin): each route checks the person.
     ("POST", r"tags"),
     ("POST", rf"tags/{_S}(/instances)?"),
     ("PATCH", r"release-schedule"),
@@ -573,10 +579,10 @@ ROUTE_SECRETS = [(("PUT",), re.compile(API + r"providers/gateway"), ("key",))]
 
 DETAIL_SECRET = (
     "A secret does not go in a request. Ask the person for it with a credential card "
-    "(`hub credential request`): the value goes straight to Credentials and never through you."
+    "(`tico credential request`): the value goes straight to Credentials and never through you."
 )
 DETAIL_ROUTE = (
-    "BotOps does not do this for a person. If the app can do it and this list should, say so with `hub support file`."
+    "BotOps does not do this for a person. If the app can do it and this list should, say so with `tico support file`."
 )
 
 
@@ -860,7 +866,7 @@ def default_delegable(method, path, body=None, query=None):
         return False
     mine = str((query or {}).get("mine", "")).lower() in ("1", "true", "yes", "on")
     if path == API + "rules" and str(method).upper() == "GET" and mine:
-        return False  # BotOps's own rules and settings (`hub rules list --mine`): its own rights, not its requester's
+        return False  # BotOps's own rules and settings (`tico rules list --mine`): its own rights, not its requester's
     # The person's own card or plain refusal (`card_for_person`, `person_only`) reaches a client that sends no
     # header too, not BotOps' own 403.
     if any(m == str(method).upper() and p.fullmatch(path) for m, p in ALWAYS) or person_only(method, path):
@@ -903,7 +909,7 @@ def mail_settings_hint(bot, slug=""):
         + bot
         + " turns its mail sending on in Settings > Bots > "
         + bot
-        + " > Mail sending, or with `hub bot mail "
+        + " > Mail sending, or with `tico bot mail "
         + (slug or bot)
         + " --send`"
     )

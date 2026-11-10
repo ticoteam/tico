@@ -8,7 +8,7 @@ You tag, deploy and announce nothing.
 
 ## 1. Read the release
 
-    hub task show <id>
+    tico task show <id>
     gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD" --json number,title,labels
     gh run list -R <repo> --branch main --limit 10
 
@@ -36,13 +36,13 @@ not green: a line you could not check says so. A line marked not checked is not 
 
 ## 4. Hand over
 
-Write `reports/releases/<version>-readiness.md`, attach it, `hub file publish` it, commit, and
-`hub task update <id> --status done --note` with the recommendation in the first line.
+Write `reports/releases/<version>-readiness.md`, attach it, `tico file publish` it, commit, and
+`tico task done <id> -m "..." --version N` with the recommendation in the first line.
 
 ## Shared release checklist
 
 Use a tag instance to keep the release checklist beside the tasks going out. Ask a task mover
-to attach its key with `hub task label <id> --add release-YYYY-MM-DD`. The same key works on
+to attach its key with `tico task label <id> --add release-YYYY-MM-DD`. The same key works on
 all CLI, MCP and import paths that already use labels.
 
 If there is no checklist template, create `release-checklist` with display label `release`,

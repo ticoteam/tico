@@ -14,7 +14,7 @@ No docs are changed.
 
 ## Steps
 
-1. **Read where things stand.** `hub task show <id>`, then the inputs above.
+1. **Read where things stand.** `tico task show <id>`, then the inputs above.
 2. **List the changes users can see.** From the pull requests, keep those that change what a user sees or types: a
    renamed option, a new step, a removed feature, a changed default, a new page or setting, a changed API field. Drop
    refactors and tests. Read the diff (`gh pr diff <n> -R <repo>`) when the description is vague.
@@ -29,8 +29,8 @@ No docs are changed.
 6. **Draft the fixes.** Follow `playbooks/draft-a-doc-page.md`. Save each draft in
    `reports/drafts/YYYY-MM-DD-<page>.md` with the old text, the new text and the pull request as the reason.
 7. **Write the report.** `reports/YYYY-MM-DD-docs-drift.md`, in the shape of `knowledge/examples/docs-drift-report.md`.
-   Then `hub file publish reports/YYYY-MM-DD-docs-drift.md`.
-8. **Finish.** Commit, then `hub task update <id> --status done --note` with the pages found, the drafts made and the
+   Then `tico file publish reports/YYYY-MM-DD-docs-drift.md`.
+8. **Finish.** Commit, then `tico task done <id> -m "..." --version N` with the pages found, the drafts made and the
    unread sources. Commit requested drafts with the repository Tools, and run the required checks.
 
 ## Output

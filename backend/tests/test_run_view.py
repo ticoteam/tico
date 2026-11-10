@@ -136,13 +136,6 @@ def test_a_run_shows_its_subagent_and_the_background_command_it_left_running(api
     kept = capped([{"id": n, "running": n == 0} for n in range(NODE_LIMIT + 10)])
     assert len(kept) == NODE_LIMIT and kept[0]["id"] == 0 and kept[-1]["id"] == NODE_LIMIT + 9
 
-    # A run that also carried a private task is left out for whoever cannot read that task.
-    hidden = post(api, "tasks", {"owner": "ops", "title": "Private", "body": "Only Ana.", "private": True})
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, hidden["id"]))
-    assert get(api, f"tasks/{tid}/run-view", token="cara-test")["runs"] == []
-    assert [r["id"] for r in get(api, f"tasks/{tid}/run-view")["runs"]] == [aid]
-
 
 def test_a_retried_run_shows_both_attempts_and_the_decision_between_them(api):
     machine = runner(api, "ana")
@@ -277,7 +270,8 @@ def test_a_run_from_a_conversation_the_reader_cannot_open_stays_out(api, monkeyp
     )
     # The task moved to a person: Cara still reads it, and still none of the bot's runs on it.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='human:ana', requester_id='human:ana' WHERE id=?", (tid,))
+        H.task_reassign(c, "human:ana", tid, "human:ana", "Mine now.", H.task(c, tid)["version"])
+        c.execute("UPDATE tasks SET requester_id='human:ana' WHERE id=?", (tid,))
     assert get(api, f"tasks/{tid}/run-view", token="cara-test")["runs"] == []
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET checkpoint_blocked=1 WHERE id=?", (tid,))
@@ -369,7 +363,8 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
     assert get(api, f"tasks/{tid}")["execution"]["run_id"] == attempt["id"], "a bot's message to a bot is not it"
     # A person owns the task and the bot still follows it: a comment that names the bot wakes it.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='human:ana', requester_id='bot:ops' WHERE id=?", (tid,))
+        H.task_reassign(c, "human:ana", tid, "human:ana", "Mine now.", H.task(c, tid)["version"])
+        c.execute("UPDATE tasks SET requester_id='bot:ops' WHERE id=?", (tid,))
     said = post(api, f"tasks/{tid}/comments", {"text": "@ops which app is still open?"})
     assert said["woke"] and said["comment"]["recipient_id"] == "bot:ops"
     queued = get(api, f"tasks/{tid}")["execution"] or {}

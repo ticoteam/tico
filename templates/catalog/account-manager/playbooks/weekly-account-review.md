@@ -17,7 +17,7 @@ published, and the task note names each notice deadline that falls within 30 day
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Read `knowledge/renewal-rules.md`, `knowledge/renewals.md` and last week's review. For each action last week proposed, note
 whether it was done, slipped or dropped.
@@ -38,7 +38,7 @@ in the headline.
 
 For each renewal in the next 90 days, read the Customer Success Manager's latest note, or ask:
 
-    hub message send customer-success "<account> health?" --needs-action
+    tico message send customer-success "<account> health?" --needs-action
 
 A red account gets no commercial proposal this week. List it under "Held for health" with their note and its date.
 
@@ -46,8 +46,8 @@ A red account gets no commercial proposal this week. List it under "Held for hea
 
 Compare usage with the contract: seats, locations, modules, usage tiers. Read recent calls for goals the customer stated:
 
-    hub meeting search "<account>"
-    hub meeting read <id>
+    tico meeting search "<account>"
+    tico meeting read <id>
 
 Score each candidate with `skills/score-an-expansion-signal/SKILL.md`. Each opportunity is one line: the account, the evidence
 with its number and date, and the option to propose. No evidence, no opportunity.
@@ -61,11 +61,11 @@ For each renewal reaching 60 days, follow `playbooks/renewal-pack.md`.
 Write `reports/YYYY-MM-DD-account-review.md` in the shape of `knowledge/examples/account-review.md`. Update
 `knowledge/renewals.md` with the new dates and their sources. Then:
 
-    hub file publish reports/YYYY-MM-DD-account-review.md
+    tico file publish reports/YYYY-MM-DD-account-review.md
 
 Commit, then:
 
-    hub task update <id> --status done --note "..."
+    tico task done <id> -m "..." --version N
 
 The note holds the notice deadlines within 30 days, the packs waiting on a price, and the sources you could not read. Always
 finish the task.

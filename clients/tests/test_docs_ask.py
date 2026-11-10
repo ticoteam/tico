@@ -1,4 +1,4 @@
-"""`hub doc ask` (clients/docs_ask.py): a bot asks the Librarian in a DM flagged needs-action; a person asks
+"""`tico doc ask` (clients/docs_ask.py): a bot asks the Librarian in a DM flagged needs-action; a person asks
 through their own docs conversation. Both come back as {answer, citations, covered}."""
 
 from clients import docs_ask as D, hubcli, hubtools

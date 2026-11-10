@@ -4,16 +4,16 @@ Runs once, on the first message or task you receive, while `state.md` says setup
 
 Inputs: certificates, registrar receipts and contractor agreements in the docs or attached to tasks, the public trademark and domain records, and the answers the human gives.
 Outcome: five recorded answers; an IP register checked against the public records, with any row that could not be confirmed marked; watch terms; an assignment check; a first watch; the first routine checked.
-Done when: `state.md` says `Setup: finished`, `hub bot setup-done` has run, and the first watch is on the task.
+Done when: `state.md` says `Setup: finished`, `tico bot setup-done` has run, and the first watch is on the task.
 
 ---
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub doc search "trademark"
-    hub doc search "domain"
-    hub doc search "contractor agreement"
+    tico task show <id>
+    tico doc search "trademark"
+    tico doc search "domain"
+    tico doc search "contractor agreement"
 
 Certificates, registrar receipts and contractor agreements often sit in the docs. Read them first, then look the team's
 name up in the public trademark database, so question one becomes "is this list complete?".
@@ -55,18 +55,18 @@ nothing.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows as off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will run this IP watch on the 1st of
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows as off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will run this IP watch on the 1st of
 every month, and warn you well ahead of every deadline." They can change it or turn it off any time; there is nothing
 to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule
-or to leave it off, adjust `knowledge/` and the routine to match (`hub automation update <id>`, with `--disable` to
+or to leave it off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to
 turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the routine run. Until then
 nothing you have runs on its own. Run it once the answers and the first result are recorded, not before.

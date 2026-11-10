@@ -25,11 +25,6 @@ def build(api, comments=0, people_comments=0, events=0, children=0, bots=0):
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
     tid = post(api, "tasks", {"owner": "ops", "title": "Grow the task", "body": "Do it."})["id"]
-    with api.app.state.store.transaction() as c:
-        kids = [
-            H.task_create(c, "human:ana", f"Child {k}", "Part of it.", "bot:ops", parent_id=tid)["id"]
-            for k in range(max(children, comments, people_comments))
-        ]
     for k in range(max(comments, 1)):
         if k:
             post(api, f"tasks/{tid}/comments", {"text": f"@ops step {k}"})
@@ -49,7 +44,12 @@ def build(api, comments=0, people_comments=0, events=0, children=0, bots=0):
             {"outcome": "completed", "text": f"Reply {k}.", "last_seq": len(rows)},
             machine["token"],
         )
+    # The child tasks come after the runs: a parent waits on its sub-tasks, so its own wakes would have no turn left.
     with api.app.state.store.transaction() as c:
+        kids = [
+            H.task_create(c, "human:ana", f"Child {k}", "Part of it.", "bot:ops", parent_id=tid)["id"]
+            for k in range(max(children, comments, people_comments))
+        ]
         for k in range(people_comments):
             H.task_comment(c, "human:ben", tid, f"Ben note {k}", wake=False, extra_refs={"task": [kids[k]]})
         for k in range(events):

@@ -19,8 +19,8 @@ def private_run(api, bot="ops"):
     assign(api, machine, bot)
     ready(api, machine, [bot])
     attempt = claim(api, machine, bot)
-    with api.app.state.store.transaction() as c:  # the run carries its private task (its work)
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], row["id"]))
+    with api.app.state.store.transaction() as c:  # the run works its private task (attempts.task_id)
+        c.execute("UPDATE attempts SET task_id=? WHERE id=?", (row["id"], attempt["id"]))
     return row, attempt
 
 

@@ -35,8 +35,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Produce the first weekly page now from the register you built, labelled "First draft, not yet
    reviewed". Contact no vendor.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -64,22 +64,22 @@ Always:
   before cost. A renegotiation line is a team rule, not a benchmark.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>`.
+1. Read `state.md`, then the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/vendors.md` and the playbook the task names.
-3. `hub doc search "<vendor> contract"` for any contract you have not read yet.
+3. `tico doc search "<vendor> contract"` for any contract you have not read yet.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a date read from the wrong document,
    a vendor found only through an invoice.
 2. Update `knowledge/vendors.md`, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: the headline, the report path, then
+3. Finish with `tico task done <id> -m "..." --version N`: the headline, the report path, then
    what you could not read.
 
 ## Talking to {{app_name}}
-Read contracts with `hub doc search` and `hub doc read`; invoices and renewal notices arrive as
+Read contracts with `tico doc search` and `tico doc read`; invoices and renewal notices arrive as
 tasks, or through a connected mailbox read with `$HUB_DIR/scripts/mail.sh search "<vendor>"` (draft
-only, never send). Ask the vendor's owner with `hub task create --owner <human>`; ask
-the requester with `hub task question "<question>" --on <person> --parent <id>`, one question per task.
+only, never send). Ask the vendor's owner with `tico task create --owner <human>`; ask
+the requester with `tico task ask <id> --to <person> "<question>" --version N`, one question per task.
 
 ## Quality standards
 - **Answer first.** Line one: how many notice deadlines fall in the next 90 days and the soonest one.
@@ -97,5 +97,5 @@ has had a security incident or missed its service level twice, or a vendor has n
 Send the ask first, in under 120 words, one question per task.
 
 ## Publishing your work
-Pages and briefs go to `reports/` and are listed with `hub file publish reports/<name>.md`.
+Pages and briefs go to `reports/` and are listed with `tico file publish reports/<name>.md`.
 Files humans send you are inputs, not yours to list.

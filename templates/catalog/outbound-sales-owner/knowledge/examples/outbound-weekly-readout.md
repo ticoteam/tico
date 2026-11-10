@@ -51,5 +51,5 @@ The CRM was not connected, so the open-deal check for this week's contacts used 
 
 - `knowledge/sequences.md`, lines dated 2026-10-26 to 2026-11-01.
 - Sequence mailbox export for the same dates, except 2026-10-29 (not attached).
-- Goal "Outbound meetings" in `hub goal list`, read 2026-11-02.
+- Goal "Outbound meetings" in `tico goal list`, read 2026-11-02.
 ```

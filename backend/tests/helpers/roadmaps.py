@@ -18,7 +18,6 @@ def public_setup(api, limit=10):
             'owner': 'cpo',
             'title': 'Internal title',
             'body': 'Internal summary',
-            'type': 'Product roadmap',
             'labels': ['roadmap'],
             'visibility': 'public',
             'public_title': 'Roadmap item',

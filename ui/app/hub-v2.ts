@@ -86,22 +86,18 @@ interface NeedsChange extends NeedsRead {
   changed?: (string | number)[] | null;
   removed?: (string | number)[] | null;
 }
-/** An item past the pages held, read alone. */
-interface NeedsOne {
-  read?: Promise<NeedsItem | null>;
-  it: NeedsItem | null;
-}
 
 // ----------------------------------------------------------------- hub v2 (docs/history/hub-v2.md)
 // Every bot is hosted by the keeper (`host: keeper`, the only host there is), so the record is hub.db, not GitHub:
 // chat is `messages`, work is `tasks`, approvals are one tap, and every bot has one status row with
 // its history. Every fetch is guarded, so a hub with no hub.db yet looks exactly as it does today.
-const V2_WORD: Record<string, string> = {idle: 'Idle', running: 'Running', waiting_human: 'Waiting on a human',
-                 waiting_bot: 'Waiting on a bot', blocked: 'Blocked', limited: 'Rate limited',
-                 crashed: 'Crashed', paused: 'Paused', quarantined: 'Paused for review'};
+// A bot that waits on someone or on another task is not running: it reads Idle (docs/pipelines-v3.md S14, S18). Who has
+// a task's turn is the task's own line, never the bot's.
+const V2_WORD: Record<string, string> = {idle: 'Idle', running: 'Running', waiting_human: 'Idle', waiting_bot: 'Idle', blocked: 'Idle',
+                 limited: 'Rate limited', crashed: 'Crashed', paused: 'Paused', quarantined: 'Paused for review'};
 // A bot the server has registered but not switched on yet. People read "Setting up"; the API value stays `planned`.
 const statusWord = (status: unknown) => status === 'planned' ? 'Setting up' : String(status || '');
-const V2_PILL: Record<string, string> = {running: 'in-progress', waiting_human: 'needs', waiting_bot: 'waiting', blocked: 'blocked',
+const V2_PILL: Record<string, string> = {running: 'in-progress', waiting_human: '', waiting_bot: '', blocked: '',
                  limited: 'waiting', crashed: 'fail', quarantined: 'fail', idle: ''};
 const V2_KIND: Record<string, string> = {decision: 'Decision', approval: 'Approval', review: 'Review', declined: 'Declined',
                  question: 'Question', task: 'Task', notice: 'Message', setup: 'Set up'};
@@ -115,14 +111,14 @@ const personDisplay = (id: unknown) => {
   return (p && p.name) || titleCase(id);
 };
 // What a sender, "added by" or "by" slot says for the keeper: it happened automatically.
-const KEEPER_LABEL = 'Automatic';
+const AUTOMATIC_LABEL = 'Automatic';
 const actorLabel = (a: unknown): string => {
   const slug = actorSlug(a);
   if (slug) return botDisplayName(slug);
   const pid = actorPerson(a);
   if (pid) return pid === S.me?.id ? 'You' : personDisplay(pid);
   // The keeper is the server itself, never the Assistant or the app: a row it wrote is labelled by its source (rowSource).
-  return a === 'keeper' ? KEEPER_LABEL : String(a || '');
+  return a === 'keeper' ? AUTOMATIC_LABEL : String(a || '');
 };
 // Notices the hub writes for bots to read carry raw ids ("New task from human:sam"); people see names.
 const plainActors = (text: unknown) => String(text ?? '').replace(/\b(human|bot):([A-Za-z0-9._-]*[A-Za-z0-9_])/g,
@@ -274,57 +270,13 @@ const NEEDS_PAGE = 50, NEEDS_PAGE_MAX = 200;
 // Where the next page starts in the list at `version`: the server's cursor (backend/views.py needs_cursor).
 const needsCursor = (version: string, n: number) => `${version}.${n}`;
 const needsAll = () => !S.v2.needsNext;
-// An item past the pages held, read alone (`ids=`) for a task's question box; forgotten whenever the list moves.
-const NEEDS_ONE = new Map<string, NeedsOne>();     // id -> {read, it}
-function v2NeedsOne(id: unknown) {
-  const key = String(id);
-  if (!NEEDS_ONE.has(key)) {
-    const one: NeedsOne = {it: null};
-    one.read = v2Get<NeedsRead>(`/v2/needs-you?ids=${encodeURIComponent(key)}`).then(r => (one.it = (r?.items || [])[0] || null));
-    NEEDS_ONE.set(key, one);
-  }
-  return NEEDS_ONE.get(key)!.read!;
-}
-const needsOneHeld = (id: unknown) => NEEDS_ONE.get(String(id))?.it || null;
-// A question to the person is delivered once their Needs you holds it, and read once they open its card or its task
-// (POST /v2/needs-you/seen, /v2/tasks/{id}/seen): a question withdrawn later tells its bot whether they had seen it.
-// Delivery is sent once per question per page load; one that fails is sent again with the next list.
-const ASKS_SENT = {seen: new Set<string>(), read: new Set<string>()};
-const askToMe = <A extends NeedsAsk>(a: A | null | undefined): a is A & {id: string} => !!a?.id && actorPerson(a.recipient_id || '') === S.me?.id;
-function needsSeen(items: NeedsItem[] | null | undefined) {
-  const ids = (items || []).map(it => it.ask).filter((a): a is NeedsAsk & {id: string} => askToMe(a) && !a.delivered_at && !ASKS_SENT.seen.has(a.id))
-    .map(a => a.id).slice(0, 200);
-  if (!ids.length) return;
-  ids.forEach(id => ASKS_SENT.seen.add(id));
-  post('/v2/needs-you/seen', {asks: ids}).catch(() => ids.forEach(id => ASKS_SENT.seen.delete(id)));
-}
-// Reads a task's open questions to the person (the server marks each open one). A card that shows one question sends
-// once per page load for that question (askId), so repaints stay quiet; opening the full task always sends, because a
-// question asked after an earlier open is read only by a request made then.
-function taskAsksRead(id: string | number, askId?: string | number | null) {
-  const key = String(id);
-  if (!key) return;
-  if (askId) {
-    if (ASKS_SENT.read.has('ask:' + askId)) return;
-    ASKS_SENT.read.add('ask:' + askId);
-  }
-  post(`/v2/tasks/${encodeURIComponent(key)}/seen`, {}).catch(() => { if (askId) ASKS_SENT.read.delete('ask:' + askId); });
-}
-// The first list held: a page drawn before it (a task opened from a link) fills its question box then. A read that
-// fails holds no list, so the wait goes on to the next one that answers.
-let needsFirstDone: (() => void) | null = null;
-const NEEDS_FIRST = new Promise<void>(done => { needsFirstDone = done; });
-const needsFirstIn = () => !needsFirstDone;
 function needsTake(needs: NeedsRead) {
-  NEEDS_ONE.clear();
   S.v2.needs = needs.items || []; S.v2.needsVersion = needs.version || null;
-  for (let at = 0; at < S.v2.needs.length; at += 200) needsSeen(S.v2.needs.slice(at, at + 200));
   S.v2.needsCount = needs.count ?? S.v2.needs.length; S.v2.needsNext = needs.next || null; S.v2.needsBots = needs.bots || null;
   S.v2.needsPlateCount = needs.plate_count ?? null;
   S.v2.needsByKind = needs.by_kind || null;
   S.v2.needsFoldedIds = needs.folded_task_ids || null;
   needsListsRedraw();
-  if (needsFirstDone) { const done = needsFirstDone; needsFirstDone = null; done(); }
 }
 // Reads are ordered by their request sequence; only paging and live mends invalidate reads already on their way.
 let NEEDS_READ = 0, NEEDS_KEPT = 0, NEEDS_REVISION = 0;
@@ -353,7 +305,6 @@ function v2NeedsMore() {
       if (!r || read !== NEEDS_READ || S.v2.needsNext !== cursor) return false;
       if (r.restart || r.version !== S.v2.needsVersion) { await v2NeedsRead(); return true; }
       S.v2.needs = [...S.v2.needs, ...(r.items || [])];
-      needsSeen(r.items);
       S.v2.needsCount = r.count ?? S.v2.needs.length; S.v2.needsNext = r.next || null; S.v2.needsBots = r.bots || null;
       S.v2.needsPlateCount = r.plate_count ?? null;
       S.v2.needsByKind = r.by_kind || null;
@@ -365,27 +316,58 @@ function v2NeedsMore() {
   })();
 }
 // A live `needs` event (live.js asks for changes, not the list): mend the held list from the ids that changed, or read
-// it whole when the event was counted from another version than the one held. One at a time, in order. Resolves true
-// when the list may have moved. A changed item whose place falls past the pages held stays unread: only the count
-// moves, and the next page starts after what is held. Missing folded ids keep the held set; null reads it whole.
+// it whole when the event was counted from another version than the one held. One at a time, in order, by one worker
+// (v2NeedsDrain). Resolves true when the list may have moved. A changed item whose place falls past the pages held
+// stays unread: only the count moves, and the next page starts after what is held. Missing folded ids keep the held
+// set; null reads it whole.
 let NEEDS_MEND = Promise.resolve(false);
-const v2NeedsChanged = (d: unknown) => (NEEDS_MEND = NEEDS_MEND.catch(() => false).then(() => v2NeedsMend(d as NeedsChange)));
-async function v2NeedsMend(d: NeedsChange) {
+// The events not mended yet, each with when it came (`at`, counted): a whole read sent after an event holds its change.
+let NEEDS_PENDING: {d: NeedsChange; at: number}[] = [], NEEDS_ARRIVED = 0;
+const v2NeedsChanged = (d: unknown) => {
+  NEEDS_PENDING.push({d: d as NeedsChange, at: ++NEEDS_ARRIVED});
+  NEEDS_MEND = NEEDS_MEND.catch(() => false).then(v2NeedsDrain);
+  return NEEDS_MEND;
+};
+// One whole read at a time, and only as many as are needed: the events a read covers are dropped, not mended or read
+// again. A read covers every event that came before it was sent, and every event up to the last one naming the version
+// it holds.
+async function v2NeedsDrain(): Promise<boolean> {
+  let moved = false;
+  while (NEEDS_PENDING.length) {
+    const held = S.v2.needsVersion, last = held ? NEEDS_PENDING.map(p => p.d.version).lastIndexOf(held) : -1;
+    if (last >= 0) {
+      for (const p of NEEDS_PENDING.splice(0, last + 1)) if (p.d.went_away) S.v2.wentAway = p.d.went_away;
+      continue;
+    }
+    const next = NEEDS_PENDING.shift()!;
+    const r = await v2NeedsMend(next.d);
+    if (r !== 'whole') { moved = r || moved; continue; }
+    const sent = NEEDS_ARRIVED;
+    if (await v2NeedsRead()) NEEDS_PENDING = NEEDS_PENDING.filter(p => p.at > sent);
+    moved = true;
+  }
+  return moved;
+}
+/** One event onto the held list: true when it moved, 'whole' when only a whole read will do (v2NeedsDrain sends it). */
+async function v2NeedsMend(d: NeedsChange): Promise<boolean | 'whole'> {
   if (d.went_away) S.v2.wentAway = d.went_away;
   if (Array.isArray(d.items)) {       // a server without changes
     NEEDS_REVISION++;
     needsTake({...d, version: null, next: null});
     return true;
   }
-  const held = S.v2.needsVersion;
+  const held = S.v2.needsVersion, list = S.v2.needs;
   if (!d.version || d.version === held) return false;
-  const whole = async () => { await v2NeedsRead(); return true; };
+  const whole = () => 'whole' as const;
   if (!held || d.base !== held || !Array.isArray(d.changed) || !Array.isArray(d.removed) || d.folded_task_ids === null) return whole();
   const all = needsAll(), out = new Set([...d.changed, ...d.removed].map(String));
   const items = (S.v2.needs || []).filter(it => !out.has(String(it.id)));
   let plateCount = d.plate_count;
   if (d.changed.length) {
     const r = await v2Get<NeedsRead & {positions: Record<string, number>}>(`/v2/needs-you?ids=${encodeURIComponent(d.changed.join(','))}`);
+    // A whole read or a page landed while this was out: the list it mended from is gone. Its answer may hold this
+    // version already; else read it whole.
+    if (S.v2.needs !== list || S.v2.needsVersion !== held) return S.v2.needsVersion === d.version ? true : whole();
     if (!r || r.version !== d.version) return whole();
     plateCount = r.plate_count ?? plateCount;
     // Unchanged items kept their order against each other, so each changed one goes back at its place, first place
@@ -397,10 +379,8 @@ async function v2NeedsMend(d: NeedsChange) {
     }
   }
   if (all ? items.length !== d.count : items.length > d.count) return whole();
-  NEEDS_ONE.clear();
   S.v2.needs = items; S.v2.needsVersion = d.version; S.v2.needsCount = d.count;
   S.v2.needsPlateCount = plateCount ?? null;
-  needsSeen(items);
   S.v2.needsNext = all || items.length >= d.count ? null : needsCursor(d.version, items.length);
   if (d.bots) S.v2.needsBots = d.bots;
   S.v2.needsByKind = d.by_kind || null;

@@ -1,6 +1,6 @@
 """Why an item is on someone's list: `GET /api/v2/origins/{ref}` (docs/assistant.md, "Why is this here").
 
-A ref is a task (its id, or its first 8 or more characters), a message (a bot's question) or an approval. The answer says
+A ref is a task (its id, or its first 8 or more characters) or a message (a bot's question). The answer says
 what made it: who filed it, the cause (the automation that opened it, the org rule that asked for it, the parent task it
 came from, or the bot that filed it alone), how many items that cause made in the last seven days and how many of them
 are still open, and up to three commands that would stop the source. Every command is a `hub` line the caller can run.
@@ -23,7 +23,7 @@ STOPS_MAX = 3
 def install(app, store, auth):
     @app.get("/api/v2/origins/{ref}")
     def origin_show(request: Request, ref: str):
-        """Why this task, message or approval is on the caller's list: its maker, its cause, its siblings in the last
+        """Why this task or message is on the caller's list: its maker, its cause, its siblings in the last
         seven days and the commands that would stop the source."""
         who = request.state.identity
         with store.read_transaction() as c:
@@ -40,19 +40,10 @@ def show(c, auth, who, ref):
         made_by, created, cause = item["requester_id"], item["created_at"], task_cause(c, item, see)
         title, siblings, stops = item["title"] or "", *siblings_and_stops(c, item, cause)
         task_id = item["id"]
-    elif kind == "message":
+    else:  # a message: resolve answers one of the two or refuses
         made_by, created, title, task_id = item["sender_id"], item["created_at"], (item["body"] or "")[:80], None
         row = H.task(c, H.message_task_id(item)) if H.message_task_id(item) else None
         cause = task_cause(c, row, see) if row else {"type": "message", "conversation_id": item["conversation_id"]}
-        siblings, stops = {"days": WINDOW_DAYS, "made": 0, "open": 0}, stops_for(c, cause, None)
-    else:
-        made_by, created, title, task_id = (
-            item["requested_by_id"],
-            item["created_at"],
-            item["kind"],
-            item.get("task_id"),
-        )
-        cause = {"type": "approval", "run": approval_run(c, item["id"]), "task": task_id}
         siblings, stops = {"days": WINDOW_DAYS, "made": 0, "open": 0}, stops_for(c, cause, None)
     return {
         "ref": ref,
@@ -82,22 +73,7 @@ def resolve(c, auth, who, ref):
     message = H.message(c, ref)
     if message and threads.message_readable(c, threads.viewer(auth, who), message):
         return "message", message
-    approval = H.approval(c, ref)
-    if approval and (
-        who.actor in (approval.get("requested_by_id"), approval.get("decision_owner"))
-        or (approval.get("task_id") and views._readable_task_ids(c, auth.task_sql(c, who), [approval["task_id"]]))
-    ):
-        return "approval", approval
-    raise Problem("not_found", f"no task, message or approval {ref} that you can read", 404)
-
-
-def approval_run(c, approval_id):
-    """The run that asked for an approval, as its request was recorded (hubdb `approval.request`)."""
-    row = c.execute(
-        "SELECT detail FROM events WHERE action='approval.request' AND target=? ORDER BY created_at DESC LIMIT 1",
-        (approval_id,),
-    ).fetchone()
-    return (json.loads(row["detail"] or "{}") or {}).get("attempt_id") if row else None
+    raise Problem("not_found", f"no task or message {ref} that you can read", 404)
 
 
 def notice_refs(c, task):
@@ -191,9 +167,7 @@ def siblings_and_stops(c, task, cause):
     open_now = 0
     for part in H.chunks(sorted(made)):
         marks = ",".join("?" * len(part))
-        open_now += c.execute(
-            f"SELECT COUNT(*) FROM tasks WHERE id IN ({marks}) AND status NOT IN ('done','closed','declined')", part
-        ).fetchone()[0]
+        open_now += c.execute(f"SELECT COUNT(*) FROM tasks WHERE id IN ({marks}) AND status='open'", part).fetchone()[0]
     siblings = {"days": WINDOW_DAYS, "made": len(made), "open": open_now}
     return siblings, stops_for(c, cause, task)
 
@@ -205,12 +179,12 @@ def stops_for(c, cause, task):
         return [
             {
                 "how": "Turn the automation off",
-                "command": f"hub automation update {cause['id']} --disable",
+                "command": f"tico automation update {cause['id']} --disable",
                 "note": "its runs stop; `--enable` turns it back on",
             },
             {
                 "how": "Change what it does",
-                "command": f"hub automation update {cause['id']} --file -",
+                "command": f"tico automation update {cause['id']} --file -",
                 "note": "a JSON object with the fields to change, on stdin; a change to its steps is a new version",
             },
         ]
@@ -218,7 +192,7 @@ def stops_for(c, cause, task):
         return [
             {
                 "how": "Retire the rule",
-                "command": f"hub rules retire {cause['id']} --version {cause.get('version', 1)}",
+                "command": f"tico rules retire {cause['id']} --version {cause.get('version', 1)}",
                 "note": "its due dates come back",
             }
         ]
@@ -226,15 +200,11 @@ def stops_for(c, cause, task):
         slug = (H.bot(c, H.actor_id(cause["bot"])) or {}).get("slug") or H.actor_id(cause["bot"])
         title = (task or {}).get("title") or "its work"
         return [
-            {
-                "how": "Close what it filed in one go (counts first)",
-                "command": f"hub task bulk close --where-requester {shlex.quote(slug)} --dry-run",
-                "note": "drop --dry-run to close them",
-            },
-            {"how": "Pause the bot until its source is fixed", "command": f"hub bot pause {shlex.quote(slug)}"},
+            {"how": "Pause the bot until its source is fixed", "command": f"tico bot pause {shlex.quote(slug)}"},
             {
                 "how": "Have BotOps fix the bot's source",
-                "command": "hub task create --owner botops --title " + shlex.quote(f"Stop {slug} filing: {title[:60]}"),
+                "command": "tico task create --owner botops --title "
+                + shlex.quote(f"Stop {slug} filing: {title[:60]}"),
                 "note": "BotOps reads the cause and files the fix in the bot's code",
             },
         ]
@@ -242,7 +212,7 @@ def stops_for(c, cause, task):
         return [
             {
                 "how": "Close the parent task",
-                "command": f"hub task close {cause['id']}",
+                "command": f"tico task close {cause['id']}",
                 "note": "its open children stay as they are",
             }
         ]

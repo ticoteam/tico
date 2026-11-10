@@ -8,11 +8,11 @@ or a prepared question for a lawyer. Nothing is sent, signed or decided.
 
 ## 1. Read the request whole
 
-    hub task show <id>
+    tico task show <id>
 
 Read every attachment. Find: what is being asked, by whom, by when, who the other party is, and what is at
-stake (money, a deadline, a person, data, a regulator). `hub doc ask "<the question>"` to see whether an
-documented answer or a policy already covers it, and `hub meeting search "<party>"` for context.
+stake (money, a deadline, a person, data, a regulator). `tico doc ask "<the question>"` to see whether an
+documented answer or a policy already covers it, and `tico meeting search "<party>"` for context.
 
 ## 2. Sort it
 
@@ -33,13 +33,13 @@ Log it in `knowledge/requests.md` and record its stage there: Intake until it is
 4. **Answered by a documented position**: answer in three lines and cite the source and its date.
 5. **A rule check.** A question about what a rule allows (a contract term against the team's rules, or a "can we...?"
    that the documented positions do not settle) goes to the Rules Owner (`tico-counsel`). Set the request to Rules check,
-   ask once with `hub task create --owner tico-counsel --parent <id> --title "Rule check: <request>" --body "<the rule,
+   ask once with `tico task create --owner tico-counsel --parent <id> --title "Rule check: <request>" --body "<the rule,
    the facts with dates, the question and the deadline>"`, and wait. You do not decide the rule check yourself.
 
 ## 4. Hand over
 
-Put the outcome on the task. Ask once with `hub task question "<question>" --on <person> --parent <id>` if the scope or lawyer is missing. Route requested work: `hub task create --owner <slug> --title "<what>" --body "<request and source>" --parent <id>`.
-End with the not-legal-advice line, update `knowledge/requests.md`, and `hub task update <id> --status done --note`.
+Put the outcome on the task. Ask once with `tico task ask <id> --to <person> "<question>" --version N` if the scope or lawyer is missing. Route requested work: `tico task create --owner <slug> --title "<what>" --body "<request and source>" --parent <id>`.
+End with the not-legal-advice line, update `knowledge/requests.md`, and `tico task done <id> -m "..." --version N`.
 
 ## Done when
 - The request has one of the three outcomes, on the task and in `knowledge/requests.md`.

@@ -12,8 +12,8 @@
 const GR_ROUTE = '#/growth', GR_SOURCES = GR_ROUTE + '/sources', BRAND_ROUTE = '#/strategy/brand', GR_GOALS = '#/strategy/goals';
 // Where Growth and Go-to-market lived, under Strategy: redesignRoute sends them on.
 const GR_OLD_ROUTE = '#/strategy/growth', GTM_OLD_ROUTE = '#/strategy/gtm';
-// The Tasks page's Marketing board (backend/marketing_tasks.py: the task type `idea`), one channel's tasks with `slug`.
-const grBoardHref = (slug = '') => `${TASKS}?view=board&type=idea&who=all${slug ? '&tag=' + encodeURIComponent('channel:' + slug) : ''}`;
+// Growth ideas are General tasks with labels (backend/marketing_tasks.py); one channel's are those with `channel:<slug>`.
+const grBoardHref = (slug = '') => `${TASKS}?pipeline=general&who=all${slug ? '&tag=' + encodeURIComponent('channel:' + slug) : ''}`;
 // The Sources list as the server answers it (GET /api/v2/growth/sources): one row per source of a truth.
 interface GrSource { id: string; truth_for: string; system: string; reach_kind: string; reach_ref?: string | null; may: string; owner_ref: string | null; retired_at?: string | null }
 interface GrSourcesData { src: GrSource[]; conflicts: string[]; may: boolean }
@@ -37,8 +37,9 @@ let GR: GrState | null = null;            // the open Growth page: {load, sub, m
 let GR_LOAD = 0;
 const GR_STAGES = [['reach', 'Reach'], ['acquire', 'Acquire'], ['activate', 'Activate'], ['retain', 'Retain'], ['refer', 'Refer']];
 const GR_CH_STAGE: Record<string, string> = {idea: 'Idea', testing: 'Testing', scaling: 'Scaling', paused: 'Paused'};
-// A marketing task's step, by its stage (backend/cards.py growth_board; the step names of backend/marketing_tasks.py).
-const GR_TASK_STAGE: Record<string, string> = {idea: 'On deck', building: 'In development', testing: 'Live', scaling: 'Working'};
+// Where a growth idea is, by its labels (backend/cards.py growth_board, backend/marketing_tasks.py STAGES).
+const GR_TASK_STAGE: Record<string, string> = {idea: 'On deck', building: 'In development', testing: 'Live', scaling: 'Working',
+  measuring: 'Measuring'};
 
 // ----------------------------------------------------------------- shared formats and pieces
 // Who may change company-level growth records: the owner or an admin (the server checks and is the one that enforces it).

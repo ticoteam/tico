@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend import auto_tasks, execution, flight, org_turns
+from backend import execution, flight, org_turns
 from backend.store import H, encode, _pooled
 from backend.tests.helpers.api import assign, headers, post, runner  # noqa: F401
 from backend.enqueue import enqueue_stored
@@ -107,9 +107,7 @@ class Phases:
                 if name == "expire" and conn is not None and conn.total_changes != before:
                     with phases.lock:
                         phases.fallbacks += 1  # the claim's own expiry changed rows: the old code chose afresh
-                if name == "auto_tasks.missing" or label == "auto_tasks.missing":
-                    phases.local.backfill = True  # the backfill's own selection is not a repeat
-                elif name == "candidate" and k.get("job_id") is None and not getattr(phases.local, "backfill", False):
+                if name == "candidate" and k.get("job_id") is None:
                     with phases.lock:
                         phases.full_under_lock += 1
 
@@ -120,7 +118,7 @@ class Phases:
         phases = self
 
         def claim(self_, c, *a, **k):
-            phases.local.inside, phases.local.backfill = True, False
+            phases.local.inside = True
             start = time.perf_counter()
             try:
                 return original(self_, c, *a, **k)
@@ -161,7 +159,6 @@ def test_claim_write_hold_at_102_bots(api, monkeypatch):
     phases.around_claim(monkeypatch, cls)
     for name in ("expire", "candidate", "held_starts", "company_waiter"):
         phases.wrap(monkeypatch, cls, name)
-    phases.wrap(monkeypatch, auto_tasks, "missing", "auto_tasks.missing")
     phases.wrap(monkeypatch, org_turns, "observe", "org_turns.observe")
     errors, taken = [], 0
     rng = random.Random(678)

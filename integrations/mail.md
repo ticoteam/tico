@@ -158,5 +158,5 @@ policy refused you. Add `--json` for structured output.
 
 ## Learnings
 
-What bots and people learn about this integration is added with `hub tool learn mail "…"` and
+What bots and people learn about this integration is added with `tico tool learn mail "…"` and
 shown under this page; a person folds it into the page over time. The page is the rule.

@@ -1,125 +1,78 @@
-"""Proposals (redesign/CONTRACT.md §5, backend/proposals.py): a bot's change to a spend limit is an approval the top of
-the org decides; on approve the hub applies it as that person, audited with via approval:<id>, spends the approval and
-sends BotOps one notice. An org change is no proposal (test_org_by_request.py)."""
+"""Proposals (redesign/CONTRACT.md §5, backend/proposals.py): a bot's change to a spend limit or a task cap is an OK the
+top of the org gives from its preview (backend/task_asks.py); on that OK the hub applies it as that person, audited
+with via approval:<id>, uses the OK and sends BotOps one notice. An org change is no proposal (test_org_by_request.py).
+On a store with no app."""
 
-from backend.store import H
-from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.helpers.groups import add_bots, send
-from backend.tests.helpers.groups_leads import as_bot
+import pytest
 
+from backend import proposals, task_asks
+from backend.auth import Auth, Identity
+from backend.store import H, Problem
 
-def setup_org(api):
-    """Engineering (ops) and Release (shipper), BotOps on hand, ops signing in as itself."""
-    with api.app.state.store.transaction() as c:
-        add_bots(c, botops=({}, "ana"), shipper=({}, "ana"))
-    eng = send(api, "POST", "groups", {"name": "Engineering", "add": {"bots": ["ops"]}})["id"]
-    release = send(api, "POST", "groups", {"name": "Release", "add": {"bots": ["shipper"]}})["id"]
-    as_bot(api, "ops", "ops-test")
-    return eng, release
+OPS = Identity("bot:ops", "bot")
 
 
-def propose(api, kind, payload, token="ops-test", expected=200):
-    r = api.post("/api/v2/approvals", json={"kind": kind, "payload": payload}, headers=headers(token))
-    assert r.status_code == expected, r.text
-    return r.json()
+@pytest.fixture
+def store(company):
+    company.auth = Auth(company)
+    return company
 
 
-def audit(api, obj):
-    return api.get("/api/v2/audit", params={"object": obj}, headers=headers()).json()["rows"]
-
-
-def botops_notices(api):
-    with api.app.state.store.read() as c:
-        return [
-            dict(r)
-            for r in c.execute(
-                "SELECT body, refs FROM messages WHERE sender_id=? AND recipient_id=? AND kind='notice'",
-                (H.KEEPER, "bot:botops"),
-            )
-        ]
-
-
-def test_a_payload_the_hub_could_not_apply_is_refused_when_filed(api):
-    setup_org(api)
-    propose(api, "spend_limit", {"daily_usd": 5}, expected=422)  # no bot, no pool
-    propose(api, "spend_limit", {"bot": "ops", "pool": "company", "daily_usd": 5}, expected=422)
-    propose(api, "spend_limit", {"pool": "team", "daily_usd": 5}, expected=422)
-
-
-def test_an_org_or_group_change_is_no_proposal_any_more(api):
-    eng, release = setup_org(api)
-    propose(api, "org", {"bot": "bot:ops", "from": eng, "to": release}, expected=422)
-    propose(api, "group", {"id": release, "name": "Shipping"}, expected=422)
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM approvals").fetchone()[0] == 0
-
-
-def test_an_approved_spend_limit_applies_as_the_decider_with_its_audit_row(api):
-    eng, _ = setup_org(api)
-    aid = propose(api, "spend_limit", {"bot": "ops", "per_30m_usd": 1.5})["approval"]
-    pool = propose(api, "spend_limit", {"pool": f"group:{eng}", "daily_usd": 40})["approval"]
-    for each in (aid, pool):
-        post(api, f"approvals/{each}", {"decision": "approved"})
-    limits = get(api, "usage/limits")
-    assert limits["bots"]["ops"]["per_30m_usd"] == 1.5
-    assert limits["pools"]["groups"][eng]["daily_usd"] == 40
-    [row] = audit(api, "spend:ops")
-    assert row["via"] == f"approval:{aid}" and row["before"] is None and row["after"]["per_30m_usd"] == 1.5
-    assert audit(api, f"spend:pool:group:{eng}")[0]["via"] == f"approval:{pool}"
-    assert len(botops_notices(api)) == 2
-
-
-def test_a_declined_proposal_changes_nothing_and_tells_nobody(api):
-    setup_org(api)
-    aid = propose(api, "spend_limit", {"bot": "ops", "daily_usd": 9})["approval"]
-    post(api, f"approvals/{aid}", {"decision": "declined"})
-    assert get(api, "usage/limits")["bots"]["ops"]["daily_usd"] is None and botops_notices(api) == []
-
-
-def test_spend_and_group_changes_by_hand_are_audited(api):
-    send(api, "PUT", "usage/limits/ops", {"daily_usd": 3})
-    send(api, "PUT", "usage/limits/ops", {"daily_usd": 4})
-    send(api, "PUT", "usage/limits/ops", {"daily_usd": 4})  # no change, no row
-    row, first = audit(api, "spend:ops")
-    assert (
-        first["after"]["daily_usd"] == 3
-        and row["before"]["daily_usd"] == 3
-        and row["after"]["daily_usd"] == 4
-        and row["via"] is None
+def _ok(store, c, asked, person=None, ctx=True):
+    """The person opens the proposal's preview and clicks OK on it."""
+    person = person or proposals.decider(c)
+    shown = task_asks.preview(c, person, asked["requirement_id"], own_click=True)["shown_hash"]
+    context = (
+        task_asks.Context(auth=store.auth, settings=store.settings, who=Identity(person, "human")) if ctx else None
     )
-    gid = send(api, "POST", "groups", {"name": "Loud"})["id"]
-    send(api, "DELETE", f"groups/{gid}")
-    created, deleted = reversed(audit(api, f"group:{gid}"))
-    assert created["before"] is None and created["after"]["name"] == "Loud" and deleted["after"] is None
+    task_asks.give_ok(c, person, asked["requirement_id"], shown, own_click=True, ctx=context)
 
 
-def test_an_approved_spend_limit_changes_only_what_it_names(api):
-    eng, _ = setup_org(api)
-    for payload in (
-        {"bot": "ops", "per_30m_usd": 1.5},
-        {"bot": "ops", "daily_usd": 20},
-        {"pool": f"group:{eng}", "per_30m_usd": 3},
-        {"pool": f"group:{eng}", "daily_usd": 40},
-    ):
-        post(api, f"approvals/{propose(api, 'spend_limit', payload)['approval']}", {"decision": "approved"})
-    limits = get(api, "usage/limits")
-    assert limits["bots"]["ops"]["per_30m_usd"] == 1.5 and limits["bots"]["ops"]["daily_usd"] == 20
-    pool = limits["pools"]["groups"][eng]
-    assert pool["per_30m_usd"] == 3 and pool["daily_usd"] == 40
+def _audit(c, obj):
+    return [dict(r) for r in c.execute("SELECT * FROM audit_log WHERE object=? ORDER BY rowid", (obj,))]
 
 
-def test_an_approved_older_mail_ask_turns_sending_on_and_keeps_no_forward_addresses(api):
-    """An older mail ask, approved, sets the bot's sending policy to On their own; forward addresses are retired."""
-    setup_org(api)
-    with api.app.state.store.transaction() as c:
-        asked = H.approval_request(
-            c, "bot:botops", "mail_alert", {"bot": "ops", "outbound_send": True, "forward_to": ["b@acme.example"]}
-        )
-    aid = asked["id"] if isinstance(asked, dict) else asked
-    post(api, f"approvals/{aid}", {"decision": "approved"})
-    from backend import email_sending
+def test_a_payload_the_hub_could_not_apply_is_refused_when_asked(store):
+    with store.transaction() as c:
+        for kind, payload in (
+            ("spend_limit", {"daily_usd": 5}),  # no bot, no pool
+            ("spend_limit", {"bot": "ops", "pool": "company", "daily_usd": 5}),
+            ("spend_limit", {"pool": "team", "daily_usd": 5}),
+            ("org", {"bot": "bot:ops"}),
+            ("mail_alert", {"bot": "ops", "outbound_send": True}),
+        ):
+            with pytest.raises(Problem):
+                proposals.propose(c, OPS, kind, payload)
+        assert c.execute("SELECT count(*) FROM ok_grants").fetchone()[0] == 0
 
-    with api.app.state.store.read() as c:
-        assert email_sending.saved(c, "bot:ops")["mode"] == "on_their_own"
-        assert email_sending.sends_on_own(c, "ops")
-    assert get(api, "bots/ops/mail-settings")["forward_to"] == []
+
+def test_an_okd_spend_limit_applies_as_the_person_with_its_audit_row(store):
+    with store.transaction() as c:
+        asked = proposals.propose(c, OPS, "spend_limit", {"bot": "ops", "per_30m_usd": 1.5})
+        assert asked["status"] == "pending" and asked["approval"] == asked["requirement_id"]
+        task = H.task(c, asked["task_id"])
+        assert (task["owner_id"], task["requester_id"]) == ("bot:ops", "bot:ops")
+        _ok(store, c, asked)
+        assert task_asks.standing(c, asked["requirement_id"]) == task_asks.USED
+        assert H.task(c, asked["task_id"])["status"] == "done"
+        [row] = _audit(c, "spend:ops")
+        assert row["via"] == f"approval:{asked['requirement_id']}"
+
+
+def test_an_ok_with_no_preview_route_behind_it_applies_nothing(store):
+    with store.transaction() as c:
+        asked = proposals.propose(c, OPS, "spend_limit", {"bot": "ops", "daily_usd": 9})
+    with pytest.raises(H.Refused, match="own click"):
+        with store.transaction() as c:
+            _ok(store, c, asked, ctx=False)
+    with store.read() as c:
+        assert task_asks.standing(c, asked["requirement_id"]) == task_asks.WAITING
+        assert _audit(c, "spend:ops") == []
+
+
+def test_a_sent_back_proposal_changes_nothing(store):
+    with store.transaction() as c:
+        asked = proposals.propose(c, OPS, "spend_limit", {"bot": "ops", "daily_usd": 9})
+        H.task_answer(c, proposals.decider(c), asked["task_id"], asked["requirement_id"], "no", "Too much.")
+        assert task_asks.standing(c, asked["requirement_id"]) == task_asks.SENT_BACK
+        assert _audit(c, "spend:ops") == [] and proposals.waiting(c, "spend_limit") == []

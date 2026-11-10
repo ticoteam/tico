@@ -1,7 +1,7 @@
 # Tico
 
 Tico is a source-available operating system for a team of humans and bots (PolyForm Perimeter 1.0.1): a FastAPI
-server in `backend/`, the one-page web UI in `ui/` (`index.html`, `app/`, `styles/`; see ui/README.md), the runner in `runner-rs/` (Python helpers in `runner_support/`), the `hub`
+server in `backend/`, the one-page web UI in `ui/` (`index.html`, `app/`, `styles/`; see ui/README.md), the runner in `runner-rs/` (Python helpers in `runner_support/`), the `tico`
 CLI and MCP tool table in `clients/`, and a Tauri desktop shell in `app/`. `README.md` says how to
 run it and `docs/how-it-works.md` describes the system.
 
@@ -18,7 +18,7 @@ first: runner images ship neither. Without Google Chrome, set `TICO_BROWSER_CHAN
 Playwright's Chromium. On a small computer (two CPUs, software WebGL) run the scripts you changed one at a time;
 the parallel suite is the release check's job on a full-size machine. The PR checks
 workflow runs the cheap checks (lint, generated types, the OpenAPI document, the wire contract, workflows, shell scripts) on each push to a
-pull request, on free GitHub-hosted runners. A ready pull request from this repository also runs a light set of tests (`plan --light`: the tests its change reaches directly, the smoke set, at most ten VMs; the browser scripts, factory sim and Caddy image only when it touches their own inputs; `scripts/pr_checks.py` NARROW), and every other job the queue runs (the Caddy image, the Rust and desktop checks, the macOS recorder tests) when its change reaches it, on GitHub-hosted runners, so `checks` (the one required check) passes only when they pass; a draft runs nothing, and a fork's pull request runs the cheap
+pull request, on free GitHub-hosted runners. A ready pull request from this repository also runs a light set of tests (`plan --light`: the tests its change reaches directly, the smoke set, at most ten VMs; the browser scripts and Caddy image only when it touches their own inputs; `scripts/pr_checks.py` NARROW), and every other job the queue runs (the Caddy image, the Rust and desktop checks, the macOS recorder tests) when its change reaches it, on GitHub-hosted runners, so `checks` (the one required check) passes only when they pass; a draft runs nothing, and a fork's pull request runs the cheap
 checks only. PR checks and the queue run a test listed in `ci/quarantine/` (it failed and passed on one commit) without failing on it; release validation still fails on it (`scripts/flake_quarantine.py`, `.github/workflows/flaky-tests.yml`). The fix for a quarantined test deletes its entry file. The merge queue runs the tests again, once per queue group on the merged result, on 4-vCPU GitHub-hosted runners: the tests a measured static
 dependency map (imports, plus files run or read by path) says use the change within two levels (not through a hub such as `backend/app.py`), capped at nineteen VMs, with the smoke set when that drops any; release validation's incremental runs and its daily full run cover the rest, the Caddy image job when the change reaches
 it, the Rust and desktop checks when they changed, and the macOS recorder tests when `recorder/` changed. A docs page or GitHub file runs the tests that read it. Dependency pins, conftest, pytest.ini, deleted or unparsable files
@@ -26,7 +26,7 @@ and UI files outside the UI map run the tests that name or read them and the smo
 the static job), never the full default suite or every browser script; release validation runs both. Draft pull requests run no checks until marked ready for
 review; a skipped run is not a pass. Main has no check run of its own: the queue tests each change before it lands, and
 Release validation tests each candidate. Agents run the tests they touched locally before marking a PR
-ready. RunsOn is for release checks only; ordinary test runs happen locally. A newer push cancels a pull request's superseded run. A failed test or factory-sim leg cancels its whole run, so a failing pull request or
+ready. RunsOn is for release checks only; ordinary test runs happen locally. A newer push cancels a pull request's superseded run. A failed test leg cancels its whole run, so a failing pull request or
 queue group stops at once; `checks` still runs and reports it. PR and queue runs restore GitHub's own caches, which `pr-cache.yml` fills from main. Python and browser groups are sized from the latest successful Release validation
 run's per-file and per-script timings (collected counts until timings exist) so each VM finishes in about 330 s, under seven minutes
 (`TICO_CI_JOB_SECONDS`, 330), and an interrupted Spot job is rerun automatically. Browser and system-package caches avoid apt
@@ -42,8 +42,8 @@ shared computer: `python3 scripts/remote.py -- <command>` (or `TICO_HEAVY_REMOTE
 `heavy.sh`) runs it on a fresh RunsOn VM against the pushed HEAD, then prints its last lines and exits with its code: 75 when it never dispatched the run, 76 when the run ended without a result, and 2 for a bad command line (`--help` lists them). At most 4 remote runs of the repository go at once (`TICO_REMOTE_MAX` changes that, 0 for none); a run past the cap waits up to 20 minutes for a slot.
 It needs `gh` signed in with permission to dispatch workflows; a test file or two you changed still runs locally (in a bot's
 turn with `TICO_HEAVY_REMOTE=1`, a pytest run naming up to three test files stays local and a whole suite goes remote).
-The factory simulation (`python -m evals.factory.run`, evals/factory/README.md) runs end-to-end board scenarios and
-goes to RunsOn by default. Locally, a PR runs only the tests for what it changed; for each release, run the full suite once on its frozen candidate. `--release` runs every test (slow included, `ui-tests.cts --all`) and the Docker
+The never-stuck fault rig (`python -m evals.never_stuck.run`, evals/never_stuck/README.md) runs the task engine on a
+fake clock and breaks things on purpose; `backend/tests/test_never_stuck_rig.py` runs its scenarios. Locally, a PR runs only the tests for what it changed; for each release, run the full suite once on its frozen candidate. `--release` runs every test (slow included, `ui-tests.cts --all`) and the Docker
 whole-product checks before a tag (docs/releasing.md). There is no budget on how many tests the suite has: write as many as a change needs, as long as each one
 guards a real failure (a privacy or permission boundary, migrations and data safety, a core task/run flow, a
 regression, an edge case that would lose or duplicate work). No tests of wording, copy or docs, trivial getters or
@@ -84,7 +84,7 @@ reviewed work merged.
 ## Hit every surface
 The commonest defect in Tico is a change that works where it was tested and is missing everywhere else. Before
 calling a change done, walk this list and say in the PR which entries applied:
-- **Clients**: the web app at desktop and phone widths, the Tauri app, Slack, the `hub` CLI and the MCP tool table
+- **Clients**: the web app at desktop and phone widths, the Tauri app, Slack, the `tico` CLI and the MCP tool table
   (`clients/hubtools.py`), API v2 and its spec (`backend/openapi_v2.py`).
 - **Runners**: the Rust runner, on a Mac and in the Docker image.
 - **Harnesses**: every harness, through the capabilities in its `runner-rs/harnesses/*.toml`, never by comparing names.

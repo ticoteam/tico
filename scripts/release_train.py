@@ -160,6 +160,35 @@ def next_patch(tag):
     return "v%d.%d.%d" % (major, minor, patch + 1)
 
 
+# The release line main is on: the train cuts patches of it only. Main's first release of a new line (v0.6.0, the
+# Pipelines v3 engine) is tagged by hand; until then the train cuts nothing, so a 0.6 main never ships as a 0.5 patch.
+LINE = (0, 6)
+# 0.6 starts fresh (docs/updates.md, "From 0.5 to 0.6"): an install below it is never updated to it or past it here.
+FRESH_START = (0, 6, 0)
+FRESH_WORDS = "0.6 starts fresh: this company's tasks would not carry over"
+
+
+def crosses_fresh_start(running_version, target):
+    """Whether updating an install that runs `running_version` to `target` crosses FRESH_START. A version that does not
+    parse (an rc, say) is judged by its numbers."""
+    have, want = (re.match(r"^v?(\d+)\.(\d+)\.(\d+)", str(v or "").strip()) for v in (running_version, target))
+    if not have or not want:
+        return False
+    have, want = (tuple(int(p) for p in m.groups()) for m in (have, want))
+    return have < FRESH_START <= want
+
+
+def off_line(newest):
+    """Why the train cuts nothing after `newest`: main is on a newer line than it (LINE), or None."""
+    if parse_version(newest)[:2] >= LINE:
+        return None
+    return "main is on %d.%d and the newest release is %s: tag v%d.%d.0 by hand (docs/releasing.md#a-new-line)" % (
+        *LINE,
+        newest,
+        *LINE,
+    )
+
+
 def title(sha, version, previous, anchor=None):
     """Release validation's run-name; release.yml finds a run by its prefix. An incremental validation names its anchor."""
     if anchor:
@@ -540,6 +569,8 @@ def update_install(target, version, timeout=UPDATE_WAIT):
     if before == want:
         note("%s already runs v%s" % (name, want))
         return
+    if crosses_fresh_start(before, want):
+        raise Fail("%s runs v%s, not updated to v%s: %s" % (name, before, want, FRESH_WORDS))
     try:
         rollout.call(target, "POST", UPDATE_PATH + "/check")  # 429 within a minute of another check is fine
         code, started = rollout.call(target, "POST", UPDATE_PATH, {"version": want})
@@ -727,6 +758,10 @@ def plan_step(gh, now, finished=None, manual=False, checkout=None):
         return unpublished(gh, now, newest, plan)
     version = next_patch(newest)
     plan["version"] = version
+    held = off_line(newest)
+    if held:
+        plan.update(action="wait", held=held, why=held)
+        return plan
     runs = gh.validation_runs()
     # A run the ceiling stopped ran no suite: it is no red candidate, no anchor and no full run.
     stopped = ceiling_stops(gh, runs, now)
@@ -1252,6 +1287,9 @@ def promote(gh, env):
     if not parse_version(want) or not parse_version(have) or parse_version(want) <= parse_version(have):
         note("Promote: skipped, the canary's %s is not a stable release ahead of stable's %s" % (want, have))
         return
+    if crosses_fresh_start(have, want):
+        note("Promote: skipped, stable runs %s and the canary %s: %s" % (have, want, FRESH_WORDS))
+        return
     issue = find_approval(gh, want)
     approval, held, why = approval_state(gh, issue, env) if issue else ("", False, "")
     waits, faults = promotion_gate(
@@ -1446,6 +1484,8 @@ def hotfix(gh, env, sha, reason, promote_stable, override_hold=False, record=Non
         raise Fail("%s is not on main: land the fix on main first" % sha[:12])
     if gh.compare(newest, sha) != "ahead":
         raise Fail("%s does not come after %s" % (sha[:12], newest))
+    if off_line(newest):
+        raise Fail(off_line(newest))
     version = next_patch(newest)
     want = title(sha, version, newest)
     since = datetime.now(timezone.utc)

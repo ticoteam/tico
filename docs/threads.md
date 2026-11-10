@@ -34,7 +34,7 @@ A thread's audience is one of these:
 - A group added to a thread is resolved live: whoever leaves the group loses the thread.
 - A bot's earlier messages reach its Home readers only once a manager of the bot opens them: **Open earlier messages to
   Read** in the Home's **Thread settings** or on the notice each manager gets in their DM with the bot, or
-  `hub thread open-earlier <thread>`. Until then readers see one **Earlier messages** row.
+  `tico thread open-earlier <thread>`. Until then readers see one **Earlier messages** row.
 - Sub-threads follow the audience of the thread they branch from.
 - Mentions and follows never give access. Naming someone outside the thread leaves a warning for the author, and
   nothing else happens until that person is added.
@@ -72,22 +72,22 @@ you change it, so there is no Save button. A row you may not use is left out. On
 
 **Reply** on a message answers it in the thread: your message goes at the bottom, with a short quote of the one it
 answers. Replying to a bot's message wakes that bot, as an @mention does. A quote of a message you can't read shows
-only that it is hidden. `hub thread post <thread> "..." --reply-to <message>` replies from the command line; the
+only that it is hidden. `tico thread post <thread> "..." --reply-to <message>` replies from the command line; the
 message must be in the same thread or a sub-thread under it, and one you can read.
 
-`hub thread show <thread> --flat` reads the thread and its open sub-threads as one list in time order.
+`tico thread show <thread> --flat` reads the thread and its open sub-threads as one list in time order.
 
 ## Sub-threads
 
 Reply under one message when the side topic would bury the main discussion:
-`hub thread reply <thread> <message> "..."`. `hub thread sub <message>` opens the sub-thread without posting.
+`tico thread reply <thread> <message> "..."`. `tico thread sub <message>` opens the sub-thread without posting.
 Use them sparingly. The work that everyone needs to see stays in the thread.
 
 A thread shows its sub-threads inline: each message is followed by its sub-thread's messages, indented and quieter, in
 tree order. They organize; they don't hide. Tap one to open that sub-thread with the path back above it, and it shows
 its own sub-threads the same way. A long sub-thread shows its latest messages under an **N more** row that loads the
-rest in place. `hub thread show` returns the same tree: each row has its `depth`, and a `collapsed` row's `cursor` reads
-the rest with `hub thread show <that thread> --cursor <cursor>`.
+rest in place. `tico thread show` returns the same tree: each row has its `depth`, and a `collapsed` row's `cursor` reads
+the rest with `tico thread show <that thread> --cursor <cursor>`.
 
 Opening a thread reads what it shows, per thread: it and each sub-thread inline, up to the last message drawn. A
 sub-thread whose **N more** holds something unread stays unread until you open that part.
@@ -108,7 +108,7 @@ Each reader follows a thread at one level. Choose it in the **Notifications** ro
   choose another level. A thread you do not follow shows as Off too.
 
 Posting in a thread does not follow it. Starting a thread, being @mentioned or being replied to does, and you can
-follow from Thread settings or `hub thread follow`. A message reaches whoever it @mentions or replies to, whatever
+follow from Thread settings or `tico thread follow`. A message reaches whoever it @mentions or replies to, whatever
 their level, and the thread's followers by their level ([Steer, queue or defer](using-tico.md#steer-queue-or-defer)).
 
 The list shows top-level threads only. A row sums up the sub-threads under it, and when something new is in a
@@ -123,28 +123,28 @@ a dot, not a count. **Needs attention** at the top of the list holds the threads
 ask you have not answered, an unread DM, a post of yours held for review or held for you to review, and any thread you
 are in where the loop guard paused the bots' wakes; posting there lets them all go, and without a post they go by
 themselves, as many as the thread's hour has room for. Unread threads come next, then the rest, newest first. A thread's
-row counts its sub-threads too. `hub thread read <thread> --seq N` marks a thread read up to a message; `--all` also marks every
+row counts its sub-threads too. `tico thread read <thread> --seq N` marks a thread read up to a message; `--all` also marks every
 sub-thread under it.
 
 ## Update requests
 
-A bot's daily update request is a notice from the keeper. In a thread, the request and the bot's replies to it read
+A bot's daily update request is a notice from Tico. In a thread, the request and the bot's replies to it read
 as one line, **› Update generated**. Tapping the line shows or hides them. The group holds the request, the bot's first reply to
 it, and the bot's other messages from that same run. It ends at the first message that is not one of those: a person's,
-another bot's, the keeper's, a message from another run, or a deleted or hidden one. The line stays shut until tapped. A
+another bot's, Tico's, a message from another run, or a deleted or hidden one. The line stays shut until tapped. A
 quote or a search hit opens the group it sits in. The posted update keeps its own row and is never in the group. If the
 request is deleted, its messages read as ordinary messages again.
 
 ## Bots in threads
 
 - A bot keeps **one progress message per task**. It posts it once and edits it as the work moves
-  (`hub thread edit <message> "..."`), instead of a line per step. A run's output is already in its run view.
+  (`tico thread edit <message> "..."`), instead of a line per step. A run's output is already in its run view.
 - A bot woken in a thread answers there, in the sub-thread it was asked in, addressed to whoever asked. If it was
   removed from the thread during the run, the reply is not posted.
 - A message that names nobody reaches the bots following the thread at All; a bot follows a chat at Mentions unless
   someone sets it to All, so @mention a bot to reach it. A DM with a bot and a bot's Home always reach that bot.
 - Under the messages, a thread shows the bots it is waiting on: working (with what it is doing now), up next (finishing
-  other work first) or can't reply (why, with a Fix link). `hub thread bot-status <thread>` lists the same.
+  other work first) or can't reply (why, with a Fix link). `tico thread bot-status <thread>` lists the same.
 - A bot that follows a thread on digest gets one run an hour for all its threads with new messages.
 - A bot acknowledges a request with a one-word `✅` in its thread.
 - A bot's open asks to people go in its Home.
@@ -203,23 +203,24 @@ Details: [threads contract §10.1](dev/threads-contract.md).
 ## Who wrote it
 
 Every line says who or what made it, from the same rule on every surface (chat, a bot's Home, a task's history and the
-Log). Nothing says "Assistant" unless the Assistant wrote it. The stored actor `keeper` is what Tico's server writes as
-when no person or bot did; it is not shown as a name.
+Log). Nothing says "Assistant" unless the Assistant wrote it. Tico's server writes under its own stored actor when no
+person or bot did; that actor is not shown as a name.
 
 | Line | How it shows |
 |---|---|
 | A person's message | Their name, as usual. |
 | A bot's message | The bot's name, as usual. |
 | The Assistant, for a person | A normal message from **<first name>'s Assistant**. |
-| A task update (a keeper line about a task) | A small gray line. Two or more in a row fold into "N task updates", collapsed by default. |
+| A task update (Tico's line about a task) | A small gray line. Two or more in a row fold into "N task updates", collapsed by default. |
 | A built-in: Follow-up timer, Earlier messages, Task roundup, Stuck check, Rule check, Health check, Maintenance | A small gray line led by its name. |
 | One of your automations | A small gray line; the name opens the automation. |
-| System (an update, a backup, a migration), or any other keeper line | A small gray line with no sender. |
+| System (an update, a backup, a migration), or any other line from Tico | A small gray line with no sender. |
 
 A gray line is always one line. Text that does not fit ends in "…"; hover over a long line to read its text.
 
 Which label a line gets changes what you see only. Who or what wakes a bot, what is delivered and what counts as
-unread stay as they were. A bot's turn reads the same labels ("Task update", "Stuck check"), not "keeper". Task
+unread stay as they were. A bot's turn reads the same labels ("Task update", "Stuck check"), never Tico's stored actor.
+Task
 history and the Log read the same rule, from the row's actor and what it names.
 
 ## Editing and deleting
@@ -230,7 +231,7 @@ not. A delete leaves a marker with no text, and the asks it answered reopen.
 
 ## Keeping messages
 
-A thread keeps its messages for good unless its owner sets a limit: `hub thread update <thread> --keep-days 90`, and
+A thread keeps its messages for good unless its owner sets a limit: `tico thread update <thread> --keep-days 90`, and
 `--keep-forever` to take it off. The **Keep messages** row in [Thread settings](#thread-settings) sets the same limit.
 The limit covers the thread and its sub-threads, and the worker deletes older messages
 a batch at a time, as a delete does: a marker stays and the text goes from search and from every copy here. A file
@@ -244,36 +245,36 @@ Each command is also an MCP tool with the same name and arguments ([Connect an a
 
 | Command | Tool | What it does |
 |---|---|---|
-| `hub thread list [--with ACTOR]` | `hub_thread_list` | your threads: needs attention, then unread, then recent; DMs apart; a task's thread only while it is unread; `--with` only the threads shared with that person, bot or group |
-| `hub thread show <thread> [--flat]` | `hub_thread_show` | the messages in tree order, each sub-thread under its message; `--flat` one list in time order |
-| `hub thread home <actor>` | `hub_thread_home` | a teammate's Home, made on first use; needs Read on them |
-| `hub thread dm <actor>` | `hub_thread_dm` | your DM with one person or bot, the open one or a new one; needs Write |
-| `hub thread dm-group <actor> <actor> ... --title "..." [--body "..."]` | `hub_thread_dm_group` | a group DM with these people or bots; a new one needs `--title`; `--body` is the first message |
-| `hub thread create "title"` | `hub_thread_create` | start a thread: `--audience`, `--group`, `--member` (repeat), `--body`, `--pin-for-members` |
-| `hub thread post <thread> "..."` | `hub_thread_post` | a message: `--kind say\|ask`, `--to`, `--reply-to MESSAGE`, `--ref KIND:ID` (repeat) |
-| `hub thread bot-status <thread>` | `hub_thread_bot_status` | the bots the thread waits on: working, up next or can't reply, and why |
-| `hub thread reply <thread> <message> "..."` | `hub_thread_reply` | a side topic in that message's sub-thread (to answer a message, `post --reply-to`) |
-| `hub thread edit <message> "..."` | `hub_thread_edit` | a new revision of your own message |
-| `hub thread sub <message>` | `hub_thread_sub` | open a message's sub-thread without posting |
-| `hub thread react <message-id> <emoji>` | `hub_thread_react` | your reaction to a message, such as `:+1:` |
-| `hub thread unreact <message-id> <emoji>` | `hub_thread_unreact` | remove your reaction |
-| `hub thread open-earlier <thread>` | `hub_thread_open_earlier` | a manager of a bot opens its earlier messages to its Home readers |
-| `hub thread task <message-id> --title T --owner O` | `hub_thread_task` | a task from a message, private unless the thread is company-wide |
-| `hub thread delete <message-id>` | `hub_thread_delete` | delete your message: a marker stays and the asks it answered reopen |
-| `hub thread upload <thread> <file> [--text ..] [--kind say\|ask] [--to ACTOR] [--under MESSAGE]` | `hub_thread_upload` | a message with a local file streamed to the thread (or to a message's sub-thread) |
-| `hub thread follow <thread> [--notify ...]` | `hub_thread_follow` | follow at a level |
-| `hub thread unfollow <thread>` | `hub_thread_unfollow` | stop following |
-| `hub thread read <thread> [--seq N \| --all]` | `hub_thread_read` | mark read |
-| `hub thread pin <thread>` | `hub_thread_pin` | pin a thread for you |
-| `hub thread unpin <thread>` | `hub_thread_unpin` | unpin it for you, even one pinned for everyone |
-| `hub thread catch-up [--cursor C]` | `hub_thread_catch_up` | the threads with new messages for you, mentions first, each with its new messages |
-| `hub thread search "..."` | `hub_thread_search` | messages in threads you can read |
-| `hub thread members list\|add\|remove` | `hub_thread_members_list`, `_add`, `_remove` | who reads the thread; `add --owner` makes an owner |
-| `hub thread update <thread>` | `hub_thread_update` | `--title`, `--archive` or `--unarchive`, `--audience`, `--group`, `--keep-days N` or `--keep-forever`, `--pin-for-everyone` or `--unpin-for-everyone` (managers) |
-| `hub thread link-slack <thread> [<channel>] [--history] [--off]` | `hub_thread_link_slack` | link a Slack channel (admins), list the thread's links, or take them away ([Slack](slack.md)) |
-| `hub thread slack-resume <link-id>` | `hub_thread_slack_resume` | check a suspended or refused Slack link again (admins) |
+| `tico thread list [--with ACTOR]` | `hub_thread_list` | your threads: needs attention, then unread, then recent; DMs apart; a task's thread only while it is unread; `--with` only the threads shared with that person, bot or group |
+| `tico thread show <thread> [--flat]` | `hub_thread_show` | the messages in tree order, each sub-thread under its message; `--flat` one list in time order |
+| `tico thread home <actor>` | `hub_thread_home` | a teammate's Home, made on first use; needs Read on them |
+| `tico thread dm <actor>` | `hub_thread_dm` | your DM with one person or bot, the open one or a new one; needs Write |
+| `tico thread dm-group <actor> <actor> ... --title "..." [--body "..."]` | `hub_thread_dm_group` | a group DM with these people or bots; a new one needs `--title`; `--body` is the first message |
+| `tico thread create "title"` | `hub_thread_create` | start a thread: `--audience`, `--group`, `--member` (repeat), `--body`, `--pin-for-members` |
+| `tico thread post <thread> "..."` | `hub_thread_post` | a message: `--kind say\|ask`, `--to`, `--reply-to MESSAGE`, `--ref KIND:ID` (repeat) |
+| `tico thread bot-status <thread>` | `hub_thread_bot_status` | the bots the thread waits on: working, up next or can't reply, and why |
+| `tico thread reply <thread> <message> "..."` | `hub_thread_reply` | a side topic in that message's sub-thread (to answer a message, `post --reply-to`) |
+| `tico thread edit <message> "..."` | `hub_thread_edit` | a new revision of your own message |
+| `tico thread sub <message>` | `hub_thread_sub` | open a message's sub-thread without posting |
+| `tico thread react <message-id> <emoji>` | `hub_thread_react` | your reaction to a message, such as `:+1:` |
+| `tico thread unreact <message-id> <emoji>` | `hub_thread_unreact` | remove your reaction |
+| `tico thread open-earlier <thread>` | `hub_thread_open_earlier` | a manager of a bot opens its earlier messages to its Home readers |
+| `tico thread task <message-id> --title T --owner O` | `hub_thread_task` | a task from a message, private unless the thread is company-wide |
+| `tico thread delete <message-id>` | `hub_thread_delete` | delete your message: a marker stays and the asks it answered reopen |
+| `tico thread upload <thread> <file> [--text ..] [--kind say\|ask] [--to ACTOR] [--under MESSAGE]` | `hub_thread_upload` | a message with a local file streamed to the thread (or to a message's sub-thread) |
+| `tico thread follow <thread> [--notify ...]` | `hub_thread_follow` | follow at a level |
+| `tico thread unfollow <thread>` | `hub_thread_unfollow` | stop following |
+| `tico thread read <thread> [--seq N \| --all]` | `hub_thread_read` | mark read |
+| `tico thread pin <thread>` | `hub_thread_pin` | pin a thread for you |
+| `tico thread unpin <thread>` | `hub_thread_unpin` | unpin it for you, even one pinned for everyone |
+| `tico thread catch-up [--cursor C]` | `hub_thread_catch_up` | the threads with new messages for you, mentions first, each with its new messages |
+| `tico thread search "..."` | `hub_thread_search` | messages in threads you can read |
+| `tico thread members list\|add\|remove` | `hub_thread_members_list`, `_add`, `_remove` | who reads the thread; `add --owner` makes an owner |
+| `tico thread update <thread>` | `hub_thread_update` | `--title`, `--archive` or `--unarchive`, `--audience`, `--group`, `--keep-days N` or `--keep-forever`, `--pin-for-everyone` or `--unpin-for-everyone` (managers) |
+| `tico thread link-slack <thread> [<channel>] [--history] [--off]` | `hub_thread_link_slack` | link a Slack channel (admins), list the thread's links, or take them away ([Slack](slack.md)) |
+| `tico thread slack-resume <link-id>` | `hub_thread_slack_resume` | check a suspended or refused Slack link again (admins) |
 
-The commands are `hub thread` in the CLI and `hub_thread_*` over MCP. The REST routes live under `/api/v2/threads`
+The commands are `tico thread` in the CLI and `hub_thread_*` over MCP. The REST routes live under `/api/v2/threads`
 and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The thread routes a client calls are:
 
 - `GET /api/v2/threads/home/{actor}`: a teammate's Home, with the actor in the path (`bot:ops` keeps its colon).
@@ -283,16 +284,16 @@ and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The t
 - `PUT` and `DELETE /api/v2/messages/{id}/reactions/{emoji}`: add or remove your reaction.
 - `POST /api/v2/threads/{id}/open-earlier`: a bot's manager opens its earlier messages to its Home readers.
 - `POST /api/v2/uploads/threads/{id}/messages`: a person posts a message with files attached (multipart, `text` and
-  `file`), under the chat upload size caps: `hub thread upload`.
-- `DELETE /api/v2/messages/{id}`: delete your message (`hub thread delete`).
-- `POST /api/v2/slack/links/{id}/resume`: check a suspended or refused link again (`hub thread slack-resume`).
+  `file`), under the chat upload size caps: `tico thread upload`.
+- `DELETE /api/v2/messages/{id}`: delete your message (`tico thread delete`).
+- `POST /api/v2/slack/links/{id}/resume`: check a suspended or refused link again (`tico thread slack-resume`).
 - `POST /api/v2/threads/messages/{id}/task` with `title` and `owner`: a task made from a message you can read. The server
   copies the message and a link back, and the task stays private unless the thread is company-wide
-  (`hub thread task <message-id> --title T --owner O`).
+  (`tico thread task <message-id> --title T --owner O`).
 
 BotOps acting for a person runs the thread writes above as that person, the same as the CLI: edits, deletes, reactions, DMs,
 uploads, Slack links and call steps (start, end, leave, bots, retry). It does not join a call or take a call's token; the
-person joins in the app or with `hub call join`.
+person joins in the app or with `tico call join`.
 
 ## Webhooks
 
@@ -304,7 +305,7 @@ thread yet and sends no event ([Webhooks](webhooks.md)).
 
 ## Older conversations
 
-`hub conversation show` and `/api/v2/conversations/*` keep working as aliases for one release. Older conversations
+`tico conversation show` and `/api/v2/conversations/*` keep working as aliases for one release. Older conversations
 map onto threads as follows: a bot's main chat becomes its Home, and a person's personal chat with a bot moves into
 that bot's Home with its messages, unless its owner may not read that Home. The Assistant's and the Strategy Bot's
 chats, the Librarian's per-person docs chats, and chats with a bot synced from another app, stay where they are. A

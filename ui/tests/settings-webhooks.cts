@@ -27,7 +27,7 @@ type Delivery = {delivery: string; sent_id: string; received_at: string; bytes: 
   type: string; via: string; rules: number; stored: boolean};
 type Hook = {id: string; name: string; url: string; host: string; events: string[]; enabled: boolean; paused_reason: string; rate_per_hour: number;
   allow_http: boolean; created_by: string; revision: number; can_change: boolean; old_secret_until: string | null;
-  last_7_days: {delivered: number; failed: number; pending: number}; filter: {departments: string[]; bots: string[]; task_types: string[]};
+  last_7_days: {delivered: number; failed: number; pending: number}; filter: {departments: string[]; bots: string[]; pipelines: string[]};
   headers: {name: string; secret: boolean; set?: boolean; value?: string}[]};
 type Send = {id: string; webhook_id: string; type: string; subject: string; state: string; attempts: number; last_status: number | null;
   last_error: string; created_at: string};
@@ -35,7 +35,7 @@ type RelayStatus = {key: string; relays: number; cursor: number; last_pull: stri
   oldest: string | null; deleting: number; active: boolean};
 // The request bodies the test reads; a field is optional where some calls omit it.
 type Body = {name?: string; url?: string; events?: string[]; preset?: string; keep_days?: number; unheard?: string; since_hours?: number;
-  since?: string; after?: string; on?: boolean; wake?: boolean; filter?: {departments: string[]; bots: string[]; task_types: string[]};
+  since?: string; after?: string; on?: boolean; wake?: boolean; filter?: {departments: string[]; bots: string[]; pipelines: string[]};
   headers?: {name: string; value?: string; secret: boolean}[]; expected_revision?: number};
 type CatalogEvent = {name: string; group: string; outbound?: boolean};
 type State = {triggers: Trigger[]; deliveries: Record<string, Delivery[]>; hooks: Hook[]; sends: Record<string, Send[]>; relay: RelayStatus;
@@ -66,12 +66,12 @@ function server(): State {
       {delivery: 'd2', sent_id: 'gh-2', received_at: AGO(4), bytes: 2300, tasks: 1, outcome: 'accepted', reason: '', type: 'push', via: 'direct', rules: 1, stored: true},
       {delivery: 'd1', sent_id: '', received_at: AGO(70), bytes: 120, tasks: 0, outcome: 'refused', reason: 'bad signature', type: '', via: 'gateway', rules: 0, stored: true}],
     _tico: [], orders: []},
-    hooks: [{id: 'wh1', name: 'Zapier', url: 'https://hooks.zapier.com/a/b', host: 'hooks.zapier.com', events: ['task.*', 'approval.decided'], enabled: false,
+    hooks: [{id: 'wh1', name: 'Zapier', url: 'https://hooks.zapier.com/a/b', host: 'hooks.zapier.com', events: ['task.*', 'bot.run_failed'], enabled: false,
       paused_reason: 'Failing for 3 days', rate_per_hour: 600, allow_http: false, created_by: 'human:ana', revision: 2, can_change: true, old_secret_until: null,
-      last_7_days: {delivered: 40, failed: 3, pending: 0}, filter: {departments: ['engineering'], bots: ['bot:eng'], task_types: []},
+      last_7_days: {delivered: 40, failed: 3, pending: 0}, filter: {departments: ['engineering'], bots: ['bot:eng'], pipelines: []},
       headers: [{name: 'x-api-key', secret: true, set: true}, {name: 'x-team', secret: false, value: 'acme'}]}],
     sends: {wh1: [{id: 's2', webhook_id: 'wh1', type: 'task.done', subject: 't-9', state: 'failed', attempts: 5, last_status: 500, last_error: 'HTTP 500', created_at: AGO(30)},
-      {id: 's1', webhook_id: 'wh1', type: 'approval.decided', subject: 'a-1', state: 'delivered', attempts: 1, last_status: 200, last_error: '', created_at: AGO(90)}]},
+      {id: 's1', webhook_id: 'wh1', type: 'bot.run_failed', subject: 'a-1', state: 'delivered', attempts: 1, last_status: 200, last_error: '', created_at: AGO(90)}]},
     relay: {key: 'none', relays: 0, cursor: 0, last_pull: null, last_error: '', pending: 0, oldest: null, deleting: 0, active: false},
     hosted: false,
     role: 'owner',
@@ -116,7 +116,7 @@ async function open(browser: import('playwright').Browser, hash: string, viewpor
     if (p === '/api/v2/event-types') return json({items: CATALOG});
     if (p === '/api/v2/sleep') return json({sleep: {hosted: state.hosted, hours: 0, runners: false}});
     if (p === '/api/v2/system-routines') return json({jobs: [], departments: [], task_rule_departments: [{id: 'engineering', name: 'Engineering'}, {id: 'sales', name: 'Sales'}]});
-    if (p === '/api/v2/task-types') return json({types: [{id: 'general', name: 'General', steps: []}, {id: 'bug', name: 'Bug', steps: []}]});
+    if (p === '/api/v2/pipelines') return json({pipelines: [{id: 'general', name: 'General', retired_at: null, stages: []}, {id: 'engineering', name: 'Engineering', retired_at: null, stages: []}]});
     if (p === '/api/v2/triggers' && !post) return json({triggers: state.triggers});
     if (p === '/api/v2/triggers') {
       const id = post!.name!.toLowerCase();
@@ -284,18 +284,18 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       await make.locator('[name=name]').fill('Make.com');
       await make.locator('[name=url]').fill('https://hook.make.com/abc');
       for (const e of CATALOG.filter(x => x.outbound === false)) assert.equal(await make.locator(`[data-ev-name="${e.name}"]`).count(), 0, e.name + ' is for automations only');
-      assert.equal(await make.locator('[data-ev-name="release.published"]').count(), 1);
+      assert.equal(await make.locator('[data-ev-name="strategy.published"]').count(), 1);
       await make.locator('[data-ev-all]').uncheck();
       assert.equal(await make.locator('.wh-ev-groups input:checked').count(), 0, 'unchecking All clears the boxes');
       await make.locator('[data-ev-group="task"] [data-ev-head]').check();
-      await make.locator('[data-ev-name="approval.decided"]').check();
+      await make.locator('[data-ev-name="bot.run_failed"]').check();
       assert.equal(await make.locator('[data-ev-group="task"] [data-ev-name]:checked').count(), CATALOG.filter(e => e.group === 'task').length);
       if (shots) { await settled(page); await make.screenshot({path: path.join(shots, 'outgoing-new-desktop.png')}); }
       await make.locator('button[type=submit]').click();
       await make.waitFor({state: 'detached'});
       await pane.locator('[data-wh-secret="secret"]').waitFor();
       const created = state.posts.find(x => x.path === '/api/v2/webhooks')!;
-      assert.deepEqual(created.body.events, ['task.*', 'approval.decided']);
+      assert.deepEqual(created.body.events, ['task.*', 'bot.run_failed']);
       assert.equal(await pane.locator('[data-wh-secret="secret"] code').innerText(), 'whsec_b3V0Z29pbmc=');
       await pane.locator('[data-wh-back]').click();
       await pane.locator('[data-wh-hook="wh1"]').click();
@@ -317,7 +317,7 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       assert.equal(await edit.locator('[data-hdr]').nth(1).locator('[data-hdr-value]').inputValue(), 'acme');
       assert.equal(await edit.locator('[data-hdr]').nth(1).locator('[data-hdr-value]').getAttribute('type'), 'text');
       assert.equal(await edit.locator('[data-filter="departments"] [data-filter-all]').isVisible(), false);
-      assert.equal(await edit.locator('[data-filter="task_types"] [data-filter-all]').isVisible(), true, 'an empty list says All');
+      assert.equal(await edit.locator('[data-filter="pipelines"] [data-filter-all]').isVisible(), true, 'an empty list says All');
       await edit.locator('[data-filter="departments"] input[value="engineering"]').uncheck();
       await edit.locator('[data-filter="bots"] input[value="ops"]').check();
       await edit.locator('[data-hdr-add]').click();
@@ -336,7 +336,7 @@ const INCOMING = '#wh-incoming', OUTGOING = '#wh-outgoing', GATEWAY = '#wh-gatew
       await edit.locator('button[type=submit]').click();
       await edit.waitFor({state: 'detached'});
       const saved = state.posts.find(x => x.path === '/api/v2/webhooks/wh1/update')!.body;
-      assert.deepEqual(saved.filter, {departments: [], bots: ['eng', 'ops'], task_types: []});
+      assert.deepEqual(saved.filter, {departments: [], bots: ['eng', 'ops'], pipelines: []});
       assert.deepEqual(saved.headers, [{name: 'x-api-key', secret: true}, {name: 'x-team', value: 'acme', secret: false},
         {name: 'Authorization', value: 'Bearer abc', secret: true}], 'blank rows are dropped and the kept secret is sent without a value');
       assert.equal(saved.expected_revision, 2);

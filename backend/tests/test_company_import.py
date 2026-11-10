@@ -9,7 +9,7 @@ from unittest import mock
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.tests.helpers.migrations import restore_config  # the column back for a rerun from before 0070
+from backend.tests.helpers.migrations import forget_from, restore_config  # the column back for a rerun from before 0070
 from backend import company_file as C
 from backend import market_spend as MS
 from backend import people_remove, views
@@ -408,7 +408,10 @@ def an_older_releases_roster_add_retries_after_the_upgrade(api):
         c.execute("DROP TABLE idempotency")
         c.execute("ALTER TABLE idempotency_legacy RENAME TO idempotency")
         restore_config(c)
-        c.execute("DELETE FROM schema_migrations WHERE version>='0050' AND version NOT LIKE 'legacy_%'")
+        # A database from before the Pipelines v3 cut-over opens only with no task in it (migrations.refuse_old_tasks);
+        # the complete company's own (the Bookkeeper's first asks) go.
+        c.execute("DELETE FROM tasks")
+        forget_from(c, "0050")
 
     class Issuer:
         name, calls = "oidc", []
@@ -1257,7 +1260,11 @@ def test_a_0_2_file_without_a_strategy_imports_as_before_and_adds_nothing_to_str
     assert "version: 0.2\n" in text
     assert "strategy" not in preview_and_import(api, text)
     assert api.get("/api/v2/strategy", headers=signed_in()).json()["bets"] == []
-    for table in ("entities", "market_sizes", "entity_watches", "market_insights"):
+    # The company is complete once imported (Onboarding.complete_company): the Bookkeeper's outside obligations name the
+    # authority each is owed to (finance/tax.py seed_dues), which is Finance's, not the file's.
+    owed = "name='IRS' OR name LIKE '% tax authority'"
+    assert rows(api, f"SELECT * FROM entities WHERE NOT ({owed})") == [], "entities"
+    for table in ("market_sizes", "entity_watches", "market_insights"):
         assert rows(api, f"SELECT * FROM {table}") == [], table
     assert {r["bet_id"] for r in rows(api, "SELECT bet_id FROM goals")} <= {None}
 
@@ -1412,7 +1419,7 @@ def test_the_places_a_company_serves_reach_botops_and_the_librarian_only_when_gi
     assert "Serves" not in LS.market_text(blank)
 
 
-# ----------------------------------------------------------------------------- live seats, teams and the factories
+# ----------------------------------------------------------------------------- live seats and teams
 # (title, template, the title of the seat it reports to or "" for the owner, live, team). A live seat is made as a bot
 # that fills it; the Engineering Pipeline Manager is a live seat, and the Growth one a plain seat.
 LIVE_SEATS = (
@@ -1510,111 +1517,6 @@ def test_live_bots_and_the_finance_owner_sit_in_their_teams_and_the_built_ins_in
     assert ids["bookkeeper"] not in built_in["bots"]
 
 
-def test_the_factories_are_set_up_once_after_the_team_with_each_pipelines_manager(environment, monkeypatch):
-    from backend import pipeline_setup
-
-    calls = []
-
-    def record(c, actor, preset="tico_default", replace=False, bindings=None):
-        calls.append((preset, bindings))
-        return {}
-
-    monkeypatch.setattr(pipeline_setup, "apply_factory_setup", record)
-    api = environment()
-    preview_and_import(api, live_text())
-    seats = {r["title"]: r["id"] for r in rows(api, "SELECT id,title FROM seats")}
-    ids = bot_ids(api)
-    assert calls == [
-        (
-            "company_default",
-            {
-                "Engineering": {"bot": ids["engineering-pipeline-manager"]},
-                "Growth Experiments": {"seat": seats["Growth Experiments Pipeline Manager"]},
-                "Finance": {"bot": ids["bookkeeper"]},
-            },
-        )
-    ]
-
-
-def test_the_real_factory_setup_makes_the_nine_pipelines_with_their_managers(environment):
-    """Not monkeypatched: the import makes company_default's pipelines, the live Pipeline Manager (still planned while
-    BotOps sets it up) runs Engineering, an open seat waits on Growth Experiments, and nothing is recorded as failed."""
-    api = environment()
-    preview_and_import(api, live_text())
-    assert not rows(api, "SELECT action FROM events WHERE action='onboarding.pipelines_failed'")
-    types = {r["name"]: r for r in rows(api, "SELECT name,manager,manager_seat FROM task_types")}
-    for name in (
-        "Product",
-        "Engineering",
-        "Growth Experiments",
-        "Lead",
-        "Opportunity",
-        "Customer",
-        "Success Experiments",
-        "Legal",
-        "Finance",
-    ):
-        assert name in types, name
-    ids = bot_ids(api)
-    seats = {r["title"]: r["id"] for r in rows(api, "SELECT id,title FROM seats")}
-    assert types["Engineering"]["manager"] == ids["engineering-pipeline-manager"]
-    assert types["Finance"]["manager"] == ids["bookkeeper"]
-    assert types["Growth Experiments"]["manager"] is None
-    assert types["Growth Experiments"]["manager_seat"] == seats["Growth Experiments Pipeline Manager"]
-
-
-def test_the_real_factory_setup_gives_engineering_the_dev_flow_and_its_reviewers(environment):
-    """The Engineering pipeline is found by its role, not a Dev name: after setup restages it, its stages carry the Dev
-    board's flow (review checks at Review 1 and 2, the merge after Review 2, Pending Release waits on the merge), its
-    Pending Release note to the Release Manager, and the company's pr-reviewer bot in both review pools."""
-    from backend import redesign_migration, step_flow
-
-    api = environment()
-    preview_and_import(api, live_text())
-    engineering = rows(api, "SELECT id FROM task_types WHERE role='engineering'")
-    assert len(engineering) == 1
-    ident = engineering[0]["id"]
-    steps = {
-        r["name"]: r for r in rows(api, "SELECT id,name,flow,check_pool FROM task_steps WHERE type_id=?", (ident,))
-    }
-    flows = {name: json.loads(s["flow"] or "{}") for name, s in steps.items()}
-    assert flows["Review 1"]["check"] == "review" and flows["Review 1"]["gate"]
-    assert flows["Review 1"]["on_fail"] == steps["Review 1 Fixes"]["id"]
-    assert flows["Review 2"]["check"] == "review" and flows["Review 2"]["on_pass"] == step_flow.MERGE
-    assert flows["Review 2"]["on_fail"] == steps["Review 2 Fixes"]["id"]
-    assert flows["Review 2 Fixes"] == {"after_green": step_flow.MERGE}
-    assert flows["Pending Release"] == {"on_merge": True, "can_hold": False}
-    assert flows["On Deck"]["backlog"]["over"] == 10
-    reviewer = bot_ids(api)["code-reviewer"]
-    for name in ("Review 1", "Review 2"):
-        assert json.loads(steps[name]["check_pool"]) == [reviewer], name
-    for name in ("On Deck", "In Progress", "Pending Release", "Done"):
-        assert steps[name]["check_pool"] is None, name
-    with api.app.state.store.read() as c:
-        wakes = [
-            r["note"]
-            for r in redesign_migration.wake_rows(c, "step_entered")
-            if (r["scope_kind"], r["scope_id"]) == ("type", ident)
-        ]
-    assert wakes == ["Pending Release entered: a note to the Release Manager"]
-
-
-def test_a_factory_setup_that_fails_is_rolled_back_recorded_and_the_team_stays(environment, monkeypatch):
-    from backend import pipeline_setup
-
-    def broken(c, actor, preset="tico_default", replace=False, bindings=None):
-        c.execute("UPDATE seats SET title='Half made'")
-        raise RuntimeError("no pipelines today")
-
-    monkeypatch.setattr(pipeline_setup, "apply_factory_setup", broken)
-    api = environment()
-    preview_and_import(api, live_text())
-    assert not rows(api, "SELECT id FROM seats WHERE title='Half made'")  # its own writes were rolled back
-    assert rows(api, "SELECT action FROM events WHERE action='onboarding.pipelines_failed'")
-    assert stored_config(api, "lead-builder")["template"] == "builder"
-    assert rows(api, "SELECT id FROM seats WHERE filled_by='%s'" % bot_ids(api)["lead-builder"])
-
-
 def test_a_live_seat_whose_template_Tico_lacks_is_refused_in_the_preview(environment, monkeypatch):
     from backend import onboarding as O
 
@@ -1628,9 +1530,7 @@ def test_a_live_seat_whose_template_Tico_lacks_is_refused_in_the_preview(environ
 
 
 # ------------------------------------------------------------------ the default chart, on every way a company starts
-NINE = ("Product", "Engineering", "Growth Experiments", "Lead", "Opportunity", "Customer", "Success Experiments")
-NINE += ("Legal", "Finance")
-LIVE_DEFAULT = ("product-pipeline-manager", "engineering-pipeline-manager", "product-owner", "qa-owner")
+LIVE_DEFAULT = ("product-owner", "qa-owner")
 
 
 def default_chart_text():
@@ -1663,14 +1563,10 @@ def default_chart_text():
     return C.to_yaml(draft)
 
 
-def types_of(api):
-    return {r["name"]: r for r in rows(api, "SELECT id,name,manager,manager_seat FROM task_types")}
-
-
-def test_setup_with_no_chart_starts_the_default_chart_its_live_bots_and_the_nine_pipelines_once(environment):
+def test_setup_with_no_chart_starts_the_default_chart_and_its_live_bots_once(environment):
     """Review finding 4: a company that finishes setup without a chart (POST /api/v2/onboarding/complete with nothing
-    picked) gets the default chart, as the site's file would give it: its live seats as bots, the rest Recruiting, and
-    company_default's pipelines with their managers. Completing again changes nothing."""
+    picked) gets the default chart, as the site's file would give it: its live seats as bots, the rest Recruiting.
+    Completing again changes nothing."""
     api = environment()
     done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
@@ -1678,28 +1574,57 @@ def test_setup_with_no_chart_starts_the_default_chart_its_live_bots_and_the_nine
     assert set(LIVE_DEFAULT) <= set(ids)
     seats = {r["title"]: r for r in rows(api, "SELECT id,title,filled_by,closed_at FROM seats")}
     assert seats["Product Team Manager"]["closed_at"] is None and seats["QA Owner"]["filled_by"] == ids["qa-owner"]
-    types = types_of(api)
-    assert set(NINE) <= set(types)
-    assert types["Product"]["manager"] == ids["product-pipeline-manager"]
-    assert types["Engineering"]["manager"] == ids["engineering-pipeline-manager"]
-    assert types["Lead"]["manager_seat"] == seats["Lead Pipeline Manager"]["id"]
-    assert not rows(api, "SELECT action FROM events WHERE action='onboarding.pipelines_failed'")
-    before = (len(rows(api, "SELECT id FROM seats")), len(types), len(ids))
+    before = (len(rows(api, "SELECT id FROM seats")), len(ids))
     again = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
     assert again.status_code == 200, again.text
-    assert (len(rows(api, "SELECT id FROM seats")), len(types_of(api)), len(bot_ids(api))) == before
+    assert (len(rows(api, "SELECT id FROM seats")), len(bot_ids(api))) == before
+
+
+def test_a_new_company_set_up_with_the_default_chart_on_a_fresh_database_has_general_and_its_bots(tmp_path):
+    """The setup path every new company runs, below the routes: a fresh database, the roster a new install seeds, and
+    the owner completing setup with nothing picked. It ends with General as the one pipeline, the built-ins and the
+    default chart's live bots made, the rest as seats, and nothing recorded as failed."""
+    from backend.auth import Auth
+    from backend.execution import Execution
+    from backend.onboarding import Onboarding
+    from backend.providers import MODEL_BY_ID
+    from backend.settings_admin import SettingsAdmin
+    from backend.store import Store
+
+    store = Store(settings_for(tmp_path))
+    store.initialize()
+    with store.transaction() as c:
+        H.sync_registry(c, SEED, PEOPLE)
+        c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO NOTHING", (encode(PEOPLE),))
+        for slug, config in SEED.items():
+            c.execute("INSERT INTO bot_config(bot,owner_id,repo) VALUES(?,?,?)", (slug, "owner", "bot-" + slug))
+            BS.write(c, slug, config)
+    auth = Auth(store)
+    execution = Execution(store, auth)
+    admin = SettingsAdmin(store, auth, execution, MODEL_BY_ID, lambda *args, **kwargs: None)
+    onboarding = Onboarding(store, auth, admin, execution, MODEL_BY_ID)
+    with store.transaction() as c:
+        onboarding.complete(c, Identity("human:owner", "owner", OWNER_EMAIL))
+    with store.read() as c:
+        assert [tuple(r) for r in c.execute("SELECT id FROM pipelines")] == [("general",)]
+        bots = {r[0] for r in c.execute("SELECT slug FROM bots")}
+        assert {"coo", "botops", "task-manager", *LIVE_DEFAULT} <= bots
+        assert c.execute("SELECT count(*) FROM seats WHERE closed_at IS NULL").fetchone()[0] > 0
+        assert not c.execute("SELECT action FROM events WHERE action LIKE '%failed%'").fetchall()
 
 
 def test_setup_leaves_a_company_whose_work_is_already_set_up_alone(environment):
-    """The guard: a company with a task type of its own (beyond the boot seeds) gets no default chart and no pipelines."""
+    """The guard: a company with a pipeline of its own (beyond General) gets no default chart."""
+    from backend import pipeline_settings
+
     api = environment()
-    made = api.post("/api/v2/task-types", json={"name": "Orders"}, headers=signed_in())
-    assert made.status_code in (200, 201), made.text
+    with api.app.state.store.transaction() as c:
+        stage = {"name": "Take the order", "owner": "assignee", "requirements": [{"kind": "owner_done"}]}
+        pipeline_settings.save(c, "human:owner", {"name": "Orders", "prefix": "OR", "stages": [stage]})
     done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     assert not set(LIVE_DEFAULT) & set(bot_ids(api))
     assert not rows(api, "SELECT id FROM seats")
-    assert "Growth Experiments" not in types_of(api)
 
 
 def test_the_finance_owner_keeps_its_corporate_seat_and_moves_under_the_corporate_manager_once_hired(environment):
@@ -1723,29 +1648,3 @@ def test_the_finance_owner_keeps_its_corporate_seat_and_moves_under_the_corporat
     )
     assert hired.status_code == 200, hired.text
     assert stored_line(api, "bookkeeper") == hired.json()["bot"]
-
-
-def test_a_new_company_files_growth_work_in_growth_experiments(environment):
-    """Review finding 6: a company set up with company_default has Growth Experiments, and the Growth Team Manager files
-    its ideas there. The Marketing board stays for the Growth page and the older growth templates."""
-    api = environment()
-    preview_and_import(api, default_chart_text())
-    types = types_of(api)
-    assert "Growth Experiments" in types and "Marketing" in types
-    root = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "growth-team-manager"
-    for path in [root / "AGENT.md", *sorted((root / "playbooks").glob("*.md"))]:
-        assert "--type idea" not in path.read_text(), path.name
-    assert '--type "Growth Experiments"' in (root / "playbooks" / "propose-ideas.md").read_text()
-
-
-def test_an_existing_company_keeps_its_marketing_board(environment):
-    """Legacy: a company already set up keeps the Marketing board, and the boot seed keeps it."""
-    api = environment()
-    made = api.post("/api/v2/task-types", json={"name": "Orders"}, headers=signed_in())
-    assert made.status_code in (200, 201), made.text
-    api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
-    from backend import marketing_tasks
-
-    with api.app.state.store.transaction() as c:
-        assert marketing_tasks.ensure(c) == "idea"
-    assert rows(api, "SELECT name FROM task_types WHERE id='idea'")

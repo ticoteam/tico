@@ -36,5 +36,5 @@ plan comparison is ready for review.**
   answered here. The general rule (2027 plan guide, p. 9) is quoted on the task for the broker contact to read with it.
 
 ## Sources
-- Plan guides 2026 and 2027 (docs), `hub team show`, tasks T-418 to T-440, read 2026-09-29
+- Plan guides 2026 and 2027 (docs), `tico team show`, tasks T-418 to T-440, read 2026-09-29
 ```

@@ -44,6 +44,11 @@ def environment_identity(env=os.environ):
     from backend.hubdb import leave_wal_for_litestream
 
     if os.path.exists(env["TICO_DB"]):
+        from backend import migrations
+
+        # A database the server would refuse (a newer one, or one from Tico 0.5 with tasks) is refused here, before
+        # this step opens it at all: even the read-only probe below makes a missing -wal and -shm and writes the -shm.
+        migrations.preflight(env["TICO_DB"])
         # Upgrade the old metadata column before reading the id, without Settings.from_env: a named install needs
         # the id this step supplies before it can construct Settings. Warm starts need only the read-only probe.
         probe = sqlite3.connect("file:%s?mode=ro" % env["TICO_DB"], uri=True)
@@ -52,9 +57,8 @@ def environment_identity(env=os.environ):
         finally:
             probe.close()
         if "value_json" in columns and "value" not in columns:
-            from backend import hubdb, migrations
+            from backend import hubdb
 
-            migrations.preflight(env["TICO_DB"])
             hubdb.connect(env["TICO_DB"]).close()
     db = leave_wal_for_litestream(sqlite3.connect(env["TICO_DB"]))
     try:
@@ -73,6 +77,29 @@ def environment_identity(env=os.environ):
     finally:
         db.close()
     return value
+
+
+def stored_environment_id(env=os.environ, tries=60, pause=2):
+    """The id the server recorded, for the Slack gateway, which never makes one. It may start beside a server that
+    refuses this database, so it reads without changing a byte of it or making a file beside it. None if it is not
+    there after `tries` reads."""
+    import json
+    import sqlite3
+    import time
+    from pathlib import Path
+    from backend.migrations import read_only
+
+    for attempt in range(tries):
+        try:
+            with read_only(Path(env["TICO_DB"])) as db:
+                row = db.execute("SELECT value FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
+        except sqlite3.Error:
+            row = None
+        if row:
+            return json.loads(row[0])
+        if attempt + 1 < tries:
+            time.sleep(pause)
+    return None
 
 
 # The Cloudflare tunnel's route. cloudflared's image has no shell and reads no environment for routes, and a tunnel that
@@ -317,7 +344,13 @@ def mark_environment(data_dir, environment_id, env=os.environ):
 
 
 def prepare(data_dir):
-    environment_id = environment_identity()
+    from backend.migrations import MigrationError
+
+    try:
+        environment_id = environment_identity()  # first: nothing below is written for a database that is refused
+    except MigrationError as refused:
+        print("tico: error: " + str(refused), file=sys.stderr)
+        return 1
     os.environ["TICO_ENVIRONMENT_ID"] = environment_id  # what the entrypoint exported before the next steps
     status = tunnel_config()
     if status:
@@ -337,7 +370,14 @@ def main(argv=None):
     if argv == ["caddy-config"]:
         caddy_config()
         return 0
-    print("usage: python -m backend.boot prepare DATA|tunnel-config|caddy-config", file=sys.stderr)
+    if argv == ["stored-id"]:
+        value = stored_environment_id()
+        if value is None:
+            print("the server has not recorded this install's id", file=sys.stderr)
+            return 1
+        print(value)
+        return 0
+    print("usage: python -m backend.boot prepare DATA|tunnel-config|caddy-config|stored-id", file=sys.stderr)
     return 2
 
 

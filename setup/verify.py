@@ -34,7 +34,7 @@ def check_dns(domain: str, records, resolvers) -> Check:
         "DNS",
         False,
         f"{domain} does not resolve as planned on {', '.join(bad)}",
-        "Add the records at the provider that serves the domain (`tico setup` prints where), then wait a few minutes.",
+        "Add the records at the provider that serves the domain (the setup wizard prints where), then wait a few minutes.",
     )
 
 
@@ -156,7 +156,7 @@ def check_runner_host(host: str, get=_get) -> Check:
             name,
             False,
             f"request failed ({getattr(e, 'reason', e)})",
-            f"{host} needs a proxied CNAME to the tunnel (`tico setup` creates it) and a Cloudflare certificate that covers it.",
+            f"{host} needs a proxied CNAME to the tunnel (the setup wizard creates it) and a Cloudflare certificate that covers it.",
         )
     if code == 200:
         return Check(name, True, f"{host} answers /api/v2 from the server, no sign-in in front")
@@ -179,7 +179,7 @@ def check_runner_host(host: str, get=_get) -> Check:
         name,
         False,
         f"HTTP {code} from the tunnel",
-        f"The tunnel has no route for {host}: re-run `tico setup` (it stores the route in Cloudflare), or in Zero Trust > Networks > "
+        f"The tunnel has no route for {host}: re-run the setup wizard (it stores the route in Cloudflare), or in Zero Trust > Networks > "
         f"Tunnels > your tunnel > Public Hostname add {host}, path {contract.RUNNER_ROUTE_PATH}, HTTP "
         f"{contract.SERVICE_SERVER}:{contract.SERVER_PORT}." + old,
     )
@@ -215,7 +215,7 @@ def check_signin(domain: str, provider: str, client_id: str, get=_get, issuer: s
             "Sign-in redirect",
             False,
             "the redirect carries a different client id",
-            "Re-run `tico setup` to update the client id.",
+            "Re-run the setup wizard to update the client id.",
         )
     return Check("Sign-in redirect", True, f"redirects to {u.hostname} with redirect_uri {want_uri}")
 

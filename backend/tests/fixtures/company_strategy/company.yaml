@@ -1,6 +1,6 @@
 # tico.company.yaml
 # Made with Tico setup at https://tico.team/setup
-# Format 0.3. Import in Tico's first-run setup or with tico setup --company-file.
+# Format 0.3. Import in Tico's first-run setup or with python3 -m setup --company-file.
 # No passwords, keys or credentials are stored here; tools are connected on your own install.
 version: 0.3
 created: 2026-10-25T12:00:00.000Z

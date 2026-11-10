@@ -187,16 +187,13 @@ def routine_times(c, at):
     if table(c, "maintenance_runs") and (due := maintenance.next_due(c, when)) is not None:
         out.append(due.timestamp())
     out.extend(later_sends(c, at))
-    if table(c, "alert_preferences"):
-        from . import personal_alerts
-
-        out.extend(personal_alerts.future_deadlines(c, at))
     # A deferred item's deadline wakes its bot like a schedule (backend/delivery.py); one past is due now.
     from . import delivery
 
     if table(c, "deferrals") and (due := epoch(delivery.next_due(c))) is not None:
         out.append(max(due, at))
     out.extend(edition_times(c, when))
+    out.extend(release_times(c, when))
     return sorted(out)
 
 
@@ -211,9 +208,16 @@ def edition_times(c, when):
     return [found.timestamp()] if found else []
 
 
+def release_times(c, when):
+    """The release hour (backend/release_hour.py): now while a due one has not fired, else the next one."""
+    from . import release_hour
+
+    found = release_hour.next_wake(c, when)
+    return [found.timestamp()] if found else []
+
+
 def fixed_times(c, when):
-    """Next run of each switched-on system job set to a time of day, and of the release schedule."""
-    from . import release_flow
+    """Next run of each switched-on system job set to a time of day."""
     from . import system_routines as SR
 
     out = []
@@ -224,12 +228,6 @@ def fixed_times(c, when):
                 found = SR.next_due(cfg, last.get(key), when)
                 if found:
                     out.append(found.timestamp())
-    except Exception:
-        pass
-    try:
-        found = release_flow.next_at(release_flow.load(c), when)
-        if found:
-            out.append(found.timestamp())
     except Exception:
         pass
     return out

@@ -100,7 +100,7 @@ pub struct Folder {
     pub state: FolderState,
     /// (bot, task) of each link in the folder, whose locks are held while anything in it goes.
     pub owners: Vec<(String, String)>,
-    /// Each link's path, whose hub CLI task lock (worktrees.rs `locked`) is held too.
+    /// Each link's path, whose tico CLI task lock (worktrees.rs `locked`) is held too.
     pub paths: Vec<String>,
 }
 
@@ -647,7 +647,7 @@ impl DiskClean {
 
 /// Every lock that keeps a turn or worktree step out of a task folder while something in it goes: each owner's
 /// checkout and task-lane locks (with the owner then shown busy to claims, and checked idle with no turn of any bot
-/// on its task), then the hub CLI task lock of every link path. None when any of them is taken.
+/// on its task), then the tico CLI task lock of every link path. None when any of them is taken.
 fn hold_folder(
     folder: &Folder,
     workspace: &Path,

@@ -6,7 +6,7 @@ import pytest
 
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
-from backend.tests.helpers.gateway_connection import KEY, fake_gateway, finish, handed_to, put_bot_on, save, setup
+from backend.tests.helpers.gateway_connection import KEY, fake_gateway, handed_to, put_bot_on, save, setup
 from backend import bot_settings as BS
 
 
@@ -47,17 +47,25 @@ def test_the_key_follows_the_claims_fallback_and_check(api, monkeypatch, change)
     on_tico = change != "fallback_added"
     assert attempt["config"]["model"] == ("tico-medium-1.0" if change == "check_reassigned" else "kimi-k3")
     # While the run is under way, the setting moves.
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "gateway"}, machine["token"])
     if change == "fallback_added":
         set_fallback(api, "ops", {"harness": "pi", "model": "tico-medium-1.0"})
     elif change == "fallback_removed":
         set_fallback(api, "ops", None)
     else:
         with api.app.state.store.transaction() as c:  # the check is handed to another bot
-            c.execute("UPDATE tasks SET owner_id='bot:finance' WHERE id=?", (task_id,))
+            H.task_reassign(c, "human:ana", task_id, "bot:finance", "Finance takes the check.")
             assert check_models.of(c, task_id, "ops") is None
     handed = handed_to(api, machine, attempt)
     assert ("TICOAI_GATEWAY_KEY" in handed) is on_tico, (change, list(handed))
-    finish(api, machine, attempt, "Tico AI Gateway: no Tico route for this request (no_route)")
+    error = "Tico AI Gateway: no Tico route for this request (no_route)"
+    post(
+        api,
+        f"attempts/{attempt['id']}/events",
+        {"events": [{"seq": 1, "kind": "error", "payload": {"error": error, "limit": False}}]},
+        machine["token"],
+    )
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "last_seq": 1, "text": ""}, machine["token"])
     # A finished run's computer gets nothing, and nothing is left behind.
     handed_to(api, machine, attempt, expected=409)
     with api.app.state.store.read() as c:

@@ -31,7 +31,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from .. import health, hosted_updates, invariants, maintenance_limits, replication
+from .. import health, hosted_updates, invariants, maintenance_limits, providers, replication
 from .. import maintenance_health as MH
 from .. import run_triggers as RT
 from ..store import H
@@ -60,7 +60,6 @@ TAGS = {
     "readiness_403": "urgent",
     "local_busy": "urgent",
     "lease_overdue": "urgent",
-    "task_stuck": "urgent",
     "sign_in_held": "urgent",
     "long_holds": "urgent",
     "runner_errors": "urgent",
@@ -71,6 +70,7 @@ TAGS = {
     "models": "urgent",
     "gateway": "urgent",
     "hook_relay": "urgent",
+    "never_stuck": "urgent",  # a rule that holds at all times is broken (never_stuck.rules_hold): an engine bug
     # noisy (the default for anything else): a state that can be a blip, a slow or idle computer, a usage limit, a version
     "runner_outdated": "noisy",
     "limited_no_fallback": "noisy",
@@ -87,7 +87,6 @@ TAGS = {
     "responder_has_tasks": "noisy",
     "doer_idle": "noisy",
     "org_rules_unchecked": "noisy",
-    "owner_unreachable": "noisy",
     "refused_again": "noisy",
     "webhook_stuck": "noisy",
     "automation_overdue": "noisy",
@@ -101,7 +100,6 @@ TAGS = {
     "performance": "noisy",
     "disk": "noisy",
     "turns": "noisy",
-    "stalled_tasks": "noisy",  # main's "Tasks not progressing" (hubdb.stalled_tasks): a task that may move on its own
 }
 # Health page checks this step files another way, so the page reader leaves them out: `invariant:<id>` rows are the
 # production checks, which the invariant reader files as `inv:<id>`.
@@ -279,6 +277,17 @@ def _page_findings(c, ctx, notes):
         base = str(check.get("id", "")).split(":", 1)[0]
         if check.get("status") not in ("warn", "bad") or base in PAGE_LEFT_OUT:
             continue
+        summary = str(check.get("summary", ""))
+        if base == "models" and not providers.configured(providers.load(c, ctx["settings"])):
+            continue  # no AI provider chosen: setup asks the owner, and BotOps itself cannot run until there is one
+        if base == "never_stuck":
+            # Its `no_one` count (private tasks no one who reads them can move) is the owner's and Admins' on Health
+            # only: a BotOps task is read more widely, and no bot can move such a task. Only a rule break files, in
+            # words without that count.
+            breaks = int((check.get("counts") or {}).get("broken") or 0)
+            if not breaks:
+                continue
+            summary = f"{breaks} never-stuck rule {'break' if breaks == 1 else 'breaks'}."
         fixes = "; ".join(str(f.get("label", "")) for f in check.get("fixes", []) if f.get("label"))
         fix = FIX_PAGE + (f" The page offers: {fixes}." if fixes else "")
         out.append(
@@ -287,7 +296,7 @@ def _page_findings(c, ctx, notes):
                 f"page:{base}",
                 MH.SETUP,
                 str(check.get("label") or base),
-                str(check.get("summary", ""))[:1500],
+                summary[:1500],
                 fix,
                 severity=MH.BAD if check.get("status") == "bad" else MH.WARN,
             )
@@ -537,12 +546,10 @@ def _task_body(sig, rows, total, now):
 
 
 def _task_create(c, title, body):
-    """The BotOps task for a setup signature. Quiet: its owner's notice is written without a wake (`_wake` wakes BotOps once)."""
+    """The BotOps task for a setup signature. Filing it wakes BotOps once, as any task for a bot does."""
     try:
         c.execute("SAVEPOINT check_health_task")
-        made = H.task_create(
-            c, H.KEEPER, f"Health: {title}"[:200], body, H.bot_actor(BOTOPS), lint=False, quiet_notice=True
-        )
+        made = H.task_create(c, H.KEEPER, f"Health: {title}"[:200], body, H.bot_actor(BOTOPS), lint=False)
         c.execute("RELEASE check_health_task")
         return made
     except Exception:  # noqa: BLE001 - a refusal to file one task must not undo the check's record
@@ -557,7 +564,8 @@ def _comment(c, task_id, text, wake):
     marker as it was and the next run tries again."""
     try:
         c.execute("SAVEPOINT check_health_comment")
-        refs = RT.stamp({"wake": "task_roundup", "no_mentions": True}, "task_roundup", "check_health") if wake else None
+        # A problem Health found is a blocker the bot is there to clear: it wakes (rules.WAKE_EVENTS), never a note.
+        refs = RT.stamp({"wake": "blocker", "no_mentions": True}, "other", "check_health") if wake else None
         message = H.task_comment(c, H.KEEPER, task_id, text, wake=wake, extra_refs=refs)
         queued = (
             not wake
@@ -635,7 +643,7 @@ def _open(c, task_id):
     row = H.task(c, task_id) if task_id else None
     if row is None or row["owner_id"] != "bot:" + BOTOPS:
         return None
-    return row if row["status"] not in ("done", "closed", "declined") else None
+    return row if row["status"] == "open" else None
 
 
 def _botops_active(c):

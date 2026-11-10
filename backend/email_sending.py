@@ -3,26 +3,27 @@
 The server freezes MIME content before approval and dispatch and decides every send here, a computer's mail tool only
 queues it (POST /api/v2/email/sends). One sending policy applies, its DEFAULTS when nothing is saved: company, inbox and
 bot layers (`effective`), blocked and owner-handled recipients, outside Cc and outside-recipient counts, the lint and
-the second reviewer on a bot's own writing, the org rule check (`rule_gate`), bounces and reply loops. The only
-approvals are a Tico send approval card bound to the exact frozen content and recipients, or a Tico message after a
-verified preview from someone who may approve for that bot (`approved`).
+the second reviewer on a bot's own writing, the org rule check (`rule_gate`), bounces and reply loops. The only thing
+that lets a held send go is an OK bound to this exact frozen send (backend/task_asks.py, subject `email_send:<id>`):
+asked of someone who may approve it under the inbox's rule (`can_ok`), given by their own click after the server showed
+them this exact email, still theirs to give when it is sent, and used once (`approved`).
 
 A Workspace mailbox (the server can mint its Gmail token) is sent by the server itself once the undo window and
 pacing allow (`drain`). A mailbox only a computer holds a grant for (a person's own Google) is leased to that computer
 (`claim`, `/dispatch`, `/result`). A lost provider response is unknown, never an invitation to send a second copy.
-Classification and review are triage, not a security boundary: permissions, approvals and limits still apply.
+Classification and review are triage, not a security boundary: permissions, OKs and limits still apply.
 """
 
 import json
 import logging
 import re
-from email.utils import getaddresses
 
 from fastapi import Request, Response
 from urllib.parse import quote
 from pydantic import Field
 
 from . import mailbox_access as access
+from . import task_asks
 from .models import Contract, Empty
 from .email_content import MAX_RAW, attachment, digest, snapshot
 from .store import H, Problem
@@ -68,8 +69,7 @@ LOG = logging.getLogger("tico.email_sending")
 LIST_MAX = 200
 DOMAIN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)+$")
 SERVER = "server"  # runner_id of a send the server dispatches itself (`drain`)
-# Only a content-bound card lifts these: a person's message grants what it says, and the reviewer judged it with it.
-CARD_ONLY = frozenset({"second_review"})
+SUBJECT = "email_send:"  # an OK's subject for one frozen send: SUBJECT + its id
 REVIEW = (
     "Would a careful second reviewer stop this email, written by an automated employee, before it is sent? Stop it "
     "if it makes a commitment (money, a discount, a date, a deliverable, a legal position, a guarantee), confirms "
@@ -135,10 +135,6 @@ class Enqueue(Contract):
     automation_action_id: str = Field(default="", max_length=100)
     calendar_action_id: str = Field(default="", max_length=100)
     operation_id: str = Field(default="", max_length=200)
-
-
-class SendApproval(Contract):
-    approval_id: str = Field(min_length=1, max_length=200)
 
 
 class Claim(Contract):
@@ -314,7 +310,7 @@ def can_ok(c, auth, actor, mailbox, bot, policy):
 
 
 def approver(c, auth, row, policy):
-    """Route the approval card to a person who may actually decide it under the effective rule."""
+    """The person an OK of this send is asked of: the first who may approve it under the effective rule."""
     facts = access._Facts(c)
     candidates = list(facts.people)
     return next(
@@ -323,84 +319,39 @@ def approver(c, auth, row, policy):
     )
 
 
+def content(row):
+    """What an OK of a frozen send is for, exactly: the inbox, every recipient, the subject, the body's hash, the whole
+    MIME's hash and each file with its hash. The preview shows it and the send checks it."""
+    return {
+        "mailbox": row["mailbox"],
+        "recipients": sorted(json.loads(row["recipients"])),
+        "subject": row["subject"],
+        "body_sha256": row["body_sha256"],
+        "content_sha256": row["content_sha256"],
+        "attachments": sorted(
+            ({"name": f["name"], "sha256": f["sha256"]} for f in json.loads(row["attachments"])), key=dump
+        ),
+    }
+
+
 def approved(c, auth, row, policy):
-    """'card' for a decided send approval bound to this exact frozen send, 'message' for a person's instruction after a
-    verified preview, else ''. Nothing else approves a send: no GitHub Issue, no standing allowance."""
-    aid = row["approval_id"]
-    if not aid:
-        return ""
-    ap = H.approval(c, aid)
-    if ap:
-        payload = ap.get("payload") or {}
-        if payload.get("email_send_id") != row["id"] or payload.get("content_sha256") != row["content_sha256"]:
-            return ""
-        if (
-            ap.get("kind") != "send"
-            or ap.get("decision") != "approved"
-            or ap.get("consumed_at")
-            or ap.get("requested_by_id") != row["actor"]
-            or not can_ok(c, auth, ap.get("decided_by_id"), row["mailbox"], row["bot"], policy)
-        ):
-            return ""
-        if not c.execute(
+    """Whether an OK bound to this exact frozen send lets it go: given from its preview by someone who may still approve
+    it under the effective rule, after the server showed them this content, and not used yet. Nothing else approves a
+    send: no message, no GitHub Issue, no standing allowance."""
+    rid = row["approval_id"]
+    found = task_asks.grant(c, rid) if rid else None
+    if not found or found["subject"] != SUBJECT + row["id"]:
+        return False
+    if not task_asks.passes(c, rid, SUBJECT + row["id"], content(row), row["actor"]):
+        return False
+    if not can_ok(c, auth, found["ok_by_id"], row["mailbox"], row["bot"], policy):
+        return False
+    return bool(
+        c.execute(
             "SELECT 1 FROM email_send_previews WHERE send_id=? AND actor=? AND content_sha256=?",
-            (row["id"], ap["decided_by_id"], row["content_sha256"]),
-        ).fetchone():
-            return ""
-
-        def addresses(value):
-            return {a.lower() for _, a in getaddresses(value if isinstance(value, list) else [str(value or "")]) if a}
-
-        recipients = addresses(payload.get("to")) | addresses(payload.get("cc")) | addresses(payload.get("bcc"))
-        if payload.get("mailbox", "").lower() != row["mailbox"] or recipients != set(json.loads(row["recipients"])):
-            return ""
-        if payload.get("subject") != row["subject"] or payload.get("body_sha256") != row["body_sha256"]:
-            return ""
-        approved_files = [
-            {"name": f.get("name"), "sha256": f.get("sha256")}
-            for f in payload.get("attachments") or []
-            if isinstance(f, dict)
-        ]
-        actual_files = [{"name": f["name"], "sha256": f["sha256"]} for f in json.loads(row["attachments"])]
-        if sorted(approved_files, key=dump) != sorted(actual_files, key=dump):
-            return ""
-        return "card"
-    # A server-recorded preview precedes the person's instruction and binds it to this exact immutable send.
-    message = H.message(c, aid)
-    if (
-        not message
-        or message.get("recipient_id") != "bot:" + row["bot"]
-        or not can_ok(c, auth, message.get("sender_id"), row["mailbox"], row["bot"], policy)
-    ):
-        return ""
-    preview = c.execute(
-        "SELECT * FROM email_send_previews WHERE send_id=? AND actor=? AND content_sha256=?",
-        (row["id"], message["sender_id"], row["content_sha256"]),
-    ).fetchone()
-    if not preview or message["created_at"] <= preview["shown_at"]:
-        return ""
-    text = (message.get("body") or "").strip()
-    # Deliberately accept only unambiguous affirmative forms; arbitrary prose needs the approval card.
-    if re.search(r"\b(?:not|no|never|unless|except|hold|stop|cancel|wait|decline|reject)\b|n['’]t", text, re.I):
-        return ""
-    card = c.execute(
-        "SELECT message_id FROM approvals WHERE json_extract(payload,'$.email_send_id')=? ORDER BY rowid DESC LIMIT 1",
-        (row["id"],),
-    ).fetchone()
-    named = re.search(r"(?<![\w-])" + re.escape(row["id"]) + r"(?![\w-])", text)
-    reply = card and message.get("in_reply_to") == card["message_id"]
-    refs = message.get("refs") or {}
-    if not (named or reply or refs.get("email_send_id") == row["id"]):
-        return ""
-    words = re.sub(re.escape(row["id"]), "", text).strip(" #.,!?:;").lower()
-    if not re.fullmatch(
-        r"(?:yes[,! ]+)?(?:please )?(?:send(?: it| this(?: email)?)?|approve(?: this(?: email)?)?|go ahead(?: and send it)?)(?: please)?",
-        words,
-    ):
-        return ""
-    if c.execute("SELECT 1 FROM email_sends WHERE approval_id=? AND id<>? LIMIT 1", (aid, row["id"])).fetchone():
-        return ""
-    return "message"
+            (row["id"], found["ok_by_id"], row["content_sha256"]),
+        ).fetchone()
+    )
 
 
 def _original(c, row):
@@ -432,17 +383,6 @@ def resolve_reply(c, mailbox, snap, supplied_reply="", supplied_thread=""):
     if (snap["in_reply_to"] or snap["references"]) and not original:
         raise Problem("reply", "Sync the original message's headers before sending this reply", 422)
     return (original["msg_id"], original["thread_id"]) if original else ("", "")
-
-
-def require_preview(c, actor, row):
-    if not row or row["state"] not in ACTIVE:
-        raise Problem("state", "This email is no longer waiting to send", 409)
-    preview = c.execute(
-        "SELECT 1 FROM email_send_previews WHERE send_id=? AND actor=? AND content_sha256=?",
-        (row["id"], actor, row["content_sha256"]),
-    ).fetchone()
-    if not preview:
-        raise Problem("preview", "Read the frozen email and attachments before approving", 409)
 
 
 def known(c, mailbox, address):
@@ -584,8 +524,7 @@ def decision(c, auth, row, *, dispatch=False):
             (row["mailbox"], row["reply_to_id"], row["id"]),
         ).fetchone():
             blocked.append("already_replied")
-    kind = approved(c, auth, row, policy)
-    lifted = kind == "card" or (kind == "message" and not CARD_ONLY & set(reasons))
+    lifted = approved(c, auth, row, policy)
     if reasons and not lifted:
         return {
             "outcome": "blocked" if blocked else "ask",
@@ -620,7 +559,7 @@ def decision(c, auth, row, *, dispatch=False):
         "reasons": blocked,
         "policy": policy,
         "approval_id": row["approval_id"],
-        "approved": bool(kind),
+        "approved": lifted,
     }
 
 
@@ -666,24 +605,57 @@ def settle_automation(c, row, state, detail="", message=""):
         )
 
 
-def request_approval(c, auth, row, policy, metadata=None):
-    groups = snapshot(row["raw"], row["mailbox"])["recipient_headers"]
-    payload = {
-        **(metadata or {}),
-        **groups,
-        "mailbox": row["mailbox"],
-        "subject": row["subject"],
-        "body_sha256": row["body_sha256"],
-        "content_sha256": row["content_sha256"],
-        "attachments": json.loads(row["attachments"]),
-        "email_send_id": row["id"],
-        "preview_url": "/api/v2/email/sends/" + row["id"],
-    }
-    approval = H.approval_request(c, row["actor"], "send", payload, to=approver(c, auth, row, policy))
-    c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (approval["id"], row["id"]))
+def request_approval(c, auth, row, policy):
+    """Ask for an OK of this frozen send, on a task of its own, of someone who may approve it (`approver`; the company's
+    first person when nobody can, so the send is held where someone sees it). The OK's id is the send's `approval_id`."""
+    person = approver(c, auth, row, policy) or H.human_actor(H.default_human(c))
+    title = "Send email: " + (" ".join(str(row["subject"] or "").split())[:120] or "(no subject)")
+    asked = task_asks.ask_ok(
+        c,
+        row["actor"],
+        person,
+        "Send this email?",
+        shows=["email:" + row["id"]],
+        subject=SUBJECT + row["id"],
+        content=content(row),
+        title=title,
+    )
+    c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (asked["requirement_id"], row["id"]))
 
 
-def enqueue(c, auth, actor, body, classification, via="", operation_key="", approval_metadata=None, rules=None):
+def shown_to(c, who, row):
+    """The whole frozen email was put in front of `who`. Only a person's own session counts as having seen it
+    (task_asks.own_click): that showing is recorded, and the OK they give is bound to it. Returns the hash their OK
+    sends back, or None when the send has no OK to give."""
+    own = task_asks.own_click(who)
+    if own:
+        c.execute(
+            "INSERT INTO email_send_previews VALUES(?,?,?,?) ON CONFLICT(send_id,actor) DO UPDATE SET "
+            "shown_at=CASE WHEN content_sha256=excluded.content_sha256 THEN shown_at ELSE excluded.shown_at END,"
+            "content_sha256=excluded.content_sha256",
+            (row["id"], who.actor, row["content_sha256"], H.now()),
+        )
+    bound = task_asks.grant(c, row["approval_id"]) if row["approval_id"] else None
+    if not bound or bound["subject"] != SUBJECT + row["id"]:
+        return None
+    return task_asks.show(c, who.actor, row["approval_id"], content(row), own_click=own)
+
+
+def ok_given(c, grant, ctx):
+    """In the transaction of an OK of a send (task_asks.ON_OK): the person who gave it may approve this send under the
+    inbox's rule now. Checked again before it is sent (`approved`)."""
+    auth = getattr(ctx, "auth", None)
+    sid = str(grant["subject"]).removeprefix(SUBJECT)
+    row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
+    if not row or row["state"] not in ACTIVE:
+        raise Problem("state", "This email is no longer waiting to send", 409)
+    if auth is None or not can_ok(
+        c, auth, grant["ok_by_id"], row["mailbox"], row["bot"], effective(c, row["mailbox"], row["bot"])
+    ):
+        raise Problem("forbidden", "This send follows its inbox's approval rule", 403)
+
+
+def enqueue(c, auth, actor, body, classification, via="", operation_key="", rules=None):
     """Freeze, decide and queue one send. `rules` is the org rule check's in-write half (`rule_gate`): a held email is
     queued blocked with the hold's text, and a warned one carries the warning line in its frozen copy."""
     mailbox = body.mailbox.strip().lower()
@@ -763,7 +735,9 @@ def enqueue(c, auth, actor, body, classification, via="", operation_key="", appr
         "draft_id": body.draft_id,
         "thread_id": thread_id,
         "reply_to_id": reply_id,
-        "approval_id": body.approval_id,
+        # An OK is asked for this snapshot once it is written (`request_approval`): nothing named in the request is
+        # one. `body.approval_id` is only ever a person's message the second reviewer reads (`review_context`).
+        "approval_id": "",
         "classification": dump(checks),
         "decision": "{}",
         "state": "pending",
@@ -784,8 +758,8 @@ def enqueue(c, auth, actor, body, classification, via="", operation_key="", appr
     if operation_key:
         c.execute("INSERT INTO email_send_operations VALUES(?,?,?)", (actor, operation_key, ident))
     if row["state"] == "waiting_approval" and not found["approved"]:
-        # Only a content-bound card or an instruction after a verified preview can release this snapshot.
-        request_approval(c, auth, row, found["policy"], approval_metadata)
+        # Only an OK bound to this exact snapshot releases it.
+        request_approval(c, auth, row, found["policy"])
     if classification.get("status") == "classified":
         H.event(
             c,
@@ -910,11 +884,11 @@ def _lease(c, auth, mailbox, runner_id, *, permit=False, lease=True):
     ).fetchall():
         if stale["provider_attempted_at"]:
             c.execute(
-                "UPDATE email_sends SET state='unknown',detail='The connector did not confirm delivery',"
-                "finished_at=?,raw='' WHERE id=?",
-                (now, stale["id"]),
+                "UPDATE email_sends SET state='unknown',detail=?,finished_at=?,raw='' WHERE id=?",
+                (UNCONFIRMED, now, stale["id"]),
             )
             settle_automation(c, stale, "unknown")
+            _outcome(c, stale, "unknown", UNCONFIRMED)
         else:
             c.execute(
                 "UPDATE email_sends SET state='pending',runner_id=NULL,claimed_at=NULL,lease_id='' WHERE id=?",
@@ -937,30 +911,35 @@ def _lease(c, auth, mailbox, runner_id, *, permit=False, lease=True):
     for row in [*waiting, *due]:
         c.execute("UPDATE email_sends SET checked_at=? WHERE id=?", (now, row["id"]))
         found = decision(c, auth, row)
-        approval = H.approval(c, row["approval_id"]) if row["approval_id"] else None
-        if approval and approval.get("decision") in ("declined", "withdrawn"):
-            found["outcome"], found["reasons"] = "blocked", ["approval_" + approval["decision"]]
+        rid = row["approval_id"]
+        bound = task_asks.grant(c, rid) if rid else None
+        bound = bound if bound and bound["subject"] == SUBJECT + row["id"] else None
+        standing = task_asks.standing(c, rid) if bound else None
+        if standing in (task_asks.SENT_BACK, task_asks.WITHDRAWN):
+            # Sent back, withdrawn, or pushed past on its task: this snapshot is not sent. A new email is a new OK.
+            reason = "approval_declined" if standing == task_asks.SENT_BACK else "approval_withdrawn"
+            found["outcome"], found["reasons"] = "blocked", [reason]
         if found["outcome"] == "blocked":
             c.execute(
                 "UPDATE email_sends SET state='blocked',decision=?,detail=?,finished_at=?,raw='' WHERE id=?",
                 (dump(found), why(found), now, row["id"]),
             )
             settle_automation(c, row, "blocked", why(found))
+            if bound:
+                task_asks.withdraw(c, rid, "The email was not sent: " + why(found))
             continue
         if found["outcome"] == "ask":
             c.execute("UPDATE email_sends SET state='waiting_approval',decision=? WHERE id=?", (dump(found), row["id"]))
-            previous_recipient = (H.message(c, approval["message_id"]) or {}).get("recipient_id") if approval else None
-            stale_approval = approval and (
-                approval.get("decision") == "approved"
-                or not can_ok(c, auth, previous_recipient, row["mailbox"], row["bot"], found["policy"])
+            # An OK that no longer lets it go (its giver may not approve it now), or an ask whose person may not, is
+            # asked again of someone who may: task_asks.ask_ok withdraws the old one.
+            asked_of = _asked_of(c, rid) if standing == task_asks.WAITING else None
+            stale = standing == task_asks.OK or (
+                standing == task_asks.WAITING
+                and not can_ok(c, auth, asked_of, row["mailbox"], row["bot"], found["policy"])
             )
-            if (
-                stale_approval
-                and (approval.get("payload") or {}).get("email_send_id") == row["id"]
-                and not approval.get("decision")
-            ):
-                H.approval_withdraw(c, approval["id"], "The email's approval rule changed")
-            if not row["approval_id"] or stale_approval:
+            if not bound or stale:
+                if bound:
+                    task_asks.withdraw(c, rid, "The email's approval rule changed")
                 request_approval(c, auth, row, found["policy"])
             continue
         if row["state"] == "waiting_approval":
@@ -986,12 +965,41 @@ def _lease(c, auth, mailbox, runner_id, *, permit=False, lease=True):
     return None
 
 
+def _asked_of(c, rid):
+    """Who an OK of a send waits on now: the person named, or the one it was given to."""
+    from . import task_requirements as R
+
+    requirement = R.get(c, rid) if rid else None
+    return R.person_of(c, requirement, requirement["visit_id"]) if requirement and requirement.get("visit_id") else None
+
+
 def _permit(c, row, found):
-    """The one write after which a provider may have the email: a lost answer from here on is unknown."""
+    """The one write after which a provider may have the email: a lost answer from here on is unknown. The OK that let
+    it go is used in this same write, so it lets nothing else go."""
     c.execute("UPDATE email_sends SET provider_attempted_at=?,decision=? WHERE id=?", (H.now(), dump(found), row["id"]))
-    if found["approved"] and H.approval(c, row["approval_id"]):
-        H.approval_consume(c, row["actor"], row["approval_id"])
+    if found["approved"]:
+        # Claimed here, before the provider is called; its task ends with the provider's answer (`_finish`).
+        task_asks.use(c, row["approval_id"], SUBJECT + row["id"], content(row), row["actor"])
     H.event(c, row["actor"], "email.dispatch", row["id"], {"mailbox": row["mailbox"]})
+
+
+UNCONFIRMED = "The connector did not confirm delivery"
+
+
+def _outcome(c, row, status, detail=""):
+    """What the provider's answer means beyond the send: the OK's task ends done only when the email went, closed
+    with what happened otherwise (the OK stays used: nothing else goes under it), and a Finance email reports to its
+    invoice (finance/delivery.py `outcome`)."""
+    rid = row["approval_id"]
+    if rid and status == "sent":
+        task_asks.settle(c, rid, "Sent the email.")
+    elif rid:
+        words = "Not sent: " + (detail or "the mail service refused it") if status == "failed" else UNCONFIRMED
+        task_asks.not_done(c, rid, words[:300] + ". Nothing else goes out under this OK.")
+    if row["via"] == "finance":
+        from .finance import delivery as finance_delivery
+
+        finance_delivery.outcome(c, dict(row), status, detail)
 
 
 def _finish(c, row, status, message="", detail=""):
@@ -1001,6 +1009,7 @@ def _finish(c, row, status, message="", detail=""):
     )
     H.event(c, row["actor"], "email." + status, row["id"], {"mailbox": row["mailbox"], "provider_message_id": message})
     settle_automation(c, row, status, detail, message)
+    _outcome(c, row, status, detail)
 
 
 def server_sends(c, mailbox):
@@ -1395,26 +1404,18 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/email/sends/{sid}")
     def send_detail(request: Request, sid: str, response: Response):
         response.headers["Cache-Control"] = "no-store"
+        who = request.state.identity
         with store.transaction(durable=True) as c:
             row = preview_row(c, request, sid)
             snap = snapshot(row["raw"], row["mailbox"]) if row["raw"] else None
-            if (
-                snap
-                and request.state.identity.role in ("owner", "human")
-                and not request.state.identity.via
-                and not request.state.identity.task_actor
-            ):
-                c.execute(
-                    "INSERT INTO email_send_previews VALUES(?,?,?,?) ON CONFLICT(send_id,actor) DO UPDATE SET "
-                    "shown_at=CASE WHEN content_sha256=excluded.content_sha256 THEN shown_at ELSE excluded.shown_at END,"
-                    "content_sha256=excluded.content_sha256",
-                    (sid, request.state.identity.actor, row["content_sha256"], H.now()),
-                )
+            shown = shown_to(c, who, row) if snap else None
             return {
                 "send": public(row),
                 "body": (snap or {}).get("body", ""),
                 "bodies": (snap or {}).get("visible_bodies", []),
                 "preview_complete": bool(snap),
+                # What the OK button sends back: POST /api/v2/tasks/{task}/asks/{approval_id}/ok {"shown_hash"}.
+                "shown_hash": shown,
             }
 
     @app.get("/api/v2/email/sends/{sid}/attachments/{part}")
@@ -1461,27 +1462,6 @@ def install(app, store, auth, mutate):
 
         return mutate(request, Empty(), work, durable=True)
 
-    @app.post("/api/v2/email/sends/{sid}/approve")
-    def bind_approval(request: Request, sid: str, body: SendApproval):
-        def work(c):
-            row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
-            if not row or not can_cancel(c, request.state.identity, row):
-                raise Problem("forbidden", "Only the sender or a send manager attaches an approval", 403)
-            if row["state"] != "waiting_approval":
-                raise Problem("state", "This email is not waiting for approval", 409)
-            asks = CARD_ONLY & set(json.loads(row["decision"] or "{}").get("reasons") or [])
-            if asks and not H.approval(c, body.approval_id):
-                # The card stays: only a person approving the frozen email in Tico lifts the second reviewer's ask.
-                raise Problem(
-                    "card_only",
-                    "The second reviewer stopped this email: a person approves it in Tico, not by message",
-                    409,
-                )
-            c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (body.approval_id, sid))
-            return {"send": public(c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone())}
-
-        return mutate(request, body, work, durable=True)
-
     @app.post("/api/v2/email/sends/{sid}/cancel")
     def cancel(request: Request, sid: str):
         def work(c):
@@ -1494,6 +1474,8 @@ def install(app, store, auth, mutate):
                 raise Problem("state", "This email can no longer be canceled; delivered email cannot be recalled", 409)
             c.execute("UPDATE email_sends SET state='canceled',raw='',finished_at=? WHERE id=?", (H.now(), sid))
             settle_automation(c, row, "canceled")
+            if row["approval_id"]:
+                task_asks.withdraw(c, row["approval_id"], "The email was canceled.")
             H.event(c, request.state.identity.actor, "email.canceled", sid, {})
             return {"send": public(c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone())}
 

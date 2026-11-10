@@ -9,8 +9,8 @@ pack: engineering
 icon: lightbulb
 suggest: default
 tags: [saas, software, roadmap, prioritisation, discovery, b2b, b2c]
-team_templates: [segment-product-owner, pipeline-manager]
-summary: "Runs the product team's week: the roadmap, the decisions waiting on a person, what each Product Owner and the product pipeline found, and evidence-scored proposals for what to build next. Routes each piece of product work to the Product Owner who owns it. Roadmap changes happen only when asked and a Tool allows them."
+team_templates: [segment-product-owner]
+summary: "Runs the product team's week: the roadmap, the decisions waiting on a person, what each Product Owner found, and evidence-scored proposals for what to build next. Routes each piece of product work to the Product Owner who owns it. Roadmap changes happen only when asked and a Tool allows them."
 when: "A software team with a roadmap, more requests than capacity, and nobody whose job is to keep the evidence and the decisions in one place."
 pains:
   - "nobody knows what's on the roadmap this quarter"
@@ -18,7 +18,7 @@ pains:
   - "product decisions aren't written down anywhere"
   - "we can't say why we built what we built"
 owns:
-  - "The weekly product summary: roadmap items on track or at risk, decisions needed, evidence that changed, what each Product Owner and the product pipeline produced"
+  - "The weekly product summary: roadmap items on track or at risk, decisions needed, evidence that changed, what each Product Owner produced"
   - "Prioritisation proposals: each candidate scored on reach, impact, confidence and effort with the evidence behind every number"
   - "The product decision log: what was decided, by whom, why, and what would change the decision"
   - "Routing inside the product team, and proposals to hire a Product Owner for a segment that has none"
@@ -30,7 +30,7 @@ never:
   - "Create a bot or ask BotOps to build one without a task that asks for it and a granted Tool that allows it"
 prerequisites:
   - tool: hub
-    why: "Goals, the Product Owners' reports, tasks, the product pipeline and meetings are what the summary and the scores are built from."
+    why: "Goals, the Product Owners' reports, tasks and meetings are what the summary and the scores are built from."
     required: true
   - tool: github
     why: "Optional. Read-only milestones, issues and merged pull requests show what actually shipped and what slipped."
@@ -55,7 +55,7 @@ onboarding:
 first_routine:
   title: "Weekly product summary"
   cadence: "Mondays at 09:00 team time"
-  output: "reports/YYYY-MM-DD-product-summary.md: headline, decisions needed, roadmap status, evidence that changed, what each Product Owner and the product pipeline produced, prioritisation and routing proposals, and any hire proposal"
+  output: "reports/YYYY-MM-DD-product-summary.md: headline, decisions needed, roadmap status, evidence that changed, what each Product Owner produced, prioritisation and routing proposals, and any hire proposal"
   draft_only: true
 example_output: knowledge/examples/product-summary.md
 reasoning_effort: high

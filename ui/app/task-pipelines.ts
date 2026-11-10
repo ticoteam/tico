@@ -1,378 +1,264 @@
+/* ui/app/task-pipelines.ts — One pipeline on the Tasks page (docs/pipelines-v3.md S7, S8, S17.3): its open tasks as
+   columns, one per work stage, or as a list grouped by stage in the same order; on a phone, one stage at a time under a
+   row of stage tabs. Done and Closed are not columns: they sit behind the page's archive button with Snoozed.
+   A stage's header is its name and its number ("Build 2/3" where it has a limit); tapping it opens the stage's settings
+   for whoever may change the pipeline. The page (tasks-page.ts) owns the header, loading the pipeline and its tasks,
+   search, filter, the archive and opening a task (any [data-task] element); it calls the hooks set at the end of this
+   file. Moving a task between columns is task-board.ts; a refused move shows the engine's reason above the stages.
+   Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// The task types the page has read (get /v2/task-types). The rail also reads who owns a pipeline (pipeline_owner_id).
-type PipelineTaskType = import('../types/api').TaskType & { pipeline_owner_id?: string | null };
-// The part of a task a pipeline reads: its type, as a task row or the task dialog carries it (steps_only: a decision item
-// carries its type's flag too, decide.ts).
-type PipelineTaskRef = { type_id?: string | null; type?: { id: string } | null; steps_only?: boolean };
-// The part of the Tasks page's state a pipeline reads: the type chosen, and the view shown (the board shows the type's steps).
-type PipelineTypeChoice = { type?: string; view?: string };
-type PipelineStep = import('../types/api').TaskStep;
-// The Tasks page's state, with the type choice a person made on it (tasks-page.ts reads typeChosen).
-type PipelineState = TaskState & { typeChosen?: boolean };
-// A step row's own state: its flow (the check's company rule) and the pool hints' request counter.
-interface HTMLDivElement {
-  _flow?: Record<string, unknown> | null;
-  _poolHintsRequest?: number;
-}
-// The create form's controls by name (the task create form, tasks-page.ts).
-interface PipelineCreateElements extends HTMLFormControlsCollection {
-  owner: HTMLSelectElement;
-  type?: HTMLSelectElement;
-  private?: HTMLInputElement;
-  public?: HTMLInputElement;
-  publicTitle?: HTMLInputElement;
-  publicSummary?: HTMLTextAreaElement;
-}
-interface PipelineCreateForm extends HTMLFormElement {
-  readonly elements: PipelineCreateElements;
-}
-// What the check pool hints read (GET /v2/check-pool-candidates): each slug's configured model and its latest run's.
-interface CheckPoolCandidates {
-  candidates?: { name: string; configured: { model: string; provider: string }; runtime?: { model: string; provider: string } | null }[];
+interface PvOpts { layout: 'list' | 'columns'; phone: boolean; q: string; filters: TaskFilters }
+/** A move the engine refused, shown above the stages: a push past to confirm with a why, or the engine's reason. */
+interface PvBar { taskId: string; to: string; push: boolean; text: string }
+interface PvState {
+  rec: PipelineRec; tasks: TaskAny[]; opts: PvOpts;
+  /** Where the page put the view; drawn again here after a move or a tab. */
+  root: HTMLElement | null;
+  /** The stage shown on a phone. */
+  stage: string;
+  /** Moves drawn before the engine answers: task id -> the stage it was moved to. */
+  moving: Map<string, string>;
+  bar: PvBar | null;
 }
 
-let TASK_TYPES: PipelineTaskType[] = [];
-let TASK_TYPES_LOADING: Promise<PipelineTaskType[]> | null = null;
-const PIPELINE_STATUSES = ['open', 'doing', 'waiting', 'review', 'ready', 'done', 'closed', 'declined'];
-// A step's status is one of these. Waiting is a tag on a task in its step, so a waiting step is a team's own column for
-// parked work that only a move by hand fills; declining goes to the closed step.
-const STEP_STATUSES = ['open', 'doing', 'waiting', 'review', 'ready', 'done', 'closed'];
-// The board shows a type's working steps; its done and closed tasks are under Done and Closed.
-const BOARD_HIDDEN = new Set(['done', 'closed', 'declined']);
-const pipelineTypeId = (task: PipelineTaskRef) => task.type_id || task.type?.id || 'general';
-const pipelineType = (task: PipelineTaskRef) => TASK_TYPES.find(type => type.id === pipelineTypeId(task));
-// A steps-only type's tasks change status only by a step move: no Done or Reopen of their own. A person can still close one.
-const pipelineStepsOnly = (task: PipelineTaskRef) => !!pipelineType(task)?.steps_only;
-const pipelineSelectedType = (state: PipelineTypeChoice) => TASK_TYPES.find(type => type.id === state?.type);
-const pipelineActionStatus = (task: PipelineTaskRef, body: { status?: string; step?: string | null }) => body.status || pipelineType(task)?.steps.find(step => step.id === body.step)?.status;
-// A person's move into a full stage stands, and the server says so (over_cap, D68): one line, not a refusal.
-const taskOverCapWarn = (task: PipelineTaskRef, body: {step?: string}, data: {over_cap?: boolean} | null | undefined): void => {
-  if (!data?.over_cap) return;
-  const step = pipelineType(task)?.steps.find(s => s.id === body.step);
-  toast(`${step?.name ?? 'That stage'} is over its cap of ${step?.card_cap ?? ''}.`);
-};
-// A stage's held count on the pipeline (D68): the unfinished cards the task list holds in it now, so a card a live change
-// moved out is not still counted (the server's step.held is only as fresh as the last types read), plus step.unseen: the
-// cards there the pipeline's rule editor cannot read, which the server counts for it. Its count is then never below the
-// one the cap is enforced against.
-function pipelineStageHeld(tasks: {step_id?: string | null; status?: unknown}[], step: {id: string; unseen?: number}): number {
-  return tasks.filter(t => t.step_id === step.id && !BOARD_HIDDEN.has(String(t.status))).length + (step.unseen ?? 0);
-}
-const pipelineStepName = (id: string) => TASK_TYPES.flatMap(type => type.steps).find(step => step.id === id)?.name || id;
-// The Product roadmap and Dev tickets types go by their role (backend/roadmap_flow.py), never by who manages them.
-const pipelineRoleType = (role: string | null | undefined) => TASK_TYPES.find(type => type.role === role);
-const pipelineProductType = () => pipelineRoleType('product-roadmap');
-let TASK_TYPES_READ = false;
-// `cached`: the types already read do (a task opened); the Tasks page's loads read them again, so an edit elsewhere shows.
-async function taskTypesLoad({cached = false}: {cached?: boolean} = {}) {
-  if (!S.me?.cloud) return TASK_TYPES;
-  if (cached && TASK_TYPES_READ) return TASK_TYPES;
-  if (!TASK_TYPES_LOADING) TASK_TYPES_LOADING = get<import('../types/api').TaskTypeList>('/v2/task-types').then(data => {
-    TASK_TYPES = data.types || [];
-    TASK_TYPES_READ = true;
-    return TASK_TYPES;
-  }).finally(() => { TASK_TYPES_LOADING = null; });
-  return TASK_TYPES_LOADING;
-}
-function taskPipelineState(state: TaskState) {
-  state.type = 'general';
-  if (!S.me?.cloud) return;
-  try { state.type = localStorage.getItem('tico.tasks.type') || 'general'; } catch {}
-}
-function taskPipelineRemember(state: PipelineTypeChoice) {
-  try { localStorage.setItem('tico.tasks.type', state.type || 'general'); } catch {}
-}
-// Open, Board and finished tasks belong to one type; a selected type turns the board into its steps.
-function taskPipelineMatches(task: PipelineTaskRef, state: PipelineTypeChoice) {
-  return pipelineTypeId(task) === (state.type || 'general');
-}
-// Common types stay one click away; other team-defined types share the last segment.
-// Engineering and a Dev tickets type made later may both have the engineering role; Dev tickets goes first.
-function taskPipelineDevType() {
-  const dev = (type: PipelineTaskType) => /^dev(?:[ -]?tickets?)?$/i.test(type.name) || /^dev(?:[ -]?tickets?)?$/i.test(type.id);
-  const engineering = TASK_TYPES.filter(type => type.role === 'engineering');
-  return engineering.find(dev) || engineering[0] || TASK_TYPES.find(dev);
-}
-// The types the scope menu lists (task-list.js tasksScopeMenu): General, the product and engineering pipelines by
-// their role, then the team's other types. Each goes by its own current name.
-function taskPipelineScopeTypes() {
-  const dev = taskPipelineDevType();
-  const product = pipelineProductType();
-  const other = TASK_TYPES.filter(type => type.id !== 'general' && type.id !== dev?.id && type.id !== product?.id);
-  return [{id: 'general', label: 'General'}, ...(product ? [{id: product.id, label: product.name}] : []),
-    ...(dev ? [{id: dev.id, label: dev.name}] : []),
-    ...other.map(type => ({id: type.id, label: type.name, other: true}))];
-}
-const taskPipelineLabel = (id: string | undefined) => taskPipelineScopeTypes().find(t => t.id === id)?.label || 'General';
-function taskPipelineTools(state: PipelineTypeChoice) {
-  $('#task-q')?.setAttribute('aria-label', `Search ${pipelineSelectedType(state)?.name || 'General'} tasks`);
-}
-function taskPipelineSelect(state: PipelineState, id: string) {
-  if (id !== 'general' && !TASK_TYPES.some(type => type.id === id)) return;
-  tasksMenuClose();
-  state.typeChosen = true; // A late preference read cannot undo a choice made in this page.
-  if (state.type === id) { tasksRemember(state); return; }
-  state.type = id;
-  state.memo = new Map();
-  tasksSelectionClear(state);
-  taskPipelineRemember(state); tasksRemember(state);
-  tasksFiltersChanged(state); tasksPeekSync(state);
-  tasksDoneEnsure(state);          // this type's board may have its finished steps unfolded
-}
-// A type's board: a column per step, in the type's order, that cards are dragged between (ui/app/task-board.ts). Its
-// leading backlog steps (open, before the first step with work under way) and its trailing finished steps each fold
-// into one strip; a finished step part way along stays off the board.
-function taskPipelineBoard(items: TaskItem[], state: TaskState, head = '') {
-  const type = pipelineSelectedType(state);
-  if (!type) return null;
-  items = items.map(item => taskBoardLive(state, item));
-  const steps = type.steps;
-  let end = steps.length;
-  while (end > 0 && BOARD_HIDDEN.has(steps[end - 1]!.status)) end--;
-  const finished = steps.slice(end), working = steps.slice(0, end).filter(step => !BOARD_HIDDEN.has(step.status));
-  let lead = 0;
-  while (lead < working.length && working[lead]!.status === 'open') lead++;
-  // A phone shows every pipeline one stage at a time, with a chip per stage, requirements or not.
-  const phone = pipelinePhone();
-  const backlog = working.slice(0, lead), folds = taskBoardFolds(state, type, backlog.length);
-  const inStep = (step: PipelineStep) => items.filter(item => item.task.step_id === step.id);
-  const stepColumn = (step: PipelineStep) => ({id: step.id, name: step.name, drop: step.id, items: inStep(step), scope: {type: type.id, step: step.id}, limit: step.limit_minutes, cap: step.card_cap ?? null, held: pipelineStageHeld(state.tasks || [], step)});
-  const strip = (fold: string, run: PipelineStep[], drop: string, name: string) => ({id: 'fold-' + fold, fold, drop, items: [], name: run.length === 1 ? run[0]!.name : name,
-    hint: run.map(step => step.name).join(', '), count: fold === 'backlog' ? run.reduce((n, step) => n + inStep(step).length, 0) : ''});
-  const columns: BoardColumn[] = [];
-  if (backlog.length && folds.backlog) columns.push(strip('backlog', backlog, backlog.at(-1)!.id, 'Backlog'));
-  else backlog.forEach((step, i) => columns.push({...stepColumn(step), foldable: i ? '' : 'backlog'}));
-  working.slice(lead).forEach(step => columns.push(stepColumn(step)));
-  const shown = [...working, ...(folds.finished ? [] : finished)];
-  const unmapped = items.filter(item => !shown.some(step => step.id === item.task.step_id) && !backlog.some(step => step.id === item.task.step_id));
-  for (const status of PIPELINE_STATUSES.filter(status => !BOARD_HIDDEN.has(status))) {
-    const list = unmapped.filter(item => item.task.status === status);
-    if (list.length) columns.push({id: 'status-' + status, name: STATUS_WORD[status] || status, items: list});
-  }
-  if (finished.length && folds.finished) columns.push(strip('finished', finished, finished[0]!.id, 'Finished'));
-  else finished.forEach((step, i) => columns.push({...stepColumn(step), foldable: i ? '' : 'finished'}));
-  const STEP_KIND: Record<string, string> = {open: 'starting', doing: 'doing', waiting: 'waiting', review: 'review', ready: 'review', done: 'done', closed: 'closed', declined: 'needs'};
-  for (const column of columns) {
-    column.items.sort(taskByStepRank);
-    Object.assign(column, {play: pipelineForYouHTML(pipelineForYouCount(column.items), type.id, column.id, true)});
-    const step = type.steps.find(step => step.id === column.id);
-    column.kind = STEP_KIND[step?.status || column.id.replace(/^status-/, '')] || '';
-  }
-  const one = phone ? pipelinePhoneBoard(state, columns) : null;
-  if (one) return head + one.chips + pipePhoneStageHTML(one.column as BoardColumn, type, one.next);
-  return boardColumnsHTML(columns, {head});
-}
-// A phone's one stage: its cards full width, under a quiet line with the "warn after" limit, the compact ▶ N and select-all.
-// The stage's name is on its chip only, so the line does not repeat it. The column box and its header do not show.
-// The "Swipe for <next stage>" hint sits under the last card, and only on a stage with cards.
-function pipePhoneStageHTML(column: BoardColumn, type: import('../types/api').TaskType, next = '') {
-  const limit = column.limit ? `warn after ${pipelineLimit(column.limit)}` : '';
-  const scope = column.scope ? ` data-board-type="${esc(column.scope.type)}" data-board-step="${esc(column.scope.step)}"` : '';
-  const all = column.items.length && tasksCanSelect()
-    ? `<button type="button" class="bcol-all" data-board-select="${esc(column.id)}"${scope} aria-label="${esc(`Select all in ${column.name}`)}" title="Select all in this column">${TL_ICON.all}</button>` : '';
-  const play = pipelineForYouHTML(pipelineForYouCount(column.items), type.id, column.id, true);
-  const release = RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : '';
-  const line = limit || play || release || all
-    ? `<div class="pipe-stage-line">${limit ? `<span class="pipe-stage-limit">${esc(limit)}</span>` : ''}${play}${release}${all}</div>` : '';
-  const notices = taskBuilderNotices([...new Set(column.items.flatMap(it => taskBuilderActors(it.task)))], true);
-  const cards = column.items.map(taskCard).join('') || '<div class="empty">Nothing here</div>';
-  return `<div class="pipe-phone"><section class="pipe-stage" data-col="${esc(column.id)}" aria-label="${esc(column.name)}">
-    ${line}${notices}<div class="pipe-stage-cards">${cards}</div>${column.items.length ? next : ''}</section></div>`;
-}
-const taskByStepRank = (a: TaskItem, b: TaskItem) => (a.task.step_rank ?? Infinity) - (b.task.step_rank ?? Infinity)
-  || String(a.task.created_at).localeCompare(String(b.task.created_at)) || String(a.task.id).localeCompare(String(b.task.id));
-// A task's Type and Step are rows in its properties (ui/app/task-props.ts).
-async function taskPipelineCreate(form: PipelineCreateForm, selected = '') {
-  form.dataset.taskType = selected || 'general';
-  try { await taskTypesLoad(); } catch { return; }
-  if (!form.isConnected || TASK_TYPES.length < 2 || form.elements.type) return;
-  const row = document.createElement('label'); row.textContent = 'Type ';
-  const select = document.createElement('select'); select.name = 'type'; select.setAttribute('aria-label', 'Type');
-  select.innerHTML = TASK_TYPES.map(type => `<option value="${esc(type.id)}">${esc(type.name)}</option>`).join('');
-  select.value = TASK_TYPES.some(type => type.id === selected) ? selected : 'general';
-  row.append(select); form.querySelector('label')?.after(row);
-  const visibility = document.createElement('label'); visibility.className = 'prop-check roadmap-check';
-  const flag = document.createElement('input'); flag.type = 'checkbox'; flag.name = 'public'; flag.setAttribute('aria-label', 'Public');
-  visibility.append(flag, 'Public');
-  // Public text is written here, never copied from the internal title and body.
-  const publicText = document.createElement('div'); publicText.className = 'roadmap-publication roadmap-create-public';
-  publicText.innerHTML = '<label>Public title<input name="publicTitle" aria-label="Public title" maxlength="300" placeholder="Needed to publish"></label>'
-    + '<label>Public summary<textarea name="publicSummary" aria-label="Public summary" rows="2" maxlength="8000" placeholder="Optional"></textarea></label>';
-  const showPublicText = () => {
-    publicText.hidden = visibility.hidden || !flag.checked;
-    const titleInput = publicText.querySelector('input');
-    if (titleInput) titleInput.required = !publicText.hidden;
-  };
-  flag.addEventListener('change', showPublicText);
-  let ownerTouched = !!form.elements.owner.value && !TASK_TYPES.find(t => t.id === select.value)?.manager;
-  form.elements.owner.addEventListener('change', () => { ownerTouched = true; });
-  const defaults = () => {
-    const type = TASK_TYPES.find(t => t.id === select.value);
-    visibility.hidden = type?.role !== 'product-roadmap';
-    flag.checked = type?.default_visibility === 'public' && !form.elements.private?.checked;
-    flag.disabled = !!form.elements.private?.checked;
-    showPublicText();
-    const manager = botByRef(type?.manager) || S.emps.find(e => type?.manager && e.template === type.manager);
-    const value = manager && [...form.elements.owner.options].find(o => o.value === manager.id || o.value === 'bot:' + manager.id)?.value;
-    if (value && !ownerTouched) form.elements.owner.value = value;
-  };
-  select.addEventListener('change', defaults); form.elements.private?.addEventListener('change', defaults); defaults(); row.after(visibility); visibility.after(publicText);
-}
-function taskPipelineCreatePayload(form: PipelineCreateForm, payload: Record<string, unknown>) {
-  payload.type = form.elements.type?.value || form.dataset.taskType || 'general';
-  if (form.elements.public && !form.elements.public.closest('label')?.hidden) payload.visibility = form.elements.public.checked ? 'public' : 'private';
-  if (payload.visibility === 'public') {
-    payload.public_title = form.elements.publicTitle?.value.trim() || '';
-    payload.public_summary = form.elements.publicSummary?.value.trim() || '';
-  }
-}
+let PV: PvState | null = null;
+const PV_BOUND = new WeakSet<HTMLElement>();
+const PV_STAGE_KEY = 'tico.pipeline.stage';
 
-function taskTypesSettingsMount() {
-  const pane = $('#settings-types');
-  if (!S.me?.cloud || !pane) return;
-  pane.innerHTML = '<section class="card"><header><h2>Task types</h2></header><div id="set-types"></div></section>';
+/** The stage each pipeline last showed on a phone. Throws where storage is blocked. */
+const pvStagesKept = (): Record<string, string> => JSON.parse(localStorage.getItem(PV_STAGE_KEY) || '{}') as Record<string, string>;
+function pvStageKept(pipelineId: string): string {
+  try { return pvStagesKept()[pipelineId] ?? ''; } catch { return ''; }
 }
-function taskTypesSettingsShow(tab: string) {
-  if (tab === 'tasks' && S.me?.cloud) void renderTaskTypes();
-}
-
-async function renderTaskTypes() {
-  const host: HTMLElement | null = $('#set-types'); if (!host) return;
-  host.textContent = 'Loading…';
+function pvStageKeep(pipelineId: string, stage: string): void {
   try {
-    await taskTypesLoad();
-    if (!host.isConnected) return;
-    const mover = canMove();
-    host.innerHTML = TASK_TYPES.map(type => `<div class="task-type-row"><strong>${esc(type.name)}</strong>
-      <div>${type.steps.map(step => `<span class="tlabel"${step.check_pool?.length ? ` title="${esc('Check pool: ' + step.check_pool.map(botSlug).join(', ') + ' · ' + (step.check_limit || 2) + ' open checks each')}"` : ''}>${esc(step.name)}${step.check_pool?.length ? ` · ${step.check_pool.length} checker${step.check_pool.length === 1 ? '' : 's'}` : ''}</span>`).join(' ')}</div>
-      ${mover && type.id !== 'general' ? `<button class="ghost" type="button" data-edit-type="${esc(type.id)}">Edit</button>` : ''}</div>`).join('')
-      + (mover ? '<button class="primary" type="button" data-new-type>New type</button>' : '');
-    host.querySelectorAll<HTMLButtonElement>('[data-edit-type]').forEach(button => button.onclick = () => taskTypeEditor(TASK_TYPES.find(type => type.id === button.dataset.editType)));
-    const add = host.querySelector<HTMLButtonElement>('[data-new-type]'); if (add) add.onclick = () => taskTypeEditor();
-  } catch (error) { host.textContent = errorMessage(error, ''); }
+    const all = pvStagesKept();
+    all[pipelineId] = stage;
+    localStorage.setItem(PV_STAGE_KEY, JSON.stringify(all));
+  } catch { /* storage blocked: not kept */ }
 }
-// What every bot may do with company tasks beyond reading (docs/tasks.md, "Types bots work on").
-const TYPE_BOTS = [['parties', 'Participants change their tasks'], ['read', 'Every bot may comment and create subtasks'],
-  ['work', 'Every bot reads and works on all of them']];
-function taskTypeEditor(type: PipelineTaskType | null = null) {
-  const dialog = document.createElement('dialog'); dialog.className = 'tmodal task-type-editor';
-  dialog.setAttribute('aria-label', type ? 'Edit type' : 'New type');
-  dialog.innerHTML = `<div class="tmodal-head"><h2>${type ? 'Edit type' : 'New type'}</h2><span class="spacer"></span><button class="ghost" type="button" data-close aria-label="Close">✕</button></div>
-    <form class="tmodal-body"><label>Name <input name="typeName" required value="${esc(type?.name || '')}" aria-label="Type name"></label>
-    <label>Default visibility<select name="defaultVisibility"><option value="private"${type?.default_visibility !== 'public' ? ' selected' : ''}>Private</option><option value="public"${type?.default_visibility === 'public' ? ' selected' : ''}>Public</option></select></label>
-    <div data-steps></div><button class="ghost" type="button" data-add-step>Add step</button>
-    <label>Bots <select name="typeBots" aria-label="What bots may do">${TYPE_BOTS.map(([value, words]) => `<option value="${value}"${(type?.bots || 'parties') === value ? ' selected' : ''}>${esc(words)}</option>`).join('')}</select></label>
-    <div class="row"><button class="primary" type="submit">Save</button>${type ? '<button class="ghost danger" type="button" data-delete-type>Delete</button>' : ''}</div>
-    <p data-error class="err" role="status"></p></form>`;
-  document.body.append(dialog); dialog.showModal();
-  dialog.addEventListener('close', () => dialog.remove());
-  const close = dialog.querySelector<HTMLButtonElement>('[data-close]');
-  if (close) close.onclick = () => dialog.close();
-  const rows = dialog.querySelector<HTMLDivElement>('[data-steps]');
-  if (!rows) return;
-  const poolHints = async (row: HTMLDivElement) => {
-    const target = row.querySelector<HTMLElement>('[data-pool-models]');
-    const pool = row.querySelector<HTMLInputElement>('[aria-label="Check pool"]');
-    if (!target || !pool) return;
-    const bots = [...new Set(pool.value.split(',').map(slug => slug.trim()).filter(Boolean))].slice(0, 40);
-    const request = (row._poolHintsRequest || 0) + 1;
-    row._poolHintsRequest = request;
-    if (!bots.length) { target.textContent = 'Enter bot slugs to see each configured model and provider.'; return; }
-    target.textContent = 'Loading model details…';
-    try {
-      const data = await get<CheckPoolCandidates>('/v2/check-pool-candidates?bots=' + encodeURIComponent(bots.join(',')));
-      if (request !== row._poolHintsRequest || !target.isConnected) return;
-      target.innerHTML = (data.candidates || []).map(bot => {
-        const configured = `${bot.configured.model} (${bot.configured.provider})`;
-        const runtime = bot.runtime ? ` · latest run: ${bot.runtime.model} (${bot.runtime.provider}); next run may differ` : '';
-        return `<span>${esc(bot.name)}: ${esc(configured + runtime)}</span>`;
-      }).join('') || 'No visible bots found for these slugs.';
-    } catch (error) {
-      if (request === row._poolHintsRequest && target.isConnected) target.textContent = `Model details unavailable: ${errorMessage(error, '')}`;
-    }
-  };
-  // A check step's model company rule (docs/tasks.md, Step flow): prefer another company's bot, or require it.
-  const companyRule = (step: Partial<PipelineStep> | null | undefined) => {
-    const flow = step?.flow;
-    return flow?.check
-      ? `<select aria-label="Another model company" title="Prefer: a bot of another model company than the builder's goes first, and one of the builder's company takes the check only when no other is free. Require: only a bot of another company takes it, and the check waits when none is free.">${['prefer', 'require'].map(rule => `<option value="${rule}"${(flow.other_company || 'prefer') === rule ? ' selected' : ''}>Another model company: ${rule === 'prefer' ? 'Prefer' : 'Require'}</option>`).join('')}</select>`
-      : '';
-  };
-  const addStep = (step?: Partial<PipelineStep> | null) => {
-    const row = document.createElement('div'); row.className = 'task-step-edit'; row.dataset.stepId = step?.id || ''; row._flow = step?.flow || null;
-    row.innerHTML = `<input required aria-label="Step name" value="${esc(step?.name || '')}" placeholder="Step name">
-      <input aria-label="Public step name" value="${esc(step?.public_name ?? '')}" placeholder="Public step (blank: not shown)" title="What a public roadmap shows for this step; blank shows none">
-      <select aria-label="Step status">${PIPELINE_STATUSES.filter(status => STEP_STATUSES.includes(status) || step?.status === status).map(status => `<option value="${status}"${step?.status === status ? ' selected' : ''}>${esc(STATUS_WORD[status] || status)}</option>`).join('')}</select>
-      <input aria-label="Check pool" value="${esc((step?.check_pool || []).map(botSlug).join(', '))}" placeholder="Check pool: bots, comma-separated" title="The bots that may do this step's check. Tico gives each check to the least busy one from another model company than the builder.">
-      <input type="number" min="1" max="20" aria-label="Open checks each" value="${esc(String(step?.check_limit || 2))}" title="How many open checks each bot in the pool may hold">
-      ${companyRule(step)}
-      <small class="task-step-models muted" data-pool-models role="status">Enter bot slugs to see each configured model and provider.</small>
-      <button class="ghost" type="button" data-up aria-label="Move step up">↑</button><button class="ghost" type="button" data-down aria-label="Move step down">↓</button>
-      <button class="ghost danger" type="button" data-remove aria-label="Remove step">×</button>`;
-    const up = row.querySelector<HTMLButtonElement>('[data-up]');
-    const down = row.querySelector<HTMLButtonElement>('[data-down]');
-    const removeButton = row.querySelector<HTMLButtonElement>('[data-remove]');
-    const pool = row.querySelector<HTMLInputElement>('[aria-label="Check pool"]');
-    if (!up || !down || !removeButton || !pool) return;
-    up.onclick = () => { if (row.previousElementSibling) rows.insertBefore(row, row.previousElementSibling); };
-    down.onclick = () => { if (row.nextElementSibling) rows.insertBefore(row.nextElementSibling, row); };
-    removeButton.onclick = () => row.remove();
-    pool.addEventListener('input', () => { void poolHints(row); });
-    rows.append(row);
-    if (step?.check_pool?.length) void poolHints(row);
-  };
-  (type?.steps || [{name: 'Open', status: 'open'}]).forEach(addStep);
-  const addButton = dialog.querySelector<HTMLButtonElement>('[data-add-step]');
-  if (addButton) addButton.onclick = () => addStep();
-  const saved = async (body: unknown) => {
-    const submit = dialog.querySelector<HTMLButtonElement>('[type=submit]');
-    if (!submit) return;
-    submit.disabled = true;
-    try {
-      await post('/v2/task-types' + (type ? '/' + encodeURIComponent(type.id) : ''), body);
-      dialog.close(); await renderTaskTypes();
-      if (TASKS_ST && $('#task-filter')) await tasksLoad(TASKS_ST);
-    } catch (error) {
-      const errorLine = dialog.querySelector<HTMLElement>('[data-error]');
-      if (errorLine) errorLine.textContent = errorMessage(error, '');
-      submit.disabled = false;
-    }
-  };
-  const form = dialog.querySelector<HTMLFormElement>('form');
-  if (form) form.onsubmit = event => {
-    event.preventDefault();
-    // A public item on a type private by default shows its step's public name, never the internal one: the field is
-    // always there, and a new step left blank gets the server's default (its name only on a type public by default).
-    // A step's flow replaces the whole flow when it is sent, and names what it points at by name: so a changed rule is
-    // sent with the flow's step references as ids (a name would not resolve once this save renames its step).
-    const ids: Record<string, string> = Object.fromEntries((type?.steps || []).map(step => [step.name, step.id]));
-    const flowFor = (row: HTMLDivElement) => {
-      const select = row.querySelector<HTMLSelectElement>('[aria-label="Another model company"]');
-      if (!select || select.value === (row._flow?.other_company || 'prefer')) return {};
-      const flow = Object.fromEntries(Object.entries(row._flow || {}).map(([key, value]) =>
-        [key, ['on_pass', 'on_fail', 'after_green'].includes(key) && typeof value === 'string' && ids[value] ? ids[value] : value]));
-      return {flow: {...flow, other_company: select.value}};
-    };
-    const steps = [...rows.children].filter((row): row is HTMLDivElement => row instanceof HTMLDivElement).map((row, position) => {
-      const shown = (row.querySelector<HTMLInputElement>('[aria-label="Public step name"]')?.value ?? '').trim();
-      return {...(row.dataset.stepId ? {id: row.dataset.stepId} : {}), name: row.querySelector<HTMLInputElement>('input')?.value ?? '',
-        ...(shown || row.dataset.stepId ? {public_name: shown} : {}), status: row.querySelector<HTMLSelectElement>('[aria-label="Step status"]')?.value ?? '', position,
-        ...flowFor(row),
-        check_pool: (row.querySelector<HTMLInputElement>('[aria-label="Check pool"]')?.value ?? '').split(',').map(slug => slug.trim()).filter(Boolean),
-        check_limit: Math.min(20, Math.max(1, parseInt(row.querySelector<HTMLInputElement>('[aria-label="Open checks each"]')?.value ?? '', 10) || 2))};
-    });
-    void saved({name: dialog.querySelector<HTMLInputElement>('[name=typeName]')?.value ?? '', steps, bots: dialog.querySelector<HTMLSelectElement>('[name=typeBots]')?.value ?? '', default_visibility: dialog.querySelector<HTMLSelectElement>('[name=defaultVisibility]')?.value ?? ''});
-  };
-  const remove = dialog.querySelector<HTMLButtonElement>('[data-delete-type]');
-  if (remove && type) remove.onclick = async () => {
-    remove.disabled = true;
-    try { await post('/v2/task-types/' + encodeURIComponent(type.id) + '/delete'); dialog.close(); await renderTaskTypes(); }
-    catch (error) {
-      const errorLine = dialog.querySelector<HTMLElement>('[data-error]');
-      if (errorLine) errorLine.textContent = errorMessage(error, '');
-      remove.disabled = false;
-    }
-  };
-  dialog.querySelector<HTMLInputElement>('[name=typeName]')?.focus();
+
+/** The view's state for a pipeline: the same one while the page draws the same pipeline again. */
+function pvStateFor(rec: PipelineRec): PvState {
+  if (PV && PV.rec.id === rec.id) return PV;
+  PV = {rec, tasks: [], opts: {layout: 'columns', phone: false, q: '', filters: {}}, root: null,
+    stage: pvStageKept(rec.id), moving: new Map(), bar: null};
+  return PV;
 }
+
+/** The open tasks the manager's rail reads, when the view shows that pipeline. */
+const pvTasksOf = (pipelineId: string): TaskAny[] => PV && PV.rec.id === pipelineId ? PV.tasks : [];
+
+// ---------------------------------------------------------------- drawing
+
+/** A task as the view draws it: in the stage a move put it in while the engine has not answered. */
+const pvShown = (state: PvState, t: TaskAny): TaskAny => {
+  const to = state.moving.get(t.id);
+  return to ? {...t, stage_id: to} : t;
+};
+
+/** "Ideas 12", "Spec 2/2": the stage's name and its number of open tasks, out of its limit when it has one. */
+function pvStageCount(state: PvState, stage: PipelineStageRec): string {
+  const n = state.tasks.filter(t => pvShown(state, t).stage_id === stage.id).length;
+  return stage.task_limit ? `${n}/${stage.task_limit}` : String(n);
+}
+
+/** S8: a stage's header. It opens the stage's settings for whoever may change the pipeline, and is plain text otherwise. */
+function pvStageHeadHTML(state: PvState, stage: PipelineStageRec): string {
+  const inner = `<span class="pv-stage-name">${esc(stage.name)}</span><span class="pv-stage-n tnum">${esc(pvStageCount(state, stage))}</span>`;
+  return state.rec.may_change
+    ? `<button type="button" class="pv-stage-h" data-pv-settings="${esc(stage.id ?? '')}">${inner}</button>`
+    : `<span class="pv-stage-h">${inner}</span>`;
+}
+
+/** The tasks of one stage that the search and the filters let through, in the order the page gave them. */
+function pvInStage(state: PvState, stageId: string): TaskAny[] {
+  return state.tasks.map(t => pvShown(state, t))
+    .filter(t => t.stage_id === stageId && taskFilterMatch(t, state.opts.q, state.opts.filters));
+}
+
+const pvSearching = (opts: PvOpts): boolean => !!opts.q.trim() || taskFiltersOn(opts.filters);
+
+function pvColumnsHTML(state: PvState): string {
+  const cols = state.rec.stages.map(stage => {
+    const id = stage.id ?? '';
+    const cards = pvInStage(state, id).map(t => taskCardHTML(t)).join('');
+    return `<section class="pv-col" data-pv-col="${esc(id)}" aria-label="${esc(stage.name)}"><header class="pv-col-head">${pvStageHeadHTML(state, stage)}</header>
+      <div class="pv-col-body">${cards}</div></section>`;
+  }).join('');
+  return `<div class="pv-cols" data-pv-drag>${cols}</div>`;
+}
+
+function pvListHTML(state: PvState): string {
+  const searching = pvSearching(state.opts);
+  const groups = state.rec.stages.map(stage => {
+    const rows = pvInStage(state, stage.id ?? '');
+    if (!rows.length && searching) return '';
+    return `<section class="pv-group" aria-label="${esc(stage.name)}"><h2 class="pv-group-head">${pvStageHeadHTML(state, stage)}</h2>
+      <div class="pv-rows">${rows.map(t => taskRowHTML(t, {look: 'list'})).join('')}</div></section>`;
+  }).join('');
+  return groups || '<p class="pv-empty muted">Nothing found</p>';
+}
+
+/** S17.3: a row of stage tabs, then the chosen stage's tasks. */
+function pvPhoneHTML(state: PvState): string {
+  const stages = state.rec.stages, ids = stages.map(s => s.id ?? '');
+  const shown = ids.includes(state.stage) ? state.stage : ids.find(id => pvInStage(state, id).length) ?? ids[0] ?? '';
+  state.stage = shown;
+  const tabs = stages.map(stage => {
+    const on = stage.id === shown;
+    return `<button type="button" role="tab" class="pv-tab${on ? ' on' : ''}" data-pv-tab="${esc(stage.id ?? '')}" aria-selected="${on}">`
+      + `${esc(stage.name)} <span class="tnum">${esc(pvStageCount(state, stage))}</span></button>`;
+  }).join('');
+  const rows = pvInStage(state, shown).map(t => taskRowHTML(t, {look: 'list'})).join('');
+  return `<div class="pv-tabs" role="tablist" aria-label="Stages">${tabs}</div><div class="pv-rows pv-phone">${rows}</div>`;
+}
+
+function pvBarHTML(bar: PvBar | null): string {
+  if (!bar) return '';
+  if (bar.push) {
+    return `<form class="pv-bar" data-pv-push role="alert"><span class="pv-bar-text">${esc(bar.text)}</span>
+      <input name="why" required maxlength="500" placeholder="Why" aria-label="Why" autocomplete="off">
+      <button type="submit" class="primary">Move</button>
+      <button type="button" class="ghost" data-pv-bar-x aria-label="Close">✕</button></form>`;
+  }
+  return `<div class="pv-bar" role="alert"><span class="pv-bar-text">${esc(bar.text)}</span>
+    <button type="button" class="ghost" data-pv-bar-x aria-label="Close">✕</button></div>`;
+}
+
+function pvHTML(state: PvState): string {
+  const body = state.opts.phone ? pvPhoneHTML(state) : state.opts.layout === 'columns' ? pvColumnsHTML(state) : pvListHTML(state);
+  return `<div class="pv${state.opts.phone ? ' pv-is-phone' : ''}">${pvBarHTML(state.bar)}${body}</div>`;
+}
+
+/** Draws the view again where the page put it, keeping a why being typed. */
+function pvDraw(state: PvState): void {
+  const root = state.root;
+  if (PV !== state || !root?.isConnected) return;
+  const field = root.querySelector<HTMLInputElement>('[data-pv-push] input[name="why"]');
+  const text = field?.value ?? '', typing = !!field && document.activeElement === field;
+  root.innerHTML = pvHTML(state);
+  const next = root.querySelector<HTMLInputElement>('[data-pv-push] input[name="why"]');
+  if (next) { next.value = text; if (typing) next.focus(); }
+}
+
+// ---------------------------------------------------------------- what a person does here
+
+function pvClick(state: PvState, ev: MouseEvent): void {
+  const target = eventElement(ev);
+  if (!target) return;
+  const settings = target.closest<HTMLElement>('[data-pv-settings]');
+  if (settings) { void openPipelineEditor(state.rec.id, settings.dataset['pvSettings'] ?? ''); return; }
+  const tab = target.closest<HTMLElement>('[data-pv-tab]');
+  if (tab) { pvStageShow(state, tab.dataset['pvTab'] ?? ''); return; }
+  if (target.closest('[data-pv-bar-x]')) { state.bar = null; pvDraw(state); }
+}
+
+function pvStageShow(state: PvState, stage: string): void {
+  if (!stage || stage === state.stage) return;
+  state.stage = stage;
+  pvStageKeep(state.rec.id, stage);
+  pvDraw(state);
+  state.root?.querySelector('.pv-tab.on')?.scrollIntoView({inline: 'center', block: 'nearest'});
+}
+
+/** A phone swipe steps to the next (1) or the previous (-1) stage. */
+function pvStageStep(state: PvState, by: number): void {
+  const ids = state.rec.stages.map(s => s.id ?? '');
+  const to = ids[ids.indexOf(state.stage) + by];
+  if (to) pvStageShow(state, to);
+}
+
+let PV_SWIPE: {x: number; y: number} | null = null;
+document.addEventListener('touchstart', (ev: TouchEvent) => {
+  const target = ev.target instanceof Element ? ev.target : null, first = ev.touches[0];
+  PV_SWIPE = first && target?.closest('.pv-is-phone') ? {x: first.clientX, y: first.clientY} : null;
+}, {passive: true});
+document.addEventListener('touchend', (ev: TouchEvent) => {
+  const start = PV_SWIPE, end = ev.changedTouches[0];
+  PV_SWIPE = null;
+  if (!start || !end || !PV) return;
+  const dx = end.clientX - start.x, dy = end.clientY - start.y;
+  if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) pvStageStep(PV, dx < 0 ? 1 : -1);
+}, {passive: true});
+
+function pvSubmit(state: PvState, ev: SubmitEvent): void {
+  const form = ev.target instanceof HTMLFormElement && ev.target.hasAttribute('data-pv-push') ? ev.target : null;
+  const bar = state.bar;
+  if (!form || !bar) return;
+  ev.preventDefault();
+  const why = String(new FormData(form).get('why') ?? '').trim();
+  if (!why) return;
+  state.bar = null;
+  const t = state.tasks.find(x => x.id === bar.taskId);
+  if (t) pvMove(state, t, bar.to, why);
+}
+
+/** Moves a task to a stage of this pipeline: `next` when it is the stage after its own, else the stage's id. The task is
+    drawn there at once; the page's live read shows where the engine put it. A refusal puts it back and says what the
+    engine said: what is missing, with a why to push past it when it can be pushed past. */
+function pvMove(state: PvState, t: TaskAny, stageId: string, why = ''): void {
+  const stages = state.rec.stages;
+  const from = stages.findIndex(s => s.id === t.stage_id), to = stages.findIndex(s => s.id === stageId);
+  const target = stages[to];
+  if (to < 0 || !target || from === to) return;
+  const where = to === from + 1 ? 'next' : stageId;
+  state.moving.set(t.id, stageId);
+  state.bar = null;
+  pvDraw(state);
+  void (async () => {
+    try {
+      const moved = await taskMove(t.id, where, t.version, why || undefined);
+      if (PV !== state) return;
+      // The engine's answer is the task as it is now: draw it there until the page's next read.
+      state.moving.delete(t.id);
+      state.tasks = state.tasks.map(x => x.id === moved.task.id ? moved.task : x).filter(x => x.status === 'open');
+      pvDraw(state);
+    } catch (error) {
+      if (PV !== state) return;
+      state.moving.delete(t.id);
+      state.bar = pvRefusedBar(t, stageId, target.name, error, !why);
+      pvDraw(state);
+    }
+  })();
+}
+
+/** What the view says about a refused move: the engine's own words. A move that misses requirements a person may push
+    past asks for the why ("Move to Review without Checks pass?"); anything else is the engine's reason. */
+function pvRefusedBar(t: TaskAny, stageId: string, stageName: string, error: unknown, mayPush: boolean): PvBar {
+  const refused = taskRefusedOf(error);
+  const missing = refused?.missing ?? [];
+  if (refused?.error === 'task_not_met' && mayPush && missing.length) {
+    return {taskId: t.id, to: stageId, push: true, text: `Move to ${stageName} without ${missing.join(', ')}?`};
+  }
+  const words = refused ? [refused.detail, missing.length ? `Missing: ${missing.join(', ')}.` : ''].filter(Boolean).join(' ')
+    : errorMessage(error, 'Not moved.');
+  return {taskId: t.id, to: stageId, push: false, text: `${t.title}: ${words}`};
+}
+
+// ---------------------------------------------------------------- the page's hooks
+
+TASK_PAGE_HOOKS.pipeline = {
+  html(rec, tasks, opts) {
+    const state = pvStateFor(rec);
+    state.rec = rec;
+    state.opts = {layout: opts.layout, phone: opts.phone, q: opts.q, filters: opts.filters};
+    state.tasks = tasks.filter(t => t.pipeline_id === rec.id && t.status === 'open');
+    // A move the read already shows is no longer drawn by hand.
+    for (const [id, to] of state.moving) if (state.tasks.find(t => t.id === id)?.stage_id === to) state.moving.delete(id);
+    return pvHTML(state);
+  },
+  bind(root, rec) {
+    const state = pvStateFor(rec);
+    state.root = root;
+    if (PV_BOUND.has(root)) return;
+    PV_BOUND.add(root);
+    // Bound once per element; each event reads the view drawn there now.
+    root.addEventListener('click', ev => { if (PV?.root === root) pvClick(PV, ev); });
+    root.addEventListener('submit', ev => { if (PV?.root === root) pvSubmit(PV, ev); });
+    taskBoardBind(root);
+  },
+  rail(host, rec) { pipelineRailSync(host, rec); },
+  edit(rec) { void openPipelineEditor(rec.id); },
+};

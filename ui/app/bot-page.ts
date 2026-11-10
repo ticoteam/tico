@@ -115,13 +115,51 @@ function lastStopOpen(slug: string) {
 }
 // Beside the bot's name only when something is wrong (#514): crashed, quarantined, rate limited,
 // blocked, a failed last run, or an agent that is offline while work waits for it. Idle says nothing.
+// The top line while the bot can't run (docs/pipelines-v3.md S14): a red dot, the server's cause as it is, and the one
+// fix a person makes. GET /v2/bots/{bot} `cant_run` (backend/org_routes.py), read with the page and again as the status
+// moves, at most every 15 seconds.
+type BotCantRun = NonNullable<import('../types/api').BotDetail['cant_run']>;
+const BOT_CANT_RUN: {slug: string; at: number; busy: boolean; value: BotCantRun | null} = {slug: '', at: 0, busy: false, value: null};
+async function botCantRunLoad(slug: string, force = false) {
+  if (BOT_CANT_RUN.busy || (!force && BOT_CANT_RUN.slug === slug && Date.now() - BOT_CANT_RUN.at < 15_000)) return;
+  BOT_CANT_RUN.busy = true;
+  try {
+    const bot = await get<import('../types/api').BotDetail>(`/v2/bots/${encodeURIComponent(slug)}`, {fresh: true});
+    Object.assign(BOT_CANT_RUN, {slug, at: Date.now(), value: bot.cant_run?.cause ? bot.cant_run : null});
+  } catch { Object.assign(BOT_CANT_RUN, {slug, at: Date.now(), value: null}); }
+  finally { BOT_CANT_RUN.busy = false; }
+  const alert = $('#bot-alert');
+  if (BOT?.slug === slug && alert) patchLiveHTML(alert, botAlertHTML(slug));
+}
+const BOT_BILLING = '#/settings/billing';
+function botCantRunFixHTML(slug: string, fix: BotCantRun['fix']): string {
+  const more = `#/bot/${encodeURIComponent(slug)}/info`, cls = 'primary bot-alert-resume';
+  switch (fix) {
+    case 'resume': return `<button class="${cls}" type="button" data-bot-unpause>Unpause</button>`;
+    case 'release_quarantine': return `<button class="${cls}" type="button" data-quarantine-resume>Resume bot</button>`;
+    case 'release_hold': return botReleaseButton(slug, cls);
+    case 'finish_setup': return `<a class="${cls}" href="${more}">Finish setup</a>`;
+    case 'assign_computer': return `<a class="${cls}" href="${more}">Assign a computer</a>`;
+    case 'resume_company': return `<a class="${cls}" href="${BOT_BILLING}">Resume company</a>`;
+    case 'unlock_cloud': return `<a class="${cls}" href="${BOT_BILLING}">Unlock</a>`;
+    case 'add_credit': return `<a class="${cls}" href="${BOT_BILLING}">Add credit</a>`;
+    default: return '';
+  }
+}
+function botCantRunHTML(slug: string): string {
+  const cant = BOT_CANT_RUN.slug === slug ? BOT_CANT_RUN.value : null;
+  if (!cant?.cause) return '';
+  return `<span class="bot-alert bot-cant-run" role="status"><span class="tk-mark tk-mark-cant" aria-hidden="true"></span> ${esc(cant.cause)}</span>${botCantRunFixHTML(slug, cant.fix)}`;
+}
 function botAlertHTML(slug: string) {
+  const cantRun = botCantRunHTML(slug);
+  if (cantRun) return cantRun;
   const e: Partial<Employee> = botRow(slug) || {}, s = v2StatusOf(slug);
   let word: string | undefined = '', why = '';
   if (s?.state === 'crashed' && s.last_stop) return lastStopHTML(slug);
   // Tico stopped it (failed runs, or over its run budget): the words are the server's, Release lifts it.
   if (s?.stopped) return `<span class="bot-alert" role="status" title="${esc(s.focus || '')}" data-bot-stopped="${esc(s.stopped)}"><span aria-hidden="true">⚠</span> Stopped</span>${botReleaseButton(slug, 'primary bot-alert-resume')}`;
-  if (s && ['crashed', 'quarantined', 'limited', 'blocked'].includes(s.state)) {
+  if (s && ['crashed', 'quarantined', 'limited'].includes(s.state)) {
     word = s.state === 'crashed' ? 'Last run stopped' : s.state === 'quarantined' && s.quarantine?.auto ? 'Quarantined' : V2_WORD[s.state]; why = s.state === 'quarantined' ? quarantineWhy(slug) : s.focus || '';
   }
   else if (!s && stateOf(slug) === 'failed') word = 'Last run failed';
@@ -159,6 +197,7 @@ const PAUSE_STALE_MS = 60_000;
 function botAlertDraw() {
   if (!BOT) return;
   if (botPauseStale(BOT)) void botPauseLoad();
+  void botCantRunLoad(BOT.slug);
   const alert = $('#bot-alert'), limit = $('#bot-limit-host'), held = $('#bot-quarantine-host'), paused = $('#bot-paused');
   if (alert) patchLiveHTML(alert, botAlertHTML(BOT.slug));
   if (paused) patchLiveHTML(paused, botPausedBadge(BOT.slug));
@@ -386,6 +425,7 @@ async function pageBot(slug: string, tab: string | undefined) {
     const button = buttons[next]!;
     button.click(); button.focus();
   };
+  void botCantRunLoad(slug, true);
   $('#bot-detail-tabs').onclick = (event: MouseEvent) => {
     const button = eventElement(event)?.closest<HTMLElement>('[data-bot-detail-tab]');
     if (button) location.hash = `${base}/${button.dataset.botDetailTab}`;
@@ -396,6 +436,15 @@ async function pageBot(slug: string, tab: string | undefined) {
     const target = eventElement(ev);
     if (target?.closest('[data-stop-review], [data-bot-review]')) { stopReview(slug); return; }
     if (target?.closest('[data-last-stop]')) { lastStopOpen(slug); return; }
+    const unpause = target?.closest<HTMLButtonElement>('[data-bot-unpause]');
+    if (unpause && !unpause.disabled && BOT) {
+      unpause.disabled = true;
+      const view = BOT;
+      if (!view.pauseState) await botPauseLoad();
+      await botPauseChange(view, 'resume');
+      await botCantRunLoad(slug, true);
+      return;
+    }
     const retry = target?.closest<HTMLButtonElement>('[data-limit-retry]');
     if (retry && !retry.disabled) {
       retry.disabled = true;
@@ -443,7 +492,16 @@ async function pageBot(slug: string, tab: string | undefined) {
   $('#pane-tasks').querySelectorAll('.rail-fold>summary').forEach((sum: Element) => sum.addEventListener('mousedown', ev => ev.preventDefault()));
   $('#pane-tasks').addEventListener('click', (ev: MouseEvent) => {
     const tabButton = eventElement(ev)?.closest<HTMLElement>('[data-bot-task-tab]');
-    if (tabButton) { BOT_TASK_TAB.set(slug, tabButton.dataset.botTaskTab); botTaskTabShow(slug, tabButton.dataset.botTaskTab, true); }
+    if (tabButton) { BOT_TASK_TAB.set(slug, tabButton.dataset.botTaskTab); botTaskTabShow(slug, tabButton.dataset.botTaskTab, true); return; }
+    // A task row opens: in Needs you, its card over the rail; else the task.
+    const task = eventElement(ev)?.closest<HTMLElement>('.tpane [data-task]')?.dataset.task;
+    if (!task) return;
+    const need = eventElement(ev)?.closest('#t-needs') ? botNeeds(slug).find(it => botNeedTaskId(it) === task) : null;
+    if (!need || !decideOpen(String(need.id))) taskModalOpen(task);
+  });
+  $('#pane-tasks').addEventListener('keydown', (ev: KeyboardEvent) => {
+    const row = eventElement(ev)?.closest<HTMLElement>('.tpane [data-task]');
+    if ((ev.key === 'Enter' || ev.key === ' ') && row && row === eventElement(ev)) { ev.preventDefault(); row.click(); }
   });
   $('#pane-tasks .bot-task-tabs').addEventListener('keydown', (ev: KeyboardEvent) => botTaskTabKey(slug, ev));
   $('#pane-tasks .bot-task-tabs').addEventListener('wheel', botTaskTabWheel, {passive: false});

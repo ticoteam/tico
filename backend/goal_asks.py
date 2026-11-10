@@ -8,7 +8,7 @@ date (stale or missing), and a proposal to confirm or reject. Each is one task, 
 by the person who must act, so it shows in Tasks and Decide like any other ask. One per KPI off track or per proposal,
 kind and person (`goal_asks`), never two. A person's out-of-date measures are one ask for all of them, listing each, as
 their Why lines are. `sync` files what is new and closes what is resolved: a fresh reading, a KPI back on track, a
-proposal decided, or the thing now someone else's. A task the person closed or declined while the cause stands is left
+proposal decided, or the thing now someone else's. A task the person closed while the cause stands is left
 alone, and asked again only once the cause has cleared and come back.
 
 Two more wait on a person: the company's vision, while it is empty (one ask to the environment owner, first in their
@@ -404,7 +404,7 @@ def _reword(conn, task, item):
     title, body = _ask(conn, item, strategy_bot.name(conn))
     if H.TITLE_LINT == "refuse" and H.lint_title(title):
         return
-    with isolated(conn, "goal_ask_reword", task["id"]):
+    with isolated(conn, "goal_ask_reword", task["id"], private=True):
         H.task_update(
             conn,
             G.AUTO_ACTOR,
@@ -413,6 +413,7 @@ def _reword(conn, task, item):
             body=body,
             private=True if item.get("private") else None,
             quiet=True,
+            seen_version=task.get("version"),
         )
 
 
@@ -428,8 +429,8 @@ def _relist(conn, task, item):
     if ours and task["title"] != title and not (H.TITLE_LINT == "refuse" and H.lint_title(title)):
         changes["title"] = _free_title(conn, task["owner_id"], title)
     if changes:
-        with isolated(conn, "goal_ask_relist", task["id"]):
-            H.task_update(conn, G.AUTO_ACTOR, task["id"], quiet=True, **changes)
+        with isolated(conn, "goal_ask_relist", task["id"], private=True):
+            H.task_update(conn, G.AUTO_ACTOR, task["id"], quiet=True, seen_version=task.get("version"), **changes)
 
 
 def _resolved(conn, kind, ref):
@@ -457,14 +458,17 @@ def _resolved(conn, kind, ref):
     return "Resolved: nothing is waiting on you here any more."
 
 
+LIVE = ("open", "done")  # a task that is still asking, or was marked done: not closed
+
+
 def _free_title(conn, owner, title):
     """task_create refuses a second live task with the same requester, owner and title; two different proposals
     can word the same, so the second one is numbered instead of refused."""
     taken = {
         r[0]
         for r in conn.execute(
-            f"SELECT title FROM tasks WHERE requester_id=? AND owner_id=? AND status IN ({','.join('?' * len(H.LIVE_STATUSES))})",
-            (G.AUTO_ACTOR, owner, *H.LIVE_STATUSES),
+            f"SELECT title FROM tasks WHERE requester_id=? AND owner_id=? AND status IN ({','.join('?' * len(LIVE))})",
+            (G.AUTO_ACTOR, owner, *LIVE),
         )
     }
     out, n = title[:290], 2
@@ -509,20 +513,17 @@ def sync(conn, owner_id, at=None, reads=None):
         # Marked done while its cause stands: accepted and asked again, so it does not sit done and hidden.
         again = key in want and task and task["status"] == "done"
         if key in want and not again:
-            if key[0] in BUNDLED and task and task["status"] in H.LIVE_STATUSES:
+            if key[0] in BUNDLED and task and task["status"] in LIVE:
                 _relist(conn, task, want[key])
             elif (
-                key[0] == "proposal"
-                and task
-                and task["status"] in H.LIVE_STATUSES
-                and want[key]["proposal"]["kind"] in GOAL_KINDS
+                key[0] == "proposal" and task and task["status"] in LIVE and want[key]["proposal"]["kind"] in GOAL_KINDS
             ):
                 _reword(conn, task, want[key])
             continue
         if again and not has_room(key[2]):
             continue  # asked again on a day with room; until then it stays as the person left it
-        with isolated(conn, "goal_ask_close", row["task_id"]):
-            if task and task["status"] in H.LIVE_STATUSES:
+        with isolated(conn, "goal_ask_close", row["task_id"], private=True):
+            if task and task["status"] in LIVE:
                 if again:
                     note = f"Still needed: {_still_needed(want[key])}. Asked again in a new task."
                 elif row["kind"] == "kpi_stale" and row["ref"] != KPIS_REF and ("kpi_stale", KPIS_REF, key[2]) in want:
@@ -532,7 +533,7 @@ def sync(conn, owner_id, at=None, reads=None):
                     note = f"Now asked of {H.actor_name(conn, moved[key[:2]])}, who owns it now."
                 else:
                     note = _resolved(conn, row["kind"], row["ref"])
-                H.task_close(conn, G.AUTO_ACTOR, task["id"], note=note, quiet=True, strict=False)
+                H.attempt(conn, H.task_close, G.AUTO_ACTOR, task["id"], note, task.get("version"))
                 closed.append(task["id"])
             conn.execute("DELETE FROM goal_asks WHERE kind=? AND ref=? AND owner=?", key)
             if again:
@@ -572,7 +573,7 @@ def sync(conn, owner_id, at=None, reads=None):
 
 def for_person(conn, actor, items):
     """The Goals page's Needs you for one caller: each item carries the task that asks it (`task`), and an item
-    the person already closed or declined while its cause stands is left out, as the task is."""
+    the person already closed while its cause stands is left out, as the task is."""
     rows = {
         (r["kind"], r["ref"]): r["task_id"] for r in conn.execute("SELECT * FROM goal_asks WHERE owner=?", (actor,))
     }
@@ -583,7 +584,7 @@ def for_person(conn, actor, items):
     for item in items:
         task_id = rows.get((item["kind"], item["ref"]))
         task = H.task(conn, task_id) if task_id else None
-        if task_id and not (task and task["status"] in H.ACTIVE_STATUSES):
+        if task_id and not (task and task["status"] == "open"):
             continue
         if not task_id and not urgent(item):
             if room <= 0:

@@ -90,7 +90,6 @@ const BOOT_ROSTER_WAIT_MS = 10000;
   void orgHistorySync();
   void railsSync();
   void sendWaySync();
-  void tasksPinsSync();
   window.gsBoot?.();
   window.hlBoot?.();
   // A team that has never been set up opens on its first run, not on an empty Chat.

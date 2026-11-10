@@ -18,7 +18,7 @@ Every bot reads what it is a member or participant of, Homes it may read, task t
 asks to a person. An internal bot (in a turn) also reads, as a person in its seat would, every company thread and its
 group's team threads, plus the tree its attempt was handed (`attempt_conversations`); an external agent never gets
 company or team standing read. The same rule is said three times: in Python (`readable`, which
-`Auth.conversation` calls), as SQL for `hub sql` (`readable_sql`, `message_sql`) and for the SSE stream
+`Auth.conversation` calls), as SQL for `tico sql` (`readable_sql`, `message_sql`) and for the SSE stream
 (`readable_ids`). backend/tests/test_threads_privacy.py runs one matrix through all three.
 
 Inside a readable thread a message can still be hidden: history migrated from a shared bot room keeps its old
@@ -919,8 +919,8 @@ def readable_sql(
 ):
     """A SQL boolean over a conversations row named `alias` (bare columns when alias is ''): the thread is readable.
 
-    `inner(table)` names an unfiltered table (hub sql's temp views); `tasks` is a SELECT of the task ids the viewer
-    reads (hub sql passes its filtered view); `meeting(id_sql)` renders the meeting-room check (hub sql's function),
+    `inner(table)` names an unfiltered table (tico sql's temp views); `tasks` is a SELECT of the task ids the viewer
+    reads (tico sql passes its filtered view); `meeting(id_sql)` renders the meeting-room check (tico sql's function),
     and without it meeting threads are left to Python (`readable_ids`). `conversation(id_sql)`, when given, is the
     meeting-provenance check every thread also passes. `only` (readable_ids) is every stored audience the roots of
     the rows asked about have (None for a root that predates threads), plus "home" when a row is a Home itself: the
@@ -2258,6 +2258,9 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
         return None
     cid = _new_id()
     refs = {"carries": message["id"], "wake": wake, "reason": reason, "from": message.get("sender_id")}
+    source = H._json(message.get("refs"), {}) or {}
+    if H.delegated(source):
+        refs["via"] = source["via"]  # written in the person's name, not by their hand: neither is its carrier
     if rule:
         refs["rule"] = rule
     if way == "queue":
@@ -2267,7 +2270,7 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
     author = message.get("sender_id") or ""
     from .files import page_references
 
-    sources = (H._json(message.get("refs"), {}) or {}).get("body_sources", [])
+    sources = source.get("body_sources", [])
     body, refs = H.sourced_text(
         body or f"{author} in this thread: {message.get('body') or ''}",
         [*sources, *({"file": fid} for fid in sorted(page_references(message, c)))],
@@ -2929,8 +2932,8 @@ def name_problem(actor):
     detail = NAME_REQUIRED
     if str(actor or "").startswith("bot:"):
         detail += (
-            " Pass a title: `title` in hub_thread_create or hub_thread_dm_group, or --title on hub thread create "
-            "and hub thread dm-group. Only a DM with one teammate may be unnamed."
+            " Pass a title: `title` in hub_thread_create or hub_thread_dm_group, or --title on tico thread create "
+            "and tico thread dm-group. Only a DM with one teammate may be unnamed."
         )
     return Problem("name_required", detail, 422)
 
@@ -3945,14 +3948,15 @@ _SUBTREE = "conversations s LEFT JOIN thread_followers f ON f.thread_id=s.id AND
 _SUBTREE_OPEN = "s.archived_at IS NULL AND s.closed_at IS NULL"
 
 
-FINISHED_TASKS = "'done','closed','declined'"
+FINISHED_TASKS = "'done','closed'"
 
 
 def _finish_sql(t="t"):
-    """SQL: when the task `t` last finished: its latest status event to done, closed or declined, else its timestamps."""
+    """SQL: when the task `t` last finished: its latest move into a Done or Closed stage, else its timestamps."""
     return (
         f"COALESCE((SELECT MAX(h.created_at) FROM history_events h WHERE h.subject_type='task' "
-        f"AND h.subject_id={t}.id AND h.kind='status' AND h.new IN ({FINISHED_TASKS})),"
+        f"AND h.subject_id={t}.id AND h.kind='move' "
+        f"AND h.new IN (SELECT id FROM stages WHERE kind IN ('done','closed'))),"
         f"{t}.closed_at,{t}.done_at,{t}.updated_at)"
     )
 
@@ -3983,9 +3987,9 @@ def revived_roots(c, v, roots=None):
 
 
 def task_open_sql(c, v, r="r", revived=frozenset()):
-    """SQL: a thread on a task is open unless its task is done, closed or declined and no post the viewer reads has come
+    """SQL: a thread on a task is open unless its task is done or closed and no post the viewer reads has come
     since: a plain post in its subtree (readable_sql on the sub-thread), or a root in `revived` (revived_roots). A notice
-    (what the task's own changes write into its thread) is not a post. The finish is the task's latest status event, so
+    (what the task's own changes write into its thread) is not a post. The finish is the task's latest move to Done or Closed, so
     a later edit to the task neither hides a thread someone posted in nor brings a finished one back."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     plain = (
@@ -4478,6 +4482,32 @@ def shown_names(c, v, threads_):
 def shown_name(c, v, thread):
     """One thread's name as `v` reads it (`shown_names`); "" for a thread that is not there."""
     return shown_names(c, v, [thread]).get(thread["id"] if isinstance(thread, dict) else thread, "")
+
+
+def brief(c, principal, row):
+    """What a list needs to add a thread's row it does not hold yet, as `view` gives it: id, title, name, audience,
+    root, kind, last message time and, for a DM root, who else is in it (`dm_with`). For a live `activity` event;
+    the caller has checked the reader may read the thread. None for a thread that is gone."""
+    v = _as_viewer(principal)
+    row = thread_row(c, row)
+    root = root_of(c, row) if row is not None else None
+    if row is None or root is None:
+        return None
+    out = {
+        "id": row["id"],
+        "title": _shown_title(c, v, row),
+        "audience": audience_of(root),
+        "root_id": row.get("root_id") or row["id"],
+        "parent_id": row.get("parent_id"),
+        "kind": row.get("kind"),
+        "last_message_at": row.get("last_message_at"),
+    }
+    out["name"] = _name(c, v, root, out["title"])
+    if out["audience"] == "home":
+        out["home"] = {"actor": home_owner(root)}
+    if v is not None and out["audience"] in ("personal", "participants") and not row.get("parent_id"):
+        out.update(dm_with(c, v, [root]).get(root["id"]) or {})
+    return out
 
 
 def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None):
@@ -5532,7 +5562,7 @@ def remove_outside_member(c, principal, thread_id, actor):
             raise Problem("forbidden", "Only someone who manages this thread, or an admin, can do that", 403)
     else:
         if who != H.KEEPER:
-            raise Problem("forbidden", "Only the keeper changes a thread's outside links without a viewer", 403)
+            raise Problem("forbidden", "Only Tico itself changes a thread's outside links without a viewer", 403)
         row = thread_row(c, thread_id)
         if row is None:
             raise Problem("not_found", "Thread not found", 404)

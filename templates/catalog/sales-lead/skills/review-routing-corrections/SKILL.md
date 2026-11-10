@@ -7,7 +7,7 @@ description: Read the routing proposals a person accepted, changed or refused, a
 When to use: once a month, or when a person changes or refuses a routing proposal and the same kind of request has been misrouted before.
 
 Steps:
-1. List the routing proposals made in the period from the task history (`hub task list --all`). For each, record the owner proposed, the owner the person chose and the reason given.
+1. List the routing proposals made in the period from the task history (`tico task list --all`). For each, record the owner proposed, the owner the person chose and the reason given.
 2. Count the outcomes: accepted, changed to another owner, refused, no answer. A proposal with no answer is not an acceptance.
 3. Group the changes by request type: net-new lead, existing account, data problem, proposal, renewal, or something only a human can take.
 4. A correction becomes a rule when the same change repeats with the same reason, or once when the person states a standing rule. Write the rule in `knowledge/routing.md` with its date, its request type and the source task id.

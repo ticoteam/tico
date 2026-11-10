@@ -1,5 +1,5 @@
-"""Rows saved before the Release 1 cutover keep working after it: an approval asked, decided and spent across the upgrade,
-a webhook send queued before the API v2 rename, and a rule or automation saved under the old column names.
+"""Rows saved before the Release 1 cutover keep working after it, except what Tico 0.6 drops: an approval asked or decided
+before the upgrade is gone after it (the Pipelines v3 cut-over carries none), while a webhook send queued before the API v2 rename, and a rule or automation saved under the old column names.
 
 The old database is backend/tests/fixtures/schema_pre_cleanup.sql (schema 71), upgraded in place by the boot's own
 path (Store.initialize). The renames that matter here are the ones the stored rows name."""
@@ -75,30 +75,21 @@ def upgraded(tmp_path):
     conn.close()
 
 
-def test_approvals_asked_and_decided_before_the_cutover_are_each_spent_once_after_it(upgraded):
-    """Both approvals share one upgraded hub (the fixture is per test, so one boot covers both stories). They touch
-    different rows, so each story's checks run in full, in order."""
+def test_approvals_asked_and_decided_before_the_cutover_are_gone_after_it_and_nothing_spends_them(upgraded):
+    """Tico 0.6 has no approval object (docs/dev/pipelines-v3-cutover.md): an OK is a requirement on a task, asked
+    again on 0.6. So the asked approval and the decided one are both dropped with the table, nothing carries their
+    decision, payload or delegation, and the payload hash the released code stored is still the one 0.6 makes."""
     conn = upgraded
-    # An approval asked before the cutover is one decision and is spent once.
-    open_ask = H.approval(conn, "appr-open")
-    assert open_ask["payload"] == RELEASE and open_ask["payload_hash"] == released_hash(RELEASE)
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "approvals" not in tables
+    assert not hasattr(H, "approval") and not hasattr(H, "approval_consume")
+    for table in sorted(tables):
+        text = " ".join(str(v) for row in conn.execute(f"SELECT * FROM {table}") for v in tuple(row) if v is not None)
+        assert "appr-open" not in text and "appr-yes" not in text, table
+    assert not conn.execute(
+        "SELECT 1 FROM requirements WHERE visit_id IS NOT NULL LIMIT 1"
+    ).fetchone()  # no OK on a task
     assert H.payload_hash(RELEASE) == released_hash(RELEASE)  # the same payload hashes the same way
-    with pytest.raises(H.Refused) as again:  # a re-ask of it finds the old one
-        H.approval_request(conn, CMO, "publish", RELEASE)
-    assert again.value.rule == "duplicate" and "appr-open" in again.value.detail
-    decided = H.approval_decide(conn, ANA, "appr-open", "approved")
-    assert (decided["decision"], decided["decided_by_id"]) == ("approved", ANA)
-    spent = H.approval_consume(conn, CMO, "appr-open")
-    assert spent["consumed_at"] and spent["payload"] == RELEASE
-    with pytest.raises(H.Refused) as twice:
-        H.approval_consume(conn, CMO, "appr-open")
-    assert twice.value.rule == "consumed"
-    # An approval decided before the cutover is spent after it, with its delegation.
-    approved = H.approval(conn, "appr-yes")
-    assert approved["decision"] == "approved" and approved["consumed_at"] is None, "appr-yes"
-    assert approved["decided_for"] == {"cited": ["msg-9"], "for": ANA, "run": "run-1"}, "appr-yes"
-    spent = H.approval_consume(conn, CMO, "appr-yes")
-    assert spent["consumed_at"] and spent["decided_for"] == approved["decided_for"], "appr-yes"
 
 
 def test_a_webhook_send_queued_before_the_run_rename_is_delivered_as_a_run_and_signed(api, net):

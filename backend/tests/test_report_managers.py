@@ -633,7 +633,7 @@ def test_botops_archives_a_report_and_the_change_is_recorded_and_restorable(api,
     assert get(api, "bots/counsel")["state"] == "archived"
 
 
-def test_a_manager_bot_files_an_instruction_change_as_a_next_run_task_for_its_report(api):
+def test_a_manager_bot_files_an_instruction_change_as_a_task_for_its_report_and_not_for_a_stranger(api):
     lead = bot(api, "lead", reports_to="human:cara")
     bot(api, "counsel", reports_to="lead")
     bot(api, "stranger", reports_to="human:cara")
@@ -645,16 +645,15 @@ def test_a_manager_bot_files_an_instruction_change_as_a_next_run_task_for_its_re
             "owner": "counsel",
             "title": "Change the NDA steps",
             "body": "Update your AGENT.md: ask for the counterparty's name first.",
-            "next_run": True,
         },
         token=lead,
     )
     row = get(api, f"tasks/{filed['id']}")["task"]
-    assert row["owner_id"] == "bot:" + bot_id(api, "counsel") and row["next_run"] is True
+    assert row["owner_id"] == "bot:" + bot_id(api, "counsel")
     post(
         api,
         "tasks",
-        {"owner": "stranger", "title": "Change the steps", "body": "Do it.", "next_run": True},
+        {"owner": "stranger", "title": "Change the steps", "body": "Do it."},
         token=lead,
         expected=403,
     )

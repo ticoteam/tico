@@ -11,9 +11,9 @@ else. Do not put a personal API token in a product backend: it carries everythin
 The owner and the admins make, list and revoke keys:
 
 ```sh
-hub service-key create --label "Billing backend"
-hub service-key list
-hub service-key revoke <id>
+tico service-key create --label "Billing backend"
+tico service-key list
+tico service-key revoke <id>
 ```
 
 `create` answers with the key (`tico_sk_...`) this once; Tico keeps only a hash. Put it in the other system's secret
@@ -33,7 +33,6 @@ returning its secret again; the retry cache stores only metadata. There is no Se
 | `key` | Your own id for this piece of work, 1 to 200 characters. Required. The pair (this service key, `key`) is one task. |
 | `owner` | `human:<id>`, `bot:<slug>`, or the email of a person on the roster. |
 | `title`, `body` | The task's title and description. |
-| `type`, `step` | A task type and one of its steps, by id or name ([Tasks](tasks.md)). |
 | `labels` | The task's labels; they replace the ones it has. |
 | `links` | Links to attach, such as the report's page. Added, never removed. |
 | `due` | ISO 8601 with a timezone. |
@@ -49,13 +48,13 @@ call wins. No `Idempotency-Key` header is needed.
   later calls leave it alone.
 - `"close": true` closes the task, with `note`. On a closed task it does nothing. For a `key` that never had a task it
   files nothing.
-- A call without `close` on a closed task reopens it, at its type's first open step or the `step` you send, and applies
-  the rest.
+- A call without `close` on a closed task reopens it in the stage it was last in, and applies the rest.
+- The task is filed in General ([Pipelines and stages](tasks.md#pipelines-and-stages)).
 
 The answer is `{"task": {...}, "created": true|false, "changed": true|false}`, with only `{"id": "..."}` acknowledging the task, or
 `"task": null` for a close that filed nothing. A new task gets the checks any new task gets: one for a person must read
 as a request (a title that starts with a verb, the ask first, under 120 words; see [How Tico works](how-it-works.md)),
-and a bot must be active. A refusal is `422` with a code naming what to fix: `owner`, `type`, `step`, `date`,
+and a bot must be active. A refusal is `422` with a code naming what to fix: `owner`, `date`,
 `validation` or `lint`. An unknown or revoked key is `401`.
 
 ```sh
@@ -78,7 +77,7 @@ a release out to several installs ([Releasing](releasing.md#the-release-managers
 because only the owner updates the install:
 
 ```sh
-hub service-key create --label "Release Manager" --scope update
+tico service-key create --label "Release Manager" --scope update
 ```
 
 (`POST /api/v2/service-keys` with `{"label": "...", "scope": "update"}`.) It reaches these routes, the same ones the
@@ -93,7 +92,7 @@ owner's **Check for updates** and **Update now** use, and nothing else:
 `GET /healthz` needs no key; its `release` is the release the server runs. Every other route answers `403`, the task
 routes included, and a tasks key answers `403` on these. The update is recorded as started by the key
 (`system.update.started` with actor `service:<id>`). The updater checks, snapshots and rolls back exactly as for the
-owner's click ([Updates](updates.md#the-servers-own-updater)). `hub service-key list` shows each key's `scope`.
+owner's click ([Updates](updates.md#the-servers-own-updater)). `tico service-key list` shows each key's `scope`.
 
 ## What a person sees
 

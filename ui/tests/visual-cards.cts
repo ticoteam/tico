@@ -1,4 +1,3 @@
-import type * as Tasks from './tasks-page.cts';
 // Visuals in replies (Visual replies 2/4): pictures, SVG and visual pages show as cards under a chat message and a
 // task comment, from the sign-in-free visual address only; pages run in the agreed sandbox with the server's real
 // content policy and height reporter (backend/visuals.py); cap of 4, removed, newer version, failure, Expand, phone.
@@ -11,9 +10,6 @@ const {html, uiFile} = require('./support/page.cts') as import('./support/page.c
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 const {threadsFake} = require('./support/threads-fake.cts') as import('./support/threads-fake.cts').Api;
 const fs: typeof import('node:fs') = require('node:fs');
-// Page globals read inside page.evaluate (types: tasks-page.cts).
-declare var TASKS_ST: Tasks.Globals['TASKS_ST'];
-declare var taskModalShow: Tasks.Globals['taskModalShow'];
 // Element.prototype.moveBefore is newer than the DOM lib: a file-local view of the Element constructor.
 declare const Element: typeof globalThis.Element & {prototype: {moveBefore?(node: Node, child: Node | null): void}};
 
@@ -154,7 +150,7 @@ const A = (id: string, kind: 'image' | 'svg' | 'page', over: Record<string, unkn
       if (p === '/api/v2/tasks/t1') return json({task, comments: taskComments, events: [], children: [], parent: null, mover: true, messages: [], can_comment: true});
       return json(unrouted(p));
     });
-    const task = {id: 't1', title: 'Launch page', owner_id: 'bot:designer', requester_id: 'human:ana', status: 'review', lane: 'company', rank: 1, labels: [], links: [],
+    const task = {id: 't1', title: 'Launch page', owner_id: 'bot:designer', requester_id: 'human:ana', status: 'open', lane: 'company', rank: 1, labels: [], links: [],
       parts: {total: 0, done: 0}, version: 1, created_at: now, updated_at: now, body: 'Make the page.', attachments: []};
     const tver = (id: string, mime: string) => ({n: 1, size: 1000, mime, sha256: 'x', created_at: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
       width: null, height: null, duration_ms: null, media_state: 'none', url: `/api/v2/files/${id}?v=1`, poster_url: null, thumb_url: null});
@@ -495,9 +491,7 @@ const A = (id: string, kind: 'image' | 'svg' | 'page', over: Record<string, unkn
     assert.deepEqual(fileReqs.filter(r => !/f-(six[56]|nosrc)\b/.test(r)), [], `${label}: a card read /api/v2/files`);
 
     // ---- task comments: the same cards; Open in file viewer opens the task's own file panel at that version
-    await page.goto('https://tico-ui.test/#/tasks?view=board');
-    await page.waitForFunction(() => typeof TASKS_ST !== 'undefined' && TASKS_ST && !TASKS_ST.loading);
-    await page.evaluate(() => taskModalShow(TASKS_ST.tasks.find(t => t.id === 't1')));
+    await page.goto('https://tico-ui.test/#/task/t1');
     const c1 = page.locator('#task-modal .tcomment', {hasText: 'Chart and page attached.'});
     await c1.locator('figure.vcard').nth(1).waitFor();
     assert.equal(await c1.locator('.tc-thumb, .tc-file').count(), 0, 'a file shown as a card is not also a chip');

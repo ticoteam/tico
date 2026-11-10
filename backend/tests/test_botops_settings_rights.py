@@ -20,13 +20,9 @@ def test_an_owner_changes_team_settings_through_botops_and_a_member_is_refused(a
     ):
         err, result = mcp(api, name, args, ana["token"])
         assert not err, (name, result)
+    # Pipelines v3: a pipeline's settings are a person's, on its page; no bot makes one, even for an owner.
     err, made = mcp(api, "hub_task_type_create", {"name": "Ops", "default_visibility": "private"}, ana["token"])
-    assert not err and made["type"]["default_visibility"] == "private", made
-    with api.app.state.store.read() as c:
-        row = c.execute(
-            "SELECT actor,detail FROM events WHERE action='task_type.create' ORDER BY rowid DESC LIMIT 1"
-        ).fetchone()
-        assert row["actor"] == "human:ana", dict(row)  # hers, via BotOps
+    assert err and made["error"] == "removed", made
     finish(api, botops, ana)
 
     cara = turn(api, botops, person="cara-test", text="Turn the daily release on")
@@ -34,11 +30,10 @@ def test_an_owner_changes_team_settings_through_botops_and_a_member_is_refused(a
         ("hub_release_schedule", {"on": True}),
         ("hub_team_budget", {"hour": 9}),
         ("hub_maintenance_set", {"paused": False}),
-        ("hub_task_type_delete", {"id": "Ops"}),
     ):
         err, result = mcp(api, name, args, cara["token"])
         assert err, (name, result)
-    # The same through a plain `hub api` call with no on_behalf_of: the route still checks Cara, not BotOps.
+    # The same through a plain `tico api` call with no on_behalf_of: the route still checks Cara, not BotOps.
     assert act(api, cara, "PATCH", "release-schedule", {"on": True}, ref=None).status_code == 403
 
 

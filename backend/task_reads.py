@@ -11,7 +11,7 @@ find that almost none had moved. Two things make a re-read cheap:
   longer match: deleted, no longer readable by the caller, or out of the filters) and a new
   `cursor`. A cursor older than the log keeps (24 h), ahead of it, malformed, read with different
   access (a grant, a team or a bot's access changed), or naming more changes than a page holds
-  (or one change to many tasks, such as a type edit) answers `reset: true`, the events stream's
+  (or one change to many tasks) answers `reset: true`, the events stream's
   word for it, and the client reads in full.
 - **ETags.** A full read of tasks or labels is tagged with the newest task change, the reader's
   access, the display names and the query; routines with their rows. A matching `If-None-Match`
@@ -170,55 +170,176 @@ def children_text(c, visible_sql, history):
     return history
 
 
-def _pipeline_of(c, tid):
-    """(known, type_id): the pipeline a ticket the change log names was on, from the ticket itself or, once it is deleted,
-    from the row its trash kept. When neither says, the pipeline is unknown: with no members-only pipeline in the company
-    no pipeline rule can apply, so the ticket counts as on none (`known` True). Otherwise `known` is False and the caller
-    fails closed."""
-    row = c.execute("SELECT type_id FROM tasks WHERE id=?", (tid,)).fetchone()
-    if row is not None:
-        return True, row[0]
-    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_trash'").fetchone() is not None:
-        found = c.execute(
-            "SELECT json_type(rows,'$.rows.tasks[0].type_id'), json_extract(rows,'$.rows.tasks[0].type_id') "
-            "FROM task_trash WHERE task_id=?",
-            (tid,),
-        ).fetchone()
-        if found is not None and found[0] is not None:
-            return True, found[1]
-    # A purged or unreadable trash row keeps no snapshot.
-    private = c.execute("SELECT 1 FROM task_types WHERE pipeline_visibility='members' LIMIT 1").fetchone()
-    return private is None, None
-
-
 def _could_read(c, visible_sql, tid, ref):
     """Whether the snapshot `ref` (owner, requester, privacy, readers, pipeline: events.py `_WAS`) let its reader open the
-    ticket. A snapshot from before the pipeline was kept names it; an older one does not, and then the ticket's pipeline
-    now (or, deleted, its trash's) stands for it."""
+    task."""
     try:
         parts = json.loads(ref)
     except (TypeError, ValueError):
         return False
     if not isinstance(parts, list):
         return False
-    owner, requester, private, readers = (parts + [None] * 4)[:4]
+    owner, requester, private, readers, pipeline_id = (parts + [None] * 5)[:5]
     if isinstance(readers, list):
         readers = json.dumps(readers)
     elif isinstance(readers, str) and readers and not readers.startswith("["):
         readers = json.dumps([readers])
     elif not isinstance(readers, str):
         readers = None
-    if len(parts) >= 5:
-        known, type_id = True, parts[4]  # the pipeline it was on, NULL for an untyped ticket
-    else:
-        known, type_id = _pipeline_of(c, tid)
-    if not known:  # the pipeline rule (pipeline_rights.list_sql) cannot be applied: the ticket is not read
-        return False
     return (
         c.execute(
             f"SELECT 1 FROM (SELECT ? AS id, ? AS owner_id, ? AS requester_id, ? AS private, ? AS readers, "
-            f"? AS type_id) tasks WHERE {visible_sql}",
-            (tid, owner, requester, private, readers, type_id),
+            f"? AS pipeline_id) tasks WHERE {visible_sql}",
+            (tid, owner, requester, private, readers, pipeline_id),
         ).fetchone()
         is not None
     )
+
+
+# ----------------------------------------------------------------------------- the engine's part of a list row
+def brief(c, rows, visible_sql="1"):
+    """The engine's fields of a list row (docs/dev/pipelines-v3-cutover.md, "The task as JSON", Brief), laid over each
+    row in place: `turn` (the headline wait; `running` when a bot's turn is a run going now), `late`, `snoozed`
+    and `pushed_past` (it entered its stage pushed past a requirement). One `H.task_waits` for every row, one read of the
+    open visits and one of the open snoozes, never a read per row. A sub-task the reader may not open is named by
+    neither its title nor its id in a turn's line, as in the task's own read (waiting_on.unnamed)."""
+    from . import waiting_on as W
+    from .store import H
+
+    ids = [row["id"] for row in rows]
+    if not ids:
+        return rows
+    waits = H.task_waits(c, ids)
+    marks = json.dumps(ids)
+    late, pushed = {}, set()
+    for r in c.execute(
+        "SELECT task_id, late_told_at, late_person_at, entered_how FROM visits WHERE left_at IS NULL "
+        "AND (late_told_at IS NOT NULL OR entered_how='pushed_past') AND task_id IN (SELECT value FROM json_each(?))",
+        (marks,),
+    ):
+        if r[1]:
+            late[r[0]] = {"since": r[1], "level": "person" if r[2] else "told"}
+        if r[3] == "pushed_past":
+            pushed.add(r[0])
+    snoozed = {
+        r[0]
+        for r in c.execute(
+            "SELECT task_id FROM snoozes WHERE ended_at IS NULL AND task_id IN (SELECT value FROM json_each(?))",
+            (marks,),
+        )
+    }
+    heads = {tid: found[0] if found else None for tid, found in waits.items()}
+    named = sorted({head.about for head in heads.values() if head and head.about})
+    shown = (
+        {
+            r[0]
+            for r in c.execute(
+                f"SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND ({visible_sql})",
+                (json.dumps(named),),
+            )
+        }
+        if named
+        else set()
+    )
+    turns = {tid: W.view(head, shown.__contains__) if head else None for tid, head in heads.items()}
+    running = _running(c, {tid: t["who"] for tid, t in turns.items() if t and t["state"] == "bot" and t["who"]})
+    for row in rows:
+        turn = turns.get(row["id"])
+        if turn:
+            turn["running"] = row["id"] in running
+        row["turn"] = turn
+        row["late"] = late.get(row["id"])
+        row["snoozed"] = row["id"] in snoozed
+        row["pushed_past"] = row["id"] in pushed
+    return rows
+
+
+def _running(c, bots):
+    """The tasks, of {task id: bot actor}, whose bot has a run on them now: its attempt is leased or running and its
+    computer still renews the lease (task_wakes.live_run, for many tasks in one read). A bot's turn that is not running
+    is waiting to try again."""
+    from .store import H
+
+    if not bots:
+        return set()
+    pairs = json.dumps([[tid, H.actor_id(bot)] for tid, bot in bots.items()])
+    return {
+        r[0]
+        for r in c.execute(
+            "SELECT DISTINCT json_extract(p.value, '$[0]') FROM json_each(?) p "
+            "JOIN tasks t ON t.id = json_extract(p.value, '$[0]') "
+            "JOIN jobs j ON j.bot_id = json_extract(p.value, '$[1]') "
+            "JOIN attempts a ON a.id = j.attempt_id AND a.state IN ('leased', 'running') AND a.lease_until > ? "
+            "JOIN messages m ON m.id = j.message_id "
+            "AND (m.conversation_id = t.conversation_id OR substr(m.wake_key, 1, length(t.id) + 1) = t.id || ':')",
+            (pairs, H.now()),
+        )
+    }
+
+
+def comment_rights(c, auth, who, task_id):
+    """Whether the caller may write on the task: every comment and file goes through here. Returns the task's row."""
+    from . import lifecycle
+    from .store import H, Problem
+
+    row = auth.task(c, who, task_id)
+    lifecycle.refuse_send(c, who, None, what="task comments")
+    if who.role == "bot" and not H.task_participant(c, who.actor, row):
+        delegated = c.execute(
+            "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires_at>?",
+            (task_id, who.actor, H.now()),
+        ).fetchone()
+        if not delegated and not H.task_ancestor_party(c, who.actor, row) and not H.task_can_work(c, who.actor, row):
+            raise Problem(
+                "forbidden",
+                "Only the task's parties, their managers, delegates, the parties of a task above it and its "
+                "pipeline's manager may comment",
+                403,
+            )
+    origin = None if H.task_private(c, row) else H.task_origin(c, row)
+    others = [
+        a for a in dict.fromkeys([row["owner_id"], row["requester_id"], origin]) if a and a not in (who.actor, H.KEEPER)
+    ]
+    target = next((a for a in others if H.is_bot(a)), None)
+    if target and not H.task_represents(c, who.actor, row["owner_id"]):
+        auth.require_write(c, who, H.actor_id(target))
+    if target:
+        auth.require_bot_contact(c, who, target, task_id=task_id, kind="comment")
+    return row
+
+
+COVERS_SQL = (
+    "WITH visuals AS ("
+    "SELECT f.task_id,f.id,v.version,v.mime,v.created_at,v.rowid AS position,"
+    "coalesce(v.width,m.width) AS width,coalesce(v.height,m.height) AS height,"
+    "coalesce(v.thumb_blob_id,m.thumb_blob_id) AS thumb_blob_id,"
+    "coalesce(v.poster_blob_id,m.poster_blob_id) AS poster_blob_id "
+    "FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
+    "LEFT JOIN blob_media m ON m.blob_id=v.blob_id "
+    "WHERE f.task_id IN ({marks}) AND f.archived=0 AND f.locator='tico_blob' "
+    "UNION ALL SELECT a.task_id,b.id,1,b.content_type,b.created_at,b.rowid,"
+    "m.width,m.height,m.thumb_blob_id,m.poster_blob_id "
+    "FROM task_assets a JOIN blobs b ON b.id=a.blob_id LEFT JOIN blob_media m ON m.blob_id=b.id "
+    "WHERE a.task_id IN ({marks}) AND NOT EXISTS "
+    "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id)), "
+    "ranked AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY task_id "
+    "ORDER BY created_at DESC,version DESC,position DESC) AS rank FROM visuals "
+    "WHERE mime LIKE 'image/%' OR (mime LIKE 'video/%' AND poster_blob_id IS NOT NULL)) "
+    "SELECT * FROM ranked WHERE rank=1"
+)
+
+
+def covers(c, task_ids):
+    """The newest picture of each task, one query for a page of tasks."""
+    if not task_ids:
+        return {}
+    marks = ",".join("?" * len(task_ids))
+    out = {}
+    for row in c.execute(COVERS_SQL.format(marks=marks), (*task_ids, *task_ids)):
+        suffix = "/poster" if row["mime"].startswith("video/") else "/thumb" if row["thumb_blob_id"] else ""
+        out[row["task_id"]] = {
+            "url": f"/api/v2/files/{row['id']}{suffix}?v={row['version']}",
+            "width": row["width"],
+            "height": row["height"],
+        }
+    return out

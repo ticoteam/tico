@@ -6,6 +6,7 @@ import json
 import pytest
 
 from backend import github as G
+from backend import never_stuck
 from backend import wake_presets as W
 from backend.store import H
 from backend.tests.helpers.api import claim, get, headers, post, ready, setup_attempt  # noqa: F401  (api is a fixture)
@@ -133,10 +134,10 @@ def test_immediate_wakes_are_never_held_and_a_duplicate_wakes_once(api, name):
     task = new_task(api, "assigned")  # an assignment
     post(api, "chat/ops", {"text": "Can you look at this?"})  # a person's question
     post(api, "chat/ops", {"text": "Can you look at this?"})  # the same, sent twice
-    # An awaited result, a blocker and a reopened task wake; "Ready for review" is a note now, not an immediate wake.
+    # An awaited result, a blocker and a reopened task wake.
     for body, refs in (
-        ("Unblocked: assigned\nThe migration is finished.", {"blocker_done": task["id"]}),
-        ("Stuck: the deploy key was revoked", {}),
+        ("All subtasks done: assigned\nThe migration is finished.", {"subtask": task["id"]}),
+        ("Your task for the deploy key is waiting on you", {}),
         ("Open: assigned", {}),
     ):
         notice(api, task, body, **refs)
@@ -185,35 +186,42 @@ def test_an_unchanged_webhook_queues_nothing_and_the_preset_is_its_only_timer(ap
         assert G.flush_wakes(c) == [task["id"]]  # the next flush, not three minutes on
         G.pr_signal(c, "pull_request_review_comment", failing)  # the same comment: nothing new
         assert G.flush_wakes(c) == []
-        G.queue_wake(c, H.task(c, task["id"]), "The release you armed a wait for is out.")
-        assert G.flush_wakes(c) == [task["id"]]  # an awaited result goes at once too
-    [ci] = [j for j in jobs(api) if j["wake_class"] == "review"]
+    [ci] = [j for j in jobs(api) if j["wake_class"] == "review" and j["state"] == "queued"]
     assert ci["held"] == 1  # a person's review comment nobody waits on is batched
     tick(api, H.now())
     [ci] = [j for j in jobs(api) if j["id"] == ci["id"]]
     assert H.parse_ts(ci["hold_until"]) <= H.parse_ts(H.shift(H.now(), seconds=window))
-    [armed] = [j for j in jobs(api) if j["body"].startswith("The release you armed")]
-    assert (armed["state"], armed["held"]) == ("queued", 0)
+    with api.app.state.store.transaction() as c:
+        G.queue_wake(c, H.task(c, task["id"]), "The release you armed a wait for is out.")
+        assert G.flush_wakes(c) == [task["id"]]  # an awaited result goes at once too
+    # It takes the held review wake with it (one turn per task) and is not held for it.
+    [armed] = [j for j in jobs(api) if "The release you armed" in j["body"]]
+    assert (armed["state"], armed["held"]) == ("queued", 0) and "review comment" in armed["body"]
+    assert [j["state"] for j in jobs(api) if j["id"] == ci["id"]] == ["canceled"]
 
 
 @pytest.mark.parametrize("name", ["token_saver", "performance"])
-def test_a_subordinates_ordinary_edits_do_not_wake_its_manager(api, name):
+def test_a_subordinates_edits_do_not_wake_its_manager_and_its_end_wakes_it_unheld(api, name):
     preset(api, "coo", name)
     with api.app.state.store.transaction() as c:
         parent = H.task_create(c, "bot:coo", "Plan the launch", "Plan it.", "bot:coo")
         task = H.task_create(c, "bot:coo", "Draft the plan", "Please draft it.", "bot:ops", parent_id=parent["id"])
         before = c.execute("SELECT count(*) FROM jobs WHERE bot_id='coo'").fetchone()[0]
-        H.task_update(c, "bot:ops", task["id"], status="doing", note="Started on the outline")
+        H.task_update(c, "bot:ops", task["id"], note="Started on the outline")
         H.task_update(c, "bot:ops", task["id"], note="Half way")
         assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='coo'").fetchone()[0] == before
-        H.task_update(c, "bot:ops", task["id"], status="done", note="Drafted")
-        [done] = c.execute(
-            "SELECT j.held,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
-            "WHERE j.bot_id='coo' AND json_extract(m.refs,'$.subtask')=?",
-            (task["id"],),
+        H.task_update(
+            c, "bot:ops", task["id"], status="done", note="Drafted", seen_version=H.task(c, task["id"])["version"]
         )
-        assert done["held"] == 0  # a delegated result continues the parent's work immediately
-        assert json.loads(done["refs"])["task"] == parent["id"]
+        # Pipelines v3: no "done" notice goes to the parent (D45). The parent's turn comes back to its owner, and the
+        # never-stuck check wakes it then, at once: nothing holds that wake.
+        never_stuck.check(c)
+        woken = c.execute(
+            "SELECT j.held FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "WHERE j.bot_id='coo' AND j.state='queued' AND json_extract(m.refs,'$.task')=?",
+            (parent["id"],),
+        ).fetchall()
+        assert woken and all(row["held"] == 0 for row in woken)
 
 
 def test_token_saver_gives_three_notices_in_its_window_one_wake(api):
@@ -481,7 +489,9 @@ def test_a_digest_turn_is_measured_from_each_event_and_split_over_its_tickets(ap
     finish(api, machine, attempt, usage={"input_tokens": 900, "cached_tokens": 0, "output_tokens": 0, "model": "fake"})
     with api.app.state.store.transaction() as c:
         for task in tasks:
-            H.task_update(c, "bot:ops", task["id"], status="done", note="Done")
+            H.task_update(
+                c, "bot:ops", task["id"], status="done", note="Done", seen_version=H.task(c, task["id"])["version"]
+            )
     [token_saver] = [
         p
         for p in get(api, "wake-presets/measures?since=" + H.shift(t0, minutes=-1))["presets"]
@@ -539,19 +549,19 @@ def test_a_persons_message_is_not_delayed_by_a_held_batch(api):
     assert [(j["state"], j["held"], j["hold_until"]) for j in jobs(api, since=since)[1:]] == [("queued", 0, None)] * 2
 
 
-def test_a_persons_act_through_botops_wakes_the_bot_at_once(api, botops):
-    """BotOps marking done, for the person, a task a bot asked them for: Tico's notice to that bot is the person's act,
-    as the same act from the app is, and no batch holds it."""
+def test_a_persons_done_through_botops_wakes_no_bot_about_the_done_task(api, botops):
+    """BotOps marking done, for the person, a task a bot asked them for: the person's act, as the same act from the app
+    is. Pipelines v3 wakes no bot about a Done task (docs/pipelines-v3.md, check rule 7), so nothing is queued or held."""
     preset(api, "ops", "token_saver")
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "bot:ops", "Approve the vendor list", "Please check it.", "human:ana")
     attempt = turn(api, botops, person="ana-test", text="Mark the vendor list done")
     since = H.now()
     version = get(api, "tasks/" + task["id"])["task"]["version"]
-    done = act(api, attempt, "POST", "tasks/" + task["id"], {"status": "done", "version": version})
+    done = act(api, attempt, "POST", f"tasks/{task['id']}/done", {"version": version})
     assert done.status_code == 200, done.text
-    [told] = jobs(api, since=since)
-    assert (told["state"], told["held"], told["wake_class"]) == ("queued", 0, None)
+    assert jobs(api, since=since) == []
+    assert get(api, "tasks/" + task["id"])["task"]["status"] == "done"
 
 
 # A held notice is queued but starts no run: every immediate wake that checks for a run already waiting still goes out.
@@ -572,33 +582,3 @@ def test_run_now_wakes_the_bot_while_a_notice_on_the_task_is_held(api):
     assert post(api, f"tasks/{task['id']}/run-now", {})["queued"] is True
     [run] = [j for j in jobs(api) if j["body"].startswith("Run now:")]
     assert (run["state"], run["held"]) == ("queued", 0)
-
-
-def test_a_resumed_task_wakes_while_a_notice_on_it_is_held(api):
-    from backend import quiet_work
-
-    preset(api, "ops", "token_saver")
-    task = new_task(api, "tidy")
-    settled(api)
-    held_notice(api, task)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET next_run=1, resume=? WHERE id=?", (json.dumps({"until": H.now()}), task["id"]))
-        quiet_work.resume(c, H.task(c, task["id"]), "Its date came.", "schedule")
-    [resumed] = [j for j in jobs(api) if j["body"].startswith("Resume:")]
-    assert (resumed["state"], resumed["held"]) == ("queued", 0)
-
-
-def test_an_update_request_and_an_automatic_start_go_out_while_a_notice_is_held(api):
-    from backend import updates
-    from backend.tests.helpers.auto_tasks import deck, take
-
-    machine = task_bot(api, lanes=True)
-    preset(api, "ops", "token_saver")
-    [task] = deck(api, 1)
-    held_notice(api, task)
-    with api.app.state.store.read() as c:
-        assert not updates._busy(c, "ops")
-    started = take(api, machine)
-    assert (
-        started and started["task"]["id"] == task["id"] and started["message"]["body"].startswith("Start assigned task")
-    )

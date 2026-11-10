@@ -295,13 +295,13 @@ def _c4_close_period_is_asked_with_the_fields_it_takes(api, token):
 
 
 def _c4_the_payloads_the_playbooks_show_take_those_fields(api, token):
-    """Each `hub finance act <kind> --payload '<json>'` a playbook or AGENT.md shows is a kind with a shape, its JSON names
+    """Each `tico finance act <kind> --payload '<json>'` a playbook or AGENT.md shows is a kind with a shape, its JSON names
     only fields that kind takes and gives every required one: the example is what a bot copies. Examples wrap over lines,
     so the text is read as one line."""
     text = " ".join(p.read_text() for p in INSTRUCTIONS).replace("\n", " ")
     shown = [
         (kind, raw)
-        for kind, raw in re.findall(r"hub finance act ([a-z_]+)\s+--payload\s+'(\{.*?\})'", text)
+        for kind, raw in re.findall(r"tico finance act ([a-z_]+)\s+--payload\s+'(\{.*?\})'", text)
         if kind != "help"
     ]
     assert len(shown) >= 6, shown  # bill_schedule, payment_create, reconcile, contact_create, ...

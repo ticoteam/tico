@@ -26,6 +26,7 @@ from backend.tests.helpers.finance_fixtures import (
     store,
     sync_once,
 )
+from backend.tests.helpers.finance_oks import give
 
 SALARY = -812_345
 
@@ -785,7 +786,7 @@ def test_a_card_limit_approval_that_no_longer_fits_stores_no_figure(books):
             ).status
             == "committed"
         )
-        H.approval_decide(c, OWNER, held.approval_id, "approved")
+        give(c, OWNER, held.approval_id)
         done = FA.approval_decided(c, held.approval_id, OCT_END)
         assert done.status in ("failed", "denied") and done.code == "invalid", done
         reason, result = c.execute(
@@ -908,7 +909,7 @@ def test_a_card_limit_refusal_keeps_a_private_charge_hidden_when_read_in_a_later
             c, "human:gus", "card_update_limit", {"card_id": card_id, "amount": 3_000}, at=OCT_END, key="gus-limit"
         )
         assert asked.status == "needs_approval" and asked.action_id and asked.approval_id, asked
-        H.approval_decide(c, str(asked.approver), asked.approval_id, "approved")
+        give(c, str(asked.approver), asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, OCT_END)
     assert done is not None and (done.status, done.code) == ("failed", "invalid"), done and done.reason
     with books.read() as c:
@@ -1133,9 +1134,9 @@ def test_a_hidden_child_budget_is_judged_on_the_true_figures_when_its_owner_appr
                 at=AT,
             )
             assert (asked[amount].status, asked[amount].approver) == ("needs_approval", OWNER), asked[amount]
-        H.approval_decide(c, OWNER, asked[6_001].approval_id, "approved")
+        give(c, OWNER, asked[6_001].approval_id)
         too_big = FA.approval_decided(c, asked[6_001].approval_id, AT)
         assert too_big.status in ("failed", "denied") and too_big.code == "invalid", too_big
-        H.approval_decide(c, OWNER, asked[6_000].approval_id, "approved")
+        give(c, OWNER, asked[6_000].approval_id)
         fits = FA.approval_decided(c, asked[6_000].approval_id, AT)
         assert fits.status == "committed", fits

@@ -29,6 +29,34 @@ def test_failed_computer_retirement_records_failure_and_runs_the_remaining_clean
     assert any(record.name == "tico.scheduler" and record.exc_info for record in caplog.records)
 
 
+def test_the_finance_sweep_commits_its_money_actions_durably(api, monkeypatch):
+    """The hourly Finance sweep ends actions whose OK was given, as the OK route does: its commit reaches the disk
+    before the pass goes on (store.transaction(durable=True))."""
+    from contextlib import contextmanager
+
+    from backend.finance import actions as finance
+
+    store = api.app.state.store
+    real = store.transaction
+    # Keyed by connection: the tick's Finance workers open transactions on their own threads meanwhile.
+    durable_of, seen = {}, []
+
+    def sweep(c, at=None, most=200):
+        seen.append(durable_of.get(id(c)))
+        return []
+
+    @contextmanager
+    def transaction(durable=False):
+        with real(durable) as c:
+            durable_of[id(c)] = durable
+            yield c
+
+    monkeypatch.setattr(finance, "ok_sweep", sweep)
+    monkeypatch.setattr(store, "transaction", transaction)
+    Scheduler(store, api.app.state.execution).tick()
+    assert seen == [True], f"the sweep ran once, in a durable transaction: {seen}"
+
+
 def test_saved_nightly_learnings_never_runs_beside_maintenance(api, monkeypatch):
     import json
     from backend import learnings, maintenance
@@ -101,7 +129,14 @@ def test_schedule_survives_restart_without_duplicate_work(api):
         )
     # A finished occurrence keeps its status; the next occurrence gets its own task and is deduplicated after restart.
     with store.transaction() as c:
-        previous = H.task_update(c, 'bot:coo', fired[0], status=finished_status, note='Daily work reviewed.')
+        previous = H.task_update(
+            c,
+            'bot:coo',
+            fired[0],
+            status=finished_status,
+            note='Daily work reviewed.',
+            seen_version=H.task(c, fired[0])['version'],
+        )
     next_at = datetime(2026, 9, 11, 17, tzinfo=timezone.utc)
     Scheduler(store, api.app.state.execution).tick(next_at)
     Scheduler(store, api.app.state.execution).tick(next_at)
@@ -110,23 +145,6 @@ def test_schedule_survives_restart_without_duplicate_work(api):
         assert c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=?", (aid,)).fetchone()[0] == 2
         again = tasks(c)
         assert len(again) == 2 and again[1] != previous['id']
-
-
-def test_due_reminder_deduplicates_across_scheduler_restart(api):
-    task = post(
-        api,
-        "tasks",
-        {"owner": "coo", "title": "Review deadline", "body": "Review pending work", "due": "2026-09-10T15:00:00Z"},
-    )
-    store = api.app.state.store
-    for _ in range(2):
-        Scheduler(store, api.app.state.execution).tick(datetime(2026, 9, 10, 17, tzinfo=timezone.utc))
-    with store.read() as c:
-        assert c.execute("SELECT count(*) FROM task_reminders").fetchone()[0] == 1
-        assert (
-            c.execute("SELECT count(*) FROM messages WHERE conversation_id=?", (task["conversation_id"],)).fetchone()[0]
-            == 2
-        )
 
 
 @pytest.mark.slow
@@ -185,9 +203,9 @@ def test_completed_tasks_stay_done_after_scheduler_ticks_and_restarts(api, monke
             H.task_create(c, 'human:ana', 'Review own receipt', 'x', 'human:ana', lint=False),
         ]
         for task in tasks:
-            c.execute("UPDATE tasks SET status='done',done_at='2026-01-01T00:00:00Z' WHERE id=?", (task['id'],))
+            H.task_update(c, task['owner_id'], task['id'], status='done', seen_version=H.task(c, task['id'])['version'])
         old_closed = H.task_create(c, 'bot:ops', 'Cancel old work', 'x', 'bot:cpo', lint=False)
-        H.task_close(c, 'bot:ops', old_closed['id'])
+        H.task_close(c, 'bot:ops', old_closed['id'], 'Not needed', old_closed['version'])
         previous = {t['id']: H.task(c, t['id']) for t in [*tasks, old_closed]}
     closes = []
 

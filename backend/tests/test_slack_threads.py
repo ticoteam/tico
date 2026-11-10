@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend import hubdb as H
+from backend import task_engine as E
 from backend import screening
 from backend import slack_channels as SC
 from backend import slack_gateway as G
@@ -940,7 +941,8 @@ def test_a_terminal_slack_refusal_files_one_needs_you_item_until_it_is_resolved(
     assert link_row(world, link_id)["state"] == "active", "a message refusal does not suspend the channel"
     assert link_row(world, link_id)["failure_task_id"] == items[0]["id"]
     with world.hub.transaction() as c:
-        c.execute("UPDATE tasks SET status='done' WHERE id=?", (items[0]["id"],))
+        item = H.task(c, items[0]["id"])
+        E.move(c, item["id"], E.DONE, item["owner_id"], "Shortened the message")
     send_as_ana(world, "third")
     world.bridge.outbound()
     assert len(all_rows(world, "SELECT id FROM tasks WHERE title LIKE 'A message to Slack%'")) == 2

@@ -745,8 +745,9 @@ def midnight():
 
 
 def _held(c, task_id, field, current, before):
-    """Who held a task's `field` (owner, the waiting_on it stored before step 6b) at any point before `before`, and at that moment: the values its
-    changes moved between, and its value then (the one the first later change moved away from, else today's)."""
+    """Who held a task's `field` (its owner: the history kind `reassign`) at any point before `before`, and at that
+    moment: the values its changes moved between, and its value then (the one the first later change moved away from,
+    else today's)."""
     out, later = set(), None
     for r in c.execute(
         "SELECT old, new, created_at FROM history_events WHERE subject_type='task' AND subject_id=? "
@@ -762,8 +763,8 @@ def _held(c, task_id, field, current, before):
 
 
 def task_parties(c, task_id, before=None):
-    """Everyone a task is shared with: its owner, requester, the one it waits on, its readers (a group's by its members), everyone who owned it, and
-    whoever posted in or is a member of its thread. `before`: who was on it then (the dry-run's history; thread members
+    """Everyone a task is shared with: its owner, requester, everyone an ask on it named (or was given to), its readers
+    (a group's by its members), everyone who owned it, and whoever posted in or is a member of its thread. `before`: who was on it then (the dry-run's history; thread members
     are left out, as their joins are not dated)."""
     row = (
         c.execute(
@@ -774,12 +775,26 @@ def task_parties(c, task_id, before=None):
     )
     if not row:
         return set()
-    from . import question_tasks as QT
-
     out = {row["requester_id"]} | H.reader_actors(c, dict(row))
-    out |= _held(c, task_id, "owner", row["owner_id"], before)
-    # Who it waits on now is derived (question_tasks.waiting_on); history keeps who it waited on before.
-    out |= _held(c, task_id, "waiting_on", QT.waiting_on(c, dict(row)), before)
+    out |= _held(c, task_id, "reassign", row["owner_id"], before)
+    # Whoever an ask on it named, in any visit, and whoever one was given to.
+    dated = " AND r.created_at<?" if before else ""
+    out |= {
+        r[0]
+        for r in c.execute(
+            "SELECT r.person_id FROM requirements r JOIN visits v ON v.id=r.visit_id WHERE v.task_id=? "
+            "AND r.person_id IS NOT NULL" + dated,
+            (task_id, *((before,) if before else ())),
+        )
+    }
+    out |= {
+        r[0]
+        for r in c.execute(
+            "SELECT a.notes FROM answers a JOIN visits v ON v.id=a.visit_id WHERE v.task_id=? AND a.answer='give' "
+            "AND a.notes IS NOT NULL" + dated.replace("r.", "a."),
+            (task_id, *((before,) if before else ())),
+        )
+    }
     if row["conversation_id"]:
         out |= {
             r[0]
@@ -821,7 +836,7 @@ def solicited(c, sender, receiver, conversation_id=None, in_reply_to=None, befor
     if (
         not person
         and c.execute(
-            "SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND status NOT IN ('done','closed','declined')"
+            "SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND status='open'"
             + (" AND created_at<?" if before else "")
             + " LIMIT 1",
             (receiver, sender, *((before,) if before else ())),
@@ -863,7 +878,7 @@ def handed(c, sender, receiver, task_id, before=None):
     """The person `receiver` handed `sender` this exact open task: they asked for it and the bot owns it."""
     return bool(task_id) and (
         c.execute(
-            "SELECT 1 FROM tasks WHERE id=? AND requester_id=? AND owner_id=? AND status NOT IN ('done','closed','declined')"
+            "SELECT 1 FROM tasks WHERE id=? AND requester_id=? AND owner_id=? AND status='open'"
             + (" AND created_at<?" if before else ""),
             (task_id, receiver, sender, *((before,) if before else ())),
         ).fetchone()

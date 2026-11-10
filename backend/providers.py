@@ -618,7 +618,7 @@ class NoProvider(ProviderError):
             "no_provider",
             f"{what} has no runtime or model and the company has no default. Choose "
             "which AI providers you use and a default model in Settings > Computers "
-            "(or run `tico env create ... --providers ...` / set TICO_ENABLED_PROVIDERS).",
+            "(or run `tico-computer env create ... --providers ...` / set TICO_ENABLED_PROVIDERS).",
             409,
         )
 

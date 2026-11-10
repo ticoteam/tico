@@ -37,7 +37,7 @@ def run_on(api, bot="ops"):
 
 
 def subtask(parent, owner, **extra):
-    return {"owner": owner, **ASK, "relations": [{"task": parent, "kind": "parent"}], **extra}
+    return {"owner": owner, **ASK, "parent": parent, **extra}
 
 
 def dry_run(api, body, token):

@@ -1,4 +1,4 @@
-"""The model one task's runs use: `hub task create --model`, `hub task model`, `POST /api/v2/tasks/{id}/model`, and a
+"""The model one task's runs use: `tico task create --model`, `tico task model`, `POST /api/v2/tasks/{id}/model`, and a
 routine's bot_turn step, which stamps its choice on the task its run opens. It is kept per task in `task_run_models`,
 apart from the check model (backend/check_models.py), which holds when it cannot run: this falls back, to the bot's
 task model and then the bot's own model (backend/task_models.py `pick`). Whoever may set the bot's model may set this,

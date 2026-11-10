@@ -173,8 +173,7 @@ def recent(c, auth, who, at=None, *, bot=None, attempt_id=""):
     waiting = {
         r[0]
         for r in c.execute(
-            f"SELECT DISTINCT requester_id FROM tasks WHERE owner_id=? AND requester_id IN ({marks}) "
-            "AND status IN ('open','doing','waiting')",
+            f"SELECT DISTINCT requester_id FROM tasks WHERE owner_id=? AND requester_id IN ({marks}) AND status='open'",
             [who.actor, *[U.author_actor(a) for a in authors]],
         )
     }

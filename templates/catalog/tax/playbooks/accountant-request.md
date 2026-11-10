@@ -15,15 +15,15 @@ request and its deadline are recorded in `knowledge/tax-calendar.md`.
 
 ## 1. Read the request
 
-    hub task show <id>
+    tico task show <id>
 
 List every item asked for, with its period and the deadline. An item you do not understand is a question for the requester,
 not a guess.
 
 ## 2. Gather
 
-For each item, find the team's own record: reports from the finance bots (`hub file list --bot <slug>`), exports attached to
-earlier tasks, `hub doc search "<item>"`. Note the file and its date. Never produce a figure the records do not contain.
+For each item, find the team's own record: reports from the finance bots (`tico file list --bot <slug>`), exports attached to
+earlier tasks, `tico doc search "<item>"`. Note the file and its date. Never produce a figure the records do not contain.
 
 ## 3. Check
 

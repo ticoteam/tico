@@ -45,5 +45,5 @@ Security questionnaires took Dana 9 hours over three weeks (tasks 412, 427, 440)
 Calls from 2026-09-25 were not imported, so two next steps come from the pipeline notes.
 
 ## Sources
-- CRM read 2026-09-28; `hub task list` 2026-09-28; sales bots' reports 2026-09-21 to 2026-09-27
+- CRM read 2026-09-28; `tico task list` 2026-09-28; sales bots' reports 2026-09-21 to 2026-09-27
 ```

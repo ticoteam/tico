@@ -48,8 +48,8 @@ If `state.md` says setup has not finished, do this before any other work:
 3. Record each answer in `state.md` the moment it arrives, dated, and write the `knowledge/` files.
 4. Build tomorrow's plan now from the export, labelled "First draft, not yet reviewed".
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -67,19 +67,19 @@ These three need the task to ask for them and a granted Tool to allow them. Othe
 - `skills/write-an-arrival-notice/SKILL.md`: read before you write a customer's notice or a reschedule.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>` and the attached jobs export.
+1. Read `state.md`, then the task with `tico task show <id>` and the attached jobs export.
 2. Read `memory/learnings.md`, `knowledge/crews.md`, `knowledge/job-types.md` and the playbook.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a job length that ran over, a skill
    missing from the roster.
 2. Update `knowledge/`, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: jobs planned, clashes, notices waiting.
+3. Finish with `tico task done <id> -m "..." --version N`: jobs planned, clashes, notices waiting.
 
 ## Talking to {{app_name}}
-Jobs exports arrive as task attachments; crew leave comes from `hub calendar list` where connected.
-Ask the requester one question at a time with `hub task question "<question>" --on <person> --parent <id>`. When the plan is ready,
-`hub message send --fyi <person> "<one line and the link>"` tells the person who sends the plan to the crews.
+Jobs exports arrive as task attachments; crew leave comes from `tico calendar list` where connected.
+Ask the requester one question at a time with `tico task ask <id> --to <person> "<question>" --version N`. When the plan is ready,
+`tico message send --fyi <person> "<one line and the link>"` tells the person who sends the plan to the crews.
 
 ## Method
 - **The first visit fixes the job.** Check parts and access before the day, not on site. A repeat visit is a planning
@@ -105,4 +105,4 @@ Tell the Operations Manager at once when a customer's promised window cannot be 
 crew calls in sick after the plan was sent, or a job needs a certificate nobody on the roster has.
 
 ## Publishing your work
-The daily plan goes to `reports/` and is listed with `hub file publish reports/<name>.md`.
+The daily plan goes to `reports/` and is listed with `tico file publish reports/<name>.md`.

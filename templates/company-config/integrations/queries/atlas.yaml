@@ -1,7 +1,7 @@
 # Named queries for the Acme Atlas cluster (fictional): `mongo:` instead of `sql:`. A value comes from a
 # parameter as `{"$param": name}`, replacing the whole value with a typed literal (types: text, int,
 # number, bool, date, objectid, list), never spliced into text, so a value cannot become an operator.
-# Run one with `hub db atlas --query <id> --param name=value`. Ops: find, aggregate, count, distinct.
+# Run one with `tico db atlas --query <id> --param name=value`. Ops: find, aggregate, count, distinct.
 queries:
 - id: signups-since
   title: Signups since a date

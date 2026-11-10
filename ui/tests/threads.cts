@@ -292,10 +292,8 @@ async function open(browser: import('playwright').Browser, who: string, {phone =
       await new Promise(r => setTimeout(r, 600));     // long enough to see "Checking…"
       return json({message: msg('n' + seen.posts.length, 9 + seen.posts.length, 'human:ana', body.text, {thread_id: send[1], parent_message_id: body.parent_message_id || null})});
     }
-    // A message held for Ana's review in a thread: Inbox lists it with its review card.
-    if (p === '/api/v2/needs-you' && !bob) return json({items: [{kind: 'thread_held', id: 'hold3', conversation_id: null, thread_id: 't-plan',
-      title: 'A message is held for your review', requester_id: 'Bea', created_at: at(5)}], count: 1, version: 'v1'});
-    if (p === '/api/v2/rule-holds/hold3') return json({id: 'hold3', operation: 'threads', can_send: true, reason: 'Names a customer'});
+    // Needs you holds tasks, asks, paused causes and mentions (backend/views.py needs_items); a held message is on its thread.
+    if (p === '/api/v2/needs-you' && !bob) return json({actor: 'human:ana', items: [], count: 0, version: 'v1'});
     if (p === '/api/v2/rule-holds/hold1') return json({id: 'hold1', can_send: false});
     const asked = p.match(/^\/api\/v2\/threads\/([^/]+)\/(catch-up|follow|open-earlier)$/);
     if (asked) {

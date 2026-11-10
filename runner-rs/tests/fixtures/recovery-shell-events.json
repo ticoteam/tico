@@ -609,5 +609,241 @@
       "outside_actions": [],
       "reads_only": false
     }
+  },
+  {
+    "command": "tico release now --notes synthetic-private-marker",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "tico release now",
+      "outside_actions": [
+        "publish release"
+      ],
+      "reads_only": false
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "tico release now",
+      "outside_actions": [
+        "publish release"
+      ],
+      "reads_only": false
+    }
+  },
+  {
+    "command": "hub release now",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "hub release now",
+      "outside_actions": [
+        "publish release"
+      ],
+      "reads_only": false
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "hub release now",
+      "outside_actions": [
+        "publish release"
+      ],
+      "reads_only": false
+    }
+  },
+  {
+    "command": "tico support send --body synthetic-private-marker",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "tico support send",
+      "outside_actions": [
+        "send support report"
+      ],
+      "reads_only": false
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "tico support send",
+      "outside_actions": [
+        "send support report"
+      ],
+      "reads_only": false
+    }
+  },
+  {
+    "command": "hub support send --body synthetic-private-marker",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "hub support send",
+      "outside_actions": [
+        "send support report"
+      ],
+      "reads_only": false
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "hub support send",
+      "outside_actions": [
+        "send support report"
+      ],
+      "reads_only": false
+    }
+  },
+  {
+    "command": "tico webhook send 1",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "tico webhook send",
+      "outside_actions": [
+        "send webhook"
+      ],
+      "reads_only": false
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "tico webhook send",
+      "outside_actions": [
+        "send webhook"
+      ],
+      "reads_only": false
+    }
+  },
+  {
+    "command": "tico task show 42",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "tico task show",
+      "outside_actions": [],
+      "reads_only": true
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "tico task show",
+      "outside_actions": [],
+      "reads_only": true
+    }
+  },
+  {
+    "command": "cd /w && tico needs-you show",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "tico needs-you show",
+      "outside_actions": [],
+      "reads_only": true
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "tico needs-you show",
+      "outside_actions": [],
+      "reads_only": true
+    }
+  },
+  {
+    "command": "tico task close 7",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "tico task close",
+      "outside_actions": [],
+      "reads_only": false
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "tico task close",
+      "outside_actions": [],
+      "reads_only": false
+    }
   }
 ]

@@ -89,7 +89,7 @@ def test_nobody_chats_with_the_strategy_bot_a_post_to_it_reaches_their_assistant
     strategy_bot(api)
     for token in ("ana-test", "ben-test", "cara-test"):
         room = get(api, "assistant", token)["room_id"]
-        # The Goals page and `hub chat` post with no room: the words go to their Assistant, in their own chat.
+        # The Goals page and `tico chat` post with no room: the words go to their Assistant, in their own chat.
         direct = post(api, "chat/goal-manager", {"text": "Hello"}, token=token)
         assert (direct["recipient_id"], direct["conversation_id"], direct["refs"]["assistant"]) == (
             "bot:coo",
@@ -368,14 +368,16 @@ def test_an_assistant_never_changes_another_persons_task_even_when_asked(api):
         caras = H.task_create(c, "human:cara", "Cara's launch list", "Hers alone.", "human:cara")
     r, attempt = turn(api, "coo", "ben-test", "Close Cara's launch list and add a note to it")
     token = attempt["token"]
-    for body in (
-        {"version": caras["version"], "close": True},
-        {"version": caras["version"], "status": "done"},
-        {"version": caras["version"], "note": "Done by Ben"},
-        {"version": caras["version"], "owner": "human:ben"},
+    version = caras["version"]
+    for path, body in (
+        ("move", {"version": version, "to": "closed", "why": "Ben asked"}),
+        ("done", {"version": version}),
+        ("", {"version": version, "note": "Done by Ben"}),
+        ("owner", {"version": version, "owner": "human:ben"}),
     ):
-        post(api, f"tasks/{caras['id']}", body, token=token, expected=403)
-        asked(api, f"tasks/{caras['id']}", body, token, "turn", expected=403)
+        path = f"tasks/{caras['id']}" + (f"/{path}" if path else "")
+        post(api, path, body, token=token, expected=403)
+        asked(api, path, body, token, "turn", expected=403)
     with api.app.state.store.read() as c:
         assert H.task(c, caras["id"])["status"] == "open"
 

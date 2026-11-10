@@ -8,7 +8,7 @@ with a tier and a suggested angle.
 
 ## 1. Read what you have
 
-    hub task show <id>
+    tico task show <id>
 
 Look in `knowledge/leads/` for an existing file and update it rather than starting a second. Check `knowledge/do-not-contact.md` first: a stop is not research. Read
 `knowledge/icp.md` and `knowledge/scoring.md` before you decide anything is interesting.
@@ -36,6 +36,6 @@ End with the tier and its score reasons.
 
 ## 5. Finish
 
-Add the lead to the pack or, for a task, attach the brief and any draft. `hub task update <id> --status
-done --note`: the tier, the angle in one line, and the sources you could not read. A source that refused
+Add the lead to the pack or, for a task, attach the brief and any draft. `tico task done <id> -m
+"..." --version N`: the tier, the angle in one line, and the sources you could not read. A source that refused
 you is a named gap, never silence.

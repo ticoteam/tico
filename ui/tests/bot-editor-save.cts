@@ -11,7 +11,7 @@ import type * as Routes from './support/routes.cts';
 //    open with the pick, and Save again sends the definition and the transition, not the Fallback;
 //  - a half-made pick (harness, no model) keeps the editor open and says so;
 //  - with nothing pending, Save posts the definition only, as before;
-//  - every other row waits for Save bot too: a model, compact-at, keep-tasks and turns-at-once change posts nothing
+//  - every other row waits for Save bot too: a model, compact-at and turns-at-once change posts nothing
 //    until Save bot, which then saves all of them, each at the revision the write before it made;
 //  - Archive bot asks first, naming who gets its work, and Cancel archives nothing;
 //  - Slug renames a bot whose id is not its slug: the new slug goes with the definition, a taken one shows the
@@ -82,7 +82,7 @@ declare function loadSettings(): void;
           return json({name: 'helper', display_name: helper.display_name, revision: ++helper.revision});
         }
         if (what === 'compact-at') helper.compact_at = body.compact_at;
-        if (what === 'compact-at' || what === 'keep-tasks-going' || what === 'turns-at-once') {
+        if (what === 'compact-at' || what === 'turns-at-once') {
           return json({bot: 'helper', revision: ++helper.revision});
         }
         if (what === 'archive') return json({bot: 'helper', archived: true});
@@ -231,15 +231,13 @@ declare function loadSettings(): void;
     await page.waitForFunction(() => /Checkpointing 0 of 1/.test(document.querySelector<HTMLElement>('#transition-dialog')?.innerText || ''));
     await page.evaluate(() => { clearInterval(SETTINGS_TRANSITION_TIMER); document.querySelector<HTMLDialogElement>('#transition-dialog')!.close(); });
 
-    // Model, compact-at, keep-tasks and turns at once changed: nothing is posted until Save bot, then all
+    // Model, compact-at and turns at once changed: nothing is posted until Save bot, then all
     // of them save together.
     await open();
     await pick('model', 'codex', 'gpt-6-luna');
     assert.deepEqual(await editor.locator('[data-bot-compact] option').allInnerTexts(), ['100k', '150k', '250k', '400k', '600k', '1M'],
       'the Compact at choices, 100k first; the default stays 250k');
     await editor.locator('[data-bot-compact]').selectOption('100000');
-    await editor.locator('[data-bot-keep-tasks]').fill('3');
-    await editor.locator('[data-bot-keep-tasks]').dispatchEvent('change');
     await editor.locator('[data-bot-turns-at-once]').fill('5');
     await editor.locator('[data-bot-turns-at-once]').dispatchEvent('change');
     await editor.locator('[data-bot-pending]:not([hidden])').waitFor();
@@ -249,11 +247,10 @@ declare function loadSettings(): void;
     await transition.locator('[data-confirm-prepare]').click();
     await closed();
     assert.deepEqual(calls.map(c => [c.what, c.body.expected_revision]),
-      [['definition', 13], ['compact-at', 14], ['keep-tasks-going', 15], ['turns-at-once', 16], ['transitions', 17]],
+      [['definition', 13], ['compact-at', 14], ['turns-at-once', 15], ['transitions', 16]],
       'Save bot saves every held change, chaining the revision');
     assert.equal(calls[1]!.body.compact_at, 100000);
-    assert.equal(calls[2]!.body.keep_tasks_going, 3);
-    assert.deepEqual(calls[3]!.body, {turns_at_once: 5, expected_revision: 16});
+    assert.deepEqual(calls[2]!.body, {turns_at_once: 5, expected_revision: 15});
     await page.waitForFunction(() => /Checkpointing 0 of 1/.test(document.querySelector<HTMLElement>('#transition-dialog')?.innerText || ''));
     await page.evaluate(() => { clearInterval(SETTINGS_TRANSITION_TIMER); document.querySelector<HTMLDialogElement>('#transition-dialog')!.close(); });
 

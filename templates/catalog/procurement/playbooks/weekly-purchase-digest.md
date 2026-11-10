@@ -3,7 +3,7 @@
 Schedule: Mondays at 09:00 team time (routine `weekly-purchase-digest`), after setup. Also run by hand on request.
 Budget 25 minutes. Nothing is sent to a vendor, signed or bought.
 
-Inputs: the purchase-request tasks still open (`hub task list --status open --status doing --status waiting`), last
+Inputs: the purchase-request tasks still open (`tico task list`), last
 week's digest, `knowledge/criteria.md`, `knowledge/vendors.md`, and each request's conversation.
 
 Outcome: one page in the shape below, with the comparisons advanced in this run attached.
@@ -15,10 +15,10 @@ it cannot be, the digest is published, and the task note carries the headline.
 
 ## 1. Read where things stand
 
-    hub task list --status open --status doing --status waiting
+    tico task list
 
 Keep the tasks that are purchase requests, plus any open item in `knowledge/vendors.md`. Read last week's digest and
-each request's conversation with `hub task show <id>`. Note what moved since last week.
+each request's conversation with `tico task show <id>`. Note what moved since last week.
 
 ## 2. Place each request in a stage
 
@@ -45,11 +45,11 @@ Write `reports/YYYY-MM-DD-purchase-digest.md`:
 
 Then:
 
-    hub file publish reports/YYYY-MM-DD-purchase-digest.md
+    tico file publish reports/YYYY-MM-DD-purchase-digest.md
 
 Commit, then:
 
-    hub task update <id> --status done --note "..."
+    tico task done <id> -m "..." --version N
 
 The note holds the headline, the nearest decide-by date and the sources you could not read. Finish the task even when
 nothing is open: a quiet digest is one line. An open scheduled task is absorbed by the next run.

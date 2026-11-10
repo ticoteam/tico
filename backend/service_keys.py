@@ -146,20 +146,6 @@ def _owner(c, value):
     return actor
 
 
-def _type_and_step(c, body, row):
-    """The type and step asked for, by id or name, refused by name when there is none."""
-    typ = H.type_get(c, body.type) if body.type else None
-    if body.type and not typ:
-        raise Problem("type", "No task type " + body.type, 422)
-    step = None
-    if body.step:
-        within = typ or H.type_get(c, (row or {}).get("type_id") or H.GENERAL_TYPE)
-        step = next((s["id"] for s in within["steps"] if body.step in (s["id"], s["name"])), None)
-        if not step:
-            raise Problem("step", "No step " + body.step + " in " + within["name"], 422)
-    return (typ or {}).get("id"), step
-
-
 def upsert(c, auth, who, body):
     """Make the task for (this key, `body.key`) look the way the other system says it is now."""
     key_id, footer = H.actor_id(who.actor), "\n\n_Filed by " + who.token_label + " (service key)._"
@@ -177,7 +163,6 @@ def upsert(c, auth, who, body):
         if missing:
             raise Problem("validation", "A new task needs " + ", ".join(missing), 422)
         owner = _owner(c, body.owner)
-        type_id, step = _type_and_step(c, body, None)
         # The pair is what makes it one task, so two pieces of work may share a title and an owner.
         row = H.task_create(
             c,
@@ -189,8 +174,6 @@ def upsert(c, auth, who, body):
             deduplicate=False,
             conversation_id=rooms.task_conversation_id(c, auth, owner, H.KEEPER),
             labels=body.labels or [],
-            type=type_id,
-            step=step,
         )
         # Rule 7 above read the other system's own words; the line naming it is Tico's.
         c.execute("UPDATE tasks SET body=? WHERE id=?", (body.body + footer, row["id"]))
@@ -202,7 +185,7 @@ def upsert(c, auth, who, body):
             H.task_link(c, H.KEEPER, row["id"], url)
         created = changed = True
     elif row and not (body.close and row["status"] == "closed"):  # closed, and to stay closed: as it is
-        changed = _apply(c, body, row, footer)
+        changed = _apply(c, body, row, footer, who.token_label)
     H.event(
         c,
         who.actor,
@@ -214,41 +197,38 @@ def upsert(c, auth, who, body):
     return {"task": {"id": row["id"]} if row else None, "created": created, "changed": changed}
 
 
-def _apply(c, body, row, footer):
+def _apply(c, body, row, footer, label):
     """Write what differs between the task and the call, reopening or closing it; whether anything did.
-    The title is the create's: a later call leaves it as it is."""
-    type_id, step = _type_and_step(c, body, row)
-    current = {
-        "owner": row["owner_id"],
-        "body": row["body"],
-        "labels": H.task_labels(row),
-        "due": row["due_at"],
-        "type": row["type_id"],
-        "step": row["step_id"],
-    }
+    The title is the create's: a later call leaves it as it is. Each change is the task call that makes it: a closed
+    task opens again, then goes to its new owner, then takes the new fields."""
+    task_id, changed = row["id"], False
+    if row["status"] == "closed" and not body.close:  # no `close`: the work is open again over there
+        H.task_move(c, H.KEEPER, task_id, H.TASK_REOPEN, f"Open again in {label}.")
+        changed = True
+    owner = _owner(c, body.owner) if body.owner else None
+    if owner and owner != (H.task(c, task_id) or {}).get("owner_id"):
+        H.task_reassign(c, H.KEEPER, task_id, owner, f"Given to them in {label}.")
+        changed = True
+    row = H.task(c, task_id)
+    if not row:
+        raise Problem("not_found", "No such task", 404)
+    current = {"body": row["body"], "labels": H.task_labels(row), "due": row["due_at"]}
     wanted = {
-        "owner": _owner(c, body.owner) if body.owner else None,
         "body": body.body + footer if body.body is not None else None,
         "labels": H._labels(body.labels) if body.labels is not None else None,
         "due": body.due,
-        "type": type_id,
-        "step": step,
     }
     fields = {name: value for name, value in wanted.items() if value is not None and value != current[name]}
-    if row["status"] == "closed" and "step" not in fields:
-        fields["status"] = "open"  # no `close`: the work is open again over there
     if fields:
-        H.task_update(c, H.KEEPER, row["id"], mover=True, **fields)
-    have = {link["url"] for link in H.task_links(c, row["id"])}
+        H.task_update(c, H.KEEPER, task_id, **fields)
+    have = {link["url"] for link in H.task_links(c, task_id)}
     links = [url for url in dict.fromkeys(body.links) if url not in have]
     for url in links:
-        H.task_link(c, H.KEEPER, row["id"], url)
-    closing = body.close and H.task(c, row["id"])["status"] != "closed"
+        H.task_link(c, H.KEEPER, task_id, url)
+    closing = body.close and (H.task(c, task_id) or {}).get("status") != "closed"
     if closing:
-        H.task_close(c, H.KEEPER, row["id"], note=body.note or "")
-    if fields or links or closing:
-        c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (row["id"],))
-    return bool(fields or links or closing)
+        H.task_close(c, H.KEEPER, task_id, body.note or "")
+    return bool(changed or fields or links or closing)
 
 
 def install_service_keys(app, store, auth, mutate):

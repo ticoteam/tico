@@ -24,7 +24,7 @@ def bots_for(c, scope):
 
 def _from_a_person(row):
     refs = H._json(row["refs"], {}) or {}
-    return H.person_sent(dict(row)) or H.is_human(str(refs.get(wake_rules.CAUSED_BY) or ""))
+    return H.in_person_name(dict(row)) or H.is_human(str(refs.get(wake_rules.CAUSED_BY) or ""))
 
 
 def apply(c, bots):

@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend import judge
+from backend import judge, task_asks
 from backend.store import Problem
 from backend.tests.helpers.api import headers, post as api_post, runner, setup_attempt
 from backend.tests.helpers.email_sending import (
@@ -19,7 +19,6 @@ from backend.tests.helpers.email_sending import (
     CONTACT,
     H,
     S,
-    approved,
     autonomous,
     claim,
     inbox,
@@ -29,6 +28,21 @@ from backend.tests.helpers.email_sending import (
     post,
     queue,
 )
+
+
+def approved(api, queued, token="ana-test", expected=200):
+    """The person opens the frozen email in Tico and clicks OK on its preview (backend/task_asks.py)."""
+    preview = api.get("/api/v2/email/sends/" + queued["id"], headers=headers(token))
+    assert preview.status_code == 200
+    with api.app.state.store.read() as c:
+        task = task_asks.task_of(c, queued["approval_id"])
+    return post(
+        api,
+        f"tasks/{task}/asks/{queued['approval_id']}/ok",
+        {"shown_hash": preview.json()["shown_hash"]},
+        token=token,
+        expected=expected,
+    )
 
 
 def raw(message):
@@ -141,44 +155,20 @@ def test_inline_text_files_are_classified_and_keep_attachment_approval_and_downl
     assert changed["attachments"][0]["sha256"] != file["sha256"] and changed["content_sha256"] != snap["content_sha256"]
 
 
-def test_new_old_format_approval_cannot_authorize_an_added_internal_bcc(inbox):
-    _, _, attempt = setup_attempt(inbox, "ops")
+def test_an_ok_of_one_copy_cannot_authorize_an_added_internal_bcc(inbox):
     original = mime(to=["ben@acme.example"], body="Sensitive legal reply")
-    snap = S.snapshot(original, BOX)
-    payload = {
-        "mailbox": BOX,
-        "to": ["ben@acme.example"],
-        "cc": [],
-        "subject": snap["subject"],
-        "body_sha256": snap["body_sha256"],
-        "attachments": [],
-    }
-    refused = inbox.post(
-        "/api/v2/approvals", json={"kind": "send", "payload": payload}, headers=headers(attempt["token"])
-    )
-    assert refused.status_code == 422 and "/api/v2/email/sends" in refused.text
-    with inbox.app.state.store.transaction() as c:
-        approval = H.approval_request(c, "bot:ops", "send", payload, to="human:ana")
-        H.approval_decide(c, "human:ana", approval["id"], "approved")
+    first = queue(inbox, actor="bot:ops", raw=original)
+    approved(inbox, first)
     from backend.email_content import parsed
 
     expanded = parsed(original)
     expanded["Bcc"] = "cara@acme.example"
-    queued = queue(inbox, actor="bot:ops", raw=raw(expanded), approval_id=approval["id"])
+    queued = queue(inbox, actor="bot:ops", raw=raw(expanded), approval_id=first["approval_id"])
     assert queued["state"] == "waiting_approval" and not queued["decision"]["approved"]
-    card = api_post(inbox, "approvals/" + queued["approval_id"], {"decision": "approved"}, expected=409)
-    assert "preview" in str(card)
-    approved(inbox, queued)
+    assert queued["approval_id"] != first["approval_id"]
     with inbox.app.state.store.read() as c:
-        payload = H.approval(c, queued["approval_id"])["payload"]
-    assert payload["to"] == ["ben@acme.example"] and payload["cc"] == [] and payload["bcc"] == ["cara@acme.example"]
-    # A claimed queue id cannot make the public endpoint a second approval creator.
-    assert (
-        inbox.post(
-            "/api/v2/approvals", json={"kind": "send", "payload": payload}, headers=headers(attempt["token"])
-        ).status_code
-        == 422
-    )
+        asked = task_asks.grant(c, queued["approval_id"])["content"]
+    assert asked["recipients"] == ["ben@acme.example", "cara@acme.example"]
 
 
 @pytest.mark.parametrize(
@@ -473,31 +463,6 @@ def test_negative_chat_cannot_approve_a_different_large_send_through_the_api(inb
     assert result["approval_id"] != note["id"]
 
 
-@pytest.mark.parametrize(
-    "text,named,viewed,allowed",
-    [
-        ("Send it", True, True, True),
-        ("Do not send it", True, True, False),
-        ("Send it unless they object", True, True, False),
-        ("We discussed the email", True, True, False),
-        ("Send it", False, True, False),
-        ("Send it", True, False, False),
-    ],
-)
-def test_chat_instruction_requires_a_prior_exact_preview_and_unambiguous_yes(inbox, text, named, viewed, allowed):
-    policy(inbox, undo_seconds=0)
-    queued = queue(inbox, actor="bot:ops")
-    if viewed:
-        detail = inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers())
-        assert detail.json()["preview_complete"]
-    note = api_post(inbox, "chat/ops", {"text": text + (" " + queued["id"] if named else "")})
-    with inbox.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), seconds=1), note["id"]))
-        c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (note["id"], queued["id"]))
-        row = c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
-        assert S.approved(c, inbox.app.state.auth, row, S.effective(c, BOX, "ops")) == ("message" if allowed else "")
-
-
 def test_company_recipient_message_type_and_approver_cannot_be_loosened(inbox):
     autonomous(inbox, to="internal", what="replies_only", who_can_ok="inbox_admins")
     with inbox.app.state.store.transaction() as c:
@@ -645,7 +610,15 @@ def test_one_hundred_waiting_approvals_do_not_starve_a_due_send(inbox):
 def test_approver_must_load_authorized_frozen_preview_and_download_exact_attachment(inbox):
     policy(inbox, who_can_ok="named_people", approvers=["cara"])
     queued = queue(inbox, actor="bot:ops", raw=mime(body="<script>unsafe</script>", files=True))
-    api_post(inbox, "approvals/" + queued["approval_id"], {"decision": "approved"}, token="cara-test", expected=409)
+    with inbox.app.state.store.read() as c:
+        task = task_asks.task_of(c, queued["approval_id"])
+        unseen = task_asks.content_hash(
+            S.content(c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone())
+        )
+    # Knowing what it says is not having seen it: the OK needs the preview the server showed Cara.
+    api_post(
+        inbox, f"tasks/{task}/asks/{queued['approval_id']}/ok", {"shown_hash": unseen}, token="cara-test", expected=409
+    )
     assert inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers("ben-test")).status_code == 403
     preview = inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers("cara-test")).json()
     assert preview["preview_complete"] and preview["body"] == "<script>unsafe</script>\n"
@@ -654,7 +627,10 @@ def test_approver_must_load_authorized_frozen_preview_and_download_exact_attachm
     assert inbox.get(path, headers=headers("ben-test")).status_code == 403
     response = inbox.get(path, headers=headers("cara-test"))
     assert response.content == b"proof" and S.digest(response.content) == file["sha256"]
-    api_post(inbox, "approvals/" + queued["approval_id"], {"decision": "approved"}, token="cara-test")
+    ok = {"shown_hash": preview["shown_hash"]}
+    api_post(inbox, f"tasks/{task}/asks/{queued['approval_id']}/ok", ok, token="cara-test")
+    with inbox.app.state.store.read() as c:
+        assert task_asks.standing(c, queued["approval_id"]) == task_asks.OK
 
 
 @pytest.mark.parametrize("state", ["canceled", "blocked", "failed", "declined"])

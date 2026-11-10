@@ -10,18 +10,15 @@ const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {open} = require('./tasks-page.cts') as Tasks.Api;
+const {open, task} = require('./tasks-page.cts') as Tasks.Api;
 // Page globals read inside page.evaluate (types: tasks-page.cts).
-declare var TASKS_ST: Tasks.Globals['TASKS_ST'];
-declare var taskModalShow: Tasks.Globals['taskModalShow'];
 declare var v2MessageHTML: Tasks.Globals['v2MessageHTML'];
 const SHOTS = process.env.TICO_SHOTS || '';
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
 
-const REVIEW = {id: 't-review', title: 'Review: Support Bot broke a rule', owner_id: 'human:ana', requester_id: 'tico', status: 'open',
+const REVIEW = task('t-review', 'Review: Support Bot broke a rule', 'todo', {owner_id: 'human:ana', requester_id: 'tico',
   body: "Support Bot's output was held: it broke a rule. Keep it blocked, send it anyway, or edit the rule.\n\nHold: h-1",
-  lane: 'company', rank: null, labels: ['rule-review'], tags: [], links: [], parts: {total: 0, done: 0}, version: 1,
-  created_at: ago(30), updated_at: ago(5)};
+  labels: ['rule-review'], version: 1, created_at: ago(30), updated_at: ago(5)});
 interface Hold {
   id: string;
   state: string;
@@ -56,26 +53,28 @@ const RULE = {id: 'r-eu', kind: 'internal', text: HOLD.rules[0]!.text, descripti
 const summary = (h: Hold) => { const {text, why, nonce, ...rest} = h; return {...rest, appealed: !!why}; };
 
 async function review(browser: Browser, {viewport, theme, paged = false}: {viewport: {width: number; height: number}; theme: string; paged?: boolean}) {
-  const {page, errors} = await open(browser, {viewport, theme, hash: '#/tasks', baseTasks: [REVIEW]});
   let hold: Hold = {...HOLD};
   const posted: {id: string | undefined; act: string | undefined; body: unknown}[] = [];
-  await page.route(url => url.pathname === '/api/v2/rule-holds', route => {
-    const cursor = new URL(route.request().url()).searchParams.get('cursor');
-    const body = cursor === 'c-1' ? {holds: [summary(SECOND)], next_cursor: null}
-      : {holds: [summary(hold)], next_cursor: paged ? 'c-1' : null};
-    return route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
-  });
-  await page.route(url => /^\/api\/v2\/rule-holds\/[^/]+$/.test(url.pathname), route => {
-    const id = new URL(route.request().url()).pathname.split('/').pop();
-    return route.fulfill({contentType: 'application/json', body: JSON.stringify(id === 'h-2' ? SECOND : hold)});
-  });
-  await page.route(url => /^\/api\/v2\/rule-holds\/[^/]+\/(keep|send)$/.test(url.pathname), route => {
-    const [, id, act] = new URL(route.request().url()).pathname.match(/rule-holds\/([^/]+)\/([^/]+)$/)!;
-    posted.push({id, act, body: route.request().postDataJSON()});
-    hold = {...hold, state: act === 'send' ? 'sent' : 'kept', decided_by: 'human:ana', decided_at: ago(0), nonce: undefined, can_send: false};
-    return route.fulfill({contentType: 'application/json', body: JSON.stringify(act === 'send' ? {hold, result: {}} : hold)});
-  });
-  await page.evaluate(() => taskModalShow(TASKS_ST.tasks.find(t => t.id === 't-review')));
+  // The holds' routes go in before the app opens, so the task window's first read is answered by them.
+  const holdRoutes = async (page: Page) => {
+    await page.route(url => url.pathname === '/api/v2/rule-holds', route => {
+      const cursor = new URL(route.request().url()).searchParams.get('cursor');
+      const body = cursor === 'c-1' ? {holds: [summary(SECOND)], next_cursor: null}
+        : {holds: [summary(hold)], next_cursor: paged ? 'c-1' : null};
+      return route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    });
+    await page.route(url => /^\/api\/v2\/rule-holds\/[^/]+$/.test(url.pathname), route => {
+      const id = new URL(route.request().url()).pathname.split('/').pop();
+      return route.fulfill({contentType: 'application/json', body: JSON.stringify(id === 'h-2' ? SECOND : hold)});
+    });
+    await page.route(url => /^\/api\/v2\/rule-holds\/[^/]+\/(keep|send)$/.test(url.pathname), route => {
+      const [, id, act] = new URL(route.request().url()).pathname.match(/rule-holds\/([^/]+)\/([^/]+)$/)!;
+      posted.push({id, act, body: route.request().postDataJSON()});
+      hold = {...hold, state: act === 'send' ? 'sent' : 'kept', decided_by: 'human:ana', decided_at: ago(0), nonce: undefined, can_send: false};
+      return route.fulfill({contentType: 'application/json', body: JSON.stringify(act === 'send' ? {hold, result: {}} : hold)});
+    });
+  };
+  const {page, errors} = await open(browser, {viewport, theme, hash: '#/task/t-review', tasks: [REVIEW], needs: [], beforeGoto: holdRoutes});
   const card = page.locator('#task-modal .rh-card[data-hold="h-1"]');
   await card.waitFor();
   await page.waitForTimeout(400);   // the dialog's open animation, so the screenshot is the settled modal

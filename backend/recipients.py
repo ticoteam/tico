@@ -176,7 +176,7 @@ def require_recipient(
                 in_assistant_room = True
             elif who.role in ("human", "owner") and H.actor_id(to) == strategy_bot.SLUG:
                 # No person chats with the Strategy Bot: their Assistant asks it (backend/assistant.py HELPERS). A
-                # person's post with no room (the Goals page, `hub chat`) goes to their Assistant instead; the
+                # person's post with no room (the Goals page, `tico chat`) goes to their Assistant instead; the
                 # owner's earlier chat with it is history, read-only. Bots still message it: its goals session.
                 if body.conversation_id or who.via:
                     raise Problem(

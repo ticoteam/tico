@@ -76,8 +76,6 @@ BLOB_HOLDERS = (
     ("letters", "source_blob_id"),
     ("letters", "original_blob_id"),
     ("letter_proofs", "blob_id"),
-    # Evidence attached to a stage requirement (backend/requirement_attachments.py): it keeps its bytes while it counts.
-    ("requirement_attachments", "blob_id"),
 )
 TEXT_TYPES = ("text/markdown", "text/plain", "application/json", "text/yaml")
 TABLE_TYPES = {"text/csv": ",", "text/tab-separated-values": "\t"}
@@ -791,7 +789,7 @@ def drain(store, blobs, limit=50):
         ).fetchall()
     removed = 0
     for q in queued:
-        error, fresh = "", False
+        error = ""
         # Held while checking and removing, so a write of the same bytes either marks them first or comes after
         # (and stores them again).
         with blobs.purging(q["digest"]) as fresh:

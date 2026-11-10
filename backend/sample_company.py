@@ -9,8 +9,8 @@ stand in for the setup chat, so a starter task is claimed as soon as a computer 
 stays off until a person turns it on. Each bot gets its goal, and the owner files its starter tasks.
 
 It is not demo mode (backend/demo.py): these are real bots on the person's own subscriptions. Nothing a starter task
-asks for leaves the company. Each ends with one Yes/No question to the owner (`hub task question`), which is the card
-in Needs you; Tico's approvals are for a send, spending, publishing or a merge, and a starter task does none of them.
+asks for leaves the company. Each ends with one Yes/No question to the owner, asked on the task (`tico task ask`), which
+the owner sees in Needs you; an OK is for a send, spending or publishing, and a starter task does none of them.
 
 Two doors: the first-run welcome's "Start with a sample company" (POST /api/v2/setup/sample, the owner), and
 TICO_SAMPLE_COMPANY=on, which loads it on the first start whose owner is on the roster. Both leave a company that is
@@ -36,12 +36,12 @@ FILE = Path(__file__).resolve().parent / "company_file" / "sample_company.yaml"
 RUNS_ON = {"claude": "anthropic", "codex": "openai"}
 ASK = """
 
-## Ask for the approval
-When {what} is on this task, ask the owner once, from this task:
+## Ask the owner
+When {what} is on this task, ask the owner once, on this task (`tico task show` prints its id and version):
 
-    hub task question --on {owner} "Approve {what}?"
+    tico task ask <id> --to {owner} "Approve {what}?" --choices Yes,No --version N
 
-Their answer reaches you on this task. Yes: mark this task done. No: change it as they say and ask once more.
+Their answer reaches you on this task. Yes: `tico task done`. No: change it as they say and ask once more.
 Nothing in this task is sent, posted or published outside Sample Co, whatever they answer.
 """
 
@@ -152,6 +152,7 @@ def load(onboarding, c, who):
     }
     onboarding._store(c, record, who.actor)
     H.event(c, who.actor, "onboarding.sample_loaded", "", {"bots": sorted(slugs.values()), "tasks": len(tasks)})
+    onboarding.complete_company(c)  # its bots are active now: what a start would complete for them, now
     return onboarding.view(c, who)
 
 

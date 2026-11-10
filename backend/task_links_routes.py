@@ -1,12 +1,10 @@
-"""Deleted task, restore, links, relations, waits, and the status route."""
+"""Deleted task, restore, links, relations, and the status route."""
 
 from .store import H
 from . import models as M
 from .store import Problem
 from fastapi import Request
 from . import task_relations as TR
-from . import approvals_routes
-from . import milestone_waits
 from . import task_privacy as privacy
 
 
@@ -38,6 +36,9 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
             report = restore_tasks(c, [row["task_id"]], actor=who.actor)
             if report.get("conflict"):
                 raise Problem("conflict", "This task cannot go back: something newer has taken its place", 409)
+            if report.get("not_shared"):
+                held = report["not_shared"][row["task_id"]]
+                raise Problem("task_not_shared", f"{held['cause']}. {held['fix']}. It stays in Deleted tasks", 409)
             if report.get("unplaced"):
                 fields = ", ".join(
                     f"{table}.{key}" for table, keys in report["unplaced"][row["task_id"]].items() for key in keys
@@ -108,82 +109,12 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
                 c, who.actor, task_id, other_id, body.kind, remove=body.remove, mover=mover(c, who) or None
             )
             # The stored direction in words, from both ends (Dev 256): a reversed write shows in the reply.
-            note = None if body.remove else TR.own_subtask_warning(c, task_id, other_id, body.kind)
             return {
                 "readback": TR.readback(c, task_id, other_id, body.kind, remove=body.remove, changed=changed),
                 "task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who),
-                **({"warning": note} if note else {}),
             }
 
         return mutate(request, body, work)
-
-    @app.post("/api/v2/tasks/{tid}/waits")
-    def task_wait_on(request: Request, tid: str, body: M.TaskWait):
-        """Wait on `task:<id>` (blocked_by), `pr:<url|task>` (until it merges) or `release:<tag>` (until it is
-        published); `remove` takes the wait off. The upstream task never moves (backend/milestone_waits.py)."""
-        who = request.state.identity
-
-        def work(c):
-            task_id = auth.resolve_task(c, who, tid)
-            row = auth.task(c, who, task_id)
-            kind, _, value = body.on.partition(":")
-            note = None
-            if kind.strip().lower() == "task":
-                if body.note and not body.remove:
-                    H.refuse(
-                        c,
-                        who.actor,
-                        "note",
-                        "a note goes with a pr: or release: wait; a task: wait is a blocked_by "
-                        "and says nothing of its own",
-                    )
-                other_id = auth.resolve_task(c, who, value.strip())
-                auth.task(c, who, other_id)
-                changed = TR.relate(
-                    c, who.actor, task_id, other_id, "blocked_by", remove=body.remove, mover=mover(c, who) or None
-                )
-                readback = TR.readback(c, task_id, other_id, "blocked_by", remove=body.remove, changed=changed)
-                note = None if body.remove else TR.own_subtask_warning(c, task_id, other_id, "blocked_by")
-            else:
-                H._writer(c, who.actor, task_id=task_id)
-                H._task_private_writer(c, who.actor, row)
-                # The same gate as a blocked_by: a wait parks the task's news just as a blocker does.
-                TR._blocker_gate(c, who.actor, row, TR._mover(c, who.actor, mover(c, who) or None))
-
-                def resolve(value):
-                    other = auth.resolve_task(c, who, value)
-                    auth.task(c, who, other)
-                    return other
-
-                if body.remove:
-                    gone = milestone_waits.remove(
-                        c, who.actor, row, body.on, release_repo=settings.release_repo, resolve_task=resolve
-                    )
-                    readback = [f"Removed: {TR._name(c, task_id)} waits for {gone}"]
-                else:
-                    wait = milestone_waits.add(
-                        c,
-                        who.actor,
-                        row,
-                        body.on,
-                        release_repo=settings.release_repo,
-                        resolve_task=resolve,
-                        note=body.note,
-                    )
-                    readback = [
-                        ("" if wait["added"] else "Already: ")
-                        + f"{TR._name(c, task_id)} {wait['sentence']}"
-                        + (" (already happened: woken once)" if wait["woke_at"] else "")
-                    ]
-            return {
-                "readback": readback,
-                "task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who),
-                **({"warning": note} if note else {}),
-            }
-
-        return mutate(request, body, work)
-
-    approvals_routes.register(app, auth, mutate, settings, store)
 
     @app.get("/api/v2/status")
     def statuses(request: Request, bot: str | None = None, since: str | None = None):

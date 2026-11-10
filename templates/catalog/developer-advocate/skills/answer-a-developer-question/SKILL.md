@@ -9,7 +9,7 @@ When to use: before you draft any public reply to a developer question, in a for
 Steps:
 1. Restate the question in one line, with the SDK version, language and runtime if the asker gave them. If the version is
    missing, ask for it in the reply and say which version you tested against.
-2. Find the answer in the docs with `hub doc search` and `hub doc ask`. Open the page and confirm the section you cite
+2. Find the answer in the docs with `tico doc search` and `tico doc ask`. Open the page and confirm the section you cite
    exists and says what you will say. A link that opens is not the same as a link that answers.
 3. When the docs and the question disagree, check the code path the answer depends on, in the SDK source or its tests.
 4. If there is a failure, reproduce it with the version the asker uses. Run any code in the reply with

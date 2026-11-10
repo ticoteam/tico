@@ -1,4 +1,4 @@
-"""`hub file publish` and `hub file import` for video and audio: streamed from disk, refused for an older server.
+"""`tico file publish` and `tico file import` for video and audio: streamed from disk, refused for an older server.
 
 The large files are sparse (an MP4 or WAV header, then a truncate), so nothing big is written or committed.
 """

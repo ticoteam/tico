@@ -104,7 +104,6 @@ NOT_PROVEN = {
     "bot.change": "422: a transition body",
     "bot.restore": "409: finance is not archived",
     "bot.compact_at": "422: the value's bounds",
-    "bot.keep_tasks_going": "422: the body shape",
     "bot.definition": "422: needs expected_revision",
     "bot.turns_at_once": "422: the body needs expected_revision",
     "bot.manages_reports": "422: the body needs expected_revision",
@@ -157,7 +156,6 @@ def _objects(api, machine):
     """One of each object an `{id}` entry names, made by Ana (synthetic rows only)."""
     api.app.state.store.settings.github_owner = "Acme"
     ids = {}
-    ids["task-types"] = post(api, "task-types", {"name": "Parity type"}, "ana-test")
     ids["tags"] = post(api, "tags", {"key": "parity", "label": "parity"}, "ana-test")
     ids["triggers"] = post(api, "triggers", {"name": "Parity trigger"}, "ana-test")
     ids["webhooks"] = post(
@@ -278,7 +276,7 @@ LAST = {}
 
 
 def ask(api, attempt, e, objects, person, token):
-    """`hub settings set` as BotOps does it for the person: the plan, then the request the plan says to make. A card,
+    """`tico settings set` as BotOps does it for the person: the plan, then the request the plan says to make. A card,
     from the plan or from the route, is tapped as the person (`tapped`): a catalogue card never reaches the route
     until then, so this is where the route says whether that person may."""
     if e.route.startswith("model-subscriptions/") or e.route == "computer-subscriptions":

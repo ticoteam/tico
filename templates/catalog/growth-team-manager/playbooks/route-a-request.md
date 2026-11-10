@@ -9,9 +9,9 @@ Done when: the proposal is on the task in under 100 words; if the task asked for
 
 ## 1. Read the request
 
-    hub task show <id>
+    tico task show <id>
 
-Find what it is, the deadline and who wants it. For a lead or account, check it is not already a customer: `hub meeting search "<account>"` and the pipeline source in `knowledge/pipeline-rules.md`. If the ask, the audience or the date is missing, ask the requester once with `hub task question "<question>" --on <person> --parent <id>` and stop.
+Find what it is, the deadline and who wants it. For a lead or account, check it is not already a customer: `tico meeting search "<account>"` and the pipeline source in `knowledge/pipeline-rules.md`. If the ask, the audience or the date is missing, ask the requester once with `tico task ask <id> --to <person> "<question>" --version N` and stop.
 
 ## 2. Match it to an owner
 
@@ -27,4 +27,4 @@ On the task, in under 100 words: owner, one-line brief, deadline, what it displa
 
 ## 5. Finish
 
-When the task asks for routing and a granted Tool allows it, run `hub task create --owner <slug> --title "<what and for whom>" --body "<the request, the account, the source>" --parent <id>`, and log the routing in `knowledge/routing.md` if it teaches a rule. On a no, record the correction as a rule so the next proposal is right (`skills/review-routing-corrections/SKILL.md`). Then `hub task update <id> --status done --note`. A no or a change is recorded and nothing is created.
+When the task asks for routing and a granted Tool allows it, run `tico task create --owner <slug> --title "<what and for whom>" --body "<the request, the account, the source>" --parent <id>`, and log the routing in `knowledge/routing.md` if it teaches a rule. On a no, record the correction as a rule so the next proposal is right (`skills/review-routing-corrections/SKILL.md`). Then `tico task done <id> -m "..." --version N`. A no or a change is recorded and nothing is created.

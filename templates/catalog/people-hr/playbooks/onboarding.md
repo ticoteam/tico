@@ -6,16 +6,16 @@ recorded answers, a handbook index, a base checklist and a hand-off list, a firs
 first routine checked.
 
 Done when the five answers are in `state.md`, the three knowledge files are written, the first result is attached to the task labelled
-as a first draft, the routine is checked and logged in `memory/decisions.md`, and `hub bot setup-done` has run.
+as a first draft, the routine is checked and logged in `memory/decisions.md`, and `tico bot setup-done` has run.
 
 ---
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub doc list
-    hub doc search "handbook"
-    hub team show
+    tico task show <id>
+    tico doc list
+    tico doc search "handbook"
+    tico team show
 
 Check what you can already reach: the handbook and policies in the docs, the roster, the calendar and start dates. Do not ask what
 these already say. If there is no handbook, say so plainly: you can build checklists but you can answer no policy questions, and the
@@ -56,16 +56,16 @@ handbook question if the task has one, following `playbooks/answer-a-policy-ques
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off, `hub automation update <id> --enable`)
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off, `tico automation update <id> --enable`)
 and tell the human in one line what it does: "I will write an onboarding tracker every Monday at 09:00 for you, and put anything for a
 new hire up for review." They can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave it off,
-adjust `knowledge/` and the routine to match (`hub automation update <id>`, with `--disable` to turn it off).
+adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the routine run; until then nothing you have runs
 on its own. Run it once the answers and the first result are recorded, not before.

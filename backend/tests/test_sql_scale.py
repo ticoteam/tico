@@ -343,9 +343,7 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
         (
             "a cited task turns private",
             False,
-            lambda c: c.execute(
-                "UPDATE tasks SET private=1, requester_id='human:ana', owner_id='bot:inbox' WHERE id=?", (task,)
-            ),
+            lambda c: c.execute("UPDATE tasks SET private=1, requester_id='human:ana' WHERE id=?", (task,)),
         ),
         (
             "a message now cites a denied task",
@@ -368,7 +366,7 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
             True,
             lambda c: c.execute("UPDATE conversations SET task_id=? WHERE id=?", (denied, room)),
         ),
-        ("a run carries a denied task", True, lambda c: world_attempt(c, sorted(world["private"])[1])),
+        ("a run reads a denied task", True, lambda c: world_attempt(c, sorted(world["private"])[1])),
     ]
     for when, moves, change in changes:
         with store.transaction() as c:
@@ -381,7 +379,9 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
 
 
 def world_attempt(c, denied):
-    """A finished run that carried a denied private task."""
+    """A finished run that also read a denied private task: a message of its conversation was folded into the run."""
     aid = c.execute("SELECT id FROM attempts ORDER BY created_at LIMIT 1").fetchone()[0]
-    c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, denied))
+    room = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (denied,)).fetchone()[0]
+    mid = H.say(c, "human:ana", "bot:ops", "Synthetic private input", conversation_id=room)["id"]
+    c.execute("INSERT OR REPLACE INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (aid, mid))
     return aid

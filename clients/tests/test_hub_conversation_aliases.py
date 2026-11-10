@@ -1,6 +1,6 @@
 """The old conversation and message spellings of `hub` still run the commands the threads build keeps.
 
-clients/hubcli.py RENAMED maps `hub history`, `hub say` and `hub ack` onto `conversation show`, `message send` and
+clients/hubcli.py RENAMED maps `tico history`, `tico say` and `tico ack` onto `conversation show`, `message send` and
 `message mark-read`, and a bot's prompt names `--before` and `--since` on `conversation show`. test_hubcli.py covers
 only the `notice` rename.
 """

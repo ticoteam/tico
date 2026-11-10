@@ -8,7 +8,7 @@ When to use: when a competitor appears in deals often enough to need one card, o
 than ninety days.
 
 Steps:
-1. Start from the competitor's record in the market graph (`hub market show`) and the last three lost or won deals
+1. Start from the competitor's record in the market graph (`tico market show`) and the last three lost or won deals
    against them. A card without deal evidence is marked "no deal evidence yet" at the top.
 2. Write who they are in two lines, with the source and its date.
 3. Write where they win: the two or three buyers or situations where they are the better choice. Be honest; the

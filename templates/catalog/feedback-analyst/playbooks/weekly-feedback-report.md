@@ -14,9 +14,9 @@ holds this week's counts, and the task is finished with the items read and any b
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
-Then `knowledge/themes.md`, `knowledge/segments.md` and `knowledge/trends.md`. Set `hub bot status set` to one line
+Then `knowledge/themes.md`, `knowledge/segments.md` and `knowledge/trends.md`. Set `tico bot status set` to one line
 naming the report.
 
 ## 2. Collect the week
@@ -41,7 +41,7 @@ Run every change through `skills/read-a-change-in-counts/SKILL.md` before you ca
 ## 5. Check the launches
 
 If a shipped change with a success measure reached 14 days this week, run `playbooks/after-launch-read.md` for it. If
-you do not know which changes shipped, ask once on the task with `hub task question "<question>" --on <person> --parent <id>`.
+you do not know which changes shipped, ask once on the task with `tico task ask <id> --to <person> "<question>" --version N`.
 
 ## 6. Write and hand over
 
@@ -50,11 +50,11 @@ headline; ranked themes with counts, last week's count, the noise note and sever
 for each of the top three; what is new; what faded; three suggested actions, each with its evidence and a person to
 ask; what was excluded and why; what could not be read; sources. Then:
 
-    hub file publish reports/YYYY-MM-DD-feedback-report.md
+    tico file publish reports/YYYY-MM-DD-feedback-report.md
 
 ## 7. Finish
 
-Commit, then `hub task update <id> --status done --note`: items read, top theme and its change, what is new, and any
+Commit, then `tico task done <id> -m "..." --version N`: items read, top theme and its change, what is new, and any
 source you could not read. Always finish it: an open scheduled task absorbs the next.
 
 ## When a source fails

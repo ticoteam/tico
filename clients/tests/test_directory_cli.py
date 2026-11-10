@@ -1,4 +1,4 @@
-"""`hub directory` as a bot runs it: each command's argv becomes the request its route takes (path, query or body), and `--text`
+"""`tico directory` as a bot runs it: each command's argv becomes the request its route takes (path, query or body), and `--text`
 prints a short answer without changing what is asked. The routes themselves are in backend/tests/test_directory_tools.py.
 """
 
