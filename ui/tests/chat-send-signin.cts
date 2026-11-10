@@ -18,6 +18,7 @@ type Field = {scope: string; key: string; value: string};
 type Msg = {id: string; sender_id: string; body: string; created_at: string};
 type Step = <T>(label: string, run: () => T | PromiseLike<T>, ms?: number) => Promise<T>;
 declare function chatDrafts(): Record<string, string>;
+declare function sessionIdentity(): string;
 declare const SESSION_RETURN: string;
 declare const CHAT_DRAFTS: string;
 declare const LIVE_SOON: Set<unknown>;
@@ -154,7 +155,7 @@ async function scenario(browser: import('playwright').Browser, engine: string, m
     await step('open Assistant', () => page.goto(origin + '/#/assistant'));
     await ready('initial conversation and event subscription ready');
     await step('type initial draft', () => box.fill(text));
-    await step('save other chat draft', () => page.evaluate(() => localStorage.setItem(CHAT_DRAFTS, JSON.stringify({...chatDrafts(), other: 'Another bot draft'}))));
+    await step('save other chat draft', () => page.evaluate(() => localStorage.setItem(CHAT_DRAFTS, JSON.stringify({identity: sessionIdentity(), value: {...chatDrafts(), other: 'Another bot draft'}}))));
     if (mode !== 'unsent') {
       await step('send with expired sign-in', () => send.click());
       await idle('rejected send finishes');

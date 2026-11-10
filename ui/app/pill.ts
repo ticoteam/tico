@@ -50,35 +50,66 @@ let BOT_PILL: Pill | null = null;
 // What was typed to one bot is still there after visiting another and coming
 // back. The text is kept per bot in this browser, so a reload keeps it too; attached files are
 // kept for the session only. Sending clears it.
+// Drafts and pending sends are the signed-in person's in this org (session.ts sessionIdentity): each record names
+// whose it is, is read only once /me has said who is signed in (sessionReturn calls chatIdentityRestore), and a record
+// of another person or org, or an older one that names no one, is dropped unread, so it never shows to them.
 const CHAT_DRAFTS = 'hub.chat.drafts', CHAT_FILES = new Map<string, File[]>();
 const CHAT_PENDING_KEY = 'hub.chat.pending';
-const chatPendingRead = (): Map<string, ChatUnconfirmed> => {
+// One saved record as it is stored: whose it is, and what.
+interface ChatOwned { identity?: unknown; value?: unknown; }
+function chatOwnedRead(storage: Storage, key: string): unknown {
+  const identity = sessionIdentity();
+  if (!identity) return null;                       // not known yet: nothing is read, and nothing is dropped
   try {
-    return new Map(JSON.parse(sessionStorage.getItem(CHAT_PENDING_KEY) || '[]').filter(([slug, u]: [string, ChatUnconfirmed]) =>
-      typeof slug === 'string' && u && typeof u.text === 'string' && typeof u.signature === 'string'
-      && typeof u.key === 'string' && u.key.length > 0 && u.key.length <= 200 && Number.isFinite(u.at)));
-  } catch { return new Map<string, ChatUnconfirmed>(); }
-};
-const CHAT_PENDING = chatPendingRead();             // per tab, including reloads; no in-flight promises are persisted
-function chatPendingSave() {
-  try {
-    sessionStorage.setItem(CHAT_PENDING_KEY, JSON.stringify([...CHAT_PENDING].map(([slug, u]) =>
-      [slug, {text: u.text, signature: u.signature, key: u.key, at: u.at}])));
-  } catch {}                                      // like draft storage, memory still works when storage is unavailable
+    const saved = JSON.parse(storage.getItem(key) || 'null') as ChatOwned | null;
+    if (saved && saved.identity === identity) return saved.value;
+    if (saved !== null) storage.removeItem(key);
+  } catch { try { storage.removeItem(key); } catch {} }
+  return null;
 }
-const chatDrafts = (): Record<string, string> => { try { return JSON.parse(localStorage.getItem(CHAT_DRAFTS) || '{}') || {}; } catch { return {}; } };
+function chatOwnedWrite(storage: Storage, key: string, value: unknown, empty: boolean) {
+  const identity = sessionIdentity();
+  if (!identity) return;                            // no one signed in to keep it for
+  try {
+    if (empty) storage.removeItem(key);
+    else storage.setItem(key, JSON.stringify({identity, value}));
+  } catch {}                                        // memory still works when storage is unavailable
+}
+const chatPendingRead = (): Map<string, ChatUnconfirmed> => {
+  const saved = chatOwnedRead(sessionStorage, CHAT_PENDING_KEY);
+  return new Map(Array.isArray(saved) ? saved.filter(([slug, u]: [string, ChatUnconfirmed]) =>
+    typeof slug === 'string' && u && typeof u.text === 'string' && typeof u.signature === 'string'
+    && typeof u.key === 'string' && u.key.length > 0 && u.key.length <= 200 && Number.isFinite(u.at)) : []);
+};
+const CHAT_PENDING = new Map<string, ChatUnconfirmed>();   // per tab, including reloads; no in-flight promises are persisted
+function chatPendingSave() {
+  chatOwnedWrite(sessionStorage, CHAT_PENDING_KEY, [...CHAT_PENDING].map(([slug, u]) =>
+    [slug, {text: u.text, signature: u.signature, key: u.key, at: u.at}]), !CHAT_PENDING.size);
+}
+const chatDrafts = (): Record<string, string> => {
+  const saved = chatOwnedRead(localStorage, CHAT_DRAFTS);
+  return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved as Record<string, string> : {};
+};
+// Once /me has said who is signed in: this tab's pending sends are theirs alone, and another person's or org's saved
+// drafts are dropped now, before any box is drawn.
+function chatIdentityRestore() {
+  CHAT_FILES.clear();
+  CHAT_PENDING.clear();
+  for (const [slug, u] of chatPendingRead()) CHAT_PENDING.set(slug, u);
+  chatDrafts();
+}
 function chatDraftSave(P: Pill) {
   if (P?.mode !== 'chat' || !P.slug) return;
   const text = pq(P, '.p-text')?.value || '', all = chatDrafts();
   if (text.trim()) all[P.slug] = text; else delete all[P.slug];
   if (P.files.length) CHAT_FILES.set(P.slug, P.files.slice()); else CHAT_FILES.delete(P.slug);
-  try { localStorage.setItem(CHAT_DRAFTS, JSON.stringify(all)); } catch {}
+  chatOwnedWrite(localStorage, CHAT_DRAFTS, all, !Object.keys(all).length);
 }
 // The draft (and files) last left in this bot's box come back.
 function pillRestore<T extends Pill>(P: T): T {
   // A pill with no slug never has a draft, files or pending send under a key, so '' reads the same as null.
   const slug = P.slug || '', draft = chatDrafts()[slug], files = CHAT_FILES.get(slug);
-  if (draft) pq(P, '.p-text').value = draft;
+  if (typeof draft === 'string' && draft) pq(P, '.p-text').value = draft;
   if (files?.length) { P.files.push(...files); pillChips(P); }
   P.unconfirmed = CHAT_PENDING.get(slug) || null;
   P.unconfirmed?.inFlight?.then(() => pillButtons(P));
