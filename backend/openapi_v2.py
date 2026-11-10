@@ -2771,6 +2771,27 @@ SCHEMAS = {
             "goals": "s",
             "turns_at_once": {"type": ["integer", "null"]},
             "task_flow": ref("TaskFlow"),
+            "cant_run": {
+                "type": ["object", "null"],
+                "properties": {
+                    "cause": {"type": "string"},
+                    "fix": {
+                        "enum": [
+                            "resume",
+                            "release_quarantine",
+                            "finish_setup",
+                            "assign_computer",
+                            "release_hold",
+                            "resume_company",
+                            "unlock_cloud",
+                            "add_credit",
+                            None,
+                        ]
+                    },
+                },
+                "description": "For a caller who can read it: why the bot can't run (a sentence) and the one fix, "
+                "or null while it can run",
+            },
             "access": ref("Access"),
             "onboarding_state": "s",
             "template": "s",
@@ -11489,9 +11510,7 @@ SCHEMAS.update(
                 "call_consent": "b",
                 "preferences": obj(
                     {
-                        "urgent_needs": "b",
                         "legal_mail": "b",
-                        "bot_stuck": "b",
                         "urgent_calls": "b",
                         "timezone": "s",
                         "quiet_start": "s",

@@ -129,3 +129,23 @@ def test_the_release_schedule_reads_and_changes_and_release_now_answers_why_noth
     assert r.status_code == 403, r.text
     answer = post(api, "release/now", {"note": "Hotfix for the login loop"})
     assert answer["sent"] is False and answer["reason"] in ("no_release_manager", "nothing_pending")
+
+
+def test_healths_never_stuck_check_gives_its_numbers_as_fields(api):
+    from backend import health
+
+    post(api, "tasks", {"title": "Book the barn", "body": "As discussed.", "owner": "ben"})
+    health.record_never_stuck(api.app.state.store)
+    check = next(c for c in get(api, "health")["checks"] if c["id"] == "never_stuck")
+    assert set(check["counts"]) == {"waiting_on_nothing", "retry", "manager", "person", "cant_run", "broken"}
+    assert all(isinstance(n, int) for n in check["counts"].values()) and check["at"]
+
+
+def test_a_bots_page_says_why_it_cant_run_and_the_fix(api):
+    r = runner(api)
+    assign(api, r, "ops")
+    assert get(api, "bots/ops")["cant_run"] is None
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='paused' WHERE id='ops'")
+    seen = get(api, "bots/ops")["cant_run"]
+    assert seen["fix"] == "resume" and seen["cause"].endswith("is paused")

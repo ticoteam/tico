@@ -366,8 +366,8 @@ def test_delegate_cannot_turn_temporary_access_into_ancestor_access(api):
             ),
         )
     get(api, 'tasks/' + unrelated['id'], token=token)
-    relate(api, unrelated['id'], parent['id'], 'parent', token=token, expected=403)
-    # Direct ownership of the child still does not permit hanging it under a parent it merely reads.
+    # A task's parent is the task that filed it and never changes, so no one hangs it under another.
+    relate(api, unrelated['id'], parent['id'], 'parent', token=token, expected=422)
     with api.app.state.store.transaction() as c:
         H.task_update(c, 'human:ana', unrelated['id'], owner='bot:ops', mover=True)
         alien_parent = H.task_create(c, 'human:ana', 'Coordinate unrelated work', 'x', 'bot:cpo', lint=False)
@@ -387,7 +387,7 @@ def test_hidden_descendants_stay_hidden_in_details_lists_trees_sql_and_counts(ap
             'owner': 'cpo',
             'title': 'Keep private work private',
             'body': 'x',
-            'relations': [{'task': parent['id'], 'kind': 'parent'}],
+            'parent': parent['id'],
         },
     )
     with api.app.state.store.transaction() as c:
@@ -451,7 +451,7 @@ def test_people_can_change_visible_task_links_but_bots_need_task_rights(api):
             'owner': 'cpo',
             'title': 'Build linked work',
             'body': 'x',
-            'relations': [{'task': parent['id'], 'kind': 'parent'}],
+            'parent': parent['id'],
         },
     )
     post(api, 'tasks/' + parent['id'] + '/links', {'url': 'https://example.com/plan'}, token=token)
