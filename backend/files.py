@@ -1986,6 +1986,9 @@ class Files:
 
 
 def install_files(app, store, auth, blobs, mutate):
+    from . import file_reviews
+
+    file_reviews.AUTH = auth  # an OK's giver is checked against the file at the OK, its use and its verdict
     files = Files(app, store, auth, blobs, mutate)
     app.state.files = files
     # Before media.py's GET /api/v2/files/{bid}, which would otherwise take /api/v2/files/search.

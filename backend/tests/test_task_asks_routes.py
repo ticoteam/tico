@@ -513,3 +513,62 @@ def test_the_assistant_never_answers_ok_with_space_or_case_around_it(api, value)
             H.task_answer(c, "human:ana", tid, rid, value)
     finally:
         H.VIA.reset(token)
+
+
+def test_an_ok_of_a_file_counts_only_while_its_giver_may_still_open_the_file(api):
+    """Codex review 2, finding 4: file access was checked only when the preview opened. Taken away after, the cached
+    hash still gave the OK, the bot used it, and `hub file approved` kept counting it. The giver's access to that file
+    is checked again at the OK, at the use and when the verdict is read."""
+    bot = as_bot(api)
+    fid = a_file(api)
+
+    def asked():
+        tid = bots_task(api, bot)
+        status, code, detail, out = call(
+            api,
+            "POST",
+            f"tasks/{tid}/oks",
+            bot,
+            {
+                "to": "ben",
+                "line": "Post this cut?",
+                "subject": f"file:{fid}",
+                "content": {},
+                "version": version(api, tid),
+            },
+        )
+        assert status == 200, (status, code, detail)
+        return tid, out["requirement_id"]
+
+    def shut(open_again=False):
+        with api.app.state.store.transaction() as c:
+            if open_again:
+                c.execute("UPDATE bot_files SET task_id=NULL WHERE id=?", (fid,))
+                return
+            hidden = H.task_create(c, "human:ana", "Ana's own " + H.new_id()[:6], "Private.", "human:ana", lint=False)
+            c.execute("UPDATE tasks SET private=1 WHERE id=?", (hidden["id"],))
+            c.execute("UPDATE bot_files SET task_id=? WHERE id=?", (hidden["id"], fid))
+
+    def pinned(rid):
+        with api.app.state.store.read() as c:
+            row = K.grant(c, rid)
+        return row["subject"], row["content"]
+
+    def approved():
+        return get(api, f"file-approvals?file={fid}", token="ana-test")["approved"]
+
+    # At the OK: shown, then shut out before the click.
+    tid, rid = asked()
+    shown = get(api, f"oks/{rid}", token="ben-test")["shown_hash"]
+    shut()
+    status, _, _, _ = call(api, "POST", f"tasks/{tid}/asks/{rid}/ok", "ben-test", {"shown_hash": shown})
+    assert status in (403, 404, 409) and standing(api, rid) == K.WAITING
+    shut(open_again=True)
+    # At the use and the verdict: OK'd, then shut out.
+    tid, rid = asked()
+    assert give(api, tid, rid)[0] == 200 and approved()
+    shut()
+    assert not approved()
+    subject, content = pinned(rid)
+    assert use(api, rid, bot, content=content, subject=subject)[0] == 409
+    assert standing(api, rid) != K.USED

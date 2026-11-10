@@ -117,6 +117,13 @@ def _file_freeze(conn: "sqlite3.Connection", by: str, subject: str, content: obj
     return module.freeze(conn, by, subject, content, shows)
 
 
+def _file_may_ok(conn: "sqlite3.Connection", person: str, grant: Row) -> str | None:
+    from . import file_reviews
+
+    module: Any = file_reviews  # its functions are typed loosely
+    return module.may_ok(conn, person, grant)
+
+
 def _file_may_see(conn: "sqlite3.Connection", auth: object, who: object, grant: Row) -> bool:
     from . import file_reviews
 
@@ -147,6 +154,7 @@ MAY_OK: dict[str, Callable[..., str | None]] = {
     "board": _edition_may_ok,
     "edition": _edition_may_ok,
     "proposal": _proposal_may_ok,
+    "file": _file_may_ok,
 }
 CHECKS_ITSELF = ("email_send", "letter")
 

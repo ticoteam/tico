@@ -183,6 +183,38 @@ def freeze(c, by, subject, content, shows):
     return pinned, frozen, [pinned, *refs]
 
 
+# The app's auth (backend/files.py install_files sets it): an OK's giver is read as the identity the file rules check.
+AUTH = None
+
+
+def may_ok(c, person, grant):
+    """Why `person` may not OK this file version now, or None (task_asks.MAY_OK): checked at the OK, at its use and when
+    a verdict is read, so an OK counts only while its giver may still open the file, and that version is still there
+    with the bytes pinned at ask. Without the app's auth, nobody may (fail closed)."""
+    from .files import file_visible
+
+    content = grant.get("content") or {}
+    row = c.execute("SELECT * FROM bot_files WHERE id=?", (str(content.get("file") or ""),)).fetchone()
+    v = (
+        c.execute(
+            "SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (row["id"], content.get("version"))
+        ).fetchone()
+        if row
+        else None
+    )
+    if not row or not v or row["archived"] or (v["source_digest"] or v["digest"]) != content.get("digest"):
+        return "That file version is not there any more"
+    if AUTH is None:
+        return "Who may open this file cannot be checked now"
+    try:
+        who = AUTH.identity_for_actor(c, person)
+    except Problem:
+        return "They can no longer open this file"
+    if not file_visible(c, AUTH, who, row, {}):
+        return f"{H.actor_name(c, person)} can no longer open this file"
+    return None
+
+
 def may_see(c, auth, who, grant):
     """Whether `who` may open a file OK's preview (task_asks.SEES): only when they may open the file itself."""
     from .files import file_visible
