@@ -173,7 +173,8 @@ def request_now(c, actor, note="", visible_sql=None):
     asked and their note, never which tasks wait or how many: the Release Manager finds what waits itself, and closes
     the task when nothing does. It is filed whether or not anything waits, so the answer never tells a requester that
     hidden work waits. The answer's `tasks` counts only the waiting tasks the requester may read (`visible_sql`).
-    `sent` is false, with a `reason` (no_release_manager, already_open), when no new task was filed."""
+    `sent` is false, with a `reason` (no_release_manager, already_open), when no new task was filed; the unfinished
+    task's id is given only to someone who may read it."""
     seen = len(pending(c, visible_sql))
     manager = release_manager(c)
     if not manager:
@@ -185,7 +186,10 @@ def request_now(c, actor, note="", visible_sql=None):
         (owner, len(TITLE), TITLE),
     ).fetchone()
     if found:
-        return {"sent": False, "reason": "already_open", "task": found[0], "tasks": seen}
+        mine = (
+            not visible_sql or c.execute(f"SELECT 1 FROM tasks WHERE id=? AND ({visible_sql})", (found[0],)).fetchone()
+        )
+        return {"sent": False, "reason": "already_open", "task": found[0] if mine else None, "tasks": seen}
     name = H.actor_name(c, actor)
     body = (
         f"Asked by {name}" + (f": {note}" if note else ".") + "\n\nRelease every task waiting for a release, or close "

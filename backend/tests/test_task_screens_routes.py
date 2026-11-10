@@ -182,6 +182,20 @@ def test_release_now_is_filed_whether_or_not_anything_waits(api):
     assert answer == {"sent": True, "reason": None, "task": answer["task"], "tasks": 0}
 
 
+def test_release_now_names_an_open_release_task_only_to_who_may_read_it(api):
+    """Codex review 2, 8: the Release Manager's open Release task is private to Ana. Cara's Release now is not
+    filed again, and is not told that task's id."""
+    import json
+
+    _releasing(api)
+    quiet = post(api, "tasks", {"title": "Release: the quiet fix", "body": "x", "owner": "ops", "private": True})
+    assert api.get("/api/v2/tasks/" + quiet["id"], headers=headers("cara-test")).status_code == 404
+    answer = post(api, "release/now", {"note": "Hotfix"}, token="cara-test")
+    assert answer == {"sent": False, "reason": "already_open", "task": None, "tasks": 0}
+    assert quiet["id"] not in json.dumps(answer)
+    assert post(api, "release/now", {})["task"] == quiet["id"]
+
+
 def test_healths_never_stuck_check_gives_its_numbers_as_fields(api):
     from backend import health
 
