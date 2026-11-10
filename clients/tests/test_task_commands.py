@@ -203,6 +203,22 @@ def test_the_assistant_cites_the_persons_message_on_a_change_they_asked_for(name
     assert hubcli.parser().parse_args([*words, "--on-behalf-of", "turn"]).on_behalf_of == "turn"
 
 
+def test_a_relation_is_a_note_and_a_blocking_one_says_what_to_do_instead(monkeypatch, capsys):
+    api = Recorder()
+    hubtools.task_relate(api, {"id": "T1", "task": "T2", "kind": "duplicate_of"})
+    assert api.writes() == [("POST", "tasks/T1/relations", {"task": "T2", "kind": "duplicate_of", "remove": False})]
+    assert "enum" not in hubtools.BY_NAME["hub_task_relate"]["inputSchema"]["properties"]["kind"]
+    for kind in ("blocks", "blocked_by"):
+        with pytest.raises(ValueError) as refused:
+            hubtools.task_relate(Recorder(), {"id": "T1", "task": "T2", "kind": kind})
+        assert str(refused.value) == hubtools.BLOCKING_GONE and "hub task file --parent" in str(refused.value)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    cli = Recorder()
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
+    assert remotecli.main(hubcli.parser().parse_args(["task", "relate", "T1", "T2", "--kind", "blocks"])) == 1
+    assert json.loads(capsys.readouterr().out)["detail"] == hubtools.BLOCKING_GONE and cli.writes() == []
+
+
 def test_label_reads_the_labels_but_sends_the_version_the_bot_was_shown():
     api = Recorder(task={"id": "T1", "version": 7, "labels": ["bug"]})
     hubtools.task_label(api, {"id": "T1", "add": ["docs"], "version": 3})

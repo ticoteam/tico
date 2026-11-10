@@ -2259,9 +2259,8 @@ def parser():
     s.add_argument(
         "--kind",
         default="related",
-        choices=["blocks", "blocked_by", "related", "duplicate_of", "follow_up"],
-        help="blocks / blocked_by; related (default); duplicate_of; follow_up: it was split off or followed up "
-        "from task. A relation is a note: a task waits only on the tasks it filed",
+        help="related (default); duplicate_of; follow_up: it was split off or followed up from task. A relation is a "
+        "note: a task waits only on its requirements and the tasks it filed",
     )
     s.add_argument("--remove", action="store_true", help="take it off instead")
     s.set_defaults(fn="task relate")

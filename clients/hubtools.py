@@ -1568,6 +1568,13 @@ def task_update(api, args):
     return s3links.annotate(_asked(api, args).post("tasks/" + args["id"], body, key=_key(args)), links)
 
 
+RELATION_KINDS = ("related", "duplicate_of", "follow_up")
+BLOCKING_GONE = (
+    'A task does not wait on another by a relation: file a sub-task (hub task file --parent <id> "title") or ask a '
+    "person (hub task ask)."
+)
+
+
 def _roles(api, args):
     """{role: [actors]} from `roles` (the tool's object) and `role` (the CLI's `--role name=a,b`, repeatable;
     `name=` clears the role), each person or bot resolved as an owner would be."""
@@ -1829,27 +1836,30 @@ def task_follow(api, args):
 
 @tool(
     "hub_task_relate",
-    "Relate another task to this one, read as `id kind task`: blocks, blocked_by, related (they belong together, "
-    "the default), duplicate_of, follow_up (it was split off or followed up from task). A relation is a note: a task "
-    "waits only on the tasks it filed (hub_task_file), and its parent is set when it is filed. `remove` takes the "
-    "relation off. The reply's `readback` says what was stored, both ends: check it before reporting the link as fixed.",
+    "Relate another task to this one, read as `id kind task`: related (they belong together, the default), "
+    "duplicate_of, follow_up (it was split off or followed up from task). A relation is a note: a task waits only on "
+    "its requirements and the tasks it filed (hub_task_file), and its parent is set when it is filed. `remove` takes "
+    "the relation off. The reply's `readback` says what was stored, both ends: check it before reporting the link as "
+    "fixed.",
     {
         "id": TASK_ID,
         "task": {**TASK_ID, "description": "The other task: its id or 8+ leading characters"},
-        "kind": {
-            "type": "string",
-            "enum": ["blocks", "blocked_by", "related", "duplicate_of", "follow_up"],
-            "default": "related",
-        },
+        # No enum: blocks and blocked_by are answered with what to do instead, not with a list of choices.
+        "kind": _s("related (the default), duplicate_of or follow_up", default="related"),
         "remove": {"type": "boolean", "default": False},
     },
     required=("id", "task"),
     writes=True,
 )
 def task_relate(api, args):
+    kind = args.get("kind") or "related"
+    if kind in ("blocks", "blocked_by"):
+        raise ValueError(BLOCKING_GONE)
+    if kind not in RELATION_KINDS:
+        raise ValueError(f"A relation is {', '.join(RELATION_KINDS)}, not {kind}")
     return api.post(
         f"tasks/{args['id']}/relations",
-        {"task": args["task"], "kind": args.get("kind") or "related", "remove": bool(args.get("remove"))},
+        {"task": args["task"], "kind": kind, "remove": bool(args.get("remove"))},
         key=_key(args),
     )
 

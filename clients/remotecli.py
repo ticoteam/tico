@@ -902,7 +902,7 @@ def run(args, who=None):
                 delegate=asked,
             )
         if sub == "relate":
-            return post(f"tasks/{args.id}/relations", {"task": args.task, "kind": args.kind, "remove": args.remove})
+            return via_tool(client, args)  # the tool says what to do instead of blocks and blocked_by
         if sub == "attach":
             path = Path(args.file)
             body = {"name": args.name or path.name}
