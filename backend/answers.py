@@ -58,6 +58,12 @@ def _feedback() -> Any:
     return feedback
 
 
+def _tc() -> Any:
+    from . import task_calls
+
+    return task_calls
+
+
 def _refuse(conn: "sqlite3.Connection", by: str, rule: str, detail: str, task_id: str | None = None) -> NoReturn:
     _h().refuse(conn, by, rule, detail, task=task_id)
     raise AssertionError("refuse() always raises")  # pragma: no cover
@@ -322,8 +328,8 @@ def give_to(
     if standing.state != R.WAITING:
         _refuse(conn, by, "task_requirement", "This is not waiting on anyone", task_id)
     current = standing.on
-    if by not in (current, row.get("owner_id")) and not is_human(by):
-        _refuse(conn, by, "task_requirement", "Only who it waits on, the owner or a person gives it away", task_id)
+    if not _tc().may_handle_ask(conn, by, row, requirement, recipient=current):
+        _refuse(conn, by, "identity", "Only who it waits on, whoever asked it, or who works the task gives it", task_id)
     if person == current:
         return row
     if requirement.get("visit_id"):
@@ -339,7 +345,7 @@ def give_to(
 
 
 def undo(conn: "sqlite3.Connection", answer_id: str, by: str) -> Row:
-    """Take an answer back: whoever gave it, or any person. While the task is still in that visit the answer is marked
+    """Take an answer back: only whoever gave it (task_calls.may_handle_ask). While the task is still in that visit the answer is marked
     undone. If the task moved on because of it, and has not moved since, it goes back to that stage: an ordinary move
     back."""
     H = _h()
@@ -351,8 +357,8 @@ def undo(conn: "sqlite3.Connection", answer_id: str, by: str) -> Row:
     task_id = row["id"]
     if found["answer"] == PUSHED_PAST:
         _refuse(conn, by, "task_requirement", "A push past is a move. Move the task back instead.", task_id)
-    if found["by_id"] != str(by) and not is_human(by):
-        _refuse(conn, by, "task_requirement", "Only who answered, or a person, takes it back", task_id)
+    if not _tc().may_handle_ask(conn, by, row, R.get(conn, found["requirement_id"]) or {}, answered_by=found["by_id"]):
+        _refuse(conn, by, "identity", "Only who gave the answer takes it back", task_id)
     if found.get("undone_at"):
         return row
     now = _part(row, "visit")
@@ -448,6 +454,9 @@ def thumbs_down(
         _refuse(conn, by, "task_why", "Say what was wrong", task_id)
     still_asked = row["status"] == "open" and _part(row, "visit").get("id") == visit["id"]
     still_asked = still_asked and any(r["id"] == requirement_id for r in R.for_visit(conn, visit))
+    asked = R.person_of(conn, requirement, visit["id"])
+    if send_back and still_asked and not _tc().may_handle_ask(conn, by, row, requirement, recipient=asked):
+        _refuse(conn, by, "identity", "Only who was asked, whoever asked, or who works the task sends it back", task_id)
     out: Row = dict(row)
     if send_back and still_asked and not requirement.get("visit_id"):
         out = answer(conn, task_id, requirement_id, by, NO, reason)
