@@ -177,8 +177,9 @@ class FakeEC2:
 
     def allocate_address(self, **kw):
         self._rec("allocate_address", **kw)
+        n = len(self.called("allocate_address"))  # each its own id, as EC2's: the first stays eipalloc-1
         self.eips.append(
-            {"AllocationId": "eipalloc-1", "PublicIp": "203.0.113.9", "Tags": kw["TagSpecifications"][0]["Tags"]}
+            {"AllocationId": f"eipalloc-{n}", "PublicIp": "203.0.113.9", "Tags": kw["TagSpecifications"][0]["Tags"]}
         )
         return self.eips[-1]
 

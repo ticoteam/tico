@@ -59,11 +59,25 @@ def _read_marker(p: Path) -> dict:
         ) from None
 
 
+def _slug(domain: str) -> str:
+    from .aws import slug
+
+    return slug(domain)
+
+
 def check_mode(domain: str, name: str, prefix: str, saved: dict) -> None:
     """Refuses a command that would take another mode, or start another install, than the one this computer recorded
-    making for the domain (or, by name, for a default-path command)."""
+    making for the domain (or, by name, for a default-path command). A default-path command for a domain with its own
+    saved default-prefix state, under that install's own name, is that install's, whatever strict install shares the
+    name: the name is not consulted."""
     prefix = prefix or DEFAULT_PREFIX
     had = (saved.get("domain") or "").lower()
+    own_default = (  # the domain's own default install, under its own name
+        bool(saved and domain)
+        and had == domain.lower()
+        and not strict(saved.get("asset_prefix", ""))
+        and name == (saved.get("aws_name") or _slug(had))
+    )
     if strict(prefix) and saved and domain and had != domain.lower():
         raise MissingInput(
             f"The state.json under {domain} was saved for {had or 'no domain'} (install {saved.get('install_id')}), "
@@ -71,7 +85,7 @@ def check_mode(domain: str, name: str, prefix: str, saved: dict) -> None:
             "or move this copy aside."
         )
     rows = {}
-    for kind, key in (("domain", domain), ("name", name if not strict(prefix) else "")):
+    for kind, key in (("domain", domain), ("name", name if not strict(prefix) and not own_default else "")):
         if key and _marker(kind, key).exists():
             rows.update(
                 {
@@ -87,7 +101,8 @@ def check_mode(domain: str, name: str, prefix: str, saved: dict) -> None:
         raise MissingInput(
             f"{r.get('domain') or domain} (--name {r.get('name')}) was made with --asset-prefix {r['asset_prefix']} "
             f"(install {install_id}); refusing to go on without it, which would act on other AWS resources. Run the "
-            f"command again with --asset-prefix {r['asset_prefix']}."
+            f"command again with --asset-prefix {r['asset_prefix']}, or, for an install made without it, with that "
+            "install's own --domain."
         )
     mine = {k: r for k, r in rows.items() if r.get("domain") == domain}
     if mine and saved.get("install_id") not in mine:

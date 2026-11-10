@@ -3039,3 +3039,44 @@ def test_runner_doctor_proves_the_runners_box_before_any_shell_on_it(monkeypatch
     io = fakes.CaptureIO()
     assert not runner_setup.doctor_runners(io, d, "https://other.example") and sent() == checked, io.text
     assert "refusing to" in io.text, io.text
+
+
+def test_a_default_install_keeps_working_beside_a_strict_install_of_the_same_name(tmp_path, monkeypatch):
+    # Codex review 6, part 2, case 1: after a hub install named hotmic, the existing tico install named hotmic on the
+    # same computer could no longer re-run or be destroyed: the name marker refused it, and named a prefix its own saved
+    # state refuses. A default-path command whose domain has its own saved default state is that install's.
+    monkeypatch.setenv("TICO_ENROLL_CODE", "one-time-code")
+    monkeypatch.setattr(runner_setup, "_verify", lambda *a: 0)
+    d, ec2, iam, ssm, s3, log = hub_world()
+    tico = "tico.hotmicapp.com"
+    r = fakes.FakeResolver({(DOMAIN, dns.A): ["203.0.113.9"], (tico, dns.A): ["203.0.113.9"]}, {ZONE: fakes.R53_NS})
+    d.resolver, d.public_resolvers = r, (lambda: [("Google", r)])
+    default = hub_args(tmp_path, "--name", "hotmic")
+    default[default.index(DOMAIN)] = tico
+    code, out = go(default, deps=d)
+    assert code == 0 and state.load(tico)[0].get("asset_prefix", "tico") == "tico", out
+    hub = hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic")
+    code, out = go(hub, deps=d)
+    assert code == 0, out
+    # The default install, named by its domain: re-run, backup storage, a runner of it, destroy.
+    code, out = go(default, deps=d)
+    assert code == 0 and "already exists; reusing it" in out, out
+    code, out = go(["backup-storage", "--domain", tico, "--aws-region", "us-west-2"], deps=d)
+    assert code == 0, out
+    runner = ["runner", "--non-interactive", "--yes", "--cloud", "aws", "--server-url", f"https://{tico}"]
+    code, out = go([*runner, "--label", "b1", "--aws-region", "us-west-2"], deps=d)
+    assert code == 0, out
+    # And the strict install beside it, as before.
+    code, out = go(hub, deps=d)
+    assert code == 0 and "already exists; reusing it" in out, out
+    # By name alone (no saved state names the install meant), the name marker still refuses.
+    before = len(log)
+    code, out = go(["destroy", "--name", "hotmic", "--yes"], deps=d)
+    assert code == 2 and "Run the command again with --asset-prefix hub" in out, out
+    assert len(log) == before
+    code, out = go(["destroy", "--domain", tico, "--yes"], deps=d)
+    assert code == 0 and "Tagged tico-setup-name=hotmic in us-west-2:" in out, out
+    assert all(not kw["Name"].startswith("/hub/") for kw in ssm.called("delete_parameter"))
+    assert all(kw["RoleName"].startswith("tico-") for kw in iam.called("delete_role"))
+    code, out = go(["destroy", "--domain", DOMAIN, "--asset-prefix", "hub", "--dns", "--yes"], deps=d)
+    assert code == 0 and "Tagged hub-setup-name=hotmic in us-west-2:" in out, out
