@@ -979,10 +979,42 @@ def materialize(conn, index, tables, inner, function, private):
     }
 
 
-def connect(path, c, auth, who, trace=None, seconds=None):
+# Tables built in Python for one request, only when its statement names them.
+WORKED_OUT = ("task_waits",)
+
+
+def task_waits(conn, c, private, hidden):
+    """What each open task the caller may read waits on, as the engine reads it (`H.task_waits`, backend/waiting_on.py):
+    one row per wait, `position` 0 the headline. A person or bot the caller may not see is '' with no line; a sub-task
+    they may not read is "A sub-task" with no id, as the task's own read says it."""
+    from .store import H
+
+    visible = f'SELECT id FROM "{private("visible_tasks")}"'
+    conn.execute(
+        'CREATE TEMP TABLE "task_waits"(task_id TEXT NOT NULL, position INTEGER NOT NULL, state TEXT NOT NULL, '
+        "waiting_on TEXT, line TEXT NOT NULL, since TEXT, until TEXT, PRIMARY KEY(task_id, position)) WITHOUT ROWID"
+    )
+    ids = [r[0] for r in conn.execute(f"SELECT id FROM main.tasks WHERE status='open' AND id IN ({visible})")]
+    if not ids:
+        return
+    readable = set(ids) | {r[0] for r in conn.execute(visible)}
+    rows = []
+    for tid, waits in H.task_waits(c, ids).items():
+        for position, wait in enumerate(waits):
+            who, line = wait.who, wait.line or ""
+            if wait.state == "tasks" and who and who not in readable:
+                who, line = None, "A sub-task"
+            elif who and who in hidden:
+                who, line = "", ""
+            rows.append((tid, position, wait.state, who, line, wait.since, wait.until))
+    conn.executemany('INSERT INTO "task_waits" VALUES(?,?,?,?,?,?,?)', rows)
+
+
+def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
     """A read-only connection whose temp views and authorizer carry this caller's visibility.
 
-    `seconds` bounds building this request's visibility sets as `run` bounds the query itself."""
+    `seconds` bounds building this request's visibility sets as `run` bounds the query itself. A table in WORKED_OUT
+    is built only when `statement` names it."""
     deadline = None if seconds is None else time.monotonic() + seconds
     prefix = "v" + secrets.token_hex(12) + "_"
     inner = lambda table: f'"{prefix}{table}"'
@@ -1185,6 +1217,9 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                     tool_names=qlist(sorted(outcome_stats.TOOL_NAMES)),
                 )
             )
+        worked_out = {name for name in WORKED_OUT if re.search(rf"\b{name}\b", statement or "", re.I)}
+        if "task_waits" in worked_out:
+            task_waits(conn, c, private, set(unseen) | set(bots))
         # Older SQLite versions initialize JSON virtual tables with schema authorization calls.
         # Initialize only these built-ins before installing the read-only authorizer.
         for function in sorted(TABLE_FUNCTIONS):
@@ -1265,7 +1300,7 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         if schema == "temp":
             if table in sets:
                 return sqlite3.SQLITE_OK if context in tables else sqlite3.SQLITE_DENY
-            if table in tables or table in views:
+            if table in tables or table in views or table in worked_out:
                 return sqlite3.SQLITE_OK
             if table in inner_names and context in views:
                 return sqlite3.SQLITE_OK if table[len(prefix) :] in views[context][0] else sqlite3.SQLITE_DENY
@@ -1366,7 +1401,7 @@ def install_sql(app, store, auth):
                 cap, seconds = LIMITS[principal.role]
                 if body.max_rows:
                     cap = min(cap, body.max_rows)
-                conn = connect(store.settings.db_path, c, auth, principal, seconds=seconds)
+                conn = connect(store.settings.db_path, c, auth, principal, seconds=seconds, statement=body.sql)
                 try:
                     result = run(conn, body.sql, body.params, cap, seconds)
                     detail.update(rows=result["row_count"], ms=result["ms"])
