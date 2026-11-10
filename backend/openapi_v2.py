@@ -16,7 +16,6 @@ import json
 import sys
 from pathlib import Path
 
-from . import needs_shape
 from .sources import KINDS as SOURCE_KINDS
 
 VERSION = "2.0.0"
@@ -32,6 +31,7 @@ TAGS = {
     "Computers": "The computers that run bots: what each one runs at once.",
     "Conversations": "Chats with bots: send, list, and stream replies.",
     "Tasks": "Work assigned to people and bots.",
+    "Pipelines": "The stages a task goes through and what it takes to leave each one.",
     "Updates": "Daily and weekly updates bots post to people.",
     "Changelog": "Product announcements and the signed-in person's read state (docs/updates.md).",
     "Needs you": "What is waiting on the signed-in person: questions, tasks, approvals.",
@@ -724,40 +724,14 @@ STABLE = [
     ),
     ("/api/v2/messages", "post", "Conversations", "sendMessage", "Send a message to a person or bot", "Message"),
     ("/api/v2/messages/{mid}", "get", "Conversations", "getMessage", "One message", "Message"),
-    ("/api/v2/task-types", "get", "Tasks", "listTaskTypes", "Task types and their ordered steps", "TaskTypeList"),
-    ("/api/v2/task-types", "post", "Tasks", "createTaskType", "Create a task type (movers only)", "TaskTypeResult"),
-    ("/api/v2/task-types/{type_id}", "get", "Tasks", "getTaskType", "One task type and its steps", "TaskTypeResult"),
-    (
-        "/api/v2/task-types/{type_id}",
-        "post",
-        "Tasks",
-        "updateTaskType",
-        "Edit a type and replace its steps, keeping retained ids (movers only)",
-        "TaskTypeResult",
-    ),
-    (
-        "/api/v2/task-types/{type_id}",
-        "delete",
-        "Tasks",
-        "deleteTaskType",
-        "Delete an unused task type (movers only)",
-        "TaskTypeResult",
-    ),
-    (
-        "/api/v2/task-types/{type_id}/delete",
-        "post",
-        "Tasks",
-        "deleteTaskTypePost",
-        "Delete an unused type for clients using POST",
-        "TaskTypeResult",
-    ),
     (
         "/api/v2/tasks",
         "get",
         "Tasks",
         "listTasks",
-        "Tasks the caller can see; q matches title words or #N; type, step, number and updated_since filter, member=<actor> keeps the tasks that "
-        "person or bot is on in some role (role=<name> narrows it to one), sort=step orders a board's columns, "
+        "Tasks the caller can see, brief: each row's version, pipeline_id, stage_id, owner, turn (whose turn it is, and "
+        "why), late and snoozed. q matches title words or #N; status (open, done, closed), number and updated_since "
+        "filter, member=<actor> keeps the tasks that person or bot is on in some role (role=<name> narrows it to one), "
         "brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all or asked for by ids or "
         "number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters "
         "answers only the tasks changed since (`tasks`) and the ids that left (`gone`), or `reset: true` to read in "
@@ -771,10 +745,11 @@ STABLE = [
         "post",
         "Tasks",
         "bulkChangeTasks",
-        "One change to every task a filter selects (filter takes the listTasks filters, ids, and exclude_owner: everything not that owner's); action is step, status, "
-        "owner, tags (add, remove) or close. Each task changes as updateTask would change it: a task the caller may not "
-        "change is skipped with its reason, the rest still change. At most 200 tasks: a filter matching more is refused "
-        "(422 too_many). dry_run makes every change and undoes it, so its counts are the real ones",
+        "One change to every task a filter selects (filter takes the listTasks filters, ids, and exclude_owner: everything "
+        "not that owner's); action is move (to), owner, tags (add, remove) or close, with a why. People only. Each task "
+        "changes by the call a single change makes: a task the caller may not change is skipped with its reason, the "
+        "rest still change. At most 200 tasks: a filter matching more is refused (422 too_many). dry_run makes every "
+        "change and undoes it, so its counts are the real ones",
         "TaskBulkResult",
     ),
     (
@@ -785,14 +760,118 @@ STABLE = [
         "Labels in use (ETag: If-None-Match answers 304 when unchanged)",
         None,
     ),
-    ("/api/v2/tasks/{tid}", "get", "Tasks", "getTask", "A task with its history, comments and messages", "TaskDetail"),
+    (
+        "/api/v2/tasks/{tid}",
+        "get",
+        "Tasks",
+        "getTask",
+        "A task with its history, comments and messages: where it is (pipeline, stage), whose turn it is, what it takes "
+        "to leave its stage (to_leave, each requirement with what the reader may do), the next stage and the tasks it filed",
+        "TaskDetail",
+    ),
     (
         "/api/v2/tasks/{tid}",
         "post",
         "Tasks",
         "updateTask",
-        "Change a task; send the version you read (409 version_conflict otherwise). status closed is close:true; closing and editing are separate operations",
+        "Edit a task's fields (title, body, due, labels, privacy, goal, note). A bot sends the version it was shown "
+        "(409 task_changed otherwise); a person may leave it out. Where it is and who has it change by done, move and owner",
         "TaskResult",
+    ),
+    (
+        "/api/v2/tasks/{tid}/done",
+        "post",
+        "Tasks",
+        "doneTask",
+        "The work of this stage is finished, with a note. It never pushes past anything: while something else is missing "
+        "it is refused (409 task_not_met) with what is missing and the commands allowed next. In the last stage the task is Done",
+        "TaskResult",
+    ),
+    (
+        "/api/v2/tasks/{tid}/move",
+        "post",
+        "Tasks",
+        "moveTask",
+        "Move a task: to is next (with a why, past what is not met), done, closed, reopen, or a stage's id or name. A "
+        "refusal is 409 with error, detail, missing, next and version",
+        "TaskResult",
+    ),
+    (
+        "/api/v2/tasks/{tid}/owner",
+        "post",
+        "Tasks",
+        "reassignTask",
+        "Give the task to another owner for this stage, with a why",
+        "TaskResult",
+    ),
+    (
+        "/api/v2/tasks/{tid}/try-again",
+        "post",
+        "Tasks",
+        "tryTaskAgain",
+        "A person hands a task that reached them back to its owner, with the count at zero",
+        "TaskResult",
+    ),
+    (
+        "/api/v2/tasks/{tid}/asks",
+        "post",
+        "Tasks",
+        "askOnTask",
+        "Ask a person on the task, in one sentence: a question (kind answer, with choices where there are some) or an "
+        "OK. The task stays in its stage until they answer; the answer carries requirement_id",
+        "TaskResult",
+    ),
+    (
+        "/api/v2/tasks/{tid}/asks/{requirement_id}",
+        "delete",
+        "Tasks",
+        "withdrawAsk",
+        "Take back an ask that was added to the task",
+        "TaskResult",
+    ),
+    (
+        "/api/v2/tasks/{tid}/asks/{requirement_id}/answer",
+        "post",
+        "Tasks",
+        "answerAsk",
+        "Answer a requirement: ok, no (send it back, with a note), again (look again), or the answer to a question; "
+        "carries answer_id",
+        "TaskResult",
+    ),
+    (
+        "/api/v2/tasks/{tid}/asks/{requirement_id}/give",
+        "post",
+        "Tasks",
+        "giveAsk",
+        "Give an ask to another person: it leaves your Needs you and goes to theirs",
+        "TaskResult",
+    ),
+    (
+        "/api/v2/tasks/{tid}/asks/{requirement_id}/thumbs",
+        "post",
+        "Tasks",
+        "rateAsk",
+        "Was this worth asking: up, or down with what was wrong (which sends an open ask back)",
+        "TaskResult",
+    ),
+    ("/api/v2/answers/{answer_id}/undo", "post", "Tasks", "undoAnswer", "Take an answer back", "TaskResult"),
+    ("/api/v2/pipelines", "get", "Pipelines", "listPipelines", "Every pipeline, each as its settings record", None),
+    ("/api/v2/pipelines/{pipeline_id}", "get", "Pipelines", "getPipeline", "One pipeline's settings record", None),
+    (
+        "/api/v2/pipelines/{pipeline_id}",
+        "post",
+        "Pipelines",
+        "savePipeline",
+        "Make or change a pipeline: the whole record, with the settings_version it was read at",
+        None,
+    ),
+    (
+        "/api/v2/pipelines/{pipeline_id}/retire",
+        "post",
+        "Pipelines",
+        "retirePipeline",
+        "Take a pipeline out of use once it holds no open task",
+        None,
     ),
     ("/api/v2/tasks/{tid}/files", "get", "Tasks", "listTaskFiles", "Files and versions on a task", "TaskFileList"),
     (
@@ -810,23 +889,6 @@ STABLE = [
         "listTaskComments",
         "Comments and questions with their answers",
         "TaskComments",
-    ),
-    (
-        "/api/v2/tasks/{tid}/answers",
-        "get",
-        "Tasks",
-        "listTaskAnswers",
-        "Structured answers, oldest first",
-        "TaskAnswers",
-    ),
-    (
-        "/api/v2/tasks/{tid}/answers",
-        "post",
-        "Tasks",
-        "answerTaskQuestion",
-        "Answer or dismiss a comment or file version question, or a question task "
-        "({task}: the answer closes it done, a dismiss declined)",
-        "TaskAnswerResult",
     ),
     ("/api/v2/tasks/{tid}/comments", "post", "Tasks", "commentOnTask", "Comment on a task", "CommentResult"),
     (
@@ -859,8 +921,8 @@ STABLE = [
         "post",
         "Tasks",
         "relateTask",
-        "Relate another task to this one ({task, kind}: parent, blocks, blocked_by, related, duplicate_of, "
-        "follow_up), or take the relation off with remove",
+        "Relate another task to this one ({task, kind}: related, duplicate_of, follow_up), or take the relation off "
+        "with remove. A task waits on no relation",
         "TaskResult",
     ),
     (
@@ -884,21 +946,12 @@ STABLE = [
         "TaskRunModelResult",
     ),
     (
-        "/api/v2/tasks/{tid}/check-back",
-        "post",
-        "Tasks",
-        "setTaskCheckBack",
-        "Set a future follow-up appointment on bot work. Accepts an offset timestamp or duration such as 45m; "
-        "human snoozes take precedence and human-only work is excluded",
-        "TaskResult",
-    ),
-    (
         "/api/v2/tasks/{tid}/snooze",
         "post",
         "Tasks",
         "snoozeTask",
-        "Set a task aside until `until` (an ISO-8601 date or date-time): off lists and Needs you, and quiet, until "
-        "then, when its owner bot is woken once. Its requester, owner, anyone on it by role, or a mover",
+        "Set a task aside in its stage, with a why, until `until` (an ISO-8601 date or date-time) or with none (on ice): "
+        "no wakes, no Late, and off Needs you until then",
         "TaskResult",
     ),
     (
@@ -906,7 +959,7 @@ STABLE = [
         "post",
         "Tasks",
         "unsnoozeTask",
-        "Bring a snoozed task back now; its owner bot is woken once",
+        "Bring a snoozed task back now",
         "TaskResult",
     ),
     (
@@ -980,7 +1033,8 @@ STABLE = [
         "get",
         "Needs you",
         "getNeedsYou",
-        "What waits on the caller, with its `version` and `count`; count=true for the number alone, version=<held> "
+        "What waits on the caller (kind task, ask, paused or mention, oldest first), with its `version` and `count`; "
+        "count=true for the number alone, version=<held> "
         "answers `unchanged` without items while it holds, ids=<comma list> only those items and their `positions`, "
         "limit=<n> (at most 200) a page with `next` to pass as cursor=<next> for the one after it (a cursor from an older version "
         "starts again from the top, with `restart`); without limit or cursor, the whole list",
@@ -1008,42 +1062,6 @@ STABLE = [
         "Needs you",
         "taskSeen",
         "The caller opened the task: its open questions to them are read",
-        None,
-    ),
-    (
-        "/api/v2/stale-review/accept-all",
-        "post",
-        "Needs you",
-        "acceptAllStaleSuggestions",
-        "Accept the suggestions your Stale tickets card showed (their ids and task versions), each as your own change; "
-        "a row whose task changed since is refused on its own and a row added since is left",
-        None,
-    ),
-    (
-        "/api/v2/stale-review/{suggestion_id}",
-        "post",
-        "Needs you",
-        "decideStaleSuggestion",
-        "Accept or skip one suggestion on your Stale tickets card; accept sends the task version it showed "
-        "(409 version_conflict otherwise)",
-        None,
-    ),
-    (
-        "/api/v2/approvals",
-        "get",
-        "Needs you",
-        "listApprovals",
-        "The approvals addressed to you: pending (what Needs you counts), approved or declined",
-        None,
-    ),
-    ("/api/v2/approvals/{aid}", "get", "Needs you", "getApproval", "One approval request", None),
-    ("/api/v2/approvals/{aid}", "post", "Needs you", "decideApproval", "Approve or reject", None),
-    (
-        "/api/v2/approvals/{aid}/undo",
-        "post",
-        "Needs you",
-        "undoApproval",
-        "Take back a decision your Assistant made for you, while nothing has acted on it",
         None,
     ),
     (
@@ -2217,32 +2235,25 @@ ACTORS = {
     "description": "On reads: display names for every actor id in the answer, {\"human:ana\": \"Ana Alvarez\"}",
 }
 
-# One item of a person's Needs you, whatever its kind (backend/needs_shape.py).
+# One item of a person's Needs you (backend/views.py needs_items).
 NEEDS_ITEM = obj(
     {
         "id": "s",
         "kind": {
             "type": "string",
-            "description": "Needs you: task, question, waiting, "
-            "declined, ask, approval, stale, setup. Goals: vision, kpi_red, kpi_stale, "
-            "recovery, proposal, why. Each kind adds the fields its card reads",
+            "enum": ["task", "ask", "paused", "mention"],
+            "description": "task: a task whose work is theirs; ask: a requirement with their name (its fields in "
+            "`ask`); paused: a bot that cannot run, which they can fix; mention: an @ of them by a person they have "
+            "not replied to",
         },
-        "title": "s",
-        "body": "n",
-        "subject": {
-            "oneOf": [
-                obj({"type": {"enum": ["task", "message", "approval", "proposal", "kpi", "strategy"]}, "id": "s"}),
-                {"type": "null"},
-            ],
-            "description": "The one thing it is about; null for a card standing for several things or a setting",
-        },
-        "created_at": "n",
-        "actions": items({"enum": list(needs_shape.ACTIONS)})
-        | {
-            "description": "The writes that settle it: "
-            + "; ".join(f"`{k}` {v}" for k, v in needs_shape.ACTIONS.items())
-        },
-    }
+        "line": "s",
+        "since": "n",
+        "task": {"oneOf": [ref("TaskBrief"), {"type": "null"}], "description": "The brief task it is about"},
+    },
+    required=["id", "kind", "line", "since"],
+    ask={"oneOf": [ref("TaskRequirement"), {"type": "null"}]},
+    task_id={"type": ["string", "null"]},
+    requirement_id={"type": ["string", "null"]},
 )
 
 # Who wrote a line (backend/sources.py): a message's, a search hit's and a task history entry's `source`.
@@ -2418,15 +2429,6 @@ SCHEMAS = {
             "and a defer's deadline (backend/delivery.py)"
         },
     ),
-    "TaskHold": obj(
-        {"kind": {"enum": ["blocked", "snoozed"]}, "reason": "n", "since": "n", "until": "n", "by": "n"},
-        required=["kind", "reason", "since", "until", "by"],
-        cause={
-            "enum": ["manual", "dependency", "stranded", "gate", "check", "worktree", None],
-            "description": "On a blocked hold: what holds it. manual is a person's or bot's move to "
-            "Blocked; the others are Tico's own (docs/tasks.md, Holds)",
-        },
-    ),
     "Execution": obj(
         {"job_id": "s", "message_id": "s", "bot_id": "s", "run_id": "n", "state": "s", "label": "s", "text": "s"},
         required=["job_id", "message_id", "bot_id", "run_id", "state", "label", "text", "parts"],
@@ -2448,63 +2450,6 @@ SCHEMAS = {
             "closed_at": "n",
         }
     ),
-    "TaskStep": obj(
-        {
-            "id": "s",
-            "type_id": "s",
-            "name": "s",
-            "public_name": "s",
-            "position": "i",
-            "status": "s",
-            "check_pool": "a",
-            "check_limit": "i",
-            "limit_minutes": {
-                "type": ["integer", "null"],
-                "description": "The stage's Warn after time in minutes (the flow's late_hours x 60), or null",
-            },
-            "card_cap": {
-                "type": ["integer", "null"],
-                "description": "The most cards the stage holds at once (0 is On ice: it takes no card from a bot and "
-                "its cards wake no one), or null for no cap",
-            },
-            "held": {
-                "type": "integer",
-                "description": "The open cards the stage holds now that the caller may read, snoozed and hidden ones "
-                "included. For the pipeline's rule editor, every open card: the count its card cap is enforced against",
-            },
-            "unseen": {
-                "type": "integer",
-                "description": "For the pipeline's rule editor, how many of the held cards it may not read (private ones, "
-                "or ones a bot it may not read works on); 0 for anyone else",
-            },
-            "flow": {
-                "type": "object",
-                "description": "What the step does with a ticket (docs/tasks.md, Step "
-                "flow). On a check step, other_company is prefer (the default) or require.",
-            },
-        },
-        required=["id", "type_id", "name", "position", "status"],
-    ),
-    "TaskType": obj(
-        {
-            "id": "s",
-            "name": "s",
-            "numbered": "b",
-            "steps_only": "b",
-            "created_at": "s",
-            "updated_at": "s",
-            "steps": items(ref("TaskStep")),
-        },
-        bots={
-            "type": ["string", "null"],
-            "enum": ["read", "work", None],
-            "description": "What every bot may do with the type's tasks beyond its own: read "
-            "(read, comment, file subtasks) or work (also change them); null keeps "
-            "each task to the bots on it",
-        },
-    ),
-    "TaskTypeList": obj({"types": items(ref("TaskType"))}),
-    "TaskTypeResult": obj({"type": ref("TaskType")}),
     "Task": obj(
         {
             "private": "b",
@@ -2512,20 +2457,22 @@ SCHEMAS = {
             "title": "s",
             "body": "s",
             "requester_id": "s",
-            "owner_id": "s",
-            "status": "s",
+            "owner_id": "n",
+            "assignee_id": "n",
+            "status": {"type": "string", "enum": ["open", "done", "closed"]},
             "created_at": "s",
             "updated_at": "s",
             "due_at": "n",
-            "check_back_at": {"type": ["string", "null"]},
-            "check_back_note": {"type": ["string", "null"]},
-            "check_back": {
-                "oneOf": [
-                    obj({"at": "s", "note": "s", "by": {"type": ["string", "null"]}, "due": "b"}),
-                    {"type": "null"},
-                ]
-            },
             "version": "i",
+            "pipeline_id": "n",
+            "stage_id": "n",
+            "turn": {
+                "oneOf": [ref("TaskWait"), {"type": "null"}],
+                "description": "The headline wait: whose turn it is",
+            },
+            "late": {
+                "oneOf": [obj({"since": "s", "level": {"enum": ["told", "person"]}}), {"type": "null"}],
+            },
             "lane": "s",
             "labels": items({"type": "string"}),
             "acceptance_criteria": items({"type": "string"}),
@@ -2544,86 +2491,61 @@ SCHEMAS = {
             "updated_at",
             "due_at",
             "version",
+            "pipeline_id",
+            "stage_id",
+            "turn",
+            "late",
             "lane",
             "labels",
-            "holds",
         ],
         owner_name={"type": "string", "description": "Display name of owner (`owner_id` stays the actor id)"},
         requester_name={"type": "string", "description": "Display name of requester"},
+        snoozed={"type": "boolean", "description": "On a list row: whether the task is set aside"},
+        pipeline={
+            "oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}],
+            "description": "On the task's own read: the pipeline it is in",
+        },
+        stage={
+            "type": "object",
+            "description": "On the task's own read: the stage it is in, {id, name, kind (work, done, closed), by_hand}",
+        },
+        waits=items(ref("TaskWait")) | {"description": "On the task's own read: every wait, headline first"},
+        to_leave=items(ref("TaskRequirement"))
+        | {"description": "On the task's own read: every requirement of the stage and each added to this visit"},
+        next={
+            "oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}],
+            "description": "On the task's own read: the stage a forward move goes to",
+        },
+        snooze={"oneOf": [obj({"until": "n", "by": "s", "why": "n"}), {"type": "null"}]},
+        filed_by={"type": ["string", "null"], "description": "The task that filed this one"},
+        filed=items(obj({"id": "s", "kind": "s", "status": "s", "title": "n"}))
+        | {"description": "The tasks this one filed; title is null for one the reader may not read"},
         cover={
             "oneOf": [
                 obj({"url": "s", "width": {"type": ["integer", "null"]}, "height": {"type": ["integer", "null"]}}),
                 {"type": "null"},
             ]
         },
-        open_asks={"type": "integer", "description": "Questions on this task with no answer or dismissal"},
-        questions={
-            "type": ["array", "null"],
-            "items": {"type": "object"},
-            "description": "A question task's question (a bot's decision for the person who owns it): "
-            "each {id, question, why, options [{label, then, description, recommended, file}], multi}; "
-            "null on any other task. Answered with POST /tasks/{id}/answers and target {task}",
-        },
-        if_no_answer={"type": ["object", "null"], "description": "A question task's default: {do, kind, by}"},
-        review={
-            "type": ["object", "null"],
-            "description": "A question task's files under review: {files, pick, attachments}",
-        },
-        spend={"type": ["object", "null"], "description": "A question task's spend, approved by picking its label"},
-        answer={
-            "type": ["object", "null"],
-            "description": "A question task's answer once closed: {answers, "
-            "other, dismiss, by, at, text}; null while open",
-        },
-        type_id={"type": ["string", "null"]},
-        step_id={"type": ["string", "null"]},
-        step_since={
-            "type": "string",
-            "description": "A Dev ticket at a working step (In Progress, a Fixes "
-            "step): when it entered that step or came back to work; absent otherwise",
-        },
-        requirements={
-            "type": "array",
-            "description": "Where each stage requirement of the ticket's current step stands "
-            "(backend/pipeline_engine.py); absent when the step has none",
-            "items": {"type": "object"},
-        },
         relations={
             "type": "object",
-            "description": "Related tasks the reader may open, by kind (parent, "
-            "blocks, related, duplicate_of, follow_up): each {id, title, status, owner, direction}; "
-            "direction is out when this task is the subtask, blocker, duplicate or follow-up, in for "
-            "the other end, both for related. Subtasks are in the task's children.",
+            "description": "Related tasks the reader may open, by kind (parent, related, duplicate_of, follow_up): "
+            "each {id, title, status, owner, direction}. A task waits on no relation. Sub-tasks are in the task's "
+            "children.",
             "additionalProperties": items(
                 obj({"id": "s", "title": "s", "status": "s", "owner_id": "s", "direction": "s"})
             ),
         },
-        type={"oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}]},
-        step={"oneOf": [ref("TaskStep"), {"type": "null"}]},
         body={
             "type": "string",
             "description": "Left out of a list asked for with brief=true, as is acceptance_criteria",
         },
-        number={
-            "type": ["integer", "null"],
-            "description": "The task's number, unique across the team "
-            "(#18945); given once on a numbered type and never changed",
-        },
-        step_rank={"type": ["number", "null"], "description": "Its place within its step, lower first"},
-        waiting_on={
-            "type": ["string", "null"],
-            "description": "Read only, derived: the person a waiting "
-            "task waits on, the owner of its oldest open question task (a subtask or a blocker). "
-            "Null when a private question task's words do not reach this task's readers",
-        },
+        number={"type": ["integer", "null"], "description": "The task's number, unique across the team"},
         readers=items({"type": "string"})
         | {
             "description": "Who else can see a private task besides its "
             "requester and owner: people, bots and group:<id>s (a group by its members now). Empty on a "
             "company task. GET/PUT /api/v2/tasks/{id}/readers reads and changes it"
         },
-        holds=items(ref("TaskHold"))
-        | {"description": "What holds the task (docs/tasks.md, Holds): at most one per kind, empty when nothing does"},
         roles={
             "type": "object",
             "description": "Who is on the task, by role: each role a short name the team "
@@ -2632,6 +2554,36 @@ SCHEMAS = {
             "update and create take the same shape to replace a role's people ([] clears one)",
             "additionalProperties": items({"type": "string"}),
         },
+    ),
+    "TaskWait": obj(
+        {
+            "state": {
+                "type": "string",
+                "enum": ["snoozed", "person", "paused", "bot", "jev", "github", "tasks", "room", "by_hand"],
+            },
+            "who": "n",
+            "line": "s",
+            "requirement_id": "n",
+            "since": "n",
+            "until": "n",
+            "ask": "b",
+        }
+    ),
+    "TaskRequirement": obj(
+        {
+            "requirement_id": "s",
+            "kind": "s",
+            "line": "s",
+            "met": "b",
+            "standing": "s",
+            "who": "n",
+            "asked_by": "n",
+            "choices": {"type": ["array", "null"], "items": {"type": "string"}},
+            "shows": items({"type": "string"}),
+            "answer": {"oneOf": [obj({"id": "s", "value": "s", "note": "n", "by": "s", "at": "s"}), {"type": "null"}]},
+            "may": items({"enum": ["done", "ok", "no", "again", "answer", "give", "undo", "withdraw", "thumbs"]})
+            | {"description": "What this reader may do with it: a hint, the engine decides"},
+        }
     ),
     "Person": obj(
         {"id": "s", "name": "s", "email": "s", "title": "s", "team": "s", "reports_to": "n", "org_parent": "s"},
@@ -3329,36 +3281,15 @@ SCHEMAS = {
     ),
     "NeedsYouItem": NEEDS_ITEM,
     "NeedsYou": {
-        "oneOf": [
+        "anyOf": [
             obj(
                 {"actor": "s", "items": items(ref("NeedsYouItem"))},
                 required=["actor", "items"],
-                older={
-                    "type": "array",
-                    "items": {"type": "object", "additionalProperties": True},
-                    "description": "Tasks there only for a question older than three days, out of the queue and its count",
-                },
-                went_away={
-                    "type": "object",
-                    "additionalProperties": True,
-                    "description": "Items that left the caller's queue this week on their own: expired, withdrawn, "
-                    "answered by their Assistant, and the total",
-                },
                 count={"type": "integer", "description": "Items in the whole list, whatever page this is"},
-                plate_count={
-                    "type": "integer",
-                    "description": "Unique task, question, waiting, declined, approval, ask and stale items "
-                    "across all boards, excluding folded or merged tasks; excludes thread and update attention",
-                },
                 by_kind={
                     "type": "object",
                     "additionalProperties": {"type": "integer"},
-                    "description": "Items of each kind in the whole list, including unread pages; Tasks excludes thread kinds",
-                },
-                folded_task_ids={
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Unique task ids folded or merged into other cards in the whole list, including unread pages",
+                    "description": "Items of each kind in the whole list, including unread pages",
                 },
                 next={
                     "type": ["string", "null"],
@@ -3374,9 +3305,27 @@ SCHEMAS = {
                     "description": "The cursor was from an older version: this page is the first",
                 },
             ),
-            obj({"actor": "s", "count": "i", "plate_count": "i"}),
+            obj({"actor": "s", "count": "i"}),
         ]
     },
+    "TaskBrief": obj(
+        {
+            "id": "s",
+            "number": {"type": ["integer", "null"]},
+            "title": "s",
+            "status": {"type": "string", "enum": ["open", "done", "closed"]},
+            "version": "i",
+            "pipeline_id": "n",
+            "stage_id": "n",
+            "owner_id": "n",
+            "assignee_id": "n",
+            "requester_id": "n",
+            "due_at": "n",
+            "turn": {"oneOf": [ref("TaskWait"), {"type": "null"}]},
+            "late": {"oneOf": [obj({"since": "s", "level": {"enum": ["told", "person"]}}), {"type": "null"}]},
+            "snoozed": "b",
+        }
+    ),
     "GranolaStatus": obj(
         {
             "mode": {"type": "string", "enum": ["account", "api_key", "off"]},
@@ -6546,23 +6495,6 @@ SCHEMAS.update(
     }
 )
 
-# Proposals (backend/proposals.py): a change a person decides, applied by the hub on approve.
-STABLE.extend(
-    [
-        (
-            "/api/v2/approvals",
-            "post",
-            "Needs you",
-            "requestApproval",
-            "Ask a person to approve an action. Kinds task_cap and spend_limit are proposals "
-            "the top of the org decides; the hub applies one on approve, audited with via approval:<id>, and tells BotOps",
-            "ApprovalRequested",
-        ),
-    ]
-)
-SCHEMAS.update(
-    {"ApprovalRequested": obj({"id": "s", "kind": "s", "approval": "s", "status": "s"}, required=["id", "kind"])}
-)
 # Automations (backend/automations.py).
 TAGS["Automations"] = (
     "A trigger and a tree of steps (filter, decide, llm, find, bot_turn, paths, action), saved as versions; "
@@ -7230,32 +7162,6 @@ SCHEMAS['Task']['properties'].update(
         'external_requesters': {'type': 'integer'},
         'internal_requesters': {'type': 'integer'},
         'important_requesters': {'type': 'integer'},
-    }
-)
-SCHEMAS['TaskType']['properties'].update(
-    {
-        'default_visibility': {'enum': ['public', 'private']},
-        'has_requirements': {
-            'type': 'boolean',
-            'description': "On the list (GET /api/v2/task-types): whether the pipeline has any live stage requirement. A "
-            "pipeline without one keeps today's phone layout; the one-stage phone view is for pipelines with requirements "
-            "(backend/pipeline_engine.py)",
-        },
-        'can_edit_rules': {
-            'type': 'boolean',
-            'description': "On the list (GET /api/v2/task-types): whether the caller may change this pipeline's rules, "
-            "the pipeline's owner or an Admin (backend/pipeline_rights.py)",
-        },
-        'manager': {'type': ['string', 'null']},
-        'manager_seat': {
-            'type': ['string', 'null'],
-            'description': 'The open seat whose hire makes this pipeline\'s manager (read-only; set by the setup binding)',
-        },
-        'role': {
-            'type': ['string', 'null'],
-            'enum': ['product-roadmap', 'engineering', None],
-            'description': 'The Product roadmap or Dev tickets type, whoever manages it',
-        },
     }
 )
 
