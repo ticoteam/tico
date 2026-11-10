@@ -866,13 +866,16 @@ def _owned(conn: "sqlite3.Connection", before: Row, after: Row, by: str) -> None
 
 def _close_under(conn: "sqlite3.Connection", task_id: str, by: str, note: str) -> None:
     """Close every open task under `task_id`, however deep: a closed task leaves no open work behind it. An ended task
-    in between stays as it ended, and what is open under it closes too."""
+    in between stays as it ended, and what is open under it closes too. One whose PR already merged stays open, with
+    what is under it (stage_effects.merged_work): its work is in the code."""
     children = conn.execute(
         "SELECT t.id, t.status FROM links l JOIN tasks t ON t.id = l.to_task_id "
         "WHERE l.from_task_id=? ORDER BY l.created_at, l.id",
         (task_id,),
     ).fetchall()
     for child, status in children:
+        if status == "open" and stage_effects.merged_work(conn, child):
+            continue
         if status == "open":
             move(conn, child, CLOSED, by, note, cascade=True)
         else:

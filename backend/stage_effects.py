@@ -128,8 +128,17 @@ def filed_open(conn: "sqlite3.Connection", visit_id: str) -> list[str]:
     ]
 
 
+def merged_work(conn: "sqlite3.Connection", task_id: str) -> bool:
+    """Whether a filed task has a linked PR that merged: its work is in the code, so undoing the filing leaves it open
+    (docs/pipelines-v3.md scenario 24) to reach a release or be closed by its owner."""
+    from . import task_facts
+
+    return any(link["fact"] and link["fact"]["state"] == "merged" for link in task_facts.prs_of(conn, task_id))
+
+
 def undo(conn: "sqlite3.Connection", task: Row, by: str, note: str) -> None:
-    """Undo what the task's open visit did on entering: close the tasks filed in it that are still open."""
+    """Undo what the task's open visit did on entering: close the tasks filed in it that are still open, except one
+    whose PR already merged."""
     from . import task_engine
 
     visit = task.get("visit")
@@ -140,4 +149,6 @@ def undo(conn: "sqlite3.Connection", task: Row, by: str, note: str) -> None:
 
         merge_queue.pull(conn, task, by)
     for filed in filed_open(conn, visit["id"]):
+        if merged_work(conn, filed):
+            continue
         task_engine.move(conn, filed, task_engine.CLOSED, by, note, cascade=True)
