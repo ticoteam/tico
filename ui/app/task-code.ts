@@ -217,7 +217,7 @@ function taskSubRowHTML(k: SubRow, open: Set<string>): string {
   return `<li class="sub-row${['done', 'closed', 'declined'].includes(String(k.status)) ? ' finished' : ''}" data-sub="${esc(key)}">
     <div class="sub-line">${kids.length ? `<button type="button" class="sub-chev${open.has(key) ? ' open' : ''}" data-sub-toggle="${esc(key)}" aria-expanded="${open.has(key)}" aria-label="${open.has(key) ? 'Hide' : 'Show'} subtasks of ${esc(k.title || '')}">›</button>` : '<span class="sub-chev-pad"></span>'}
       ${taskStatusText(k)}<button type="button" class="sub-open" data-sub-open="${esc(key)}" title="${esc(`${k.title || ''} · ${taskStatusLabel(k)} · ${actorLabel(k.owner_id)}`)}"><span class="sub-title">${esc(k.title || 'Untitled')}</span>${
-        k.label ? `<span class="pill sub-chip">${esc(k.label)}${k.step ? ` · ${esc(k.step)}` : ''}</span>` : ''}</button>
+        k.label ? `<span class="pill sub-chip">${esc(k.label)}</span>` : ''}</button>
       ${prStateBadge(k.pr_state)}${taskVerdictHTML(k)}<span class="sub-who" title="${esc(actorLabel(k.owner_id))}">${who}</span></div>
     ${kids.length && open.has(key) ? `<ul class="sub-list">${kids.map(c => taskSubRowHTML(c, open)).join('')}</ul>` : ''}</li>`;
 }
@@ -314,7 +314,7 @@ function taskRailBind(d: TaskRailDialog, t: CodeTask): void {
       const k = taskRailFind(st.kids, String(opener.dataset.subOpen));
       if (k) void taskModalShow({...k, links: k.links || [], labels: k.labels || []}, d);
       // The parent is not one of the children, so its full task is read when it opens (taskModalOpen).
-      else if (t.parent && String(t.parent.id) === opener.dataset.subOpen) void taskModalOpen(`t${t.parent.id}`, d);
+      else if (t.parent && String(t.parent.id) === opener.dataset.subOpen) void taskModalOpen(String(t.parent.id), d);
       return;
     }
     const drop = eventElement(ev)?.closest<HTMLButtonElement>('[data-code-drop]');

@@ -163,25 +163,28 @@ def registry(api, check_id):
 
 
 def open_approvals(api, kind):
-    """The OKs of `kind` (subject kind:...) still waiting for a person."""
+    """The OKs asked for reports of `kind` (support: subject support:<key>) still waiting for their person."""
     with api.app.state.store.read() as c:
         rows = c.execute("SELECT requirement_id FROM ok_grants WHERE subject LIKE ?", (kind + ":%",)).fetchall()
         return [{"id": r[0]} for r in rows if task_asks.standing(c, r[0]) == task_asks.WAITING]
 
 
-def give_ok(api, rid):
-    """The owner, who is asked, OKs exactly what they were shown."""
-    with api.app.state.store.transaction() as c:
-        owner = api.app.state.auth.owner_identity(c).actor
-        shown = task_asks.show(c, owner, rid, task_asks.grant(c, rid)["content"], own_click=True)
-        task_asks.give_ok(c, owner, rid, shown, own_click=True)
+def answer_report(api, rid, ok=True):
+    """The owner answers a report's OK through the real routes: OK from its preview, or a send back."""
+    from backend import task_asks
 
-
-def send_back(api, rid):
-    """The owner sends the OK back."""
-    with api.app.state.store.transaction() as c:
-        owner = api.app.state.auth.owner_identity(c).actor
-        H.task_answer(c, owner, task_asks.task_of(c, rid), rid, "no", "Not this one.")
+    with api.app.state.store.read() as c:
+        tid = task_asks.task_of(c, rid)
+    if not ok:
+        r = api.post(f"/api/v2/tasks/{tid}/asks/{rid}/answer", json={"value": "no", "note": "No."}, headers=signed_in())
+        assert r.status_code == 200, r.text
+        return
+    shown = api.get(f"/api/v2/oks/{rid}", headers=signed_in())
+    assert shown.status_code == 200, shown.text
+    r = api.post(
+        f"/api/v2/tasks/{tid}/asks/{rid}/ok", json={"shown_hash": shown.json()["shown_hash"]}, headers=signed_in()
+    )
+    assert r.status_code == 200, r.text
 
 
 def set_rule(api, reports):
@@ -1174,7 +1177,7 @@ def _part_declined(api, runner, monkeypatch, hq=None, comments=None, clock=None)
     set_rule(api, False)
     code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG, title="Pushes are stuck")]
     first = file_due(api, run(api))[MH.signature("push_stuck")]["approval"]
-    send_back(api, first)
+    answer_report(api, first, ok=False)
     second = api.post("/api/v2/health/findings/push_stuck:A/report", json={}, headers=signed_in()).json()
     assert second["approval"] and second["approval"] != first and "again" not in second
     assert hq.seen == []
@@ -1188,9 +1191,9 @@ def _part_owner_approved(api, runner, monkeypatch, hq=None, comments=None, clock
     run(api)
     url = f"/api/v2/health/findings/event_stream:{runner['runner_id']}/report"
     approval = api.post(url, json={}, headers=signed_in()).json()["approval"]
-    give_ok(api, approval)
     with store.read() as c:
         owner = api.app.state.auth.owner_identity(c)
+    answer_report(api, approval)
     api.app.state.support.file_approved(owner, approval)
     assert json.loads(hq.seen[-1].content)["source"] == "health_monitor"
     with store.read() as c:
@@ -1225,7 +1228,7 @@ def _part_sent_as_requester(api, runner, monkeypatch, hq=None, comments=None, cl
     assert first["approval"] == approval["id"] and hq.seen == []
     with store.read() as c:
         assert task_asks.grant(c, approval["id"])["asked_by_id"] == "bot:botops"
-    give_ok(api, approval["id"])
+    answer_report(api, approval["id"])
 
     def unreachable(who, approval_id):
         raise Problem("support_unreachable", "Tico support is out of reach", 503)
@@ -1259,7 +1262,7 @@ def _part_approved_cap(api, runner, monkeypatch, hq=None, comments=None, clock=N
     approvals = file_due(api, run(api))
     clock.at += timedelta(hours=25)  # requests from yesterday still count when sent today
     for answer in approvals.values():
-        give_ok(api, answer["approval"])
+        answer_report(api, answer["approval"])
     with store.transaction() as c:
         for i in range(MH.REPORTS_PER_DAY - 1):
             c.execute(
@@ -1301,7 +1304,7 @@ def _part_send_resets(api, runner, monkeypatch, hq=None, comments=None, clock=No
     clock.at += timedelta(hours=25)
     result = run(api)  # seen again while the approval waited
     assert result["details"]["reports_due"] == [sig]
-    give_ok(api, approval)
+    answer_report(api, approval)
     assert file_due(api, result)[sig]["ticket"]
     (ticket,) = hq.tickets.values()
     assert ticket["messages"] == []
@@ -1719,7 +1722,7 @@ def _fresh(api, hq=None, comments=None):
     and closed), so the next section starts as on a new install. BotOps is active again, the team rule back to its default."""
     with api.app.state.store.transaction() as c:
         for (tid,) in c.execute("SELECT id FROM tasks WHERE title LIKE 'Health:%' AND status='open'").fetchall():
-            TE.move(c, tid, TE.DONE, H.KEEPER, "wiped")
+            H.task_close(c, H.KEEPER, tid, "A new section of the story.")
         c.execute("UPDATE tasks SET title='old: '||title WHERE title LIKE 'Health:%'")
         c.execute("UPDATE messages SET body='old '||body WHERE body LIKE 'Health wake: %'")
         for table in ("health_findings", "health_reports", "invariant_state", "support_tickets"):

@@ -1589,7 +1589,9 @@ def create_app(settings=None):
         if c is None:
             return value
         viewer = (who.task_actor or who.actor) if who is not None else None
-        value.update(H.task_view(c, row["id"], viewer) or {})
+        # Another task it names is shown under the reader's whole rule, the one a direct read of that task uses.
+        rule = auth.task_sql(c, who) if who is not None and visible_sql == "1" else visible_sql
+        value.update(H.task_view(c, row["id"], viewer, rule) or {})
         value["parent_id"] = TR.parent_of(c, row["id"])
         value["relations"] = TR.grouped(c, [row["id"]], visible_sql)[row["id"]]
         value["roles"] = TRo.roles_of(c, row["id"])

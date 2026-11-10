@@ -4,7 +4,7 @@
 The setting (`release-schedule`, a team setting in registry_metadata) is what it was: on or off, one or two hours in
 company time (`updates.ZONE`), and the Release Manager and Technical Writer, named or found by starter template. What
 waits for a release is now the open tasks in a stage that has an "In a release" requirement. Release now gives the
-Release Manager ONE task, or answers with its unfinished one. Firing the daily hour is a routine on the Release Manager
+Release Manager ONE task, naming no waiting work, or answers with its unfinished one. Firing the daily hour is a routine on the Release Manager
 (D13); this module only reads the next hour.
 """
 
@@ -169,38 +169,35 @@ def view(c, who, auth):
 
 
 def request_now(c, actor, note="", visible_sql=None):
-    """ONE task for the Release Manager, or its unfinished Release task. `sent` is false, with a `reason`
-    (no_release_manager, nothing_pending, already_open), when no new task was filed. A person's note is heard even
-    with nothing waiting for a release: work often reaches main with no task. The task the requester files names
-    only the waiting tasks they may read (`visible_sql`), and counts the rest."""
+    """ONE task for the Release Manager, or its unfinished Release task. Anyone may read that task, so it says who
+    asked and their note, never which tasks wait or how many: the Release Manager finds what waits itself, and closes
+    the task when nothing does. It is filed whether or not anything waits, so the answer never tells a requester that
+    hidden work waits. The answer's `tasks` counts only the waiting tasks the requester may read (`visible_sql`).
+    `sent` is false, with a `reason` (no_release_manager, already_open), when no new task was filed; the unfinished
+    task's id is given only to someone who may read it."""
+    seen = len(pending(c, visible_sql))
     manager = release_manager(c)
     if not manager:
-        return {"sent": False, "reason": "no_release_manager", "task": None, "tasks": 0}
+        return {"sent": False, "reason": "no_release_manager", "task": None, "tasks": seen}
     owner = H.bot_actor(manager)
-    waiting = pending(c)
-    if not waiting and not (H.is_human(actor) and note.strip()):
-        return {"sent": False, "reason": "nothing_pending", "task": None, "tasks": 0}
     found = c.execute(
         "SELECT id FROM tasks WHERE owner_id=? AND status='open' AND substr(title, 1, ?)=? "
         "ORDER BY created_at DESC LIMIT 1",
         (owner, len(TITLE), TITLE),
     ).fetchone()
     if found:
-        return {"sent": False, "reason": "already_open", "task": found[0], "tasks": len(waiting)}
-    title = (
-        f"{TITLE}{len(waiting)} task{'s' if len(waiting) != 1 else ''} waiting for a release"
-        if waiting
-        else f"{TITLE}requested by {H.actor_name(c, actor)}"
+        mine = (
+            not visible_sql or c.execute(f"SELECT 1 FROM tasks WHERE id=? AND ({visible_sql})", (found[0],)).fetchone()
+        )
+        return {"sent": False, "reason": "already_open", "task": found[0] if mine else None, "tasks": seen}
+    name = H.actor_name(c, actor)
+    body = (
+        f"Asked by {name}" + (f": {note}" if note else ".") + "\n\nRelease every task waiting for a release, or close "
+        "this task if none waits."
     )
-    lines = [f"Asked by {H.actor_name(c, actor)}" + (f": {note}" if note else ".")]
-    readable = set(pending(c, visible_sql)) if visible_sql else set(waiting)
-    named = [tid for tid in waiting if tid in readable][:60]
-    lines += [f"- {tid}" for tid in named]
-    if len(waiting) > len(named):
-        lines.append(f"- and {len(waiting) - len(named)} more")
-    task = H.task_create(c, actor, title, "\n".join(lines), owner, deduplicate=False)
-    H.event(c, actor, "release.requested", task["id"], {"tasks": len(waiting)})
-    return {"sent": True, "reason": None, "task": task["id"], "tasks": len(waiting)}
+    task = H.task_create(c, actor, f"{TITLE}requested by {name}", body, owner, deduplicate=False)
+    H.event(c, actor, "release.requested", task["id"], {})
+    return {"sent": True, "reason": None, "task": task["id"], "tasks": seen}
 
 
 def register(app, auth, mutate, store):

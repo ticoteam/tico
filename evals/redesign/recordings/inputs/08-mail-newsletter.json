@@ -19,7 +19,10 @@
     "labels": [
       "INBOX",
       "CATEGORY_PROMOTIONS"
-    ]
+    ],
+    "from_domain": "acme.example",
+    "category": "promotions",
+    "known_sender": false
   },
   "note": "A newsletter the rules missed: archive."
 }

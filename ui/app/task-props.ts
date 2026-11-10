@@ -1,20 +1,17 @@
-/* ui/app/task-props.ts — A task's properties, Linear style: one click-to-edit row each (Status, Owner, Asked by, Due,
-   Tags, Part of, Blocked by, and Type and Step for a typed task), their menus and pickers, and the task's "…" menu.
-   Used by the full task (#task-modal) and the side peek (#task-peek); each change saves at once with the task's version.
+/* ui/app/task-props.ts — A task's properties, Linear style: one click-to-edit row each (Stage, Owner, Asked by, Due,
+   Tags, Part of), their menus and pickers, and the task's "…" menu (docs/pipelines-v3.md S4, S5).
+   Used by the task's window (#task-modal); each change saves at once with the task's version.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 // The task as this file reads it: the server's Task, plus the fields a task's page adds on top of it.
-interface PropTask extends Omit<import('../types/api').Task, 'check_back'> {
-  check_back?: {at: string; by: string | null; due: boolean; note: string; enabled?: boolean; delivery?: string | null} | null;
+interface PropTask extends TaskV3 {
   links?: {kind: string; detail?: string | null}[];
   verdict?: string | null;
   qa_waivers?: {head: string; actor: string; reason?: string | null}[];
   followers?: PropFollower[] | null;
 }
 interface PropFollower { actor: string; notify: string; }
-type PropStep = import('../types/api').TaskStep;
-type PropTaskType = import('../types/api').TaskType;
 // A request body: the server's JSON for one change (a saved row sends a field, a reader or follower sends its own shape).
 type PropPatch = Record<string, unknown>;
 // A save takes the body to send, or a function of the newest copy of the task that builds it (null: nothing to send).
@@ -42,7 +39,6 @@ interface PropMenuItem {
   checked?: boolean;
   danger?: boolean;
   actor?: string;
-  step?: PropStep;
 }
 interface PropMenuOptions<T extends PropMenuItem> {
   label: string;
@@ -57,10 +53,8 @@ interface PropMenuOptions<T extends PropMenuItem> {
 interface PropMenuAction { text: string; danger?: boolean; run: () => unknown; }
 interface PropRowOptions { edit?: boolean; empty?: boolean; popup?: string; words?: string; title?: string; extra?: string; }
 
-const TASK_SET_STATUSES = ['open', 'doing', 'waiting', 'review', 'ready', 'done', 'declined'];
 const PROP_ICON = {
   due: '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" focusable="false"><rect x="2" y="3" width="10" height="9" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2 6h10M5 1.8v2.4M9 1.8v2.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
-  type: '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" focusable="false"><path d="M2.5 4.5h9M2.5 7h9M2.5 9.5h5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
   open: '<svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true" focusable="false"><path d="M5 2.5H2.5v7h7V7M7 2.5h2.5V5M9.5 2.5L5.5 6.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   check: '<svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M3 7.3l2.6 2.6L11 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   more: '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" focusable="false"><circle cx="3" cy="7" r="1.2" fill="currentColor"/><circle cx="7" cy="7" r="1.2" fill="currentColor"/><circle cx="11" cy="7" r="1.2" fill="currentColor"/></svg>',
@@ -90,9 +84,8 @@ function snoozeMenu(d: TaskDialog, anchor: HTMLElement, save: TaskSave): void {
       void save('snooze', {snooze: at.toISOString()});
     }});
 }
-function taskPropsHTML(t: PropTask, opts = {}): string {
+function taskPropsHTML(t: PropTask): string {
   const r = taskPropRights(t);
-  const type = pipelineType(t), typed = !!type && pipelineTypeId(t) !== 'general';
   const row = (key: string, label: string, value: string, o: PropRowOptions = {}): string => {
     const words = o.words || label;
     const v = o.edit
@@ -102,16 +95,16 @@ function taskPropsHTML(t: PropTask, opts = {}): string {
   };
   const txt = (s: string): string => `<span class="prop-txt">${esc(s)}</span>`;
   const rows: string[] = [];
-  // Status: the shared icon and the status's name. A blocked hold reads Blocked (the header no longer says so); a typed
-  // task's step is its own row.
-  const statusName = taskBlockedHold(t) ? 'Blocked' : STATUS_WORD[t.status] || String(t.status || '');
-  rows.push(row('status', 'Status', txt(statusName), {edit: r.edit || (!r.live && r.reopen), words: statusName}));
+  // Stage: the pipeline and the stage it is in (Done or Closed once finished); its menu moves it back or on.
+  const stageName = taskStatusLabel(t), pipeName = t.pipeline?.name || '';
+  rows.push(row('stage', 'Stage', txt(pipeName && t.status === 'open' ? `${pipeName} › ${stageName}` : stageName),
+    {edit: r.edit && !!t.pipeline_id, words: stageName}));
   // Owner and who asked. A private task's reassignment rule is the Owner label's tooltip, not a line on screen.
   rows.push(row('owner', 'Owner', actorFace(t.owner_id, 16) + txt(actorLabel(t.owner_id)), {edit: r.edit, words: actorLabel(t.owner_id),
     title: t.private ? 'Reassigning grants the new assignee access and removes the previous assignee’s access unless they requested the task.' : ''}));
   const asker = taskRequester(t);
   rows.push(row('asker', 'Asked by', asker ? actorFace(asker, 16) + txt(actorLabel(asker)) : txt('Unknown'), {words: actorLabel(asker) || 'Unknown', empty: !asker}));
-  if (t.roles && (typed || Object.keys(t.roles).length)) rows.push(taskPeopleRowHTML(t, r));
+  if (t.roles && Object.keys(t.roles).length) rows.push(taskPeopleRowHTML(t, r));
   // Private: the box only; Who can see, below it, says who does
   rows.push(`<div class="prop" data-prop-row="private"><span class="prop-k">Private</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Private" data-task-private ${t.private ? 'checked' : ''} ${r.party && (!t.private || myActor() === t.requester_id) ? '' : 'disabled'}></label></span></div>`);
   rows.push(taskReadersRowHTML(t, r));
@@ -132,13 +125,6 @@ function taskPropsHTML(t: PropTask, opts = {}): string {
     {edit: r.edit, empty: !dueAt, popup: 'dialog', words: dueWords || 'none',
       extra: (r.edit ? `<input type="date" class="prop-date" data-prop-date data-task-field="due" tabindex="-1" aria-hidden="true" value="${esc(dueISO)}">` : '')
         + (r.edit && dueAt ? `<button type="button" class="prop-x" data-prop-clear="due" aria-label="Clear the due date" title="Clear">${TL_ICON.x}</button>` : '')}));
-  if (t.check_back_at && t.check_back?.enabled !== false) {
-    const when = fmt(t.check_back_at);
-    const edit = r.edit || (r.reopen && ['done', 'declined'].includes(t.status));
-    rows.push(row('check_back', 'Follow up by', txt(when), {edit, words: when,
-      extra: t.check_back ? `<small>${esc(actorLabel(t.check_back.by))}${t.check_back.due ? ' · Due' : ''}${t.check_back.delivery ? ' · ' + esc(t.check_back.delivery.replaceAll('_', ' ')) : ''}</small>` : ''}));
-    rows.push(row('check_back_note', 'Expected result', txt(t.check_back_note || 'Inspect progress'), {edit, words: t.check_back_note || 'Inspect progress'}));
-  }
   // Tags: chips (each opens its tag) and a small +
   const chips = tagChips(t.labels || [], t.tags || [], r.links, true);
   rows.push(`<div class="prop" data-prop-row="tags"><span class="prop-k" aria-hidden="true">Tags</span><span class="prop-vwrap"><span class="prop-tags tlabels" aria-label="Tags">${chips
@@ -153,15 +139,9 @@ function taskPropsHTML(t: PropTask, opts = {}): string {
     rows.push(row('parent', 'Part of', txt(parent.title), {words: parent.title}));
   } else if (parent) {
     rows.push(`<div class="prop" data-prop-row="parent"><span class="prop-k" aria-hidden="true">Part of</span><span class="prop-vwrap">`
-      + `<button type="button" class="prop-v prop-link" data-open-task="t${esc(parent.id)}" aria-label="Part of: ${esc(parent.title)}. Open it"><span class="prop-txt">${esc(parent.title)}</span></button>`
+      + `<button type="button" class="prop-v prop-link" data-open-task="${esc(parent.id)}" aria-label="Part of: ${esc(parent.title)}. Open it"><span class="prop-txt">${esc(parent.title)}</span></button>`
       + (r.links ? `<button type="button" class="prop-x" data-prop-clear="parent" aria-label="Clear Part of" title="Clear">${TL_ICON.x}</button>` : '') + '</span></div>');
   } else rows.push(row('parent', 'Part of', txt(r.links ? 'Add parent' : 'None'), {edit: r.links, empty: true, words: 'none'}));
-  // Type and Step: only for a task that has a type
-  if (typed) {
-    rows.push(row('type', 'Type', `<span class="prop-ic">${PROP_ICON.type}</span>` + txt(type.name), {edit: r.edit && TASK_TYPES.length > 1, words: type.name}));
-    const step = type.steps.find((s: PropStep) => s.id === t.step_id);
-    rows.push(row('step', 'Step', step ? txt(step.name) : txt('Add step'), {edit: r.edit || (!r.live && r.reopen), empty: !step, words: step?.name || 'none'}));
-  }
   if (t.verdict) rows.push(row('verdict', 'Verdict', taskVerdictHTML(t), {words: VERDICT_WORDS[t.verdict]?.[0] || t.verdict}));
   const waiver = (t.qa_waivers || []).at(-1);
   if (waiver) rows.push(row('qa-waiver', 'QA', taskQaWaiverHTML(waiver), {words: `waived on ${String(waiver.head).slice(0, 7)}, not a QA pass`,
@@ -169,7 +149,7 @@ function taskPropsHTML(t: PropTask, opts = {}): string {
   return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
 }
 // A refused save's reason stays under the properties until that property saves (several: one line each, named).
-const PROP_WORDS: Record<string, string> = {readers: 'Who can see', followers: 'Followers', status: 'Status', owner: 'Owner', due: 'Due', check_back: 'Follow up by', check_back_note: 'Expected result', tags: 'Tags', parent: 'Part of', type: 'Type', step: 'Step', people: 'People', publication: 'Public', size: 'Size'};
+const PROP_WORDS: Record<string, string> = {readers: 'Who can see', followers: 'Followers', stage: 'Stage', owner: 'Owner', due: 'Due', tags: 'Tags', parent: 'Part of', people: 'People', publication: 'Public', size: 'Size', snooze: 'Snooze'};
 
 // Who is on a task by role (the server's `roles`): one chip per person and role, × takes one off, + adds one.
 // Roles are names the team chooses; what they mean downstream is the client's.
@@ -191,7 +171,7 @@ function taskReadersRowHTML(t: PropTask, r: PropRights): string {
   const may = r.mover || r.party;
   const chip = (a: string, off: boolean): string => `<span class="prop-chip">${actorAvatar(a, 16)}<span class="prop-txt">${esc(actorName(a))}</span>${off
     ? `<button type="button" class="prop-x" data-prop-clear-reader="${esc(a)}" aria-label="Take ${esc(actorName(a))} off" title="Take off">${TL_ICON.x}</button>` : ''}</span>`;
-  const parties = [...new Set([taskRequester(t) || t.requester_id, t.owner_id].filter(Boolean))];
+  const parties = [...new Set([taskRequester(t) || t.requester_id, t.owner_id].filter((a): a is string => !!a))];
   const chips = parties.map(a => chip(a, false)).join('') + (t.readers || []).map(a => chip(a, may)).join('');
   const add = may ? `<button type="button" class="prop-add" data-prop="readers" aria-haspopup="menu" aria-label="Add who can see" title="Add">${TL_ICON.plus}</button>` : '';
   return head + `<span class="prop-tags" aria-label="Who can see">${chips}${add}</span></span></div>`;
@@ -330,31 +310,21 @@ function taskMenuSettled(d: TaskDialog) {
 }
 
 // ---- the pickers
-const stepItems = (t: PropTask, type: PropTaskType): PropMenuItem[] => [{value: '', text: 'No step', html: `<span>No step</span>`, checked: !t.step_id},
-  ...type.steps.map(s => ({value: s.id, text: s.name, html: `<span>${esc(s.name)}</span>`, checked: s.id === t.step_id, step: s}))];
-// Tasks to pick from: the Tasks page's list, else a short-lived copy (a minute; the Tasks page clears it on open).
-let PROP_TASKS: {at: number; rows: PropTask[]} | null = null;
-async function taskPropCandidates(t: PropTask, key: string): Promise<PropTask[]> {
-  let rows: PropTask[] = (TASKS_ST?.tasks || []).filter((x: PropTask) => !taskFinished(x));
-  if (!rows.length) {
-    if (!PROP_TASKS || Date.now() - PROP_TASKS.at > 60000) PROP_TASKS = {at: Date.now(), rows: (await v2Get(activeTasksPath()))?.tasks || []};
-    rows = PROP_TASKS.rows;
-  }
-  const bar = taskPropLoops(t, key, rows);
-  return rows.filter(x => !bar.has(String(x.id))).sort((a, b) => String(a.title).localeCompare(String(b.title)));
+// Open tasks to pick from: a short-lived copy (a minute; a sent comment clears it).
+type PropCandidate = Pick<TaskBriefV3, 'id' | 'title' | 'owner_id' | 'status'>;
+let PROP_TASKS: {at: number; rows: PropCandidate[]} | null = null;
+async function taskPropCandidates(t: PropTask & {children?: unknown[]}): Promise<PropCandidate[]> {
+  if (!PROP_TASKS || Date.now() - PROP_TASKS.at > 60000) PROP_TASKS = {at: Date.now(), rows: await taskBriefs({status: 'open', limit: 500})};
+  // Not the task itself, nor one of its own subtasks (that would make a loop).
+  const bar = new Set([String(t.id), ...(t.children || []).map(c => String((c as {id?: unknown}).id))]);
+  return PROP_TASKS.rows.filter(x => !bar.has(String(x.id))).sort((a, b) => String(a.title).localeCompare(String(b.title)));
 }
-// What a picker must not offer, because it would make a loop: the task itself, and for Part of everything under it
-// (children, grandchildren…), for Blocked by every task that already waits on it, for Blocks every task it already
-// waits on, however far along the chain; for the other kinds only the task itself.
-function taskPropLoops(t: PropTask, key: string, rows: PropTask[]): Set<string> {
-  const here = String(t.id), under = new Map<string, string[]>();
-  const ups: ((x: PropTask) => string[]) | null = key === 'parent' ? x => [taskParentId(x)] : key === 'blocked_by' ? x => taskBlockers(x).map((b: {id: string}) => String(b.id))
-    : key === 'blocks' ? x => taskRels(x, 'blocks', 'out').map((b: {id: string}) => String(b.id)) : null;
-  if (!ups) return new Set([here]);
-  for (const x of rows) for (const up of ups(x)) if (up) { if (!under.has(up)) under.set(up, []); under.get(up)!.push(String(x.id)); }
-  const out = new Set([here]), todo = [here];
-  while (todo.length) for (const k of under.get(todo.pop()!) || []) if (!out.has(k)) { out.add(k); todo.push(k); }
-  return out;
+// The stages a task may move back to: the earlier ones of its pipeline.
+function taskEarlierStages(t: PropTask): {id: string; name: string}[] {
+  const p = (TASK_PIPELINES || []).find(x => x.id === t.pipeline_id), here = t.stage_id;
+  if (!p || !here) return [];
+  const at = p.stages.findIndex(st => st.id === here);
+  return p.stages.slice(0, Math.max(0, at)).map(st => ({id: String(st.id), name: st.name}));
 }
 // Wires the rows of a drawn task. `change(body)` saves (task-modal.ts taskModalBind) and redraws.
 function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void {
@@ -368,7 +338,6 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       .then(data => { if (data) taskFollowersPaint(d, task, data.followers); }).catch(() => {});
     return done;
   };
-  const type = pipelineType(task), typed = !!type && pipelineTypeId(task) !== 'general';
   box.onclick = async ev => {
     if (eventElement(ev)?.closest('[data-tag-key],[data-drop-label],[data-open-task]')) return;   // a tag opens its page; × and ↗ are bound in taskModalBind
     const unread = eventElement(ev)?.closest<HTMLElement>('[data-prop-clear-reader]');
@@ -391,28 +360,8 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     }
     const b = eventElement(ev)?.closest<HTMLElement>('[data-prop]'); if (!b) return;
     const key = b.dataset.prop;
-    if (key === 'status') {
-      if (typed) {
-        propMenu(d, b, {label: 'Status', items: stepItems(task, type).slice(1), onPick: async it => {
-          if (it.value === task.step_id) return;
-          const body: PropPatch = {step: it.value, ...(it.step?.status === 'done' ? {status: 'done'} : {})};
-          if (it.step?.status === 'waiting') { const reason = await taskBlockedReason(task); if (reason === null) return; body.note = reason; }
-          void save('status', body);
-        }});
-        return;
-      }
-      propMenu(d, b, {label: 'Status', items: TASK_SET_STATUSES.map(s => ({value: s, text: STATUS_WORD[s] || s,
-        html: `<span>${esc(STATUS_WORD[s] || s)}</span>`, checked: task.status === s})),
-        onPick: it => { if (it.value !== task.status) void save('status', {status: it.value}); }});
-    } else if (key === 'step' && typed) {
-      propMenu(d, b, {label: 'Step', items: stepItems(task, type), onPick: async it => {
-        if (it.value === (task.step_id || '')) return;
-        const body: PropPatch = {step: it.value, ...(it.step?.status === 'done' ? {status: 'done'} : {})};
-        if (it.step?.status === 'waiting') { const reason = await taskBlockedReason(task); if (reason === null) return; body.note = reason; }
-        void save('step', body);
-      }});
-    } else if (key === 'type') {
-      taskTypeMenu(d, b, task, save);
+    if (key === 'stage') {
+      void taskStageMenu(d, b, task, save);
     } else if (key === 'people') {
       // First the role (one already on the task, or a new name), then the person or bot.
       const pick = (role: string): void => {
@@ -457,14 +406,6 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
         const actor = o.value.includes(':') ? o.value : 'bot:' + o.value;
         return {value: o.value, text: o.textContent ?? '', html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent ?? '')}</span>`, checked: task.owner_id === actor, actor};
       }), onPick: it => { if (it.actor !== task.owner_id) void save('owner', {owner: it.actor}); }});
-    } else if (key === 'check_back') {
-      propMenu(d, b, {label: 'Follow up by', items: [
-        {value: '30m', text: 'In 30 minutes'}, {value: '2h', text: 'In two hours'}, {value: '1d', text: 'Tomorrow'}
-      ], entry: 'ISO date-time with timezone or duration', onPick: it => void save('check_back', {check_back_at: it.value}),
-      onEntry: at => void save('check_back', {check_back_at: at})});
-    } else if (key === 'check_back_note') {
-      propMenu(d, b, {label: 'Expected result', entry: 'What should be ready to inspect?',
-        onEntry: note => void save('check_back_note', {check_back_note: note})});
     } else if (key === 'due') {
       const input: HTMLInputElement | null = $('[data-prop-date]', d);
       d.focusProp = 'due';
@@ -472,18 +413,15 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       try { input.showPicker(); } catch { input.removeAttribute('tabindex'); input.classList.add('shown'); input.focus(); }
     } else if (key === 'tags') {
       const have = new Set(task.labels || []);
-      const keys = [...new Set([...(TASKS_ST?.labels || []), ...(TASKS_ST?.tasks || []).flatMap((x: PropTask) => x.labels || [])])].filter(k => !have.has(k)).sort();
       // built from the newest copy when it saves, so two quick tags both stay
       const add = (tag: string): void => { tag = String(tag).trim().toLowerCase(); if (tag && !have.has(tag)) void save('tags', cur => (cur.labels || []).includes(tag) ? null : {labels: [...(cur.labels || []), tag]}); };
-      propMenu(d, b, {label: 'Add a tag', entry: 'Tag', none: 'Type a tag, then Enter', items: keys.map(k => ({value: k, text: k,
-        html: `<span class="tl-dot" style="--hue:${tagHue(k)}"></span><span>${esc(k)}</span>`})), onPick: it => add(it.value), onEntry: add});
+      propMenu(d, b, {label: 'Add a tag', entry: 'Tag', none: 'Type a tag, then Enter', onEntry: add});
     } else if (key === 'parent') {
-      const rows = await taskPropCandidates(task, key);
+      const rows = await taskPropCandidates(task);
       if (!b.isConnected) return;
       propMenu(d, b, {label: 'Part of', find: 'Find a task', none: 'No open tasks', items: rows.map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner_id)}`,
-        html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner_id))}</span>`,
+        html: `<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner_id))}</span>`,
         checked: taskParentId(task) === String(x.id)})), onPick: it => {
-          if (taskPropLoops(task, key, TASKS_ST?.tasks || PROP_TASKS?.rows || []).has(String(it.value))) { d.propsErrs = {id: String(task.id), map: new Map([[key, 'That would make a loop.']])}; taskPropsMsgPaint(d); return; }
           if (String(it.value) !== taskParentId(task)) { d.focusProp = key; void taskRelate(d, task, {task: it.value, kind: 'parent'}); }
         }});
     }
@@ -496,13 +434,11 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
   if (date) date.onkeydown = ev => {
     if (ev.key === 'Enter') { ev.preventDefault(); date.dispatchEvent(new Event('change')); }
   };
-  // the "…" menu in the header: what used to be links and buttons under the task
+  // the "…" menu in the header: Snooze, Move back, Move on, Close and the rest (S5)
   const more = $('[data-task-more]', d) as HTMLElement | null;
   if (more) more.onclick = () => {
     const r = taskPropRights(task), items: PropMenuAction[] = [];
-    if (d.dataset.peek) items.push({text: 'Open full', run: () => { const t = d.liveTask || task; d.close(); void taskModalShow(t); }});
     if (r.links && !$('[data-sub-add]', d)) items.push({text: 'Add subtask', run: () => taskRailAdd(d, task)});
-    if (r.edit && TASK_TYPES.length > 1 && !typed) items.push({text: 'Set type…', run: () => taskTypeMenu(d, more, task, save)});
     items.push({text: 'Copy link', run: async () => {
       try { await navigator.clipboard.writeText(`${location.origin}/#/task/${encodeURIComponent(task.id)}`); toast('Link copied'); } catch { toast('Could not copy the link', true); }
     }});
@@ -515,21 +451,41 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     }});
     if (r.snooze) items.push(taskSnoozed(task) ? {text: 'Unsnooze', run: () => save('snooze', {unsnooze: true})}
       : {text: 'Snooze…', run: () => setTimeout(() => snoozeMenu(d, more, save))});
-    const stepsOnly = pipelineStepsOnly(task);
-    if (!r.live && r.reopen && !stepsOnly) items.push({text: 'Reopen', run: () => save('status', {status: 'open'})});
-    if (task.status !== 'closed' && (r.mover || r.party)) items.push({text: 'Close', danger: true, run: () => save('status', {close: true})});
+    if (r.edit && task.pipeline_id) {
+      items.push({text: 'Move back…', run: () => setTimeout(() => void taskStageMenu(d, more, task, save, 'back'))});
+      items.push({text: 'Move on', run: () => taskMoveOn(d, more, save)});
+    }
+    if (r.edit) items.push({text: 'Reassign…', run: () => setTimeout(() => ($('[data-prop="owner"]', d) as HTMLElement | null)?.click())});
+    if (!r.live && r.reopen) items.push({text: 'Reopen', run: () => save('stage', {move: 'reopen'})});
+    if (task.status === 'open' && (r.mover || r.party)) items.push({text: 'Close', danger: true, run: () => save('stage', {close: true})});
     // Closing counts as finished work; a task made by mistake is deleted into the trash instead.
     if (r.mover || task.requester_id === myActor()) items.push({text: 'Delete task', danger: true, run: async () => {
       if (!window.confirm(`Delete "${task.title}"? It goes to the trash, from which it can be restored.`)) return;
-      try { await post(`/v2/tasks/${encodeURIComponent(task.id)}/delete`, {}); } catch (e) { toast(errorCode(e) === 'has_work' ? "This task has work on it, such as a bot's turn, an approval, a bot's file or a subtask, so it can't be deleted. Close it instead." : errorMessage(e, ''), true); return; }
+      try { await post(`/v2/tasks/${encodeURIComponent(task.id)}/delete`, {}); } catch (e) { toast(errorCode(e) === 'has_work' ? "This task has work on it, such as a bot's turn, an answer, a bot's file or a subtask, so it can't be deleted. Close it instead." : errorMessage(e, ''), true); return; }
       d.close(); toast('Deleted');
       if (TASKS_ST) void tasksLoad(TASKS_ST);
     }});
     propMenu(d, more, {label: 'Task', items: items.map(it => ({...it, html: `<span>${esc(it.text)}</span>`})), onPick: it => it.run()});
   };
 }
-function taskTypeMenu(d: TaskDialog, anchor: HTMLElement, task: PropTask, save: TaskSave): void {
-  propMenu(d, anchor, {label: 'Type', items: TASK_TYPES.map(type => ({value: type.id, text: type.name,
-    html: `<span class="prop-ic">${PROP_ICON.type}</span><span>${esc(type.name)}</span>`, checked: type.id === pipelineTypeId(task)})),
-    onPick: it => { if (it.value !== pipelineTypeId(task)) void save('type', {type: it.value}); }});
+// The Stage row's menu: Move on, the earlier stages (Move back), Done; `only: 'back'` lists just the earlier ones.
+async function taskStageMenu(d: TaskDialog, anchor: HTMLElement, task: PropTask, save: TaskSave, only = ''): Promise<void> {
+  if (!TASK_PIPELINES) await tasksPipelinesRead().catch(() => []);
+  if (!anchor.isConnected) return;
+  const back = taskEarlierStages(task).map(st => ({value: st.id, text: st.name, html: `<span>${esc(st.name)}</span>`}));
+  const items = only === 'back' ? back : [{value: 'next', text: 'Move on', html: '<span>Move on</span>'}, ...back,
+    {value: 'done', text: 'Done', html: '<span>Done</span>'}];
+  propMenu(d, anchor, {label: only === 'back' ? 'Move back to' : 'Move to', items, none: 'No earlier stage', onPick: it => {
+    if (it.value === 'next') taskMoveOn(d, anchor, save);
+    else void save('stage', {move: it.value});
+  }});
+}
+// Move on: when the engine refuses for what is missing, the menu names it and takes a why to move on anyway.
+function taskMoveOn(d: TaskDialog, anchor: HTMLElement, save: TaskSave): void {
+  void Promise.resolve(save('stage', {move: 'next', quiet: true})).then(refused => {
+    const why = refused && typeof refused === 'object' ? refused as TaskRefused : null;
+    if (!why?.missing.length || !anchor.isConnected) return;
+    setTimeout(() => propMenu(d, anchor, {label: `Missing: ${why.missing.join(', ')}`, entry: 'Why move on anyway', none: 'Say why, then Enter',
+      onEntry: v => void save('stage', {move: 'next', why: v})}));
+  });
 }

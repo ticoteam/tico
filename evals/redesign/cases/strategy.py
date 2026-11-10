@@ -2,7 +2,7 @@
 
 36: a listening match reaches the market graph only through the Librarian's turn, never by a direct write.
 37: the daily briefing fires at 07:00 on the fake clock and posts to Market and Updates.
-38: a reorg is no proposal: a bot's org approval is refused, and the owner moves the bot herself, audited as hers."""
+38: a reorg is no bot's to make: a bot's group change is refused, and the owner moves the bot herself, audited as hers."""
 
 import json
 from datetime import datetime
@@ -12,7 +12,6 @@ from ..harness import (
     DANA,
     LEAD,
     OPENAI_ID,
-    OPENAI_REF,
     RELEASE_ID,
     W2,
     W3,
@@ -123,20 +122,16 @@ def advance_to_next_run(org, facts):
     return due
 
 
-def propose_move(org, facts):
-    """The Engineering Lead tries to file moving the OpenAI builder from Builders to Release as an approval: org changes
-    are no proposal any more (the Strategy Bot suggests them in words), so the hub refuses it."""
+def bot_moves(org, facts):
+    """The Engineering Lead tries to move the OpenAI builder into Release itself. An org change is no bot's to make and
+    no OK a bot can ask for (backend/proposals.py: the Strategy Bot suggests it in words), so the hub refuses it."""
     return org.api(
-        "post",
-        "/api/v2/approvals",
-        {"kind": "org", "payload": {"bot": OPENAI_REF, "from": got(facts, "builders"), "to": got(facts, "release")}},
-        who=LEAD,
-        wave=W2,
+        "patch", f"/api/v2/groups/{got(facts, 'release')}", {"add": {"bots": [OPENAI_ID]}}, who=LEAD, wave=W2
     )
 
 
 def move_by_hand(org, facts):
-    """Dana, the owner, moves it herself on the Org tab: one group change, no approval."""
+    """Dana, the owner, moves it herself on the Org tab: one group change, made as her."""
     return org.api(
         "patch", f"/api/v2/groups/{got(facts, 'release')}", {"add": {"bots": [OPENAI_ID]}}, who=DANA, wave=W2
     )
@@ -320,17 +315,17 @@ def posted_to_updates(facts):
 def s38_steps(org, facts):
     org.step(facts, "builders", make_group, org, "Builders", [CLAUDE_ID, OPENAI_ID])
     org.step(facts, "release", make_group, org, "Release", [RELEASE_ID])
-    org.step(facts, "proposal", propose_move, org, facts)
+    org.step(facts, "bot_move", bot_moves, org, facts)
     org.step(facts, "moved", move_by_hand, org, facts)
     org.step(facts, "groups", org.api, "get", "/api/v2/groups", who=DANA, wave=W2)
     org.step(facts, "audit", audit_group, org, facts)
 
 
-def proposal_refused(facts):
+def bot_move_refused(facts):
     got(facts, "builders")
     got(facts, "release")
-    reply = got(facts, "proposal")
-    return reply.status == 422, f"an org approval got {reply.status}, not 422"
+    reply = got(facts, "bot_move")
+    return reply.status == 403, f"a bot's group change got {reply.status}, not 403"
 
 
 def moved_by_hand(facts):
@@ -344,7 +339,7 @@ def moved_by_hand(facts):
 def audited_as_dana(facts):
     setup(facts, "audit", "moved")
     hit = [row for row in rows(body(facts, "audit")) if not row.get("via") and "dana" in canon(row.get("actor"))]
-    return bool(hit), "no audit row by Dana, with no approval, for the group change"
+    return bool(hit), "no audit row by Dana, made by hand, for the group change"
 
 
 # ---------------------------------------------------------------------------------------------- scenarios
@@ -381,13 +376,13 @@ SCENARIOS = [
     Scenario(
         38,
         "strategy-reorg-by-hand",
-        "A reorg is no proposal: a bot's org approval is refused and the owner moves the bot herself",
+        "A reorg is no bot's to make: a bot's group change is refused and the owner moves the bot herself",
         s38_steps,
         [
-            Check("a bot's org move is refused as a proposal", W2, proposal_refused),
+            Check("a bot's own group change is refused", W2, bot_move_refused),
             Check("Dana's move is accepted", W2, lambda facts: accepted(facts, "moved")),
             Check("the bot is in Release after Dana's move", W2, moved_by_hand),
-            Check("the group change is audited as Dana's, with no approval", W2, audited_as_dana),
+            Check("the group change is audited as Dana's, made by hand", W2, audited_as_dana),
         ],
     ),
 ]

@@ -58,6 +58,12 @@ def _feedback() -> Any:
     return feedback
 
 
+def _tc() -> Any:
+    from . import task_calls
+
+    return task_calls
+
+
 def _refuse(conn: "sqlite3.Connection", by: str, rule: str, detail: str, task_id: str | None = None) -> NoReturn:
     _h().refuse(conn, by, rule, detail, task=task_id)
     raise AssertionError("refuse() always raises")  # pragma: no cover
@@ -170,6 +176,10 @@ def _may_answer(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row,
     if kind == "ok":
         from . import task_asks
 
+        # The Assistant and BotOps never answer OK to an OK, bound or plain, whichever caller brings it here: the value
+        # is already stripped (answer), so " ok " is "ok".
+        if value == OK and task_asks.acting_for_people(by):
+            _refuse(conn, by, "task_requirement", task_asks.NOT_YOURS, task_id)
         # An OK bound to exact content is given only through its preview, with the hash of what was shown
         # (task_asks.give_ok). A send back stays a plain answer.
         refused = task_asks.refuses_plain_ok(conn, requirement["id"], value)
@@ -262,6 +272,10 @@ def answer(
         out["answer_id"] = newest["id"]
         return out
     answer_id = _write(conn, row, requirement_id, by, value, notes)
+    if requirement["kind"] == "ok" and value != OK:
+        from . import task_asks
+
+        task_asks.revoke(conn, requirement_id)  # a send back ends a bound OK for good (no grant: nothing)
     out = E.advance(conn, task_id)
     if out is None:
         # The task changed and stays: the never-stuck ladder starts again, before any wake this answer sends.
@@ -314,8 +328,8 @@ def give_to(
     if standing.state != R.WAITING:
         _refuse(conn, by, "task_requirement", "This is not waiting on anyone", task_id)
     current = standing.on
-    if by not in (current, row.get("owner_id")) and not is_human(by):
-        _refuse(conn, by, "task_requirement", "Only who it waits on, the owner or a person gives it away", task_id)
+    if not _tc().may_handle_ask(conn, by, row, requirement, recipient=current):
+        _refuse(conn, by, "identity", "Only who it waits on, whoever asked it, or who works the task gives it", task_id)
     if person == current:
         return row
     if requirement.get("visit_id"):
@@ -331,7 +345,7 @@ def give_to(
 
 
 def undo(conn: "sqlite3.Connection", answer_id: str, by: str) -> Row:
-    """Take an answer back: whoever gave it, or any person. While the task is still in that visit the answer is marked
+    """Take an answer back: only whoever gave it (task_calls.may_handle_ask). While the task is still in that visit the answer is marked
     undone. If the task moved on because of it, and has not moved since, it goes back to that stage: an ordinary move
     back."""
     H = _h()
@@ -343,8 +357,8 @@ def undo(conn: "sqlite3.Connection", answer_id: str, by: str) -> Row:
     task_id = row["id"]
     if found["answer"] == PUSHED_PAST:
         _refuse(conn, by, "task_requirement", "A push past is a move. Move the task back instead.", task_id)
-    if found["by_id"] != str(by) and not is_human(by):
-        _refuse(conn, by, "task_requirement", "Only who answered, or a person, takes it back", task_id)
+    if not _tc().may_handle_ask(conn, by, row, R.get(conn, found["requirement_id"]) or {}, answered_by=found["by_id"]):
+        _refuse(conn, by, "identity", "Only who gave the answer takes it back", task_id)
     if found.get("undone_at"):
         return row
     now = _part(row, "visit")
@@ -361,6 +375,11 @@ def undo(conn: "sqlite3.Connection", answer_id: str, by: str) -> Row:
     if not stays and not moved_by_it:
         _refuse(conn, by, "task_changed", "The task moved since. Move it back by hand.", task_id)
     conn.execute("UPDATE answers SET undone_at=? WHERE id=?", (H.now(), answer_id))
+    if answered and answered["kind"] == "ok" and found["answer"] in (OK, NO):
+        from . import task_asks
+
+        # An OK taken back is revoked for good; a send back taken back leaves its revocation where it is.
+        task_asks.revoke(conn, found["requirement_id"])
     # A wake this answer caused and no run took yet is moot.
     task_wakes.cancel(conn, f"{task_id}:{visit['id']}:answer:{answer_id}")
     H.history_event(conn, "task", task_id, by, "answer_undone", found["answer"], None, None, {"answer_id": answer_id})
@@ -435,6 +454,9 @@ def thumbs_down(
         _refuse(conn, by, "task_why", "Say what was wrong", task_id)
     still_asked = row["status"] == "open" and _part(row, "visit").get("id") == visit["id"]
     still_asked = still_asked and any(r["id"] == requirement_id for r in R.for_visit(conn, visit))
+    asked = R.person_of(conn, requirement, visit["id"])
+    if send_back and still_asked and not _tc().may_handle_ask(conn, by, row, requirement, recipient=asked):
+        _refuse(conn, by, "identity", "Only who was asked, whoever asked, or who works the task sends it back", task_id)
     out: Row = dict(row)
     if send_back and still_asked and not requirement.get("visit_id"):
         out = answer(conn, task_id, requirement_id, by, NO, reason)

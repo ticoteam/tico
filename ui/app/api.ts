@@ -36,8 +36,9 @@ interface ApiPrefetch {
 type UntypedJson = any;
 
 const bytes = (n: number): string => n < 1024 ? `${n} B` : n < 1048576 ? `${(n/1024).toFixed(0)} KB` : n < 1073741824 ? `${(n/1048576).toFixed(1)} MB` : `${(n/1073741824).toFixed(1)} GB`;
-// A task cap's 409 (redesign CONTRACT §1) says why in `message`; `error` is only its code.
-const apiErrorRaw = (j: ApiFailureBody, r: Response): string => (j.error === 'task_cap' && j.message) || (j.error && typeof j.error === 'object' ? j.error.detail : '') || (typeof j.error === 'string' ? j.error : '') || (Array.isArray(j.detail) ? j.detail.map(e => `${e.loc?.slice(1).join('.') || 'Request'}: ${e.msg}`).join('; ') : '') || r.statusText;
+// A task cap's 409 (redesign CONTRACT §1) says why in `message`; `error` is only its code. The task engine's refusal is
+// flat: `error` is its rule and `detail` the one line a person reads.
+const apiErrorRaw = (j: ApiFailureBody, r: Response): string => (j.error === 'task_cap' && j.message) || (j.error && typeof j.error === 'object' ? j.error.detail : '') || (typeof j.error === 'string' && typeof j.detail === 'string' && j.detail) || (typeof j.error === 'string' ? j.error : '') || (Array.isArray(j.detail) ? j.detail.map(e => `${e.loc?.slice(1).join('.') || 'Request'}: ${e.msg}`).join('; ') : '') || r.statusText;
 const apiError = (j: ApiFailureBody, r: Response): string => {
   const raw = apiErrorRaw(j, r);
   return String(raw).replace(/\. Rewrite the title\/body to fix these writing errors and retry\. Do not ask the human to waive formatting rules\./g, '. Please edit the title or details and try again.')

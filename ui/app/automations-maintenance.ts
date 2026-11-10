@@ -116,9 +116,9 @@ const AU_MAINT_SCHEDULES: Array<[string, string]> = [['hourly', 'Every hour'], [
 const AU_MAINT_OFTEN: Array<[string, string]> = [['run', 'Every run'], ['day', 'At most once a day'], ['week', 'At most once a week'], ['custom', 'Custom']];
 const AU_MAINT_CAPS = [0, 10, 25, 50, 100, 250, 500];
 const AU_MAINT_WHAT: Record<string, string> = {collect: 'What changed since the last run', clean_up: 'Old data past retention',
-  check_health: 'Setup problems to BotOps', find_stuck: 'Wakes bots on work that stalled', learn: 'Passes on what people said',
+  check_health: 'Setup problems to BotOps', learn: 'Passes on what people said',
   suggest: 'Ideas from Tico Playbooks', update: 'Each bot that worked writes its update', dream: 'Bots tidy their memory'};
-const AU_MAINT_BOTS: Record<string, string> = {find_stuck: 'Most bots woken per run', dream: 'Most bots per run'};
+const AU_MAINT_BOTS: Record<string, string> = {dream: 'Most bots per run'};
 const AU_MAINT_BETA = new Set(['learn']);
 const AU_MAINT_PRIVACY = '#/settings/general/settings-privacy';
 const AU_MAINT_RUNS_PAGE = 25;

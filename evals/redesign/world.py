@@ -3,7 +3,7 @@
 The redesign scenarios and the UI's real-hub tests (ui/tests/support/real_hub_server.py) drive the real server
 in-process: real API calls with test tokens, real webhooks for pull requests, and the real scheduler pass on demand. Only
 time and GitHub are made up. This was the factory simulation's world (evals/factory, deleted at the Pipelines v3
-cut-over) without its Dev board, its bots' replies or its board reads: every scenario builds the org it needs."""
+cut-over) without its own pipeline, its bots' replies or its reads of them: every scenario builds the org it needs."""
 
 import datetime as dt
 import hashlib
@@ -45,8 +45,7 @@ class Refusal(Exception):
 class World:
     """One run of one scenario. Use as a context manager: it starts the clock and the server, and stops both."""
 
-    def __init__(self, board, bots, tick_minutes=5, rng=None, capacity=4):
-        self.board = board  # kept for callers that name their scenario by it; no board is made
+    def __init__(self, bots, tick_minutes=5, rng=None, capacity=4):
         self.bot_slugs = list(bots)
         self.rng = rng or random.Random(0)
         self.ci = {}  # pr number -> (head, when its checks finish, passed)
@@ -289,6 +288,16 @@ class World:
         self.hook("pull_request", self.pr_payload(number, "opened"))
         self.start_ci(number)
         return number
+
+    def push(self, number):
+        """A new commit on the pull request: a new head, GitHub's `synchronize`, and CI on it. Returns the head."""
+        pr = self.prs[number]
+        pr.setdefault("old_heads", []).append(pr["head"])
+        pr["head"] = uuid.uuid4().hex + uuid.uuid4().hex[:8]
+        pr.setdefault("heads", []).append((self.now(), pr["head"]))
+        self.hook("pull_request", self.pr_payload(number, "synchronize"))
+        self.start_ci(number)
+        return pr["head"]
 
     # CI on a new head takes 3 to 15 minutes, usually about 6. It always passes.
     def start_ci(self, number):

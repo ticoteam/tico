@@ -22,20 +22,19 @@
 .pdots-tip ul { margin: 0; padding: 0; list-style: none; font-size: 12px; line-height: 18px; color: var(--ink); }
 .pdots:hover > .pdots-tip, .pdots[data-open] > .pdots-tip { display: block; }
 
-/* A ticket's requirements (ui/app/task-requirements.ts). */
+/* "To leave <stage>" in a task's window (ui/app/task-requirements.ts). */
 .task-requirements { display: flex; flex-direction: column; }
-.task-req { position: relative; display: grid; grid-template-columns: 10px minmax(0, 1fr) auto 32px; gap: 10px; align-items: center;
-  padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
-.task-req .pdot { cursor: default; }
-.task-req-state { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.task-req { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto 28px; gap: 10px; align-items: center;
+  padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.task-req-dot { color: var(--muted); text-align: center; }
+.task-req[data-state="met"] .task-req-dot { color: var(--accent); }
+.task-req-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .task-req-name { min-width: 0; overflow-wrap: anywhere; }
-.task-req-more { width: 28px; height: 28px; padding: 0; border-radius: 6px; }
-.task-req-mark { position: absolute; right: 0; top: calc(100% + 4px); z-index: 10; width: 260px; box-sizing: border-box; padding: 10px;
-  border-radius: 8px; border: 1px solid var(--line); background: var(--surface2); box-shadow: 0 6px 16px rgba(0, 0, 0, .3);
-  display: flex; flex-direction: column; gap: 8px; }
-.task-req-mark[hidden] { display: none; }
-.task-req-mark label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
-.task-req-mark input { height: 32px; box-sizing: border-box; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
+.task-req-ask { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 10px; }
+.task-req-ask[hidden] { display: none; }
+.task-req-ask input[name=line] { flex: 1 1 160px; min-width: 0; height: 32px; box-sizing: border-box; padding: 0 10px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
+.task-req-ok { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
 .task-req-err { font-size: 12px; color: var(--fail); }
 
 /* The "▶ N for you" buttons: the header's, beside the pipeline picker (#task-play), and a column's or a phone stage's compact
@@ -226,35 +225,6 @@
   body.pipe-sheet-open .pr-bar { display: none; }
   .tasks-pane { padding-bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 84px); }
 }
-
-/* Evidence on a requirement, and Attach to (ui/app/task-requirements.ts). */
-.task-req-files { margin: 4px 0 0; padding: 0; list-style: none; font-size: 12px; }
-.task-req-files li { padding: 2px 0; overflow-wrap: anywhere; }
-.task-req-old { color: var(--wait-ink); }
-.task-req-attach { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 10px; }
-.task-req-attach-menu { position: absolute; left: 0; top: calc(100% - 4px); z-index: 10; min-width: 200px; display: flex; flex-direction: column; padding: 4px;
-  border-radius: 8px; border: 1px solid var(--line); background: var(--surface2); box-shadow: 0 6px 16px rgba(0, 0, 0, .3); }
-.task-req-attach-menu[hidden], .task-req-attach-form[hidden] { display: none; }
-.task-req-attach-menu button { min-height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
-.task-req-attach-menu button:hover { background: var(--surface); }
-.task-req-attach-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: 1 1 100%; }
-.task-req-attach-for { font-weight: 600; }
-.task-req-attach-form input[type=url] { flex: 1 1 160px; min-width: 0; height: 32px; box-sizing: border-box; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
-.task-req-file { display: inline-flex; align-items: center; height: 32px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--line); cursor: pointer; }
-@media (max-width: 600px) {
-  .task-req-attach .ghost, .task-req-attach .primary, .task-req-attach-form input[type=url], .task-req-file, .task-req-attach-menu button { min-height: 44px; }
-}
-
-/* Move anyway: a refused drag past unmet requirements, for a pipeline editor. */
-.pipe-override { width: min(360px, calc(100vw - 32px)); padding: 16px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface2); color: var(--ink); }
-.pipe-override::backdrop { background: rgba(0, 0, 0, .4); }
-.pipe-override form { display: flex; flex-direction: column; gap: 10px; }
-.pipe-override p { margin: 0; }
-.pipe-override label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
-.pipe-override input { height: 36px; box-sizing: border-box; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
-.pipe-override-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.pipe-override-actions button { min-height: 36px; }
-@media (max-width: 600px) { .pipe-override-actions button { min-height: 44px; } }
 
 /* The pipeline editor (ui/app/pipeline-editor.ts). */
 .pe-dialog{width:min(720px,calc(100vw - 32px))}

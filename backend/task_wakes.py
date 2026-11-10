@@ -79,20 +79,6 @@ ENGINE_REFS = (
 )
 
 
-def _bring_in_manager(conn: "sqlite3.Connection", task: Row, target: str) -> bool:
-    """The pipeline's manager bot is woken about a private task it cannot read (a task with no owner, or one the ladder
-    hands it): it becomes a reader of that task, as a task event, the way a stage's own rule brings in the bot it names.
-    The pipeline's settings chose that bot to look after its tasks. Whether it reads the task now."""
-    H = _h()
-    found = conn.execute(
-        "SELECT p.manager_id FROM tasks t JOIN pipelines p ON p.id = t.pipeline_id WHERE t.id=?", (task["id"],)
-    ).fetchone()
-    if not found or not found[0] or found[0] != target or not H.is_bot(target):
-        return False
-    H.set_task_readers(conn, H.KEEPER, task["id"], add=[target])
-    return bool(H.task_private_readable(conn, target, H.task(conn, task["id"])))
-
-
 def add(
     conn: "sqlite3.Connection",
     task: Row,
@@ -123,8 +109,8 @@ def add(
         return None
     if not H._actor_exists(conn, target):
         return None
-    if not H.task_private_readable(conn, target, task) and not _bring_in_manager(conn, task, target):
-        return None
+    if not H.task_private_readable(conn, target, task):
+        return None  # the engine never adds a reader: who can see a private task does not change
     waiting: list[Any] = []
     carried: Row = {}
     parts: list[Row] = []
@@ -182,21 +168,30 @@ def add(
     return message["id"]
 
 
-def ask(conn: "sqlite3.Connection", task: Row, requirement: Row | None) -> str | None:
-    """Wake the bot an ask added to this task names (an OK or an answer), once per ask, keyed
-    `<task>:<visit>:ask:<requirement>`: only while that bot has a turn on the task (`waiting_on.turns`), so never while
-    a person has it or it is snoozed. The never-stuck check calls this again for a bot that has a turn and was never
-    woken for its ask: the ask it got while a person had the task reaches it once a person acts."""
+def ask(conn: "sqlite3.Connection", task: Row, requirement: Row | None, who: str | None = None) -> str | None:
+    """Wake the bot an ask on this task names (an OK or an answer), once per ask and visit, keyed
+    `<task>:<visit>:ask:<requirement>`: an ask added to the visit, or one the task's stage has (it holds for every
+    visit of the stage). Only while that bot has a turn on the task (`waiting_on.turns`), so never while a person has
+    it or it is snoozed. `who` is the bot the task waits on for it, when the requirement names nobody itself. A task
+    entering a stage wakes each bot a stage's ask names beside the bot with the turn (task_engine._wake_turn); the
+    never-stuck check calls this again for a bot that has a turn and was never woken for its ask: the ask it got while
+    a person had the task reaches it once a person acts."""
     from . import waiting_on as W
 
     H = _h()
     visit: Row = task.get("visit") or {}
-    if not requirement or requirement.get("visit_id") != visit.get("id") or requirement.get("withdrawn_at"):
+    if not requirement or requirement.get("withdrawn_at"):
         return None
-    bot = requirement.get("person_id")
+    staged = requirement.get("stage_id")
+    if (staged or requirement.get("visit_id")) != (task["stage"]["id"] if staged else visit.get("id")):
+        return None
+    bot = requirement.get("person_id") or who
     if not H.is_bot(bot) or task.get("status") != "open" or task.get("snooze") or bot not in W.turns(conn, task):
         return None
-    lead = f"{H.actor_name(conn, requirement.get('added_by_id'))} asks you: {requirement.get('line') or ''}"
+    line = requirement.get("line") or ""
+    lead = (
+        f"You are asked: {line}" if staged else f"{H.actor_name(conn, requirement.get('added_by_id'))} asks you: {line}"
+    )
     return add(
         conn, task, bot, visit, body(conn, task, lead), wake_key=f"{task['id']}:{visit['id']}:ask:{requirement['id']}"
     )
@@ -297,19 +292,29 @@ def live_run(
 ) -> bool:
     """This bot has a run on this task whose computer still checks in. A run is live only while its lease is renewed
     (every 90 seconds at most): one that is held, cut off or lost is over. `live` is `live_bots` read at the same
-    `now`: a bot not in it has no live run on any task."""
+    `now`: a bot not in it has no live run on any task. A run is on the task as `_ON_TASK` says: a run in the task's
+    conversation counts only when it names no task and no other open task has that conversation, so a run on another
+    task there never hides this one's lost wake."""
     H = _h()
     if not H.is_bot(actor):
         return False
     if live is not None and H.actor_id(actor) not in live:
         return False
+    on_task = _on_task(conn, task)
     return bool(
         conn.execute(
             "SELECT 1 FROM (SELECT m.id FROM messages m WHERE "
             f"{_KEY} UNION SELECT id FROM messages WHERE conversation_id = ?) w "
             "CROSS JOIN jobs j ON j.message_id = w.id JOIN attempts a ON a.id = j.attempt_id "
-            "WHERE j.bot_id=? AND a.state IN ('leased', 'running') AND a.lease_until > ? LIMIT 1",
-            (*_range(task["id"]), task.get("conversation_id") or "", H.actor_id(actor), now or H.now()),
+            "JOIN messages m ON m.id = w.id "
+            f"WHERE j.bot_id=? AND a.state IN ('leased', 'running') AND a.lease_until > ? AND {_ON_TASK} LIMIT 1",
+            (
+                *_range(task["id"]),
+                on_task[-1] if on_task[-2] else "",  # the conversation's messages, only when it is this task's alone
+                H.actor_id(actor),
+                now or H.now(),
+                *on_task,
+            ),
         ).fetchone()
     )
 
@@ -359,15 +364,19 @@ def _marks(task: Row) -> tuple[int, int]:
     return int(visit.get("last_change_attempt") or 0), int(visit.get("last_change_message") or 0)
 
 
-def runs_since(conn: "sqlite3.Connection", task: Row, *, starting: bool = False) -> int:
+def runs_since(conn: "sqlite3.Connection", task: Row, *, starting: bool = False, besides: str | None = None) -> int:
     """How many bot runs started on this task since its visit last changed, whoever ran: the count the never-stuck
     ladder holds to 7. Only a run that started counts (`started_at`): a lease that failed before it began ran nothing.
     With `starting`, a lease still live that has not started yet counts too: it is about to. "Since" is by order, not
-    by the clock: a run whose attempt row came after the change. A run belongs to the change it was claimed after."""
-    started, args = "a.started_at IS NOT NULL", [_marks(task)[0]]
+    by the clock: a run whose attempt row came after the change. A run belongs to the change it was claimed after.
+    `besides` leaves one run out: the one asking whether it may start."""
+    started, args = "a.started_at IS NOT NULL", list[object]([_marks(task)[0]])
     if starting:
         started = "(a.started_at IS NOT NULL OR (a.state = 'leased' AND a.lease_until > ?))"
         args.append(_h().now())
+    if besides:
+        started += " AND a.id <> ?"
+        args.append(besides)
     found = conn.execute(
         f"SELECT COUNT(*) {_RUNS}WHERE a.rowid > ? AND {started} AND {_ON_TASK}", (*args, *_on_task(conn, task))
     ).fetchone()
@@ -379,40 +388,62 @@ def runs_since(conn: "sqlite3.Connection", task: Row, *, starting: bool = False)
 RUNS = 7
 
 
-def may_start(conn: "sqlite3.Connection", message: str | Row) -> bool:
-    """Whether a queued wake may start its run now. The code that claims a job calls it, in the claim's write
-    transaction, before it leases the run: `message` is the job's message, by id (a job's id is its message's) or as a
-    row. False when the wake is about a task that is not open, is snoozed or has left that visit, when its bot has no
-    turn on the task now (`waiting_on.turns`; Late's one look for the manager bot needs none), or when the visit has
-    started 7 runs since it last changed, the leases about to start included. Then the wake is canceled, here. True for
-    a message that is not the engine's wake about a task: the engine does not hold those."""
+def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | None = None) -> bool:
+    """Whether a queued run about a task may start now. The claim of a job calls it in its write transaction before it
+    leases the run, and the start of that run calls it again (`attempt`: that run's own lease is not counted as one
+    about to start). `message` is the job's message, by id (a job's id is its message's) or as a row.
+
+    Every automatic start tied to a task on the engine is held: the engine's wakes, and any other message a person did
+    not write (a scheduled occurrence's notice, a CI nudge, a task's news), retries included. Such a run may start only
+    while the task is open, not snoozed and not at level person, while its bot has a turn on it (`waiting_on.turns`;
+    Late's one look for the manager bot needs none), and while the visit has started fewer than 7 runs since it last
+    changed, the leases about to start included. An engine wake must also be about the task's open visit. When the
+    run is held its queued job is canceled, here. True for a person's own message (their words always get an answer),
+    a quiet note, and anything about no task on the engine."""
     from . import task_engine as E
 
     H = _h()
     message_id = message if isinstance(message, str) else str(message.get("message_id") or message.get("id") or "")
-    found = conn.execute("SELECT wake_key, recipient_id, refs FROM messages WHERE id=?", (message_id,)).fetchone()
-    refs: Row = (H._json(found[2], {}) or {}) if found else {}
-    if not found or not found[0] or refs.get("wake") != "task_turn" or refs.get("quiet"):
+    found = conn.execute(
+        "SELECT m.wake_key, m.recipient_id, m.refs, m.sender_id, c.task_id FROM messages m "
+        "LEFT JOIN conversations c ON c.id = m.conversation_id WHERE m.id=?",
+        (message_id,),
+    ).fetchone()
+    if not found:
         return True
-    parts = str(found[0]).split(":")
-    if _may_start(conn, E.task(conn, parts[0]), str(found[1] or ""), refs, parts[2] if len(parts) > 2 else ""):
+    refs: Row = H._json(found[2], {}) or {}
+    if refs.get("quiet") or H.person_sent({"sender_id": found[3], "refs": refs}):
+        return True
+    parts = str(found[0] or "").split(":")
+    task = E.task(conn, parts[0]) if found[0] else None
+    if task is None:
+        named = H.message_task_id({"refs": refs}, {"task_id": found[4]})
+        task = E.task(conn, str(named)) if named else None
+    if task is None:
+        return True  # about no task on the engine: not the engine's to hold
+    visit: Row = task.get("visit") or {}
+    if refs.get("wake") == "task_turn" and refs.get("visit") != visit.get("id"):
+        allowed = False
+    else:
+        kind = parts[2] if found[0] and task["id"] == parts[0] and len(parts) > 2 else ""
+        allowed = _may_start(conn, task, str(found[1] or ""), kind, attempt)
+    if allowed:
         return True
     conn.execute("UPDATE jobs SET state='canceled' WHERE message_id=? AND state='queued'", (message_id,))
     return False
 
 
-def _may_start(conn: "sqlite3.Connection", task: Row | None, bot: str, refs: Row, kind: str) -> bool:
+def _may_start(conn: "sqlite3.Connection", task: Row, bot: str, kind: str, attempt: str | None) -> bool:
     from . import waiting_on as W
 
-    if not task or task["status"] != "open" or task.get("snooze") or not task.get("visit"):
+    if task["status"] != "open" or task.get("snooze") or not task.get("visit"):
         return False
-    visit: Row = task["visit"]
-    if refs.get("visit") != visit["id"] or (visit.get("level") or "owner") == "person":
+    if (task["visit"].get("level") or "owner") == "person":
         return False
     pipe: Row = task.get("pipeline") or {}
     if not (kind == "late" and bot == pipe.get("manager_id")) and bot not in W.turns(conn, task):
         return False
-    return runs_since(conn, task, starting=True) < RUNS
+    return runs_since(conn, task, starting=True, besides=attempt) < RUNS
 
 
 # A job in one of these states may still start its run: its wake is not lost.
@@ -431,7 +462,7 @@ def lost(conn: "sqlite3.Connection", task: Row, actor: str | None, *, whole_visi
     found = conn.execute(
         "SELECT m.id, m.body, m.rowid, json_extract(m.refs, '$.job'), "
         "(SELECT j.state FROM jobs j WHERE j.id = m.id) FROM messages m "
-        f"WHERE {_KEY} AND m.rowid > ? AND m.recipient_id=? "
+        f"WHERE {_KEY} AND m.rowid > ? AND +m.recipient_id=? "
         "AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 ORDER BY m.rowid DESC LIMIT 1",
         (*_range(f"{task['id']}:{visit.get('id')}"), 0 if whole_visit else _marks(task)[1], actor),
     ).fetchone()
@@ -459,11 +490,29 @@ def inbox(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | Non
     reads_inbox: str = cast("Any", enqueue).external_bot_sql("m.recipient_id")
     found = conn.execute(
         f"SELECT m.id, m.read_at FROM messages m WHERE {_KEY} AND m.rowid > ? "
-        "AND m.recipient_id=? AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 "
+        "AND +m.recipient_id=? AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 "
         f"AND json_extract(m.refs, '$.job') IS NULL AND {reads_inbox} ORDER BY m.rowid DESC LIMIT 1",
         (*_range(f"{task['id']}:{visit.get('id')}"), _marks(task)[1], actor),
     ).fetchone()
     return {"id": str(found[0]), "read_at": found[1]} if found else None
+
+
+def told_in_visit(conn: "sqlite3.Connection", task: Row, actor: str | None) -> str | None:
+    """Whether this bot was told about the task's open visit: "told" when it got a wake that queued a run or sits in
+    its own inbox, "lost" when its newest such wake never ran (the never-stuck check writes it again, once per level,
+    try and change), None when it got none at all."""
+    H = _h()
+    if not H.is_bot(actor):
+        return None
+    visit: Row = task.get("visit") or {}
+    found = conn.execute(
+        f"SELECT 1 FROM messages m WHERE {_KEY} AND +m.recipient_id=? "
+        "AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 LIMIT 1",
+        (*_range(f"{task['id']}:{visit.get('id')}"), actor),
+    ).fetchone()
+    if not found:
+        return None
+    return "lost" if lost(conn, task, actor, whole_visit=True) else "told"
 
 
 def queued(conn: "sqlite3.Connection", task_id: str, actor: str | None) -> bool:

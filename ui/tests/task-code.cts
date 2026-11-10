@@ -7,12 +7,12 @@
 //    icon, PR badge, owner), a child's own children on expand, and "Add subtask" posting a task with a parent relation;
 //  - a worktree with no repo names it from its folder, else says "unknown repo" (muted);
 //  - a task with no code links and no children has no rail at all; on a phone the rail sits under the details;
-//  - the bot page's Active rows carry one small PR badge each, from the task's pr_state, and none without PRs;
+//  - only the latest open shows: a late detail cannot replace it or reopen a task after leaving the page;
 //  - Runs (GET /tasks/{id}/run-view): the checkpoint with its author, background work still running, each try with what
 //    woke it and what followed it (a resume or dismiss decision beside its state: "Canceled: dismissed by BotOps at 09:50Z, <note>";
 //    none on a try with no decision), and the subagent tree with a nested subagent under its parent; a task with no runs has no section.
 // TASK_CODE_SHOTS=<dir> saves the screenshots for the owner.
-import type {Browser, Locator, Page} from 'playwright';
+import type {Browser} from 'playwright';
 import type {Task} from './tasks-page.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -30,7 +30,10 @@ export interface CodeTask extends Task {
   children_summary?: Record<string, number> | undefined;
 }
 // A subtask as GET /tasks/{id}/tree answers it: its own children nested.
-interface Kid {id: string; title: string; status: string; owner_id: string; pr_state: string | null; children: Kid[]}
+interface Kid {id: string; title: string; status: string; stage?: Stage; owner_id: string; pr_state: string | null; children: Kid[]}
+// The stage a task is in, as GET /v2/tasks/{id} sends it.
+interface Stage {id: string; name: string; kind: 'work' | 'done' | 'closed'; by_hand: boolean}
+const stage = (name: string): Stage => ({id: 's-' + name.toLowerCase(), name, kind: 'work', by_hand: false});
 // A write the fake server saw (a DELETE has no body).
 export interface Write {
   method: string;
@@ -48,7 +51,7 @@ export interface OpenOptions {
 declare var taskCodeLineHTML: (link: Record<string, unknown>, mover: boolean, links?: Record<string, unknown>[]) => string;
 declare var taskCodeHTML: (task: Record<string, unknown>) => string;
 declare var taskWorktreeRepo: (link: Record<string, unknown>, links: Record<string, unknown>[]) => string;
-declare var taskModalOpen: (key: string) => Promise<unknown>;
+declare var taskModalOpen: (id: string) => Promise<unknown>;
 declare var commentLineHTML: (line: unknown, index: number, all: unknown[]) => string;
 declare var v2Get: (path: string) => Promise<unknown>;
 declare var v2Done: string[];
@@ -59,7 +62,7 @@ declare const window: Window & typeof globalThis & {copied: string[]; botBefore:
 
 const now = new Date().toISOString();
 const worktreeError = 'This bot needs write access to the attached repository. Literal <b>diagnostic</b>: /workspace/' + 'nested-directory-'.repeat(24) + '/checkout';
-const task = (id: string, over: Partial<CodeTask> = {}): CodeTask => ({id, title: id, body: 'Details.', owner_id: 'bot:eng', requester_id: 'human:ana', status: 'doing',
+const task = (id: string, over: Partial<CodeTask> = {}): CodeTask => ({id, title: id, body: 'Details.', owner_id: 'bot:eng', requester_id: 'human:ana', status: 'open', stage: stage('Doing'),
   lane: 'company', rank: 1, labels: [], links: [], parts: {total: 0, done: 0}, version: 2, created_at: now, updated_at: now, ...over});
 const pr = (id: string, number: number, title: string, over: Partial<Link> = {}): Link => ({id, kind: 'pr', repo: 'acme/web', number, url: `https://github.com/acme/web/pull/${number}`,
   title, state: 'open', checks: 'passing', mergeable: 'clean', review_state: null, pending_comments: 0, ...over});
@@ -90,11 +93,13 @@ function fixtures() {
       {id: 's0', kind: 'session', url: 'session:api/thread-old', title: 'api', detail: JSON.stringify({primary: false, harness: 'codex', thread_id: 'thread-old', bot: 'api'})},
       {id: 's1', kind: 'session', url: 'session:eng/thread-abc', title: 'eng', detail: JSON.stringify({primary: true, harness: 'claude', thread_id: 'thread-abc', bot: 'eng'})},
     ]});
-  const kid = (id: string, title: string, status: string, owner: string, pr_state: string | null = null, children: Kid[] = []): Kid => ({id, title, status, owner_id: owner, pr_state, children});
-  const tree = [kid('k1', 'Summary step on web', 'review', 'bot:eng', 'failing', [kid('k1a', 'Copy for the summary', 'done', 'human:sam', 'merged')]),
-    kid('k2', 'Rounding in the API', 'doing', 'bot:api', 'conflict'),
+  // A stage name for a task still open (status 'open'), else 'done' or 'closed'.
+  const kid = (id: string, title: string, at: string, owner: string, pr_state: string | null = null, children: Kid[] = []): Kid =>
+    ({id, title, ...(['done', 'closed'].includes(at) ? {status: at} : {status: 'open', stage: stage(at)}), owner_id: owner, pr_state, children});
+  const tree = [kid('k1', 'Summary step on web', 'Review', 'bot:eng', 'failing', [kid('k1a', 'Copy for the summary', 'done', 'human:sam', 'merged')]),
+    kid('k2', 'Rounding in the API', 'Doing', 'bot:api', 'conflict'),
     kid('k3', 'Cart badge', 'done', 'bot:eng', 'merged'),
-    kid('k4', 'Check the receipts email', 'open', 'human:sam')];
+    kid('k4', 'Check the receipts email', 'To do', 'human:sam')];
   const plain = task('t-plain', {title: 'Book the team offsite', owner_id: 'human:ana'});
   const others = [task('t-review', {title: 'Review the pricing copy', pr_state: 'changes_requested'}),
     task('t-open', {title: 'Upgrade the image library', pr_state: 'open'}),
@@ -390,8 +395,8 @@ async function desktop(browser: Browser) {
   const first = rail.locator('.sub-row[data-sub="k1"]');
   assert.match(await first.locator('> .sub-line').innerText(), /Summary step on web\s*PR ✕/);
   // The same status icon as the Tasks list, with its words for screen readers.
-  assert.equal(await first.locator('> .sub-line > .task-status').getAttribute('data-status'), 'review');
-  assert.equal(await first.locator('> .sub-line > .task-status').getAttribute('aria-label'), 'In review');
+  assert.equal(await first.locator('> .sub-line > .task-status').getAttribute('data-status'), 'open');
+  assert.equal(await first.locator('> .sub-line > .task-status').getAttribute('aria-label'), 'Review', 'an open task reads its stage');
   assert.equal(await rail.locator('.sub-row[data-sub="k3"] > .sub-line > .task-status').getAttribute('data-status'), 'done');
   assert.equal(await rail.locator('.sub-row[data-sub="k4"] .pr-badge').count(), 0, 'no PRs, no badge');
   assert.equal(await rail.locator('[data-sub="k1a"]').count(), 0, 'one level shown');
@@ -491,174 +496,39 @@ async function member(browser: Browser) {
   await page.close();
 }
 
-async function botPage(browser: Browser) {
-  const {page, errors} = await open(browser, {at: '#/bot/eng'});
-  const rows = page.locator('#t-open .trow');
-  await rows.first().waitFor();
-  const badge = (title: string) => page.locator('#t-open .trow', {hasText: title}).locator('.pr-badge');
-  assert.equal(await badge('Ship the new checkout').innerText(), 'PR ✕');
-  assert.equal(await badge('Ship the new checkout').getAttribute('aria-label'), 'Checks failing');
-  assert.equal(await badge('Review the pricing copy').innerText(), 'PR changes');
-  assert.equal(await badge('Upgrade the image library').innerText(), 'PR');
-  assert.equal(await badge('Write the release notes').count(), 0, 'no PRs, no badge');
-  for (const title of ['Ship the new checkout', 'Write the release notes']) {
-    const box = (await page.locator('#t-open .trow', {hasText: title}).locator('.trow-head').boundingBox())!;
-    assert.ok(box.height <= 44, `${title}: still a compact row`);
-  }
-  if (SHOTS) await page.locator('#pane-tasks .bot-active').screenshot({path: path.join(SHOTS, 'bot-active-pr-badges-dark.png')});
+// Only the latest open can show; a late detail response cannot bring a task back on another page.
+// The earlier detail is held until the test lets it go; v2Done notes each answer the app has taken in.
+async function lateOpen(browser: Browser) {
+  const {page, errors} = await open(browser);
+  const modal = page.locator('#task-modal');
+  await modal.locator('.tmodal-title', {hasText: 'Ship the new checkout'}).waitFor();
+  // The dialog's close event is queued after close(): the opens below start once it has run.
+  const closed = page.evaluate(() => new Promise(done => document.querySelector('#task-modal')!.addEventListener('close', done, {once: true})));
+  await modal.locator('[data-modal-close]').click(); await closed;
+  await page.waitForFunction(() => !history.state?.taskModal && !document.querySelector('#task-modal[open]'));
+  const held: ((value?: unknown) => void)[] = [];
+  const releaseHeld = async () => {
+    for (const end = Date.now() + t(10000); !held.length && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
+    assert.ok(held.length, 'the detail request is held');
+    held.splice(0).forEach(release => release());
+  };
+  await page.route('**/api/v2/tasks/t-checkout', route => new Promise(release => held.push(release)).then(() => route.fallback()));
+  await page.evaluate(() => { const get = v2Get; window.v2Done = []; window.v2Get = async path => { try { return await get(path); } finally { v2Done.push(path); } }; });
+  const lateDone = (n: number) => page.waitForFunction(n => v2Done.filter(p => p === '/v2/tasks/t-checkout').length === n, n);
+  await page.evaluate(() => { void taskModalOpen('t-checkout'); void taskModalOpen('t-none'); });
+  await modal.locator('.tmodal-title', {hasText: 'Write the release notes'}).waitFor();
+  await releaseHeld(); await lateDone(1);
+  assert.equal(await modal.locator('.tmodal-title').innerText(), 'Write the release notes', 'a slower earlier tap cannot replace the latest task');
+  await modal.locator('[data-modal-close]').click();
+  await page.waitForFunction(() => !history.state?.taskModal);
+  await page.evaluate(() => { void taskModalOpen('t-checkout'); location.hash = '#/updates'; });
+  await page.waitForFunction(() => S.route === '#/updates');
+  await releaseHeld(); await lateDone(2);
+  assert.equal(await modal.isVisible(), false, 'navigating away cancels a pending open');
+  assert.equal(await page.evaluate(() => !!history.state?.taskModal || document.body.classList.contains('task-modal-open')), false, 'no stale history or scroll lock');
   assert.deepEqual(errors, []);
-  console.log('bot page badges: ok');
   await page.close();
-}
-
-// The bot rail is another entry to the manager's task detail, with no lost files, questions or history.
-async function botDetail(browser: Browser) {
-  const ready = async (d: Locator) => {
-    await d.locator('[data-sub="k1"]').waitFor();
-    await d.locator('[data-tf-file="f-notes"]').waitFor();
-    await d.locator('.task-comments .ask').waitFor();
-  };
-  const contents = (d: Locator) => d.evaluate(el => {
-    const copy = el.cloneNode(true) as Element;
-    copy.querySelectorAll('time').forEach(el => el.remove());
-    const text = (selector: string) => [...copy.querySelectorAll(selector)].map(x => x.textContent!.trim());
-    return {title: text('.tmodal-title'), details: text('.tdesc'), properties: text('[data-task-props] .prop'),
-      criteria: text('.tcriteria'), code: text('.code-line'), children: text('.sub-line'), comments: text('.task-comments'),
-      questions: text('.ask-text'), files: text('.tf-name'), links: text('.tlinks')};
-  });
-  const shots = async (page: Page, d: Locator, name: string, phone: boolean) => {
-    if (!SHOTS) return;
-    fs.mkdirSync(SHOTS, {recursive: true});
-    await page.mouse.move(0, 0);
-    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-    await d.evaluate(el => { el.scrollTop = 0; });
-    await page.screenshot({path: path.join(SHOTS, name + '-top.png')});
-    if (phone) for (const [suffix, selector] of [['code', '[data-task-rail]'], ['comments', '.task-chat']] as [string, string][]) {
-      await d.locator(selector).scrollIntoViewIfNeeded();
-      await page.screenshot({path: path.join(SHOTS, name + '-' + suffix + '.png')});
-    }
-  };
-  for (const phone of [false, true]) {
-    const viewport = phone ? {width: 390, height: 844} : {width: 1440, height: 900};
-    const {page, errors, writes} = await open(browser, {at: '#/bot/eng/tasks', viewport, rich: true});
-    const d = page.locator('#task-modal'), row = page.locator('[data-task-detail="t-checkout"]');
-    await row.locator('[data-task-detail-open]').waitFor();
-    assert.equal(await row.locator('details, .tbody').count(), 0, 'no separate inline detail');
-    // 9d11efec7: a Doing row drops the status its tab shares (the pill still says Doing).
-    assert.equal(await row.locator('.task-status').count(), 0, 'a Doing row drops the shared status');
-    assert.equal(await page.locator('.bot-done .task-status, .bot-done .pill').count(), 0, 'Done already supplies status context');
-    await page.evaluate(() => { window.botBefore = BOT; window.botWorkBefore = document.querySelector('#bot-work'); });
-    await row.locator('[data-task-detail-open]').focus();
-    await page.keyboard.press('Enter');
-    await ready(d);
-    assert.equal(await d.evaluate(el => el.matches(':modal')), true, 'the same full task dialog');
-    assert.equal(await page.evaluate(() => TASKS_ST), null, 'opening from the bot does not create a task manager');
-    const botContents = await contents(d);
-    assert.equal((botContents.comments.join('').match(/The draft is checked\./g) || []).length, 1, 'a mirrored note is read once');
-    assert.match(botContents.comments.join(''), /moved it to Doing/, 'its status event remains');
-    assert.ok(botContents.code.some(line => /↑2 ↓1/.test(line)), 'the full worktree report is loaded');
-    if (phone) {
-      const box = (await d.boundingBox())!;
-      assert.ok(box.x === 0 && box.y === 0 && box.width >= 389 && box.height >= 843, 'full-screen: ' + JSON.stringify(box));
-      assert.equal(await d.evaluate(el => el.scrollWidth <= el.clientWidth + 1), true, 'no horizontal overflow');
-    }
-    await shots(page, d, `task-detail-bot-${phone ? 'phone' : 'desktop'}-dark`, phone);
-    // File versions and comments are usable through this entry, as they are in the manager.
-    await d.locator('[data-tf-file="f-notes"]').click();
-    await d.locator('[data-tf-v="1"]').click();
-    await d.locator('[data-tf-view]', {hasText: 'Receipt check version 1.'}).waitFor();
-    await d.locator('[data-tf-close]').click();
-    await d.locator('.task-chat textarea').fill('Check the receipt totals too.');
-    await d.locator('.task-chat button[type="submit"]').click();
-    await d.locator('.task-comments', {hasText: 'Check the receipt totals too.'}).waitFor();
-    assert.deepEqual(writes.at(-1), {method: 'POST', p: '/api/v2/tasks/t-checkout/comments', body: {text: 'Check the receipt totals too.', public: false}});
-    // A subtask opens in the same dialog even though no manager state exists on the bot page.
-    await d.locator('[data-sub-open="k1"]').click();
-    await d.locator('.tmodal-title', {hasText: 'Summary step on web'}).waitFor();
-    await d.locator('[data-modal-close]').click();
-    await page.waitForFunction(() => !history.state?.taskModal && !document.querySelector('#task-modal[open]'));
-    assert.equal(new URL(page.url()).hash, '#/bot/eng/tasks');
-    assert.equal(await page.evaluate(() => BOT === window.botBefore && document.querySelector('#bot-work') === window.botWorkBefore), true, 'the bot context survives');
-    assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-task-detail-open')), true, 'focus returns to the task row');
-    for (const how of ['back', 'escape']) {
-      await row.locator('[data-task-detail-open]').click(); await ready(d);
-      if (how === 'back') await page.goBack(); else await page.keyboard.press('Escape');
-      await page.waitForFunction(() => !history.state?.taskModal && !document.querySelector('#task-modal[open]'));
-      assert.equal(new URL(page.url()).hash, '#/bot/eng/tasks', how + ' returns to the bot');
-    }
-    for (const id of ['t-outward', 't-finished']) {
-      await page.locator(id === 't-finished' ? '#bot-tab-t-done' : '#bot-tab-t-c4').click();
-      await page.locator(`[data-task-detail="${id}"] [data-task-detail-open]`).click();
-      await d.locator(`[data-task-props]`).waitFor();
-      await page.waitForFunction(id => document.querySelector<HTMLElement>('#task-modal')?.dataset.task === id, id);
-      await d.locator('[data-modal-close]').click();
-      await page.waitForFunction(() => !history.state?.taskModal && !document.querySelector('#task-modal[open]'));
-    }
-    assert.deepEqual(errors, []);
-    await page.close();
-
-    const manager = await open(browser, {at: '#/issues', viewport, rich: true});
-    await manager.page.locator('[data-task-key="tt-checkout"] .tl-title').click();
-    const peek = manager.page.locator('#task-peek'); await ready(peek);
-    assert.deepEqual(await contents(peek), botContents, 'bot and manager render every task section from the same content');
-    await shots(manager.page, peek, `task-detail-manager-${phone ? 'phone' : 'desktop'}-dark`, phone);
-    if (!phone) {
-      await peek.locator('[data-task-more]').click();
-      await peek.getByRole('menuitem', {name: 'Open full'}).click();
-      const full = manager.page.locator('#task-modal'); await ready(full);
-      assert.deepEqual(await contents(full), botContents);
-      await shots(manager.page, full, 'task-detail-manager-full-desktop-dark', false);
-      await full.locator('[data-modal-close]').click();
-    } else {
-      await peek.locator('[data-modal-close]').click();
-      await manager.page.waitForFunction(() => !history.state?.taskPeek);
-    }
-    await manager.page.evaluate(() => { location.hash = '#/bot/eng/tasks'; });
-    await manager.page.locator('[data-task-detail="t-checkout"] [data-task-detail-open]').click();
-    const modal = manager.page.locator('#task-modal'); await ready(modal);
-    assert.equal(await manager.page.evaluate(() => TASKS_ST), null, 'manager state is cleared before entering the bot');
-    if (phone) await modal.locator('[data-modal-close]').click(); else await manager.page.mouse.click(5, 5);
-    await manager.page.waitForFunction(() => !history.state?.taskModal && !document.querySelector('#task-modal[open]') && !document.body.classList.contains('task-modal-open'));
-    assert.equal(new URL(manager.page.url()).hash, '#/bot/eng/tasks');
-    // Only the latest selection can open; a late detail response cannot resurrect a task on another page.
-    // The earlier detail is held until the test lets it go; v2Done notes each answer the app has taken in.
-    const held: ((value?: unknown) => void)[] = [];
-    const releaseHeld = async () => {
-      for (const end = Date.now() + t(10000); !held.length && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
-      assert.ok(held.length, 'the detail request is held');
-      held.splice(0).forEach(release => release());
-    };
-    await manager.page.route('**/api/v2/tasks/t-checkout', route => new Promise(release => held.push(release)).then(() => route.fallback()));
-    await manager.page.evaluate(() => { const get = v2Get; window.v2Done = []; window.v2Get = async path => { try { return await get(path); } finally { v2Done.push(path); } }; });
-    const lateDone = (n: number) => manager.page.waitForFunction(n => v2Done.filter(p => p === '/v2/tasks/t-checkout').length === n, n);
-    await manager.page.evaluate(() => { void taskModalOpen('tt-checkout'); void taskModalOpen('tt-none'); });
-    await modal.locator('.tmodal-title', {hasText: 'Write the release notes'}).waitFor();
-    await releaseHeld(); await lateDone(1);
-    assert.equal(await modal.locator('.tmodal-title').innerText(), 'Write the release notes', 'a slower earlier tap cannot replace the latest task');
-    await modal.locator('[data-modal-close]').click();
-    await manager.page.waitForFunction(() => !history.state?.taskModal);
-    await manager.page.evaluate(() => { void taskModalOpen('tt-checkout'); location.hash = '#/updates'; });
-    await manager.page.waitForFunction(() => S.route === '#/updates');
-    await releaseHeld(); await lateDone(2);
-    assert.equal(await modal.isVisible(), false, 'navigating away cancels a pending open');
-    assert.equal(await manager.page.evaluate(() => !!history.state?.taskModal || document.body.classList.contains('task-modal-open')), false, 'no stale history or scroll lock');
-    const historyNotes = await manager.page.evaluate(() => {
-      const ts = new Date().toISOString(), note = 'Receipt check complete.';
-      const events = ['done', 'closed'].map((status, i) => ({kind: 'event', ts, actor: 'bot:eng', field: 'status', old: i ? 'done' : 'doing', new: status, note}));
-      const comment = {kind: 'comment', ts, message: {sender_id: 'bot:eng', body: note, kind: 'say', created_at: ts, refs: {}}};
-      const all = [...events, comment];
-      return {html: all.map((x, i) => commentLineHTML(x, i, all)).join(''),
-        otherActor: commentLineHTML(events[0], 0, [events[0], {...comment, message: {...comment.message, sender_id: 'human:ana'}}]),
-        later: commentLineHTML(events[0], 0, [events[0], {...comment, ts: new Date(Date.parse(ts) + 6000).toISOString()}])};
-    });
-    assert.match(historyNotes.html, /moved it to Done/); assert.match(historyNotes.html, /moved it to Closed/);
-    assert.equal((historyNotes.html.match(/Receipt check complete\./g) || []).length, 1, 'both transitions remain while the result appears once');
-    assert.match(historyNotes.otherActor, /Receipt check complete\./, 'another actor does not hide an event note');
-    assert.match(historyNotes.later, /Receipt check complete\./, 'a later comment does not hide an event note');
-    assert.deepEqual(manager.errors, []);
-    await manager.page.close();
-  }
-  console.log('bot task detail parity, files, comments, related tasks and return: ok');
+  console.log('late task open: ok');
 }
 
 async function retirementHistory(browser: Browser) {
@@ -696,6 +566,6 @@ export type Opened = Awaited<ReturnType<typeof open>>;
 module.exports = api;
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
-  try { await desktop(browser); await phone(browser); await member(browser); await botPage(browser); await botDetail(browser); await retirementHistory(browser); }
+  try { await desktop(browser); await phone(browser); await member(browser); await lateOpen(browser); await retirementHistory(browser); }
   finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

@@ -193,7 +193,7 @@ function botSidebarEdit(slug: string) {
   const layout = botSidebarLayout(slug);
   if (!layout?.can_edit || BOT_EDIT) return;
   BOT_EDIT = {slug, tabs: botLayoutCopy(layout.tabs.map(botTaskTabDefaults)), widgets: botLayoutCopy(layout.widgets || BOT_WIDGET_DEFAULT)};
-  void taskTypesLoad().catch(() => TASK_TYPES);
+  void botFilterPipelines();
   botTaskTabsPaint(slug);
   botSidebarApply(slug);
   const status = $('#bot-sidebar-status');
@@ -435,16 +435,21 @@ async function botPinAddOpen(slug: string) {
 }
 
 // ---- a tab's pop-up: Name, Show count, its rows (a filter's), Delete and Save. Nothing else.
-const BOT_FILTER_FIELDS: [string, string][] = [['status', 'Status'], ['step', 'Step'], ['assigned_to', 'Assigned to'], ['asked_by', 'Asked by'],
-  ['type', 'Type'], ['needs', 'Needs'], ['waiting_on', 'Waiting on'], ['created_within', 'Created within'], ['updated_within', 'Updated within'],
+const BOT_FILTER_FIELDS: [string, string][] = [['status', 'Status'], ['pipeline', 'Pipeline'], ['stage', 'Stage'], ['assigned_to', 'Assigned to'],
+  ['asked_by', 'Asked by'], ['needs', 'Needs'], ['waiting_on', 'Waiting on'], ['created_within', 'Created within'], ['updated_within', 'Updated within'],
   ['done_within', 'Done within'], ['due', 'Due'], ['label', 'Label']];
-const BOT_FILTER_STATUSES: [string, string][] = [['open', 'Open'], ['doing', 'Doing'], ['waiting', 'Waiting'], ['review', 'In review'], ['ready', 'Ready'],
-  ['done', 'Done'], ['closed', 'Closed'], ['declined', 'Declined']];
+const BOT_FILTER_STATUSES: [string, string][] = [['open', 'Open'], ['done', 'Done'], ['closed', 'Closed']];
 const BOT_FILTER_WAITING: [string, string][] = [['any', 'Anyone'], ['person', 'A person'], ['bot', 'A bot'], ['me', 'Me'], ['not_me', 'Someone else']];
-const BOT_FILTER_START = {status: ['open', 'doing', 'waiting'], step: '', assigned_to: 'this_bot', asked_by: 'this_bot', type: ['general'],
+const BOT_FILTER_START = {status: ['open'], stage: '', assigned_to: 'this_bot', asked_by: 'this_bot', pipeline: ['general'],
   needs: 'you', waiting_on: 'any', created_within: 7, updated_within: 7, done_within: 14, due: 'overdue', label: ''};
 // A field's first row when a person picks it in a condition.
 type BotFilterField = keyof typeof BOT_FILTER_START;
+// The pipelines a filter picks from, and their stages (GET /v2/pipelines), read when a tab is edited.
+let BOT_FILTER_PIPELINES: PipelineRec[] = [];
+async function botFilterPipelines() {
+  try { BOT_FILTER_PIPELINES = (await pipelinesAll()).filter(p => !p.retired_at); } catch { /* the last list stands */ }
+  return BOT_FILTER_PIPELINES;
+}
 function botFilterParties(slug: string, others: boolean) {
   const people = (S.people || []).map(p => [actorOf('human', p.id), p.id === S.me?.id ? `${p.name || p.id} (you)` : p.name || p.id]);
   const bots = (S.emps || []).map(e => [`bot:${e.id}`, e.display_name || e.slug]);
@@ -459,9 +464,9 @@ function botFilterValueHTML(slug: string, row: BotSidebarCondition, at: number) 
   const days = (value: BotSidebarValue) => `<input type="number" ${name} min="1" max="3650" step="1" value="${esc(value ?? '')}" aria-label="Days" required> days`;
   switch (row.field) {
     case 'status': return checks(BOT_FILTER_STATUSES, v);
-    case 'type': return checks((TASK_TYPES?.length ? TASK_TYPES : [{id: 'general', name: 'General'}]).map(t => [t.id, t.name]), v);
-    case 'step': return `<select ${name} aria-label="Step" required><option value=""></option>${(TASK_TYPES || []).map(t =>
-      `<optgroup label="${esc(t.name)}">${options((t.steps || []).map(s => [s.id, s.name]), none.concat(v)[0])}</optgroup>`).join('')}</select>`;
+    case 'pipeline': return checks((BOT_FILTER_PIPELINES.length ? BOT_FILTER_PIPELINES : [{id: 'general', name: 'General'}]).map(p => [p.id, p.name]), v);
+    case 'stage': return `<select ${name} aria-label="Stage" required><option value=""></option>${BOT_FILTER_PIPELINES.map(p =>
+      `<optgroup label="${esc(p.name)}">${options(p.stages.filter(st => st.id).map(st => [st.id, st.name]), none.concat(v)[0])}</optgroup>`).join('')}</select>`;
     case 'assigned_to': case 'asked_by':
       return `<select ${name} aria-label="Who">${options(botFilterParties(slug, row.field === 'assigned_to'), v)}</select>`;
     case 'needs': return `<select ${name} aria-label="Who">${options([['you', 'You (assigned to you, or waiting on you)']], v)}</select>`;
@@ -474,7 +479,7 @@ function botFilterValueHTML(slug: string, row: BotSidebarCondition, at: number) 
 }
 async function botFilterOpen(slug: string, at: number) {
   if (!botDrafting(slug)) return;
-  await taskTypesLoad().catch(() => TASK_TYPES);
+  await botFilterPipelines();
   if (!botDrafting(slug) || !BOT_EDIT) return;
   const adding = at < 0, was = adding ? {name: '', show_count: true, conditions: [{field: 'status', value: BOT_FILTER_START.status}]} : BOT_EDIT.tabs[at];
   if (!was) return;
@@ -494,8 +499,8 @@ async function botFilterOpen(slug: string, at: number) {
     if (!editable || !draft.conditions) return;
     draft.conditions = draft.conditions.map((row, i) => {
       const inputs = [...dialog.querySelectorAll(`[data-cond-value="${i}"]`)];
-      if (['status', 'type'].includes(row.field)) return {field: row.field, value: inputs.filter(x => x.checked).map(x => x.value)};
-      if (row.field === 'step') return {field: row.field, value: inputs[0]?.value ? [inputs[0].value] : []};
+      if (['status', 'pipeline'].includes(row.field)) return {field: row.field, value: inputs.filter(x => x.checked).map(x => x.value)};
+      if (row.field === 'stage') return {field: row.field, value: inputs[0]?.value ? [inputs[0].value] : []};
       if (row.field === 'due' && dialog.querySelector(`[data-cond-due="${i}"]`).value === 'overdue') return {field: 'due', value: 'overdue'};
       if (/_within$|^due$/.test(row.field)) return {field: row.field, value: inputs[0]?.value === '' ? '' : Number(inputs[0]?.value)};
       return {field: row.field, value: inputs[0]?.value ?? ''};
@@ -511,7 +516,6 @@ async function botFilterOpen(slug: string, at: number) {
         <span class="bot-cond-value">${botFilterValueHTML(slug, row, i)}</span>
         <button type="button" class="ghost bot-cond-x" data-cond-remove="${i}" aria-label="Remove condition" title="Remove">✕</button></li>`).join('')}</ol>
       <button type="button" class="ghost bot-cond-add" data-cond-add>+ Condition</button>`}
-      ${draft.builtin === 'needs' ? '<p>Also shows this bot’s approvals and questions for you</p>' : ''}
       ${draft.builtin === 'needs' && JSON.stringify(draft.conditions) !== JSON.stringify(BOT_TASK_DEFAULT_CONDITIONS.needs)
         ? `<p>The org chart number still counts everything ${esc(empName(slug))} needs from you, not this tab.</p>` : ''}
       ${defaults[String(draft.builtin)] ? '<button type="button" class="ghost" data-filter-reset>Reset to default</button>' : ''}

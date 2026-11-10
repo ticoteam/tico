@@ -86,19 +86,17 @@ const AU_TRIGGER_WORDS: Record<string, string> = {message: 'Message received', t
 const AU_WHEN: Array<[string, string]> = [['schedule', 'On a schedule'], ['event', 'When something happens'], ['due', 'Before a due date']];
 const AU_REPEATS: Array<[string, string]> = [['once', 'Once'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['quarterly', 'Quarterly'], ['yearly', 'Yearly']];
 const auCap = (s: unknown) => String(s || '').charAt(0).toUpperCase() + String(s || '').slice(1);
-// An event trigger's event in a few words: the catalog's (backend/event_catalog.py, old spellings too) and the
-// built-ins' tico.builtin.* (backend/redesign_migration.py). The dotted name is only ever a chip's tooltip.
-const AU_EVENTS: Record<string, string> = {'task.created': 'Task created', 'task.assigned': 'Task assigned', 'task.step_changed': 'Task step changed',
-  'task.state_changed': 'Task state changed', 'task.commented': 'Task comment', 'task.done': 'Task finished',
-  'task.declined': 'Task declined', 'task.blocked': 'Task waiting', 'task.closed': 'Task closed', 'task.reopened': 'Task reopened',
-  'approval.requested': 'Approval asked', 'approval.decided': 'Approval decided', 'approval.withdrawn': 'Approval withdrawn',
-  'needs_you.created': 'Needs you', 'needs_you.answered': 'Needs you answered', 'bot.run_failed': 'Bot run failed',
-  'bot.held': 'Bot held', 'bot.released': 'Bot released', 'release.published': 'Release published', 'meeting.ready': 'Meeting ready',
-  'strategy.published': 'Strategy published', 'market.insight.urgent': 'Urgent insight', 'market.briefing': 'Market briefing',
-  'inbound.received': 'Message received', 'health.finding': 'Health finding', 'webhook.received': 'Webhook received',
-  'tico.notice': 'Notice'};
-const AU_EVENT_MORE: Record<string, string> = {release_published: 'Release published', 'recording.ready': 'Meeting ready',
-  'tico.builtin.wakes': 'Every event', 'tico.builtin.task_rule': 'Task rule', 'tico.builtin.health': 'Health check'};
+// An event trigger's event in a few words: the catalog's (backend/event_catalog.py) and the built-ins'
+// tico.builtin.*. The dotted name is only ever a chip's tooltip.
+const AU_EVENTS: Record<string, string> = {'task.created': 'Task created', 'task.assigned': 'Task assigned', 'task.step_changed': 'Task stage changed',
+  'task.commented': 'Task comment', 'task.done': 'Task finished', 'task.closed': 'Task closed', 'task.reopened': 'Task reopened',
+  'thread.created': 'Thread started', 'message.created': 'Message sent', 'message.held': 'Message held',
+  'bot.run_failed': 'Bot run failed', 'bot.held': 'Bot held', 'bot.released': 'Bot released', 'org_rule.retired': 'Rule retired',
+  'rules.blocked': 'Rule blocked', 'rules.escalated': 'Rule escalated', 'rules.warned': 'Rule warned', 'rules.unchecked': 'Rule unchecked',
+  'meeting.ready': 'Meeting ready', 'strategy.published': 'Strategy published', 'brand.published': 'Brand published',
+  'market.insight.urgent': 'Urgent insight', 'market.briefing': 'Market briefing', 'inbound.received': 'Message received',
+  'health.finding': 'Health finding', 'webhook.received': 'Webhook received', 'tico.notice': 'Notice'};
+const AU_EVENT_MORE: Record<string, string> = {'tico.builtin.wakes': 'Every event', 'tico.builtin.health': 'Health check'};
 function auEventWords(name: unknown) {
   const n = String(name || '');
   if (AU_EVENTS[n] || AU_EVENT_MORE[n]) return AU_EVENTS[n] || AU_EVENT_MORE[n];
