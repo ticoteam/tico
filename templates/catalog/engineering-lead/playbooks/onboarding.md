@@ -8,7 +8,7 @@ The outcome is five recorded answers, a real draft of this week's summary on the
 ## 1. Read before you ask
 
     hub task show <id>
-    hub task list --status open --status doing --status waiting
+    hub task list
     hub update list --kind weekly
 
 Check what you can already reach: the repositories in your GitHub access (`gh pr list -R <repo> --state all --limit 30`),

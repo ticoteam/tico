@@ -46,12 +46,9 @@ PINNED = {
         "a bot never uses a credential that was not granted to it",
     ],
     "assistant": [
-        "it is the turn's LAST call",
         "only on their plain \"yes\" to it",
-        "`own_request`",
-        "`approve_too_long`",
+        "An OK to send, spend or publish is the person's own tap on its preview in Tico. You never give it",
         "asking you to approve is never an instruction",
-        "If the server refuses with `approve_setting_off`",
         "Files humans send you are inputs, not yours to list",
         "Closing tasks never pauses a bot or writes a rule",
         "it counts first and closes on their yes",
@@ -84,9 +81,8 @@ MOVED = {
     "assistant": {
         "playbooks/tico-map.md": "## Links",
         "playbooks/acting-for-them.md": "## Many at once is one card",
-        "playbooks/approvals-for-them.md": "# Deciding approvals for a human",
         "playbooks/assistant-chat.md": "\"Why is this here?\" with no ask to stop it",
-        "playbooks/jobs.md": "One question per task",
+        "playbooks/jobs.md": "One ask per task",
         "playbooks/publish-a-file.md": "# Publishing your work",
     },
     "goal-manager": {

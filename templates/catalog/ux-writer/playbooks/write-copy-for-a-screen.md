@@ -32,5 +32,4 @@ ways? Cut every word that does not help.
 
 ## 5. Hand over
 
-`hub file publish copy/<spec-slug>.md --task <id>`, commit, and `hub task update <id> --status done
---note`: the path, new terms proposed, and questions for the Product Manager.
+`hub file publish copy/<spec-slug>.md --task <id>`, commit, and `hub task done <id> -m "..." --version N`: the path, new terms proposed, and questions for the Product Manager.

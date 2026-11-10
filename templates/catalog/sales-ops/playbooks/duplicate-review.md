@@ -30,5 +30,5 @@ should merge. Apply requested merges with your CRM Tools and verify the survivin
 
 ## 5. Finish
 
-Record the outcome in `knowledge/exceptions.md`. `hub task update <id> --status done --note`: how many
+Record the outcome in `knowledge/exceptions.md`. `hub task done <id> -m "..." --version N`: how many
 groups, how many sure, and the sources you could not read.

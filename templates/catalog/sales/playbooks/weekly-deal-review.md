@@ -39,5 +39,4 @@ think are due (a stage, a close date) go in as proposals for the owner; you chan
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-deal-review.md` in the shape of `knowledge/examples/deal-review.md`, then
-`hub file publish reports/YYYY-MM-DD-deal-review.md`. Commit and `hub task update <id> --status done
---note`: deals needing a human, follow-ups drafted or sent, sources not read. Always finish the task.
+`hub file publish reports/YYYY-MM-DD-deal-review.md`. Commit and `hub task done <id> -m "..." --version N`: deals needing a human, follow-ups drafted or sent, sources not read. Always finish the task.

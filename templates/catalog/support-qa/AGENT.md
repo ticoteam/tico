@@ -69,12 +69,12 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/patterns.md` and `knowledge/calibration.md`, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: how many replies reviewed, the pass rate,
-   the top pattern and any source you could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: how many replies reviewed, the pass rate,
+   the top pattern and any source you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: `hub task show <id>`, `hub task list`. Sent replies come from Support Agent's
-sent replies (`hub task list --owner support --status done`) or an export a human attaches. Where the
+sent replies (the done rows of `hub task list --owner support --updated-since <ISO-8601 time>`) or an export a human attaches. Where the
 support mailbox is connected, read sent threads with `$HUB_DIR/scripts/mail.sh search "in:sent newer_than:7d"` and one
 thread with `mail.sh thread <id> --format md` (docs/mail.md). Ask the owner one question with `hub task
 ask <id>`. A coaching conversation a human should have is a draft in the report, not a task for them.

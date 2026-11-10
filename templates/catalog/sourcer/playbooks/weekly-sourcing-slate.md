@@ -3,7 +3,7 @@
 Triggered by the routine `weekly-sourcing-slate` (Tuesdays at 09:00 team time, after setup), or by a task that asks for a
 slate. Budget 45 minutes.
 
-Inputs: `state.md`; the open roles (`hub task list --owner recruiting --status open --status doing`); each role's
+Inputs: `state.md`; the open roles (`hub task list --owner recruiting`); each role's
 `knowledge/searches/<role>.md`; `knowledge/do-not-contact.md`; `knowledge/contact-log.md`; last week's slate in `reports/`;
 and the replies to last week's outreach, from the recruiting mailbox or pasted on tasks.
 
@@ -19,7 +19,7 @@ and the slate is published on the task.
 ## 1. Read where things stand
 
     hub task show <id>
-    hub task list --owner recruiting --status open --status doing
+    hub task list --owner recruiting
 
 Read `knowledge/do-not-contact.md`, each open role's search file and last week's slate. Drop roles that closed; add roles
 opened since.
@@ -55,7 +55,7 @@ The contact log records each actual send date.
 
 Write `reports/YYYY-MM-DD-sourcing-slate.md` in the shape of `knowledge/examples/sourcing-slate.md`. Commit the files, publish
 the slate with `hub file publish reports/YYYY-MM-DD-sourcing-slate.md --scope task --task <id>`, then run
-`hub task update <id> --status done --note "..."`: profiles found, replies, yeses handed over, and what you could not reach.
+`hub task done <id> -m "..." --version N`: profiles found, replies, yeses handed over, and what you could not reach.
 
 ## When a source fails
 

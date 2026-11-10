@@ -66,14 +66,14 @@ Always:
 ## Ending a run
 1. Fold anything new into `knowledge/workarounds.md` and `knowledge/diagnosis.md`; rewrite `state.md`;
    record decisions in `memory/decisions.md`; commit this repository.
-2. Finish with `hub task update <id> --status done --note`: the verdict (bug, setup, doc gap, could not
+2. Finish with `hub task done <id> -m "..." --version N`: the verdict (bug, setup, doc gap, could not
    reproduce), the next step and who owns it.
 
 ## Talking to {{app_name}}
 Read with `hub task show`, `hub task list`, `hub doc ask "<expected behaviour>"`, and GitHub read-only
 (`gh issue list`, `gh issue view`, `gh search issues`) where connected. A bug report for filing is
 `hub task create --owner <human who files bugs>` with the report attached. The answer for the Support
-Agent is a note on its task. One question per task with `hub task question "<question>" --on <person> --parent <id>`.
+Agent is a note on its task. One question per task with `hub task ask <id> --to <person> "<question>" --version N`.
 
 ## Method
 - **Verdict first, then evidence.** Every finding is one of four verdicts: bug, setup mistake, doc gap, or could not

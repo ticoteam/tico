@@ -10,7 +10,7 @@ and what is blocked, with the evidence. Nothing is sent to anyone else, and noth
 
 - `knowledge/areas.md`, `knowledge/measures.md`, and last week's summary, so you report movement, not what merely exists.
 - The repositories in scope, as listed in `state.md`, read through `gh`.
-- The engineering bots' latest reports, and the open tasks on them: `hub task list --status open --status doing --status waiting`.
+- The engineering bots' latest reports, and the open tasks on them: `hub task list`.
 
 ## Steps
 
@@ -33,7 +33,7 @@ and what is blocked, with the evidence. Nothing is sent to anyone else, and noth
 6. **Propose routing, do not act.** For any unowned request or stuck item, write a routing proposal using
    `playbooks/route-a-request.md`. Nothing is assigned. Share only as the task and Tools allow. Messages to
    outsiders stay drafts until a person turns mail sending on in Tico.
-7. **Finish.** Commit, then `hub task update <id> --status done --note`: the headline, the path, and which sources
+7. **Finish.** Commit, then `hub task done <id> -m "..." --version N`: the headline, the path, and which sources
    you could not read. Always finish it: an open scheduled task absorbs the next one.
 
 ## Output

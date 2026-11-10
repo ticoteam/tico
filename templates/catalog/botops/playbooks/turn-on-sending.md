@@ -34,7 +34,7 @@ turn it off again in one message.
    add it again, which files a "Remove Gmail access" task nobody wants. No gmail tool yet:
    `hub tool add <slug> gmail --can read,draft,send --identity <the bot's mailbox>`. This is the step the server
    checks against their rights; it answers at once. A refusal ends the playbook. It files one task for you with the
-   entry; when step 3 has put that entry in `bot.yaml`, close it: `hub task update <id> --status done --note "..."`.
+   entry; when step 3 has put that entry in `bot.yaml`, close it: `hub task done <id> -m "..." --version N`.
 3. **Change the bot's repository** (`$HUB_WORKSPACE/bot-<slug>`):
    - `bot.yaml`: the gmail entry's `can: [read, draft, send]`. The sending policy itself is the person's, in Tico
      (step 5); `bot.yaml` carries no sending setting.

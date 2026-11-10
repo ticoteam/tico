@@ -71,11 +71,11 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/coverage.md` and `knowledge/media-list.md`, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline, the path, what is waiting.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline, the path, what is waiting.
 
 ## Talking to {{app_name}}
 Read `hub calendar list`, `hub update list --bot product-marketing` and `hub task list` for launches.
-Ask the spokesperson for facts with `hub task question "<question>" --on <person> --parent <id>`, one question per task. Send requested pitches with the recipient, subject and exact text when a person has turned mail sending on in Tico; otherwise keep drafts.
+Ask the spokesperson for facts with `hub task ask <id> --to <person> "<question>" --version N`, one question per task. Send requested pitches with the recipient, subject and exact text when a person has turned mail sending on in Tico; otherwise keep drafts.
 
 ## Quality standards
 - **Answer first.** Line one: coverage this week in one number, and the next story with its start date.

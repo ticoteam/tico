@@ -36,4 +36,4 @@ for the seller. Put the exact text and recipients on the task. Send a recap only
 ## 5. Hand over
 
 If the buyer asked for a proposal or sent a questionnaire, open `playbooks/proposal-or-rfp.md` as a
-follow-on task. `hub task update <id> --status done --note`: the next step and date, what is ready to act on.
+follow-on task. `hub task done <id> -m "..." --version N`: the next step and date, what is ready to act on.

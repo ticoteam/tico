@@ -39,4 +39,4 @@ A one-page summary (spread, items to discuss, the definitions) and the grid as a
 ## 5. After the session
 
 Record in `knowledge/review-cycle.md` only process lessons (which definition caused debate, which phase ran late), never an
-outcome about a person. Then `hub task update <id> --status done --note`.
+outcome about a person. Then `hub task done <id> -m "..." --version N`.

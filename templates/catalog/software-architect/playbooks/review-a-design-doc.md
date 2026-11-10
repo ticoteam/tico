@@ -50,7 +50,7 @@ first finding.
 ## 4. Write the notes
 
 Write them in the shape above. Label each point blocking or non-blocking. Attach the file, commit it, and run
-`hub task update <id> --status done --note` with the recommendation and the one blocking question in the first line.
+`hub task done <id> -m "..." --version N` with the recommendation and the one blocking question in the first line.
 
 ## 5. When the design is a rework
 

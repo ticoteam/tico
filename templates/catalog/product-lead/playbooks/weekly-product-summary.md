@@ -45,6 +45,6 @@ happens if nobody decides this week, framed as in `skills/frame-a-decision-for-t
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-product-summary.md` in the shape of `knowledge/examples/product-summary.md`,
-then `hub file publish reports/YYYY-MM-DD-product-summary.md`. Commit, and `hub task update <id>
---status done --note`: the headline, the path, the decisions waiting, and any source you could not read.
+then `hub file publish reports/YYYY-MM-DD-product-summary.md`. Commit, and `hub task done <id>
+-m "..." --version N`: the headline, the path, the decisions waiting, and any source you could not read.
 Always finish the task.

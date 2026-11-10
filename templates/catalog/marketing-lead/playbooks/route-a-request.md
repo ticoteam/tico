@@ -14,7 +14,7 @@ Done when: the proposal is on the task in under 100 words; if the task asked for
     hub task show <id>
 
 Find the ask, the deadline and who wants it. If the ask, the audience or the date is missing, ask
-the requester once with `hub task question "<question>" --on <person> --parent <id>` and stop.
+the requester once with `hub task ask <id> --to <person> "<question>" --version N` and stop.
 
 ## 2. Match it to an owner
 
@@ -42,4 +42,4 @@ live page is marked "draft until a person turns mail sending on in Tico".
 
 When the task asks for routing and a granted Tool allows it, run `hub task create --owner <slug>` with the brief, link it to this
 task, and log the routing in `knowledge/routing.md` if it teaches a rule. Then
-`hub task update <id> --status done --note`. A no or a change is recorded and nothing is created.
+`hub task done <id> -m "..." --version N`. A no or a change is recorded and nothing is created.

@@ -15,7 +15,7 @@ Done when `state.md` says `Setup: finished`, the first sheet is attached to the 
 ## 1. Read before you ask
 
     hub task show <id>
-    hub task list --status open --status doing --status waiting
+    hub task list
     hub calendar list
     hub team show
 

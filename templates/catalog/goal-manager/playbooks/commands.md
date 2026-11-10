@@ -45,8 +45,8 @@ with --all, kpi readings, and any `--help` or `--version` probe of a name not li
 ## Tasks
 - `hub task show <id>`: one task: title, body, owner, requester, status and history. Several ids in one call are allowed.
 - `hub task list [--owner <bot-or-person>]`: tasks, optionally one owner's. Look here for an open task before you file one.
-- `hub task update <id> --status done --note "<the result, in a few plain sentences>"`: finishes a task you own.
-  The requester closes it. Every task you are given ends with this command.
+- `hub task done <id> -m "<the result, in a few plain sentences>" --version N`: finishes a task you own.
+  Every task you are given ends with this command.
 - `hub task create --owner <person> --title "<question>" --body "<the facts and what you need>"`: a question or a source
   request to a person, only as `playbooks/check-ins.md` and `playbooks/owner-chat.md` say.
 

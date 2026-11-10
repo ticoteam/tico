@@ -14,7 +14,7 @@ named a decision for the owner, check whether it was made; say so in the first s
 
 ## 2. Collect the week's requests
 
-`hub task list --status open --status doing --status waiting` and any new task that is legal in kind (a
+`hub task list` and any new task that is legal in kind (a
 contract, an NDA, a notice, a privacy or employment question). Add each new one to `knowledge/requests.md`
 with its kind, urgency (a date or "none"), risk in one line and proposed owner. Close rows whose task is done. Record each open request's Legal pipeline stage in its row; anything at Rules check is
 waiting on the Rules Owner (`tico-counsel`), so name it in the summary.
@@ -43,7 +43,7 @@ proposal as `AGENT.md` "Proposing a new role" describes: a note to the Corporate
 
 Write `reports/YYYY-MM-DD-legal-summary.md` in the shape of `knowledge/examples/legal-summary.md`, ending with
 the not-legal-advice line, then `hub file publish reports/YYYY-MM-DD-legal-summary.md`. Commit, and `hub task
-update <id> --status done --note`: the headline, the path, the sources you could not read.
+done <id> -m "..." --version N`: the headline, the path, the sources you could not read.
 
 ## When a source fails
 

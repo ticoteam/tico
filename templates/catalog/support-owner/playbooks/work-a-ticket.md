@@ -64,7 +64,7 @@ already names. If the same problem has now arrived three times, that is one line
 
 ## 6. Finish
 
-Commit, then `hub task update <id> --status done --note`: the bucket, whether a draft is on the task,
+Commit, then `hub task done <id> -m "..." --version N`: the bucket, whether a draft is on the task,
 and who you routed it to. Add the ticket to `knowledge/follow-ups.md` with who it waits on (the customer, a colleague, a fix)
 and the next nudge date. A draft that rests on a human's word rather than a doc says so on the task.
 

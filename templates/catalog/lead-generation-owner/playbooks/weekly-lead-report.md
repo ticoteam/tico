@@ -65,7 +65,7 @@ Log the week's counts in `knowledge/sources.md`. Record the qualified count as a
 
 ## 9. Close
 
-    hub task update <id> --status done --note "..."
+    hub task done <id> -m "..." --version N
 
 The note holds the headline, the report path, the hand-offs not yet picked up, and what could not be counted. Finish the task
 even on a quiet week.

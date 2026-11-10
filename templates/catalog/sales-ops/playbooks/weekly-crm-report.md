@@ -52,5 +52,5 @@ quarter add picklist and unused-field observations as proposals.
 
 Write `reports/YYYY-MM-DD-crm-report.md` in the shape of `knowledge/examples/crm-report.md`, update
 `knowledge/exceptions.md`, then `hub file publish reports/YYYY-MM-DD-crm-report.md`. Commit and `hub
-task update <id> --status done --note`: the headline, the path, the size of the read, what failed.
+task done <id> -m "..." --version N`: the headline, the path, the size of the read, what failed.
 Apply requested fixes with your Tools and verify the result. Always finish the task.

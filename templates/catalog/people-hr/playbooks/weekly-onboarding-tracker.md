@@ -17,7 +17,7 @@ to the Librarian, the page is published, and the draft welcome messages are atta
     hub calendar list
 
 Then `knowledge/onboarding-base.md`, `knowledge/hand-offs.md`, last week's tracker and the open tasks labelled for onboarding
-(`hub task list --status open --status doing --status waiting`).
+(`hub task list`).
 
 ## 2. Find who is starting
 
@@ -55,7 +55,7 @@ Write `reports/YYYY-MM-DD-onboarding-tracker.md` in the shape of `knowledge/exam
 
 A welcome message is drafted on the new hire's task. It is sent only when the task asks for it, a granted Tool allows it and mail
 sending is on in Tico; otherwise it stays a draft for a person. Chase each late item's owner with one line on its task. Then
-`hub task update <id> --status done --note`: the headline, counts (late, due), and what you could not read.
+`hub task done <id> -m "..." --version N`: the headline, counts (late, due), and what you could not read.
 
 ## When a source fails
 

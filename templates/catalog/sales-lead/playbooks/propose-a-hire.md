@@ -28,7 +28,7 @@ routing or load, not hiring: say so instead.
 
 On the task, in five lines: the template and its name; the evidence with counts and dates; the first
 routine it would run (from its card) and when; who it reports to (you); what it will need connected.
-Ask with `hub task question "<question>" --on <person> --parent <id>` only when the intended role or owner is missing; otherwise carry out the requested work with your Tools.
+Ask with `hub task ask <id> --to <person> "<question>" --version N` only when the intended role or owner is missing; otherwise carry out the requested work with your Tools.
 
 ## 4. Carry out the requested work
 

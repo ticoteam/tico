@@ -10,7 +10,7 @@ Steps:
 1. Read `knowledge/rhythm.md` and `knowledge/open-loops.md`, and the last brief in `reports/` if there is one. Read
    only what changed since that brief.
 2. Read each source once: `hub goal list --all`, `hub goal show <id>` for each red, yellow or unread goal,
-   `hub update list --kind weekly`, `hub task list --status open --status doing --status waiting`, and
+   `hub update list --kind weekly`, `hub task list`, and
    `hub meeting search --since <last Friday>`. Name any source that refuses you.
 3. Sort what you found into five sections: Needs you, Goals, Stalled, What moved, Watch. Put each item in one
    section only.

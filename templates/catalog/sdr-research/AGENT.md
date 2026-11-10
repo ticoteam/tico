@@ -68,12 +68,12 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Write what you learned into `knowledge/`. A competitor fact is `hub market report`, not a list here.
 3. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-4. Finish with `hub task update <id> --status done --note`: the headline first (how many leads, how
-   many A, meetings booked), the touches drafted or sent, and which sources you could not read. The requester closes it.
+4. Finish with `hub task done <id> -m "..." --version N`: the headline first (how many leads, how
+   many A, meetings booked), the touches drafted or sent, and which sources you could not read.
 
 ## Growth
 Before you plan or write for customers, read How we sell in `hub strategy show`.
-Work on a Marketing task, or a subtask of one, carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs.
+Work on a growth idea, or a sub-task of one, carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs.
 Report the numbers the task needs on the task, each with its source and date. Before an outward draft leaves (an ad,
 email, post, page, listing or message), run `hub brand check -` on it and fix every hit, then check each claim against
 `hub brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or

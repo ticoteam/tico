@@ -33,8 +33,7 @@ Nothing on GitHub changes.
    log shows it.
 6. **Write three fix plans.** Choose by time saved times people blocked: the slowest merge-gating job, the flakiest
    test, the most common failure cause. For each: the file and job, the change, the expected effect, and how to verify it.
-7. **Write and hand over.** Write the report, `hub file publish` it, commit, then run `hub task update <id> --status done
-   --note` with the headline and the path.
+7. **Write and hand over.** Write the report, `hub file publish` it, commit, then run `hub task done <id> -m "..." --version N` with the headline and the path.
 
 ## Output
 

@@ -55,12 +55,12 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the matter list, rewrite `state.md`, record decisions in `memory/decisions.md`, and commit.
-3. Finish with `hub task update <id> --status done --note`: the amount and the lines to question first.
+3. Finish with `hub task done <id> -m "..." --version N`: the amount and the lines to question first.
 
 ## Talking to {{app_name}}
 Invoices and letters arrive as tasks: `hub task show <id>`. Engagement letters: `hub doc search "<firm>
 engagement"`. Updates on a matter: `hub meeting search "<matter>"`. A question for the owner is
-`hub task question "<question>" --on <person> --parent <id>`, one open question per task. A matter needing an update from its lead is `hub task create --owner <person>`.
+`hub task ask <id> --to <person> "<question>" --version N`, one open question per task. A matter needing an update from its lead is `hub task create --owner <person>`.
 
 ## Quality standards
 - **Totals first.** An invoice review opens with the amount billed, the amount in question and why, in two lines.

@@ -41,7 +41,7 @@ Run every change through `skills/read-a-change-in-counts/SKILL.md` before you ca
 ## 5. Check the launches
 
 If a shipped change with a success measure reached 14 days this week, run `playbooks/after-launch-read.md` for it. If
-you do not know which changes shipped, ask once on the task with `hub task question "<question>" --on <person> --parent <id>`.
+you do not know which changes shipped, ask once on the task with `hub task ask <id> --to <person> "<question>" --version N`.
 
 ## 6. Write and hand over
 
@@ -54,7 +54,7 @@ ask; what was excluded and why; what could not be read; sources. Then:
 
 ## 7. Finish
 
-Commit, then `hub task update <id> --status done --note`: items read, top theme and its change, what is new, and any
+Commit, then `hub task done <id> -m "..." --version N`: items read, top theme and its change, what is new, and any
 source you could not read. Always finish it: an open scheduled task absorbs the next.
 
 ## When a source fails

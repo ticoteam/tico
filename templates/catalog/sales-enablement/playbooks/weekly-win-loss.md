@@ -36,5 +36,5 @@ For each seller in `knowledge/ramp/`, list milestones due this week and the call
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-win-loss.md` in the shape of `knowledge/examples/win-loss.md`, `hub file publish`
-it, commit, and `hub task update <id> --status done --note`: deals covered, the change proposed, calls not
+it, commit, and `hub task done <id> -m "..." --version N`: deals covered, the change proposed, calls not
 imported. Once a quarter (the last Friday), add the synthesis: patterns by segment and competitor, counts.

@@ -1,8 +1,7 @@
 # Weekly growth meeting
 
 When: Mondays at 08:00 (routine `weekly-growth-meeting`), or when the owner asks. One turn, about 30 minutes. The outcome
-is the tests that have ended closed out, the picks moved to In development, and one question to the owner with the picks
-ticked.
+is the tests that have ended closed out, and one ask to the owner with the picks.
 Nothing else waits for a person.
 
 If there is nothing to decide (no test has ended and no idea is ready to pick), finish the task with "Nothing to decide
@@ -12,78 +11,63 @@ this week" and the numbers in one line. Do not ask.
 
 ## 1. Read the week
 
-    hub growth numbers                 the growth numbers
-    hub task list --type idea          the board: On deck, In development, Live, Working and Paused
+    hub growth numbers                      the growth numbers
+    hub task list --label idea:on-deck          ideas not started
+    hub task list --label idea:in-development   being built
+    hub task list --label idea:live             tests running
+    hub task list --label idea:working          tests ended, numbers being read
 
-Note anything the numbers show off track; it goes in the question in step 4.
+Note anything the numbers show off track; it goes in the ask in step 4.
 
-- An In development task whose build subtasks are done and whose test has started moves to Live:
-  `hub task update <task id> --step Live`.
-- A Live task with no update for two weeks is listed in the question's `--why`. Its owning bot is nudged with a task of its
-  own; only bots are nudged, never a person:
-  `hub task create --owner <owner slug> --title "Update: <task title>" --body "<task id> is Live with no update for two weeks: post its latest numbers, or move it to Working, Succeeded or Failed."`
-
-A task someone else holds: take it first with `hub task update <task id> --owner marketing-lead`, or ask its assignee on the
-task.
+- An idea in development whose build sub-tasks are done and whose test has started goes live:
+  `hub task label <task id> --remove idea:in-development --add idea:live`.
+- A live test with no update for two weeks is named in the ask. Its owning bot is nudged with a task of its own; only
+  bots are nudged, never a person:
+  `hub task create --owner <owner slug> --title "Update: <task title>" --body "<task id> is live with no update for two weeks: post its latest numbers, or say it has ended."`
 
 ## 2. Close out what has ended
 
-For each Live or Working task whose test has ended or been stopped, apply `playbooks/close-out.md`. A test still running
-is not closed. If its task has a due date within seven days, the question says so.
+For each live or working test that has ended or been stopped, apply `playbooks/close-out.md`. A test still running is not
+closed. If its task has a due date within seven days, the ask says so.
 
 ## 3. Pick what to test next
 
-Candidates: the tasks On deck. Apply the capacity rule before you offer any pick:
+Candidates: the ideas on deck. Apply the capacity rule before you offer any pick:
 
-- at most six tests running at once across the team (Live tasks);
+- at most six tests running at once across the team (live tests);
 - at most two new tests per channel owner at a time, counting tests already running for that owner;
 - a test needs a channel with a stage of `testing` or `scaling`, and budget left for its spend (`hub growth channel list`).
 
-A pick that breaks the rule waits for next Monday, and the question says so.
+A pick that breaks the rule waits for next Monday, and the ask says so.
 
-## 4. Ask one question
+## 4. Ask once
 
-Put the picks to the owner as one multi-pick question, filed as its own task under this one (`--parent`). Options are "LABEL -> WHAT HAPPENS", two to six of them.
-Recommend the picks you would start. Name the money on the label for any idea that spends. `--spend` takes one pick: ticking
-that option approves its spend, and no other option does. Any other paid pick needs its own approval
-(`hub approval request --kind spend`) and does not start until it is approved. Name any breached guardrail and every test
-ending soon in `--why`.
+Put the picks to the owner as one ask on this task, two to six choices. Recommend the picks you would start, and name the
+money on any pick that spends. Name any breached guardrail and every test ending soon in the line.
 
-    hub task question "Which of these should we test first?" --on <owner person ref> --multi \
-      --title "Weekly growth, week <NN>" --parent <this task id> \
-      --why "Closed: <task and step>. Ending soon: <task and date, or none>. Off track: <none or what>." \
-      --option "Price calculator -> moves to In development, no spend" \
-      --option "Competitor bids -> two weeks, <amount> on Google Ads" \
-      --option "Manager meetups -> sponsor one for <amount>, after its own spend approval" \
-      --recommend "Price calculator" --recommend "Competitor bids" \
-      --spend "Competitor bids=<amount>:Google Ads, two weeks" \
-      --if-no-answer "Move to In development the picks that cost nothing" --default-kind reversible
+    hub task ask <this task id> --to <owner person ref> "Which ideas should we test this week? I'd start Price calculator and Competitor bids (<amount> on Google Ads). Ending soon: <task and date, or none>." --choices "Price calculator,Competitor bids,Manager meetups" --version N
 
-Use the owner's person ref from `hub team show`. Two rules for the `--if-no-answer` line: only reversible work goes ahead on
-its own, and a pick with money waits for a yes.
+Use the owner's person ref from `hub team show`. The owner may pick several or type an answer. The run ends here, with
+the task asking the owner.
 
 ## 5. On the answer
 
-For each picked task, in this order:
+You are woken on this task with the answer. For each picked idea, in this order:
 
-1. Say what changes and what we will watch, then move it to In development:
+1. Say what changes and what we will watch, then move it into development:
 
        hub task comment <task id> "<what changes, in one line, and what we will watch>"
-       hub task update <task id> --step "In development"
+       hub task label <task id> --remove idea:on-deck --add idea:in-development
 
-2. File a subtask for each channel owner, with the channel label. Order matters: link later steps with `blocked_by`.
+2. File a sub-task for each channel owner, with the channel label:
 
-       hub task child <idea task id> --owner <channel owner slug> --title "<one step>"
-       hub task label <child task id> --add channel:<channel slug>
-       hub task relate <later task id> <earlier task id> --kind blocked_by
+       hub task create --owner <channel owner slug> --parent <idea task id> --title "<one piece of the build>" --label channel:<channel slug>
 
-3. Spend the question did not cover needs its own approval first: `hub approval request --kind spend --payload-file <file> --task <idea task id>`. Money on a ticked pick is already approved by `--spend`, as a spend approval you consume once, when the money is committed.
+3. A pick that spends: ask the owner for an OK on its idea task before any money is committed, and commit it only on that
+   OK: `hub task ask <idea task id> --to <owner person ref> "Spend <amount> on Google Ads for two weeks?" --version N`.
 
-Picks the owner did not tick stay On deck.
+Ideas the owner did not pick stay on deck.
 
 ## 6. Finish
 
-    hub task update <id> --status done --note "<closed: n; moved to In development: n; waiting on the owner>"
-
-Finish the task even when the question is open. The owner's answer arrives on the question task; run step 5 for it in a
-turn of its own.
+    hub task done <id> -m "<closed: n; started: n; spend asked for: n>" --version N

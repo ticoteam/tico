@@ -2,7 +2,7 @@
 
 Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 25 minutes.
 
-Inputs: `hub task show <id>`, the open roles on the recruiting board (`hub task list --owner recruiting --status open --status doing`),
+Inputs: `hub task show <id>`, the open roles on the recruiting board (`hub task list --owner recruiting`),
 `hub team show`, and any role file the Recruiter already keeps with written criteria.
 
 Outcome: five recorded answers in `state.md`, a search file and a do-not-contact list, a first slate of up to five profiles
@@ -15,7 +15,7 @@ Done when: the answers, the first result and the routine check are recorded, and
 ## 1. Read before you ask
 
     hub task show <id>
-    hub task list --owner recruiting --status open --status doing
+    hub task list --owner recruiting
     hub team show
 
 Check which roles are open and whether the Recruiter already keeps a role file. Do not ask what those already say.

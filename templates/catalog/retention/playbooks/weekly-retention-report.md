@@ -44,4 +44,4 @@ several losses. Give the evidence and who decides.
 
 Write `reports/YYYY-MM-DD-retention.md` in the shape of `knowledge/examples/retention-report.md`, then
 `hub file publish reports/YYYY-MM-DD-retention.md`. Put each prepared reply on the task as its own item. Commit, then
-`hub task update <id> --status done --note "..."` with the counts and the path.
+`hub task done <id> -m "..." --version N` with the counts and the path.

@@ -8,7 +8,7 @@ Triggered by a task asking for a new campaign or ad group, a keyword, a negative
 
     hub task show <id>
 
-Find the segment, the goal, the platform, the campaign or ad group, the budget and the date. If one of them is missing, ask once with `hub task question "<question>" --on <person> --parent <id>` and stop.
+Find the segment, the goal, the platform, the campaign or ad group, the budget and the date. If one of them is missing, ask once with `hub task ask <id> --to <person> "<question>" --version N` and stop.
 
 ## 2. Check it against the targets and the structure
 
@@ -33,4 +33,4 @@ On the task, in under 150 words: the change, the money, the evidence, how it wil
 
 ## 6. Apply it when it is asked for
 
-Only when the task asks for it and a granted Tool allows it: apply the change in the account, then record who applied it and when in `knowledge/changes.md`, and add the two-week check to the next review. Ad copy with a claim in it stays a draft on the task until it is applied under the same gate. Finish with `hub task update <id> --status done --note "..."`.
+Only when the task asks for it and a granted Tool allows it: apply the change in the account, then record who applied it and when in `knowledge/changes.md`, and add the two-week check to the next review. Ad copy with a claim in it stays a draft on the task until it is applied under the same gate. Finish with `hub task done <id> -m "..." --version N`.

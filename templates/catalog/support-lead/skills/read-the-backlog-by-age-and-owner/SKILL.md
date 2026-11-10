@@ -8,8 +8,8 @@ When to use: when a summary says whether the backlog is growing, names the oldes
 ticket stuck.
 
 Steps:
-1. Count the open tickets from the record (`hub task list --owner <support bot> --status open` and
-   `--status waiting` for each support bot), not from memory. Write the time of the count.
+1. Count the open tickets from the record (`hub task list --owner <support bot>` for each support bot; each row says
+   what it waits on), not from memory. Write the time of the count.
 2. Put each open ticket in one age bucket: 0 to 2 days, 3 to 7 days, 8 to 14 days, or 15 days and older. Age runs
    from the customer's first message when it is known, and from the task's creation when it is not. Say which.
 3. For each ticket in the 8 to 14 and 15-plus buckets, write its owner (or "none") and what it waits on: a customer,

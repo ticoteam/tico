@@ -48,4 +48,4 @@ pull requests and the system map). When a pattern repeats, change `knowledge/dec
 ## 7. Write and hand over
 
 Write `reports/YYYY-MM-DD-architecture-review.md` in the shape of `knowledge/examples/architecture-review.md`,
-`hub file publish` it, commit, then `hub task update <id> --status done --note`.
+`hub file publish` it, commit, then `hub task done <id> -m "..." --version N`.

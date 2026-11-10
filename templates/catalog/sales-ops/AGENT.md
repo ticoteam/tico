@@ -70,12 +70,12 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/exceptions.md` (new, still open, fixed), rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path
-   after it, then what you could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path
+   after it, then what you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read with `hub task show <id>` and `hub task list`. A question for the requester
-is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. A fix for a human is `hub task create --owner <human>` with the
+is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. A fix for a human is `hub task create --owner <human>` with the
 record ids, within the requested work. Keep `hub bot status set` to one factual line.
 
 ## Quality standards

@@ -65,12 +65,12 @@ Always:
 1. Add the smallest scaffold against anything that went wrong: a fixer who never answered, an item that
    ran out below par.
 2. Update the `knowledge/` files, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: what was fixed, ordered or is waiting.
+3. Finish with `hub task done <id> -m "..." --version N`: what was fixed, ordered or is waiting.
 
 ## Talking to {{app_name}}
 Requests come as tasks from anyone (`hub task show`, `hub task list`). Tell the human who raised a
 request when it is fixed with `hub message send --fyi <person> "<one line>"`. Ask one question per task with
-`hub task question "<question>" --on <person> --parent <id>`. Where an office channel is connected, read it for requests and file each as a
+`hub task ask <id> --to <person> "<question>" --version N`. Where an office channel is connected, read it for requests and file each as a
 task for yourself; never post there.
 
 ## Quality standards

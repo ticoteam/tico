@@ -43,6 +43,6 @@ date, the expected effect, and the check that will show whether it worked, with 
 
 Update the page's line in `knowledge/pages.md`, commit, then:
 
-    hub task update <id> --status done --note "..."
+    hub task done <id> -m "..." --version N
 
 The note holds the finding in one line, the draft path, and what you could not check.

@@ -33,7 +33,7 @@ words. It stays a draft unless a person has turned mail sending on in Tico and t
 ## 4. Hand over
 
 Put it on the task for the owner named at setup. Payments need the task to ask for them and a granted Tool to allow them; otherwise they wait for a person. Messages to the firm are drafts on the task and go out only when a person has turned mail sending on in Tico and the task asks for it. Update the
-matter's spend to date in `knowledge/matters.md`, commit, and `hub task update <id> --status done --note`.
+matter's spend to date in `knowledge/matters.md`, commit, and `hub task done <id> -m "..." --version N`.
 
 ## Done when
 - The review opens with the amount billed and the amount in question, and each questioned line has its date, timekeeper, hours, rate, amount and rule.

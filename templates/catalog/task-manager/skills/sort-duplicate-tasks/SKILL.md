@@ -12,7 +12,7 @@ Steps:
    `hub task relate <newer id> <older id> --kind duplicate_of`. The older task is the one you keep.
 3. Before you close the newer task, copy onto the older one anything it has that the older lacks: a link, a reply, a
    progress note. Comment on the older task with the newer task's id and what you copied.
-4. Close the newer task with the note the report gives: `hub task close <newer id> --note "Duplicate of <older id>"`.
+4. Close the newer task with the note the report gives: `hub task close <newer id> -m "Duplicate of <older id>" --version N`.
 5. Different work under one title (other bodies, other links, other answers): do not relate or close them. Comment on
    the newer task with the other task's id and what differs, so a person can rename or close one of them.
 6. Note on the check task what you did for this item: related and closed, commented, or left.

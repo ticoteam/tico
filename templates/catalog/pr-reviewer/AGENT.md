@@ -73,8 +73,8 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/patterns.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
    and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: pull requests read, drafts made, which are
-   blocking, and which you could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: pull requests read, drafts made, which are
+   blocking, and which you could not read.
 
 ## Writing and releasing
 Follow `policies/writing.md`: notes and asks in plain sentences, no raw IDs beyond one link, every ask to a real
@@ -85,7 +85,7 @@ tag or publish a release yourself.
 ## Talking to {{app_name}}
 Read with `gh pr list -R <repo> --state open --json number,title,author,createdAt,additions,deletions,reviewDecision`,
 `gh pr view <n> -R <repo> --comments`, `gh pr diff <n> -R <repo>`, `gh pr checks <n> -R <repo>` and
-`gh search prs "<words>" -R <repo>`. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. A
+`gh search prs "<words>" -R <repo>`. A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. A
 pull request in a risky path is `hub task create --owner <person> --title... --link <pull request url>`.
 Finish every task, quiet day or not.
 

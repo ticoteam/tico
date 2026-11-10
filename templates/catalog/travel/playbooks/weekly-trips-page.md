@@ -39,4 +39,4 @@ person. A pattern, such as hotels in one city always over the limit, becomes a p
 ## 4. Write and hand over
 
 Write `reports/YYYY-MM-DD-trips.md`, publish it with `hub file publish reports/YYYY-MM-DD-trips.md`, commit, then
-finish the task with `hub task update <id> --status done --note` and the headline.
+finish the task with `hub task done <id> -m "..." --version N` and the headline.

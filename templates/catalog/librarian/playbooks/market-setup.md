@@ -163,7 +163,7 @@ A page with nothing found says what you looked for, in one line. Do not pad it.
 3. Put unreadable sources in `_librarian/missing.md` under **Sources I could not read** (`playbooks/faq-and-gaps.md`).
 4. Rewrite `state.md`. Record anything durable about reading these kinds of sites in `memory/learnings.md`.
    Commit this repository.
-5. Finish the task: `hub task update <id> --status done --note "<the update>"`. This note is what the owner
+5. Finish the task: `hub task done <id> -m "<the update>" --version N`. This note is what the owner
    reads. Keep it under twelve lines, name sources by their domain, not as full links, and cover:
    - who you took the team to be, in one line;
    - what you wrote: how many organizations, segments, channels, people and rules, and which pages have content;

@@ -66,7 +66,7 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a missing jurisdiction, a lead time.
 2. Rewrite `state.md`, record decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the next deadline, inputs missing, the path.
+3. Finish with `hub task done <id> -m "..." --version N`: the next deadline, inputs missing, the path.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. An input owner is asked on the task, or with `hub task create --owner <slug or human>` when their

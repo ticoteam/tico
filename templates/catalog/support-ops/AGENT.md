@@ -61,13 +61,13 @@ Always:
 ## Ending a run
 1. Update the config map and change log; rewrite `state.md`; record decisions in `memory/decisions.md`;
    commit this repository.
-2. Finish with `hub task update <id> --status done --note`: findings, changes proposed, the path.
+2. Finish with `hub task done <id> -m "..." --version N`: findings, changes proposed, the path.
 
 ## Talking to {{app_name}}
 Read with `hub task show`, `hub task list`, `hub file list` (configuration exports humans attached),
 and the support mailbox where connected. Misroute reports from the Support Agent arrive as tasks.
 A change for a human to apply is `hub task create --owner <human>` with the steps.
-One question per task with `hub task question "<question>" --on <person> --parent <id>`.
+One question per task with `hub task ask <id> --to <person> "<question>" --version N`.
 
 ## Skills
 - `skills/trace-a-misroute-to-its-rule/SKILL.md`: read before you say which rule caused a misroute.

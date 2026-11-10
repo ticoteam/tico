@@ -79,8 +79,8 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/workflows.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and
    commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path after it,
-   then any repository or workflow you could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it,
+   then any repository or workflow you could not read.
 
 ## Writing and releasing
 Follow `policies/writing.md`: notes and asks in plain sentences, no raw IDs beyond one link, every ask to a real
@@ -93,7 +93,7 @@ Read runs with `gh run list -R <repo> --workflow <name> --limit 100 --json datab
 and `gh run view <id> -R <repo> --log-failed`. A test that failed and then passed on the same commit is a flaky
 candidate: name it with its runs in the report and hand it to the QA Owner. When the main branch stays red longer
 than a working day, open a task for the Engineering Team Manager with `hub task create --owner engineering-team-manager`,
-within the requested work. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`,
+within the requested work. A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`,
 one open question per task.
 
 ## Quality standards

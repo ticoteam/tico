@@ -64,10 +64,10 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a late input, an input source.
 2. Update `knowledge/baseline.md` after a post-run check, rewrite `state.md`, record decisions, commit.
-3. Finish with `hub task update <id> --status done --note`: changes counted, questions open, the path.
+3. Finish with `hub task done <id> -m "..." --version N`: changes counted, questions open, the path.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. A missing input is asked of its owner on the task with `hub task question "<question>" --on <person> --parent <id>` or a
+Work arrives as tasks. A missing input is asked of its owner on the task with `hub task ask <id> --to <person> "<question>" --version N` or a
 `hub task create --owner <slug or person>` when their action is needed, two working days before cut-off.
 Keep `hub bot status set` to one line that never contains a figure.
 

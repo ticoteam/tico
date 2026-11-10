@@ -62,5 +62,5 @@ behind the confidence. Then three lines: what is off track, what needs a decisio
 ## 7. Write and hand over
 
 Write `reports/YYYY-MM-DD-quarterly-plan.md` in the shape of `knowledge/examples/quarterly-plan.md`,
-then `hub file publish reports/YYYY-MM-DD-quarterly-plan.md`. Commit, then `hub task update <id>
---status done --note`: the headline, the path, what you could not read. Always finish the task.
+then `hub file publish reports/YYYY-MM-DD-quarterly-plan.md`. Commit, then `hub task done <id>
+-m "..." --version N`: the headline, the path, what you could not read. Always finish the task.

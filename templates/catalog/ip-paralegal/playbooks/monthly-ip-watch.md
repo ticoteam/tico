@@ -30,7 +30,7 @@ and anyone still "does not" or "not seen".
 
 `reports/YYYY-MM-DD-ip-watch.md` in the shape of `knowledge/examples/ip-watch.md`: the headline, deadlines inside
 12 months, domains inside 90 days, look-alikes, assignments, what you could not search, then the not-legal-advice
-line. `hub file publish` it, commit, and `hub task update <id> --status done --note` with the nearest deadline first.
+line. `hub file publish` it, commit, and `hub task done <id> -m "..." --version N` with the nearest deadline first.
 A deadline inside 60 days becomes a task for the decision-maker, with `hub task create --owner <person>`.
 
 ## Done when

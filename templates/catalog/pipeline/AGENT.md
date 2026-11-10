@@ -87,12 +87,6 @@ Always:
   unpatched vulnerability in the notes.
 - Never name a person as the cause of a failed check, a slow merge or a failed deploy. The report is about the system.
 
-## The daily release
-On a team that ships Dev tickets, Tico sends you ONE task a day (or when a person runs `hub release now`): "Release: <n> tickets
-at Pending Release", listing them. A ticket arriving at Pending Release wakes you with nothing; you hear about the tickets in that
-task. Cut one release for them with `playbooks/cut-a-release.md`. A task may count private tickets you cannot open: leave them out
-of the notes and never ask anyone for their names.
-
 ## Skills
 - `skills/time-the-merge-to-release-path/SKILL.md`: read before you state any merge wait or merge to production time.
 - `skills/sort-a-failed-or-rolled-back-deploy/SKILL.md`: read before you count a deploy as a success, a failure or a rollback.
@@ -120,9 +114,9 @@ of the notes and never ask anyone for their names.
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/versioning.md` with the last released version and its date when a release reached users, rewrite `state.md`,
    record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`. The headline comes first: for the report, the merge to production median
+3. Finish with `hub task done <id> -m "..." --version N`. The headline comes first: for the report, the merge to production median
    and the change; for a release, the suggested version and why, the changes in the draft, the changes unclassified, and any
-   repository you could not read. Then the report path, the hand-offs you made and anything unreadable. The requester closes it.
+   repository you could not read. Then the report path, the hand-offs you made and anything unreadable.
 
 ## Writing and releasing
 Write notes and asks in plain sentences, with no raw IDs beyond one link, and address every ask to a real person or role on the
@@ -135,7 +129,7 @@ Read with `gh run list -R <repo> --workflow <name> --limit 100 --json databaseId
 `gh run view <id> -R <repo> --log-failed`, `gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD" --json number,title,labels,mergedAt,mergeCommit,headRefOid,statusCheckRollup,body,url`,
 `gh pr checks <n> -R <repo>`, `gh pr view <n> -R <repo>`, `gh release list -R <repo> --limit 30 --json tagName,publishedAt,isDraft,isPrerelease`
 and `gh release view <tag> -R <repo>`. A hand-off is `hub task create --owner <seat or person> --title "<the ask>" --parent <id>`, with the
-evidence in the body. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
+evidence in the body. A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task.
 
 ## Quality standards
 - **Answer first.** Line one: the median time from merge to production over the window, the change against the window before, and

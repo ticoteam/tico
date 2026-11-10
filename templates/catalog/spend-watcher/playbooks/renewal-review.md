@@ -38,6 +38,6 @@ show are idle, a multi-year offer already in the paper.
 
 ## 4. Finish
 
-Attach the brief, then `hub task update <id> --status done --note`: the decide-by date, the suggestion, and
+Attach the brief, then `hub task done <id> -m "..." --version N`: the decide-by date, the suggestion, and
 what you could not read. The human cancels, renegotiates or renews; you never contact the vendor.
 When the notice date has passed, say so in the first line.

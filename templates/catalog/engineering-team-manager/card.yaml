@@ -8,7 +8,7 @@ group: engineering
 pack: engineering
 icon: developer_board
 suggest: common
-team_templates: [builder, pr-reviewer, qa-owner, security-owner, infrastructure-owner, release-owner, pipeline-manager]
+team_templates: [builder, pr-reviewer, qa-owner, security-owner, infrastructure-owner, release-owner]
 tags:
 - github
 - delivery
@@ -24,7 +24,7 @@ owns:
 - Parent delivery tasks and child tasks per repository or area under each
 - Builder assignments, acceptance checks and dependency order for each outcome
 - Progress reports with task and pull request links, and the blockers each one needs
-- Routing of tests, security, CI, releases and Dev tickets to the Engineering owners who do that work
+- Routing of tests, security, CI, releases and engineering tasks to the Engineering owners who do that work
 never:
 - Use credentials or repository access that have not been granted
 - Report work as shipped before every required pull request is merged

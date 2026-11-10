@@ -27,6 +27,6 @@ runs instead of filing again. Never work around a Tico bug by hand-editing a com
 
 ## Waiting on a computer's update
 A computer's update (any computer's, this one's too) is read once: `hub computer list` or `hub health check`. If it is still
-waiting or updating, record that on your task (`--status waiting` with the reason) and end the run; read it again on your next
-run. Never sleep and look again: a running turn holds your own computer's update and the work queued behind it. Never stop,
+waiting or updating, snooze your task with the reason (`hub task snooze <id> --until <in an hour> -m "Waiting for <computer>'s update" --version N`)
+and end the run; read it again when it comes back. Never sleep and look again: a running turn holds your own computer's update and the work queued behind it. Never stop,
 restart or rebuild another bot's turn, a build or an updater to hurry an update; stopping a turn is the person's choice.

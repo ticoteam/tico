@@ -44,13 +44,13 @@ the result into `knowledge/changes.md`. A change that did not work is a line, no
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-paid-media.md` in the shape of `knowledge/examples/paid-media-review.md`,
-then `hub file publish reports/YYYY-MM-DD-paid-media.md`. Commit, and `hub task update <id> --status
-done --note`: the headline, the path, what you could not read.
+then `hub file publish reports/YYYY-MM-DD-paid-media.md`. Commit, and `hub task done <id> -m
+"..." --version N`: the headline, the path, what you could not read.
 
 Done when: the report is published with the spend and cost per result by campaign, the exclusions with their spend,
 three changes each with its evidence, and last fortnight's changes checked.
 
 ## When the export is missing
 
-Say which report is missing and for which dates, ask once with `hub task question "<question>" --on <person> --parent <id>`, and finish with
+Say which report is missing and for which dates, ask once with `hub task ask <id> --to <person> "<question>" --version N`, and finish with
 what you have. Never fill a gap from last week's numbers.

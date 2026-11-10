@@ -30,16 +30,16 @@ A customer with no segment field is counted in a no-segment row and never droppe
 
 ## Tests
 
-- A test is a Marketing task (type `idea`). It moves through the board: On deck, In development, Live, Working, then Succeeded, Failed, Inconclusive or Dropped. Paused waits to one side. Nothing closes a Live or Working test while it runs.
+- A test is an idea task owned by the Growth Team Manager. Its label says where it is: `growth:ideas`, `growth:running`, `growth:measuring`. It ends done (Kept) or closed (Dropped: failed, inconclusive or stopped). Nothing ends a running test while it runs.
 - A test starts only when the Growth Team Manager (`growth-team-manager`) picks it at the Monday growth meeting, on a channel at stage `testing` or `scaling` with budget left (`hub growth channel list`). A paused channel gets no new test.
-- Team capacity, from the marketing team's growth meeting: at most six Live tests across the team, and at most two new tests per channel Owner at a time.
+- Team capacity, from the marketing team's growth meeting: at most six running tests across the team, and at most two new tests per channel Owner at a time.
 - An idea carries no prediction, hypothesis, score or bet. It says the segment, the change, the channel and the measure. Tico's Marketing tasks have no field for any of the others.
 - A test is read only after its own window and not in its first seven days. The seven days are a team default.
 - Every finished test gets one line in its comment on what was learned and the numbers behind it.
 
 ## Asks to channel Owners
 
-- An ask names one outcome, one segment, one date and the spend it may use. An ask that spends money needs a spend approval before it starts.
+- An ask names one outcome, one segment, one date and the spend it may use. An ask that spends money needs the owner's OK on its task before it starts.
 - Two open asks per channel Owner from this segment at a time, and one open ask per channel per idea. Both are team defaults.
 - A reminder after seven days, as a comment on the same ask. A question to the Growth Team Manager (`growth-team-manager`) after 14 days with no answer.
 

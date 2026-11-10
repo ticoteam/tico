@@ -36,5 +36,5 @@ the fee. Put the list on the task and make requested payments with the necessary
 
 ## 6. Write and hand over
 
-Write `reports/YYYY-MM-DD-partner-review.md` in the shape of `knowledge/examples/partner-review.md`, `hub file publish` it, commit, and `hub task update <id> --status done --note`: registrations waiting, conflicts,
+Write `reports/YYYY-MM-DD-partner-review.md` in the shape of `knowledge/examples/partner-review.md`, `hub file publish` it, commit, and `hub task done <id> -m "..." --version N`: registrations waiting, conflicts,
 fees for review, sources not read. Always finish the task.

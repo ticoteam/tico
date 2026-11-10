@@ -59,7 +59,7 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a PO rule, a contact, a usage alias.
 2. Update the register, rewrite `state.md`, record decisions in `memory/decisions.md`, and commit.
-3. Finish with `hub task update <id> --status done --note`: invoices ready, held, unbilled found, and the path.
+3. Finish with `hub task done <id> -m "..." --version N`: invoices ready, held, unbilled found, and the path.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. A missing PO number or usage figure is asked of its owner on the task, or raised with

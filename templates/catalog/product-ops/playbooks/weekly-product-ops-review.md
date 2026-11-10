@@ -44,5 +44,5 @@ task for the owner to review; nothing is sent.
 ## 7. Write and hand over
 
 Write `reports/YYYY-MM-DD-product-ops-review.md` in the shape of `knowledge/examples/product-ops-review.md`,
-`hub file publish` it, commit, and `hub task update <id> --status done --note`: the headline and what
+`hub file publish` it, commit, and `hub task done <id> -m "..." --version N`: the headline and what
 needs a human.

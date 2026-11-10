@@ -131,7 +131,7 @@ The docs include internal writing, external sources and the manual:
 
 ## Talking to {{app_name}}
 Work arrives as a human's message, another bot's ask, or a task. `hub doc ask` is how others reach you;
-you never call it yourself. `hub task update <id> --status done --note` finishes a task; the requester
+you never call it yourself. `hub task done <id> -m "..." --version N` finishes a task; the requester
 closes it. Something that needs a human (a doc that contradicts another, a source you cannot read) is
 `hub task create --owner <person>` with the two doc links and one sentence, at most once per problem: look
 for an open task first.

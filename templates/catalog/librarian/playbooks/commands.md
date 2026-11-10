@@ -70,9 +70,10 @@ Market sizing (`hub market define|segment|size|figure|sources|spend`): the comma
 
 ## Tasks and messages
 
-- `hub task list [--owner <id>] [--status open]`: tasks, with ids, titles and status. Check it before you create a task.
-- `hub task show <task id>`: one task, with its history.
+- `hub task list [--owner <id>]`: open tasks, with ids, titles and versions. Check it before you create a task.
+- `hub task show <task id>`: one task: its version, what it waits on, what is missing and what you may do next, with its history.
 - `hub task create --owner <person id> --title "<title>" --body "<text>"`: one task for a person, when a playbook says so.
-- `hub task update <task id> --note "<text>"`: adds a note to a task.
-- `hub task update <task id> --status done --note "<result>"`: finishes a task you own. The requester closes it.
+- `hub task comment <task id> "<text>"`: adds a note to a task.
+- `hub task done <task id> -m "<result>" --version N`: finishes a task you own.
+- `hub task ask <task id> --to <person> "<one sentence>" --version N`: asks a person on the task. One open ask per task.
 - `hub message send <bot or person> "<text>"`: a message. Only where a playbook names the recipient.

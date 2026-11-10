@@ -31,4 +31,4 @@ as scope changes with a new date.
 ## 4. Hand over
 
 Save it to `knowledge/poc/<deal>.md` and attach it. Send the plan to its recipient only when the task asks for it, a granted Tool allows it and a person has turned mail sending on in Tico; otherwise keep the draft. Access to a sandbox is a separate request
-for a human. `hub task update <id> --status done --note`: the criteria, the dates, what is ready to act on.
+for a human. `hub task done <id> -m "..." --version N`: the criteria, the dates, what is ready to act on.

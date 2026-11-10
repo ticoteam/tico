@@ -74,12 +74,12 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/campaigns.md`, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline, the path, what you could
+3. Finish with `hub task done <id> -m "..." --version N`: the headline, the path, what you could
    not read.
 
 ## Talking to {{app_name}}
 Read `hub goal list` for the funnel targets, the CRM read-only where connected (or `hub db` if the owner
-listed a database), and exports on tasks. Create requested fix tasks with `hub task create --owner <owner>`. A question is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
+listed a database), and exports on tasks. Create requested fix tasks with `hub task create --owner <owner>`. A question is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task.
 
 ## Quality standards
 - **One definition per number.** A conversion is one named event. A page view or a click is a diagnostic.

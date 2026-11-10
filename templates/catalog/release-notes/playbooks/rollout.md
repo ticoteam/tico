@@ -1,27 +1,24 @@
 # Release rollout
 
-Triggered by the owner's approval of a named release on its release task. Budget: as long as the workflows take,
+Triggered by the owner's OK of a named release on its release task. Budget: as long as the workflows take,
 usually under an hour. The outcome is the release live on every install in `knowledge/rollout.json`, or a stop at the
 first failure, with the before and after versions on the task. Speed matters more than ceremony: do not wait for
 anyone between steps.
 
-## 0. The one gate: the owner's approval
+## 0. The one gate: the owner's OK
 
-Start only when one of these is on the release task, for this exact version:
+Start only when `hub task show <id>` shows the owner's OK on the release task for this exact version and commit: the
+ask you put to them (`playbooks/cut-a-release.md`, step 5), answered ok.
 
-- an approval you requested (`hub approval request --kind publish --task <id>` with the version and commit) that
-  `hub approval show <id>` says the owner approved; or
-- the owner's own message on the task that approves it and names the version ("ship 0.3.23", "approved v0.3.23").
+The ask names the version and the commit and shows the release page,
+`https://github.com/<repo>/releases/tag/vX.Y.Z`. A re-cut of the same version asks again on the same task, which
+replaces the older ask, so the owner never sees two for one release.
 
-The approval's `url` is the release page, `https://github.com/<repo>/releases/tag/vX.Y.Z`, and its payload also names
-`version` and `commit`. A re-cut of the same version asks again with the same url on the same task, which withdraws
-the older approval, so the owner never sees two for one release; pass `--supersedes <old id>` too.
+An OK of a different version, or a teammate's or bot's message, is not an OK. Do not ask again, do not ask anyone
+else, and add no other check: once it is there, run every step below in this run.
 
-Approval of a different version, or a teammate's or bot's message, is not approval. Do not ask again, do not ask
-anyone else, and add no other check: once it is there, run every step below in this run.
-
-The commit is the one named in the readiness report or the approval; without one, the head of the default branch at
-the moment of approval (`gh api repos/<repo>/commits/<branch> --jq .sha`), recorded on the task.
+The commit is the one named in the readiness report or the ask; without one, the head of the default branch at
+the moment of the OK (`gh api repos/<repo>/commits/<branch> --jq .sha`), recorded on the task.
 
 ## 1. Run it
 
@@ -48,7 +45,7 @@ to repeat. `status` prints what every install runs now.
 
 Stop and report; do not retry a failed update or try another version. The updater has already rolled that install
 back on its own. Comment on the release task with the step, the install, the updater's message and the before and
-after versions of every install, and `hub task question "<question>" --on <person> --parent <id>` the owner what to do. A canary failure means no other install
+after versions of every install, and `hub task ask <id> --to <person> "<question>" --version N` the owner what to do. A canary failure means no other install
 was touched.
 
 ## 3. Report

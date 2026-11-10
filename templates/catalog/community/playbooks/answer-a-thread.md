@@ -35,4 +35,4 @@ The answer in the first sentence, then the steps, then the doc link. Use the mem
 
 ## 5. Put it up for review
 
-Add the reply to the week's batch, or, for one thread, put it to the human named in setup as a review question: `hub task question "Post this reply?" --on <that person> --parent <id> --review <reply file>`, with the thread link in the file. A person approves it. It is posted with your Tools only when the task asks for it and mail sending is on in Tico; otherwise it stays a draft. After it is posted, note it in the digest, then `hub task update <id> --status done --note "<type>; <reply or task link>"`.
+Add the reply to the week's batch, or, for one thread, put it to the human named in setup as a review question: `hub task ask <id> --to <that person> "Post this reply?" --show file:<reply file> --version N`, with the thread link in the file. A person approves it. It is posted with your Tools only when the task asks for it and mail sending is on in Tico; otherwise it stays a draft. After it is posted, note it in the digest, then `hub task done <id> -m "<type>; <reply or task link>" --version N`.

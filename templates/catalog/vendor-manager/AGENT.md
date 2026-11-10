@@ -72,14 +72,14 @@ Always:
 1. Add the smallest scaffold against anything that went wrong: a date read from the wrong document,
    a vendor found only through an invoice.
 2. Update `knowledge/vendors.md`, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: the headline, the report path, then
+3. Finish with `hub task done <id> -m "..." --version N`: the headline, the report path, then
    what you could not read.
 
 ## Talking to {{app_name}}
 Read contracts with `hub doc search` and `hub doc read`; invoices and renewal notices arrive as
 tasks, or through a connected mailbox read with `$HUB_DIR/scripts/mail.sh search "<vendor>"` (draft
 only, never send). Ask the vendor's owner with `hub task create --owner <human>`; ask
-the requester with `hub task question "<question>" --on <person> --parent <id>`, one question per task.
+the requester with `hub task ask <id> --to <person> "<question>" --version N`, one question per task.
 
 ## Quality standards
 - **Answer first.** Line one: how many notice deadlines fall in the next 90 days and the soonest one.

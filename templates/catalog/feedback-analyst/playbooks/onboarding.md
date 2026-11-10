@@ -9,7 +9,7 @@ the first routine checked.
 ## 1. Read before you ask
 
     hub task show <id>
-    hub task list --status done
+    hub task list --updated-since <ISO-8601 time with a timezone>   each row says whether it is done
     hub meeting search "customer" --since <two weeks ago>
 
 Check what feedback you can already reach: Support Agent's digests, imported customer calls, a mailbox

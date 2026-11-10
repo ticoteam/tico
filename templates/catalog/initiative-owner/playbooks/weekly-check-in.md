@@ -68,7 +68,7 @@ Write `reports/YYYY-MM-DD-initiative.md` in the shape of `knowledge/examples/bet
 Add this week's entry to `knowledge/call-log.md` and update `knowledge/plan.md`. Rewrite `state.md`, and commit this
 repository. Finish the task:
 
-    hub task update <id> --status done --note "<the call, the bet's id, the report path, what you could not read>"
+    hub task done <id> -m "<the call, the bet's id, the report path, what you could not read>" --version N
 
 ## When a source fails
 

@@ -36,8 +36,7 @@ Nothing on GitHub changes, and no test is skipped, quarantined or deleted by thi
 9. **Write three fix plans.** Choose by time saved times people blocked: the slowest suite, the flakiest test, the most
    common cause. For each: the test or file, the change, the expected effect and how to verify it. A change to a product file
    is not a fix plan of yours; it is a hand-off in step 8.
-10. **Write and hand over.** Write the report, `hub file publish` it, commit, then run `hub task update <id> --status done
-    --note` with the headline and the path.
+10. **Write and hand over.** Write the report, `hub file publish` it, commit, then run `hub task done <id> -m "..." --version N` with the headline and the path.
 
 ## Output
 

@@ -2,9 +2,9 @@
 
 A dream is an ordinary task: the bot owns it, the person who started it is its requester, it carries the label
 `dream` and its body is INSTRUCTIONS. It runs as a task turn on the bot's computer with the bot's own model, and its
-session resumes across the one question it may ask (`hub_task_question`), so the answer lands in the same context. The
-commits it makes are memory updates like any other: the Learnings history names their run's task, and the panel
-filters them by this task. Nothing is stored here beyond the task.
+session resumes across the one ask it may put to its requester on the task (`hub_task_ask`), so the answer lands in
+the same context. The commits it makes are memory updates like any other: the Learnings history names their run's
+task, and the panel filters them by this task. Nothing is stored here beyond the task.
 
 What makes a task a dream is the `dream.start` event this route writes on it, with the person as its actor: labels
 are anyone's to edit, but only this route writes that event. A hand-labelled task is never a dream, so its question
@@ -32,6 +32,7 @@ RECENT_HOURS = 24  # a finished dream is still shown for this long
 SINCE_DAYS = 14  # a first dream reads this far back
 MAX_TEXT = 4000  # the question and the summary, as the panel shows them
 DOING_TEXT = 200  # the one line the bot keeps in the task note while it dreams
+ENDED = "('done','closed')"  # a finished dream's status, as SQL
 MARK = "dream.start"  # the event dream_start writes on the task; its actor is the task's requester
 AUTO_MARK = "dream.auto"  # the event an auto dream's start writes; its actor is the system (H.KEEPER)
 # The marker as SQL over `tasks`: an index probe on events_task_origin (actor, action, target) per candidate row.
@@ -42,8 +43,9 @@ MARKED = (
 
 INSTRUCTIONS = """Dream: tidy your own instructions and memory. {waiting}
 They watch this task's note while you work: at the start of each step below, and whenever you begin something that
-takes a while, set it with `hub_task_update` (note only, never the status) to one short line saying what you are
-doing now, e.g. "2/7 Gathering: reading chats since Oct 20" or "5/7 Applying: rewriting the merge rules in AGENT.md".
+takes a while, set it with `hub_task_update` (the note only) to one short line saying what you are doing now, e.g.
+"2/7 Gathering: reading chats since Oct 20" or "5/7 Applying: rewriting the merge rules in AGENT.md". Read the task
+with `hub_task_show` first, and pass the version the last call on it printed with every call.
 
 1. Orient. Read your instructions and memory: AGENT.md, AGENTS.md or CLAUDE.md if present, `memory/` (the working
    rules at the top of memory/learnings.md first, then memory/decisions.md and any index), state.md and `knowledge/`.
@@ -63,8 +65,9 @@ doing now, e.g. "2/7 Gathering: reading chats since Oct 20" or "5/7 Applying: re
    instructions about the work disagree, or one broad question that would align you better. Never ask for
    permission, about which files to edit, how to organize your memory, or anything else about the dream itself:
    decide those yourself. If something only {requester} can settle, ask at most 3 such questions in ONE
-   `hub_task_question` on this task. Number them. Each one makes sense on its own and ends with your suggested answer
-   ("Suggested: ..."). Ask big alignment questions before small either/or ones. Zero questions is fine. {wait}
+   `hub_task_ask` to {requester} on this task. Number them. Each one makes sense on its own and ends with your
+   suggested answer ("Suggested: ..."). Ask big alignment questions before small either/or ones. Zero questions is
+   fine. {wait}
 
 5. Apply. Fold the answers in. A broad answer may rewrite whole sections. Fix each fact where it lives, delete what
    has been replaced, turn relative dates into absolute ones, and merge duplicates.
@@ -73,7 +76,8 @@ doing now, e.g. "2/7 Gathering: reading chats since Oct 20" or "5/7 Applying: re
    is one line with its source and date. Remove pointers to things that no longer exist.
 
 7. Finish. Make one commit of every file you changed, instructions and memory alike, with the subject
-   `Dream: <what changed, in a few words>`, ending with the usual `Tico-Run:` line. Then mark this task done with a 2-4 line summary of what changed.
+   `Dream: <what changed, in a few words>`, ending with the usual `Tico-Run:` line. Then finish this task with
+   `hub_task_done` and a 2-4 line summary of what changed.
 
 If nothing needed changing, say so and finish."""
 
@@ -88,10 +92,10 @@ MODES = {
     },
     True: {
         "waiting": "Nobody is waiting: this dream started on its own.",
-        "settle": "Apply it as you go, and commit what you have settled before any question (step 7, but do not mark "
-        "the task done yet).",
+        "settle": "Apply it as you go, and commit what you have settled before any question (step 7, but do not "
+        "finish the task yet).",
         "wait": "If you asked, stop and wait for the answer, apply it, and make the second commit of step 7 before you "
-        "mark it done. With zero questions, finish after the first commit. {requester} did not start this "
+        "finish the task. With zero questions, finish after the first commit. {requester} did not start this "
         "dream.",
     },
 }
@@ -172,8 +176,7 @@ def _dreams(c, owners, where, args=(), visible="1"):
 
 
 def _open(c, owners, visible="1"):
-    marks = ",".join("?" * len(H.ACTIVE_STATUSES))
-    return _dreams(c, owners, f"tasks.status IN ({marks})", H.ACTIVE_STATUSES, visible)
+    return _dreams(c, owners, "tasks.status='open'", (), visible)
 
 
 def _ended_at(row):
@@ -182,12 +185,11 @@ def _ended_at(row):
 
 def since(c, owner):
     """Where a dream's reading starts: the end of the bot's last finished dream, else SINCE_DAYS ago."""
-    marks = ",".join("?" * len(H.TASK_ENDED))
     row = c.execute(
         "SELECT max(coalesce(tasks.closed_at,tasks.done_at)) FROM tasks JOIN task_tags tt ON tt.task_id=tasks.id "
-        f"JOIN tags g ON g.id=tt.tag_id WHERE g.key=? AND tasks.owner_id=? AND tasks.status IN ({marks}) "
+        f"JOIN tags g ON g.id=tt.tag_id WHERE g.key=? AND tasks.owner_id=? AND tasks.status IN {ENDED} "
         f"AND {MARKED}",
-        (LABEL, owner, *H.TASK_ENDED),
+        (LABEL, owner),
     ).fetchone()
     stamp = (row and row[0]) or H.shift(H.now(), days=-SINCE_DAYS)
     return stamp[:10] + " " + stamp[11:16] + " UTC"
@@ -199,12 +201,11 @@ def latest(c, auth, who, owner):
     row = _open(c, [owner], visible)
     if row:
         return row
-    marks = ",".join("?" * len(H.TASK_ENDED))
     return _dreams(
         c,
         [owner],
-        f"tasks.status IN ({marks}) AND coalesce(tasks.closed_at,tasks.done_at,tasks.updated_at)>=?",
-        (*H.TASK_ENDED, H.shift(H.now(), hours=-RECENT_HOURS)),
+        f"tasks.status IN {ENDED} AND coalesce(tasks.closed_at,tasks.done_at,tasks.updated_at)>=?",
+        (H.shift(H.now(), hours=-RECENT_HOURS),),
         visible,
     )
 
@@ -224,13 +225,19 @@ def _started(c, row):
     )
 
 
+def _ask(c, row):
+    """The dream's open ask to its requester: a wait on a requirement that names them, or None."""
+    waits = H.task_waits(c, [row["id"]]).get(row["id"]) or []
+    return next((w for w in waits if w.state == "person" and w.ask and w.who == row["requester_id"]), None)
+
+
 def view(c, who, row):
     """{dream: ...} as GET answers it; a dream's question shows only to whoever may read it."""
     if not row:
         return {"dream": None}
     row = dict(row)
     auto = auto_event(c, row)
-    ended = row["status"] in H.TASK_ENDED
+    ended = row["status"] != "open"
     questions, summary, doing = None, None, None
     if ended:
         state = "done" if row["status"] == "done" else "stopped"
@@ -244,14 +251,15 @@ def view(c, who, row):
             summary = (said[-1].get("body") or "").strip() if said else ""
         summary = summary[:MAX_TEXT] or None
     else:
-        ask = H.unanswered_ask(c, row, actor=privacy.actor(who))
-        if ask and ask["recipient_id"] == row["requester_id"]:
-            # Its question task (`hub_task_question` under the dream), answered on the Learnings panel.
+        ask = _ask(c, row)
+        if ask:
+            # Its ask to the requester (`hub_task_ask` on the dream), answered on the Learnings panel.
             state = "asking"
             questions = {
-                "task_id": ask["id"],
-                "text": (ask.get("body") or "")[:MAX_TEXT],
-                "mine": ask["recipient_id"] == who.actor,
+                "task_id": row["id"],
+                "requirement_id": ask.requirement_id,
+                "text": ask.line[:MAX_TEXT],
+                "mine": ask.who == who.actor,
             }
         elif row["status"] == "open" and not _started(c, row):
             state = "starting"

@@ -658,9 +658,9 @@ def test_a_close_of_done_tasks_keeps_the_callers_own_by_default(cases):
     assert not hits(everything, "must_not", plain)
 
 
-def test_the_filter_close_playbook_keeps_mine_by_default_and_chunks_by_id():
-    """Job 12a: keeping the caller's tasks is the default, and a part still over the cap is closed by id chunks of up to 100."""
+def test_the_filter_close_playbook_keeps_mine_by_default_and_closes_each_on_their_yes():
+    """Job 12a: keeping the caller's tasks is the default, the count comes first, and each task is closed with its version."""
     text = (EVALS.parents[1] / "templates/catalog/assistant/playbooks/jobs.md").read_text()
     job = text[text.index("12a.") : text.index("\n13. ")]
-    assert "Keep mine is the default" in job and "--where-not-owner me" in job
-    assert "--where-id" in job and "up to 100" in job and "chunk" in job
+    assert "Keep mine is the default" in job and "Close N? Say yes." in job
+    assert 'hub task close <id> -m "<why>" --version N' in job and "bulk" not in job

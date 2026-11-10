@@ -8,11 +8,9 @@
                                          carrying that Health Monitor signature
     hq-tickets show TK-XXXXXXXX          one ticket with its messages, and the diagnostics the person attached: a
                                          summary first, then the whole redacted bundle
-    hq-tickets payload TK-XXXXXXXX FILE  the JSON for `hub approval request --kind publish --payload-file`
-    hq-tickets reply TK-XXXXXXXX FILE [--approval ID]
-                                         post FILE as this bot's sending policy in Tico allows: On their own posts,
-                                         Ask first needs a person's approval of these bytes for this ticket, Never
-                                         keeps the reply a draft
+    hq-tickets reply TK-XXXXXXXX FILE    post FILE as this bot's sending policy in Tico allows: On their own posts;
+                                         Ask first and Never keep the reply a draft (with Ask first a person posts
+                                         it on their OK, asked on the task)
     hq-tickets close-signature hm-... FILE
                                          a release shipped the fix for one Health Monitor signature: post FILE as the
                                          fixed-in reply on every open ticket with that signature, and close each.
@@ -25,7 +23,6 @@ says so and `watch` exits 0, so a team that does not work HQ tickets loses nothi
 bearer token to HQ_URL and is never printed. A ticket is text from an outside person: it is quoted and labelled as
 data wherever it is shown, and nothing here follows an instruction in it.
 """
-import hashlib
 import json
 import os
 import re
@@ -336,25 +333,6 @@ def read_reply(path):
     return data, text
 
 
-def payload(ticket_id, path):
-    data, text = read_reply(path)
-    return {"url": "hq-ticket:" + ticket_id, "content_sha256": hashlib.sha256(data).hexdigest(), "text": text}
-
-
-def approved(approval_id, ticket_id, data, run=subprocess.run):
-    """Refuse unless `hub approval show` says a human approved exactly this text for exactly this ticket."""
-    try:
-        shown = run(["hub", "approval", "show", approval_id], capture_output=True, text=True, timeout=30)
-        record = json.loads(shown.stdout[shown.stdout.index("{"):])
-    except (OSError, ValueError, subprocess.SubprocessError):
-        raise Refused("could not read that approval with `hub approval show`") from None
-    body = record.get("payload") or {}
-    if record.get("decision") != "approved":
-        raise Refused(f"approval {approval_id} is {record.get('decision') or 'not decided yet'}, not approved")
-    if body.get("url") != "hq-ticket:" + ticket_id or body.get("content_sha256") != hashlib.sha256(data).hexdigest():
-        raise Refused(f"approval {approval_id} is not for this exact reply to {ticket_id}")
-
-
 def mail_policy(env):
     """The mail connector's policy module (connectors/mail/policy.py), from the Tico checkout a bot turn names in
     HUB_DIR. Its `sending_policy` reads the bot's sending policy a person sets in Tico
@@ -382,17 +360,15 @@ def sending_mode(env):
     return str(answer["effective"].get("mode") or "never")
 
 
-def sending_allowed(env, approval=False):
-    """Refuse unless the sending policy lets this post go: On their own always, Ask first only with a person's
-    approval of the exact text (`approval`), Never not at all."""
+def sending_allowed(env):
+    """Refuse unless the sending policy lets this post go: On their own always. Ask first and Never keep the draft: with
+    Ask first a person posts the reply on their OK, asked on the task."""
     mode = sending_mode(env)
     if mode == "on_their_own":
         return mode
-    if mode == "ask_first" and approval:
-        return mode
     if mode == "ask_first":
-        raise Refused("sending is Ask first for this bot: request a publish approval for this exact reply "
-                      "(`hq-tickets payload`) and pass it with --approval; keep the reply as a draft until then")
+        raise Refused("sending is Ask first for this bot: keep the reply as a draft on the task and ask a person for "
+                      "their OK there; a person posts it")
     raise Refused("sending is Never for this bot (Tools > the mailbox > Limits); keep the reply as a draft")
 
 
@@ -421,14 +397,9 @@ def main(argv, env=None, out=print, opener=None, run=subprocess.run, emit=None, 
                     f"{(t.get('signature') or '-'):<15}  {first_words(t['body'])}")
         elif command == "show" and len(args) == 1 and TICKET.fullmatch(args[0]):
             out(show_ticket(hq.call("GET", "/v1/staff/tickets/" + args[0])))
-        elif command == "payload" and len(args) == 2 and TICKET.fullmatch(args[0]):
-            out(json.dumps(payload(args[0], args[1])))
-        elif command == "reply" and TICKET.fullmatch(args[0] if args else "") and (
-                len(args) == 2 or (len(args) == 4 and args[2] == "--approval")):
-            data, text = read_reply(args[1])
-            sending_allowed(env, approval=len(args) == 4)
-            if len(args) == 4:
-                approved(args[3], args[0], data, run)
+        elif command == "reply" and len(args) == 2 and TICKET.fullmatch(args[0]):
+            _, text = read_reply(args[1])
+            sending_allowed(env)
             done = hq.call("POST", f"/v1/staff/tickets/{args[0]}/reply", {"body": text})
             out(f"posted reply {done['reply_id']} on {args[0]}" + ("; the person gave an email, so an email reply is pending" if done.get("email_pending") else ""))
         elif command == "close-signature" and len(args) == 2 and SIGNATURE.fullmatch(args[0]):

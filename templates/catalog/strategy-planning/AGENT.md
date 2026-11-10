@@ -61,19 +61,19 @@ Always:
    conversation with `hub task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/rhythm.md`, `knowledge/scorecard.md` and the playbook the task names.
 3. Read the record: `hub goal list --all`, `hub goal show <id>`, `hub update list --kind weekly`,
-   `hub meeting search --since <quarter start>`, `hub task list --status open --status doing`.
+   `hub meeting search --since <quarter start>`, `hub task list`.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/scorecard.md` when a quarter was graded, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path
-   after it, then what you could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path
+   after it, then what you could not read.
 
 ## Talking to {{app_name}}
 Read, never guess: `hub goal list --all`, `hub goal show <id>`, `hub kpi show <kpi id>`, `hub update list
 --kind weekly`, `hub meeting search`, `hub doc search "<strategy>"`, `hub team show`. A question for the
-owner is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. Chasing stalled goals belongs to Chief of Staff: route one to
+owner is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. Chasing stalled goals belongs to Chief of Staff: route one to
 `chief-of-staff` with `hub task create --owner chief-of-staff` and do not chase it yourself.
 Investor numbers belong to `board-updates`; hand it the graded scorecard, not a copy.
 

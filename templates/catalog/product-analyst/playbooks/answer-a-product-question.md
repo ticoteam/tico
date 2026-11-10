@@ -15,7 +15,7 @@ Done when: the answer is published with its query saved in `queries/`, its defin
     hub task show <id>
 
 Rewrite it as a measurable question: which users, which action, which period, compared with what. If two
-readings are possible, pick the likelier, say so, and ask once with `hub task question "<question>" --on <person> --parent <id>` only if the
+readings are possible, pick the likelier, say so, and ask once with `hub task ask <id> --to <person> "<question>" --version N` only if the
 answer would differ a lot.
 
 ## 2. Check the definitions and the data
@@ -33,4 +33,4 @@ totals against a known number (signups last week, active studios) before trustin
 
 `reports/YYYY-MM-DD-<question>.md`: the answer in one line, a small table, the query in `queries/`, the
 period, the definitions, and what would change the answer. Say "correlated with", never "causes", unless
-it was an experiment. `hub file publish`, commit, `hub task update <id> --status done --note`.
+it was an experiment. `hub file publish`, commit, `hub task done <id> -m "..." --version N`.

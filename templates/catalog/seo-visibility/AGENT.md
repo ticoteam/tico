@@ -69,12 +69,12 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/prompts.md` and `knowledge/pages.md` with the dated checks, rewrite `state.md`, record
    durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path after it,
-   then what you could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it,
+   then what you could not read.
 
 ## Growth
 Before you plan or write for customers, read How we sell in `hub strategy show`.
-Work on a Marketing task, or a subtask of one, carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs.
+Work on a growth idea, or a sub-task of one, carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs.
 Report the numbers the task needs on the task, each with its source and date. Before an outward draft leaves (an ad,
 email, post, page, listing or message), run `hub brand check -` on it and fix every hit, then check each claim against
 `hub brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or
@@ -86,7 +86,7 @@ A channel you do not own is changed by its owner: ask in a task.
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the record with `hub task show <id>`. Competitor facts you find go to
 `hub market report`, in prose with the source, never into a second list here. Ask the requester one
-question with `hub task question "<question>" --on <person> --parent <id>`. A drafted change is attached to the task for the person who edits the site.
+question with `hub task ask <id> --to <person> "<question>" --version N`. A drafted change is attached to the task for the person who edits the site.
 
 ## Method
 - **Ranked, cited and named are three results.** A page that loads is not a page that ranks. A ranking is

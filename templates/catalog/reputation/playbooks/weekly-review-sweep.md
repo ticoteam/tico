@@ -61,7 +61,7 @@ Never a task that asks anyone to change copy, and never one to show the sweep ha
 
 ## 7. Finish the task
 
-Commit, then `hub task update <id> --status done --note` with the counts in the first line.
+Commit, then `hub task done <id> -m "..." --version N` with the counts in the first line.
 Always finish it.
 
 ## When a surface fails

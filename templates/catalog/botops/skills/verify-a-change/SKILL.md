@@ -28,7 +28,7 @@ Steps:
    in step 1 says so.
 3. If a check fails, name the check and give one line of evidence. Name the fix and who can make it. A refusal for
    their rights is reported as one (`playbooks/refusals.md`). Do not try another route to the same change.
-4. Note the result on the task with `hub task update <id> --note "..."`: what you read, when, and what is still
+4. Note the result on the task with `hub task comment <id> "..."`: what you read, when, and what is still
    waiting.
 
 Checks before you finish:

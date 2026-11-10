@@ -25,7 +25,7 @@ documented API, for an engineer to review and merge. Nothing is pushed or publis
 4. **Write the tutorial around it.** Steps a developer follows top to bottom: what you will build, prerequisites,
    numbered steps with the code, how to check it worked, what to try next. Second person, present tense.
 5. **Hand over.** Save to `samples/<topic>/`, commit, publish `tutorial.md` and `run.md` on the task with
-   `hub file publish <path>`, and run `hub task update <id> --status done --note` with the reviewer's name and the folder
+   `hub file publish <path>`, and run `hub task done <id> -m "..." --version N` with the reviewer's name and the folder
    path. `hub file publish` takes one file at a time and refuses folders, and code files such as `.py` are not on its
    list, so the reviewer reads the code from the commit. Public publication uses your Tools and stays a draft until a
    person turns mail sending on in Tico.

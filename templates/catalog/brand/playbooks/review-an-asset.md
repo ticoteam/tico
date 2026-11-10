@@ -14,7 +14,7 @@ Done when: the verdict is on the task in one line with the path to the full revi
 
     hub task show <id>
 
-Find the item, its audience, where it will appear and the deadline. If the audience is missing, ask once with `hub task question "<question>" --on <person> --parent <id>`.
+Find the item, its audience, where it will appear and the deadline. If the audience is missing, ask once with `hub task ask <id> --to <person> "<question>" --version N`.
 
 ## 2. Review copy
 
@@ -28,4 +28,4 @@ Follow `skills/run-a-name-clash-check/SKILL.md`. Check the name against the nami
 
 Write `reports/reviews/<date>-<item>.md`: the verdict first, then the marked changes, then open questions. On the task, put the verdict in one line and the path. If the review exposed a missing rule, propose it for the owner. Then:
 
-    hub task update <id> --status done --note "<verdict>; reports/reviews/<date>-<item>.md"
+    hub task done <id> -m "<verdict>; reports/reviews/<date>-<item>.md" --version N

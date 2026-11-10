@@ -17,7 +17,7 @@ Then `knowledge/rhythm.md` (recipient, thresholds, exclusions) and `knowledge/op
     hub goal list --all
     hub goal show <id>                     # each goal that is red, yellow, or has no reading
     hub update list --kind weekly              # the bots' week in review
-    hub task list --status open --status doing --status waiting
+    hub task list
     hub meeting search --since <last Friday>
 
 Read only what changed since last week's brief. Team meetings only; you cannot see private ones,
@@ -27,7 +27,7 @@ and you never guess at them. If a source refuses you, note which one and carry o
 
 | Section | What belongs in it |
 |---|---|
-| Needs you | Approvals, questions and tasks waiting on the owner, oldest first, with the age |
+| Needs you | Asks and tasks waiting on the owner, oldest first, with the age |
 | Goals | One line per goal: colour, movement since last week, the evidence, next step and its owner |
 | Stalled | A goal or task with no change past the threshold in `knowledge/rhythm.md` |
 | What moved | Shipped, decided or closed this week, from tasks, updates and meetings |
@@ -62,7 +62,7 @@ Before it is armed, attach the report to the task and say it is a draft.
 
 ## 7. Finish
 
-Commit, then `hub task update <id> --status done --note` with the headline, how many goals are
+Commit, then `hub task done <id> -m "..." --version N` with the headline, how many goals are
 red, yellow and green, how many items are stalled, and the report path. Always finish it: a
 routine task left open absorbs next Friday's.
 

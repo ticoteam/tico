@@ -68,13 +68,13 @@ Always:
 ## Ending a run
 1. Update `knowledge/reasons.md` and `knowledge/watch.md`, rewrite `state.md`, record decisions in
    `memory/decisions.md`, commit this repository.
-2. Finish with `hub task update <id> --status done --note`: requests, saves, losses, the path.
+2. Finish with `hub task done <id> -m "..." --version N`: requests, saves, losses, the path.
 
 ## Talking to {{app_name}}
 Requests arrive as tasks. Read with `hub task show`, `hub task list`, the support mailbox where
 connected, and the usage export the owner has shared. A missing-feature
 pattern is `hub task create --owner feedback-analyst`; an at-risk business account is `hub task create
---owner customer-success`. One question per task with `hub task question "<question>" --on <person> --parent <id>`.
+--owner customer-success`. One question per task with `hub task ask <id> --to <person> "<question>" --version N`.
 
 ## Quality standards
 - **Answer first.** The report opens with requests, saves and the net loss this week.

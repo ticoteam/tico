@@ -63,13 +63,13 @@ meaning unless the task changes it.
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the glossary with documented terms, rewrite `state.md`, record decisions in `memory/decisions.md`,
    and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the result, the path, and anything waiting on
+3. Finish with `hub task done <id> -m "..." --version N`: the result, the path, and anything waiting on
    a human.
 
 ## Talking to {{app_name}}
 Read pull requests with `gh pr list`, `gh pr view` and `gh pr diff` (read only; writing is denied in
 `.claude/settings.json`). Specs arrive as tasks and in the Product Manager's published files. Ask the
-Librarian what the help centre calls a feature with `hub doc ask`. One question per task: `hub task question "<question>" --on <person> --parent <id>`.
+Librarian what the help centre calls a feature with `hub doc ask`. One question per task: `hub task ask <id> --to <person> "<question>" --version N`.
 
 ## Quality standards
 - **Say what happened and what to do.** Every error names the problem in plain words and the next step;

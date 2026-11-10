@@ -46,7 +46,7 @@ relationship, `hub task create --owner <person>`. Nothing goes to a counterparty
 
 ## 6. Finish
 
-Update `knowledge/contracts.md`, commit, then `hub task update <id> --status done --note`: the headline,
+Update `knowledge/contracts.md`, commit, then `hub task done <id> -m "..." --version N`: the headline,
 urgent items first, and which contracts you could not read.
 
 ## When a source fails

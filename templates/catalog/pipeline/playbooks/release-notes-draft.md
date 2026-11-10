@@ -1,7 +1,7 @@
 # Weekly release notes draft
 
 Schedule: Fridays at 14:00 team time (routine `weekly-release-notes-draft`), after setup. Also run by hand, and for each release
-the daily release task names (`playbooks/cut-a-release.md`). Budget 40 minutes. The outcome is one draft: a suggested
+you cut (`playbooks/cut-a-release.md`). Budget 40 minutes. The outcome is one draft: a suggested
 version, a changelog entry and plain-language notes, plus the changes you could not classify. Nothing is published and no tag
 is pushed.
 
@@ -50,7 +50,7 @@ Then `hub file publish reports/YYYY-MM-DD-release-notes.md`.
 
 ## 6. Finish
 
-Commit, then `hub task update <id> --status done --note`: the suggested version and why, changes included, changes unclassified,
+Commit, then `hub task done <id> -m "..." --version N`: the suggested version and why, changes included, changes unclassified,
 and which repository or range you could not read. Publishing is a human's step, and the approved text is the text that goes out.
 
 ## When a source fails

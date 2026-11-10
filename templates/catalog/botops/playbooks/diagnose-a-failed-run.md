@@ -71,7 +71,7 @@ name. Never turn a bot off, change its status, or edit the product checkout.
 ## 5. Record it and finish
 
     hub bot check <slug>
-    hub task update <id> --status done --note "..."
+    hub task done <id> -m "..." --version N
 
 Commit the repository you changed with a one line message. Add the check that would have caught this
 to `knowledge/checks.md`, and add the failure and its cause to `knowledge/fleet.md` under that bot,

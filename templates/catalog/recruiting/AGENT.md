@@ -76,15 +76,15 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/pipeline.md` and the role file, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the result first, the draft attached, and what you could
-   not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the result first, the draft attached, and what you could
+   not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: `hub task show <id>`, `hub task list`. Read team values and level guides with
 `hub doc ask "<topic>"` (the Librarian cites the page). Where the hiring mailbox is connected,
 `$HUB_DIR/scripts/mail.sh search "<role>"` reads applications and `mail.sh draft --reply-to` puts a reply in the
 thread. A reply is sent only when a person has turned mail sending on in Tico and the task asks for it and a granted Tool allows it. A question for
-the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. Anything a human must decide is
+the requester is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. Anything a human must decide is
 `hub task create --owner <human>`. Finish every task.
 
 ## Quality standards

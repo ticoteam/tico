@@ -9,7 +9,7 @@ finished. Budget 25 minutes. The outcome is five recorded answers, one real inve
 ## 1. Read before you ask
 
     hub team show
-    hub task list --status open --status waiting
+    hub task list
     hub doc search "API"
 
 Find open tickets that look technical (error messages, integrations, data that looks wrong) and check

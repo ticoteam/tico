@@ -38,8 +38,8 @@ Log it in `knowledge/requests.md` and record its stage there: Intake until it is
 
 ## 4. Hand over
 
-Put the outcome on the task. Ask once with `hub task question "<question>" --on <person> --parent <id>` if the scope or lawyer is missing. Route requested work: `hub task create --owner <slug> --title "<what>" --body "<request and source>" --parent <id>`.
-End with the not-legal-advice line, update `knowledge/requests.md`, and `hub task update <id> --status done --note`.
+Put the outcome on the task. Ask once with `hub task ask <id> --to <person> "<question>" --version N` if the scope or lawyer is missing. Route requested work: `hub task create --owner <slug> --title "<what>" --body "<request and source>" --parent <id>`.
+End with the not-legal-advice line, update `knowledge/requests.md`, and `hub task done <id> -m "..." --version N`.
 
 ## Done when
 - The request has one of the three outcomes, on the task and in `knowledge/requests.md`.

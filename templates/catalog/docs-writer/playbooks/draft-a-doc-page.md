@@ -37,7 +37,7 @@ commit with one edit.
 5. **Check it.** Run `skills/check-a-doc-against-the-code/SKILL.md` on the draft. Every link points at a page that exists,
    or is marked new. No credential or customer detail appears. The page is short enough for a reader to finish in one
    sitting.
-6. **Finish.** Save the draft, attach it to the task, commit, then `hub task update <id> --status done --note`: the path,
+6. **Finish.** Save the draft, attach it to the task, commit, then `hub task done <id> -m "..." --version N`: the path,
    the type, the items marked to verify, and who should review. Commit requested changes with the repository Tools, run
    the docs build and checks when they are available, and name any Tool that is missing.
 
@@ -54,4 +54,4 @@ then the draft in the docs repository's format, then the list of items marked to
 
 ## When you cannot verify
 
-Ask once with `hub task question "<question>" --on <person> --parent <id>`, naming the sentence and the human who knows. Ship the draft with the gap marked.
+Ask once with `hub task ask <id> --to <person> "<question>" --version N`, naming the sentence and the human who knows. Ship the draft with the gap marked.

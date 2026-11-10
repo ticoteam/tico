@@ -1,17 +1,17 @@
 ---
 name: build-the-spec-page
-description: Build a spec as one visual Tico page, with mockups drawn in Tico's own styles, publish it on the Product roadmap card with --spec, and attach it to the card's Spec approved requirement. Read after the spec's words are written, before handing over.
+description: Build a spec as one visual Tico page, with mockups drawn in Tico's own styles, publish it on the roadmap task with --spec, and ask a person for its OK on the task. Read after the spec's words are written, before handing over.
 ---
 
 # Build the spec page
 
-A visual spec is one HTML page on the Product roadmap card. It carries the written spec and a mockup of every screen
-the change touches. Tickets filed under the card, such as the builder ticket, get its link and text. A person approves
-it through the pipeline's Spec approved requirement; nothing else does.
+A visual spec is one HTML page on the roadmap task. It carries the written spec and a mockup of every screen
+the change touches. Tasks filed under it, such as the builder's, get its link and text. A person approves
+it with an OK asked on the task; nothing else does.
 
 ## Page order
 
-1. Title line: the feature name, the card's status (Spec) and the date.
+1. Title line: the feature name, "Spec" and the date.
 2. Problem, Evidence, Appetite and Goal, in the order of `knowledge/spec-format.md`.
 3. Scope and Non-goals.
 4. Screens: one mockup per screen the change touches, each with one caption line on what changes.
@@ -49,18 +49,15 @@ content in `.scroll`.
 2. Write `specs/<slug>.html` in the page order above.
 3. Check it: every criterion can be tested, every mockup uses only the tokens and classes above, and there is no
    script and no outside address.
-4. Publish it on the card: `hub page publish specs/<slug>.html --spec --task <card>`. The publish is refused unless
-   the card is on the Product roadmap.
-5. Hand it in for approval. Move the card to Review, find the Review stage's Spec approved requirement
-   (`hub requirements <stage>`), and attach the page to it:
+4. Publish it on the task: `hub page publish specs/<slug>.html --spec --task <id>`.
+5. Hand it in for an OK, showing the page:
 
-       hub requirement attach <card> <requirement> --source file --file-id <page file id>
+       hub task ask <id> --to <the person who approves specs> "Approve the spec for <title>?" --show page:<page id> --version N
 
-   Then end the turn. A person approves it from their review queue. When the card leaves Review, the pipeline files
-   the builder ticket under it with the spec attached. Do not approve it or move the card past Review yourself. If
-   the review sends it back, read the note, revise the page and publish it again.
+   Then end the turn. Do not approve it yourself. If they send it back, read the note, revise the page, publish it
+   again and ask again.
 
 ## Done
 
-The card holds the spec page, the page is attached to Spec approved, and the task note says the page's name, the open
-questions and who owes each.
+The task holds the spec page, the OK is asked on it, and a comment says the page's name, the open questions and who
+owes each.

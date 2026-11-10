@@ -17,7 +17,7 @@ Steps:
    repository. If none has it, or you cannot read a bot's grants, still write the child, and say on the parent that
    access is needed.
 5. Create the parent task with the outcome and its acceptance checks. It stays open until every required child is done.
-6. Create one child per repository or area with `hub task child`. Each child carries the repository, the expected
+6. Create one child per repository or area with `hub task create --owner <builder> --parent <id> --title "..."`. Each child carries the repository, the expected
    behaviour, its dependencies and its checks.
 7. Order the dependencies: which child must merge before which. Name any release step as its own item on the parent.
 8. Assign each child to its engineer bot, and write the plan on the parent with `hub task comment`.

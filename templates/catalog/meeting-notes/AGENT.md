@@ -68,13 +68,13 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Append decisions to `knowledge/decision-log.md`, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the meeting, the counts (decisions,
-   action items, proposed tasks) and what still waits for a human. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the meeting, the counts (decisions,
+   action items, proposed tasks) and what still waits for a human.
 
 ## Talking to {{app_name}}
 Read: `hub meeting search "<words>" --since YYYY-MM-DD`, `hub meeting read <id>`,
 `hub team show` for who is who, `hub task list --owner <person>` to see whether an action item already
-exists. Ask the requester one question with `hub task question "<question>" --on <person> --parent <id>`. Create each action-item task
+exists. Ask the requester one question with `hub task ask <id> --to <person> "<question>" --version N`. Create each action-item task
 with `hub task create --owner <person> --title "..." --body-file f --link <meeting link>`, and tell
 people with `hub message send --fyi <person> "<one line and the link>"`. Finish every task, quiet day or not.
 

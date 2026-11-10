@@ -12,7 +12,7 @@ Done when: every open tier 2 ticket is listed with its verdict and what it waits
 
 ## 1. List the queue
 
-Every open tier 2 task (`hub task list --owner technical-support --status open --status waiting`) with
+Every open tier 2 task (`hub task list --owner technical-support`) with
 its age, verdict so far and what it waits on: the customer, engineering, or you.
 
 ## 2. Check engineering status

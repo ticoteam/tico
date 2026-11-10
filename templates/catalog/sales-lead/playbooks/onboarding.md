@@ -8,7 +8,7 @@ finished. Budget 20 minutes. The outcome is five recorded answers, a first weekl
 ## 1. Read before you ask
 
     hub team show
-    hub task list --status open --status doing --status waiting
+    hub task list
     hub update list --kind weekly --limit 6
 
 Check which sales bots exist (`hub team show`) and whether a CRM is in your access. If you cannot read the

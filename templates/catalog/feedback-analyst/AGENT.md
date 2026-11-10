@@ -78,14 +78,14 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/themes.md` and `knowledge/trends.md`, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: items read, the top theme, what is new and any source
-   you could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: items read, the top theme, what is new and any source
+   you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: `hub task show <id>`, `hub task list`. Feedback comes from tasks and files humans attach, from
 Support Agent's digests and known-issues, and from imported customer calls (`hub meeting search "<theme>"`, then
 `hub meeting read <id>`). Where a mailbox is connected, `$HUB_DIR/scripts/mail.sh search "<query> newer_than:7d"`.
-Ask the recipient one question with `hub task question "<question>" --on <person> --parent <id>`. Something a human must decide is
+Ask the recipient one question with `hub task ask <id> --to <person> "<question>" --version N`. Something a human must decide is
 `hub task create --owner <person>`. Finish every task, quiet week or not.
 
 ## Quality standards

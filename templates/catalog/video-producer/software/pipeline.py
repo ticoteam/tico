@@ -4,7 +4,7 @@
     python3 software/pipeline.py status projects/<slug> [--task ID] [--owner NAME]
     python3 software/pipeline.py next projects/<slug> [--task ID] [--owner NAME]   the one step to take now
     python3 software/pipeline.py gate projects/<slug>/<stage>/<file>               exit 0 when the next stage may use it
-    python3 software/pipeline.py raise projects/<slug> --usd N --approval ID       record a budget raise the owner approved
+    python3 software/pipeline.py raise projects/<slug> --usd N --ok ID             record a budget raise the owner OK'd
 
 Stages, their movers, the owner and the budget come from pipeline.yaml at the repository root. A project is a folder per
 stage (projects/<slug>/<stage>/<asset>). An asset may have a provenance sidecar: the same file name with `.json` added,
@@ -129,30 +129,30 @@ def spent(project, cfg):
 
 
 def budget_record(project):
-    """projects/<slug>/budget.json: {"extra_usd": the raises so far, "approval": the latest, "approvals": all of them}."""
+    """projects/<slug>/budget.json: {"extra_usd": the raises so far, "ok": the latest OK, "oks": all of them}."""
     path = project / "budget.json"
     if not path.is_file():
-        return {"extra_usd": 0.0, "approval": "", "approvals": []}
+        return {"extra_usd": 0.0, "ok": "", "oks": []}
     try:
         data = json.loads(path.read_text())
     except ValueError:
         raise Problem(f"{path}: not readable JSON") from None
     return {
         "extra_usd": float(data.get("extra_usd") or 0),
-        "approval": str(data.get("approval") or ""),
-        "approvals": [str(a) for a in data.get("approvals") or []],
+        "ok": str(data.get("ok") or ""),
+        "oks": [str(a) for a in data.get("oks") or []],
     }
 
 
-def record_raise(project, usd, approval_id):
-    """Add an approved raise to the project's budget. The same approval id is recorded once, however often this runs."""
+def record_raise(project, usd, ok_id):
+    """Add a raise the owner OK'd to the project's budget. The same OK is recorded once, however often this runs."""
     record = budget_record(project)
-    if approval_id in record["approvals"]:
+    if ok_id in record["oks"]:
         return record
     record = {
         "extra_usd": record["extra_usd"] + float(usd),
-        "approval": approval_id,
-        "approvals": record["approvals"] + [approval_id],
+        "ok": ok_id,
+        "oks": record["oks"] + [ok_id],
     }
     project.mkdir(parents=True, exist_ok=True)
     (project / "budget.json").write_text(json.dumps(record, indent=2) + "\n")
@@ -200,12 +200,14 @@ def approval(asset, mover="owner"):
 
 
 # ----------------------------------------------------------------------------- what to do next
-def question(task, person, text, files, extra=()):
-    """`hub task question`: one decision for a person, as its own task under the project task."""
-    command = ["hub", "task", "question", text, "--on", person, "--parent", task]
+def question(task, person, text, files, choices=()):
+    """`hub task ask`: one decision for a person, asked on the project task, showing the files it turns on."""
+    command = ["hub", "task", "ask", task, "--to", person, text]
+    if choices:
+        command += ["--choices", ",".join(choices)]
     for path in files:
-        command += ["--review", rel(path)]
-    return shlex.join(command + list(extra))
+        command += ["--show", "file:" + rel(path)]
+    return shlex.join(command + ["--version", "N"])
 
 
 def request(project, cfg, stage, files, task, owner):
@@ -247,14 +249,12 @@ def self_step(project, cfg, stage, task, owner):
     if not owner:
         return NO_OWNER
     raise_by = f"{cfg['budget']:g}"
-    options = [
-        f"Raise budget -> the self-moved stages of {project.name} may spend {raise_by} USD more",
-        "Stop -> no more self-moved work on this project",
-    ]
-    extra = [item for option in options for item in ("--option", option)]
-    extra += ["--spend", f"Raise budget={raise_by}:{project.name} self-moved stages"]
-    return f"over budget ({used:.2f} of {limit:.2f} USD used): ask the owner: " + question(
-        task, owner, f"Spend {raise_by} USD more on {project.name}? {used:.2f} of {limit:.2f} USD used.", [], extra
+    line = (
+        f"Spend {raise_by} USD more on {project.name}? {used:.2f} of {limit:.2f} USD used. Raise budget lets its "
+        "self-moved stages go on; Stop ends them."
+    )
+    return f"over budget ({used:.2f} of {limit:.2f} USD used): ask the owner for an OK: " + question(
+        task, owner, line, [], ("Raise budget", "Stop")
     )
 
 
@@ -337,14 +337,14 @@ def main(argv=None):
     gate_cmd.add_argument("file", help="projects/<slug>/<stage>/<file>")
     raise_cmd = commands.add_parser("raise")
     raise_cmd.add_argument("project", help="projects/<slug>")
-    raise_cmd.add_argument("--usd", type=float, required=True, help="the amount the owner approved")
-    raise_cmd.add_argument("--approval", required=True, help="the spend approval id the owner's answer created")
+    raise_cmd.add_argument("--usd", type=float, required=True, help="the amount the owner OK'd")
+    raise_cmd.add_argument("--ok", required=True, help="the requirement id of the owner's OK on the task")
     args = parser.parse_args(argv)
     try:
         if args.command == "gate":
             return gate(args.file)
         if args.command == "raise":
-            record = record_raise(Path(args.project).resolve(), args.usd, args.approval)
+            record = record_raise(Path(args.project).resolve(), args.usd, args.ok)
             print(f"budget raised: {record['extra_usd']:.2f} USD raised in total")
             return 0
         cfg = read()

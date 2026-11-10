@@ -19,5 +19,5 @@ decides exceptions, and the task is updated. The booking is not changed in this 
    to the person who decides exceptions, with `hub task create --owner <person>`.
 4. Attach the options and the draft to the task. Apply the change only when the task asks for it, a granted Tool allows it,
    and a person has confirmed the new slot.
-5. Finish with `hub task update <id> --status done --note "..."`: the request, the options offered, and what is waiting on
+5. Finish with `hub task done <id> -m "..." --version N`: the request, the options offered, and what is waiting on
    the customer or a person.

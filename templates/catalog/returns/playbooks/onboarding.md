@@ -13,7 +13,7 @@ Done when: the five answers are in `state.md`, the policy checks and the ledger 
 ## 1. Read before you ask
 
     hub team show
-    hub task list --status open --status waiting
+    hub task list
     hub doc ask "What is our return and refund policy?"
 
 Collect the open return and refund requests. The policy the Librarian cites, with its date, is the

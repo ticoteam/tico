@@ -6,7 +6,7 @@ outcome is three recorded answers, the deadlines written down, a first draft sum
 ## 1. Read before you ask
 
     hub team show --team corporate
-    hub task list --status open
+    hub task list
     hub update list --kind weekly --limit 10
 
 Note which corporate bots exist and what they last reported. Do not ask what these already say.

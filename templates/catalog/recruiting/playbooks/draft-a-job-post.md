@@ -50,7 +50,7 @@ follow-up and a four-level scoring guide. The same kit for every candidate. Save
 Attach the post, the kit and the gap list to the task. A post goes to a board or the careers page only when the task asks
 for it, a granted Tool allows it, and a person has turned mail sending on in Tico. Otherwise the draft stays on the task.
 
-    hub task update <id> --status done --note "..."
+    hub task done <id> -m "..." --version N
 
 The note holds the post's path, the gaps left for the manager, and what you could not read.
 

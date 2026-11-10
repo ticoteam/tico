@@ -12,7 +12,7 @@ submitted or sent.
 
     hub task show <id>
     hub team show
-    hub task list --status open --status doing --status waiting
+    hub task list
 
 Then `knowledge/change-log.md`, `knowledge/benefits-calendar.md`, `knowledge/eligibility.md` and last week's page.
 
@@ -42,7 +42,7 @@ Enrollment opening within 30 days means the comparison (`playbooks/compare-plans
 
 Write `reports/YYYY-MM-DD-benefits-deadlines.md` in the shape of `knowledge/examples/benefits-deadlines.md`,
 then `hub file publish reports/YYYY-MM-DD-benefits-deadlines.md --scope task --task <id>`. Reminders to
-employees go on the task for review. Commit, and `hub task update <id> --status done --note`.
+employees go on the task for review. Commit, and `hub task done <id> -m "..." --version N`.
 
 ## When a source fails
 

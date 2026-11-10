@@ -1,7 +1,7 @@
 # Plan a growth test
 
 Run inside the weekly review, or alone when the Growth Team Manager (`growth-team-manager`) asks for ideas for a segment. Budget 30 minutes.
-The outcome is up to three Marketing tasks on the board, each with its channel and segment, ready for the Monday growth
+The outcome is up to three idea tasks labelled growth:ideas, each with its channel and segment, ready for the Monday growth
 meeting. Nothing starts, spends or changes a channel here.
 
 ---
@@ -12,10 +12,10 @@ Use the review's numbers. Look for a channel whose share of this segment's new c
 above its ceiling, a message whose claims just changed, or a goal with no test behind it. Write each gap in one line,
 with its reading and its date.
 
-## 2. Check the channel and the board
+## 2. Check the channel and the ideas
 
     hub growth channel list
-    hub task list --type idea --label segment:<slug>
+    hub task list --label growth:ideas --label segment:<slug>
 
 `hub growth channel list` gives each channel's stage and budget. A test can start only on a channel at `testing` or
 `scaling` with budget left for its spend. A channel at `idea` can take an idea, but the growth meeting cannot start it
@@ -37,7 +37,7 @@ meeting decides.
 
 ## 4. File each idea
 
-    hub task create --owner growth-team-manager --type idea --title "<idea, one line>" --body-file <file> --label channel:<slug> --label segment:<slug>
+    hub task create --owner growth-team-manager --label growth:ideas --title "<idea, one line>" --body-file <file> --label channel:<slug> --label segment:<slug>
 
 ## 5. Link a follow-up
 
@@ -48,4 +48,4 @@ When an idea follows a test that has closed, relate the new idea to the closed o
 ## 6. Finish
 
 List each idea filed, with its task id, in the weekly review. If this playbook was the task, finish it with
-`hub task update <id> --status done --note "<ideas filed: n; ids>"`.
+`hub task done <id> -m "<ideas filed: n; ids>" --version N`.

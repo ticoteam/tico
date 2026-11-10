@@ -42,6 +42,6 @@ Save the pack in `reports/`, publish it with `hub file publish reports/<file>`, 
 `hub task attach <id> <file>`. Send the cover note only when the task asks, a person has turned mail sending on for this bot in
 Tico, and a granted Tool allows it. Otherwise it stays a draft on the task. Then:
 
-    hub task update <id> --status done --note "..."
+    hub task done <id> -m "..." --version N
 
 The note holds the options, the gaps, and the notice deadline.

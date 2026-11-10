@@ -57,18 +57,18 @@ Always:
 ## Starting a run
 1. Read `state.md`, then the task with `hub task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/milestones.md` and the plans in `knowledge/customers/`.
-3. Look for customers signed since the last run: `hub task list --status open`, the CRM if readable,
+3. Look for customers signed since the last run: `hub task list`, the CRM if readable,
    `hub meeting search "kickoff"`.
 
 ## Ending a run
 1. Update each plan's progress log with dated evidence; rewrite `state.md`; record decisions in
    `memory/decisions.md`; commit this repository.
-2. Finish with `hub task update <id> --status done --note`: how many in onboarding, how many stuck, the
+2. Finish with `hub task done <id> -m "..." --version N`: how many in onboarding, how many stuck, the
    report path, what you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read with `hub task show`, `hub task list`, `hub meeting search "<customer>"`,
-`hub meeting read <id>`, `hub calendar list`. A question is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
+`hub meeting read <id>`, `hub calendar list`. A question is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task.
 A human's job (a training call, a data import on the customer's side) is `hub task create --owner
 <person>` after the owner agrees. A handover at go-live is `hub task create --owner customer-success`.
 

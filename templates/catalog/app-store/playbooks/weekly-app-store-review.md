@@ -70,7 +70,7 @@ as "proposed", rewrite `state.md`, and commit this repository.
 
 ## 7. Close
 
-    hub task update <id> --status done --note "..."
+    hub task done <id> -m "..." --version N
 
 The note holds the headline, the report path, and what you could not read. Finish the task even on a quiet week.
 

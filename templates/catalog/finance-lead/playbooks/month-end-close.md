@@ -38,7 +38,7 @@ Each is done, open or blocked, with who owes it:
 
 ## 3. Unblock
 
-For each blocked line, one routing proposal: who, what, by when. Ask once with `hub task question "<question>" --on <person> --parent <id>`. Create the requested
+For each blocked line, one routing proposal: who, what, by when. Ask once with `hub task ask <id> --to <person> "<question>" --version N`. Create the requested
 follow-through with `hub task create --owner <slug or person> --parent <id>` and the evidence.
 
 ## 4. Report
@@ -46,4 +46,4 @@ follow-through with `hub task create --owner <slug or person> --parent <id>` and
 Add a close section to the task: day N of the close against the deadline, lines done, the blockers with owners, and the one
 thing that would finish it soonest. When a human says the period is locked, record the date in
 `knowledge/finance-calendar.md` and tell the FP&A Analyst on its task that budget-against-actual can run.
-`hub task update <id> --status done --note` on the last day.
+`hub task done <id> -m "..." --version N` on the last day.

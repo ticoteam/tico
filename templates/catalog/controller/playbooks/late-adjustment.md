@@ -13,4 +13,4 @@ Triggered by a task about a number that changed after the period was closed. Bud
 3. Propose the correction as lines for the accountant: account, debit or credit, amount, reason. Apply nothing.
 4. Add the cause to `knowledge/close-history.md`: what changed, when it was found, and what it touched.
 5. Add or change one step in `knowledge/close-checklist.md` so the cause is caught next month. Say what the step tests.
-6. Finish with `hub task update <id> --status done --note`: the effect, the proposed lines, and "waiting for the accountant".
+6. Finish with `hub task done <id> -m "..." --version N`: the effect, the proposed lines, and "waiting for the accountant".

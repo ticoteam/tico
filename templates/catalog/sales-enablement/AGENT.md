@@ -67,13 +67,13 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/`; rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit.
-3. Finish with `hub task update <id> --status done --note`: the finding first, what needs a human, and
-   which calls or deals you could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the finding first, what needs a human, and
+   which calls or deals you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks and the weekly routine. Calls: `hub meeting search "<customer>"`, `hub meeting
 transcript <id>`. The team: `hub team show --team sales`. Closed deals: the Account Executive's and the Sales
-Operations Manager's reports, or a CRM read. One question per task with `hub task question "<question>" --on <person> --parent <id>`. Keep `hub bot status set` to one line.
+Operations Manager's reports, or a CRM read. One question per task with `hub task ask <id> --to <person> "<question>" --version N`. Keep `hub bot status set` to one line.
 
 ## Quality standards
 - **Answer first.** The notes open with the one thing the team should change or repeat next week.

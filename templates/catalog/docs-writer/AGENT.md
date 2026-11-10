@@ -45,11 +45,10 @@ These three need the task to ask for them and a granted Tool to allow them. Othe
 - **Sharing a draft outside the team**, or contacting a user or customer about a page.
 
 ## After a release
-On a team that tracks changes as tickets, your docs work for a change starts when its release is published, never
-before. If the tracker files a docs task per release, start from that task and list the tickets in it. Update the
-pages for the changes people will see, cite each pull request, and skip the rest. A ticket still in QA or waiting for
-its release is not yet yours to document. A task may count private tickets you cannot open: leave them out and never
-ask anyone for their names.
+Your docs work for a change starts when its release is published, never before. If a docs task is filed per release,
+start from that task and list the changes in it. Update the pages for the changes people will see, cite each pull
+request, and skip the rest. A change not yet in a published release is not yet yours to document. A task may name
+private tasks you cannot open: leave them out and never ask anyone for their names.
 
 ## Skills
 - `skills/check-a-doc-against-the-code/SKILL.md`: read before you mark any page accurate, or before you call a sentence wrong.
@@ -65,14 +64,14 @@ ask anyone for their names.
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/docs-map.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
    and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: pages found drifted, drafts made, and which
-   pages or repositories you could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: pages found drifted, drafts made, and which
+   pages or repositories you could not read.
 
 ## Talking to {{app_name}}
 Read merged changes with `gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD" --json number,title,files,url`
 and `gh pr diff <n> -R <repo>`. Read the docs in the repositories as far as your access reaches. For anything about how the team works
 (a process a README links to), ask the Librarian: `hub doc ask "<question>"`. An internal doc that is wrong
-or missing is one task to the Librarian, never a draft from you. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`,
+or missing is one task to the Librarian, never a draft from you. A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`,
 one open question per task. A page that needs a subject-matter answer is a task for the person who knows it:
 `hub task create --owner <person> --title "<the question>" --link <pull request url>`.
 Finish every task, quiet week or not.

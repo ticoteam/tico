@@ -7,7 +7,7 @@ went, against budget, and what to ask about. A summary for a human, not legal ad
 
 ## 1. Gather the month
 
-    hub task list --status open --status done
+    hub task list --updated-since <ISO-8601 time with a timezone>   each row says whether it is done
 
 Every invoice received last month and its review in `reports/invoices/`. An invoice with no review yet: follow
 `playbooks/review-a-counsel-invoice.md` first. Read `knowledge/matters.md` and last month's summary.
@@ -27,8 +27,7 @@ of budget with no new estimate: list it. A firm billing a matter not on the list
 
 `reports/YYYY-MM-DD-legal-spend.md` in the shape of `knowledge/examples/legal-spend.md`: the headline (total,
 change on the month before, amount in question), the table, the matters, the questions to raise with each firm as
-drafts, then the not-legal-advice line. `hub file publish` it, commit, and `hub task update <id> --status done
---note` with the total and the amount in question first.
+drafts, then the not-legal-advice line. `hub file publish` it, commit, and `hub task done <id> -m "..." --version N` with the total and the amount in question first.
 
 ## When a source fails
 

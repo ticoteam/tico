@@ -81,13 +81,13 @@ Always:
    that was unreliable.
 2. Update `knowledge/vendors.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
    and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first (the suggestion and the
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first (the suggestion and the
    decide-by date), the report path, then what you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: `hub task show <id>`, `hub task list`. Where a mailbox is connected, quotes are read
 with `$HUB_DIR/scripts/mail.sh search "<vendor>"`; leave a draft only with `mail.sh draft`, never `send`. Ask
-the requester one question with `hub task question "<question>" --on <person> --parent <id>`. Something a human must decide is
+the requester one question with `hub task ask <id> --to <person> "<question>" --version N`. Something a human must decide is
 `hub task create --owner <human>`. A renewal that needs a keep-or-drop view starts with the FP&A Analyst's
 (`spend-watcher`) brief. A contract's terms are the Contracts Manager's: `hub task create --owner legal-review`.
 Keep `hub bot status set` to one factual line. Finish every task, quiet week or not.

@@ -21,17 +21,17 @@ names as its mover. Good looks like a final the owner could publish unedited, wi
 ## Stages and who moves them
 Run `python3 software/pipeline.py status projects/<slug> --task <project task>` to see where a project stands, and
 `next` for the one step. Pass `--owner NAME` when `pipeline.yaml` has no `owner`.
-- **Mover is `owner` or `person:<name>`**: `next` prints `hub task question`, with the reviewed files attached. It is
-  its own task under the project task. Start the next stage only after its files come back approved.
+- **Mover is `owner` or `person:<name>`**: `next` prints a `hub task ask` on the project task, showing the files. Fill
+  in the version `hub task show` printed. Start the next stage only after its files come back approved.
 - **Mover is `bot:<slug>`**: `next` prints two steps. First `hub file publish <path>` for each file, which gives its
   file id and version. Then a `hub task create` hand-off to that bot, with `<FILE@N>` placeholders filled from that
   output and the `hub file review <FILE@N> --approve|--changes --task <this task>` command for each file. Only that
   bot's verdict counts for its stage; a person's verdict does not.
 - **Mover is `self`**: work on the stage. Touch `.done` in its folder once every shot or the cut is finished;
   `next` moves on only then. The project's spend is the sum of `cost_usd` over the self-moved stages, and it may not
-  pass `budget_usd` plus any raise the owner approved. Over it, `next` prints the owner question with a
-  `--spend` line. When the owner says yes, run `python3 software/pipeline.py raise projects/<slug> --usd <amount>
-  --approval <spend approval id>` once. It records the raise in `projects/<slug>/budget.json`.
+  pass `budget_usd` plus any raise the owner OK'd. Over it, `next` prints the ask for the owner's OK. When the owner
+  answers Raise budget, run `python3 software/pipeline.py raise projects/<slug> --usd <amount> --ok <requirement id>`
+  once. It records the raise in `projects/<slug>/budget.json`.
 
 ## Truthfulness
 - Label every fictional, staged, sample or time-compressed part on screen and on the task. A storyboard is never shown
@@ -84,12 +84,13 @@ If `state.md` says setup has not finished, do this before any other work:
 ## Ending a run
 1. Add the smallest fix against anything that went wrong: a line in the playbook or the checklist, with its date.
 2. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: what is made, where it is, the stage it is waiting at and
+3. Finish with `hub task done <id> -m "..." --version N`: what is made, where it is, the stage it is waiting at and
    who moves it, and anything you could not check.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the record with `hub task show <id>` and `hub task list` first. Ask the requester one
-question with `hub task question "<question>" --on <person> --parent <id>`. A decision for a person is `hub task question`, with the files it turns on.
+question with `hub task ask <id> --to <person> "<question>" --version N`. A decision for a person is the same ask, with
+the files it turns on (`--show file:<path>`).
 Finish every task you were given, even when the answer is "not yet".
 
 ## Working style

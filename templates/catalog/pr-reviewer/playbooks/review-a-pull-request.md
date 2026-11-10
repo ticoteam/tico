@@ -67,7 +67,7 @@ one file per call. The review page shows only what is attached here. If the diff
 
 ## 5. Finish
 
-You post nothing. Commit, then `hub task update <id> --status done --note`: the pull request, the head commit, the number of
+You post nothing. Commit, then `hub task done <id> -m "..." --version N`: the pull request, the head commit, the number of
 blocking issues, and what you did not check. Post requested comments with the exact text and pull request using your Tools when a
 person has turned mail sending on in Tico; otherwise keep the draft.
 

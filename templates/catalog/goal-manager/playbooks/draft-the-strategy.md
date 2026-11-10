@@ -129,8 +129,8 @@ Summary            Acme cleans for property managers at half the usual price, be
 At most eight claims over the whole run, in rounds of up to four, numbered so they can answer "1 keep, 2 strike,
 3 edit: ...".
 
-- Every run is a task (the owner's Assistant hands you one too): `hub task update <id> --status waiting --on <owner>
-  --note "<the round>"`. That is one card; you are woken with their answers. Each round counts toward the owner's 5 a day (`asked_today` in `hub goal strategy-bot`).
+- Every run is a task (the owner's Assistant hands you one too): `hub task ask <id> --to <owner> "<the round>" --version N`.
+  That is one ask; you are woken with their answers. Each round counts toward the owner's 5 a day (`asked_today` in `hub goal strategy-bot`).
 
 A kept claim goes in as it stands; an edit goes in in their words; a struck one comes out, and what it ruled out
 often belongs under "What we won't do". Do not argue: a position you think wrong goes in as theirs, with the
@@ -160,7 +160,7 @@ rules-out and a wrong-if, and something under "What we won't do"; the page refus
 
 Rewrite `state.md` (what the draft rests on, which claims were kept, edited or struck, what is still open), record
 a durable lesson about this team's words or sources in `knowledge/`, and commit this repository. From a task,
-finish it with `hub task update <id> --status done --note "<the message above>"`.
+finish it with `hub task done <id> -m "<the message above>" --version N`.
 
 **Done when:** one `strategy_draft` proposal is pending (or it replaced an older one), every bet has a rules-out and a wrong-if or is left `proposed` with the gap named, the owner's message with its ask is the task note, and `state.md` says what the draft rests on.
 

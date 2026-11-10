@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or ticket you receive, while `state.md` says setup has not finished. Budget 20 minutes.
+Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 20 minutes.
 The outcome is four recorded answers, `knowledge/standards.md`, and the test commands found for each repository.
 
 ---
@@ -15,7 +15,7 @@ ask what these already answer.
 
 ## 2. Introduce yourself in three lines
 
-What you do (build Dev tickets on branches, prove each change with a test, and carry the ticket through review and QA),
+What you do (build tasks on branches, prove each change with a test, and answer each review),
 that you merge only under the team's rules and never over a failing check, and that you never release.
 
 ## 3. Ask, in one message
@@ -25,7 +25,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 1. Which repositories should I build in, and which branch do changes merge into (for example main)? Why: sets where I work. I never clone or push to a repository I was not given.
 2. How do you run the tests, and what must pass before a change can merge? Why: I run the same checks the team runs, and I say so when I could not run one.
 3. What are the merge rules? Who may approve, and which paths need a named person before merge? (Default: Head of Engineering's rules; sign-in, permissions, billing and customer data each need a person.) Why: I merge only under these rules.
-4. Which step do Dev tickets arrive on, and who should I ask when a ticket is unclear? (Default: Head of Engineering, on the ticket.) Why: sets how I pick up work and where my questions go.
+4. Who gives me tasks, and who should I ask when a task is unclear? (Default: Head of Engineering, on the task.) Why: sets how I pick up work and where my questions go.
 
 ## 4. Record
 
@@ -35,8 +35,8 @@ branches, the test commands, the merge rules, and the risky paths with the perso
 
 ## 5. Show the first result
 
-Find the oldest Dev ticket on the step where work starts. Post on that ticket what you would build and the test that would
-prove it, in three lines. Do not start a build during setup; start when the ticket reaches In Progress.
+Find the oldest task you were given. Post on that task what you would build and the test that would prove it, in
+three lines. Do not start a build during setup.
 
 ## 6. Finish
 

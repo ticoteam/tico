@@ -11,7 +11,7 @@ the task for the campaign owner.
     hub task show <id>
 
 List the channels (each email, each ad platform, each social post, partner or event), the landing
-pages and the owner. If a landing page is missing, ask once with `hub task question "<question>" --on <person> --parent <id>`.
+pages and the owner. If a landing page is missing, ask once with `hub task ask <id> --to <person> "<question>" --version N`.
 
 ## 2. Name the campaign
 
@@ -29,4 +29,4 @@ check it loads and that a lead form on it carries the hidden source field.
 
 A table on the task: placement, final URL. Note anything that will not be measurable (a QR code on
 print with no short link, a form without the source field) and what to do about it. Add the campaign
-to `knowledge/campaigns.md`. `hub task update <id> --status done --note`.
+to `knowledge/campaigns.md`. `hub task done <id> -m "..." --version N`.

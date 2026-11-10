@@ -34,4 +34,4 @@ run would breach the minimum, say so in the first line and propose which bills c
 Write `reports/YYYY-MM-DD-payment-run.md` in the shape of `knowledge/examples/payment-run.md` and publish it with
 `hub file publish reports/YYYY-MM-DD-payment-run.md`. Pay the requested, matched lines only when the task asks for it, your Tools
 allow it, and the payee's details are verified. Otherwise attach `run.json` to the task and name the access that is missing.
-Commit, then `hub task update <id> --status done --note` with the total, the held count and the path.
+Commit, then `hub task done <id> -m "..." --version N` with the total, the held count and the path.

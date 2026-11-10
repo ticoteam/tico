@@ -61,12 +61,12 @@ Always:
    checklist step you forgot.
 2. Update `knowledge/open-questions.md`, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first (how many lines are
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first (how many lines are
    done, how many need a human), the report path, then what you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: `hub task show <id>`, `hub task list`. Ask the requester one question with
-`hub task question "<question>" --on <person> --parent <id>`; batch every owner question into that one ask. Something a human must do
+`hub task ask <id> --to <person> "<question>" --version N`; batch every owner question into that one ask. Something a human must do
 (enter, reconcile, chase a receipt) is `hub task create --owner <person>`.
 Overdue invoices are the Accounts Receivable Specialist's (`ar-followup`); an unentered or disputed
 bill is the Accounts Payable Specialist's (`accounts-payable`); a purchase question is the Procurement

@@ -78,12 +78,12 @@ Always:
 1. Add the smallest scaffold against anything that went wrong: evidence that did not match the control, an owner who never
    answered.
 2. Update the logs, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: the headline and what is still missing.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline and what is still missing.
 
 ## Talking to {{app_name}}
 Evidence requests go to control owners as tasks (`hub task create --owner <human>`) when ready. Read policies and evidence
 folders with `hub doc search` and `hub doc read`; read repository settings with read-only `gh` where GitHub is connected.
-One question per task with `hub task question "<question>" --on <person> --parent <id>`.
+One question per task with `hub task ask <id> --to <person> "<question>" --version N`.
 
 ## Quality standards
 - **Answer first.** Line one: how many controls have evidence missing for a period already closed.

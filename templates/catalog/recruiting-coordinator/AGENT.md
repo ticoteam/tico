@@ -64,15 +64,15 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/schedule.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this
    repository.
-3. Finish with `hub task update <id> --status done --note "..."`: the result first, what is booked, what waits on whom.
-   The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the result first, what is booked, what waits on whom.
+  
 
 ## Talking to {{app_name}}
 Loops arrive as tasks from `recruiting` or a manager. Free and busy times come from `hub calendar list --calendar <email>`;
 a confirmed booking is checked with `hub calendar status <action-id>`. A nudge to an interviewer inside the team is
 `hub message send <human> "<one line>"`, at most one a day each. Where a mailbox is connected, `mail.sh draft --reply-to`
 keeps a message in the candidate's thread. It is sent only when a person has turned mail sending on in Tico and the task
-asks for it. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
+asks for it. A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The sheet opens with today's interviews and anything that will break one.

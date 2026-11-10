@@ -14,7 +14,7 @@ Done when: the note is on the task with the answer first, the coverage line (ret
     hub task show <id>
 
 Name the topic, the window (default: the last 14 days) and who will read the answer. Ask once with
-`hub task question "<question>" --on <person> --parent <id>` if the topic is ambiguous, and stop.
+`hub task ask <id> --to <person> "<question>" --version N` if the topic is ambiguous, and stop.
 
 ## 2. Query the sources
 
@@ -36,8 +36,8 @@ blocked sources), the quotes with links, and anything that looks like a real mov
 ## 5. Finish
 
 If a finding needs a human or the content bot, propose the child task in the note; create it only
-when ready. Report competitor facts with `hub market report`. Commit, then `hub task update <id>
---status done --note`: the answer, then what was blocked.
+when ready. Report competitor facts with `hub market report`. Commit, then `hub task done <id>
+-m "..." --version N`: the answer, then what was blocked.
 
 ## When a source fails
 

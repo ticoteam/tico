@@ -81,19 +81,19 @@ invoices, payroll changes) has nobody. Then:
 1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/thresholds.md`, `knowledge/cash-forecast.md`, `knowledge/finance-calendar.md`
    and the playbook the task names.
-3. Read the week: `hub task list --status open --status doing --status waiting`, `hub update list --kind weekly`, the
+3. Read the week: `hub task list`, `hub update list --kind weekly`, the
    finance bots' newest `reports/`, and the exports attached to the task.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a calendar date, a forecast line.
 2. Roll `knowledge/cash-forecast.md` forward, rewrite `state.md`, record decisions in `memory/decisions.md`, and commit
    this repository.
-3. Finish with `hub task update <id> --status done --note`: cash and weeks of runway first, the report path, then what you
-   could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: cash and weeks of runway first, the report path, then what you
+   could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the team with `hub team show`, `hub task list`, `hub update list --bot <slug>` and
-`hub calendar list`. A question for the owner is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. When the summary is
+`hub calendar list`. A question for the owner is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. When the summary is
 ready, it reaches the owner as `hub message send --fyi <owner> "<one line and the link>"`. Team goals and KPIs belong to
 the Strategy Bot; read them with `hub goal list`, never keep your own.
 

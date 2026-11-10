@@ -13,7 +13,7 @@ Done when: the five answers are in `state.md`, the save policy and the reasons l
 ## 1. Read before you ask
 
     hub team show
-    hub task list --status open --status done
+    hub task list --updated-since <ISO-8601 time with a timezone>   each row says whether it is done
     hub doc ask "What is our cancellation and refund policy?"
 
 Collect the cancellation and downgrade requests of the last four weeks from tasks (and the support

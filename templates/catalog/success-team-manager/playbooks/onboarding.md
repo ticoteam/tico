@@ -6,7 +6,7 @@ outcome is three recorded answers, a first draft summary on the task, and the ro
 ## 1. Read before you ask
 
     hub team show --team success
-    hub task list --status open
+    hub task list
     hub update list --kind weekly --limit 10
 
 Note which success and support bots exist and what they last reported. Do not ask what these already say.

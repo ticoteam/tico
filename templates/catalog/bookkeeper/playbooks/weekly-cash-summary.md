@@ -18,7 +18,7 @@ against the minimum, every blocked item has an owner, and the task is done with 
     hub task show <id>
 
 Then `knowledge/cash-thresholds.md`, `knowledge/cash-forecast.md` and last week's summary. If `cash-thresholds.md` does not
-exist, ask the owner once, with `hub task question`, for the minimum cash line and the runway alert. Until they answer, the
+exist, ask the owner once, with `hub task ask`, for the minimum cash line and the runway alert. Until they answer, the
 summary says no minimum is set and shows the lowest week without a comparison. If last week named a decision, check whether
 it was made.
 
@@ -57,13 +57,13 @@ inputs are ready. A payroll or tax date less than five working days away with it
 ## 7. Decisions
 
 At most five decisions for the owner, each one line with the figure, the deadline and the options, asked on a task with
-`hub task question`. A payment that needs a decision is a question to the owner, never a payment you request yourself.
+`hub task ask`. A payment that needs a decision is a question to the owner, never a payment you request yourself.
 
 ## 8. Write and hand over
 
 Write `reports/cash-<YYYY-MM-DD>.md` in the shape of `knowledge/examples/weekly-cash-summary.md`, then publish it with
 `hub doc write finance/reports/cash-<YYYY-MM-DD> --title "Cash summary: <date>" --body-file reports/cash-<YYYY-MM-DD>.md`.
 Commit the rolled `knowledge/cash-forecast.md` and the summary. Then `hub task comment <task id> "Cash summary: <doc path>"`
-and `hub task done <task id> --note "<cash, the lowest week, what you could not read>"`.
+and `hub task done <task id> -m "<cash, the lowest week, what you could not read>" --version N`.
 
 Write only what the reports and reads say. A number you could not read is "not available", never a guess.

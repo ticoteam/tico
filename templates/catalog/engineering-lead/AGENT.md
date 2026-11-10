@@ -88,8 +88,8 @@ notes written by hand, design docs reviewed by nobody), propose one specific wor
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/routing.md` with the requested routing and corrections, rewrite `state.md`, record
    durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path after it,
-   then which repositories or bot reports you could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it,
+   then which repositories or bot reports you could not read.
 
 ## Writing and releasing
 Follow `policies/writing.md`: notes and asks in plain sentences, no raw IDs beyond one link, every ask to a real
@@ -101,8 +101,8 @@ it to that seat on a task; never push a release tag or publish a release yoursel
 Read GitHub with `gh pr list -R <repo> --state open --json number,title,createdAt,reviewDecision,statusCheckRollup`,
 `gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD"`, `gh run list -R <repo>` and `gh pr view`. Review
 with `gh pr diff`, `gh pr checks` and `gh pr review`; merge with `gh pr merge`. Read
-the team with `hub task list --status open --status doing --status waiting`, `hub update list --kind weekly`,
-`hub team show`, and each bot's published reports on its page. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`,
+the team with `hub task list`, `hub update list --kind weekly`,
+`hub team show`, and each bot's published reports on its page. A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`,
 one open question per task. A routing proposal, when ready, is `hub task create --owner <slug> --title "<the proposal>" --parent <id>`.
 Finish every task, quiet week or not.
 

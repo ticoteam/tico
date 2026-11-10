@@ -19,7 +19,7 @@ summary in `reports/`.
 ## 2. Gather the week, by workstream
 
 For each workstream in `knowledge/workstreams.md`, read what its owner produced since last Friday:
-`hub task list --status open --status doing --status waiting`, `hub update list --kind weekly --bot <slug>`,
+`hub task list`, `hub update list --kind weekly --bot <slug>`,
 the owner's newest published report, and imported meetings that mention it. A bot or human with
 nothing this week is "no report", never "on track".
 
@@ -49,7 +49,7 @@ Routing and reassigning tasks are not part of this playbook; a request for them 
 
     hub file publish reports/YYYY-MM-DD-marketing-week.md
 
-Commit, then `hub task update <id> --status done --note`: the headline, the path, what you could not read.
+Commit, then `hub task done <id> -m "..." --version N`: the headline, the path, what you could not read.
 Always finish it: an open scheduled task absorbs the next.
 
 ## When a source fails

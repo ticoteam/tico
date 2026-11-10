@@ -16,7 +16,7 @@ has run.
 ## 1. Read before you ask
 
     hub team show
-    hub task list --status open --status doing --status waiting
+    hub task list
     hub calendar list
     hub template list
 

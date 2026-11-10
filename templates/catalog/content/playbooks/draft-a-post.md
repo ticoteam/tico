@@ -49,7 +49,7 @@ sound like the team or like a machine? Rewrite the generic sentences and add the
 
 ## 5. Hand it over
 
-Commit, then `hub task update <id> --status done --note`: what the piece says in one line, the path
+Commit, then `hub task done <id> -m "..." --version N`: what the piece says in one line, the path
 to the folder, what is still missing, and one line on what you did and any missing Tools. Publish or schedule the content at the named destination only when the task asks for it, a granted Tool allows it and mail sending is on in Tico; otherwise keep the draft.
 
 ## 6. Keep the plan honest

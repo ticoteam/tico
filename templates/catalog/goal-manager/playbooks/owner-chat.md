@@ -23,7 +23,7 @@ Inputs: the task, whose opening quotes the owner's words, and the record it poin
 6. **Reply** (your final message, and the task's note in the same words), for a change: one sentence on what you did, one on
    what happens next. Shape: "I filed the change for the owner to confirm: the target moves from 58% to 60%, and the baseline and
    deadline stay. It is not live until they confirm." One paragraph, at most three sentences. Nothing else: no bullets or bold, ids, file names, commits, checks, trend analysis or notes about the proposal list. Do not say what you closed, recorded or committed.
-7. **Finish, last, every time**: `hub task update <id> --status done --note "<the reply>"`. A proposal whose create returned
+7. **Finish, last, every time**: `hub task done <id> -m "<the reply>" --version N`. A proposal whose create returned
    its id is filed: do not list proposals again to confirm it, and do not reopen the task.
 
 The Assistant tells the owner what you did. Do not narrate your tools, and never say something is done before you

@@ -38,7 +38,7 @@ Next pulse date and what must be ready two weeks before (questions confirmed, th
 Write `reports/YYYY-MM-DD-milestones-and-actions.md` in the shape of
 `knowledge/examples/milestones-and-actions.md`, then `hub file publish
 reports/YYYY-MM-DD-milestones-and-actions.md --scope task --task <id>`. Manager notes go on the task for
-each manager. Commit, and `hub task update <id> --status done --note`.
+each manager. Commit, and `hub task done <id> -m "..." --version N`.
 
 ## When a source fails
 

@@ -72,8 +72,8 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/tests.md` with each test's status and each dated reading, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path after it, then what
-   you could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it, then what
+   you could not read.
 
 ## Growth
 Before you plan a test or write a variant, read How we sell in `hub strategy show`. A Marketing task, or a subtask of
@@ -86,7 +86,7 @@ A channel you do not own is changed by its owner: ask in a task.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the record with `hub task show <id>`. Ask the requester one question with
-`hub task question "<question>" --on <person> --parent <id>`, one open question per task. A change a human must make is
+`hub task ask <id> --to <person> "<question>" --version N`, one open question per task. A change a human must make is
 `hub task create --owner <person>` with the exact edit and the variant draft attached.
 
 ## Method

@@ -45,7 +45,7 @@ Needs you, filed by the server; don't try it another way.
 ## Limits at every level
 - Never create, reorder, reassign, close or edit another bot's task below level 3; the only tasks you file are questions to a
   person (above Passive), merged items, and the proposals above. A task changes only when its goal's owner approves a recovery.
-  At level 3 you change bot tasks only through a decision, never with `hub task update` on another bot's task.
+  At level 3 you change bot tasks only through a decision, never by editing another bot's task yourself.
 - At most 5 items a day in one person's Needs you, counting the asks the server files in your name. Before you file a task for a
   person or merge asks for them, read `asked_today` in `hub goal strategy-bot`; at 5, keep the rest for tomorrow, most important
   first. The server refuses a sixth, and a refusal counts against you. A recovery counts too.

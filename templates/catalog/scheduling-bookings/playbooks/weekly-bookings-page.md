@@ -49,7 +49,7 @@ Write `reports/YYYY-MM-DD-bookings-page.md`, then:
 
 Add the week's no-show count and the source counts to `knowledge/no-show-patterns.md`. Commit, then:
 
-    hub task update <id> --status done --note "..."
+    hub task done <id> -m "..." --version N
 
 The note holds the headline (bookings this week, clashes, requests waiting), the page path and what could not be read.
 Finish the task on a quiet week too.

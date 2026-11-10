@@ -88,14 +88,14 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/decisions-needed.md`, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path after
-   it, then what you could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after
+   it, then what you could not read.
 
 ## Talking to {{app_name}}
-Read from Tico, never from memory: `hub task list --owner <support bot> --status open`, `hub task
-list --status waiting`, `hub update list --kind weekly --bot <bot>`, `hub update list --kind daily`, `hub team show
+Read from Tico, never from memory: `hub task list --owner <support bot>` (each row says
+what it waits on), `hub update list --kind weekly --bot <bot>`, `hub update list --kind daily`, `hub team show
 --team support`, `hub file list`. Where the support mailbox is connected, count with
-`$HUB_DIR/scripts/mail.sh search "newer_than:7d"`. Ask the owner one question with `hub task question "<question>" --on <person> --parent <id>`.
+`$HUB_DIR/scripts/mail.sh search "newer_than:7d"`. Ask the owner one question with `hub task ask <id> --to <person> "<question>" --version N`.
 Something a human must decide is `hub task create --owner <human>`. Finish every
 task, quiet week or not.
 

@@ -66,12 +66,12 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the change log and calendar, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this
    repository.
-3. Finish with `hub task update <id> --status done --note`: the result first, then what you could not read.
+3. Finish with `hub task done <id> -m "..." --version N`: the result first, then what you could not read.
 
 ## Talking to {{app_name}}
 Plan documents come through the Librarian: `hub doc ask "<question>"`, then `hub doc read <path>` for the page it cites.
 The roster is `hub team show`. A change a human must submit is `hub task create --owner <person>` with what the provider
-needs. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
+needs. A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The page opens with the windows closing in the next 14 days.

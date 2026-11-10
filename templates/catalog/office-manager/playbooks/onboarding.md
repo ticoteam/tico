@@ -13,7 +13,7 @@ marked, the first page is attached and labelled, the routine is checked and logg
 ## 1. Read before you ask
 
     hub task show <id>
-    hub task list --status open
+    hub task list
     hub calendar list
     hub doc search "office"
 

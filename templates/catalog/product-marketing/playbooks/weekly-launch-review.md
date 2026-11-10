@@ -10,7 +10,7 @@ Schedule: Mondays at 10:00 team time (routine `weekly-launch-review`), after set
     hub task show <id>
 
 Then `knowledge/launches.md`, `knowledge/positioning.md`, and the open product and launch tasks
-(`hub task list --status open --status doing --status waiting`), goals and `hub calendar list`.
+(`hub task list`), goals and `hub calendar list`.
 
 ## 2. Launches
 
@@ -32,7 +32,7 @@ days is marked stale at the top.
 ## 5. Write the review and hand it over
 
 `reports/YYYY-MM-DD-launch-review.md`, answer first. Then `hub file publish` it, commit, and
-`hub task update <id> --status done --note`: the headline, the path and what you could not read.
+`hub task done <id> -m "..." --version N`: the headline, the path and what you could not read.
 Always finish it.
 
 ## When a source fails

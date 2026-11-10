@@ -8,7 +8,7 @@ before their first page arrives. You do not page, silence an alert or change any
 
 ## Inputs
 
-- `hub task show <id>` and `hub task list --status open --status doing --status waiting`.
+- `hub task show <id>` and `hub task list`.
 - `knowledge/actions.md` and this week's incident files in `reports/incidents/`.
 - Any alert or error source named in `knowledge/triggers.md` that you can read (a channel, an attached export).
 - The shift's dates.
@@ -26,7 +26,7 @@ before their first page arrives. You do not page, silence an alert or change any
    - **Could not read:** any source you lacked.
    Describe systems and events. Never a person's fault.
 3. **Hand over.** Write `reports/oncall/YYYY-MM-DD-handoff.md`, run `hub file publish` on it, commit, and run
-   `hub task update <id> --status done --note` with the count of open incidents in the first line.
+   `hub task done <id> -m "..." --version N` with the count of open incidents in the first line.
 
 ## Output
 

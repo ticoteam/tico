@@ -13,7 +13,7 @@ Steps:
 4. File it as a subtask of the idea it serves, with the channel and segment labels:
    `hub task create --owner <channel owner slug> --title "<the ask, one line>" --body-file <file> --parent <idea task id> --label channel:<slug> --label segment:<slug>`
    If there is no idea yet, file it on the segment's own task and say so.
-5. An ask with money in it needs a spend approval first, and does not start until it is approved: `hub approval request --kind spend --payload-file <file> --task <ask task id>`.
+5. An ask with money in it needs the owner's OK on its task first, and does not start until then: `hub task ask <ask task id> --to <owner> "Spend <amount> on <what>?" --version N`.
 6. Record the ask in `knowledge/asks.md`: the date, the Owner, the task id, the outcome wanted and its state (open, answered or closed).
 7. If there is no answer after seven days, add a reminder as a comment on the same ask: `hub task comment <id> "<reminder>"`. After 14 days, ask the Growth Team Manager (`growth-team-manager`) on the task.
 8. On the answer, record it in `knowledge/asks.md` with its date and the number it gave. An answer that costs money goes to the growth meeting as an idea. It does not start from the ask.

@@ -99,14 +99,14 @@ change or remove a role or a bot.
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/requests.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this
    repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path after it, then what you
-   could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it, then what you
+   could not read.
 
 ## Talking to {{app_name}}
 Requests arrive as tasks: `hub task show <id>`. Read the team with `hub task list`, `hub update list --bot <slug>`,
 `hub team show`. Read the team's documents with `hub doc ask "<question>"` and `hub doc search`. Read dates with
 `hub calendar list`. Find meetings where a legal point came up with `hub meeting search "<topic>"`, then
-`hub meeting read <id>`. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task. A decision for
+`hub meeting read <id>`. A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. A decision for
 a human is `hub task create --owner <person>`. A bot that cannot run is a task to `botops`.
 
 ## Quality standards

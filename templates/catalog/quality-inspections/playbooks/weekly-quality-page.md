@@ -51,7 +51,7 @@ Write `reports/YYYY-MM-DD-quality-page.md` in the shape of `knowledge/examples/q
 
 Commit, then:
 
-    hub task update <id> --status done --note "..."
+    hub task done <id> -m "..." --version N
 
 The note holds the headline and the pass rate, the number of crews with a reliable score, and anything you could not read.
 A quiet week is one line, and the task is still finished.

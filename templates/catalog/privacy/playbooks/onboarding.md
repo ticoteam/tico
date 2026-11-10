@@ -13,7 +13,7 @@ Done when: `state.md` says `Setup: finished`, `hub bot setup-done` has run, and 
     hub task show <id>
     hub doc search "privacy"
     hub doc search "data processing"
-    hub task list --status open --status waiting
+    hub task list
 
 Read the privacy notice and any signed DPAs in the team docs, and look for open tasks that are data requests or DPAs.
 A data request already waiting has a deadline running: log it before you ask anything.

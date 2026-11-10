@@ -56,10 +56,10 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/asks.md` and `knowledge/finance-inputs.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path after it, and the figures still missing. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it, and the figures still missing.
 
 ## Talking to {{app_name}}
-Work arrives as tasks: `hub task show <id>`, `hub task list`. Ask the owner for a missing figure with `hub task question "<question>" --on <person> --parent <id>`, one question per task. Where the owner's
+Work arrives as tasks: `hub task show <id>`, `hub task list`. Ask the owner for a missing figure with `hub task ask <id> --to <person> "<question>" --version N`, one question per task. Where the owner's
 mailbox is connected, read an investor's last email with `$HUB_DIR/scripts/mail.sh search "<investor>"`. Leave a draft only with `mail.sh draft --reply-to`;
 never `send`. The graded plan comes from the Strategy Analyst (`strategy-planning`). Ask it with `hub task create --owner strategy-planning`, and do not
 recompute grades. Cash, burn and runway come from the Head of Finance (`finance-lead`) when the team has one. Ask on the task; never estimate.

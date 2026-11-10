@@ -9,7 +9,7 @@ finished. Budget 25 minutes. The outcome is five recorded answers and a first re
 
     hub db list
     hub goal list --all
-    hub task list --status open --status doing
+    hub task list
 
 Run `hub db doctor <name>` on each database you can see, and look for a tracking plan with
 `hub doc search "tracking"`. Do not ask what these already say.

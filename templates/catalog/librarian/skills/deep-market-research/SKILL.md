@@ -89,7 +89,7 @@ growth rate, a count), `channel`, `person`, `event`, `rule`. `status` starts `ra
      documents, big players' job posts. What they tell investors is often the opposite of what they tell buyers.
    - **Numbers**: the sources in `playbooks/size-the-market.md` (public statistics, filings, trade groups).
    - **Channels and people**: where buyers are reached, and who shapes them.
-5. Say what you're doing in the task, once: `hub task update <id> --note "Researching: <question>. First results in
+5. Say what you're doing in the task, once: `hub task comment <id> "Researching: <question>. First results in
    about an hour."` Then start round 1.
 
 ## 2. Send a round
@@ -159,10 +159,9 @@ Stop when any is true:
 - The budget (rounds, fetches, searches, hours) is spent.
 - The person said to stop.
 
-To continue: update `notes.md` (round done, budget spent, next batches), commit, then
-`hub task check-back <id> --in 5m --for "Deep research round <n+1>: <next batches in a few words>"`. End the turn
-with a short reply of where it stands (it becomes the task's checkpoint): rounds done, claims checked, the headline so
-far, next round.
+To continue: update `notes.md` (round done, budget spent, next batches), commit, and end the turn with a short reply
+of where it stands (it becomes the task's checkpoint): rounds done, claims checked, the headline so far, next round. The
+task stays open and your commit is a change, so you are woken again for the next round.
 
 If a turn is cut off, the next one starts from `notes.md` and the claims file. Re-run a batch only if its collector
 wrote nothing.
@@ -174,7 +173,7 @@ wrote nothing.
 2. What you could not read goes in `_librarian/missing.md` under **Sources I could not read**. Durable lessons
    about where good sources are for this kind of market go in `memory/learnings.md`.
 3. Rewrite `state.md`. Commit this repository.
-4. `hub task update <id> --status done --note "<the update>"`. Under twelve lines, sources by domain, covering:
+4. `hub task done <id> -m "<the update>" --version N`. Under twelve lines, sources by domain, covering:
    - the answer in one or two sentences;
    - what you read (counts by kind) and what you wrote (report link, entities added, pages changed);
    - what you could not do: unreadable sources, questions still open;

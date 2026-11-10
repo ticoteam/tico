@@ -66,12 +66,12 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Delete any completion export from the working tree, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the result first, then what you could not read.
+3. Finish with `hub task done <id> -m "..." --version N`: the result first, then what you could not read.
 
 ## Talking to {{app_name}}
 The level guide and training policy come from the Librarian (`hub doc ask`, `hub doc read`). Course
 pages are read with `hub doc fetch <url>`. Scheduled sessions come from `hub calendar list`. A
-question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
+question for the requester is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The tracker opens with overdue mandatory training, then what falls due in 30 days.

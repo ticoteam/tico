@@ -132,13 +132,13 @@ stays local until then. Never create a repository for a slug other than this bot
 ## 5c. Close what you filed for a human
 
 If you filed a task for a human about this bot ("Create the record", "Add Sam", "Paste the key") and you have
-now done that work yourself, or it is already true, close it with one line: `hub task close <id> --note "Done:
-<what>"`. Find them with `hub task list --requester me --status open`. A task left open after the work is
+now done that work yourself, or it is already true, close it with one line: `hub task close <id> -m "Done:
+<what>" --version N`. Find them with `hub task list --requester me`. A task left open after the work is
 done sends the human to do something that is finished.
 
 ## 6. Finish the task
 
-    hub task update <id> --status done --note "..."
+    hub task done <id> -m "..." --version N
 
 The note says, in this order:
 
@@ -148,7 +148,7 @@ The note says, in this order:
 4. the one thing the owner should read before it goes live, usually the `## Boundaries`
    section or a gap the answers did not fill.
 
-The requester closes the task. Unless a human asked you in chat to take it live, the bot stays as it is
+Unless a human asked you in chat to take it live, the bot stays as it is
 (still being set up) until its owner turns it on.
 
 ## When it goes sideways

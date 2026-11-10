@@ -13,7 +13,7 @@ Done when: the five answers are in `state.md`, the register and the first digest
 ## 1. Read before you ask
 
     hub team show
-    hub task list --status open --status waiting
+    hub task list
     hub update list --kind weekly --limit 4
 
 Look for tasks that are escalations in all but name: a customer who has written three times, a ticket

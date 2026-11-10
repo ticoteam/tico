@@ -39,19 +39,20 @@ Done when: the change is made as the requester and read back, or the refusal is 
 
 ## Tasks
 
-- `hub task list --owner <slug>` (also `--requester me`, `--status open`, `--brief`): tasks, filtered. `--status` takes open,
-  doing, waiting, review, ready, done, closed or declined.
-- `hub task list --stuck` (`--hours N`): open work untouched for N hours (default 24) that waits on nobody.
-- `hub task show <id>` (one or more ids): each task with its history and conversation.
+- `hub task list --owner <slug>` (also `--requester me`, `--brief`): open tasks, filtered, each with its version.
+- `hub task show <id>` (one or more ids): each task with its version, what it waits on, what is missing to leave its stage,
+  what you may do next, its history and its conversation.
 - `hub task run <id>`: start a bot's task now.
 - `hub task comment <id> "<text>"`: a comment on the task, with your name. Add `--defer never` for a quiet note that wakes nobody;
   only whoever you @mention reaches it.
 - `hub task follow <id>` and `hub task unfollow <id>`: follow a task you care about, or stop when you are done with it.
-- `hub task question "<question>" --on <person> --parent <id>`: a question on the task.
-- `hub task update <id> --status waiting --on <person> --note "<text>"`: set a task waiting on a person, with the one thing they
-  must do.
-- `hub task update <id> --status done --note "<result>"`: finish a task you own.
-- `hub task close <id> --note "Done: <one line>"`: close a task whose condition is now true.
+- `hub task ask <id> --to <person> "<question>" [--choices a,b] --version N`: ask a person on the task. One open ask per
+  task; asking again replaces it.
+- `hub task file --parent <id> "<title>"`: a sub-task, for work that is more than an answer.
+- `hub task done <id> -m "<result>" --version N`: the work of the stage is finished.
+- `hub task snooze <id> --until <date> -m "<why>" --version N`: you cannot go on now.
+- `hub task close <id> -m "<why>" --version N`: it will not be done, or it is no longer needed.
+- A refusal says what is missing and which commands are allowed next. Do one of those.
 
 ## Build and change a bot
 
@@ -98,7 +99,7 @@ Done when: the change is made as the requester and read back, or the refusal is 
   `hub api POST runners/<id>/inbox-only '{"enabled": false}'` (or `true` to keep one for them).
 - Freeing task worktrees for a person: `hub api DELETE tasks/<task>/links/<link>` as them asks the computer to remove that
   worktree once its bot is idle. Check its open pull requests first. Do not leave it open just because its requester is a
-  bot or keeper.
+  bot or the system.
 
 ## Talk to another bot
 

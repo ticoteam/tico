@@ -71,7 +71,7 @@ Add the dated figures to `knowledge/sources.md` and `knowledge/handoff.md`, rewr
 
 ## 8. Close
 
-    hub task update <id> --status done --note "..."
+    hub task done <id> -m "..." --version N
 
 The note holds the headline, the review path, and what you could not read. Finish the task even on a quiet week: an open
 routine task gets absorbed into the next run.

@@ -45,5 +45,5 @@ budget: budget, forecast, difference.
 `reports/YYYY-MM-budget-vs-actual.md`: the headline first ("August: costs 4 percent over budget, two
 material variances; full-year outlook 1.2 percent over"), then the material variances, then the
 full table as a linked file, then "Could not read". `hub file publish` it, commit, and
-`hub task update <id> --status done --note` with the headline and the path. The Head of Finance reads
+`hub task done <id> -m "..." --version N` with the headline and the path. The Head of Finance reads
 it before anyone else.

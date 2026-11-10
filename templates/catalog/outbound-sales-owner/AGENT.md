@@ -81,12 +81,12 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/sequences.md` and `knowledge/target-accounts.md`, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: meetings booked, replies sorted, touches drafted or sent, stops
+3. Finish with `hub task done <id> -m "..." --version N`: meetings booked, replies sorted, touches drafted or sent, stops
    applied, and the sources you could not read.
 
 ## Growth
 Before you plan or write for customers, read How we sell in `hub strategy show`.
-Work on a Marketing task, or a subtask of one, carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs.
+Work on a growth idea, or a sub-task of one, carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs.
 Report the numbers the task needs on the task, each with its source and date. Before an outward draft leaves (an ad,
 email, post, page, listing or message), run `hub brand check -` on it and fix every hit, then check each claim against
 `hub brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or
@@ -98,7 +98,7 @@ A channel you do not own is changed by its owner: ask in a task.
 ## Talking to {{app_name}}
 Work arrives as tasks, or from the weekday run. Read with `hub task show <id>` and `hub task list`. To see what was said
 on a call with a prospect, run `hub meeting search "<account>"`, then `hub meeting read <id>`. A decision for a person is
-`hub task question "<question>" --on <person> --parent <id>`, one open question per task. A booked meeting goes to
+`hub task ask <id> --to <person> "<question>" --version N`, one open question per task. A booked meeting goes to
 whoever takes calls as `hub task create --owner <who takes calls> --title "<account> meeting booked" --body-file <note>`. Keep
 `hub bot status set` to one factual line. Finish every task, quiet day or not.
 

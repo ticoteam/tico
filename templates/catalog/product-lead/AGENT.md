@@ -83,20 +83,20 @@ Always:
 ## Starting a run
 1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/roadmap.md`, `knowledge/decision-log.md`, `knowledge/prioritisation-practice.md` and the playbook.
-3. Read the week: `hub goal list --all`, `hub task list --status open --status doing --status waiting`,
+3. Read the week: `hub goal list --all`, `hub task list`,
    `hub update list --kind weekly`, and each product bot's newest file in `reports/`.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/roadmap.md` and `knowledge/decision-log.md`, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline, the path, the decisions
-   waiting and what you could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline, the path, the decisions
+   waiting and what you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read with `hub goal list`, `hub goal show <id>`, `hub task list`, `hub task list --all`,
 `hub update list --bot <slug>`, `hub team show`, `hub meeting search "<topic>"`, and GitHub milestones read-only
-where connected. Ask the owner one question with `hub task question "<question>" --on <person> --parent <id>`. A decision for a human is
+where connected. Ask the owner one question with `hub task ask <id> --to <person> "<question>" --version N`. A decision for a human is
 `hub task create --owner <human>`. When ready, the summary reaches its reader as
 `hub message send --fyi <owner> "<one line and the link>"`.
 

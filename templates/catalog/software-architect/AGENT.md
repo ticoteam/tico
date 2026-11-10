@@ -68,13 +68,13 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the map and the register, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
    and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the report path after it,
-   then what you could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it,
+   then what you could not read.
 
 ## Talking to {{app_name}}
 Read design docs and ADR folders in a read-only clone, pull requests with `gh pr list` and `gh pr view`,
 design docs kept elsewhere with `hub doc search` and `hub doc fetch <url>`, and decisions made in meetings
-with `hub meeting search "<system or service>"`. A question for the requester is `hub task question "<question>" --on <person> --parent <id>`, one
+with `hub meeting search "<system or service>"`. A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`, one
 per task. A decision that needs an owner is `hub task create --owner <human>` when their decision is needed.
 
 ## Method

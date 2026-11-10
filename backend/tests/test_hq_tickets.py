@@ -1,5 +1,5 @@
 """The Support Agent's `hq-tickets` script against Tico HQ's documented staff routes (docs/telemetry.md, "Support
-tickets", and docs/support.md for the judge): watcher events, the spam and injection verdicts, outbound sends and optional approvals. HQ's code is in
+tickets", and docs/support.md for the judge): watcher events, the spam and injection verdicts and outbound sends. HQ's code is in
 ticoteam/tico-services, which tests its own side of these routes; `StaffHQ` answers as those routes are documented."""
 
 import hashlib
@@ -383,95 +383,27 @@ def test_list_and_show_read_the_queue_and_the_key_is_never_printed(rig, hq):
     assert STAFF not in everything and "w" * 32 not in everything
 
 
-def approval(decision, url, digest):
-    return lambda *a, **k: SimpleNamespace(
-        stdout=json.dumps({"id": "a1", "decision": decision, "payload": {"url": url, "content_sha256": digest}})
-    )
-
-
-def test_an_optional_approval_must_match_exactly_that_text_and_ticket(rig, hq, tmp_path):
-    tid = hq.file("The board will not load", email="ana@acme.example")
-    other = hq.file("Another")
-    reply = tmp_path / "reply.md"
-    reply.write_text("Thanks. Try the latest release; the board fix is in it.\n")
-    digest = hashlib.sha256(reply.read_bytes()).hexdigest()
-
-    code, text = rig.cli("payload", tid, str(reply))
-    assert code == 0 and json.loads(text) == {
-        "url": "hq-ticket:" + tid,
-        "content_sha256": digest,
-        "text": reply.read_text(),
-    }
-
-    def post(run):
-        rig.lines.clear()
-        code = tickets_cli.main(
-            ["reply", tid, str(reply), "--approval", "a1"], rig.env, out=rig.lines.append, opener=hq, run=run
-        )
-        return code, "\n".join(rig.lines)
-
-    for run in (
-        approval(None, "hq-ticket:" + tid, digest),
-        approval("declined", "hq-ticket:" + tid, digest),
-        approval("approved", "hq-ticket:" + other, digest),
-        approval("approved", "hq-ticket:" + tid, "0" * 64),
-    ):
-        code, text = post(run)
-        assert code == 1 and "approval" in text
-    assert hq.tickets[tid]["messages"] == [] and hq.seen == []  # nothing was posted
-
-    code, text = post(approval("approved", "hq-ticket:" + tid, digest))
-    assert code == 0 and "posted reply 1" in text and "email reply is pending" in text
-    (request,) = hq.seen
-    assert (request.get_method(), request.full_url) == ("POST", f"{URL}/v1/staff/tickets/{tid}/reply")
-    assert json.loads(request.data) == {"body": reply.read_text()}
-    assert hq.tickets[tid]["status"] == "answered" and hq.tickets[tid]["messages"][0]["body"].startswith("Thanks. Try")
-
-    reply.write_text("x" * 8001)
-    assert post(approval("approved", "hq-ticket:" + tid, hashlib.sha256(reply.read_bytes()).hexdigest()))[0] == 1
-    assert tickets_cli.main(["reply", tid, str(reply)], rig.env, out=rig.lines.append, opener=hq) == 1
-    assert len(hq.seen) == 1
-
-
 @pytest.mark.parametrize("mode", [None, "never"])
-def test_never_or_no_answer_from_tico_keeps_the_draft_even_with_an_approval(rig, hq, tmp_path, mode):
+def test_never_or_no_answer_from_tico_keeps_the_draft(rig, hq, tmp_path, mode):
     rig.setting["mode"] = mode
     tid = hq.file("The board will not load")
     reply = tmp_path / "reply.md"
     reply.write_text("Try the latest release.\n")
-    digest = hashlib.sha256(reply.read_bytes()).hexdigest()
-    for extra in ([], ["--approval", "a1"]):
-        rig.lines.clear()
-        code = tickets_cli.main(
-            ["reply", tid, str(reply), *extra],
-            rig.env,
-            out=rig.lines.append,
-            opener=hq,
-            run=approval("approved", "hq-ticket:" + tid, digest),
-        )
-        text = "\n".join(rig.lines)
-        assert code == 1 and "keep the reply as a draft" in text, text
+    code, text = rig.cli("reply", tid, str(reply))
+    assert code == 1 and "keep the reply as a draft" in text, text
     assert hq.tickets[tid]["messages"] == [] and hq.seen == []
 
 
-def test_ask_first_posts_only_with_a_matching_approval_and_never_closes_by_signature(rig, hq, tmp_path):
+def test_ask_first_keeps_the_draft_for_a_person_to_post_and_never_closes_by_signature(rig, hq, tmp_path):
     rig.setting["mode"] = "ask_first"
     tid = hq.file("The board will not load")
     reply = tmp_path / "reply.md"
     reply.write_text("Try the latest release.\n")
     code, text = rig.cli("reply", tid, str(reply))
-    assert code == 1 and "Ask first" in text and hq.seen == []
+    assert code == 1 and "Ask first" in text and "a person posts it" in text and hq.seen == []
+    assert rig.cli("reply", tid, str(reply), "--approval", "a1")[0] == 2  # no approval to pass any more
     code, text = rig.cli("close-signature", "hm-a1b2c3d4e5f6", str(reply))
     assert code == 1 and "keep the reply as a draft" in text and hq.seen == []
-    rig.lines.clear()
-    code = tickets_cli.main(
-        ["reply", tid, str(reply), "--approval", "a1"],
-        rig.env,
-        out=rig.lines.append,
-        opener=hq,
-        run=approval("approved", "hq-ticket:" + tid, hashlib.sha256(reply.read_bytes()).hexdigest()),
-    )
-    assert code == 0 and hq.tickets[tid]["messages"][0]["body"] == reply.read_text().strip()
 
 
 def test_a_run_that_does_not_name_its_bot_keeps_the_draft(rig, hq, tmp_path):
@@ -517,13 +449,18 @@ def test_link_names_the_fix_a_release_will_announce(rig, hq):
     assert rig.cli("link", tid, "PR-712")[0] == 2
 
 
-def test_on_their_own_posts_without_a_separate_approval(rig, hq, tmp_path):
+def test_on_their_own_posts_the_reply_and_refuses_one_too_long(rig, hq, tmp_path):
     reply = tmp_path / "reply.md"
-    reply.write_text("Try the latest release.\n")
-    tid = hq.file("The board will not load")
+    reply.write_text("Thanks. Try the latest release; the board fix is in it.\n")
+    tid = hq.file("The board will not load", email="ana@acme.example")
     code, text = rig.cli("reply", tid, str(reply))
-    assert code == 0 and "posted reply" in text and tid in text
-    assert hq.tickets[tid]["messages"][0]["body"] == reply.read_text().strip()
+    assert code == 0 and "posted reply 1" in text and tid in text and "email reply is pending" in text
+    (request,) = hq.seen
+    assert (request.get_method(), request.full_url) == ("POST", f"{URL}/v1/staff/tickets/{tid}/reply")
+    assert json.loads(request.data) == {"body": reply.read_text()}
+    assert hq.tickets[tid]["status"] == "answered" and hq.tickets[tid]["messages"][0]["body"].startswith("Thanks. Try")
+    reply.write_text("x" * 8001)
+    assert rig.cli("reply", tid, str(reply))[0] == 1 and len(hq.seen) == 1
 
 
 def test_a_setup_ticket_reaches_the_bot_on_the_same_path_marked_as_setup(rig, hq):

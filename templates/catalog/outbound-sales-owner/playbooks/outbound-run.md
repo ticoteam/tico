@@ -57,5 +57,5 @@ person's act.
 
 ## 7. Finish
 
-Write the run note on the routine's task, commit, and run `hub task update <id> --status done --note`. A quiet day finishes with the
+Write the run note on the routine's task, commit, and run `hub task done <id> -m "..." --version N`. A quiet day finishes with the
 count of contacts still waiting and the oldest reply waiting on a person.

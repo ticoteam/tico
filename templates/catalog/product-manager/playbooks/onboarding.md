@@ -10,7 +10,7 @@ finished. Budget 25 minutes. The outcome is five recorded answers, a first real 
     hub goal list --all
     hub team show
     hub doc search "spec"
-    hub task list --status open --status doing
+    hub task list
 
 Look for existing specs and the Head of Product's decision log, and check whether GitHub is readable.
 Do not ask what these already say.
