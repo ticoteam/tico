@@ -599,6 +599,21 @@ in_release    a PR not merged                            waiting  github  Not me
 
 With many PRs the first unmet one, in link order, gives the line.
 
+### Choices made while building
+
+- **Room in Spec (C10)** wakes the owner of Ideas once, which is the Product Manager bot in the preset.
+- **Closing a Product task** closes the Engineering tasks it filed, except one whose PR merged: its work is in the code,
+  so it stays open to reach a release or be closed by its owner (`stage_effects.merged_work`, scenario 24). Undoing a
+  stage's filing skips it the same way.
+- **A person is asked once per requirement per visit.** A page's ask offers OK and Send back only.
+- **Queue again** (`tico task queue`) covers a PR GitHub refused to queue as well as one it dropped from the queue.
+- **A drop from the merge queue is the owner's turn at once**, with the reason (one wake per drop). There is no separate
+  "after 3 drops" step: the owner already has the turn.
+- **GitHub down for days:** the facts wait, the stage turns Late after its expected time and the manager bot looks once,
+  then a person's list at 3 times the expected time (rig case `github-down-for-days`).
+- **The Release Manager** is the bot the release schedule names, else the first active bot made from `release-owner`.
+  `release-notes` is the Release Notes Writer and never stands in.
+
 ## Tests and the rig
 
 - Run them with a Python 3.12 environment built from `backend/requirements-dev.txt`:

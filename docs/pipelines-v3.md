@@ -296,7 +296,8 @@ lists all of them. The list is never empty for an open task. Each state's look i
 6. **GitHub**
    - Starts: Checks are running, the PR is in the merge queue, or it merged and waits for a release.
    - Ends: The fact arrives, by webhook or by the 5-minute read.
-   - If not: After 2 hours of checks or 3 queue drops it is the bot's turn. A release that never comes turns Late.
+   - If not: After 2 hours of checks it is the bot's turn; a drop from the merge queue is the owner's turn at once. A
+     release that never comes turns Late.
 7. **Other tasks**
    - Starts: It filed tasks that are still open.
    - Ends: The last one ends. The owner is woken once.
@@ -385,8 +386,8 @@ is.
   Builder is out of credit". They carry on by themselves when the bot can run.
 - **A person's turn:** the task is in their Needs you, once. No reminders.
 - **Jev:** a failed check is retried on the same 3 tries, then goes to a person as "Jev couldn't check this".
-- **GitHub:** the PR is read again if the last read is over 5 minutes old. Checks still running after 2 hours, or a PR
-  that fell out of the merge queue 3 times, become the owner's turn with the reason.
+- **GitHub:** the PR is read again if the last read is over 5 minutes old. Checks still running after 2 hours become the
+  owner's turn with the reason; a PR that fell out of the merge queue is the owner's turn at once (Merge).
 - **Other tasks:** nothing. Those tasks have their own turn. When the last one ends, the owner is woken once with how
   each ended.
 - **Room:** the oldest waiting task takes the next free slot.
@@ -1592,7 +1593,7 @@ Numbered in order so they can be cited (scenario 1 to 52).
 27. Production runs an older version than the release: Jev says "not yet". Nothing is filed.
 28. A new commit lands during Review: the review goes back to Waiting on the reviewer.
 29. A task has two PRs and one merges: it stays in Merge. Both merge: it moves.
-30. The merge queue drops a PR: the task stays in Merge. After 3 tries it is the Builder's turn with the reason.
+30. The merge queue drops a PR: the task stays in Merge, and it is the Release Manager's turn with the reason.
 31. Close an Engineering task in Merge: its PRs leave the queue and never merge.
 32. A stale PR read arrives after a newer one: the recorded commit doesn't change.
 33. A PR merges after a release is cut: the task stays in Release until a release that contains the merge.
