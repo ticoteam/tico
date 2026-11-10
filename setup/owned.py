@@ -182,6 +182,19 @@ class Journal:
         self.made(kind, value)
 
 
+def settled(read: Callable, sleep: Callable[[float], None], missing: type[Exception], tries: int = 6):
+    """IAM is eventually consistent: a read right after a create can answer NoSuchEntity for a few seconds. It is tried
+    again after 1, 2, 4, 8 and 16 s; then the error stands."""
+    for attempt in range(tries):
+        try:
+            return read()
+        except missing:
+            if attempt == tries - 1:
+                raise
+            sleep(2**attempt)
+    raise AssertionError
+
+
 def server_identity(prefix: str, server_url: str, region: str) -> str:
     """A short, fixed digest of what makes a runner's saved record another server's: prefix, full URL and region."""
     return hashlib.sha256(f"{prefix}|{server_url}|{region}".encode()).hexdigest()[:20]
@@ -499,9 +512,11 @@ class StrictDeployer(Deployer):
 
     def add_role(self, n: str) -> None:
         """Adds the role to the profile, both read again right before it (tags and recorded ids)."""
-        prof = instance_profile(self.iam, n)
-        if prof is None:
-            raise not_ours("IAM instance profile", n, self.n, self.p.name)
+        try:
+            read = lambda: self.iam.get_instance_profile(InstanceProfileName=n)["InstanceProfile"]
+            prof = settled(read, self.sleep, self.iam.exceptions.NoSuchEntityException)
+        except self.iam.exceptions.NoSuchEntityException:
+            raise not_ours("IAM instance profile", n, self.n, self.p.name) from None
         self.prove_profile(prof)
         self.prove_role(n)
         self.iam.add_role_to_instance_profile(InstanceProfileName=n, RoleName=n)
@@ -509,7 +524,9 @@ class StrictDeployer(Deployer):
     def prove_role(self, n: str) -> str:
         """The role's RoleId, read now: it must carry this install's tags and be the role this install recorded (or the
         one its journalled create made)."""
-        role = self.iam.get_role(RoleName=n)["Role"]
+        role = settled(
+            lambda: self.iam.get_role(RoleName=n)["Role"], self.sleep, self.iam.exceptions.NoSuchEntityException
+        )
         tags = role.get("Tags")
         if tags is None:  # GetRole returns tags on real IAM; older fakes and SDKs may not
             tags = self.iam.list_role_tags(RoleName=n)["Tags"]
@@ -894,6 +911,7 @@ def create_s3(
     names: Names,
     ids: dict | None = None,
     save: Callable[[], None] = lambda: None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, str]:
     """Returns the .env values. `ids`/`save`: the journal of what it makes (bucket, the backup user's UserId), saved as each
     is made. Safe to re-run: an existing bucket is kept and a fresh key replaces the oldest.
@@ -978,6 +996,7 @@ def create_s3(
         ),
     )
 
+    made_here = not user_exists
     if not user_exists:
         j.intend("backup_user", name=user)
         try:
@@ -991,9 +1010,11 @@ def create_s3(
     def prove_user() -> None:
         # IAM has no compare-and-swap: the user is re-read by UserId right before each write; one replaced in the
         # instant between that read and the write is the residual window.
-        try:
-            now = (iam.get_user(UserName=user) or {}).get("User") or {}
-            tags = iam.list_user_tags(UserName=user).get("Tags")
+        def read() -> tuple[dict, list | None]:
+            return (iam.get_user(UserName=user) or {}).get("User") or {}, iam.list_user_tags(UserName=user).get("Tags")
+
+        try:  # a user this run just made may not be readable yet (IAM lag)
+            now, tags = settled(read, sleep, iam.exceptions.NoSuchEntityException) if made_here else read()
         except iam.exceptions.NoSuchEntityException:
             raise not_ours("IAM user", user, names, name) from None
         if not names.is_ours(tags, name) or (user_id and now.get("UserId") != user_id):

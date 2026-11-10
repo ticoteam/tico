@@ -2040,3 +2040,72 @@ def test_the_plan_bucket_and_object_are_proved_before_each_write_and_a_lost_put_
     s3.objects[("hub-plans-x", other)] = {"Body": b"x", "Metadata": {"sha256": "f" * 64}, "ETag": '"x"'}
     with pytest.raises(MissingInput, match="did not record writing it"):
         third.put_plan(s3, other, "ours")
+
+
+def test_iam_reads_right_after_a_create_wait_out_iam_lag_and_a_lost_launch_answer_makes_no_second_server():
+    # Codex review 4: IAM is eventually consistent, so the read that proves a role, profile or user just made can answer
+    # NoSuchEntity for a few seconds; it is retried with backoff, a bounded number of times. And a RunInstances whose
+    # answer was lost, with DescribeInstances lagging behind on the re-run, sends the journalled ClientToken again: EC2
+    # answers with the instance it launched, and no second one is made.
+    p, slept = hub_plan(domain=DOMAIN), []
+
+    class Lagging(IAM):
+        def __init__(self, lag):
+            super().__init__()
+            self.lag = dict(lag)
+
+        def _lagging(self, kind):
+            if self.lag.get(kind):
+                self.lag[kind] -= 1
+                raise self.exceptions.NoSuchEntityException()
+
+        def get_role(self, RoleName):
+            if any(n == "create_role" for n, _ in self.calls):
+                self._lagging("role")
+            return super().get_role(RoleName)
+
+        def get_instance_profile(self, InstanceProfileName):
+            if InstanceProfileName in self.profiles:  # made
+                self._lagging("profile")
+            return super().get_instance_profile(InstanceProfileName)
+
+        def get_user(self, UserName):
+            if UserName in self.users:
+                self._lagging("user")
+            return super().get_user(UserName)
+
+    iam = Lagging({"role": 2, "profile": 2})
+    dep = owned.StrictDeployer(p, fakes.FakeEC2(), iam, fakes.FakeSSM(), ACCOUNT, say=print, sleep=slept.append)
+    dep.ensure_role()
+    assert iam.called("add_role_to_instance_profile") and slept == [1, 2, 1, 2]
+    iam = Lagging({"user": 3})
+    owned.create_s3(
+        S3(), iam, domain=DOMAIN, region="us-west-2", account_id=ACCOUNT, name="acme", names=HUB, sleep=slept.append
+    )
+    assert iam.called("create_access_key")
+    iam, slept[:] = Lagging({"role": 99}), []
+    dep = owned.StrictDeployer(p, fakes.FakeEC2(), iam, fakes.FakeSSM(), ACCOUNT, say=print, sleep=slept.append)
+    with pytest.raises(fakes._Exc.NoSuchEntityException):
+        dep.ensure_role()
+    assert slept == [1, 2, 4, 8, 16] and not iam.called("attach_role_policy")
+
+    ec2, saved = fakes.FakeEC2(), []
+    real = ec2.run_instances
+
+    def lost(**kw):
+        real(**kw)
+        raise ConnectionError("read timeout")
+
+    ec2.run_instances = lost
+    first = strict_dep(
+        p, ec2, IAM(), fakes.FakeSSM(), ids={}, save=lambda: saved.append(json.loads(json.dumps(first.ids)))
+    )
+    with pytest.raises(ConnectionError):
+        first.launch("#!/bin/bash\n", "hub-hotmic", "sg-1")
+    ec2.run_instances = real
+    ec2.describe_instances = lambda **kw: {"Reservations": []}  # lagging: the instance is not listed yet
+    again = strict_dep(p, ec2, IAM(), fakes.FakeSSM(), ids=saved[-1])
+    assert again.launch_or_reuse({"sg": "sg-1", "alloc": ""}, "#!/bin/bash\n") == ("i-1", True)
+    tokens = [kw["ClientToken"] for kw in ec2.called("run_instances")]
+    assert len(ec2.instances) == 1 and len(tokens) == 2 and tokens[0] == tokens[1]
+    assert again.ids["instance"] == "i-1"
