@@ -36,7 +36,7 @@ It waits up to a minute and prints the run. If it is still running, `hub lens sh
 
 ## 4. Finish
 
-If the run filed a proposal, its id is on the run (`proposal_id`) and the owner's Decide card says it came from the
+If the run filed a proposal, its id is on the run (`proposal_id`) and the owner's proposal says it came from the
 lens. If it did not, the lens found nothing to change, and that is a finding. Finish with
 `hub task done <id> -m "<lens, run id, proposal id or none>" --version N` and one line in `state.md`.
 

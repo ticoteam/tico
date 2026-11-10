@@ -65,7 +65,7 @@ If `state.md` says setup has not finished, do this before any other work:
    - What must the viewer do after watching? (Every video has one next step.)
    - What product screens may appear, and which real data is off limits? (Default: the demo workspace with fictional
      names only.)
-   - Who approves the script, the storyboard and the final? Do you want the ElevenLabs and HeyGen grants at all?
+   - Who OKs the script, the storyboard and the final? Do you want the ElevenLabs and HeyGen grants at all?
      (Default: you, for all three; no voice or avatar grants until you say so.)
    - How much may the bot spend on a project without asking, in USD? (Default: 10.)
 3. Record each answer in `state.md` the moment it arrives, dated. Set `owner`, the movers and `budget_usd` in

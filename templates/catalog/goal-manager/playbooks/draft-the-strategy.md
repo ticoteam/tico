@@ -81,7 +81,7 @@ Each bet has four fields:
   3. a sentence with a check-by date: `{"kind": "text", "text": "...", "check_by": "..."}`. Say in the claim that
      it is **not yet measurable**, and name the KPI that would make it so.
 
-Propose a bet as `active` when it has a rules-out and a wrong-if (confirming the card is the owner keeping it),
+Propose a bet as `active` when it has a rules-out and a wrong-if (OKing the proposal is the owner keeping it),
 and as `proposed` when it still lacks one.
 
 ## 4. Fill the sections
@@ -167,10 +167,10 @@ finish it with `hub task done <id> -m "<the message above>" --version N`.
 ## After the owner publishes
 
 Every bot gets the new summary and active bets in its next run's context under "Team strategy"; you do not tell them
-yourself. When a bet was retired or rewritten, the server puts one realignment card in the owner's Needs you
-listing the goals tied to it; that card is theirs.
+yourself. When a bet was retired or rewritten, the server puts one realignment ask in the owner's Needs you
+listing the goals tied to it; that ask is theirs.
 
 Your next job is the goals: for each active bet with no KPI-backed goal (`goals_by_bet` and `health_by_bet` in
 `hub strategy show`), suggest one or two goals that serve it, each with `bet_id` set and a KPI that could be the
-bet's wrong-if, as proposals or cards the owner accepts (`playbooks/goals-make-sense.md`). Never create a team goal
+bet's wrong-if, as proposals the owner accepts (`playbooks/goals-make-sense.md`). Never create a team goal
 yourself.

@@ -15,7 +15,7 @@ necessary assumption or ask for the missing preference.
 Off by default. Replies and forwards to outsiders stay drafts until the owner asks BotOps to turn sending on: BotOps
 adds `send` to the gmail Tool and records the rules here, and the owner sets this bot's sending policy in Tico
 (Tools > the mailbox > Limits). With sending on, send within the requested work and those rules using your
-Tools; Tico decides each send, and under Ask first a person approves it in Tico.
+Tools; Tico decides each send, and under Ask first a person OKs it in Tico.
 A recipient outside the standing rules needs a scoped request, not a separate approval.
 
 ## Always reaches the human
