@@ -34,8 +34,7 @@ a job description from its template card (what it owns, and the file's reason fo
 a role under a role included (`seat:<id>`). Only the built-ins and the file's `live` seats become bots, once each: a live bot is made from its
 template, fills its seat and reports where the seat's line ends. The Finance Owner (the bookkeeper) keeps a seat on its line in the team
 its file gives (Corporate in the default structure), filled by the built-in bot itself, so a Corporate Team Manager hired later takes it
-along. Then the factory pipelines are set up once, best effort: a failure is recorded (`onboarding.pipelines_failed`), rolled back,
-and the team stays. Import retries do not duplicate
+along. Import retries do not duplicate
 a seat, and an import cannot replace a company whose setup is complete. A file named at install
 (`TICO_COMPANY_FILE_B64` or `TICO_COMPANY_FILE`) is imported when the server starts; if it cannot be read or applied,
 the server still starts, **no sample team is set up in its place**, and the owner sees why on the welcome page and on
@@ -193,9 +192,8 @@ second). It reaches no computer.
   with the card's summary as its description, `bot-<slug>` as its repository, the card's runtime, model and reasoning effort, the human
   it reports to, and the owner as its owner. A model a deployment does not offer falls back to the product default. They are
   Active on day one.
-- **A new company's first Create ends like an import** (`company_import.finish_new_company`): the live seats' bots, then the default
-  factories and their nine pipelines, once, best effort, and only while the company has no task type beyond the ones every server
-  starts with. **With nothing picked**, the chart is the default one: the chart formula's own
+- **A new company's first Create ends like an import** (`company_import.finish_new_company`): the live seats' bots. The General
+  pipeline needs no setup: every server start makes it when it is missing. **With nothing picked**, the chart is the default one: the chart formula's own
   (`backend/company_file/chart_formula.py`, no segment or bet, the default channels), the chart the public setup page's file
   gives a company that picked nothing, so it starts with the same live bots and seats.
 - **Everything else picked is a Recruiting seat** (`seats` on the record: `{pick: seat id}`), with the reviewed name as its
@@ -271,7 +269,7 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
   the shared doc `onboarding/interview.md` so the next bot only asks whether anything changed, and suggests the person open
   the mic and just talk; the Onboarding pill carries the same tip. It learns only: it answers and asks in
   its thread, reads, connects tools and talks with its manager. It takes no task, files none, runs no routine (timed or on an event),
-  comments on, asks about or attaches to no task (one it held before included), asks no approval, sends no email and posts
+  comments on, asks about or attaches to no task (one it held before included), sends no email and posts
   nothing on Slack, and sends messages, answers and notes only to its manager, the people above it and a person it answers in
   a thread. A run that cannot confirm its stage with Tico sends no email or Slack post either. Each attempt is refused with a
   plain reason. Any number of bots may be onboarding at once.
