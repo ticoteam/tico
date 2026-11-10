@@ -2385,7 +2385,9 @@ def _threads(view, rows):
             count = sum(1 for ref in shown if _activity_unread(view, tid, ref))
             entry.update(unread=count > 0, unread_count=count)
             # Enough of the thread for a list that does not hold its row to add one: title, audience, who a DM is with.
-            entry["thread"] = threads.brief(view.c, view.reader, found)
+            brief = threads.brief(view.c, view.reader, found)
+            if brief:
+                entry["thread"] = brief
         elif kind == "counters":
             entry["counters"] = {
                 "last_seq": found.get("last_seq") or 0,

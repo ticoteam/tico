@@ -257,8 +257,7 @@ def _seen(conn: "sqlite3.Connection") -> dict[str, str | None]:
     discards it (read_cache)."""
     if read_cache.cache(conn) is None:
         return {}
-    found: dict[str, str | None] = read_cache.value(conn, ("bots_can_run",), dict, shared=True)
-    return found
+    return read_cache.value(conn, ("bots_can_run",), dict[str, str | None], shared=True)
 
 
 def of(

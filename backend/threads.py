@@ -4484,10 +4484,12 @@ def shown_name(c, v, thread):
 def brief(c, principal, row):
     """What a list needs to add a thread's row it does not hold yet, as `view` gives it: id, title, name, audience,
     root, kind, last message time and, for a DM root, who else is in it (`dm_with`). For a live `activity` event;
-    the caller has checked the reader may read the thread."""
+    the caller has checked the reader may read the thread. None for a thread that is gone."""
     v = _as_viewer(principal)
     row = thread_row(c, row)
-    root = root_of(c, row)
+    root = root_of(c, row) if row is not None else None
+    if row is None or root is None:
+        return None
     out = {
         "id": row["id"],
         "title": _shown_title(c, v, row),
