@@ -3,7 +3,7 @@
 'use strict';
 
 // The alert events a person can ask for, in the order the card draws them.
-type IbAlertEvent = 'urgent_needs' | 'legal_mail' | 'bot_stuck';
+type IbAlertEvent = 'legal_mail';
 // GET /v2/alerts/me, as this card reads it (ui/types/api.d.ts).
 type IbAlertState = import('../types/api').PersonalAlerts;
 type IbAlertPrefs = Partial<IbAlertState['preferences']>;
@@ -11,9 +11,7 @@ type IbAlertPrefs = Partial<IbAlertState['preferences']>;
 type IbAlertsHost = HTMLElement & { _alertsRun?: number };
 
 const IB_ALERT_EVENTS: [IbAlertEvent, string][] = [
-  ['urgent_needs', 'An overdue task needs me'],
   ['legal_mail', 'Legal mail arrives'],
-  ['bot_stuck', 'A bot I manage has a stalled task'],
 ];
 const IB_ALERT_STATUS: Record<string, [string, string]> = {
   none: ['off', 'No phone'], code_sent: ['pending', 'Verify your phone'], verified: ['ok', 'Verified'],
@@ -36,9 +34,7 @@ interface IbAlertsConfirmControls {
 }
 // Every box below is drawn on every render: the IB_ALERT_EVENTS checkboxes, urgent_calls and emergency_exception.
 interface IbAlertsPrefControls {
-  urgent_needs: HTMLInputElement;
   legal_mail: HTMLInputElement;
-  bot_stuck: HTMLInputElement;
   urgent_calls: HTMLInputElement;
   emergency_exception: HTMLInputElement;
   quiet: HTMLInputElement;

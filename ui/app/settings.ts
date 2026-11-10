@@ -34,7 +34,6 @@ type SettingsCatalog = {models: SettingsModel[]; harnesses?: HarnessRow[]; gatew
 type SettingsData = {people: SettingsPerson[]; machines: SettingsMachine[]; services: SettingsService[]; models: SettingsModel[]; issues: SettingsIssue[]; history: SettingsHistory; loaded?: boolean; schedulerEnabled?: boolean; runnable?: SettingsRunnable; agents?: SettingsAgentRow[]; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabledProviders?: string[]; defaultModel?: string; limits?: SettingsLimits | null};
 type SettingsPresence = {interval: number; timeout: number; at: number; checking: boolean; failed: boolean; timer: number | null; pending: Promise<unknown> | null; request: number; applied: number};
 type SettingsDestinationHeld = {name?: string; credentials?: string[]; old?: {address?: string}; new?: {address?: string}; path?: string};
-type SettingsAssistantDecision = {id: string; decision: string; what: string; decided_at: string; decided_for?: {words?: string} | null; consumed_at?: string | null; can_undo?: boolean};
 // GET /v2/bots/<bot>/execution-review: the stopped runs a person decides on.
 type StoppedKind = 'read' | 'restarted' | 'timeout' | 'changed' | 'twice' | 'unknown';
 type StoppedDecision = 'resume' | 'dismiss';
@@ -305,7 +304,7 @@ function pageSettings() {
       <section class="card" id="settings-assistant-pane"><header><h2>${esc(assistantName())}</h2><div class="row">
         <a class="ghost" href="${ASSISTANT}">Open chat</a>
         ${settingsCanManageBot(botRow(assistantBot())) ? `<a class="ghost" href="#/bot/${encodeURIComponent(assistantBot())}/more">Bot settings</a>` : ''}
-      </div></header><div id="settings-assistant-approvals"></div></section>
+      </div></header></section>
       <div id="settings-assistant"></div>
       <div id="settings-notifications"></div>
       ${S.me?.role === 'owner' ? `<section class="card" id="settings-privacy"><header><h2>Privacy</h2></header><div id="set-privacy">${skelRows(3, {card: true, dot: false})}</div></section>
@@ -474,7 +473,7 @@ function settingsShow(tab: string) {
     if (privacy) privacy.hidden = storage.hidden = !owner;
     if (SETTINGS_TAB === 'general') {
       window.hlSummaryDraw?.();
-      void Promise.all([renderSettingsAssistantApprovals(),
+      void Promise.all([
         // The owner's one click when the team has no Assistant (ui/assistant.ts): restore it or add it.
         owner && window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
         privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(),
@@ -543,42 +542,6 @@ function settingsTeamIconBind() {
     } catch (error) { status.textContent = errorMessage(error, 'Could not save the icon.'); status.classList.add('err'); }
     finally { button.disabled = input.disabled = false; input.value = ''; }
   };
-}
-// Settings > General > Assistant: the person's own switch for their Assistant deciding approvals addressed to them, and what it
-// decided, each undoable until it has run (backend/assistant.py decides, approval_undo). Only they see or change it.
-async function renderSettingsAssistantApprovals() {
-  const host = $('#settings-assistant-approvals');
-  if (!host || formBusy(host)) return;
-  let v, list;
-  try { [v, list] = await Promise.all([get('/v2/assistant/settings'), get('/v2/assistant/decisions')]); }
-  catch (e) { host.innerHTML = `<div class="empty">${esc(errorMessage(e, 'Something went wrong.'))}</div>`; return; }
-  if (!host.isConnected) return;   // Settings redrew while this loaded; the new page draws its own
-  const name = esc(assistantName());
-  const rows = (list.decisions || []).map((d: SettingsAssistantDecision) => {
-    const words = d.decided_for?.words ? `“${esc(d.decided_for.words)}”` : '';
-    return `<li class="people-line"><span><strong>${d.decision === 'approved' ? 'Approved' : 'Declined'}</strong> ${esc(d.what)}
-      <span class="settings-cell-note">${esc(ago(d.decided_at))}${words ? ` · you said ${words}` : ''}${d.consumed_at ? ' · already ran' : ''}</span></span>
-      ${d.can_undo ? `<button type="button" class="ghost" data-undo-approval="${esc(d.id)}">Undo</button>` : ''}</li>`;
-  }).join('');
-  host.innerHTML = `<h3 id="settings-assistant-approvals-h">Approvals</h3>
-    <label class="people-line"><input type="checkbox" role="switch" class="people-switch" id="assistant-decides"${v.decides_approvals ? ' checked' : ''}${v.team_allows ? '' : ' disabled'} aria-label="My assistant can decide approvals for me">
-      <span>My assistant can decide approvals for me</span></label>
-    <p class="settings-cell-note">${v.team_allows
-      ? `When you ask in its chat, your ${name} approves or declines your approvals. It reads the list back first, and only your own words count.`
-      : 'Your team’s owner has turned this off for everyone (Settings > People).'}</p>
-    ${rows ? `<h3>Decided by ${name} for you</h3><ul class="assistant-decisions">${rows}</ul>` : ''}`;
-  host.querySelector('#assistant-decides').onchange = async (ev: Event) => {
-    const box = ev.target;
-    if (!(box instanceof HTMLInputElement)) return;
-    try { await post('/v2/assistant/settings', {decides_approvals: box.checked}); toast('Saved'); void renderSettingsAssistantApprovals(); }
-    catch (e) { box.checked = !box.checked; settingsFieldError(box, errorMessage(e, 'Something went wrong.')); }
-  };
-  host.querySelectorAll('[data-undo-approval]').forEach((button: HTMLButtonElement) => button.onclick = async () => {
-    button.disabled = true;
-    try { await post(`/v2/approvals/${encodeURIComponent(String(button.dataset.undoApproval))}/undo`); toast('Undone: it is waiting for you again'); }
-    catch (e) { toast(errorMessage(e, 'Something went wrong.'), true); }
-    void renderSettingsAssistantApprovals();
-  });
 }
 // Settings > General > Team: whether a bot's report to the Tico team goes without a card (team rule bot_reports_direct,
 // backend/support.py send_by_rule). Owner only. Off, every bot report waits for a person's yes in Needs you.
