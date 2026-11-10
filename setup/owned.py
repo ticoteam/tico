@@ -11,9 +11,11 @@ import hashlib
 import json
 import time
 import uuid
+from pathlib import Path
 from typing import Callable
 
 from . import backup as bk
+from . import state
 from .aws import AMI_PARAMS, DEFAULT_PREFIX, SSM_CORE, Deployer, Names, fit_user_data
 from .ui import MissingInput
 
@@ -21,6 +23,74 @@ from .ui import MissingInput
 def strict(prefix: str) -> bool:
     """The one switch: any --asset-prefix but the default is strict mode."""
     return (prefix or DEFAULT_PREFIX) != DEFAULT_PREFIX
+
+
+# --- the mode marker: a strict install stays strict ------------------------------------------------------------------
+# Saved before the first AWS write, apart from state.json, keyed by domain and by name: a later command for either that
+# would take the default path (the flag left out, state.json lost or corrupt) refuses instead. Only strict mode writes
+# one, so a default-prefix computer has none and its commands read nothing new that could stop them.
+
+
+def _marker(kind: str, key: str) -> Path:
+    return state.home() / "installs" / f"{kind}-{key}.json"
+
+
+def mark(domain: str, name: str, prefix: str, install_id: str) -> None:
+    for kind, key in (("domain", domain), ("name", name)):
+        if not key:
+            continue
+        p, rows = _marker(kind, key), {}
+        if p.exists():
+            rows = _read_marker(p)
+        rows[install_id] = {"asset_prefix": prefix, "domain": domain, "name": name}
+        state.write_private(p, json.dumps(rows, indent=2, sort_keys=True))
+
+
+def _read_marker(p: Path) -> dict:
+    try:
+        rows = json.loads(p.read_text())
+        if not isinstance(rows, dict) or not all(isinstance(r, dict) and r.get("asset_prefix") for r in rows.values()):
+            raise ValueError
+        return rows
+    except (OSError, ValueError):
+        raise MissingInput(
+            f"{p} records an install made with an --asset-prefix, but cannot be read; refusing to change anything. "
+            "Restore it, or check by hand which AWS resources that install made."
+        ) from None
+
+
+def check_mode(domain: str, name: str, prefix: str, saved: dict) -> None:
+    """Refuses a command that would take another mode, or start another install, than the one this computer recorded
+    making for the domain (or, by name, for a default-path command)."""
+    prefix = prefix or DEFAULT_PREFIX
+    rows = {}
+    for kind, key in (("domain", domain), ("name", name if not strict(prefix) else "")):
+        if key and _marker(kind, key).exists():
+            rows.update(
+                {
+                    k: r
+                    for k, r in _read_marker(_marker(kind, key)).items()
+                    if kind == "name" or r.get("domain") == domain
+                }
+            )
+    if not rows:
+        return
+    if not strict(prefix):
+        install_id, r = next(iter(rows.items()))
+        raise MissingInput(
+            f"{r.get('domain') or domain} (--name {r.get('name')}) was made with --asset-prefix {r['asset_prefix']} "
+            f"(install {install_id}); refusing to go on without it, which would act on other AWS resources. Run the "
+            f"command again with --asset-prefix {r['asset_prefix']}."
+        )
+    mine = {k: r for k, r in rows.items() if r.get("domain") == domain}
+    if mine and saved.get("install_id") not in mine:
+        install_id, r = next(iter(mine.items()))
+        why = "is missing or unreadable" if not saved else f"belongs to another install ({saved.get('install_id')})"
+        raise MissingInput(
+            f"This computer recorded install {install_id} for {domain}, made with --asset-prefix {r['asset_prefix']}, "
+            f"but its state.json {why}; refusing to change anything or start another install. Check by hand in the AWS "
+            "console which of its resources exist, and restore that install's state.json."
+        )
 
 
 def not_ours(kind: str, resource: str, names: Names, name: str, pick: str = "--name or --asset-prefix") -> MissingInput:

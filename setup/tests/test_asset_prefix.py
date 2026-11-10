@@ -847,16 +847,18 @@ def test_a_name_other_than_the_domains_saved_one_is_refused_before_any_aws_call(
     before = (len(log), len(opened))
     msg = f"{DOMAIN} is set up with --name hotmic"
     for argv in (
-        hub_args(tmp_path, "--name", "production"),
-        ["destroy", "--domain", DOMAIN, "--name", "production", "--yes"],
+        hub_args(tmp_path, "--asset-prefix", "hub", "--name", "production"),
+        ["destroy", "--domain", DOMAIN, "--asset-prefix", "hub", "--name", "production", "--yes"],
     ):
         code, out = go(argv, deps=d)
         assert code == 2 and msg in out and "Leave --name out or pass --name hotmic" in out, out
     assert (len(log), len(opened)) == before
     # Saved before install ids: destroy takes --name as it always has.
     state.save("old.example.com", {"domain": "old.example.com", "target": "aws", "aws_instance_id": "i-1"})
+    code, out = go(["destroy", "--domain", "old.example.com", "--name", "legacy", "--yes"], deps=d)
+    assert code == 0 and "Nothing tagged ManagedBy=tico-setup, tico-setup-name=legacy" in out, out
     code, out = go(["destroy", "--domain", "old.example.com", "--name", "hotmic", "--yes"], deps=d)
-    assert code == 0 and "Nothing tagged ManagedBy=tico-setup, tico-setup-name=hotmic" in out, out
+    assert code == 2 and "made with --asset-prefix hub" in out, out  # review 5, case 1: the name is the hub install's
 
 
 READS = ("describe_", "list_", "get_", "head_")
@@ -1771,12 +1773,18 @@ def test_lost_cut_short_or_edited_state_never_adopts_or_deletes_what_carries_the
     assert code == 2 and "nothing was deleted" in out, out
     # Lost or corrupt: no install id to prove anything with.
     (state.home() / DOMAIN / "state.json").write_text("{not json")
+    # (Review 5, case 1: this computer's mode marker names the install, so both are refused before anything else.)
     code, out = go(argv, deps=d)
-    assert code == 2 and "state.json cannot be read" in out, out
+    assert code == 2 and "state.json is missing or unreadable" in out, out
     assert (state.home() / DOMAIN / "state.json").read_text() == "{not json"
     (state.home() / DOMAIN / "state.json").unlink()  # lost: a new install's id proves nothing of the old one's
     code, out = go(argv, deps=d)
+    assert code == 2 and "state.json is missing or unreadable" in out, out
+    marker = state.home() / "installs" / f"domain-{DOMAIN}.json"
+    marker.rename(marker.with_suffix(".moved"))  # the marker lost too: the AWS tags still refuse
+    code, out = go(argv, deps=d)
     assert code == 2 and "was not made by this setup" in out, out
+    marker.with_suffix(".moved").rename(marker)
     (state.home() / DOMAIN / "state.json").write_text("{not json")
     code, out = go(["destroy", "--domain", DOMAIN, "--asset-prefix", "hub", "--name", "hotmic", "--yes"], deps=d)
     assert code == 2 and "Check by hand" in out, out
@@ -2149,3 +2157,47 @@ def test_destroy_dns_deletes_the_recorded_records_after_the_server_is_already_go
     iam.roles, iam.profiles = {}, {}
     code, out = go(["destroy", "--domain", DOMAIN, "--dns", "--yes"], deps=d)
     assert code == 0 and "DNS records deleted." in out and r53.records == [], out
+
+
+# --- Codex's fifth review ------------------------------------------------------------------------------------------
+
+
+def test_a_strict_install_stays_strict_when_its_state_is_lost_or_corrupt_or_the_flag_is_left_out(tmp_path):
+    # Codex review 5, case 1: with state.json corrupt, a retry without --asset-prefix took the default path and overwrote
+    # and re-tagged a foreign /tico/hotmic/env. A mode marker, saved before the first AWS write and keyed by domain and
+    # by name, makes every later command for either refuse instead of falling back to the default path.
+    d, ec2, iam, ssm, s3, log = hub_world()
+    assert go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)[0] == 0
+    kept = state.home() / DOMAIN / "state.json"
+    good = kept.read_text()
+    writes = lambda: [n for n, _ in log if not n.startswith(("describe_", "get_", "head_", "list_"))]  # noqa: E731
+    for broken in ("{not json", None):
+        if broken is None:
+            kept.unlink()
+        else:
+            kept.write_text(broken)
+        before = len(writes())
+        for argv in (
+            hub_args(tmp_path, "--name", "hotmic"),  # the flag left out
+            hub_args(tmp_path),
+            hub_args(tmp_path, "--asset-prefix", "tico", "--name", "hotmic"),
+            ["destroy", "--domain", DOMAIN, "--yes"],
+            ["destroy", "--domain", DOMAIN, "--name", "hotmic", "--yes"],
+            ["backup-storage", "--domain", DOMAIN, "--aws-region", "us-west-2"],
+        ):
+            code, out = go(argv, deps=d)
+            assert code != 0 and "made with --asset-prefix hub" in out, (argv, out)
+        code, out = go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)
+        assert code != 0 and "refusing" in out, out  # never a second install over the lost one
+        assert (
+            len(writes()) == before
+            and not ssm.called("put_parameter")
+            or all(kw["Name"].startswith("/hub/") for kw in ssm.called("put_parameter"))
+        )
+        kept.write_text(good)
+    other = hub_args(tmp_path, "--name", "hotmic")  # another domain, the same name, no flag
+    other[other.index(DOMAIN)] = "other.hotmicapp.com"
+    code, out = go(other, deps=d)
+    assert code != 0 and "made with --asset-prefix hub" in out, out
+    assert all(kw["Name"].startswith("/hub/") for kw in ssm.called("put_parameter"))
+    assert go(hub_args(tmp_path, "--name", "hotmic"), deps=d)[0] == 0  # its state intact: strict without the flag

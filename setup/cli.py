@@ -241,7 +241,11 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
     domain = args.domain.lower()
     saved, _ = state.load(domain)
     mine = state.load_backup(domain)  # an earlier strict-mode backup-storage for this domain
-    if owned.strict(awsmod.asset_prefix(args.asset_prefix, saved or mine)):
+    prefix = awsmod.asset_prefix(args.asset_prefix, saved or mine)
+    owned.check_mode(
+        domain, getattr(args, "name", None) or awsmod.saved_name(saved) or awsmod.slug(domain), prefix, saved
+    )
+    if owned.strict(prefix):
         values = _backup_storage_strict(args, io, deps, domain, saved, mine)
     else:
         _, iam, _, account = deps.aws_clients(args.aws_region, args.aws_profile)

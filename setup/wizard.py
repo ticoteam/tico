@@ -838,7 +838,9 @@ def run(args, io: IO, deps: Deps) -> int:
         return again
 
     s = gather(io, args, s, dry, restore=None if saved else restore)
-    strict = owned.strict(awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved))
+    prefix = awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved)
+    owned.check_mode(s.domain, s.aws_name or getattr(args, "name", None) or awsmod.slug(s.domain), prefix, saved)
+    strict = owned.strict(prefix)
     if strict:
         _strict_start(args, s, saved, dry)
     hosted.gather(args, s, dry)
@@ -1042,6 +1044,7 @@ def _strict_preflight(io: IO, args, s: Settings, deps: Deps, zone, records, kept
     s.replace_dns = bool(getattr(args, "replace_dns", False))
     if not kept:  # before the first AWS write: a retry after a failure from here keeps the prefix and install id
         state.save(s.domain, s.public())
+    owned.mark(s.domain, s.aws_name, s.asset_prefix, s.install_id)
     ours = {s.server_ip} - {""}
     if s.target == "aws":
         clients = deps.aws_clients(s.aws_region, s.aws_profile)
@@ -1513,7 +1516,12 @@ def destroy(args, io: IO, deps: Deps) -> int:
     hosted.check_dns_identity(args, saved.get("dns_name", ""), saved.get("dns_zone", ""))
     if saved.get("target") in cloudmod.PROVIDERS:
         return _destroy_hint(io, saved)
-    if owned.strict(awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved)):
+    prefix = awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved)
+    domain = (args.domain or "").lower()
+    owned.check_mode(
+        domain, args.name or saved.get("aws_name") or (awsmod.slug(domain) if domain else ""), prefix, saved
+    )
+    if owned.strict(prefix):
         return _destroy_strict(args, io, deps, saved)
     name = args.name or saved.get("aws_name") or (awsmod.slug(args.domain) if args.domain else "")
     if not name:
