@@ -3,7 +3,7 @@
 import hashlib
 import pytest
 from backend import hubdb as H, letters as L
-from backend.tests.helpers.api import get, post, put
+from backend.tests.helpers.api import get, give_ok, post, put
 from clients import gateway as G
 
 
@@ -121,7 +121,7 @@ def send(api, row, token="ana-test"):
 
 
 def approve(api, row):
-    return post(api, "approvals/" + row["approval_id"], {"decision": "approved"})
+    return give_ok(api, row["approval_id"])
 
 
 def fetch(api, row, token="ana-test"):

@@ -103,38 +103,39 @@ null inherits the company default. Caps include Tico-originated letters and unce
 company, plus the optional bot cap, in each UTC month. A failed delivery does not erase spend: HQ's billing state
 must confirm no charge, a void or a reversal. Older HQ responses without billing fields keep the reservation.
 
-Use `hub letter quote --text "..." --recipient '{"name":"Recipient","line1":"2 Main St","city":"Dover","state":"DE","postal_code":"19901"}'`
+Use `tico letter quote --text "..." --recipient '{"name":"Recipient","line1":"2 Main St","city":"Dover","state":"DE","postal_code":"19901"}'`
 (MCP `hub_letter_quote`), or `--file-id` for a PDF already in Tico's upload/media store. ReportLab renders text and
 markdown as searchable US Letter text, without fetching images or executing HTML; upload a PDF for characters
 outside its Latin character set. The source PDF may have 1–100 pages and be at most 5 MiB. The result includes the
 page count, live total and a link to HQ's rendered proof, kept in Tico's own blob store.
 
-`hub letter send <letter_id>` (`hub_letter_send`) asks for approval by default. The existing approval card shows the
-proof, recipient, return address, mail class and total. A bot's manager or an admin decides; decline closes the
-letter. On their own is an explicit company opt-in and still asks for certified mail, courts/agencies, uncertain
+`tico letter send <letter_id>` (`hub_letter_send`) asks for an OK by default: "Mail this letter?", on the letter's task
+or a task of its own. The ask shows the proof, recipient, return address, mail class and total. A bot's manager or an
+admin OKs it with their own click; saying no closes the letter. On their own is an explicit company opt-in and still
+asks for certified mail, courts/agencies, uncertain
 classification, unreadable or truncated PDF text, and the first letter to an address. An incomplete PDF extraction
 says "Couldn't read the whole letter, so it needs an OK"; Tico does not try OCR. Classify/Decide is triage, not a security boundary. Never and revoked
-access block approved sends too.
+access block sends already OK'd too.
 
-Quotes last 15 minutes. When approval lands Tico re-quotes; any changed approval hash asks again. Earlier proofs stay
+Quotes last 15 minutes. When the OK lands Tico re-quotes; a quote with another hash asks again. Earlier proofs stay
 readable only while the caller has current access to the original source's tasks, runs and threads. Both the
 represented person and an acting bot must qualify. Admins and the sender without source access see a metadata-only row (status,
 class, pages, cost, date and sending bot) and may cancel; recipients, contents and PDFs stay private. Letters without
 a task follow their sender, manager and outbox grants. HQ keeps no letter contents.
 
-External agents keep their narrower thread access rules when Tico checks a saved proof or an approved send.
+External agents keep their narrower thread access rules when Tico checks a saved proof or a send someone OK'd.
 Changes to a source task's privacy or parties, or a source thread's audience or members, update open outbox rows
 through the live stream. A row disappears when the viewer loses all access. Large source changes coalesce into one
 outbox invalidation; other changes replace only the affected rows.
 
-Submission durably commits its quote, approval consumption and a key derived from the Tico letter id before the
+Submission durably commits its quote, the OK's use and a key derived from the Tico letter id before the
 HTTP call. A known pre-claim refusal releases the hold and remains cancellable; a later attempt gets a new quote
-and approval as the current policy requires. After uncertainty Tico checks Never, access and caps again before any
+and OK as the current policy requires. After uncertainty Tico checks Never, access and caps again before any
 retry POST. If sending is no longer allowed, HQ's resolve-by-key capability reconciles the existing job or atomically
 abandons the key without printing. Older HQ versions leave the letter in Needs review and keep its hold. Never create
 a replacement for a `submitting` or `needs_review` letter until its existing outcome is confirmed.
 
-`hub letter list`, `hub letter show <id>` and `hub letter cancel <id>` have matching MCP tools and v2 endpoints:
+`tico letter list`, `tico letter show <id>` and `tico letter cancel <id>` have matching MCP tools and v2 endpoints:
 `GET /api/v2/letters`, `GET /api/v2/letters/{id}` and `POST /api/v2/letters/{id}/cancel`. Lists are paged and byte
 capped. Status sync polls each active record with backoff and publishes a permission-filtered `letters` live event
 with the changed row. Cancellation passes through HQ's honest answer; User Credit jobs cannot be cancelled and
@@ -176,7 +177,7 @@ For example, to let a bot whose slug is `legal` read physical mail at every comp
 `PUT /api/v2/postal/settings` with `{"legal_bot_id":"legal"}` to give it future legal-mail tasks while keeping the
 owner informed. Use `DELETE` on the grant's URL to revoke it, and `{"legal_bot_id":null}` to restore owner routing.
 
-Bots and people read letters with `hub mail list` and `hub mail read <id>` (MCP `hub_mail_list`, `hub_mail_read`).
+Bots and people read letters with `tico mail list` and `tico mail read <id>` (MCP `hub_mail_list`, `hub_mail_read`).
 
 ## Personal alerts
 
@@ -204,8 +205,8 @@ same provider idempotency key; it never gets a fresh incident id to bypass dedup
 spend are visible in Alerts settings. Tests bypass quiet hours but still require consent and both spend caps.
 
 These controls use `/api/v2/alerts/me` and `/api/v2/alerts/company`, with `/me/phone`, `/me/phone/confirm` and `/me/test`
-subroutes (see [the v2 contract](api.md#the-contract)). The same actions are `hub alerts show|set|verify|confirm|remove|test|company`
-and MCP's `hub_alerts_*`, offered only to people. `hub alerts test --accept-charge --operation-id <stable-id>` keeps
+subroutes (see [the v2 contract](api.md#the-contract)). The same actions are `tico alerts show|set|verify|confirm|remove|test|company`
+and MCP's `hub_alerts_*`, offered only to people. `tico alerts test --accept-charge --operation-id <stable-id>` keeps
 retries to one paid test. They are personal settings, including in the Tauri app; Slack/BotOps directs you to them.
 HQ must deploy the person-scoped paging API and configure its signed Twilio opt-out webhook before personal
 verification/sending works. Demo and rehearsal mode send nothing.

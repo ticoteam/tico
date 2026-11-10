@@ -4,7 +4,7 @@ Triggered by anything a human asks you for that you are not going to answer your
 minutes. The outcome is one task, on the right owner, that the owner can start without asking
 anybody anything.
 
-Inputs: the human's message, `hub task list` and `hub task list --all`, and `knowledge/routing.md`.
+Inputs: the human's message, `tico task list` and `tico task list --all`, and `knowledge/routing.md`.
 
 ---
 
@@ -12,8 +12,8 @@ Inputs: the human's message, `hub task list` and `hub task list --all`, and `kno
 
 Read what they wrote, then read the record before you decide anything:
 
-    hub task list
-    hub task list --all
+    tico task list
+    tico task list --all
 
 Four outcomes, and only four:
 
@@ -35,7 +35,7 @@ and add the answer to `knowledge/routing.md` in the same run so you never ask ag
 
 ## 3. Write it
 
-    hub task create --owner <owner> --title "..." --body "..."
+    tico task create --owner <owner> --title "..." --body "..."
 
 No `--due` unless they gave a calendar date. Keep "by Friday" in the body as they said it.
 
@@ -73,7 +73,7 @@ and commit.
 - The request is a decision only the requester can make. Give them the options and let them decide.
 - Two humans have asked for opposite things. One task for whoever decides, naming both, not two
   tasks that will collide.
-- It would need a send, a spend, or a publish. That is an approval on an existing task, not a new
+- It would need a send, a spend, or a publish. That is an OK asked on the task the work belongs to, not a new
   task that quietly authorises it.
 
 **Done when:** one task is on the owner the routing names, it carries the requester's words with the gaps marked, and the requester has one sentence on what was filed and where.

@@ -85,14 +85,18 @@ def test_a_key_login_or_one_whose_kind_is_unknown_is_not_listed_as_shared(api, q
     assert shared(api, r)[0]["count"] == 2
 
 
-def test_a_turns_login_class_puts_release_blockers_first_then_reviews_and_a_persons_chat_and_watches_last(tmp_path):
+def test_a_turns_login_class_puts_release_blockers_first_then_reviews_and_a_persons_chat_and_watches_last(company):
+    with company.transaction() as c:
+        login_classes(c)
+
+
+def login_classes(c):
     from backend.execution import login_class
     from backend.store import H
-    from backend.tests.helpers.hubdb import ANA, CMO, EMPLOYEES, PEOPLE
+    from backend.tests.helpers import engine as X
 
-    c = H.connect(tmp_path / "hub.db")
-    H.sync_registry(c, EMPLOYEES, PEOPLE)
-    make = lambda title, **kw: H.task(c, H.task_create(c, ANA, title, "Check it.", CMO, lint=False, **kw)["id"])  # noqa: E731
+    cmo = X.bot(c, "cmo")
+    make = lambda title, **kw: H.task(c, H.task_create(c, X.ANA, title, "Check it.", cmo, lint=False, **kw)["id"])  # noqa: E731
     person, bot = {"sender_id": "human:ana"}, {"sender_id": "bot:lead"}
     release, critical, plain = (
         make("Release v1", labels=["release-blocker"]),
@@ -157,6 +161,19 @@ def test_a_turn_that_gave_its_login_up_at_the_cap_goes_back_in_the_queue_unanswe
     assert again["job_id"] == a["job_id"] and again["id"] != a["id"]
 
 
+def close(c, tid, run):
+    """Close the task through the engine, as made from inside the turn `run`: a close stops every other turn on the
+    task at once (execution.end_task_work), so the turn's own renewal is what decides here."""
+    from backend import task_engine as E
+    from backend.store import H
+
+    token = H.RUN.set(run)
+    try:
+        E.move(c, tid, E.CLOSED, "human:ana")
+    finally:
+        H.RUN.reset(token)
+
+
 def test_a_turn_waiting_for_its_login_whose_task_is_closed_meanwhile_is_skipped_cleanly(api, queued_login):
     from backend.tests.helpers.api import claim, ready
 
@@ -167,7 +184,7 @@ def test_a_turn_waiting_for_its_login_whose_task_is_closed_meanwhile_is_skipped_
     a = claim(api, r)
     assert "stop" not in post(api, f"attempts/{a['id']}/renew", {}, r["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='closed',closed_at=? WHERE id=?", ("9999-01-01T00:00:00Z", tid))
+        close(c, tid, a["id"])
     # Only a turn waiting for its login is stopped: one still preparing runs on, as before there was a queue.
     assert "stop" not in post(api, f"attempts/{a['id']}/renew", {}, r["token"])
     wait = {
@@ -201,7 +218,7 @@ def test_a_turn_waiting_for_its_login_whose_task_is_closed_meanwhile_is_skipped_
             .fetchone()[0]
             .startswith("human:")
         )
-        c.execute("UPDATE tasks SET status='closed',closed_at=? WHERE id=?", ("9999-01-01T00:00:00Z", tid))
+        close(c, tid, b["id"])
     post(api, f"attempts/{b['id']}/events", {"events": [{"seq": 1, "kind": "status", "payload": wait}]}, r["token"])
     assert "stop" not in post(api, f"attempts/{b['id']}/renew", {}, r["token"])
 

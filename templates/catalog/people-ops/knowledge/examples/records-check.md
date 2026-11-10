@@ -18,7 +18,7 @@ system or sent. First draft, not yet reviewed.
 | L-2026-05 | Finance | 2026-09-25 | 11 | 0 | 1 (billing admin) |
 | L-2026-06 | Sales | 2026-10-16 | 2 | 12 | 0; handover plan with the Sales lead due 2026-10-09 |
 
-## Record mismatches (HR export 2026-09-27, payroll export 2026-09-27, `hub team show`)
+## Record mismatches (HR export 2026-09-27, payroll export 2026-09-27, `tico team show`)
 | Ref | Field | HR record | Payroll | Roster | Proposed |
 |---|---|---|---|---|---|
 | E-031 | Title | Support Specialist | Support Agent | Support Specialist | payroll to correct |
@@ -33,5 +33,5 @@ system or sent. First draft, not yet reviewed.
 - Remote work policy v2 (2026-09-12): 36 of 42 acknowledged; 6 outstanding.
 
 ## Sources
-- HR and payroll exports on T-458, `hub team show`, offboarding tasks T-459 to T-470, read 2026-09-28.
+- HR and payroll exports on T-458, `tico team show`, offboarding tasks T-459 to T-470, read 2026-09-28.
 ```

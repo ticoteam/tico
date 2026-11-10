@@ -17,7 +17,7 @@ Names and signatures are in docs/dev/pipelines-v3-build.md.
 """
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from . import hubdb_core
 from . import task_engine as E
@@ -56,6 +56,12 @@ def _feedback() -> Any:
     from . import feedback
 
     return feedback
+
+
+def _tc() -> Any:
+    from . import task_calls
+
+    return task_calls
 
 
 def _refuse(conn: "sqlite3.Connection", by: str, rule: str, detail: str, task_id: str | None = None) -> NoReturn:
@@ -140,8 +146,19 @@ def _asked(conn: "sqlite3.Connection", row: Row, requirement_id: str, by: str) -
     _refuse(conn, by, "task_requirement", "That is not asked of this task", row["id"])
 
 
-def _may_answer(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row, value: str, notes: str | None) -> None:
-    """Refuses an answer that does not fit the requirement or comes from someone it is not asked of. Writes nothing."""
+def _may_answer(
+    conn: "sqlite3.Connection",
+    by: str,
+    row: Row,
+    requirement: Row,
+    value: str,
+    notes: str | None,
+    *,
+    own_click: bool = False,
+) -> None:
+    """Refuses an answer that does not fit the requirement or comes from someone it is not asked of. Writes nothing.
+    An OK added to one task is a person's: a bot never answers one, and the one who asked it OKs it only as a person,
+    by their own click in their own session (`own_click`), never through the Assistant, BotOps or a token."""
     task_id = row["id"]
     kind = requirement["kind"]
     if value == PUSHED_PAST:
@@ -152,7 +169,9 @@ def _may_answer(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row,
         if value != DONE:
             _refuse(conn, by, "task_requirement", "Say done", task_id)
         manager = _part(row, "pipeline").get("manager_id")
-        if by not in (row.get("owner_id"), manager) and not is_human(by):
+        # The engine itself says it for code that finishes a task for nobody (a routine's own upkeep), never to get
+        # past anything else the stage needs.
+        if by not in (row.get("owner_id"), manager, E.SYSTEM) and not is_human(by):
             _refuse(conn, by, "task_requirement", "Only the owner, the manager or a person says it is done", task_id)
         return
     person = R.person_of(conn, requirement, row["visit"]["id"])
@@ -165,6 +184,23 @@ def _may_answer(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row,
         return
     if kind == "ok" and value not in (OK, NO):
         _refuse(conn, by, "task_requirement", "An OK takes ok or no", task_id)
+    if kind == "ok" and requirement.get("visit_id") and not is_human(by):
+        _refuse(conn, by, "task_requirement", "An OK is a person's to give", task_id)
+    if kind == "ok" and value == OK and requirement.get("visit_id") and by == requirement.get("added_by_id"):
+        if not own_click:
+            _refuse(conn, by, "task_requirement", "Your own ask is OK'd only by your own click in Tico", task_id)
+    if kind == "ok":
+        from . import task_asks
+
+        # The Assistant and BotOps never answer OK to an OK, bound or plain, whichever caller brings it here: the value
+        # is already stripped (answer), so " ok " is "ok".
+        if value == OK and task_asks.acting_for_people(by):
+            _refuse(conn, by, "task_requirement", task_asks.NOT_YOURS, task_id)
+        # An OK bound to exact content is given only through its preview, with the hash of what was shown
+        # (task_asks.give_ok). A send back stays a plain answer.
+        refused = task_asks.refuses_plain_ok(conn, requirement["id"], value)
+        if refused:
+            _refuse(conn, by, "task_requirement", refused, task_id)
     if kind == "answer" and not value:  # a choice or any text: "no" is an answer like any other
         _refuse(conn, by, "task_requirement", "Give an answer", task_id)
     # A requirement that names nobody (a stage's OK), or a person who left, is any person's. A bot answers only when it
@@ -184,7 +220,8 @@ def _write(conn: "sqlite3.Connection", row: Row, requirement_id: str, by: str, v
         (answer_id, row["visit"]["id"], requirement_id, str(by), value, notes, H.now()),
     )
     data: Row = {"requirement": requirement_id, "answer_id": answer_id}
-    H.history_event(conn, "task", row["id"], by, "answer", None, value, notes, data)
+    # Through the task's history writer: an answer the Assistant or BotOps gave with the person's rights says so (via).
+    H._task_event(conn, row["id"], by, "answer", None, value, notes, data=data)
     return answer_id
 
 
@@ -192,12 +229,34 @@ def _wake_key(row: Row, answer_id: str) -> str:
     return f"{row['id']}:{row['visit']['id']}:answer:{answer_id}"
 
 
-def _wake(conn: "sqlite3.Connection", row: Row, target: str | None, lead: str, wake_key: str) -> str | None:
+def _wake(
+    conn: "sqlite3.Connection", row: Row, target: str | None, lead: str, wake_key: str, shows: object = None
+) -> str | None:
     """Wake a bot about an open task once per key. A snoozed task wakes nobody. A bot that cannot run gets it when it
-    can."""
+    can. `shows`, the pages the ask showed, go with the words as their provenance (refs.body_sources), so a reader who
+    may no longer open one of them reads none of the words (files.readable_page_refs)."""
     if not is_bot(target) or row["status"] != "open" or row.get("snooze"):
         return None
-    return task_wakes.add(conn, row, target, row["visit"], task_wakes.body(conn, row, lead), wake_key=wake_key)
+    sources = [str(ref) for ref in cast("list[object]", shows)] if isinstance(shows, list) else []
+    _, refs = _h().sourced_text(lead, sources)
+    return task_wakes.add(
+        conn,
+        row,
+        target,
+        row["visit"],
+        task_wakes.body(conn, row, lead, to=target),
+        wake_key=wake_key,
+        refs=refs or None,
+    )
+
+
+def _whose(conn: "sqlite3.Connection", row: Row, bot: str | None) -> str | None:
+    """Who gets news meant for `bot`: the bot itself while it has a turn on the task, else the one bot whose turn it is
+    now (`waiting_on.turn`), so only whoever has the turn is woken (R2). None when it is nobody's turn, or a
+    person's."""
+    if is_bot(bot) and bot in W.turns(conn, row):
+        return bot
+    return W.turn(conn, row, paused=True)
 
 
 def _tell_bot(
@@ -205,15 +264,25 @@ def _tell_bot(
 ) -> None:
     """After an answer that left the task where it is: a send back is the bot's turn, with the notes word for word; an
     answer to something that was added to this task (a question or an OK) goes to the bot that asked, with the ask and
-    the answer. A question's answer is never a send back, whatever it says."""
+    the answer. A question's answer is never a send back, whatever it says. A bot that has no turn on the task now is
+    not woken: whoever has the turn gets the words."""
     steered = R.steers(requirement["kind"], value)
     if steered and value == NO:
-        _wake(conn, row, W.holder(conn, row), f"{_name(conn, by)} sent this back: {notes}", key)
+        _wake(
+            conn,
+            row,
+            _whose(conn, row, W.holder(conn, row)),
+            f"{_name(conn, by)} sent this back: {notes}",
+            key,
+            requirement.get("shows"),
+        )
     elif requirement.get("visit_id") and not steered:
         asker = requirement.get("added_by_id")
-        target = asker if is_bot(asker) else W.holder(conn, row)
+        target = _whose(conn, row, asker if is_bot(asker) else W.holder(conn, row))
         lead = f'{_name(conn, by)} answered "{R.name_of(requirement)}": {value}'
-        _wake(conn, row, target, lead, key)
+        if is_bot(asker) and target != asker:
+            lead = f'{_name(conn, by)} answered "{R.name_of(requirement)}", asked by {_name(conn, asker)}: {value}'
+        _wake(conn, row, target, lead, key, requirement.get("shows"))
 
 
 def answer(
@@ -225,37 +294,59 @@ def answer(
     notes: str | None = None,
     *,
     seen_version: int | str | None = None,
+    own_click: bool = False,
 ) -> Row:
     """Answer a requirement of the task's open visit: `done` (owner says done), `ok`, `no` with notes or `again` (an
     OK), or the choice or text (a question). If that was the last thing missing, the task moves in the same step. The
-    same answer given twice is one answer."""
+    same answer given twice is one answer. `own_click`: the person's own click in their own session (_may_answer)."""
     row = _open_task(conn, task_id, by)
     E.check_version(conn, by, row, seen_version)
     requirement = _asked(conn, row, requirement_id, by)
     value = str(value or "").strip()
-    _may_answer(conn, by, row, requirement, value, notes)
+    _may_answer(conn, by, row, requirement, value, notes, own_click=own_click)
     newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement_id)
     if newest and (newest["by_id"], newest["answer"], newest.get("notes")) == (str(by), value, notes):
         out = E.task(conn, task_id) or row
         out["answer_id"] = newest["id"]
         return out
     answer_id = _write(conn, row, requirement_id, by, value, notes)
+    if requirement["kind"] == "ok" and value != OK:
+        from . import task_asks
+
+        task_asks.revoke(conn, requirement_id)  # a send back ends a bound OK for good (no grant: nothing)
     out = E.advance(conn, task_id)
     if out is None:
         # The task changed and stays: the never-stuck ladder starts again, before any wake this answer sends.
         E.changed(conn, task_id, by)
         out = E.task(conn, task_id) or row
         _tell_bot(conn, out, requirement, by, value, notes, _wake_key(out, answer_id))
+    if requirement["kind"] == "answer":
+        from . import strategy_merge
+
+        merged: Any = strategy_merge
+        # A person's answer on an item the Strategy Bot merged is their answer to every original still asked of them,
+        # and the item is done. Any other task is left alone.
+        if merged.on_answer(conn, by, task_id, value):
+            out = E.task(conn, task_id) or out
     out["answer_id"] = answer_id
     return out
 
 
-def give_to(conn: "sqlite3.Connection", task_id: str, requirement_id: str, by: str, person: str) -> Row:
+def give_to(
+    conn: "sqlite3.Connection",
+    task_id: str,
+    requirement_id: str,
+    by: str,
+    person: str,
+    *,
+    seen_version: int | str | None = None,
+) -> Row:
     """Give an ask to another person: it gets their name and moves to their list. A requirement added to one task gets
     the new name. A stage's OK gets a `give` answer naming them. The owner's own "done" is a reassign (C29: only a
-    person is named, and one who is still here)."""
+    person is named, and one who is still here). A bot says which version of the task it saw."""
     H = _h()
     row = _open_task(conn, task_id, by)
+    E.check_version(conn, by, row, seen_version)
     if not is_human(person):
         _refuse(conn, by, "task_requirement", "Give it to a person", task_id)
     if not R.active_person(conn, person):
@@ -267,7 +358,7 @@ def give_to(conn: "sqlite3.Connection", task_id: str, requirement_id: str, by: s
     if kind == "owner_done":
         if by != row.get("owner_id") and not is_human(by):
             _refuse(conn, by, "task_requirement", "Only the owner or a person gives this task to someone", task_id)
-        return E.reassign(conn, task_id, person, by)
+        return E.reassign(conn, task_id, person, by, seen_version=row.get("version"))
     if kind not in ASKS:
         _refuse(conn, by, "task_requirement", f"{R.name_of(requirement)} can't name a person", task_id)
     visit = row["visit"]
@@ -275,13 +366,13 @@ def give_to(conn: "sqlite3.Connection", task_id: str, requirement_id: str, by: s
     if standing.state != R.WAITING:
         _refuse(conn, by, "task_requirement", "This is not waiting on anyone", task_id)
     current = standing.on
-    if by not in (current, row.get("owner_id")) and not is_human(by):
-        _refuse(conn, by, "task_requirement", "Only who it waits on, the owner or a person gives it away", task_id)
+    if not _tc().may_handle_ask(conn, by, row, requirement, recipient=current):
+        _refuse(conn, by, "identity", "Only who it waits on, whoever asked it, or who works the task gives it", task_id)
     if person == current:
         return row
     if requirement.get("visit_id"):
         conn.execute("UPDATE requirements SET person_id=? WHERE id=?", (person, requirement_id))
-        H.history_event(conn, "task", task_id, by, "give", current, person, None, {"requirement": requirement_id})
+        H._task_event(conn, task_id, by, "give", current, person, None, data={"requirement": requirement_id})
         E.changed(conn, task_id, by)
         return E.task(conn, task_id) or row
     answer_id = _write(conn, row, requirement_id, by, GIVE, person)
@@ -292,7 +383,7 @@ def give_to(conn: "sqlite3.Connection", task_id: str, requirement_id: str, by: s
 
 
 def undo(conn: "sqlite3.Connection", answer_id: str, by: str) -> Row:
-    """Take an answer back: whoever gave it, or any person. While the task is still in that visit the answer is marked
+    """Take an answer back: only whoever gave it (task_calls.may_handle_ask). While the task is still in that visit the answer is marked
     undone. If the task moved on because of it, and has not moved since, it goes back to that stage: an ordinary move
     back."""
     H = _h()
@@ -304,8 +395,8 @@ def undo(conn: "sqlite3.Connection", answer_id: str, by: str) -> Row:
     task_id = row["id"]
     if found["answer"] == PUSHED_PAST:
         _refuse(conn, by, "task_requirement", "A push past is a move. Move the task back instead.", task_id)
-    if found["by_id"] != str(by) and not is_human(by):
-        _refuse(conn, by, "task_requirement", "Only who answered, or a person, takes it back", task_id)
+    if not _tc().may_handle_ask(conn, by, row, R.get(conn, found["requirement_id"]) or {}, answered_by=found["by_id"]):
+        _refuse(conn, by, "identity", "Only who gave the answer takes it back", task_id)
     if found.get("undone_at"):
         return row
     now = _part(row, "visit")
@@ -322,9 +413,14 @@ def undo(conn: "sqlite3.Connection", answer_id: str, by: str) -> Row:
     if not stays and not moved_by_it:
         _refuse(conn, by, "task_changed", "The task moved since. Move it back by hand.", task_id)
     conn.execute("UPDATE answers SET undone_at=? WHERE id=?", (H.now(), answer_id))
+    if answered and answered["kind"] == "ok" and found["answer"] in (OK, NO):
+        from . import task_asks
+
+        # An OK taken back is revoked for good; a send back taken back leaves its revocation where it is.
+        task_asks.revoke(conn, found["requirement_id"])
     # A wake this answer caused and no run took yet is moot.
     task_wakes.cancel(conn, f"{task_id}:{visit['id']}:answer:{answer_id}")
-    H.history_event(conn, "task", task_id, by, "answer_undone", found["answer"], None, None, {"answer_id": answer_id})
+    H._task_event(conn, task_id, by, "answer_undone", found["answer"], None, None, data={"answer_id": answer_id})
     if stays:
         moved = E.advance(conn, task_id)
         if moved is None:
@@ -396,14 +492,20 @@ def thumbs_down(
         _refuse(conn, by, "task_why", "Say what was wrong", task_id)
     still_asked = row["status"] == "open" and _part(row, "visit").get("id") == visit["id"]
     still_asked = still_asked and any(r["id"] == requirement_id for r in R.for_visit(conn, visit))
+    asked = R.person_of(conn, requirement, visit["id"])
+    if send_back and still_asked and not _tc().may_handle_ask(conn, by, row, requirement, recipient=asked):
+        _refuse(conn, by, "identity", "Only who was asked, whoever asked, or who works the task sends it back", task_id)
     out: Row = dict(row)
     if send_back and still_asked and not requirement.get("visit_id"):
         out = answer(conn, task_id, requirement_id, by, NO, reason)
     feedback_id = _rate(conn, by, row, visit, requirement, bot, "down", reason)
     if send_back and still_asked and requirement.get("visit_id"):
         out = E.withdraw_requirement(conn, requirement_id, by, reason) or E.task(conn, task_id) or row
+        target = _whose(conn, out, bot) if out["status"] == "open" else None
         lead = f'{_name(conn, by)} sent back your ask "{R.name_of(requirement)}": {reason}'
-        _wake(conn, out, bot, lead, f"{task_id}:{visit['id']}:thumbs_down:{feedback_id}")
+        if target != bot:
+            lead = f'{_name(conn, by)} sent back {_name(conn, bot)}\'s ask "{R.name_of(requirement)}": {reason}'
+        _wake(conn, out, target, lead, f"{task_id}:{visit['id']}:thumbs_down:{feedback_id}")
     out["feedback_id"] = feedback_id
     return out
 

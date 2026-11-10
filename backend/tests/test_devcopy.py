@@ -5,6 +5,7 @@ import re
 import sqlite3
 import stat
 from contextlib import closing
+from importlib import import_module
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from backend.execution import Execution
 from backend.finance import actions as finance
 from backend.enqueue import enqueue_stored
 from backend.store import H, Problem, Store
+from backend.tests.helpers.migrations import forget_from
 
 OLD = "2020-01-01T00:00:00.000000Z"
 
@@ -132,7 +134,7 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
     dest = tmp_path / "copy" / "hub.sqlite"
     removed, loose = devcopy.build(source, dest, days=30)
     devcopy.write_environment(dest, 8879, "morgan@acme.example")
-    assert removed["task_rules"] == 1  # scheduled actions never enter the copy
+    assert removed["schedules"] == 1  # scheduled actions never enter the copy
     assert source.read_bytes() == before  # the source is only read
     assert loose == [] and removed["attempts"] == 2 and removed["attempt_events"] == 2 and removed["messages"] == 2
     assert removed['alert_preferences'] == 1 and removed['personal_alerts'] == 3
@@ -209,6 +211,8 @@ def test_every_table_is_classified(tmp_path, booted):
         dropped |= set(re.findall(r"DROP TABLE IF EXISTS ([a-z_]+);", text))  # and a migration script drops again
     for source in (Path(devcopy.__file__).parent / "migrations").glob("*.py"):  # and a migration file drops for good
         dropped |= set(re.findall(r"DROP TABLE IF EXISTS ([a-z_]+);", source.read_text()))
+    # The Pipelines v3 cut-over drops the old task engine's tables from its own list.
+    dropped |= set(import_module("backend.migrations.20261110054000_pipelines_v3_cutover").OLD_TABLES)
     names -= dropped | {old for old, _new, _wave in renames_data.TABLES}  # an old schema step's name, renamed since
     groups = (devcopy.KEEP, set(devcopy.HISTORY), set(devcopy.EMPTY), set(finance.DEV_COPY_EMPTIED))
     assert {t: n for t in names if (n := sum(t in g for g in groups)) != 1} == {}
@@ -265,8 +269,8 @@ def test_a_dev_copy_drops_deleted_tasks_requesters_and_gets_its_own_roadmap_secr
 
 
 def test_keep_automations_keeps_definitions_and_empties_their_queues_and_secrets(tmp_path, booted):
-    """`--keep-automations` (the redesign converter's rehearsal): routines, task rules, triggers, webhooks and
-    automations stay; their occurrences, deliveries and runs go; no trigger URL or webhook signature still works."""
+    """`--keep-automations` (the redesign converter's rehearsal): routines, triggers, webhooks and automations
+    stay; their occurrences, deliveries and runs go; no trigger URL or webhook signature still works."""
     source = source_db(tmp_path, booted)
     with closing(sqlite3.connect(source)) as c, c:
         now = H.now()
@@ -302,9 +306,9 @@ def test_keep_automations_keeps_definitions_and_empties_their_queues_and_secrets
     with closing(sqlite3.connect(dest)) as c:
         kept = {
             t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
-            for t in ("schedules", "task_rules", "triggers", "webhooks", "automations")
+            for t in ("schedules", "triggers", "webhooks", "automations")
         }
-        assert kept == {"schedules": 1, "task_rules": 1, "triggers": 1, "webhooks": 1, "automations": 1}
+        assert kept == {"schedules": 1, "triggers": 1, "webhooks": 1, "automations": 1}
         for table in ("schedule_occurrences", "trigger_deliveries", "automation_runs", "credentials", "human_tokens"):
             assert c.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0, table
         assert c.execute("SELECT secret_hash, signing_secret FROM triggers").fetchall() == [
@@ -388,7 +392,7 @@ def test_a_copy_of_a_database_from_before_the_history_move_keeps_its_change_logs
     with closing(sqlite3.connect(source)) as c, c:
         # Before 0064: no history table, the five logs are there, and the migration has not run.
         c.execute("DROP TABLE history_events")
-        c.execute("DELETE FROM schema_migrations WHERE version>='0064_history_events' AND version NOT LIKE 'legacy_%'")
+        forget_from(c, "0064_history_events")
         for statement in OLD:
             c.execute(statement)
         c.execute(

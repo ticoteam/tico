@@ -15,7 +15,7 @@ const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as Routes.Api;
 type AskMsg = {id: string; sender_id: string; body: string; refs: Record<string, unknown>; created_at: string; kind: string};
 type AskTicket = {id: string; status: string; unread: boolean; title: string; message: string; created_at: string; messages: {body: string; from: string; created_at: string}[]};
-type AskNeed = {kind: string; id: string; created_at: string; ask: Record<string, unknown>};
+type AskNeed = {kind: string; id: string; task_id: string; requirement_id: string; line: string; since: string; ask: Record<string, unknown>};
 type AskCard = {id: string; summary: string; method: string; path: string; status: string; result: null; description: string; diff: unknown[];
   body: Record<string, unknown>; proposed_via: string; created_at: string};
 type AskExecution = {job_id: string; message_id: string; bot_id: string; state: string; label: string; text: string; started_at: string;
@@ -28,6 +28,10 @@ declare const ASK: {draw(): void; refresh(): void};
 declare function v2Refresh(): Promise<void>;
 
 const now = new Date().toISOString(), ago = (min: number) => new Date(Date.now() - min * 60000).toISOString();
+// An ask to Ben in Needs you, as GET /v2/needs-you sends it: the item's id is the requirement's, `ask` its requirement.
+const need = (rid: string, task: string, who: string, line: string, since: string, extra: Record<string, unknown> = {}): AskNeed => ({kind: 'ask', id: rid,
+  task_id: task, requirement_id: rid, line, since, ask: {requirement_id: rid, kind: 'answer', line, asked_by: who, who: 'human:ben', choices: null,
+    may: ['answer', 'give'], met: false, shows: [], standing: 'Waiting on Ben', answer: null, ...extra}});
 const msg = (id: string, from: string, body: string, created: string = now): AskMsg => ({id, sender_id: from, body, refs: {}, created_at: created, kind: 'say'});
 
 async function open(browser: import('playwright').Browser, viewport: {width: number; height: number}, state: AskState) {
@@ -54,7 +58,11 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     if (p === '/api/v2/assistant/actions/act9' && method === 'GET') return json({action: state.card});
     if (p === '/api/v2/assistant/actions/act9/confirm') { state.decided.push('act9'); state.card!.status = 'done'; return json({action: state.card}); }
     if (p === '/api/v2/needs-you') return json({actor: 'human:ben', count: state.needs.length, version: 'v' + state.needs.length, items: state.needs});
-    if (p === '/api/v2/tasks/t7/answers') { state.picked!.push(JSON.parse(route.request().postData()!).answers['tone-2']); state.needs = []; return json({ok: true}); }
+    const answer = p.match(/^\/api\/v2\/tasks\/([^/]+)\/asks\/([^/]+)\/answer$/);
+    if (answer && method === 'POST') {
+      state.picked!.push([answer[1], answer[2], JSON.parse(route.request().postData()!).value]);
+      state.needs = state.needs.filter(n => n.id !== answer[2]); return json({task: {id: answer[1]}});
+    }
     if (p === '/api/v2/assistant/messages') {
       const body = JSON.parse(route.request().postData()!);
       state.sent.push(body);
@@ -122,10 +130,9 @@ async function flight(page: import('playwright').Page, dot: string, act: () => P
                  messages: [{body: 'Try a hard reload.', from: 'staff', created_at: ago(20)}]}],
       card: {id: 'act9', summary: 'Add Cara as an admin', method: 'POST', path: '/api/v2/people', status: 'pending', result: null,
              description: 'Add Cara as an admin', diff: [], body: {}, proposed_via: 'botops', created_at: ago(13)},
-      needs: [{kind: 'question', id: 'm9', created_at: ago(12), ask: {id: 'm9', sender_id: 'bot:botops', recipient_id: 'human:ben', body: 'Which inbox should the bot answer?', created_at: ago(12),
-               refs: {questions: [{id: 'inbox', question: 'Which inbox should the bot answer?', options: []}]}}},
-              {kind: 'question', id: 't4', created_at: now, ask: {id: 'q4', sender_id: 'bot:coo', recipient_id: 'human:ben', body: 'Two launch questions', created_at: now,
-               refs: {questions: [{question: 'Launch day?', options: [{label: 'Mon'}, {label: 'Tue'}]}, {question: 'Price?', options: [{label: '$9'}, {label: '$19'}]}]}}}]};
+      picked: [],
+      needs: [need('r9', 't9', 'bot:botops', 'Which inbox should the bot answer?', ago(12)),
+              need('r4', 't4', 'bot:coo', 'OK the launch post', now, {kind: 'ok', may: ['ok', 'no', 'give']})]};
     let {page, errors} = await open(browser, {width: 1280, height: 900}, state);
     assert.equal(await page.locator('#nav-assistant, #nav-botops, #help-open, #mobile-support').count(), 0, 'no BotOps or Assistant rows, no old Help link in the rail');
     const fab = page.locator('#ask-row'), panel = page.locator('#ask-panel');
@@ -188,41 +195,40 @@ async function flight(page: import('playwright').Page, dot: string, act: () => P
     // came after them; the launch questions, newest, are last. The thread opens at the newest.
     await thread.locator('[data-action-host="act9"] [data-confirm]').waitFor();
     const order = await thread.evaluate(el => [...(el.children as unknown as HTMLElement[])].map(c => c.dataset.message || c.dataset.askQ || c.querySelector<HTMLElement>('[data-action-host]')?.dataset.actionHost || '?'));
-    assert.deepEqual(order, ['a1', 'act9', 'm9', 'a2', 't4'], `in time order: ${order}`);
-    assert.match(await thread.locator('.ask-card[data-ask-q="m9"]').innerText(), /BotOps asks/, 'a card says who asks');
+    assert.deepEqual(order, ['a1', 'act9', 'r9', 'a2', 'r4'], `in time order: ${order}`);
+    assert.match(await thread.locator('.ask-card[data-ask-q="r9"] .ask-card-who').innerText(), /^BotOps$/, 'a card says who asks');
     assert.ok(await thread.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 4), 'opens at the newest');
     // BotOps' Confirm card, confirmed here, and its question, answered here.
     await thread.locator('[data-action-host="act9"]').getByRole('button', {name: 'Confirm'}).click();
     await page.waitForFunction(() => !document.querySelector('#ask-panel [data-action-host="act9"] [data-confirm]'));
     assert.deepEqual(state.decided, ['act9']);
-    // Several structured questions are answered on the task, not with a line of words.
-    const several = thread.locator('.ask-card[data-ask-q="t4"]');
-    assert.equal(await several.locator('a[href="#/task/t4"]').count(), 1);
-    assert.equal(await several.locator('form').count(), 0);
-    // A question with no options is answered on its task: the card links there, with no words to send here.
-    const question = thread.locator('.ask-card', {hasText: 'Which inbox should the bot answer?'});
-    assert.equal(await question.locator('a[href="#/task/m9"]').count(), 1);
-    assert.equal(await question.getByRole('textbox').count(), 0);
-    // Three picks or more are a list and Send, and the one chosen survives the thread being drawn again.
-    const need = (id: string, extra: Record<string, unknown>): AskNeed => ({kind: 'question', id, created_at: now, ask: {id: 'q' + id, sender_id: 'bot:botops', recipient_id: 'human:ben', created_at: now, ...extra}});
+    // An OK is given on the ask screen, where what it is for is shown: the card opens it, with nothing to send here.
+    const ok = thread.locator('.ask-card[data-ask-q="r4"]');
+    assert.equal(await ok.getByRole('button', {name: 'Open'}).count(), 1);
+    assert.equal(await ok.locator('form, [data-ask-pick]').count(), 0);
+    // A question with no choices is answered with a line of words, on its ask.
+    const question = thread.locator('.ask-card[data-ask-q="r9"]');
+    await question.getByRole('textbox').fill('Support');
+    await question.getByRole('button', {name: 'Send'}).click();
+    await question.waitFor({state: 'detached'});
+    assert.deepEqual(state.picked, [['t9', 'r9', 'Support']]);
+    // Three choices or more are a list and Send, and the one chosen survives the thread being drawn again.
     state.picked = [];
-    state.needs = [need('t7', {body: 'Tone?', refs: {questions: [{id: 'tone', question: 'Which tone?', options: [{label: 'Plain'}, {label: 'Friendly'}, {label: 'Formal'}]}]}})];
+    state.needs = [need('r7', 't7', 'bot:botops', 'Which tone?', now, {choices: ['Plain', 'Friendly', 'Formal']}), state.needs[0]!];
     await page.evaluate(async () => { await v2Refresh(); ASK.draw(); });
-    const tone = thread.locator('.ask-card[data-ask-q="t7"]');
+    const tone = thread.locator('.ask-card[data-ask-q="r7"]');
     await tone.locator('select').selectOption('2');
-    state.needs = [...state.needs, need('m10', {body: 'Anything else?', refs: {questions: [{id: 'more', question: 'Anything else?', options: [{label: 'Yes'}, {label: 'No'}]}]}})];
+    state.needs = [...state.needs, need('r10', 't10', 'bot:botops', 'Anything else?', now, {choices: ['Yes', 'No']})];
     await page.evaluate(async () => { await v2Refresh(); ASK.draw(); });
-    await thread.locator('.ask-card[data-ask-q="m10"]').waitFor();
+    await thread.locator('.ask-card[data-ask-q="r10"] [data-ask-pick]').first().waitFor();
     assert.equal(await tone.locator('select').inputValue(), '2', 'the pick stays across a redraw');
-    // Reworded (a new question id), the old pick is gone: the recommended option shows. Back to the pick for Send.
-    state.needs = [need('t7', {body: 'Tone?', refs: {questions: [{id: 'tone-2', question: 'Which tone now?', options: [{label: 'Plain'}, {label: 'Friendly', recommended: true}, {label: 'Formal'}]}]}}), state.needs[1]!];
-    await page.evaluate(async () => { await v2Refresh(); ASK.draw(); });
-    await tone.getByText('Which tone now?').waitFor();
-    assert.equal(await tone.locator('select').inputValue(), '1', 'a reworded question starts at its recommended option');
-    await tone.locator('select').selectOption('2');
     await tone.getByRole('button', {name: 'Send'}).click();
     await tone.waitFor({state: 'detached'});
-    assert.deepEqual(state.picked, [['Formal']]);
+    assert.deepEqual(state.picked, [['t7', 'r7', 'Formal']]);
+    // Two choices are two buttons.
+    await thread.locator('.ask-card[data-ask-q="r10"]').getByRole('button', {name: 'No'}).click();
+    await thread.locator('.ask-card[data-ask-q="r10"]').waitFor({state: 'detached'});
+    assert.deepEqual(state.picked, [['t7', 'r7', 'Formal'], ['t10', 'r10', 'No']]);
     assert.equal(await box.getAttribute('placeholder'), 'Message Tico Assistant');
     assert.equal(await box.getAttribute('aria-label'), 'Message Tico Assistant');
     // A message goes with the page it was asked from; a #/support link in the reply opens the Tico team chat over the page.
@@ -271,8 +277,7 @@ async function flight(page: import('playwright').Page, dot: string, act: () => P
     await page.close();
 
     // A phone: the dot in the middle of the tab bar opens a full page above the tab bar, and closes it.
-    const ask = (id: string, who: string, body: string): AskNeed => ({kind: 'question', id, created_at: now, ask: {id, sender_id: who, recipient_id: 'human:ben', body, created_at: now,
-      refs: {questions: [{id: 'q' + id, question: body, options: []}]}}});
+    const ask = (id: string, who: string, body: string): AskNeed => need(id, 't-' + id, who, body, now);
     state = {messages: [msg('p1', 'human:ben', 'Our key is sk-live1234567890abcdef, board blank', ago(5)), msg('p2', 'bot:coo', 'Try a reload.', ago(4))],
       sent: [], read: [], decided: [], answers: [], tickets: [], card: null,
       needs: [ask('m8', 'bot:botops', 'Which inbox should the bot answer?'), ask('m7', 'bot:coo', 'Ship the launch post today?')]};

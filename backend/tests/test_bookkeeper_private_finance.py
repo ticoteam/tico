@@ -33,8 +33,8 @@ def private_run(api, *, carried=("books",), extra=None, feed=True):
             made[f"extra{i}"] = H.task_create(c, requester, title, "Private work.", owner, private=True, lint=False)[
                 "id"
             ]
-        for tid in made.values():
-            c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt, tid))
+        for tid in made.values():  # the run carries each task, as the engine records it
+            H.event(c, "system", "task.next-run.carried", attempt, {"task_id": tid})
     if feed:
         mercury(api)
     return token, made, attempt
@@ -122,9 +122,9 @@ def test_a_person_without_finance_access_does_not_see_the_books_check_or_watch(a
 
 
 def _asks_and_tasks(api):
-    """What a refusal must leave alone: the task rows, the approvals a person decides, and the messages a person reads."""
+    """What a refusal must leave alone: the task rows, the asks a person answers, and the messages a person reads."""
     with api.app.state.store.read() as c:
-        return {t: c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("tasks", "approvals", "messages")}
+        return {t: c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("tasks", "requirements", "messages")}
 
 
 def test_a_refusal_for_another_reason_is_one_plain_sentence_and_the_row_stays(api):
@@ -146,7 +146,7 @@ def test_a_refusal_for_another_reason_is_one_plain_sentence_and_the_row_stays(ap
     with api.app.state.store.read() as c:
         for tid in made.values():
             row = H.task(c, tid)
-            assert row["status"] not in ("done", "closed", "declined"), dict(row)
+            assert row["status"] == "open", dict(row)
             assert H.task_private(c, row), dict(row)
 
 
@@ -176,15 +176,15 @@ def test_the_refusal_is_noted_on_the_task_in_one_sentence_and_nobody_is_asked(ap
     err, widened = call(
         api,
         "hub_task_update",
-        {"id": made["books"], "visibility": "public", "public_title": "Books check"},
+        {"id": made["books"], "private": False, "version": shown["task"]["version"]},
         token=token,
     )
-    assert err and widened.get("error") == "private", widened
+    assert err and widened.get("error") == "privacy", widened
     with api.app.state.store.read() as c:
         assert H.task_private(c, H.task(c, made["books"])), "the Books check stays private"
-        assert H.task(c, made["books"])["status"] not in ("done", "closed", "declined")
+        assert H.task(c, made["books"])["status"] == "open"
     after = _asks_and_tasks(api)
-    assert after["tasks"] == before["tasks"] and after["approvals"] == before["approvals"], (before, after)
+    assert after["tasks"] == before["tasks"] and after["requirements"] == before["requirements"], (before, after)
     assert after["messages"] == before["messages"] + 1, "only the note itself is written: no message to anyone"
     err, left = call(api, "hub_finance_inbox", {"kind": "uncategorized"}, token=token)
     assert not err and feed_id in {r["feed_id"] for r in left["items"]}, left
@@ -208,11 +208,11 @@ def test_a_month_close_from_its_own_private_run_is_refused_and_no_approval_is_as
     asks for, covered by test_close_turn)."""
     token, made, _ = private_run(api, feed=False)
     with api.app.state.store.read() as c:
-        approvals = c.execute("SELECT COUNT(*) FROM approvals").fetchone()[0]
+        asks = c.execute("SELECT COUNT(*) FROM requirements").fetchone()[0]
     refused = post_finance(api, token, "close_period", {"month": "2026-10"}, "close:2026-10")
     assert refused.status_code == 403 and BK.PRIVATE_FINANCE_REFUSAL in refused.text, refused.text
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT COUNT(*) FROM approvals").fetchone()[0] == approvals
+        assert c.execute("SELECT COUNT(*) FROM requirements").fetchone()[0] == asks
         assert c.execute("SELECT COUNT(*) FROM fin_actions WHERE kind='close_period'").fetchone()[0] == 0
 
 
@@ -272,7 +272,7 @@ def test_an_open_books_check_takes_the_next_list_and_no_new_task_is_filed(api):
     assert again == (made["books"], "updated"), again
     with store.read() as c:
         open_books = c.execute(
-            "SELECT COUNT(*) FROM tasks WHERE owner_id=? AND title LIKE 'Books check (%' AND status NOT IN ('done','closed','declined')",
+            "SELECT COUNT(*) FROM tasks WHERE owner_id=? AND title LIKE 'Books check (%' AND status='open'",
             (BK.ACTOR,),
         ).fetchone()[0]
     assert open_books == 1

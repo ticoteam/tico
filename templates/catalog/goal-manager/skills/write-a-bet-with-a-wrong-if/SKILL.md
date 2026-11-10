@@ -12,7 +12,7 @@ description: "Drafts one strategy bet with what it rules out and a wrong-if the 
 
 ## Steps
 
-1. Read the evidence first: `hub strategy show` for the published bets, then `hub doc search --market "<topic>"` and `hub market show <id>` for the pages the bet rests on.
+1. Read the evidence first: `tico strategy show` for the published bets, then `tico doc search --market "<topic>"` and `tico market show <id>` for the pages the bet rests on.
 2. Write the statement as one sentence: a decision the team has made that could turn out wrong. "We sell to small teams first" is a bet. "We care about customers" is not.
 3. Write `rules_out`: what the team gives up by choosing it. If you cannot name anything, the statement is not a bet yet. Rewrite it or drop it.
 4. Write `why` in one or two sentences, and put the market ids it rests on in `cites`.

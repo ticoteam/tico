@@ -22,7 +22,7 @@ interface PageWin {
     const errors: string[] = [], writes: Write[] = [], receipts = new Set();
     page.on('pageerror', (e: Error) => errors.push(e.message));
     const state: {phone: string | null; status: string; verified_at: string | null; call_consent: boolean; preferences: Record<string, unknown>; monthly_spend: number; company_monthly_cap: number; company_monthly_spend: number; price_usd: number; paid_by: string; recent: unknown[]} = {phone: null, status: 'none', verified_at: null, call_consent: false,
-      preferences: {urgent_needs: false, legal_mail: false, bot_stuck: false, urgent_calls: false, timezone: 'America/Los_Angeles',
+      preferences: {legal_mail: false, urgent_calls: false, timezone: 'America/Los_Angeles',
         quiet_start: '22:00', quiet_end: '07:00', emergency_exception: false, monthly_cap: 10},
       monthly_spend: 0, company_monthly_cap: 50, company_monthly_spend: 0, price_usd: 1, paid_by: 'company', recent: []};
     let callConsent = false, sendAttempts = 0;

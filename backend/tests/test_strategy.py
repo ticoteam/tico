@@ -5,6 +5,7 @@ Acme."""
 import json
 
 from backend import strategy as S
+from backend import task_engine as E
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import get, post, put  # noqa: F401
@@ -301,7 +302,7 @@ def test_goals_by_bet_hides_goals_the_reader_may_not_see_and_task_only_goals_are
         c.execute("UPDATE goals SET owner_id='bot:acme-helper' WHERE id=?", (theirs["id"],))
         listed = S.goals_by_bet(c, Auth, Identity("human:cara", "human"), [bet["id"]])
     assert [g["id"] for g in listed[bet["id"]]] == [mine["id"]]
-    post(api, "goals", {"title": "Nope", "owner": "ana", "bet_id": "missing"}, expected=422)
+    post(api, "goals", {"title": "Nope", "owner": "ana", "bet_id": "missing"}, expected=404)
     goal, kpi = goal_with_kpi(api)
     post(api, f"goals/{goal['id']}", {"bet_id": bet["id"]})
     log(api, kpi["id"], 41)
@@ -349,10 +350,21 @@ def test_retiring_a_bet_with_goals_files_one_realign_card_for_the_owner(api):
     post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm", "moves": {goal["id"]: two["id"]}})
     assert get(api, f"goals/{goal['id']}")["goal"]["bet_id"] == two["id"]
     with api.app.state.store.read() as c:
-        closed = H._one(c, "SELECT status, note FROM tasks WHERE id=?", (task["id"],))
-        assert closed["status"] in ("done", "closed")
+        closed = H._one(c, "SELECT status FROM tasks WHERE id=?", (task["id"],))
+        assert closed["status"] == "closed"
         assert not H._one(c, "SELECT 1 AS x FROM goal_asks WHERE ref=?", (proposal["id"],))
-    assert closed["note"] == "Resolved: the goals were realigned with the strategy."
+    assert closing_note(api, task["id"]) == "Resolved: the goals were realigned with the strategy."
+
+
+def closing_note(api, tid):
+    """The why on the move that closed the task."""
+    with api.app.state.store.read() as c:
+        return H._one(
+            c,
+            "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='move' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (tid,),
+        )["note"]
 
 
 def realign_card(api):
@@ -382,11 +394,7 @@ def test_a_reworded_bet_carries_its_earlier_wording_and_keeping_every_goal_says_
     assert task["title"] == "Choose what happens to 2 goals after strategy v2" and "reworded" in task["body"]
     post(api, f"goal-proposals/{card['id']}/decide", {"decision": "confirm", "moves": {g["id"]: "keep" for g in goals}})
     assert all(get(api, f"goals/{g['id']}")["goal"]["bet_id"] == card["payload"]["goals"][0]["bet_id"] for g in goals)
-    with api.app.state.store.read() as c:
-        assert (
-            H._one(c, "SELECT note FROM tasks WHERE id=?", (task["id"],))["note"]
-            == "Resolved: the goals stay as they are."
-        )
+    assert closing_note(api, task["id"]) == "Resolved: the goals stay as they are."
 
 
 def test_a_goal_closed_since_the_card_was_filed_is_listed_closed_and_left_alone(api):
@@ -399,11 +407,7 @@ def test_a_goal_closed_since_the_card_was_filed_is_listed_closed_and_left_alone(
     )["proposal"]
     assert out["result"]["goals"] == {goals[0]["id"]: "closed", goals[1]["id"]: "kept"}
     assert get(api, f"goals/{goals[0]['id']}")["goal"]["status"] == "done"
-    with api.app.state.store.read() as c:
-        assert (
-            H._one(c, "SELECT note FROM tasks WHERE id=?", (task["id"],))["note"]
-            == "Resolved: the goals stay as they are."
-        )
+    assert closing_note(api, task["id"]) == "Resolved: the goals stay as they are."
 
 
 def test_a_kpi_reading_past_the_wrong_if_trips_the_bet_once_per_version(api):
@@ -432,7 +436,8 @@ def test_an_open_bet_task_from_an_earlier_trip_holds_the_trip_until_it_closes(ap
         assert not c.execute(
             "SELECT 1 FROM history_events WHERE subject_type='strategy' AND kind=?", (S.TRIPPED,)
         ).fetchone()
-        c.execute("UPDATE tasks SET status='done' WHERE title='Bet 1: may be wrong'")
+        held = c.execute("SELECT id FROM tasks WHERE title='Bet 1: may be wrong'").fetchone()[0]
+        E.move(c, held, E.DONE, "human:ana", "Looked into it")
     log(api, kpi["id"], 15)
     with api.app.state.store.read() as c:
         tasks = H._rows(c.execute("SELECT status FROM tasks WHERE title='Bet 1: may be wrong' ORDER BY created_at"))

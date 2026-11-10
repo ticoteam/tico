@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_profiles.py": {
-    "F841": 1
-  }
-}

@@ -26,6 +26,7 @@ from backend.tests.helpers.finance_fixtures import (
     spend,
     store,
 )  # noqa: F401
+from backend.tests.helpers.finance_oks import give
 
 NOON = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
 
@@ -662,7 +663,7 @@ def test_the_requester_of_an_approved_action_needs_the_view_to_read_its_reason(b
         )
         assert (asked.status, asked.approver) == ("needs_approval", "human:ben")
         spend(c, "6100", 900)
-        H.approval_decide(c, "human:ben", asked.approval_id, "approved")
+        give(c, "human:ben", asked.approval_id)
         failed = FA.approval_decided(c, asked.approval_id, AT)
         assert failed.status == "failed" and "100" in failed.reason
         act(c, OWNER, "view_revoke", {"grant_id": grant.result["grant_id"]})

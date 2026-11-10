@@ -24,7 +24,7 @@ impl Fixture {
             .output()
             .unwrap();
         let python = String::from_utf8(python.stdout).unwrap();
-        for name in ["git", "gh", "python3", "hub"] {
+        for name in ["git", "gh", "python3", "tico"] {
             let path = root.join(name);
             fs::write(
                 &path,

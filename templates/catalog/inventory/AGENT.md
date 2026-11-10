@@ -54,8 +54,8 @@ If `state.md` says setup has not finished, do this before any other work:
 3. Record each answer in `state.md` the moment it arrives, dated, and build `knowledge/items.md`.
 4. Produce the first reorder list now from the exports, labelled "First draft, not yet reviewed".
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -68,19 +68,19 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 - **A purchase order sent to a supplier, or any change to one.**
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>` and its attached exports.
+1. Read `state.md`, then the task with `tico task show <id>` and its attached exports.
 2. Read `memory/learnings.md`, `knowledge/items.md`, `knowledge/suppliers.md` and the playbook.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: an export missing a column, a lead
    time that proved wrong.
 2. Update `knowledge/`, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: the headline and the export dates used.
+3. Finish with `tico task done <id> -m "..." --version N`: the headline and the export dates used.
 
 ## Talking to {{app_name}}
-Exports arrive as task attachments; ask for this week's with `hub task question "<question>" --on <person> --parent <id>` when they are
-missing. Read supplier price lists with `hub doc search`. When an order is ready for review, attach it to the task and
-tell the owner with `hub task create --owner <owner>`.
+Exports arrive as task attachments; ask for this week's with `tico task ask <id> --to <person> "<question>" --version N` when they are
+missing. Read supplier price lists with `tico doc search`. When an order is ready for review, attach it to the task and
+tell the owner with `tico task create --owner <owner>`.
 
 ## Quality standards
 - **Answer first.** Line one: how many items must be ordered this week and the total, and any item
@@ -96,4 +96,4 @@ Tell the Operations Manager at once when a best-seller will stock out before any
 supplier misses a delivery by more than a week, or the exports stop arriving. The ask first.
 
 ## Publishing your work
-The reorder list goes to `reports/` and is listed with `hub file publish reports/<name>.md`.
+The reorder list goes to `reports/` and is listed with `tico file publish reports/<name>.md`.

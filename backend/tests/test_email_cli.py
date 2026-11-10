@@ -83,8 +83,8 @@ def test_email_mcp_reads_share_the_same_rights_and_are_offered_to_the_assistant(
 def test_archive_cli_reports_count_and_a_runnable_undo(email_cli, live, capsys, assistant_token):
     assert email_cli(assistant_token, "archive", BOX, "m1", "m2") == 0
     text = capsys.readouterr().out.strip()
-    assert text == f"Archived 2 messages in {BOX}. Undo: hub email unarchive {BOX} m1 m2"
-    assert email_cli(assistant_token, *shlex.split(text.split("Undo: hub email ")[1])) == 0
+    assert text == f"Archived 2 messages in {BOX}. Undo: tico email unarchive {BOX} m1 m2"
+    assert email_cli(assistant_token, *shlex.split(text.split("Undo: tico email ")[1])) == 0
     assert capsys.readouterr().out.startswith(f"Unarchived 2 messages in {BOX}.")
     assert live["writes"][-1][1] == {"ids": ["m1", "m2"], "addLabelIds": ["INBOX"], "removeLabelIds": []}
 
@@ -102,7 +102,7 @@ def test_organize_cli_query_limits_json_and_mark_read_commands(email_cli, live, 
         ("mark-unread", "mark-read", ["UNREAD"], []),
     ):
         assert email_cli("ana-test", action, BOX, "m1") == 0
-        assert f"Undo: hub email {inverse} {BOX} m1" in capsys.readouterr().out
+        assert f"Undo: tico email {inverse} {BOX} m1" in capsys.readouterr().out
         assert live["writes"][-1][1] == {"ids": ["m1"], "addLabelIds": add, "removeLabelIds": remove}
 
 
@@ -110,7 +110,7 @@ def test_label_cli_undo_quotes_label_names_and_is_runnable(email_cli, live, caps
     assert email_cli("ana-test", "label", BOX, "Review later", "m1") == 0
     text = capsys.readouterr().out
     assert "Labeled 1 messages" in text and "'Review later'" in text
-    assert email_cli("ana-test", *shlex.split(text.split("Undo: hub email ")[1])) == 0
+    assert email_cli("ana-test", *shlex.split(text.split("Undo: tico email ")[1])) == 0
     assert "Unlabeled 1 messages" in capsys.readouterr().out
     assert live["writes"][-1][1]["removeLabelIds"]
 

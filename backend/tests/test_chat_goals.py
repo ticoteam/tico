@@ -119,7 +119,13 @@ def test_goal_migration_numbers_and_idempotency(api):
     assert hubdb.MIGRATIONS[15] == SCHEMA
 
 
-def test_a_task_goal_is_set_by_the_keeper_and_meeting_it_marks_the_task_done(api):
+@pytest.mark.parametrize('ruled', [False, True])
+def test_a_task_goal_is_set_by_the_keeper_and_meeting_it_marks_the_task_done(api, ruled):
+    """With a company rule in force the done note is the fixed "Goal met.": the harness's words were never checked."""
+    if ruled:
+        from backend.tests.helpers.org_rules import rule
+
+        rule(api, {'kind': 'internal', 'text': 'Never name the board.', 'who': {'bots': ['ops']}})
     machine = runner(api)
     assign(api, machine, 'ops')
     with api.app.state.store.transaction() as c:
@@ -155,7 +161,15 @@ def test_a_task_goal_is_set_by_the_keeper_and_meeting_it_marks_the_task_done(api
     goal_event(api, machine, attempt, 'met', 'The summary is in Docs.')
     assert get(api, f"conversations/{task['conversation_id']}/goal")['goal']['status'] == 'met'
     done = get(api, 'tasks/' + task['id'])['task']
-    assert done['status'] == 'done' and done['note'] == 'The summary is in Docs.'
+    assert done['status'] == 'done'
+    with api.app.state.store.read() as c:  # the goal's note is the owner's answer to "owner says done"
+        notes = [
+            r[0]
+            for r in c.execute(
+                "SELECT a.notes FROM answers a JOIN visits v ON v.id=a.visit_id WHERE v.task_id=?", (task['id'],)
+            )
+        ]
+    assert notes == ['Goal met.' if ruled else 'The summary is in Docs.']
 
 
 def test_turning_a_task_goal_off_clears_it_natively_and_a_persons_goal_never_completes_the_task(api):
@@ -215,18 +229,14 @@ def test_another_bots_turn_in_the_task_room_leaves_the_owners_task_goal_alone(ap
         },
         machine['token'],
     )
-    with api.app.state.store.transaction() as c:  # the owner tells another bot, in the task's room
-        conv = H.conversation(c, task['conversation_id'])
-        H._write_message(
+    with api.app.state.store.transaction() as c:  # the owner asks another bot on the task: its turn, in the task's room
+        H.task_ask(
             c,
             'bot:ops',
+            task['id'],
             'bot:product-design',
-            'The summary is drafted.',
-            conv,
-            'say',
-            {'task': task['id'], 'needs_action': True},
-            None,
-            None,
+            'Is the summary right?',
+            seen_version=H.task(c, task['id'])['version'],
         )
     other = claim(api, machine)
     assert other['bot'] == 'product-design' and other['task']['id'] == task['id'] and other['chat_goal'] is None
@@ -257,9 +267,11 @@ def test_handing_the_task_to_a_person_ends_the_old_owners_task_goal(api):
 def test_a_done_tasks_goal_is_met_even_when_the_bot_signs_off_waiting(api):
     machine, task = task_goal_world(api)
     attempt = claim(api, machine)
+    # The run starts first: a turn whose task finished before it started is refused (execution.held_before_start).
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'fake-thread'}, machine['token'])
     with api.app.state.store.transaction() as c:  # the bot marks its task done, then says what it waits on elsewhere
-        H.task_update(c, 'bot:ops', task['id'], status='done', note='Published.')
-    goal_event(api, machine, attempt, 'paused', 'Waiting on: Ana to "close" it.')
+        H.task_done(c, 'bot:ops', task['id'], 'Published.', H.task(c, task['id'])['version'])
+    goal_event(api, machine, attempt, 'paused', 'Waiting on: Ana to "close" it.', started=False)
     goal = get(api, f"conversations/{task['conversation_id']}/goal")['goal']
     assert goal['status'] == 'met' and goal['note'] == 'Waiting on: Ana to "close" it.'
     assert get(api, 'tasks/' + task['id'])['task']['status'] == 'done'

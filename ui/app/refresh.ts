@@ -33,7 +33,6 @@ async function refresh(force = false): Promise<void> {
   if (S.me?.cloud) void updUnreadRefresh();
   renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster();
   tipRefresh();
-  taskBuilderNoticesRefresh();
   botAlertDraw();
   if (BOT) botScreenRefresh(BOT.slug);   // the Screen row and header button follow the computer (online, screen offered)
   if (BOT && $('#bot-onboard-host') && ($('#bot-onboard') ? '1' : '') !== (frNeedsSetup(botRow(BOT.slug)) ? '1' : '')) frBotRefresh(BOT.slug);   // the mark clears when the bot says it is set up
@@ -41,12 +40,10 @@ async function refresh(force = false): Promise<void> {
   // written in).
   const reviewing = $('#main .req[open]') || [...document.querySelectorAll('#main .issue-compose:not([hidden])')].some(form => !form.closest('details:not([open])'));
   if (force || !reviewing) {
-    // Only what changed since the list's cursor (not Done's pages); only changed rows redraw. A full read on its way
-    // (tasksReadFull) brings all of it.
-    if (TASKS_ST && isTasksRoute(S.route) && !TASKS_ST.fullRead) void tasksLoad(TASKS_ST, {poll: true});
-    // The Active column beside the chat was loaded once and never again, so a task the bot closed
-    // stayed listed until a reload. The poll redraws it too.
-    if (BOT && BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
+    if (TASKS_ST && isTasksRoute(S.route)) void (force ? tasksLoad(TASKS_ST) : tasksCatchUp(TASKS_ST));   // a delta from the list's cursor
+    // A bot's tasks catch up from their cursor too (bot-tasks.ts); a forced refresh reads them whole.
+    if (BOT && BOT.loaded.has('tasks')) void (force ? loadBotTasksV2(BOT.slug) : botTasksCatchUp(BOT.slug));
+    if (typeof PERSON_TASKS !== 'undefined' && PERSON_TASKS) void personTasksReload();
   }
 }
 
@@ -66,23 +63,17 @@ function sameData(a: unknown, b: unknown): boolean {
   const fa = fieldsOf(a), fb = fieldsOf(b);
   return ka.every(k => Object.hasOwn(b, k) && sameData(fa[k], fb[k]));
 }
-// What a list shows of a task: a link's own write time is not on any row, and a computer's heartbeat on a worktree
-// changes only that, once a minute per tree.
-const taskListCopy = (t: LiveTaskRow | null | undefined): unknown => Array.isArray(t?.links) ? {...t, links: t.links.map(({updated_at: updated, ...link}) => link)} : t;
 /** One live task event: the task it names (task_id or id), whether it is gone or a bulk change, and the task's copy. */
 interface LiveTaskEvent {
+  /** The change's number (backend/events.py _event): a list read as of a later one already holds it. */
+  seq?: unknown;
   id?: unknown;
   task_id?: unknown;
   gone?: unknown;
   bulk?: unknown;
+  kinds?: unknown;
   task?: {id?: unknown; lane?: unknown; links?: unknown; owner_id?: unknown; requester_id?: unknown; type_id?: unknown} | null;
 }
-/** A task row in a list: its id and links, and the rest of the row as the server sends it (a TaskRow fits it). */
-interface LiveTaskRow { id?: unknown; links?: unknown; }
-/** The list a live change applies to, the open one or the kept one (S.lastRead.tasks), with its rows and cursor. */
-interface KeptTaskList { tasks: LiveTaskRow[]; since?: unknown; }
-// The kept list S.lastRead.tasks: LastRead types its tasks key as unknown, so this is the one place it is cast.
-const keptTasks = (): KeptTaskList | undefined => S.lastRead.tasks as KeptTaskList | undefined;
 function liveTasksApply(events: LiveTaskEvent[]): void {
   events = events.map(d => d.task_id && !d.id ? {...d, id: d.task_id} : d);
   const chat = TASK_CHAT;   // the open conversation as it is now (taskChatStop below clears the global)
@@ -91,56 +82,16 @@ function liveTasksApply(events: LiveTaskEvent[]): void {
     else chat.dialog.querySelector<HTMLElement>('[data-modal-close]')?.click();
     taskChatStop();
   }
-  const state = TASKS_ST;
-  // One change to many tasks (a type or tag edit) comes as one `bulk` event: the open list reads in full once (its
-  // cursor resets), and the other lists below reload as for any change.
-  const bulk = events.some(d => d.bulk);
-  const unchanged = new Set();
-  if (bulk && state && isTasksRoute(S.route)) liveThrottle('tasks-bulk', () => { if (TASKS_ST === state) void tasksLoad(state); }, 5000);
-  // The open list, or away from it the list kept for the next visit (S.lastRead.tasks): kept current the same way, so a
-  // return paints what is true now. A bulk change drops the kept list; the next visit reads it.
-  if (bulk && !state) S.lastRead.tasks = null;
-  const kept = keptTasks();
-  const list: KeptTaskList | null = state && isTasksRoute(S.route) && state.tasks ? state : !state ? kept ?? null : null;
-  if (list) {
-    const known = new Map<string, number>(list.tasks.map((t, i): [string, number] => [String(t.id), i]));
-    let changed = false;
-    for (const d of events) {
-      const i = known.get(String(d.id));
-      if (d.gone) { if (i != null) { list.tasks = list.tasks.filter(t => String(t.id) !== String(d.id)); known.clear(); list.tasks.forEach((t, j) => { known.set(String(t.id), j); }); changed = true; } continue; }
-      if (!d.task) continue;
-      const task = d.task;   // a closure below cannot keep d.task's narrowing
-      if ((d.task.lane || 'company') !== 'company') { if (i != null) { list.tasks = list.tasks.filter(t => String(t.id) !== String(d.id)); known.clear(); list.tasks.forEach((t, j) => { known.set(String(t.id), j); }); changed = true; } continue; }
-      // A write that shows nothing new on the list: no redraw. The open task follows any change (a worktree's
-      // progress shows there), so only an identical copy is left out of that.
-      if (i != null && sameData(taskListCopy(list.tasks[i]), taskListCopy(task))) {
-        if (sameData(list.tasks[i], task)) unchanged.add(String(d.id));
-        else list.tasks = list.tasks.map((t, j) => j === i ? task : t);
-        continue;
-      }
-      if (i != null) list.tasks = list.tasks.map((t, j) => j === i ? task : t);
-      else { list.tasks = [...list.tasks, task]; known.set(String(d.id), list.tasks.length - 1); }   // a new task arrives whole
-      changed = true;
-    }
-    // Never the whole list again: every open tab gets every change, and a busy team's bots change tasks every few
-    // seconds. The 2-minute refresh catches up from the list's cursor.
-    if (changed && list === state) { tasksTools(state); tasksRender(state); }
-  }
-  // These read whole lists, so at most every 15 s and not in a hidden tab (liveThrottle).
-  if (BOT) {
-    const me = 'bot:' + BOT.slug;
-    if (events.some(d => d.bulk || d.gone || d.task?.owner_id === me || d.task?.requester_id === me)) liveThrottle('bot-tasks', () => {
-      if (!BOT || BOT.slug !== me.slice(4)) return;
-      if (BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
-    });
-  }
-  if (typeof PERSON_TASKS !== 'undefined' && PERSON_TASKS) {
-    const me = 'human:' + PERSON_TASKS;
-    if (events.some(d => d.bulk || d.gone || d.task?.owner_id === me)) liveThrottle('person-tasks', personTasksReload);
-  }
+  // The Tasks page puts each event's task in place (tasks-page.ts); it reads nothing.
+  if (events.length) tasksLiveApply(events);
+  // A bot's page puts each in place too (bot-tasks.ts); it reads nothing.
+  if (BOT) botTasksLive(BOT.slug, events);
+  // And a person's page (person-page.ts).
+  if (typeof PERSON_TASKS !== 'undefined' && PERSON_TASKS) personTasksLive(events);
+  // And My dashboard's My tasks (dashboard.ts).
+  dashTasksLive(events);
   const open = TASK_CHAT;   // read again: a stop above may have cleared it
-  if (open && events.some(d => d.bulk || String(d.id) === String(open.id) && !unchanged.has(String(d.id)))) taskChatLive(open);
-  pipelineLateLive(events);   // the pipeline on the board: its cards' late times (pipeline-rail.ts)
+  if (open && events.some(d => d.bulk || String(d.id) === String(open.id))) taskChatLive(open);
 }
 /** A bot's live status line: the bot, and its status (absent when the bot has none). */
 interface LiveBotEvent { bot: string; status?: V2BotState; }
@@ -154,7 +105,6 @@ function liveWire(): void {
     liveSoon('bots', () => {
       renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster();
       tipRefresh();
-      taskBuilderNoticesRefresh();
       botAlertDraw();
       overviewRefresh();                // the campus desks too, not only at the next refresh (no read: the model is local)
     }, 200);
@@ -168,54 +118,28 @@ function liveWire(): void {
     liveSoon('needs', () => {
       renderTree();
       if (OVERVIEW_PAGE) overviewNeedsDraw();
-      if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
+      tasksNeedsLive();
       if (BOT) botNeedsChanged(BOT.slug);
     }, 200);
   }).catch(() => {}));
-  // My dashboard reads itself again when what its cards show may have moved (ui/app/dashboard.ts dashFollow).
-  for (const topic of ['tasks', 'needs-list', 'threads']) liveOn(topic, dashFollow);
+  // My dashboard puts each change in its cards (ui/app/dashboard.ts); it reads nothing for them.
+  liveOn('needs-list', dashNeedsLive);
+  liveOn('threads', dashThreadsLive);
   // Away longer than the server keeps: read everything once.
-  liveOn('reset', () => { pagesAccessRefresh(); if (TASKS_ST) TASKS_ST.since = null; const keptList = keptTasks(); if (keptList) keptList.since = null; liveSoon('refresh', () => refresh(true), 100); });
+  liveOn('reset', () => { pagesAccessRefresh(); liveSoon('refresh', () => refresh(true), 100); });
   liveStart();
 }
-// A tab back from sleep or from a dropped network catches its task list up at once: a delta read from the list's
-// cursor (tasksLoad), which costs only what changed while it was away, or a full read when the list has no cursor (its
-// paging stopped part-way, or its last read failed).
+// A tab back from sleep or from a dropped network reads the Tasks page's view again, and reconnects the stream after a
+// long time away (a phone can drop it while the app is suspended without the page hearing of it).
+const TASKS_AWAY_MS = 10 * 60e3;
 let tasksHiddenAt = 0;
-function tasksCatchUp(): void {
-  if (TASKS_ST && isTasksRoute(S.route)) liveSoon('tasks-catch-up', () => { if (TASKS_ST && !TASKS_ST.fullRead) void tasksLoad(TASKS_ST, {poll: true}); }, 300);
-}
-// The open list never drifts for long: it is read in full (tasksReadFull) at least every 15 minutes while it is on
-// screen, and at once when the page comes back after more than 10 minutes away. A delta read and the live stream bring
-// only what the change log names, and a phone can drop the stream while the app is suspended without the page hearing
-// of it, so it is reconnected then too. "Away" is hidden, or asleep: a suspended app's timers stop without the page
-// being hidden first, so a gap between two ticks of the 30-second clock counts as well.
-const TASKS_FULL_MS = 15 * 60e3, TASKS_AWAY_MS = 10 * 60e3;
-let tasksTickAt = Date.now();
-function tasksFreshen(): void {
-  const state = TASKS_ST;
-  if (!state || !isTasksRoute(S.route) || document.hidden || state.fullRead) return;
-  if (!state.stale && Date.now() - (state.fullAt || 0) < TASKS_FULL_MS) return;
-  if (formBusy($('#task-body'))) return;     // someone writing in the list: the next tick looks again
-  void tasksReadFull(state, {poll: true});
-}
-// The stream is reconnected once per return, not on each tick a failing full read leaves the list stale: that would
-// undo the stream's own backoff while the server is down.
 function tasksBack(away: number): void {
-  if (away > TASKS_AWAY_MS) { liveResume(); if (TASKS_ST) TASKS_ST.stale = true; tasksFreshen(); }
-  else if (away > 30000) tasksCatchUp();
+  if (away > TASKS_AWAY_MS) liveResume();
+  if (away > 30000 && TASKS_ST && isTasksRoute(S.route)) void tasksCatchUp(TASKS_ST);
 }
-function tasksTick(): void {
-  const now = Date.now(), slept = now - tasksTickAt;
-  tasksTickAt = now;
-  if (document.hidden) return;
-  if (slept > TASKS_AWAY_MS) tasksBack(slept); else tasksFreshen();
-}
-setInterval(tasksTick, 30000);
-window.addEventListener('online', tasksCatchUp);
+window.addEventListener('online', () => tasksBack(Infinity));
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { tasksHiddenAt = Date.now(); return; }
-  tasksTickAt = Date.now();
   if (tasksHiddenAt) tasksBack(Date.now() - tasksHiddenAt);
 });
 // Back from the browser's page cache: nothing ran meanwhile.

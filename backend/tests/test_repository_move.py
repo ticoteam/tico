@@ -1,5 +1,5 @@
 """Placing or moving a bot brings its repository: the server names it on the assignment, refuses a move that
-would strand the only copy, forgets the old computer's report, and Health and `hub health check` say why a
+would strand the only copy, forgets the old computer's report, and Health and `tico health check` say why a
 bot has no repository on its computer."""
 
 from backend.tests.helpers.api import assign, get, post, runner

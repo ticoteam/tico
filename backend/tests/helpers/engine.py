@@ -1,8 +1,8 @@
 """Rows for tests of the one task engine (backend/task_engine.py): a pipeline with its stages and requirements, a bot,
 and a task put into a pipeline's first stage.
 
-Until the cut-over `new_task` makes the row through `H.task_create` (so it has a conversation and a number like any
-task) and then calls `task_engine.enter`. After it, `H.task_create` does both.
+`new_task` makes the task through `H.task_create`, as everything does: it has a conversation, and the engine has put
+it into the pipeline's first stage.
 """
 
 import json
@@ -45,8 +45,11 @@ def place(c, slug):
     c.execute("INSERT OR REPLACE INTO assignments VALUES(?,?,1,?,'human:ana')", (slug, "r1", H.now()))
 
 
-def ran(c, task_id, actor, state="completed", at=None):
-    """The bot's queued wakes for a task have had their run: each job gets one run that ended in `state` at `at`."""
+def ran(c, task_id, actor, state="completed", at=None, runner="r1"):
+    """The bot's queued wakes for a task have had their run: each job gets one run that ended in `state` at `at`, each
+    started in order (task_wakes.started), on the computer `runner`."""
+    from backend import task_wakes
+
     at = at or H.now()
     rows = c.execute(
         "SELECT j.id, j.message_id FROM jobs j JOIN messages m ON m.id = j.message_id "
@@ -57,9 +60,10 @@ def ran(c, task_id, actor, state="completed", at=None):
         run = H.new_id()
         c.execute(
             "INSERT INTO attempts (id, job_id, bot_id, runner_id, generation, token_hash, state, lease_until, "
-            "created_at, started_at, finished_at, message_id, task_id) VALUES (?,?,?,'r1',1,?,?,?,?,?,?,?,?)",
-            (run, job_id, H.actor_id(actor), run, state, at, at, at, at, message_id, task_id),
+            "created_at, started_at, finished_at, message_id, task_id) VALUES (?,?,?,?,1,?,?,?,?,?,?,?,?)",
+            (run, job_id, H.actor_id(actor), runner, run, state, at, at, at, at, message_id, task_id),
         )
+        task_wakes.started(c, run)
         c.execute(
             "UPDATE jobs SET state=?, attempt_id=? WHERE id=?",
             ("completed" if state == "completed" else "uncertain", run, job_id),
@@ -157,10 +161,19 @@ def settled(c):
 
 
 def new_task(c, by, title, pipeline_id="general", assignee=None, parent=None):
-    """A task in the first stage of `pipeline_id`, as `task_engine.task()` gives it."""
-    row = H.task_create(c, by, title, "What to do and how to tell it is done.", assignee or by, lint=False)
-    settled(c)
-    return E.enter(c, row["id"], pipeline_id, by, assignee=assignee, parent=parent)
+    """A task in the first stage of `pipeline_id`, as `task_engine.task()` gives it: made the way every task is
+    (`H.task_create`), given to `assignee`, or to whoever files it when nobody is named."""
+    row = H.task_create(
+        c,
+        by,
+        title,
+        "What to do and how to tell it is done.",
+        assignee or by,
+        parent_id=parent,
+        pipeline=pipeline_id,
+        lint=False,
+    )
+    return E.task(c, row["id"])
 
 
 def say_done(c, row, by=None):
@@ -180,6 +193,12 @@ def answer(c, row, requirement_id, value, by, notes=None):
         (aid, row["visit"]["id"], requirement_id, by, value, notes, H.now()),
     )
     return aid
+
+
+def ask_key(c, requirement_id):
+    """A batch item's key for an ask on a task's own visit: "ask:" + waiting_on.ask_id (its visit, the requirement)."""
+    visit = c.execute("SELECT visit_id FROM requirements WHERE id=?", (requirement_id,)).fetchone()[0]
+    return f"ask:{visit}:{requirement_id}"
 
 
 def wakes(c, task_id, actor=None):
@@ -207,6 +226,19 @@ def left(c, actor):
     people = whole["people"]
     at = next(i for i, p in enumerate(people) if p["id"] == H.actor_id(actor))
     people[at] = Access.leave(c, people, people[at])
+    Access.save_roster(c, {**whole, "people": people})
+
+
+def no_sign_in(c, actor):
+    """Turn a person's sign-in off, as the People tab's switch does (backend/access.py): `sign_in: false` on their
+    roster row. They are still on the chart, and cannot act."""
+    from backend import access as Access
+    from backend.views import roster
+
+    whole = roster(c)
+    people = whole["people"]
+    at = next(i for i, p in enumerate(people) if p["id"] == H.actor_id(actor))
+    people[at] = {**people[at], "sign_in": False}
     Access.save_roster(c, {**whole, "people": people})
 
 

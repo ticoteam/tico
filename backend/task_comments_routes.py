@@ -1,4 +1,4 @@
-"""Task comment and reader routes: comment writes, answers, tree, links, readers."""
+"""Task comment and reader routes: comment writes, tree, links, readers."""
 
 from .store import H
 from . import models as M
@@ -9,7 +9,6 @@ from . import counsel
 from . import delivery
 from . import org_rule_check
 from . import task_privacy as privacy
-from . import question_tasks
 from . import teammate_access
 from . import visuals
 
@@ -17,16 +16,12 @@ from . import visuals
 def register(
     app,
     auth,
-    checked_write,
     comment_bot,
     comment_way_for,
     mover,
     mutate,
-    readable_task,
     rule_check,
     rule_comment_audience,
-    rule_task_audience,
-    saved_retry,
     send,
     settings,
     store,
@@ -40,7 +35,7 @@ def register(
         task_id = auth.resolve_task(c, who, tid)
         row = auth.task(c, who, task_id)
         from .chat_goals import may_direct, own_room, set_goal
-        from .task_review import comment_rights
+        from .task_reads import comment_rights
 
         comment_rights(c, auth, who, task_id)
         # The org rule check (backend/org_rule_check.py), applied before anything is written: held, nothing is.
@@ -176,7 +171,8 @@ def register(
         running turn, queue right after it, defer to its next turn on the task (at the latest `defer_for`, 24h), or
         goal: the task session's goal becomes the text (chat_goals.set_goal). Omitted, it steers (D13), or defers with no
         deadline for a reader who may not direct the task's bots. It reaches the task's followers and whom it addresses
-        (threads.plan). A question to a person is a question task (`POST /api/v2/task-questions`), never a comment."""
+        (threads.plan). A question to a person is an ask on the task (`POST /api/v2/tasks/{tid}/asks`), never a
+        comment."""
         who = request.state.identity
         counsel.no_attachments(who, body.attachments)  # before the rule check holds anything (visuals.attach too)
         if body.delivery and body.needs_action and body.delivery != "steer":
@@ -207,61 +203,6 @@ def register(
                     c, request.state.identity, H.task_comments(c, task_id, actor=privacy.actor(request.state.identity))
                 )
             }
-
-    @app.get("/api/v2/tasks/{tid}/answers")
-    def task_answers(request: Request, tid: str):
-        with store.read() as c:
-            task_id = auth.resolve_task(c, request.state.identity, tid)
-            who = request.state.identity
-            row = auth.task(c, who, task_id)
-            answers = [m["answer"] for m in H.task_comments(c, task_id, actor=privacy.actor(who)) if m.get("answer")]
-            # A question task's own answer (backend/question_tasks.py) is on the task, not in a comment. Words it copies
-            # from a page this reader may not open are redacted, as /api/v2/answers does.
-            own = question_tasks.view_fields(row).get("answer")
-            from .files import readable_page_refs
-
-            return readable_page_refs(c, auth, who, {"answers": answers + ([own] if own else [])}, task_id=task_id)
-
-    def task_answer_write(c, who, tid, body, warn=""):
-        from .task_review import answer_task
-
-        task_id = auth.resolve_task(c, who, tid)
-        row = auth.task(c, who, task_id)
-        wake = who.role == "bot" or H.task_participant(c, who.actor, row) or mover(c, who)
-        return answer_task(c, auth, who, task_id, body, wake=wake, warn=warn)
-
-    def task_answer_text(body):
-        """What a task answer says, as the rule check reads it: each question's picks and the free text."""
-        if body.dismiss:
-            return ""
-        with store.read() as c:
-            asked = H.answer_question(c, body.target.model_dump(exclude_none=True))
-            return H.answer_text(asked, body.answers, other=body.other)[0]
-
-    @app.post("/api/v2/tasks/{tid}/answers")
-    def task_answer(request: Request, tid: str, body: M.TaskAnswer):
-        who = request.state.identity
-
-        def write(c, gate):
-            return task_answer_write(c, who, tid, body, org_rule_check.warn_line(gate))
-
-        return checked_write(
-            request,
-            body,
-            who,
-            "task_answer",
-            task_answer_text(body),
-            lambda c: rule_task_audience(c, auth.task(c, who, auth.resolve_task(c, who, tid)), who.actor),
-            write,
-            {"task": tid, "body": body.model_dump(mode="json", by_alias=True)},
-        )
-
-    @org_rule_check.replayer("task_answer")
-    def rule_replay_task_answer(c, bot, hold, replay, ingest, gate=None):
-        # Its route's guard (`/tasks/{tid}/answers`: the task's readers may read the run's private work) ran in send.
-        return task_answer_write(
-            c, bot, replay["task"], M.TaskAnswer.model_validate(replay["body"]), org_rule_check.warn_line(gate)
-        )
 
     @app.get("/api/v2/tasks/{tid}/tree")
     def task_tree(request: Request, tid: str):

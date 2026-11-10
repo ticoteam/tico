@@ -19,14 +19,14 @@ def cards_of(view):
 
 def test_the_dashboard_starts_with_its_defaults_and_counts_only_what_each_reader_may_read(api):
     task(api, "bot:ops", "Ops work")
-    task(api, "bot:inbox", "Mail work", status="doing")  # inbox is Ana's alone
+    task(api, "bot:inbox", "Mail work")  # inbox is Ana's alone
     view = place(api, "dashboard", "cara-test")
     assert view["saved"] is False and view["can_edit"] is False
     assert cards_of(view) == [("tasks_by_status", ""), ("done_per_week", ""), ("needs_you", ""), ("latest_pages", "")]
     assert all(p["id"] is None for p in view["pins"])
     counts = lambda v: v["pins"][0]["card"]["data"]["counts"]  # noqa: E731
-    assert counts(view)["open"] == 1 and counts(view)["doing"] == 0
-    assert counts(place(api, "dashboard"))["doing"] == 1
+    assert counts(view) == {"open": 1, "done": 0}
+    assert counts(place(api, "dashboard"))["open"] == 2
     assert len(view["pins"][1]["card"]["data"]["weeks"]) == 8
     # Saving makes the defaults real; a member arranges nothing.
     put(api, "places/dashboard", {}, "cara-test", expected=403)
@@ -140,6 +140,18 @@ def test_needs_you_and_spend_show_only_their_own_reader(api):
     as_member(api, "ben@acme.example")
     shown = get(api, "cards?ids=" + spend["id"], "ben-test")["cards"][0]
     assert shown["hidden"] is True and shown["data"] is None  # a member sees no company spend
+
+
+def test_needs_you_rows_say_each_items_own_line(api):
+    """A Needs you row says what the item asks of its reader (the ask's line), not the title of the task it is on."""
+    from backend.store import H
+
+    with api.app.state.store.transaction() as c:
+        work = H.task_create(c, "human:ben", "Launch plan", "Plan it.", "human:ben", lint=False)
+        H.task_ask(c, "human:ben", work["id"], "human:ana", "Which region?")
+    needs = next(p["card"] for p in place(api, "dashboard")["pins"] if p["card"]["template"] == "needs_you")
+    asks = [row for row in needs["data"]["items"] if row["kind"] == "ask"]
+    assert [(row["title"], row["task_id"]) for row in asks] == [("Which region?", work["id"])]
 
 
 def test_a_page_pinned_by_a_person_widens_to_the_places_audience_and_is_in_its_activity(api):

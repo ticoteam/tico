@@ -92,14 +92,16 @@ def test_commenting_does_not_follow(api):
 
 def test_a_new_owner_follows_and_the_old_one_stops_unless_they_chose(api):
     row = made(api)
-    r = api.post(f"/api/v2/tasks/{row['id']}", json={"version": row["version"], "owner": "ben"}, headers=headers())
+    r = api.post(
+        f"/api/v2/tasks/{row['id']}/owner", json={"version": row["version"], "owner": "ben"}, headers=headers()
+    )
     assert r.status_code == 200, r.text
     assert who(api, row["id"]) == {"human:ben": ("live", "owner")}
     assert rows(api, row["id"])["bot:ops"] == (0, "read")
     # Ben chooses to follow; handing it on to Cara keeps him.
     assert follow(api, row["id"], {"notify": "digest"}, "ben-test").status_code == 200
     version = get(api, "tasks/" + row["id"])["task"]["version"]
-    r = api.post(f"/api/v2/tasks/{row['id']}", json={"version": version, "owner": "cara"}, headers=headers())
+    r = api.post(f"/api/v2/tasks/{row['id']}/owner", json={"version": version, "owner": "cara"}, headers=headers())
     assert r.status_code == 200, r.text
     assert who(api, row["id"]) == {"human:ben": ("digest", "manual"), "human:cara": ("live", "owner")}
 

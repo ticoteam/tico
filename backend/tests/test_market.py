@@ -398,7 +398,8 @@ def test_the_daily_curate_pass_is_skipped_when_it_has_nothing_to_read(api):
     # A team that rewrote the automation's words gave it other work: it runs with nothing new to curate.
     with store.transaction() as c:
         c.execute("UPDATE market_insights SET status='applied'")
-        c.execute("UPDATE tasks SET status='done' WHERE owner_id='bot:librarian'")
+        for (done,) in c.execute("SELECT id FROM tasks WHERE owner_id='bot:librarian'").fetchall():
+            H.task_done(c, "human:ana", done, "Curated")
     flow = get(api, f"automations/{aid}")
     steps = [{**step, "prompt": "Curate the market, then tidy the glossary."} for step in flow["steps"]]
     r = api.patch(f"/api/v2/automations/{aid}", json={"steps": steps}, headers=headers())

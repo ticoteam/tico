@@ -46,10 +46,6 @@ interface AskInfo {
 interface AskExecution {
   text?: string;
 }
-// Needs you: a bot's question carries its ask (NeedsAsk, ui/types/shared.d.ts); the panel reads these fields of each item.
-interface NeedsItem {
-  created_at?: string;
-}
 // The reply forms: a choice of options has a named select, a free answer a named text box.
 interface AskChoiceForm extends HTMLFormElement {
   readonly elements: HTMLFormControlsCollection & { pick: HTMLSelectElement };
@@ -181,6 +177,8 @@ function askClick(ev: MouseEvent) {
   if (t.closest('[data-ask-close]')) { askToggle(false); return; }
   const pick = t.closest<HTMLElement>('[data-ask-pick]');
   if (pick) { void askAnswer(pick.closest<HTMLElement>('[data-ask-q]'), {pick: Number(pick.dataset.askPick)}); return; }
+  const opens = t.closest<HTMLElement>('[data-ask-open]');
+  if (opens) { const id = opens.closest<HTMLElement>('[data-ask-q]')?.dataset.askQ || ''; if (!decideOpen(id)) void decideWanted(id); return; }
   const more = t.closest<HTMLElement>('[data-ask-more]');
   if (more) { more.setAttribute('aria-expanded', String(more.getAttribute('aria-expanded') !== 'true')); return; }
   const hint = t.closest<HTMLElement>('[data-ask-hint]');
@@ -190,51 +188,49 @@ function askClick(ev: MouseEvent) {
   if (a && askPhone() && !a.getAttribute('href')?.startsWith('#/support')) askToggle(false, false);
 }
 
-// ---- Bots' questions
-// Bots' questions to this person (Needs you), the first few: one pick of two to six answered with a tap, any other
-// question with a line of words; several picks at once, or several questions, open the task.
-function askQuestions(): NeedsItem[] {
+// ---- Bots' asks
+// The asks to this person in Needs you (docs/pipelines-v3.md S3), the first few: a choice of two answered with a tap,
+// more in a list and Send, a question with a line of words. An OK, or an ask this person only opens, opens the ask
+// screen (decide.ts), where what is asked about is shown in full.
+function askQuestions(): NeedsEntry[] {
   const me = myActor();
-  return (S.v2?.needs || []).filter(it => it.kind === 'question' && it.ask?.recipient_id === me
-    && it.ask.sender_id !== me).slice(0, ASK_CARDS_MAX);
+  return needsAsEntries(S.v2?.needs).filter(it => it.kind === 'ask' && it.ask && it.ask.who === me && it.ask.asked_by !== me)
+    .slice(0, ASK_CARDS_MAX);
 }
-// Who asks: the panel's own bot by the panel's name, anyone else as the question card names them.
-const askAsker = (actor: string | undefined): string => actor === 'bot:' + assistantBot() ? askName() : qcardAsker(actor);
+// Who asks: the panel's own bot by the panel's name, anyone else by their name.
+const askAsker = (actor: string | null | undefined): string => actor === 'bot:' + assistantBot() ? askName() : actor ? actorLabel(actor) : '';
+// Answered here: a question (the ask's own `answer`), not an OK, which needs its content shown.
+const askAnswerable = (it: NeedsEntry) => !!it.ask && it.ask.kind !== 'ok' && it.ask.may.includes('answer');
 // A card is who asks, the question and at most two buttons. A long question shows three lines until it is tapped; three
-// or more picks are one list and Send.
+// or more choices are one list and Send.
 const ASK_Q_LONG = 160;
-// A pick chosen in a list and not yet sent, by the question's wording ("task:question id", a reworded ask gets a new
-// id) and kept as its label: the thread is drawn again whenever the chat changes. Questions no longer shown drop out.
-const askPicks = new Map<string, string>(), askPickKey = (it: NeedsItem, q: {id?: unknown}) => `${it.id}:${q.id}`;
-function askQuestionHTML(it: NeedsItem) {
-  const q: QcQuestion | null = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask?.sender_id);
-  const text = plainActors(q ? q.question : it.ask?.body);
-  const body = `<div class="ask-card-who">${esc(who)} asks</div>${text.length > ASK_Q_LONG
+// A choice picked in a list and not yet sent, by the ask's id: the thread is drawn again whenever the chat changes.
+// Asks no longer shown drop out.
+const askPicks = new Map<string, string>();
+function askQuestionHTML(it: NeedsEntry) {
+  const ask = it.ask!, who = askAsker(ask.asked_by), choices = ask.choices || [], id = String(it.id);
+  const text = plainActors(ask.line || it.line || '');
+  const body = `${who ? `<div class="ask-card-who">${esc(who)}</div>` : ''}${text.length > ASK_Q_LONG
     ? `<button type="button" class="ask-card-q" data-ask-more aria-expanded="false">${esc(text)}</button>` : `<div class="ask-card-q">${esc(text)}</div>`}`;
-  const structured = it.kind === 'question' && (it.ask?.refs?.questions || []).length;
-  const answer = q?.multi || (structured && !q) ? `<a href="#/task/${encodeURIComponent(String(it.id))}">Answer</a>`
-    : q && q.options.length > 2 ? `<form class="ask-reply" data-ask-choose="${esc(askPickKey(it, q))}"><select name="pick" aria-label="Answer ${esc(who)}">${q.options.map((o, i, all) => {
-      const kept = askPicks.get(askPickKey(it, q)), on = all.some(x => x.label === kept) ? o.label === kept : o.recommended;
-      return `<option value="${i}"${on ? ' selected' : ''}>${esc(o.label)}</option>`;
-    }).join('')}</select><button type="submit" class="ghost">Send</button></form>`
-    : q ? `<div class="ask-picks">${q.options.map((o, i) => `<button type="button" class="ghost" data-ask-pick="${i}">${esc(o.label)}</button>`).join('')}</div>`
-    : `<form class="ask-reply" data-ask-reply><input name="text" maxlength="4000" autocomplete="off" placeholder="Answer ${esc(who)}" aria-label="Answer ${esc(who)}"><button type="submit" class="ghost">Send</button></form>`;
-  return `<div class="ask-card" data-ask-q="${esc(it.id)}" data-ask-row="q:${esc(it.id)}">${body}${answer}</div>`;
+  const answer = !askAnswerable(it) ? `<button type="button" class="ghost" data-ask-open>Open</button>`
+    : choices.length > 2 ? `<form class="ask-reply" data-ask-choose="${esc(id)}"><select name="pick" aria-label="Answer">${choices.map((c, i) =>
+      `<option value="${i}"${askPicks.get(id) === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select><button type="submit" class="ghost">Send</button></form>`
+    : choices.length ? `<div class="ask-picks">${choices.map((c, i) => `<button type="button" class="ghost" data-ask-pick="${i}">${esc(c)}</button>`).join('')}</div>`
+    : `<form class="ask-reply" data-ask-reply><input name="text" maxlength="4000" autocomplete="off" placeholder="Answer" aria-label="Answer"><button type="submit" class="ghost">Send</button></form>`;
+  return `<div class="ask-card" data-ask-q="${esc(id)}" data-ask-row="q:${esc(id)}">${body}${answer}</div>`;
 }
-// The answer goes where Decide sends it (decide.js): a pick to the task's answers, words to a loose question's answer
-// or as a comment on the task, which wakes its bot.
+// The answer goes on the ask (POST /v2/tasks/{id}/asks/{rid}/answer): a choice by its words, or the line typed.
 async function askAnswer(card: HTMLElement | null, {pick, text}: {pick?: number; text?: string}) {
-  const it = (S.v2?.needs || []).find(x => String(x.id) === card?.dataset.askQ);
-  if (!it || !card || card.dataset.busy) return;
-  const q: QcQuestion | null = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask?.sender_id);
-  const writes = pick !== undefined && q ? qcardWrites(it, q, [q.options[pick]?.label], undefined)
-    : [{path: `/v2/tasks/${encodeURIComponent(String(it.id))}/comments`, body: {text}}];
+  const it = askQuestions().find(x => String(x.id) === card?.dataset.askQ);
+  if (!it?.ask || !it.task_id || !card || card.dataset.busy) return;
+  const value = pick !== undefined ? it.ask.choices?.[pick] : text;
+  if (!value) return;
+  const who = askAsker(it.ask.asked_by);
   card.dataset.busy = '1';
   card.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select').forEach(el => { el.disabled = true; });
   try {
-    for (const w of writes) await post(w.path, w.body);
-    card.innerHTML = `<div class="ask-card-who">${esc(who)}</div><div class="muted">Answered</div>`;
-    toast('Sent to ' + who);
+    await taskAnswer(it.task_id, it.ask.requirement_id, value, null);
+    card.innerHTML = `${who ? `<div class="ask-card-who">${esc(who)}</div>` : ''}<div class="muted">Answered</div>`;
     await v2Refresh();                              // Needs you without it: the card leaves the chat
     ASK?.draw?.();
   } catch (e) {
@@ -266,8 +262,8 @@ async function askLoad(chat: AskChat) {
     const here = new Set(messages.map(m => m.refs?.action).filter(Boolean)), late = new Date().toISOString(), asks = askQuestions();
     const cards: AskRow[] = pending.filter(a => !here.has(a.id)).map(a => ({at: a.created_at || late,
       html: `<div class="conv-run chat"><div data-action-host="${esc(a.id)}"><div class="asst-state">Loading the card…</div></div></div>`}))
-      .concat(asks.map(it => ({at: it.ask?.created_at || it.created_at || late, html: askQuestionHTML(it)})));
-    const listed = new Set(asks.map(it => { const q: QcQuestion | null | false = it.kind === 'question' && qcardQuestion(it); return q ? askPickKey(it, q) : ''; }));
+      .concat(asks.map(it => ({at: it.since || late, html: askQuestionHTML(it)})));
+    const listed = new Set(asks.map(it => String(it.id)));
     for (const k of askPicks.keys()) if (!listed.has(k)) askPicks.delete(k);
     const rows: string[] = messages.slice(-30).map((m): AskRow => ({at: m.created_at, html: v2MessageHTML({...m, run: null})}))
       .concat(cards)

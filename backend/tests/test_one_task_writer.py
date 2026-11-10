@@ -23,11 +23,11 @@ COLUMN = re.compile(r"(?<![\w.])(?:" + "|".join(COLUMNS) + r")\s*=")
 # Python string pieces between the SQL words: quotes, an f prefix, line breaks and indentation.
 JOINTS = re.compile(r"""["']\s*(?:\n\s*)?f?["']""")
 
-OLD_WRITERS = {
-    "backend/hubdb.py": 1,
-    "backend/shared_bots.py": 1,
-    "evals/factory/cases/source_outages.py": 1,
-}
+# Writes made on purpose to prove the trigger refuses them (the fault rig's scenario 6: "A direct database write to a
+# task's stage: refused by the trigger"). They never change a row.
+REFUSED_ON_PURPOSE = {"evals/never_stuck/scenarios.py": 1}
+
+OLD_WRITERS: dict[str, int] = {}  # empty since the cut-over: a writer anywhere outside the engine fails
 
 
 def writers(text):
@@ -58,7 +58,11 @@ def test_the_scan_sees_a_write_however_the_statement_is_split():
 
 def test_only_the_engine_writes_a_tasks_status_stage_owner_and_pipeline():
     found = scan()
-    new = {name: count for name, count in found.items() if count > OLD_WRITERS.get(name, 0)}
+    new = {
+        name: count
+        for name, count in found.items()
+        if count > OLD_WRITERS.get(name, 0) + REFUSED_ON_PURPOSE.get(name, 0)
+    }
     assert not new, f"a task's status, stage, owner and pipeline change only through backend/task_engine.py: {new}"
     stale = {name: count for name, count in OLD_WRITERS.items() if found.get(name, 0) < count}
     assert not stale, f"OLD_WRITERS only shrinks; lower or remove these entries to what the scan finds: {stale}"

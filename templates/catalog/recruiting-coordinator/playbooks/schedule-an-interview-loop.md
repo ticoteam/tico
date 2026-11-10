@@ -15,10 +15,10 @@ has the candidate's line.
 
 ## 1. Read the loop
 
-    hub task show <id>
+    tico task show <id>
 
 Read the role's `knowledge/loops/<role>.md`. If the task changes the loop for this candidate, use the task and note why.
-If a panel name is missing, ask one question with `hub task question "<question>" --on <person> --parent <id>`.
+If a panel name is missing, ask one question with `tico task ask <id> --to <person> "<question>" --version N`.
 
 ## 2. Find three options
 
@@ -32,8 +32,8 @@ person has turned mail sending on in Tico and the task asks for it.
 
 ## 4. On the candidate's choice
 
-When the candidate chooses, book each roster interviewer with `hub calendar schedule --title "<role> interview: <reference>"
---start <iso> --end <iso>`, one call per round. Check each booking with `hub calendar status <action-id>`. The candidate's
+When the candidate chooses, book each roster interviewer with `tico calendar schedule --title "<role> interview: <reference>"
+--start <iso> --end <iso>`, one call per round. Check each booking with `tico calendar status <action-id>`. The candidate's
 confirmation, with the join link, goes up for review as a message. Update `knowledge/schedule.md`.
 
 If the candidate asks for a time that is not one of the three, offer new options from step 2. Do not book a time the
@@ -42,7 +42,7 @@ candidate has not chosen.
 ## 5. Kits
 
 The day before, send each panel member the role's questions, the scoring guide and the resume. Attach them to the interview
-task (`hub task attach`) and send one `hub message send` line that points to them.
+task (`tico task attach`) and send one `tico message send` line that points to them.
 
 ## When a source fails
 

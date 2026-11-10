@@ -289,10 +289,11 @@ def _parse(record: object) -> tuple[Row, list[str]]:
 
 # ----------------------------------------------------------------------------- check
 def _actor_exists(conn: "sqlite3.Connection", actor: str) -> bool:
+    """A bot that exists, or a person who is here and can act (not left, removed, or with sign-in off)."""
     if is_bot(actor):
         return _h().bot(conn, actor) is not None
     if is_human(actor):
-        return _h().human(conn, actor) is not None
+        return R.active_person(conn, actor)
     return False
 
 
@@ -321,7 +322,7 @@ def _check_requirement(conn: "sqlite3.Connection", stage: Row, req: Row, problem
         problems.append(
             f"Only a requirement a person can meet with a button can name a person (C29): not {name}, on {label}."
         )
-    elif person and not (_actor_exists(conn, person) and (is_bot(person) or R.active_person(conn, person))):
+    elif person and not _actor_exists(conn, person):
         problems.append(f"{person} is not a person or a bot here (on {label}).")  # removed, or left
     elif kind == "ok" and not person:
         problems.append(f"An OK from someone on {label} names the person or bot who OKs it.")
@@ -346,6 +347,9 @@ def _check_on_enter(conn: "sqlite3.Connection", record: Row, stage: Row, label: 
             f"On enter on {label} is nothing, file a linked task into a pipeline, or queue the PRs to merge."
         )
         return
+    # Filing a linked task is not built until phase 2 (stage_effects.enter): a stage that files would hold every task
+    # that enters it on a task nobody files.
+    problems.append(f"Filing into a pipeline comes with the Product pipeline (on {label}).")
     found = task_engine.pipeline(conn, target)
     if target != record["id"] and (not found or found.get("retired_at")):
         problems.append(f"{label} files into a pipeline that does not exist: {target}.")
@@ -409,6 +413,11 @@ def _problems(conn: "sqlite3.Connection", record: Row) -> list[str]:
     existing = task_engine.pipeline(conn, pid) if pid else None
     if existing and existing.get("retired_at"):
         problems.append("This pipeline is retired.")
+    if record["private"]:
+        # docs/pipelines-v3.md lists `pipelines.private` and an editor switch but says nothing of who may then see the
+        # pipeline or its tasks, and nothing reads it: a private pipeline would promise privacy it does not give. Who
+        # reads a task is the task's own privacy (Who can see), whatever pipeline it is in.
+        problems.append("A pipeline can't be private yet. Make its tasks private instead, and choose who can see each.")
     name = record["name"]
     if not name:
         problems.append("A pipeline needs a name.")
@@ -772,13 +781,25 @@ def preset(conn: "sqlite3.Connection", key: str) -> Row:
 
 
 def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
-    """Boot: make each preset pipeline the org does not have yet. Returns the ids it made. A preset the org has, under
-    its id or as its preset, is never changed, nor one it retired. A preset whose name or prefix another pipeline
-    already uses is left out, so boot never fails on it."""
+    """Every start: make each preset pipeline the org does not have yet. Returns the ids it made. A preset the org
+    has, under its id or as its preset, is never changed, nor one it retired, with one exception: General is made at
+    the first start, before the org has any bot, so while nobody has changed it and it has no manager, it gets the
+    preset's manager once that bot exists. A preset whose name or prefix another pipeline already uses is left out,
+    so a start never fails on it."""
     made: list[str] = []
     for key in PRESETS:
         record = preset(conn, key)
-        if conn.execute("SELECT 1 FROM pipelines WHERE id=? OR preset=?", (record["id"], key)).fetchone():
+        have = conn.execute(
+            "SELECT id, manager_id, settings_version, retired_at FROM pipelines WHERE id=? OR preset=?",
+            (record["id"], key),
+        ).fetchone()
+        if have:
+            untouched = int(have[2] or 1) == 1 and not have[1] and not have[3]
+            if untouched and record.get("manager_id"):
+                conn.execute(
+                    "UPDATE pipelines SET manager_id=?, updated_at=? WHERE id=?",
+                    (record["manager_id"], _h().now(), have[0]),
+                )
             continue
         if check(conn, record):
             continue

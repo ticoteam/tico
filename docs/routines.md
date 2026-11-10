@@ -16,11 +16,11 @@ An install that had routines moved them once, on the upgrade to Automations; see
   error, a **Filter** step, or an **LLM** step that chooses a destination, shows the detail of its first failed action,
   cut the same way. When a step has both an error and a failed action, the error is shown first. A refused **Action**
   step shows no reason. An **Action** step that stops with an error shows the error, as above.
-- **The `hub` CLI, from a person or a bot.** `hub automation guide` prints the flow format and every trigger, step and
+- **The `tico` CLI, from a person or a bot.** `tico automation guide` prints the flow format and every trigger, step and
   action. Write the flow as JSON and pass it with `--file` (`-` reads stdin):
 
   ```
-  hub automation create --file - <<'EOF'
+  tico automation create --file - <<'EOF'
   {"name": "Daily audit", "owner": "bot:acme-ops", "enabled": true,
    "trigger": {"type": "schedule", "cron": "0 7 * * 1-5", "tz": "America/Los_Angeles"},
    "steps": [{"id": "audit", "type": "bot_turn", "enabled": true, "bot": "acme-ops",
@@ -29,7 +29,7 @@ An install that had routines moved them once, on the upgrade to Automations; see
   ```
 
   For an event, the trigger is `{"type": "event", "name": "meeting.ready"}`; for a webhook,
-  `{"type": "webhook", "id": "<trigger id>"}` (`hub trigger list` shows the ids). A new automation is saved off
+  `{"type": "webhook", "id": "<trigger id>"}` (`tico trigger list` shows the ids). A new automation is saved off
   unless the flow sends `"enabled": true`.
 
 ## Before a due date
@@ -48,8 +48,8 @@ payroll run, a renewal or a board report gets its task in time:
   zone).
 - A task a run opens (a `create_task` step, or a bot turn) is due at the end of its due day in `tz` (its `due` argument
   overrides it), and it carries the occurrence: `tasks.occurrence` is `<automation id>:<due day>`, and the task's
-  notice carries `due_on`, and `rule_due_id` when one is set. Its due is a deadline, not a wake date, and the asks
-  sweep never expires it. It reads as its due day in `tz`, whatever the viewer's zone. A step that sets its own
+  notice carries `due_on`, and `rule_due_id` when one is set. Its due is a deadline, not a wake date.
+  It reads as its due day in `tz`, whatever the viewer's zone. A step that sets its own
   `due` keeps that instant.
 - One task per occurrence and step: a retry of a run that already made it reuses that task, so nothing is filed twice.
   An occurrence's task is not parked until its due day, even while its bot is idle (its bot works it through the lead
@@ -76,8 +76,8 @@ failures, cost and trend. The **Runs** tab shows every run in that range, newest
 ended. A built-in automation can't be edited or deleted; only the top of the org can turn one off.
 
 ```
-hub automation recent-runs [--range 1h] [--status failed] [--trigger system] [--owner O]
-hub automation stats [--range 24h]
+tico automation recent-runs [--range 1h] [--status failed] [--trigger system] [--owner O]
+tico automation stats [--range 24h]
 ```
 
 These are `hub_automation_recent_runs` and `hub_automation_stats` over MCP, and `GET /api/v2/automations/runs` and
@@ -97,12 +97,12 @@ connected, say) is left out of the list, runs and counts until its feature is se
   it.
 
   ```
-  hub automation list [--owner O]
-  hub automation show <id>
-  hub automation update <id> [--file F] [--name N] [--enable|--disable] [--summary S]
-  hub automation run <id> [--input JSON]
-  hub automation runs <id>
-  hub automation delete <id>
+  tico automation list [--owner O]
+  tico automation show <id>
+  tico automation update <id> [--file F] [--name N] [--enable|--disable] [--summary S]
+  tico automation run <id> [--input JSON]
+  tico automation runs <id>
+  tico automation delete <id>
   ```
 
   The MCP tools have the same names (`hub_automation_list`, `hub_automation_create`, `hub_automation_update`,
@@ -122,7 +122,7 @@ one notice. The automation's page shows **On hold · N held**: fix what starts i
 queue, oldest first) or **Drop** (they are skipped). Turning it off or deleting it skips them too.
 
 ```
-hub automation held <id> release|drop
+tico automation held <id> release|drop
 ```
 
 Over MCP this is `hub_automation_held`; in the API, `POST /api/v2/automations/{aid}/held` with `{"action": "release"}`
@@ -130,7 +130,7 @@ or `{"action": "drop"}`. Whoever may change the automation may do either.
 
 ## Events
 
-`hub event-types` (`hub_event_types`, `GET /api/v2/event-types`) lists every event name with its description and an
+`tico event-types` (`hub_event_types`, `GET /api/v2/event-types`) lists every event name with its description and an
 example payload; `--group` narrows it. Some that bots use: `meeting.ready` (a team meeting with a transcript is imported;
 see [Meetings](meetings.md)), `release.published`, `market.insight.urgent`, `strategy.published` and `market.briefing`
 (see [Market briefing](market-briefing.md)). An event fires an automation only once something emits it.
@@ -145,14 +145,14 @@ Recipes: [GitHub](webhooks-github.md), [Stripe](webhooks-stripe.md), [Zapier, Ma
 ## Templates
 
 A template's `bot.yaml` may still declare `routines:` (`id`, `title`, `cron` or `on`, `timezone`, `template:` a
-playbook path, and optionally `enabled: false`). `hub bot create` seeds them once, and each becomes an automation for the
+playbook path, and optionally `enabled: false`). `tico bot create` seeds them once, and each becomes an automation for the
 new bot. After that the automations are what run; editing the file changes nothing. `clients/preflight.py` still checks
 the block.
 
 ## Inbox templates
 
-A new inbox can start from one of four templates: Founder, Support, Sales and Blank. `hub automation templates` lists
-them, and `hub automation template <id> --owner <ref> --inbox <address>` fills one in for an owner. The fill is a flow
+A new inbox can start from one of four templates: Founder, Support, Sales and Blank. `tico automation templates` lists
+them, and `tico automation template <id> --owner <ref> --inbox <address>` fills one in for an owner. The fill is a flow
 like any other: its roles (`legal_lead`, `support_lead`, ...) are resolved on the org chart, and what the owner cannot
 use is taken out. A role goes to the first active bot on the chart that can take the work: one that is still onboarding,
 takes no tasks under its profile, or runs on a synced harness is passed over. A wake the owner may not tell becomes a
@@ -163,5 +163,5 @@ synced harness gets Sort instead. The choose's prompt names the message (its sub
 Slack), and so does each task body and wake text the template hands on. A wake's text is quoted as data; a task body is
 substituted as plain text, so the message reaches it unquoted. In Slack, a bot that cannot take a non-routine task (a
 draft is one) gets no draft actions, and its choose becomes Sort. A group with no lead to act as loses the actions that need one (tasks, replies); when nothing it would do can run
-in its Slack channel, the fill is refused with a 422. Nothing is saved: the filled flow comes back off, and `hub automation create --file -` saves it.
+in its Slack channel, the fill is refused with a 422. Nothing is saved: the filled flow comes back off, and `tico automation create --file -` saves it.
 The same fill is `GET /api/v2/automations/templates/{id}?owner=...&inbox=...`.

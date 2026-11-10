@@ -27,20 +27,18 @@ from clients.gateway import user_agent
 
 TRANSPORT = None
 MAX_RESPONSE = 32768
-KINDS = ("urgent_needs", "legal_mail", "bot_stuck")
+# What a person may be paged about. Nothing pages a person about a task (docs/pipelines-v3.md): an overdue or stuck
+# task reaches them in Needs you.
+KINDS = ("legal_mail",)
 TEXTS = {
-    "urgent_needs": "Tico: an overdue task needs you. Open Needs you in Tico.",
     "legal_mail": "Tico: legal mail has arrived. Open Inboxes in Tico.",
-    "bot_stuck": "Tico: a bot you manage has a stalled task. Open Health in Tico.",
     "test": "Tico: your test alert. Your company pays $1 for this accepted alert.",
 }
 CLOCK = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]")
 
 
 class Preferences(Contract):
-    urgent_needs: StrictBool | None = None
     legal_mail: StrictBool | None = None
-    bot_stuck: StrictBool | None = None
     urgent_calls: StrictBool | None = None
     timezone: str | None = Field(default=None, max_length=80)
     quiet_start: str | None = Field(default=None, max_length=5)
@@ -98,7 +96,6 @@ def prefs(c, ident):
         "phone_version": "",
         "verified_at": None,
         "revocation_pending": 0,
-        "stall_after": "",
         "call_consent": 0,
         **dict.fromkeys(KINDS, 0),
         "urgent_calls": 0,
@@ -147,13 +144,6 @@ def update(c, ident, body, auth):
     return local_view(c, ident, auth)
 
 
-def overdue(task, at):
-    due = H.parse_ts(task.get("due_at"))
-    if due and due.tzinfo is None:
-        due = due.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
-    return bool(due and due <= at)
-
-
 def quiet(row, at, emergency):
     if emergency and row["emergency_exception"]:
         return False
@@ -180,30 +170,6 @@ def next_month(at):
         .replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         .strftime("%Y-%m-%dT%H:%M:%SZ")
     )
-
-
-def future_deadlines(c, at):
-    """Personal task deadlines wake a sleeping install so its next collection can page or defer to quiet-hours end."""
-    from . import question_tasks as QT
-
-    waits = QT.waits_sql("t", "='human:'||p.person_id")  # or waiting on them (an open question task of theirs)
-    rows = c.execute(
-        "SELECT DISTINCT t.due_at FROM tasks t JOIN alert_preferences p ON "
-        f"(t.owner_id='human:'||p.person_id OR {waits}) "
-        "WHERE p.verified_at IS NOT NULL AND p.urgent_needs=1 AND p.monthly_cap>0 "
-        "AND t.status IN ('open','doing','waiting') AND t.due_at IS NOT NULL "
-        "AND NOT EXISTS (SELECT 1 FROM personal_alerts a WHERE a.person_id=p.person_id "
-        "AND a.incident_key='due:'||t.id||':'||t.due_at) "
-        "AND (SELECT monthly_cap FROM alert_company_settings WHERE id=1)>0 ORDER BY t.due_at LIMIT 100"
-    )
-    out = []
-    for (value,) in rows:
-        due = H.parse_ts(value)
-        if due and due.tzinfo is None:
-            due = due.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
-        if due and due.timestamp() > at:
-            out.append(due.timestamp())
-    return out
 
 
 def spend(c, ident=None, month=None):
@@ -447,19 +413,12 @@ class Alerts:
             task = self.auth.task(c, who, alert["subject_id"])
         except Problem:
             return False
-        if task["status"] not in H.ACTIVE_STATUSES or H.TS.snoozed(task):
+        snoozed = c.execute("SELECT 1 FROM snoozes WHERE task_id=? AND ended_at IS NULL", (task["id"],)).fetchone()
+        if task["status"] != "open" or snoozed:
             return False
-        if alert["kind"] == "legal_mail":
-            return True
-        if alert["kind"] == "urgent_needs":
-            return overdue(task, H.parse_ts(H.now())) and (
-                who.actor == task["owner_id"] or H._waits_on(c, task, who.actor)
-            )
-        return bool(
-            H.is_bot(task["owner_id"])
-            and self.auth.bot_manager(c, who, H.actor_id(task["owner_id"]))
-            and H.stalled_tasks(c, task_ids=[task["id"]])
-        )
+        # Legal mail is the one page about mail that came in. Nothing pages a person about a task: an overdue or stuck
+        # task reaches them in Needs you (Late, the never-stuck ladder), so an older alert of those kinds is not sent.
+        return alert["kind"] == "legal_mail"
 
     def dispatch(self, alert_id):
         with self.lock:
@@ -553,51 +512,6 @@ class Alerts:
                 )
             return {"id": alert_id, "status": "accepted", "price_usd": 1, "paid_by": "company"}
 
-    def collect(self):
-        with self.store.transaction() as c:
-            people = c.execute(
-                "SELECT person_id FROM alert_preferences WHERE verified_at IS NOT NULL AND person_id>? "
-                "ORDER BY person_id LIMIT 20",
-                (self.cursor,),
-            ).fetchall()
-            self.cursor = people[-1][0] if len(people) == 20 else ""
-            for (ident,) in people:
-                row = prefs(c, ident)
-                try:
-                    who = self.auth.identity_for_actor(c, "human:" + ident)
-                except Problem:
-                    continue
-                if row["urgent_needs"]:
-                    from . import question_tasks as QT
-
-                    tasks = c.execute(
-                        f"SELECT * FROM tasks WHERE (owner_id=? OR {QT.waits_sql('tasks', '=?')}) "
-                        "AND status IN ('open','doing','waiting') "
-                        "AND due_at IS NOT NULL AND due_at<=? AND NOT EXISTS (SELECT 1 FROM personal_alerts a "
-                        "WHERE a.person_id=? AND a.incident_key='due:'||tasks.id||':'||tasks.due_at) "
-                        "ORDER BY due_at LIMIT 100",
-                        (who.actor, who.actor, H.shift(H.now(), hours=24), ident),
-                    ).fetchall()
-                    for task in tasks:
-                        if overdue(dict(task), H.parse_ts(H.now())) and not H.TS.snoozed(dict(task)):
-                            enqueue(
-                                c, ident, "urgent_needs", task["id"], "due:" + task["id"] + ":" + task["due_at"], True
-                            )
-                if row["bot_stuck"]:
-                    ids = [
-                        r[0]
-                        for r in c.execute(
-                            "SELECT id FROM tasks WHERE id>? AND owner_id LIKE 'bot:%' "
-                            "AND status IN ('open','doing','waiting') ORDER BY id LIMIT 100",
-                            (row["stall_after"],),
-                        )
-                    ]
-                    save(c, ident, {"stall_after": ids[-1] if len(ids) == 100 else ""})
-                    stalled = H.stalled_tasks(c, task_ids=ids) if ids else []
-                    for task in stalled:
-                        if self.auth.bot_manager(c, who, H.actor_id(task["owner_id"])):
-                            enqueue(c, ident, "bot_stuck", task["id"], "stuck:" + task["id"] + ":" + task["updated_at"])
-
     def run(self):
         # One pass is the Heartbeat's Personal alerts step (backend/heartbeat.py), whose outcome lands here, on its own
         # thread, after the beat: a pass with nothing to send writes nothing.
@@ -606,7 +520,6 @@ class Alerts:
 
         words, quiet, error, begun = "Nothing to send", True, None, time.monotonic()
         try:
-            self.collect()
             with self.store.read() as c:
                 ids = [
                     r[0]

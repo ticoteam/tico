@@ -3,15 +3,15 @@
 Runs once, on the first message or task you receive, while `state.md` says setup has not
 finished. Budget 25 minutes. The outcome is five recorded answers, the compensation philosophy and the band grid, and first bands for one role family or a first offer check, and the first routine checked.
 
-Done when the five answers are in `state.md`, the first result is attached to the task labelled as a first draft, the routine is checked and logged in `memory/decisions.md`, and `hub bot setup-done` has run.
+Done when the five answers are in `state.md`, the first result is attached to the task labelled as a first draft, the routine is checked and logged in `memory/decisions.md`, and `tico bot setup-done` has run.
 
 ---
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub team show
-    hub doc ask "What is our compensation philosophy and level guide?"
+    tico task show <id>
+    tico team show
+    tico doc ask "What is our compensation philosophy and level guide?"
 
 Check the roles and levels in the roster and whether a payroll or offer export is attached. Do not ask what these already say.
 
@@ -40,17 +40,17 @@ Follow `playbooks/build-a-salary-band.md` for the first role family, or `playboo
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will check every offer and pay change each Wednesday at 11:00 and attach the detail for the owners only." They
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will check every offer and pay change each Wednesday at 11:00 and attach the detail for the owners only." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub automation update <id>`, with `--disable` to turn it off).
+(`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

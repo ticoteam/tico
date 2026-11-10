@@ -136,8 +136,8 @@ function signInAgain() {
 // the same box of the same task or page, never into another task's.
 const sessionKey = (el: SessionBox): string => el.id || el.name || el.getAttribute('aria-label') || el.placeholder || el.dataset.taskField || '';
 const sessionScope = (el: SessionBox): string => {
-  const task = el.closest<HTMLElement>('[data-task]')?.dataset.task, d = el.closest('dialog'), question = el.closest<HTMLElement>('[data-qc-key]');
-  return task ? 'task:' + task + (question ? '|question:' + question.dataset.qcKey : '') : location.hash + (d ? '|' + (d.id || d.getAttribute('aria-label') || '') : '');
+  const task = el.closest<HTMLElement>('[data-task]')?.dataset.task, d = el.closest('dialog');
+  return task ? 'task:' + task : location.hash + (d ? '|' + (d.id || d.getAttribute('aria-label') || '') : '');
 };
 // A bot's or the Assistant's chat box keeps its own draft (pill.js chatDraftSave, by slug) and clears it once the
 // message is sent; kept here too, its text came back into the emptied box after sign-in, ready to send a second time.
@@ -228,12 +228,7 @@ function sessionReturn() {
     for (const el of sessionBoxes()) {
       const field = el.dataset.taskField, live = el.closest('dialog')?.taskLive;
       if (sessionBoxValue(el) && !field) continue;
-      const key = sessionKey(el), scope = sessionScope(el), question = el.closest<HTMLElement>('[data-qc-key]');
-      if (question) {
-        const before = kept.fields.length, prefix = 'task:' + question.dataset.qcard + '|question:';
-        kept.fields = kept.fields.filter(f => !f.scope.startsWith(prefix) || f.scope === scope);
-        put ||= before !== kept.fields.length;
-      }
+      const key = sessionKey(el), scope = sessionScope(el);
       const i = kept.fields.findIndex(f => f.key === key && f.scope === scope);
       if (i < 0 || (field && !live)) continue;
       const saved = kept.fields[i];

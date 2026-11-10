@@ -42,8 +42,8 @@ STALE = json.loads((ROOT / "e2e" / "cli" / "stale.json").read_text())
 TEMPLATES = ROOT / "templates"
 SKILLS = ROOT / "skills"
 SKIP_FILES = (".png", ".jpg", ".gif", ".pdf", ".woff", ".woff2", ".zip", ".gz", ".sqlite", ".db")
-# A `hub` command in running text: the word `hub`, then up to four words that name a command.
-COMMAND = re.compile(r"(?:^|[\s`$(\"'|&;])hub ((?:[a-z][a-z0-9-]*)(?: [a-z][a-z0-9-]*){0,3})")
+# A `tico` command in running text (or `hub`, its old name): the word, then up to four words that name a command.
+COMMAND = re.compile(r"(?:^|[\s`$(\"'|&;])(?:tico|hub) ((?:[a-z][a-z0-9-]*)(?: [a-z][a-z0-9-]*){0,3})")
 RECORD = os.environ.get("TICO_E2E_RECORD_REFUSALS", "")
 SMOKE = "Acme smoke"
 
@@ -88,10 +88,12 @@ def used_commands():
             found, leaf = resolve(words)
             rel = str(path.relative_to(ROOT))
             if found is None:
+                if words == ["help"]:
+                    continue  # `tico help` reads as `tico --help` (hubcli.main), not a parser command
                 stale.setdefault(words[0], rel)
                 continue
             if subparsers(leaf) is not None or leaf.get_default("fn") is None:
-                continue  # a group named in prose (`hub task`), not a command to run
+                continue  # a group named in prose (`tico task`), not a command to run
             used.setdefault(" ".join(found), (leaf, rel))
     return used, stale
 
@@ -179,6 +181,8 @@ def argument_value(action, command):
         return str(next(iter(action.choices)))
     if action.type in (int, float):
         return "0" if "wait" in dest else "1"
+    if action.type is hubcli.json_value:
+        return '{"project": "acme-smoke"}'
     if dest in (
         "id",
         "task",
@@ -199,7 +203,7 @@ def argument_value(action, command):
     if dest in ("person", "human", "email") or dest.endswith("_email"):
         return "smoke@acme.example"
     if dest == "name":
-        return "acme-smoke"  # a slug in most commands (`hub market page <slug>`)
+        return "acme-smoke"  # a slug in most commands (`tico market page <slug>`)
     if dest in ("text", "title", "body", "note", "subject", "reason", "description", "question"):
         return SMOKE
     if dest in ("url",):
@@ -363,14 +367,14 @@ def test_every_hub_command_in_templates_and_skills_runs_or_is_its_recorded_refus
         try:  # every command's argv parses, run live or not
             command_tree().parse_args(argv)
         except SystemExit:
-            problems.append(f"hub {path} ({where}): the argv built for it does not parse: {argv}")
+            problems.append(f"tico {path} ({where}): the argv built for it does not parse: {argv}")
             continue
         if path not in sample:
             continue
         try:
             code, out, err = run_as_owner(live, workspace, argv)
         except Exception as exc:  # a command that raises instead of exiting is the failure this test is for
-            problems.append(f"hub {path}: raised {type(exc).__name__}: {exc}")
+            problems.append(f"tico {path}: raised {type(exc).__name__}: {exc}")
             continue
         result = classify(code, out, err)
         if result != "ok":
@@ -378,17 +382,17 @@ def test_every_hub_command_in_templates_and_skills_runs_or_is_its_recorded_refus
         if RECORD:
             continue
         if result in ("usage-error", "silent"):
-            problems.append(f"hub {path} ({where}): {result}: {(out + err)[:200]!r}")
+            problems.append(f"tico {path} ({where}): {result}: {(out + err)[:200]!r}")
         elif not exact:
             continue  # a subset runs without the state earlier commands leave, so refusals differ: see `exact`
         elif result == "ok":
             if path in EXPECTED:
                 problems.append(
-                    f"hub {path}: was refused as {EXPECTED[path]!r} and now runs; update expected-refusals.json"
+                    f"tico {path}: was refused as {EXPECTED[path]!r} and now runs; update expected-refusals.json"
                 )
         elif EXPECTED.get(path) != result:
-            problems.append(f"hub {path} ({where}): refused as {result!r} (recorded: {EXPECTED.get(path)!r})")
-    unlisted = sorted(f"hub {word} (in {where})" for word, where in stale.items() if word not in STALE)
+            problems.append(f"tico {path} ({where}): refused as {result!r} (recorded: {EXPECTED.get(path)!r})")
+    unlisted = sorted(f"tico {word} (in {where})" for word, where in stale.items() if word not in STALE)
     if unlisted:
         problems.append("`hub` words that name no CLI command and are not in stale.json: " + ", ".join(unlisted))
     if RECORD:

@@ -15,18 +15,18 @@ the recipient has its one-line message; and the task is done with its counts.
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/rhythm.md`, `knowledge/duties.md`, `knowledge/vendors.md` and last week's page in
 `reports/`. Read live sources, not memory:
 
-    hub task list --status open --status doing --status waiting
-    hub update list --kind weekly
-    hub calendar list
+    tico task list
+    tico update list --kind weekly
+    tico calendar list
 
 Skim the reports the Operations bots published since last Monday (`meeting-notes`, `procurement`,
 `vendor-manager`, `office-manager`, `it-support`, `security-compliance`, `travel`, `inventory`,
-`logistics`, `dispatcher`: whichever `hub team show` shows this team has).
+`logistics`, `dispatcher`: whichever `tico team show` shows this team has).
 
 ## 2. Sort every duty
 
@@ -68,14 +68,14 @@ Write `reports/YYYY-MM-DD-ops-weekly.md` in the shape of `knowledge/examples/ops
 what needs a human, the checklist, vendor follow-ups, the team summary, routing proposals, and what you
 could not read. Then:
 
-    hub file publish reports/YYYY-MM-DD-ops-weekly.md
+    tico file publish reports/YYYY-MM-DD-ops-weekly.md
 
 Update `knowledge/duties.md` and `knowledge/vendors.md` with what you learned. Only the recipient in
-`knowledge/rhythm.md` gets it, as `hub message send --fyi <person> "<one line and the link>"`.
+`knowledge/rhythm.md` gets it, as `tico message send --fyi <person> "<one line and the link>"`.
 
 ## 8. Finish
 
-Commit, then `hub task update <id> --status done --note`: the headline first, counts (overdue, due,
+Commit, then `tico task done <id> -m "..." --version N`: the headline first, counts (overdue, due,
 blocked), and which sources you could not read. Always finish it: an open scheduled task absorbs the next.
 
 ## When a source fails

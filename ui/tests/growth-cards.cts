@@ -178,7 +178,7 @@ async function shot(page: Page, name: string) {
       assert.equal(await ns.getAttribute('href'), '#/strategy/goals?kpi=k2');
       assert.equal(await page.locator('[data-gr-month]').inputValue(), '2026-10');
       assert.deepEqual(await page.locator('[data-gr-month] option').allInnerTexts(), ['Oct 2026', 'Sep 2026', 'Aug 2026', 'Jul 2026'], 'newest first');
-      assert.equal(await page.locator('[data-gr-board]').getAttribute('href'), '#/tasks?view=board&type=idea&who=all');
+      assert.equal(await page.locator('[data-gr-board]').getAttribute('href'), '#/tasks?pipeline=general&who=all');
       assert.equal(await page.locator('[data-gr-settings]').count(), 1);
       assert.equal(await page.locator('.dash-actions').isVisible(), true);
       assert.equal(await page.locator('[data-dash-add="page"]').count(), 1, 'an owner pins pages too');
@@ -225,7 +225,7 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(await chips.evaluateAll(els => els.map(el => el.getAttribute('href'))), ['#/task/t1', '#/task/t2', '#/task/t3']);
       assert.deepEqual(await chips.locator('.grc-sq').evaluateAll(els => els.map(el => el.dataset.stage)), ['scaling', 'testing', 'idea']);
       assert.equal(await rows.nth(0).locator('a.grc-more').innerText(), '+2 more');
-      assert.equal(await rows.nth(0).locator('a.grc-more').getAttribute('href'), '#/tasks?view=board&type=idea&who=all&tag=channel%3Asearch');
+      assert.equal(await rows.nth(0).locator('a.grc-more').getAttribute('href'), '#/tasks?pipeline=general&who=all&tag=channel%3Asearch');
       assert.equal(await rows.locator('img, svg.nav-icon, .grc-kind').count(), 0, 'no icons or kinds');
 
       // Retention: a cell per share, empty where none yet, the text readable on every shade.

@@ -321,20 +321,7 @@ slack_gateway() {
     sleep 2; waited=$((waited + 2))
   done
   # The server writes the install's id after creating the database; read it, never invent one here.
-  TICO_ENVIRONMENT_ID="$(python - <<'PY'
-import json, os, sqlite3, sys, time
-for _ in range(60):
-    try:
-        row = sqlite3.connect("file:%s?mode=ro" % os.environ["TICO_DB"], uri=True).execute(
-            "SELECT value FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
-    except sqlite3.Error:
-        row = None
-    if row:
-        print(json.loads(row[0])); sys.exit(0)
-    time.sleep(2)
-sys.exit("the server has not recorded this install's id")
-PY
-)"
+  TICO_ENVIRONMENT_ID="$(python -m backend.boot stored-id)"
   export TICO_ENVIRONMENT_ID TICO_SLACK_GATEWAY_ENABLED=1 TICO_SLACK_WAIT=1
   exec python -m backend.slack_gateway
 }

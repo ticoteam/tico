@@ -9,8 +9,8 @@ Use team wording in titles: "Team glossary", "Docs index" and "Where things live
 An empty glossary says "No team terms are defined yet"; do not invent terms to fill it. Use `manual:glossary` for Tico's
 product words and its "Instead of" mappings.
 
-Write each with `hub doc write <path> --title "<title>" --body-file <file> --note "<what changed>"`.
-That creates or updates; a version conflict is re-read and retried once. Read one with `hub doc read`.
+Write each with `tico doc write <path> --title "<title>" --body-file <file> --note "<what changed>"`.
+That creates or updates; a version conflict is re-read and retried once. Read one with `tico doc read`.
 
 ## `_librarian/index.md`: the table of contents and a summary of every doc
 
@@ -21,7 +21,7 @@ One line per internal doc, grouped by folder, in path order:
     - `sales/objections.md` (v2, 2026-08-30): The five objections and the approved reply to each.
 
 - The summary says **what the doc answers**, not what it is called, in one sentence, from its text: the topics it answers, not its figures.
-- Include the version and the updated date from `hub doc list`, so a refresh can tell which docs
+- Include the version and the updated date from `tico doc list`, so a refresh can tell which docs
   changed since it last read them: a line whose version matches the list needs no reread.
 - Skip `_librarian/` itself and `FAQ.md`. The server removes an archived source
   from the index immediately; verify availability before following any older cached entry.

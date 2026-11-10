@@ -9,9 +9,9 @@ When to use: every Friday routine run, or a task that asks for this week's brief
 Steps:
 1. Read `knowledge/rhythm.md` and `knowledge/open-loops.md`, and the last brief in `reports/` if there is one. Read
    only what changed since that brief.
-2. Read each source once: `hub goal list --all`, `hub goal show <id>` for each red, yellow or unread goal,
-   `hub update list --kind weekly`, `hub task list --status open --status doing --status waiting`, and
-   `hub meeting search --since <last Friday>`. Name any source that refuses you.
+2. Read each source once: `tico goal list --all`, `tico goal show <id>` for each red, yellow or unread goal,
+   `tico update list --kind weekly`, `tico task list`, and
+   `tico meeting search --since <last Friday>`. Name any source that refuses you.
 3. Sort what you found into five sections: Needs you, Goals, Stalled, What moved, Watch. Put each item in one
    section only.
 4. For each goal, write one line: colour, movement since last week with both readings and dates, the evidence

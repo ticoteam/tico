@@ -9,16 +9,18 @@ browser, and is sealed with the credential vault's key: `seal_plaintext_secrets`
 timer of its own. Every route shows a person their own tickets and no one else's. Ticket text, from either side, is data:
 it is stored as plain text and the page escapes it.
 
-A bot (or the Assistant, or a person's token) reports a Tico bug the same way, with one step more: it drafts the report as
-a `support` approval (backend/hubdb.py `lint_approval`: the message, its hash, whether the IDs go), a person reads it in
-Needs you and says yes, and only then may the bot send it (`file_approved`). The ticket is the approving person's: it is
-filed as them, counts against their day, and its replies show on their Support page. No diagnostics bundle goes this way.
-Unless the team lets bots send without asking (team rule `bot_reports_direct`, on by default): then the same draft is
-decided as the install's default person under the team rule and sent at once (`send_by_rule`, through the same send).
+A bot (or the Assistant, or a person's token) reports a Tico bug the same way, with one step more: it drafts the report
+(`report`: the message, its hash, whether the IDs go; hubdb_text.lint_support), a person OKs it from its preview in
+Needs you by their own click (backend/task_asks.py, subject `support:<id>`), and only then may whoever asked send it
+(`file_approved`). The ticket is the person's who OK'd it: it is filed as them, counts against their day, and its
+replies show on their Support page. No diagnostics bundle goes this way. Unless the team lets bots send without asking
+(team rule `bot_reports_direct`, on by default): then a bot's draft is filed at once as the install's default person,
+with no OK (`report`, through the same send).
 
 `TICO_SUPPORT=off` removes the feature (an air-gapped install); PRIVACY.md and docs/support.md describe it.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -32,13 +34,13 @@ import httpx
 
 from pydantic import Field
 
-from . import diagnostics, support_asks, team_rules
+from . import diagnostics, support_asks, task_asks, team_rules
 from .census import hq_url
 from .auth import Identity, validate_identity
 from .models import Contract
 from .replication import rehearsal_on
 from .credentials import SEALED
-from .store import H, Problem, encode, refused
+from .store import H, Problem, encode, refusal_problem
 
 log = logging.getLogger("tico.support")
 
@@ -75,9 +77,8 @@ OWN = (
     "AND COALESCE(request_key,'') NOT LIKE 'approval:%' AND COALESCE(request_key,'') NOT LIKE 'health:%'"
 )
 RESERVED_KEYS = ("approval:", "health:", "draft:", "idem:", "feedback:")  # request keys the server itself writes
-RULE = "bot_reports_direct"  # the team rule: a bot's report is sent without a card (send_by_rule)
-RULE_VIA = "team rule"  # approvals.decided_via of a draft the rule decided: no person decided it
-RULE_NOTE = "team rule: bots send reports without asking"  # the decision's note, in its history
+RULE = "bot_reports_direct"  # the team rule: a bot's report is sent without an OK (`report`)
+SUBJECT = "support:"  # an OK's subject for one report: SUBJECT + a new id
 # Who may act for a person on their confirmation (`Identity.confirmed`): BotOps and the Assistant, with their yes to a
 # read-back or their tap on a Confirm card (backend/app.py, backend/auth.py). Unconfirmed, they are refused here.
 CONFIRMED_VIA = ("botops", "assistant")
@@ -99,7 +100,7 @@ class SupportTicket(Contract):
     # What the person is asking for: help, help with setting up (backend/support_asks.py setup_snapshot), or feedback.
     kind: Literal["support", "setup", "feedback"] = "support"
     # Who is filing, for HQ's queue (`source`; HQ owns the list): the person's own app sends nothing, so `person`; only
-    # BotOps' `hub support file` says `botops`, kept only when BotOps makes the request. It sorts tickets at HQ and
+    # BotOps' `tico support file` says `botops`, kept only when BotOps makes the request. It sorts tickets at HQ and
     # grants nothing.
     source: Literal["person", "botops"] = "person"
 
@@ -110,7 +111,14 @@ class FeedbackAnswer(Contract):
 
 
 class SupportFromApproval(Contract):
-    approval: str = Field(min_length=1, max_length=64)  # an approved `support` approval the caller asked for
+    approval: str = Field(min_length=1, max_length=64)  # the OK of a report the caller asked for (its requirement id)
+
+
+class SupportReport(Contract):
+    """A report a bot, a person's token or the Assistant drafts: the message, its SHA-256, whether the IDs go."""
+
+    payload: dict = Field(default_factory=dict)
+    task_id: str = Field(default="", max_length=64)  # the task the report belongs to; none files one
 
 
 class SupportRefresh(Contract):
@@ -233,12 +241,15 @@ def clean_email(value):
     return value
 
 
-def _ask_hq(method, path, *, body=None, secret="", wait=HQ_WAIT):
+def _ask_hq(method, path, *, body=None, secret="", wait=HQ_WAIT, idem=""):
     """One request to HQ, or a Problem the person can act on. Nothing from HQ's answer is logged. `wait` is longer for
-    a long poll (backend/support_access.py)."""
+    a long poll (backend/support_access.py). `idem` is sent as Idempotency-Key: the same report sent again (a retry
+    after a crash or a lost answer) is the same ticket at an HQ that keeps keys."""
     headers = {"Accept": "application/json", "User-Agent": "tico-support"}
     if secret:
         headers["X-Ticket-Secret"] = secret
+    if idem:
+        headers["Idempotency-Key"] = idem
     try:
         with httpx.Client(timeout=wait, transport=TRANSPORT, follow_redirects=False) as http:
             return http.request(method, hq_url() + path, json=body, headers=headers)
@@ -365,11 +376,75 @@ def seal_plaintext_secrets(store, vault):
     return len(rows)
 
 
+def ok_given(c, grant, ctx=None):
+    """In the transaction of the person's click on a report's OK (task_asks.ON_OK "support"): the click claims the OK
+    for whoever asked (task_asks.use, authority checked once more) and so queues the report. A claimed report with no
+    ticket yet is the queue (CLAIMED_SQL): Maintenance delivers it (maintenance_health._send_approved), and nothing in
+    the background ever claims an OK itself."""
+    task_asks.use(c, grant["requirement_id"], grant["subject"], grant["content"], grant["asked_by_id"])
+
+
+# Reports a person's click claimed that have no ticket yet and were not given up on (task_asks.not_done): what
+# Maintenance still has to deliver, and the number Health shows. A ticket the same report got under the team rule
+# (its key is `approval:` and the report's own key, the subject's id after "support:") is that report's one send.
+CLAIMED_SQL = (
+    "SELECT g.requirement_id, g.asked_by_id FROM ok_grants g WHERE g.subject LIKE 'support:%' "
+    "AND g.used_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM support_tickets t WHERE t.request_key IN "
+    "('approval:' || g.requirement_id, 'draft:' || g.requirement_id, 'approval:' || substr(g.subject, 9))) "
+    "AND NOT EXISTS (SELECT 1 FROM events e "
+    "WHERE e.action='ok.not_done' AND e.target=g.requirement_id) ORDER BY g.used_at"
+)
+
+
+def claimed(c):
+    """[{requirement_id, asked_by_id}] of the reports claimed and not delivered yet (CLAIMED_SQL)."""
+    return [dict(r) for r in c.execute(CLAIMED_SQL).fetchall()]
+
+
+def refused_lately(c, days=7):
+    """How many reports a person's click claimed were given up on in the last `days` (task_asks.not_done: the stored
+    report no longer matched its hash, or whoever OK'd it could no longer): the number Health shows."""
+    return c.execute(
+        "SELECT count(DISTINCT g.requirement_id) FROM ok_grants g JOIN events e ON e.target=g.requirement_id "
+        "AND e.action='ok.not_done' WHERE g.subject LIKE 'support:%' AND e.created_at>?",
+        (H.shift(H.now(), days=-days),),
+    ).fetchone()[0]
+
+
+def _key_of(by, payload):
+    """One report by one asker: the same message drafted again is the same report."""
+    return hashlib.sha256((str(by) + "\n" + str(payload.get("content_sha256") or "")).encode()).hexdigest()[:32]
+
+
+def ask_report(c, by, payload, *, task_id=None, person=None):
+    """Ask a person for an OK of a report to Tico support, exactly as drafted (`payload`: message, content_sha256,
+    include_ids). Asked of `person`; else the person whose token or Assistant drafted it, the task's owner when that is
+    a person, or the install's default person. Returns {task_id, requirement_id}. The Health Monitor asks with this
+    too, as the engine."""
+    if not person:
+        owner = (H.task(c, task_id) or {}).get("owner_id") if task_id else None
+        person = by if H.is_human(by) else owner if H.is_human(owner) else None
+        person = person or (H.human_actor(H.default_human(c)) if H.default_human(c) else None)
+    if not person:
+        raise Problem("identity", "This install has no person to OK a report yet.", 409)
+    return task_asks.ask_ok(
+        c,
+        by,
+        person,
+        "Send this report to Tico support?",
+        shows=["support:report"],
+        subject=SUBJECT + _key_of(by, payload),
+        content=dict(payload),
+        task_id=task_id,
+        title="Send a report to Tico support",
+    )
+
+
 class Support:
     def __init__(self, store, settings, census, vault=None):
         self.store, self.settings, self.census, self.vault = store, settings, census, vault
         self.previews = diagnostics.Previews()
-        self.sending = threading.Lock()  # one approval is sent once, even when two calls race
+        self.sending = threading.Lock()  # one OK is used once, even when two calls race
 
     def secret(self, row):
         """The ticket's HQ secret, opened with the vault. One still in plaintext (sealing failed at start) is sealed
@@ -470,10 +545,12 @@ class Support:
             raise Problem("diagnostics_stale", "This preview expired. Refresh diagnostics and review again.", 409)
         return bundle
 
-    def file(self, who, body, key="", on_filed=None, source=""):
+    def file(self, who, body, key="", on_filed=None, source="", idem=""):
         """Send the ticket to HQ, then keep HQ's id and secret. Nothing is kept when HQ refuses or cannot be reached.
         `on_filed(c, ticket_id)` runs in the transaction that keeps it (an approval spent with it). `source` is who
-        filed it, as HQ's queue sorts tickets (one of SOURCES; the body's own when not given)."""
+        filed it, as HQ's queue sorts tickets (one of SOURCES; the body's own when not given). `idem` is an OK already
+        used for this report (file_approved): HQ hears it as Idempotency-Key, and the day's cap, counted when it was
+        asked, refuses nothing after the claim."""
         message, email = clean_message(body.message), clean_email(body.email)
         with self.store.read() as c:
             if key:
@@ -492,7 +569,7 @@ class Support:
             recent = c.execute(
                 "SELECT count(*) FROM support_tickets WHERE actor=? AND created_at>?", (who.actor, since)
             ).fetchone()[0]
-        if recent >= PER_DAY:
+        if recent >= PER_DAY and not idem:
             raise Problem("support_busy", "That is enough requests for today. Try again tomorrow.", 429)
         # The secret HQ answers with is sealed with the vault's key: make sure it opens (or, on a fresh install, make
         # it, as the first saved credential would) before anything goes to HQ, so no ticket is made that this server
@@ -516,12 +593,12 @@ class Support:
             payload["diagnostics"] = self.attachment(who, body.diagnostics)
         if body.kind != "support":
             payload["kind"] = sent["kind"] = body.kind
-        answer = _ask_hq("POST", "/v1/support", body=payload)
+        answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem)
         if answer.status_code == 422 and _refused_field(answer) == "fields":
             # An HQ from before source refuses it as an unknown field: the ticket goes again without it, keeping the
             # rest (BotOps' and the Health Monitor's messages start with their name, which is how such an HQ reads it).
             payload.pop("source")
-            answer = _ask_hq("POST", "/v1/support", body=payload)
+            answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem)
         if answer.status_code == 422 and {"app_version", "kind"} & set(payload) and _refused_field(answer) == "fields":
             # An HQ from before app_version or kind refuses unknown fields; the ticket still goes without them, and
             # names its kind in the message instead.
@@ -531,7 +608,7 @@ class Support:
             named = f"[{body.kind.capitalize()}] {message}"
             if body.kind != "support" and len(named) <= MAX_MESSAGE:
                 payload["message"] = named
-            answer = _ask_hq("POST", "/v1/support", body=payload)
+            answer = _ask_hq("POST", "/v1/support", body=payload, idem=idem)
         if answer.status_code == 422 and "diagnostics" in payload:
             raise Problem(
                 "diagnostics_rejected",
@@ -581,183 +658,222 @@ class Support:
                 on_filed(c, ticket_id)
             return view(c.execute("SELECT * FROM support_tickets WHERE id=?", (ticket_id,)).fetchone())
 
-    def send_by_rule(self, who, approval_id, check=None):
-        """Send a bot's report the team rule lets go without a card (`bot_reports_direct`), once the route has drafted it.
-        The draft is decided as the install's default person under the team rule and sent through `_file_approved`, the
-        send a person's yes gets: the same HQ call, day limit, source and spend. `check(c)` is the privacy check for this
-        send, run under the write lock; when it refuses, the draft waits. Returns {ticket, sent, filed_as}, or None when the
-        draft waits for a person: the rule is off (read under the lock, so a report queued while the owner turned it off
-        waits), this copy runs from source (`from_source`), or a person already decided the draft. A bot that is paused or revoked is refused and nothing is sent. A
-        spent approval answers with its ticket whatever the rule says now.
-
-        A rule decision is taken back when its send fails, or when the rule is off by the time it is sent, so a draft is
-        never left decided by the rule without a ticket."""
-        if who.role != "bot":
-            return None
-        with self.sending:
-            return self._send_by_rule(who, approval_id, check)
-
-    def _send_by_rule(self, who, approval_id, check):
+    def report(self, who, payload, task_id="", check=None):
+        """Draft a report to Tico support (POST /api/v2/support/reports). A bot's draft is filed at once as the
+        install's default person while the team rule lets bots send without asking (`RULE`), this copy names an HQ of
+        its own (`from_source`) and the privacy check `check(c)` passes. Otherwise a person OKs it first: the person
+        whose token or Assistant drafted it, the task's owner when that is a person, or the install's default person.
+        A report that already went under the rule answers with its ticket. Returns {ticket, sent, filed_as, status:
+        sent, task_id} when it went, else {id, approval, task_id, requirement_id, status: pending}."""
         from . import lifecycle
 
-        refusal = None
-        with self.store.transaction() as c:
-            validate_identity(c, who)  # the bot still holds its credential, lease and state, under the lock
-            lifecycle.refuse_send(c, who, None, what="anything")
-            row = H.approval(c, approval_id)
-            if not row or row["kind"] != "support" or row["requested_by_id"] != who.actor:
-                return None
-            if not row["consumed_at"]:
-                if row["decided_via"] == RULE_VIA:
-                    if not team_rules.load(c)[RULE]:
-                        self._unrule(c, who, approval_id)  # the rule went off before this send: a person decides
-                        return None
-                elif row["decision"] is None:
-                    if not team_rules.load(c)[RULE] or from_source():
-                        return None  # a copy run from source sends no bot's report by rule: a person decides
+        problems = H.lint_support(payload) if isinstance(payload, dict) else ["a report is an object"]
+        if not problems and not payload.get("content_sha256"):
+            problems = ["a report needs content_sha256: the SHA-256 of the exact message, as hex"]
+        if problems or not H.support_text_matches(payload):
+            raise Problem("validation", "; ".join(problems) or "The message does not match its hash", 422)
+        key = "approval:" + _key_of(who.actor, payload)
+        with self.sending:
+            claimed_rid = None
+            with self.store.transaction() as c:
+                validate_identity(c, who)
+                lifecycle.refuse_send(c, who, None, what="anything")
+                done = c.execute(
+                    "SELECT * FROM support_tickets WHERE request_key=? OR request_key IN (SELECT p.prefix || "
+                    "g.requirement_id FROM ok_grants g, (SELECT 'approval:' AS prefix UNION ALL SELECT 'draft:') p "
+                    "WHERE g.subject=? AND g.asked_by_id=? AND g.used_at IS NOT NULL) ORDER BY created_at LIMIT 1",
+                    (key, SUBJECT + _key_of(who.actor, payload), who.actor),
+                ).fetchone()
+                if done:
+                    # This very report already went, under the team rule or on a person's OK: a retry gets its ticket,
+                    # whatever the rule says now, and no person is asked to OK a report HQ already has.
+                    return {
+                        "ticket": view(done),
+                        "sent": True,
+                        "filed_as": done["actor"],
+                        "status": "sent",
+                        "task_id": task_id or None,
+                    }
+                person = H.default_human(c)
+                direct = who.role == "bot" and team_rules.load(c)[RULE] and not from_source()
+                if direct:
                     try:
                         if check is not None:
                             check(c)
                     except Problem:
-                        return None  # this send is not allowed for its source: the draft waits
-                    person = H.default_human(c)
-                    if not person:
-                        raise Problem("identity", "This install has no person to file a report for yet.", 409)
-                    c.execute("SAVEPOINT domain_write")
-                    try:
-                        H.approval_decide(c, H.human_actor(person), approval_id, "approved", RULE_NOTE)
-                        c.execute("UPDATE approvals SET decided_via=? WHERE id=?", (RULE_VIA, approval_id))
-                        if row["message_id"]:
-                            # The notice the draft wrote for the default person is read and delivered with its decision,
-                            # as the person's own ack would leave it (bot_status_routes.py acknowledge): the message stays as history.
-                            H.mark_delivered(c, H.KEEPER, row["message_id"], recipient=H.human_actor(person))
-                            H.mark_read(c, H.KEEPER, row["message_id"], recipient=H.human_actor(person))
-                        c.execute("RELEASE domain_write")
-                    except H.Refused as exc:
-                        refusal = refused(c, who, exc)  # the decision undone, the refusal kept and counted
-                else:
-                    return None  # a person decided it: their file_approved sends it, or it is declined
-        if refusal:
-            raise refusal
-        try:
-            sent = self._file_approved(who, approval_id)
-        except Exception:
-            with self.store.transaction() as c:
-                self._unrule(c, who, approval_id)  # not sent: the rule's decision is taken back, the draft waits
-            raise
-        return {"ticket": sent["ticket"], "sent": True, "filed_as": sent["filed_as"]}
+                        direct = False  # this send is not allowed for its source: a person OKs it
+                if direct and not person:
+                    raise Problem("identity", "This install has no person to file a report for yet.", 409)
+                # A person already OK'd this very report and their click claimed it, and Maintenance has not delivered
+                # it yet: that OK is the one send, whichever path gets here first.
+                claimed_rid = next(
+                    (
+                        r["requirement_id"]
+                        for r in claimed(c)
+                        if r["asked_by_id"] == who.actor
+                        and (task_asks.grant(c, r["requirement_id"]) or {}).get("subject")
+                        == SUBJECT + _key_of(who.actor, payload)
+                    ),
+                    None,
+                )
+                if not direct and not claimed_rid:
+                    asked = ask_report(c, who.actor, payload, task_id=task_id or None)
+                    return {
+                        **asked,
+                        "id": asked["requirement_id"],
+                        "approval": asked["requirement_id"],
+                        "status": "pending",
+                    }
+                # An OK this bot asked for the same report, still waiting, is not needed now it goes under the rule.
+                for (rid,) in (
+                    ()
+                    if claimed_rid
+                    else c.execute(
+                        "SELECT requirement_id FROM ok_grants WHERE subject=? AND asked_by_id=? AND used_at IS NULL",
+                        (SUBJECT + _key_of(who.actor, payload), who.actor),
+                    ).fetchall()
+                ):
+                    if task_asks.standing(c, rid) == task_asks.WAITING:
+                        task_asks.withdraw(c, rid, "Sent to Tico support under the team rule")
+            if claimed_rid:
+                sent = self._file_approved(who, claimed_rid)
+                return {
+                    "ticket": sent["ticket"],
+                    "sent": True,
+                    "filed_as": sent["filed_as"],
+                    "status": "sent",
+                    "task_id": task_id or None,
+                }
+            ticket = self._send(Identity(H.human_actor(person), "human"), payload, "bot_report", key)
+            return {
+                "ticket": ticket,
+                "sent": True,
+                "filed_as": H.human_actor(person),
+                "status": "sent",
+                "task_id": task_id or None,
+            }
 
-    def _unrule(self, c, who, approval_id):
-        """Take a team-rule decision back, while nothing has been sent on it: the draft waits for a person again."""
-        row = H.approval(c, approval_id)
-        if not row or row["decided_via"] != RULE_VIA or row["consumed_at"]:
-            return
-        c.execute(
-            "UPDATE approvals SET decision=NULL, decided_by_id=NULL, decided_at=NULL, decided_via=NULL, "
-            "decided_for=NULL WHERE id=?",
-            (approval_id,),
-        )
-        H.event(c, who.actor, "approval.undo", approval_id, {"was": row["decision"], "via": RULE_VIA})
-        H._recount(c, row["requested_by_id"])
-
-    def file_approved(self, who, approval_id):
-        """Send the report a person approved, for whoever asked for the approval. The ticket is filed as the person who
-        approved it (theirs to read and answer, counted against their day) and the approval is spent in the same
-        transaction that keeps the ticket: HQ refusing or out of reach spends nothing, so the call can be made again.
-        A second call for a spent approval answers with the same ticket."""
+    def file_approved(self, who, rid):
+        """Send the report a person OK'd, for whoever asked for the OK. The ticket is filed as the person who OK'd it
+        (theirs to read and answer, counted against their day). Claim, then send: the OK is used and committed first,
+        then the report goes with Idempotency-Key `tico-support:<rid>`. HQ refusing or out of reach leaves the OK used
+        with no ticket; calling again (Maintenance does, for the Health Monitor) sends the same report under the same
+        key. A call once the ticket is kept answers with it."""
         with self.sending:
-            return self._file_approved(who, approval_id)
+            return self._file_approved(who, rid)
 
-    def _file_approved(self, who, approval_id):
-        """The send itself, under the lock `sending` that file_approved and send_by_rule both hold."""
+    def _file_approved(self, who, rid):
+        """The send itself, under the lock `sending` that report and file_approved both hold."""
         with self.store.read() as c:
-            row = H.approval(c, approval_id)
+            found = task_asks.grant(c, rid)
+            standing = task_asks.standing(c, rid) if found else None
             quarantined = H.is_bot(who.actor) and (H.bot(c, H.actor_id(who.actor)) or {}).get("state") == "quarantined"
-        if not row:
-            raise Problem("not_found", "Approval not found", 404)
-        if row["requested_by_id"] != who.actor:
-            raise Problem("forbidden", "Only whoever asked for this approval may send it.", 403)
+            health = found and (
+                c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='health_reports'").fetchone()
+                and c.execute("SELECT 1 FROM health_reports WHERE approval_id=?", (rid,)).fetchone()
+            )
+        if not found or not str(found["subject"]).startswith(SUBJECT):
+            raise Problem("not_found", "No such report to send", 404)
+        if found["asked_by_id"] != who.actor:
+            raise Problem("forbidden", "Only whoever asked for this OK may send it.", 403)
         if quarantined:
             raise Problem("forbidden", "A quarantined bot sends nothing until a person clears it.", 403)
-        if row["kind"] != "support":
-            raise Problem("approval", f"{approval_id} is a {row['kind']} approval, not a support report.", 422)
-        if row["decision"] != "approved":
-            state = row["decision"] or "waiting for a person"
-            raise Problem("approval", f"This report is {state}: only a report a person approved is sent.", 409)
-        if row["decided_via"] == RULE_VIA and not row["consumed_at"]:
-            # The team rule decided it and nothing was sent: once the rule is off, the draft waits for a person.
-            with self.store.transaction() as c:
-                waits = not team_rules.load(c)[RULE]
-                if waits:
-                    self._unrule(c, who, approval_id)
-            if waits:
-                raise Problem(
-                    "approval", "This report waits for a person: the team rule that would send it is off.", 409
-                )
-        payload = row["payload"] or {}
+        payload = found["content"] or {}
         if H.lint_support(payload) or not H.support_text_matches(payload):
-            raise Problem("approval", "The approved message no longer matches its hash; nothing was sent.", 409)
-        person = Identity(row["decided_by_id"], "human")
-        # Who asked decides whose ticket it is. A Health Monitor report (health_reports names the approval, whoever asked)
-        # is the monitor's; a bot's report a person approved is the bot's; a report a person asked for and sent is theirs,
-        # filed as `person`. The monitor's and the bot's keep `approval:` (the monitor's "Seen again" finds its ticket by
-        # it); the person's own keeps `draft:`, so their chat lists it (OWN). A person's draft filed under `approval:` (an
-        # older release, after migration 0072) is found by that key too, so a replay does not file it again, and moves
-        # it to `draft:` so the chat lists it.
-        bot = H.is_bot(who.actor)
-        with self.store.read() as c:
-            health = (
-                c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='health_reports'").fetchone()
-                and c.execute("SELECT 1 FROM health_reports WHERE approval_id=?", (approval_id,)).fetchone()
+            words = (
+                "The OK'd report has no content_sha256; nothing was sent."
+                if not payload.get("content_sha256")
+                else "The OK'd message no longer matches its hash; nothing was sent."
             )
+            if standing == task_asks.USED:
+                # Claimed and never deliverable: refused once, for good. It leaves the queue (not_done), the task of
+                # the person who OK'd it says why, and Health counts it (health._claimed_oks_check).
+                with self.store.transaction() as c:
+                    if not c.execute("SELECT 1 FROM events WHERE action='ok.not_done' AND target=?", (rid,)).fetchone():
+                        task_asks.not_done(c, rid, words)
+            raise Problem("approval", words, 409)
+        person = Identity(found["ok_by_id"], "human") if found["ok_by_id"] else None
+        # Who asked decides whose ticket it is. A Health Monitor report (health_reports names the OK, whoever asked)
+        # is the monitor's; a bot's report a person OK'd is the bot's; a report a person asked for and sent is theirs,
+        # filed as `person`. The monitor's and the bot's keep `approval:` (the monitor's "Seen again" finds its ticket by
+        # it); the person's own keeps `draft:`, so their chat lists it (OWN).
         if health:
-            source, key = "health_monitor", "approval:" + approval_id
-        elif bot:
-            source, key = "bot_report", "approval:" + approval_id
+            source, key = "health_monitor", "approval:" + rid
+        elif H.is_bot(who.actor):
+            source, key = "bot_report", "approval:" + rid
         else:
-            source, key = "person", "draft:" + approval_id
-        legacy = "approval:" + approval_id
+            source, key = "person", "draft:" + rid
 
-        def spent_ticket(c):
-            return c.execute(
-                "SELECT * FROM support_tickets WHERE actor=? AND request_key IN (?,?) ORDER BY created_at LIMIT 1",
-                (person.actor, key, legacy),
-            ).fetchone()
-
-        def spend(c, _ticket_id=None):
-            spent = c.execute(
-                "UPDATE approvals SET consumed_at=? WHERE id=? AND consumed_at IS NULL", (H.now(), approval_id)
-            ).rowcount
-            if spent:
-                H.event(c, who.actor, "approval.consume", approval_id, {"kind": "support"})
-
-        with self.store.read() as c:
-            done = spent_ticket(c)
-        if done and source == "person" and done["request_key"] == legacy:
-            with self.store.transaction() as c:
-                c.execute(
-                    "UPDATE support_tickets SET request_key=? WHERE id=? AND request_key=?", (key, done["id"], legacy)
-                )
+        def kept():
             with self.store.read() as c:
-                done = c.execute("SELECT * FROM support_tickets WHERE id=?", (done["id"],)).fetchone()
-        if row["consumed_at"]:
-            if not done:
-                raise Problem("approval", f"{approval_id} was already spent at {row['consumed_at']}.", 409)
-            return {"ticket": view(done), "approval": approval_id, "filed_as": person.actor, "again": True}
-        if done:  # a ticket kept before its approval was spent (an older crash): spend it
+                return c.execute(
+                    "SELECT * FROM support_tickets WHERE actor=? AND request_key=? ORDER BY created_at LIMIT 1",
+                    (found["ok_by_id"], key),
+                ).fetchone()
+
+        if standing != task_asks.USED or not person:
+            # The person's click claims the OK (ok_given); a report it did not claim is never sent from here.
+            state = {
+                task_asks.WAITING: "waiting for a person",
+                task_asks.SENT_BACK: "sent back",
+                task_asks.OK: "OK'd but not claimed by its click",
+            }.get(str(standing), "not asked any more")
+            raise Problem("approval", f"This report is {state}: only a report a person's OK claimed is sent.", 409)
+        done = kept()
+        if done:
+            return {"ticket": view(done), "approval": rid, "filed_as": found["ok_by_id"], "again": True}
+        with self.store.read() as c:
+            # The same report already went under the team rule (`report`, its own key): one report, one send.
+            ruled = c.execute(
+                "SELECT * FROM support_tickets WHERE request_key=? ORDER BY created_at LIMIT 1",
+                ("approval:" + _key_of(found["asked_by_id"], payload),),
+            ).fetchone()
+        if ruled and found["subject"] == SUBJECT + _key_of(found["asked_by_id"], payload):
             with self.store.transaction() as c:
-                spend(c)
-            return {"ticket": view(done), "approval": approval_id, "filed_as": person.actor, "again": True}
-        ticket = self.file(
+                task_asks.settle(c, rid, "Sent the report to Tico support.")
+            return {"ticket": view(ruled), "approval": rid, "filed_as": ruled["actor"], "again": True}
+        if found["used_by_id"] != who.actor:
+            raise Problem("approval", f"This OK was already used at {found['used_at']}.", 409)
+        # Claimed, with no ticket yet: the first send, or a retry after a crash or HQ out of reach, under the same
+        # Idempotency-Key (HQ answers a retry with the ticket the first send made). Before the first send, whoever gave
+        # the OK must still be here and still entitled to give it (rule C); if not, it is given up on and never sent.
+        # Once a send has begun (`ok.sending`) HQ may have it, so a retry is never refused for that.
+        with self.store.transaction() as c:
+            started = c.execute("SELECT 1 FROM events WHERE action='ok.sending' AND target=?", (rid,)).fetchone()
+            refused = task_asks.claimed_problem(c, rid, authority=not started)
+            if refused:
+                task_asks.not_done(c, rid, refused)
+            elif not started:
+                H.event(c, who.actor, "ok.sending", rid, {"task": task_asks.task_of(c, rid)})
+        if refused:
+            raise Problem("approval", f"{refused}: the report was not sent.", 409)
+
+        def settle(c, _ticket_id=None):
+            task_asks.settle(c, rid, "Sent the report to Tico support.")
+
+        ticket = self._send(person, payload, source, key, on_filed=settle, idem="tico-support:" + rid)
+        return {"ticket": ticket, "approval": rid, "filed_as": person.actor, "again": False}
+
+    def _send(self, person, payload, source, key, on_filed=None, idem=""):
+        """File a report as `person`, once per `key`: a ticket kept under that key answers again."""
+        with self.store.read() as c:
+            done = c.execute(
+                "SELECT * FROM support_tickets WHERE actor=? AND request_key=? ORDER BY created_at LIMIT 1",
+                (person.actor, key),
+            ).fetchone()
+        if done:
+            if on_filed:
+                with self.store.transaction() as c:  # a ticket kept before its OK was used (an older crash)
+                    on_filed(c, done["id"])
+            return view(done)
+        return self.file(
             person,
             SupportTicket(message=payload["message"], include_ids=payload.get("include_ids", True) is not False),
             key,
-            on_filed=spend,
+            on_filed=on_filed,
             source=source,
+            idem=idem,
         )
-        with self.store.transaction() as c:  # a ticket kept before its approval was spent (an older crash)
-            spend(c)
-        return {"ticket": ticket, "approval": approval_id, "filed_as": person.actor, "again": False}
 
     def write(self, who, ticket_id, text, attachment=""):
         """Add a message to one of the person's own tickets (the chat's; a bot's ticket is not theirs to write on)."""
@@ -994,11 +1110,35 @@ def install(app, store, settings, census):
         require_on(settings)
         return support_asks.answer_feedback(store, support, who, body)
 
+    @app.post("/api/v2/support/reports")
+    def support_report(request: Request, body: SupportReport):
+        """A bot, a person's token or the Assistant drafts a report to Tico support: filed at once under the team rule
+        `bot_reports_direct`, otherwise a person OKs it from its preview first (docs/support.md)."""
+        require_on(settings)
+        who = request.state.identity
+        auth = request.app.state.auth
+        auth.domain(who)
+        if who.role not in ("bot", "owner", "human"):
+            raise Problem("forbidden", "Only a bot or a person drafts a report.", 403)
+
+        def privacy_now(c):
+            from . import task_privacy
+
+            task_privacy.guard_write(c, getattr(request.state, "privacy_source", who), request.url.path, auth)
+
+        try:
+            return support.report(who, body.payload, body.task_id, check=privacy_now)
+        except H.Refused as exc:
+            raise refusal_problem(exc) from None
+
     @app.post("/api/v2/support/tickets/from-approval")
     def support_file_approved(request: Request, body: SupportFromApproval):
-        """A bot, a person's token or the Assistant sends the report a person approved (docs/support.md)."""
+        """A bot, a person's token or the Assistant sends the report a person OK'd (docs/support.md)."""
         require_on(settings)
-        return support.file_approved(request.state.identity, body.approval)
+        try:
+            return support.file_approved(request.state.identity, body.approval)
+        except H.Refused as exc:
+            raise refusal_problem(exc) from None
 
     @app.post("/api/v2/support/tickets/refresh")
     def support_refresh(request: Request, body: SupportRefresh | None = None):

@@ -18,11 +18,11 @@ type TaskModel = {harness: string; model: string; reasoning_effort: string; runt
 // The bot as the test serves and edits it (the fields it reads or writes).
 type Bot = {name: string; display_name: string; description: string; status: string; owner_id: string; repo: string; can_manage: boolean;
   users: unknown[]; bot_owners: unknown[]; revision: number; model: string; harness: string; reasoning_effort: string;
-  keep_tasks_going: number | null; task_flow: {going: number; waiting: number}; task_model: TaskModel | null; task_model_warning?: string;
+  task_model: TaskModel | null; task_model_warning?: string;
   turns_at_once?: number | null; thread_mode: string; bot_contact: string; machine: {runner_id: string; label: string; owner_id: string; generation: number}};
 // A request body the page posted to the bot's save routes.
 type Body = {expected_revision?: number; task_model?: {harness?: string; model?: string | null; effort?: string | null; compact_at?: number | null} | null;
-  display_name?: string; description?: string; keep_tasks_going?: number | null; turns_at_once?: number | null};
+  display_name?: string; description?: string; turns_at_once?: number | null};
 declare const S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
 
 declare var SETTINGS: string;
@@ -46,7 +46,7 @@ declare var loadSettings: () => void;
     };
     const helper: Bot = {name: 'helper', display_name: 'Helper', description: '', status: 'active', owner_id: 'ana', repo: 'bot-helper',
       can_manage: true, users: [], bot_owners: [], revision: 4, model: 'claude-sonnet-5-5', harness: 'claude', reasoning_effort: 'high',
-      keep_tasks_going: null, task_flow: {going: 2, waiting: 5}, task_model: null, thread_mode: 'personal', bot_contact: 'open', machine: {runner_id: 'r1', label: 'Box', owner_id: 'ana', generation: 7}};
+      task_model: null, thread_mode: 'personal', bot_contact: 'open', machine: {runner_id: 'r1', label: 'Box', owner_id: 'ana', generation: 7}};
     const bots = [helper];
     const WARNING = 'This bot sends messages for you. Haiku 5.5 is a cheaper model than its own Sonnet 5.5, and may word things badly. It still saves, and its tasks run on it.';
     let calls: {what: string; body: Body}[] = [];
@@ -73,10 +73,6 @@ declare var loadSettings: () => void;
           helper.task_model_warning = t?.model === 'claude-haiku-5-5' && helper.model === 'claude-sonnet-5-5' ? WARNING : '';
           return json({bot: 'helper', task_model: helper.task_model, revision: ++helper.revision, readiness: null,
             warning: helper.task_model_warning});
-        }
-        if (what === 'keep-tasks-going') {
-          helper.keep_tasks_going = body.keep_tasks_going;
-          return json({bot: 'helper', keep_tasks_going: body.keep_tasks_going, revision: ++helper.revision});
         }
         if (what === 'turns-at-once') {
           helper.turns_at_once = body.turns_at_once;
@@ -279,27 +275,11 @@ declare var loadSettings: () => void;
     await capture('phone-task-row', row);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll');
 
-    // Active-work caps save with Save bot at both widths, including off and the unlimited default.
+    // Turns at once saves with Save bot at both widths.
     for (const width of [1440, 390]) {
       await page.setViewportSize({width, height: 900});
       await toBots();
-      assert.match(await page.locator('[data-settings-bot=helper] [data-task-flow]').innerText(), /2 of unlimited tasks going, 5 waiting to start/);
       await openEditor();
-      const keep = editor.locator('[data-bot-keep-tasks]');
-      for (const [value, stored] of [['3', 3], ['0', 0], ['', null]] as const) {
-        const before = helper.revision;
-        calls = [];
-        await keep.fill(value);
-        await keep.dispatchEvent('change');
-        await page.waitForTimeout(100);
-        assert.deepEqual(calls, [], 'held until Save bot');
-        await editor.locator('button[type=submit]').click();
-        await loaded(before + 2);
-        assert.deepEqual(calls.map(c => c.what), ['definition', 'keep-tasks-going']);
-        assert.deepEqual(calls[1]!.body, {keep_tasks_going: stored, expected_revision: before + 1});
-        assert.equal(helper.keep_tasks_going, stored);
-        await openEditor();
-      }
       // Turns at once saves the same way; a value out of range or not a whole number is named under its row
       // and not sent.
       const turns = editor.locator('[data-bot-turns-at-once]');

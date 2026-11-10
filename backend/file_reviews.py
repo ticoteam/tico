@@ -1,12 +1,12 @@
-"""File reviews: a bot's question to a person about exact file versions (`hub task question --review`), and whether a
-person approved a version (`hub file approved`, docs/files.md).
+"""File reviews: whether a person approved an exact file version (`tico file approved`, docs/files.md).
 
-The question's ask keeps the versions under review (`review`: file, version, digest) and shows them on the card as
-attachments, which each reader sees through the file's own visibility (visuals.decorate). An answer records a verdict
-per version in its file's activity log (action `reviewed`), so the approval check reads one indexed log, never the
-messages. A bot may review another bot's file too (`hub file review`), for a company where a bot moves a stage. By
-default only a person's verdict counts (`--by human`); `--by bot:SLUG` or `--by any` reads those. The newest verdict
-on that version decides, and a version never inherits another's: a new version is a new review.
+A bot asks a person for a bound OK of the file (POST /api/v2/tasks/{id}/oks with subject `file:<id>@<version>`,
+`file:<id>` or `file:<path in its checkout>`). The version and its digest are pinned when it asks (`freeze`), and the
+person's OK from its preview approves exactly that version; a send back asks for changes on it (`_asked`). A plain
+answer on an ask that only shows a file approves nothing. A bot may review another
+bot's file too (`tico file review`), recorded in the file's activity log (action `reviewed`). By default only a
+person's verdict counts (`--by human`); `--by bot:SLUG` or `--by any` reads those. The newest verdict on that version
+decides, and a version never inherits another's: a new version is a new review.
 """
 
 import re
@@ -14,207 +14,28 @@ import re
 from .store import H, Problem
 from . import task_privacy as privacy
 
-APPROVE, CHANGES = "Approve", "Request changes"
-AMOUNT = re.compile(r"\$?[0-9]+(?:\.[0-9]{1,2})?")
+ACTS_FOR_PEOPLE = ("bot:assistant", "bot:botops")  # task_asks.ACTS_FOR_PEOPLE: never a reviewer
 BY = re.compile(r"human|any|bot:[a-z0-9][a-z0-9_-]{0,63}")
 VERDICTS = ("approve", "changes")
 
 
-def _label(title, taken, n):
-    """A pick's label from a file's title: the name without its extension, words not path parts, at most 60
-    characters, unique among the picks; "Option n" when nothing is left."""
-    text = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", str(title or "").strip())
-    text = " ".join(re.sub(r"[_/\\]+|(?<=\w)-(?=\w)", " ", text).split())[:60].strip() or f"Option {n}"
-    label, i = text, 2
-    while label in taken:
-        label = f"{text[:55]} ({i})"
-        i += 1
-    taken.add(label)
-    return label
-
-
-def resolve(c, auth, blobs, who, person, items):
-    """The versions under review as (review entries, attachments), checked: each a stored file the asking bot may
-    read, at a version it has, that the person asked can open too. A bare file id means its current version."""
-    from .files import file_visible
-    from .visuals import kind_of, _head
-
-    reader = auth.identity_for_actor(c, person)
-    entries, attachments, seen = [], [], set()
-    for item in items:
-        row = c.execute("SELECT * FROM bot_files WHERE id=?", (item.file,)).fetchone()
-        if not row or row["archived"] or row["locator"] != "tico_blob" or not file_visible(c, auth, who, row, {}):
-            raise Problem("not_found", f"File {item.file} not found", 404)
-        number = item.version or row["current_version"]
-        v = c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (row["id"], number)).fetchone()
-        if not v:
-            raise Problem("not_found", f"File {item.file} has no version {number}", 404)
-        if (row["id"], number) in seen:
-            raise Problem("validation", f"{row['id']}@{number} is under review twice", 422)
-        seen.add((row["id"], number))
-        if not file_visible(c, auth, reader, row, {}):
-            raise Problem(
-                "privacy",
-                f"{H.actor_name(c, person)} cannot open {row['id']}, so they could not review it: "
-                "publish it where they can read it",
-                403,
-            )
-        mime = (v["mime"] or "").split(";", 1)[0].strip().lower()
-        kind = kind_of(mime, v["size"], _head(blobs, v["digest"]) if blobs else b"")
-        entries.append({"file": row["id"], "version": number, "digest": v["source_digest"] or v["digest"]})
-        attachments.append(
-            {
-                "id": row["id"],
-                "file_id": row["id"],
-                "version": number,
-                "ref": f"{row['id']}@{number}",
-                "title": row["title"],
-                "kind": kind,
-                "name": v["name"],
-                "size": v["size"],
-                "content_type": v["mime"],
-                "url": f"/api/v2/files/{row['id']}?v={number}",
-            }
-        )
-    return entries, attachments
-
-
-def same_versions(entries):
-    """Whether an open question task with the same words asks about these same versions (hubdb.task_create's duplicate
-    check): the same question about a new version is a new review."""
-    mine = {(e["file"], e["version"]) for e in entries}
-
-    def same(c, task_id):
-        own = c.execute("SELECT review FROM tasks WHERE id=?", (task_id,)).fetchone()
-        if own and own[0]:
-            # A question task (backend/question_tasks.py) keeps its review on itself.
-            files = (H._json(own[0], {}) or {}).get("files") or []
-            return {(f.get("file"), f.get("version")) for f in files} == mine
-        row = c.execute(
-            "SELECT m.refs FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id "
-            "WHERE t.id=? AND json_extract(m.refs,'$.review') IS NOT NULL "
-            "ORDER BY m.created_at DESC, m.id DESC LIMIT 1",
-            (task_id,),
-        ).fetchone()
-        files = ((H._json(row["refs"], {}) or {}).get("review") or {}).get("files") or [] if row else []
-        return {(f.get("file"), f.get("version")) for f in files} == mine
-
-    return same
-
-
-def options(entries, attachments, pick, given):
-    """The question's options for a review: the bot's own when it gave some, else Approve and Request changes; in a
-    pick, one per file (its entry keeps the label) and Request changes."""
-    from . import models as M
-
-    if pick:
-        taken = set()
-        for entry, a in zip(entries, attachments, strict=True):
-            entry["label"] = _label(a["title"] or a["name"], taken, len(taken) + 1)
-        return [
-            *(M.QuestionChoice(label=e["label"], then="This one is approved") for e in entries),
-            M.QuestionChoice(label=CHANGES, then="Your note on what to change goes back"),
-        ]
-    if given:
-        return given
-    return [
-        M.QuestionChoice(label=APPROVE, then="This version is approved"),
-        M.QuestionChoice(label=CHANGES, then="Your note on what to change goes back"),
-    ]
-
-
-def spend_payload(spend):
-    return {"amount": spend["amount"], "account": spend["account"], "what": spend["what"]}
-
-
-def check_spend(spend, labels):
-    """The spend a pick approves, as stored on the ask: its option exists and the payload lints like any spend."""
-    if spend is None:
-        return None
-    if spend.label not in labels:
-        raise Problem("validation", f'--spend names "{spend.label}", which is not one of the options', 422)
-    if not AMOUNT.fullmatch(spend.amount.strip()) or not float(spend.amount.strip().lstrip("$")) > 0:
-        raise Problem("validation", "A spend amount is a number above zero, like 12.50", 422)
-    value = {
-        "label": spend.label,
-        "amount": spend.amount.strip(),
-        "account": spend.account.strip(),
-        "what": spend.what.strip(),
-    }
-    problems = H.lint_approval("spend", spend_payload(value))
-    if problems:
-        raise Problem("validation", "; ".join(problems), 422)
-    return value
-
-
-def verdicts(review, labels, other):
-    """What one answer says of each version: approve, changes, passed (another file was picked) or other (a label
-    that is neither). A note with no pick asks for changes."""
-    files = review.get("files") or []
-    if CHANGES in labels or not labels and other:
-        said = {i: "changes" for i in range(len(files))}
-    elif review.get("pick"):
-        said = {i: "approve" if e.get("label") in labels else "passed" for i, e in enumerate(files)}
-    else:
-        said = {i: "approve" if APPROVE in labels else "other" for i in range(len(files))}
-    return [
-        {"file": e["file"], "version": e["version"], "digest": e["digest"], "verdict": said[i]}
-        for i, e in enumerate(files)
-    ]
-
-
-def require_readable(c, auth, who, reviewed):
-    """The person answering can still open every version they are judging."""
-    from .files import file_visible
-
-    for entry in reviewed:
-        row = c.execute("SELECT * FROM bot_files WHERE id=?", (entry["file"],)).fetchone()
-        if not row or not file_visible(c, auth, who, row, {}):
-            raise Problem("privacy", "You can no longer open a file under review", 403)
-        H._writer(c, who.actor, task_id=row["task_id"])
-
-
-def record(c, who, task_id, question_id, answer_id, reviewed):
-    """Each verdict as a `reviewed` line in its file's activity log, which hub file approved reads."""
-    at = H.now()
-    for entry in reviewed:
-        c.execute(
-            "INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created_at,"
-            "detail) VALUES(?,?,'reviewed',NULL,?,?,?,?,?)",
-            (
-                entry["file"],
-                who.actor,
-                task_id,
-                entry["version"],
-                entry["digest"],
-                at,
-                H._dump({"verdict": entry["verdict"], "question": question_id, "answer": answer_id}),
-            ),
-        )
-
-
-def spend_approval(c, who, asked, task_id, spend, previous):
-    """The spend the picked option carries, approved by the person who picked it: a `spend` approval the asking bot
-    requested, decided by this answer, spent once by the bot (hub approval consume). One per question: a later
-    answer that picks it again keeps the first."""
-    for answer in previous:
-        if answer.get("spend_approval"):
-            return answer["spend_approval"]
-    if not H.is_human(who.actor):
-        raise Problem("forbidden", "Only a person approves spending", 403)
-    made = H.approval_request(c, asked["sender_id"], "spend", spend_payload(spend), task_id=task_id, to=who.actor)
-    # The request's own notice to the person is answered by this pick: it never sits unread in their inbox.
-    c.execute("UPDATE messages SET read_at=? WHERE id=? AND read_at IS NULL", (H.now(), made["message_id"]))
-    note, refs = H.answer_text(asked, spend["label"], text=f'Picked "{spend["label"]}".')
-    H.approval_decide(c, who.actor, made["id"], "approved", note=note, note_sources=refs.get("body_sources", []))
-    return made["id"]
-
-
 def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=None, verdict=None, note=""):
-    """A verdict given directly (`hub file review`): a bot reviewing another bot's file, on a task it reads, when it can
-    open the file; a person may too. Recorded as a `reviewed` line like an answer's, with no question."""
+    """A verdict given directly (`tico file review`): a bot reviewing another bot's file, on a task it reads, when it can
+    open the file. Recorded as a `reviewed` line like an answer's, with no question. A bot's only: a person approves a
+    file by a bound OK of the version pinned when it was asked (task_asks), and their token or Assistant never gives a
+    verdict here; nor does a bot that acts for a person (the Assistant, BotOps)."""
+    from . import task_asks
     from .files import file_visible
 
+    if (
+        who.role != "bot"
+        or not H.is_bot(who.actor)
+        or getattr(who, "via", None)
+        or (who.actor in task_asks.ACTS_FOR_PEOPLE)
+    ):
+        raise Problem(
+            "forbidden", "A person approves a file by their own OK of it (ask with POST /api/v2/tasks/{id}/oks)", 403
+        )
     if verdict not in VERDICTS:
         raise Problem("validation", "A review approves or asks for changes", 422)
     task_id = auth.task(c, who, auth.resolve_task(c, who, task))["id"]
@@ -267,7 +88,7 @@ def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=No
 
 
 def approved(c, auth, who, fid=None, version=None, path=None, digest=None, by="human"):
-    """Whether this exact version is approved (`hub file approved`): {approved, by, at, task, question, file, version,
+    """Whether this exact version is approved (`tico file approved`): {approved, by, at, task, question, file, version,
     digest, verdict}. By file id (current version without one), or by a path in the bot's checkout and the digest of
     its bytes now, which finds the bot's versions with those exact bytes. Only verdicts on tasks the caller reads
     count, from whom `by` names (a person by default, `bot:SLUG`, or `any`); the newest such verdict decides."""
@@ -324,35 +145,169 @@ def _counts(actor, by):
     return actor == by
 
 
+VERSIONED = re.compile(r"(?P<fid>[^@]+)@v?(?P<number>[0-9]+)")
+
+
+def freeze(c, by, subject, content, shows):
+    """What an OK of a file is about, pinned when it is asked (task_asks.FREEZE): `file:<id>@<n>`, `file:<id>` (its
+    current version now) or `file:<path>` (the asking bot's own file there, its newest version now) becomes
+    `file:<id>@<n>` with that version's digest. The OK binds to that pair, so a version published after the ask is
+    never the one approved. Whatever content the bot sent is replaced by what is pinned."""
+    ref = subject.split(":", 1)[1].strip()
+    exact = VERSIONED.fullmatch(ref)
+    fid = exact["fid"] if exact else ref
+    row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+    if row:
+        number = int(exact["number"]) if exact else row["current_version"]
+        v = c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)).fetchone()
+    elif not exact and H.is_bot(by):
+        v = c.execute(
+            "SELECT v.* FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE f.bot_id=? AND v.repo_path=? "
+            "AND NOT f.archived ORDER BY v.created_at DESC, v.version DESC LIMIT 1",
+            (H.actor_id(by), ref),
+        ).fetchone()
+        row = c.execute("SELECT * FROM bot_files WHERE id=?", (v["file_id"],)).fetchone() if v else None
+    else:
+        v = None
+    if not row or not v or row["archived"]:
+        H.refuse(c, by, "not-found", f"No file version {ref} to ask about", task=None)
+    pinned = f"file:{row['id']}@{v['version']}"
+    frozen = {
+        "file": row["id"],
+        "version": v["version"],
+        "digest": v["source_digest"] or v["digest"],
+        "name": v["name"],
+        "path": v["repo_path"],
+    }
+    refs = [str(x) for x in (shows or []) if str(x) != subject]
+    return pinned, frozen, [pinned, *refs]
+
+
+# The app's auth (backend/files.py install_files sets it): an OK's giver is read as the identity the file rules check.
+AUTH = None
+
+
+def may_ok(c, person, grant):
+    """Why `person` may not OK this file version now, or None (task_asks.MAY_OK): checked at the OK, at its use and when
+    a verdict is read, so an OK counts only while its giver may still open the file, and that version is still there
+    with the bytes pinned at ask. Without the app's auth, nobody may (fail closed)."""
+    from .files import file_visible
+
+    content = grant.get("content") or {}
+    row = c.execute("SELECT * FROM bot_files WHERE id=?", (str(content.get("file") or ""),)).fetchone()
+    v = (
+        c.execute(
+            "SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (row["id"], content.get("version"))
+        ).fetchone()
+        if row
+        else None
+    )
+    if not row or not v or row["archived"] or (v["source_digest"] or v["digest"]) != content.get("digest"):
+        return "That file version is not there any more"
+    if AUTH is None:
+        return "Who may open this file cannot be checked now"
+    try:
+        who = AUTH.identity_for_actor(c, person)
+    except Problem:
+        return "They can no longer open this file"
+    if not file_visible(c, AUTH, who, row, {}):
+        return f"{H.actor_name(c, person)} can no longer open this file"
+    return None
+
+
+def may_see(c, auth, who, grant):
+    """Whether `who` may open a file OK's preview (task_asks.SEES): only when they may open the file itself."""
+    from .files import file_visible
+
+    fid = (grant.get("content") or {}).get("file")
+    row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone() if fid else None
+    return bool(row) and file_visible(c, auth, who, row, {})
+
+
+def _asked(c, versions):
+    """The verdicts bound OKs give the versions they pinned (task_asks, subject `file:<id>@<n>`): one dict per grant,
+    like an activity row's (created_at, actor, task_id, file_id, version, digest, verdict, question). An OK given from
+    its preview, by a giver who may still give it, approves; a send back asks for changes. A plain answer on an ask
+    that only shows a file, an OK withdrawn or on a task closed or moved back, or one for other bytes gives none."""
+    from . import task_asks
+
+    out = []
+    for fid, number, digest in versions:
+        for found in c.execute(
+            "SELECT requirement_id FROM ok_grants WHERE subject=? ORDER BY created_at DESC",
+            (f"file:{fid}@{number}",),
+        ).fetchall():
+            row = task_asks.grant(c, found[0])
+            if not row or (row["content"] or {}).get("digest") != digest:
+                continue
+            state, requirement, visit = task_asks._state(c, row)
+            if state in (task_asks.OK, task_asks.USED):
+                if not row["ok_by_id"] or task_asks._authority(c, row["ok_by_id"], row):
+                    continue
+                actor, at, verdict = row["ok_by_id"], row["ok_at"], "approve"
+            elif state == task_asks.SENT_BACK and requirement and visit:
+                answer = task_asks._newest_answer(c, visit["id"], requirement["id"]) or {}
+                actor, at, verdict = answer.get("by_id"), answer.get("created_at"), "changes"
+            else:
+                continue
+            out.append(
+                {
+                    "created_at": at,
+                    "actor": actor,
+                    "task_id": task_asks.task_of(c, row["requirement_id"]),
+                    "file_id": fid,
+                    "version": number,
+                    "digest": digest,
+                    "verdict": verdict,
+                    "question": row["requirement_id"],
+                }
+            )
+    return out
+
+
 def _verdict(c, who, versions, by="human"):
     """The newest verdict on any of `versions` (file id, version, digest; the newest version first) from whom `by`
-    names, on a task the caller reads. A later verdict on a newer version with the same bytes wins over an earlier
-    approval. With none counted, the first version is not approved."""
+    names, on a task the caller reads: an OK or a send back on an ask that shows it, or a bot's direct review. A later
+    verdict on a newer version with the same bytes wins over an earlier approval. With none counted, the first version
+    is not approved."""
     digests = {(fid, number): digest for fid, number, digest in versions}
     marks = ", ".join("(?, ?)" for _ in versions)
     args = [part for fid, number, _ in versions for part in (fid, number)]
-    rows = c.execute(
-        "SELECT * FROM bot_file_activity WHERE action='reviewed' AND (file_id, version) IN (VALUES "
-        f"{marks}) ORDER BY id DESC",
-        args,
-    ).fetchall()
+    # A direct review counts only when a bot gave it (`review`); a person's verdict is a bound OK (`_asked`).
+    rows = [
+        {
+            "created_at": r["created_at"],
+            "actor": r["actor"],
+            "task_id": r["task_id"],
+            "file_id": r["file_id"],
+            "version": r["version"],
+            "digest": r["digest"],
+            "verdict": (H._json(r["detail"], {}) or {}).get("verdict"),
+            "question": (H._json(r["detail"], {}) or {}).get("question"),
+        }
+        for r in c.execute(
+            "SELECT * FROM bot_file_activity WHERE action='reviewed' AND (file_id, version) IN (VALUES "
+            f"{marks}) ORDER BY id DESC",
+            args,
+        ).fetchall()
+        if H.is_bot(r["actor"]) and r["actor"] not in ACTS_FOR_PEOPLE
+    ]
+    rows = sorted(rows + _asked(c, versions), key=lambda r: r["created_at"] or "", reverse=True)
     for r in rows:
         task = H.task(c, r["task_id"]) if r["task_id"] else None
         if not _counts(r["actor"], by) or not task or not privacy.task_readable(c, who, task):
             continue
-        detail = H._json(r["detail"], {}) or {}
-        verdict = detail.get("verdict")
         digest = digests[(r["file_id"], r["version"])]
         return {
-            "approved": verdict == "approve" and r["digest"] == digest,
+            "approved": r["verdict"] == "approve" and r["digest"] == digest,
             "by": r["actor"],
             "at": r["created_at"],
             "task": r["task_id"],
-            "question": detail.get("question"),
+            "question": r["question"],
             "file": r["file_id"],
             "version": r["version"],
             "digest": digest,
-            "verdict": verdict,
+            "verdict": r["verdict"],
         }
     fid, number, digest = versions[0]
     return {

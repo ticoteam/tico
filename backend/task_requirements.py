@@ -14,14 +14,16 @@ What met a requirement is its newest answer on the visit that is not undone (`an
   ordinary answers there: they steer only an OK (and a page).
 - `pushed_past`: someone moved the task on without it, with the reason in `notes`. Any kind.
 
-A requirement never waits on a person who left or was removed (`active_person`): it waits on nobody named instead, and
+A requirement never waits on a person who left, was removed or cannot sign in (`active_person`): it waits on nobody named instead, and
 `waiting_on` gives it to the person the task falls to.
 """
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+
+from . import read_cache
 
 if TYPE_CHECKING:
     import sqlite3
@@ -60,31 +62,44 @@ def steers(kind: str, value: object) -> bool:
 
 
 def active_person(conn: "sqlite3.Connection", actor: object) -> bool:
-    """Whether `actor` is a person who is still here: `human:<id>` with a `humans` row, whose roster row is not marked
-    as left (`hidden`, set by `access.leave`) nor dropped by the directory (`directory_left`). Remove deletes the
-    `humans` row (`people_remove`). A bot, nobody, or anything else is not an active person."""
+    """Whether `actor` is a person who is still here and can act: `human:<id>` with a `humans` row, whose roster row is
+    not marked as left (`hidden`, set by `access.leave`), nor dropped by the directory (`directory_left`), nor has
+    sign-in turned off (`sign_in: false`, the People tab's switch). Remove deletes the `humans` row
+    (`people_remove`). A bot, nobody, or anything else is not an active person."""
     text = str(actor or "")
     if not text.startswith("human:") or not text[len("human:") :]:
         return False
-    found = conn.execute(
-        "SELECT 1 FROM humans h WHERE h.id=? AND NOT EXISTS (SELECT 1 FROM registry_metadata m, "
-        "json_each(CASE WHEN json_valid(m.value) THEN m.value ELSE '{}' END, '$.people') p "
-        "WHERE m.key='people' AND json_extract(p.value, '$.id') = h.id "
-        "AND (json_extract(p.value, '$.hidden') OR json_extract(p.value, '$.directory_left')))",
-        (text[len("human:") :],),
-    ).fetchone()
-    return found is not None
+    if read_cache.cache(conn) is None:
+        return conn.execute(ACTIVE_PEOPLE_SQL + " AND h.id=?", (text[len("human:") :],)).fetchone() is not None
+    # In one snapshot every person is read once: a list asks this for each task's people.
+    return text[len("human:") :] in read_cache.value(conn, ("active_people",), lambda: _active_ids(conn), shared=True)
+
+
+# The people who are here and can act (`active_person`).
+ACTIVE_PEOPLE_SQL = (
+    "SELECT h.id FROM humans h WHERE NOT EXISTS (SELECT 1 FROM registry_metadata m, "
+    "json_each(CASE WHEN json_valid(m.value) THEN m.value ELSE '{}' END, '$.people') p "
+    "WHERE m.key='people' AND json_extract(p.value, '$.id') = h.id "
+    "AND (json_extract(p.value, '$.hidden') OR json_extract(p.value, '$.directory_left') "
+    "OR json_extract(p.value, '$.sign_in') = 0))"
+)
+
+
+def _active_ids(conn: "sqlite3.Connection") -> frozenset[str]:
+    return frozenset(str(found[0]) for found in conn.execute(ACTIVE_PEOPLE_SQL).fetchall())
 
 
 @dataclass
 class Standing:
     """Where one requirement stands for one visit. `on` is who or what it waits on: an actor, `jev`, `github`, or a
-    task id. `line` is one sentence: what is missing, or what met it."""
+    task id. `line` is one sentence: what is missing, or what met it. `about` is the task it filed whose title (and
+    why it was closed) the line says, so a reader who may not open that task is not told them (waiting_on.unnamed)."""
 
     requirement: Row
     state: str
     on: str | None = None
     line: str = ""
+    about: str | None = None
 
     @property
     def met(self) -> bool:
@@ -117,30 +132,52 @@ def _loaded(row: Row) -> Row:
     return row
 
 
+STAGE_SQL = (
+    "SELECT * FROM requirements WHERE stage_id IN (%s) AND withdrawn_at IS NULL ORDER BY position, created_at, id"
+)
+VISIT_SQL = "SELECT * FROM requirements WHERE visit_id IN (%s) AND withdrawn_at IS NULL ORDER BY created_at, id"
+ANSWERS_SQL = "SELECT * FROM answers WHERE visit_id IN (%s) AND undone_at IS NULL ORDER BY created_at, id"
+
+
+def _by(conn: "sqlite3.Connection", sql: str, column: str, keys: list[str]) -> dict[str, list[Row]]:
+    """{key: its rows} for `sql` over many keys, one statement however many (the keys go in as one JSON list)."""
+    out: dict[str, list[Row]] = {key: [] for key in keys}
+    if keys:
+        for row in _rows(conn.execute(sql % "SELECT value FROM json_each(?)", (json.dumps(keys),))):
+            out[str(row[column])].append(row)
+    return out
+
+
+def _cached(conn: "sqlite3.Connection", what: str, sql: str, column: str, key: str) -> list[Row]:
+    """The rows of `sql` for one key, read once in a snapshot (or seeded by `prime`)."""
+    return read_cache.value(conn, (what, key), lambda: _by(conn, sql, column, [key])[key])
+
+
+def prime(conn: "sqlite3.Connection", tasks: Iterable[Row]) -> None:
+    """Read the requirements and answers of many tasks' open visits (`task_engine.task()` shapes) together, for the
+    `standings` of each that follow in this snapshot: a list costs what one task does."""
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+    visits = [visit for visit in (task.get("visit") for task in tasks) if visit]
+    for what, sql, column, keys in (
+        ("requirements_on_stage", STAGE_SQL, "stage_id", {str(v["stage_id"]) for v in visits}),
+        ("requirements_on_visit", VISIT_SQL, "visit_id", {str(v["id"]) for v in visits}),
+        ("answers_on_visit", ANSWERS_SQL, "visit_id", {str(v["id"]) for v in visits}),
+    ):
+        unread = sorted(key for key in keys if (what, key) not in values)
+        for key, rows in _by(conn, sql, column, unread).items():
+            values.setdefault((what, key), rows)
+
+
 def on_stage(conn: "sqlite3.Connection", stage_id: str) -> list[Row]:
     """A stage's requirements, in order."""
-    return [
-        _loaded(r)
-        for r in _rows(
-            conn.execute(
-                "SELECT * FROM requirements WHERE stage_id=? AND withdrawn_at IS NULL ORDER BY position, created_at, id",
-                (stage_id,),
-            )
-        )
-    ]
+    return [_loaded(r) for r in _cached(conn, "requirements_on_stage", STAGE_SQL, "stage_id", stage_id)]
 
 
 def on_visit(conn: "sqlite3.Connection", visit_id: str) -> list[Row]:
     """The requirements added to one visit, oldest first."""
-    return [
-        _loaded(r)
-        for r in _rows(
-            conn.execute(
-                "SELECT * FROM requirements WHERE visit_id=? AND withdrawn_at IS NULL ORDER BY created_at, id",
-                (visit_id,),
-            )
-        )
-    ]
+    return [_loaded(r) for r in _cached(conn, "requirements_on_visit", VISIT_SQL, "visit_id", visit_id)]
 
 
 def for_visit(conn: "sqlite3.Connection", visit: Row) -> list[Row]:
@@ -156,12 +193,7 @@ def get(conn: "sqlite3.Connection", requirement_id: str) -> Row | None:
 def newest_answers(conn: "sqlite3.Connection", visit_id: str) -> dict[str, Row]:
     """{requirement id: its newest answer on this visit that is not undone}."""
     out: dict[str, Row] = {}
-    for row in _rows(
-        conn.execute(
-            "SELECT * FROM answers WHERE visit_id=? AND undone_at IS NULL ORDER BY created_at, id",
-            (visit_id,),
-        )
-    ):
+    for row in _cached(conn, "answers_on_visit", ANSWERS_SQL, "visit_id", visit_id):
         out[row["requirement_id"]] = row
     return out
 
@@ -170,16 +202,17 @@ def person_of(conn: "sqlite3.Connection", requirement: Row, visit_id: str) -> st
     """Who a requirement waits on in one visit: the person it was last given to (a `give` answer that is not undone,
     on a kind a give steers), else the person or bot it names. A person who left or was removed is skipped: with
     nobody left, it is None, and the task's person takes it (`waiting_on.person_for`)."""
-    given = (
-        conn.execute(
-            "SELECT notes FROM answers WHERE visit_id=? AND requirement_id=? AND answer='give' AND undone_at IS NULL "
-            "ORDER BY created_at DESC, id DESC LIMIT 1",
-            (visit_id, requirement["id"]),
-        ).fetchone()
+    gives = (
+        [
+            row
+            for row in _cached(conn, "answers_on_visit", ANSWERS_SQL, "visit_id", visit_id)
+            if row["requirement_id"] == requirement["id"] and row["answer"] == "give"
+        ]
         if requirement["kind"] in STEERED
-        else None
+        else []
     )
-    for found in (str(given[0]) if given and given[0] else None, requirement.get("person_id")):
+    given = gives[-1]["notes"] if gives else None  # the newest: answers are oldest first
+    for found in (str(given) if given else None, requirement.get("person_id")):
         if found and (not str(found).startswith("human:") or active_person(conn, found)):
             return str(found)
     return None
@@ -232,15 +265,14 @@ def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer
     still_open = [f for f in filed if f["status"] == "open"]
     if still_open:
         first = still_open[0]
-        return Standing(requirement, WAITING, first["id"], first.get("title") or "")
+        return Standing(requirement, WAITING, first["id"], first.get("title") or "", first["id"])
     closed = [f for f in filed if f["status"] != "done"]
     if closed:
         first = closed[0]
         why = (first.get("why") or "").strip()
         title = first.get("title") or "A filed task"
-        return Standing(
-            requirement, NOT_MET, task.get("owner_id"), f"{title} was closed: {why}" if why else f"{title} was closed"
-        )
+        line = f"{title} was closed: {why}" if why else f"{title} was closed"
+        return Standing(requirement, NOT_MET, task.get("owner_id"), line, first["id"])
     return Standing(requirement, MET, line="Done")
 
 

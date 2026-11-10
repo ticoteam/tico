@@ -1,524 +1,352 @@
-/* ui/app/pipeline-editor.ts — The pipeline editor: a pipeline's stages, their requirements and Warn after times, the
-   links that hand tickets on, and its goal, factory, privacy, owner, manager and prefix. It opens from the pencil by the pipeline's name on the
-   Tasks page, which shows only to a reader who may change the pipeline's rules (GET /api/v2/pipelines/{id}/rights).
-   Every control calls a route that exists: stage names and order use the task-type route (movers only, so those
-   controls show only to a mover), requirements and settings use backend/pipeline_requirements.py, links use
-   backend/pipeline_links.py. A part whose route is not there is left out, not shown dead.
-   Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
-
-   openPipelineEditor(pipelineId)    opens the editor for a pipeline.
-   pipelineEditSync(pipelineId)      shows or hides the pencil for the pipeline in view. */
+/* ui/app/pipeline-editor.ts — The pipeline editor (docs/pipelines-v3.md S11): a pipeline's Goal, Manager, Factory and
+   Prefix (no Private: pipeline_settings refuses a private pipeline until one is defined), then its stages, one panel
+   each, closed until clicked. A stage has Purpose, Owner, how tasks leave, a Limit, an Expected time, and the
+   requirements to leave it. Done and Closed are not listed: every pipeline ends in them.
+   It opens from a stage's header (that stage open) or the page's edit button, for whoever may change the pipeline.
+   The whole record is read (GET /api/v2/pipelines/{id}) and saved at once (POST, with the settings_version it was read
+   at). When someone else saved first, the editor says what they changed and lets the person load theirs or save theirs
+   over it. Any other refusal shows the server's words. What the editor does not show (a stage's On enter, Expected for
+   bots only, a requirement's settings) is sent back as it was read.
+   Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-interface PeStage { id: string; name: string; status: string; limit_minutes?: number | null; card_cap?: number | null; position?: number; }
-interface PeType { id: string; name: string; prefix?: string | null; pipeline_owner_id?: string | null; manager?: string | null; goal?: string | null; steps: PeStage[]; }
-interface PeNeeds { formats?: string[]; newer_than_change?: boolean; is_work?: boolean; field?: string; source?: string; }
-interface PeReq {
-  id: string; name: string; kind: string; needs: PeNeeds; reviewed_by: string; reviewer_id?: string | null;
-  backup_reviewer_id?: string | null; rubric?: string | null; applies_to_label?: string | null; position?: number | null;
-}
-interface PeLink { id: string; from_pipeline_id: string; from_pipeline_stage_id: string; to_pipeline_id: string; mode: string; }
 interface PeState {
-  type: PeType; reqs: Map<string, PeReq[]>; links: PeLink[] | null; requirements: boolean;
-  mover: boolean; warn: string; cap: string; link: string;
-  /** Whether the reader may change the pipeline's rules (its owner and admins): the manager is a choice only then. */
-  mayEdit: boolean;
-  /** The settings block's server view (goal, factory, privacy, members), or null when the route did not answer. */
-  settings: PipelineSettings | null;
-  /** The live factories for the Factory choice, or null when the list did not load (the choice is then left out). */
-  factories: PipelineFactory[] | null;
+  id: string;
+  /** The record as last read: what a save is checked against. */
+  base: PipelineRec;
+  /** The record being edited. */
+  draft: PipelineRec;
+  /** The stages whose panel is open. */
+  open: WeakSet<PipelineStageRec>;
+  factories: FactoryRow[] | null;
+  /** Someone saved first: what they changed, and their record. */
+  clash: {theirs: PipelineRec; changed: string[]} | null;
+  error: string;
+  saving: boolean;
 }
-
-const PE_KINDS: [string, string][] = [['attachment', 'Attachment'], ['field', 'Field'], ['approval', 'Approval'], ['run', 'Run']];
-const PE_REVIEWERS: [string, string][] = [['nobody', 'Nobody'], ['bot', 'Bot'], ['person', 'Person'], ['bot_then_person', 'Bot, then person']];
-const PE_FORMATS: [string, string][] = [['image', 'Image'], ['video', 'Video'], ['page', 'Page'], ['file', 'File'], ['link', 'Link']];
-const PE_FIELDS: [string, string][] = [['pr_linked', 'PR linked'], ['label', 'Label'], ['assignee', 'Assignee'], ['due', 'Due date']];
-const PE_RUNS: [string, string][] = [['github_checks', 'GitHub checks'], ['test_receipt', 'Test receipt'], ['check_pool', 'Check pool']];
-const PE_UNITS: [string, string, number][] = [['minutes', 'minutes', 1], ['hours', 'hours', 60], ['days', 'days', 1440]];
-
-// The pipelines the Tasks page has read, kept when the editor opens (task-pipelines.js declares TASK_TYPES without a type).
-let PE_TYPES: {id: string; name: string}[] = [];
-const peTypes = (): {id: string; name: string}[] => PE_TYPES;
-
-// Requirements, settings, stage limits and links are served by backend/pipeline_requirements.py and pipeline_links.py
-// (tracks B and A); this branch has neither, so the route check reads them through here, as pipeline-api.ts does.
-const peRoute = (path: string): string => path;
 
 let PE: PeState | null = null;
-let PE_SEQ = 0;
-const PE_RIGHTS = new Map<string, {may: boolean; at: number}>();
 
-const peOptions = (rows: [string, string][], on: string | null | undefined): string =>
-  rows.map(([v, l]) => `<option value="${esc(v)}"${v === on ? ' selected' : ''}>${esc(l)}</option>`).join('');
-const pePeople = (): {id: string; name: string}[] => (S.people || []).filter(p => !p.hidden).map(p => ({id: 'human:' + p.id, name: p.name || p.id}));
-// A pipeline's manager is an active bot: paused, planned and archived bots are not offered. The roster carries the bot's
-// state as `state` (`status` on the org roster, the same value).
-const peBots = (): {id: string; name: string}[] => (S.emps || []).filter(e => (e.state ?? e.status) === 'active').map(e => ({id: 'bot:' + e.id, name: botDisplayName(e.id)}));
-/** A choice of one person or bot. A clearable choice offers `none` as an empty value. One that cannot be cleared (an owner
-    or a manager: the server refuses an empty one) shows `none` only while nothing is set, as a disabled placeholder. */
-const peWho = (rows: {id: string; name: string}[], on: string | null | undefined, none: string, clearable = true): string => {
-  const empty = clearable ? `<option value="">${esc(none)}</option>` : on ? '' : `<option value="" disabled selected>${esc(none)}</option>`;
-  return `${empty}${rows.map(r => `<option value="${esc(r.id)}"${r.id === on ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}`;
-};
-
-/** "2 days", "90 minutes": a Warn after time the way the person would say it. */
-function peAfter(minutes: number | null | undefined): string {
-  if (!minutes) return 'Off';
-  for (const [, label, size] of [...PE_UNITS].reverse()) if (minutes % size === 0) return `${minutes / size} ${label}`;
-  return `${minutes} minutes`;
-}
-
-function peFail(error: unknown): void {
-  toast(error instanceof Error && error.message ? error.message : 'Could not save', true);
-}
-
-// ---- the pencil: shown to a reader who may change the pipeline's rules.
-async function pipelineEditSync(pipelineId: string | null | undefined): Promise<void> {
-  const button = document.getElementById('task-pipeline-edit');
-  if (!button) return;
-  const seq = ++PE_SEQ;
-  if (!pipelineId) { button.hidden = true; return; }
-  button.dataset['pipeline'] = pipelineId;
-  const kept = PE_RIGHTS.get(pipelineId);
-  if (kept !== undefined && Date.now() - kept.at < 60000) { button.hidden = !kept.may; return; }
-  button.hidden = true;
-  try {
-    const rights: {may_edit_rules?: boolean} = await get(`/v2/pipelines/${encodeURIComponent(pipelineId)}/rights`);
-    PE_RIGHTS.set(pipelineId, {may: !!rights.may_edit_rules, at: Date.now()});
-    if (seq !== PE_SEQ) return;
-    button.hidden = !rights.may_edit_rules;
-  } catch { /* no rights known: the pencil stays hidden */ }
-}
-
-async function peLoad(id: string): Promise<PeState> {
-  const type: PeType = (await get(`/v2/task-types/${encodeURIComponent(id)}`, {fresh: true})).type;
-  const state: PeState = {type, reqs: new Map(), links: null, requirements: true, mover: canMove(), mayEdit: false, warn: '', cap: '', link: '', settings: null, factories: null};
-  try { state.mayEdit = !!(await get(`/v2/pipelines/${encodeURIComponent(id)}/rights`, {fresh: true})).may_edit_rules; } catch { state.mayEdit = false; }
-  try { state.settings = await pipelineSettings(id); } catch { state.settings = null; }
-  try { state.factories = await pipelineFactories(); } catch { state.factories = null; }
-  try { state.links = (await get(peRoute(`/v2/pipeline-links?pipeline=${encodeURIComponent(id)}`), {fresh: true})).links; } catch { state.links = null; }
-  try {
-    for (const stage of type.steps) state.reqs.set(stage.id, (await get(peRoute(`/v2/pipeline-stages/${encodeURIComponent(stage.id)}/requirements`), {fresh: true})).requirements ?? []);
-  } catch { state.requirements = false; }
-  return state;
-}
-
-// ---- drawing
-function peNeedsText(r: PeReq): string {
-  if (r.kind === 'attachment') return (r.needs.formats || []).join(', ');
-  if (r.kind === 'field') return PE_FIELDS.find(([v]) => v === r.needs.field)?.[1] ?? '';
-  if (r.kind === 'run') return PE_RUNS.find(([v]) => v === r.needs.source)?.[1] ?? '';
-  return '';
-}
-const peWhoName = (actor: string | null | undefined): string => pePeople().find(p => p.id === actor)?.name ?? '';
-
-function peReqHTML(r: PeReq): string {
-  const by = r.reviewed_by === 'nobody' ? '' : `${PE_REVIEWERS.find(([v]) => v === r.reviewed_by)?.[1] ?? ''}${r.reviewer_id ? ' ' + peWhoName(r.reviewer_id) : ''}`;
-  return `<li class="pe-req"><button type="button" class="pe-req-main" data-pe-req="${esc(r.id)}"><span class="pe-req-name">${esc(r.name)}</span>
-    <span class="pe-req-meta">${esc([PE_KINDS.find(([v]) => v === r.kind)?.[1] ?? r.kind, peNeedsText(r), by].filter(Boolean).join(' · '))}</span></button></li>`;
-}
-
-function peWarnHTML(stage: PeStage, on: boolean): string {
-  const unit = PE_UNITS.slice().reverse().find(([, , size]) => !!stage.limit_minutes && stage.limit_minutes % size === 0) ?? PE_UNITS[0]!;
-  const shown = stage.limit_minutes ? stage.limit_minutes / unit[2] : 1;
-  return `<span class="pe-warn"><button type="button" class="ghost pe-warn-b" data-pe-warn="${esc(stage.id)}" aria-expanded="${on}">Warn after: ${esc(peAfter(stage.limit_minutes))}</button>${on ? `
-    <span class="pe-pop" role="group" aria-label="Warn after"><input type="number" min="1" step="1" value="${shown}" data-pe-warn-n aria-label="Warn after">
-      <select data-pe-warn-u aria-label="Unit">${PE_UNITS.map(([v, l, size]) => `<option value="${size}"${unit[0] === v ? ' selected' : ''}>${l}</option>`).join('')}</select>
-      <button type="button" class="primary" data-pe-warn-save="${esc(stage.id)}">Save</button>
-      <button type="button" class="ghost" data-pe-warn-off="${esc(stage.id)}">Don't warn</button></span>` : ''}</span>`;
-}
-
-// "At most": how many cards the stage holds at once (D68). Blank is no cap; 0 is On ice (D69), a stage nobody works.
-function peCapHTML(stage: PeStage, on: boolean): string {
-  return `<span class="pe-cap"><button type="button" class="ghost pe-cap-b" data-pe-cap="${esc(stage.id)}" aria-expanded="${on}">At most: ${stage.card_cap == null ? 'No cap' : stage.card_cap}</button>${on ? `
-    <span class="pe-pop" role="group" aria-label="At most"><input type="number" min="0" max="500" step="1" value="${stage.card_cap ?? ''}" data-pe-cap-n aria-label="At most">
-      <button type="button" class="primary" data-pe-cap-save="${esc(stage.id)}">Save</button>
-      <button type="button" class="ghost" data-pe-cap-off="${esc(stage.id)}">No cap</button></span>` : ''}</span>`;
-}
-
-function peLinkHTML(state: PeState, stage: PeStage): string {
-  if (state.links === null) return '';
-  const link = state.links.find(l => l.from_pipeline_stage_id === stage.id && l.from_pipeline_id === state.type.id);
-  if (link) {
-    const name = peTypes().find(t => t.id === link.to_pipeline_id)?.name ?? link.to_pipeline_id;
-    return `<span class="pe-then">Then <b>${esc(name)}</b> (${link.mode === 'spawn' ? 'new ticket' : 'move'}) <button type="button" class="ghost" data-pe-unlink="${esc(link.id)}" aria-label="Remove link">Remove</button></span>`;
-  }
-  if (stage.status === 'done' || stage.status === 'closed') return '';
-  if (state.link !== stage.id) return `<button type="button" class="ghost pe-then-add" data-pe-link="${esc(stage.id)}">Then…</button>`;
-  const others = peTypes().filter(t => t.id !== state.type.id && t.id !== 'general');
-  return `<span class="pe-pop" role="group" aria-label="Then"><select data-pe-link-to aria-label="Then go to">${others.map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('')}</select>
-    <select data-pe-link-mode aria-label="How"><option value="move">Move</option><option value="spawn">New ticket</option></select>
-    <button type="button" class="primary" data-pe-link-save="${esc(stage.id)}">Add</button><button type="button" class="ghost" data-pe-link-cancel>Cancel</button></span>`;
-}
-
-function peStageHTML(state: PeState, stage: PeStage, i: number, count: number): string {
-  const name = state.mover
-    ? `<input class="pe-stage-name" value="${esc(stage.name)}" maxlength="80" data-pe-rename="${esc(stage.id)}" aria-label="Stage name">
-       <span class="pe-order"><button type="button" class="ghost" data-pe-up="${esc(stage.id)}" aria-label="Move up"${i === 0 ? ' disabled' : ''}>↑</button><button type="button" class="ghost" data-pe-down="${esc(stage.id)}" aria-label="Move down"${i === count - 1 ? ' disabled' : ''}>↓</button><button type="button" class="ghost" data-pe-drop="${esc(stage.id)}" aria-label="Remove stage">Remove</button></span>`
-    : `<span class="pe-stage-name">${esc(stage.name)}</span>`;
-  const reqs = state.reqs.get(stage.id) ?? [];
-  return `<li class="pe-stage"><div class="pe-stage-head">${name}</div>
-    <div class="pe-stage-tools">${peWarnHTML(stage, state.warn === stage.id)}${peCapHTML(stage, state.cap === stage.id)}${peLinkHTML(state, stage)}</div>
-    ${state.requirements ? `<ul class="pe-reqs">${reqs.map(peReqHTML).join('')}</ul><button type="button" class="ghost pe-req-add" data-pe-new="${esc(stage.id)}">+ Require</button>` : ''}
-    <div class="pe-form-slot" data-pe-slot="${esc(stage.id)}"></div></li>`;
-}
-
-/** The Goal, Factory and Private rows of the settings block. They show only when the server sent the settings. */
-function peGoalHTML(state: PeState): string {
-  const s = state.settings;
-  if (!s) return '';
-  const isPrivate = s.visibility === 'members';
-  const factories = (state.factories ?? []).map(f => ({id: f.id, name: f.name}));
-  // A member the roster does not show (a hidden person, an archived bot) still gets a checked box, so saving keeps it.
-  const roster = [...pePeople(), ...peBots()];
-  const unlisted = s.members.filter(id => !roster.some(p => p.id === id)).map(id => ({id, name: id.replace(/^(human|bot):/, '')}));
-  const members = isPrivate
-    ? `<fieldset class="pe-members"><legend>Who can see it</legend>${[...roster, ...unlisted].map(p =>
-        `<label class="pe-check"><input type="checkbox" data-pe-member value="${esc(p.id)}"${s.members.includes(p.id) ? ' checked' : ''}> ${esc(p.name)}</label>`).join('')}</fieldset>`
-    : '';
-  return `<label class="pe-f"><span>Goal</span><input name="goal" maxlength="200" value="${esc(s.goal ?? '')}" data-pe-setting="goal" autocomplete="off"></label>
-      ${state.factories ? `<label class="pe-f"><span>Factory</span><select data-pe-setting="factory_id"${isPrivate ? ' disabled' : ''}>${peWho(factories, s.factory_id, 'None')}</select></label>` : ''}
-      ${peStuckHTML(s)}
-      <label class="pe-check"><input type="checkbox" role="switch" data-pe-private${isPrivate ? ' checked' : ''}> Private</label>
-      ${members}`;
-}
-
-/** The manager as a reader who may not change it sees it: the saved bot's name, with its state when it is not active. The
-    roster leaves archived bots out, so a saved bot it does not list is said to be no longer on the team. */
-function peManagerName(saved: string): string {
-  if (!saved) return 'Not set';
-  const bot = (S.emps || []).find(e => e.id === saved);
-  if (!bot) return 'A bot no longer on the team';
-  const botState = bot.state ?? bot.status;
-  return botState === 'active' ? botDisplayName(saved) : `${botDisplayName(saved)} (${botState})`;
-}
-
-/** The Pipeline Manager field. An owner or admin picks an active bot, or Not set; anyone else reads the name. A saved
-    manager that is not an active bot (archived, paused, planned or gone) shows as Not set, with a line saying so. */
-function peManagerHTML(state: PeState): string {
-  const bots = peBots();
-  const saved = (state.type.manager ?? '').replace(/^bot:/, '');
-  const current = bots.some(b => b.id === 'bot:' + saved) ? saved : '';
-  const stale = !!saved && !current;
-  if (!state.mayEdit) return `<span class="pe-readonly" data-pe-manager-readonly>${esc(peManagerName(saved))}</span>`;
-  const hint = `<span class="pe-hint">The bot that checks this pipeline's stuck tasks. Only active bots can be picked.</span>`;
-  const warn = stale ? `<span class="pe-hint pe-warn-line" data-pe-manager-stale>The saved manager is not an active bot. Pick one.</span>` : '';
-  if (!bots.length) return `<select data-pe-setting="manager_id" disabled><option value="">No active bots</option></select>${hint}${warn}`;
-  return `<select data-pe-setting="manager_id">${peWho(bots, current ? 'bot:' + current : '', 'Not set')}</select>${hint}${warn}`;
-}
-
-/** The stuck rule's three numbers: empty is the default, shown as the placeholder. */
-const PE_STUCK: [keyof PipelineSettings['stuck_rule_defaults'], string][] = [
-  ['stuck_after_hours', 'Stuck after (h)'],
-  ['ask_person_after_hours', 'Ask a person after (h)'],
-  ['question_expiry_days', 'Questions expire (days)'],
+/** The kinds a stage's requirement can be. A kind built in a later phase shows, but cannot be picked yet. An answer is
+    asked on one task, never set on a stage. */
+const PE_KINDS: [string, string, boolean][] = [
+  ['owner_done', 'Owner says done', true],
+  ['ok', 'OK from someone', true],
+  ['linked_done', 'Linked work done', true],
+  ['page', 'A page', false],
+  ['pr_open', 'PR open', false],
+  ['checks_pass', 'Checks pass', false],
+  ['pr_merged', 'PR merged', false],
+  ['in_release', 'In a release', false],
 ];
+/** Kinds met with a button: they name who meets them, and have a Who OKs. */
+const PE_OK_KINDS = ['ok', 'page'];
+/** Kinds that can never be pushed past (C3). */
+const PE_NEVER_PUSHED = ['pr_merged', 'in_release'];
+const PE_WHO_OKS: [string, string][] = [['people_with_exceptions', 'People, with exceptions'], ['people_only', 'People only']];
+const PE_UNITS: [string, number][] = [['minutes', 1], ['hours', 60], ['days', 1440]];
+const PE_ASSIGNEE = 'assignee';
 
-function peStuckHTML(s: PipelineSettings): string {
-  if (!s.stuck_rule_defaults) return '';
-  return PE_STUCK.map(([key, label]) => `<label class="pe-f"><span>${label}</span><input type="number" min="1" step="1" inputmode="numeric" value="${esc(String(s[key] ?? ''))}" placeholder="${esc(String(s.stuck_rule_defaults[key]))}" data-pe-number="${key}" autocomplete="off"></label>`).join('');
+const peBots = (): {id: string; name: string}[] =>
+  (S.emps || []).filter(e => (e.state ?? e.status) === 'active').map(e => ({id: 'bot:' + e.id, name: botDisplayName(e.id)}));
+const pePeople = (): {id: string; name: string}[] =>
+  (S.people || []).filter(p => !p.hidden).map(p => ({id: 'human:' + p.id, name: p.name || p.id}));
+
+/** A choice among rows, with an empty first choice. A saved value the rows lack stays chosen under its own id. */
+function peChoice(rows: {id: string; name: string}[], on: string | null | undefined, none: string): string {
+  const all = on && !rows.some(r => r.id === on) ? [...rows, {id: on, name: actorLabel(on) || on}] : rows;
+  return `<option value="">${esc(none)}</option>`
+    + all.map(r => `<option value="${esc(r.id)}"${r.id === on ? ' selected' : ''}>${esc(r.name)}</option>`).join('');
+}
+
+const peCopy = (rec: PipelineRec): PipelineRec => JSON.parse(JSON.stringify(rec)) as PipelineRec;
+const peKindName = (kind: string): string => PE_KINDS.find(([k]) => k === kind)?.[1] ?? kind;
+
+/** "2 days": the expected time as the unit it divides into, and the number of them. */
+function peExpected(minutes: number | null): {n: string; unit: number} {
+  if (!minutes) return {n: '', unit: 60};
+  for (const [, size] of [...PE_UNITS].reverse()) if (minutes % size === 0) return {n: String(minutes / size), unit: size};
+  return {n: String(minutes), unit: 1};
+}
+
+// ---------------------------------------------------------------- drawing
+
+const peF = (label: string, control: string): string => `<label class="pe-f"><span>${esc(label)}</span>${control}</label>`;
+
+function peReqHTML(req: PipelineReqRec, si: number, ri: number): string {
+  const at = `data-pe-si="${si}" data-pe-ri="${ri}"`;
+  const okKind = PE_OK_KINDS.includes(req.kind), never = PE_NEVER_PUSHED.includes(req.kind);
+  const kinds = PE_KINDS.map(([k, name, may]) =>
+    `<option value="${k}"${k === req.kind ? ' selected' : ''}${may || k === req.kind ? '' : ' disabled'}>${esc(name)}${may ? '' : ' (later)'}</option>`).join('');
+  const who = req.person_id ? actorLabel(req.person_id) : '';
+  return `<details class="pe-req"${req.id ? '' : ' open'}><summary><span class="pe-req-name">${esc(req.line || peKindName(req.kind))}</span>`
+    + `<span class="pe-req-who muted">${esc(who)}</span></summary><div class="pe-req-body">`
+    + peF('Needs', `<select data-pe-rf="kind" ${at}${req.id ? ' disabled' : ''}>${kinds}</select>`)
+    // A page's line is what Jev checks (S11); on any other kind it is the requirement's name.
+    + peF(req.kind === 'page' ? 'Jev checks' : 'Name', `<input data-pe-rf="line" ${at} maxlength="200" value="${esc(req.line)}" autocomplete="off">`)
+    + (okKind ? peF('From', `<select data-pe-rf="person_id" ${at}>${peChoice([...pePeople(), ...peBots()], req.person_id, 'Choose')}</select>`)
+      + peF('Who OKs', `<select data-pe-rf="who_oks" ${at}>${PE_WHO_OKS.map(([v, l]) => `<option value="${v}"${v === req.who_oks ? ' selected' : ''}>${l}</option>`).join('')}</select>`) : '')
+    + `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rf="can_push_past" ${at}${req.can_push_past && !never ? ' checked' : ''}${never ? ' disabled' : ''}> Can be pushed past</label>`
+    + `<button type="button" class="ghost pe-req-x" data-pe-req-x ${at}>Remove</button></div></details>`;
+}
+
+function peStageHTML(state: PeState, stage: PipelineStageRec, si: number, count: number): string {
+  const at = `data-pe-si="${si}"`;
+  const ex = peExpected(stage.expected_minutes);
+  const owners = [{id: PE_ASSIGNEE, name: 'Whoever it is assigned to'}, ...peBots(), ...pePeople()];
+  const body = peF('Name', `<input data-pe-sf="name" ${at} maxlength="80" value="${esc(stage.name)}" required autocomplete="off">`)
+    + peF('Purpose', `<input data-pe-sf="purpose" ${at} maxlength="300" value="${esc(stage.purpose)}" autocomplete="off">`)
+    + peF('Owner', `<select data-pe-sf="owner" ${at}>${peChoice(owners, stage.owner, 'Not set')}</select>`)
+    + peF('Tasks leave', `<select data-pe-sf="by_hand" ${at}><option value="0"${stage.by_hand ? '' : ' selected'}>When requirements are met</option>`
+      + `<option value="1"${stage.by_hand ? ' selected' : ''}>By hand</option></select>`)
+    + (si > 0 ? peF('Limit', `<input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="task_limit" ${at} value="${stage.task_limit ?? ''}" placeholder="None">`) : '')
+    + `<div class="pe-f"><span>Expected time</span><span class="pe-pair"><input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="expected_n" ${at} value="${ex.n}" placeholder="None" aria-label="Expected time">`
+    + `<select data-pe-sf="expected_unit" ${at} aria-label="Unit">${PE_UNITS.map(([l, size]) => `<option value="${size}"${size === ex.unit ? ' selected' : ''}>${l}</option>`).join('')}</select></span></div>`
+    + `<h4 class="pe-h">To leave</h4>`
+    + stage.requirements.map((req, ri) => peReqHTML(req, si, ri)).join('')
+    + `<button type="button" class="ghost pe-add" data-pe-req-add ${at}>+ Requirement</button>`;
+  const tools = `<span class="pe-tools"><button type="button" class="ghost" data-pe-up ${at} aria-label="Move up"${si === 0 ? ' disabled' : ''}>↑</button>`
+    + `<button type="button" class="ghost" data-pe-down ${at} aria-label="Move down"${si === count - 1 ? ' disabled' : ''}>↓</button>`
+    + `<button type="button" class="ghost" data-pe-stage-x ${at}${count < 2 ? ' disabled' : ''}>Remove</button></span>`;
+  return `<details class="pe-stage" ${at}${state.open.has(stage) ? ' open' : ''}><summary><span class="pe-stage-name">${esc(stage.name || 'New stage')}</span>${tools}</summary>`
+    + `<div class="pe-stage-body">${body}</div></details>`;
+}
+
+function peClashHTML(state: PeState): string {
+  const clash = state.clash;
+  if (!clash) return '';
+  return `<div class="pe-clash" role="alert"><p>Someone saved this pipeline while you had it open. They changed: ${esc(clash.changed.join(', ') || 'nothing you can see here')}.</p>`
+    + `<span class="pe-clash-do"><button type="button" class="ghost" data-pe-theirs>Load theirs</button>`
+    + `<button type="button" class="primary" data-pe-mine>Save mine</button></span></div>`;
 }
 
 function peBodyHTML(state: PeState): string {
-  const t = state.type;
-  const from = (state.links ?? []).filter(l => l.to_pipeline_id === t.id).map(l => {
-    const src = peTypes().find(x => x.id === l.from_pipeline_id);
-    return `<span class="pe-from">${esc(src?.name ?? l.from_pipeline_id)}</span>`;
-  }).join('');
-  return `<div class="pe-settings">
-      <label class="pe-f"><span>Prefix</span><input name="prefix" maxlength="2" value="${esc(t.prefix ?? '')}" data-pe-setting="prefix" autocomplete="off"></label>
-      <label class="pe-f"><span>Owner</span><select data-pe-setting="owner_id">${peWho(pePeople(), t.pipeline_owner_id, 'Not set', false)}</select></label>
-      <label class="pe-f"><span>Pipeline Manager</span>${peManagerHTML(state)}</label>
-      ${peGoalHTML(state)}
-      ${from ? `<p class="pe-froms"><span>From</span> ${from}</p>` : ''}</div>
-    <ol class="pe-stages">${t.steps.map((s, i) => peStageHTML(state, s, i, t.steps.length)).join('')}</ol>
-    ${state.mover ? '<form class="pe-add-stage" data-pe-add-stage><input name="name" maxlength="80" placeholder="New stage" aria-label="New stage" autocomplete="off"><button type="submit" class="ghost">Add stage</button></form>' : ''}`;
+  const d = state.draft;
+  const factories = (state.factories ?? []).map(f => ({id: f.id, name: f.name}));
+  const fields = peF('Goal', `<input data-pe-pf="goal" maxlength="300" value="${esc(d.goal)}" autocomplete="off">`)
+    + peF('Manager', `<select data-pe-pf="manager_id">${peChoice(peBots(), d.manager_id, 'Not set')}</select>`)
+    + (state.factories ? peF('Factory', `<select data-pe-pf="factory_id">${peChoice(factories, d.factory_id, 'None')}</select>`) : '')
+    + peF('Prefix', `<input data-pe-pf="prefix" maxlength="2" value="${esc(d.prefix ?? '')}" autocomplete="off">`);
+  const stages = d.stages.map((s, i) => peStageHTML(state, s, i, d.stages.length)).join('');
+  return `${peClashHTML(state)}<div class="pe-fields">${fields}</div><div class="pe-stages">${stages}</div>`
+    + `<p class="err" role="alert" data-pe-error${state.error ? '' : ' hidden'}>${esc(state.error)}</p>`
+    + `<div class="pe-foot"><button type="button" class="ghost" data-pe-stage-add>+ Stage</button>`
+    + `<button type="button" class="primary" data-pe-save${state.saving ? ' disabled' : ''}>Save</button></div>`;
 }
 
-function peRender(): void {
+function peDraw(state: PeState): void {
   const body = document.getElementById('pe-body');
-  if (!body || !PE) return;
+  if (PE !== state || !body) return;
   const scroll = body.scrollTop;
-  // A setting the reader is typing in keeps its unsaved text, caret and focus across a redraw (another save, a live
-  // update). The redraw replaces every field, so without this a half-typed Goal lost its focus and its words.
-  const typing = document.activeElement;
-  const kept = typing instanceof HTMLInputElement && body.contains(typing) && typing.dataset['peSetting']
-    ? {key: typing.dataset['peSetting'], text: typing.value, start: typing.selectionStart, end: typing.selectionEnd} : null;
-  body.innerHTML = peBodyHTML(PE);
+  body.innerHTML = peBodyHTML(state);
   body.scrollTop = scroll;
-  if (!kept) return;
-  const field = body.querySelector<HTMLInputElement>(`[data-pe-setting="${CSS.escape(kept.key)}"]`);
-  if (!field) return;
-  field.focus();
-  field.value = kept.text;
-  try { field.setSelectionRange(kept.start, kept.end); } catch { /* a field with no caret keeps its place */ }
 }
 
-async function peReload(): Promise<void> {
-  if (!PE) return;
-  PE = await peLoad(PE.type.id);
-  peRender();
-  void pipelineEditSync(PE.type.id);
-}
+// ---------------------------------------------------------------- editing the draft
 
-// ---- a requirement's form
-function peReqFormHTML(stageId: string, r: PeReq | null): string {
-  const kind = r?.kind ?? 'attachment', by = r?.reviewed_by ?? 'nobody', needs = r?.needs ?? {};
-  const people = pePeople();
-  return `<form class="pe-form" data-pe-form="${esc(stageId)}" data-pe-id="${esc(r?.id ?? '')}" novalidate>
-    <label class="pe-f"><span>Name</span><input name="name" maxlength="80" value="${esc(r?.name ?? '')}" required autocomplete="off"></label>
-    <label class="pe-f"><span>Kind</span><select name="kind">${peOptions(PE_KINDS, kind)}</select></label>
-    <div class="pe-needs" data-pe-needs="attachment"${kind === 'attachment' ? '' : ' hidden'}>
-      ${PE_FORMATS.map(([v, l]) => `<label class="pe-check"><input type="checkbox" name="format" value="${v}"${(needs.formats ?? []).includes(v) ? ' checked' : ''}> ${l}</label>`).join('')}
-      <label class="pe-check"><input type="checkbox" name="newer"${needs.newer_than_change === false ? '' : ' checked'}> Newer than the last change</label>
-      <label class="pe-check"><input type="checkbox" name="is_work"${needs.is_work ? ' checked' : ''}> Is the work itself</label></div>
-    <label class="pe-f" data-pe-needs="field"${kind === 'field' ? '' : ' hidden'}><span>Field</span><select name="field">${peOptions(PE_FIELDS, needs.field)}</select></label>
-    <label class="pe-f" data-pe-needs="run"${kind === 'run' ? '' : ' hidden'}><span>Source</span><select name="source">${peOptions(PE_RUNS, needs.source)}</select></label>
-    <label class="pe-f"><span>Reviewed by</span><select name="reviewed_by">${peOptions(PE_REVIEWERS, by)}</select></label>
-    <label class="pe-f" data-pe-by="person"><span>Reviewer</span><select name="reviewer_id">${peWho(people, r?.reviewer_id, 'Choose a person')}</select></label>
-    <label class="pe-f" data-pe-by="backup"><span>Backup reviewer</span><select name="backup_reviewer_id">${peWho(people, r?.backup_reviewer_id, 'None')}</select></label>
-    <label class="pe-f" data-pe-by="rubric"><span>Rubric</span><textarea name="rubric" rows="3" maxlength="2000">${esc(r?.rubric ?? '')}</textarea></label>
-    <label class="pe-f"><span>Only for label</span><input name="applies_to_label" maxlength="80" value="${esc(r?.applies_to_label ?? '')}" autocomplete="off"></label>
-    <p class="pe-affected muted" data-pe-affected hidden></p>
-    <p class="err" role="alert" data-pe-error hidden></p>
-    <div class="pe-form-foot"><button type="submit" class="primary">Save</button><button type="button" class="ghost" data-pe-cancel>Cancel</button>
-      ${r ? `<button type="button" class="ghost pe-retire" data-pe-retire="${esc(r.id)}">Retire</button>` : ''}</div></form>`;
-}
+const peIndex = (el: HTMLElement, key: string): number => Number(el.dataset[key] ?? -1);
 
-// Show the parts of the form its kind and reviewer need.
-function peFormSync(form: HTMLFormElement): void {
-  const kind = String(new FormData(form).get('kind') ?? '');
-  const select = form.elements.namedItem('reviewed_by') as HTMLSelectElement;
-  if (kind === 'approval') select.value = 'person';
-  for (const option of Array.from(select.options)) option.disabled = kind === 'approval' && option.value !== 'person';
-  const by = select.value;
-  for (const el of form.querySelectorAll<HTMLElement>('[data-pe-needs]')) el.hidden = el.dataset['peNeeds'] !== kind;
-  const show = (key: string, on: boolean): void => { const el = form.querySelector<HTMLElement>(`[data-pe-by="${key}"]`); if (el) el.hidden = !on; };
-  show('person', by === 'person' || by === 'bot_then_person');
-  show('backup', by !== 'nobody');
-  show('rubric', by === 'bot' || by === 'bot_then_person');
-}
-
-/** The requirement's body as its review mode allows: a reviewer only for a person's review, a backup and a rubric only when
-    someone reviews. A field the mode does not use is cleared, not sent (the server refuses a Nobody with a reviewer). */
-function peReqBody(form: HTMLFormElement): Record<string, unknown> {
-  const data = new FormData(form), text = (k: string): string => String(data.get(k) ?? '').trim();
-  const kind = text('kind'), by = text('reviewed_by');
-  const needs: Record<string, unknown> = kind === 'attachment'
-    ? {formats: data.getAll('format').map(String), newer_than_change: data.has('newer'), is_work: data.has('is_work')}
-    : kind === 'field' ? {field: text('field')} : kind === 'run' ? {source: text('source')} : {};
-  const person = by === 'person' || by === 'bot_then_person', someone = by !== 'nobody';
-  return {
-    name: text('name'), kind, needs, reviewed_by: by,
-    reviewer_id: person ? text('reviewer_id') || null : null,
-    backup_reviewer_id: someone ? text('backup_reviewer_id') || null : null,
-    rubric: someone ? text('rubric') || null : null, applies_to_label: text('applies_to_label') || null,
-  };
-}
-
-/** The line under the form: how many open cards at the stage the requirement would apply to right now. Read again when the
-    label changes, and only written when the label it was read for is still the one typed. */
-async function peAffectedSync(form: HTMLFormElement): Promise<void> {
-  const note = form.querySelector<HTMLElement>('[data-pe-affected]');
-  const stageId = form.dataset['peForm'] ?? '';
-  if (!note || !stageId) return;
-  const label = String(new FormData(form).get('applies_to_label') ?? '').trim();
-  try {
-    const {count, stage} = await pipelineAffectedCount(stageId, label);
-    if (!form.isConnected || String(new FormData(form).get('applies_to_label') ?? '').trim() !== label) return;
-    note.textContent = count === 0 ? `Applies to no cards in ${stage} now.` : `Applies to the ${count} card${count === 1 ? '' : 's'} in ${stage} now.`;
-    note.hidden = false;
-  } catch { note.hidden = true; }
-}
-
-async function peSaveReq(form: HTMLFormElement): Promise<void> {
-  const stageId = form.dataset['peForm'] ?? '', id = form.dataset['peId'] ?? '';
-  const error = form.querySelector<HTMLElement>('[data-pe-error]');
-  const body = peReqBody(form);
-  if (!body['name']) { if (error) { error.textContent = 'Name it'; error.hidden = false; } return; }
-  try {
-    if (id) await writeRequest('PUT', peRoute(`/v2/requirements/${encodeURIComponent(id)}`), body);
-    else await writeRequest('POST', peRoute(`/v2/pipeline-stages/${encodeURIComponent(stageId)}/requirements`), body);
-    await peReload();
-  } catch (e) {
-    if (error) { error.textContent = e instanceof Error && e.message ? e.message : 'Could not save'; error.hidden = false; }
-  }
-}
-
-function peOpenForm(stageId: string, r: PeReq | null): void {
-  const slot = document.querySelector<HTMLElement>(`[data-pe-slot="${CSS.escape(stageId)}"]`);
-  if (!slot) return;
-  for (const other of document.querySelectorAll<HTMLElement>('[data-pe-slot]')) other.innerHTML = '';
-  slot.innerHTML = peReqFormHTML(stageId, r);
-  const form = slot.querySelector('form');
-  if (form) { peFormSync(form); void peAffectedSync(form); form.querySelector<HTMLInputElement>('[name="name"]')?.focus(); }
-}
-
-// ---- stage changes go through the task-type route, which takes the whole list of stages
-async function peSaveStages(steps: {id?: string; name: string; status: string}[]): Promise<void> {
-  if (!PE) return;
-  try {
-    await writeRequest('POST', `/v2/task-types/${encodeURIComponent(PE.type.id)}`, {steps});
-    taskTypesLoad().catch(() => undefined);
-  } catch (e) { peFail(e); }
-  await peReload();
-}
-const peSteps = (): {id?: string; name: string; status: string}[] => (PE?.type.steps ?? []).map(s => ({id: s.id, name: s.name, status: s.status}));
-
-/** Save some of the pipeline's settings (only the fields given), then read the editor again. */
-async function peSaveSettings(fields: Record<string, unknown>): Promise<void> {
-  if (!PE) return;
-  try { await pipelinePatchSettings(PE.type.id, fields); } catch (e) { peFail(e); }
-  await peReload();
-}
-
-async function peSetting(key: string, value: string): Promise<void> {
-  await peSaveSettings({[key]: value});
-}
-
-async function peWarnSave(target: Element, stage: string, off: boolean): Promise<void> {
-  const root = target.closest('.pe-warn');
-  const n = Number(root?.querySelector<HTMLInputElement>('[data-pe-warn-n]')?.value);
-  const size = Number(root?.querySelector<HTMLSelectElement>('[data-pe-warn-u]')?.value) || 1;
-  const minutes = off ? null : Math.round(n * size);
-  if (!off && !(minutes && minutes > 0)) { toast('Enter a time', true); return; }
-  try { await writeRequest('PATCH', peRoute(`/v2/pipeline-stages/${encodeURIComponent(stage)}`), {limit_minutes: minutes}); if (PE) PE.warn = ''; } catch (e) { peFail(e); }
-  await peReload();
-}
-
-async function peCapSave(target: Element, stage: string, off: boolean): Promise<void> {
-  const raw = target.closest('.pe-cap')?.querySelector<HTMLInputElement>('[data-pe-cap-n]')?.value.trim() ?? '';
-  const cap = off ? null : Number(raw);
-  if (!off && !(raw !== '' && Number.isInteger(cap) && (cap as number) >= 0)) { toast('Enter a whole number, 0 or more', true); return; }
-  try { await writeRequest('PATCH', peRoute(`/v2/pipeline-stages/${encodeURIComponent(stage)}`), {card_cap: cap}); if (PE) PE.cap = ''; } catch (e) { peFail(e); }
-  await peReload();
-}
-
-async function peClick(target: Element): Promise<void> {
-  if (!PE) return;
-  const hit = (attr: string): string | null => target.closest<HTMLElement>(`[${attr}]`)?.getAttribute(attr) ?? null;
-  const warn = hit('data-pe-warn');
-  if (warn) { PE.warn = PE.warn === warn ? '' : warn; peRender(); return; }
-  const save = hit('data-pe-warn-save'), off = hit('data-pe-warn-off');
-  if (save || off) { await peWarnSave(target, save ?? off ?? '', !save); return; }
-  const cap = hit('data-pe-cap');
-  if (cap) { PE.cap = PE.cap === cap ? '' : cap; peRender(); return; }
-  const capSave = hit('data-pe-cap-save'), capOff = hit('data-pe-cap-off');
-  if (capSave || capOff) { await peCapSave(target, capSave ?? capOff ?? '', !capSave); return; }
-  const req = hit('data-pe-req');
-  if (req) {
-    const stage = [...PE.reqs.entries()].find(([, rs]) => rs.some(r => r.id === req))?.[0];
-    const found = [...PE.reqs.values()].flat().find(r => r.id === req);
-    if (found && stage) peOpenForm(stage, found);
+/** A field changed: the draft follows it. A change that alters what the panel shows (a requirement's kind) draws again. */
+function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void {
+  const value = el.value, checked = el instanceof HTMLInputElement && el.type === 'checkbox' ? el.checked : false;
+  const d = state.draft;
+  const pf = el.dataset['pePf'];
+  if (pf) {
+    if (pf === 'goal') d.goal = value;
+    else if (pf === 'prefix') d.prefix = value.trim() || null;
+    else if (pf === 'manager_id') d.manager_id = value || null;
+    else if (pf === 'factory_id') d.factory_id = value || null;
     return;
   }
-  const fresh = hit('data-pe-new');
-  if (fresh) { peOpenForm(fresh, null); return; }
-  if (target.closest('[data-pe-cancel]')) { for (const slot of document.querySelectorAll<HTMLElement>('[data-pe-slot]')) slot.innerHTML = ''; return; }
-  const retire = hit('data-pe-retire');
-  if (retire) { try { await writeRequest('DELETE', peRoute(`/v2/requirements/${encodeURIComponent(retire)}`), {}); } catch (e) { peFail(e); } await peReload(); return; }
-  const link = hit('data-pe-link');
-  if (link) { PE.link = link; peRender(); return; }
-  if (target.closest('[data-pe-link-cancel]')) { PE.link = ''; peRender(); return; }
-  const linkSave = hit('data-pe-link-save');
-  if (linkSave) {
-    const root = target.closest('.pe-pop');
-    const to = root?.querySelector<HTMLSelectElement>('[data-pe-link-to]')?.value, mode = root?.querySelector<HTMLSelectElement>('[data-pe-link-mode]')?.value ?? 'move';
-    if (!to) return;
-    try { await writeRequest('POST', peRoute('/v2/pipeline-links'), {from_stage_id: linkSave, to_pipeline_id: to, mode}); PE.link = ''; } catch (e) { peFail(e); }
-    await peReload();
+  const stage = d.stages[peIndex(el, 'peSi')];
+  if (!stage) return;
+  const sf = el.dataset['peSf'];
+  if (sf) {
+    if (sf === 'name') stage.name = value;
+    else if (sf === 'purpose') stage.purpose = value;
+    else if (sf === 'owner') stage.owner = value || null;
+    else if (sf === 'by_hand') stage.by_hand = value === '1';
+    else if (sf === 'task_limit') stage.task_limit = Number(value) > 0 ? Math.round(Number(value)) : null;
+    else if (sf === 'expected_n' || sf === 'expected_unit') {
+      const panel = el.closest('.pe-pair');
+      const n = Number(panel?.querySelector<HTMLInputElement>('[data-pe-sf="expected_n"]')?.value ?? '');
+      const unit = Number(panel?.querySelector<HTMLSelectElement>('[data-pe-sf="expected_unit"]')?.value ?? 60);
+      stage.expected_minutes = n > 0 ? Math.round(n * unit) : null;
+    }
+    if (sf === 'name') {
+      const summary = el.closest('.pe-stage')?.querySelector('.pe-stage-name');
+      if (summary) summary.textContent = value || 'New stage';
+    }
     return;
   }
-  const unlink = hit('data-pe-unlink');
-  if (unlink) { try { await writeRequest('POST', peRoute(`/v2/pipeline-links/${encodeURIComponent(unlink)}/retire`), {}); } catch (e) { peFail(e); } await peReload(); return; }
-  const steps = peSteps();
-  const move = (stage: string, by: number): void => {
-    const i = steps.findIndex(s => s.id === stage), a = steps[i], b = steps[i + by];
-    if (a && b) { steps[i] = b; steps[i + by] = a; void peSaveStages(steps); }
-  };
-  const up = hit('data-pe-up'), down = hit('data-pe-down'), drop = hit('data-pe-drop');
-  if (up) move(up, -1);
-  else if (down) move(down, 1);
-  else if (drop) {
-    if (steps.length < 2) { toast('A pipeline keeps at least one stage', true); return; }
-    void peSaveStages(steps.filter(s => s.id !== drop));
+  const req = stage.requirements[peIndex(el, 'peRi')];
+  const rf = el.dataset['peRf'];
+  if (!req || !rf) return;
+  if (rf === 'line') req.line = value;
+  else if (rf === 'person_id') req.person_id = value || null;
+  else if (rf === 'who_oks') req.who_oks = value as PipelineReqRec['who_oks'];
+  else if (rf === 'can_push_past') req.can_push_past = checked;
+  else if (rf === 'kind') {
+    req.kind = value;
+    const ok = PE_OK_KINDS.includes(value);
+    req.who_oks = ok ? 'people_with_exceptions' : 'none';
+    if (!ok) req.person_id = null;
+    req.can_push_past = !PE_NEVER_PUSHED.includes(value);
+    peDraw(state);
   }
 }
 
-function peWire(dialog: HTMLDialogElement): void {
-  dialog.addEventListener('click', ev => {
-    const t = eventElement(ev);
-    if (!t) return;
-    if (t.closest('[data-pe-close]')) { dialog.close(); return; }
-    if (t.closest('button')) void peClick(t);
-  });
-  // A setting or the Goal saves on Enter as well as on change (the Goal sits in no form, so nothing else would send it).
-  dialog.addEventListener('keydown', ev => {
-    const t = ev.target;
-    if (ev.key !== 'Enter' || !(t instanceof HTMLInputElement) || !t.dataset['peSetting']) return;
-    ev.preventDefault();
-    void peSetting(t.dataset['peSetting'], t.value);
-  });
-  dialog.addEventListener('change', ev => {
-    const t = ev.target;
-    if (t instanceof HTMLElement && t.closest('[data-pe-form]')) { const form = t.closest('form'); if (form) { peFormSync(form); void peAffectedSync(form); } return; }
-    if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement) {
-      const key = t.dataset['peSetting'], renamed = t.dataset['peRename'];
-      if (t instanceof HTMLInputElement && t.hasAttribute('data-pe-private')) { void peSaveSettings({visibility: t.checked ? 'members' : 'company'}); return; }
-      if (t instanceof HTMLInputElement && t.hasAttribute('data-pe-member')) {
-        void peSaveSettings({members: [...dialog.querySelectorAll<HTMLInputElement>('[data-pe-member]:checked')].map(box => box.value)});
-        return;
-      }
-      const number = t.dataset['peNumber'];
-      if (number) { const raw = t.value.trim(); void peSaveSettings({[number]: raw === '' ? null : Number(raw)}); return; }
-      if (key) void peSetting(key, t.value);
-      else if (renamed && PE) {
-        const name = t.value.trim();
-        if (!name) { void peReload(); return; }
-        void peSaveStages(peSteps().map(s => s.id === renamed ? {...s, name} : s));
-      }
-    }
-  });
-  dialog.addEventListener('submit', ev => {
-    ev.preventDefault();
-    const form = ev.target;
-    if (!(form instanceof HTMLFormElement)) return;
-    if (form.hasAttribute('data-pe-form')) { void peSaveReq(form); return; }
-    if (form.hasAttribute('data-pe-add-stage')) {
-      const name = String(new FormData(form).get('name') ?? '').trim();
-      if (!name || !PE) return;
-      const steps = peSteps();
-      // A new stage goes before the closing ones, as a working stage.
-      const at = steps.findIndex(s => s.status === 'done' || s.status === 'closed');
-      steps.splice(at < 0 ? steps.length : at, 0, {name, status: 'doing'});
-      void peSaveStages(steps);
-    }
-  });
+function peClick(state: PeState, target: Element): void {
+  const el = target.closest<HTMLElement>('button');
+  if (!el) return;
+  const d = state.draft, si = peIndex(el, 'peSi'), ri = peIndex(el, 'peRi'), stage = d.stages[si];
+  if (el.hasAttribute('data-pe-save')) { void peSave(state); return; }
+  if (el.hasAttribute('data-pe-theirs') && state.clash) {
+    state.base = state.clash.theirs; state.draft = peCopy(state.clash.theirs); state.clash = null; state.error = '';
+    state.open = new WeakSet();
+    peDraw(state); return;
+  }
+  if (el.hasAttribute('data-pe-mine') && state.clash) {
+    state.base = state.clash.theirs; state.clash = null;
+    void peSave(state); return;
+  }
+  if (el.hasAttribute('data-pe-stage-add')) {
+    const fresh: PipelineStageRec = {name: '', purpose: '', owner: null, by_hand: false, task_limit: null, expected_minutes: null,
+      expected_bots_only: false, on_enter: {}, requirements: []};
+    d.stages.push(fresh);
+    state.open.add(fresh);
+    peDraw(state);
+    document.querySelector<HTMLInputElement>('#pe-body .pe-stage:last-of-type [data-pe-sf="name"]')?.focus();
+    return;
+  }
+  if (!stage) return;
+  const swap = (by: number): void => {
+    const other = d.stages[si + by];
+    if (!other) return;
+    d.stages[si + by] = stage; d.stages[si] = other;
+    peDraw(state);
+  };
+  if (el.hasAttribute('data-pe-up')) swap(-1);
+  else if (el.hasAttribute('data-pe-down')) swap(1);
+  else if (el.hasAttribute('data-pe-stage-x')) { if (d.stages.length > 1) { d.stages.splice(si, 1); peDraw(state); } }
+  else if (el.hasAttribute('data-pe-req-add')) {
+    stage.requirements.push({kind: 'owner_done', settings: {}, can_push_past: true, who_oks: 'none', person_id: null, line: ''});
+    peDraw(state);
+  } else if (el.hasAttribute('data-pe-req-x')) { stage.requirements.splice(ri, 1); peDraw(state); }
 }
 
-async function openPipelineEditor(pipelineId: string | null): Promise<void> {
-  if (!pipelineId) return;
+// ---------------------------------------------------------------- saving
+
+/** The panels open before a save, found again in the saved record by their place. */
+function peOpenSame(open: WeakSet<PipelineStageRec>, before: PipelineStageRec[], saved: PipelineRec): WeakSet<PipelineStageRec> {
+  const next = new WeakSet<PipelineStageRec>();
+  saved.stages.forEach((stage, i) => { const was = before[i]; if (was && open.has(was)) next.add(stage); });
+  return next;
+}
+
+/** What changed between two records, as a person names it: a pipeline field, or a stage by its name. */
+function peChanged(a: PipelineRec, b: PipelineRec): string[] {
+  const out: string[] = [];
+  const fields: [keyof PipelineRec, string][] = [['name', 'Name'], ['goal', 'Goal'], ['manager_id', 'Manager'],
+    ['factory_id', 'Factory'], ['prefix', 'Prefix'], ['private', 'Private'], ['owner_id', 'Owner']];
+  for (const [key, label] of fields) if (JSON.stringify(a[key]) !== JSON.stringify(b[key])) out.push(label);
+  const byId = new Map(a.stages.map(s => [s.id, s]));
+  for (const s of b.stages) {
+    const before = s.id ? byId.get(s.id) : undefined;
+    if (!before) out.push(`${s.name} (added)`);
+    else if (JSON.stringify(before) !== JSON.stringify(s)) out.push(s.name);
+  }
+  const kept = new Set(b.stages.map(s => s.id));
+  for (const s of a.stages) if (!kept.has(s.id)) out.push(`${s.name} (removed)`);
+  if (!out.length && a.stages.map(s => s.id).join() !== b.stages.map(s => s.id).join()) out.push('The order of the stages');
+  return out;
+}
+
+async function peSave(state: PeState): Promise<void> {
+  if (state.saving) return;
+  state.saving = true; state.error = '';
+  peDraw(state);
+  try {
+    const saved = await pipelineSave(state.id, {...state.draft, settings_version: state.base.settings_version});
+    if (PE !== state) return;
+    // The editor stays as S11 draws it, now on the saved record: its ids and its new settings_version.
+    state.saving = false;
+    const draft = peCopy(saved);
+    state.open = peOpenSame(state.open, state.draft.stages, draft);
+    state.base = saved; state.draft = draft;
+    toast('Saved');
+    peDraw(state);
+  } catch (error) {
+    if (PE !== state) return;
+    state.saving = false;
+    const refused = taskRefusedOf(error);
+    if (refused?.error === 'task_changed') {
+      try {
+        const theirs = await pipelineRec(state.id);
+        if (PE !== state) return;
+        state.clash = {theirs, changed: peChanged(state.base, theirs)};
+      } catch (again) { state.error = errorMessage(again, 'Could not read the pipeline again.'); }
+    } else {
+      state.error = refused?.detail || errorMessage(error, 'Could not save.');
+    }
+    peDraw(state);
+  }
+}
+
+// ---------------------------------------------------------------- opening
+
+/** Opens the editor for a pipeline; with a stage id, that stage's panel is open and in view. */
+async function openPipelineEditor(pipelineId: string, stageId = ''): Promise<void> {
   document.getElementById('pe-dialog')?.remove();
   const dialog = document.createElement('dialog');
   dialog.id = 'pe-dialog'; dialog.className = 'tmodal tmodal-shell pe-dialog';
   dialog.setAttribute('aria-labelledby', 'pe-title');
-  dialog.innerHTML = `<div class="tmodal-head"><h2 id="pe-title">Edit pipeline</h2><button class="ghost tmodal-x" type="button" data-pe-close aria-label="Close">✕</button></div>
+  dialog.innerHTML = `<div class="tmodal-head"><h2 id="pe-title">Pipeline</h2><button class="ghost tmodal-x" type="button" data-pe-close aria-label="Close">✕</button></div>
     <div class="tmodal-body pe-body" id="pe-body">${skelRows(3, {dot: false})}</div>`;
   document.body.append(dialog);
   const leave = (): void => dialog.close();
-  window.addEventListener('hashchange', leave);
+  window.addEventListener('hashchange', leave, {once: true});
   dialog.addEventListener('close', () => { window.removeEventListener('hashchange', leave); dialog.remove(); PE = null; });
-  peWire(dialog);
+  dialog.addEventListener('click', ev => {
+    const t = eventElement(ev);
+    if (!t) return;
+    if (t.closest('[data-pe-close]')) { dialog.close(); return; }
+    // A button in a stage's summary (up, down, remove) does not also open or close the stage.
+    if (t.closest('summary button')) ev.preventDefault();
+    if (PE) peClick(PE, t);
+  });
+  // A stage's panel stays open or closed across redraws.
+  dialog.addEventListener('toggle', ev => {
+    const panel = ev.target instanceof HTMLDetailsElement && ev.target.classList.contains('pe-stage') ? ev.target : null;
+    const stage = panel && PE ? PE.draft.stages[peIndex(panel, 'peSi')] : undefined;
+    if (!PE || !panel || !stage) return;
+    if (panel.open) PE.open.add(stage); else PE.open.delete(stage);
+  }, true);
+  const onField = (ev: Event): void => {
+    const t = ev.target;
+    if (PE && (t instanceof HTMLInputElement || t instanceof HTMLSelectElement)) peInput(PE, t);
+  };
+  // Typing follows each key; a choice or a switch follows its change.
+  const choice = (t: EventTarget | null): boolean => t instanceof HTMLSelectElement || (t instanceof HTMLInputElement && t.type === 'checkbox');
+  dialog.addEventListener('input', ev => { if (!choice(ev.target)) onField(ev); });
+  dialog.addEventListener('change', ev => { if (choice(ev.target)) onField(ev); });
   dialog.showModal();
   try {
-    PE_TYPES = (await taskTypesLoad({cached: true})) ?? [];
-    PE = await peLoad(pipelineId);
-    const title = document.getElementById('pe-title');
-    if (title) title.textContent = PE.type.name;
-    peRender();
-  } catch (e) { peFail(e); dialog.close(); }
+    const [rec, factories] = await Promise.all([
+      pipelineRec(pipelineId),
+      factoriesRead('7d').then(map => map.factories, () => null),
+    ]);
+    if (!dialog.isConnected) return;
+    const state: PeState = {id: pipelineId, base: rec, draft: peCopy(rec), open: new WeakSet(), factories, clash: null, error: '', saving: false};
+    const opened = state.draft.stages.find(s => s.id === stageId);
+    if (opened) state.open.add(opened);
+    PE = state;
+    const title = dialog.querySelector('#pe-title');
+    if (title) title.textContent = rec.name;
+    peDraw(state);
+    if (opened) dialog.querySelector('.pe-stage[open]')?.scrollIntoView({block: 'nearest'});
+  } catch (error) {
+    toast(errorMessage(error, 'Could not open the pipeline.'), true);
+    dialog.close();
+  }
 }
-
-document.addEventListener('click', ev => {
-  if (eventElement(ev)?.closest('#task-pipeline-edit')) void openPipelineEditor(document.getElementById('task-pipeline-edit')?.dataset['pipeline'] ?? null);
-});

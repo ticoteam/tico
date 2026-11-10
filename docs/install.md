@@ -257,7 +257,7 @@ check the provider before you commit):
 Whatever you pick, allow inbound 80 and 443 in the provider's firewall (not needed with a tunnel), and add an SSH
 key or console access so you can reach a shell. The installer does not touch the firewall.
 
-**Shortcut.** If you would rather not click through a provider's console, `tico setup --cloud hetzner|digitalocean|aws`
+**Shortcut.** If you would rather not click through a provider's console, `python3 -m setup --cloud hetzner|digitalocean|aws`
 creates the server for you from your laptop, through your own `hcloud`, `doctl` or AWS credentials, and the new server
 runs this same installer as its first boot step (`infra/cloud-init/`). Run it from a clone of the repository:
 `python3 -m setup --cloud hetzner --domain tico.example.com`. It is optional; everything below is what it automates.
@@ -280,7 +280,7 @@ It asks for `sudo` if you are not root, and it prints each step. In order it:
    repository on Debian and Ubuntu, and with Docker's convenience script (`get.docker.com`) on other distributions.
 3. **Downloads that release's compose bundle** (`tico-bundle-vX.Y.Z.tar.gz`) and checks it against the release's
    `SHA256SUMS`. A bundle that does not match is refused and nothing is installed.
-4. **Runs the `tico setup` wizard** on the server, interactively, with the release pinned in `.env` as `TICO_TAG`.
+4. **Runs the setup wizard** (`python3 -m setup`) on the server, interactively, with the release pinned in `.env` as `TICO_TAG`.
 
 Everything lives in `/opt/tico` (`compose.yaml`, `.env`, the wizard). Options, after `sh install.sh`:
 
@@ -291,7 +291,7 @@ Everything lives in `/opt/tico` (`compose.yaml`, `.env`, the wizard). Options, a
 | `--yes` | Do not ask for confirmation |
 | `--tunnel` | Cloudflare Tunnel: no public ports, so 80 and 443 are not checked |
 | `--docker-only` | Only install Docker and Compose (runner computers) |
-| `-- FLAGS` | Everything after `--` goes to `tico setup` (see Automation below) |
+| `-- FLAGS` | Everything after `--` goes to the setup wizard, `python3 -m setup` (see Automation below) |
 
 Exit codes: 0 done, 2 bad usage, 3 the computer does not qualify, 4 download or checksum failed, 5 Docker or Python
 could not be set up, 6 the wizard or the health check failed.
@@ -358,7 +358,7 @@ Credentials never appear on the command line, in the plan, in logs or in the rep
 ### When something fails
 
 - **The certificate does not appear.** DNS was not live when Caddy first asked. Check the record is at the provider
-  `tico setup` named (a Route 53 zone can exist while another provider serves the domain), then
+  the setup wizard named (a Route 53 zone can exist while another provider serves the domain), then
   `docker compose restart caddy` in `/opt/tico`.
 - **"redirect_uri_mismatch" at sign-in.** The OAuth client must list exactly `https://<domain>/auth/callback`.
 - **Sign-in says you are not on the roster.** The owner email must match the account you sign in with.
@@ -373,7 +373,7 @@ Credentials never appear on the command line, in the plan, in logs or in the rep
 ### Automation
 
 Run the installer with no terminal (a provisioning script, cloud-init, CI) and the wizard never prompts: a missing
-value is an error that names the flag. Flags after `--` go to `tico setup`; credentials come from the environment only, so
+value is an error that names the flag. Flags after `--` go to the setup wizard; credentials come from the environment only, so
 they never appear in a process list:
 
 ```
@@ -602,11 +602,11 @@ minutes:
 Set it as the owner, with the Tico Gateway connected in Settings → Models:
 
 ```
-hub relay wake-url set https://wake.acme.example/start-tico
+tico relay wake-url set https://wake.acme.example/start-tico
 ```
 
-The answer shows a signing secret (`whsec_...`) once. Tico does not keep it. `hub relay wake-url show` shows the address, who set
-it and when; `hub relay wake-url off` stops the calls. The address must be public https with no user or password.
+The answer shows a signing secret (`whsec_...`) once. Tico does not keep it. `tico relay wake-url show` shows the address, who set
+it and when; `tico relay wake-url off` stops the calls. The address must be public https with no user or password.
 
 The call is signed as [Standard Webhooks](https://www.standardwebhooks.com) (`webhook-id`, `webhook-timestamp`,
 `webhook-signature`) with that secret. Check it before you start anything, so a stranger who finds the address cannot start your
@@ -849,7 +849,7 @@ instance metadata hop limit at 1 for runner computers too.
 A Linux runner can offer its screen to the web app, so people can watch bots work in a headed browser and, if
 allowed, take control. The computer itself decides whether it offers one:
 
-- Docker: a new runner offers it. `install.sh --runner` (and `tico setup runner`, and the cloud-init template) writes
+- Docker: a new runner offers it. `install.sh --runner` (and `python3 -m setup runner`, and the cloud-init template) writes
   `TICO_SCREEN=1` in the runner's `.env`; `--no-screen` (or `TICO_SCREEN=0` in the cloud-init inputs) writes `0`
   instead. A runner installed before this default has no such line and keeps its screen off until you turn it on.
   To turn it on later, run this in the runner's folder; it takes effect live, with no restart, so no running turn is

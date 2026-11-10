@@ -4,7 +4,7 @@ description: Write the how-we-will-know part of a product brief, covering the me
 ---
 # Write how we will know
 
-When to use: for every board brief, before it is filed, and when your manager asks how a brief would be judged.
+When to use: for every product brief, before it is filed, and when your manager asks how a brief would be judged.
 
 Steps:
 1. Name the measure in segment terms: the segment's activation or retention, or the rate of the one step the problem blocks (for example, "connected a calendar within 14 days of sign-up"). It must be countable in the usage export. If it is not, say which export it needs.
@@ -19,4 +19,4 @@ Checks before you finish:
 - The read date is after the window, never before it.
 - Every target has a source, or is marked missing.
 
-Example (invented, for illustration): "Measure: share of new Creator accounts that connect a calendar within 14 days. Baseline: 21% for accounts with a shared calendar (3 of 14), sign-ups 2026-10-05 to 2026-10-18, usage export 2026-11-02. Target: missing, to be set by your manager; no target exists in `hub goal list`. Read on 2026-12-14, after two 14-day windows following an expected release. Guard: calendar-related tickets per week, baseline 9 (2026-10-26 to 2026-11-01). Keep the change if the measure rises and the tickets do not; undo it if the tickets rise."
+Example (invented, for illustration): "Measure: share of new Creator accounts that connect a calendar within 14 days. Baseline: 21% for accounts with a shared calendar (3 of 14), sign-ups 2026-10-05 to 2026-10-18, usage export 2026-11-02. Target: missing, to be set by your manager; no target exists in `tico goal list`. Read on 2026-12-14, after two 14-day windows following an expected release. Guard: calendar-related tickets per week, baseline 9 (2026-10-26 to 2026-11-01). Keep the change if the measure rises and the tickets do not; undo it if the tickets rise."

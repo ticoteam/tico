@@ -44,8 +44,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Run the first review now (`playbooks/weekly-lead-generation-review.md`) on whatever source data is attached,
    and attach it to the task as a draft labelled "First draft, not yet reviewed". Send nothing.
 5. Check the routine (Mondays 08:30 unless they said otherwise). Setting you up switched it on, so nothing waits
-   for a yes. Check it with `hub automation list`, tell the human what it does and that they can change it or turn
-   it off, and log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   for a yes. Check it with `tico automation list`, tell the human what it does and that they can change it or turn
+   it off, and log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -70,33 +70,33 @@ Always:
 - `skills/check-outreach-before-it-goes/SKILL.md`: read before any list is handed to `sdr-research`.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/qualified.md`, `knowledge/sources.md` and last week's review.
 3. Read `knowledge/icp.md`, the ideal customer profile. If it is missing or out of date, ask the Sales Development Representative or the Sales Manager for it in a task.
-4. Set `hub bot status set` to one line naming the review in progress.
+4. Set `tico bot status set` to one line naming the review in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/sources.md`, `knowledge/handoff.md` and the lists with the dated checks, rewrite `state.md`, record
    durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first (qualified leads this week, by source),
-   the review path after it, then what you could not read. The requester closes it.
+3. Finish with `tico task done <id> -m "..." --version N`: the headline first (qualified leads this week, by source),
+   the review path after it, then what you could not read.
 
 ## Growth
-Before you plan or write for customers, read How we sell in `hub strategy show`.
-Work on a Marketing task, or a subtask of one, carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs.
+Before you plan or write for customers, read How we sell in `tico strategy show`.
+Work on a growth idea, or a sub-task of one, carries the label `channel:<slug>` for its channel; `tico growth channel list` names the slugs.
 Report the numbers the task needs on the task, each with its source and date. Before an outward draft leaves (a form,
-page, lead magnet, email or post), run `hub brand check -` on it and fix every hit, then check each claim against
-`hub brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or
-contact anyone for a channel, read `hub rules list --mine`; a rule that blocks the work stops it. Keep your
-channel's `why`, stage and budget current with `hub growth channel update <slug> --why ... --stage ... --budget ...`.
-Record each measurement as a KPI reading with `hub kpi log <kpi id> <value> --period-start <date> --period-end <date>`.
+page, lead magnet, email or post), run `tico brand check -` on it and fix every hit, then check each claim against
+`tico brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or
+contact anyone for a channel, read `tico rules list --mine`; a rule that blocks the work stops it. Keep your
+channel's `why`, stage and budget current with `tico growth channel update <slug> --why ... --stage ... --budget ...`.
+Record each measurement as a KPI reading with `tico kpi log <kpi id> <value> --period-start <date> --period-end <date>`.
 A channel you do not own is changed by its owner: ask in a task.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Read with `hub task show <id>` and `hub task list`. Sales' accept and reject feedback is read from
-the lead's record on the task. A decision for a human is `hub task create --owner <human>`, and a question is
-`hub task question "<question>" --on <person> --parent <id>`. Keep `hub bot status set` to one factual line.
+Work arrives as tasks. Read with `tico task show <id>` and `tico task list`. Sales' accept and reject feedback is read from
+the lead's record on the task. A decision for a human is `tico task create --owner <human>`, and a question is
+`tico task ask <id> --to <person> "<question>" --version N`. Keep `tico bot status set` to one factual line.
 
 ## Method
 - **One definition of qualified.** Count only leads that meet the definition in `knowledge/qualified.md`. A change to that
@@ -126,5 +126,5 @@ include someone who asked not to be contacted, or when a lead magnet needs a cla
 the ask in the first line, under 120 words.
 
 ## Publishing your work
-The review goes to `reports/` and is listed with `hub file publish reports/<name>.md`; publishing again adds a version.
+The review goes to `reports/` and is listed with `tico file publish reports/<name>.md`; publishing again adds a version.
 Files humans send you are inputs, not yours to list.

@@ -74,21 +74,27 @@ def test_a_check_subtask_keeps_its_check_model_over_the_tasks_own_model(api):
     own_model(api, parent["id"], HAIKU)
     turn = claim(api, machine)
     assert turn["config"]["model"] == "claude-haiku-5-5"
-    sub = post(
-        api,
-        "tasks",
-        {
-            "owner": "ops",
-            "title": "Review PR 700 with another model",
-            "body": "Read it.",
-            "check_model": "grok",
-            "check_role": "review",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
-        },
-        turn["token"],
-    )
-    own_model(api, sub["id"], HAIKU)
-    finish(api, machine, turn, HAIKU_RAN)
+    made = {}
+
+    def file_the_check():
+        # The started turn files it: once filed, its parent waits on it, and a turn not yet started would not start.
+        made["sub"] = post(
+            api,
+            "tasks",
+            {
+                "owner": "ops",
+                "title": "Review PR 700 with another model",
+                "body": "Read it.",
+                "check_model": "grok",
+                "check_role": "review",
+                "parent": parent["id"],
+            },
+            turn["token"],
+        )
+        own_model(api, made["sub"]["id"], HAIKU)
+
+    finish(api, machine, turn, HAIKU_RAN, during=file_the_check)
+    sub = made["sub"]
     check = claim(api, machine)
     assert check["task"]["id"] == sub["id"]
     assert (check["config"]["runtime"], check["config"]["model"]) == ("grok", "grok-4.6")
@@ -293,7 +299,7 @@ def test_a_task_handed_to_another_bot_loses_the_model_its_old_bot_was_given(api)
     finance_on_the_computer(api, machine)
     mine = filed(api, "Tidy the changelog")
     own_model(api, mine["id"], HAIKU)
-    post(api, "tasks/" + mine["id"], {"version": mine["version"], "owner": "finance"})
+    post(api, "tasks/" + mine["id"] + "/owner", {"version": mine["version"], "owner": "finance"})
     assert get(api, "tasks/" + mine["id"])["run_model"] is None
     with api.app.state.store.read() as c:
         events = c.execute(
@@ -329,13 +335,11 @@ def test_a_temporary_assignment_retired_with_its_task_takes_the_model_off_it(api
         )
         c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('ops-a1','ana')")
         BS.write(c, 'ops-a1', {'assignment_branch': True, 'shared_from': 'ops'})
-        c.execute("UPDATE tasks SET owner_id='bot:ops-a1',status='doing' WHERE id=?", (mine["id"],))
+        H.task_reassign(c, H.KEEPER, mine["id"], "bot:ops-a1", "A temporary assignment takes it")
         haiku = task_run_models.stamped("claude-haiku-5-5", "low", "claude")
         task_run_models.set_choice(c, "human:ana", mine["id"], haiku)
         assert task_run_models.of(c, mine["id"]) is not None
-        # Ops is not active, so the task goes back to it directly rather than through a handoff.
-        c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
-        retire_assignments(c)
+        retire_assignments(c)  # the task goes back to Ops through the engine's reassign
         assert H.task(c, mine["id"])["owner_id"] == "bot:ops"
         assert task_run_models.of(c, mine["id"]) is None
 

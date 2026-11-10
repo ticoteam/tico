@@ -46,17 +46,6 @@
             "live": false
           },
           {
-            "id": "product-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Product Pipeline Manager",
-            "department": "operations",
-            "reports_to": "product-team-manager",
-            "team": "Product",
-            "reason": "Moves the product pipeline's cards from idea to validated, and keeps its stages healthy.",
-            "start": true,
-            "live": true
-          },
-          {
             "id": "creators-product-owner",
             "template": "segment-product-owner",
             "title": "Creators Product Owner",
@@ -88,17 +77,6 @@
             "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases.",
             "start": true,
             "live": false
-          },
-          {
-            "id": "engineering-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Engineering Pipeline Manager",
-            "department": "operations",
-            "reports_to": "engineering-team-manager",
-            "team": "Engineering",
-            "reason": "Moves the engineering pipeline's cards through build, review and release.",
-            "start": true,
-            "live": true
           },
           {
             "id": "builder",
@@ -185,39 +163,6 @@
             "reports_to": null,
             "team": "Growth",
             "reason": "Leads growth: from first contact to customer, and its owners.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "growth-experiments-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Growth Experiments Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Runs the growth experiments: one idea at a time, measured and kept or dropped.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "lead-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Lead Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Moves leads from targets to qualified, and hands qualified ones on.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "opportunity-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Opportunity Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Moves each opportunity from first talk to a signed deal or a loss.",
             "start": true,
             "live": false
           },
@@ -328,28 +273,6 @@
             "reports_to": null,
             "team": "Success",
             "reason": "Leads success: support, onboarding and renewals, and its owners.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "customer-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Customer Pipeline Manager",
-            "department": "operations",
-            "reports_to": "success-team-manager",
-            "team": "Success",
-            "reason": "Moves each new customer from onboarding to active, referred or closed.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "success-experiments-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Success Experiments Pipeline Manager",
-            "department": "operations",
-            "reports_to": "success-team-manager",
-            "team": "Success",
-            "reason": "Runs the success experiments: one idea at a time, measured and kept or dropped.",
             "start": true,
             "live": false
           },
@@ -491,17 +414,6 @@
             "live": false
           },
           {
-            "id": "product-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Product Pipeline Manager",
-            "department": "operations",
-            "reports_to": "product-team-manager",
-            "team": "Product",
-            "reason": "Moves the product pipeline's cards from idea to validated, and keeps its stages healthy.",
-            "start": true,
-            "live": true
-          },
-          {
             "id": "families-product-owner",
             "template": "segment-product-owner",
             "title": "Families Product Owner",
@@ -533,17 +445,6 @@
             "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases.",
             "start": true,
             "live": false
-          },
-          {
-            "id": "engineering-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Engineering Pipeline Manager",
-            "department": "operations",
-            "reports_to": "engineering-team-manager",
-            "team": "Engineering",
-            "reason": "Moves the engineering pipeline's cards through build, review and release.",
-            "start": true,
-            "live": true
           },
           {
             "id": "builder",
@@ -630,39 +531,6 @@
             "reports_to": null,
             "team": "Growth",
             "reason": "Leads growth: from first contact to customer, and its owners.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "growth-experiments-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Growth Experiments Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Runs the growth experiments: one idea at a time, measured and kept or dropped.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "lead-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Lead Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Moves leads from targets to qualified, and hands qualified ones on.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "opportunity-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Opportunity Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Moves each opportunity from first talk to a signed deal or a loss.",
             "start": true,
             "live": false
           },
@@ -762,28 +630,6 @@
             "reports_to": null,
             "team": "Success",
             "reason": "Leads success: support, onboarding and renewals, and its owners.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "customer-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Customer Pipeline Manager",
-            "department": "operations",
-            "reports_to": "success-team-manager",
-            "team": "Success",
-            "reason": "Moves each new customer from onboarding to active, referred or closed.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "success-experiments-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Success Experiments Pipeline Manager",
-            "department": "operations",
-            "reports_to": "success-team-manager",
-            "team": "Success",
-            "reason": "Runs the success experiments: one idea at a time, measured and kept or dropped.",
             "start": true,
             "live": false
           },
@@ -966,17 +812,6 @@
             "live": false
           },
           {
-            "id": "product-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Product Pipeline Manager",
-            "department": "operations",
-            "reports_to": "product-team-manager",
-            "team": "Product",
-            "reason": "Moves the product pipeline's cards from idea to validated, and keeps its stages healthy.",
-            "start": true,
-            "live": true
-          },
-          {
             "id": "startups-product-owner",
             "template": "segment-product-owner",
             "title": "Startups Product Owner",
@@ -1008,17 +843,6 @@
             "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases.",
             "start": true,
             "live": false
-          },
-          {
-            "id": "engineering-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Engineering Pipeline Manager",
-            "department": "operations",
-            "reports_to": "engineering-team-manager",
-            "team": "Engineering",
-            "reason": "Moves the engineering pipeline's cards through build, review and release.",
-            "start": true,
-            "live": true
           },
           {
             "id": "builder",
@@ -1105,39 +929,6 @@
             "reports_to": null,
             "team": "Growth",
             "reason": "Leads growth: from first contact to customer, and its owners.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "growth-experiments-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Growth Experiments Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Runs the growth experiments: one idea at a time, measured and kept or dropped.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "lead-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Lead Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Moves leads from targets to qualified, and hands qualified ones on.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "opportunity-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Opportunity Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Moves each opportunity from first talk to a signed deal or a loss.",
             "start": true,
             "live": false
           },
@@ -1248,28 +1039,6 @@
             "reports_to": null,
             "team": "Success",
             "reason": "Leads success: support, onboarding and renewals, and its owners.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "customer-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Customer Pipeline Manager",
-            "department": "operations",
-            "reports_to": "success-team-manager",
-            "team": "Success",
-            "reason": "Moves each new customer from onboarding to active, referred or closed.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "success-experiments-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Success Experiments Pipeline Manager",
-            "department": "operations",
-            "reports_to": "success-team-manager",
-            "team": "Success",
-            "reason": "Runs the success experiments: one idea at a time, measured and kept or dropped.",
             "start": true,
             "live": false
           },
@@ -1411,17 +1180,6 @@
             "live": false
           },
           {
-            "id": "product-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Product Pipeline Manager",
-            "department": "operations",
-            "reports_to": "product-team-manager",
-            "team": "Product",
-            "reason": "Moves the product pipeline's cards from idea to validated, and keeps its stages healthy.",
-            "start": true,
-            "live": true
-          },
-          {
             "id": "customers-product-owner",
             "template": "segment-product-owner",
             "title": "Customers Product Owner",
@@ -1442,17 +1200,6 @@
             "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases.",
             "start": true,
             "live": false
-          },
-          {
-            "id": "engineering-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Engineering Pipeline Manager",
-            "department": "operations",
-            "reports_to": "engineering-team-manager",
-            "team": "Engineering",
-            "reason": "Moves the engineering pipeline's cards through build, review and release.",
-            "start": true,
-            "live": true
           },
           {
             "id": "builder",
@@ -1539,39 +1286,6 @@
             "reports_to": null,
             "team": "Growth",
             "reason": "Leads growth: from first contact to customer, and its owners.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "growth-experiments-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Growth Experiments Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Runs the growth experiments: one idea at a time, measured and kept or dropped.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "lead-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Lead Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Moves leads from targets to qualified, and hands qualified ones on.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "opportunity-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Opportunity Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Moves each opportunity from first talk to a signed deal or a loss.",
             "start": true,
             "live": false
           },
@@ -1671,28 +1385,6 @@
             "reports_to": null,
             "team": "Success",
             "reason": "Leads success: support, onboarding and renewals, and its owners.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "customer-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Customer Pipeline Manager",
-            "department": "operations",
-            "reports_to": "success-team-manager",
-            "team": "Success",
-            "reason": "Moves each new customer from onboarding to active, referred or closed.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "success-experiments-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Success Experiments Pipeline Manager",
-            "department": "operations",
-            "reports_to": "success-team-manager",
-            "team": "Success",
-            "reason": "Runs the success experiments: one idea at a time, measured and kept or dropped.",
             "start": true,
             "live": false
           },
@@ -1813,17 +1505,6 @@
             "live": false
           },
           {
-            "id": "product-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Product Pipeline Manager",
-            "department": "operations",
-            "reports_to": "product-team-manager",
-            "team": "Product",
-            "reason": "Moves the product pipeline's cards from idea to validated, and keeps its stages healthy.",
-            "start": true,
-            "live": true
-          },
-          {
             "id": "fans-product-owner",
             "template": "segment-product-owner",
             "title": "Fans Product Owner",
@@ -1844,17 +1525,6 @@
             "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases.",
             "start": true,
             "live": false
-          },
-          {
-            "id": "engineering-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Engineering Pipeline Manager",
-            "department": "operations",
-            "reports_to": "engineering-team-manager",
-            "team": "Engineering",
-            "reason": "Moves the engineering pipeline's cards through build, review and release.",
-            "start": true,
-            "live": true
           },
           {
             "id": "builder",
@@ -1941,39 +1611,6 @@
             "reports_to": null,
             "team": "Growth",
             "reason": "Leads growth: from first contact to customer, and its owners.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "growth-experiments-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Growth Experiments Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Runs the growth experiments: one idea at a time, measured and kept or dropped.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "lead-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Lead Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Moves leads from targets to qualified, and hands qualified ones on.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "opportunity-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Opportunity Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Moves each opportunity from first talk to a signed deal or a loss.",
             "start": true,
             "live": false
           },
@@ -2084,28 +1721,6 @@
             "reports_to": null,
             "team": "Success",
             "reason": "Leads success: support, onboarding and renewals, and its owners.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "customer-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Customer Pipeline Manager",
-            "department": "operations",
-            "reports_to": "success-team-manager",
-            "team": "Success",
-            "reason": "Moves each new customer from onboarding to active, referred or closed.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "success-experiments-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Success Experiments Pipeline Manager",
-            "department": "operations",
-            "reports_to": "success-team-manager",
-            "team": "Success",
-            "reason": "Runs the success experiments: one idea at a time, measured and kept or dropped.",
             "start": true,
             "live": false
           },
@@ -2224,17 +1839,6 @@
             "live": false
           },
           {
-            "id": "product-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Product Pipeline Manager",
-            "department": "operations",
-            "reports_to": "product-team-manager",
-            "team": "Product",
-            "reason": "Moves the product pipeline's cards from idea to validated, and keeps its stages healthy.",
-            "start": true,
-            "live": true
-          },
-          {
             "id": "patients-product-owner",
             "template": "segment-product-owner",
             "title": "Patients Product Owner",
@@ -2255,17 +1859,6 @@
             "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases.",
             "start": true,
             "live": false
-          },
-          {
-            "id": "engineering-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Engineering Pipeline Manager",
-            "department": "operations",
-            "reports_to": "engineering-team-manager",
-            "team": "Engineering",
-            "reason": "Moves the engineering pipeline's cards through build, review and release.",
-            "start": true,
-            "live": true
           },
           {
             "id": "builder",
@@ -2352,39 +1945,6 @@
             "reports_to": null,
             "team": "Growth",
             "reason": "Leads growth: from first contact to customer, and its owners.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "growth-experiments-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Growth Experiments Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Runs the growth experiments: one idea at a time, measured and kept or dropped.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "lead-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Lead Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Moves leads from targets to qualified, and hands qualified ones on.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "opportunity-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Opportunity Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Moves each opportunity from first talk to a signed deal or a loss.",
             "start": true,
             "live": false
           },
@@ -2484,28 +2044,6 @@
             "reports_to": null,
             "team": "Success",
             "reason": "Leads success: support, onboarding and renewals, and its owners.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "customer-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Customer Pipeline Manager",
-            "department": "operations",
-            "reports_to": "success-team-manager",
-            "team": "Success",
-            "reason": "Moves each new customer from onboarding to active, referred or closed.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "success-experiments-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Success Experiments Pipeline Manager",
-            "department": "operations",
-            "reports_to": "success-team-manager",
-            "team": "Success",
-            "reason": "Runs the success experiments: one idea at a time, measured and kept or dropped.",
             "start": true,
             "live": false
           },
@@ -2630,17 +2168,6 @@
             "live": false
           },
           {
-            "id": "product-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Product Pipeline Manager",
-            "department": "operations",
-            "reports_to": "product-team-manager",
-            "team": "Product",
-            "reason": "Moves the product pipeline's cards from idea to validated, and keeps its stages healthy.",
-            "start": true,
-            "live": true
-          },
-          {
             "id": "stra-e-h-ndler-product-owner",
             "template": "segment-product-owner",
             "title": "Straße Händler Product Owner",
@@ -2672,17 +2199,6 @@
             "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases.",
             "start": true,
             "live": false
-          },
-          {
-            "id": "engineering-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Engineering Pipeline Manager",
-            "department": "operations",
-            "reports_to": "engineering-team-manager",
-            "team": "Engineering",
-            "reason": "Moves the engineering pipeline's cards through build, review and release.",
-            "start": true,
-            "live": true
           },
           {
             "id": "builder",
@@ -2773,39 +2289,6 @@
             "live": false
           },
           {
-            "id": "growth-experiments-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Growth Experiments Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Runs the growth experiments: one idea at a time, measured and kept or dropped.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "lead-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Lead Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Moves leads from targets to qualified, and hands qualified ones on.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "opportunity-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Opportunity Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Moves each opportunity from first talk to a signed deal or a loss.",
-            "start": true,
-            "live": false
-          },
-          {
             "id": "stra-e-h-ndler-marketing-owner",
             "template": "segment-marketing-owner",
             "title": "Straße Händler Marketing Owner",
@@ -2879,28 +2362,6 @@
             "reports_to": null,
             "team": "Success",
             "reason": "Leads success: support, onboarding and renewals, and its owners.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "customer-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Customer Pipeline Manager",
-            "department": "operations",
-            "reports_to": "success-team-manager",
-            "team": "Success",
-            "reason": "Moves each new customer from onboarding to active, referred or closed.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "success-experiments-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Success Experiments Pipeline Manager",
-            "department": "operations",
-            "reports_to": "success-team-manager",
-            "team": "Success",
-            "reason": "Runs the success experiments: one idea at a time, measured and kept or dropped.",
             "start": true,
             "live": false
           },
@@ -3028,17 +2489,6 @@
             "live": false
           },
           {
-            "id": "product-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Product Pipeline Manager",
-            "department": "operations",
-            "reports_to": "product-team-manager",
-            "team": "Product",
-            "reason": "Moves the product pipeline's cards from idea to validated, and keeps its stages healthy.",
-            "start": true,
-            "live": true
-          },
-          {
             "id": "creators-product-owner",
             "template": "segment-product-owner",
             "title": "Creators Product Owner",
@@ -3059,17 +2509,6 @@
             "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases.",
             "start": true,
             "live": false
-          },
-          {
-            "id": "engineering-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Engineering Pipeline Manager",
-            "department": "operations",
-            "reports_to": "engineering-team-manager",
-            "team": "Engineering",
-            "reason": "Moves the engineering pipeline's cards through build, review and release.",
-            "start": true,
-            "live": true
           },
           {
             "id": "builder",
@@ -3156,39 +2595,6 @@
             "reports_to": null,
             "team": "Growth",
             "reason": "Leads growth: from first contact to customer, and its owners.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "growth-experiments-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Growth Experiments Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Runs the growth experiments: one idea at a time, measured and kept or dropped.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "lead-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Lead Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Moves leads from targets to qualified, and hands qualified ones on.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "opportunity-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Opportunity Pipeline Manager",
-            "department": "operations",
-            "reports_to": "growth-team-manager",
-            "team": "Growth",
-            "reason": "Moves each opportunity from first talk to a signed deal or a loss.",
             "start": true,
             "live": false
           },
@@ -3288,28 +2694,6 @@
             "reports_to": null,
             "team": "Success",
             "reason": "Leads success: support, onboarding and renewals, and its owners.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "customer-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Customer Pipeline Manager",
-            "department": "operations",
-            "reports_to": "success-team-manager",
-            "team": "Success",
-            "reason": "Moves each new customer from onboarding to active, referred or closed.",
-            "start": true,
-            "live": false
-          },
-          {
-            "id": "success-experiments-pipeline-manager",
-            "template": "pipeline-manager",
-            "title": "Success Experiments Pipeline Manager",
-            "department": "operations",
-            "reports_to": "success-team-manager",
-            "team": "Success",
-            "reason": "Runs the success experiments: one idea at a time, measured and kept or dropped.",
             "start": true,
             "live": false
           },

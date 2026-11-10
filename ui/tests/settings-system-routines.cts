@@ -19,7 +19,7 @@ type Job = {key: string; name: string; what: string; schedule: string; ai: boole
   last: {started_at: string; finished_at: string; ok: boolean; result: string; runs: number} | null; next: string | null; group: string;
   when: string[]; then: string[]; department: {id?: string; name: string; in_chart: boolean}; switch: boolean; on: boolean;
   preset: string | null; at: string | null; presets: {key: string; label: string}[]; owner_only: boolean; can_change: boolean; search: string;
-  kind?: string; route?: string; fallback?: string; spent_this_month_usd?: number; triggers?: {key: string; hours: number}[]; actions?: string[]};
+  route?: string; fallback?: string; spent_this_month_usd?: number};
 // One recorded write to the system-routines API: the request method, the job key and the body the page sent.
 type Write = {method: string; key: string; body: unknown};
 
@@ -37,8 +37,8 @@ function system(role: string) {
   const admin = ['owner', 'admin'].includes(role);
   const ctl = (extra: Partial<Job>) => ({switch: true, controllable: true, can_change: admin, ...extra});
   const jobs = [
-    job('stale_review', 'Stale ticket review', ctl({ai: true, route: 'Company key', fallback: 'Ran on your own key: Gateway unavailable', group: 'checks', preset: 'hourly', presets: AI,
-      then: ['check stale tickets', 'suggest to each owner: mark done, close or check it'], on: true,
+    job('stale_review', 'Stale task review', ctl({ai: true, route: 'Company key', fallback: 'Ran on your own key: Gateway unavailable', group: 'checks', preset: 'hourly', presets: AI,
+      then: ['check stale tasks', 'suggest to each owner: mark done, close or check it'], on: true,
       spent_this_month_usd: 0.42, next: soon, last: {started_at: before, finished_at: before, ok: true, result: '9 checked, 2 suggestions', runs: 1}})),
     job('kpi_asks', 'KPI stale asks', ctl({schedule: 'Daily at 09:00', preset: 'daily', at: '09:00', presets: ALL, group: 'checks', next: soon,
       when: ['every day at 09:00'], last: {started_at: before, finished_at: before, ok: false, result: 'Failed: the database was busy', runs: 1}})),
@@ -49,10 +49,9 @@ function system(role: string) {
     job('topic_fresh', 'Start fresh when the topic changes', {switch: true, can_change: admin, on: false, group: 'chat', schedule: 'When it happens',
       when: ['a message in a direct chat changes the topic'], then: ['start a fresh session, like Clear']}),
   ];
-  jobs.push(job('task-rule-close-after-done', 'Close 24h after done', {kind: 'task_rule', group: 'task_rules', switch: true, on: true, can_change: role !== 'member', preset: '15m', presets: ALL, department: {id: 'engineering', name: 'Engineering', in_chart: true}, triggers: [{key: 'done_untouched', hours: 24}], actions: ['close'], when: ['a task has been done and untouched for 24 hours'], then: ['close it']}));
   const words: Record<string, string> = {stale_review: 'stale done close suggest checks that suggest', approval_expiry: 'approval expire close done', due_reminders: 'due remind'};
   for (const j of jobs) j.search = [j.name, j.what, ...j.when, ...j.then, j.department.name, j.group, words[j.key] || ''].join(' ').toLowerCase();
-  return {now: new Date().toISOString(), departments: ['Engineering'], task_rule_departments: [{id: 'engineering', name: 'Engineering'}, {id: 'marketing', name: 'Marketing'}], task_rule_department: 'engineering', can_create_task_rule: role !== 'member', jobs};
+  return {now: new Date().toISOString(), departments: ['Engineering'], task_rule_departments: [{id: 'engineering', name: 'Engineering'}, {id: 'marketing', name: 'Marketing'}], jobs};
 }
 
 async function open(browser: import('playwright').Browser, role: string) {
@@ -78,18 +77,6 @@ async function open(browser: import('playwright').Browser, role: string) {
     if (p === '/api/v2/models') return json({models: [], harnesses});
     if (p === '/api/v2/access') return json({rules: {}});
     if (p === '/api/v2/system-routines') { asked.push(req.method()); return json(data); }
-    if (p.startsWith('/api/v2/task-rules')) {
-      const body = req.postDataJSON();
-      writes.push({method: req.method(), key: p.split('/').at(-1)!, body});
-      if (body.name === 'Rejected') return json({error: {detail: 'Only this department can edit the rule', code: 'forbidden'}}, 403);
-      let j = data.jobs.find(x => x.key === p.split('/').at(-1));
-      if (!j) { j = {...data.jobs.find(x => x.kind === 'task_rule')!, key: 'task-rule-new'}; data.jobs.push(j); }
-      Object.assign(j, body);
-      if (body.department) j.department = {id: body.department, name: body.department === 'engineering' ? 'Engineering' : 'Marketing', in_chart: true};
-      if (body.triggers) j.when = [`a task has been done and untouched for ${body.triggers[0].hours} hours`];
-      j.search = [j.name, ...j.when, ...j.then, j.department.name].join(' ').toLowerCase();
-      return json({job: j});
-    }
     const one = p.match(/^\/api\/v2\/system-routines\/([a-z_]+)(\/run)?$/);
     if (one) {
       const body = req.postDataJSON() || {}, j = data.jobs.find(x => x.key === one[1])!;
@@ -133,16 +120,16 @@ const saved = async (page: Page, writes: Write[], count: number, key: string) =>
       assert.ok(!headings.some(h => /wakes|routines/i.test(h)), role + ': ' + headings);
       assert.equal(await page.locator('#set-system-routines h3').count(), 0, 'no group headings');
       assert.equal(await page.locator('#set-system-routines [data-sysr-search]').count(), 1);
-      assert.equal(await page.locator('#set-system-routines [data-system-routine]').count(), 8);
+      assert.equal(await page.locator('#set-system-routines [data-system-routine]').count(), 7);
       assert.equal(await row(page, 'task_roundup').count(), 0, 'Task roundup controls moved to Maintenance Find stuck');
       assert.equal(await row(page, 'learnings').count(), 0, 'Learn runs in Maintenance');
       // Each row: WHEN ... THEN ..., one department tag.
       assert.equal(await row(page, 'stale_review').locator('[data-sysr-rule]').innerText(),
-        'WHEN every hour THEN check stale tickets AND suggest to each owner: mark done, close or check it');
+        'WHEN every hour THEN check stale tasks AND suggest to each owner: mark done, close or check it');
       assert.equal(await row(page, 'stale_review').locator('[data-sysr-dept]').count(), 1);
       assert.equal(await row(page, 'stale_review').locator('[data-sysr-dept]').innerText(), 'Engineering');
       const stale = await row(page, 'stale_review').innerText();
-      assert.match(stale, /Stale ticket review[\s\S]*AI: Company key[\s\S]*\$0\.42 this month[\s\S]*9 checked, 2 suggestions[\s\S]*20m ago[\s\S]*in 40m/);
+      assert.match(stale, /Stale task review[\s\S]*AI: Company key[\s\S]*\$0\.42 this month[\s\S]*9 checked, 2 suggestions[\s\S]*20m ago[\s\S]*in 40m/);
       const failed = row(page, 'kpi_asks').locator('[data-sysr-result]');
       assert.equal(await failed.innerText(), 'Failed: the database was busy');
       assert.notEqual(await failed.evaluate(el => getComputedStyle(el).color), await row(page, 'stale_review').locator('[data-sysr-result]').evaluate(el => getComputedStyle(el).color), 'a failure is red');
@@ -154,13 +141,13 @@ const saved = async (page: Page, writes: Write[], count: number, key: string) =>
       const search = page.locator('[data-sysr-search]');
       const shown = async () => page.locator('#set-system-routines [data-system-routine]').evaluateAll(els => els.map(el => (el as HTMLElement).dataset.systemRoutine));
       await search.fill('done');
-      assert.deepEqual(await shown(), ['stale_review', 'approval_expiry', 'task-rule-close-after-done']);
+      assert.deepEqual(await shown(), ['stale_review', 'approval_expiry']);
       await search.fill('remind');
       assert.deepEqual(await shown(), ['due_reminders', 'approval_expiry'], 'its action, or its group word');
       await search.fill('fresh session');
       assert.deepEqual(await shown(), ['topic_fresh']);
       await search.fill('engineering');
-      assert.equal((await shown()).length, 8);
+      assert.equal((await shown()).length, 7);
       await search.fill('zzz');
       assert.match(await page.locator('[data-sysr-none]').innerText(), /No job matches/);
       await search.fill('');
@@ -217,43 +204,6 @@ const saved = async (page: Page, writes: Write[], count: number, key: string) =>
         await saved(page, writes, count + 2, 'daily_check');
         assert.equal(writes.at(-1)!.method, 'POST');
       }
-      await page.close();
-    }
-    {
-      const {page, errors, writes} = await open(browser, 'department');
-      const rule = () => row(page, 'task-rule-close-after-done');
-      assert.equal(await row(page, 'stale_review').locator('button,select,input').count(), 0);
-      await rule().locator('[data-task-rule-edit]').click();
-      assert.equal(await page.locator('.task-rule-dialog select[name=department]').inputValue(), 'engineering');
-      await page.locator('.task-rule-dialog input[name=ruleName]').fill('Rejected');
-      await page.locator('.task-rule-dialog button[type=submit]').click();
-      await page.locator('[data-task-rule-error]').filter({hasText: /department/}).waitFor();
-      assert.equal(await page.locator('.task-rule-dialog input[name=ruleName]').inputValue(), 'Rejected');
-      await page.locator('.task-rule-dialog input[name=ruleName]').fill('Close reviewed exports');
-      await page.locator('.task-rule-dialog input[name=hours]').fill('48');
-      await page.locator('.task-rule-dialog button[type=submit]').click();
-      await page.locator('.task-rule-dialog').waitFor({state: 'detached'});
-      assert.match(await rule().innerText(), /48 hours/);
-      const before = writes.length;
-      await rule().locator('[data-sysr-on]').uncheck();
-      await saved(page, writes, before + 1, 'task-rule-close-after-done');
-      assert.equal(await rule().locator('[data-sysr-on]').isChecked(), false);
-      await page.locator('[data-task-rule-new]').click();
-      assert.equal(await page.locator('.task-rule-dialog select[name=department]').inputValue(), 'engineering');
-      assert.deepEqual(await page.locator('.task-rule-dialog select[name=department] option').evaluateAll(es => es.map(e => (e as HTMLOptionElement).value)), ['', 'engineering', 'marketing']);
-      await page.locator('.task-rule-dialog input[name=ruleName]').fill('Close exports');
-      for (const dark of [false, true]) {
-        await page.evaluate(d => document.documentElement.dataset.theme = d ? 'dark' : 'light', dark);
-        for (const width of [1440, 390]) {
-          await page.setViewportSize({width, height: 900});
-          assert.equal(await page.locator('.task-rule-dialog').evaluate(el => el.scrollWidth <= el.clientWidth + 1), true);
-        }
-      }
-      await page.locator('.task-rule-dialog button[type=submit]').click();
-      await page.locator('.task-rule-dialog').waitFor({state: 'detached'});
-      assert.equal(await row(page, 'task-rule-new').count(), 1);
-      assert.equal(writes.at(-1)!.method, 'POST');
-      assert.deepEqual(errors, []);
       await page.close();
     }
     {

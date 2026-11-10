@@ -18,7 +18,7 @@ headline.
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Read last week's report, `knowledge/funnel.md`, `knowledge/leaks.md`, `knowledge/pages.md` and
 `knowledge/conversion-method.md`. For each change last week proposed, note whether it was applied, is still pending or
@@ -26,8 +26,8 @@ was dropped.
 
 ## 2. Pull the counts
 
-Use the export on the task if one is attached. Otherwise read the counts with `hub db list` and `hub db <name> "<select>"`,
-or with `hub sql "<select>"` for the team's own tables. Write each pull into `knowledge/funnel.md` with its window, its
+Use the export on the task if one is attached. Otherwise read the counts with `tico db list` and `tico db <name> "<select>"`,
+or with `tico sql "<select>"` for the team's own tables. Write each pull into `knowledge/funnel.md` with its window, its
 segment and the date it was pulled. If no source has a count, that step reads "not measured", and the report's first
 line says so.
 
@@ -51,11 +51,11 @@ shown in full. A guardrail breach goes to the page owner as a question in the sa
 ## 6. Read any test that reached its planned end
 
 Follow `skills/read-a-test-without-peeking/SKILL.md`. Record the read-out in the test's file as won, lost or inconclusive,
-and set the Marketing task's outcome:
+and comment the outcome on the idea task, with one line on what the test showed:
 
-    hub task update <id> --step <Succeeded|Failed|Inconclusive>
+    tico task comment <id> "<Succeeded|Failed|Inconclusive>: <what the test showed>"
 
-Add one line to the task's note on what the test showed.
+The Growth Team Manager closes it out.
 
 ## 7. Draft one proposal
 
@@ -67,14 +67,14 @@ check, and the date it will be read. A test is proposed through `playbooks/run-a
 
 Write `reports/YYYY-MM-DD-conversion.md` in the shape of the example. Then:
 
-    hub file publish reports/YYYY-MM-DD-conversion.md
+    tico file publish reports/YYYY-MM-DD-conversion.md
 
 Log the pulls in `knowledge/funnel.md` and the leaks in `knowledge/leaks.md`. Record the headline rate as a KPI reading
-with `hub kpi log` if `hub kpi list` shows one you own. Rewrite `state.md`, and commit this repository.
+with `tico kpi log` if `tico kpi list` shows one you own. Rewrite `state.md`, and commit this repository.
 
 ## 9. Close
 
-    hub task update <id> --status done --note "..."
+    tico task done <id> -m "..." --version N
 
 The note holds the headline, the report path, and what could not be measured. Finish the task even on a quiet week: an
 open routine task gets absorbed into the next run.

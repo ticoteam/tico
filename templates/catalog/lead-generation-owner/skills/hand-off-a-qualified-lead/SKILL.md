@@ -15,7 +15,7 @@ Steps:
 3. Set the pick-up time from `knowledge/lead-method.md`: inbound the same business day, outbound within two business days.
 4. Create the task:
 
-       hub task create --owner <inbound-sales-owner or outbound-sales-owner> --title "<lead or company>: qualified, <source>" --body "<body>"
+       tico task create --owner <inbound-sales-owner or outbound-sales-owner> --title "<lead or company>: qualified, <source>" --body "<body>"
 
    The body carries: the source tag; the reason it qualified; the dated signal with its date; the profile match with its source;
    the pick-up time; and the CRM id or a link.

@@ -102,21 +102,10 @@ SCHEMA = (
     "CREATE TRIGGER IF NOT EXISTS read_deps_conversation_delete AFTER DELETE ON conversations BEGIN "
     + _touch("'c:'||OLD.id")
     + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_task_insert AFTER INSERT ON tasks BEGIN "
-    + _touch("'t:'||NEW.id")
-    + _touch("'a:'||NEW.carried_by")
-    + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_task_update AFTER UPDATE OF id, carried_by ON tasks "
-    f"WHEN {_changed(('id', 'carried_by'))} BEGIN "
-    + _touch("'t:'||OLD.id")
-    + _touch("'t:'||NEW.id")
-    + _touch("'a:'||OLD.carried_by")
-    + _touch("'a:'||NEW.carried_by")
-    + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_task_delete AFTER DELETE ON tasks BEGIN "
-    + _touch("'t:'||OLD.id")
-    + _touch("'a:'||OLD.carried_by")
-    + "END",
+    "CREATE TRIGGER IF NOT EXISTS read_deps_task_insert AFTER INSERT ON tasks BEGIN " + _touch("'t:'||NEW.id") + "END",
+    "CREATE TRIGGER IF NOT EXISTS read_deps_task_update AFTER UPDATE OF id ON tasks "
+    f"WHEN {_changed(('id',))} BEGIN " + _touch("'t:'||OLD.id") + _touch("'t:'||NEW.id") + "END",
+    "CREATE TRIGGER IF NOT EXISTS read_deps_task_delete AFTER DELETE ON tasks BEGIN " + _touch("'t:'||OLD.id") + "END",
     "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_insert AFTER INSERT ON attempts BEGIN "
     "INSERT OR IGNORE INTO read_dirty VALUES('a:'||NEW.id); " + _touch("'a:'||NEW.id") + "END",
     "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_update AFTER UPDATE OF id, bot_id, job_id, state ON attempts "

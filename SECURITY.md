@@ -33,7 +33,7 @@ already fixed in the latest release, we will say so.
 
 ## Scope
 
-Tico's server, runner, `hub` CLI, MCP tools and desktop shell in this repository. Problems in a
+Tico's server, runner, `tico` CLI, MCP tools and desktop shell in this repository. Problems in a
 third-party dependency are best reported to that project, but tell us if Tico's use of it makes the
 problem worse.
 

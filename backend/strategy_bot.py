@@ -486,7 +486,7 @@ def mirror_hide(c, actor, value_json, updated):
 
 # ----------------------------------------------------------------------------- what it asked today
 # The Strategy Bot has no daily limit on a person's Needs you. The server counts the tasks it filed for that person
-# since midnight UTC, whoever filed them for it: its own `hub task create` and the asks backend/goal_asks.py files in
+# since midnight UTC, whoever filed them for it: its own `tico task create` and the asks backend/goal_asks.py files in
 # its name, and the items it merged several bots' asks into (backend/strategy_merge.py).
 NO_LIMIT = 10**6  # no daily cap: the room never runs out
 

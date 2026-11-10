@@ -9,14 +9,13 @@ there (threads.note_fits_run), which the recipient's next run starts. Nothing is
 waits for the next one (H.NOTE_WAITING_SQL), and the message stays in its room for that room's next turn.
 
 It wakes the recipient at once, as before, when (WAKES):
-- the sender flags it: `needs_action` (`hub message send --needs-action`, `hub task comment --needs-action`);
+- the sender flags it: `needs_action` (`tico message send --needs-action`, `tico task comment --needs-action`);
 - it is not a plain message: an ask, an answer, a steer;
 - it carries anything but a plain message's references (an approval, questions, a command, a batch, ...);
 - it answers the recipient's own ask, a message the recipient flagged needs-action, or one it waits on (wait_s);
-- it is a gate verdict (a `VERDICT: approve|changes PR #<n> head <sha>` line, Review 1/2, QA, Security);
 - it @mentions the recipient (an @mention always reaches, D6).
 Fail open: anything this cannot read (references that are not an object, a flag that is not true or false)
-wakes. A person's message, the keeper's notices (assignments, gate requests, approvals, a blocker done) and
+wakes. A person's message, Tico's own notices (assignments, gate requests, asks) and
 everything on token saving 2/9's always-wake list never reach this rule: only bot-to-bot messages do.
 """
 
@@ -29,7 +28,6 @@ WAKES = (
     "an ask, answer or steer",
     "references beyond a plain message",
     "a reply the recipient waits on",
-    "a gate verdict",
     "an @mention of the recipient",
 )
 FLAG = "needs_action"
@@ -48,7 +46,7 @@ def can_wait(conn, actor, target, kind, refs, body, in_reply_to=None):
             return False
         from . import wake_rules
 
-        # The flag, the reply the recipient waits on and the verdict lines are on the always-wake list.
+        # The flag and the reply the recipient waits on are on the always-wake list.
         if wake_rules.always_wakes(conn, actor, target, kind, refs, body, in_reply_to=in_reply_to):
             return False
         if set(refs) - PLAIN_REFS - {FLAG}:

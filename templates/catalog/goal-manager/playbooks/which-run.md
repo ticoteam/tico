@@ -1,6 +1,6 @@
 # Which playbook a run needs
 
-Read the first line of the work, then the playbook it names. Read `hub strategy show` first on every run.
+Read the first line of the work, then the playbook it names. Read `tico strategy show` first on every run.
 
 - A task "Draft the strategy", or the owner asking for the strategy through their Assistant: `draft-the-strategy.md`.
 - The owner asking to update "How we know they want it" (proof), or the Monday note finding it stale: `keep-proof-current.md`.
@@ -11,6 +11,6 @@ Read the first line of the work, then the playbook it names. Read `hub strategy 
   each red or stalled goal).
 - At level 3, a bot's question to you, a clash between Heads' tasks or a broken bot: `acts-on-its-own.md`.
 - The routine "Weekly goals review": `weekly-goals-review.md`.
-- A task or a message about one KPI or goal is that KPI or goal only: `hub kpi show <id>` or `hub goal show <id>` first, then the
+- A task or a message about one KPI or goal is that KPI or goal only: `tico kpi show <id>` or `tico goal show <id>` first, then the
   matching playbook.
 - A task from the owner's Assistant that quotes their words: `owner-chat.md`.

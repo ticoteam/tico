@@ -187,10 +187,11 @@ async function linkedTasks({hub, browser}: Ctx) {
           assert.match(await row.innerText(), /Review the public plan/);
           assert.equal(await page.locator(`[data-linked-task="${hidden.id}"]`).count(), 0);
           await page.evaluate(id => { (window as unknown as PageWin).heldLinkedTask = document.querySelector(`[data-linked-task="${id}"]`); }, task.id);
-          task = await call('POST', 'tasks/' + task.id, {version: task.version, title: 'Review the final plan on ' + surface, status: 'doing'});
+          task = await call('POST', 'tasks/' + task.id, {version: task.version, title: 'Review the final plan on ' + surface});
+          task = await call('POST', `tasks/${task.id}/done`, {version: task.version});
           await page.waitForFunction(id => {
             const text = document.querySelector(`[data-linked-task="${id}"]`)?.textContent || '';
-            return text.includes('Review the final plan') && text.toLowerCase().includes('doing');
+            return text.includes('Review the final plan') && text.toLowerCase().includes('done');
           }, task.id, {timeout: t(20000)});
           assert.equal(await page.evaluate(id => (window as unknown as PageWin).heldLinkedTask === document.querySelector(`[data-linked-task="${id}"]`), task.id), true);
           await call('DELETE', `meetings/${meeting.id}/tasks/${task.id}`);

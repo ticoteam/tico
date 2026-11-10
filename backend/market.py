@@ -1568,15 +1568,15 @@ def is_stale(row, today):
 
 
 def _free_owner_title(conn, actor, owner):
-    """A title this run can still open. A live task of the same title, even one marked done,
-    blocks another ask with that title, so the next pass gets its own."""
+    """A title this run can still open. An open task of the same title blocks another ask with that title (the
+    duplicate rule), so the next pass gets its own."""
     base = "Review market insights that need a person"
-    marks = ",".join("?" * len(H.LIVE_STATUSES))
+    marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     for n in range(1, 40):
         title = base if n == 1 else f"Review market insights that need a person, pass {n}"
         if not conn.execute(
             f"SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status IN ({marks})",
-            (actor, owner, title, *H.LIVE_STATUSES),
+            (actor, owner, title, *H.ACTIVE_STATUSES),
         ).fetchone():
             return title
     return base + ", pass 40"
@@ -2266,7 +2266,7 @@ Resolve each name against the market graph before you invent an entity.
 Write the evidence row first, then the entity or edge that cites it.
 Close the insight as applied, merged, rejected with one sentence, or needs-human.
 All needs-human items from this run go into one task on the company owner.
-On Mondays the sweep refreshes the weekly delta page from market events. hub market refresh does the same.
+On Mondays the sweep refreshes the weekly delta page from market events. tico market refresh does the same.
 Mark unverified only the entities you tried to check and could not. Do not file a listening task just because a date is old.
 If there are no new insights and it is not Monday, stop.
 """
@@ -2736,7 +2736,7 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/market/pages/{name}")
     def page_read(request: Request, name: str):
-        """One market page as it reads now, for a curator about to add to it (`hub market page <name>`)."""
+        """One market page as it reads now, for a curator about to add to it (`tico market page <name>`)."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:

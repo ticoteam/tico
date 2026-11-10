@@ -226,6 +226,17 @@ def api(tmp_path, api_database):
     yield from api_client(tmp_path, api_database)
 
 
+@pytest.fixture
+def company(tmp_path, api_database):
+    """A store on a new hub database with the fictional company and no app (backend/tests/helpers/company.py): for
+    tests of code below the routes, which need a transaction and not a client."""
+    from backend.tests.helpers.company import company_store
+
+    store = company_store(tmp_path, api_database)
+    yield store
+    store.close()
+
+
 @pytest.fixture(scope="session")
 def api_database(tmp_path_factory, request):
     """One initialized, fictional database per worker and invocation; never a cache across code changes.

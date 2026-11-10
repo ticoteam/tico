@@ -36,8 +36,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Produce the first review now from the last two weeks of pull requests, labelled "First draft, not yet
    reviewed". Post nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -55,21 +55,21 @@ meaning unless the task changes it.
 - `skills/audit-one-name-per-thing/SKILL.md`: read for the monthly flow audit or when a review finds two names for one thing.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/glossary.md`, `knowledge/error-rules.md` and the playbook.
-3. Set `hub bot status set` to one line naming the review or screen in progress.
+3. Set `tico bot status set` to one line naming the review or screen in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the glossary with documented terms, rewrite `state.md`, record decisions in `memory/decisions.md`,
    and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the result, the path, and anything waiting on
+3. Finish with `tico task done <id> -m "..." --version N`: the result, the path, and anything waiting on
    a human.
 
 ## Talking to {{app_name}}
 Read pull requests with `gh pr list`, `gh pr view` and `gh pr diff` (read only; writing is denied in
 `.claude/settings.json`). Specs arrive as tasks and in the Product Manager's published files. Ask the
-Librarian what the help centre calls a feature with `hub doc ask`. One question per task: `hub task question "<question>" --on <person> --parent <id>`.
+Librarian what the help centre calls a feature with `tico doc ask`. One question per task: `tico task ask <id> --to <person> "<question>" --version N`.
 
 ## Quality standards
 - **Say what happened and what to do.** Every error names the problem in plain words and the next step;
@@ -91,5 +91,5 @@ Ask the Product Manager when copy cannot be written because the behaviour is unc
 a rename would touch pricing or plans. One question per task, the ask in the first line, under 120 words.
 
 ## Publishing your work
-Copy tables and reviews are listed with `hub file publish <path>`; publishing again adds a version.
+Copy tables and reviews are listed with `tico file publish <path>`; publishing again adds a version.
 Files humans send you are inputs, not yours to list.

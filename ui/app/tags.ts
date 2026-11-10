@@ -177,7 +177,7 @@ async function pageTag(key: string) {
   }
 }
 function tagTaskRows(tasks: import('../types/api').Task[] | null | undefined) {
-  return (tasks || []).map(task => `<a class="tag-task" href="#/task/${encodeURIComponent(task.id)}">${esc(task.title)} <span class="muted">${esc(STATUS_WORD[task.status] || task.status)}</span></a>`).join('') || '<div class="empty">No tasks</div>';
+  return (tasks || []).map(task => `<a class="tag-task" href="#/task/${encodeURIComponent(task.id)}">${esc(task.title)} <span class="muted">${esc(taskLine(task))}</span></a>`).join('') || '<div class="empty">No tasks</div>';
 }
 // A new tag is a name and notes; its key (made from the name) and its metadata wait under Advanced. A tag made from a
 // template asks for its key, since that names this instance (release-2026-10-02). Keys stop at 40 characters, where the

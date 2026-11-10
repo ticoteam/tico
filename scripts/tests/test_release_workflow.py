@@ -13,7 +13,7 @@ JOBS = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())["job
 CORE = {"validated", "runner-changes", "release"}
 
 
-def _runs(jobs, name, results, outputs, *, cancelled=False, inherited=()):
+def _runs(jobs, name, results, outputs, *, cancelled=False, inherited=(), ref="v0.6.1"):
     def parents(name):
         needs = jobs[name].get("needs", [])
         return [needs] if isinstance(needs, str) else needs
@@ -36,17 +36,23 @@ def _runs(jobs, name, results, outputs, *, cancelled=False, inherited=()):
 
     condition = condition.removeprefix("${{").removesuffix("}}").strip()
     condition = re.sub(r"needs\.([\w-]+)\.(?:outputs\.([\w-]+)|result)", value, condition)
+    condition = condition.replace("github.ref_name", repr(ref))
     condition = re.sub(r"!(?!=)", " not ", condition).replace("&&", " and ").replace("||", " or ")
     return bool(
         eval(
             condition.strip(),
             {"__builtins__": {}},
-            {"cancelled": lambda: cancelled, "success": lambda: success, "always": lambda: True},
+            {
+                "cancelled": lambda: cancelled,
+                "success": lambda: success,
+                "always": lambda: True,
+                "contains": lambda haystack, needle: needle in haystack,
+            },
         )
     )
 
 
-def _schedule(*, published=False, dry_run=False, build=True, enabled=True, failures=()):
+def _schedule(*, published=False, dry_run=False, build=True, enabled=True, failures=(), ref="v0.6.1"):
     outputs = {
         "validated": {
             "published": "true" if published else "false",
@@ -57,7 +63,7 @@ def _schedule(*, published=False, dry_run=False, build=True, enabled=True, failu
     }
     results = {}
     for name in JOBS:
-        if _runs(JOBS, name, results, outputs):
+        if _runs(JOBS, name, results, outputs, ref=ref):
             results[name] = "failure" if name in failures else "success"
         else:
             results[name] = "skipped"
@@ -82,6 +88,16 @@ def test_release_build_and_carry_forward_schedules(published):
         *([] if published else ["release"]),
     }
     assert _schedule(published=published, enabled=False)["companies"] == "skipped"
+
+
+@pytest.mark.parametrize("ref", ["v0.6.0-rc.1", "v1.2.0-beta", "v1.0.0-0"])
+def test_a_prerelease_builds_the_generic_apps_and_no_company_app(ref):
+    # A company's installed apps update from its own bucket's latest.json: a prerelease must never move it.
+    results = _schedule(ref=ref)
+    assert results["company-matrix"] == results["companies"] == "skipped"
+    assert {"desktop", "desktop-assets", "recorder", "recorder-assets", "macos", "macos-assets"} <= {
+        name for name, result in results.items() if result == "success"
+    }
 
 
 def test_dry_run_and_failed_validation_never_start_optional_jobs():
@@ -326,13 +342,8 @@ def test_an_incremental_validation_is_a_plan_on_an_anchor_and_the_gate_runs_only
     # The gate's VMs come from the candidate's plan (release_increment.matrix): the full matrix when the plan is empty.
     assert jobs["gate"]["strategy"]["matrix"] == "${{ fromJSON(needs.candidate.outputs.matrix) }}"
     assert jobs["gate"]["strategy"]["fail-fast"] is False
-    # The full default factory sim and the measured timings run only in a full validation.
-    assert (
-        jobs["factory-sim"]["if"]
-        == "needs.candidate.outputs.plan == '' || fromJSON(needs.candidate.outputs.plan).factory"
-    )
+    # The measured timings run only in a full validation.
     assert jobs["test-timings"]["if"] == "inputs.anchor == ''"
-    assert "candidate" in jobs["release-check"]["needs"]
     steps = {step.get("name"): step for step in jobs["gate"]["steps"] if step.get("name")}
     assert "--suite" in steps["Run the candidate's unchanged release gate, this part"]["run"]
 
@@ -342,14 +353,14 @@ def test_an_incremental_validation_runs_hosted_except_its_product_and_desktop_pa
     and the Docker images, so they stay on RunsOn. A full validation keeps the configured runners."""
     ci, _ = _workflow("ci.yml")
     jobs = ci["jobs"]
-    for name in ("candidate", "native-linux", "images", "factory-sim"):
+    for name in ("candidate", "native-linux", "images"):
         assert "inputs.anchor != ''" in str(jobs[name]["runs-on"]), name
         assert "runs-on=" in str(jobs[name]["runs-on"]), name  # a full validation still runs on RunsOn
     gate = str(jobs["gate"]["runs-on"])
     assert "inputs.anchor != ''" in gate and "matrix.part != 'product'" in gate and "matrix.part != 'desktop'" in gate
     assert "runs-on=" in gate
     # The hosted disk clean-up step is reused, gated on the same mode: no new step text.
-    for name in ("native-linux", "images", "factory-sim"):
+    for name in ("native-linux", "images"):
         step = next(step for step in jobs[name]["steps"] if step.get("name", "").startswith("Free disk"))
         assert step["if"] == "vars.TICO_CI_HOSTED == 'true' || inputs.anchor != ''", name
     # The gate's hosted parts are the same mode as its runs-on: its clean-up step follows that condition.

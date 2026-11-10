@@ -1,6 +1,6 @@
 # cloud-init files for a Tico server or runner
 
-Paste-ready `#cloud-config` user data for any Ubuntu 24.04 cloud VM. `tico setup --cloud hetzner|digitalocean` fills the
+Paste-ready `#cloud-config` user data for any Ubuntu 24.04 cloud VM. `python3 -m setup --cloud hetzner|digitalocean` fills the
 same files in for you (`setup/cloudinit.py`).
 
 | File | Installs | Inbound |

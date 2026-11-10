@@ -17,7 +17,7 @@ Done when every step has a result or a "not measured" line with its reason, the 
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Read last week's review and `knowledge/tests.md`. For each test running, note its sample so far and whether its end date
 has come. For each change last week proposed, note whether it was built, slipped or dropped.
@@ -50,13 +50,13 @@ hypothesis, the metric, the sample, the stop rule, and the draft variant saved t
 
 Write `reports/YYYY-MM-DD-conversion.md` in the shape of `knowledge/examples/conversion-review.md`. Then:
 
-    hub file publish reports/YYYY-MM-DD-conversion.md
+    tico file publish reports/YYYY-MM-DD-conversion.md
 
 Add each dated reading to `knowledge/tests.md`, rewrite `state.md`, and commit this repository.
 
 ## 7. Close
 
-    hub task update <id> --status done --note "..."
+    tico task done <id> -m "..." --version N
 
 The note holds the headline, the report path, and what you could not read. Finish the task even on a quiet week: an open
 routine task gets absorbed into the next run.

@@ -95,7 +95,7 @@ def test_task_pages_live_blocks_and_bot_context_do_not_bypass_audience(api):
             assert fid not in r.text and 'Audience secret' not in r.text
         assert sql(api, f"SELECT id FROM bot_files WHERE id='{fid}'", token) == []
     with api.app.state.store.read() as c:
-        from backend.task_review import comment_file
+        from backend.files import comment_file
         from backend.store import Problem
 
         with pytest.raises(Problem):

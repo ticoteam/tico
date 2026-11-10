@@ -17,7 +17,7 @@ interface GithubNudgeTeam {
 // The fields of a task the nudge reads (the task record the task modal and the task route draw).
 interface GithubNudgeTask {
   id: string | number;
-  owner_id?: string;
+  owner_id?: string | null;
   title?: string;
   status?: string;
 }

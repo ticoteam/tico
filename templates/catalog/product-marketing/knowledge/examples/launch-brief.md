@@ -32,5 +32,5 @@ Sales and support on 2026-10-01; customers on 2026-10-08. Date and pricing: [to 
 No customer quote yet; competitor Rivalbook's waitlist is described on their site 2026-09-20 (cited) but their pricing is not public.
 
 ## Sources
-- Call transcripts 2026-09-14 to 2026-09-26; `hub market show rivalbook`, 2026-09-28; goal "Retention", 2026-09-28
+- Call transcripts 2026-09-14 to 2026-09-26; `tico market show rivalbook`, 2026-09-28; goal "Retention", 2026-09-28
 ```

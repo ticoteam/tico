@@ -15,7 +15,7 @@ One Slack app serves the whole company. The token is `SLACK_BOT_TOKEN` in the ru
 
 Posting is gated in code, not in prompts:
   - the employee's bot.yaml (older: emp-<slug>/employee.yaml) must declare tools: service slack with `post` in `can`
-  - the channel must be on the company's Slack channel list (Settings > Tools > Slack, `hub slack channel list`)
+  - the channel must be on the company's Slack channel list (Settings > Tools > Slack, `tico slack channel list`)
     and that entry must allow bots to post (it does unless an owner or admin turned it off)
   - externally shared (Slack Connect) channels are refused: posting there is an outbound send
   - text over 4000 characters is refused
@@ -763,7 +763,7 @@ def _default_hub_get(path):
 
 HUB_GET = _default_hub_get
 CHANNELS_HINT = (
-    "The list is in Tico: Settings > Tools > Slack, or `hub slack channel list`. A bot run reads it from "
+    "The list is in Tico: Settings > Tools > Slack, or `tico slack channel list`. A bot run reads it from "
     "the hub with HUB_API_URL and HUB_TOKEN."
 )
 
@@ -824,7 +824,7 @@ def find_registry_channel(channels, ref):
         f"channel {ref!r} is not on the company's Slack channel list.",
         "Bots use only the channels listed in Settings > Tools > Slack. Adding one is an owner's or "
         "admin's call: ask BotOps, or an owner or admin runs "
-        "`hub slack channel add <channel> --reader <bot>`.",
+        "`tico slack channel add <channel> --reader <bot>`.",
     )
 
 

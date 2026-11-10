@@ -9,11 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from backend import company, goals, market, task_delete
+from backend import company, goals, market
 from backend import hubdb as H
 from backend.config import Settings
 from backend.store import Store
 from backend.tests.helpers.history_events import OLD, migration
+from backend.tests.helpers.migrations import forget_from
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SOURCES = ("task_events", "goal_events", "market_events", "company_events", "strategy_events")
@@ -150,7 +151,7 @@ def test_an_existing_file_moves_on_boot_and_booting_again_changes_nothing(tmp_pa
         for statement in OLD:
             c.execute(statement)
         fill(c)
-        c.execute("DELETE FROM schema_migrations WHERE version>='0064_history_events' AND version NOT LIKE 'legacy_%'")
+        forget_from(c, "0064_history_events")
     boot(path)
     with sqlite3.connect(path) as c:
         assert not set(SOURCES) & {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -196,43 +197,6 @@ def test_only_a_tasks_rows_can_be_changed_or_removed(tmp_path):
                 "INSERT INTO history_events(id, subject_type, subject_id, kind, created_at) "
                 "VALUES('h4','planet','p','x','t')"
             )
-
-
-def test_a_trash_snapshot_saved_before_the_move_restores_its_task_history():
-    old = {
-        "task_events": [
-            {
-                "_rowid": 7,
-                "id": "t1",
-                "task_id": "task-1",
-                "created_at": "2026-01-01T00:00:00Z",
-                "actor": "human:ana",
-                "field": "status",
-                "old": "open",
-                "new": "done",
-                "note": "",
-            }
-        ],
-        "task_links": [{"id": "l1"}],
-    }
-    moved = task_delete._history_rows(old)
-    assert "task_events" not in moved and moved["task_links"] == [{"id": "l1"}]
-    assert moved["history_events"] == [
-        {
-            "_rowid": 7,
-            "id": "t1",
-            "subject_type": "task",
-            "subject_id": "task-1",
-            "actor_id": "human:ana",
-            "kind": "status",
-            "old": "open",
-            "new": "done",
-            "note": "",
-            "action_id": None,
-            "via": None,
-            "created_at": "2026-01-01T00:00:00Z",
-        }
-    ]
 
 
 def test_the_readers_answer_what_the_old_tables_did(tmp_path):
@@ -304,10 +268,9 @@ def test_the_readers_answer_what_the_old_tables_did(tmp_path):
     } == golden["tripped"]
 
 
-def test_task_rows_keep_their_rowids_so_a_persisted_verdict_key_still_matches(tmp_path):
-    # The reopen was the 100th row ever written to task_events: the 99 rows before it were deleted, leaving gaps. A
-    # verdict delivered before the move carries its cycle as that rowid ("100:verdict approve 06d18530"), and the
-    # delivery dedups on that exact key, so the migrated history must still name the reopen as 100.
+def test_task_rows_keep_their_rowids_through_the_move(tmp_path):
+    # The reopen was the 100th row ever written to task_events: the 99 rows before it were deleted, leaving gaps. The
+    # migrated history keeps that rowid, and rows from the other sources come after the task rows.
     c = sqlite3.connect(tmp_path / "old.sqlite")
     c.row_factory = sqlite3.Row
     c.execute(OLD[0])
@@ -334,13 +297,3 @@ def test_task_rows_keep_their_rowids_so_a_persisted_verdict_key_still_matches(tm
     assert c.execute("SELECT rowid FROM history_events WHERE id='reopen'").fetchone()[0] == 100
     assert c.execute("SELECT rowid FROM history_events WHERE id='verdict'").fetchone()[0] == 101
     assert c.execute("SELECT rowid FROM history_events WHERE id='g1'").fetchone()[0] == 102  # other sources come after
-    row = {"id": "task-1"}
-    assert H._subtask_result_cycle(c, row) == "100:"
-    assert (
-        H._subtask_result_key(c, row, "Checked it. VERDICT: approve PR #1549 head 06d18530")
-        == "100:verdict approve 06d18530"
-    )
-    assert H._check_cycle_start(c, {"id": "task-1", "verdict": "approve"}) == {
-        "at": "2026-01-02T00:00:00Z",
-        "current": True,
-    }

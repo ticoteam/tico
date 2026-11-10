@@ -92,11 +92,14 @@ interface ThreadsEvent {
   actor?: string | undefined;
   unread?: boolean | undefined;
   unread_count?: number | undefined;
-  read?: boolean | undefined;
+  /** The viewer's own read: the thread's read mark now. */
+  read?: { last_read_seq?: number | undefined } | undefined;
   pinned?: boolean | undefined;
   pinned_for_everyone?: boolean | undefined;
   counters?: { last_seq?: number | undefined; last_unread_seq?: number | undefined } | undefined;
   thread?: ThreadRow | undefined;
+  /** The viewer can no longer read the thread (taken off its members): its id alone, and its row leaves. */
+  gone?: boolean | undefined;
 }
 // The needs topic's event: the Needs you version, and what the stream carried over a reconnect.
 interface NeedsEvent {
@@ -302,7 +305,7 @@ const threadsEach = (fn: (t: ThreadRow) => ThreadRow | null | undefined) => {
   for (const key of ['pinned', 'threads'] as const) THREADS[key] = THREADS[key].map(t => fn(t) || t);
 };
 // One thread's row, updated in place from a thread view the server sent: archived leaves the rail, a pin moves it to
-// Pinned (or back), a new one the viewer is in joins its list by title.
+// Pinned (or back), a new one the viewer is in joins its list by title, and on the plain list a renamed one moves.
 // `recheck` (a members event): whether the viewer is still in it decides, not whether it is listed.
 function threadsPut(view: ThreadRow, {recheck = false} = {}) {
   if (!view?.id || view.parent_id) return;
@@ -325,6 +328,9 @@ function threadsPut(view: ThreadRow, {recheck = false} = {}) {
     THREADS[out] = THREADS[out].filter(x => x.id !== t.id);
     if (!THREADS[into].some(x => x.id === t.id)) THREADS[into] = [...THREADS[into], t].sort(threadsByTitle);
   } else if (!listed) THREADS.threads = [...THREADS.threads, view].sort(threadsByTitle);
+  // The plain list is by title: a renamed thread goes where its new title puts it. (The rail's order is the server's
+  // ranking, which a row alone cannot redo; its next read does.)
+  else if (!THREADS.rail) THREADS.threads = [...THREADS.threads].sort(threadsByTitle);
   threadsSideRender();
 }
 // Read up to `seq` here: the row's count clears at once, the server's answer follows on the stream.
@@ -350,10 +356,30 @@ function threadsAllRead(id: string) {
   if (dm && Number(THREADS.dms[dm])) { THREADS.dms = {...THREADS.dms, [dm]: 0}; if (typeof renderTree === 'function') renderTree(); }
   threadsSideRender();
 }
+// The viewer's own read (it comes only to them): that one thread's mark. The root's own read moves the row's mark
+// (threadsMarkedRead: what is past it, or new in a sub-thread, stays); a sub-thread's read cannot settle a row that sums
+// the whole subtree, which keeps its marks until the next read. A row left quiet leaves Catch up, and an open Catch up's
+// card for it goes. A 1:1 DM is not on the rail: its own read clears its count on its teammate.
+function threadsReadLive(d: ThreadsEvent) {
+  const root = d.root_id || d.thread_id;
+  if (!root) return;
+  const own = !d.thread_id || d.thread_id === root;
+  if (own) threadsMarkedRead(root, Number(d.read?.last_read_seq) || 0);
+  const row = threadsRow(root), dm = THREADS.roots[root]?.dm;
+  if (row ? threadUnread(row) || row.me?.activity : !(own && dm)) return;
+  threadsAllRead(root);
+  if (typeof catchUpGone === 'function') catchUpGone(root);
+}
 // Archive a thread from its row or its header: it leaves Threads and Catch up at once, and a short Undo puts it back.
 // The server refuses anyone who does not manage the thread.
 // An archived thread, here or in another window, leaves Catch up and its count at once; a 1:1 DM's count on its teammate
 // goes too (a DM is not on the list, so only this clears it).
+// A thread the viewer can no longer read: off the rail, Catch up and its count, with nothing read for it.
+function threadsGone(id: string) {
+  THREADS.pinned = THREADS.pinned.filter(t => t.id !== id);
+  THREADS.threads = THREADS.threads.filter(t => t.id !== id);
+  threadsArchivedGone(id, THREADS.roots[id]?.dm);
+}
 function threadsArchivedGone(id: string, dm?: string | null) {
   THREADS.cu?.delete(id);
   if (typeof catchUpGone === 'function') catchUpGone(id, true);
@@ -442,7 +468,7 @@ async function threadsPinned(d: ThreadsEvent) {
   const view = await get<ThreadRow>(thvPath(d.thread_id), {fresh: true}).catch(() => null);
   if (view?.id) threadsPut({...view, me: {...view.me, pinned: true}});
 }
-// The whole rail is read only on the first load, a `reset`, a `needs` change and the safety poll; every other change is
+// The whole rail is read only on the first load, a `reset`, a reconnect and the safety poll; every other change is
 // patched from its event (above). Once per burst.
 const threadsRecount = () => liveThrottle('threads-rail', threadsLoad, 3000);
 // Every route: the first load, the current row marked, and the stream wired once.
@@ -455,14 +481,9 @@ function threadsSync() {
   liveOn('threads', (d: ThreadsEvent) => {
     THREADS.gen++;
     if (d.kind === 'activity') void threadsActivity(d);
-    // The viewer's own read (it comes only to them): the root's row and its Catch up place clear; a card for it in an
-    // open Catch up goes.
-    else if (d.kind === 'read' && d.read) {
-      const root = d.root_id || d.thread_id;
-      threadsAllRead(root ?? '');
-      if (typeof catchUpGone === 'function') catchUpGone(root);
-    }
+    else if (d.kind === 'read' && d.read) threadsReadLive(d);
     else if (d.kind === 'pinned' && d.thread_id) void threadsPinned(d);
+    else if (d.gone && d.thread_id) threadsGone(d.thread_id);
     else if (d.thread && !d.thread.parent_id) {
       // A 1:1 DM is not on the rail: it is learned for its teammate's count; a new one starts that count.
       if (threadIsDm(d.thread) && !threadIsGroupDm(d.thread)) {
@@ -482,14 +503,15 @@ function threadsSync() {
     if (d.kind === 'capped') liveSoon('threads-needs', () => liveEmit('needs', {version: 'read'}), 400);
     threadViewsLive('threads', d);
   });
-  // An ask or a held message moved on the viewer's Needs you list: Catch up holds those too. A reconnect that carried
-  // `threads` over (it replays the thread changes it missed) naming the Needs you version the rail was last read at,
-  // within 5 minutes of that read, moved nothing, so the rail is not read again for it. Any other connect reads it: a
-  // change no event names (a thread the viewer can no longer see) is caught by one at least that often.
+  // A Needs you change while connected reads nothing here (Nov 3): an unread mention already came as its thread's
+  // `activity` (above), and what no event names (an ask answered, a held message let go) waits for the safety read. A
+  // reconnect that carried `threads` over (it replays the thread changes it missed) naming the Needs you version the
+  // rail was last read at, within 5 minutes of that read, moved nothing, so the rail is not read again for it. Any other
+  // connect reads it: a change no event names (a thread the viewer can no longer see) is caught by one at least that often.
   liveOn('needs', (d: NeedsEvent) => {
+    if (!THREADS.on || !d?.connect) return;
     const fresh = Date.now() - THREADS.readAt < THREADS_CONNECT_FRESH_MS;
-    if (!THREADS.on || fresh && d?.carried?.includes('threads') && d.version === THREADS.needsSeen) return;
-    if (!d?.connect) THREADS.gen++;
+    if (fresh && d.carried?.includes('threads') && d.version === THREADS.needsSeen) return;
     threadsRecount();
   });
   liveOn('reset', () => { liveSoon('threads-rail', threadsLoad, 400); threadViewsLive('reset', {}); });

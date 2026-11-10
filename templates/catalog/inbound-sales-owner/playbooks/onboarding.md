@@ -8,9 +8,9 @@ leads already waiting, and both routines checked.
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub goal list
-    hub calendar list
+    tico task show <id>
+    tico goal list
+    tico calendar list
 
 Check what you can already reach: a CRM entry in your access, the sales mailbox, the form leads on the
 task, imported calls. Note any goal that names booked calls, pipeline or closes: it sets the number you are
@@ -40,7 +40,7 @@ some, record those and use the defaults for the rest, saying which you used.
    `knowledge/team.md`, which names the person who takes calls. Which prices or terms may I quote, if any? I quote only
    what is recorded.
 5. Who approves a reply before it leaves? (Default: you, on the task.) Which mailbox and calendar should replies come
-   from? Sets the sender and the approval step. Nothing reaches a lead without that approval, once mail sending is on
+   from? Sets the sender and who OKs each send. Nothing reaches a lead without that OK, once mail sending is on
    in Tico.
 
 ## 4. Record
@@ -56,19 +56,19 @@ draft, not yet reviewed". Nothing is sent.
 
 ## 6. Check the routines
 
-Setting you up switched on your first routine, the inbound sweep. Check it with `hub automation list`; if it shows off,
-run `hub automation update <id> --enable`. Then turn on the weekly read-out the same way, by its id from that list:
-`hub automation update <id> --enable` for `weekly-inbound-readout`.
+Setting you up switched on your first routine, the inbound sweep. Check it with `tico automation list`; if it shows off,
+run `tico automation update <id> --enable`. Then turn on the weekly read-out the same way, by its id from that list:
+`tico automation update <id> --enable` for `weekly-inbound-readout`.
 
 Tell the human in one line each: "I will sweep inbound leads on weekdays at 09:00, 11:00, 13:00, 15:00 and 17:00 and
 prepare replies for your review." and "I will publish the inbound read-out every Monday at 08:00." They can change or
 turn off either one any time; there is nothing to approve.
 
 Record both in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule
-or to leave one off, adjust `knowledge/inbound-method.md` and the routine to match (`hub automation update <id>`, with
+or to leave one off, adjust `knowledge/inbound-method.md` and the routine to match (`tico automation update <id>`, with
 `--disable` to turn it off).
 
-Last, once the answers and the first sweep are recorded, not before, run `hub bot setup-done`. It tells {{app_name}}
+Last, once the answers and the first sweep are recorded, not before, run `tico bot setup-done`. It tells {{app_name}}
 your setup is done: it clears your "Needs setup" mark and lets the routines run. Until then nothing you have runs on its own.
 
-    hub bot setup-done
+    tico bot setup-done

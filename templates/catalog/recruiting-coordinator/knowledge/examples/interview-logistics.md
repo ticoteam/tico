@@ -31,5 +31,5 @@ candidate messages wait for a person to turn mail sending on. First draft, not y
 - SS-09: 3 of 3 scorecards in. Proposed 2026-10-01 16:00 for the panel, 30 minutes. Pack attached to the task.
 
 ## Sources
-- `hub calendar list` for six interviewers, read 2026-09-30 07:55. `knowledge/schedule.md`.
+- `tico calendar list` for six interviewers, read 2026-09-30 07:55. `knowledge/schedule.md`.
 ```

@@ -28,7 +28,7 @@ declare const window: Window & typeof globalThis & {
 declare const S: {route: string; lastRead: {tasks: unknown}};
 declare const DASH: {view?: unknown} | undefined;
 declare const STRAT: unknown;
-declare const TASKS_ST: {read?: unknown} | undefined;
+declare const TASKS_ST: {loading: boolean} | null | undefined;
 declare const AU: {list?: unknown} | undefined;
 
 const LAP = ['#/overview', '#/strategy', '#/updates', '#/tasks', '#/automations'];
@@ -115,7 +115,7 @@ const READ: Record<string, () => boolean> = {
   '#/overview': () => !!DASH?.view && !!document.querySelector('#dash-grid > :not(.skel):not(.skel-row)'),
   '#/strategy': () => !!STRAT && !document.querySelector('#strat-body .skel-row'),
   '#/updates': () => !!document.querySelector('.upd-feed > :not(.upd-skel)'),
-  '#/tasks': () => !!TASKS_ST?.read,
+  '#/tasks': () => !!TASKS_ST && !TASKS_ST.loading,
   '#/automations': () => Array.isArray(AU?.list),
 };
 
@@ -170,9 +170,10 @@ run('tab-switch-smooth', ['org', 'toured', 'groups', 'automations'], async ({hub
     assert.ok(v.late.length <= Math.max(2, v.keys / 10), `${tag}: ${v.route} drew ${v.late.length} of ${v.keys} texts after its first frame: ${JSON.stringify(v.late.slice(0, 8))}`);
   assert.ok(rows.length && rows.every(Boolean), `${tag}: no team list row was redrawn by a page change: ${JSON.stringify(rows)}`);
 
-  // Leaving Tasks before its first read answers still keeps that answer: the next visit draws it, no skeleton.
+  // Leaving Tasks before its first read (You's Needs you) answers still keeps that answer: the next visit draws it, no
+  // skeleton.
   let release!: () => void, held = new Promise<void>(r => { release = r; });
-  await page.route(/\/api\/v2\/tasks\?lane=company&status=/, async route => { await held; route.continue().catch(() => {}); });
+  await page.route(/\/api\/v2\/needs-you$/, async route => { await held; route.continue().catch(() => {}); });
   await page.evaluate(() => { S.lastRead.tasks = null; window.__watch = 3; });
   await go(page, '#/tasks');
   await page.waitForFunction(() => S.route === '#/tasks' && !!document.querySelector('#main .skel, #main .skel-row'));
@@ -180,7 +181,7 @@ run('tab-switch-smooth', ['org', 'toured', 'groups', 'automations'], async ({hub
   await page.waitForFunction(() => S.route === '#/strategy');
   release();
   await page.waitForFunction(() => !!S.lastRead.tasks, null, {timeout: t(5000)}).catch(() => {});   // the assert below says why
-  await page.unroute(/\/api\/v2\/tasks\?lane=company&status=/);
+  await page.unroute(/\/api\/v2\/needs-you$/);
   await page.evaluate(() => { window.__back = window.__skels.length; });
   await go(page, '#/tasks');
   await page.waitForFunction(() => S.route === '#/tasks');

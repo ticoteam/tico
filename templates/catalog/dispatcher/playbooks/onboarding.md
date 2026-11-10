@@ -8,9 +8,9 @@ written down, tomorrow's plan built from a real export, and the first routine ch
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub team show
-    hub calendar list
+    tico task show <id>
+    tico team show
+    tico calendar list
 
 If a jobs export is attached, read its columns (job, customer area, type, length, window, assigned).
 Use observed job lengths from past exports where they exist.
@@ -41,17 +41,17 @@ reviewed", beside how tomorrow is planned today if the human shares it, so they 
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "tomorrow's plan will be ready at 15:00 every weekday, with the arrival notices ready to send when a person has turned mail sending on in Tico." They
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "tomorrow's plan will be ready at 15:00 every weekday, with the arrival notices ready to send when a person has turned mail sending on in Tico." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub automation update <id>`, with `--disable` to turn it off).
+(`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

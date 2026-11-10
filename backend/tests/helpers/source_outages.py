@@ -6,4 +6,12 @@ def notices(c):
 
 
 def managers(c):
-    c.execute("UPDATE task_types SET manager='coo',role='engineering' WHERE id='general'")
+    """An Engineering pipeline the COO manages: a source outage tells its manager."""
+    from backend import hubdb as H
+
+    now = H.now()
+    c.execute(
+        "INSERT INTO pipelines(id,name,manager_id,preset,created_at,updated_at) "
+        "VALUES('outage-engineering','Outage engineering','bot:coo','engineering',?,?)",
+        (now, now),
+    )

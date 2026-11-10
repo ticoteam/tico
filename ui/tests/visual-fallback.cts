@@ -15,8 +15,9 @@ const ORIGIN = 'https://tico-ui.test';
 type Kind = 'image' | 'video' | 'audio' | 'svg' | 'page';
 const TYPES: {[k in Kind]: [string, string]} = {image: ['.png', 'image/png'], video: ['.mp4', 'video/mp4'], audio: ['.wav', 'audio/wav'], svg: ['.svg', 'image/svg+xml'], page: ['.html', 'text/html']};
 declare const VIEW: {items: {fileId: string; version: number}[]};
-declare const TASKS_ST: {tasks: {id: string}[]; loading?: boolean};
-declare function taskModalShow(task: {id: string} | undefined): void;
+declare const TASKS_ST: {loading?: boolean};
+declare function taskModalShow(task: unknown): Promise<void>;
+declare function v2Get(path: string): Promise<unknown>;
 declare function $(selector: string): {close(): void; tfOpen?: {id: string; n: number}};
 declare function visualCardsHTML(files: Record<string, unknown>[], options: {key: string}): string;
 declare function visualSwap(root: Element, html: string): void;
@@ -73,7 +74,7 @@ const A = (id: string, kind: Kind, over: Record<string, unknown> = {}) => ({id, 
       }
       return json(unrouted(p));
     });
-    const task = {id: 't1', title: 'Launch page', owner_id: 'bot:designer', requester_id: 'human:ana', status: 'review', lane: 'company', rank: 1, labels: [], links: [],
+    const task = {id: 't1', title: 'Launch page', owner_id: 'bot:designer', requester_id: 'human:ana', status: 'open', lane: 'company', rank: 1, labels: [], links: [],
       parts: {total: 0, done: 0}, version: 1, created_at: now, updated_at: now, body: 'Make the page.', attachments: []};
     const tver = (id: string, mime: string) => ({n: 1, size: 1000, mime, sha256: 'x', created_at: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
       width: null, height: null, duration_ms: null, media_state: 'none', url: `/api/v2/files/${id}?v=1`, poster_url: null, thumb_url: null});
@@ -126,9 +127,9 @@ const A = (id: string, kind: Kind, over: Record<string, unknown> = {}) => ({id, 
     await page.evaluate(() => $('#doc-viewer').close());
 
     // ---- task conversation: the same; Open shows the page in the task's own file panel
-    await page.goto(ORIGIN + '/#/tasks?view=board');
+    await page.goto(ORIGIN + '/#/tasks');
     await page.waitForFunction(() => typeof TASKS_ST !== 'undefined' && TASKS_ST && !TASKS_ST.loading);
-    await page.evaluate(() => taskModalShow(TASKS_ST.tasks.find(t => t.id === 't1')));
+    await page.evaluate(async () => { const r = await v2Get('/v2/tasks/t1') as {task: unknown}; await taskModalShow(r.task); });
     const c1 = page.locator('#task-modal .tcomment', {hasText: 'Media attached.'}), c2 = page.locator('#task-modal .tcomment', {hasText: 'Page and logo attached.'});
     await c1.locator('figure.vcard').nth(2).waitFor();
     assert.deepEqual(await c1.locator('figure.vcard').evaluateAll(els => els.map(e => [e.dataset.kind, e.dataset.freshSrc])),

@@ -44,7 +44,7 @@ def _delivery(args):
 
 
 def _rules_args(args):
-    """`hub rules` flags as the API takes them: the Who and With flags become scope objects, the rest pass as they are."""
+    """`tico rules` flags as the API takes them: the Who and With flags become scope objects, the rest pass as they are."""
 
     def scope(names, everyone=False, all_bots=False, outside_editions=False):
         out = {}
@@ -74,10 +74,10 @@ def _rules_args(args):
     if args.fn == "rules read" and not getattr(args, "source", None):
         args.fn = "rules get"  # one rule by id; with --from it is a document read (hub_rules_read)
     if args.fn == "rules add" and getattr(args, "file_version", None) and not getattr(args, "quote", None):
-        raise SystemExit("hub rules add: --version goes with --file and --quote")
+        raise SystemExit("tico rules add: --version goes with --file and --quote")
     if args.fn == "rules add" and getattr(args, "quote", None):
         if not getattr(args, "file_id", None):
-            raise SystemExit("hub rules add: a quote needs --file (the document it is in)")
+            raise SystemExit("tico rules add: a quote needs --file (the document it is in)")
         args.cite = {"file_id": args.file_id, "section": getattr(args, "section", None) or "", "quote": args.quote}
         if getattr(args, "file_version", None):
             args.cite["version"] = args.file_version
@@ -98,7 +98,7 @@ def _rules_args(args):
 
 
 def _directory_args(args):
-    """`hub directory` flags as the tools take them: a KEY=VALUE match is an object, --set pairs are the values object, and
+    """`tico directory` flags as the tools take them: a KEY=VALUE match is an object, --set pairs are the values object, and
     --option pairs are an attribute's options. The pairs are the command line's; the tool takes objects."""
     if getattr(args, "match", None):
         args.match = {args.match[0]: args.match[1]}
@@ -108,6 +108,11 @@ def _directory_args(args):
     if getattr(args, "options", None) is not None:
         args.options = [{"key": key, "label": label} for key, label in args.options]
     return args
+
+
+def unwrap(result):
+    """A write's task as the CLI prints it: the task alone when the answer is only `{"task": ...}`."""
+    return result["task"] if isinstance(result, dict) and set(result) == {"task"} else result
 
 
 def via_tool(client, args, **more):
@@ -135,7 +140,7 @@ def via_tool(client, args, **more):
 
 
 def automation(client, args):
-    """`hub automation ...`: the hub_automation_* tools, with flows read from a file or stdin."""
+    """`tico automation ...`: the hub_automation_* tools, with flows read from a file or stdin."""
     from clients import hubtools
 
     def flow(path):
@@ -295,24 +300,20 @@ def counsel_held(args):
         raise SystemExit(f"{fn} is not available to Counsel: it has no credentials and sends nothing")
 
 
-# The aliases hubcli.parser() declares. Argparse keeps the spelling typed (`hub tasks list` sets cmd to "tasks"), and the
+# The aliases hubcli.parser() declares. Argparse keeps the spelling typed (`tico tasks list` sets cmd to "tasks"), and the
 # dispatch below tests the canonical names, so each alias is renamed once, here, before anything is dispatched on it.
 COMMAND_ALIASES = {
     "tasks": "task",
-    "approvals": "approval",
     "automations": "automation",
     "bots": "bot",
     "rule": "rules",
 }
-SUBCOMMAND_ALIASES = {("task", "defer"): "later"}
 
 
 def canonical_names(args):
-    """Rename an aliased command or subcommand on a parsed line to the name it stands for. `fn` is already the canonical
-    name, set by each leaf of the parser."""
+    """Rename an aliased command on a parsed line to the name it stands for. `fn` is already the canonical name, set by
+    each leaf of the parser."""
     args.cmd = COMMAND_ALIASES.get(args.cmd, args.cmd)
-    if hasattr(args, "sub"):
-        args.sub = SUBCOMMAND_ALIASES.get((args.cmd, args.sub), args.sub)
     return args
 
 
@@ -357,8 +358,6 @@ def run(args, who=None):
     if args.cmd == "feedback":
         return via_tool(client, args)
     if args.cmd == "call":
-        return via_tool(client, args)
-    if args.cmd in ("requirements", "requirement"):
         return via_tool(client, args)
     if args.cmd in ("card", "pin"):
         return via_tool(client, args)
@@ -466,8 +465,6 @@ def run(args, who=None):
         "needs-you show",
         "origin show",
         "brief",
-        "pipeline",
-        "pipeline-manager",
         "mcp stats",
         "calendar list",
         "calendar status",
@@ -502,7 +499,7 @@ def run(args, who=None):
             return hubtools.BY_NAME["hub_run_export"]["fn"](client, {"run": args.run})
         found = hubtools.run_export_full(client, args.run)
         return {"written": hubtools.write_fixture(found, Path(args.out or "."))}
-    if fn in ("task child create", "task tree", "task bulk", "task model", "task meetings", "task context"):
+    if fn in ("task child create", "task tree", "task model", "task meetings", "task context"):
         return via_tool(client, args)
     if fn in (
         "task requesters",
@@ -551,9 +548,10 @@ def run(args, who=None):
 
         key = os.environ.get("HUB_OPERATION_ID")
         if fn == "support send":
-            return hubtools.support_send(client, {"approval": args.approval, "operation_id": key})
+            return hubtools.support_send(client, {"ok": args.ok, "operation_id": key})
         text = Path(args.file).read_text(encoding="utf-8") if args.file else args.message
-        return hubtools.support_report(client, {"message": text, "include_ids": not args.no_ids, "operation_id": key})
+        report = {"message": text, "include_ids": not args.no_ids, "task": args.task, "operation_id": key}
+        return hubtools.support_report(client, report)
     if args.cmd in ("api", "computer", "credential", "support", "health") or fn == "message redact":
         return botops_tools(client, args)
     if args.cmd == "classify":
@@ -669,6 +667,8 @@ def run(args, who=None):
         if fn == "service-key revoke":
             return client.post("service-keys/" + args.id + "/revoke", {}, key=os.environ.get("HUB_OPERATION_ID"))
         return client.get("service-keys")["keys"]
+    if args.cmd == "ok":
+        return unwrap(via_tool(client, args))
     if args.cmd == "webhook":
         from clients import hubtools
 
@@ -781,100 +781,72 @@ def run(args, who=None):
         return post(f"notes/{args.id}/cancel", {})["note"]
     if cmd == "task":
         asked = getattr(args, "on_behalf_of", None) or False
-        if sub in ("type", "types"):
-            # The task type tools: BotOps changes a type as the person who asked it (clients/hubtools.py _as_person).
+        if sub == "create":
             from clients import hubtools
 
-            name, steps_file = getattr(args, "name", None), getattr(args, "steps_file", None)
-            edits = name is not None or bool(steps_file)
-            if sub == "type":
-                change = args.type_sub
-            else:  # `task types`: the older form, which lists unless told to change something
-                change = "delete" if args.delete else ("update" if args.id else "create") if edits else None
-            if change is None:
-                return client.get("task-types" + ("/" + args.id if args.id else ""))
-            if change != "create" and not args.id:
-                raise ValueError("Choose a type to " + change)
-            if change == "create" and name is None:
-                raise ValueError("Name the new type with --name")
-            fields = {"operation_id": key, **({"id": args.id} if change != "create" else {})}
-            if change != "delete":
-                for name in ("name", "bots", "numbered", "steps_only", "default_visibility"):
-                    if getattr(args, name, None) is not None:
-                        fields[name] = getattr(args, name)
-                if steps_file:
-                    fields["steps"] = json.loads(Path(steps_file).read_text())
-            return hubtools.BY_NAME["hub_task_type_" + change]["fn"](client, fields)
-        if sub == "create":
-            body = Path(args.body_file).read_text() if args.body_file else args.body
-            payload = {
-                "owner": target(args.owner),
+            fields = {
+                "owner": args.owner,
                 "title": args.title,
-                "body": body,
+                "body": Path(args.body_file).read_text() if args.body_file else args.body,
                 "due": args.due,
                 "goal_id": getattr(args, "goal", None) or None,
+                "labels": [x.strip() for one in args.label or [] for x in one.split(",") if x.strip()] or None,
+                "links": list(args.link) if args.link else None,
+                "readers": list(args.readers) if getattr(args, "readers", None) else None,
+                "operation_id": key,
             }
-            for field in ("check_back_at", "check_back_note"):
-                if getattr(args, field, None) is not None:
-                    payload[field] = getattr(args, field)
-            if args.parent:
-                payload["relations"] = [{"task": args.parent, "kind": "parent"}]
-            if getattr(args, "private", None) is not None:
-                payload["private"] = args.private
-            if getattr(args, "readers", None):
-                payload["readers"] = list(args.readers)
-            if getattr(args, "follow", None):
-                payload["follow"] = True
-            if getattr(args, "from_private", False):
-                payload["from_private"] = True
-            for field in ("type", "step", "number", "qa", "change_paths", "qa_not_checkable_live"):
-                if getattr(args, field, None) is not None:
-                    payload[field] = (getattr(args, field) == "yes") if field == "qa" else getattr(args, field)
-            if args.label:
-                payload["labels"] = [x.strip() for one in args.label for x in one.split(",") if x.strip()]
-            if getattr(args, "blocker", None):
-                repo, status, endpoint = args.blocker
-                if not status.isdigit():
-                    raise SystemExit("hub: --blocker STATUS is an HTTP status number, e.g. 403")
-                payload["blocker"] = {"repo": repo, "status": int(status), "endpoint": endpoint}
-            if args.top:
-                payload["top"] = True
-            if args.link:
-                payload["links"] = list(args.link)
-            if getattr(args, "next_run", False):
-                payload["next_run"] = True
-            payload.update(_delivery(args))
-            if getattr(args, "request_id", None):
-                payload["request_id"] = args.request_id
-            for field in ("model", "effort", "harness"):
-                if getattr(args, field, None):
-                    payload[field] = getattr(args, field)
-            links = s3links.apply(client, payload, ("body",))
-            return s3links.annotate(post("tasks", payload), links)
+            for field in (
+                "parent",
+                "pipeline",
+                "private",
+                "follow",
+                "from_private",
+                "top",
+                "request_id",
+                "number",
+                "model",
+                "effort",
+                "harness",
+                "visibility",
+                "public_title",
+                "public_summary",
+            ):
+                fields[field] = getattr(args, field, None)
+            return unwrap(hubtools.task_create(client, {k: v for k, v in fields.items() if v is not None}))
         if sub == "show":
+            from clients import hubtools
+
             ids = args.id if isinstance(args.id, list) else [args.id]
             if len(ids) > 1:  # one read for several (hub_task_show_many), not one GET each
-                from clients import hubtools
-
                 return hubtools.BY_NAME["hub_task_show_many"]["fn"](client, {"ids": ids})
-            return client.get("tasks/" + ids[0])
-        if sub == "check-back":
-            return post(
-                f"tasks/{args.id}/check-back", {"at": args.at or args.in_duration, "note": args.check_back_note}
-            )
+            return hubtools.task_show(client, {"id": ids[0]})
         if sub == "run":
             return post(f"tasks/{args.id}/run-now", {})
-        if sub in ("later", "defer"):  # `defer` is the older name
-            return post(
-                f"tasks/{args.id}/later",
-                {"after": args.after, "at": args.at, "next_run": bool(args.next_run), "handled": bool(args.handled)},
-            )
-        if sub == "waive-qa":
-            return post(f"tasks/{args.id}/qa-waiver", {"head": args.head, "reason": args.reason})
-        if sub in ("list", "snooze", "unsnooze", "readers", "followers", "follow", "unfollow"):
+        if sub in ("list", "readers", "followers", "follow", "unfollow"):
             return via_tool(client, args)
-        if sub == "question":
-            return via_tool(client, args)
+        if sub in (
+            "done",
+            "move",
+            "close",
+            "reassign",
+            "ask",
+            "answer",
+            "thumbs",
+            "file",
+            "snooze",
+            "unsnooze",
+            "update",
+        ):
+            # The engine's commands (docs/pipelines-v3.md S16): each sends the version the bot passed, never one read now.
+            return unwrap(via_tool(client, args))
+        if sub == "give":  # `--to <person>`, or the person as a third word
+            args.to = args.to or args.to_person
+            del args.to_person
+            return unwrap(via_tool(client, args))
+        if sub == "label":
+            split = lambda values: [x.strip() for one in values or [] for x in one.split(",") if x.strip()]
+            args.add, args.remove = split(args.add), split(args.remove)
+            return unwrap(via_tool(client, args))
         if sub == "comment":
             from clients.task_review import attachment
 
@@ -904,17 +876,15 @@ def run(args, who=None):
             body.update(_delivery(args))
             if getattr(args, "public", None):
                 body["public"] = True
-            if getattr(args, "approval_id", None):
-                body["approval_id"] = args.approval_id
+            if getattr(args, "ok", None):
+                body["approval_id"] = args.ok
             links = s3links.apply(client, body, ("text",))
             result = s3links.annotate(post(f"tasks/{args.id}/comments", body, delegate=asked), links)
             return {**result, "visuals_local": local} if local and isinstance(result, dict) else result
-        if sub == "answers":
-            return client.get(f"tasks/{args.id}/answers")
         if sub == "comment-edit":
             body = {"text": args.text}
-            if getattr(args, "approval_id", None):
-                body["approval_id"] = args.approval_id
+            if getattr(args, "ok", None):
+                body["approval_id"] = args.ok
             links = s3links.apply(client, body, ("text",))
             return s3links.annotate(post(f"tasks/{args.id}/comments/{args.comment_id}", body), links)
         if sub == "comment-delete":
@@ -937,30 +907,7 @@ def run(args, who=None):
                 delegate=asked,
             )
         if sub == "relate":
-            return post(f"tasks/{args.id}/relations", {"task": args.task, "kind": args.kind, "remove": args.remove})
-        if sub == "wait":
-            return post(
-                f"tasks/{args.id}/waits",
-                {
-                    "on": args.wait_on,
-                    "remove": args.remove,
-                    **({"note": args.note} if getattr(args, "note", None) else {}),
-                },
-            )
-        if sub == "label":
-            current = client.get("tasks/" + args.id)["task"]
-            labels = [x for x in current.get("labels") or []]
-            for one in args.remove or []:
-                for x in one.split(","):
-                    labels = [y for y in labels if y != x.strip().lower()]
-            for one in args.add or []:
-                for x in one.split(","):
-                    if x.strip() and x.strip().lower() not in labels:
-                        labels.append(x.strip().lower())
-            body = {"version": current["version"], "labels": labels}
-            if getattr(args, "approval_id", None):
-                body["approval_id"] = args.approval_id
-            return post("tasks/" + args.id, body, delegate=asked)
+            return via_tool(client, args)  # the tool says what to do instead of blocks and blocked_by
         if sub == "attach":
             path = Path(args.file)
             body = {"name": args.name or path.name}
@@ -984,36 +931,6 @@ def run(args, who=None):
             except UnicodeDecodeError:
                 body["content_base64"] = base64.b64encode(data).decode("ascii")
             return post(f"tasks/{args.id}/files", body)
-        if sub in ("update", "close", "done"):
-            current = client.get("tasks/" + args.id)["task"]
-            body = {"version": current["version"], "note": args.note}
-            if sub == "done":
-                body["status"] = "done"
-            for field in ("verdict", "verdict_head"):
-                if getattr(args, field, None) is not None:
-                    body[field] = getattr(args, field)
-            if getattr(args, "brief", False):
-                body["quiet"] = True
-            if sub == "close":
-                body["close"] = True
-            elif sub == "update":
-                body.update(
-                    {
-                        "status": args.status,
-                        "owner": args.owner,
-                        "due": args.due,
-                        "goal_id": getattr(args, "goal", None),
-                    }
-                )
-                if getattr(args, "private", None) is not None:
-                    body["private"] = args.private
-                for field in ("title", "type", "step", "step_rank", "number"):
-                    if getattr(args, field, None) is not None:
-                        body[field] = getattr(args, field)
-                if getattr(args, "waiting_on", None) is not None:
-                    body["waiting_on"] = args.waiting_on
-            links = s3links.apply(client, body, ("note",))
-            return s3links.annotate(post("tasks/" + args.id, body, delegate=asked), links)
     if cmd == "goal":
         if sub in ("create", "update"):
             args.parent_id = args.parent
@@ -1194,33 +1111,6 @@ def run(args, who=None):
         return automation(client, args)
     if cmd == "release":
         return via_tool(client, args)
-    if cmd == "approval":
-        if sub == "show":
-            return client.get("approvals/" + args.id)
-        if sub == "list":
-            query = {"status": args.status, "limit": args.limit, "offset": args.offset}
-            query.update(
-                {k: v for k, v in (("from", args.from_actor), ("before", args.before), ("since", args.since)) if v}
-            )
-            return client.get("approvals", **query)
-        if sub == "read-back":
-            return post("assistant/read-back", {"approvals": args.ids, "note": args.note})
-        if sub in ("approve", "decline"):
-            return post(
-                "approvals/" + args.id,
-                {"decision": sub + "d", "note": args.note},
-                delegate=getattr(args, "on_behalf_of", None) or False,
-            )
-        payload = json.loads(Path(args.payload_file).read_text() if args.payload_file else args.payload or "{}")
-        return post(
-            "approvals",
-            {
-                "kind": args.kind,
-                "payload": payload,
-                "task_id": args.task,
-                "supersedes_approval": getattr(args, "supersedes", None),
-            },
-        )
     if fn.startswith("bot status"):
         if fn == "bot status set":
             bot = args.bot or actor.split(":", 1)[-1]
@@ -1254,7 +1144,7 @@ def run(args, who=None):
 
 
 def botops_tools(client, args):
-    """`hub api`, `hub credential ...`, `hub computer list`, `hub health check`, `hub message redact`, `hub support file`: the
+    """`tico api`, `tico credential ...`, `tico computer list`, `tico health check`, `tico message redact`, `tico support file`: the
     tool of the same name. A secret is read from standard input, never from the command line."""
     from clients import hubtools
 
@@ -1294,7 +1184,7 @@ def botops_tools(client, args):
 
 # ----------------------------------------------------------------------------- bots
 def bots(client, args):
-    """`hub template list`, `hub bot create|check` and the bot commands that act as the requester: how BotOps sets the
+    """`tico template list`, `tico bot create|check` and the bot commands that act as the requester: how BotOps sets the
     chosen bots up.
 
     The materialization is `clients/catalog.py`, which needs no network. What comes from the
@@ -1402,7 +1292,7 @@ def bots(client, args):
         problems = catalog.check(folder_dir(workspace, folder_of(client, args.slug), args.slug), args.slug)
         return {"ready": not problems, "problems": problems}
     if not args.template:
-        raise APIError("usage", "hub bot create --template T builds the bot; --record-only only registers it")
+        raise APIError("usage", "tico bot create --template T builds the bot; --record-only only registers it")
     record = onboarding(client)
     chosen = (record.get("selected") or {}).get(args.slug) or {} if args.slug else {}
     registered = register_for_requester(client, args, chosen)
@@ -1466,7 +1356,7 @@ def github_repository(client, slug, path):
             return {"skipped": exc.detail}
         if exc.code in ("forbidden", "not_found"):
             # A bot the server has not registered stays on this computer, as before.
-            return {"skipped": exc.detail, "note": f"register the bot, then hub bot repo-create {slug} --empty"}
+            return {"skipped": exc.detail, "note": f"register the bot, then tico bot repo-create {slug} --empty"}
         if exc.code == "github_repo_exists":
             return {"repository": path.name, "existing": True, "note": exc.detail}
         if exc.code == "github_permission_missing":
@@ -1482,8 +1372,8 @@ def github_repository(client, slug, path):
 
 
 def register_for_requester(client, args, chosen):
-    """`hub bot create` in a turn a person's chat message started also registers the bot with the server as
-    them (planned, they own it), so `hub bot update` and its routines have a bot to act on. A refusal for what that
+    """`tico bot create` in a turn a person's chat message started also registers the bot with the server as
+    them (planned, they own it), so `tico bot update` and its routines have a bot to act on. A refusal for what that
     person may not do (no create_bots, the limit) stops the build; a turn no person started (onboarding, a
     routine) registers nothing here, as before."""
     try:
@@ -1590,7 +1480,7 @@ from clients.hubtools import query_search  # (one search, shared with the hub_to
 
 # ----------------------------------------------------------------------------- decisions
 def judge(client, args):
-    """`hub decision ask`: load the questions on this side, send them inline, print the answers.
+    """`tico decision ask`: load the questions on this side, send them inline, print the answers.
 
     The hub knows nothing about question sets (questions/README.md): the set is read from this
     checkout, a dynamic choice is completed from `--option`, and the label is the set's
@@ -1600,9 +1490,9 @@ def judge(client, args):
     if args.list:
         return J.list_sets()
     if bool(args.question_set) == bool(args.questions_file):
-        raise APIError("usage", "hub decision ask takes --set <name> or --questions-file <file>, and --state-file")
+        raise APIError("usage", "tico decision ask takes --set <name> or --questions-file <file>, and --state-file")
     if not args.state_file:
-        raise APIError("usage", "hub decision ask needs --state-file <json> (`-` for stdin)")
+        raise APIError("usage", "tico decision ask needs --state-file <json> (`-` for stdin)")
     try:
         if args.question_set:
             chosen = J.load_set(args.question_set)
@@ -1661,11 +1551,11 @@ def integration_text(page):
     if page["queries"]:
         out += [
             "",
-            f"## Queries ({len(page['queries'])}; `hub tool query-search {page['service']} <term>` searches, `--id <id>` prints one)",
+            f"## Queries ({len(page['queries'])}; `tico tool query-search {page['service']} <term>` searches, `--id <id>` prints one)",
         ]
         out += [f"  {q['id']:<44} {q['title']}" for q in page["queries"]]
     notes = page.get("learnings") or []
-    out += ["", f"## Learnings ({len(notes)}; add one with `hub tool learn {page['service']} \"...\"`)"]
+    out += ["", f"## Learnings ({len(notes)}; add one with `tico tool learn {page['service']} \"...\"`)"]
     out += [f"  {n['created_at'][:10]}  {n['actor']}: {n['text']}" for n in notes] or ["  none yet"]
     return "\n".join(out)
 
@@ -1731,7 +1621,7 @@ def sql_csv(result):
     return out.getvalue().rstrip("\n")
 
 
-# `hub task worktree add` at the bot's worktree limit: Tico recorded a wait and wakes the task; end the turn.
+# `tico task worktree add` at the bot's worktree limit: Tico recorded a wait and wakes the task; end the turn.
 WORKTREE_WAIT_EXIT = 3
 
 
@@ -1769,7 +1659,7 @@ def _table(rows, cols):
 
 
 def growth_text(fn, result):
-    """`hub brand|growth ...` for a person: the summary as text, lists as tables, the rest as indented lines.
+    """`tico brand|growth ...` for a person: the summary as text, lists as tables, the rest as indented lines.
     `--json` prints the API response instead."""
     if not isinstance(result, dict):
         return "\n".join(_plain(result))
@@ -1848,7 +1738,7 @@ def growth_text(fn, result):
 
 
 def strategy_section_text(result, key):
-    """One section of the published strategy as text, for `hub strategy show --section`."""
+    """One section of the published strategy as text, for `tico strategy show --section`."""
     current = result.get("current") if isinstance(result, dict) else None
     if not current:
         return "Nothing published yet."
@@ -1869,7 +1759,7 @@ def email_text(result, action):
         if not result['count']:
             return text
         undo = result['undo']
-        words = ['hub', 'email', undo['action'].replace('_', '-'), result['mailbox']]
+        words = ['tico', 'email', undo['action'].replace('_', '-'), result['mailbox']]
         if 'label' in undo:
             words.append(undo['label'])
         command = shlex.join(words + undo['ids'])
@@ -1946,6 +1836,8 @@ def directory_text(fn, result):
 
 
 def main(args, who=None):
+    from clients import hubtools
+
     try:
         result = run(args, who)
         if (
@@ -1990,6 +1882,13 @@ def main(args, who=None):
             print(result["text"])
         elif args.fn == "meeting read" and getattr(args, "notes", False):
             print(result["text"])
+        elif (
+            args.fn == "task show"
+            and not getattr(args, "json", False)
+            and isinstance(result, dict)
+            and "text" in result
+        ):
+            print(result["text"])  # the lines a bot reads (docs/pipelines-v3.md S16); --json prints the task
         elif args.fn == "bot go-live" and isinstance(result, dict) and result.get("state") == "waiting_for_repository":
             # Not an error and nothing to retry: Tico finishes it when the computer reports the repository.
             print(
@@ -2003,11 +1902,11 @@ def main(args, who=None):
             return 0 if isinstance(result, dict) and result.get("approved") else 1
         if isinstance(result, dict) and result.get("readback"):  # what a relation write stored, direction and all
             for line in result["readback"]:
-                print("hub: stored: " + str(line), file=sys.stderr)
+                print("tico: stored: " + str(line), file=sys.stderr)
         if isinstance(result, dict) and result.get("warning"):  # saved, but a person should know why it waits
-            print("hub: " + str(result["warning"]), file=sys.stderr)
+            print("tico: " + str(result["warning"]), file=sys.stderr)
         if isinstance(result, dict) and result.get("held"):  # a bot's message to a bot waits for its next run
-            print("hub: " + str(result["held"]), file=sys.stderr)
+            print("tico: " + str(result["held"]), file=sys.stderr)
         return 0
     except APIError as exc:
         if exc.code == "worktree_limit" and isinstance(exc.extra.get("wait"), dict):
@@ -2019,6 +1918,11 @@ def main(args, who=None):
             # Nothing to retry and nothing for the caller to build: the owner's Needs you task holds the fix.
             print(f"{exc.detail}.")
             return 2
+        if args.cmd == "task" and any(k in exc.extra for k in hubtools.REFUSAL_FIELDS):
+            # A task refusal: the line, what is missing and the commands allowed next, so the bot acts instead of
+            # retrying the same command.
+            print(hubtools.refusal_text(hubtools.error_payload(exc), getattr(args, "id", None)))
+            return 2
         print(
             json.dumps(
                 {"error": exc.code, "detail": exc.detail, "retryable": exc.retryable, "operation_id": exc.operation_id},
@@ -2026,3 +1930,9 @@ def main(args, who=None):
             )
         )
         return 1 if exc.retryable else 2
+    except ValueError as exc:
+        if args.cmd != "task":
+            raise
+        # What the command needs first, in its own words ("Add --version N: ..."), as the MCP tool says it.
+        print(json.dumps({"error": "usage", "detail": str(exc), "retryable": False}, indent=2))
+        return 1

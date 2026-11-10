@@ -9,7 +9,7 @@ max_run_minutes: 60
 
 # Routines this bot owns. The server runs the clock and turns each occurrence into a task.
 # The morning message runs once a day for the whole Assistant, not per person: for each person it sends at most one
-# message (`hub assistant morning`), or none on a quiet day. The id stays `daily-sweep` for installs that have it.
+# message (`tico assistant morning`), or none on a quiet day. The id stays `daily-sweep` for installs that have it.
 # See docs/routines.md for the shape.
 routines:
   - id: daily-sweep

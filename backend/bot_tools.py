@@ -17,8 +17,6 @@ lists it as changed). A change keeps the entry where it is: one task with the wh
 removal followed by an add.
 """
 
-import json
-
 from fastapi import Request
 
 from clients import access_entry, harness_manifests, mcp_servers
@@ -662,7 +660,7 @@ def _task_text(verb, bot, name, entry, computer, repo=None):
                 if entry.get("mcp")
                 else []
             ),
-            "Commit the bot repository locally and run `hub bot check "
+            "Commit the bot repository locally and run `tico bot check "
             + bot
             + "`. The bot publishes its own repository "
             "with its own access on its next run. Say on this task what the check reported. "
@@ -762,10 +760,7 @@ def unregister(c, auth, settings_admin, settings, who, bot, tool_id):
         if not found:
             raise Problem("not_found", "That request is not waiting any more", 404)
         c.execute("UPDATE bot_tool_requests SET state='canceled' WHERE id=?", (found["id"],))
-        H.task_close(
-            c, H.KEEPER, found["task_id"], note="Tool request withdrawn; do not apply this change.", strict=False
-        )
-        c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (found["task_id"],))
+        H.attempt(c, H.task_close, H.KEEPER, found["task_id"], "Tool request withdrawn; do not apply this change.")
         H.event(c, who.actor, "bot.tool_request_canceled", bot, {"service": found["service"], "task": found["task_id"]})
         return {
             "canceled": True,
@@ -1027,5 +1022,5 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
 
     @app.post("/api/v2/bots/{bot}/tools/{tool_id}/delete")
     def delete_tool_post(request: Request, bot: str, tool_id: str, body: M.Empty):
-        """The same as DELETE, for clients (the hub CLI, MCP) that only send GET and POST."""
+        """The same as DELETE, for clients (the tico CLI, MCP) that only send GET and POST."""
         return remove(request, bot, tool_id)

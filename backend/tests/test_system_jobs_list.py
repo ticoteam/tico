@@ -81,24 +81,10 @@ def test_the_mirror_sync_makes_retires_renames_and_waits_out_a_broken_write(api,
         flow = json.loads(c.execute("SELECT flow FROM automations WHERE id=?", (aid,)).fetchone()["flow"])
     assert flow["name"] == SR.BY_KEY["goal_colours"].name
     assert sync(api)["renamed"] == []
-    # a task rule mirror whose rule is gone is retired
+    # a task rule mirror (task rules ended with 0.6) is retired
     gone = dead_mirror(api, "Old rule", "task_rule", {"kind": "task_rule", "id": "task-rule-gone"})
     assert sync(api)["retired"] == [gone]
     assert mirrors(api)[gone][2]
-    # a task rule mirror takes its rules name and switch
-    rid = "task-rule-close-after-done"
-    (aid,) = [
-        a
-        for a, (t, src, deleted, _) in mirrors(api).items()
-        if t == "tico.builtin.task_rule" and src == rid and not deleted
-    ]
-    with db(api).transaction() as c:
-        c.execute("UPDATE task_rules SET name='Close finished work', enabled=0 WHERE id=?", (rid,))
-    assert sync(api)["renamed"] == [aid]
-    with db(api).read() as c:
-        row = c.execute("SELECT name, enabled, flow FROM automations WHERE id=?", (aid,)).fetchone()
-    assert (row["name"], row["enabled"], json.loads(row["flow"])["controls"]["on"]) == ("Close finished work", 0, False)
-    assert sync(api)["renamed"] == []
     # the health monitor mirror comes back with its bot and follows its switch
     with db(api).transaction() as c:  # restored in Settings > Bots
         if H.bot(c, H.HEALTH_MONITOR):
@@ -219,7 +205,7 @@ def test_on_a_plain_install_the_feature_jobs_are_hidden_and_the_rest_listed(api,
         "physical_mail",
     ):
         assert hidden not in keys, hidden
-    for shown in ("topic_fresh", "heartbeat", "finance_upkeep", "inbound_mail", "assigned_tasks"):
+    for shown in ("topic_fresh", "heartbeat", "finance_upkeep", "inbound_mail", "never_stuck_reading"):
         assert shown in keys, shown
 
 
@@ -236,11 +222,9 @@ HEARTBEAT_STEPS = (
     "stall_marks",
     "run_housekeeping",
     "ship_deployed",
-    "task_loops",
+    "never_stuck",
     "queue_check",
-    "milestone_waits",
     "thread_loop_guard",
-    "snooze_ends",
 )
 
 
@@ -286,18 +270,18 @@ def test_scheduler_jobs_and_background_passes_record_their_runs(api, monkeypatch
         kept = [r["steps"] for r in c.execute("SELECT steps FROM heartbeat_beats")]
     assert kept == [], kept
     # a failing block records its failure
-    from backend import milestone_waits
+    from backend import never_stuck
 
-    def broken(c, failures=None, task_id=None):
+    def broken(c, now=None, failures=None):
         raise RuntimeError("private words")
 
-    monkeypatch.setattr(milestone_waits, "reconcile", broken)
+    monkeypatch.setattr(never_stuck, "check", broken)
     failures = Scheduler(db(api), api.app.state.execution).tick()["failures"]  # a Heartbeat step: the rest still ran
-    assert {"milestone_waits": "RuntimeError"} in failures
-    step = step_rows(api)["milestone_waits"]
+    assert {"never_stuck": "RuntimeError"} in failures
+    step = step_rows(api)["never_stuck"]
     assert step["last_error"] == "Failed: unexpected error (RuntimeError)" and step["failed_count"] == 1
     run = runs_of(api, "heartbeat")[-1]
-    assert not run["ok"] and run["result"] == "Failed: Merge and release waits"
+    assert not run["ok"] and run["result"] == "Failed: Never-stuck check"
     assert "private" not in json.dumps(step) + json.dumps(run)
     # a background pass records one run and quiet passes fold
     for _ in range(3):
@@ -404,7 +388,7 @@ def recorded_keys():
 
 def test_every_key_a_block_records_under_is_a_job():
     found = recorded_keys()
-    assert {"heartbeat", "release_check", "inbound_mail", "doc_sync", "assigned_tasks"} <= set(found)
+    assert {"heartbeat", "release_check", "inbound_mail", "doc_sync", "never_stuck_reading"} <= set(found)
     from backend import heartbeat
 
     assert not set(found) & set(heartbeat.BY_KEY), "a Heartbeat step records on its step row"

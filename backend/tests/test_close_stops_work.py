@@ -1,8 +1,6 @@
-"""Closing or declining a task stops the bot work on it (docs/tasks.md): its queued runs are canceled, the turns running
-on it are asked to stop, the turn that makes the close is left alone, and a stopped turn's answer is filed on its run
-rather than posted into the closed task's room."""
-
-import pytest
+"""Closing a task (declined is Closed in v3) stops the bot work on it (docs/tasks.md): its queued runs are canceled,
+the turns running on it are asked to stop, the turn that makes the close is left alone, and a stopped turn's answer is
+filed on its run rather than posted into the closed task's room."""
 
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401
@@ -25,13 +23,6 @@ def requester(api, task_id):
         return c.execute("SELECT requester_id FROM tasks WHERE id=?", (task_id,)).fetchone()[0]
 
 
-def finish(conn, who, task_id, status, note):
-    # A close goes through task_close (task_update refuses status closed); a decline is a status change.
-    if status == "closed":
-        return H.task_close(conn, who, task_id, note=note)
-    return H.task_update(conn, who, task_id, status=status, note=note)
-
-
 def stop_flag(api, attempt_id):
     with api.app.state.store.read() as c:
         return c.execute("SELECT stop_requested_at FROM attempts WHERE id=?", (attempt_id,)).fetchone()[0]
@@ -48,18 +39,14 @@ def work_events(api, task_id):
         ]
 
 
-# A close with a note also queues the note for the owner bot, which the close cancels with the turn's run.
-@pytest.mark.parametrize(
-    "status,said",
-    [("closed", "Stopped 1 running turn; canceled 1 queued run."), ("declined", "Stopped 1 running turn.")],
-)
-def test_closing_or_declining_asks_the_running_turn_to_stop(api, status, said):
+# The close's note wakes nobody: nothing wakes a bot about a Closed task (docs/pipelines-v3.md), so only the turn stops.
+def test_closing_asks_the_running_turn_to_stop(api):
     machine, task, attempt, conversation = task_turn(api)
     who = requester(api, task["id"])
     with api.app.state.store.transaction() as c:
-        finish(c, who, task["id"], status, "Not needed.")
+        H.task_close(c, who, task["id"], note="Not needed.")
     assert stop_flag(api, attempt["id"]) == who
-    assert work_events(api, task["id"]) == [said]
+    assert work_events(api, task["id"]) == ["Stopped 1 running turn."]
 
 
 def test_closing_cancels_the_queued_runs_on_it(api):
@@ -76,7 +63,7 @@ def test_closing_cancels_the_queued_runs_on_it(api):
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM jobs WHERE id=?", (queued[0],)).fetchone()[0] == "canceled"
     assert stop_flag(api, attempt["id"]) == who
-    assert work_events(api, task["id"]) == ["Stopped 1 running turn; canceled 2 queued runs."]
+    assert work_events(api, task["id"]) == ["Stopped 1 running turn; canceled 1 queued run."]
 
 
 def test_the_turn_making_the_close_is_not_stopped(api):
@@ -187,18 +174,3 @@ def test_an_input_the_stopped_turn_never_got_does_not_run_again_on_the_closed_ta
             "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued' AND m.conversation_id=?",
             (conversation,),
         ).fetchone()
-
-
-def test_a_close_through_a_step_that_also_hands_the_task_on_leaves_no_run_queued(api):
-    machine, task, attempt, conversation = task_turn(api)
-    who = requester(api, task["id"])
-    # The new owner's assignment is queued after task_close stopped the work, so the update stops it too.
-    with api.app.state.store.transaction() as c:
-        H.task_update(c, who, task["id"], step="general-closed", owner="coo", note="Handled elsewhere.")
-    with api.app.state.store.read() as c:
-        assert H.task(c, task["id"])["status"] == "closed"
-        assert not c.execute(
-            "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued' AND m.conversation_id=?",
-            (conversation,),
-        ).fetchone()
-    assert stop_flag(api, attempt["id"]) == who

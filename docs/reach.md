@@ -64,9 +64,8 @@ the receiver's own first.
 
 A bot's write is checked on:
 
-- creating a task for someone else (`POST /api/v2/tasks`, MCP and CLI included), and the person a task question or
-  approval asks (`asked`), unless they share the parent task;
-- handing a task to someone or setting it waiting on a person (`POST /api/v2/tasks/{id}` with `owner` or `waiting_on`, which files them a question task);
+- creating a task for someone else (`POST /api/v2/tasks`, MCP and CLI included), unless they share the parent task;
+- handing a task to someone (`POST /api/v2/tasks/{id}/owner`, `tico task reassign`);
 - chat: a message (`POST /api/v2/messages`, bot to bot included: the one it is sent to first, then everyone else it was
   delivered to, its @mentions and a DM's members, in the same write), a note (`POST /api/v2/notes`), and a thread post
   or new thread or DM (`/api/v2/threads...`): the one it is addressed to, those it @mentions who can read the thread, a
@@ -82,7 +81,6 @@ work to its manager, who passes it up. Being on a task with the person (reader, 
 a parent task) or having been given some task by them does not open them. Only three things do, for the person who is
 the receiver: a direct reply to that person's own message; a write in a conversation where that person wrote to the
 bot in the last 7 days; a write on a task that person handed this bot (they are its requester, the bot its owner).
-Questions and asks that become a question task for a person are checked the same way.
 
 Never refused (a person receiver follows the rule above):
 
@@ -92,13 +90,12 @@ Never refused (a person receiver follows the rule above):
   an answer to one who gave the bot an open task, or who wrote to it (addressed or @mentioning it) in the last 7 days,
   in that thread (or the thread above a sub-thread) when it names one. In a DM, anything the receiver wrote there, and
   any person's message there, counts. It still adds to the bot's chats a day;
-- anything on a task the bot and a bot teammate are both part of: requester, owner (now or at any earlier step), the
-  one it waits on, its readers, or a poster in or member of the task's thread. A message in a task's thread is on that
-  task. Handing a task back to its requester passes; handing it to someone new is checked;
-- system hand-offs: step flow and the allocator, check pools, routines and automations, rule wakes and the keeper. They
-  write in the hub, not through a bot's route;
-- the hub's own work in a bot's name: a runner's reply to the message that woke it, an approval's decider, comments
-  on a task;
+- anything on a task the bot and a bot teammate are both part of: requester, owner (now or at any earlier stage), anyone
+  an ask on it names or was given to, its readers, or a poster in or member of the task's thread. A message in a
+  task's thread is on that task. Handing a task back to its requester passes; handing it to someone new is checked;
+- system hand-offs: the task engine and the never-stuck check, routines and automations, and rule wakes. They write in
+  the hub, not through a bot's route;
+- the hub's own work in a bot's name: a runner's reply to the message that woke it, comments on a task;
 - a held write (a message, note or task) a person chose to Send anyway: it passed reach before it was held;
 - built-in helpers off the chart, as sender or receiver: BotOps, Task Manager, Goal Manager, Librarian, the Assistant
   (`TICO_ASSISTANT_BOT`, `coo` by default), the Bookkeeper, Counsel (`tico-counsel`), the Brand Owner (`brand`) and the
@@ -134,7 +131,7 @@ totals by kind. Run it on a copy (`python -m backend.devcopy`) before an install
 
 Task caps (`/api/v2/task-caps`, `backend/task_caps.py`) are still their own table, checked on the same task writes just
 before reach: a task passes both. They are to become lines: each cap row moves to a line with its `per_day`, and the
-routes and the `task_cap` approval read and write lines.
+routes read and write lines.
 
 ## API
 

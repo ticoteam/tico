@@ -2,7 +2,7 @@
 `GET /api/v2/strategy/draft-from/{job}` (or `latest`) reads it. The owner's own click, like every strategy write.
 
 With a website the server reads a few of its pages (the home page, then about, pricing and customers, from the home
-page's own links or their usual addresses) through `clients/doc_fetch.py`, the same guard `hub doc fetch` uses: http
+page's own links or their usual addresses) through `clients/doc_fetch.py`, the same guard `tico doc fetch` uses: http
 and https on the ordinary ports, every address the name resolves to public (no loopback, private, link-local or
 metadata address), each redirect checked again, 5 MB and 20 seconds a page, at most PAGES pages and BUDGET_S seconds
 in all, and no credential of the server's ever sent. Then one model call, with no runner: the writer the daily-update

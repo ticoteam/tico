@@ -167,8 +167,8 @@ def _hold(c, settings, bot, window, runs, budget, now):
         bot,
         f"{name} stopped: {runs} runs in the last {window}",
         f"{_sentence(name, runs, window)}\n\nIts budget is {budget} runs per {window}. Check its last runs in Runs. "
-        f"Then release {name} (Settings > Bots > {name}, or `hub bot release {bot}`) or raise its budget "
-        f"(`hub bot budget {bot} --{window} N`). Everything queued for it is kept and starts after the release.",
+        f"Then release {name} (Settings > Bots > {name}, or `tico bot release {bot}`) or raise its budget "
+        f"(`tico bot budget {bot} --{window} N`). Everything queued for it is kept and starts after the release.",
     )
     c.execute(
         "INSERT INTO bot_budget(bot,held_at,window,runs,budget,task_id) VALUES(?,?,?,?,?,?) "

@@ -12,13 +12,13 @@ with totals, the recommendation and why, the policy result, the entry documents 
 picks, the booking request.
 
 Done when: every option has a total and a policy result; the recommendation says why; the traveller is asked to pick
-with `hub task question "<question>" --on <person> --parent <id>`; the entry documents are listed with their sources; and the task note says what is still open.
+with `tico task ask <id> --to <person> "<question>" --version N`; the entry documents are listed with their sources; and the task note says what is still open.
 
 ---
 
 ## 1. Pin the trip down
 
-    hub task show <id>
+    tico task show <id>
 
 Traveller, purpose, where exactly (the venue address, not just the city), the first and last commitments there, and
 anything fixed (a talk at 09:00 on the first day). Check the calendar if connected. Ask the traveller one question if
@@ -39,7 +39,7 @@ traveller confirms their own documents.
 
 ## 4. Recommend and ask
 
-Write `reports/trip-<traveller>-<date>.md`. Ask the traveller to pick with `hub task question "<question>" --on <person> --parent <id>`. Record the option, its
+Write `reports/trip-<traveller>-<date>.md`. Ask the traveller to pick with `tico task ask <id> --to <person> "<question>" --version N`. Record the option, its
 total, its fare rules and its policy fit in `knowledge/trips.md`.
 
 A booking follows the traveller's pick, and only with a granted Tool. If a fact or a Tool is missing, name it in the
@@ -49,4 +49,4 @@ task rather than working around it.
 
 File the confirmation numbers in `knowledge/trips.md`. Build the itinerary: local times, addresses, check-in rules, the
 local contact, and what to do if a leg is canceled. Send it to the traveller with
-`hub message send --fyi <traveller> "<one line and the link>"`.
+`tico message send --fyi <traveller> "<one line and the link>"`.

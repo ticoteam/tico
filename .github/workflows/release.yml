@@ -587,11 +587,13 @@ jobs:
           find dist/recorder -type f ! -name recorder-latest.json -print0 | xargs -0 gh release upload "$GITHUB_REF_NAME" --clobber
           gh release upload "$GITHUB_REF_NAME" dist/recorder/recorder-latest.json --clobber
 
+  # A prerelease (any '-' in the tag, as the release job marks it) builds no company app: a company's installed apps
+  # update from its own bucket's latest.json, which a prerelease must never move (scripts/company_apps.py refuses too).
   company-matrix:
     needs: desktop-changes
     if: >-
       ${{ !cancelled() && needs.desktop-changes.result == 'success'
-      && needs.desktop-changes.outputs.build == 'true' }}
+      && needs.desktop-changes.outputs.build == 'true' && !contains(github.ref_name, '-') }}
     runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64
     permissions:
       contents: read

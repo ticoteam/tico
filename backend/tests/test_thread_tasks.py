@@ -74,20 +74,20 @@ def test_the_maker_still_sees_what_others_post_to_their_task_later(api):
 
 
 def test_a_bot_made_task_for_a_person_is_not_news_to_that_person(api):
-    """The "New task from" notice is task news: it stays in the task's thread, and the requester gets no delivery for it
-    (no unread, no Inbox row, no digest or push)."""
+    """A new task is the owner's turn (task_turn), not news for its requester: no unread, no Inbox row, no digest or push
+    reaches Ana. No person is told about a task in a chat (Needs you is where a person learns)."""
     with api.app.state.store.transaction() as c:
         made = H.task_create(
             c, "bot:ops", "Filed for Ana", "Details.", "bot:ops", requester_actor="human:ana", lint=False
         )
     assert thread_me(api, made["conversation_id"])["unread"] == 0
     with api.app.state.store.read() as c:
-        notice = c.execute(
-            "SELECT COUNT(*) FROM messages WHERE conversation_id=? AND sender_id=? AND body LIKE ?",
-            (made["conversation_id"], H.KEEPER, "New task from%"),
-        ).fetchone()[0]
         delivered = c.execute(
             "SELECT COUNT(*) FROM message_deliveries WHERE thread_id=? AND recipient=?",
             (made["conversation_id"], "human:ana"),
         ).fetchone()[0]
-    assert notice == 1 and delivered == 0
+        to_ana = c.execute(
+            "SELECT COUNT(*) FROM messages WHERE conversation_id=? AND recipient_id=?",
+            (made["conversation_id"], "human:ana"),
+        ).fetchone()[0]
+    assert delivered == 0 and to_ana == 0

@@ -5,12 +5,12 @@ no schedule. Budget 30 minutes.
 
 The outcome is a repository in {{company_name}}'s workspace that passes its readiness check and holds
 instructions the owner recognises as what they asked for. When a human asked you in chat, you then
-take it live (`hub bot go-live <slug>`); for a task nobody chatted, the note tells the owner the one
+take it live (`tico bot go-live <slug>`); for a task nobody chatted, the note tells the owner the one
 thing to read before they turn it on, and they do.
 
-Inputs: the task (`hub task show <id>`): the bot's name, its template, its slug if it is already registered, and any reviewed instructions or setup answers.
+Inputs: the task (`tico task show <id>`): the bot's name, its template, its slug if it is already registered, and any reviewed instructions or setup answers.
 
-Done when: `hub bot check <slug>` passes or its warnings are explained in the note, and the note from section 6 is on the task. The bot stays off unless the human asked you to take it live.
+Done when: `tico bot check <slug>` passes or its warnings are explained in the note, and the note from section 6 is on the task. The bot stays off unless the human asked you to take it live.
 
 ---
 
@@ -19,14 +19,14 @@ Done when: `hub bot check <slug>` passes or its warnings are explained in the no
 The task names the bot, the template it comes from, and, when the bot is already registered, its slug, and it carries the
 owner's reviewed instructions and the setup answers.
 
-    hub task show <id>
+    tico task show <id>
 
 A task titled `Build a bot: <name>` carries a name and a plain-language job
 instead of a template. Pick the closest template in the templates, and write `AGENT.md` for that job.
 
 If any of those is missing, choose it and go on (AGENT.md, Defaults, not questions):
 
-- **Slug:** never ask anyone for one, and leave it out of `hub bot create`: Tico picks it from the name (else the
+- **Slug:** never ask anyone for one, and leave it out of `tico bot create`: Tico picks it from the name (else the
   template's name), lowercase with hyphens ("Projects Manager" is `projects-manager`), adds -2, -3
   when it is taken or reserved, and prints it. Use the printed slug from then on and name it in the report. Pass a
   slug only when the bot is already registered: the task names one, or you registered it with `--record-only`
@@ -39,7 +39,7 @@ Name every choice you made in the task note, so the owner can correct it.
 
 ## 2. Create the repository
 
-    hub bot create --template <template> --name "<Display>"        # add the slug when the bot is already registered (§1)
+    tico bot create --template <template> --name "<Display>"        # add the slug when the bot is already registered (§1)
 
 That prints the slug it picked and materialises `$HUB_WORKSPACE/bot-<slug>` from the template, fills the team's names
 into the placeholders, writes `knowledge/company.md` from the setup answers, and seeds the
@@ -48,8 +48,8 @@ human asked for the bot in chat, it also registers the bot with the server as th
 them an owner (`playbooks/build-me-a-bot.md`); for a task with no human behind it, the owner registered
 it already.
 Read what it produced before you change anything: the template is a starting point, not the
-answer. Use `hub bot branch <bot>` for shared instructions and lessons on your own computer; `hub bot copy <bot>` starts an independent bot from the original repository's contents.
-From here on a routine is changed in Tico with `hub automation update <id>` (its id is in `hub automation list`), not by editing the file.
+answer. Use `tico bot branch <bot>` for shared instructions and lessons on your own computer; `tico bot copy <bot>` starts an independent bot from the original repository's contents.
+From here on a routine is changed in Tico with `tico automation update <id>` (its id is in `tico automation list`), not by editing the file.
 
 ## 3. Put the real instructions in
 
@@ -79,23 +79,23 @@ If the instructions include a `Mailbox: <email>` line (message bots), replace ev
 `bot.yaml` with that address. That is the mailbox this bot is assigned; do not invent one.
 
 The server has already named the bot as that person's message bot and recorded the mailbox when the bot was
-added (the person is the one whose email on the roster is that address). If `hub health check` still says the
+added (the person is the one whose email on the roster is that address). If `tico health check` still says the
 bot's Gmail tool has no message bot, name it yourself as the person who asked:
-`hub api POST access/people/<person id> '{"inbox_bot": "<slug>", "mailbox": "<the Mailbox: address>"}'`
+`tico api POST access/people/<person id> '{"inbox_bot": "<slug>", "mailbox": "<the Mailbox: address>"}'`
 (a card for their click). That link is the one thing that lets its runs on a Docker computer read the mailbox.
 Changing a message bot's mailbox later is the same call with the new address.
 
 The instructions a new bot starts with already say how it publishes what it makes (the "Publishing
 your work" section that comes with every template): reports and exports in `reports/` or
-`artifacts/` are listed on its page after a run, `hub file publish <path>` lists one at once,
-`hub file link <url>` lists a Google Doc, Sheet or Notion page it creates, and `hub file import
+`artifacts/` are listed on its page after a run, `tico file publish <path>` lists one at once,
+`tico file link <url>` lists a Google Doc, Sheet or Notion page it creates, and `tico file import
 s3://bucket/key` copies an S3 object. Keep that section when you rewrite the role. A bot whose work
 should not be listed sets `files: {publish: []}` in `bot.yaml`; one that writes deliverables
 elsewhere names the folders, `files: {publish: [reports/, deliverables/]}`.
 
 ## 4. Check it
 
-    hub bot check <slug>
+    tico bot check <slug>
 
 Fix everything it reports as a failure: a missing `state.md`, an `AGENT.md` still identical to the
 template, an empty `## Owns`, a `name:` that is not the slug, a schedule that would be refused. A
@@ -110,19 +110,19 @@ Commit the new repository with a one line message that says what it is, for exam
 
 ## 5b. Its GitHub repository, if GitHub is connected
 
-`hub bot create` already asked for the bot's empty private repository `<org>/bot-<slug>` (its answer says
+`tico bot create` already asked for the bot's empty private repository `<org>/bot-<slug>` (its answer says
 so under `github`); with no GitHub connected it skips this and the bot stays on its computer. For a bot set
 up some other way, create it with:
 
-    hub bot repo-create <slug> --empty
+    tico bot repo-create <slug> --empty
 
 Do not push it yourself: the bot publishes its own history. The bot's repository link (Settings, Bots) has to be `<org>/bot-<slug>`
 (a bare `bot-<slug>` also resolves to the connected organization). Its owner sets it there, or you set it
-for the human who asked in chat with `hub bot update <slug>` (it takes their rights); say so in the task note. The bot's
+for the human who asked in chat with `tico bot update <slug>` (it takes their rights); say so in the task note. The bot's
 first placement is your computer, where its history is: the runner there sets `origin` to that repository and
 publishes the history with the bot's own token, and never forces: if the repository already holds different
 history it stops and Health says so. Once GitHub has it, the bot can move to any computer. You do not push other bots'
-repositories. If `hub bot create` failed with `github_permission_missing`, a person must act: the app
+repositories. If `tico bot create` failed with `github_permission_missing`, a person must act: the app
 was not given permission to create repositories. Do not work around it or retry (AGENT.md rule 6). Finish
 steps 3 to 5 in the local repository anyway, then say plainly in the task note that the bot waits for its
 GitHub repository and that the owner has a Needs-you task with the fix it names; tell the person who asked
@@ -132,13 +132,13 @@ stays local until then. Never create a repository for a slug other than this bot
 ## 5c. Close what you filed for a human
 
 If you filed a task for a human about this bot ("Create the record", "Add Sam", "Paste the key") and you have
-now done that work yourself, or it is already true, close it with one line: `hub task close <id> --note "Done:
-<what>"`. Find them with `hub task list --requester me --status open`. A task left open after the work is
+now done that work yourself, or it is already true, close it with one line: `tico task close <id> -m "Done:
+<what>" --version N`. Find them with `tico task list --requester me`. A task left open after the work is
 done sends the human to do something that is finished.
 
 ## 6. Finish the task
 
-    hub task update <id> --status done --note "..."
+    tico task done <id> -m "..." --version N
 
 The note says, in this order:
 
@@ -148,7 +148,7 @@ The note says, in this order:
 4. the one thing the owner should read before it goes live, usually the `## Boundaries`
    section or a gap the answers did not fill.
 
-The requester closes the task. Unless a human asked you in chat to take it live, the bot stays as it is
+Unless a human asked you in chat to take it live, the bot stays as it is
 (still being set up) until its owner turns it on.
 
 ## When it goes sideways

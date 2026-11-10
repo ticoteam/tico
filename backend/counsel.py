@@ -57,7 +57,7 @@ NOTE_MAX = 2000
 # the read says so (truncated), in the response, the task and the rule_reads row.
 DOC_CHARS = 400_000
 # A document's text goes into Counsel's task only up to this many characters (a run's prompt budget). A longer one is
-# named by file and version, and Counsel reads it with `hub file read`.
+# named by file and version, and Counsel reads it with `tico file read`.
 TEXT_INLINE_MAX = 20_000
 ASK_MATCHES = 8
 STOP_WORDS = frozenset(
@@ -408,7 +408,7 @@ def _open_read(c, who, file_id, number, source_id):
     """The open task for this person, file version and source; identical re-reads return it."""
     row = c.execute(
         "SELECT r.task_id FROM rule_reads r JOIN tasks t ON t.id=r.task_id WHERE r.file_id=? AND r.version=? "
-        "AND r.requested_by=? AND r.source_id=? AND t.closed_at IS NULL AND t.status NOT IN ('done','closed','declined')",
+        "AND r.requested_by=? AND r.source_id=? AND t.status='open'",
         (file_id, number, who.actor, source_id),
     ).fetchone()
     return row["task_id"] if row else None
@@ -486,7 +486,7 @@ def read(c, auth, who, files, blobs, body, found):
         lines += [
             "",
             f"The document is {len(text)} characters, too long for this task. Its text is not here.",
-            f"Read the whole of this version with `hub file read {file_id} --version {number}` and work from that.",
+            f"Read the whole of this version with `tico file read {file_id} --version {number}` and work from that.",
             "",
             fence(f"Title: {title}"),
         ]
@@ -652,7 +652,7 @@ def scrub_page_task(c, tid):
         )
     )
     c.execute(
-        "UPDATE tasks SET title=?,body=?,note=?,checkpoint=NULL,resume=NULL,acceptance='[]',updated_at=? WHERE id=?",
+        "UPDATE tasks SET title=?,body=?,note=?,checkpoint=NULL,acceptance='[]',updated_at=? WHERE id=?",
         (REMOVED_PAGE, REMOVED_PAGE, REMOVED_PAGE, H.now(), tid),
     )
     # Workflow changes keep their old/new identities; free text and arbitrary notes/data cannot keep page copies.
@@ -910,21 +910,20 @@ def _disclaimer(line):
 
 def turn_done(c, attempt, outcome, task_id, text):
     """Counsel's turn on a document's read task ended (backend/execution.py complete). A completed turn finishes the
-    read it was allowed to publish from (attempt_read): the task is marked done with the turn's last line other than
-    NOT_ADVICE, so it never sits in doing after the work. A run that carried another task copies nothing and finishes
-    nothing. A failed,
-    stopped or canceled turn leaves the task to the normal retry and cleanup; a task Counsel set waiting or already
-    finished is left as it is."""
+    read it was allowed to publish from (attempt_read): Counsel says it is done (task_done) with the turn's last line
+    other than NOT_ADVICE, so it never sits open after the work. Done never pushes past: a read that waits on an ask
+    Counsel made stays where it is. A run that carried another task copies nothing and finishes nothing. A failed,
+    stopped or canceled turn leaves the task to the never-stuck check; a finished task is left as it is."""
     if attempt["bot_id"] != SLUG or outcome != "completed" or not task_id:
         return
     read = attempt_read(c, attempt["id"])
     if not read or read["task_id"] != task_id:
         return  # a run that carried another task: its text stays on the run, the task to the normal cleanup
     row = H.task(c, task_id)
-    if not row or row["owner_id"] != "bot:" + SLUG or row["status"] not in ("open", "doing"):
+    if not row or row["owner_id"] != "bot:" + SLUG or row["status"] != "open":
         return
     lines = [line.strip() for line in str(text or "").splitlines() if line.strip() and not _disclaimer(line)]
-    H.task_update(c, "bot:" + SLUG, task_id, status="done", note=(lines[-1][:500] if lines else None), strict=False)
+    H.attempt(c, H.task_done, "bot:" + SLUG, task_id, lines[-1][:500] if lines else "", row["version"])
 
 
 def check_cite(c, auth, who, blobs, cite):

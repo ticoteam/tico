@@ -27,7 +27,7 @@ never:
   - "Write an id number, a home address, bank details or health information into this repository"
 prerequisites:
   - tool: hub
-    why: "Leavers, record exports and letter requests arrive as tasks; the roster is `hub team show`."
+    why: "Leavers, record exports and letter requests arrive as tasks; the roster is `tico team show`."
     required: true
   - tool: docs
     why: "Optional. The team's letter templates and the handbook's leaving section, read through the Librarian, keep letters and checklists consistent."

@@ -228,23 +228,19 @@ def why_not(c, settings, bot, choice, runner_id, job_id=None, kept=""):
     return ""
 
 
-# What a bot does that a weaker model could get wrong, from the approvals it has asked for (backend/hubdb.py
-# APPROVAL_KINDS), and the plain words a warning names it with.
-STAKES = {
-    "send": ("sends messages for you", "may word things badly"),
-    "spend": ("spends money for you", "may spend it badly"),
-    "publish": ("publishes for you", "may get what it publishes wrong"),
-}
+# What a bot does that a weaker model could get wrong: it has asked a person to OK something on a task (an OK guards
+# what is sent, spent or published), in the plain words a warning names it with.
+ASKS_OK = ("asks you to OK what it sends, spends or publishes", "may get it wrong")
 
 
 def stakes(c, settings, bot):
-    """What is at stake on `bot`, plain words per signal: each send, spend or publish approval it has asked for, and
-    each tool grant that lets it write beyond its own repository (backend/bot_tools.py). Empty for a bot with none.
-    Customer data and permission changes have no signal of their own beyond these."""
-    asked = {
-        row[0] for row in c.execute("SELECT DISTINCT kind FROM approvals WHERE requested_by_id=?", (H.bot_actor(bot),))
-    }
-    found = [{"kind": kind, "does": STAKES[kind][0], "risk": STAKES[kind][1]} for kind in STAKES if kind in asked]
+    """What is at stake on `bot`, plain words per signal: an OK it has asked a person for on a task, and each tool grant
+    that lets it write beyond its own repository (backend/bot_tools.py). Empty for a bot with none. Customer data and
+    permission changes have no signal of their own beyond these."""
+    asked = c.execute(
+        "SELECT 1 FROM requirements WHERE kind='ok' AND added_by_id=? LIMIT 1", (H.bot_actor(bot),)
+    ).fetchone()
+    found = [{"kind": "ok", "does": ASKS_OK[0], "risk": ASKS_OK[1]}] if asked else []
     from . import bot_tools
     from .github_app import repo_of
 

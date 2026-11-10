@@ -8,6 +8,7 @@ import sqlite3
 
 import pytest
 
+from backend import task_delete
 from backend import task_engine as E
 from backend import task_requirements as R
 from backend.store import H
@@ -26,8 +27,8 @@ BUILD = (
 
 
 @pytest.fixture
-def c(api):
-    with api.app.state.store.transaction() as conn:
+def c(company):
+    with company.transaction() as conn:
         yield conn
 
 
@@ -54,8 +55,10 @@ def test_a_task_on_the_engine_changes_stage_owner_and_status_only_through_the_en
         with pytest.raises(sqlite3.IntegrityError, match="only through move"):
             c.execute(f"UPDATE tasks SET {write} WHERE id=?", (row["id"],))
     c.execute("UPDATE tasks SET title='Write the launch note today' WHERE id=?", (row["id"],))
-    old = H.task_create(c, ANA, "File the receipts", "Body.", ANA, lint=False)
-    c.execute("UPDATE tasks SET status='doing' WHERE id=?", (old["id"],))  # not on the engine yet: untouched
+    # A row is never born in a stage or ended: it starts open, in no pipeline, and enter() places it.
+    for columns, values in (("status", "'done'"), ("status, stage_id", "'open', 'general-todo'")):
+        with pytest.raises(sqlite3.IntegrityError, match="a new task starts open"):
+            c.execute(f"INSERT INTO tasks (id, {columns}) VALUES ('made-by-hand', {values})")
     assert X.guard_closed(c)
 
 
@@ -70,8 +73,9 @@ def test_a_new_task_starts_in_the_first_stage_with_one_open_visit_and_one_wake(c
     assert mine["owner_id"] == ANA and X.wakes(c, mine["id"]) == []  # a person's list is a read: nothing is sent
 
 
-def test_a_task_with_no_assignee_wakes_the_manager_bot_to_pick_one(c, general):
-    row = X.new_task(c, ANA, "Sort the shared inbox")
+def test_a_task_in_a_stage_nobody_owns_wakes_the_manager_bot_to_pick_an_owner(c, general):
+    X.pipeline(c, "intake", "Intake", ({"name": "Sort", "requirements": [{"kind": "owner_done"}]},), "bot:manager")
+    row = X.new_task(c, ANA, "Sort the shared inbox", "intake")
     assert row["owner_id"] is None
     assert [w[1] for w in X.wakes(c, row["id"])] == ["bot:manager"]
 
@@ -158,6 +162,29 @@ def test_forward_needs_room_back_and_close_never_do_and_the_oldest_takes_a_free_
     assert E.move(c, third["id"], E.CLOSED, ANA)["status"] == "closed"  # a person need not say why
 
 
+def test_a_persons_ok_that_takes_a_bots_work_to_done_accepts_the_run_that_made_it(c, build):
+    import json
+
+    from backend import task_calls
+
+    row = X.new_task(c, ANA, "Build the importer", "eng")
+    E.fill_open_slots(c)
+    builder_run = H.turn_start(c, "bot:builder", "builder", task_id=row["id"])["id"]
+    seen = E.task(c, row["id"])["version"]
+    task_calls.task_done(c, "bot:builder", row["id"], seen_version=seen)  # the bot's own done is no verdict
+    review = E.task(c, row["id"])
+    assert review["stage"]["name"] == "Review" and review["owner_id"] == "bot:reviewer"
+    ok = c.execute("SELECT id FROM requirements WHERE stage_id=? AND kind='ok'", (review["stage_id"],)).fetchone()[0]
+    assert task_calls.task_answer(c, ANA, row["id"], ok, "ok")["status"] == "done"
+    # Ana's OK (the cause of the engine's move) accepted the run that produced the work: the builder's, not the
+    # reviewer's, which never ran on it.
+    got = [
+        (r[0], r[1], json.loads(r[2])["outcome"])
+        for r in c.execute("SELECT target, actor, detail FROM events WHERE action='turn.outcome'")
+    ]
+    assert got == [(builder_run, ANA, "accepted")]
+
+
 def test_skipping_a_stage_counts_its_requirements_as_missing(c, build):
     row = X.new_task(c, ANA, "Build the importer", "eng")
     with _refused("task_not_met"):
@@ -207,8 +234,7 @@ def test_a_filed_task_that_was_deleted_counts_as_closed_not_done(c, general):
     two = X.new_task(c, ANA, "Build the payment form", assignee="bot:builder", parent=parent["id"])
     X.say_done(c, one)
     E.advance(c, one["id"])
-    c.execute("PRAGMA foreign_keys=OFF")
-    c.execute("DELETE FROM tasks WHERE id=?", (two["id"],))
+    assert task_delete.delete_tasks(c, [two["id"]], apply=True, keep_work=True)["applied"]
     standing = R.standings(c, E.task(c, parent["id"]))[0]
     assert (standing.state, standing.line) == (R.NOT_MET, "A deleted task was closed: It was deleted")
     assert E.advance(c, parent["id"]) is None
@@ -227,6 +253,23 @@ def test_a_filed_task_that_closes_keeps_the_parent_and_wakes_its_owner_once(c, g
     assert standing.state == R.NOT_MET and "The cart is a duplicate" in standing.line
     told = [key for key, who in X.wakes(c, parent["id"], "bot:manager") if ":filed:" in key]
     assert told == [f"{parent['id']}:{parent['visit']['id']}:filed:{child['id']}"]
+
+
+def test_a_bot_cannot_close_a_persons_request_and_is_told_to_ask_them(c, general):
+    asked = X.new_task(c, ANA, "Book the flights", assignee="bot:builder")
+    with _refused("task_needs_person") as refused:
+        E.move(c, asked["id"], E.CLOSED, "bot:builder", "Not possible", seen_version=asked["version"])
+    assert "Ask Ana, in one sentence, why it can't be done" in str(refused.value)
+    assert E.task(c, asked["id"])["status"] == "open"
+    assert E.move(c, asked["id"], E.CLOSED, ANA)["status"] == "closed"  # a person closes anything
+    # A bot closes what a bot asked for, and what a task filed (and the engine closes filed tasks with their parent).
+    theirs = X.new_task(c, "bot:manager", "Tidy the labels", assignee="bot:builder")
+    closed = E.move(c, theirs["id"], E.CLOSED, "bot:builder", "Done by hand", seen_version=theirs["version"])
+    assert closed["status"] == "closed"
+    parent = X.new_task(c, ANA, "Plan the trip", assignee="bot:builder")
+    filed = X.new_task(c, ANA, "Find a hotel", assignee="bot:builder", parent=parent["id"])
+    closed = E.move(c, filed["id"], E.CLOSED, "bot:builder", "Not needed", seen_version=filed["version"])
+    assert closed["status"] == "closed"
 
 
 def test_reopen_needs_a_note_and_goes_back_to_the_stage_the_task_left(c, build):
@@ -305,7 +348,8 @@ def test_a_snooze_ends_when_the_task_leaves_the_stage_it_was_set_aside_in(c, bui
 
 
 def test_a_snooze_cancels_every_wake_queued_for_the_task_whoever_it_was_for(c, general):
-    row = X.new_task(c, ANA, "Write the launch note")  # no owner: the manager bot is woken to pick one
+    X.pipeline(c, "intake", "Intake", ({"name": "Sort", "requirements": [{"kind": "owner_done"}]},), "bot:manager")
+    row = X.new_task(c, ANA, "Write the launch note", "intake")  # no owner: the manager bot is woken to pick one
     E.reassign(c, row["id"], "bot:builder", ANA)
     mine = "message_id IN (SELECT id FROM messages WHERE wake_key LIKE ?)"
     c.execute(f"UPDATE jobs SET state='queued' WHERE {mine}", (row["id"] + ":%",))
@@ -347,7 +391,7 @@ def test_a_requirement_added_to_one_task_holds_it_until_answered_withdrawn_or_th
     open_ones = R.on_visit(c, row["visit"]["id"])
     assert [r["id"] for r in open_ones] == [second["requirement_id"]]  # a bot's second replaces its first
     assert first["version"] == row["version"]  # asking is not a move
-    mine = E.add_requirement(c, row["id"], ANA, "ok", "human:ana", "OK the retry plan")
+    mine = E.add_requirement(c, row["id"], ANA, "ok", "human:ben", "OK the retry plan")
     assert len(R.on_visit(c, row["visit"]["id"])) == 2  # a person has no such limit
     X.say_done(c, row)
     assert E.advance(c, row["id"]) is None  # the stage's own requirement is met: the task still waits
@@ -355,6 +399,24 @@ def test_a_requirement_added_to_one_task_holds_it_until_answered_withdrawn_or_th
     assert E.advance(c, row["id"]) is None
     moved = E.withdraw_requirement(c, mine["requirement_id"], ANA)
     assert moved["stage"]["name"] == "Review"
-    asked = E.add_requirement(c, row["id"], ANA, "ok", ANA, "OK the importer's limits")
+    asked = E.add_requirement(c, row["id"], ANA, "ok", "human:ben", "OK the importer's limits")
     E.move(c, row["id"], "Build", ANA)
     assert R.get(c, asked["requirement_id"])["withdrawn_at"]  # moving back ends it: nothing is left behind
+
+
+def test_a_reassign_names_only_someone_who_can_act(c, general):
+    row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
+    X.left(c, "human:ben")
+    X.no_sign_in(c, "human:cara")
+    for who, words in (
+        ("human:ben", "has left or is not here"),
+        ("human:cara", "has left or is not here"),
+        ("human:nobody", "has left or is not here"),
+        ("bot:nobody", "no such bot"),
+        ("everyone", "Name a person or a bot"),
+    ):
+        with pytest.raises(H.Refused, match=f"task_requirement.*{words}|{words}.*task_requirement"):
+            E.reassign(c, row["id"], who, ANA)
+    assert E.task(c, row["id"])["owner_id"] == "bot:builder"
+    assert E.reassign(c, row["id"], "bot:reviewer", ANA)["owner_id"] == "bot:reviewer"
+    assert E.reassign(c, row["id"], ANA, ANA)["owner_id"] == ANA

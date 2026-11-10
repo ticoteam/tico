@@ -1,5 +1,5 @@
 """Growth in demo mode: the numbers page tells one season's story from one model, the weekly routine's runs are its
-history and its next run is the next Monday, and the paid test that loses is closed as Lost."""
+history and its next run is the next Monday, and the paid test that loses is closed: a dropped idea."""
 
 import sqlite3
 from datetime import datetime, timezone
@@ -89,12 +89,12 @@ def _creator_videos_pay_back_and_paid_ads_do_not(numbers):
     assert last("paid-ads", "ltv_cac") < 1
 
 
-def _markers_show_the_started_tests_and_the_paid_test_closing_as_lost(numbers):
+def _markers_show_the_started_tests_and_the_paid_test_closed_as_dropped(numbers):
     markers = {(marker["title"], marker["kind"], marker["outcome"]) for marker in numbers["markers"]}
     assert markers == {
         ("Twelve creators film their own holiday show", "started", None),
         ("Holiday search and social ads for the Storefront", "started", None),
-        ("Holiday search and social ads for the Storefront", "finished", "lost"),
+        ("Holiday search and social ads for the Storefront", "finished", "dropped"),
         ("Starter bundle on bigmarket.example", "started", None),
     }
 
@@ -134,7 +134,7 @@ def test_the_demo_growth_tells_its_story(built, numbers, subtests):
         _units_are_about_six_thousand_over_the_window,
         _units_ramp_into_the_holiday_and_the_inputs_and_guardrails_are_named,
         _creator_videos_pay_back_and_paid_ads_do_not,
-        _markers_show_the_started_tests_and_the_paid_test_closing_as_lost,
+        _markers_show_the_started_tests_and_the_paid_test_closed_as_dropped,
     ):
         with subtests.test(check.__name__):
             check(numbers)

@@ -66,17 +66,10 @@ def seed(api):
         post(api, f"kpis/{kpi['id']}/readings", {"value": value, "period_end": "2026-10-31T00:00:00Z"})
 
 
-def marketing(api, title, channel, step="idea-open", owner="ops", **more):
-    """A marketing idea tagged with its channel, moved to its step (Idea by default)."""
-    tid = post(
-        api,
-        "tasks",
-        {"title": title, "body": "Try it.", "owner": owner, "type": "idea", "labels": [f"channel:{channel}"], **more},
-    )["id"]
-    if step != "idea-open":
-        version = get(api, "tasks/" + tid)["task"]["version"]
-        post(api, "tasks/" + tid, {"version": version, "step": step})
-    return tid
+def marketing(api, title, channel, stage="idea:on-deck", owner="ops", **more):
+    """A marketing idea: a General task labelled with its channel and with where it is (On deck by default)."""
+    labels = [f"channel:{channel}", stage]
+    return post(api, "tasks", {"title": title, "body": "Try it.", "owner": owner, "labels": labels, **more})["id"]
 
 
 def test_the_growth_page_starts_with_its_cards_and_admins_and_bots_arrange_it(api):
@@ -132,12 +125,12 @@ def test_growth_cards_read_the_month_picked_and_carry_a_figure_back_to_the_last_
 
 def test_the_growth_templates_read_the_seeded_install_for_what_the_reader_may_see(api):
     seed(api)
-    shipped = marketing(api, "Google ads test", "google-search", step="idea-doing")
-    marketing(api, "Referral scaling", "google-search", step="idea-scaling")
+    shipped = marketing(api, "Google ads test", "google-search", stage="idea:live")
+    marketing(api, "Referral scaling", "google-search", stage="idea:working")
     flyers = marketing(api, "Flyers at the market", "referrals")
-    building = marketing(api, "Referral reward copy", "referrals", step="idea-building")
-    marketing(api, "Old banner", "google-search", step="idea-paused")
-    marketing(api, "Inbox test", "google-search", step="idea-doing", owner="inbox", private=True)
+    building = marketing(api, "Referral reward copy", "referrals", stage="idea:in-development")
+    marketing(api, "Old banner", "google-search", stage="idea:paused")
+    marketing(api, "Inbox test", "google-search", stage="idea:live", owner="inbox", private=True)
     cards = {
         p["card"]["template"]: p["card"]["data"]
         for p in growth(api)["pins"]
@@ -186,17 +179,18 @@ def test_the_growth_templates_read_the_seeded_install_for_what_the_reader_may_se
     assert retention["columns"] == ["30 days", "90 days", "180 days"]
     assert [r["month"] for r in retention["rows"]] == ["2026-09", "2026-10"]
     assert retention["rows"][0]["kept"] == [75, None, None] and retention["rows"][1]["kept"] == [81, 64, 52]
-    # The board: Live, Working, In development, On deck; each lane's count is all of its tests the reader may see, and
-    # its newest one.
+    # The board: Live, Working, Measuring, In development, On deck; each lane's count is all of its tests the reader may
+    # see, and its newest one.
     lanes = {lane["stage"]: lane for lane in cards["growth_board"]["lanes"]}
     assert [lane["label"] for lane in cards["growth_board"]["lanes"]] == [
         "Live",
         "Working",
+        "Measuring",
         "In development",
         "On deck",
     ]
     counts = {stage: lane["count"] for stage, lane in lanes.items()}
-    assert counts == {"testing": 2, "scaling": 1, "building": 1, "idea": 1}
+    assert counts == {"testing": 2, "scaling": 1, "measuring": 0, "building": 1, "idea": 1}
     assert shipped in {c["id"] for c in lanes["testing"]["cards"]}
     assert lanes["scaling"]["cards"][0]["channel"] == "Google Search"
     assert lanes["building"]["cards"][0]["id"] == building and lanes["building"]["cards"][0]["channel"] == "Referrals"

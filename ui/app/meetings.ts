@@ -158,7 +158,8 @@ async function pageNotes(): Promise<void> {
   state.landing = false;
   const open = linked.get('meeting') || linked.get('recording');
   if (open) { state.selected = open; meetShow(state, true); meetDetail(state, open); }
-  state.poll = setInterval(() => { if (!document.hidden && !state.open) meetLoad(state, false); }, 30000);
+  // A safety read only: the list follows its live events, so the whole list is read every 3 minutes, not every 30 s.
+  state.poll = setInterval(() => { if (!document.hidden && !state.open) meetLoad(state, false); }, 180000);
   state.sourcesPoll = setInterval(() => { if (!document.hidden) meetSources(state); }, 60000);
 }
 
@@ -588,7 +589,8 @@ const meetSourceLabel = (s?: string): string => ({...IMPORT_SOURCES, manual: 'Ty
 // The source in words; a meeting the Recorder filed says so.
 const meetSourceName = (r: MeetRec) => r.client === 'tico-recorder' ? 'Tico Recorder' : r.source === 'tico-live' ? 'Tico live' : meetSourceLabel(r.source);
 const meetIcon = (name: string, label = '') => `<span class="nav-icon" aria-hidden="true">${name}</span>${label}`;
-const meetStatusWord = (s: string | undefined) => (typeof STATUS_WORD === 'object' && typeof s === 'string' && STATUS_WORD[s]) || s || '';
+const MEET_STATUS_WORD: Record<string, string> = {open: 'Open', done: 'Done', closed: 'Closed'};
+const meetStatusWord = (s: string | undefined) => (s && MEET_STATUS_WORD[s]) || s || '';
 // Who was there: people, then the bots attached to its live meeting and the bot it was shared with. Each is an
 // avatar; its name shows on hover, or on tap (focus) on a phone.
 function meetFaces(state: MeetState, rec: MeetRec): string {
@@ -947,7 +949,7 @@ function meetMadeTasks(state: MeetState, rec: MeetRec): MeetTaskRow[] {
   if (rec.sent?.task || work) {
     const st = rec.outcome?.status;
     add({id: rec.sent?.task || '', title: bot ? `Review by ${botDisplayName(bot)}` : 'Review', status: work ? '' : st,
-         who: work, spin: work === 'Sending' || ['open', 'doing', 'review', 'ready'].includes(String(st)),
+         who: work, spin: work === 'Sending' || st === 'open',
          line: rec.outcome?.task_id ? meetOneLine(plainMd(rec.outcome.summary || '')) : ''});
   }
   for (const t of rec.outcome?.tasks || []) add({id: t.id, title: t.title, status: t.status});

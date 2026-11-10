@@ -371,27 +371,8 @@ interface WentAway {
   days?: number;
 }
 
-/** The question a Needs you row asks (`ask`): to whom, and whether it was delivered. */
-interface NeedsAsk {
-  id?: string;
-  recipient_id?: string | null;
-  sender_id?: string;
-  created_at?: string;
-  delivered_at?: string | null;
-  /** What it says, and its structured questions (the Ask panel, ui/app/ask-panel.ts). */
-  body?: string;
-  refs?: QcRefs | null;
-}
-
-/** One row of Needs you (`S.v2.needs`). */
-interface NeedsItem {
-  kind: string;
-  id: string;
-  ask?: NeedsAsk | null;
-  requested_by_id?: string;
-  requester_id?: string;
-  [key: string]: unknown;
-}
+/** One row of Needs you (`S.v2.needs`): GET /v2/needs-you's item (NeedsEntry, ui/app/task-api.ts). */
+type NeedsItem = NeedsEntry;
 
 interface V2State {
   on: boolean;
@@ -428,6 +409,8 @@ interface LastRead {
   hours?: BotHours | null;
   /** The Dashboard's places, keyed by the place's key. */
   places?: Record<string, DashView>;
+  /** The Tasks page's last read, of the view it names (tasks-page.ts tasksLoad). */
+  tasks?: {view: string; needs: NeedsEntry[]; tasks: TaskBriefV3[]} | null;
   [page: string]: unknown;
 }
 

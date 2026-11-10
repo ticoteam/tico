@@ -17,8 +17,8 @@ def test_replay_is_ordered_and_never_shows_a_viewer_more_than_they_can_see(api, 
         )
         secret = H.task_create(c, "human:ana", "Acme layoffs plan", "", "human:ben", lint=False, private=True)
         mail = H.task_create(c, "human:ana", "Sort the inbox", "", "bot:inbox", lint=False, private=False)
-        H.task_update(c, "bot:ops", public["id"], status="doing", note="On it")
-        H.task_update(c, "human:ben", secret["id"], status="doing", note="Acme layoffs draft")
+        H.task_done(c, "bot:ops", public["id"], "Refreshed it", H.task(c, public["id"])["version"])
+        H.task_close(c, "human:ben", secret["id"], "Acme layoffs draft")
         H.status_set(c, H.KEEPER, "inbox", state="running", focus="Reading the owner's mail")
         H.status_set(c, H.KEEPER, "inbox", state="idle", focus="")
     mine = post(api, "chat/ops", {"text": "Hello from Cara"}, token="cara-test")
@@ -45,7 +45,7 @@ def test_replay_is_ordered_and_never_shows_a_viewer_more_than_they_can_see(api, 
     seen = texts(cara)
     assert "Refresh the Acme pricing page" in seen and "Hello from Cara" in seen and "Hi Cara" in seen
     assert any(
-        i["kind"] == "task.status" and i["task"]["id"] == public["id"] and i["new"] == "doing" for i in cara["items"]
+        i["kind"] == "task.status" and i["task"]["id"] == public["id"] and i["new"] == "done" for i in cara["items"]
     )
     for hidden in (
         "Acme layoffs",
@@ -89,15 +89,16 @@ def test_replay_scans_a_bounded_number_of_rows_per_source(api, monkeypatch):
     def query(first, last, extra=""):
         return "replay?" + urlencode({"from": first.isoformat(), "to": last.isoformat()}) + extra
 
-    # Task changes: a private task Cara cannot read changes status many times, then one she can read does.
+    # Task changes: a private task Cara cannot read is closed and reopened many times, then one she can read is done.
     started = span() - timedelta(seconds=1)
     with store.transaction() as c:
         secret = H.task_create(c, "human:ana", "Private plan", "", "human:ben", lint=False, private=True)
         public = H.task_create(c, "human:cara", "Public plan", "", "bot:ops", lint=False, private=False)
     with store.transaction() as c:
-        for status in ("doing", "waiting", "doing", "waiting", "doing"):
-            H.task_update(c, "human:ben", secret["id"], status=status)
-        H.task_update(c, "bot:ops", public["id"], status="doing")
+        for n in range(3):
+            H.task_close(c, "human:ben", secret["id"], f"Not now ({n})")
+            H.task_move(c, "human:ben", secret["id"], H.TASK_REOPEN, "Back on")
+        H.task_done(c, "bot:ops", public["id"], "Done", H.task(c, public["id"])["version"])
     tasks = get(api, query(started, span() + timedelta(seconds=1)), token="cara-test")
     assert tasks["truncated"] and tasks["next"]
     assert all(i["at"] < tasks["next"] for i in tasks["items"])

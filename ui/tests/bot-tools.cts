@@ -12,7 +12,7 @@ const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as RoutesSupport.Api;
 const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 interface PageWin { opened: string[]; open: (url: string) => null }
-interface OpenData { updates?: unknown[]; files?: unknown[]; bots?: unknown[]; goals?: unknown[]; status?: Record<string, unknown> }
+interface OpenData { updates?: unknown[]; files?: unknown[]; bots?: unknown[]; goals?: unknown[]; status?: Record<string, unknown>; cantRun?: {cause: string; fix: string | null} | null }
 // Page-defined function (the bot page script), called inside page.evaluate.
 declare function botLatestUpdate(bot: string): void;
 const shots = process.env.TICO_SCREENSHOT_DIR;
@@ -37,9 +37,9 @@ const TOOLS = [
   ...['acme-co/docs', 'acme-co/pricing-api'].map((name, n) => tool('github-extra-' + n, 'github', 'GitHub', {logo_key: 'github', identity: name,
     can: n ? ['read', 'write'] : ['read'], scope: {repo: name}, url: 'https://github.com/' + name, status: 'unknown', detail: 'Granted repository'})),
 ];
-const task = (id: string, title: string, extra?: Record<string, unknown>) => ({id, title, status: 'doing', owner_id: 'bot:cmo', requester_id: 'human:ana', created_at: iso(-30 * hour), updated_at: iso(-hour), ...extra});
+const task = (id: string, title: string, extra?: Record<string, unknown>) => ({id, title, status: 'open', pipeline_id: 'general', stage_id: 'general-work', turn: {who: 'bot:cmo', state: 'bot'}, owner_id: 'bot:cmo', requester_id: 'human:ana', created_at: iso(-30 * hour), updated_at: iso(-hour), ...extra});
 const TASKS = [task('t1', 'Draft the October pricing page copy'), task('t2', 'Pull last week\'s funnel numbers from PostHog', {status: 'open'}),
-  task('t3', 'Write the launch email for the new plan', {status: 'waiting'}),
+  task('t3', 'Write the launch email for the new plan', {turn: {who: 'human:ana', state: 'person'}}),
   task('t4', 'Weekly report', {status: 'done', done_at: iso(-20 * hour)}), task('t5', 'Clean up UTM tags', {status: 'done', done_at: iso(-40 * hour)})];
 const ASKED = [task('a1', 'Approve the pricing page before Friday', {owner_id: 'human:ana', requester_id: 'bot:cmo'})];
 const UPDATE = {id: 'u1', bot: 'cmo', kind: 'daily', day: '2026-10-01', read: false, created_at: iso(-10 * hour), updated_at: iso(-10 * hour),
@@ -82,6 +82,7 @@ async function open(browser: Browser, viewport: {width: number; height: number},
     if (p === '/api/v2/status') return json({bots: [status]});
     if (p === '/api/v2/bots/cmo/limit/retry') { cleared.push(p); status = {bot: 'cmo', state: 'idle', bot_state: 'active'}; return json({cleared: 1}); }
     if (p === '/api/v2/bots/cmo/execution-review') return json({jobs: []});
+    if (p === '/api/v2/bots/cmo') return json({display_name: 'AI CMO', access: {}, cant_run: data.cantRun ?? null});
     if (p === '/api/v2/bots/cmo/quarantine/clear') { cleared.push(p); status = {bot: 'cmo', state: 'idle', bot_state: 'active'}; return json({}); }
     if (p === '/api/v2/goals') return json({goals: data.goals || [], chain: [], reports: [], company: []});
     if (p === '/api/v2/updates/read') { read.push(...JSON.parse(route.request().postData()!).ids); return json({}); }
@@ -161,7 +162,7 @@ const railOrder = (page: Page) => page.evaluate(() => [...(document.querySelecto
       const scheme = 'dark';
       const {page, errors, read, context} = await open(browser, {width: 1440, height: 900}, {colorScheme: scheme});
       await page.goto('https://tico-ui.test/#/bot/cmo');
-      await page.locator('#t-open .trow').first().waitFor();
+      await page.locator('#t-open .tk-row').first().waitFor();
       await page.locator('#bot-files .bf-row').first().waitFor();
       await page.locator('#bot-latest:not([hidden])').waitFor();
 
@@ -251,7 +252,7 @@ const railOrder = (page: Page) => page.evaluate(() => [...(document.querySelecto
       assert.equal(await page.locator('#bot-tool-strip').isVisible(), false, 'no room for the tools beside the name');
       if (shots) await page.screenshot({path: path.join(shots, `bot-page-phone-chat-${scheme}.png`)});
       await page.evaluate(() => { location.hash = '#/bot/cmo/tasks'; });
-      await page.locator('#t-open .trow').first().waitFor();
+      await page.locator('#t-open .tk-row').first().waitFor();
       await page.locator('#bot-files .bf-row').first().waitFor();
       await page.locator('#bot-latest:not([hidden])').waitFor();
       assert.deepEqual(await railOrder(page), ['Tasks', 'Updates', 'Files']);
@@ -376,6 +377,27 @@ const railOrder = (page: Page) => page.evaluate(() => [...(document.querySelecto
       await page.locator('dialog#last-stop [data-stop-review]').click();
       await page.locator('dialog.tmodal', {hasText: 'No stopped runs remain.'}).waitFor();
       assert.deepEqual(errors, [], 'stopped last-run errors');
+      await context.close();
+    }
+    {
+      // S14: while it can't run, the top line is a red dot, the server's cause as it is, and the one fix; no fix, no button.
+      let {page, errors, context} = await open(browser, {width: 1440, height: 900}, {}, {status: {bot: 'cmo', state: 'idle', bot_state: 'active'},
+        cantRun: {cause: 'AI CMO has no computer.', fix: 'assign_computer'}});
+      await page.goto('https://tico-ui.test/#/bot/cmo');
+      const line = page.locator('#bot-alert .bot-cant-run');
+      await line.waitFor();
+      assert.equal((await line.innerText()).trim(), 'AI CMO has no computer.');
+      assert.equal(await line.locator('.tk-mark-cant').count(), 1);
+      assert.equal(await page.locator('#bot-alert a').getAttribute('href'), '#/bot/cmo/info');
+      assert.equal(await page.locator('#bot-alert a').innerText(), 'Assign a computer');
+      assert.deepEqual(errors, [], "can't run errors");
+      await context.close();
+      ({page, errors, context} = await open(browser, {width: 1440, height: 900}, {}, {status: {bot: 'cmo', state: 'idle', bot_state: 'active'},
+        cantRun: {cause: 'AI CMO was removed.', fix: null}}));
+      await page.goto('https://tico-ui.test/#/bot/cmo');
+      await page.locator('#bot-alert .bot-cant-run').waitFor();
+      assert.equal(await page.locator('#bot-alert button, #bot-alert a').count(), 0);
+      assert.deepEqual(errors, [], "can't run, no fix errors");
       await context.close();
     }
     console.log('bot page: Tasks, Updates and Files; tools open under More; desktop and phone navigation; quarantine says why and when it resumes; Resume bot beside the warning and under More; Try now on a usage limit; a last run that ended unfinished says why');

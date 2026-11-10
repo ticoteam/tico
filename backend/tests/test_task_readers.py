@@ -28,6 +28,11 @@ def readers(api, tid):
     }
 
 
+def seen(api, row, attempt):
+    """The version of the task the run was shown: a bot's write carries it."""
+    return get(api, "tasks/" + row["id"], attempt["token"])["task"]["version"]
+
+
 def sql_sees(api, token, words):
     r = api.post("/api/v2/sql", json={"sql": "SELECT id,title,body FROM tasks"}, headers=headers(token))
     assert r.status_code == 200, r.text
@@ -78,17 +83,20 @@ def test_the_readers_answer_comes_back_to_the_task_and_nowhere_wider(api):
     child = post(api, "tasks", subtask(row["id"], "ben"), attempt["token"])
     done = post(
         api,
-        "tasks/" + child["id"],
-        {"version": child["version"], "status": "done", "note": "Approved: go with the plan."},
+        "tasks/" + child["id"] + "/done",
+        {"version": child["version"], "note": "Approved: go with the plan."},
         "ben-test",
     )
-    assert done["status"] == "done"
-    # Ben's answer wakes the bot that owns the task, which can act on its task with it.
+    assert (done.get("task") or done)["status"] == "done"
+    # Ben's answer wakes the bot that owns the task, which can act on its task with it: its turn on the task again.
     with api.app.state.store.read() as c:
         queued = c.execute(
             "SELECT m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops' AND j.state='queued'"
         ).fetchall()
-    assert any(json.loads(r[0] or "{}").get("subtask") == child["id"] for r in queued)
+    assert any(
+        json.loads(r[0] or "{}").get("task") == row["id"] and json.loads(r[0] or "{}").get("wake") == "task_turn"
+        for r in queued
+    ), queued
     answer = run_on(api)
     post(api, f"tasks/{row['id']}/comments", {"text": "Ben approved; going ahead."}, answer["token"])
     # ...but not past the task's own readers.
@@ -121,33 +129,32 @@ def test_only_the_owning_bot_brings_a_person_in(api):
     assert readers(api, row["id"]) == set()
 
 
-def test_waiting_on_a_person_makes_them_a_reader_and_reassignment_keeps_them(api):
+def test_an_ask_reaches_only_a_reader_and_reassignment_keeps_the_readers(api):
+    """An ask on a private task makes nobody a reader (task_engine.not_shared): the owning bot's sub-task brings the
+    one person in (Dev 172), an ask then reaches them, and an ask of anyone else is refused with the fix."""
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
     attempt = run_on(api)
-    current = get(api, "tasks/" + row["id"], attempt["token"])["task"]
-    waiting = post(
-        api,
-        "tasks/" + row["id"],
-        {
-            "version": current["version"],
-            "status": "waiting",
-            "waiting_on": "ben",
-            "note": "Ben, please approve the plan.",
-        },
-        attempt["token"],
-    )
-    # One question, one card: Ben gets a small subtask with the ask, and the task waits on it.
-    card = next(t for t in get(api, "tasks", "ben-test")["tasks"] if t["owner_id"] == "human:ben")
+
+    def ask(to):
+        return api.post(
+            f"/api/v2/tasks/{row['id']}/asks",
+            json={"to": to, "line": "Approve the plan?", "choices": ["Yes", "No"], "version": seen(api, row, attempt)},
+            headers=headers(attempt["token"]),
+        )
+
+    r = ask("ben")
+    assert r.status_code == 422 and r.json()["error"]["code"] == "private" and "Ben cannot read" in r.text, r.text
+    assert "Who can see" in r.text and readers(api, row["id"]) == set()
+    card = post(api, "tasks", subtask(row["id"], "ben"), attempt["token"])
     assert card["private"] and card["requester_id"] == "bot:ops"
-    assert waiting["status"] == "waiting" and readers(api, row["id"]) == {"ben"} and readers(api, card["id"]) == {"ben"}
-    r = api.post(
-        "/api/v2/tasks/" + row["id"],
-        json={"version": waiting["version"], "status": "waiting", "waiting_on": "cara"},
-        headers=headers(attempt["token"]),
-    )
-    assert r.status_code in (403, 422) and "already reached Ben" in r.text, r.text
+    assert readers(api, row["id"]) == {"ben"} and readers(api, card["id"]) == {"ben"}
+    r = ask("ben")
+    assert r.status_code == 200, r.text
+    r = ask("cara")
+    assert r.status_code == 422 and r.json()["error"]["code"] == "private" and "Cara cannot read" in r.text, r.text
+    assert readers(api, row["id"]) == {"ben"}
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cpo", row["id"], owner="bot:cpo")
+        H.task_reassign(c, "bot:cpo", row["id"], "bot:cpo", "Cpo takes it back", H.task(c, row["id"])["version"])
     assert readers(api, row["id"]) == {"ben"}
 
 
@@ -175,100 +182,78 @@ def test_a_reader_who_cannot_read_the_bots_opens_that_task_and_no_other_work_of_
     assert api.get("/api/v2/tasks/" + other["id"], headers=headers("cara-test")).status_code == 403
 
 
-def test_the_readers_answer_clears_the_wait_for_good(api):
+def test_the_readers_answer_clears_the_wait(api):
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
     attempt = run_on(api)
-    current = get(api, "tasks/" + row["id"], attempt["token"])["task"]
-    post(
-        api,
-        "tasks/" + row["id"],
-        {
-            "version": current["version"],
-            "status": "waiting",
-            "waiting_on": "ben",
-            "note": "Ben, please approve the plan.",
-        },
-        attempt["token"],
-    )
-    card = next(t for t in get(api, "tasks", "ben-test")["tasks"] if t["owner_id"] == "human:ben")
+    card = post(api, "tasks", subtask(row["id"], "ben"), attempt["token"])
+    from backend.waiting_on import waiting_on
+
     with api.app.state.store.read() as c:
-        assert TR.blocker_ids(c, row["id"]) == [card["id"]]
-    done = post(
-        api, "tasks/" + card["id"], {"version": card["version"], "status": "done", "note": "Approved."}, "ben-test"
-    )
-    post(api, "tasks/" + card["id"], {"version": done["version"], "status": "open"}, "ben-test")
+        assert [(w.state, w.who) for w in waiting_on(c, row["id"])][:1] == [("tasks", card["id"])]
+    post(api, "tasks/" + card["id"] + "/done", {"version": card["version"], "note": "Approved."}, "ben-test")
     with api.app.state.store.read() as c:
-        assert TR.blocker_ids(c, row["id"]) == [] and H.task(c, row["id"])["status"] == "open"
+        assert card["id"] not in {w.who for w in waiting_on(c, row["id"])}
+        assert H.task(c, row["id"])["status"] == "open"
 
 
 def test_a_run_carrying_work_the_person_cannot_read_does_not_reach_them(api):
+    from backend.tests.helpers.task_sealed_child import carry
+
     own = task(api, "bot:ops", "bot:ops", "Zip triage")
     theirs = task(api, "human:cara", "bot:ops", "Cara's vendor dispute")
     attempt = run_on(api)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], theirs["id"]))
-    current = get(api, "tasks/" + own["id"], attempt["token"])["task"]
-    wait = {
-        "version": current["version"],
-        "status": "waiting",
-        "waiting_on": "ben",
-        "note": "Ben, approve the vendor dispute reply? If yes, I will send it.",
-    }
-    r = api.post("/api/v2/tasks/" + own["id"], json=wait, headers=headers(attempt["token"]))
-    assert r.status_code == 403 and r.json()["error"]["code"] == "privacy", r.text
-    for path, body in (
-        ("tasks", subtask(own["id"], "ben")),
-        (
-            "task-questions",
-            {
-                "question": "Send the reply?",
-                "on": "ben",
-                "parent": own["id"],
-                "options": [{"label": "Yes", "then": "Go with Yes"}, {"label": "No", "then": "Go with No"}],
-            },
-        ),
-    ):
-        r = api.post("/api/v2/" + path, json=body, headers=headers(attempt["token"]))
-        assert r.status_code == 403, (path, r.text)
-    # Nothing reached Ben: no reader, no card, and the task's note is unchanged.
+    carry(api, attempt, theirs)
+    body = subtask(own["id"], "ben", body="Ben, approve the vendor dispute reply? If yes, I will send it.")
+    r = api.post("/api/v2/tasks", json=body, headers=headers(attempt["token"]))
+    assert r.status_code == 403, r.text
+    r = api.post(
+        f"/api/v2/tasks/{own['id']}/asks",
+        json={"to": "ben", "line": "Send the reply?", "choices": ["Yes", "No"], "version": seen(api, own, attempt)},
+        headers=headers(attempt["token"]),
+    )
+    assert r.status_code == 422 and r.json()["error"]["code"] == "private", r.text
+    # Nothing reached Ben: no reader, no task of his, and no ask on the task.
     with api.app.state.store.read() as c:
-        row = H.task(c, own["id"])
-        assert not H.task_readers(row) and row["status"] != "waiting" and "vendor" not in (row["note"] or "")
+        assert not H.task_readers(H.task(c, own["id"]))
+        assert not c.execute(
+            "SELECT 1 FROM requirements r JOIN visits v ON v.id=r.visit_id WHERE v.task_id=? AND r.person_id='human:ben'",
+            (own["id"],),
+        ).fetchone()
     assert readers(api, own["id"]) == set() and not get(api, "tasks", "ben-test")["tasks"]
-    # Once Ben reads every task the run carries, the same wait reaches him.
+    # Once Ben reads every task the run carries, the same sub-task reaches him.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET requester_id='human:ben' WHERE id=?", (theirs["id"],))
-    post(api, "tasks/" + own["id"], wait, attempt["token"])
+    post(api, "tasks", body, attempt["token"])
     assert readers(api, own["id"]) == {"ben"}
 
 
-def test_a_question_reaches_one_person(api):
+def test_a_question_reaches_one_reader(api):
+    """A question is an ask on the task: it goes only to someone who can read it already, and makes nobody a reader."""
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
     attempt = run_on(api)
-    asked = post(
-        api,
-        "task-questions",
-        {
-            "question": "Ship the zip fix in the next release?",
-            "on": "ben",
-            "parent": row["id"],
-            "options": [{"label": "Yes", "then": "Go with Yes"}, {"label": "No", "then": "Go with No"}],
-        },
-        attempt["token"],
-    )
-    assert asked["task"]["owner_id"] == "human:ben" and asked["task"]["private"]  # the person owns a question task
-    assert readers(api, row["id"]) == {"ben"} and readers(api, asked["task"]["id"]) == {"ben"}
-    r = api.post(
-        "/api/v2/task-questions",
-        json={
-            "question": "Or should Cara decide?",
-            "on": "cara",
-            "parent": row["id"],
-            "options": [{"label": "Yes", "then": "Go with Yes"}, {"label": "No", "then": "Go with No"}],
-        },
-        headers=headers(attempt["token"]),
-    )
-    assert r.status_code == 403 and "already reached Ben" in r.text, r.text
+
+    def ask(to):
+        return api.post(
+            f"/api/v2/tasks/{row['id']}/asks",
+            json={
+                "to": to,
+                "line": "Ship the zip fix in the next release?",
+                "choices": ["Yes", "No"],
+                "version": seen(api, row, attempt),
+            },
+            headers=headers(attempt["token"]),
+        )
+
+    r = ask("ben")
+    assert r.status_code == 422 and r.json()["error"]["code"] == "private" and "Ben cannot read" in r.text, r.text
+    assert readers(api, row["id"]) == set() and not get(api, "tasks", "ben-test")["tasks"]
+    assert change(api, row["id"], {"add": ["ben"]}, attempt["token"]).status_code == 200
+    asked = ask("ben")
+    assert asked.status_code == 200, asked.text
+    assert readers(api, row["id"]) == {"ben"}
+    r = ask("cara")
+    assert r.status_code == 422 and r.json()["error"]["code"] == "private" and "Cara cannot read" in r.text, r.text
+    assert readers(api, row["id"]) == {"ben"}
 
 
 def who_sees(api, tid, token="ana-test"):
@@ -404,8 +389,9 @@ def test_a_private_run_adds_only_readers_who_read_what_it_carries(api):
     own = task(api, "bot:ops", "bot:ops", "Zip triage")
     theirs = task(api, "human:cara", "bot:ops", "Cara's vendor dispute")
     attempt = run_on(api)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], theirs["id"]))
+    from backend.tests.helpers.task_sealed_child import carry
+
+    carry(api, attempt, theirs)
     r = change(api, own["id"], {"add": ["ben"]}, attempt["token"])
     assert r.status_code == 403 and r.json()["error"]["code"] == "privacy", r.text
     words = r.json()["error"]["detail"]
@@ -446,10 +432,8 @@ def test_a_task_made_public_then_private_again_has_no_readers(api):
 def test_a_reader_who_becomes_owner_stays_listed(api):
     row = task(api, "human:ana", "bot:ops", "Payroll review")
     change(api, row["id"], {"add": ["ben"]})
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='human:ben' WHERE id=?", (row["id"],))
+    post(api, f"tasks/{row['id']}/owner", {"owner": "ben", "why": "Ben does the review"})
     assert change(api, row["id"], {"add": ["cara"]}).json()["readers"] == ["human:ben", "human:cara"]
     assert change(api, row["id"], {"readers": ["ben"]}, method="put").json()["readers"] == ["human:ben"]
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='bot:ops' WHERE id=?", (row["id"],))
+    post(api, f"tasks/{row['id']}/owner", {"owner": "ops", "why": "Ops takes it back"})
     assert readers(api, row["id"]) == {"ana", "ben"}

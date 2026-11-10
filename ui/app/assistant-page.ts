@@ -182,14 +182,26 @@ async function assistantRail(slug: string, load: number) {
   if (!ASSISTANT_RAIL_WATCH) { ASSISTANT_RAIL_WATCH = true; BOT_WIDE.addEventListener('change', assistantRailFit); }   // bot-page.ts loads after this file
   new MutationObserver(assistantRailFit).observe(rail, {subtree: true, attributes: true, attributeFilter: ['hidden']});
   window.botFiles?.mount($('#asst-files'), {slug, get, esc, openFile: openFileLink});
-  const [owned, latest] = await Promise.all([v2Get(`/v2/tasks?owner=${encodeURIComponent(slug)}&status=${V2_ACTIVE.join(',')}&brief=true`),
+  const query: TaskBriefQuery = {owner: slug, status: 'open', sort: 'queue'};
+  const [owned, latest] = await Promise.all([taskBriefsPage(query).catch(() => null),
     v2Get(`/v2/updates?bot=${encodeURIComponent(slug)}&limit=1`)]);
   if (load !== ASSISTANT_LOAD || S.route !== ASSISTANT || !rail.isConnected) return;
-  const active = (owned?.tasks || []).filter((t: TaskRow) => V2_ACTIVE.includes(String(t.status)))
-    .sort((a: TaskRow, b: TaskRow) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')));
-  const act = $('#asst-active');
-  act.querySelector('.tpane').innerHTML = `<div class="bot-task-list">${active.map((t: TaskRow) => v2TaskRow(t, slug)).join('')}</div>`;
-  act.hidden = !active.length;
+  // Its open tasks, page by page: More reads on after the last row the server gave (task-api.ts taskPageNext).
+  const has = (t: TaskBriefV3) => t.status === 'open', rows = (owned?.tasks || []).filter(has), feed = taskFeedNew();
+  const paging: TaskPaging<TaskBriefV3> = {more: !!owned?.more && !!owned.tasks.length, edge: owned?.tasks.at(-1) ?? null};
+  const act = $('#asst-active'), draw = (busy = false) => {
+    act.querySelector('.tpane').innerHTML = `<div class="bot-task-list">${rows.map(t => botTaskRowHTML(t)).join('')}</div>`
+      + (paging.more ? `<div class="tl-more"><button type="button" class="ghost" data-asst-more${busy ? ' disabled' : ''}>More</button></div>` : '');
+    act.hidden = !rows.length;
+  };
+  draw();
+  act.onclick = async (ev: MouseEvent) => {
+    if (!eventElement(ev)?.closest('[data-asst-more]:not([disabled])')) return;
+    draw(true);
+    try { await taskPageNext(paging, rows, query, feed, has, taskQueueOrder, () => load === ASSISTANT_LOAD && act.isConnected); }
+    catch (e) { toast(errorMessage(e, 'More did not load.'), true); }
+    if (load === ASSISTANT_LOAD && act.isConnected) draw();
+  };
   const u = latest?.updates?.[0], up = $('#asst-latest');
   if (u) {
     up.innerHTML = `<header class="rail-head"><h2 class="rail-h">Updates</h2>

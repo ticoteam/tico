@@ -252,8 +252,8 @@ def _own_ask_to_a_person(who, row):
 
     A turn is granted the conversations its attempt was handed, which for a scheduled routine is
     that routine's task and nothing else. So a routine had no way to ask a person anything --
-    `hub question ask ben` came back "outside the current execution context" -- and the bots that run
-    entirely on routines fell back to `hub task create --owner ben`. That put questions on a
+    `tico question ask ben` came back "outside the current execution context" -- and the bots that run
+    entirely on routines fell back to `tico task create --owner ben`. That put questions on a
     person's task list in a shape nobody wanted, and made them clear the human-item lint first:
     a bot could spend several attempts getting one title past it, to file something
     that was a question the whole time.
@@ -1035,11 +1035,17 @@ class Auth:
         if who.task_actor:
             actor = A.q(who.task_actor)
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
-            # On a person's own Assistant turn, the person's own question tasks too (hubdb.own_question_for_assistant).
-            own = f" OR (questions IS NOT NULL AND owner_id={me})" if H.assistant_turn_person(who) else ""
+            from .task_asks import FILED_FOR_SQL, assistant_for
+
+            # The person's own Assistant also reads the tasks filed for the OKs asked of her (task_asks.assistant_reads_own_ok).
+            own_oks = (
+                (" OR id IN (" + FILED_FOR_SQL.replace("?", me) + ")")
+                if assistant_for(who.actor, who.task_actor)
+                else ""
+            )
             audience += (
                 f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} "
-                f"OR {reader_sql(c, who.task_actor)} OR ({participant_access_sql(c, actor)}){own})"
+                f"OR {reader_sql(c, who.task_actor)} OR ({participant_access_sql(c, actor)}){own_oks})"
             )
         from . import counsel
 
@@ -1047,6 +1053,12 @@ class Auth:
         if denied:
             audience += " AND id NOT IN " + A.qlist(sorted(denied))
         return audience
+
+    @staticmethod
+    def _assistant_reads_own_ok(c, who, task_id):
+        from .task_asks import assistant_reads_own_ok
+
+        return assistant_reads_own_ok(c, who.actor, who.task_actor, task_id)
 
     def operator(self, c, who, bot):
         row = read_cache.one(c, OPERATOR_SQL, (bot,))
@@ -1186,7 +1198,7 @@ class Auth:
                 "bot_contact",
                 f"{slug} takes work as a task and nothing else (notes only from its manager "
                 "and BotOps). File one "
-                f"with `hub task create --owner {slug}`, say what you want "
+                f"with `tico task create --owner {slug}`, say what you want "
                 "done in the body, and do not wait for it.",
                 403,
             )
@@ -1305,18 +1317,10 @@ class Auth:
             raise Problem("not_found", "Task not found", 404)
         if who.role not in ("owner", "human", "bot") or not H.task_private_readable(c, who.actor, row):
             raise Problem("not_found", "Task not found", 404)
-        from . import pipeline_rights
-
-        # A members-only pipeline's tickets are its owner's, manager's and members' whatever the ticket's own privacy says
-        # (pipeline_rights.may_see). A person's Assistant reads them as the person it acts for.
-        principal = who.task_actor or who.actor
-        # The ticket's own owner and requester read it whatever its pipeline: a bot that owns a ticket on a private pipeline
-        # it is not on still reads its own work.
-        own = principal in (row.get("owner_id"), row.get("requester_id"))
-        if row.get("type_id") and not own and not pipeline_rights.may_see(c, principal, row["type_id"]):
-            raise Problem("not_found", "Task not found", 404)
-        if who.task_actor and not (
-            H.task_private_readable(c, who.task_actor, row) or H.own_question_for_assistant(who, row)
+        if (
+            who.task_actor
+            and not H.task_private_readable(c, who.task_actor, row)
+            and not self._assistant_reads_own_ok(c, who, row["id"])
         ):
             raise Problem("not_found", "Task not found", 404)
         participants = (row["owner_id"], row["requester_id"])
@@ -1428,41 +1432,6 @@ class Auth:
         """Every task except those that involve a bot this caller may not read."""
         hidden = ["bot:" + slug for slug in sorted(self.unreadable_bots(c, who))]
         return ("NOT (owner_id IN %s OR requester_id IN %s)" % ((A.qlist(hidden),) * 2)) if hidden else "1"
-
-    def approval(self, c, who, approval_id, decide=False):
-        self.domain(who)
-        row = H.approval(c, approval_id)
-        if not row:
-            raise Problem("not_found", "Approval not found", 404)
-        if row["kind"] == "send" and (row.get("payload") or {}).get("email_send_id"):
-            from .email_sending import can_ok, effective
-
-            send = c.execute("SELECT * FROM email_sends WHERE id=?", (row["payload"]["email_send_id"],)).fetchone()
-            permitted = send and can_ok(
-                c, self, who.actor, send["mailbox"], send["bot"], effective(c, send["mailbox"], send["bot"])
-            )
-            if permitted or (not decide and who.actor == row["requested_by_id"]):
-                return row
-            raise Problem("forbidden", "This send follows its inbox's approval rule", 403)
-        msg = H.message(c, row["message_id"])
-        if decide:
-            allowed = who.role in ("owner", "human") and msg["recipient_id"] == who.actor
-        else:
-            allowed = who.role == "owner" or who.actor in (row["requested_by_id"], msg["recipient_id"])
-        if row["kind"] == "letter":
-            from . import letters
-
-            letter = c.execute("SELECT * FROM letters WHERE approval_id=?", (approval_id,)).fetchone()
-            allowed = False
-            if letter:
-                may_decide = who.role in ("owner", "human") and (
-                    letters.admin(self, who)
-                    or (letter["acting_bot_id"] and self.bot_manager(c, who, letter["acting_bot_id"]))
-                )
-                allowed = letters.readable(c, self, who, letter) and (not decide or may_decide)
-        if not allowed:
-            raise Problem("forbidden", "This approval is not yours", 403)
-        return row
 
 
 def actor_reads_task(c, actor, row):

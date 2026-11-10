@@ -32,6 +32,12 @@ pub const STREAM_WINDOW: Duration = Duration::from_millis(50);
 const RENEW_INTERVAL: Duration = Duration::from_secs(10);
 const CONTINUE_LOST: &str = "This turn continues one the model's capacity stopped after it acted, but its thread could not be resumed on this computer; a fresh thread could repeat what it did, so the run is held for review";
 const HELD_AT_LOGIN_CAP: &str = "Interrupted at the end of the shared login's grace; this turn cannot be resumed (its harness cannot resume an interrupted turn, or it ran on a fallback whose thread is not kept), so the run is held for review instead of queued to continue";
+/// `started` answered `start_wait` this many times in a row: the server will not start this lease (a refused start
+/// stays refused, backend/execution.py refuse_start), so the turn gives up and reports itself interrupted, which the
+/// server settles as skipped. A fresh wake comes on a new lease.
+const START_WAIT_TRIES: u32 = 5;
+const START_REFUSED: &str =
+    "Execution interrupted after stop: the server kept refusing this turn's start";
 const OWN_INTERRUPT: &[&str] = &[
     "Lease expired",
     "Execution interrupted after stop",
@@ -976,6 +982,34 @@ impl Drove {
             yielded: false,
         }
     }
+
+    /// How a held login's turn ends when its fallback never acknowledged it: nothing ran. A start the server refused
+    /// (`refused`: `started` kept answering start_wait, or start-place said stop) stays interrupted, which the server
+    /// settles as skipped (backend/execution.py held_before_start). Any other failure ends like a turn with no fallback
+    /// ready: failed on the limit, so the bot waits out the hold. Returns the limit error to record, if any.
+    fn unacked_fallback(self, refused: bool, why: String) -> (Drove, Option<String>) {
+        if refused {
+            let ended = Drove {
+                outcome: "interrupted".into(),
+                limited: false,
+                ..self
+            };
+            return (ended, None);
+        }
+        let ended = Drove {
+            outcome: "failed".into(),
+            reply: why.clone(),
+            limited: true,
+            ..self
+        };
+        (ended, Some(why))
+    }
+}
+
+/// Whether a turn's start failed because the server will not start it, or it was stopped, before it started: the
+/// texts of START_REFUSED, `unstopped` and start-place's stop.
+fn start_refusal(e: &Fail) -> bool {
+    e.text.starts_with("Execution interrupted after stop")
 }
 
 /// Err when the turn was stopped before it acknowledged its start (a person's Stop, or its task done or closed while it
@@ -1185,6 +1219,22 @@ impl Runner {
         }
     }
 
+    /// After the `tries`-th `start_wait` in a row: a pause that doubles (1, 2, 4, 8 seconds) before the turn asks for
+    /// its place and its start again, and at START_WAIT_TRIES the turn gives up as interrupted. A runner with no
+    /// managed start place asked `started` again at once, for ever, while renew kept its lease alive.
+    async fn after_start_wait(&self, tries: u32) -> Result<(), Fail> {
+        if tries >= START_WAIT_TRIES {
+            return Err(Fail::runtime(START_REFUSED));
+        }
+        let pause = if cfg!(test) {
+            Duration::from_millis(1)
+        } else {
+            Duration::from_secs(1 << tries.saturating_sub(1).min(4))
+        };
+        tokio::time::sleep(pause).await;
+        Ok(())
+    }
+
     async fn wait_before_start(&self, attempt: &Value, reason: &str) -> Result<(), Fail> {
         if attempt.get("start_reservation_seconds").is_some() {
             let aid = text_of(&attempt["id"]);
@@ -1244,6 +1294,7 @@ impl Runner {
                 Err(e) if e.code == "start_wait" => {
                     self.places.lock().unwrap().remove(&aid);
                     tries += 1;
+                    self.after_start_wait(tries).await?;
                 }
                 Err(e) => return Err(e.into()),
             }
@@ -1947,7 +1998,7 @@ impl Runner {
     }
 
     /// The pushes this turn made from its task's worktrees on this computer: those the claim named, and any the
-    /// turn added (`hub task worktree add`), which this computer's worktree list names by now.
+    /// turn added (`tico task worktree add`), which this computer's worktree list names by now.
     async fn task_pushes(&self, attempt: &Value, bot: &str, since: i64) -> Vec<Value> {
         let task = text_of(&attempt["task"]["id"]);
         if task.is_empty() {
@@ -2478,6 +2529,7 @@ impl Runner {
                         Err(e) if e.code == "start_wait" => {
                             drop(cold_guard.take());
                             self.places.lock().unwrap().remove(&aid);
+                            self.after_start_wait(start_try + 1).await?;
                             if cold { cold_guard = Some(self.wait_cold_start(&attempt, &flags).await?); }
                             else { self.wait_start_place(&attempt, &flags).await?; }
                             start_try += 1;
@@ -2798,6 +2850,8 @@ impl Runner {
         let mut left = None;
         // Whether a fallback host acknowledged the turn of a held login (below): until it does, nothing has run.
         let mut acked = false;
+        // Whether that fallback's start was refused (start_refusal) before it acknowledged the turn.
+        let mut start_refused = false;
         while let (Some(hop), true, Some(base)) = (pending.take(), prepared, base_env.clone()) {
             tried.push(crate::fallback::slot(&hop.runtime, &hop.model));
             uses.push(hop.runtime.clone());
@@ -3035,6 +3089,7 @@ impl Runner {
                 log(&format!("Tico runner: {bot}: {why}; ran the turn on {}{how}", hop.harness));
                 Ok(())
             }.await;
+            start_refused = matches!(&hopped, Err(e) if !acked && start_refusal(e));
             if let Err(e) = hopped {
                 if self.drain.returning(&aid) {
                     // The regular settlement below saves and hands the continuation back.
@@ -3091,13 +3146,16 @@ impl Runner {
             // Sent away from a held login, its fallback failed before it acknowledged the turn: nothing ran. It ends
             // like a turn with no fallback ready, so the server settles it unstarted and the bot waits out the hold
             // instead of the job being leased to the same fallback again and again.
+            // A start the server refused for good stays interrupted, so the server settles it as skipped.
             let why = format!("{runtime} login held (usage limit); its fallback {f} did not start on this computer");
-            let _ = self
-                .state
-                .append(&aid, "error", &json!({"error": why, "limit": true}));
-            drove.outcome = "failed".into();
-            drove.reply = why;
-            drove.limited = true;
+            let (ended, error) = std::mem::replace(&mut drove, Drove::interrupted())
+                .unacked_fallback(start_refused, why);
+            drove = ended;
+            if let Some(why) = error {
+                let _ = self
+                    .state
+                    .append(&aid, "error", &json!({"error": why, "limit": true}));
+            }
             fallback = None;
             subscription_unavailable = None;
         }
@@ -4697,6 +4755,43 @@ mod tests {
         assert_eq!(requests.len(), 5);
         assert!(requests[1].contains("started:a1") && requests[4].contains("started:a1:1"));
         assert!(runner.places.lock().unwrap().contains("a1"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_held_logins_fallback_whose_start_is_refused_stays_interrupted_so_the_server_skips_it(
+    ) {
+        // The server keeps answering start_wait (the task no longer wants this lease, backend/execution.py
+        // refuse_start), then says stop: the fallback never acknowledged the turn, and its end stays interrupted,
+        // not a failure on the login's limit that the server would queue again as a wait for quota.
+        let mut answers = Vec::new();
+        for _ in 0..START_WAIT_TRIES {
+            answers.push((200, r#"{"reserved":true}"#));
+            answers.push((
+                409,
+                r#"{"error":{"code":"start_wait","message":"The task no longer waits on this turn"}}"#,
+            ));
+        }
+        let (url, _seen) = crate::client::tests::serve(answers).await;
+        let (runner, dir) = lease_runner(&url, "fallback-refused");
+        let turn = json!({"id": "a1", "start_reservation_seconds": 180});
+        let refused = runner
+            .start_fallback(&turn, &lease_flags(), "thread1")
+            .await
+            .unwrap_err();
+        assert!(start_refusal(&refused), "{}", refused.text);
+        let (ended, error) = Drove::interrupted().unacked_fallback(true, "held".into());
+        assert_eq!(
+            (ended.outcome.as_str(), ended.limited, error),
+            ("interrupted", false, None)
+        );
+        // Any other failure before the fallback started is the hold's: failed on the limit, its error recorded.
+        assert!(!start_refusal(&Fail::runtime("no such harness here")));
+        let (ended, error) = Drove::interrupted().unacked_fallback(false, "held".into());
+        assert_eq!(
+            (ended.outcome.as_str(), ended.limited, error.as_deref()),
+            ("failed", true, Some("held"))
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -6822,10 +6917,10 @@ for line in sys.stdin:
     #[tokio::test]
     async fn a_resumed_claude_turn_is_given_its_standing_lines_again_only_after_they_may_be_gone() {
         let held =
-            |p: &str| p.contains(crate::prompt::STANDING_SEEN) && !p.contains("Use the hub CLI");
+            |p: &str| p.contains(crate::prompt::STANDING_SEEN) && !p.contains("Use the tico CLI");
         let full = |p: &str| {
             !p.contains(crate::prompt::STANDING_SEEN)
-                && p.contains("Use the hub CLI")
+                && p.contains("Use the tico CLI")
                 && p.contains("Read AGENT.md and state.md")
         };
         // 0 new, 1 resumed and unchanged, 2 resumed but Claude compacts during it, 3 after that compaction, 4 unchanged,
@@ -6846,7 +6941,7 @@ for line in sys.stdin:
         // Turn 2's short prompt is followed, as soon as Claude compacts, by the standing lines it left out.
         assert!(
             injected[2].contains(crate::prompt::RESTORED)
-                && injected[2].contains("Use the hub CLI")
+                && injected[2].contains("Use the tico CLI")
                 && injected[2].contains("Read AGENT.md and state.md"),
             "{}",
             injected[2]
@@ -6910,7 +7005,7 @@ for line in sys.stdin:
         .await;
         for p in &prompts {
             assert!(
-                !p.contains(crate::prompt::STANDING_SEEN) && p.contains("Use the hub CLI"),
+                !p.contains(crate::prompt::STANDING_SEEN) && p.contains("Use the tico CLI"),
                 "{p}"
             );
         }
@@ -6942,7 +7037,7 @@ for line in sys.stdin:
         assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
         let rule = "Repo rules for acme/app";
         assert!(
-            prompts[0].contains(rule) && prompts[0].contains("Use the hub CLI"),
+            prompts[0].contains(rule) && prompts[0].contains("Use the tico CLI"),
             "{}",
             prompts[0]
         );
@@ -6951,7 +7046,7 @@ for line in sys.stdin:
         let restored = &prompts[2];
         assert!(
             restored.contains(rule)
-                && restored.contains("Use the hub CLI")
+                && restored.contains("Use the tico CLI")
                 && restored.contains("Question 1"),
             "{restored}"
         );
@@ -7039,20 +7134,20 @@ for line in sys.stdin:
             injected[1]
         );
         assert_eq!(injected[1].matches(rule).count(), 2, "{}", injected[1]);
-        assert!(injected[1].contains("Use the hub CLI"), "{}", injected[1]);
+        assert!(injected[1].contains("Use the tico CLI"), "{}", injected[1]);
         // With no room the prompt is whole but for the unchanged rules: a compaction gives back those alone.
         let tight = json!({"compact_at": 2_000});
         let (_, prompts, _, injected) =
             claude_rig(&[tight.clone(), tight], &[1], &[], &[], extra, rules).await;
         assert!(
-            prompts[1].contains("Use the hub CLI") && !prompts[1].contains(rule),
+            prompts[1].contains("Use the tico CLI") && !prompts[1].contains(rule),
             "{}",
             prompts[1]
         );
         assert!(
             injected[1].contains(crate::prompt::RESTORED)
                 && injected[1].contains(rule)
-                && !injected[1].contains("Use the hub CLI"),
+                && !injected[1].contains("Use the tico CLI"),
             "{}",
             injected[1]
         );
@@ -7137,13 +7232,13 @@ for line in sys.stdin:
         );
         assert!(
             !ran.prompts[0].contains(crate::prompt::STANDING_SEEN)
-                && ran.prompts[0].contains("Use the hub CLI"),
+                && ran.prompts[0].contains("Use the tico CLI"),
             "{}",
             ran.prompts[0]
         );
         for p in &ran.prompts[1..] {
             assert!(
-                p.contains(crate::prompt::STANDING_SEEN) && !p.contains("Use the hub CLI"),
+                p.contains(crate::prompt::STANDING_SEEN) && !p.contains("Use the tico CLI"),
                 "{p}"
             );
         }

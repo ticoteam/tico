@@ -5,12 +5,12 @@ for, the format it takes and where to get one. The person types the value into t
 `POST /api/v2/credential-requests/{id}/save`, is checked here, stored in the vault under the variable's name and
 granted to that one bot. The bot is told it is saved; the value never enters a message, an event, a log or the model.
 
-`hub credential set` takes a value a person gave BotOps in chat instead: the same store, as the person, and the
+`tico credential set` takes a value a person gave BotOps in chat instead: the same store, as the person, and the
 words they pasted are taken out of the conversation (`redact_value`). What the vault allows is unchanged: only a
 credential administrator, or (team rule "Members store credentials") a person who manages the bot, stores a credential, and
 only for a bot they may manage.
 
-`hub credential import` moves a secret a bot already has in its own file on its computer (`secrets/<bot>.env`) into the vault,
+`tico credential import` moves a secret a bot already has in its own file on its computer (`secrets/<bot>.env`) into the vault,
 granted to that bot (`POST /api/v2/credential-imports`): the computer reads the one variable and hands it over its own
 authenticated channel (`runner-credential-imports`). Only a credential administrator asks, and the value is in no request
 the person or BotOps makes, no message, event, receipt or log.

@@ -20,6 +20,7 @@ from clients.manifest import tools_of
 
 from .context import Ctx
 from .core.errors import CONFLICT, DENIED, FinanceError
+from .core.org import SYSTEM
 from .. import bot_settings as BS
 from .store import ap as SAP
 from .store import tico
@@ -151,7 +152,8 @@ def _which(stage: int | None) -> str:
 
 def report(c: Any, at: str, invoice_id: str, stage: int | None, delivered: bool, reason: str, person: str) -> None:
     """Record how a send went: delivered, or failed with its reason (one Needs-you for `person`, the finance admin).
-    A failed email stays waiting, so the retry sends the same text under the same approval."""
+    A failed email stays on the invoice as not delivered; its OK was used when it was handed to the provider, so it is
+    never sent again under that OK."""
     if stage is None:
         table, where, args = "fin_invoices", "id=?", (invoice_id,)
     else:
@@ -170,8 +172,35 @@ def report(c: Any, at: str, invoice_id: str, stage: int | None, delivered: bool,
         c,
         person,
         f"Invoice email not sent: {number}{_which(stage)}",
-        f"{reason[:300]}\n\nThe Bookkeeper retries under the same approval; the text does not change.",
+        f"{reason[:300]}\n\nNothing else goes out under the OK it was sent with: a send again is asked again.",
     )
+
+
+def outcome(c: Any, send: Mapping[str, Any], status: str, detail: str) -> None:
+    """The email queue's answer for one of Finance's invoice emails (email_sending `_outcome`), reported as the
+    Bookkeeper would: delivered once the provider took it; otherwise failed with what happened. Its OK was used before
+    the provider was called, so a failed one is never sent again under it. An email that is not an invoice's, or whose
+    invoice row is gone or already delivered, is left alone: the queue's own write never fails on Finance's account."""
+    from .context import load
+    from .payments import admin_person
+
+    parts = str(send.get("operation_key") or "").split(":")
+    if len(parts) not in (2, 3) or parts[0] != "invoice":
+        return
+    stage = int(parts[2]) if len(parts) == 3 and parts[2].isdigit() else None
+    if status == "sent":
+        reason = ""
+    elif status == "failed":
+        reason = "Not sent: " + (detail or "the mail service refused it") + ". Nothing else goes out under that OK."
+    else:
+        reason = "The mail service did not confirm it went: check the mailbox before anything is sent again."
+    c.execute("SAVEPOINT finance_delivery")
+    try:
+        report(c, tico.now(), parts[1], stage, status == "sent", reason, admin_person(load(c)))
+    except FinanceError as exc:
+        c.execute("ROLLBACK TO finance_delivery")
+        tico.audit(c, SYSTEM, "finance.delivery_skipped", str(send.get("id") or ""), {"why": str(exc)[:300]})
+    c.execute("RELEASE finance_delivery")
 
 
 def queue_items(c: Any) -> list[dict[str, str]]:
@@ -181,7 +210,7 @@ def queue_items(c: Any) -> list[dict[str, str]]:
     for row in pending(c):
         label = (
             f"Invoice {row['number']}{_which(row['stage'])} email waits to send. Read it: "
-            f"hub finance search --kind invoice --q {row['number']}"
+            f"tico finance search --kind invoice --q {row['number']}"
         )
         items.append(
             {
@@ -223,6 +252,7 @@ __all__ = [
     "intent",
     "issue",
     "mailbox",
+    "outcome",
     "pending",
     "queue_items",
     "recipients",

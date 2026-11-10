@@ -406,20 +406,26 @@ def test_a_check_subtask_keeps_its_check_model_over_the_task_model_and_says_so(a
     set_task_model(api, HAIKU)
     parent, turn = task_turn(api, machine, "Ship the import fix")
     assert turn["config"]["model"] == "claude-haiku-5-5", "the builder's own task follows the task model set on it"
-    sub = post(
-        api,
-        "tasks",
-        {
-            "owner": "ops",
-            "title": "Review PR 700 with another model",
-            "body": "Read it.",
-            "check_model": "grok",
-            "check_role": "review",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
-        },
-        turn["token"],
-    )
-    finish(api, machine, turn, HAIKU_RAN)
+    made = {}
+
+    def file_the_check():
+        # The started turn files it: once filed, its parent waits on it, and a turn not yet started would not start.
+        made["sub"] = post(
+            api,
+            "tasks",
+            {
+                "owner": "ops",
+                "title": "Review PR 700 with another model",
+                "body": "Read it.",
+                "check_model": "grok",
+                "check_role": "review",
+                "parent": parent["id"],
+            },
+            turn["token"],
+        )
+
+    finish(api, machine, turn, HAIKU_RAN, during=file_the_check)
+    sub = made["sub"]
     check = claim(api, machine)
     assert check["task"]["id"] == sub["id"]
     assert (check["config"]["runtime"], check["config"]["model"]) == ("grok", "grok-4.6")
@@ -640,14 +646,13 @@ def test_a_cheaper_task_model_on_a_bot_that_sends_warns_in_plain_words_and_still
     assert set_task_model(api, HAIKU)["warning"] == ""
     set_task_model(api, None)
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO approvals(id,kind,requested_by_id,created_at) VALUES('ap-1','send','bot:ops',?)", (H.now(),)
-        )
+        asked = H.task_create(c, "bot:ops", "Send the launch note", "To the list.", "bot:ops", lint=False)
+        H.task_ask(c, "bot:ops", asked["id"], "human:ana", "OK to send it?", kind="ok", seen_version=asked["version"])
     saved = set_task_model(api, HAIKU)
     assert saved["task_model"]["model"] == "claude-haiku-5-5", "it still saves"
     assert saved["warning"] == (
-        "This bot sends messages for you. Haiku 5.5 is a cheaper model than its own Sonnet 5.5, "
-        "and may word things badly. It still saves, and its tasks run on it."
+        "This bot asks you to OK what it sends, spends or publishes. Haiku 5.5 is a cheaper model than its own "
+        "Sonnet 5.5, and may get it wrong. It still saves, and its tasks run on it."
     )
     assert get(api, "bots/ops")["task_model_warning"] == saved["warning"], "the bot view carries it too"
     task, turn = task_turn(api, machine)

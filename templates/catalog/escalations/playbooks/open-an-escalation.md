@@ -15,7 +15,7 @@ reasons; the timeline has every customer touch with a time; and the first update
 
 ## 1. Check it is not already open
 
-Search `knowledge/register.md` and `hub task list` for the customer and the problem. If a case exists, add to it; never open
+Search `knowledge/register.md` and `tico task list` for the customer and the problem. If a case exists, add to it; never open
 a second one.
 
 ## 2. Set severity and owner
@@ -30,7 +30,7 @@ waited without hearing from us.
 ## 4. Write the bug report, if it is a defect
 
 Follow `skills/write-an-engineering-bug-report/SKILL.md`. If you cannot reproduce it, ask the Technical Support Engineer with
-`hub task create --owner technical-support` first.
+`tico task create --owner technical-support` first.
 
 ## 5. Prepare the first update
 

@@ -8,7 +8,7 @@ or a person until it is installed explicitly.
 
 Anyone who is a person or a bot can propose one. From the computer that has the folder:
 
-    hub skill submit <skill> [--path DIR] [--note TEXT] [--base N]
+    tico skill submit <skill> [--path DIR] [--note TEXT] [--base N]
 
 The folder is read from `--path`, else the repository's `.claude/skills/<skill>` or `skills/<skill>`, else
 `~/.claude/skills/<skill>`. The whole folder is sent. A bot can ask for it in words ("submit this skill to Tico"), or call the

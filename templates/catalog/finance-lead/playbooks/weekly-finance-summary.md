@@ -15,7 +15,7 @@ against the minimum, every blocked item has an owner, and the task is closed wit
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/thresholds.md`, `knowledge/cash-forecast.md`, `knowledge/finance-calendar.md`, `knowledge/team.md` and last
 week's summary. If last week named a decision, check whether it was made.
@@ -41,7 +41,7 @@ not arrive.
 
 ## 5. The next 14 days
 
-From `knowledge/finance-calendar.md` and `hub calendar list`, using `skills/check-a-finance-date-before-it-is-ready/SKILL.md`:
+From `knowledge/finance-calendar.md` and `tico calendar list`, using `skills/check-a-finance-date-before-it-is-ready/SKILL.md`:
 every date in the window, its owner, and whether its inputs are ready.
 
 ## 6. Decisions and routing
@@ -53,5 +53,5 @@ them and your Tools allow it. If uncovered work keeps recurring, follow `playboo
 ## 7. Write and hand over
 
 Write `reports/YYYY-MM-DD-finance-summary.md` in the shape of `knowledge/examples/finance-summary.md`, then
-`hub file publish reports/YYYY-MM-DD-finance-summary.md`. Commit, and `hub task update <id> --status done --note`: cash,
+`tico file publish reports/YYYY-MM-DD-finance-summary.md`. Commit, and `tico task done <id> -m "..." --version N`: cash,
 the lowest week, the path, and what you could not read. Always finish the task.

@@ -157,7 +157,7 @@ def _required(c: sqlite3.Connection, actor: str, value: object, what: str) -> st
 def _type(c: sqlite3.Connection, actor: str, key: str) -> Row:
     row = _one(c, "SELECT * FROM entity_types WHERE key = ?", (key,))
     if row is None:
-        _refuse(c, actor, "kind", f"{key} is not an entity type; see hub directory types")
+        _refuse(c, actor, "kind", f"{key} is not an entity type; see tico directory types")
     if row["archived_at"]:
         _refuse(c, actor, "kind", f"{key} is archived")
     return row
@@ -168,7 +168,7 @@ def _attribute(c: sqlite3.Connection, actor: str, type_key: str, key: str) -> Ro
         c, "SELECT * FROM entity_attributes WHERE entity_type = ? AND key = ? AND archived_at IS NULL", (type_key, key)
     )
     if row is None:
-        _refuse(c, actor, "kind", f"{type_key} has no attribute {key}; add it with hub directory attribute add")
+        _refuse(c, actor, "kind", f"{type_key} has no attribute {key}; add it with tico directory attribute add")
     return row
 
 
@@ -715,7 +715,7 @@ def link(
     _writer(c, actor)
     lt = _one(c, "SELECT * FROM link_types WHERE key = ? AND archived_at IS NULL", (link_key,))
     if lt is None:
-        _refuse(c, actor, "kind", f"{link_key} is not a link type; see hub directory link-type add")
+        _refuse(c, actor, "kind", f"{link_key} is not a link type; see tico directory link-type add")
     _check_evidence(c, actor, evidence_id)
     a, b = _live(c, actor, from_id), _live(c, actor, to_id)
     if a["id"] == b["id"]:
@@ -2044,7 +2044,7 @@ COMPANY_READER = V.Reader(actor="", key="", system=False, sensitive=False, grant
 
 
 def record_lookup(c: sqlite3.Connection, attempt_id: str, entity_id: str) -> None:
-    """The entity an attempt read (`hub directory get` or `rules`): the run trace the linker links that attempt's text to.
+    """The entity an attempt read (`tico directory get` or `rules`): the run trace the linker links that attempt's text to.
     Once per attempt and entity."""
     c.execute(
         "INSERT OR IGNORE INTO entity_lookups (id, attempt_id, entity_id, created_at) VALUES (?, ?, ?, ?)",

@@ -9,7 +9,7 @@ When to use: a task asks whether someone may do something, such as "Can we keep 
 Steps:
 1. Work out what would be done, by whom and about what. If the question does not say what would be done, answer with the
    one question that would settle it, then the closing line.
-2. Read the rules in force: `hub rules list` for the active rules, and `hub rules list --mine` for the bot asking. Read
+2. Read the rules in force: `tico rules list` for the active rules, and `tico rules list --mine` for the bot asking. Read
    each sentence, its From and its due date.
 3. Keep the rules that fit: the same action, the same party, and a date that is in force. A retired rule, or one about
    another party, does not count.

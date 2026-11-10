@@ -38,7 +38,7 @@ The same history is available to signed-in users through the stable API and MCP:
   `hub_changelog_mark_read` accepts `ids` from that result. Listing does not mark anything read.
   For a catch-up request, list unread changes, show the user the summary, and acknowledge the
   entries shown when they ask to mark them read.
-- CLI: `hub changelog list --unread` and `hub changelog mark-read <entry-id>`.
+- CLI: `tico changelog list --unread` and `tico changelog mark-read <entry-id>`.
 
 ## Manual server update
 
@@ -296,7 +296,8 @@ reports its full path, age and one removal command. Check no Git is running for 
 before running that command on the Computer.
 `scripts/tico-computer update` still works by hand and still follows `main`. It ends with `tico-computer restart
 all`; a `scripts/tico` from before `tico-computer` existed ends with `scripts/tico restart all`, which `scripts/tico`
-now hands to `tico-computer`, so that first update lands too.
+still hands to `tico-computer` from a person's terminal, so that first update lands too. `tico` itself is the teamwork
+CLI: `tico update` is the bots' daily updates, not this computer's.
 
 A launch failure waits six hours before another attempt at the same release. A newly installed runner retries a
 launch failure from an older runner build at once; if that attempt fails, the six-hour wait applies again. A dead
@@ -500,6 +501,13 @@ bot had before is kept in the repository's history. The bot's own notes, knowled
 (`clients/catalog.py`, `refresh`).
 
 ## Coming from an older version
+
+### From 0.5 to 0.6: every company starts over
+
+Tico 0.6 does not carry tasks over. Every company starts on a new database. A 0.6 server refuses to start on a 0.5
+database that has tasks and changes nothing: "This database has tasks from Tico 0.5. Tico 0.6 does not carry tasks
+over: every company starts on a new database. Nothing was changed. Run Tico 0.5 on this database, or set up a new
+company on 0.6."
 
 ### Moving to Automations (one time)
 

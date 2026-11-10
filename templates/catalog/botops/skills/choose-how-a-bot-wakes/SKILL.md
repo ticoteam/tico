@@ -11,16 +11,16 @@ Skills propose changes to systems only when the task asks for them and a granted
 Steps:
 1. Name the trigger the request describes:
    - a time: a schedule, a five-field cron in a named time zone;
-   - something Tico does: an event from `hub event-types` (for example `meeting.ready`);
-   - something outside Tico that posts to Tico: a webhook, whose id `hub trigger list` shows;
+   - something Tico does: an event from `tico event-types` (for example `meeting.ready`);
+   - something outside Tico that posts to Tico: a webhook, whose id `tico trigger list` shows;
    - a date that comes round: a due-date trigger, which starts its run a few days before each due day;
    - something outside Tico that only needs looking at: a watcher.
 2. Ask whether the bot must think each time. If a plain look is enough (a new item, a changed status) and only a change
    needs judgment, use a watcher (`playbooks/set-up-a-watcher.md`). A watcher runs a program with no model, and it
    wakes the bot only when it files a task or adds a note.
 3. If the bot must think on each occurrence, make an automation whose step is a Bot turn:
-   `hub automation create --file -`, with `owner` set to `bot:<slug>`, the trigger from step 1, and a prompt that names
-   the one playbook the run follows. `hub automation guide` has the flow format. A new automation is saved off unless
+   `tico automation create --file -`, with `owner` set to `bot:<slug>`, the trigger from step 1, and a prompt that names
+   the one playbook the run follows. `tico automation guide` has the flow format. A new automation is saved off unless
    the flow says `"enabled": true`; turn it on only when the requester asked for that.
 4. Count the runs before you accept a schedule. A schedule every few minutes is a model run each time. Choose the
    longer interval, or a watcher, unless the request needs the speed. A routine earns its place after a human has read
@@ -34,7 +34,7 @@ Checks before you finish:
 - Every schedule has a time zone, and its prompt names one playbook.
 - A watcher prints only new things: its second run prints nothing (`playbooks/set-up-a-watcher.md`).
 - Each change went through the requester's rights. A refusal is reported with who can make the change, not routed around.
-- You read it back with `hub automation show <id>` before you report it (`skills/verify-a-change/SKILL.md`).
+- You read it back with `tico automation show <id>` before you report it (`skills/verify-a-change/SKILL.md`).
 
 Example (invented): The request is "Tell me each Monday what the support desk closed last week." The trigger is a
 schedule: Mondays at 08:00 in the team's zone. No watcher, because the answer needs one model run a week. The

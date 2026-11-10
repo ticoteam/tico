@@ -1,50 +1,59 @@
-# Approvals policy
+# OK policy
 
 Bots act within the requested work and their Tools. Spending, publishing, changing infrastructure,
-deleting data and making commitments do not require a separate human approval. Keep the stated
+deleting data and making commitments do not need a separate OK from a person. Keep the stated
 scope, budget and terms, protect private data and Credentials, and verify the result before saying
-it is done. Tell the owner what changed and what remains blocked by missing information or Tools.
+it is done. Tell the owner what changed and what is still missing.
 
-An approval is optional when a bot is genuinely unsure about a specific action. Use
-`hub approval request --kind spend|publish|merge` with the exact amount, content or
-pull request.
+Ask for an OK only when you are unsure about one exact action, or when Tico holds it. Ask on the
+task you are working on, name one person, and show them the exact thing:
+`tico task ask <id> --to <person> "<one sentence>" --kind ok --show <page:ID|file:ID@N|link> --version N`.
+The task stays in its stage until they OK it or send it back. It is one line in their Needs you, and
+their answer wakes you once. Asking again in the same stage replaces your open ask.
 
-A docs change needs no approval. A `merge` request is refused when every file the pull request changes is under
-`docs/` or ends in `.md` or `.mdx`, and for any pull request in `ticoteam/tico-marketing-site` (code `docs_merge_no_approval`).
-Put a `Changelog:` line in its body that says what changed for readers, then merge it yourself once its checks are green.
-A pull request that mixes docs with code, or whose files cannot be read, is still requested as usual. Only a human decides a requested approval, and it can be consumed once. Do not add
-an approval step to work the owner already requested.
+An OK covers exactly what the person saw. Never act on an OK for different content: a new draft, a
+new file version, other recipients, a larger amount, a new head of a pull request. Ask again. A push
+past is never an OK, and neither is a "yes" in a chat.
 
-An approval nobody decided is withdrawn when it is no longer needed, and you are told quietly: when
-its task is closed, declined or marked done; when you ask again for the same thing (a re-cut, a
-redraft) with `--supersedes <id>`, or on the same task for the same `url`, recipient and subject,
-pull request or spend; and after 14 days undecided. A withdrawn approval can't be decided or spent.
-Ask again if it is still needed. A task that has ended takes no new approval, and `--supersedes`
-can't replace an approval that was already approved and not yet spent.
-Nor does it take a new question to a person: reopen the task, or ask on an open one. A done task
-still asks for acceptance of what it delivered with its review questions.
+For a file, a budget raise or a reply to Tico support, Tico binds the OK to the content for you:
 
-A `publish` payload names the `url` and the `content_sha256` of what will be published. If it also
-carries the `text` the person reads, that text must be exactly what will be published:
-`content_sha256` must be the lower-case hex SHA-256 of the text's UTF-8 bytes, or the request is refused.
-With or without text, a `content_sha256` that isn't 64 lower-case hex characters is refused.
+```text
+tico task ask <id> --to <person> "<one sentence>" --for <kind>:<id> --content '<json>' --version N
+tico ok use <requirement> --for <kind>:<id> --content '<json>' -m "<what was done>"
+```
 
-A `support` approval is a Tico bug report for the Tico maintainers. `hub support report --message "..."` sends it at
-once, unless the team's owner turned off "Bots send reports to the Tico team without asking"; then it is drafted (the
-`message`, its `content_sha256` and `include_ids`, whether the version and install ID go with it), and once a person
-approves it, `hub support send --approval <id>` sends it, filed as that person. The command's output says which. Make the report self-contained: what
-failed, since when, the exact error, what you tried. No secrets, customer data or tokens. Don't hand the
-person a copy-and-paste task instead.
+The first prints the requirement id. Run `tico ok use` just before you act, with the same subject and
+content. It passes once, only after the person's own tap. If it is refused, do not act. The kinds are
+`file` (`file:<ID@N>`, pinned to that version), `budget_raise` and `hq_reply`. An email, a letter, an
+edition, a Finance action and a webhook ask for their OK where the work is: do not ask a second one.
+
+A docs change needs no OK. Put a `Changelog:` line in its pull request body that says what changed
+for readers, then merge it yourself once its checks are green. A pull request that mixes docs with
+code, in a repository whose merges need a person, gets an OK on the task with the pull request shown.
+Do not add an OK to work the owner already requested.
+
+An ask never expires. It ends when it is answered, when you withdraw it
+(`tico task ask <id> --withdraw -m "<why>"`), or when the task moves back or closes. A task that has
+ended takes no new ask: reopen it (`tico task move <id> reopen -m "<why>" --version N`) or ask on an
+open one.
+
+A Tico bug report goes to the Tico maintainers with `tico support report --message "..." --task <id>`.
+It is sent at once, unless the team's owner turned off "Bots send reports to the Tico team without
+asking". Then Tico asks a person for an OK on the task, and once they OK it,
+`tico support send --ok <id>` sends it, filed as that person. The command's output says which. Make
+the report self-contained: what failed, since when, the exact error, what you tried. No secrets,
+customer data or tokens. Don't hand the person a copy-and-paste job instead.
 
 ## Outbound sends
 
-Every email, including an internal message or calendar invitation, enters the shared sending policy and frozen queue.
-Use `mail send` or `POST /api/v2/email/sends`; a generic `kind=send` approval request is refused. The effective company,
-inbox and bot policy decides whether it asks, sends on its own, or never sends. Never also blocks approved mail.
-An approval card binds the complete MIME, exact To/Cc/Bcc and attachment bytes, and approval requires loading its
-frozen preview. An in-chat instruction counts only after an authorized person sees that send and explicitly approves
-that exact pending send. Existing approvals created before the queue migration retain their original scope.
+Every email, including an internal message or calendar invitation, enters the shared sending policy
+and frozen queue. Use `mail send` or `POST /api/v2/email/sends`. The company, inbox and bot policy
+decides whether it asks, sends on its own, or never sends. Never also stops mail that was OK'd.
+Under Ask first, Tico asks the OK on the task itself. It binds the complete message, the exact
+To/Cc/Bcc and the attachment bytes, and the person OKs it from its preview. An instruction in a chat
+counts only after an authorized person sees that send and OKs that exact message.
 
-Calendar events are created silently. Their invitations enter the same queue after the conference link is ready and
-include the join URL and event details. Calendar actions also follow the team's scheduling and attendee rules.
-An invitation does not authorize unrelated messages, spending or commitments.
+Calendar events are created silently. Their invitations enter the same queue after the conference
+link is ready and include the join URL and event details. Calendar actions also follow the team's
+scheduling and attendee rules. An invitation does not authorize unrelated messages, spending or
+commitments.

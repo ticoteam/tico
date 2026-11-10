@@ -14,17 +14,17 @@ recipients have their one-line note, and the task note carries the headline, the
 
 ## 1. Decide whether to write it up
 
-    hub task show <id>
+    tico task show <id>
 
 Read `knowledge/coverage.md`. If the meeting is outside coverage, on the restricted list, or has a
 transcript with nothing readable in it, finish the task with one line that says which and stop. A
-skipped meeting is a stated decision, never silence. If the transcript and the invite show no recording notice, ask the human who ran the meeting once with `hub task question "<question>" --on <person> --parent <id>` and stop until they answer (`knowledge/recording-notice.md`).
+skipped meeting is a stated decision, never silence. If the transcript and the invite show no recording notice, ask the human who ran the meeting once with `tico task ask <id> --to <person> "<question>" --version N` and stop until they answer (`knowledge/recording-notice.md`).
 
 ## 2. Read it properly
 
 The body has the source's own notes and the transcript. If it is cut off, read the rest:
 
-    hub meeting read <id> --offset <next_offset>
+    tico meeting read <id> --offset <next_offset>
 
 Read the whole transcript. The source's summary is a lead, not a fact: check its decisions against
 what was actually said.
@@ -43,7 +43,7 @@ look at that" is a discussion. Use a speaker's name only when the transcript lab
 
 ## 4. Check what already exists
 
-    hub task list --owner <person>
+    tico task list --owner <person>
 
 Run the action test in `skills/decide-whether-an-action-is-a-task/SKILL.md` on each candidate first. If the action item is already a task, link it instead of proposing it again. Search
 `knowledge/decision-log.md`: a decision that contradicts an earlier one is shown next to it with both
@@ -64,14 +64,14 @@ Under 250 words for the summary part. Append each decision to `knowledge/decisio
 ## 6. Create tasks and share
 
 Create the action-item tasks that pass the test in step 4 with
-`hub task create --owner <person> --link <meeting link>`. Use the actual owner and due date;
+`tico task create --owner <person> --link <meeting link>`. Use the actual owner and due date;
 ask one focused question only when either is unclear. Send
-`hub message send --fyi <person> "<one line and the link>"` to the recipients in
+`tico message send --fyi <person> "<one line and the link>"` to the recipients in
 `knowledge/coverage.md`. Keep restricted meetings and private details with their intended readers.
 
 ## 7. Finish
 
-Publish with `hub file publish reports/...`, commit, and `hub task update <id> --status done --note`:
+Publish with `tico file publish reports/...`, commit, and `tico task done <id> -m "..." --version N`:
 the headline, counts, and what still waits. Always finish it; an open routine task absorbs the
 next meeting.
 

@@ -41,7 +41,7 @@ Codex uses app-server equivalents for `compact` and `review` when its installed 
 supports them. Unknown commands remain ordinary messages. Bot skills are not included yet.
 
 A task's comment can set the goal of the task's session as well. **Set as goal** in the task's composer,
-`hub task comment <task-id> "<objective>" --goal`, `hub_task_comment` with `delivery: "goal"`, and
+`tico task comment <task-id> "<objective>" --goal`, `hub_task_comment` with `delivery: "goal"`, and
 `POST /v2/tasks/{id}/comments` with `"delivery": "goal"` all set it the way `/goal <objective>` does in that
 thread. The comment is kept on the task quietly, and the goal line wakes the bot. The same access and harness
 checks apply: 403 without write access, 403 for someone not on the task (a mover may set it), `goal_unsupported` (409)
@@ -52,13 +52,13 @@ takes no files and cannot be public (422), and its response carries the `goal` i
 The CLI and MCP use the same API and access checks:
 
 ```sh
-hub chat goal <conversation-id>
-hub chat goal <conversation-id> set "Write the Acme summary and verify it"
-hub chat goal <conversation-id> pause
-hub chat goal <conversation-id> resume
-hub chat goal <conversation-id> edit "Write a shorter Acme summary"
-hub chat goal <conversation-id> clear
-hub chat send ops "/compact" --conversation <conversation-id> --command
+tico chat goal <conversation-id>
+tico chat goal <conversation-id> set "Write the Acme summary and verify it"
+tico chat goal <conversation-id> pause
+tico chat goal <conversation-id> resume
+tico chat goal <conversation-id> edit "Write a shorter Acme summary"
+tico chat goal <conversation-id> clear
+tico chat send ops "/compact" --conversation <conversation-id> --command
 ```
 
 MCP `hub_chat_goal` takes `conversation_id`, optional `action` (`get`, `set`, `edit`, `pause`,

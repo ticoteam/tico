@@ -6,7 +6,7 @@
 
 ## Drive the wizard from your laptop
 
-`tico setup` normally runs on the server (`install.sh` starts it there). It can instead run on your laptop and reach the
+The setup wizard (`python3 -m setup`) normally runs on the server (`install.sh` starts it there). It can instead run on your laptop and reach the
 server for you. It needs `python3` (3.10+) and a clone of the repository; the AWS option also needs `pip install boto3`
 and your AWS credentials. Run it from the clone:
 

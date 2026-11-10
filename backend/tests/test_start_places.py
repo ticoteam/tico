@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from backend import task_engine
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.helpers.attempt_contention import fleet
@@ -312,7 +313,7 @@ def test_finished_task_stops_a_new_pre_start_wait_before_capacity_returns(api):
     aid = attempt['id']
     post(api, f'attempts/{aid}/start-place', {'waiting': 'pre-start requirements'}, computer['token'])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done',done_at=? WHERE id=?", (H.now(), task['id']))
+        task_engine.move(c, task['id'], task_engine.DONE, 'human:ana', 'Finished by hand')
     assert post(api, f'attempts/{aid}/renew', {}, computer['token'])['stop'] is True
     # The grant and started endpoints must fence the race even without another renewal.
     assert post(api, f'attempts/{aid}/start-place', {}, computer['token']) == {'reserved': False, 'stop': True}
@@ -368,7 +369,7 @@ def test_live_legacy_login_clear_preserves_preparation_after_task_finishes(api, 
     with api.app.state.store.transaction() as c:
         assert not start_places.is_waiting(c, aid)
         assert c.execute('SELECT waiting_since FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0] is None
-        c.execute("UPDATE tasks SET status='done',done_at=? WHERE id=?", (H.now(), task['id']))
+        task_engine.move(c, task['id'], task_engine.DONE, 'human:ana', 'Finished by hand')
     assert not post(api, f'attempts/{aid}/renew', {}, computer['token']).get('stop')
     # An obsolete login-queue report cannot reintroduce a wait after this capability opts out.
     caps['one_turn_per_login'] = False
@@ -380,7 +381,9 @@ def test_live_legacy_login_clear_preserves_preparation_after_task_finishes(api, 
         c.execute('DELETE FROM start_places WHERE attempt_id=?', (aid,))
         start_places.restore_waits(c)
         assert not start_places.is_waiting(c, aid)
-    assert post(api, f'attempts/{aid}/started', {'thread_id': 'legacy-preparation'}, computer['token'])['started']
+    # The task finished before the run started: the engine no longer wants it (execution.held_before_start).
+    refused = post(api, f'attempts/{aid}/started', {'thread_id': 'legacy-preparation'}, computer['token'], expected=409)
+    assert refused['error']['code'] == 'start_wait'
 
 
 def test_delayed_managed_login_events_cannot_release_a_new_start_grant(api, monkeypatch):
@@ -609,6 +612,14 @@ def test_memory_pressure_revokes_only_a_persons_unallocated_start_place(api, all
             assert c.execute('SELECT start_until FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0]
         return
     assert response.status_code == 409 and response.json()['error']['code'] == 'start_wait'
+    # The refusal's own write is kept, before any start-place: the grant let go and the wait on record, and it is a
+    # wait, not a refusal of this turn for good.
+    from backend import execution
+
+    with api.app.state.store.read() as c:
+        kept = c.execute('SELECT start_until, wait_reason FROM start_places WHERE attempt_id=?', (aid,)).fetchone()
+        assert kept[0] is None and kept[1] == 'computer busy: memory'
+        assert not execution.start_refused(c, aid)
     place = post(api, f'attempts/{aid}/start-place', {}, computer['token'])
     assert not place['reserved'] and place['waiting'].startswith('computer busy: memory')
     with api.app.state.store.read() as c:

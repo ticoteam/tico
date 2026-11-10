@@ -239,12 +239,6 @@ SPEND = ("payment_create",)
 SERVER_ONLY_KEYS = frozenset({"raise_check"})
 
 
-def approval_kind(kind: str) -> str:
-    """The Tico approval kind: `spend` for money out, else `finance` with the action kind in the payload. Never
-    `spend_limit`: approving one makes Tico apply it as a usage-cap proposal (backend/proposals.py)."""
-    return "spend" if kind in SPEND else "finance"
-
-
 @dataclass(frozen=True)
 class Gate:
     """What the default gates say: `allow`, or `needs_approval` from `who` (owner | finance_admin | manager |

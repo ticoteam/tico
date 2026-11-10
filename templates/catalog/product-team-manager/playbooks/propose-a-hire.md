@@ -4,10 +4,10 @@ Use this when recurring product work has no owner: a segment with no Product Own
 
 ## Steps
 1. Check that the work is recurring, not a one-off. One-off work is routed to the right seat, not hired for.
-2. Check that no seat already covers it: `hub team show` and `knowledge/team.md`. If one does, route to it instead.
-3. Write the proposal as a task to the owner, `hub task create --owner <owner> --title "Hire proposal: <template>"`, with five lines:
+2. Check that no seat already covers it: `tico team show` and `knowledge/team.md`. If one does, route to it instead.
+3. Write the proposal as a task to the owner, `tico task create --owner <owner> --title "Hire proposal: <template>"`, with five lines:
    the recurring work, how often it recurs, the decision it frees for a person, the cost in attention if it is not hired, and the
    seat it would fill, named as `<segment>-product-owner`.
 4. On a yes, with a task that asks for it and a granted Tool:
-   `hub task create --owner botops --title "Set up <template>" --body "<why, first routine, reports to product-team-manager, what to connect>" --parent <id>`.
+   `tico task create --owner botops --title "Set up <template>" --body "<why, first routine, reports to product-team-manager, what to connect>" --parent <id>`.
 5. Record the hire, or the no and its reason, in `knowledge/team.md` and `memory/decisions.md`, so the same proposal is not raised again for 30 days.

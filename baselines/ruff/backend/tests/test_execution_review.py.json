@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_execution_review.py": {
-    "F841": 1
-  }
-}

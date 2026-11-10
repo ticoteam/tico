@@ -23,8 +23,8 @@ BUILD = (
 
 
 @pytest.fixture
-def c(api):
-    with api.app.state.store.transaction() as conn:
+def c(company):
+    with company.transaction() as conn:
         yield conn
 
 
@@ -54,8 +54,10 @@ def test_a_task_a_bot_owns_is_the_bots_turn_and_a_persons_task_is_theirs(c, gene
 
 
 def test_a_task_with_no_owner_is_the_manager_bots_and_with_no_manager_a_persons(c, general):
-    X.pipeline(c, "ops", "Operations")
-    assert _states(c, X.new_task(c, ANA, "Sort the shared inbox")["id"]) == [("bot", "bot:manager")]
+    unowned = ({"name": "Sort", "requirements": [{"kind": "owner_done"}]},)
+    X.pipeline(c, "intake", "Intake", unowned, manager="bot:manager")
+    X.pipeline(c, "ops", "Operations", unowned)
+    assert _states(c, X.new_task(c, ANA, "Sort the shared inbox", "intake")["id"]) == [("bot", "bot:manager")]
     assert _states(c, X.new_task(c, ANA, "Renew the domain", "ops")["id"]) == [("person", ANA)]  # whoever asked
 
 
@@ -66,6 +68,26 @@ def test_a_bot_that_cannot_run_shows_paused_with_the_cause(c, general):
     assert (wait.state, wait.who, wait.line) == ("paused", "bot:builder", "builder is quarantined")
     c.execute("UPDATE bots SET state='active' WHERE id='builder'")
     assert W.headline(c, row["id"]).state == "bot"  # it carries on by itself
+
+
+def test_a_task_waiting_for_a_worktree_is_paused_and_nobody_is_woken_for_it(c, general):
+    from backend import worktree_waits
+
+    worktree_waits.ensure(c)
+    row = X.new_task(c, ANA, "Fix the login page", assignee="bot:builder")
+    other = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
+    c.execute(
+        "INSERT INTO worktree_waits VALUES('w1',?,'bot:builder','acme/web',1,NULL,'waiting',NULL,'',?,?,NULL)",
+        (row["id"], X.H.now(), X.H.now()),
+    )
+    wait = W.headline(c, row["id"])
+    assert (wait.state, wait.who, wait.line) == ("paused", "bot:builder", "builder is waiting for a free worktree")
+    assert W.turn(c, E.task(c, row["id"])) is None  # the wait wakes it once the worktree is ready, not never-stuck
+    assert W.headline(c, other["id"]).state == "bot"  # the bot itself can run: its other tasks carry on
+    c.execute("UPDATE worktree_waits SET state='reserved', link_id='l1' WHERE id='w1'")
+    assert W.headline(c, row["id"]).line == "builder is waiting for its worktree to be set up"
+    c.execute("UPDATE worktree_waits SET state='served', finished_at=updated_at WHERE id='w1'")
+    assert W.headline(c, row["id"]).state == "bot"
 
 
 def test_the_ladder_hands_the_turn_to_the_manager_bot_and_then_to_a_person(c, general):
@@ -189,7 +211,7 @@ def test_a_person_who_left_or_was_removed_is_never_chosen(c, general):
     }
     X.left(c, ben)
     assert W.needs(c, ben) == []
-    # Each falls through to the next person who is here: the manager bot's owner, Ana.
+    # Each falls through to the next person who is here: the first person above the manager bot, Ana.
     assert _states(c, his) == [("person", ANA)]
     assert [(w.state, w.who, w.ask) for w in W.waiting_on(c, asked["id"])] == [("person", ANA, True)]
     assert _states(c, stuck) == [("person", ANA), ("person", ANA)]
@@ -198,9 +220,98 @@ def test_a_person_who_left_or_was_removed_is_never_chosen(c, general):
     assert [n["tasks"] for n in W.needs(c, ANA) if n["kind"] == "paused"] == [[paused]]  # the company owner fixes it
 
 
+def test_every_persons_needs_you_comes_from_one_pass_over_the_tasks(c, general, monkeypatch):
+    """The never-stuck check compares each person's turns with their Needs you. One pass builds every person's list:
+    each task is read once, not once a person, and each list is the one `needs` gives that person."""
+    ben = "human:ben"
+    c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='reviewer'")
+    his = X.new_task(c, ANA, "Call the bank", assignee=ben)["id"]
+    hers = X.new_task(c, ANA, "Renew the lease", assignee=ANA)["id"]
+    asked = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
+    E.add_requirement(c, asked["id"], "bot:builder", "ok", ben, "OK the headline", seen_version=asked["version"])
+    E.add_requirement(c, his, ANA, "answer", ANA, "Which bank?")
+    paused = X.new_task(c, ANA, "Check the facts", assignee="bot:reviewer")["id"]
+    c.execute("UPDATE bots SET state='paused' WHERE id='reviewer'")
+    reads: list[str] = []
+    task = E.task
+    monkeypatch.setattr(E, "task", lambda conn, task_id, *a, **k: reads.append(task_id) or task(conn, task_id, *a, **k))
+    every = W.needs_by_person(c)
+    assert sorted(reads) == sorted({his, hers, asked["id"], paused})  # each open task once
+    assert set(every) == {ANA, ben}
+    assert {(n["kind"], n.get("task_id")) for n in every[ben]} == {
+        ("task", his),
+        ("ask", asked["id"]),
+        ("paused", None),
+    }
+    assert {(n["kind"], n.get("task_id")) for n in every[ANA]} == {("task", hers), ("ask", his)}
+    for person in (ANA, ben, "human:nobody"):
+        assert W.needs(c, person) == every.get(person, [])
+
+
 def test_an_ok_that_names_a_bot_is_that_bots_turn(c, general):
-    row = X.new_task(c, ANA, "Write the launch note", assignee=ANA)
-    E.add_requirement(c, row["id"], ANA, "ok", "bot:reviewer", "OK the wording")
+    """A stage's OK may name a bot (docs/pipelines-v3.md, kind 2); an OK added to one task is asked of a person."""
+    from backend.hubdb import Refused
+
+    ok = {"kind": "ok", "person": "bot:reviewer", "line": "OK the wording"}
+    stages = ({"name": "Check", "owner": ANA, "requirements": [{"kind": "owner_done"}, ok]},)
+    X.pipeline(c, "notes", "Notes", stages)
+    row = X.new_task(c, ANA, "Write the launch note", "notes", assignee=ANA)
+    with pytest.raises(Refused, match="An OK is asked of a person"):
+        E.add_requirement(c, row["id"], ANA, "ok", "bot:reviewer", "OK the wording")
     waits = W.waiting_on(c, row["id"])
     assert [(w.state, w.who, w.ask) for w in waits] == [("person", ANA, False), ("bot", "bot:reviewer", True)]
     assert [n["kind"] for n in W.needs(c, ANA)] == ["task"]  # the reviewer's OK is not in Ana's list
+
+
+def test_a_person_who_cannot_sign_in_is_never_chosen_and_someone_who_can_always_is(c, general, monkeypatch):
+    from backend import never_stuck as NS
+    from backend import task_requirements as R
+
+    ben = "human:ben"
+    X.pipeline(c, "plans", "Plans", ({"name": "Plan", "owner": ben, "requirements": [{"kind": "owner_done"}]},))
+    c.execute("UPDATE pipelines SET owner_id=?, manager_id=? WHERE id='plans'", (ben, ben))
+    c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='builder'")
+    task_id = X.new_task(c, "bot:builder", "Plan the offsite", "plans")["id"]
+    assert _states(c, task_id) == [("person", ben)]
+    X.no_sign_in(c, ben)  # on the chart, but sign-in is off: he cannot act
+    assert not R.active_person(c, ben)
+    # The stage, the pipeline and the bot that asked all fall to Ben, and the company owner does not resolve: the
+    # person who has been here longest has it.
+    monkeypatch.setattr(W.pipeline_rights, "company_owner", lambda conn: "")
+    who = W.person_for(c, E.task(c, task_id))
+    assert who and who != ben and R.active_person(c, who)
+    assert _states(c, task_id) == [("person", who)]
+    assert [n["task_id"] for n in W.needs(c, who) if n["kind"] == "task"] == [task_id]
+    assert NS.rules_hold(c) == []
+    monkeypatch.setattr(W, "person_for", lambda conn, row: None)  # a turn that names nobody is a broken rule
+    assert NS.rules_hold(c) == [f"3: task {task_id} is a person's turn that names nobody"]
+
+
+def test_the_top_of_the_ladder_is_the_first_person_above_the_manager_bot_on_the_org_chart(c, general):
+    """C16: the person the ladder reaches is the first person above the pipeline's manager bot on the org chart, not
+    the person whose computer it runs on. Someone on the way who cannot act is passed over to the next one up; with
+    nobody above it, the company's owner."""
+    from backend import access as Access
+    from backend.views import roster
+
+    for slug, name in (("bo", "Bo"), ("cy", "Cy"), ("di", "Di")):
+        c.execute("INSERT INTO humans(id,name,email) VALUES(?,?,?)", (slug, name, f"{slug}@acme.example"))
+    whole = roster(c)
+    people = [
+        *whole["people"],
+        {"id": "bo", "name": "Bo", "reports_to": "di"},
+        {"id": "cy", "name": "Cy"},
+        {"id": "di", "name": "Di"},
+    ]
+    Access.save_roster(c, {**whole, "people": people})
+    c.execute("UPDATE pipelines SET owner_id=NULL WHERE id='general'")
+    # The manager reports to Bo and runs on Cy's computer; the builder runs on Cy's too.
+    c.execute("UPDATE bot_config SET reports_to='human:bo', owner_id='cy' WHERE bot='manager'")
+    c.execute("UPDATE bot_config SET reports_to='bot:manager', owner_id='cy' WHERE bot='builder'")
+    task_id = X.new_task(c, "bot:reviewer", "Write the launch note", assignee="bot:builder")["id"]
+    c.execute("UPDATE visits SET level='person', person_id=NULL WHERE task_id=?", (task_id,))
+    assert W.person_for(c, E.task(c, task_id)) == "human:bo"
+    X.no_sign_in(c, "human:bo")  # passed over: the next person up
+    assert W.person_for(c, E.task(c, task_id)) == "human:di"
+    c.execute("UPDATE bot_config SET reports_to=NULL WHERE bot='manager'")  # nobody above it: the company's owner
+    assert W.person_for(c, E.task(c, task_id)) == W.company_person(c)

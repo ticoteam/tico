@@ -9,9 +9,10 @@
 - `kpis`: the KPI tree by growth role, each with its last 24 readings as the sparkline plots them (one value per period,
   partials left out, oldest first). A KPI with no growth field is left out; `other` holds one with a stage or loop but
   no role.
-- `markers`: the moves of marketing tasks that start a test or finish it, newest first, at most 200. Each move is one
-  marker, so a task moved twice gives two. The window is the first month's start to now (the last twelve months when
-  there are no cohorts).
+- `markers`: when a marketing idea's test started (it took a `growth:running` or `idea:live` label) or the idea finished
+  (done: `kept`; closed: `dropped`), newest first, at most 200 (backend/marketing_tasks.py). Each is one marker, so an
+  idea started twice gives two. The window is the first month's start to now (the last twelve months when there are no
+  cohorts).
 
 The tasks, KPIs and channels are read as their own routes read them: a marker shows only a task the reader may see
 (auth.task_sql, as task lists do). `may_edit` is who may record cohorts: an admin or a bot (growth.py's cohort rule).
@@ -60,8 +61,6 @@ SERIES_KEYS = (
     "revenue_month",
     "margin_pct",
 )
-# The marketing tasks' steps that start a test or finish it, by step id: (kind, outcome).
-MOVES = {MT.step_id("testing"): ("started", None), **{MT.step_id(key): ("finished", key) for key in MT.TERMINAL}}
 
 
 def _month(row, month):
@@ -147,15 +146,44 @@ def _kpis(c, hidden):
     }
 
 
+def _has_any(labels, values):
+    """SQL: the JSON list of labels `labels` holds one of `values` (bound in order)."""
+    return f"EXISTS (SELECT 1 FROM json_each({labels}) WHERE value IN ({','.join('?' * len(values))}))"
+
+
+# A test starts when a label change takes an idea from none of the running labels to one of them. Adding or swapping
+# to the other running label while it runs is the same test.
+STARTED_SQL = (
+    _has_any("coalesce(e.new, '[]')", MT.STARTED) + " AND NOT " + _has_any("coalesce(e.old, '[]')", MT.STARTED)
+)
+
+
+# The idea's labels when a move was made: the last label change before it, else what the first one after it changed
+# from, else the labels it has now (it never changed them).
+LABELS_THEN = (
+    "coalesce((SELECT l.new FROM history_events l WHERE l.subject_type='task' AND l.subject_id=e.subject_id "
+    "AND l.kind='labels' AND l.rowid<e.rowid ORDER BY l.rowid DESC LIMIT 1), "
+    "(SELECT l.old FROM history_events l WHERE l.subject_type='task' AND l.subject_id=e.subject_id "
+    "AND l.kind='labels' AND l.rowid>e.rowid ORDER BY l.rowid LIMIT 1), "
+    "(SELECT json_group_array(tg.key) FROM task_tags tt JOIN tags tg ON tg.id=tt.tag_id WHERE tt.task_id=e.subject_id))"
+)
+
+
 def _markers(c, auth, who, since):
     visible = auth.task_sql(c, who)
+    # A finish is a move that ended the task (into Done or Closed, by a person, a bot or a close of the task above it)
+    # while it was an idea. A task put back from the trash as it ended did not end again.
     rows = H._rows(
         c.execute(
-            "SELECT e.subject_id AS task_id, e.created_at, e.new, t.title, t.goal_id FROM history_events e "
-            "JOIN tasks t ON t.id=e.subject_id "
-            f"WHERE e.subject_type='task' AND e.kind='step' AND e.new IN ({','.join('?' * len(MOVES))}) AND t.type_id=? AND e.created_at>=? "
-            f"AND t.id IN (SELECT id FROM tasks WHERE type_id=? AND {visible}) ORDER BY e.created_at DESC, e.id DESC LIMIT ?",
-            [*MOVES, MT.TYPE_ID, since, MT.TYPE_ID, MARKERS_MAX],
+            "SELECT e.kind AS event, e.subject_id AS task_id, e.created_at, e.old, e.new, s.kind AS stage, t.title, "
+            "t.goal_id FROM history_events e JOIN tasks t ON t.id=e.subject_id "
+            "LEFT JOIN stages s ON e.kind='move' AND s.id=e.new "
+            f"WHERE e.subject_type='task' AND e.created_at>=? AND ((e.kind='labels' AND {STARTED_SQL}) "
+            "OR (e.kind='move' AND s.kind IN ('done','closed') "
+            "AND coalesce(json_extract(e.data, '$.move'), '')!='restored' "
+            f"AND {_has_any(LABELS_THEN, MT.LABELS)})) "
+            f"AND t.id IN (SELECT id FROM tasks WHERE {visible}) ORDER BY e.created_at DESC, e.rowid DESC LIMIT ?",
+            [since, *MT.STARTED, *MT.STARTED, *MT.LABELS, MARKERS_MAX],
         )
     )
     tags = {}
@@ -169,13 +197,13 @@ def _markers(c, auth, who, since):
             tags.setdefault(task_id, []).append(key[len("channel:") :])
     out = []
     for r in rows:
-        kind, outcome = MOVES[r["new"]]
+        finished = r["event"] == "move"
         out.append(
             {
                 "task_id": r["task_id"],
                 "title": r["title"],
-                "kind": kind,
-                "outcome": outcome,
+                "kind": "finished" if finished else "started",
+                "outcome": ("kept" if r["stage"] == "done" else "dropped") if finished else None,
                 "at": r["created_at"],
                 "channels": tags.get(r["task_id"], []),
                 "goal_id": r["goal_id"],
@@ -210,8 +238,8 @@ def install(app, store, auth):
     @app.get("/api/v2/growth/numbers")
     def growth_numbers(request: Request, months: int = MONTHS_DEFAULT):
         """The Growth page's numbers: the months, every channel's and the total's CAC, LTV, retention, revenue and
-        margin, the KPI tree with its last readings, and the marketing tests that started or finished. `months`: the
-        newest 1 to 24 months."""
+        margin, the KPI tree with its last readings, and the marketing ideas whose test started or that finished.
+        `months`: the newest 1 to 24 months."""
         who = request.state.identity
         auth.domain(who)
         if not MONTHS_MIN <= months <= MONTHS_MAX:

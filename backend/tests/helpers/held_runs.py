@@ -46,8 +46,11 @@ def task_held(api, private=False):
     stop_partway(api, machine, attempt, 'held')
     other = post(api, 'tasks', {'owner': 'ops', 'title': 'Weekly digest', 'body': 'Send it.'})
     other_id = other.get('task', other).get('id') or other['refs']['task']
-    # Tico hands a review child's verdict back to its parent task as its own notice.
+    # Tico hands a review sub-task's verdict back to its parent task as its own notice: a sub-task's result wakes the
+    # parent's owner (rules.AWAITED_EVENTS), where a plain notice from Tico is only a note.
     with api.app.state.store.transaction() as c:
-        H.task_comment(c, H.KEEPER, task_id, 'VERDICT: changes PR #12 head ' + 'a' * 40)
-        H.task_comment(c, H.KEEPER, other_id, 'The digest numbers are in.')
+        H.task_comment(
+            c, H.KEEPER, task_id, 'VERDICT: changes PR #12 head ' + 'a' * 40, extra_refs={'subtask': 'review-1'}
+        )
+        H.task_comment(c, H.KEEPER, other_id, 'The digest numbers are in.', extra_refs={'subtask': 'digest-1'})
     return machine, attempt, task_id, other_id

@@ -39,7 +39,7 @@ prerequisites:
     why: "Optional. A read-only Slack support channel catches questions that never become email."
     required: false
   - tool: docs
-    why: "Optional but the biggest lift. The team docs, help centre or FAQ, linked in Tico, are what the Librarian answers from when this bot asks with `hub doc ask`. Without them each reply carries a marked gap."
+    why: "Optional but the biggest lift. The team docs, help centre or FAQ, linked in Tico, are what the Librarian answers from when this bot asks with `tico doc ask`. Without them each reply carries a marked gap."
     required: false
 onboarding:
   - ask: "Where does support arrive: a support mailbox, mail forwarded to me, a Slack channel, a ticket tool?"

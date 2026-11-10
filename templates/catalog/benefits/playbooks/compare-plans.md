@@ -11,8 +11,8 @@ task, and nothing has been sent to an employee or a broker.
 
 ## 1. Read the plan documents
 
-    hub doc ask "What are the deductibles, premiums and out-of-pocket maximums for each plan in <year>?"
-    hub doc read <path>
+    tico doc ask "What are the deductibles, premiums and out-of-pocket maximums for each plan in <year>?"
+    tico doc read <path>
 
 Read each plan summary the Librarian cites, whole. Note the plan year and page for every figure. A figure you cannot find
 is a marked gap, never an estimate. If a plan has a Summary of Benefits and Coverage, read its coverage examples first.

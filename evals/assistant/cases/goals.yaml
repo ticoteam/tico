@@ -58,7 +58,7 @@
         kpis: [{id: kpi_trials, name: "Paid trials per month", unit: "", latest: {value: 318, period_end: "2026-10-31"}, freshness: fresh, target_label: "→ 400 by Dec 31", status: yellow, reason: "318 against 400"}]
         children: []
         chain: []
-        tasks: [{id: 7d1e4b20-5000-4000-8000-000000000003, title: "Trial onboarding emails", owner_id: "bot:copywriter", requester_id: "human:dana", status: doing, updated_at: "2026-11-03T15:00:00Z"}]
+        tasks: [{id: 7d1e4b20-5000-4000-8000-000000000003, title: "Trial onboarding emails", owner_id: "bot:copywriter", requester_id: "human:dana", status: open, updated_at: "2026-11-03T15:00:00Z"}]
         events: []
         checkins: [{id: chk_1, goal_id: goal_4f2a9c1b, created_at: "2026-10-27T16:00:00Z", author: "human:dana", body: "Onboarding emails go out next week.", signal: at_risk}]
         proposals: []
@@ -69,7 +69,7 @@
   must_not:
     - '^goal (save|create|update|status|read-back)\b'
     - '^assistant propose'
-    - '^task (create|close|bulk)\b'
+    - '^task (create|close|done|answer|move|update)\b'
   reply: |
     Opens with where they stand in one line: one goal red, one yellow. The red company goal comes first and is linked,
     [Grow the Harbor account](#/goals/goal_9a1e0c77), with its number from the record (42,000 against 120,000, Oct 31). The
@@ -112,7 +112,7 @@
         kpis: [{id: kpi_trials, name: "Paid trials per month", unit: "", latest: {value: 318, period_end: "2026-10-31"}, freshness: fresh, target_label: "→ 400 by Dec 31", status: yellow, reason: "318 against 400"}]
         children: []
         chain: []
-        tasks: [{id: 7d1e4b20-5000-4000-8000-000000000003, title: "Trial onboarding emails", owner_id: "bot:copywriter", requester_id: "human:dana", status: doing, updated_at: "2026-11-03T15:00:00Z"}]
+        tasks: [{id: 7d1e4b20-5000-4000-8000-000000000003, title: "Trial onboarding emails", owner_id: "bot:copywriter", requester_id: "human:dana", status: open, updated_at: "2026-11-03T15:00:00Z"}]
         events: []
         checkins: [{id: chk_1, goal_id: goal_4f2a9c1b, created_at: "2026-10-27T16:00:00Z", author: "human:dana", body: "Onboarding emails go out next week.", signal: at_risk}]
         proposals: []
@@ -168,12 +168,12 @@
     - match: '^proposal list'
       out: {proposals: []}
     - match: '^task list'
-      out: {tasks: [], next_offset: null}
+      out: {tasks: [], next: null}
   must:
     - '^goal list\b'
   must_not:
     - '^assistant propose'
-    - '^task (create|close|bulk)\b'
+    - '^task (create|close|done|answer|move|update)\b'
     - '^goal (save|update|status)\b'
     - 'reply:Next:'
   reply: |
@@ -230,7 +230,7 @@
         kpis: [{id: kpi_trials, name: "Paid trials per month", unit: "", latest: {value: 318, period_end: "2026-10-31"}, freshness: fresh, target_label: "→ 400 by Dec 31", status: yellow, reason: "318 against 400"}]
         children: []
         chain: []
-        tasks: [{id: 9c4e2f71-5000-4000-8000-000000000001, title: "Spring campaign: paid social", owner_id: "bot:campaigns", requester_id: "human:dana", status: doing, updated_at: "2026-10-15T10:00:00Z"}]
+        tasks: [{id: 9c4e2f71-5000-4000-8000-000000000001, title: "Spring campaign: paid social", owner_id: "bot:campaigns", requester_id: "human:dana", status: open, updated_at: "2026-10-15T10:00:00Z"}]
         events: []
         checkins: [{id: chk_1, goal_id: goal_4f2a9c1b, created_at: "2026-10-06T16:00:00Z", author: "human:dana", body: "Campaign starts mid-October.", signal: at_risk}]
         proposals: []
@@ -253,8 +253,8 @@
     - match: '^task list'
       out:
         tasks:
-          - {id: 9c4e2f71-5000-4000-8000-000000000001, title: "Spring campaign: paid social", status: doing, step: "Live", type: "Marketing", owner: "campaigns", requester: "human:dana", note: "Waiting on the creative.", created: "2026-10-10T09:00:00Z", updated: "2026-10-15T10:00:00Z"}
-        next_offset: null
+          - {id: 9c4e2f71-5000-4000-8000-000000000001, number: 57, title: "Spring campaign: paid social", status: open, version: 6, pipeline_id: general, stage_id: general-todo, owner: "bot:campaigns", labels: ["growth:running"], turn: {state: bot, who: "bot:campaigns", line: "Waiting on the creative.", since: "2026-10-15T10:00:00Z"}}
+        next: null
     - match: '^finance report budget_vs_actual'
       out:
         start: "2026-11-01"
@@ -267,9 +267,9 @@
   must:
     - '^goal list\b'
   must_not:
-    - '^task (close|bulk)\b'
+    - '^task (close|done|answer|move)\b'
     - '^assistant propose'
-    - '^approval (approve|decline)'
+    - '^task (update|reassign)\b'
     - '^task create --owner human:'
   reply: |
     Gives at most three items, highest first: the red Harbor goal, which nobody is on (owned by the Team, no open task),
@@ -313,7 +313,7 @@
         kpis: [{id: kpi_trials, name: "Paid trials per month", unit: "", latest: {value: 318, period_end: "2026-10-31"}, freshness: fresh, target_label: "→ 400 by Dec 31", status: yellow, reason: "318 against 400"}]
         children: []
         chain: []
-        tasks: [{id: 9c4e2f71-5000-4000-8000-000000000001, title: "Spring campaign: paid social", owner_id: "bot:campaigns", requester_id: "human:dana", status: doing, updated_at: "2026-10-15T10:00:00Z"}]
+        tasks: [{id: 9c4e2f71-5000-4000-8000-000000000001, title: "Spring campaign: paid social", owner_id: "bot:campaigns", requester_id: "human:dana", status: open, updated_at: "2026-10-15T10:00:00Z"}]
         events: []
         checkins: [{id: chk_1, goal_id: goal_4f2a9c1b, created_at: "2026-10-06T16:00:00Z", author: "human:dana", body: "Campaign starts mid-October.", signal: at_risk}]
         proposals: []
@@ -353,15 +353,15 @@
     - match: '^task list'
       out:
         tasks:
-          - {id: 9c4e2f71-5000-4000-8000-000000000001, title: "Spring campaign: paid social", status: open, type: "Marketing", step: "On deck", owner: "campaigns", requester: "human:dana", note: "Waiting on the creative.", created: "2026-10-10T09:00:00Z", updated: "2026-10-15T10:00:00Z"}
-        next_offset: null
+          - {id: 9c4e2f71-5000-4000-8000-000000000001, number: 57, title: "Spring campaign: paid social", status: open, version: 6, pipeline_id: general, stage_id: general-todo, owner: "bot:campaigns", labels: ["growth:running"], turn: {state: bot, who: "bot:campaigns", line: "Waiting on the creative.", since: "2026-10-15T10:00:00Z"}}
+        next: null
     - match: '^task (create|comment)'
       out: {ok: true, task: {id: 2b7c9d10-5000-4000-8000-000000000009, status: open, owner: "campaigns"}}
   must:
     - '^task (create .*--owner (bot:)?campaigns|comment)\b'
   must_not:
     - '^task create --owner human:'
-    - '^task (close|bulk)\b'
+    - '^task (close|done|answer|move)\b'
     - '^assistant propose'
   reply: |
     Gives the spring campaign work to the Campaigns bot, not to Dana: a task for the campaigns bot, or a comment on its open
@@ -422,7 +422,7 @@
     - '^assistant propose'
     - '^goal (checkin|save|update)\b'
   reply: |
-    A short sign-off, one line ("Good. Talk tomorrow." is enough). It does not offer the next step, ask a question, recap
+    A short sign-off, one line ("Good. Talk tomorrow." is enough). It does not offer the next item, ask a question, recap
     the Harbor goal or repeat the check-in item. It changes nothing.
 
 - id: goals-ordinary-chore-no-next
@@ -432,18 +432,18 @@
     - match: '^task list'
       out:
         tasks:
-          - {id: 3b8e1c42-6000-4000-8000-000000000001, title: "Confirm the Harbor renewal terms with legal", status: open, owner: "human:dana", requester: "bot:copywriter", note: "", created: "2026-11-03T10:00:00Z", updated: "2026-11-03T10:00:00Z"}
-          - {id: 7f2d9a10-6000-4000-8000-000000000002, title: "Review the trials landing page copy", status: open, owner: "human:dana", requester: "bot:copywriter", note: "", created: "2026-11-04T09:00:00Z", updated: "2026-11-04T09:00:00Z"}
-        next_offset: null
+          - {id: 3b8e1c42-6000-4000-8000-000000000001, number: 61, title: "Confirm the Harbor renewal terms with legal", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana", turn: {state: person, who: "human:dana", line: "Confirm the Harbor renewal terms with legal", since: "2026-11-03T10:00:00Z"}}
+          - {id: 7f2d9a10-6000-4000-8000-000000000002, number: 64, title: "Review the trials landing page copy", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana", turn: {state: person, who: "human:dana", line: "Review the trials landing page copy", since: "2026-11-04T09:00:00Z"}}
+        next: null
   must:
     - '^task list\b'
   must_not:
     - 'reply:Next:'
     - 'reply:Do it now'
-    - '^task (close|bulk|update)\b'
+    - '^task (close|done|answer|move|update)\b'
     - '^assistant propose'
   reply: |
-    Lists her two open tasks with their links, and nothing else. No "Next:" line, no offer of a next step, no goal advice: she
+    Lists her two open tasks with their links, and nothing else. No "Next:" line, no offer of a next thing, no goal advice: she
     asked a plain question. It changes nothing.
 
 - id: goals-non-owner-own-area
@@ -566,11 +566,24 @@
     - match: '^task list'
       out:
         tasks:
-          - {id: 9c4e2f71-5000-4000-8000-000000000001, title: "Spring campaign: paid social", status: doing, step: "Live", type: "Marketing", owner: "campaigns", requester: "human:dana", note: "", created: "2026-10-10T09:00:00Z", updated: "2026-10-15T10:00:00Z"}
-        next_offset: null
+          - {id: 9c4e2f71-5000-4000-8000-000000000001, number: 57, title: "Spring campaign: paid social", status: open, version: 6, pipeline_id: general, stage_id: general-todo, owner: "bot:campaigns", labels: ["growth:running"], turn: {state: bot, who: "bot:campaigns", line: "Running", since: "2026-10-15T10:00:00Z"}}
+        next: null
     - match: '^task show 9c4e2f71'
       out:
-        task: {id: 9c4e2f71-5000-4000-8000-000000000001, title: "Spring campaign: paid social", status: doing, step: "Live", type: "Marketing", owner: "campaigns", requester: "human:dana", updated: "2026-10-15T10:00:00Z", comments: []}
+        id: 9c4e2f71-5000-4000-8000-000000000001
+        number: 57
+        title: "Spring campaign: paid social"
+        body: "Paid social for the spring trials push."
+        status: open
+        version: 6
+        pipeline: {id: general, name: General}
+        stage: {id: general-todo, name: "To do", kind: work, by_hand: false}
+        owner_id: "bot:campaigns"
+        requester: "human:dana"
+        labels: ["growth:running"]
+        turn: {state: bot, who: "bot:campaigns", line: "Running", since: "2026-10-15T10:00:00Z"}
+        to_leave: []
+        comments: []
     - match: '^task comment'
       out: {ok: true, comment: {id: cmt_1, task_id: 9c4e2f71-5000-4000-8000-000000000001}}
     - match: '^assistant morning'
@@ -579,13 +592,13 @@
     - '^human list\b'
     - '^assistant morning --for human:dana\b'
   must_not:
-    - '^task (close|bulk)\b'
+    - '^task (close|done|answer|move)\b'
     - '^assistant propose'
-    - '^approval (approve|decline)'
+    - '^task (update|reassign)\b'
     - '^message send'
     - '^assistant send'
   reply: |
-    Sends ONE morning message to Dana with `hub assistant morning --for human:dana --body`: short, addressed to "you", with
+    Sends ONE morning message to Dana with `tico assistant morning --for human:dana --body`: short, addressed to "you", with
     at most three things only she can do, each linked, led by the red Harbor goal that nobody is on (her call on who takes
     it, with its goal linked and 42,000 against 120,000). The stalled spring campaign task is the campaigns bot's to move: at
     most one comment on it for that bot, and it is never asked of Dana. The run sends no second message, closes nothing and
@@ -621,17 +634,17 @@
     - match: '^proposal list'
       out: {proposals: []}
     - match: '^task list'
-      out: {tasks: [], next_offset: null}
+      out: {tasks: [], next: null}
   must:
     - '^goal list\b'
   must_not:
     - '^assistant morning\b'
     - '^assistant propose'
-    - '^task (close|bulk|comment)\b'
+    - '^task (close|done|answer|comment)\b'
     - '^message send'
   reply: |
     A quiet day: the only goal is green, nothing is stuck and nothing needs her. The run sends NO morning message to Dana (no
-    `hub assistant morning` at all), closes nothing and proposes nothing. Its final reply is a short run record saying
+    `tico assistant morning` at all), closes nothing and proposes nothing. Its final reply is a short run record saying
     nothing was sent for her.
 
 - id: goals-morning-409-no-retry
@@ -679,14 +692,14 @@
     - match: '^proposal list'
       out: {proposals: []}
     - match: '^task list'
-      out: {tasks: [], next_offset: null}
+      out: {tasks: [], next: null}
     - match: '^assistant morning'
       exit: 2
       out: {error: already_sent_today, detail: "The Tico Assistant has already sent this person their morning message today; the next can go at 2026-11-06T00:00:00-08:00 (midnight, company time)", retryable: false, operation_id: null}
   must:
     - '^assistant morning --for human:dana\b'
   must_not:
-    - '^task (close|bulk|create)\b'
+    - '^task (close|done|answer|create)\b'
     - '^assistant (propose|send)\b'
     - '^message send'
   reply: |

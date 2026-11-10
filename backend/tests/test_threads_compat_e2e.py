@@ -1,6 +1,6 @@
 """What clients read and send on today's conversation surfaces, pinned before the native threads build replaces them.
 
-docs/dev/threads-contract.md (section 10) keeps `/api/v2/conversations/*` as aliases for one release, and the `hub` CLI
+docs/dev/threads-contract.md (section 10) keeps `/api/v2/conversations/*` as aliases for one release, and the `tico` CLI
 and MCP old names with them. Each test here is a behaviour a client depends on today: the paths a person or a bot
 calls, the fields it parses, the cursor it walks, the answer a person who may not read a chat gets, and the claim
 fields the runner keys its session on. The refactor has to keep each one true, or change the client on purpose.

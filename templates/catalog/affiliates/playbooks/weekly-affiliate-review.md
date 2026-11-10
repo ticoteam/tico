@@ -17,7 +17,7 @@ application has a proposed decision, the review is published, and the task note 
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Read last week's review and each affiliate's file. For each decision a person made last week, note whether it was carried
 out, still open, or dropped.
@@ -61,13 +61,13 @@ Write `reports/YYYY-MM-DD-affiliates.md` in the shape of `knowledge/examples/aff
 
 Then:
 
-    hub file publish reports/YYYY-MM-DD-affiliates.md
+    tico file publish reports/YYYY-MM-DD-affiliates.md
 
 Add the dated checks to each `knowledge/affiliates/<name>.md`, rewrite `state.md`, and commit this repository.
 
 ## 8. Close
 
-    hub task update <id> --status done --note "..."
+    tico task done <id> -m "..." --version N
 
 The note holds the headline, the review path, and what you could not read. Finish the task even on a quiet week: an open
 routine task gets absorbed into the next run.

@@ -18,7 +18,10 @@
     "is_calendar_invite": false,
     "labels": [
       "INBOX"
-    ]
+    ],
+    "from_domain": "acme.example",
+    "category": "",
+    "known_sender": true
   },
   "note": "A thread the owner already answered; nothing is asked: archive."
 }

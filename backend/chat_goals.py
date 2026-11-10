@@ -157,14 +157,11 @@ def report(c, attempt, payload):
 TASK_GOAL_CHARS = 3500
 
 
-def task_goal_objective(task, objective, steps=()):
-    """What a task's native goal holds the bot to: the task's own objective, then marking it done, or on a
-    steps-only type (`steps`, its step names) moving it to the step its work has reached."""
+def task_goal_objective(task, objective):
+    """What a task's native goal holds the bot to: the task's own objective, then saying its work is done."""
     tail = (
-        f"\nThen move task {task['id']} to the step its work has reached ({', '.join(steps)}) with a summary "
-        f"(hub task update {task['id']} --step \"<step>\" --note ...)."
-        if steps
-        else f"\nThen mark task {task['id']} done with a summary (hub task update {task['id']} --status done --note ...)."
+        f"\nThen say task {task['id']} is done with a summary "
+        f"(tico task done {task['id']} -m \"what was done\" --version <the version you were shown>)."
     )
     return objective[: TASK_GOAL_CHARS - len(tail)].rstrip() + tail
 
@@ -179,7 +176,7 @@ def task_goal_row(c, auth, conv, bot, task, objective):
     owner, supported, _ = capabilities(c, auth, conv)
     if owner != bot or not supported:
         return None
-    objective = task_goal_objective(task, objective, H.steps_only(c, task))
+    objective = task_goal_objective(task, objective)
     goal = current(c, conv["id"])
     if goal and (goal["set_by"] != H.KEEPER or goal["objective"] == objective and goal["status"] != "cleared"):
         return goal if goal["status"] == "active" else None
@@ -237,9 +234,9 @@ def clear_task_goal(c, conv):
 
 
 def task_goal_ended(c, goal, task_id, status, note):
-    """A task goal the harness ended. Met: the task is marked done with the judge's reason, when the bot has not
-    marked it already (the objective told it to). Paused or stopped: the task stays open and the main chat hears
-    it is blocked (waiting on someone) or stuck."""
+    """A task goal the harness ended. Met: the bot says the task's work is done with the judge's reason, when it has
+    not already (the objective told it to). Paused or stopped: nothing here; the task stays open, and the never-stuck
+    check wakes whoever has its turn."""
     row = H.task(c, task_id)
     if not row or row["owner_id"] != "bot:" + goal["bot"] or row["status"] not in H.ACTIVE_STATUSES:
         return
@@ -249,21 +246,15 @@ def task_goal_ended(c, goal, task_id, status, note):
         from .execution import current_task_goal
 
         wanted = current_task_goal(c, goal["bot"], row)
-        # A steps-only type's task is finished by the bot moving it to a step, not by its goal being met.
-        steps = H.steps_only(c, row)
-        if (
-            row["status"] in ("open", "doing")
-            and goal["set_by"] == H.KEEPER
-            and wanted
-            and not steps
-            and goal["objective"] == task_goal_objective(row, wanted["objective"], steps)
-        ):
-            H.task_update(c, row["owner_id"], task_id, status="done", note=(note or "Goal met.")[:4000], strict=False)
-        return
-    if status in ("paused", "stopped"):
-        # A harness pauses a goal that needs a person (Codex "blocked"); the runner's tries guard pauses a stuck one.
-        waiting = "waiting on:" in note.lower() or (status == "paused" and not note.startswith("Goal paused after"))
-        H.task_report(c, row, "blocked" if waiting else "stuck", note)
+        if goal["set_by"] == H.KEEPER and wanted and goal["objective"] == task_goal_objective(row, wanted["objective"]):
+            # The bot's own word, inside the transaction that read the task: the version it just read. With a company
+            # rule in force the note is the fixed "Goal met.": the harness's words were never checked against the
+            # rules, and no check can run inside this write (backend/task_rule_gate.py).
+            from . import org_rule_check
+
+            if org_rule_check.in_force(c):
+                note = ""
+            H.attempt(c, H.task_done, row["owner_id"], task_id, (note or "Goal met.")[:4000], row["version"])
 
 
 def install(app, store, auth, mutate, send):

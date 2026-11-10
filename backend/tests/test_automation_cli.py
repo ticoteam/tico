@@ -1,4 +1,4 @@
-"""`hub automation ...` and the hub_automation_* tools against the real API (clients/remotecli.py, clients/hubtools.py):
+"""`tico automation ...` and the hub_automation_* tools against the real API (clients/remotecli.py, clients/hubtools.py):
 the CLI and MCP run the same tool, so the same rights and the same payloads as the UI."""
 
 import json
@@ -68,7 +68,9 @@ def test_botops_acts_with_the_askers_rights(api, botops):
     err, made = mcp(api, "hub_automation_create", flow, attempt["token"])
     assert not err and made["can_edit"], made
     err, listed = mcp(api, "hub_automation_list", {}, attempt["token"])
-    assert not err and [a["id"] for a in listed["automations"] if not a["builtin"]] == [made["id"]]
+    # BotOps' own daily "Sweep stuck tasks" (routines.ensure_task_sweep) is listed beside it.
+    mine = [a["id"] for a in listed["automations"] if not a["builtin"] and a["name"] != "Sweep stuck tasks"]
+    assert not err and mine == [made["id"]]
     finish(api, botops, attempt)
     member = turn(api, botops, person="cara-test", text="Pause the ops automation")
     err, refused = mcp(api, "hub_automation_update", {"id": made["id"], "enabled": False}, member["token"])
@@ -89,7 +91,7 @@ def test_the_cli_discards_a_proposal_and_lists_the_question_sets_and_the_guide(a
     sets = cli(api, "ana-test", "question-sets")["sets"]
     assert sets and all("@" in s["id"] for s in sets)
     guide = cli(api, "ana-test", "guide")["text"]
-    assert "hub automation create --file -" in guide and "`send_reply`" in guide and "{{" not in guide
+    assert "tico automation create --file -" in guide and "`send_reply`" in guide and "{{" not in guide
 
 
 def test_botops_sets_an_email_inboxs_send_switch_for_its_owner_only(api, botops):

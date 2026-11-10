@@ -1,11 +1,9 @@
 /// <reference lib="dom.iterable" />
 // A task's files and questions: the strip of tiles (lazy, sized, skeletons), a tile opened in place with its versions
-// and Compare, image arrows and Esc; files a comment carried; asks on a file version and on comments (single, multi
-// with Other, Dismiss; the asker sees no buttons); the modal's poll bringing new files without breaking a playing
-// video or a half-filled answer; a reader's questions (no controls) and an older runner's plain answer; linked
-// images inline; board covers and the open-question dot; Pin to the sidebar; the task view preference and file
-// input on a local install; uploads (Files + and a new task) sending in-memory copies of every file; no sideways
-// scroll at phone width. Every request is intercepted.
+// and Compare, image arrows and Esc; files a comment carried; questions on a file version and on comments, read only;
+// the modal's poll bringing new files without breaking a playing video; a reader's view (no controls) and an older
+// runner's plain answer; linked images inline; uploads (Files +, a drop, a paste) sending in-memory copies of every
+// file; no sideways scroll at phone width. Every request is intercepted.
 // TICO_SHOTS=<dir> saves screenshots (desktop and phone, dark and light).
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -26,13 +24,12 @@ interface FileRow {id: string; name: string; mime: string; current_version: numb
 interface CommentRow {id: string; kind: string; sender_id: string; body: string; created_at: string; answers?: unknown[]; answer?: unknown; refs: {task: string; comment?: boolean; questions?: unknown[]}}
 interface PageWin {sentFiles: {name: string; size: number; copied: boolean}[]; readDone: string[]; fastPoll: boolean}
 // App functions and page globals, called inside page.evaluate.
-declare const TASKS_ST: {loading?: boolean; view: string; tasks: {id: string}[]};
+declare const TASKS_ST: {loading?: boolean};
 declare const TASK_CHAT: unknown;
 declare const readDone: string[];
 declare function taskChatLive(chat: unknown): void;
-declare function openTaskCreate(bot?: string): void;
-declare function taskModalShow(task: unknown): void;
-declare function tasksRender(state: unknown): void;
+declare function v2Get(path: string): Promise<unknown>;
+declare function taskModalShow(task: unknown): Promise<void>;
 declare function tfLoad(root: Element, id: string): void;
 declare function $(selector: string): Element;
 // A small striped PNG, made here so the test needs no image files.
@@ -220,44 +217,12 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
       for (const [sw, cw] of r.dialogs) assert(sw <= cw + 1, `${where}: a dialog scrolls sideways ${JSON.stringify(r)}`);
     };
 
-    // ---- the board: a cover for the task with a picture, the open-question dot, none for the other
-    await page.goto('http://tico-ui.test/#/tasks?view=board');
-    await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelectorAll('#task-body .bcard').length === 2);
-    const card = page.locator('#task-body .bcard[data-task-key="tt1"]');
-    assert.equal(await card.locator('.bcard-cover img').getAttribute('data-tf-src'), '/api/v2/files/f-frame/thumb');
-    await card.locator('.bcard-cover.ready').waitFor();
-    assert.equal(await card.locator('.ask-dot').count(), 1, 'an open question shows as a dot');
-    assert.equal(await page.locator('#task-body .bcard[data-task-key="tt2"] .bcard-cover, #task-body .bcard[data-task-key="tt2"] .ask-dot').count(), 0);
-    // a local install (no `cloud`) still reads the saved view and offers files on a new task
-    assert(requested.includes('/api/v2/preferences/tasks.view'), 'the saved task view is read');
-    await page.evaluate(() => openTaskCreate());
-    assert.equal(await page.locator('#task-create-form input[type=file][name=files]').count(), 1);
-    await page.keyboard.press('Escape');
-    await page.locator('#task-create-form').waitFor({state: 'hidden'});
-
-    // ---- Pin to sidebar, and unpin from its ✕
-    assert.equal(await page.locator('#nav-pins').isHidden(), true);
-    const pinItem = async () => { await page.locator('#task-more').click(); return (await page.locator('#task-pin').innerText()).trim(); };
-    assert.equal(await pinItem(), 'Pin to sidebar');
-    await page.locator('#task-pin').click();
-    await page.locator('#pin-list a[href="#/tasks?type=general&view=board"]').waitFor();
-    for (const mode of ['dark', 'light']) { await theme(mode); await shot(`board-covers-desktop-${mode}`); }
-    await theme('dark');
-    assert.equal(await page.locator('#nav-pins-h').textContent(), 'Pipelines');
-    assert.match(await page.locator('#pin-list').innerText(), /General/);
-    assert.equal(await pinItem(), 'Unpin', 'the ⋯ menu offers Unpin for a pinned view');
-    await page.keyboard.press('Escape');
-    assert.deepEqual((posted.at(-1)!.body.value as {items: unknown[]}).items, [{hash: '#/tasks?type=general&view=board', name: 'General'}]);
-    await page.locator('#pin-list .pin-row').hover();
-    await page.locator('#pin-list [data-unpin="0"]').click();
-    await page.waitForFunction(() => document.querySelector<HTMLElement>('#nav-pins')!.hidden);
-    assert.deepEqual((posted.at(-1)!.body.value as {items: unknown[]}).items, []);
-    assert.equal(await pinItem(), 'Pin to sidebar');
-    await page.keyboard.press('Escape');
+    await page.goto('http://tico-ui.test/#/tasks');
+    await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading);
 
     // ---- the strip: one tile per file at its newest version, sized, a skeleton until the thumb arrives
     { let release!: (value?: unknown) => void; thumbHold = {held: new Promise(r => { release = r; })}; thumbHold.release = release; }
-    await page.evaluate(() => taskModalShow(TASKS_ST.tasks.find(t => t.id === 't1')));
+    await page.evaluate(async () => { const r = await v2Get('/v2/tasks/t1') as {task: unknown}; await taskModalShow(r.task); });
     const modal = page.locator('#task-modal');
     await modal.locator('.tf-tile[data-tf-file="f-cut"]').waitFor();
     assert.deepEqual(await modal.locator('.tf-tile .tf-name').allTextContents(), ['cut.mp4', 'script.md', 'frame.png', 'still.png', 'shots.csv', 'logo.svg', 'page.html', 'site.html']);
@@ -392,46 +357,8 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     await page.mouse.click(4, 4);
     await view.waitFor({state: 'hidden'});
 
-    // ---- answering: one question, one click; the thread shows the answer comment and the ask folds to its answers
-    await cutTile.click();
-    await view.locator('.ask .ask-opt', {hasText: 'Approve'}).click();
-    await modal.locator('.tcomment', {hasText: 'Ana approved "cut.mp4" v3.'}).waitFor();
-    assert.deepEqual(posted.find(x => x.path.endsWith('/answers'))!.body, {target: {file: 'f-cut', version: 3}, answers: {verdict: ['Approve']}});
-    await view.locator('.ask.answered').waitFor();
-    assert.match(await view.locator('.ask-answers').innerText(), /You\s*Approve|Ana\s*Approve/);
-    assert.equal(await view.locator('.ask .ask-opt').first().isVisible(), false, 'answered: folded to its answers');
-    assert.equal(await cutTile.locator('.ask-dot').count(), 0);
-    await fold();
-    // two questions: multi-select with Other, then Send
-    const m2 = modal.locator('.tcomment', {has: page.locator('.ask-q[data-qid="music"]')});
-    assert.equal(await m2.locator('.ask-opt .ask-pic').count(), 2, 'variants that point at a file show it');
-    await m2.locator('.ask-opt', {hasText: 'Upbeat'}).click();
-    await m2.locator('.ask-opt', {hasText: 'Calm'}).click();
-    await m2.locator('.ask-opt[data-label="B"]').click();
-    await m2.locator('.ask-other').fill('Softer at the end');
-    for (const mode of ['dark', 'light']) { await theme(mode); await m2.scrollIntoViewIfNeeded(); await shot(`task-open-ask-desktop-${mode}`); }
-    await theme('dark');
-    await m2.locator('[data-ask-send]').click();
-    await modal.locator('.tcomment', {hasText: 'Ana answered "Which tracks fit?"'}).waitFor();
-    assert.deepEqual(posted.filter(x => x.path.endsWith('/answers')).at(-1)!.body,
-      {target: {comment: 'm2'}, answers: {music: ['Upbeat', 'Calm'], thumb: ['B']}, other: 'Softer at the end'});
-    assert.match(await m2.locator('.ask-answers').innerText(), /Music: Upbeat, Calm; Thumbnail: B[\s\S]*Softer at the end/);
-    // Dismiss
-    const m3 = modal.locator('.tcomment', {has: page.locator('.ask-q[data-qid="ship"]')});
-    await m3.locator('[data-ask-dismiss]').click();
-    await modal.locator('.tcomment', {hasText: 'Ana dismissed the question.'}).waitFor();
-    assert.deepEqual(posted.filter(x => x.path.endsWith('/answers')).at(-1)!.body, {target: {comment: 'm3'}, answers: {}, dismiss: true});
-    assert.match(await m3.locator('.ask-answers').innerText(), /dismissed/);
-    // the asker sees its own question without buttons
-    const m4 = modal.locator('.tcomment', {has: page.locator('.ask-q[data-qid="cap"]')});
-    assert.equal(await m4.locator('.ask-opt, .ask-form').count(), 0);
-    assert.equal(await m4.locator('.ask-text').innerText(), 'Captions too?');
-    assert.deepEqual(errors, []);
-
-    // ---- the modal's poll brings a new file and version; a playing video and a half-filled answer wait for it
+    // ---- the modal's poll brings a new file and version; a playing video waits for it
     const video = view.locator('video');
-    comments.push({id: 'm6', kind: 'ask', sender_id: 'bot:editor', body: 'Which end card?', created_at: new Date().toISOString(), answers: [], refs: {task: 't1',
-      questions: [{id: 'end', question: 'Which end card?', options: [{label: 'Logo'}, {label: 'Link'}], multi: true, other: true}]}});
     // readDone: every answer the app has read in full (its handler runs in the same turn)
     await page.evaluate(() => {
       const send = fetch; (window as unknown as PageWin).readDone = [];
@@ -442,10 +369,6 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
       };
     });
     await page.evaluate(() => { (window as unknown as PageWin).fastPoll = true; });
-    const m6 = modal.locator('.tcomment', {has: page.locator('.ask-q[data-qid="end"]')});
-    await m6.locator('.ask-opt', {hasText: 'Logo'}).click();
-    await m6.locator('.ask-other').fill('Short');
-    await page.evaluate(() => (document.activeElement as HTMLElement).blur());
     await cutTile.click();
     await video.evaluate(v => { v.dataset.keep = '1'; Object.defineProperty(v, 'paused', {configurable: true, get: () => false}); });
     files.push({id: 'f-new', name: 'end-card.png', mime: 'image/png', current_version: 1, archived: false,
@@ -461,12 +384,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
       && readDone.filter(p => p === '/api/v2/tasks/t1').length >= c + 2, [filesRead, commentsRead] as [number, number]);
     assert.equal(await view.locator('video[data-keep="1"]').count(), 1, 'the playing video was left alone');
     assert.equal(await view.locator('[data-tf-v="4"]').count(), 0);
-    assert.equal(await m6.locator('.ask-opt[aria-pressed="true"]').count(), 1, 'the picked choice stays');
-    assert.equal(await m6.locator('.ask-other').inputValue(), 'Short');
-    assert.equal(await modal.locator('.tcomment', {hasText: 'End card added.'}).count(), 0, 'the thread waits for the answer');
-    // the answer is cleared (under the open file, so by script) and the video stops: the next poll catches up
-    await m6.locator('.ask-opt', {hasText: 'Logo'}).dispatchEvent('click');
-    await m6.locator('.ask-other').evaluate(el => { (el as HTMLTextAreaElement).value = ''; el.dispatchEvent(new Event('input', {bubbles: true})); });
+    // the video stops: the next poll catches up
     await video.evaluate(v => { delete (v as unknown as {paused?: boolean}).paused; });
     await view.locator('[data-tf-v="4"]').waitFor();
     await modal.locator('.tcomment', {hasText: 'End card added.'}).waitFor();
@@ -475,26 +393,19 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
 
     // ---- phone width: no sideways scroll, with the strip and an open video
     await page.setViewportSize({width: 390, height: 844});
-    assert.equal(await cutTile.getAttribute('aria-expanded'), 'true', 'still open after answering');
+    assert.equal(await cutTile.getAttribute('aria-expanded'), 'true', 'still open');
     await view.locator('video').waitFor();
     await noSideways('phone, task with an open video');
     for (const mode of ['dark', 'light']) { await theme(mode); await modal.evaluate(d => { (d as HTMLElement).scrollTop = 0; }); await shot(`task-files-strip-phone-${mode}`); await view.scrollIntoViewIfNeeded(); await shot(`task-video-versions-phone-${mode}`); }
-    // the multi ask, re-opened for a later answer, at phone width
     await fold();
-    await m2.locator('[data-ask-again]').click();
-    await noSideways('phone, an open ask');
-    for (const mode of ['dark', 'light']) { await theme(mode); await m2.scrollIntoViewIfNeeded(); await shot(`task-open-ask-phone-${mode}`); }
     await modal.locator('[data-modal-close]').click();
-    await page.evaluate(() => { TASKS_ST.view = 'board'; tasksRender(TASKS_ST); });
-    await noSideways('phone, the board');
-    for (const mode of ['dark', 'light']) { await theme(mode); await shot(`board-covers-phone-${mode}`); }
 
     // ---- a reader (can_comment false): the questions, their choices and answers, no controls and no comment box;
     // an older runner's answer reads as its text, folded
     const answersBefore = posted.filter(x => x.path.endsWith('/answers')).length;
     for (const [width, height, where] of [[390, 844, 'phone'], [1280, 900, 'desktop']] as [number, number, string][]) {
       await page.setViewportSize({width, height});
-      await page.evaluate(() => taskModalShow(TASKS_ST.tasks.find(t => t.id === 't2')));
+      await page.evaluate(async () => { const r = await v2Get('/v2/tasks/t2') as {task: unknown}; await taskModalShow(r.task); });
       const legacy = modal.locator('.tcomment', {has: page.locator('.ask-q[data-qid="tone"]')});
       await legacy.locator('.ask.answered').waitFor();
       assert.match(await legacy.locator('.ask-answers').innerText(), /Sam\s*Keep it warm and short\./);
@@ -514,36 +425,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
       await modal.locator('[data-modal-close]').click();
     }
     assert.equal(posted.filter(x => x.path.endsWith('/answers')).length, answersBefore, 'a reader sends nothing');
-    // the new-task form takes dropped files and pasted screenshots into its one file input
-    await page.evaluate(() => openTaskCreate('bot:editor'));
-    await page.locator('#task-create-form').evaluate(form => {
-      const dropped = new DataTransfer();
-      dropped.items.add(new File(['pdf'], 'brief.pdf', {type: 'application/pdf'}));
-      for (const type of ['dragenter', 'dragover', 'drop']) form.dispatchEvent(new DragEvent(type, {dataTransfer: dropped, bubbles: true, cancelable: true}));
-      const pasted = new DataTransfer();
-      pasted.items.add(new File(['shot'], 'image.png', {type: 'image/png'}));
-      (form as unknown as {body: HTMLElement}).body.dispatchEvent(new ClipboardEvent('paste', {clipboardData: pasted, bubbles: true, cancelable: true}));
-    });
-    const held = await page.locator('#task-create-form input[type=file]').evaluate(input => [...(input as HTMLInputElement).files!].map(f => f.name));
-    assert.equal(held[0], 'brief.pdf');
-    assert.match(held[1]!, /^screenshot-.*\.png$/);
-    assert.match(await page.locator('#task-create-form .files').innerText(), /brief\.pdf.*screenshot-/s);
-    // creating it sends both as copies made in memory, every byte included
-    await page.locator('#task-create-form [name=title]').fill('Brief');
-    await page.locator('#task-create-form [name=body]').fill('See the brief.');
-    const sentBefore = await page.evaluate(() => (window as unknown as PageWin).sentFiles.length);
-    // The page counts a file when it is added to the form, before the request reaches the server: read the new task's
-    // own upload, not whichever upload the server saw last.
-    const created = page.waitForRequest(r => new URL(r.url()).pathname === '/api/v2/uploads/tasks' && r.method() === 'POST');
-    await page.locator('#task-create-form [type=submit]').click();
-    await page.waitForFunction(n => (window as unknown as PageWin).sentFiles.length >= n + 2, sentBefore);
-    assert.deepEqual(await page.evaluate(n => (window as unknown as PageWin).sentFiles.slice(n).map(f => [f.name.replace(/\d/g, ''), f.size, f.copied]), sentBefore),
-      [['brief.pdf', 3, true], ['screenshot--.png', 4, true]]);
-    const createdBody = ((await created).postDataBuffer() || Buffer.alloc(0)).toString('latin1');
-    assert.match(createdBody, /filename="brief\.pdf"\r\nContent-Type: application\/pdf\r\n\r\npdf\r\n/);
-    assert.match(createdBody, /filename="screenshot-\d{8}-\d{6}\.png"\r\nContent-Type: image\/png\r\n\r\nshot\r\n/);
-    await page.locator('#task-create').waitFor({state: 'hidden'});
     assert.deepEqual(errors, []);
-    console.log(`PASS: files strip, viewer, versions, compare, asks, comment files, linked images, covers, pins, phone (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+    console.log(`PASS: files strip, viewer, versions, compare, read-only asks, comment files, linked images, phone (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

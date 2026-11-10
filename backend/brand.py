@@ -298,7 +298,7 @@ def install(app, store, auth, mutate):
             raise Problem(
                 "propose_instead",
                 "A bot proposes a change to the brand draft and an admin confirms it: "
-                "hub proposal create --kind brand_draft",
+                "tico proposal create --kind brand_draft",
                 403,
             )
         raise Problem("forbidden", "Only the owner or an admin writes the brand draft and publishes it", 403)
