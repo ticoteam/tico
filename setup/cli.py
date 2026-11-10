@@ -6,7 +6,7 @@ import sys
 from . import backup as bk, settings as st, state
 from .ui import IO, MissingInput
 from .runner_setup import run_runner
-from . import aws as awsmod, hosted, support
+from . import aws as awsmod, hosted, owned, support
 from .wizard import Deps, destroy, doctor, run
 
 COMMANDS = ("run", "doctor", "destroy", "runner", "backup-storage", "support", "owner-link")
@@ -240,46 +240,20 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
         raise MissingInput("backup-storage needs --domain and --aws-region")
     domain = args.domain.lower()
     saved, _ = state.load(domain)
-    mine = state.load_backup(domain)  # an earlier backup-storage for this domain
-    # The server install's id, else this storage's own; a new one only when neither exists (older ones keep none).
-    install_id = saved.get("install_id") or mine.get("install_id") or ("" if saved or mine else awsmod.new_install_id())
-    names = awsmod.Names(awsmod.asset_prefix(args.asset_prefix, saved or mine), install_id)
-    # An install saved before --asset-prefix (no asset_prefix key) had its backup user named after the domain.
-    server_name = saved.get("aws_name") if "asset_prefix" in saved else ""
-    name = (args.name or mine.get("name") or server_name or awsmod.slug(args.domain)).strip().lower()
-    if not awsmod.NAME_RE.fullmatch(name):
-        raise MissingInput(
-            "--name is 1 to 40 lowercase letters, digits and dashes, starting and ending with a letter or digit"
+    mine = state.load_backup(domain)  # an earlier strict-mode backup-storage for this domain
+    if owned.strict(awsmod.asset_prefix(args.asset_prefix, saved or mine)):
+        values = _backup_storage_strict(args, io, deps, domain, saved, mine)
+    else:
+        _, iam, _, account = deps.aws_clients(args.aws_region, args.aws_profile)
+        values = bk.create_s3(
+            deps.aws_s3(args.aws_region, args.aws_profile),
+            iam,
+            domain=args.domain,
+            region=args.aws_region,
+            account_id=account,
+            name=awsmod.slug(args.domain),
+            say=io.say,
         )
-    awsmod.check_name(args.name, mine.get("name", ""), domain)
-    # Both records: the storage's own, and the server install's when there is one (its bucket is the server's).
-    for rec, what in ((mine, f"Backup storage for {domain}"), (saved, domain)):
-        awsmod.check_region(
-            rec.get("aws_region", "") if rec.get("target", "aws") == "aws" else "", args.aws_region, what
-        )
-    _, iam, _, account = deps.aws_clients(args.aws_region, args.aws_profile)
-    for rec, what in ((mine, f"Backup storage for {domain}"), (saved, domain)):
-        awsmod.check_account(rec.get("aws_account_id", ""), account, what)
-    # Before the first AWS write, beside (never in) the server's state: a retry keeps it all without the flags.
-    record = {**mine, "asset_prefix": names.prefix, "name": name, "aws_region": args.aws_region}
-    record["aws_account_id"] = account
-    if install_id:
-        record["install_id"] = install_id
-    ids = record.setdefault("aws_ids", {})
-    state.save_backup(domain, record)
-
-    values = bk.create_s3(
-        deps.aws_s3(args.aws_region, args.aws_profile),
-        iam,
-        domain=args.domain,
-        region=args.aws_region,
-        account_id=account,
-        name=name,
-        say=io.say,
-        names=names,
-        ids=ids,
-        save=lambda: state.save_backup(domain, record),
-    )
     io.say("\nOn the server, before the installer (the key is shown once; keep it out of shell history and chat):")
     io.say(f"  export LITESTREAM_ACCESS_KEY_ID={values['LITESTREAM_ACCESS_KEY_ID']}")
     io.say(f"  export LITESTREAM_SECRET_ACCESS_KEY={values['LITESTREAM_SECRET_ACCESS_KEY']}")
@@ -290,6 +264,48 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
         f"  (non-interactive: -- --backup existing --backup-url {values['TICO_BACKUP_URL']} --backup-region {values['TICO_BACKUP_REGION']})"
     )
     return 0
+
+
+def _backup_storage_strict(args, io: IO, deps: Deps, domain: str, saved: dict, mine: dict) -> dict:
+    """Strict mode (owned.py): the storage of a saved install with an id, or a new one with its own id."""
+    if (saved and not saved.get("install_id")) or (mine and not mine.get("install_id")):
+        raise MissingInput(
+            f"The saved state for {domain} has no install id, so setup cannot prove which backup bucket and IAM user are "
+            "its own; refusing to change anything. Check by hand what exists in S3 and IAM before running this again."
+        )
+    install_id = saved.get("install_id") or mine.get("install_id") or awsmod.new_install_id()
+    names = awsmod.Names(awsmod.asset_prefix(args.asset_prefix, saved or mine), install_id)
+    name = (args.name or mine.get("name") or awsmod.saved_name(saved) or awsmod.slug(domain)).strip().lower()
+    if not awsmod.NAME_RE.fullmatch(name):
+        raise MissingInput(
+            "--name is 1 to 40 lowercase letters, digits and dashes, starting and ending with a letter or digit"
+        )
+    owned.check_name(args.name, mine.get("name", "") or awsmod.saved_name(saved), domain)
+    # Both records: the storage's own, and the server install's when there is one (its bucket is the server's).
+    for rec, what in ((mine, f"Backup storage for {domain}"), (saved, domain)):
+        owned.check_region(
+            rec.get("aws_region", "") if rec.get("target", "aws") == "aws" else "", args.aws_region, what
+        )
+    _, iam, _, account = deps.aws_clients(args.aws_region, args.aws_profile)
+    for rec, what in ((mine, f"Backup storage for {domain}"), (saved, domain)):
+        owned.check_account(rec.get("aws_account_id", ""), account, what)
+    # Before the first AWS write, beside (never in) the server's state: a retry keeps it all without the flags.
+    record = {**mine, "asset_prefix": names.prefix, "name": name, "aws_region": args.aws_region}
+    record["aws_account_id"], record["install_id"] = account, install_id
+    ids = record.setdefault("aws_ids", {})
+    state.save_backup(domain, record)
+    return owned.create_s3(
+        deps.aws_s3(args.aws_region, args.aws_profile),
+        iam,
+        domain=domain,
+        region=args.aws_region,
+        account_id=account,
+        name=name,
+        say=io.say,
+        names=names,
+        ids=ids,
+        save=lambda: state.save_backup(domain, record),
+    )
 
 
 def main(argv: list[str] | None = None, deps: Deps | None = None, io: IO | None = None) -> int:

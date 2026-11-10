@@ -10,7 +10,7 @@ import urllib.parse
 import uuid
 import urllib.request
 
-from . import aws as awsmod, contract, envfile, remote, settings as st, state, verify
+from . import aws as awsmod, contract, envfile, owned, remote, settings as st, state, verify
 from .remote import Host, Step, StepFailed
 from .settings import Asker, Settings
 from .ui import IO, MissingInput
@@ -155,7 +155,7 @@ def plan_lines(s: Settings, label: str) -> list[str]:
 
 
 def _aws_plan(s: Settings, label: str) -> awsmod.AwsPlan:
-    p = awsmod.plan_aws(
+    return awsmod.plan_aws(
         domain=s.server_url,
         front_door="none",
         region=s.aws_region,
@@ -165,16 +165,15 @@ def _aws_plan(s: Settings, label: str) -> awsmod.AwsPlan:
         role="runner",
         boundary=s.aws_permissions_boundary,
         prefix=s.asset_prefix,
-        install_id=s.install_id,
+        install_id=s.install_id if owned.strict(s.asset_prefix) else "",
     )
-    return p
 
 
 def runner_key(s: Settings, name: str) -> str:
     """The file its record is saved in: one per server, region and name, so another server's runner is never overwritten.
     The digest of the full identity (prefix, URL with port and path, region) keeps names that slug alike apart."""
     host = urllib.parse.urlsplit(s.server_url).hostname or ""
-    ident = awsmod.server_identity(s.asset_prefix, s.server_url, s.aws_region)[:10]
+    ident = owned.server_identity(s.asset_prefix, s.server_url, s.aws_region)[:10]
     return f"{name}--{awsmod.slug(host)[:20]}--{s.aws_region}--{ident}"
 
 
@@ -198,7 +197,7 @@ def runner_prefix(s: Settings, label: str, given: str | None) -> str:
         ),
         None,
     )
-    if other:
+    if other and owned.strict(prefix):
         raise MissingInput(
             f"{awsmod.Names(prefix).resource(name)} is already the runner of {other['server_url']} "
             f"({other.get('aws_region', '')}), "
@@ -233,7 +232,25 @@ def save_aws_runner(s: Settings, plan: awsmod.AwsPlan, label: str, iid: str) -> 
         "install_id": s.install_id,
         "aws_ids": s.aws_ids,
     }
-    state.save_runner(runner_key(s, plan.name), data, replaces=plan.name)
+    state.save_runner(runner_key(s, plan.name), data)
+
+
+def _save_aws_runner(s: Settings, plan: awsmod.AwsPlan, label: str, iid: str) -> None:
+    if owned.strict(s.asset_prefix):
+        save_aws_runner(s, plan, label, iid)
+        return
+    state.save_runner(
+        plan.name,
+        {
+            "server_url": s.server_url,
+            "label": label,
+            "target": "aws",
+            "aws_region": s.aws_region,
+            "aws_profile": s.aws_profile,
+            "instance_id": iid,
+            "name": plan.name,
+        },
+    )
 
 
 def run_runner(args, io: IO, deps: Deps) -> int:
@@ -292,11 +309,16 @@ def run_runner(args, io: IO, deps: Deps) -> int:
         )
         a.get("aws_profile", "AWS profile (blank for the default credentials)", flag="--aws-profile", required=False)
         s.asset_prefix = runner_prefix(s, label, getattr(args, "asset_prefix", None))
-        # This runner's own install id: kept from its record, or new (a record from before ids keeps none: the tags
-        # alone, as before). Another server's runner of the same name, in any region, carries another id.
-        rec = own_record(s, s.aws_name or f"runner-{awsmod.slug(label)}")
-        s.install_id = rec.get("install_id", "") if rec else awsmod.new_install_id()
-        s.aws_ids = dict(rec.get("aws_ids") or {})
+        if owned.strict(s.asset_prefix):
+            # Strict mode: this runner's own install id, kept from its record, or new for a runner never set up here.
+            rec = own_record(s, s.aws_name or f"runner-{awsmod.slug(label)}")
+            if rec and not rec.get("install_id"):
+                raise MissingInput(
+                    "This runner's saved record has no install id, so setup cannot prove which AWS resources are its "
+                    "own; refusing to change anything. Check by hand what exists before setting it up again."
+                )
+            s.install_id = rec.get("install_id", "") if rec else awsmod.new_install_id()
+            s.aws_ids = dict(rec.get("aws_ids") or {})
     io.say("\nPlan")
     for line in plan_lines(s, label):
         io.say(line)
@@ -363,20 +385,25 @@ def run_runner(args, io: IO, deps: Deps) -> int:
     elif s.target == "aws":
         plan = _aws_plan(s, label)
         ec2, iam, ssm, account = deps.aws_clients(s.aws_region, s.aws_profile)
-        awsmod.check_account(own_record(s, plan.name).get("aws_account_id", ""), account, f"Runner {plan.name}")
-        if s.install_id:
+        strict = owned.strict(s.asset_prefix)
+        if strict:
+            owned.check_account(own_record(s, plan.name).get("aws_account_id", ""), account, f"Runner {plan.name}")
             s.aws_account_id = account
 
-        def keep_ids() -> None:
-            save_aws_runner(s, plan, label, s.aws_ids.get("instance", ""))
+            def keep_ids() -> None:
+                save_aws_runner(s, plan, label, s.aws_ids.get("instance", ""))
 
-        d = awsmod.Deployer(plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep, ids=s.aws_ids, save=keep_ids)
-        d.preflight()
+            d = owned.StrictDeployer(
+                plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep, ids=s.aws_ids, save=keep_ids
+            )
+            d.preflight()
+        else:
+            d = awsmod.Deployer(plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep)
         existing = d.find_instance()
         if existing:
             io.say(f"  {existing['InstanceId']} already exists for this name; not creating a second one.")
-        # Before the first AWS write: a retry after a failure from here on keeps this prefix without the flag.
-        save_aws_runner(s, plan, label, existing["InstanceId"] if existing else "")
+        if strict:  # before the first AWS write: a retry after a failure from here keeps this prefix without the flag
+            save_aws_runner(s, plan, label, existing["InstanceId"] if existing else "")
         d.put_env(join_env(s.server_url, get_code(), label))
         prep = d.prepare()
         script = bootstrap_script(
@@ -387,7 +414,7 @@ def run_runner(args, io: IO, deps: Deps) -> int:
             screen=screen,
         )
         iid, _ = d.launch_or_reuse(prep, script)
-        save_aws_runner(s, plan, label, iid)
+        _save_aws_runner(s, plan, label, iid)
         if existing:
             # SSM may still be registering after EC2 reports running. Wait before replay,
             # then let cloud-init finish before recovering an incomplete boot.
@@ -409,7 +436,7 @@ def run_runner(args, io: IO, deps: Deps) -> int:
             io.say("The box did not report ready in time. Log: /var/log/tico-setup.log (via SSM Session Manager).")
             return 1
         shell = remote.SSMShell(ssm, iid, deps.sleep)
-        save_aws_runner(s, plan, label, iid)
+        _save_aws_runner(s, plan, label, iid)
     else:
         script = bootstrap_script(
             os_family="ubuntu",

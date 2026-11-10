@@ -1,15 +1,13 @@
 """Create (and destroy) the one EC2 server. boto3 is imported only when the AWS target is used.
 
-Everything gets two tags, Names.managed_tag and Names.name_tag, and destroy only touches what carries both. A new install
-also gets a random install id (Names.install_tag), saved before its first AWS write: when an install has one, that tag,
-not the prefix and name, is what makes a resource its own, and the immutable id of each resource it made (Deployer.ids)
-must still match.
+Everything gets two tags, Names.managed_tag and Names.name_tag, and destroy only touches what carries both. Under the
+default prefix (tico) this module is all there is. Under another --asset-prefix, setup runs in strict mode (owned.py):
+every resource also carries the install's id and is acted on only once proved to be the one this install made.
 """
 
 from __future__ import annotations
 
 import gzip
-import hashlib
 import json
 import re
 import secrets
@@ -148,20 +146,16 @@ class Names:
 
 
 DEFAULT_NAMES = Names()
+# The default prefix's tags, as they were spelled before Names.
+MANAGED_TAG = DEFAULT_NAMES.managed_tag
+NAME_TAG = DEFAULT_NAMES.name_tag
+tags = DEFAULT_NAMES.tags
+is_ours = DEFAULT_NAMES.is_ours
+_filters = DEFAULT_NAMES.filters
 
 
 def new_install_id() -> str:
     return secrets.token_hex(8)
-
-
-def not_ours(kind: str, resource: str, names: Names, name: str, pick: str = "--name or --asset-prefix") -> MissingInput:
-    """The refusal for a name this install would take that something it did not make already holds."""
-    install = f", {names.install_tag}={names.install_id}" if names.install_id else ""
-    return MissingInput(
-        f"{kind} {resource} already exists and was not made by this setup (it lacks the tags "
-        f"{names.managed_tag[0]}={names.managed_tag[1]} and {names.name_tag}={name}{install}, or is not the one this "
-        f"install recorded); refusing to reuse or change it. Pick another {pick}."
-    )
 
 
 def asset_prefix(given: str | None, saved: dict | None) -> str:
@@ -197,89 +191,6 @@ def saved_name(saved: dict) -> str:
     return slug(saved["domain"]) if saved.get("aws_instance_id") and saved.get("domain") else ""
 
 
-def check_name(given: str | None, had: str, domain: str) -> None:
-    """A domain's install keeps its name: another one would find, change or delete another install's resources."""
-    given = (given or "").strip().lower()
-    if given and had and given != had:
-        raise MissingInput(
-            f"{domain} is set up with --name {had}, and it cannot change on a later run. Leave --name out or pass "
-            f"--name {had}; another name is another install, with its own --domain."
-        )
-
-
-# --- buckets setup makes -------------------------------------------------------------------------------------------
-# A bucket is setup's only when it carries this install's tags, which it gets in the CreateBucket call itself: there is
-# never an untagged bucket of setup's, so an untagged one is never adopted.
-
-
-def error_code(e: Exception) -> str:
-    return str(getattr(e, "response", {}).get("Error", {}).get("Code", ""))
-
-
-def bucket_tags(s3, owned: dict) -> list[dict]:
-    try:
-        return s3.get_bucket_tagging(**owned).get("TagSet") or []
-    except Exception as e:  # NoSuchTagSet: a bucket with no tags at all
-        if error_code(e) == "NoSuchTagSet":
-            return []
-        raise
-
-
-def bucket_proof(s3, owned: dict, names: Names, name: str, pick: str) -> str:
-    """Reads only: "absent" or "ours" (this install's tags); else refused."""
-    try:
-        s3.head_bucket(**owned)
-    except Exception as e:
-        if error_code(e) not in ("404", "NoSuchBucket", "NotFound"):
-            raise
-        return "absent"
-    tags = bucket_tags(s3, owned)
-    if names.is_ours(tags, name):
-        return "ours"
-    raise not_ours("S3 bucket", owned["Bucket"], names, name, pick)
-
-
-def ensure_bucket(s3, owned: dict, region: str, names: Names, name: str, proof: str, pick: str) -> None:
-    """After bucket_proof found no bucket of the name: creates it with its tags in the same call. Never called for a name
-    that exists (us-east-1's CreateBucket answers success for one this account holds, and resets its ACLs)."""
-    if proof != "absent":
-        return
-    bucket, config = owned["Bucket"], {"Tags": names.tags(name)}
-    if region != "us-east-1":
-        config["LocationConstraint"] = region
-    try:
-        s3.create_bucket(Bucket=bucket, CreateBucketConfiguration=config)
-    except Exception as e:
-        if error_code(e) in ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"):  # made by someone since the read
-            raise not_ours("S3 bucket", bucket, names, name, pick) from None
-        if type(e).__name__ == "ParamValidationError":  # a boto3 from before CreateBucket took tags
-            raise SystemExit(
-                "Setup creates S3 buckets with their tags, which needs a current boto3: pip install -U boto3"
-            ) from None
-        raise
-    # A bucket made in the instant between the read and the create, in this account, under a deterministic name (the
-    # default prefix's backup bucket) is told apart only by its tags; a name ending in the install id has no such instant.
-    if not names.is_ours(bucket_tags(s3, owned), name):
-        raise not_ours("S3 bucket", bucket, names, name, pick)
-
-
-def check_account(had: str, account: str, what: str) -> None:
-    """An install's resources are its account's: the same names and tags in another account are someone else's."""
-    if had and account != had:
-        raise MissingInput(
-            f"{what} was set up in AWS account {had}, but these credentials are for account {account}; refusing to "
-            "change anything there. Use that account's credentials (--aws-profile)."
-        )
-
-
-def check_region(had: str, given: str | None, what: str) -> None:
-    if had and given and given != had:
-        raise MissingInput(
-            f"{what} was set up in {had}, and its region cannot change on a later run. Leave --aws-region out or pass "
-            f"--aws-region {had}; another region is another install."
-        )
-
-
 @dataclass
 class AwsPlan:
     name: str
@@ -295,7 +206,7 @@ class AwsPlan:
     boundary: str = ""  # the permissions boundary the IAM role is created under, when the account requires one
     plan_bucket: str = ""  # --plan-bucket: the role may read its own starter plan there, plans/<name>/*
     prefix: str = DEFAULT_PREFIX  # --asset-prefix
-    install_id: str = ""  # Names.install_id
+    install_id: str = ""  # Names.install_id (strict mode only)
 
     @property
     def names(self) -> Names:
@@ -326,8 +237,8 @@ class AwsPlan:
             f"{self.volume_gib} GiB encrypted gp3, region {self.region}",
             f"Security group {n.resource(self.name)}: {sg}",
             "Instance metadata: IMDSv2 required, hop limit 1 (containers and bots cannot reach the instance role)",
-            f"Shell access through SSM (IAM role {n.resource(self.name)} with AmazonSSMManagedInstanceCore); no SSH key, "
-            "no port 22",
+            "Shell access through SSM (IAM role %s with AmazonSSMManagedInstanceCore); no SSH key, no port 22"
+            % n.resource(self.name),
             *([f"The IAM role is created under the permissions boundary {self.boundary}"] if self.boundary else []),
             *(
                 [
@@ -349,11 +260,6 @@ class AwsPlan:
             + (f", {n.install_tag}={self.install_id}" if self.install_id else ""),
             f"Estimated cost: about ${self.monthly_usd:.0f}/month running 24/7 (list prices, us-east-1; other regions differ)",
         ]
-
-
-def server_identity(prefix: str, server_url: str, region: str) -> str:
-    """A short, fixed digest of what makes a runner's saved record another server's: prefix, full URL and region."""
-    return hashlib.sha256(f"{prefix}|{server_url}|{region}".encode()).hexdigest()[:20]
 
 
 def plan_aws(
@@ -437,26 +343,10 @@ class Deployer:
         account_id: str,
         say: Callable[[str], None] = print,
         sleep: Callable[[float], None] = time.sleep,
-        ids: dict | None = None,
-        save: Callable[[], None] = lambda: None,
     ):
         self.p, self.ec2, self.iam, self.ssm, self.say, self.sleep = plan, ec2, iam, ssm, say, sleep
         self.account_id = account_id
         self.n = plan.names
-        # The immutable ids of what this install made (role, profile, sg, eip, instance), kept in its saved state by
-        # save(): every later run, and destroy, acts only on those same resources.
-        self.ids = ids if ids is not None else {}
-        self.save = save
-
-    def keep(self, kind: str, value: str) -> None:
-        if value and self.ids.get(kind) != value:
-            self.ids[kind] = value
-            self.save()
-
-    def same(self, kind: str, value: str, what: str, resource: str) -> None:
-        """Refuses a resource that is not the one this install recorded making (one deleted and made again is another)."""
-        if self.ids.get(kind) and value != self.ids[kind]:
-            raise not_ours(what, resource, self.n, self.p.name)
 
     @property
     def param_name(self) -> str:
@@ -468,9 +358,6 @@ class Deployer:
             + [{"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]}]
         )
         found = [i for res in r["Reservations"] for i in res["Instances"] if self.n.is_ours(i.get("Tags"), self.p.name)]
-        if found:
-            self.same("instance", found[0]["InstanceId"], "EC2 instance", self.n.resource(self.p.name))
-            self.keep("instance", found[0]["InstanceId"])
         return found[0] if found else None
 
     def put_env(self, env_text: str, *, company_file=False) -> None:
@@ -484,70 +371,30 @@ class Deployer:
                 "The starter plan and install settings exceed AWS Parameter Store's 8 KB limit. "
                 + starter.IMPORT_IN_APP
             )
-        tags = self.param_tags()
-        if tags is not None and not self.n.is_ours(tags, self.p.name):
-            raise not_ours("SSM parameter", self.param_name, self.n, self.p.name)
-        if tags is None:  # created with its tags, never overwritten: one made meanwhile by someone else fails here
-            self.ssm.put_parameter(
-                Name=self.param_name,
-                Value=env_text,
-                Type="SecureString",
-                Overwrite=False,
-                Tags=self.n.tags(self.p.name),
-                **tier,
-            )
-        else:
-            # Tags were read just above. SSM has no conditional put, so a parameter replaced in that instant is the
-            # one residual window; it is never re-tagged here, so a replacement keeps its own tags.
-            self.ssm.put_parameter(Name=self.param_name, Value=env_text, Type="SecureString", Overwrite=True, **tier)
-
-    def param_tags(self) -> list[dict] | None:
-        """The settings parameter's tags; None when there is no such parameter."""
-        try:
-            return self.ssm.list_tags_for_resource(ResourceType="Parameter", ResourceId=self.param_name)["TagList"]
-        except self.ssm.exceptions.InvalidResourceId:
-            return None
-
-    def role_tags(self) -> list[dict] | None:
-        try:
-            return self.iam.list_role_tags(RoleName=self.n.resource(self.p.name))["Tags"]
-        except self.iam.exceptions.NoSuchEntityException:
-            return None
-
-    def preflight(self) -> None:
-        """Reads only, before setup's first write: every fixed name this install takes is free or already its own.
-        Something else of that name is refused here, so nothing is created, changed or tagged first."""
-        tags = self.param_tags()
-        if tags is not None and not self.n.is_ours(tags, self.p.name):
-            raise not_ours("SSM parameter", self.param_name, self.n, self.p.name)
-        tags = self.role_tags()
-        if tags is not None and not self.n.is_ours(tags, self.p.name):
-            raise not_ours("IAM role", self.n.resource(self.p.name), self.n, self.p.name)
-        n = self.n.resource(self.p.name)
-        if tags is not None:
-            self.keep("role", self.prove_role(n))
-        self.prove_profile(instance_profile(self.iam, n))
-        self.find_instance()  # also refuses an instance that is not the recorded one
-
-    def prove_profile(self, prof: dict | None) -> None:
-        n = self.n.resource(self.p.name)
-        if prof is None:
-            return
-        if not profile_is_ours(prof, n, self.n):
-            raise not_ours("IAM instance profile", n, self.n, self.p.name)
-        self.same("profile", prof.get("InstanceProfileId", ""), "IAM instance profile", n)
+        self.ssm.put_parameter(Name=self.param_name, Value=env_text, Type="SecureString", Overwrite=True, **tier)
+        self.ssm.add_tags_to_resource(
+            ResourceType="Parameter", ResourceId=self.param_name, Tags=self.n.tags(self.p.name)
+        )
 
     def ensure_plan_bucket(self, s3, region: str) -> None:
         """Configure only setup's dedicated bucket, in the installer's account. Never adopt an unrelated bucket.
         Every safety setting precedes the first chart upload. Re-running repairs an interrupted configuration.
         """
-        owned = {"Bucket": self.p.plan_bucket, "ExpectedBucketOwner": self.account_id}
+        bucket = self.p.plan_bucket
+        owned = {"Bucket": bucket, "ExpectedBucketOwner": self.account_id}
         try:
+            s3.head_bucket(**owned)
+        except Exception as exc:
+            code = str(getattr(exc, "response", {}).get("Error", {}).get("Code", ""))
+            if code not in ("404", "NoSuchBucket", "NotFound"):
+                raise
+            location = {} if region == "us-east-1" else {"CreateBucketConfiguration": {"LocationConstraint": region}}
             # A collision is an error, never permission to reuse someone else's name.
-            proof = bucket_proof(s3, owned, self.n, self.p.name, "--name")
-            ensure_bucket(s3, owned, region, self.n, self.p.name, proof, "--name")
-        except MissingInput:
-            raise SystemExit("The starter plan bucket was not created by this setup; refusing to reuse it.") from None
+            s3.create_bucket(Bucket=bucket, **location)
+            s3.put_bucket_tagging(**owned, Tagging={"TagSet": self.n.tags(self.p.name)})
+        else:
+            if not self.n.is_ours(s3.get_bucket_tagging(**owned).get("TagSet"), self.p.name):
+                raise SystemExit("The starter plan bucket was not created by this setup; refusing to reuse it.")
         s3.put_public_access_block(
             **owned,
             PublicAccessBlockConfiguration={
@@ -581,61 +428,19 @@ class Deployer:
             },
         )
 
-    def verify_plan_bucket(self, s3) -> None:
-        """A --plan-bucket setup did not make: it must be one this AWS account owns before anything goes into it."""
-        code = self._s3_call(s3.head_bucket, Bucket=self.p.plan_bucket)  # 403: another account's
-        if code:
-            raise MissingInput(
-                f"The starter plan bucket {self.p.plan_bucket} is not one this AWS account owns, or cannot be read "
-                f"({code}); refusing to upload to it. Check --plan-bucket and the AWS credentials."
-            )
-        n = self.n
-        if n.install_id and n.prefix != DEFAULT_PREFIX:
-            # Owned by the account is not enough there: the account holds others' buckets too. Only one tagged for this
-            # install takes its plan.
-            owned = {"Bucket": self.p.plan_bucket, "ExpectedBucketOwner": self.account_id}
-            tags = {t["Key"]: t["Value"] for t in bucket_tags(s3, owned)}
-            if tags.get(n.install_tag) != n.install_id:
-                raise MissingInput(
-                    f"The starter plan bucket {self.p.plan_bucket} is not tagged for this install; refusing to upload "
-                    f"to it. Tag it {n.install_tag}={n.install_id} (this install's id, kept for the re-run) and run "
-                    "setup again, or leave --plan-bucket out."
-                )
-
     def put_plan(self, s3, key: str, data: str) -> None:
         """The packed starter plan, for the server to copy once at first boot (remote.bootstrap_script). Plan only:
         the env names the key and its sha256, never the plan."""
         if not key.startswith(f"plans/{self.p.name}/"):
             raise ValueError("a starter plan key is plans/<this server's name>/<sha256>")
-        body = {"Body": data.encode("ascii"), "ContentType": "text/plain", "ExpectedBucketOwner": self.account_id}
-        if not self.n.install_id:  # an install saved before ids: as before
-            s3.put_object(Bucket=self.p.plan_bucket, Key=key, **body)
-            return
-        try:  # only where no object is: one already at the key is never overwritten
-            s3.put_object(Bucket=self.p.plan_bucket, Key=key, IfNoneMatch="*", **body)
-        except Exception as e:
-            if error_code(e) != "PreconditionFailed":
-                raise
-            # A retry of this install's own put (the key is the plan's sha256), or something else's: then refused.
-            if self.ids.get("plan_object") != key:
-                raise MissingInput(
-                    f"s3://{self.p.plan_bucket}/{key} already exists and this install did not record writing it; "
-                    "refusing to overwrite it."
-                ) from None
-        self.keep("plan_object", key)
+        s3.put_object(Bucket=self.p.plan_bucket, Key=key, Body=data.encode("ascii"), ContentType="text/plain")
 
     def delete_plan(self, s3, key: str) -> str:
         """Once the server is up and its app reads its copy. Returns "" when deleted, else the error code: the server is
         already working, and the plan stays until someone deletes it or the bucket's lifecycle rule, if it has one,
         expires it."""
-        if self.n.install_id and self.ids.get("plan_object") != key:
-            return "NotWrittenByThisInstall"  # only the object this install recorded writing is ever deleted
-        return self._s3_call(s3.delete_object, Bucket=self.p.plan_bucket, Key=key)
-
-    def _s3_call(self, call, **kw) -> str:
-        """ "" when the call, made with this account as the expected bucket owner, worked; else its error code."""
         try:
-            call(**kw, ExpectedBucketOwner=self.account_id)
+            s3.delete_object(Bucket=self.p.plan_bucket, Key=key)
         except Exception as e:  # botocore ClientError, a network error; without importing botocore here
             return str(getattr(e, "response", {}).get("Error", {}).get("Code") or type(e).__name__)
         return ""
@@ -652,19 +457,14 @@ class Deployer:
         # boundary, tagged ManagedBy=<prefix>-setup, refuses a role that would get them afterwards.
         boundary = {"PermissionsBoundary": self.p.boundary} if self.p.boundary else {}
         try:
-            made = self.iam.create_role(
+            self.iam.create_role(
                 RoleName=n, AssumeRolePolicyDocument=json.dumps(trust), Tags=self.n.tags(self.p.name), **boundary
             )
-            self.keep("role", ((made or {}).get("Role") or {}).get("RoleId", ""))
         except self.iam.exceptions.EntityAlreadyExistsException:
             if not self.n.is_ours(self.iam.list_role_tags(RoleName=n)["Tags"], self.p.name):
                 raise SystemExit(
                     f"IAM role {n} exists but was not created by tico setup; refusing to reuse it."
                 ) from None
-            self.keep("role", self.prove_role(n))
-        # IAM and SSM have no conditional writes: the role is read again, by its install id tag and recorded RoleId,
-        # right before each write. That re-read is the bar; a replacement made in the instant after it is not caught.
-        self.prove_role(n)
         self.iam.attach_role_policy(RoleName=n, PolicyArn=SSM_CORE)
         arn = self.ssm_param_arn()
         pol = {
@@ -680,32 +480,13 @@ class Deployer:
                     "Resource": f"arn:aws:s3:::{self.p.plan_bucket}/plans/{self.p.name}/*",
                 }
             )
-        self.prove_role(n)
         self.iam.put_role_policy(RoleName=n, PolicyName=self.n.role_policy, PolicyDocument=json.dumps(pol))
         try:
-            made = self.iam.create_instance_profile(InstanceProfileName=n, Tags=self.n.tags(self.p.name))
-            self.keep("profile", ((made or {}).get("InstanceProfile") or {}).get("InstanceProfileId", ""))
+            self.iam.create_instance_profile(InstanceProfileName=n, Tags=self.n.tags(self.p.name))
             self.iam.add_role_to_instance_profile(InstanceProfileName=n, RoleName=n)
         except self.iam.exceptions.EntityAlreadyExistsException:
-            prof = instance_profile(self.iam, n)
-            if not prof:
-                raise not_ours("IAM instance profile", n, self.n, self.p.name) from None
-            self.prove_profile(prof)
-            self.keep("profile", prof.get("InstanceProfileId", ""))
-            if not prof.get("Roles"):  # an earlier run stopped between creating it and adding the role
-                self.iam.add_role_to_instance_profile(InstanceProfileName=n, RoleName=n)
+            pass
         return n
-
-    def prove_role(self, n: str) -> str:
-        """The role's RoleId, read now: it must carry this install's tags and be the role this install recorded."""
-        role = self.iam.get_role(RoleName=n)["Role"]
-        tags = role.get("Tags")
-        if tags is None:  # GetRole returns tags on real IAM; older fakes and SDKs may not
-            tags = self.iam.list_role_tags(RoleName=n)["Tags"]
-        if not self.n.is_ours(tags, self.p.name):
-            raise not_ours("IAM role", n, self.n, self.p.name)
-        self.same("role", role.get("RoleId", ""), "IAM role", n)
-        return role.get("RoleId", "")
 
     def ssm_param_arn(self) -> str:
         return f"arn:aws:ssm:{self.p.region}:{self.account_id}:parameter{self.param_name}"
@@ -713,12 +494,7 @@ class Deployer:
     def ensure_sg(self) -> str:
         n = self.n.resource(self.p.name)
         r = self.ec2.describe_security_groups(Filters=self.n.filters(self.p.name))["SecurityGroups"]
-        r = [g for g in r if self.n.is_ours(g.get("Tags"), self.p.name)]
         if r:
-            self.same("sg", r[0]["GroupId"], "Security group", n)
-            self.keep("sg", r[0]["GroupId"])
-            if self.n.install_id:  # proved this install's: a run stopped before its ingress gets it now
-                self.authorize(r[0]["GroupId"], r[0].get("IpPermissions") or [])
             return r[0]["GroupId"]
         vpcs = self.ec2.describe_vpcs(Filters=[{"Name": "isDefault", "Values": ["true"]}])["Vpcs"]
         if not vpcs:
@@ -731,61 +507,24 @@ class Deployer:
             VpcId=vpcs[0]["VpcId"],
             TagSpecifications=[{"ResourceType": "security-group", "Tags": self.n.tags(self.p.name, n)}],
         )["GroupId"]
-        self.keep("sg", gid)
-        self.authorize(gid, [])
-        return gid
-
-    def ingress(self) -> list[dict]:
-        perms = [
-            {
-                "IpProtocol": "tcp",
-                "FromPort": p,
-                "ToPort": p,
-                "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
-                "Ipv6Ranges": [{"CidrIpv6": "::/0"}],
-            }
-            for p in self.p.ports
-        ]
-        if perms:
+        if self.p.ports:
+            perms = [
+                {
+                    "IpProtocol": "tcp",
+                    "FromPort": p,
+                    "ToPort": p,
+                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                    "Ipv6Ranges": [{"CidrIpv6": "::/0"}],
+                }
+                for p in self.p.ports
+            ]
             perms.append({"IpProtocol": "udp", "FromPort": 443, "ToPort": 443, "IpRanges": [{"CidrIp": "0.0.0.0/0"}]})
-        return perms
-
-    def authorize(self, gid: str, have: list[dict]) -> None:
-        """Adds the wanted ingress the group lacks (all of it for a new group)."""
-
-        def rules(perms: list[dict]) -> set[tuple]:
-            out = set()
-            for p in perms:
-                port = (p.get("IpProtocol"), p.get("FromPort"), p.get("ToPort"))
-                out |= {(*port, r["CidrIp"]) for r in p.get("IpRanges", [])}
-                out |= {(*port, r["CidrIpv6"]) for r in p.get("Ipv6Ranges", [])}
-            return out
-
-        missing = rules(self.ingress()) - rules(have)
-        if not missing:
-            return
-        perms = []
-        for p in self.ingress():
-            v4 = [
-                r
-                for r in p.get("IpRanges", [])
-                if (p["IpProtocol"], p["FromPort"], p["ToPort"], r["CidrIp"]) in missing
-            ]
-            v6 = [
-                r
-                for r in p.get("Ipv6Ranges", [])
-                if (p["IpProtocol"], p["FromPort"], p["ToPort"], r["CidrIpv6"]) in missing
-            ]
-            if v4 or v6:
-                perms.append({**p, "IpRanges": v4, **({"Ipv6Ranges": v6} if "Ipv6Ranges" in p else {})})
-        self.ec2.authorize_security_group_ingress(GroupId=gid, IpPermissions=perms)
+            self.ec2.authorize_security_group_ingress(GroupId=gid, IpPermissions=perms)
+        return gid
 
     def ensure_eip(self) -> tuple[str, str]:
         r = self.ec2.describe_addresses(Filters=self.n.filters(self.p.name))["Addresses"]
-        r = [a for a in r if self.n.is_ours(a.get("Tags"), self.p.name)]
         if r:
-            self.same("eip", r[0]["AllocationId"], "Elastic IP", self.n.resource(self.p.name))
-            self.keep("eip", r[0]["AllocationId"])
             return r[0]["AllocationId"], r[0]["PublicIp"]
         a = self.ec2.allocate_address(
             Domain="vpc",
@@ -793,7 +532,6 @@ class Deployer:
                 {"ResourceType": "elastic-ip", "Tags": self.n.tags(self.p.name, self.n.resource(self.p.name))}
             ],
         )
-        self.keep("eip", a["AllocationId"])
         return a["AllocationId"], a["PublicIp"]
 
     def public_subnet(self) -> str:
@@ -866,9 +604,7 @@ class Deployer:
             args["SubnetId"] = subnet
         for attempt in range(8):  # a new instance profile takes a few seconds to be usable
             try:
-                iid = self.ec2.run_instances(**args)["Instances"][0]["InstanceId"]
-                self.keep("instance", iid)
-                return iid
+                return self.ec2.run_instances(**args)["Instances"][0]["InstanceId"]
             except Exception as e:  # botocore ClientError, without importing botocore here
                 if not ("Instance Profile" in str(e) or "iamInstanceProfile" in str(e)) or attempt == 7:
                     raise
@@ -897,21 +633,8 @@ class Deployer:
             self.say(f"  launched {iid}")
         self.ec2.get_waiter("instance_running").wait(InstanceIds=[iid])
         if prep["alloc"]:
-            self.associate(prep["alloc"], iid)
+            self.ec2.associate_address(AllocationId=prep["alloc"], InstanceId=iid, AllowReassociation=True)
         return iid, created
-
-    def associate(self, alloc: str, iid: str) -> None:
-        if not self.n.install_id:  # an install saved before ids: as before
-            self.ec2.associate_address(AllocationId=alloc, InstanceId=iid, AllowReassociation=True)
-            return
-        rows = self.ec2.describe_addresses(Filters=self.n.filters(self.p.name))["Addresses"]
-        at = next((a.get("InstanceId") or "" for a in rows if a["AllocationId"] == alloc), "")
-        if at and at != iid:  # never taken from another server: AWS refuses the call too, without AllowReassociation
-            raise MissingInput(
-                f"Elastic IP {alloc} is attached to {at}, which is not this install's server; refusing to move it."
-            )
-        if not at:
-            self.ec2.associate_address(AllocationId=alloc, InstanceId=iid)
 
     def wait_ready(self, timeout: int = 1200) -> bool:
         """Waits for the SSM agent and the bootstrap script to finish."""
@@ -933,26 +656,6 @@ class Deployer:
                     return False
             self.sleep(15)
         return False
-
-
-def instance_profile(iam, name: str) -> dict | None:
-    try:
-        return iam.get_instance_profile(InstanceProfileName=name)["InstanceProfile"]
-    except iam.exceptions.NoSuchEntityException:
-        return None
-
-
-def profile_is_ours(prof: dict, name: str, names: Names) -> bool:
-    """Its own tags make it setup's <prefix>-<tagged name>, and it holds no role but setup's of that name. A profile is
-    checked apart from its role: a role being setup's says nothing about a profile of the same name."""
-    tags = {t["Key"]: t["Value"] for t in prof.get("Tags") or []}
-    tagged = tags.get(names.name_tag)
-    return (
-        bool(tagged)
-        and names.is_ours(prof.get("Tags"), tagged)
-        and names.resource(tagged) == name
-        and all(r.get("RoleName") == name for r in prof.get("Roles") or [])
-    )
 
 
 # --- destroy -----------------------------------------------------------------------------------------------
@@ -1011,38 +714,6 @@ def addresses(ec2, name: str, names: Names = DEFAULT_NAMES) -> set[str]:
     return out
 
 
-def foreign_attached(ec2, instance_ids: list[str], name: str, names: Names) -> list[str]:
-    """The volumes and network interfaces that terminating these instances would delete (DeleteOnTermination) but that
-    lack this install's tags: someone attached them, so terminating would delete what setup did not make."""
-    if not instance_ids:
-        return []
-    flt = [{"Name": "attachment.instance-id", "Values": list(instance_ids)}]
-    vols = [
-        v["VolumeId"]
-        for v in ec2.describe_volumes(Filters=flt)["Volumes"]
-        if any(a.get("InstanceId") in instance_ids and a.get("DeleteOnTermination") for a in v.get("Attachments", []))
-        and not names.is_ours(v.get("Tags"), name)
-    ]
-    enis = [
-        n["NetworkInterfaceId"]
-        for n in ec2.describe_network_interfaces(Filters=flt)["NetworkInterfaces"]
-        if (n.get("Attachment") or {}).get("InstanceId") in instance_ids
-        and n["Attachment"].get("DeleteOnTermination")
-        and not names.is_ours(n.get("TagSet"), name)
-    ]
-    return vols + enis
-
-
-def refuse_foreign_attached(ec2, instance_ids: list[str], name: str, names: Names) -> None:
-    found = foreign_attached(ec2, instance_ids, name, names)
-    if found:
-        raise MissingInput(
-            f"Terminating {', '.join(instance_ids)} would also delete {', '.join(found)}, which this setup did not make "
-            "(attached with DeleteOnTermination, without this install's tags); refusing. Detach it, or turn off its "
-            "DeleteOnTermination, then run destroy again."
-        )
-
-
 def destroy(
     ec2,
     iam,
@@ -1052,16 +723,7 @@ def destroy(
     sleep: Callable[[float], None] = time.sleep,
     dns_done: bool = False,
     names: Names = DEFAULT_NAMES,
-    name: str = "",
-    ids: dict | None = None,
 ) -> None:
-    """Deletes what discover found. With an install id, each resource is read again right before its delete, in order,
-    and deleted only while it carries the install's tags and is the one the install recorded (ids); anything else is
-    left alone and named. Without one (an install saved before ids, or none on this computer): as before."""
-    if names.install_id:
-        _destroy_install(ec2, iam, ssm, found, say, sleep, names, name, ids or {})
-        say("  done." if dns_done else "  done. DNS records were not touched; remove them at your DNS provider.")
-        return
     if found.get("instance"):
         ec2.terminate_instances(InstanceIds=found["instance"])
         say("  waiting for the instance to terminate ...")
@@ -1069,7 +731,14 @@ def destroy(
     for a in found.get("elastic-ip", []):
         ec2.release_address(AllocationId=a)
     for g in found.get("security-group", []):
-        _delete_sg(ec2, g, sleep)
+        for attempt in range(6):  # the network interface lingers briefly after termination
+            try:
+                ec2.delete_security_group(GroupId=g)
+                break
+            except Exception:
+                if attempt == 5:
+                    raise
+                sleep(5)
     for n in found.get("iam-role", []):
         try:
             iam.remove_role_from_instance_profile(InstanceProfileName=n, RoleName=n)
@@ -1082,94 +751,3 @@ def destroy(
     for p in found.get("ssm-parameter", []):
         ssm.delete_parameter(Name=p)
     say("  done." if dns_done else "  done. DNS records were not touched; remove them at your DNS provider.")
-
-
-def _delete_sg(ec2, g: str, sleep) -> None:
-    for attempt in range(6):  # the network interface lingers briefly after termination
-        try:
-            ec2.delete_security_group(GroupId=g)
-            return
-        except Exception:
-            if attempt == 5:
-                raise
-            sleep(5)
-
-
-def _destroy_install(ec2, iam, ssm, found, say, sleep, names: Names, name: str, ids: dict) -> None:
-    def left(what: str, why: str = "is no longer this install's (its tags or id changed since it was listed)") -> None:
-        say(f"  left alone: {what} {why}.")
-
-    def still(kind: str, rid: str, rows: list[dict], key: str) -> dict | None:
-        """The row for rid, read just now, while it carries the install's tags and is the one recorded."""
-        row = next((r for r in rows if r.get(key) == rid), None)
-        ok = row is not None and names.is_ours(row.get("Tags"), name) and ids.get(kind, rid) == rid
-        return row if ok else None
-
-    live = ["pending", "running", "stopping", "stopped"]
-    flt = names.filters(name)
-    insts = []
-    if found.get("instance"):
-        r = ec2.describe_instances(Filters=flt + [{"Name": "instance-state-name", "Values": live}])
-        rows = [i for res in r["Reservations"] for i in res["Instances"]]
-        for i in found["instance"]:
-            (insts.append(i) if still("instance", i, rows, "InstanceId") else left(f"instance {i}"))
-    if insts:
-        refuse_foreign_attached(ec2, insts, name, names)
-        ec2.terminate_instances(InstanceIds=insts)
-        say("  waiting for the instance to terminate ...")
-        ec2.get_waiter("instance_terminated").wait(InstanceIds=insts)
-    for a in found.get("elastic-ip", []):
-        row = still("eip", a, ec2.describe_addresses(Filters=flt)["Addresses"], "AllocationId")
-        if not row:
-            left(f"Elastic IP {a}")
-        elif row.get("InstanceId") and row["InstanceId"] not in insts:
-            left(f"Elastic IP {a}", f"is attached to {row['InstanceId']}, which is not this install's server")
-        else:
-            ec2.release_address(AllocationId=a)
-    for g in found.get("security-group", []):
-        if still("sg", g, ec2.describe_security_groups(Filters=flt)["SecurityGroups"], "GroupId"):
-            _delete_sg(ec2, g, sleep)
-        else:
-            left(f"security group {g}")
-    for n in found.get("iam-role", []):
-        prof = instance_profile(iam, n)
-        pid = (prof or {}).get("InstanceProfileId", "")
-        if prof is not None and not (profile_is_ours(prof, n, names) and ids.get("profile", pid) == pid):
-            left(f"IAM instance profile {n}", f"was not made by this install; the role {n} stays with it")
-            continue
-        try:
-            if prof and any(r.get("RoleName") == n for r in prof.get("Roles") or []):
-                iam.remove_role_from_instance_profile(InstanceProfileName=n, RoleName=n)
-            if prof:
-                iam.delete_instance_profile(InstanceProfileName=n)
-        except iam.exceptions.NoSuchEntityException:
-            pass
-        steps = (
-            (iam.detach_role_policy, {"RoleName": n, "PolicyArn": SSM_CORE}),
-            (iam.delete_role_policy, {"RoleName": n, "PolicyName": names.role_policy}),
-            (iam.delete_role, {"RoleName": n}),
-        )
-        for call, kw in steps:
-            # IAM has no conditional delete: the role is read again, by its tags and recorded RoleId, right before each.
-            try:
-                role = iam.get_role(RoleName=n)["Role"]
-            except iam.exceptions.NoSuchEntityException:
-                break
-            if not (
-                names.is_ours(role.get("Tags"), name) and ids.get("role", role.get("RoleId")) == role.get("RoleId")
-            ):
-                left(f"IAM role {n}")
-                break
-            try:
-                call(**kw)
-            except iam.exceptions.NoSuchEntityException:  # an interrupted install: the policy was never put or attached
-                pass
-    for p in found.get("ssm-parameter", []):
-        try:  # read again right before the delete: a parameter replaced since it was listed is left alone
-            tags = ssm.list_tags_for_resource(ResourceType="Parameter", ResourceId=p)["TagList"]
-        except ssm.exceptions.InvalidResourceId:
-            continue
-        if names.is_ours(tags, name):
-            ssm.delete_parameter(Name=p)
-        else:
-            left(f"SSM parameter {p}")

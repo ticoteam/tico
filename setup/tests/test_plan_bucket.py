@@ -27,24 +27,13 @@ BUCKET = "tico-preview-planbucket-abc123"
 
 
 class FakeS3:
-    """The given bucket, owned by the fake AWS account (owner: another account's bucket of that name)."""
-
-    def __init__(self, region, log, fail=None, owner="123456789012"):
-        self.region, self.log, self.fail, self.owner = region, log, fail, owner
-
-    def _owned(self, kw):
-        if kw.get("ExpectedBucketOwner") != self.owner:
-            raise ClientError("403" if "Key" not in kw else "AccessDenied")
-
-    def head_bucket(self, **kw):
-        self._owned(kw)
+    def __init__(self, region, log, fail=None):
+        self.region, self.log, self.fail = region, log, fail
 
     def put_object(self, **kw):
-        self._owned(kw)
         self.log.append(("put_object", kw))
 
     def delete_object(self, **kw):
-        self._owned(kw)
         self.log.append(("delete_object", kw))
         if self.fail:
             raise self.fail
@@ -74,7 +63,7 @@ def test_a_300_seat_chart_reaches_the_server_by_the_plan_bucket_and_never_by_its
     body = put["Body"].decode()
     sha = hashlib.sha256(put["Body"]).hexdigest()
     assert put["Bucket"] == BUCKET and put["Key"] == f"plans/{NAME}/{sha}"
-    assert deleted == {"Bucket": BUCKET, "Key": put["Key"], "ExpectedBucketOwner": "123456789012"}  # gone once up
+    assert deleted == {"Bucket": BUCKET, "Key": put["Key"]}  # gone once it is up
     assert len(body) > starter.ENV_PACKED and len(starter.unpack(body)["bots"]) == 300
     (param,) = ssm.called("put_parameter")
     env = envfile.parse(param["Value"])
@@ -613,12 +602,3 @@ def test_every_aws_boot_makes_the_folder_compose_mounts_even_without_a_plan():
         f"mkdir -p {folder}" in script and f"chown 10001:10001 {folder}" in script and f"chmod 700 {folder}" in script
     )
     assert script.index("pull-env.sh\n") < script.index("docker compose up")
-
-
-def test_a_given_plan_bucket_in_another_aws_account_gets_no_upload_and_no_server(big):
-    d, ec2, iam, ssm, r53 = world()
-    log = []
-    d.aws_s3 = lambda region, profile: FakeS3(region, log, owner="999999999999")
-    code, out = go([*CREATE, "--company-file", str(big), "--plan-bucket", BUCKET], d)
-    assert code == 2 and f"The starter plan bucket {BUCKET} is not one this AWS account owns" in out, out
-    assert log == [] and not ec2.called("run_instances") and not ssm.called("put_parameter")

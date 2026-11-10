@@ -60,6 +60,16 @@ SECRET_FIELDS = (
 )
 # This run's only, never saved: a re-run without the flag must not inherit permission to repoint a record.
 TRANSIENT_FIELDS = ("runner_given", "replace_dns")
+# Saved only when set (strict mode), each with its unset value.
+STRICT_FIELDS = {
+    "asset_prefix": DEFAULT_PREFIX,
+    "install_id": "",
+    "aws_ids": {},
+    "aws_account_id": "",
+    "dns_zone_id": "",
+    "dns_records": [],
+    "dns_pending": [],
+}
 # Only these named settings migrate from the private env; never copy ambient or arbitrary keys.
 RUNTIME_ENV = {
     "domain_aliases": "TICO_DOMAIN_ALIASES",
@@ -201,7 +211,9 @@ class Settings:
 
     def public(self) -> dict:
         validate_runtime(self)
-        return {k: v for k, v in asdict(self).items() if k not in SECRET_FIELDS + TRANSIENT_FIELDS}
+        out = {k: v for k, v in asdict(self).items() if k not in SECRET_FIELDS + TRANSIENT_FIELDS}
+        # Strict mode's (owned.py) only: the default prefix saves exactly what it saved before --asset-prefix.
+        return {k: v for k, v in out.items() if k not in STRICT_FIELDS or v != STRICT_FIELDS[k]}
 
     def runner(self) -> str:
         return "" if self.front_door != "cloudflared" or self.runner_host in ("", "none") else self.runner_host

@@ -1,6 +1,7 @@
-"""The words in every AWS name, tag and path setup makes. Without --asset-prefix they are today's `tico` names, and an
-existing install must keep finding its own resources by them, so these pin each one. With --asset-prefix hub no AWS
-name, tag, path, policy or bucket says tico; names on the server itself (/opt/tico, TICO_* settings) stay."""
+"""The words in every AWS name, tag and path setup makes. Without --asset-prefix (or with tico) they are today's `tico`
+names and setup runs exactly as before (test_default_prefix_golden.py pins every call). With --asset-prefix hub no AWS
+name, tag, path, policy or bucket says tico, names on the server itself (/opt/tico, TICO_* settings) stay, and setup runs
+in strict mode (setup/owned.py): it acts only on what it proves is this install's."""
 
 import gzip
 import json
@@ -10,7 +11,7 @@ import pytest
 
 from backend import company_file as C
 from backend.tests.helpers.company_file import chart
-from setup import aws, backup, dns, remote, route53, runner_setup, signin, state, wizard
+from setup import aws, backup, dns, owned, remote, route53, runner_setup, signin, state, wizard
 from setup.settings import Settings
 from setup.ui import MissingInput
 from setup.tests import fakes
@@ -82,9 +83,23 @@ class IAM(fakes.FakeIAM):
         return {"AccessKey": {"AccessKeyId": "AKIANEW", "SecretAccessKey": "s3cr3t"}}
 
 
+def strict_dep(p, ec2, iam, ssm, ids=None, save=lambda: None):
+    """Strict mode's deployer (a plan with an install id)."""
+    return owned.StrictDeployer(p, ec2, iam, ssm, ACCOUNT, say=print, sleep=lambda s: None, ids=ids, save=save)
+
+
+def hub_plan(**kw):
+    """A strict-mode plan: --asset-prefix hub, a new install's id."""
+    base = dict(domain="hub.hotmicapp.com", front_door="caddy", region="us-west-2", name="hotmic", prefix="hub")
+    return aws.plan_aws(**{**base, "install_id": INSTALL, **kw})
+
+
 def deployed(p):
     ec2, iam, ssm, _ = aws_clients()
-    d = aws.Deployer(p, ec2, iam, ssm, ACCOUNT, say=lambda m: None, sleep=lambda s: None)
+    if p.install_id:
+        d = strict_dep(p, ec2, iam, ssm)
+    else:
+        d = aws.Deployer(p, ec2, iam, ssm, ACCOUNT, say=lambda m: None, sleep=lambda s: None)
     d.put_env("TICO_DOMAIN=x\n")
     d.launch_or_reuse(d.prepare(), "#!/bin/bash\n")
     return d, ec2, iam, ssm
@@ -92,7 +107,7 @@ def deployed(p):
 
 def created_backup(prefix_kw=None):
     s3, iam = S3(), IAM()
-    values = backup.create_s3(
+    values = (owned.create_s3 if prefix_kw else backup.create_s3)(
         s3,
         iam,
         domain="tico.example.com",
@@ -134,7 +149,7 @@ def test_the_default_server_names_tags_and_policies_are_todays():
     assert iam.called("create_instance_profile") == [{"InstanceProfileName": "tico-acme", "Tags": tags}]
     assert iam.called("add_role_to_instance_profile") == [{"InstanceProfileName": "tico-acme", "RoleName": "tico-acme"}]
     assert d.param_name == "/tico/acme/env" and ssm.called("put_parameter")[0]["Name"] == "/tico/acme/env"
-    assert ssm.called("put_parameter")[0]["Tags"] == tags and not ssm.called("add_tags_to_resource")  # tagged at birth
+    assert "Tags" not in ssm.called("put_parameter")[0] and ssm.called("add_tags_to_resource")[0]["Tags"] == tags
     text = "\n".join(p.lines())
     for want in (
         "Security group tico-acme:",
@@ -169,7 +184,8 @@ def test_the_default_backup_names_are_todays():
     (pol,) = iam.called("put_user_policy")
     assert (pol["UserName"], pol["PolicyName"]) == ("tico-backup-acme", "tico-backup")
     assert values["TICO_BACKUP_URL"] == f"s3://{bucket}/tico"
-    assert s3.called("create_bucket")[0]["CreateBucketConfiguration"]["Tags"] == [
+    assert s3.called("create_bucket")[0]["CreateBucketConfiguration"] == {"LocationConstraint": "us-west-2"}
+    assert s3.called("put_bucket_tagging")[0]["Tagging"]["TagSet"] == [
         {"Key": "ManagedBy", "Value": "tico-setup"},
         {"Key": "tico-setup-name", "Value": "acme"},
     ]
@@ -235,43 +251,34 @@ def test_the_default_runner_names_are_todays():
         assert want in out
 
 
-# --- the two bugs fixed with the flag -------------------------------------------------------------------------------
+# --- the backup user's name, in strict mode (the default prefix keeps main's, from the domain) ---------------------
 
 
-def test_the_plan_names_the_backup_user_from_name_as_setup_creates_it():
-    code, out = go(["--dry-run", "--target", "aws", "--front-door", "caddy", "--name", "acme", *BASE])
+def test_a_hub_plan_names_the_backup_user_from_name_as_setup_creates_it():
+    code, out = go(
+        ["--dry-run", "--target", "aws", "--front-door", "caddy", "--name", "acme", "--asset-prefix", "hub", *BASE]
+    )
     assert code == 0, out
-    assert "IAM user tico-backup-acme allowed" in out and "tico-backup-tico-example-com allowed" not in out
+    assert "IAM user hub-backup-acme allowed" in out and "hub-backup-tico-example-com allowed" not in out
 
 
-def test_backup_storage_takes_name_and_otherwise_the_saved_one():
+def test_hub_backup_storage_takes_name_and_otherwise_the_saved_one(monkeypatch):
     s3, iam = S3(), IAM()
     d = fakes.deps()
     d.aws_clients = lambda region, profile: (None, iam, None, ACCOUNT)
     d.aws_s3 = lambda region, profile: s3
     argv = ["backup-storage", "--domain", "tico.example.com", "--aws-region", "us-west-2"]
-    assert go([*argv, "--name", "acme"], deps=d)[0] == 0
-    assert go(argv, deps=d)[0] == 0  # its own saved name
+    assert go([*argv, "--name", "acme", "--asset-prefix", "hub"], deps=d)[0] == 0
+    assert go(argv, deps=d)[0] == 0  # its own saved name and prefix
     assert state.load_backup("tico.example.com")["name"] == "acme"
-    state.save("other.example.com", {"domain": "other.example.com", "aws_name": "saved-name", "asset_prefix": "tico"})
+    other = {"domain": "other.example.com", "aws_name": "saved-name", "asset_prefix": "hub", "install_id": INSTALL}
+    state.save("other.example.com", {**other, "target": "aws", "aws_region": "us-west-2"})
     assert go(["backup-storage", "--domain", "other.example.com", "--aws-region", "us-west-2"], deps=d)[0] == 0
-    assert [c["UserName"] for c in iam.called("create_user")] == ["tico-backup-acme", "tico-backup-saved-name"]
+    assert [c["UserName"] for c in iam.called("create_user")] == ["hub-backup-acme", "hub-backup-saved-name"]
     code, out = go([*argv, "--name", "other"], deps=d)
     assert code == 2 and "tico.example.com is set up with --name acme" in out
     code, out = go([*argv, "--name", "Not_A_Name"], deps=d)
     assert code == 2 and "--name is 1 to 40" in out
-
-
-def test_backup_storage_for_an_install_saved_before_the_flag_keeps_its_old_backup_user():
-    # Before --asset-prefix, backup-storage always named its user after the domain, whatever --name the server had.
-    s3, iam = S3(), IAM()
-    d = fakes.deps()
-    d.aws_clients = lambda region, profile: (None, iam, None, ACCOUNT)
-    d.aws_s3 = lambda region, profile: s3
-    state.save("old.example.com", {"domain": "old.example.com", "aws_name": "custom", "aws_instance_id": "i-1"})
-    assert go(["backup-storage", "--domain", "old.example.com", "--aws-region", "us-west-2"], deps=d)[0] == 0
-    assert [c["UserName"] for c in iam.called("create_user")] == ["tico-backup-old-example-com"]
-    assert state.load_backup("old.example.com")["name"] == "old-example-com"
 
 
 # --- --asset-prefix hub -------------------------------------------------------------------------------------------
@@ -281,6 +288,7 @@ TICO_TAGS = [{"Key": "ManagedBy", "Value": "tico-setup"}, {"Key": "tico-setup-na
 HUB_TAGS = [{"Key": "ManagedBy", "Value": "hub-setup"}, {"Key": "hub-setup-name", "Value": "hotmic"}]
 INSTALL = "0123456789abcdef"
 HUB_ID, TICO_ID = aws.Names("hub", INSTALL), aws.Names("tico", INSTALL)  # a new install's: tags carry its id
+HUB_OURS = HUB_ID.tags("hotmic")
 
 
 def test_the_prefix_is_checked_and_a_saved_one_wins():
@@ -320,16 +328,9 @@ def test_the_longest_names_fit_every_aws_limit(prefix):
 
 
 def test_hub_server_names_tags_and_policies():
-    p = aws.plan_aws(
-        domain="hub.hotmicapp.com",
-        front_door="caddy",
-        region="us-west-2",
-        name="hotmic",
-        plan_bucket="hub-setup-plans-abc",
-        prefix="hub",
-    )
+    p = hub_plan(plan_bucket="hub-setup-plans-abc")
     d, ec2, iam, ssm = deployed(p)
-    named = HUB_TAGS + [{"Key": "Name", "Value": "hub-hotmic"}]
+    named = HUB_OURS + [{"Key": "Name", "Value": "hub-hotmic"}]
     (sg,) = ec2.called("create_security_group")
     assert (sg["GroupName"], sg["Description"], sg["TagSpecifications"][0]["Tags"]) == ("hub-hotmic", "Server", named)
     assert ec2.called("allocate_address")[0]["TagSpecifications"][0]["Tags"] == named
@@ -343,9 +344,9 @@ def test_hub_server_names_tags_and_policies():
         f"arn:aws:ssm:us-west-2:{ACCOUNT}:parameter/hub/hotmic/env",
         "arn:aws:s3:::hub-setup-plans-abc/plans/hotmic/*",
     ]
-    assert iam.called("create_instance_profile") == [{"InstanceProfileName": "hub-hotmic", "Tags": HUB_TAGS}]
+    assert iam.called("create_instance_profile") == [{"InstanceProfileName": "hub-hotmic", "Tags": HUB_OURS}]
     assert ssm.called("put_parameter")[0]["Name"] == d.param_name == "/hub/hotmic/env"
-    assert ssm.called("put_parameter")[0]["Tags"] == HUB_TAGS and not ssm.called("add_tags_to_resource")
+    assert ssm.called("put_parameter")[0]["Tags"] == HUB_OURS and not ssm.called("add_tags_to_resource")
     text = "\n".join(p.lines())
     assert "Security group hub-hotmic:" in text and "IAM role hub-hotmic " in text
     assert "SSM SecureString /hub/hotmic/env" in text and "ManagedBy=hub-setup, hub-setup-name=hotmic" in text
@@ -493,6 +494,10 @@ def test_destroy_deletes_only_the_install_of_its_own_prefix(argv, prefix, other)
     state.save("old.example.com", {"domain": "old.example.com", "aws_name": "hotmic"})
     d, ec2, iam, ssm = two_installs()
     code, out = go(["destroy", *argv, "--yes"], deps=d)
+    if prefix == "hub":  # strict mode: never by the prefix and name tags alone, without a saved install id
+        assert code == 2 and "nothing was deleted" in out and "Check by hand" in out, out
+        assert not any(deleted(ec2, iam, ssm).values())
+        return
     assert code == 0 and f"Tagged {prefix}-setup-name=hotmic in us-east-1:" in out, out
     assert deleted(ec2, iam, ssm) == {
         "instances": [f"i-{prefix}"],
@@ -507,8 +512,8 @@ def test_destroy_deletes_only_the_install_of_its_own_prefix(argv, prefix, other)
 
 
 def test_hub_backup_names():
-    s3, iam, values = created_backup({"names": HUB})
-    bucket = f"hub-backup-tico-example-com-{ACCOUNT}"  # the domain's slug, as given
+    s3, iam, values = created_backup({"names": HUB_ID})
+    bucket = f"hub-backup-tico-example-com-{INSTALL}"  # the domain's slug, then the install id
     assert s3.called("create_bucket")[0]["Bucket"] == bucket
     rules = s3.called("put_bucket_lifecycle_configuration")[0]["LifecycleConfiguration"]["Rules"]
     assert [(r["ID"], r["Filter"]) for r in rules] == [
@@ -523,12 +528,9 @@ def test_hub_backup_names():
     assert (
         iam.called("create_user")[0]["Tags"]
         == s3.called("create_bucket")[0]["CreateBucketConfiguration"]["Tags"]
-        == [
-            {"Key": "ManagedBy", "Value": "hub-setup"},
-            {"Key": "hub-setup-name", "Value": "acme"},
-        ]
+        == HUB_ID.tags("acme")
     )
-    lines = "\n".join(backup.aws_plan_lines("hub.hotmicapp.com", "us-west-2", "hotmic", HUB, ACCOUNT))
+    lines = "\n".join(backup.aws_plan_lines("hub.hotmicapp.com", "us-west-2", ACCOUNT, HUB, "hotmic"))
     assert f"S3 bucket hub-backup-hub-hotmicapp-com-{ACCOUNT} in us-west-2" in lines
     assert (
         "IAM user hub-backup-hotmic allowed" in lines and f"to s3://hub-backup-hub-hotmicapp-com-{ACCOUNT}/hub" in lines
@@ -753,12 +755,12 @@ def test_a_backup_bucket_another_prefix_made_is_refused_before_any_write():
     """hub + backup-foo.example.com and hub-backup + foo.example.com spell the same bucket."""
     s3, iam = S3(), IAM()
     kw = dict(region="us-west-2", account_id=ACCOUNT, say=lambda _: None)
-    backup.create_s3(s3, iam, domain="backup-foo.example.com", name="a", names=HUB, **kw)
+    owned.create_s3(s3, iam, domain="backup-foo.example.com", name="a", names=HUB, **kw)
     bucket = HUB.backup_bucket("backup-foo.example.com", ACCOUNT)
     assert aws.Names("hub-backup").backup_bucket("foo.example.com", ACCOUNT) == bucket
     before, users = len(s3.calls), dict(iam.users)
     with pytest.raises(MissingInput, match=f"S3 bucket {bucket} .*another --asset-prefix"):
-        backup.create_s3(s3, iam, domain="foo.example.com", name="b", names=aws.Names("hub-backup"), **kw)
+        owned.create_s3(s3, iam, domain="foo.example.com", name="b", names=aws.Names("hub-backup"), **kw)
     assert [n for n, _ in s3.calls[before:]] == ["head_bucket", "get_bucket_tagging"]
     assert iam.users == users and len(iam.called("put_user_policy")) == 1
     assert all(c[1].get("ExpectedBucketOwner") == ACCOUNT for c in s3.calls[before:])
@@ -766,17 +768,18 @@ def test_a_backup_bucket_another_prefix_made_is_refused_before_any_write():
 
 def test_an_untagged_backup_bucket_is_refused_and_a_new_one_is_tagged_in_its_create_call():
     s3, iam = S3(), IAM()
-    bucket = aws.DEFAULT_NAMES.backup_bucket("tico.example.com", ACCOUNT)
+    bucket = HUB_ID.backup_bucket("tico.example.com", ACCOUNT)
     s3.tagsets[bucket] = []  # exists, made by someone else
     with pytest.raises(MissingInput, match=f"S3 bucket {bucket} "):
-        backup.create_s3(
-            s3, iam, domain="tico.example.com", region="us-west-2", account_id=ACCOUNT, name="acme", say=print
+        owned.create_s3(
+            s3, iam, domain="tico.example.com", region="us-west-2", account_id=ACCOUNT, name="acme", names=HUB_ID
         )
-    assert [n for n, _ in s3.calls] == ["head_bucket", "get_bucket_tagging"] and not iam.calls
-    s3, _, _ = created_backup()
+    assert [n for n, _ in s3.calls] == ["head_bucket", "get_bucket_tagging"]
+    assert not [n for n, _ in iam.calls if not n.startswith(READS)]
+    s3, _, _ = created_backup({"names": HUB_ID})
     writes = [n for n, _ in s3.calls if n not in ("head_bucket", "get_bucket_tagging")]
     assert writes[0] == "create_bucket" and "put_bucket_tagging" not in writes
-    assert s3.called("create_bucket")[0]["CreateBucketConfiguration"]["Tags"] == aws.DEFAULT_NAMES.tags("acme")
+    assert s3.called("create_bucket")[0]["CreateBucketConfiguration"]["Tags"] == HUB_ID.tags("acme")
 
 
 def test_a_runner_takes_its_own_servers_prefix_not_another_servers_runner_of_the_same_name(monkeypatch):
@@ -795,26 +798,13 @@ def test_a_runner_takes_its_own_servers_prefix_not_another_servers_runner_of_the
     assert ssm.called("put_parameter")[0]["Name"] == "/hub/runner-b1/env"
     runners = {r["server_url"]: r for r in state.load_runners()}
     assert runners["https://a.example"] == old and runners[f"https://{DOMAIN}"]["asset_prefix"] == "hub"
-    # Another tico server's runner b1 in that region would be a.example's runner: refused before any AWS call.
-    state.save("c.example.com", {"domain": "c.example.com"})
+    # Another hub server's runner b1 in that region would be hub.hotmicapp.com's runner: refused before any AWS call.
+    state.save("c.example.com", {"domain": "c.example.com", "aws_name": "c", "asset_prefix": "hub"})
     before = len(log)
     argv[argv.index(f"https://{DOMAIN}")] = "https://c.example.com"
     code, out = go([*argv, "--yes"], deps=d)
-    assert code == 2 and "tico-runner-b1 is already the runner of https://a.example (us-west-2)" in out, out
+    assert code == 2 and f"hub-runner-b1 is already the runner of https://{DOMAIN} (us-west-2)" in out, out
     assert len(log) == before
-
-
-def test_a_runner_saved_by_name_alone_is_moved_to_its_server_scoped_record(monkeypatch):
-    monkeypatch.setenv("TICO_ENROLL_CODE", "one-time-code")
-    monkeypatch.setattr(runner_setup, "_verify", lambda *a: 0)
-    old = {"server_url": "https://other.example", "label": "b1", "target": "aws", "aws_region": "us-west-2"}
-    state.save_runner("runner-b1", {**old, "aws_profile": "", "instance_id": "i-1", "name": "runner-b1"})
-    d, ec2, iam, ssm, s3, log = hub_world()
-    argv = ["runner", "--non-interactive", "--yes", "--cloud", "aws", "--server-url", "https://other.example"]
-    assert go([*argv, "--label", "b1", "--aws-region", "us-west-2"], deps=d)[0] == 0
-    assert [r["server_url"] for r in state.load_runners()] == ["https://other.example"]
-    assert not (state.home() / "runners" / "runner-b1.json").exists()
-    assert ssm.called("put_parameter")[0]["Name"] == "/tico/runner-b1/env"  # saved before the flag: tico
 
 
 def test_a_name_other_than_the_domains_saved_one_is_refused_before_any_aws_call(tmp_path):
@@ -849,8 +839,7 @@ def test_an_ssm_parameter_setup_did_not_make_is_refused_before_any_write(tmp_pat
     assert "Pick another --name or --asset-prefix." in out
     assert [n for n, _ in log if not n.startswith(READS)] == []
     # The deployer on its own never overwrites or tags it either.
-    p = aws.plan_aws(domain=DOMAIN, front_door="caddy", region="us-west-2", name="hotmic", prefix="hub")
-    dep = aws.Deployer(p, ec2, iam, ssm, ACCOUNT, say=lambda m: None, sleep=lambda s: None)
+    dep = strict_dep(hub_plan(domain=DOMAIN), ec2, iam, ssm)
     with pytest.raises(MissingInput, match="SSM parameter /hub/hotmic/env"):
         dep.put_env("X=1\n")
     assert not ssm.called("put_parameter") and not ssm.called("add_tags_to_resource")
@@ -858,7 +847,7 @@ def test_an_ssm_parameter_setup_did_not_make_is_refused_before_any_write(tmp_pat
     del ssm.params["/hub/hotmic/env"]
     dep.put_env("X=1\n")
     (put,) = ssm.called("put_parameter")
-    assert put["Overwrite"] is False and put["Tags"] == HUB_TAGS
+    assert put["Overwrite"] is False and put["Tags"] == HUB_OURS
 
 
 def test_an_iam_role_setup_did_not_make_is_refused_before_any_write(tmp_path):
@@ -879,8 +868,7 @@ def test_an_instance_profile_setup_did_not_make_is_refused_and_never_deleted(tmp
     assert code == 2 and "IAM instance profile hub-hotmic already exists and was not made by this setup" in out, out
     assert [n for n, _ in log if not n.startswith(READS)] == []
     # ensure_role on its own refuses it too, rather than handing it to EC2.
-    p = aws.plan_aws(domain=DOMAIN, front_door="caddy", region="us-west-2", name="hotmic", prefix="hub")
-    dep = aws.Deployer(p, ec2, iam, ssm, ACCOUNT, say=lambda m: None, sleep=lambda s: None)
+    dep = strict_dep(hub_plan(domain=DOMAIN), ec2, iam, ssm)
     with pytest.raises(MissingInput, match="IAM instance profile hub-hotmic"):
         dep.ensure_role()
     assert not iam.called("add_role_to_instance_profile")
@@ -895,7 +883,7 @@ def test_an_instance_profile_setup_did_not_make_is_refused_and_never_deleted(tmp
         held = ["production-app"] if tags == HUB_ID.tags("hotmic") else []
         iam.profiles["hub-hotmic"] = {"Tags": tags, "Roles": held}
         out = []
-        aws.destroy(
+        owned.destroy(
             ec2,
             iam,
             ssm,
@@ -904,16 +892,16 @@ def test_an_instance_profile_setup_did_not_make_is_refused_and_never_deleted(tmp
             sleep=lambda s: None,
             names=HUB_ID,
             name="hotmic",
+            ids={},
         )
         assert not iam.called("delete_instance_profile") and not iam.called("remove_role_from_instance_profile")
         assert "left alone: IAM instance profile hub-hotmic was not made by this install" in "\n".join(out)
 
 
 def test_a_profile_setup_made_without_its_role_gets_it_on_a_rerun():
-    p = aws.plan_aws(domain=DOMAIN, front_door="caddy", region="us-west-2", name="hotmic", prefix="hub")
     iam = IAM()
-    iam.profiles["hub-hotmic"] = {"Tags": HUB_TAGS, "Roles": []}  # an earlier run stopped between the two calls
-    dep = aws.Deployer(p, fakes.FakeEC2(), iam, fakes.FakeSSM(), ACCOUNT, say=lambda m: None, sleep=lambda s: None)
+    iam.profiles["hub-hotmic"] = {"Tags": HUB_OURS, "Roles": []}  # an earlier run stopped between the two calls
+    dep = strict_dep(hub_plan(domain=DOMAIN), fakes.FakeEC2(), iam, fakes.FakeSSM())
     assert dep.ensure_role() == "hub-hotmic"
     assert iam.called("add_role_to_instance_profile") == [
         {"InstanceProfileName": "hub-hotmic", "RoleName": "hub-hotmic"}
@@ -934,7 +922,7 @@ def test_a_route53_record_setup_did_not_make_is_refused_unless_replace_dns(tmp_p
     assert code == 0, out
     assert [r["ResourceRecords"] for r in r53.records] == [[{"Value": "203.0.113.9"}]]
     saved = state.load(DOMAIN)[0]
-    assert saved["dns_records"] == r53.records and saved["dns_zone_id"] == "Z1" and saved["dns_pending"] == []
+    assert saved["dns_records"] == r53.records and saved["dns_zone_id"] == "Z1" and saved.get("dns_pending", []) == []
     # Re-runs of this install keep working without the flag while the record is exactly the one it made.
     assert go(argv, deps=d)[0] == 0
     # Codex review 3, case 2: a record repointed (at production, say) is no longer the one it made: refused, untouched.
@@ -1080,10 +1068,10 @@ def test_a_runner_and_backup_storage_keep_their_aws_account(monkeypatch):
     monkeypatch.setattr(runner_setup, "_verify", lambda *a: 0)
     d, ec2, iam, ssm, s3, log = hub_world()
     argv = ["runner", "--non-interactive", "--yes", "--cloud", "aws", "--server-url", "https://other.example"]
-    argv += ["--label", "b1", "--aws-region", "us-west-2"]
+    argv += ["--label", "b1", "--aws-region", "us-west-2", "--asset-prefix", "hub"]
     assert go(argv, deps=d)[0] == 0
     assert state.load_runners()[0]["aws_account_id"] == HOTMIC_ACCOUNT
-    bs = ["backup-storage", "--domain", "laptop.example.com", "--aws-region", "us-west-2"]
+    bs = ["backup-storage", "--domain", "laptop.example.com", "--aws-region", "us-west-2", "--asset-prefix", "hub"]
     assert go(bs, deps=d)[0] == 0 and state.load_backup("laptop.example.com")["aws_account_id"] == HOTMIC_ACCOUNT
     d.aws_clients = lambda region, profile: (Spy(ec2, log), Spy(iam, log), Spy(ssm, log), "999999999999")
     log.clear()
@@ -1110,36 +1098,26 @@ class RacingS3(S3):
 
 def test_a_bucket_that_appears_between_the_read_and_the_create_is_never_adopted():
     # (An untagged one made in that instant cannot be told from a new one in us-east-1: the residual window.)
-    for tags in (PRODUCTION, TICO_TAGS):
+    for tags in (PRODUCTION, HUB_TAGS):
         s3, iam = RacingS3(tags), IAM()
         with pytest.raises(MissingInput, match="was not made by this setup"):
-            backup.create_s3(
-                s3, iam, domain="tico.example.com", region="us-east-1", account_id=ACCOUNT, name="acme", say=print
+            owned.create_s3(
+                s3, iam, domain="tico.example.com", region="us-east-1", account_id=ACCOUNT, name="acme", names=HUB
             )
         assert not s3.called("put_bucket_tagging") and not iam.called("create_user")
         assert [n for n, _ in s3.calls] == ["head_bucket", "create_bucket", "get_bucket_tagging"]
 
 
-def test_an_untagged_bucket_is_never_adopted_even_one_an_earlier_run_claimed():
-    # Codex review 3, case 4: a claim saved before a create that never reached AWS let someone else's untagged bucket
-    # of that name be adopted and retagged. Buckets are tagged in the create call now, so none of setup's is untagged.
-    iam, s3 = IAM(), S3()
-    d = fakes.deps()
-    d.aws_clients = lambda region, profile: (None, iam, None, ACCOUNT)
-    d.aws_s3 = lambda region, profile: s3
-    bucket = aws.DEFAULT_NAMES.backup_bucket("laptop.example.com", ACCOUNT)
-    state.save_backup("laptop.example.com", {"bucket_claims": f"{bucket}@2026-11-10T00:00:00Z"})
-    s3.tagsets[bucket] = []  # someone else's, made after the claim
-    code, out = go(["backup-storage", "--domain", "laptop.example.com", "--aws-region", "us-west-2"], deps=d)
-    assert code == 2 and "was not made by this setup" in out, out
-    assert not s3.called("put_bucket_tagging") and not s3.called("create_bucket") and not iam.calls
-    p = aws.plan_aws(
-        domain="a.example", front_door="caddy", region="us-east-1", name="acme", plan_bucket="tico-setup-plans-x"
-    )
-    s3.tagsets["tico-setup-plans-x"] = []
-    with pytest.raises(SystemExit, match="refusing to reuse"):
-        aws.Deployer(p, None, None, None, ACCOUNT).ensure_plan_bucket(s3, "us-east-1")
-    assert not s3.called("put_bucket_tagging")
+def test_an_untagged_bucket_is_never_adopted():
+    # Codex review 3, case 4: someone else's untagged bucket of the name was adopted and retagged. Strict mode's buckets
+    # are tagged in the create call, so none of setup's is untagged.
+    s3 = S3()
+    s3.tagsets["hub-setup-plans-x"] = []
+    with pytest.raises((MissingInput, SystemExit), match="refusing to reuse"):
+        strict_dep(hub_plan(region="us-east-1", plan_bucket="hub-setup-plans-x"), None, None, None).ensure_plan_bucket(
+            s3, "us-east-1"
+        )
+    assert not s3.called("put_bucket_tagging") and not s3.called("create_bucket")
 
 
 def test_a_boto3_too_old_to_tag_a_bucket_at_creation_stops_before_making_one():
@@ -1148,15 +1126,13 @@ def test_a_boto3_too_old_to_tag_a_bucket_at_creation_stops_before_making_one():
 
     s3 = S3()
     s3.create_bucket = lambda **kw: (_ for _ in ()).throw(ParamValidationError("Unknown parameter Tags"))
-    p = aws.plan_aws(
-        domain="a.example", front_door="caddy", region="us-west-2", name="acme", plan_bucket="tico-setup-plans-x"
-    )
+    p = hub_plan(plan_bucket="hub-setup-plans-x")
     with pytest.raises(SystemExit, match="pip install -U boto3"):
-        aws.Deployer(p, None, None, None, ACCOUNT).ensure_plan_bucket(s3, "us-west-2")
-    assert "tico-setup-plans-x" not in s3.tagsets
+        strict_dep(p, None, None, None).ensure_plan_bucket(s3, "us-west-2")
+    assert "hub-setup-plans-x" not in s3.tagsets
 
 
-def saved_install(domain="x.example.com", prefix="tico", **extra):
+def saved_install(domain="x.example.com", prefix="hub", **extra):
     """A whole install saved with an install id, as a new install saves it."""
     rec = {"domain": domain, "target": "aws", "aws_name": "hotmic", "aws_region": "us-east-1", "asset_prefix": prefix}
     state.save(domain, {**rec, "aws_account_id": ACCOUNT, "install_id": INSTALL, **extra})
@@ -1167,11 +1143,11 @@ def saved_install(domain="x.example.com", prefix="tico", **extra):
 def test_destroy_never_terminates_an_instance_that_would_take_something_setup_did_not_make(kind):
     # Codex review 3, case 9: foreign network interfaces attached with DeleteOnTermination go with the instance too.
     d, ec2, iam, ssm = two_installs()
-    ec2.instances[0]["Tags"] = TICO_ID.tags("hotmic")
-    attach = lambda dot: {"InstanceId": "i-tico", "DeleteOnTermination": dot}  # noqa: E731
-    ec2.volumes = [{"VolumeId": "vol-root", "Tags": TICO_ID.tags("hotmic"), "Attachments": [attach(True)]}]
-    ec2.enis = [{"NetworkInterfaceId": "eni-root", "TagSet": TICO_ID.tags("hotmic"), "Attachment": attach(True)}]
-    for dot, tags in ((True, PRODUCTION), (False, PRODUCTION), (True, TICO_TAGS)):  # TICO_TAGS: no install id
+    ec2.instances[1]["Tags"] = HUB_OURS
+    attach = lambda dot: {"InstanceId": "i-hub", "DeleteOnTermination": dot}  # noqa: E731
+    ec2.volumes = [{"VolumeId": "vol-root", "Tags": HUB_OURS, "Attachments": [attach(True)]}]
+    ec2.enis = [{"NetworkInterfaceId": "eni-root", "TagSet": HUB_OURS, "Attachment": attach(True)}]
+    for dot, tags in ((True, PRODUCTION), (False, PRODUCTION), (True, HUB_TAGS)):  # HUB_TAGS: no install id
         if kind == "volume":
             ec2.volumes.append({"VolumeId": "vol-prod", "Tags": tags, "Attachments": [attach(dot)]})
         else:
@@ -1183,26 +1159,26 @@ def test_destroy_never_terminates_an_instance_that_would_take_something_setup_di
             assert code == 2 and prod in out and "root" not in out.split("would also delete")[-1], out
             assert deleted(ec2, iam, ssm)["instances"] == []
             with pytest.raises(MissingInput, match=prod):  # and again right before the terminate call itself
-                aws.destroy(ec2, iam, ssm, {"instance": ["i-tico"]}, say=print, names=TICO_ID, name="hotmic")
+                owned.destroy(ec2, iam, ssm, {"instance": ["i-hub"]}, print, None, names=HUB_ID, name="hotmic", ids={})
         else:
-            assert code == 0 and deleted(ec2, iam, ssm)["instances"] == ["i-tico"], out
+            assert code == 0 and deleted(ec2, iam, ssm)["instances"] == ["i-hub"], out
             ec2.calls.clear()
         ec2.volumes, ec2.enis = ec2.volumes[:1], ec2.enis[:1]
 
 
 def test_a_role_or_backup_user_replaced_between_the_proof_and_the_write_is_never_written():
-    p = aws.plan_aws(domain=DOMAIN, front_door="caddy", region="us-west-2", name="hotmic", prefix="hub")
-    for replacement in ({"RoleId": "AROAOTHER", "Tags": HUB_TAGS}, {"RoleId": "AROAOTHER", "Tags": PRODUCTION}):
+    p = hub_plan(domain=DOMAIN)
+    for replacement in ({"RoleId": "AROAOTHER", "Tags": HUB_OURS}, {"RoleId": "AROAOTHER", "Tags": PRODUCTION}):
         iam = IAM()
-        iam.roles["hub-hotmic"] = {"RoleId": "AROAFIRST", "Tags": HUB_TAGS}
-        dep = aws.Deployer(p, fakes.FakeEC2(), iam, fakes.FakeSSM(), ACCOUNT, say=print, sleep=lambda s: None)
+        iam.roles["hub-hotmic"] = {"RoleId": "AROAFIRST", "Tags": HUB_OURS}
+        dep = strict_dep(p, fakes.FakeEC2(), iam, fakes.FakeSSM())
         dep.preflight()  # proven: setup's role
         iam.roles["hub-hotmic"] = replacement  # deleted and made again by someone else
         with pytest.raises((MissingInput, SystemExit), match="hub-hotmic"):
             dep.ensure_role()
         assert not iam.called("attach_role_policy") and not iam.called("put_role_policy")
-    ssm = fakes.FakeSSM(param_tags=HUB_TAGS)  # an existing parameter is overwritten, never re-tagged
-    aws.Deployer(p, fakes.FakeEC2(), IAM(), ssm, ACCOUNT, say=print, sleep=lambda s: None).put_env("A=1")
+    ssm = fakes.FakeSSM(param_tags=HUB_OURS)  # an existing parameter is overwritten, never re-tagged
+    strict_dep(p, fakes.FakeEC2(), IAM(), ssm).put_env("A=1")
     assert ssm.called("put_parameter")[0]["Overwrite"] and not ssm.called("add_tags_to_resource")
     s3, iam = S3(), IAM()
     real_get = iam.get_user
@@ -1215,7 +1191,7 @@ def test_a_role_or_backup_user_replaced_between_the_proof_and_the_write_is_never
     iam.users["hub-backup-acme"] = {"UserId": "AIDAFIRST", "Tags": HUB.tags("acme")}
     iam.get_user = swapped
     with pytest.raises(MissingInput, match="IAM user hub-backup-acme"):
-        backup.create_s3(
+        owned.create_s3(
             s3,
             iam,
             domain="tico.example.com",
@@ -1223,7 +1199,6 @@ def test_a_role_or_backup_user_replaced_between_the_proof_and_the_write_is_never
             account_id=ACCOUNT,
             name="acme",
             names=HUB,
-            say=print,
         )
     assert not iam.called("put_user_policy") and not iam.called("create_access_key")
 
@@ -1263,7 +1238,7 @@ def test_a_matching_record_setup_did_not_make_is_left_alone_and_never_deleted(tm
     code, out = go(argv, deps=d)
     assert code == 0, out
     assert r53.records == [manual] and not r53.called("change_resource_record_sets")  # TTL kept, nothing written
-    assert state.load(DOMAIN)[0]["dns_records"] == []
+    assert state.load(DOMAIN)[0].get("dns_records", []) == []
     code, out = go(["destroy", "--domain", DOMAIN, "--dns", "--yes"], deps=d)
     assert code == 0 and f"Left alone: A {DOMAIN} -> 203.0.113.9 is not the record this install made" in out, out
     assert r53.records == [manual] and not r53.called("change_resource_record_sets")
@@ -1290,18 +1265,19 @@ def test_another_servers_runner_role_in_another_region_is_never_reused(monkeypat
     monkeypatch.setattr(runner_setup, "_verify", lambda *a: 0)
     d, ec2, iam, ssm, s3, log = hub_world()
     # Made from another computer for https://a.example in us-east-2: IAM roles and profiles are global.
-    theirs = aws.Names().tags("runner-b1") + [
-        {"Key": "tico-setup-server", "Value": aws.server_identity("tico", "https://a.example", "us-east-2")}
+    theirs = HUB.tags("runner-b1") + [
+        {"Key": "hub-setup-server", "Value": owned.server_identity("hub", "https://a.example", "us-east-2")}
     ]
-    iam.roles["tico-runner-b1"] = {"RoleId": "AROATHEIRS", "Tags": theirs}
-    iam.profiles["tico-runner-b1"] = {"Tags": theirs, "Roles": ["tico-runner-b1"]}
+    iam.roles["hub-runner-b1"] = {"RoleId": "AROATHEIRS", "Tags": theirs}
+    iam.profiles["hub-runner-b1"] = {"Tags": theirs, "Roles": ["hub-runner-b1"]}
     argv = ["runner", "--non-interactive", "--yes", "--cloud", "aws", "--server-url", "https://c.example.com"]
+    argv += ["--asset-prefix", "hub"]
     code, out = go([*argv, "--label", "b1", "--aws-region", "us-west-2"], deps=d)
-    assert code == 2 and "IAM role tico-runner-b1" in out, out
+    assert code == 2 and "IAM role hub-runner-b1" in out, out
     assert not iam.called("put_role_policy") and not ssm.called("put_parameter") and not ec2.called("run_instances")
     # From this computer too, the saved record of a.example's runner in another region refuses it before any AWS call.
     rec = {"server_url": "https://a.example", "label": "b1", "target": "aws", "aws_region": "us-east-2"}
-    state.save_runner("a", {**rec, "name": "runner-b1", "instance_id": "i-a"})
+    state.save_runner("a", {**rec, "name": "runner-b1", "instance_id": "i-a", "asset_prefix": "hub"})
     before = len(log)
     code, out = go([*argv, "--label", "b1", "--aws-region", "us-west-2"], deps=d)
     assert code == 2 and "already the runner of https://a.example (us-east-2)" in out and len(log) == before, out
@@ -1309,8 +1285,8 @@ def test_another_servers_runner_role_in_another_region_is_never_reused(monkeypat
     code, out = go([*argv, "--label", "b2", "--aws-region", "us-west-2"], deps=d)
     assert code == 0, out
     (rec,) = [r for r in state.load_runners() if r.get("name") == "runner-b2"]
-    mine = {"Key": "tico-setup-install", "Value": rec["install_id"]}
-    assert mine in iam.called("create_role")[0]["Tags"] and mine in iam.profiles["tico-runner-b2"]["Tags"]
+    mine = {"Key": "hub-setup-install", "Value": rec["install_id"]}
+    assert mine in iam.called("create_role")[0]["Tags"] and mine in iam.profiles["hub-runner-b2"]["Tags"]
     assert mine in ssm.called("put_parameter")[0]["Tags"]
 
 
@@ -1326,36 +1302,20 @@ def test_runner_records_of_servers_that_slug_alike_never_share_a_file():
     assert len(keys) == 8
 
 
-def test_an_old_install_re_saved_keeps_the_backup_user_backup_storage_made_for_it(tmp_path):
-    d, ec2, iam, ssm, s3, log = hub_world()
-    state.save(DOMAIN, {"domain": DOMAIN, "aws_name": "hotmic", "target": "aws", "aws_region": "us-west-2"})
-    bs = ["backup-storage", "--domain", DOMAIN, "--aws-region", "us-west-2"]
-    assert go(bs, deps=d)[0] == 0  # as an older release did: named after the domain, and no backup.json kept
-    assert [c["UserName"] for c in iam.called("create_user")] == ["tico-backup-hub-hotmicapp-com"]
-    (state.home() / DOMAIN / "backup.json").unlink()
-    code, out = go(hub_args(tmp_path, "--name", "hotmic", "--backup", "local"), deps=d)  # re-saves with asset_prefix
-    assert code == 0, out
-    assert state.load(DOMAIN)[0]["asset_prefix"] == "tico"
-    code, out = go(bs, deps=d)
-    assert code == 0, out
-    assert len(iam.called("create_user")) == 1 and state.load_backup(DOMAIN)["name"] == "hub-hotmicapp-com"
-
-
 def test_a_role_without_a_profile_or_beside_someone_elses_is_modelled_and_handled_apart():
     ec2, ssm = fakes.FakeEC2(), fakes.FakeSSM()
     ours = HUB_ID.tags("hotmic")
     iam = fakes.FakeIAM(role_tags=ours, profile_tags=None)  # setup's role; its profile was never made
-    assert aws.instance_profile(iam, "hub-hotmic") is None
-    kw = dict(say=print, sleep=lambda s: None, names=HUB_ID, name="hotmic")
-    aws.destroy(ec2, iam, ssm, {"iam-role": ["hub-hotmic"]}, **kw)
+    assert owned.instance_profile(iam, "hub-hotmic") is None
+    kw = dict(say=print, sleep=lambda s: None, names=HUB_ID, name="hotmic", ids={})
+    owned.destroy(ec2, iam, ssm, {"iam-role": ["hub-hotmic"]}, **kw)
     assert iam.called("delete_role") == [{"RoleName": "hub-hotmic"}] and not iam.called("delete_instance_profile")
     with pytest.raises(fakes._Exc.NoSuchEntityException):
         iam.get_instance_profile(InstanceProfileName="hub-hotmic")  # still none: never made up from the role's tags
     iam = fakes.FakeIAM(role_tags=ours, profile_tags=PRODUCTION)  # someone else's profile of that name
-    aws.destroy(ec2, iam, ssm, {"iam-role": ["hub-hotmic"]}, **kw)
+    owned.destroy(ec2, iam, ssm, {"iam-role": ["hub-hotmic"]}, **kw)
     assert not iam.called("delete_role") and not iam.called("delete_instance_profile")
-    p = aws.plan_aws(domain=DOMAIN, front_door="caddy", region="us-west-2", name="hotmic", prefix="hub")
-    dep = aws.Deployer(p, ec2, iam, ssm, ACCOUNT, say=print, sleep=lambda s: None)
+    dep = strict_dep(hub_plan(domain=DOMAIN), ec2, iam, ssm)
     with pytest.raises(MissingInput, match="IAM instance profile hub-hotmic"):
         dep.preflight()
 
@@ -1404,10 +1364,10 @@ def test_a_new_hub_installs_buckets_end_in_its_install_id_and_an_existing_name_i
         s3, iam = S3(), IAM()
         s3.tagsets[names.backup_bucket("a.example", ACCOUNT)] = tags
         with pytest.raises(MissingInput, match="was not made by this setup"):
-            backup.create_s3(
-                s3, iam, domain="a.example", region="us-east-1", account_id=ACCOUNT, name="acme", say=print, names=names
+            owned.create_s3(
+                s3, iam, domain="a.example", region="us-east-1", account_id=ACCOUNT, name="acme", names=names
             )
-        assert not s3.called("create_bucket") and not iam.calls
+        assert not s3.called("create_bucket") and not [n for n, _ in iam.calls if not n.startswith(READS)]
 
 
 class ObjectS3(S3):
@@ -1441,7 +1401,7 @@ def test_an_explicit_plan_bucket_must_be_tagged_for_this_install_and_its_objects
         prefix="hub",
         install_id=install,
     )
-    d = aws.Deployer(p, None, None, None, ACCOUNT, ids={}, save=lambda: saved.append(dict(d.ids)))
+    d = strict_dep(p, None, None, None, ids={}, save=lambda: saved.append(dict(d.ids)))
     s3 = ObjectS3()
     s3.tagsets["prod-assets"] = PRODUCTION
     with pytest.raises(MissingInput, match=f"Tag it hub-setup-install={install}"):
@@ -1481,11 +1441,11 @@ def test_a_create_whose_answer_was_lost_is_known_for_its_own_on_the_retry_and_de
         go(argv, deps=d)
     (made,) = r53.records
     saved = state.load(DOMAIN)[0]
-    assert saved["dns_pending"] == [made] and saved["dns_records"] == []
+    assert saved["dns_pending"] == [made] and saved.get("dns_records", []) == []
     code, out = go(argv, deps=d)
     assert code == 0, out
     saved = state.load(DOMAIN)[0]
-    assert saved["dns_records"] == [made] and saved["dns_pending"] == []
+    assert saved["dns_records"] == [made] and saved.get("dns_pending", []) == []
     code, out = go(["destroy", "--domain", DOMAIN, "--dns", "--yes"], deps=d)
     assert code == 0 and "DNS records deleted." in out and r53.records == [], out
 
@@ -1502,13 +1462,12 @@ def test_route53_refuses_a_delete_that_does_not_carry_the_whole_record_set():
 
 
 def id_install():
-    """two_installs, with the tico one made by a new install: every resource carries its install id."""
+    """two_installs, with the hub one made by a new install (strict mode): every resource carries its install id."""
     d, ec2, iam, ssm = two_installs()
-    ours = TICO_ID.tags("hotmic")
     for rows in (ec2.instances, ec2.sgs, ec2.eips):
-        rows[0]["Tags"] = ours
-    iam.roles["tico-hotmic"], iam.profiles["tico-hotmic"]["Tags"] = ours, ours
-    ssm.params["/tico/hotmic/env"] = ours
+        rows[1]["Tags"] = HUB_OURS
+    iam.roles["hub-hotmic"], iam.profiles["hub-hotmic"]["Tags"] = HUB_OURS, HUB_OURS
+    ssm.params["/hub/hotmic/env"] = HUB_OURS
     return d, ec2, iam, ssm
 
 
@@ -1516,24 +1475,24 @@ def test_destroy_reads_each_resource_again_right_before_deleting_it():
     # Codex review 3, case 5: a parameter replaced after it was listed was deleted. Each resource is read again right
     # before its delete, in order, and deleted only while it carries the install's tags and recorded id.
     d, ec2, iam, ssm = id_install()
-    found = aws.discover(ec2, iam, ssm, "hotmic", TICO_ID)
+    found = aws.discover(ec2, iam, ssm, "hotmic", names=HUB_ID)
     assert found == {
-        "instance": ["i-tico"],
-        "elastic-ip": ["eip-tico"],
-        "security-group": ["sg-tico"],
-        "iam-role": ["tico-hotmic"],
-        "ssm-parameter": ["/tico/hotmic/env"],
+        "instance": ["i-hub"],
+        "elastic-ip": ["eip-hub"],
+        "security-group": ["sg-hub"],
+        "iam-role": ["hub-hotmic"],
+        "ssm-parameter": ["/hub/hotmic/env"],
     }
-    ssm.params["/tico/hotmic/env"] = PRODUCTION  # replaced since it was listed
-    ec2.sgs[0]["Tags"] = TICO_TAGS  # retagged without the install id
+    ssm.params["/hub/hotmic/env"] = PRODUCTION  # replaced since it was listed
+    ec2.sgs[1]["Tags"] = HUB_TAGS  # retagged without the install id
     out = []
     ids = {"eip": "eip-other"}  # the install recorded another allocation
-    aws.destroy(ec2, iam, ssm, found, say=out.append, sleep=lambda s: None, names=TICO_ID, name="hotmic", ids=ids)
+    owned.destroy(ec2, iam, ssm, found, say=out.append, sleep=lambda s: None, names=HUB_ID, name="hotmic", ids=ids)
     gone = deleted(ec2, iam, ssm)
-    assert gone["params"] == gone["sgs"] == gone["eips"] == [] and gone["instances"] == ["i-tico"]
-    assert gone["roles"] == ["tico-hotmic"]
+    assert gone["params"] == gone["sgs"] == gone["eips"] == [] and gone["instances"] == ["i-hub"]
+    assert gone["roles"] == ["hub-hotmic"]
     said = "\n".join(out)
-    for what in ("SSM parameter /tico/hotmic/env", "security group sg-tico", "Elastic IP eip-tico"):
+    for what in ("SSM parameter /hub/hotmic/env", "security group sg-hub", "Elastic IP eip-hub"):
         assert f"left alone: {what}" in said, said
     # A role replaced (same tags, another RoleId) after the first delete step keeps its policies.
     d, ec2, iam, ssm = id_install()
@@ -1541,46 +1500,46 @@ def test_destroy_reads_each_resource_again_right_before_deleting_it():
 
     def replaced(**kw):
         real(**kw)
-        iam.roles["tico-hotmic"] = {"RoleId": "AROAPRODUCTION", "Tags": TICO_ID.tags("hotmic")}
+        iam.roles["hub-hotmic"] = {"RoleId": "AROAPRODUCTION", "Tags": HUB_ID.tags("hotmic")}
 
     iam.detach_role_policy = replaced
     out = []
-    ids = {"role": "AROAtico-hotmic"}
-    aws.destroy(ec2, iam, ssm, {"iam-role": ["tico-hotmic"]}, say=out.append, names=TICO_ID, name="hotmic", ids=ids)
+    ids = {"role": "AROAhub-hotmic"}
+    owned.destroy(ec2, iam, ssm, {"iam-role": ["hub-hotmic"]}, out.append, None, names=HUB_ID, name="hotmic", ids=ids)
     assert not iam.called("delete_role_policy") and not iam.called("delete_role")
-    assert "left alone: IAM role tico-hotmic" in "\n".join(out)
+    assert "left alone: IAM role hub-hotmic" in "\n".join(out)
 
 
 def test_destroy_finishes_an_install_interrupted_before_its_inline_policy():
     # Codex review 3, case 14: deleting an inline policy the role never got raises NoSuchEntity, as IAM does.
     d, ec2, iam, ssm = id_install()
-    iam.no_policy.add("tico-hotmic")
+    iam.no_policy.add("hub-hotmic")
     with pytest.raises(fakes._Exc.NoSuchEntityException):
-        iam.delete_role_policy(RoleName="tico-hotmic", PolicyName="tico-env")
+        iam.delete_role_policy(RoleName="hub-hotmic", PolicyName="hub-env")
     code, out = go(saved_install(), deps=d)
-    assert code == 0 and deleted(ec2, iam, ssm)["roles"] == ["tico-hotmic"], out
-    assert deleted(ec2, iam, ssm)["params"] == ["/tico/hotmic/env"]
+    assert code == 0 and deleted(ec2, iam, ssm)["roles"] == ["hub-hotmic"], out
+    assert deleted(ec2, iam, ssm)["params"] == ["/hub/hotmic/env"]
 
 
 def test_an_elastic_ip_attached_to_another_server_is_never_moved_or_released():
     # Codex review 3, case 10: a setup-tagged address since attached to a production server was taken back with
     # AllowReassociation=True. Its attachment is checked; the call never forces it.
-    p = aws.plan_aws(domain="a.example", front_door="caddy", region="us-east-1", name="hotmic", install_id=INSTALL)
+    p = hub_plan(domain="a.example", region="us-east-1")
     ec2 = fakes.FakeEC2()
-    ec2.eips = [{"AllocationId": "eip-tico", "PublicIp": "203.0.113.9", "Tags": TICO_ID.tags("hotmic")}]
+    ec2.eips = [{"AllocationId": "eip-hub", "PublicIp": "203.0.113.9", "Tags": HUB_OURS}]
     ec2.eips[0]["InstanceId"] = "i-production"
-    dep = aws.Deployer(p, ec2, fakes.FakeIAM(), fakes.FakeSSM(), ACCOUNT, say=print, sleep=lambda s: None)
+    dep = strict_dep(p, ec2, fakes.FakeIAM(), fakes.FakeSSM())
     with pytest.raises(MissingInput, match="attached to i-production"):
-        dep.associate("eip-tico", "i-tico")
+        dep.associate("eip-hub", "i-hub")
     assert not ec2.called("associate_address")
     del ec2.eips[0]["InstanceId"]
-    dep.associate("eip-tico", "i-tico")
-    assert ec2.called("associate_address") == [{"AllocationId": "eip-tico", "InstanceId": "i-tico"}]
+    dep.associate("eip-hub", "i-hub")
+    assert ec2.called("associate_address") == [{"AllocationId": "eip-hub", "InstanceId": "i-hub"}]
     # Destroy leaves it too.
     d, ec2, iam, ssm = id_install()
-    ec2.eips[0]["InstanceId"] = "i-production"
+    ec2.eips[1]["InstanceId"] = "i-production"
     code, out = go(saved_install(), deps=d)
-    assert code == 0 and "left alone: Elastic IP eip-tico is attached to i-production" in out, out
+    assert code == 0 and "left alone: Elastic IP eip-hub is attached to i-production" in out, out
     assert deleted(ec2, iam, ssm)["eips"] == []
 
 
@@ -1618,12 +1577,10 @@ def test_backup_storage_checks_the_server_installs_account_and_region_too():
 
 def test_a_security_group_left_without_its_ingress_gets_it_on_the_retry():
     # Codex review 3, case 13: a run stopped between creating the group and opening its ports left a closed group.
-    p = aws.plan_aws(
-        domain=DOMAIN, front_door="caddy", region="us-east-1", name="hotmic", prefix="hub", install_id=INSTALL
-    )
+    p = hub_plan(domain=DOMAIN, region="us-east-1")
     ec2 = fakes.FakeEC2()
-    ec2.sgs = [{"GroupId": "sg-hub", "Tags": HUB_ID.tags("hotmic")}]
-    dep = aws.Deployer(p, ec2, IAM(), fakes.FakeSSM(), ACCOUNT, say=print, sleep=lambda s: None)
+    ec2.sgs = [{"GroupId": "sg-hub", "Tags": HUB_OURS}]
+    dep = strict_dep(p, ec2, IAM(), fakes.FakeSSM())
     assert dep.ensure_sg() == "sg-hub"
     (call,) = ec2.called("authorize_security_group_ingress")
     assert call["GroupId"] == "sg-hub" and {(r["FromPort"], r["IpProtocol"]) for r in call["IpPermissions"]} == {
@@ -1637,10 +1594,10 @@ def test_a_security_group_left_without_its_ingress_gets_it_on_the_retry():
     dep.ensure_sg()
     (call,) = ec2.called("authorize_security_group_ingress")
     assert [(r["FromPort"], r["IpProtocol"]) for r in call["IpPermissions"]] == [(80, "tcp")]
-    # An install saved before ids keeps main's behaviour: an existing group is used as it is.
-    old = aws.plan_aws(domain=DOMAIN, front_door="caddy", region="us-east-1", name="hotmic", prefix="hub")
+    # The default prefix keeps main's behaviour: an existing group is used as it is.
+    old = aws.plan_aws(domain=DOMAIN, front_door="caddy", region="us-east-1", name="hotmic")
     ec2 = fakes.FakeEC2()
-    ec2.sgs = [{"GroupId": "sg-hub", "Tags": HUB_TAGS}]
+    ec2.sgs = [{"GroupId": "sg-tico", "Tags": TICO_TAGS}]
     aws.Deployer(old, ec2, IAM(), fakes.FakeSSM(), ACCOUNT, say=print, sleep=lambda s: None).ensure_sg()
     assert not ec2.called("authorize_security_group_ingress")
 

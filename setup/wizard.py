@@ -25,6 +25,7 @@ from . import (
     dns as dnsmod,
     envfile,
     hosted,
+    owned,
     remote,
     route53,
     settings as st,
@@ -132,8 +133,8 @@ def gather_company_file(args, s):
 
 
 def gather(io: IO, args, s: Settings, dry: bool, restore=None) -> Settings:
-    """`restore(s)`: once a domain that was asked for is known, the install saved for it, whole, with this run's answers
-    so far; the rest of this run's flags then apply to it."""
+    """`restore(s)` (strict mode only): once a domain that was asked for is known, the install saved for it, whole, with
+    this run's answers so far; the rest of this run's flags then apply to it."""
     a = Asker(io, args, s, dry)
     a.get("target", "Where should Tico run?", choices=st.TARGETS, default="aws")
     a.get(
@@ -174,8 +175,6 @@ def gather(io: IO, args, s: Settings, dry: bool, restore=None) -> Settings:
             default="ubuntu",
         )
         a.get("aws_profile", "AWS profile (blank for the default credentials)", flag="--aws-profile", required=False)
-        had = {"aws_name": s.aws_name, "aws_instance_id": s.aws_instance_id, "domain": s.domain}
-        awsmod.check_name(getattr(args, "name", None), awsmod.saved_name(had), s.domain)
         s.aws_name = (getattr(args, "name", None) or s.aws_name or "").strip().lower()
         if s.aws_name and not awsmod.NAME_RE.fullmatch(s.aws_name):
             raise MissingInput(
@@ -394,21 +393,18 @@ def provision_backup(io: IO, s: Settings, deps: Deps, cf: Cloudflare | None) -> 
     try:
         if s.backup == "aws":
             _, iam, _, account = deps.aws_clients(s.aws_region, s.aws_profile)
-            awsmod.check_account(s.aws_account_id, account, s.domain)
-            if s.install_id:
-                s.aws_account_id = account
-            values = bk.create_s3(
-                deps.aws_s3(s.aws_region, s.aws_profile),
-                iam,
-                domain=s.domain,
-                region=s.aws_region,
-                account_id=account,
-                name=s.aws_name or awsmod.slug(s.domain),
-                say=io.say,
-                names=awsmod.Names(s.asset_prefix, s.install_id),
-                ids=s.aws_ids,
-                save=lambda: state.save(s.domain, {**state.load(s.domain)[0], **s.public()}),
-            )
+            if owned.strict(s.asset_prefix):
+                values = _strict_backup(io, s, deps, iam, account)
+            else:
+                values = bk.create_s3(
+                    deps.aws_s3(s.aws_region, s.aws_profile),
+                    iam,
+                    domain=s.domain,
+                    region=s.aws_region,
+                    account_id=account,
+                    name=s.aws_name or awsmod.slug(s.domain),
+                    say=io.say,
+                )
         else:
             account_id = s.cf_account_id
             if not account_id:
@@ -425,8 +421,11 @@ def provision_backup(io: IO, s: Settings, deps: Deps, cf: Cloudflare | None) -> 
             "Fix that and re-run `tico setup` (finished steps are skipped), or use `--backup local` to continue without off-server backups.\n"
             "On a server with no AWS credentials (the usual case), create the bucket from your laptop instead:\n"
             f"  python3 -m setup backup-storage --domain {s.domain} --aws-region {s.aws_region or '<region>'}"
-            + (f" --name {s.aws_name}" if s.aws_name else "")
-            + (f" --asset-prefix {s.asset_prefix}" if s.asset_prefix != awsmod.DEFAULT_PREFIX else "")
+            + (
+                f" --name {s.aws_name or awsmod.slug(s.domain)} --asset-prefix {s.asset_prefix}"
+                if owned.strict(s.asset_prefix)
+                else ""
+            )
             + "\n"
             "then re-run here with the backup answer `existing`."
         )
@@ -435,6 +434,23 @@ def provision_backup(io: IO, s: Settings, deps: Deps, cf: Cloudflare | None) -> 
     s.backup_region, s.backup_key_id = values.get("TICO_BACKUP_REGION", ""), values["LITESTREAM_ACCESS_KEY_ID"]
     s.backup_secret = values["LITESTREAM_SECRET_ACCESS_KEY"]
     return True
+
+
+def _strict_backup(io: IO, s: Settings, deps: Deps, iam, account: str) -> dict:
+    owned.check_account(s.aws_account_id, account, s.domain)
+    s.aws_account_id = account
+    return owned.create_s3(
+        deps.aws_s3(s.aws_region, s.aws_profile),
+        iam,
+        domain=s.domain,
+        region=s.aws_region,
+        account_id=account,
+        name=s.aws_name or awsmod.slug(s.domain),
+        say=io.say,
+        names=awsmod.Names(s.asset_prefix, s.install_id),
+        ids=s.aws_ids,
+        save=lambda: _save(s),
+    )
 
 
 # --- 2. plan ---------------------------------------------------------------------------------------------
@@ -451,18 +467,23 @@ def aws_plan(s: Settings) -> awsmod.AwsPlan:
         boundary=s.aws_permissions_boundary,
         plan_bucket=s.plan_bucket if s.company_file_data else "",
         prefix=s.asset_prefix,
-        install_id=s.install_id,
+        install_id=s.install_id if owned.strict(s.asset_prefix) else "",
     )
 
 
 def deployer(s: Settings, plan, clients, io: IO, deps: Deps) -> awsmod.Deployer:
-    """The install's Deployer, with the ids of what it made kept in its saved state as each is made."""
+    """aws.Deployer, as before --asset-prefix; in strict mode owned.StrictDeployer, keeping the ids of what it makes in
+    the install's saved state as each is made."""
     ec2, iam, ssm, account = clients
+    if not owned.strict(s.asset_prefix):
+        return awsmod.Deployer(plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep)
+    return owned.StrictDeployer(
+        plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep, ids=s.aws_ids, save=lambda: _save(s)
+    )
 
-    def save() -> None:
-        state.save(s.domain, {**state.load(s.domain)[0], **s.public()})
 
-    return awsmod.Deployer(plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep, ids=s.aws_ids, save=save)
+def _save(s: Settings) -> None:
+    state.save(s.domain, {**state.load(s.domain)[0], **s.public()})
 
 
 def cloudname(s: Settings) -> str:
@@ -572,11 +593,16 @@ def plan_lines(s: Settings, zone: dnsmod.Zone | None, records: list[dnsmod.Recor
                 add(line)
     if s.backup == "aws":
         add("Backups: create the backup storage on AWS")
-        names = awsmod.Names(s.asset_prefix, s.install_id)
-        L += [
-            f"       - {x}"
-            for x in bk.aws_plan_lines(s.domain, s.aws_region, s.aws_name or awsmod.slug(s.domain), names)
-        ]
+        if owned.strict(s.asset_prefix):
+            names = awsmod.Names(s.asset_prefix, s.install_id)
+            L += [
+                f"       - {x}"
+                for x in bk.aws_plan_lines(
+                    s.domain, s.aws_region, names=names, name=s.aws_name or awsmod.slug(s.domain)
+                )
+            ]
+        else:
+            L += [f"       - {x}" for x in bk.aws_plan_lines(s.domain, s.aws_region)]
     elif s.backup == "r2":
         add("Backups: create the backup storage on Cloudflare R2")
         L += [f"       - {x}" for x in bk.r2_plan_lines(s.domain)]
@@ -654,23 +680,16 @@ def ensure_dns(
     )
 
 
-def _r53_zone(s: Settings, deps: Deps, zone: dnsmod.Zone):
-    """(client, zone id, status, problem): the domain's Route 53 zone, or why it could not be read."""
-    client = None
+def _route53(io: IO, s: Settings, deps: Deps, zone: dnsmod.Zone, records) -> bool:
     try:
         client = deps.route53_client(s.aws_profile) if deps.route53_client else _r53_client(s.aws_profile)
+    except Exception:
+        io.say("  Route 53 serves this domain but no AWS credentials are available here; add the records by hand.")
+        return False
+    try:
         zid, status = route53.find_zone(client, zone)
     except Exception as e:
-        if client is None:
-            return None, "", "", "Route 53 serves this domain but no AWS credentials are available here"
-        return None, "", "", f"Route 53 lookup failed ({type(e).__name__})"
-    return client, zid, status, ""
-
-
-def _route53(io: IO, s: Settings, deps: Deps, zone: dnsmod.Zone, records) -> bool:
-    client, zid, status, problem = _r53_zone(s, deps, zone)
-    if problem:
-        io.say(f"  {problem}; add the records by hand.")
+        io.say(f"  Route 53 lookup failed ({type(e).__name__}); add the records by hand.")
         return False
     if status == "not-authoritative":
         io.say(
@@ -683,10 +702,30 @@ def _route53(io: IO, s: Settings, deps: Deps, zone: dnsmod.Zone, records) -> boo
         return False
     if not io.confirm(f"  Create the record in Route 53 zone {zone.name}?", True):
         return False
-    if not s.install_id:  # an install saved before install ids: as before
-        route53.upsert(client, zid, records)
-        io.say("  Route 53 records upserted.")
-        return True
+    if owned.strict(s.asset_prefix):
+        return _route53_strict(io, s, client, zid, records)
+    route53.upsert(client, zid, records)
+    io.say("  Route 53 records upserted.")
+    return True
+
+
+# --- strict mode's Route 53 (owned.py): only the exact record sets this install recorded making ---------------------
+
+
+def _r53_zone(s: Settings, deps: Deps, zone: dnsmod.Zone):
+    """(client, zone id, status, problem): the domain's Route 53 zone, or why it could not be read."""
+    client = None
+    try:
+        client = deps.route53_client(s.aws_profile) if deps.route53_client else _r53_client(s.aws_profile)
+        zid, status = route53.find_zone(client, zone)
+    except Exception as e:  # noqa: BLE001  any failure here is reported as "add the record by hand", as _route53 does
+        if client is None:
+            return None, "", "", "Route 53 serves this domain but no AWS credentials are available here"
+        return None, "", "", f"Route 53 lookup failed ({type(e).__name__})"
+    return client, zid, status, ""
+
+
+def _route53_strict(io: IO, s: Settings, client, zid: str, records) -> bool:
     ours = {r.value for r in records} | {s.server_ip} - {""}
     changes, created, found, kept = route53.plan(client, zid, records, owned_dns(s, zid), replace(s), ours)
     refuse_dns(s, found)
@@ -741,8 +780,8 @@ def dns_preflight(s: Settings, deps: Deps, zone: dnsmod.Zone | None, records, ou
     if not zone or zone.provider.key != "route53":
         return
     client, zid, status, problem = _r53_zone(s, deps, zone)
-    if problem or status != "authoritative" or not s.install_id:
-        return  # setup writes nothing there (ensure_dns says to add the record by hand), or upserts as before
+    if problem or status != "authoritative":
+        return  # setup writes nothing there (ensure_dns says to add the record by hand)
     refuse_dns(s, route53.plan(client, zid, records, owned_dns(s, zid), replace(s), ours, preflight=True)[2])
 
 
@@ -757,9 +796,10 @@ def _r53_client(profile: str):
 # --- 4. the run --------------------------------------------------------------------------------------------
 
 
-def start(args, domain: str) -> tuple[Settings, dict]:
-    """The settings a run starts from: what was saved for the domain, then this run's environment and company file."""
-    saved, saved_env = state.load(domain) if domain else ({}, "")
+def run(args, io: IO, deps: Deps) -> int:
+    dry = args.dry_run
+    domain_hint = (args.domain or "").lower()
+    saved, saved_env = state.load(domain_hint) if domain_hint else ({}, "")
     s = st.from_saved(saved, saved_env) if saved else Settings()
     s.cf_token = os.environ.get("CLOUDFLARE_API_TOKEN", "")
     s.tunnel_token = os.environ.get("CLOUDFLARE_TUNNEL_TOKEN", "") or s.tunnel_token
@@ -767,56 +807,43 @@ def start(args, domain: str) -> tuple[Settings, dict]:
     s.inbound_key = os.environ.get("TICO_INBOUND_KEY", "") or s.inbound_key
     s.inbound_url = os.environ.get("TICO_INBOUND_URL", "") or s.inbound_url
     gather_company_file(args, s)
-    return s, saved
-
-
-def run(args, io: IO, deps: Deps) -> int:
-    dry = args.dry_run
-    domain_hint = (args.domain or "").lower()
-    s, saved = start(args, domain_hint)
     io.say("tico setup" + (" (dry run: nothing will be created or changed)" if dry else ""))
     io.say(USAGE_NOTICE + " Details: PRIVACY.md in the Tico repository.")
     if saved:
         io.say(f"Resuming from the last run for {domain_hint} (secrets kept in {state.home() / domain_hint}).")
+    strict = owned.strict(awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved))
 
     def restore(asked: Settings) -> Settings:
-        # The domain was asked for: its saved install whole (name, prefix, private .env), as if --domain had named it.
+        # Strict mode (by the flag or by the domain's saved install), the domain asked for: its saved install whole (name,
+        # prefix, private .env), as if --domain named it.
         nonlocal saved
         if not asked.domain or asked.domain.startswith("<"):
             return asked
-        again, saved = start(args, asked.domain)
-        if not saved:
-            return asked
+        found, found_env = state.load(asked.domain)
+        if not found or not (strict or owned.strict(found.get("asset_prefix", ""))):
+            return asked  # a default-prefix install's prompted domain keeps today's behaviour
+        saved = found
+        again = st.from_saved(found, found_env)
+        again.cf_token, again.tunnel_token = s.cf_token, s.tunnel_token or again.tunnel_token
+        again.inbound_key, again.inbound_url = s.inbound_key or again.inbound_key, s.inbound_url or again.inbound_url
+        gather_company_file(args, again)
         io.say(f"Resuming from the last run for {asked.domain} (secrets kept in {state.home() / asked.domain}).")
         again.target, again.domain = asked.target, asked.domain
         return again
 
     s = gather(io, args, s, dry, restore=None if saved else restore)
-    kept = saved
-    if (
-        s.target == "aws"
-        and kept.get("target") == "aws"
-        and (kept.get("aws_account_id") or kept.get("aws_instance_id"))
-    ):
-        awsmod.check_region(kept.get("aws_region", ""), s.aws_region, s.domain)
-    if kept and "asset_prefix" not in kept and not dry and not state.load_backup(s.domain):
-        # Saved before --asset-prefix: `setup backup-storage` named its bucket's user after the domain. Re-saving adds
-        # asset_prefix, which would hide that, so the old identity is kept beside the state first.
-        state.save_backup(
-            s.domain, {"asset_prefix": awsmod.DEFAULT_PREFIX, "name": awsmod.slug(s.domain), "legacy": True}
-        )
-    # Without a server install, the prefix `setup backup-storage` made the domain's bucket with.
-    s.asset_prefix = awsmod.asset_prefix(getattr(args, "asset_prefix", None), kept or state.load_backup(s.domain))
-    if not kept and not dry:
-        # A new install: its id goes on everything it makes, and is saved before the first AWS write (below). An install
-        # saved before ids keeps none, and with it the two tags alone, as before.
-        s.install_id = awsmod.new_install_id()
+    strict = owned.strict(awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved))
+    if strict:
+        _strict_start(args, s, saved, dry)
     hosted.gather(args, s, dry)
     if s.target == "aws" and s.company_file_data and not s.plan_bucket and not s.hosted:
         # Saved before any cloud writes, so retries use the same bucket and chart. No credentials in its name.
-        # Under another prefix, a new install's ends in its id: a name no one else holds.
-        own = s.install_id if s.asset_prefix != awsmod.DEFAULT_PREFIX else ""
-        s.plan_bucket = awsmod.Names(s.asset_prefix).plan_bucket(own or secrets.token_hex(16))
+        # In strict mode a new install's ends in its id: a name no one else holds.
+        s.plan_bucket = (
+            awsmod.Names(s.asset_prefix).plan_bucket(s.install_id or secrets.token_hex(16))
+            if strict
+            else "tico-setup-plans-" + secrets.token_hex(16)
+        )
         s.plan_bucket_region = s.aws_region
         s.plan_bucket_managed = True
     st.gather_runtime(args, s)
@@ -908,22 +935,8 @@ def run(args, io: IO, deps: Deps) -> int:
     cf = deps.cloudflare(s.cf_token) if s.cf_token else None
     if cf and s.runner() and not s.runner_given:
         runner_record_free(s, cf)
-    if not kept:
-        # Before the first AWS write: a retry after a failure from here on keeps the prefix and install id.
-        state.save(s.domain, s.public())
-    s.replace_dns = bool(getattr(args, "replace_dns", False))
-    ours = {s.server_ip} - {""}
-    if s.target == "aws":
-        # Before the first write, backup storage included: a name something else holds stops the run here.
-        clients = deps.aws_clients(s.aws_region, s.aws_profile)
-        awsmod.check_account(s.aws_account_id, clients[3], s.domain)
-        plan = aws_plan(s)
-        deployer(s, plan, clients, io, deps).preflight()
-        ours = awsmod.addresses(clients[0], plan.name, plan.names)
-        if s.install_id:  # before the first write: the account every later run and destroy must match
-            s.aws_account_id = clients[3]
-            state.save(s.domain, {**state.load(s.domain)[0], **s.public()})
-    dns_preflight(s, deps, zone, records, ours)
+    if strict:
+        _strict_preflight(io, args, s, deps, zone, records, kept=bool(saved))
     if not provision_backup(io, s, deps, cf):
         return 1
     if s.front_door == "cloudflared":
@@ -988,6 +1001,44 @@ def run(args, io: IO, deps: Deps) -> int:
         return _command(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout)
 
     return finish(io, s, deps, records, runner, args)
+
+
+def _strict_start(args, s: Settings, saved: dict, dry: bool) -> None:
+    """Strict mode (owned.py), once the domain is known: the saved install's prefix, name and region, and its id; a new
+    install gets its id here."""
+    s.asset_prefix = awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved)
+    if saved and not saved.get("install_id"):
+        raise MissingInput(
+            f"The saved state for {s.domain} has no install id, so setup cannot prove which AWS resources under "
+            f"--asset-prefix {s.asset_prefix} are this install's; refusing to change anything. Check by hand what "
+            f"{s.asset_prefix}-* resources exist (EC2, IAM, SSM, S3, Route 53) before setting it up again under another "
+            "--domain or --name."
+        )
+    owned.check_name(getattr(args, "name", None), awsmod.saved_name(saved), s.domain)
+    s.aws_name = s.aws_name or awsmod.saved_name(saved)
+    if s.target == "aws" and saved.get("target") == "aws":
+        owned.check_region(saved.get("aws_region", ""), s.aws_region, s.domain)
+    if not saved and not dry:
+        # A new install: its id goes on everything it makes, and is saved before the first AWS write.
+        s.install_id = awsmod.new_install_id()
+
+
+def _strict_preflight(io: IO, args, s: Settings, deps: Deps, zone, records, kept: bool) -> None:
+    """Strict mode, reads only (and the install's own state file) before the first AWS write: every name the install
+    takes is free or already provably its own, and its account is recorded."""
+    s.replace_dns = bool(getattr(args, "replace_dns", False))
+    if not kept:  # before the first AWS write: a retry after a failure from here keeps the prefix and install id
+        state.save(s.domain, s.public())
+    ours = {s.server_ip} - {""}
+    if s.target == "aws":
+        clients = deps.aws_clients(s.aws_region, s.aws_profile)
+        owned.check_account(s.aws_account_id, clients[3], s.domain)
+        plan = aws_plan(s)
+        deployer(s, plan, clients, io, deps).preflight()
+        ours = awsmod.addresses(clients[0], plan.name, plan.names)
+        s.aws_account_id = clients[3]
+        _save(s)
+    dns_preflight(s, deps, zone, records, ours)
 
 
 def runner_record_free(s: Settings, cf: Cloudflare) -> None:
@@ -1058,9 +1109,8 @@ def _aws(
 ) -> tuple[remote.Shell, list[dnsmod.Record]] | None:
     plan = aws_plan(s)
     io.say("\nAWS")
-    clients = deps.aws_clients(s.aws_region, s.aws_profile)
-    ec2, iam, ssm, account = clients
-    d = deployer(s, plan, clients, io, deps)
+    ec2, iam, ssm, account = deps.aws_clients(s.aws_region, s.aws_profile)
+    d = deployer(s, plan, (ec2, iam, ssm, account), io, deps)
     plan_s3 = deps.aws_s3(s.plan_bucket_region or s.aws_region, s.aws_profile) if plan.plan_bucket else None
     if plan_s3 and s.plan_bucket_managed:
         try:
@@ -1071,7 +1121,7 @@ def _aws(
                 f"Cannot prepare the private starter plan bucket ({code}). Check your AWS bucket "
                 "permissions and re-run setup; no chart was uploaded and the saved chart stays on this computer."
             ) from None
-    elif plan_s3:
+    elif plan_s3 and owned.strict(s.asset_prefix):
         d.verify_plan_bucket(plan_s3)  # before the env names it and before the upload
     d.put_env(env_text, company_file=bool(s.company_file_data) and not plan.plan_bucket)
     if plan_s3:
@@ -1389,8 +1439,8 @@ def doctor(args, io: IO, deps: Deps) -> int:
     saved, env_text = state.load(domain)
     if not saved:
         raise MissingInput(f"No saved setup for {domain}; run `tico setup` first.")
-    s = st.from_saved(saved, env_text)
     awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved)  # refuses a different one; doctor names nothing
+    s = st.from_saved(saved, env_text)
     tunnel_id = s.tunnel_id or tunnel_id_from_token(s.tunnel_token)
     records = dnsmod.plan_records(domain, s.front_door, ipv4=s.server_ip, tunnel_id=tunnel_id, runner_host=s.runner())
     runner = None
@@ -1447,21 +1497,65 @@ def destroy(args, io: IO, deps: Deps) -> int:
     hosted.check_dns_identity(args, saved.get("dns_name", ""), saved.get("dns_zone", ""))
     if saved.get("target") in cloudmod.PROVIDERS:
         return _destroy_hint(io, saved)
-    domain = (args.domain or "").lower()
-    install_id = saved.get("install_id", "")
-    names = awsmod.Names(awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved), install_id)
-    if install_id:  # a whole saved install: its own name, prefix, region, account and ids, nothing else
-        awsmod.check_name(args.name, awsmod.saved_name(saved), domain)
-        awsmod.check_region(saved.get("aws_region", ""), args.aws_region, domain)
-        name, region = awsmod.saved_name(saved), saved["aws_region"]
-    else:  # an install saved before ids, or none on this computer: as before
-        name = args.name or awsmod.saved_name(saved) or (awsmod.slug(domain) if domain else "")
-        region = args.aws_region or saved.get("aws_region") or os.environ.get("AWS_REGION") or "us-east-1"
+    if owned.strict(awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved)):
+        return _destroy_strict(args, io, deps, saved)
+    name = args.name or saved.get("aws_name") or (awsmod.slug(args.domain) if args.domain else "")
     if not name:
         raise MissingInput("Pass --domain or --name")
+    region = args.aws_region or saved.get("aws_region") or os.environ.get("AWS_REGION") or "us-east-1"
+    ec2, iam, ssm, _ = deps.aws_clients(region, args.aws_profile or saved.get("aws_profile", ""))
+    found = awsmod.discover(ec2, iam, ssm, name)
+    if not found:
+        io.say(f"Nothing tagged {awsmod.MANAGED_TAG[0]}={awsmod.MANAGED_TAG[1]}, {awsmod.NAME_TAG}={name} in {region}.")
+        return 0
+    io.say(f"Tagged {awsmod.NAME_TAG}={name} in {region}:")
+    for kind, ids in found.items():
+        for i in ids:
+            io.say(f"  {kind}: {i}")
+    records = None
+    if getattr(args, "dns", False):
+        records = _dns_to_delete(io, args, saved, deps, awsmod.addresses(ec2, name))
+        if records is None:
+            io.say("Nothing was deleted: run it again, or without --dns and remove the DNS record yourself.")
+            return 1
+    io.say("The server's data (the tico-data volume) is deleted with the instance. Back it up first if you need it.")
+    io.say(
+        f"The backup bucket and its IAM user (tico-backup-{name}) are left alone: they hold the copy you would restore from."
+    )
+    if args.dry_run:
+        io.say("Dry run: nothing was deleted.")
+        return 0
+    if not args.yes and not (io.interactive and io.ask(f"Type {name} to delete these") == name):
+        io.say("Not confirmed; nothing was deleted.")
+        return 1
+    if records and records[2]:
+        client, zid, sets = records
+        route53.delete(client, zid, sets)  # first: the name never points at an address AWS may give someone else
+        io.say("  DNS records deleted.")
+    awsmod.destroy(ec2, iam, ssm, found, say=io.say, sleep=deps.sleep, dns_done=records is not None)
+    return 0
+
+
+def _destroy_strict(args, io: IO, deps: Deps, saved: dict) -> int:
+    """Strict mode: only a whole saved install (its name, prefix, region, account and recorded ids) is destroyed, and
+    only what is proved its own; never by prefix and name tags alone."""
+    domain = (args.domain or "").lower()
+    install_id = saved.get("install_id", "")
+    prefix = awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved)
+    if not install_id:
+        raise MissingInput(
+            f"No saved install with an id for {domain or '(no --domain)'} under --asset-prefix {prefix} on this computer, "
+            "so setup cannot prove which AWS resources are its own; nothing was deleted. Check by hand in the AWS "
+            f"console what {prefix}-* resources exist (EC2 instances, Elastic IPs, security groups, IAM roles and "
+            f"instance profiles, SSM parameters under /{prefix}/, S3 buckets, Route 53 records), and delete only those "
+            "you know are this install's."
+        )
+    names = awsmod.Names(prefix, install_id)
+    owned.check_name(args.name, awsmod.saved_name(saved), domain)
+    owned.check_region(saved.get("aws_region", ""), args.aws_region, domain)
+    name, region = awsmod.saved_name(saved), saved["aws_region"]
     ec2, iam, ssm, account = deps.aws_clients(region, args.aws_profile or saved.get("aws_profile", ""))
-    if install_id:
-        awsmod.check_account(saved.get("aws_account_id", ""), account, domain)
+    owned.check_account(saved.get("aws_account_id", ""), account, domain)
     found = awsmod.discover(ec2, iam, ssm, name, names)
     if not found:
         io.say(f"Nothing tagged {names.managed_tag[0]}={names.managed_tag[1]}, {names.name_tag}={name} in {region}.")
@@ -1470,8 +1564,7 @@ def destroy(args, io: IO, deps: Deps) -> int:
     for kind, ids in found.items():
         for i in ids:
             io.say(f"  {kind}: {i}")
-    if install_id:
-        awsmod.refuse_foreign_attached(ec2, found.get("instance", []), name, names)
+    owned.refuse_foreign_attached(ec2, found.get("instance", []), name, names)
     records = None
     if getattr(args, "dns", False):
         records = _dns_to_delete(io, args, saved, deps, awsmod.addresses(ec2, name, names))
@@ -1493,17 +1586,17 @@ def destroy(args, io: IO, deps: Deps) -> int:
         client, zid, sets = records
         route53.delete(client, zid, sets, names)  # first: the name never points at an address AWS may give someone else
         io.say("  DNS records deleted.")
-    awsmod.destroy(
+    owned.destroy(
         ec2,
         iam,
         ssm,
         found,
         say=io.say,
         sleep=deps.sleep,
-        dns_done=records is not None,
         names=names,
         name=name,
         ids=saved.get("aws_ids") or {},
+        dns_done=records is not None,
     )
     return 0
 
@@ -1537,10 +1630,10 @@ def _dns_to_delete(io: IO, args, saved: dict, deps: Deps, ours: set[str]):
             io.say(f"No Route 53 zone in this account serves {zone.name}.")
             return None
         if saved.get("install_id"):
-            # Only the exact record sets this install recorded creating, in the zone it created them in.
-            owned = saved.get("dns_records", []) + saved.get("dns_pending", [])
-            sets, other = route53.recorded(client, zid, domain, owned if saved.get("dns_zone_id") == zid else [])
-        else:  # no saved install ids (an older install, or none on this computer): as before
+            # Strict mode: only the exact record sets this install recorded creating, in the zone it created them in.
+            owned_sets = saved.get("dns_records", []) + saved.get("dns_pending", [])
+            sets, other = route53.recorded(client, zid, domain, owned_sets if saved.get("dns_zone_id") == zid else [])
+        else:
             sets, other = route53.pointing_at(client, zid, domain, ours)
     except Exception as e:
         io.say(f"Could not read Route 53 ({type(e).__name__}).")

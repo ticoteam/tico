@@ -13,7 +13,6 @@ from typing import Callable
 
 from . import aws as awsmod
 from .cloudflare import Cloudflare, CloudflareError
-from .ui import MissingInput
 
 CHOICES = {
     "aws": "an S3 bucket in your AWS account, created for you (versioned, encrypted, private)",
@@ -21,10 +20,19 @@ CHOICES = {
     "existing": "a bucket I already have (S3, R2 or any S3-compatible store)",
     "local": "none: keep copies only on this server (not safe if the server is lost)",
 }
-KEY_PREFIX = awsmod.DEFAULT_PREFIX  # R2's folder; on AWS the folder is Names.backup_key_prefix
+KEY_PREFIX = "tico"
 NONCURRENT_DAYS = 90  # superseded attachments and key copies
 LITESTREAM_NONCURRENT_DAYS = 3  # Litestream writes ~1 file/s and deletes old ones, so its versions pile up fast
 R2_TOKEN_HELP = "permissions: Account > Workers R2 Storage > Edit"
+
+
+def bucket_name(domain: str, account_id: str) -> str:
+    """Bucket names are global; the account id keeps two companies' names from colliding."""
+    return f"tico-backup-{awsmod.slug(domain)[:30]}-{account_id}"[:63].rstrip("-")
+
+
+def user_name(name: str) -> str:
+    return f"tico-backup-{name}"[:64]
 
 
 def policy(bucket: str) -> dict:
@@ -53,58 +61,40 @@ def policy(bucket: str) -> dict:
 
 
 def aws_plan_lines(
-    domain: str, region: str, name: str, names: awsmod.Names = awsmod.DEFAULT_NAMES, account_id: str = "<account>"
+    domain: str, region: str, account_id: str = "<account>", names: awsmod.Names | None = None, name: str = ""
 ) -> list[str]:
-    bucket = names.backup_bucket(domain, account_id)
+    """`names`/`name`: strict mode's (owned.create_s3); without them, the default prefix's."""
+    bucket = names.backup_bucket(domain, account_id) if names else bucket_name(domain, account_id)
+    user = names.backup_user(name) if names else user_name(awsmod.slug(domain))
+    folder = names.backup_key_prefix if names else KEY_PREFIX
     return [
         f"S3 bucket {bucket} in {region}: versioning on, AES-256 encryption, all public access blocked, TLS only, "
         f"older versions expire after {NONCURRENT_DAYS} days ({LITESTREAM_NONCURRENT_DAYS} for database copies)",
-        f"IAM user {names.backup_user(name)} allowed to read and write that bucket only; its access key goes into .env "
+        f"IAM user {user} allowed to read and write that bucket only; its access key goes into .env "
         "(containers cannot use the instance role)",
-        f"The server copies its database (Litestream, about every minute) and attachments (every 30 seconds) to s3://{bucket}/{names.backup_key_prefix}",
+        f"The server copies its database (Litestream, about every minute) and attachments (every 30 seconds) to s3://{bucket}/{folder}",
     ]
 
 
 def create_s3(
-    s3,
-    iam,
-    *,
-    domain: str,
-    region: str,
-    account_id: str,
-    name: str,
-    say: Callable[[str], None] = print,
-    names: awsmod.Names = awsmod.DEFAULT_NAMES,
-    ids: dict | None = None,
-    save: Callable[[], None] = lambda: None,
+    s3, iam, *, domain: str, region: str, account_id: str, name: str, say: Callable[[str], None] = print
 ) -> dict[str, str]:
-    """Returns the .env values. `ids`/`save`: the backup user's UserId, kept as it is made. Safe to re-run: an existing bucket is kept and a fresh key replaces the oldest.
-    Only a bucket (in this account) and a user that carry both of this install's tags are reused; anything else of the
-    same name is refused before the first write."""
-    bucket = names.backup_bucket(domain, account_id)
-    owned = {"Bucket": bucket, "ExpectedBucketOwner": account_id}
-    pick = "--domain or another --asset-prefix"
+    """Returns the .env values. Safe to re-run: an existing bucket is kept and a fresh key replaces the oldest."""
+    bucket = bucket_name(domain, account_id)
     try:
-        proof = awsmod.bucket_proof(s3, owned, names, name, pick)
-    except MissingInput:
-        raise
+        s3.head_bucket(Bucket=bucket)
+        say(f"  bucket {bucket} exists; keeping it")
     except Exception as e:
-        raise RuntimeError(f"cannot use bucket {bucket}: {awsmod.error_code(e) or e}") from e
-    user = names.backup_user(name)
-    try:
-        user_id = ((iam.get_user(UserName=user) or {}).get("User") or {}).get("UserId", "")
-        user_exists = True
-    except iam.exceptions.NoSuchEntityException:
-        user_id, user_exists = "", False
-    ids = ids if ids is not None else {}
-    if user_exists and not names.is_ours(iam.list_user_tags(UserName=user).get("Tags"), name):
-        raise awsmod.not_ours("IAM user", user, names, name)
-    if user_exists and ids.get("backup_user") and user_id != ids["backup_user"]:
-        raise awsmod.not_ours("IAM user", user, names, name)
-    awsmod.ensure_bucket(s3, owned, region, names, name, proof, pick)
-    say(f"  created bucket {bucket}" if proof == "absent" else f"  bucket {bucket} exists; keeping it")
+        code = str(getattr(e, "response", {}).get("Error", {}).get("Code", ""))
+        if code not in ("404", "NoSuchBucket", "NotFound"):
+            raise RuntimeError(f"cannot use bucket {bucket}: {code or e}") from e
+        args = {"Bucket": bucket}
+        if region != "us-east-1":
+            args["CreateBucketConfiguration"] = {"LocationConstraint": region}
+        s3.create_bucket(**args)
+        say(f"  created bucket {bucket}")
     s3.put_public_access_block(
-        **owned,
+        Bucket=bucket,
         PublicAccessBlockConfiguration={
             "BlockPublicAcls": True,
             "IgnorePublicAcls": True,
@@ -112,19 +102,19 @@ def create_s3(
             "RestrictPublicBuckets": True,
         },
     )
-    s3.put_bucket_versioning(**owned, VersioningConfiguration={"Status": "Enabled"})
+    s3.put_bucket_versioning(Bucket=bucket, VersioningConfiguration={"Status": "Enabled"})
     s3.put_bucket_encryption(
-        **owned,
+        Bucket=bucket,
         ServerSideEncryptionConfiguration={
             "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]
         },
     )
     s3.put_bucket_lifecycle_configuration(
-        **owned,
+        Bucket=bucket,
         LifecycleConfiguration={
             "Rules": [
                 {
-                    "ID": names.backup_rule,
+                    "ID": "tico-backups",
                     "Status": "Enabled",
                     "Filter": {"Prefix": ""},
                     "NoncurrentVersionExpiration": {"NoncurrentDays": NONCURRENT_DAYS},
@@ -135,14 +125,14 @@ def create_s3(
                     # Litestream keeps one folder per compaction level (0000-0009) at the top of the replica.
                     "ID": "litestream",
                     "Status": "Enabled",
-                    "Filter": {"Prefix": f"{names.backup_key_prefix}/000"},
+                    "Filter": {"Prefix": f"{KEY_PREFIX}/000"},
                     "NoncurrentVersionExpiration": {"NoncurrentDays": LITESTREAM_NONCURRENT_DAYS},
                 },
             ]
         },
     )
     s3.put_bucket_policy(
-        **owned,
+        Bucket=bucket,
         Policy=json.dumps(
             {
                 "Version": "2012-10-17",
@@ -159,46 +149,28 @@ def create_s3(
             }
         ),
     )
+    s3.put_bucket_tagging(Bucket=bucket, Tagging={"TagSet": awsmod.DEFAULT_NAMES.tags(name)})
 
-    if not user_exists:
-        try:
-            made = iam.create_user(UserName=user, Tags=names.tags(name))
-        except iam.exceptions.EntityAlreadyExistsException:  # made by someone else since the read above
-            raise awsmod.not_ours("IAM user", user, names, name) from None
-        user_id = ((made or {}).get("User") or {}).get("UserId", "")
+    user = user_name(name)
+    try:
+        iam.get_user(UserName=user)
+        if not awsmod.DEFAULT_NAMES.is_ours(iam.list_user_tags(UserName=user).get("Tags"), name):
+            raise RuntimeError(f"IAM user {user} exists but was not created by tico setup; refusing to touch it")
+    except iam.exceptions.NoSuchEntityException:
+        iam.create_user(UserName=user, Tags=awsmod.DEFAULT_NAMES.tags(name))
         say(f"  created IAM user {user}")
-    if user_id and ids.get("backup_user") != user_id:
-        ids["backup_user"] = user_id
-        save()
-
-    def prove_user() -> None:
-        # IAM has no compare-and-swap: the user is re-read by UserId right before each write; one replaced in the
-        # instant between that read and the write is the residual window.
-        try:
-            now = (iam.get_user(UserName=user) or {}).get("User") or {}
-            tags = iam.list_user_tags(UserName=user).get("Tags")
-        except iam.exceptions.NoSuchEntityException:
-            raise awsmod.not_ours("IAM user", user, names, name) from None
-        if not names.is_ours(tags, name) or (user_id and now.get("UserId") != user_id):
-            raise awsmod.not_ours("IAM user", user, names, name)
-
-    prove_user()
-    iam.put_user_policy(UserName=user, PolicyName=names.backup_policy, PolicyDocument=json.dumps(policy(bucket)))
-    prove_user()
+    iam.put_user_policy(UserName=user, PolicyName="tico-backup", PolicyDocument=json.dumps(policy(bucket)))
     keys = sorted(iam.list_access_keys(UserName=user)["AccessKeyMetadata"], key=lambda k: k["CreateDate"])
     if len(keys) >= 2:  # IAM allows two; a secret cannot be read back, so a re-run makes a new one
         iam.delete_access_key(UserName=user, AccessKeyId=keys[0]["AccessKeyId"])
     key = iam.create_access_key(UserName=user)["AccessKey"]
     say(f"  created an access key for {user}")
     return {
-        "TICO_BACKUP_URL": f"s3://{bucket}/{names.backup_key_prefix}",
+        "TICO_BACKUP_URL": f"s3://{bucket}/{KEY_PREFIX}",
         "TICO_BACKUP_REGION": region,
         "LITESTREAM_ACCESS_KEY_ID": key["AccessKeyId"],
         "LITESTREAM_SECRET_ACCESS_KEY": key["SecretAccessKey"],
     }
-
-
-bucket_tags = awsmod.bucket_tags
 
 
 def r2_endpoint(account_id: str) -> str:

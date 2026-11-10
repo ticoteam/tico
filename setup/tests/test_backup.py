@@ -14,26 +14,12 @@ class Missing(Exception):
 
 
 class FakeS3:
-    """An existing bucket is setup's (tagged); a new one has no tags until it is tagged."""
-
     def __init__(self, exists=False):
         self.exists, self.calls = exists, []
-        self.tags = OURS if exists else []
 
-    def head_bucket(self, **kw):
+    def head_bucket(self, Bucket):
         if not self.exists:
             raise Missing("404")
-
-    def create_bucket(self, **kw):
-        self.calls.append(("create_bucket", kw))
-        self.exists, self.tags = True, kw.get("CreateBucketConfiguration", {}).get("Tags", [])
-
-    def put_bucket_tagging(self, **kw):
-        self.calls.append(("put_bucket_tagging", kw))
-        self.tags = kw["Tagging"]["TagSet"]
-
-    def get_bucket_tagging(self, **kw):
-        return {"TagSet": self.tags}
 
     def __getattr__(self, name):
         return lambda **kw: self.calls.append((name, kw))
@@ -50,12 +36,7 @@ class Iam(fakes.FakeIAM):
     def get_user(self, UserName):
         if self.user_tags is None:
             raise self.exceptions.NoSuchEntityException()
-        return {"User": {"UserName": UserName, "UserId": "AIDAUSER"}}
-
-    def create_user(self, **kw):
-        self._rec("create_user", **kw)
-        self.user_tags = kw["Tags"]
-        return {"User": {"UserName": kw["UserName"], "UserId": "AIDAUSER"}}
+        return {}
 
     def list_user_tags(self, UserName):
         return {"Tags": self.user_tags}
@@ -89,7 +70,7 @@ def test_the_bucket_is_versioned_encrypted_private_and_expires_old_versions():
     s3, iam, values = make()
     (created,) = s3.called("create_bucket")
     assert created["Bucket"] == "tico-backup-tico-example-com-123456789012"
-    assert created["CreateBucketConfiguration"] == {"LocationConstraint": "us-west-2", "Tags": OURS}  # tagged at birth
+    assert created["CreateBucketConfiguration"] == {"LocationConstraint": "us-west-2"}
     assert s3.called("put_bucket_versioning")[0]["VersioningConfiguration"] == {"Status": "Enabled"}
     assert s3.called("put_bucket_encryption")[0]["ServerSideEncryptionConfiguration"]["Rules"][0][
         "ApplyServerSideEncryptionByDefault"
@@ -130,7 +111,7 @@ def test_the_iam_user_can_only_reach_that_bucket_and_is_tagged():
 
 def test_a_bucket_someone_else_owns_is_an_error_not_a_silent_success():
     class Forbidden(FakeS3):
-        def head_bucket(self, **kw):
+        def head_bucket(self, Bucket):
             raise Missing("403")
 
     with pytest.raises(RuntimeError, match="403"):
