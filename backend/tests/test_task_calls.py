@@ -185,6 +185,18 @@ def test_a_bots_open_ask_counts_as_waiting_on_a_person_until_it_is_answered(c):
     assert H.status_counts(c, BUILDER) == before
 
 
+def test_a_thumbs_down_that_lets_the_task_finish_is_the_persons_move(c):
+    row = _new(c)
+    asked = H.task_ask(c, BUILDER, row["id"], ANA, "Ship it on Monday or Friday?", seen_version=_version(c, row["id"]))
+    H.task_done(c, BUILDER, row["id"], "Drafted both.", _version(c, row["id"]))
+    out = H.task_thumbs(c, ANA, row["id"], asked["requirement_id"], False, "Either day is fine; do not ask.")
+    assert out["status"] == "done"
+    updates = c.execute(
+        "SELECT actor FROM events WHERE action='task.update' AND target=? AND detail LIKE '%\"done\"%'", (row["id"],)
+    ).fetchall()
+    assert [u[0] for u in updates] == [ANA]  # what the move causes is Ana's, not Tico's
+
+
 def test_a_bots_ask_to_a_person_is_plain_words(c):
     row = _new(c)
     with _refused("lint"):

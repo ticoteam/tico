@@ -404,13 +404,15 @@ def task_answer_undo(conn: "sqlite3.Connection", actor: str, answer_id: str) -> 
 def task_thumbs(
     conn: "sqlite3.Connection", actor: str, task_id: str, requirement_id: str, up: bool, note: str | None = None
 ) -> Row:
-    """Was this worth asking. A thumbs down says what was wrong, and sends an open ask back."""
+    """Was this worth asking. A thumbs down says what was wrong, and sends an open ask back. A move it causes is the
+    actor's."""
     from . import answers as A
 
     _open(conn, actor, task_id, work=False)
-    if up:
-        return A.thumbs_up(conn, task_id, requirement_id, actor)
-    return A.thumbs_down(conn, task_id, requirement_id, actor, note or "")
+    with task_effects.because(actor):
+        if up:
+            return A.thumbs_up(conn, task_id, requirement_id, actor)
+        return A.thumbs_down(conn, task_id, requirement_id, actor, note or "")
 
 
 # ----------------------------------------------------------------------------- snooze
