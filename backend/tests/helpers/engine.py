@@ -198,5 +198,17 @@ def events(c, task_id):
     return [row[0] for row in rows]
 
 
+def left(c, actor):
+    """Mark a person as left, as the People tab does (backend/access.py `leave`): their roster row is hidden."""
+    from backend import access as Access
+    from backend.views import roster
+
+    whole = roster(c)
+    people = whole["people"]
+    at = next(i for i, p in enumerate(people) if p["id"] == H.actor_id(actor))
+    people[at] = Access.leave(c, people, people[at])
+    Access.save_roster(c, {**whole, "people": people})
+
+
 def guard_closed(c):
     return c.execute("SELECT open FROM task_move_guards WHERE id=1").fetchone()[0] == 0

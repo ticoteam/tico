@@ -239,6 +239,25 @@ def test_check_names_each_problem_in_a_sentence_and_save_refuses_it(c):
     assert c.execute("SELECT COUNT(*) FROM pipelines").fetchone()[0] == 1
 
 
+def test_a_requirement_id_is_listed_once_in_the_whole_record(c):
+    record = _ops()
+    _req(record, 0)["id"] = "r1"
+    _req(record, 1)["id"] = "r1"  # two new stages: neither row is in the table yet
+    assert "Requirement r1 is listed twice." in PS.check(c, record)
+    with _refused("task_settings", "Requirement r1 is listed twice"):
+        PS.save(c, ANA, record)
+    assert c.execute("SELECT COUNT(*) FROM requirements WHERE id='r1'").fetchone()[0] == 0
+
+
+def test_an_ok_on_a_stage_names_a_person_who_is_here(c):
+    X.left(c, BEN)
+    with _refused("task_settings", f"{BEN} is not a person or a bot here"):
+        PS.save(c, ANA, _ops())  # Sign off names Ben
+    record = _ops()
+    _req(record, 1).update(person_id="human:missing")
+    assert any("human:missing is not a person or a bot here" in p for p in PS.check(c, record))
+
+
 def test_an_ok_on_a_stage_may_name_a_bot(c):
     record = _ops()
     _req(record, 1).update(person_id="bot:reviewer")

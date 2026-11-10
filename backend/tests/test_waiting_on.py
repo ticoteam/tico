@@ -172,6 +172,32 @@ def test_a_persons_own_task_is_listed_once_however_much_is_missing(c, general):
     assert listed[0]["missing"] == ["Say when the work is done", "No task filed yet"]
 
 
+def test_a_person_who_left_or_was_removed_is_never_chosen(c, general):
+    ben = "human:ben"
+    c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='reviewer'")
+    his = X.new_task(c, ANA, "Call the bank", assignee=ben)["id"]
+    asked = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
+    E.add_requirement(c, asked["id"], "bot:builder", "ok", ben, "OK the headline", seen_version=asked["version"])
+    stuck = X.new_task(c, ANA, "Fix the footer", assignee="bot:builder")["id"]
+    c.execute("UPDATE visits SET level='person', person_id='human:nobody' WHERE task_id=?", (stuck,))  # removed
+    paused = X.new_task(c, ANA, "Check the facts", assignee="bot:reviewer")["id"]
+    c.execute("UPDATE bots SET state='paused' WHERE id='reviewer'")
+    assert {(n["kind"], n.get("task_id")) for n in W.needs(c, ben)} == {
+        ("task", his),
+        ("ask", asked["id"]),
+        ("paused", None),
+    }
+    X.left(c, ben)
+    assert W.needs(c, ben) == []
+    # Each falls through to the next person who is here: the manager bot's owner, Ana.
+    assert _states(c, his) == [("person", ANA)]
+    assert [(w.state, w.who, w.ask) for w in W.waiting_on(c, asked["id"])] == [("person", ANA, True)]
+    assert _states(c, stuck) == [("person", ANA), ("person", ANA)]
+    listed = {(n["kind"], n.get("task_id")) for n in W.needs(c, ANA)}
+    assert {("task", his), ("ask", asked["id"]), ("task", stuck)} <= listed
+    assert [n["tasks"] for n in W.needs(c, ANA) if n["kind"] == "paused"] == [[paused]]  # the company owner fixes it
+
+
 def test_an_ok_that_names_a_bot_is_that_bots_turn(c, general):
     row = X.new_task(c, ANA, "Write the launch note", assignee=ANA)
     E.add_requirement(c, row["id"], ANA, "ok", "bot:reviewer", "OK the wording")

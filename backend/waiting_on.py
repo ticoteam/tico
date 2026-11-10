@@ -74,37 +74,49 @@ class Wait:
 def person_for(conn: "sqlite3.Connection", row: Row) -> str | None:
     """The person a task falls to when no bot can take it further: the one the ladder already chose, else the task's
     owner where that is a person, else the pipeline's owner or manager where that is a person, else the owner of its
-    manager bot, else the owner of the bot that has the task, else whoever asked for it, else the company owner. None
-    only when the company has no people."""
+    manager bot, else the owner of the bot that has the task, else whoever asked for it, else the company owner. Anyone
+    on the way who left or was removed is skipped. None only when the company has no people."""
     visit: Row = row.get("visit") or {}
     pipe: Row = row.get("pipeline") or {}
     for found in (visit.get("person_id"), row.get("owner_id"), pipe.get("owner_id"), pipe.get("manager_id")):
-        if is_human(found):
+        if R.active_person(conn, found):
             return found
     for bot in (pipe.get("manager_id"), row.get("owner_id")):
-        if is_bot(bot):
-            owner = conn.execute("SELECT owner_id FROM bot_config WHERE bot=?", (actor_id(bot),)).fetchone()
-            if owner and owner[0]:
-                return owner[0] if is_human(owner[0]) else human_actor(owner[0])
-    if is_human(row.get("requester_id")):
+        owner = _bot_owner(conn, bot)
+        if owner:
+            return owner
+    if R.active_person(conn, row.get("requester_id")):
         return row["requester_id"]
     return pipeline_rights.company_owner(conn) or None
+
+
+def _bot_owner(conn: "sqlite3.Connection", bot: object) -> str | None:
+    """The person who owns a bot, as an actor, while they are still here. None for a bot with no owner, one whose owner
+    left, or anything that is not a bot."""
+    if not is_bot(bot):
+        return None
+    found = conn.execute("SELECT owner_id FROM bot_config WHERE bot=?", (actor_id(bot),)).fetchone()
+    if not found or not found[0]:
+        return None
+    owner = str(found[0]) if is_human(found[0]) else human_actor(found[0])
+    return owner if R.active_person(conn, owner) else None
 
 
 def holder(conn: "sqlite3.Connection", row: Row) -> str | None:
     """Who has the task's own work now, as an actor: the owner, or whoever the ladder handed it to (the manager bot,
     then a person). A person's own task stays theirs whatever the ladder did. A task with no owner is its pipeline
-    manager's to hand out. Never None while the company has a person."""
+    manager's to hand out. A person who left or was removed has nothing: it falls to `person_for`. Never None while
+    the company has a person."""
     visit: Row = row.get("visit") or {}
     level = visit.get("level") or "owner"
     pipe: Row = row.get("pipeline") or {}
     manager = pipe.get("manager_id")
     if is_human(row.get("owner_id")):
-        return row["owner_id"]
+        return row["owner_id"] if R.active_person(conn, row["owner_id"]) else person_for(conn, row)
     if level == "person":
         return person_for(conn, row)
     if level == "manager" or not row.get("owner_id"):
-        return manager if is_bot(manager) or is_human(manager) else person_for(conn, row)
+        return manager if is_bot(manager) or R.active_person(conn, manager) else person_for(conn, row)
     return row["owner_id"]
 
 
@@ -182,7 +194,8 @@ def of(
         elif standing.state == R.WAITING and standing.on in (R.JEV, R.GITHUB):
             out.append(Wait(JEV if standing.on == R.JEV else GITHUB, None, line, requirement["id"], since))
         elif standing.state == R.WAITING:
-            # An OK or an answer waits on whoever it names: a person, or a bot that was named to approve.
+            # An OK or an answer waits on whoever it names: a person, or a bot that was named to approve. One that names
+            # nobody, or a person who left (`person_of` skips them), is the task's person's.
             named = standing.on or person_for(conn, row)
             out.append(_turn(conn, row, named, line, requirement["id"], since, True, seen))
         elif by_hand or asked:
@@ -305,9 +318,9 @@ def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
 
 def _fixer(conn: "sqlite3.Connection", bot: str, cause: str | None) -> str | None:
     """The person who can get a bot running again: the company's owner for a cause that stops every bot, else the
-    bot's owner, else the company's owner."""
+    bot's owner while they are still here, else the company's owner."""
     if cause not in task_wakes.COMPANY_WIDE:
-        owner = conn.execute("SELECT owner_id FROM bot_config WHERE bot=?", (actor_id(bot),)).fetchone()
-        if owner and owner[0]:
-            return owner[0] if is_human(owner[0]) else human_actor(owner[0])
+        owner = _bot_owner(conn, bot)
+        if owner:
+            return owner
     return pipeline_rights.company_owner(conn) or None

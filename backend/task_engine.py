@@ -684,11 +684,20 @@ def changed(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
 
 def try_again(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None = None) -> Row:
     """Try again: hand a task the ladder or Late brought to a person back to its owner, with the count at zero. The
-    owner is woken once."""
+    owner is woken once. Only a person tries again: a bot that could restart the ladder could keep a task going
+    round it for ever."""
     H = _h()
     row = task(conn, task_id)
     if not row:
         _refuse(conn, by, "not-found", "No such task")
+    if not is_human(by):
+        _refuse(
+            conn,
+            by,
+            "task_needs_person",
+            "Try again needs a person. You can reassign it, ask a person, snooze it or close it.",
+            task_id,
+        )
     if row["status"] != "open":
         _refuse(conn, by, "task_ended", f"The task is {row['stage']['name']}. Reopen it first.", task_id)
     ts = H.now()
@@ -743,6 +752,8 @@ def snooze(
             "UPDATE visits SET level='manager', tries=0, next_try_at=?, last_change_at=? WHERE id=? AND level='owner'",
             (ts, ts, visit["id"]),
         )
+        # The manager bot has it now: what was still queued for anyone else would start runs it did not ask for.
+        task_wakes.drop(conn, task_id, keep=_part(row, "pipeline").get("manager_id"))
         _event(conn, task_id, by, "snooze_refused", None, None, why, {"snoozes": visit.get("bot_snoozes")})
         out = _task(conn, task_id)
         out["note"] = f"Snoozed {BOT_SNOOZES} times in this stage. The manager has it now."
@@ -816,6 +827,10 @@ def add_requirement(
         _refuse(conn, by, "task_requirement", "Only an OK or an answer can be added to one task", task_id)
     if not (is_human(person) or is_bot(person)):
         _refuse(conn, by, "task_requirement", "Name who it is for", task_id)
+    if is_human(person) and not R.active_person(conn, person):
+        _refuse(conn, by, "task_requirement", "That person has left or is not here. Ask someone who is.", task_id)
+    if is_bot(person) and not H.bot(conn, person):
+        _refuse(conn, by, "task_requirement", "There is no such bot here", task_id)
     if not (line or "").strip():
         _refuse(conn, by, "task_requirement", "Say what you are asking, in one sentence", task_id)
     ts = H.now()

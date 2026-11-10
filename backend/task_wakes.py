@@ -222,13 +222,15 @@ def queued(conn: "sqlite3.Connection", task_id: str, actor: str | None) -> bool:
     )
 
 
-def drop(conn: "sqlite3.Connection", task_id: str) -> int:
-    """Cancel every wake still queued for this task, whoever it is for: the turn they were about is over. Returns how
-    many."""
+def drop(conn: "sqlite3.Connection", task_id: str, keep: str | None = None) -> int:
+    """Cancel every wake still queued for this task, whoever it is for: the turn they were about is over. With `keep`,
+    that bot's wakes stay queued. A run that already took its wake is left alone. Returns how many."""
+    H = _h()
+    kept = H.actor_id(keep) if H.is_bot(keep) else None
     cursor = conn.execute(
-        "UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
+        "UPDATE jobs SET state='canceled' WHERE state='queued' AND bot_id IS NOT ? AND message_id IN "
         "(SELECT id FROM messages WHERE wake_key LIKE ? ESCAPE '\\')",
-        (_like(task_id),),
+        (kept, _like(task_id)),
     )
     return cursor.rowcount
 

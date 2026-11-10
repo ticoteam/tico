@@ -10,8 +10,12 @@ What met a requirement is its newest answer on the visit that is not undone (`an
 - `done`: the owner said the stage's work is finished (owner_done).
 - `ok`: the named person approved. `no`: they sent it back, with notes. `again`: the owner asks them to look again.
 - `give`: a stage's OK was given to another person, named in `notes`. It waits on them now.
-- anything else on an `answer` requirement: the choice the person picked, or what they typed.
+- anything on an `answer` requirement: the choice the person picked, or what they typed. `no`, `again` and `give` are
+  ordinary answers there: they steer only an OK (and a page).
 - `pushed_past`: someone moved the task on without it, with the reason in `notes`. Any kind.
+
+A requirement never waits on a person who left or was removed (`active_person`): it waits on nobody named instead, and
+`waiting_on` gives it to the person the task falls to.
 """
 
 import json
@@ -43,6 +47,33 @@ KIND_NAMES = {
 NEVER_PUSHED_PAST = ("pr_merged", "in_release")
 # Kinds whose "Who OKs" switch means something. Elsewhere it reads as `none`.
 OK_KINDS = ("ok", "page", "answer")
+# Answers that steer an OK instead of meeting it: a send back, a look again, a give. They mean that only on the kinds
+# in STEERED; on a question they are the answer.
+STEERS = ("no", "again", "give")
+STEERED = ("ok", "page")
+
+
+def steers(kind: str, value: object) -> bool:
+    """Whether an answer of this value steers a requirement of this kind (send back, look again, give) instead of
+    meeting it."""
+    return kind in STEERED and value in STEERS
+
+
+def active_person(conn: "sqlite3.Connection", actor: object) -> bool:
+    """Whether `actor` is a person who is still here: `human:<id>` with a `humans` row, whose roster row is not marked
+    as left (`hidden`, set by `access.leave`) nor dropped by the directory (`directory_left`). Remove deletes the
+    `humans` row (`people_remove`). A bot, nobody, or anything else is not an active person."""
+    text = str(actor or "")
+    if not text.startswith("human:") or not text[len("human:") :]:
+        return False
+    found = conn.execute(
+        "SELECT 1 FROM humans h WHERE h.id=? AND NOT EXISTS (SELECT 1 FROM registry_metadata m, "
+        "json_each(CASE WHEN json_valid(m.value) THEN m.value ELSE '{}' END, '$.people') p "
+        "WHERE m.key='people' AND json_extract(p.value, '$.id') = h.id "
+        "AND (json_extract(p.value, '$.hidden') OR json_extract(p.value, '$.directory_left')))",
+        (text[len("human:") :],),
+    ).fetchone()
+    return found is not None
 
 
 @dataclass
@@ -136,16 +167,22 @@ def newest_answers(conn: "sqlite3.Connection", visit_id: str) -> dict[str, Row]:
 
 
 def person_of(conn: "sqlite3.Connection", requirement: Row, visit_id: str) -> str | None:
-    """Who a requirement waits on in one visit: the person it was last given to (a `give` answer that is not undone),
-    else the person it names."""
-    given = conn.execute(
-        "SELECT notes FROM answers WHERE visit_id=? AND requirement_id=? AND answer='give' AND undone_at IS NULL "
-        "ORDER BY created_at DESC, id DESC LIMIT 1",
-        (visit_id, requirement["id"]),
-    ).fetchone()
-    if given and given[0]:
-        return str(given[0])
-    return requirement.get("person_id")
+    """Who a requirement waits on in one visit: the person it was last given to (a `give` answer that is not undone,
+    on a kind a give steers), else the person or bot it names. A person who left or was removed is skipped: with
+    nobody left, it is None, and the task's person takes it (`waiting_on.person_for`)."""
+    given = (
+        conn.execute(
+            "SELECT notes FROM answers WHERE visit_id=? AND requirement_id=? AND answer='give' AND undone_at IS NULL "
+            "ORDER BY created_at DESC, id DESC LIMIT 1",
+            (visit_id, requirement["id"]),
+        ).fetchone()
+        if requirement["kind"] in STEERED
+        else None
+    )
+    for found in (str(given[0]) if given and given[0] else None, requirement.get("person_id")):
+        if found and (not str(found).startswith("human:") or active_person(conn, found)):
+            return str(found)
+    return None
 
 
 def _filed(conn: "sqlite3.Connection", visit_id: str) -> list[Row]:
@@ -182,7 +219,7 @@ def _ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | N
 
 
 def _answer(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
-    if answer and answer["answer"] not in ("again", "give"):
+    if answer:  # nothing steers a question: any value is the answer, "no", "again" and "give" too
         return Standing(requirement, MET, line=str(answer["answer"]))
     person = person_of(conn, requirement, task["visit"]["id"])
     return Standing(requirement, WAITING, person, requirement.get("line") or "Answer")

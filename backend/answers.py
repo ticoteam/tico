@@ -165,12 +165,13 @@ def _may_answer(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row,
         return
     if kind == "ok" and value not in (OK, NO):
         _refuse(conn, by, "task_requirement", "An OK takes ok or no", task_id)
-    if kind == "answer" and (not value or value in (AGAIN, GIVE)):
+    if kind == "answer" and not value:  # a choice or any text: "no" is an answer like any other
         _refuse(conn, by, "task_requirement", "Give an answer", task_id)
-    # A requirement that names nobody (a stage's OK) is any person's. A bot answers only when it is named.
+    # A requirement that names nobody (a stage's OK), or a person who left, is any person's. A bot answers only when it
+    # is named.
     if by != person and not (person is None and is_human(by)):
         _refuse(conn, by, "task_requirement", f"This is asked of {_name(conn, person)}", task_id)
-    if value == NO and not (notes or "").strip():
+    if R.steers(kind, value) and value == NO and not (notes or "").strip():
         _refuse(conn, by, "task_why", "Say what to change", task_id)
 
 
@@ -204,10 +205,11 @@ def _tell_bot(
 ) -> None:
     """After an answer that left the task where it is: a send back is the bot's turn, with the notes word for word; an
     answer to something that was added to this task (a question or an OK) goes to the bot that asked, with the ask and
-    the answer."""
-    if value == NO:
+    the answer. A question's answer is never a send back, whatever it says."""
+    steered = R.steers(requirement["kind"], value)
+    if steered and value == NO:
         _wake(conn, row, W.holder(conn, row), f"{_name(conn, by)} sent this back: {notes}", key)
-    elif requirement.get("visit_id") and value not in (AGAIN, GIVE):
+    elif requirement.get("visit_id") and not steered:
         asker = requirement.get("added_by_id")
         target = asker if is_bot(asker) else W.holder(conn, row)
         lead = f'{_name(conn, by)} answered "{R.name_of(requirement)}": {value}'
@@ -251,11 +253,15 @@ def answer(
 def give_to(conn: "sqlite3.Connection", task_id: str, requirement_id: str, by: str, person: str) -> Row:
     """Give an ask to another person: it gets their name and moves to their list. A requirement added to one task gets
     the new name. A stage's OK gets a `give` answer naming them. The owner's own "done" is a reassign (C29: only a
-    person is named)."""
+    person is named, and one who is still here)."""
     H = _h()
     row = _open_task(conn, task_id, by)
     if not is_human(person):
         _refuse(conn, by, "task_requirement", "Give it to a person", task_id)
+    if not R.active_person(conn, person):
+        _refuse(
+            conn, by, "task_requirement", "That person has left or is not here. Give it to someone who is.", task_id
+        )
     requirement = _asked(conn, row, requirement_id, by)
     kind = requirement["kind"]
     if kind == "owner_done":
@@ -304,9 +310,11 @@ def undo(conn: "sqlite3.Connection", answer_id: str, by: str) -> Row:
         return row
     now = _part(row, "visit")
     stays = visit.get("left_at") is None
-    # Only an answer that meets a requirement can move a task: not a send back, a look again or a give.
+    # Only an answer that meets a requirement can move a task: not a send back, a look again or a give on an OK. On a
+    # question every answer meets it, "no" too.
+    answered = R.get(conn, found["requirement_id"])
     moved_by_it = (
-        found["answer"] not in (NO, AGAIN, GIVE)
+        not R.steers(answered["kind"] if answered else "ok", found["answer"])
         and visit.get("how") == "met"
         and now.get("entered_how") == "met"
         and now.get("entered_at") == visit.get("left_at")

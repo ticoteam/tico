@@ -321,8 +321,8 @@ def _check_requirement(conn: "sqlite3.Connection", stage: Row, req: Row, problem
         problems.append(
             f"Only a requirement a person can meet with a button can name a person (C29): not {name}, on {label}."
         )
-    elif person and not _actor_exists(conn, person):
-        problems.append(f"{person} is not a person or a bot here (on {label}).")
+    elif person and not (_actor_exists(conn, person) and (is_bot(person) or R.active_person(conn, person))):
+        problems.append(f"{person} is not a person or a bot here (on {label}).")  # removed, or left
     elif kind == "ok" and not person:
         problems.append(f"An OK from someone on {label} names the person or bot who OKs it.")
     if req["id"]:
@@ -441,6 +441,8 @@ def _problems(conn: "sqlite3.Connection", record: Row) -> list[str]:
         problems.append("A pipeline needs at least one stage.")
     names: set[str] = set()
     ids: set[str] = set()
+    # A requirement id is one row: listed on two stages, the second write would take the first stage's requirement.
+    req_ids: set[str] = set()
     for position, stage in enumerate(stages):
         label = stage["name"] or f"Stage {position + 1}"
         if not stage["name"]:
@@ -463,10 +465,9 @@ def _problems(conn: "sqlite3.Connection", record: Row) -> list[str]:
         if position == 0 and stage["task_limit"]:
             problems.append(f"The first stage of a pipeline has no limit ({label}).")
         _check_on_enter(conn, record, stage, label, problems)
-        req_ids: set[str] = set()
         for req in stage["requirements"]:
             if req["id"] and req["id"] in req_ids:
-                problems.append(f"Requirement {req['id']} is listed twice on {label}.")
+                problems.append(f"Requirement {req['id']} is listed twice.")
             if req["id"]:
                 req_ids.add(req["id"])
             _check_requirement(conn, stage, req, problems)

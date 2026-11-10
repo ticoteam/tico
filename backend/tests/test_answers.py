@@ -20,7 +20,7 @@ from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import headers, post
 
 ANA = X.ANA
-BO = "human:bo"
+BEN = "human:ben"
 BUILD = (
     {"name": "Build", "owner": "bot:builder", "requirements": [{"kind": "owner_done"}]},
     {
@@ -106,7 +106,7 @@ def test_the_owner_the_manager_or_any_person_says_done_and_nobody_else(c, genera
     assert H._one(c, "SELECT COUNT(*) AS n FROM answers")["n"] == 0
     assert A.answer(c, row["id"], rid, "bot:manager", "done", seen_version=row["version"])["status"] == "done"
     other = X.new_task(c, ANA, "Write the release note", assignee="bot:builder")
-    assert A.answer(c, other["id"], _owner_done(c, other), BO, "done")["status"] == "done"
+    assert A.answer(c, other["id"], _owner_done(c, other), BEN, "done")["status"] == "done"
 
 
 def test_a_bot_sends_the_version_it_saw_and_an_old_one_is_refused(c, general):
@@ -129,7 +129,7 @@ def test_an_ok_from_the_named_person_moves_the_task_on_and_nobody_else_can_give_
     with _refused("task_requirement"):
         A.answer(c, row["id"], rid, "bot:reviewer", "ok", seen_version=row["version"])  # a bot it does not name
     with _refused("task_requirement"):
-        A.answer(c, row["id"], rid, BO, "ok")  # it names Ana
+        A.answer(c, row["id"], rid, BEN, "ok")  # it names Ana
     with _refused("task_requirement"):
         A.answer(c, row["id"], rid, ANA, "maybe")
     done = A.answer(c, row["id"], rid, ANA, "ok", "Looks right")
@@ -176,7 +176,7 @@ def test_a_stage_ok_that_names_nobody_is_any_persons_and_never_a_bots(c, general
     rid = R.on_stage(c, row["stage_id"])[0]["id"]
     with _refused("task_requirement"):
         A.answer(c, row["id"], rid, "bot:builder", "ok", seen_version=row["version"])
-    assert A.answer(c, row["id"], rid, BO, "ok")["status"] == "done"
+    assert A.answer(c, row["id"], rid, BEN, "ok")["status"] == "done"
 
 
 # ----------------------------------------------------------------------------- questions
@@ -208,6 +208,32 @@ def test_an_answered_question_wakes_the_bot_that_asked_once_with_the_question_an
     [(key, who)] = _answer_wakes(c, row["id"])
     assert (key, who) == (f"{row['id']}:{row['visit']['id']}:answer:{out['answer_id']}", "bot:builder")
     assert '"Which plan do new signups get?": Ask at signup, with Free picked' in _body(c, key)
+
+
+def test_no_is_an_ordinary_answer_to_a_question(c, general):
+    row = X.new_task(c, ANA, "Send the invoice", assignee="bot:builder")
+    rid = _bot_ask(c, row["id"], "bot:builder", "answer", ANA, "Send it today?", choices=["yes", "no"])[
+        "requirement_id"
+    ]
+    X.settled(c)
+    said = A.answer(c, row["id"], rid, ANA, "no")  # no notes: it is not a send back
+    assert said["status"] == "open" and [s.state for s in R.standings(c, said)] == [R.NOT_MET, R.MET]
+    [(key, who)] = _answer_wakes(c, row["id"])
+    assert who == "bot:builder" and '"Send it today?": no' in _body(c, key) and "sent this back" not in _body(c, key)
+    A.undo(c, said["answer_id"], ANA)  # taken back like any answer, and its wake with it
+    assert [s.state for s in R.standings(c, E.task(c, row["id"]))] == [R.NOT_MET, R.WAITING]
+    job = H._one(c, "SELECT j.state FROM jobs j JOIN messages m ON m.id = j.message_id WHERE m.wake_key=?", (key,))
+    assert job["state"] == "canceled"
+    A.answer(c, row["id"], _owner_done(c, row), "bot:builder", "done", seen_version=row["version"])
+    done = A.answer(c, row["id"], rid, ANA, "no")
+    assert done["status"] == "done"  # the last thing missing: it moves in the same step
+    back = A.undo(c, done["answer_id"], ANA)  # it moved the task, so taking it back is a move back
+    assert (back["stage_id"], back["status"]) == ("general-todo", "open")
+    other = X.new_task(c, ANA, "Name the plan", assignee="bot:builder")
+    asked = _bot_ask(c, other["id"], "bot:builder", "answer", ANA, "Which word?", choices=["give", "again"])
+    for word in ("give", "again"):
+        out = A.answer(c, other["id"], asked["requirement_id"], ANA, word)
+        assert [s.state for s in R.standings(c, out)] == [R.NOT_MET, R.MET]
 
 
 def test_a_snoozed_task_takes_the_answer_and_wakes_nobody(c, general):
@@ -262,37 +288,71 @@ def test_give_a_requirement_added_to_one_task_to_another_person_and_needs_you_fo
     assert [n["requirement_id"] for n in W.needs(c, ANA)] == [rid]
     with _refused("task_requirement"):
         A.give_to(c, row["id"], rid, ANA, "bot:reviewer")  # only a person is named (C29)
-    given = A.give_to(c, row["id"], rid, ANA, BO)
+    given = A.give_to(c, row["id"], rid, ANA, BEN)
     assert given["version"] == row["version"] and "answer_id" not in given
-    assert R.get(c, rid)["person_id"] == BO
-    assert W.needs(c, ANA) == [] and [n["requirement_id"] for n in W.needs(c, BO)] == [rid]
+    assert R.get(c, rid)["person_id"] == BEN
+    assert W.needs(c, ANA) == [] and [n["requirement_id"] for n in W.needs(c, BEN)] == [rid]
     with _refused("task_requirement"):
         A.answer(c, row["id"], rid, ANA, "ok")
-    A.answer(c, row["id"], rid, BO, "ok")
-    assert W.needs(c, BO) == []
+    A.answer(c, row["id"], rid, BEN, "ok")
+    assert W.needs(c, BEN) == []
 
 
 def test_give_a_stage_ok_to_another_person_and_needs_you_follows(c, build):
     row = _in_review(c, build)
     rid = build["requirements"]["Review"][0]
     assert [n["task_id"] for n in W.needs(c, ANA)] == [row["id"]]
-    given = A.give_to(c, row["id"], rid, ANA, BO)
+    given = A.give_to(c, row["id"], rid, ANA, BEN)
     assert given["version"] == row["version"]
     saved = H._one(c, "SELECT * FROM answers WHERE id=?", (given["answer_id"],))
-    assert (saved["answer"], saved["notes"]) == ("give", BO)
-    assert W.needs(c, ANA) == [] and [n["requirement_id"] for n in W.needs(c, BO)] == [rid]
+    assert (saved["answer"], saved["notes"]) == ("give", BEN)
+    assert W.needs(c, ANA) == [] and [n["requirement_id"] for n in W.needs(c, BEN)] == [rid]
     with _refused("task_requirement"):
         A.answer(c, row["id"], rid, ANA, "ok")
-    assert A.answer(c, row["id"], rid, BO, "ok")["status"] == "done"
+    assert A.answer(c, row["id"], rid, BEN, "ok")["status"] == "done"
     assert R.get(c, rid)["person_id"] == ANA  # the stage still names Ana for the next task
 
 
 def test_give_your_own_task_to_someone_else_is_a_reassign(c, general):
     row = X.new_task(c, ANA, "Call the bank", assignee=ANA)
     assert [n["task_id"] for n in W.needs(c, ANA)] == [row["id"]]
-    given = A.give_to(c, row["id"], _owner_done(c, row), ANA, BO)
-    assert (given["owner_id"], given["version"]) == (BO, row["version"] + 1)
-    assert W.needs(c, ANA) == [] and [n["task_id"] for n in W.needs(c, BO)] == [row["id"]]
+    given = A.give_to(c, row["id"], _owner_done(c, row), ANA, BEN)
+    assert (given["owner_id"], given["version"]) == (BEN, row["version"] + 1)
+    assert W.needs(c, ANA) == [] and [n["task_id"] for n in W.needs(c, BEN)] == [row["id"]]
+
+
+def test_an_ask_is_given_or_named_only_to_a_person_who_is_here(c, build):
+    review = _in_review(c, build)
+    stage_ok = build["requirements"]["Review"][0]
+    row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
+    rid = _bot_ask(c, row["id"], "bot:builder", "ok", ANA, "OK the headline")["requirement_id"]
+    mine = X.new_task(c, ANA, "Call the bank", assignee=ANA)
+    X.left(c, "human:cara")
+    for nobody in ("human:missing", "human:cara"):  # never on the roster; on it, and left
+        with _refused("task_requirement"):
+            A.give_to(c, row["id"], rid, ANA, nobody)
+        with _refused("task_requirement"):
+            A.give_to(c, review["id"], stage_ok, ANA, nobody)
+        with _refused("task_requirement"):
+            A.give_to(c, mine["id"], _owner_done(c, mine), ANA, nobody)
+        with _refused("task_requirement"):
+            E.add_requirement(c, row["id"], ANA, "answer", nobody, "Card or invoice?")
+    with _refused("task_requirement"):
+        E.add_requirement(c, row["id"], ANA, "ok", "bot:nobody", "OK the footer")
+    assert R.get(c, rid)["person_id"] == ANA and E.task(c, mine["id"])["owner_id"] == ANA
+    assert H._one(c, "SELECT COUNT(*) AS n FROM answers WHERE answer='give'")["n"] == 0
+
+
+def test_an_ask_that_names_a_person_who_left_is_any_persons(c, general):
+    row = X.new_task(c, ANA, "Pick the signup plan", assignee="bot:builder")
+    rid = _bot_ask(c, row["id"], "bot:builder", "answer", BEN, "Which plan?", choices=["Free"])["requirement_id"]
+    X.left(c, BEN)
+    wait = W.headline(c, row["id"])
+    assert (wait.state, wait.who, wait.ask) == ("person", ANA, True)
+    with _refused("task_requirement"):
+        A.answer(c, row["id"], rid, "bot:reviewer", "Free", seen_version=row["version"])  # still never a bot's
+    out = A.answer(c, row["id"], rid, ANA, "Free")
+    assert [s.state for s in R.standings(c, out)] == [R.NOT_MET, R.MET]
 
 
 def test_an_answered_ask_is_not_given_away(c, build):
@@ -300,7 +360,7 @@ def test_an_answered_ask_is_not_given_away(c, build):
     rid = build["requirements"]["Review"][0]
     A.answer(c, row["id"], rid, ANA, "no", "Keep the header")
     with _refused("task_requirement"):
-        A.give_to(c, row["id"], rid, ANA, BO)
+        A.give_to(c, row["id"], rid, ANA, BEN)
 
 
 # ----------------------------------------------------------------------------- undo
@@ -403,9 +463,9 @@ def test_thumbs_down_on_a_stage_ok_is_a_send_back(c, build):
 
 def test_a_thumb_needs_a_bots_ask(c, general):
     row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
-    mine = E.add_requirement(c, row["id"], ANA, "ok", BO, "OK the headline")
+    mine = E.add_requirement(c, row["id"], ANA, "ok", BEN, "OK the headline")
     with _refused("task_requirement"):
-        A.thumbs_up(c, row["id"], mine["requirement_id"], BO)  # a person asked it
+        A.thumbs_up(c, row["id"], mine["requirement_id"], BEN)  # a person asked it
     with _refused("task_requirement"):
         A.thumbs_up(c, row["id"], _owner_done(c, row), ANA)  # not an ask
 

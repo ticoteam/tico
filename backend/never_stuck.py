@@ -235,9 +235,11 @@ def _try(
 def _to_manager(
     conn: "sqlite3.Connection", row: Row, manager: str | None, why: str, at: str, done: dict[str, int]
 ) -> None:
-    """Hand the task to the pipeline's manager bot, told who tried and what is missing: its first of 3 tries."""
+    """Hand the task to the pipeline's manager bot, told who tried and what is missing: its first of 3 tries. A wake
+    still queued for anyone else is canceled: it would start a run about a turn that is over. A live run goes on."""
     visit = row["visit"]
     conn.execute("UPDATE visits SET level='manager', tries=0, next_try_at=? WHERE id=?", (at, visit["id"]))
+    task_wakes.drop(conn, row["id"], keep=manager)
     _event(conn, row["id"], "ladder", visit.get("level") or "owner", "manager", {"why": why})
     done["to_manager"] += 1
     handed = E.task(conn, row["id"]) or row
@@ -247,10 +249,12 @@ def _to_manager(
 
 
 def _to_person(conn: "sqlite3.Connection", row: Row, level: str, done: dict[str, int]) -> None:
-    """Hand the task to a person. It shows in their Needs you, once, and nothing more runs until a person acts."""
+    """Hand the task to a person. It shows in their Needs you, once, and nothing more runs until a person acts: every
+    wake still queued for the task is canceled. A live run goes on."""
     visit = row["visit"]
     person = W.person_for(conn, row)
     conn.execute("UPDATE visits SET level='person', person_id=?, next_try_at=NULL WHERE id=?", (person, visit["id"]))
+    task_wakes.drop(conn, row["id"])
     _event(conn, row["id"], "ladder", level, "person", {"person": person})
     done["to_person"] += 1
 
