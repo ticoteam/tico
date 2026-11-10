@@ -55,6 +55,7 @@ TRIGGERS = (
     "release_published",
     "check_back",
     "task_roundup",
+    "task_turn",
     "other",
 )
 OUTCOMES = ("acted", "no_change", "nothing_to_do")
@@ -75,6 +76,7 @@ TRIGGER_PURPOSES = {
     "background_done": "resume after background work",
     "release_published": "follow up a release",
     "task_roundup": "check the task roundup list",
+    "task_turn": "work a task",
 }
 # Bots whose work is one thing: a reviewer woken by a task change or a PR's checks is reviewing that PR.
 REVIEWERS = ("pr-reviewer-sol", "reviewer-2")

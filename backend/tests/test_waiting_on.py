@@ -1,0 +1,150 @@
+"""Whose turn a task is (backend/waiting_on.py, docs/pipelines-v3.md "Whose turn it is").
+
+Synthetic rows only (backend/tests/helpers/engine.py).
+"""
+
+import pytest
+
+from backend import task_engine as E
+from backend import waiting_on as W
+from backend.tests.helpers import engine as X
+
+ANA = X.ANA
+BUILD = (
+    {"name": "Ideas", "by_hand": True},
+    {"name": "On deck"},
+    {"name": "Build", "owner": "bot:builder", "task_limit": 1, "requirements": [{"kind": "owner_done"}]},
+    {
+        "name": "Review",
+        "owner": "bot:reviewer",
+        "requirements": [{"kind": "ok", "person": ANA, "line": "OK the build"}],
+    },
+)
+
+
+@pytest.fixture
+def c(api):
+    with api.app.state.store.transaction() as conn:
+        yield conn
+
+
+@pytest.fixture
+def general(c):
+    for slug in ("builder", "reviewer", "manager"):
+        X.bot(c, slug)
+    return X.pipeline(c, manager="bot:manager")
+
+
+@pytest.fixture
+def build(c, general):
+    return X.pipeline(c, "eng", "Engineering", BUILD, manager="bot:manager")
+
+
+def _states(c, task_id):
+    return [(w.state, w.who) for w in W.waiting_on(c, task_id)]
+
+
+def test_a_task_a_bot_owns_is_the_bots_turn_and_a_persons_task_is_theirs(c, general):
+    mine = X.new_task(c, ANA, "Call the bank", assignee=ANA)
+    bots = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
+    assert _states(c, mine["id"]) == [("person", ANA)]
+    assert _states(c, bots["id"]) == [("bot", "bot:builder")]
+    wait = W.headline(c, bots["id"])
+    assert wait.requirement_id == general["requirements"]["To do"][0] and wait.since == bots["visit"]["entered_at"]
+
+
+def test_a_task_with_no_owner_is_the_manager_bots_and_with_no_manager_a_persons(c, general):
+    X.pipeline(c, "ops", "Operations")
+    assert _states(c, X.new_task(c, ANA, "Sort the shared inbox")["id"]) == [("bot", "bot:manager")]
+    assert _states(c, X.new_task(c, ANA, "Renew the domain", "ops")["id"]) == [("person", ANA)]  # whoever asked
+
+
+def test_a_bot_that_cannot_run_shows_paused_with_the_cause(c, general):
+    row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
+    c.execute("UPDATE bots SET state='quarantined' WHERE id='builder'")
+    wait = W.headline(c, row["id"])
+    assert (wait.state, wait.who, wait.line) == ("paused", "bot:builder", "quarantined")
+    c.execute("UPDATE bots SET state='active' WHERE id='builder'")
+    assert W.headline(c, row["id"]).state == "bot"  # it carries on by itself
+
+
+def test_the_ladder_hands_the_turn_to_the_manager_bot_and_then_to_a_person(c, general):
+    row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
+    c.execute("UPDATE visits SET level='manager' WHERE id=?", (row["visit"]["id"],))
+    assert _states(c, row["id"]) == [("bot", "bot:manager")]
+    c.execute("UPDATE visits SET level='person' WHERE id=?", (row["visit"]["id"],))
+    assert _states(c, row["id"]) == [("person", ANA)]  # the manager bot's owner
+
+
+def test_snoozed_is_the_headline_and_the_rest_is_still_listed(c, general):
+    row = X.new_task(c, ANA, "Chase the vendor", assignee="bot:builder")
+    E.snooze(c, row["id"], "bot:builder", "Vendor replies by Nov 14", "2026-11-14T00:00:00.000000Z")
+    waits = W.waiting_on(c, row["id"])
+    assert [w.state for w in waits] == ["snoozed", "bot"]
+    assert (waits[0].who, waits[0].line, waits[0].until) == (
+        "bot:builder",
+        "Vendor replies by Nov 14",
+        "2026-11-14T00:00:00.000000Z",
+    )
+
+
+def test_by_hand_room_and_a_named_person_follow_the_task_through_its_stages(c, build):
+    first = X.new_task(c, ANA, "Build the importer", "eng")
+    second = X.new_task(c, ANA, "Build the exporter", "eng")
+    wait = W.headline(c, first["id"])
+    assert (wait.state, wait.who, wait.line) == ("by_hand", "eng-ideas", "Leaves Ideas by hand")
+    for row in (first, second):
+        E.move(c, row["id"], E.NEXT, ANA)  # picked by hand: Ideas needs nothing
+    assert W.all_met(W.waiting_on(c, first["id"]))  # On deck needs nothing: it waits only for a slot
+    assert W.headline(c, first["id"]).line == "Moving to Build"
+    E.fill_open_slots(c)
+    wait = W.headline(c, second["id"])
+    assert (wait.state, wait.who, wait.line) == ("room", "eng-build", "No room in Build")
+    assert _states(c, first["id"]) == [("bot", "bot:builder")]
+    X.say_done(c, E.task(c, first["id"]))
+    E.advance(c, first["id"])
+    wait = W.headline(c, first["id"])
+    assert (wait.state, wait.who, wait.line) == ("person", ANA, "OK the build")
+    assert wait.requirement_id == build["requirements"]["Review"][0]
+
+
+def test_a_task_waits_on_the_tasks_it_filed_and_on_a_question_a_bot_asked(c, general):
+    stages = ({"name": "In development", "owner": "bot:manager", "requirements": [{"kind": "linked_done"}]},)
+    X.pipeline(c, "product", "Product", stages)
+    parent = X.new_task(c, ANA, "Checkout flow", "product")
+    assert _states(c, parent["id"]) == [("bot", "bot:manager")]  # nothing filed yet: the owner's to do
+    child = X.new_task(c, ANA, "Build the cart", assignee="bot:builder", parent=parent["id"])
+    assert _states(c, parent["id"]) == [("tasks", child["id"])]
+    asked = E.add_requirement(
+        c, child["id"], "bot:builder", "answer", ANA, "Card or invoice?", choices=["Card", "Invoice"]
+    )
+    waits = W.waiting_on(c, child["id"])
+    assert [(w.state, w.who) for w in waits] == [("person", ANA), ("bot", "bot:builder")]
+    assert waits[0].requirement_id == asked["requirement_id"] and waits[0].line == "Card or invoice?"
+
+
+def test_an_ended_task_waits_on_nothing_and_an_open_one_never_does(c, build):
+    row = X.new_task(c, ANA, "Build the importer", "eng")
+    stops = []
+    for step in (E.NEXT, E.NEXT, "Review", E.DONE):
+        assert W.waiting_on(c, row["id"]), "an open task always waits on something"
+        stops.append(W.headline(c, row["id"]).state)
+        row = E.move(c, row["id"], step, ANA, "Moved by hand for the test")
+    assert stops == ["by_hand", "room", "bot", "person"]
+    assert W.waiting_on(c, row["id"]) == [] and W.headline(c, row["id"]) is None
+    assert W.waiting_on(c, "no-such-task") == []
+
+
+def test_needs_you_lists_what_is_a_persons_to_act_on_oldest_first_and_leaves_out_snoozed(c, build):
+    mine = X.new_task(c, ANA, "Call the bank", assignee=ANA)
+    bots = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
+    asked = E.add_requirement(c, bots["id"], "bot:builder", "ok", ANA, "OK the headline")
+    set_aside = X.new_task(c, ANA, "Renew the lease", assignee=ANA)
+    E.snooze(c, set_aside["id"], ANA)
+    listed = W.needs(c, ANA)
+    assert [(n["task_id"], n["line"]) for n in listed] == [
+        (mine["id"], "Say when the work is done"),
+        (bots["id"], "OK the headline"),
+    ]
+    assert listed[1]["requirement_id"] == asked["requirement_id"]
+    assert W.needs(c, "human:nobody") == []

@@ -2331,7 +2331,9 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     # A writing correction ("start the title with a verb") is fixed by retrying, not a sign the bot
     # is reaching where it should not: it neither counts nor quarantines. A bot was quarantined by
     # ten refusals, three of them lint on one task title.
-    if rule in ("lint", "queue_full", "stage_full", "on_ice"):
+    # A move the one task engine refused (backend/task_engine.py, every rule starts `task_`) says what to send
+    # instead: a newer version, a reason, a requirement still missing. It is a correction too.
+    if rule in ("lint", "queue_full", "stage_full", "on_ice") or str(rule).startswith("task_"):
         return
     slug = actor_id(actor)
     day = ts[:10]
@@ -2361,7 +2363,8 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     for refused in _rows(
         conn.execute(
             "SELECT rule, detail, created_at FROM refusals WHERE actor=? AND created_at>=? "
-            "AND rule NOT IN ('lint','queue_full','stage_full','on_ice') ORDER BY created_at, id",
+            "AND rule NOT IN ('lint','queue_full','stage_full','on_ice') AND substr(rule, 1, 5) != 'task_' "
+            "ORDER BY created_at, id",
             (actor, since),
         )
     ):

@@ -333,6 +333,7 @@ def test_the_always_wake_list_is_one_list_the_bot_to_bot_rule_reads_first(api):
     with api.app.state.store.transaction() as c:
         assert [key for key, _ in W.ALWAYS_WAKE] == [
             "check_back",
+            "task_turn",
             "person",
             "manager",
             "ask",
