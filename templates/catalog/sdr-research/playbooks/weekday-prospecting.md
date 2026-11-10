@@ -45,6 +45,5 @@ is a human's act.
 ## 6. Write the pack and finish
 
 Write `reports/YYYY-MM-DD-prospecting.md` in the shape of `knowledge/examples/prospecting-run.md`, update
-`knowledge/sequences.md`, `hub file publish` the pack, commit, and `hub task done <id> -m "..." --version N
---note`: inbound handled, leads worked, A/B/C, touches drafted or sent, meetings booked, sources not
+`knowledge/sequences.md`, `hub file publish` the pack, commit, and `hub task done <id> -m "..." --version N`: inbound handled, leads worked, A/B/C, touches drafted or sent, meetings booked, sources not
 read. Always finish it: an open routine task absorbs tomorrow's.

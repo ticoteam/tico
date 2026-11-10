@@ -50,5 +50,4 @@ before handing over.
 ## 6. Hand over
 
 Publish with `hub file publish specs/<slug>.md --task <id>`. List the issues you would file (title and
-body) on the task for a human, and the questions for the owners. `hub task done <id> -m "..." --version N
---note`: the problem in one line, the appetite, the path, open questions and who owes them.
+body) on the task for a human, and the questions for the owners. `hub task done <id> -m "..." --version N`: the problem in one line, the appetite, the path, open questions and who owes them.

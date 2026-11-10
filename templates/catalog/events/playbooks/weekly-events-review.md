@@ -37,5 +37,4 @@ conversations, meetings, pipeline, and cost per meeting. Write one line per even
 ## 5. Write and hand over
 
 Write `reports/YYYY-MM-DD-events.md` in the shape of `knowledge/examples/events-review.md`, then
-`hub file publish reports/YYYY-MM-DD-events.md`. Commit, and `hub task done <id> -m "..." --version N
---note`: the headline, the path, what you could not read.
+`hub file publish reports/YYYY-MM-DD-events.md`. Commit, and `hub task done <id> -m "..." --version N`: the headline, the path, what you could not read.

@@ -33,8 +33,7 @@ launch, two for smaller news), what is missing (a customer, data, a spokesperson
 ## 5. Write and hand over
 
 Write `reports/YYYY-MM-DD-pr.md` in the shape of `knowledge/examples/pr-review.md`, then
-`hub file publish reports/YYYY-MM-DD-pr.md`. Commit, and `hub task done <id> -m "..." --version N
---note`: the headline, the path, what is waiting on a human.
+`hub file publish reports/YYYY-MM-DD-pr.md`. Commit, and `hub task done <id> -m "..." --version N`: the headline, the path, what is waiting on a human.
 
 Done when: coverage since the last review is logged with dates and tone, each inaccurate article has a correction
 request drafted, the story pipeline has start dates, and every blocked source is named.

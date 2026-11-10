@@ -54,7 +54,6 @@ Sharing the report with finance is within the requested work. Any message to a p
 
 ## 7. Finish
 
-Update `knowledge/vendors.md` and `knowledge/renewals.md`. Commit, then `hub task done <id> -m "..." --version N
---note`: the total and its change, the count of anomalies and renewals, and which sources you could not
+Update `knowledge/vendors.md` and `knowledge/renewals.md`. Commit, then `hub task done <id> -m "..." --version N`: the total and its change, the count of anomalies and renewals, and which sources you could not
 read. A source that failed is named, and its spend is "unknown", not zero. Always finish the task: an open
 routine task absorbs the next.

@@ -305,7 +305,7 @@ contrast, a never-claim, a number) never closes on the founder's call.
    never-claims itself. It replaces the Brand card summary for growth-facing bots.
 2. **Governance**: owner by name, approvers, review date (default every six months and before any launch or
    rename), what Tico checks automatically, the needs-teammate list.
-3. **Ask the teammates.** Each needs-teammate item goes to its owner as one question (in Tico: a question task, or
+3. **Ask the teammates.** Each needs-teammate item goes to its owner as one question (in Tico: an ask on the task, or
    a message to their bot), quoting the section and what the answer unlocks. Facts a teammate holds come from them,
    not second-hand through the founder: tag second-hand ones `assumption` until the owner confirms.
 4. Headline, decisions, assumptions, next steps, as in `coach.md`.
