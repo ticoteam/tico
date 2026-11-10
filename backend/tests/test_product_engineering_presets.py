@@ -180,8 +180,11 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
     assert (validate["person_id"], validate["settings"]["with_release"]) == (None, True)  # Jev only; G15
     fixes_2 = stages["engineering-fixes-2"]["requirements"][1]
     assert fixes_2["person_id"] == ANA
-    assert all(r["settings"]["at_head"] for s in ("engineering-review-1", "engineering-review-2") for r in
-               stages[s]["requirements"])
+    assert all(
+        r["settings"]["at_head"]
+        for s in ("engineering-review-1", "engineering-review-2")
+        for r in stages[s]["requirements"]
+    )
     never = [r for s in stages.values() for r in s["requirements"] if r["kind"] in ("pr_merged", "in_release")]
     assert len(never) == 2 and not any(r["can_push_past"] for r in never)
 
@@ -345,7 +348,11 @@ def test_in_development_files_one_engineering_task_with_the_product_text_and_the
     filed = _filed(c, row["id"])
     assert [kind for _, kind in filed] == ["handoff"]
     eng = E.task(c, filed[0][0])
-    assert (eng["pipeline_id"], eng["stage_id"], eng["owner_id"]) == ("engineering", "engineering-on-deck", "bot:builder")
+    assert (eng["pipeline_id"], eng["stage_id"], eng["owner_id"]) == (
+        "engineering",
+        "engineering-on-deck",
+        "bot:builder",
+    )
     assert eng["title"] == "Saved carts"
     assert eng["body"] == "Let a shopper keep a cart.\n\nSpec: page:f-spec@3"
     assert eng["requester_id"] == "bot:pm"
@@ -428,9 +435,9 @@ def test_the_product_manager_is_woken_once_when_spec_has_room(c):
     N.check(c)  # Spec is full: nothing
     assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%'").fetchone()[0] == 1
     E.move(c, ideas[0]["id"], "product-ideas", ANA, "Not ready")
-    left = c.execute(
-        "SELECT id FROM visits WHERE task_id=? AND stage_id='product-spec'", (ideas[0]["id"],)
-    ).fetchone()[0]
+    left = c.execute("SELECT id FROM visits WHERE task_id=? AND stage_id='product-spec'", (ideas[0]["id"],)).fetchone()[
+        0
+    ]
     N.check(c)
     N.check(c)
     keys = [r[0] for r in c.execute("SELECT wake_key FROM messages WHERE wake_key LIKE 'room:%' ORDER BY rowid")]

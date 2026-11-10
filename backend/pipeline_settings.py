@@ -1010,9 +1010,7 @@ def preset(conn: "sqlite3.Connection", key: str) -> Row:
 
 def _untouched(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
     """A preset nobody changed: still at its first settings version and not retired."""
-    found = conn.execute(
-        "SELECT settings_version, retired_at FROM pipelines WHERE id=?", (pipeline_id,)
-    ).fetchone()
+    found = conn.execute("SELECT settings_version, retired_at FROM pipelines WHERE id=?", (pipeline_id,)).fetchone()
     return bool(found) and int(found[0] or 1) == 1 and not found[1]
 
 

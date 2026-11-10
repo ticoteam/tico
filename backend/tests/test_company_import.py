@@ -1607,7 +1607,11 @@ def test_a_new_company_set_up_with_the_default_chart_on_a_fresh_database_has_its
     with store.transaction() as c:
         onboarding.complete(c, Identity("human:owner", "owner", OWNER_EMAIL))
     with store.read() as c:
-        assert [r[0] for r in c.execute("SELECT id FROM pipelines ORDER BY id")] == ["engineering", "general", "product"]
+        assert [r[0] for r in c.execute("SELECT id FROM pipelines ORDER BY id")] == [
+            "engineering",
+            "general",
+            "product",
+        ]
         bots = {r[0] for r in c.execute("SELECT slug FROM bots")}
         assert {"coo", "botops", "task-manager", *LIVE_DEFAULT} <= bots
         assert c.execute("SELECT count(*) FROM seats WHERE closed_at IS NULL").fetchone()[0] > 0

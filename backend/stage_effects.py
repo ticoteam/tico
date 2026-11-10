@@ -59,7 +59,9 @@ def _filer(conn: "sqlite3.Connection", task: Row, by: str) -> str:
     """Who files the handoff: the filing task's owner (the Product Manager), else its pipeline's manager, else whoever
     moved it."""
     H = _h()
-    for actor in (task.get("owner_id"), (task.get("pipeline") or {}).get("manager_id"), by):
+    pipeline: Row = task.get("pipeline") or {}
+    candidates: list[str | None] = [task.get("owner_id"), pipeline.get("manager_id"), by]
+    for actor in candidates:
         if actor and (H.is_bot(actor) or H.is_human(actor)) and H._actor_exists(conn, actor):
             return str(actor)
     return str(H.KEEPER)
