@@ -2013,6 +2013,12 @@ MENTIONS_SQL = (
 def _mentions(c, who):
     """The @s of `who` by a person that they have not replied to and may still read, oldest first."""
     rows = [dict(r) for r in c.execute(MENTIONS_SQL, (who.actor, who.actor, who.actor))]
+    # Each mention's message, rooms and references read together, not a few statements per mention.
+    stored = H.prime_messages(c, [row["id"] for row in rows])
+    privacy.prime_messages(c, list(stored.values()))
+    from . import threads
+
+    threads.prime_members(c, who, [row["conversation_id"] for row in rows])
     seen, out = set(), []
     for row in rows:
         if row["id"] in seen:
