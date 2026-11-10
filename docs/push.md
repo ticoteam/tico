@@ -38,3 +38,8 @@ server; the public half is what browsers subscribe with (`GET /api/v2/push/key`)
 `push_subscriptions`, added and removed only by that person, signed in as themselves
 (`POST` and `DELETE /api/v2/push/subscriptions`). Pushes go out from the server to the push service over https; an
 endpoint on a private or local address is refused.
+
+Each push names a contact for the push service (VAPID's `sub`): the server's public https address, or on an install
+without one, the owner's email (`TICO_OWNER_EMAIL`, else the team's owner). With neither, it is the placeholder
+`mailto:push@localhost`; Chrome and Firefox take it, and Apple may refuse pushes from such an install, so set an owner
+email or a public https address for iPhone and Safari push.

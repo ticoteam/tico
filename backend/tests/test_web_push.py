@@ -70,6 +70,18 @@ def test_the_vapid_token_names_the_endpoints_origin_expires_within_a_day_and_has
     assert jwt.get_unverified_header(token) == {"alg": "ES256", "typ": "JWT"}
 
 
+def test_the_vapid_subject_is_the_https_address_else_the_owner_else_a_placeholder():
+    from types import SimpleNamespace as Settings
+
+    assert W._subject(Settings(public_url="https://tico.acme.example", owner_email="ana@acme.example")) == (
+        "https://tico.acme.example"
+    )
+    assert W._subject(Settings(public_url="http://127.0.0.1:8765", owner_email="ana@acme.example")) == (
+        "mailto:ana@acme.example"
+    )
+    assert W._subject(Settings(public_url="http://127.0.0.1:8765", owner_email="")) == "mailto:push@localhost"
+
+
 def browser():
     """A browser's push keys: its private key (to read what it is sent) and the subscription JSON it would post."""
     private, auth = ec.generate_private_key(ec.SECP256R1()), os.urandom(16)

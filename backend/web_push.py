@@ -267,9 +267,13 @@ def _pool():
 
 
 def _subject(settings):
-    """VAPID's `sub`: the server's https address, else a mailto a push service accepts for a local install."""
+    """VAPID's `sub`, the contact a push service may use about this sender: the server's https address; on an install
+    without one, the owner's address (TICO_OWNER_EMAIL or the roster's owner); else a placeholder mailto."""
     url = str(getattr(settings, "public_url", "") or "")
-    return url if url.startswith("https://") else "mailto:push@localhost"
+    if url.startswith("https://"):
+        return url
+    owner = str(getattr(settings, "owner_email", "") or "").strip()
+    return "mailto:" + owner if re.fullmatch(r"[^@\s<>]+@[^@\s<>]+", owner) else "mailto:push@localhost"
 
 
 def _message(payload):
