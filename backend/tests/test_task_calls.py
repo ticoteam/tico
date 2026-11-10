@@ -476,6 +476,21 @@ def test_an_ask_names_only_someone_who_can_read_the_task(c):
     H.task_ask(c, BUILDER, row["id"], BEN, "Which vendor do we keep?", seen_version=_version(c, row["id"]))
 
 
+def test_a_bot_asks_only_a_person_in_its_reach_or_who_handed_it_the_task(c, monkeypatch):
+    """By default a bot reaches its manager, its reports, its peers and its team (reach.py, mode nearby). An ask is a
+    write to a person like a message is, so one outside that reach is refused and nothing is asked; the person who
+    handed the bot the task may always be asked about it."""
+    from backend import reach
+
+    monkeypatch.setenv("TICO_REACH_DEFAULT", "nearby")  # conftest starts tests open
+    row = _new(c, by=BEN, owner=BUILDER)
+    with pytest.raises(reach.Refused) as refused:
+        H.task_ask(c, BUILDER, row["id"], "human:cara", "Which vendor do we keep?", seen_version=_version(c, row["id"]))
+    assert refused.value.code == "reach_closed"
+    assert len(H.task_view(c, row["id"], BEN)["to_leave"]) == 1  # only the owner's own done
+    H.task_ask(c, BUILDER, row["id"], BEN, "Which vendor do we keep?", seen_version=_version(c, row["id"]))
+
+
 def test_a_refused_write_on_a_private_task_is_recorded_without_its_words(c):
     row = _new(c, by=BEN, owner=BUILDER, private=True)
     H.task_ask(c, BUILDER, row["id"], BEN, "Do we drop the Acme contract?", seen_version=_version(c, row["id"]))

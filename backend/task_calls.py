@@ -336,6 +336,14 @@ def task_ask(
     H = _h()
     row = _open(conn, actor, task_id, mover)
     target = H._reach(conn, actor, person)
+    if is_bot(actor):
+        # An ask writes to the one it names, so a bot's ask keeps to its reach as its messages do (reach.check: the
+        # person who handed it the task is always in it). Refused before anything is written.
+        from types import SimpleNamespace
+
+        from . import reach
+
+        reach.check(conn, SimpleNamespace(role="bot", actor=actor), target, "task", task_id=task_id)
     bring_in(conn, actor, row, target)
     if is_bot(actor) and is_human(target):
         # What a bot puts in front of a person is plain: one or two short sentences, no ids or paths (rule 7).
