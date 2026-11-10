@@ -2,6 +2,8 @@
 
 import pytest
 
+from backend import task_engine as E
+
 from backend.tests.helpers.meeting_items import record, add, items, change, headers  # noqa: F401
 from backend.tests.helpers.meeting_task_links import task, get
 from backend.tests.helpers.recorder_audience import live_meeting, readable
@@ -28,7 +30,7 @@ def test_accepting_a_closed_task_proposal_links_without_creating_a_task(api):
     )['item']
     with api.app.state.store.transaction() as c:
         before = c.execute('SELECT count(*) FROM tasks').fetchone()[0]
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (target['id'],))
+        E.move(c, target['id'], E.CLOSED, 'human:ana', 'Settled in the meeting')
     result = accept(api, rid, proposal['id'], 'cara-test', 'accept-retry')
     assert result['pushed'] and result['item']['result_ref'] == target['id']
     assert not accept(api, rid, proposal['id'])['pushed']
