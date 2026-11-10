@@ -820,9 +820,11 @@ the [Heartbeat](heartbeat.md) (`backend/stuck_cards.py`); no model is called.
   again when the limit lifts. A manager in a usage limit is woken once it is back.
 - When a card becomes stuck, its pipeline's manager bot is woken once, on the card, with the card's hold. It is asked to
   unblock, reassign, split or close the card and to leave one line saying which. It is not woken again until the card
-  moves and gets stuck again (a new spell, one row of `stuck_spells`). The exception is the Head of Engineering: it
-  runs on its hourly schedule (and when a person asks), so a stuck card is never a wake for it. The card stays stuck
-  and visible to its sweep, which is how the Head of Engineering hears of it.
+  moves and gets stuck again (a new spell, one row of `stuck_spells`). The exception is the Head of Engineering: it is
+  never woken for a stuck card. Its stuck cards are listed on its task roundup instead, on each pipeline it manages: a
+  STUCK line, relisted every 7 days while the card stays stuck, and the answer to a question a person has answered about
+  the card, listed once. The roundup is [Maintenance's Find stuck step](maintenance.md), on its saved schedule (every 6
+  hours by default), so a stuck card reaches the Head up to one interval after it is marked stuck.
 - Still stuck after 24 hours: the pipeline's owner (else the company owner) gets one question on their Needs you, a
   subtask of the card asked by Tico. One question per card, ever. When it is answered or expires, the manager hears the
   answer once, on the card.

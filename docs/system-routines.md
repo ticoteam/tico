@@ -130,7 +130,7 @@ The jobs that must happen within seconds (due times, recovery and outside polls)
 
 | Job | What it does | Default schedule | Only when |
 |---|---|---|---|
-| **Heartbeat** | Runs its steps in one short beat: due reminders, snooze ends, updates, digests, ask go-ahead and approval expiry; stall checks, [stuck cards](tasks.md#stuck-cards) (for the Head of Engineering a stuck card reaches its hourly sweep, not a wake), the turn fixer, run housekeeping and the other recovery checks; GitHub sync, repository waits and personal alerts. See [Heartbeat](heartbeat.md). | Every 10 seconds, or the interval set there |  |
+| **Heartbeat** | Runs its steps in one short beat: due reminders, snooze ends, updates, digests, ask go-ahead and approval expiry; stall checks, [stuck cards](tasks.md#stuck-cards) (for the Head of Engineering a stuck card is listed on its task roundup, Find stuck's list, not a wake), the turn fixer, run housekeeping and the other recovery checks; GitHub sync, repository waits and personal alerts. See [Heartbeat](heartbeat.md). | Every 10 seconds, or the interval set there |  |
 | **Start assigned tasks** | Starts eligible assigned work on a free computer turn; respects task caps, usage holds, and computer capacity. Each start is one run. | When a turn is free | |
 | **Stale ticket review** (AI) | Finds open tasks that look finished or forgotten and suggests to each owner what to do. See [Stale ticket review](tasks.md#stale-ticket-review). | Hourly |  |
 | **KPI stale asks** | Asks a KPI's keeper for a reading when it goes out of date, and a goal's owner when a KPI goes off track. | Hourly |  |

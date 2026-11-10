@@ -3,7 +3,7 @@ list of the tasks it needs to look at. Plain code: no model is called and no Bot
 place Tico tells a bot about its tasks on a schedule: the per-task wakes of the stall watcher, the check-backs, the late
 notices, the backlog warnings, the exceptions lines, the still-needed batch and the assigned-start
 recovery are all lines here now.
-Its schedule is a setting; the default is three times a day, at 6am, noon and 6pm company time.
+Its schedule is Maintenance's Find stuck step (docs/maintenance.md): every 6 hours by default, or the saved schedule.
 
 A bot's list has these lines, in this order, MAX_LINES in all (the rest are counted), one line per task:
 - a follow-up time that has come, set by a person or a bot (below);
@@ -17,6 +17,8 @@ A bot's list has these lines, in this order, MAX_LINES in all (the rest are coun
   RELIST_DAYS;
 - an engineering exception on a manager's list that reads the exceptions list (backend/pipeline_exceptions.py), relisted
   after RELIST_DAYS;
+- a stuck card on the Head of Engineering's list (backend/stuck_cards.py head_spells): its open stuck cards, relisted
+  after RELIST_DAYS while the card is stuck, and the answer to its question to a person, listed once (STUCK);
 - a step's backlog over its limit (backend/step_backlog.py), on each bot it names, on the oldest ticket waiting there,
   relisted after the step's every_hours;
 - a missed update, then a quiet task, on a task the bot owns (below).
@@ -49,13 +51,14 @@ task a person owns is on no bot's list. A date a snooze left behind is not a fol
 force hides the task (task_snooze.snoozed) until it ends.
 A held queued job does not hide a due follow-up.
 
-A private task is listed as "a private task <id>", without its title, its follow-up's who and note, its step, or what changed:
-only that a follow-up time has come, that it has an update, that it has gone quiet, or the bare fact of a line. A bot whose
-profile has its sweeps off (rules.sweeps_on: a reviewer, lead, responder or monitor) is listed its unanswered questions and
-its own follow-up times only: never an idle, late, exception or assigned line. The one exception is a backlog line for
-the type it manages (step_backlog's `manager` target): the team lead hears of its own board's backlog with sweeps off. A
-manager and a doer get all of them. A late ticket or an exception is listed only where its bot reads the task (H.bot_reads_task). Only bots are listed:
-a person a line would name is never told by the roundup.
+A private task is listed as "a private task <id>", without its title, its follow-up's who and note, its step, or what
+changed: only that a follow-up time has come, that it has an update, that it has gone quiet, or the bare fact of a line.
+A bot whose profile has its sweeps off (rules.sweeps_on: a reviewer, lead, responder or monitor) is listed its
+unanswered questions, its own follow-up times and, when it is the Head of Engineering, its stuck cards (STUCK): never an
+idle, late, exception or assigned line. The one exception is a backlog line for the type it manages (step_backlog's
+`manager` target): the team lead hears of its own board's backlog with sweeps off. A manager and a doer get all of them.
+A late ticket or an exception is listed only where its bot reads the task (H.bot_reads_task). Only bots are listed: a
+person a line would name is never told by the roundup.
 
 A bot is sent at most one list per run: registry_metadata `task_roundup:<slug>` holds the run's time it was last sent a
 list, and a bot already sent one since this run's time gets nothing more, so the roundup works at any cadence. Each line's
@@ -100,7 +103,7 @@ DELIVERED_JOBS = (
     "completed",
 )  # a job that reached its bot: a turn on the task started
 # The lines' order on a list (a group sorts its own lines; a missed update newest first).
-DUE, ASKS, ASSIGNED, START, STOPPED, LATE, EXCEPTIONS, BACKLOG, BLOCKED, MISSED, QUIET = range(11)
+DUE, ASKS, ASSIGNED, START, STOPPED, LATE, EXCEPTIONS, STUCK, BACKLOG, BLOCKED, MISSED, QUIET = range(12)
 # The changes to a task itself. Anything else a history row records (check-backs, rank, checkpoints) is bookkeeping.
 # "waiting_on" is the stored wait before step 6b, still in older history.
 TASK_KINDS = ("status", "owner", "step", "waiting_on", "due", "title", "body", "acceptance")
@@ -135,7 +138,7 @@ def run(c, at=None):
 def _candidates(c, at, shared):
     """The bots a list could name this run: each that owns a live task, and each a shared line names (a late ticket's
     manager, an exception's manager, a backlog's targets, a question's asker). Any other bot has no line to list."""
-    from . import still_needed, step_age, step_backlog
+    from . import still_needed, stuck_cards, step_age, step_backlog
 
     actors = {
         row[0]
@@ -156,6 +159,7 @@ def _candidates(c, at, shared):
     actors |= stranded_resume.told(c, at)
     actors |= {H.bot_actor(manager) for _, manager in _shared(shared, "types", lambda: _engineering_types(c))}
     actors |= {H.bot_actor(slug) for slug in _shared(shared, "blocked", lambda: _blocked_waits(c, at))}
+    actors |= {H.bot_actor(slug) for slug in _shared(shared, "stuck", lambda: stuck_cards.head_bots(c))}
     actors |= {
         who for warning in _shared(shared, "backlog", lambda: step_backlog.warnings(c)) for who in warning["targets"]
     }
@@ -415,7 +419,9 @@ def _items(c, slug, at, shared, skip_tasks=(), *, allowed=None):
         if sweeping
         else _backlogs(c, slug, actor, at, shared, managed_only=True)
     )
-    found = _asks_back(c, slug, actor, at) + _resume_stops(c, slug, actor, at) + sweep_lines
+    found = (
+        _asks_back(c, slug, actor, at) + _resume_stops(c, slug, actor, at) + _stuck(c, slug, actor, at) + sweep_lines
+    )
     # A card On ice (D69) wakes no bot, whichever line would name it: a question sent back, a stop, a backlog, a blocker.
     parked = H.on_ice_ids(c, {item["tid"] for _, _, item in found})
     for group, sort, item in found:
@@ -766,6 +772,51 @@ def _exceptions(c, slug, actor, at, shared):
                 line, tid = f"- {subject}: {entry['cause']}, since {since}", None
             out.append((EXCEPTIONS, entry["since"], _item(tid, line, key)))
     return out
+
+
+def _stuck(c, slug, actor, at):
+    """The Head of Engineering's stuck cards (backend/stuck_cards.py head_spells), on its list in place of a wake. A
+    stuck card is relisted after RELIST_DAYS while it stands; the question it put to a person is listed once, when it
+    closes."""
+    from . import stuck_cards
+
+    out = []
+    for row in stuck_cards.head_spells(c, slug):
+        if not H.task_private_readable(c, actor, row):
+            continue
+        closed = row["question_status"] is not None and row["question_status"] not in H.ACTIVE_STATUSES
+        key = _key("stuck", slug, f"{row['spell_id']}:{row['question_status'] if closed else ''}")
+        if closed and _mark(c, key) is not None:
+            continue
+        if not closed and not _stale(c, key, at, timedelta(days=RELIST_DAYS)):
+            continue
+        private = H.task_private(c, row)
+        reason = _stuck_reason(c, row, closed, at, private)
+        out.append((STUCK, row["stuck_since"], _item(row["id"], _line(row, reason, private), key)))
+    return out
+
+
+def _stuck_reason(c, row, closed, at, private):
+    """A stuck card's reason on the Head's list: how long it has stood still, or what came of its question to a person.
+    A private card's names no person, text or hold (its line is the id alone)."""
+    from . import stuck_cards
+
+    began, now = H.parse_ts(row["stuck_since"]), H.parse_ts(at)
+    span = _span((now - began).total_seconds() / 3600 if began and now else 0)
+    if row["question_status"] is None:  # no question to a person: the card stands on its own
+        hold = "" if private else _clip(row["hold_reason"], ASK_CHARS).rstrip(".")
+        return f"Stuck {span} with no progress" + (f". Hold: {hold}." if hold else ".")
+    name = None if private or not row["person_id"] else H.person_name(c, H.actor_id(row["person_id"]))
+    to = f" to {name}" if name else ""
+    if not closed:
+        return f"Stuck {span}. A question{to} is open."
+    answered, said = stuck_cards.answer_of(H.task(c, row["question_task_id"]))
+    if not answered:
+        return f"The question{to} about this card closed with no answer. Decide it yourself."
+    if private:
+        return "The question about this card was answered. Act on it."
+    said = stuck_cards.sentence(_clip(said or row["question_status"], ASK_CHARS))
+    return f"{name or 'A person'} answered: {said} Act on it."
 
 
 def _engineering_types(c):

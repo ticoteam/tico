@@ -6,8 +6,9 @@ from backend import ask_deadlines
 from backend import bot_settings as BS
 from backend import hubdb as H
 from backend import question_tasks as QT
-from backend import stuck_cards
+from backend import stuck_cards, task_roundup
 from backend.tests.helpers.api import get, headers
+from backend.tests.helpers.task_roundup import lists, only_list
 
 ANA = "human:ana"
 STAGES = [
@@ -63,7 +64,7 @@ def test_the_head_of_engineering_is_not_woken_for_a_stuck_card_but_the_card_stay
         assert stuck_cards.sweep(c, later(5))["woken"] == []
         assert stuck_cards.sweep(c, later(9))["woken"] == []  # still stuck, still no wake
         assert wakes(c, row["id"], "bot:ops") == []
-        # The spell stays open, so the card is listed on the Head of Engineering's sweep.
+        # The spell stays open, so the card is listed on the Head of Engineering's task roundup (its STUCK line).
         open_spells = c.execute(
             "SELECT COUNT(*) FROM stuck_spells WHERE task_id=? AND ended_at IS NULL", (row["id"],)
         ).fetchone()[0]
@@ -173,6 +174,61 @@ def test_the_head_of_engineering_is_not_woken_when_a_stuck_question_is_answered(
         assert stuck_cards.sweep(c, later(31))["relayed"] == []
         assert wakes(c, row["id"], "bot:ops") == []
         assert stuck_cards.sweep(c, later(32))["relayed"] == []
+
+
+def test_the_head_of_engineering_lists_a_stuck_card_once_on_its_task_roundup_and_again_after_seven_days(api):
+    with api.app.state.store.transaction() as c:
+        BS.update(c, "ops", {"template": "engineering-lead"})
+        pid = pipeline(c, "Dev", manager="ops")
+        row = card(c, pid)
+        assert stuck_cards.sweep(c, later(5))["woken"] == []
+        assert "ops" in task_roundup.run(c, later(5))["woke"]
+        body = only_list(c, "ops")
+        assert "- " in body and "Ship the launch page" in body and "Stuck 5 h with no progress." in body
+        assert "ops" not in task_roundup.run(c, later(6))["woke"], "listed once: not again the next run"
+        assert "ops" in task_roundup.run(c, later(5 + 7 * 24))["woke"], "still stuck after seven days: listed again"
+        assert "Stuck 7 days with no progress." in lists(c, "ops")[-1]
+        assert wakes(c, row["id"], "bot:ops") == []
+
+
+def test_the_head_of_engineering_is_told_a_stuck_questions_answer_on_its_roundup_once(api):
+    with api.app.state.store.transaction() as c:
+        BS.update(c, "ops", {"template": "engineering-lead"})
+        pid = pipeline(c, "Dev", manager="ops")
+        row = card(c, pid)
+        stuck_cards.sweep(c, later(5))
+        assert stuck_cards.sweep(c, later(25))["asked"] == [row["id"]]
+        [question] = questions(c, row["id"])
+        QT.record(c, question["id"], {"by": ANA, "text": "Give it to Ben."})
+        H.task_update(c, ANA, question["id"], status="done", note="Give it to Ben.")
+        assert stuck_cards.sweep(c, later(31))["relayed"] == []
+        assert wakes(c, row["id"], "bot:ops") == []
+        assert "ops" in task_roundup.run(c, later(31))["woke"]
+        assert "Ana answered: Give it to Ben. Act on it." in only_list(c, "ops")
+        assert "ops" not in task_roundup.run(c, later(32))["woke"], "the answer is listed once"
+
+
+def test_the_head_of_engineering_is_told_a_stuck_question_closed_with_no_answer_on_its_roundup(api):
+    with api.app.state.store.transaction() as c:
+        BS.update(c, "ops", {"template": "engineering-lead"})
+        pid = pipeline(c, "Dev", manager="ops")
+        row = card(c, pid)
+        stuck_cards.sweep(c, later(5))
+        stuck_cards.sweep(c, later(25))
+        [question] = questions(c, row["id"])
+        at = H.shift(H.now(), days=8)  # past the question's seven days: it expires with no answer
+        assert question["id"] in ask_deadlines.sweep(c, at)["expired"]
+        assert "ops" in task_roundup.run(c, at)["woke"]
+        assert "The question to Ana about this card closed with no answer. Decide it yourself." in only_list(c, "ops")
+
+
+def test_a_manager_that_is_not_the_head_of_engineering_gets_no_stuck_line_on_its_roundup(api):
+    with api.app.state.store.transaction() as c:
+        pid = pipeline(c)  # manager: coo
+        row = card(c, pid)
+        assert stuck_cards.sweep(c, later(5))["woken"] == [row["id"]]
+        task_roundup.run(c, later(5))
+        assert not any("Stuck" in body for body in lists(c, "coo"))
 
 
 def test_pipeline_settings_set_the_hours_and_unset_ones_use_the_defaults(api):

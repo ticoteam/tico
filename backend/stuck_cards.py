@@ -15,7 +15,8 @@ A pipeline rule for every pipeline that has a manager bot (task_types.manager). 
 - At stuck: the pipeline's manager bot is woken once for the stuck spell, on the card, with its hold, and asked to unblock,
   reassign, split or close it and to leave one line saying which. A spell is one row of `stuck_spells`; it ends when the
   card makes progress, finishes or leaves the pipeline. The manager's own comments do not end it, so it is not woken
-  again for the same spell.
+  again for the same spell. The Head of Engineering (HEAD_OF_ENGINEERING) is never woken: its task roundup lists its
+  stuck cards and the answers to their questions (head_spells, backend/task_roundup.py `_stuck`).
 - Still stuck at `ask_person_after_hours` (default ASK_PERSON_AFTER_HOURS): one question to the pipeline's owner (else the
   company owner) on their Needs you, a subtask of the card, asked by Tico. One per card, ever. When it is answered or
   expires, the manager hears the answer once on the card.
@@ -257,15 +258,46 @@ def _hours(since: str, at: str) -> int:
     return max(0, int((now - began).total_seconds() // 3600)) if began and now else 0
 
 
-# The Head of Engineering's templates (backend/idea_triage.py engineering_bot). It runs on its schedule, and a stuck card
-# reaches it on that sweep, so a stuck card is never a wake for it (docs/tasks.md, Stuck cards).
+# The Head of Engineering's templates (backend/idea_triage.py engineering_bot). A stuck card is never a wake for it: it
+# reads its stuck cards, and the answers to their questions, on its task roundup list (head_spells, docs/tasks.md).
 HEAD_OF_ENGINEERING = ("engineering-lead", "engineering-team-manager")
 
 
 def hears_on_sweep(c: "sqlite3.Connection", manager: str) -> bool:
-    """True when the manager is the Head of Engineering: a stuck card is left to its hourly sweep, with no wake."""
+    """True when the manager is the Head of Engineering: a stuck card is listed on its task roundup, with no wake."""
     row = c.execute("SELECT template FROM bot_settings WHERE bot_id=?", (manager,)).fetchone()
     return bool(row) and row[0] in HEAD_OF_ENGINEERING
+
+
+def head_spells(c: "sqlite3.Connection", bot: str) -> list[Row]:
+    """The stuck spells the Head of Engineering `bot` lists on its task roundup (task_roundup.py `_stuck`): every
+    open spell on a live card in a pipeline it manages, and a spell whose question to a person has closed while its card
+    is still live (the answer, or none). Each row is the card (all its columns) with `spell_id`, `stuck_since`,
+    `hold_reason`, `person_id`, `question_task_id` and `question_status` (None when no question was asked)."""
+    if not hears_on_sweep(c, bot):
+        return []
+    managed = [p["id"] for p in _pipelines(c) if PM.manager_bot(c, p) == bot]
+    if not managed:
+        return []
+    live = ",".join("?" * len(H.ACTIVE_STATUSES))
+    pipes = ",".join("?" * len(managed))
+    return H._rows(
+        c.execute(
+            "SELECT t.*, s.id AS spell_id, s.stuck_since, s.hold_reason, s.person_id, s.question_task_id, "
+            "q.status AS question_status FROM stuck_spells s JOIN tasks t ON t.id=s.task_id "
+            "LEFT JOIN tasks q ON q.id=s.question_task_id "
+            f"WHERE s.pipeline_id IN ({pipes}) AND t.status IN ({live}) "
+            f"AND (s.ended_at IS NULL OR (q.id IS NOT NULL AND q.status NOT IN ({live}))) "
+            "ORDER BY s.stuck_since, s.id",
+            (*managed, *H.ACTIVE_STATUSES, *H.ACTIVE_STATUSES),
+        )
+    )
+
+
+def head_bots(c: "sqlite3.Connection") -> set[str]:
+    """The Head of Engineering bots that head_spells would list something for: the task roundup's candidates."""
+    managers = {PM.manager_bot(c, p) for p in _pipelines(c)}
+    return {bot for bot in managers if bot and head_spells(c, bot)}
 
 
 def _wake_manager(c: "sqlite3.Connection", card: Row, manager: str, spell: Row, at: str) -> bool:
@@ -341,6 +373,19 @@ def _asked_before(c: "sqlite3.Connection", task_id: str) -> bool:
     return found is not None
 
 
+def sentence(text: str) -> str:
+    """The text as one sentence: it keeps its own stop, or gets a full stop."""
+    return text if text.endswith((".", "!", "?")) else text + "."
+
+
+def answer_of(question: Row | None) -> tuple[bool, str]:
+    """Whether a person answered a stuck question (the keeper closing it with no answer does not count), and the text
+    they gave, else the question's note. Shared by the relay wake and the Head of Engineering's list."""
+    answer: Row = (QT.fields(question).get("answer") or {}) if question else {}
+    said = str(answer.get("text") or (question or {}).get("note") or "").strip()
+    return bool(answer) and answer.get("by") != H.KEEPER, said
+
+
 def _relay(c: "sqlite3.Connection", at: str, done: dict[str, list[str]]) -> None:
     """A stuck question that was answered or expired: its pipeline's manager hears the answer once, on the card."""
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
@@ -359,14 +404,13 @@ def _relay(c: "sqlite3.Connection", at: str, done: dict[str, list[str]]) -> None
         if not card or card["status"] not in H.ACTIVE_STATUSES or not manager:
             continue
         if hears_on_sweep(c, manager):
-            continue  # the answer is on the question task, and the Head of Engineering reads it on its sweep
-        answer: Row = (QT.fields(question).get("answer") or {}) if question else {}
-        said = str(answer.get("text") or (question or {}).get("note") or "").strip()
+            continue  # no wake: the Head's task roundup lists the answer (head_spells reads the question)
+        answered, said = answer_of(question)
         name = H.person_name(c, H.actor_id(spell["person_id"])) if spell.get("person_id") else "The person"
-        if not answer or answer.get("by") == H.KEEPER:
+        if not answered:
             text = f"Stuck: {card['title']}\nThe question to {name} about this card closed with no answer. Decide it yourself."
         else:
-            text = f"Stuck: {card['title']}\n{name} answered: {said or spell['question_status']}. Act on it."
+            text = f"Stuck: {card['title']}\n{name} answered: {sentence(said or spell['question_status'])} Act on it."
         if H._wake(
             c, card, H.bot_actor(manager), text, {"wake": STEP}, trigger="schedule", source="stuck_cards.answer"
         ):
