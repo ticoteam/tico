@@ -17,7 +17,6 @@ lists it as changed). A change keeps the entry where it is: one task with the wh
 removal followed by an add.
 """
 
-
 from fastapi import Request
 
 from clients import access_entry, harness_manifests, mcp_servers
