@@ -179,9 +179,10 @@ def test_obsolete_notice_is_canceled_even_when_idle_claim_finds_no_candidate(api
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (notice["id"],)).fetchone()[0] == "canceled"
 
 
-def test_a_notice_a_person_caused_on_a_finished_task_leaves_idle_claims_read_only(api, monkeypatch):
-    """The claim keeps it (it owes that person an answer), so the idle claim must not count it as one to cancel: it did,
-    and every claim from that computer took the write lock while the bot waited out a usage limit."""
+def test_a_notice_a_person_caused_on_a_finished_task_is_canceled_once_and_idle_claims_stay_read_only(api, monkeypatch):
+    """Nothing wakes a bot about a Done task, a person-caused Tico notice included (obsolete_notices_sql): the first
+    claim cancels it. Every claim after that, while the bot waits out a usage limit, answers on the read connection:
+    a notice the claim keeps queued must never send each claim from that computer to the write lock."""
     machine, task, original = task_attempt(api)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='completed',finished_at=? WHERE id=?", (H.now(), original["id"]))
@@ -198,12 +199,13 @@ def test_a_notice_a_person_caused_on_a_finished_task_leaves_idle_claims_read_onl
         )
         W.tick(c, H.shift(H.now(), minutes=2))
         c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
+    assert claim(api, machine) is None
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (notice["id"],)).fetchone()[0] == "canceled"
     wrote = []
     monkeypatch.setattr(api.app.state.execution, "claim", lambda *a, **k: wrote.append(1) or {"attempt": None})
     assert claim(api, machine) is None
     assert not wrote  # answered on the read connection
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (notice["id"],)).fetchone()[0] == "queued"
 
 
 @pytest.mark.parametrize("cause", ["stop", "done", "closed"])
