@@ -206,6 +206,33 @@ def test_a_run_whose_task_changed_between_its_claim_and_its_start_never_starts(a
             assert not c.execute("SELECT 1 FROM jobs WHERE state='queued' AND bot_id='ops'").fetchone(), change
 
 
+def test_a_live_run_on_one_task_never_hides_a_lost_wake_on_another_in_the_same_conversation(c, general):
+    """Two open tasks share a conversation. The builder's live run on the footer task is not a run on the launch note:
+    the note's wake that never ran is lost, and the never-stuck check wakes the builder for it again."""
+    from backend import never_stuck as NS
+    from backend import task_engine as E
+
+    first = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    second = X.new_task(c, ANA, "Fix the footer", assignee=BUILDER)
+    c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (first["conversation_id"], second["id"]))
+    c.execute(
+        "UPDATE messages SET conversation_id=? WHERE wake_key LIKE ?", (first["conversation_id"], second["id"] + ":%")
+    )
+    X.ran(c, second["id"], BUILDER, state="running")  # under way on the footer, its lease renewed
+    c.execute(
+        "UPDATE attempts SET finished_at=NULL, lease_until=? WHERE task_id=?",
+        (H.shift(H.now(), minutes=5), second["id"]),
+    )
+    c.execute(
+        "UPDATE jobs SET state='running' WHERE attempt_id IN (SELECT id FROM attempts WHERE task_id=?)", (second["id"],)
+    )
+    c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")  # the launch note's start never ran: lost
+    first, second = E.task(c, first["id"]), E.task(c, second["id"])
+    assert task_wakes.live_run(c, second, BUILDER) and not task_wakes.live_run(c, first, BUILDER)
+    NS.check(c, H.shift(H.now(), seconds=10))
+    assert _queued(c, first["id"]) == [BUILDER]  # woken again for the note
+
+
 def _chat_run(c, conversation_id, bot):
     """A run of `bot` on a message in a conversation that names no task: a person wrote to it there."""
     message, run = H.new_id(), H.new_id()

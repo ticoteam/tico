@@ -280,19 +280,29 @@ def live_run(
 ) -> bool:
     """This bot has a run on this task whose computer still checks in. A run is live only while its lease is renewed
     (every 90 seconds at most): one that is held, cut off or lost is over. `live` is `live_bots` read at the same
-    `now`: a bot not in it has no live run on any task."""
+    `now`: a bot not in it has no live run on any task. A run is on the task as `_ON_TASK` says: a run in the task's
+    conversation counts only when it names no task and no other open task has that conversation, so a run on another
+    task there never hides this one's lost wake."""
     H = _h()
     if not H.is_bot(actor):
         return False
     if live is not None and H.actor_id(actor) not in live:
         return False
+    on_task = _on_task(conn, task)
     return bool(
         conn.execute(
             "SELECT 1 FROM (SELECT m.id FROM messages m WHERE "
             f"{_KEY} UNION SELECT id FROM messages WHERE conversation_id = ?) w "
             "CROSS JOIN jobs j ON j.message_id = w.id JOIN attempts a ON a.id = j.attempt_id "
-            "WHERE j.bot_id=? AND a.state IN ('leased', 'running') AND a.lease_until > ? LIMIT 1",
-            (*_range(task["id"]), task.get("conversation_id") or "", H.actor_id(actor), now or H.now()),
+            "JOIN messages m ON m.id = w.id "
+            f"WHERE j.bot_id=? AND a.state IN ('leased', 'running') AND a.lease_until > ? AND {_ON_TASK} LIMIT 1",
+            (
+                *_range(task["id"]),
+                on_task[-1] if on_task[-2] else "",  # the conversation's messages, only when it is this task's alone
+                H.actor_id(actor),
+                now or H.now(),
+                *on_task,
+            ),
         ).fetchone()
     )
 
