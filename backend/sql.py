@@ -750,6 +750,8 @@ SETS = (
     "denied_reads",
 )
 RUN_EVENTS = "('task.next-run.carried','attempt.input.moved')"
+# Replied-to messages whose file refusal a settled row checks in SQL (materialize's reply_pages).
+REPLY_LEVELS = 3
 
 
 class Gates:
@@ -769,8 +771,8 @@ class Gates:
 
     KEYS = ("task", "task_id", "turn_id", "run", "attempt_id", "answers", "inputs")
 
-    def __init__(self, inner, private, denied):
-        self.inner, self.denied = inner, bool(denied)
+    def __init__(self, inner, private, denied, page):
+        self.inner, self.denied, self.page = inner, bool(denied), page
         self.tasks, self.messages = '"' + private("known_tasks") + '"', inner("messages")
         self.denied_tasks = '"' + private("denied_tasks") + '"'
         self.rooms = '"' + private("unreadable_rooms") + '"'
@@ -843,11 +845,13 @@ class Gates:
         return f"{checked}WHEN {direct} THEN 1 WHEN {inherited} THEN 1 ELSE 0 END"
 
     def root(self, alias):
-        """A message settled by its own row: no parent, answers or inputs, and (unread here) no run."""
+        """A message settled by its own row: no parent, answers or inputs, its file references readable, and (unread
+        here) no run. Its file check is ReadIndex.message's own-refs check, so a parent with a refused file is not a yes."""
         # Preserve CASE's false result for NULL comparisons under the negated root checks in message/attempt.
         return (
             f"(coalesce({alias}.in_reply_to,'')='' AND coalesce({alias}.conversation_id NOT IN "
-            f"(SELECT id FROM {self.rooms}),0) AND {self.refs(alias + '.refs', top=False)})"
+            f"(SELECT id FROM {self.rooms}),0) AND {self.refs(alias + '.refs', top=False)} "
+            f"AND {self.page(alias + '.refs')})"
         )
 
     def message(self, alias="source"):
@@ -931,7 +935,20 @@ def materialize(conn, index, tables, inner, function, private):
         "denied_reads",
         f"SELECT key FROM main.read_deps WHERE dep IN (SELECT 't:'||id FROM \"{private("denied_tasks")}\")",
     )
-    gates = Gates(inner, private, index.denied)
+    page = function("page_message") + "(refs)"
+
+    def page_gate(refs):
+        """The file check for one row's refs. A page review can narrow a message independently of task/run provenance.
+        Only these top-level keys enter that check; escaped keys and every non-object keep Python's JSON parsing and
+        page permissions."""
+        no_page = " AND ".join(f"instr({refs},'\"{key}\"')=0" for key in privacy.PAGE_MESSAGE_KEYS)
+        return (
+            f"(CASE WHEN coalesce({refs},'') IN ('','{{}}') THEN 1 WHEN json_valid({refs}) "
+            f"AND json_type({refs})='object' AND instr({refs},'\\')=0 AND {no_page} THEN 1 "
+            f"ELSE {function('page_message')}({refs}) END)"
+        )
+
+    gates = Gates(inner, private, index.denied, page_gate)
     # Task-only refs repeat across a room's history. Validate the compact and spaced object encodings once per
     # task, without reading message history; every other encoding or shape keeps the ordinary refs gate.
     task_refs = gates.refs("json_object('task',id)", top=False, cached=False)
@@ -944,35 +961,60 @@ def materialize(conn, index, tables, inner, function, private):
     create("plain_refs", allowed + objects)
     message = function("message") + "(id,conversation_id,refs,in_reply_to)"
     attempt = function("attempt") + "(id)"
-    page = function("page_message") + "(refs)"
-    # A page review can narrow a message independently of task/run provenance. Only these top-level keys enter
-    # that check; escaped keys and every non-object keep Python's JSON parsing and page permissions.
-    no_page = " AND ".join(f"instr(refs,'\"{key}\"')=0" for key in privacy.PAGE_MESSAGE_KEYS)
-    page_gate = (
-        f"(CASE WHEN coalesce(refs,'') IN ('','{{}}') THEN 1 WHEN json_valid(refs) "
-        f"AND json_type(refs)='object' AND instr(refs,'\\')=0 AND {no_page} THEN 1 ELSE {page} END)"
-    )
 
-    def settled(prefix):
-        """A settled row that touched no denied task is read at once; any other row keeps the gate and its walk."""
+    def reply_pages(alias):
+        """ReadIndex.reply_pages in SQL: the first REPLY_LEVELS messages on `alias`'s in_reply_to chain have no refused
+        file, and the chain ends within them. A longer chain is not settled here, so Python reads it. Unrolled rather
+        than recursive: SQLite names a recursive CTE as the view context and the authorizer refuses its column reads."""
+        levels, expr = [], f"{alias}.in_reply_to"
+        for _ in range(REPLY_LEVELS):
+            levels.append(expr)
+            expr = f"(SELECT q.in_reply_to FROM {inner('messages')} q WHERE q.id={expr})"
+        checks = [
+            f"NOT EXISTS (SELECT 1 FROM {inner('messages')} p WHERE p.id={level} AND NOT {page_gate('p.refs')})"
+            for level in levels
+        ]
+        return f"({' AND '.join(checks)} AND coalesce({expr},'')='')"
+
+    def settled(prefix, pages=None):
+        """A settled row that touched no denied task is read at once; any other row keeps the gate and its walk.
+        Settled provenance does not see file references, so `pages` (when given) also has to hold."""
         key = f"'{prefix}:'||source.id"
         return (
             f"{key} IN (SELECT key FROM {inner('read_index')}) AND {key} NOT IN "
-            f'(SELECT id FROM "{private("denied_reads")}")'
+            f'(SELECT id FROM "{private("denied_reads")}")' + (f" AND {pages}" if pages else "")
         )
+
+    # A message is settled with its replied-to messages' file refusals checked here (ReadIndex.reply_pages). A run
+    # is settled with its message's and inputs' messages' file refusals checked (ReadIndex.attempt_pages).
+    message_pages = f"(coalesce(source.in_reply_to,'')='' OR {reply_pages('source')})"
+    run_messages = (
+        f"SELECT 1 FROM {inner('attempts')} run JOIN {inner('jobs')} job ON job.id=run.job_id "
+        f"JOIN {inner('messages')} root ON root.id=job.message_id WHERE run.id=source.id"
+    )
+    run_inputs = (
+        f"SELECT 1 FROM {inner('attempt_inputs')} input JOIN {inner('messages')} root "
+        f"ON root.id=input.message_id WHERE input.attempt_id=source.id"
+    )
+    root_pages = f"{page_gate('root.refs')} AND (coalesce(root.in_reply_to,'')='' OR {reply_pages('root')})"
+    attempt_pages = (
+        f"NOT EXISTS ({run_messages} AND NOT ({root_pages})) AND NOT EXISTS ({run_inputs} AND NOT ({root_pages}))"
+    )
 
     # CASE evaluates only the chosen branch. A fast yes skips the Python callback altogether; OR can evaluate
     # the function first, and passing the fast answer to a function still calls Python for every history row.
     return {
         table: (
             predicate.replace(
-                message, f"(CASE WHEN {settled('m')} THEN 1 WHEN {gates.message()} THEN 1 ELSE {message} END)"
+                message,
+                f"(CASE WHEN {settled('m', message_pages)} THEN 1 WHEN {gates.message()} THEN 1 ELSE {message} END)",
             )
             .replace(
                 attempt,
-                f"(CASE WHEN {settled('a')} THEN 1 WHEN {gates.attempt('source.id')} THEN 1 ELSE {attempt} END)",
+                f"(CASE WHEN {settled('a', attempt_pages)} THEN 1 WHEN {gates.attempt('source.id')} THEN 1 "
+                f"ELSE {attempt} END)",
             )
-            .replace(page, page_gate),
+            .replace(page, page_gate("refs")),
             hidden,
         )
         for table, (predicate, hidden) in tables.items()
