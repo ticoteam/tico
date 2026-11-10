@@ -20,7 +20,7 @@ import threading
 from dataclasses import replace
 from contextlib import suppress
 from types import SimpleNamespace
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import quote as quote_path
 from xml.sax.saxutils import escape
 
@@ -321,7 +321,7 @@ def freeze_sources(c, ident):
     )
 
 
-def get(c, auth, who, ident, *, metadata=False):
+def get(c, auth, who, ident, *, metadata=False) -> dict[str, Any]:
     row = c.execute("SELECT * FROM letters WHERE id=?", (ident,)).fetchone()
     level = record_access(c, auth, who, row) if row else None
     if level is None or (level != "full" and not metadata):
@@ -757,10 +757,13 @@ class Letters:
         """Ask for an OK of this letter as quoted now, on its task (or a task of its own)."""
         if row["approval_id"]:
             task_asks.withdraw(c, row["approval_id"], "Quoted again")
+        person = self.approver(c, row)
+        if not person:
+            raise Problem("no_approver", "Nobody can OK this letter: the company has no owner on the team", 409)
         asked = task_asks.ask_ok(
             c,
             row["requested_by"],
-            self.approver(c, row),
+            person,
             "Mail this letter?",
             shows=["letter:" + row["id"]],
             subject=SUBJECT + row["id"],
@@ -923,7 +926,7 @@ class Letters:
                             # The new quote is not what was OK'd (another proof or total): it needs its own OK.
                             self.ask(c, row)
                             return
-                        if not self.may_ok(c, found["ok_by_id"], row):
+                        if not found or not self.may_ok(c, found["ok_by_id"], row):
                             raise Problem("forbidden", "Whoever OK'd this letter may no longer approve it", 403)
                     elif self.needs_approval(c, row, mode):
                         self.ask(c, row)

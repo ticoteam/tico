@@ -11,13 +11,13 @@ from backend.tests.helpers.api import get, headers, post
 from backend.tests.helpers.company import with_strategy_bot
 from backend.tests.helpers.org_rules import rule
 from backend.tests.helpers.strategy_bot_level import level
-from backend.tests.test_org_rule_check import (  # noqa: F401 - fixtures
+from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     COLOR,
     LAUNCH,
-    _not_a_friday,
     hand_over,
     color_rule,
     hold_row,
+    not_a_friday,
     ruled,
     sql,
     task_for_ops,

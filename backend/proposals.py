@@ -54,7 +54,9 @@ def _parse(kind, payload):
         return found
     except ValidationError as exc:
         first = exc.errors()[0]
-        raise Problem("validation", f"{kind} payload: {'.'.join(map(str, first['loc']))}: {first['msg']}", 422) from None
+        raise Problem(
+            "validation", f"{kind} payload: {'.'.join(map(str, first['loc']))}: {first['msg']}", 422
+        ) from None
 
 
 def check(c, kind, payload):
@@ -172,6 +174,8 @@ def ok_given(c, grant, ctx):
         raise Problem("approval", "A proposal is OK'd from its preview in Tico", 409)
     content = grant["content"] or {}
     kind = content.get("kind")
+    if kind not in APPLY:
+        raise Problem("approval", "This OK names no change Tico knows", 409)
     change = content.get("change") or {}
     words = APPLY[kind](c, auth, getattr(ctx, "settings", None), who, grant["requirement_id"], _parse(kind, change))
     task_asks.use(c, grant["requirement_id"], grant["subject"], content, grant["asked_by_id"])

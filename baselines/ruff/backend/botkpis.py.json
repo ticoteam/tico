@@ -1,5 +1,0 @@
-{
-  "backend/botkpis.py": {
-    "F401": 1
-  }
-}

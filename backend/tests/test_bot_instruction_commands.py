@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 
 from backend import routines
-from backend.tests.test_assistant_template_commands import argv_of, commands_in, parse_error, variants
+from backend.tests.helpers.assistant_template_commands import argv_of, commands_in, parse_error, variants
 from clients import hubcli
 
 ROOT = Path(__file__).resolve().parents[2]

@@ -3033,10 +3033,21 @@ def create_app(settings=None):
             from . import task_reads
 
             history = task_reads.children_text(c, related_sql, history)
+            # What a bound OK is for is its parties' alone: its ask and answers keep no words for anyone else.
+            from . import task_asks
+
+            history = task_asks.private_history(c, who.actor, history)
             lines = SRC.lookup(c, SRC.actors_of(history))
             for event in history:
                 event["source"] = SRC.source_of(lines, event)  # reads `data`, which the answer leaves out
                 event.pop("data", None)
+            # An ask's words come from the pages it showed (body_sources): a reader who may not open one reads none.
+            from .files import readable_page_refs
+
+            history = readable_page_refs(c, auth, who, history)
+            for event in history:
+                if isinstance(event, dict):
+                    event.pop("body_sources", None)
             # Who follows it (backend/task_followers.py): null for a task with no thread of its own.
             return {
                 "task": {
@@ -4339,11 +4350,7 @@ def create_app(settings=None):
         found = carried(c, task, requester)
         if not found or not found.get("lends") or not open_task(task):
             return None
-        if c.execute(
-            "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' AND old IN (?,?,?) "
-            "LIMIT 1",
-            (task["id"], *botops_act.TERMINAL),
-        ).fetchone():
+        if botops_act.reopened_by(c, task["id"]):
             return None  # finished once: the request it carried was done, whoever reopened it
         msg = H.message(c, found.get("message_id") or "")
         if not msg or msg.get("deleted_at") or msg["sender_id"] != found.get("person") or week_old(msg["created_at"]):

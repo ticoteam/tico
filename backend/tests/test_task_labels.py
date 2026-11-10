@@ -290,20 +290,9 @@ def test_a_bot_creates_no_task_with_a_public_roadmap_label_and_is_told_the_way_t
     refused = post(api, "tasks", body, token=token, expected=403)["error"]
     assert "a person on the leadership, product, engineering teams adds it" in refused["detail"]
     assert created(api, "cpo", "Research search") == 0 and written(api) == before
-    # The way through: created without it, then labelled on the task with an approved publish approval.
-    post(api, "roadmaps/settings", {"bot_public_approval": True})
-    item = post(api, "tasks", {**body, "labels": ["area-search"]}, token=token)
-    preview = post(
-        api, "tasks/" + item["id"] + "/publication-preview", {"labels": ["roadmap", "area-search"]}, token=token
-    )
-    approval = post(
-        api, "approvals", {"kind": "publish", "task_id": item["id"], "payload": preview["payload"]}, token=token
-    )
-    post(api, "approvals/" + approval["id"], {"decision": "approved"})
-    assert label(api, item["id"], ["roadmap", "area-search"], token, approval_id=approval["id"])["labels"] == [
-        "roadmap",
-        "area-search",
-    ]
+    # No way through yet: the publication preview answers as the public roadmap does (backend/roadmaps.py NOT_YET).
+    r = api.post("/api/v2/tasks/x/publication-preview", json={"labels": ["roadmap"]}, headers=headers(token))
+    assert r.status_code == 404, r.text
 
 
 def _the_cli_carries_the_approval_id_when_a_bot_adds_a_public_roadmap_label(api, monkeypatch):

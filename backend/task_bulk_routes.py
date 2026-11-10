@@ -121,7 +121,8 @@ def register(app, auth, mover, mutate, store, task_filters, task_idents, task_vi
             new = [rules.rule_target(c, caller, body.owner)] if body.action == "owner" and body.owner else []
             for tid in bulk_select(c, caller, body.filter):
                 row = H.task(c, tid)
-                yield row, [a for a in (*new, row["owner_id"], row["requester_id"]) if a]
+                if row:  # selected inside this same write, so it is there
+                    yield row, [a for a in (*new, row["owner_id"], row["requester_id"]) if a]
 
         def reach(c):
             return list(dict.fromkeys(a for _, people in reached(c) for a in people))
@@ -142,7 +143,7 @@ def register(app, auth, mover, mutate, store, task_filters, task_idents, task_vi
             if task_rule_gate.held(gate):
                 return org_rule_check.answer(gate)
             if gate and gate.get("warn"):
-                checked = body.model_copy(update={"why": task_rule_gate.warn_on(gate, body.why)})
+                checked = body.model_copy(update={"why": task_rule_gate.warn_on(gate, body.why or "")})
             else:
                 checked = body
             # Every task this call skips keeps its refusal on record, and the call counts once toward quarantine.

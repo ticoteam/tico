@@ -83,6 +83,7 @@ def _row(c, entry):
             row["choices"] = requirement["choices"]
         if requirement.get("shows"):
             row["shows"] = requirement["shows"]
+            row["source"] = requirement["shows"]  # its words come from those pages (files.readable_page_refs)
         if kind == "ok" and task_asks.grant(c, entry["requirement_id"]):
             # Bound to what it lets go: OK'd only from its preview in Tico, never on a walk.
             row["preview_only"] = True

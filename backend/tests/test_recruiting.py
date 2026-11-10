@@ -880,5 +880,3 @@ def test_a_seat_set_up_with_a_template_is_that_job_and_a_coding_one_in_engineeri
     marketing = pinned("Rust engineer", "marketing-lead")
     assert [c["template"] for c in marketing["candidates"]] == ["marketing-lead"]
     assert marketing["department"] == "marketing" and marketing["agents"] == []
-
-

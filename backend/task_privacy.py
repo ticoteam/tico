@@ -1871,6 +1871,11 @@ def event_readable(c, actor, event):
             c, None, viewer, event.get("target"), event.get("detail")
         ):
             return False
+    from . import task_asks
+
+    # An event about a bound OK reads only to the OK's parties (task_asks.party), whoever reads its task.
+    if task_asks.event_hidden(c, principals, event.get("target")):
+        return False
     detail = H._json(event.get("detail"), {}) or {}
     if str(event.get("action", "")).startswith("alerts.") and event["action"] != "alerts.company_cap":
         recipient = actor[0] if isinstance(actor, tuple) else getattr(actor, "actor", actor)

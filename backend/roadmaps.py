@@ -223,7 +223,7 @@ def approve(c, actor, task_id, operation, values, approval_id=None):
             c,
             actor,
             'approval',
-            'Public changes need an OK of exactly this publication; use POST /api/v2/tasks/{id}/publication-preview',
+            'Public changes need an OK of exactly this publication. ' + NOT_YET,
         )
     task_asks.use(c, approval_id, subject, expected, actor)
 
@@ -525,16 +525,9 @@ def install_internal(app, store, auth, mutate, mover):
 
     @app.post('/api/v2/tasks/{tid}/publication-preview')
     def preview(request: Request, tid: str, body: PublicationInput):
-        with store.read() as c:
-            row = task(c, request.state.identity, tid)
-            if body.labels is not None:
-                if body.model_fields_set != {'labels'}:
-                    raise Problem('publication', 'Preview labels separately from public text', 422)
-                return {'payload': publication_payload(row['id'], 'labels', {'labels': H._labels(body.labels)})}
-            if body.comment is not None:
-                return {'payload': publication_payload(row['id'], 'comment', {'text': body.comment.strip()})}
-            values = {k: v for k, v in body.model_dump(exclude_none=True).items() if v != row.get(k)}
-            return {'payload': publication_payload(row['id'], 'text', values)}
+        """Not available yet, like the public routes: no route asks a publish OK (task_asks has no ask path for the
+        `publish:` subject, and the generic OK route refuses it), so a preview would lead nowhere."""
+        raise Problem('not_found', NOT_YET, 404)
 
     @app.post('/api/v2/tasks/{tid}/comments/{mid}/moderate')
     def moderate(request: Request, tid: str, mid: str, body: Moderate):

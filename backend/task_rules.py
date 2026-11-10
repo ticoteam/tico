@@ -9,6 +9,7 @@ The task rule that closed a done task after a day went with the old engine: a ta
 from . import groups, people
 from .store import H
 
+
 def departments(settings):
     from . import recruit, recruit_rank
     import yaml

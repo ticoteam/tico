@@ -95,7 +95,7 @@ def questions(detail, bot):
     (docs/pipelines-v3.md: requirements and asks)."""
     task = detail.get("task") or {}
     # An answered ask names who answered it; an open one, who it waits on.
-    who = lambda r: r.get("who") or (r.get("answer") or {}).get("by")  # noqa: E731
+    who = lambda r: r.get("who") or (r.get("answer") or {}).get("by")
     return [
         {
             "id": r["requirement_id"],
