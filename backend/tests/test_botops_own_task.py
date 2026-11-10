@@ -83,7 +83,7 @@ def test_botops_files_a_subtask_for_a_person_on_its_own_task(api, botops):
             "owner": "ana",
             "title": "Which mailbox should Ops send from?",
             "body": "Which mailbox should Ops send from: support@ or hello@?",
-            "relations": [{"task": task["id"], "kind": "parent"}],
+            "parent": task["id"],
         },
     )
     assert filed.status_code == 200, filed.text
@@ -100,8 +100,8 @@ def test_a_subtask_for_a_bot_or_with_no_parent_is_not_botops_own_ask(api, botops
     task, attempt = _commented(api, botops)
     _route(api, "/api/v2/tasks/dry-run")
     for body in (
-        {"owner": "ops", "relations": [{"task": task["id"], "kind": "parent"}]},
-        {"owner": "ana", "relations": []},
+        {"owner": "ops", "parent": task["id"]},
+        {"owner": "ana"},
     ):
         tried = api.post(
             "/api/v2/tasks/dry-run", headers=headers(attempt["token"]), json={"title": "x", "body": "x", **body}
@@ -210,22 +210,21 @@ def test_botops_own_ask_is_a_plain_ask(api, botops):
     _ready(api, botops)
     task, attempt = _commented(api, botops)
     _route(api, "/api/v2/tasks/dry-run")
-    parent = [{"task": task["id"], "kind": "parent"}]
     for extra in (
         {"roles": {"reviewer": ["ana"]}},
         {"goal_id": "g1"},
-        {"relations": parent + [{"task": task["id"], "kind": "related"}]},
+        {"relations": [{"task": task["id"], "kind": "related"}]},
     ):
         tried = api.post(
             "/api/v2/tasks/dry-run",
             headers=headers(attempt["token"]),
-            json={"title": "x", "body": "x", "owner": "ana", "relations": parent, **extra},
+            json={"title": "x", "body": "x", "owner": "ana", "parent": task["id"], **extra},
         )
         assert (tried.json()["actor"], tried.json()["role"]) == ("bot:ops", "bot"), extra
     tried = api.post(
         "/api/v2/tasks/dry-run",
         headers=headers(attempt["token"]),
-        json={"title": "x", "body": "x", "owner": "ana", "relations": parent, "due": "2026-11-01T00:00:00Z"},
+        json={"title": "x", "body": "x", "owner": "ana", "parent": task["id"], "due": "2026-11-01T00:00:00Z"},
     )
     assert (tried.json()["actor"], tried.json()["role"]) == ("bot:botops", "bot")
 
@@ -253,13 +252,14 @@ def test_private_subtask_from_bot_requested_run_is_judged_on_by_default(api, bot
             "title": "Which mailbox should Ops send from?",
             "body": "Choose support@ or hello@",
             "visibility": "private",
-            "relations": [{"task": task["id"], "kind": "parent"}],
+            "parent": task["id"],
         },
     )
     assert filed.status_code == 422 and filed.json()["error"]["code"] == "ask_refused", filed.text
     [item], [call] = items(api), calls(api)
     assert (item["mode"], item["outcome"], item["would"]) == ("on", "sent_back", "sent_back")
-    assert item["asker"] == "bot:ops" and item["ref"] == "" and item["call_id"] == call["id"]
+    # BotOps files a task for a bot that asked it as itself (app.create_task): the ask is BotOps' own.
+    assert item["asker"] == "bot:botops" and item["ref"] == "" and item["call_id"] == call["id"]
     assert len(model.calls) == 1
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM ask_ingest_settings").fetchone()[0] == 0

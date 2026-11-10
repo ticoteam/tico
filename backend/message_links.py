@@ -3,7 +3,7 @@
 A message's tasks (backend/task_privacy.py `message_tasks`) come from three places: what its own refs
 name, its parents' tasks (`in_reply_to`, `refs.answers`, `refs.inputs`), and the run it reports on
 (`refs.turn_id`, `refs.run.attempt_id`). The first two are fixed by the row; a run's tasks grow after
-the message is written (a carried task, a moved input). So a message keeps its static links here:
+the message is written (a run on the task, a moved input). So a message keeps its static links here:
 
   task     a string in its refs that could be a task id
   parent   a message whose tasks it inherits
@@ -262,10 +262,11 @@ def candidates(conn, task_id, cid):
         if not frontier:
             break
         about |= frontier
-    # Runs that took the task in: one started by or reading such a message, or one whose moved input had it.
-    # Messages reporting on those runs inherit it.
+    # Runs that took the task in: one started by or reading such a message, one on the task (attempts.task_id,
+    # task_privacy.RUN_TASK_SQL), or one whose moved input had it. Messages reporting on those runs inherit it.
     runs = _in(conn, "SELECT a.id FROM jobs j JOIN attempts a ON a.job_id=j.id WHERE j.message_id IN (%s)", about)
     runs |= _in(conn, "SELECT attempt_id FROM attempt_inputs WHERE message_id IN (%s)", about)
+    runs.update(r[0] for r in conn.execute("SELECT id FROM attempts WHERE task_id=?", (task_id,)))
     runs.update(
         r[0]
         for r in conn.execute(

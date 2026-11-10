@@ -14,7 +14,7 @@ import unittest.mock
 import uuid
 from pathlib import Path
 
-from backend import bot_tools, files, migrations, store, status_values
+from backend import bot_tools, files, migrations, pipeline_settings, store, status_values
 from backend import hubdb as H
 from backend.config import Settings
 
@@ -88,10 +88,12 @@ def _old_shape_database(path):
     assert old_first != H.SCHEMA
     # v0.5 had no migration files: hubdb.migrate, which now runs them after its numbered steps, leaves them out here.
     # Its start did make the threads schema (now migration 0047's, unrecorded here so the real start still runs it),
-    # which threads.migrate, at the end of hubdb.migrate, reads.
+    # which threads.migrate, at the end of hubdb.migrate, reads. v0.5 had no pipelines either: the presets hubdb.migrate
+    # makes last read bots by id, which only the bot id migration gives them.
     with (
         unittest.mock.patch.object(H, "MIGRATIONS", [old_first, *H.MIGRATIONS[1:]]),
         unittest.mock.patch.object(migrations, "apply", lambda conn, directory=None: THREADS_SCHEMA.up(conn)),
+        unittest.mock.patch.object(pipeline_settings, "ensure_presets", lambda conn: []),
     ):
         conn = H.connect(path)
     conn.execute("PRAGMA foreign_keys=OFF")
@@ -431,6 +433,7 @@ class Ids(_Case):
             self.conn.execute("UPDATE bots SET id='changed' WHERE id=?", (bot_id,))
 
     def test_rename_then_a_new_bot_takes_the_old_slug_and_the_history_stays_with_the_right_bot(self):
+        _store_tables(self.conn)  # a task enters its pipeline, which reads where its bot runs (store.SCHEMA)
         old_id = self.make_bot("ops-lead")
         old_actor = H.bot_actor(old_id)
         task = H.task_create(

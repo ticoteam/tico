@@ -105,7 +105,13 @@ def test_an_assistant_or_a_token_is_not_the_persons_ok(store):
 def test_someone_who_may_not_approve_this_inbox_cannot_ok_it(store):
     queued = _queue(store)
     with store.transaction() as c:
-        H.task_give(c, ANA, K.task_of(c, queued["approval_id"]), queued["approval_id"], BEN)
+        task_id = K.task_of(c, queued["approval_id"])
+        # The ask's task is private: it goes to Ben only once someone who sees it lets Ben see it too.
+        with pytest.raises(H.Refused, match="Ben cannot read this private task"):
+            H.task_give(c, ANA, task_id, queued["approval_id"], BEN)
+    with store.transaction() as c:
+        H.set_task_readers(c, "bot:ops", task_id, add=[BEN])
+        H.task_give(c, ANA, task_id, queued["approval_id"], BEN)
     with pytest.raises(Exception, match="approval rule"):
         _ok(store, queued, person=BEN)
 

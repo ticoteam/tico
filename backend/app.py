@@ -3947,7 +3947,7 @@ def create_app(settings=None):
         BotOps themselves (not through BotOps or the Assistant). Otherwise any bot that owns a person's task could
         reassign it to BotOps and borrow their rights for its next run."""
         moved = c.execute(
-            "SELECT new, actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='owner' "
+            "SELECT new, actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='reassign' "
             "ORDER BY created_at DESC, rowid DESC "
             "LIMIT 1",
             (task["id"],),
