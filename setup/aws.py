@@ -575,8 +575,11 @@ class Deployer:
                 "unreachable from the internet and Let's Encrypt could not issue a certificate. Add such a route to a "
                 "subnet's route table (or create a public subnet), or use --front-door cloudflared, which needs no inbound access."
             )
+        return self.order_subnets(ok)[0]["SubnetId"]
+
+    def order_subnets(self, ok: list[dict]) -> list[dict]:
         ok.sort(key=lambda s: not s.get("DefaultForAz"))
-        return ok[0]["SubnetId"]
+        return ok
 
     def launch(self, user_data: str, profile: str, sg: str, subnet: str = "") -> str:
         parameter = AMI_PARAMS[self.p.os_family]

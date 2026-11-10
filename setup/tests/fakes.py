@@ -155,8 +155,8 @@ class FakeEC2:
         {"Associations": [{"Main": True}], "Routes": [{"DestinationCidrBlock": "0.0.0.0/0", "GatewayId": "igw-1"}]}
     ]
 
-    def describe_subnets(self, Filters):
-        return {"Subnets": self.subnets}
+    def describe_subnets(self, Filters=(), SubnetIds=()):
+        return {"Subnets": [r for r in self.subnets if not SubnetIds or r["SubnetId"] in SubnetIds]}
 
     def describe_route_tables(self, Filters):
         return {"RouteTables": self.route_tables}
