@@ -169,6 +169,43 @@ def test_a_claim_starts_no_run_the_engine_holds_and_the_check_takes_the_task_on(
     assert c.execute("SELECT level FROM visits WHERE id=?", (mine["visit"]["id"],)).fetchone()[0] == "person"
 
 
+def test_a_run_whose_task_changed_between_its_claim_and_its_start_never_starts(api):
+    """The claim let the run through; then, before its computer started it, the task was snoozed, closed, handed to a
+    person or given another owner. The start asks the engine again (task_wakes.may_start, its own lease not counted):
+    `started` is refused as a wait, the computer's next ask for a place is told to stop, and the run it then reports
+    interrupted settles as skipped, its job canceled rather than queued again."""
+    from backend import task_engine as E
+    from backend.tests.helpers.api import assign, claim, post, ready, runner
+
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    token = machine["token"]
+    changes = {
+        "snoozed": lambda c, row: E.snooze(c, row["id"], ANA),
+        "closed": lambda c, row: E.move(c, row["id"], E.CLOSED, ANA, "Not needed"),
+        "a person's": lambda c, row: c.execute("UPDATE visits SET level='person' WHERE id=?", (row["visit"]["id"],)),
+        "owned by a person": lambda c, row: E.reassign(c, row["id"], ANA, ANA),
+    }
+    for change, made in changes.items():
+        tid = post(api, "tasks", {"owner": "ops", "title": "Plan the week " + change, "body": "Draft it."})["id"]
+        attempt = claim(api, machine)
+        aid = attempt["id"]
+        with api.app.state.store.transaction() as c:
+            job = c.execute("SELECT job_id FROM attempts WHERE id=?", (aid,)).fetchone()[0]
+            assert task_wakes.may_start(c, job, attempt=aid), change  # claimed with the engine's leave
+            made(c, E.task(c, tid))
+        refused = post(api, f"attempts/{aid}/started", {"thread_id": "t-" + aid}, token, expected=409)
+        assert refused["error"]["code"] == "start_wait", change
+        assert post(api, f"attempts/{aid}/start-place", {}, token).get("stop") is True, change
+        post(api, f"attempts/{aid}/complete", {"outcome": "interrupted", "last_seq": 0}, token)
+        with api.app.state.store.read() as c:
+            ran = c.execute("SELECT state, started_at FROM attempts WHERE id=?", (aid,)).fetchone()
+            assert ran[1] is None, change  # it never started
+            assert c.execute("SELECT state FROM jobs WHERE id=?", (job,)).fetchone()[0] == "canceled", change
+            assert not c.execute("SELECT 1 FROM jobs WHERE state='queued' AND bot_id='ops'").fetchone(), change
+
+
 def _chat_run(c, conversation_id, bot):
     """A run of `bot` on a message in a conversation that names no task: a person wrote to it there."""
     message, run = H.new_id(), H.new_id()
@@ -206,4 +243,3 @@ def test_a_run_counts_for_the_task_it_names_and_by_its_conversation_only_when_on
     assert (runs(first), runs(second)) == (0, 1)
     E.move(c, second["id"], E.CLOSED, ANA, "Not needed")
     assert runs(E.task(c, first["id"])) == 1  # now the conversation is one open task's
-
