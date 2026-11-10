@@ -1,3 +1,4 @@
+# pyright: strict
 """What a task needs before it leaves a stage (docs/pipelines-v3.md, "The nine requirement kinds").
 
 A requirement sits on a stage (every task that visits it) or on one visit (this task, this time). Each kind answers one
@@ -13,7 +14,14 @@ What met a requirement is its newest answer on the visit that is not undone (`an
 """
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import sqlite3
+
+Row = dict[str, Any]
 
 MET, WAITING, NOT_MET = "met", "waiting", "not_met"
 # What a requirement waits on when it is not a person or a task: `Standing.on` for the kinds that read saved facts.
@@ -41,31 +49,31 @@ class Standing:
     """Where one requirement stands for one visit. `on` is who or what it waits on: an actor, `jev`, `github`, or a
     task id. `line` is one sentence: what is missing, or what met it."""
 
-    requirement: dict
+    requirement: Row
     state: str
     on: str | None = None
     line: str = ""
 
     @property
-    def met(self):
+    def met(self) -> bool:
         return self.state == MET
 
     @property
-    def name(self):
+    def name(self) -> str:
         return name_of(self.requirement)
 
 
-def name_of(requirement):
+def name_of(requirement: Row) -> str:
     """What a requirement is called on a task: its own line if it has one, else its kind."""
-    return (requirement.get("line") or "").strip() or KIND_NAMES.get(requirement["kind"], requirement["kind"])
+    return (requirement.get("line") or "").strip() or KIND_NAMES.get(requirement["kind"]) or requirement["kind"]
 
 
-def _rows(cursor):
+def _rows(cursor: "sqlite3.Cursor") -> list[Row]:
     names = [d[0] for d in cursor.description]
     return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
 
 
-def _loaded(row):
+def _loaded(row: Row) -> Row:
     for key in ("settings", "shows", "choices"):
         value = row.get(key)
         if isinstance(value, str):
@@ -77,7 +85,7 @@ def _loaded(row):
     return row
 
 
-def on_stage(conn, stage_id):
+def on_stage(conn: "sqlite3.Connection", stage_id: str) -> list[Row]:
     """A stage's requirements, in order."""
     return [
         _loaded(r)
@@ -90,7 +98,7 @@ def on_stage(conn, stage_id):
     ]
 
 
-def on_visit(conn, visit_id):
+def on_visit(conn: "sqlite3.Connection", visit_id: str) -> list[Row]:
     """The requirements added to one visit, oldest first."""
     return [
         _loaded(r)
@@ -103,19 +111,19 @@ def on_visit(conn, visit_id):
     ]
 
 
-def for_visit(conn, visit):
+def for_visit(conn: "sqlite3.Connection", visit: Row) -> list[Row]:
     """Everything a task needs to leave its open visit: the stage's requirements, then the ones added to this visit."""
     return on_stage(conn, visit["stage_id"]) + on_visit(conn, visit["id"])
 
 
-def get(conn, requirement_id):
+def get(conn: "sqlite3.Connection", requirement_id: str) -> Row | None:
     rows = _rows(conn.execute("SELECT * FROM requirements WHERE id=?", (requirement_id,)))
     return _loaded(rows[0]) if rows else None
 
 
-def newest_answers(conn, visit_id):
+def newest_answers(conn: "sqlite3.Connection", visit_id: str) -> dict[str, Row]:
     """{requirement id: its newest answer on this visit that is not undone}."""
-    out = {}
+    out: dict[str, Row] = {}
     for row in _rows(
         conn.execute(
             "SELECT * FROM answers WHERE visit_id=? AND undone_at IS NULL ORDER BY created_at, id",
@@ -126,7 +134,7 @@ def newest_answers(conn, visit_id):
     return out
 
 
-def _filed(conn, visit_id):
+def _filed(conn: "sqlite3.Connection", visit_id: str) -> list[Row]:
     """The tasks filed during a visit, with how each stands."""
     return _rows(
         conn.execute(
@@ -138,13 +146,13 @@ def _filed(conn, visit_id):
     )
 
 
-def _owner_done(conn, task, requirement, answer):
+def _owner_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     if answer and answer["answer"] == "done":
         return Standing(requirement, MET, line="Done")
     return Standing(requirement, NOT_MET, task.get("owner_id"), requirement.get("line") or "Say when the work is done")
 
 
-def _ok(conn, task, requirement, answer):
+def _ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     person = requirement.get("person_id")
     what = requirement.get("line") or "OK"
     if answer and answer["answer"] == "ok":
@@ -155,13 +163,13 @@ def _ok(conn, task, requirement, answer):
     return Standing(requirement, WAITING, person, what)
 
 
-def _answer(conn, task, requirement, answer):
+def _answer(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     if answer and answer["answer"] not in ("again",):
         return Standing(requirement, MET, line=str(answer["answer"]))
     return Standing(requirement, WAITING, requirement.get("person_id"), requirement.get("line") or "Answer")
 
 
-def _linked_done(conn, task, requirement, answer):
+def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     filed = _filed(conn, task["visit"]["id"])
     if not filed:
         return Standing(requirement, NOT_MET, task.get("owner_id"), "No task filed yet")
@@ -180,11 +188,11 @@ def _linked_done(conn, task, requirement, answer):
     return Standing(requirement, MET, line="Done")
 
 
-def _later_phase(conn, task, requirement, answer):
+def _later_phase(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     return Standing(requirement, NOT_MET, task.get("owner_id"), f"{name_of(requirement)} is not built yet")
 
 
-KINDS = {
+KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standing]] = {
     "owner_done": _owner_done,
     "ok": _ok,
     "answer": _answer,
@@ -197,14 +205,14 @@ KINDS = {
 }
 
 
-def standing(conn, task, requirement, answer=None):
+def standing(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None = None) -> Standing:
     """Where `requirement` stands for the task's open visit. `task` is `task_engine.task()`'s shape."""
     if answer and answer["answer"] == "pushed_past":
         return Standing(requirement, MET, line="Pushed past")
     return KINDS[requirement["kind"]](conn, task, requirement, answer)
 
 
-def standings(conn, task):
+def standings(conn: "sqlite3.Connection", task: Row) -> list[Standing]:
     """Every requirement of the task's open visit with where it stands, stage's first."""
     visit = task.get("visit")
     if not visit:
@@ -213,13 +221,13 @@ def standings(conn, task):
     return [standing(conn, task, r, answers.get(r["id"])) for r in for_visit(conn, visit)]
 
 
-def unmet(conn, task):
+def unmet(conn: "sqlite3.Connection", task: Row) -> list[Standing]:
     return [s for s in standings(conn, task) if not s.met]
 
 
-def can_push_past(requirement):
+def can_push_past(requirement: Row) -> bool:
     return bool(requirement.get("can_push_past")) and requirement["kind"] not in NEVER_PUSHED_PAST
 
 
-def people_only(requirement):
+def people_only(requirement: Row) -> bool:
     return requirement["kind"] in OK_KINDS and requirement.get("who_oks") == "people_only"

@@ -1,3 +1,4 @@
+# pyright: strict
 """A bot's wake about a task on the engine (docs/pipelines-v3.md, "Effects travel with the move").
 
 A wake is a row in `messages` with a `wake_key`: `<task id>:<visit id>:<level>:<try>`. The key is unique, so writing the
@@ -5,8 +6,17 @@ same wake twice is one wake. It is written in the same transaction as the move t
 missing and the five ways a run may end.
 """
 
-from . import run_triggers as RT
+from typing import TYPE_CHECKING, Any
+
+from . import run_triggers
 from . import task_requirements as R
+
+if TYPE_CHECKING:
+    import sqlite3
+
+Row = dict[str, Any]
+# run_triggers is untyped: its functions are Any here.
+RT: Any = run_triggers
 
 ENDINGS = (
     "Leave the task in one of five states before you stop:\n"
@@ -19,20 +29,20 @@ ENDINGS = (
 )
 
 
-def _h():
+def _h() -> Any:
     from . import hubdb
 
     return hubdb
 
 
-def key(task_id, visit_id, level="owner", try_n=0):
+def key(task_id: str, visit_id: str, level: str = "owner", try_n: int = 0) -> str:
     return f"{task_id}:{visit_id}:{level}:{try_n}"
 
 
-def body(conn, task, lead=""):
+def body(conn: "sqlite3.Connection", task: Row, lead: str = "") -> str:
     """What a bot reads when it is woken for a task: the stage, what is missing, and how its run may end."""
-    stage = task.get("stage") or {}
-    pipeline = task.get("pipeline") or {}
+    stage: Row = task.get("stage") or {}
+    pipeline: Row = task.get("pipeline") or {}
     lines = [lead.strip()] if lead.strip() else []
     lines.append(f"{task.get('title') or 'A task'} is in {stage.get('name', '?')} ({pipeline.get('name', '?')}).")
     missing = [s for s in R.standings(conn, task) if not s.met]
@@ -46,7 +56,18 @@ def body(conn, task, lead=""):
     return "\n".join(lines)
 
 
-def add(conn, task, target, visit, text, *, level="owner", try_n=0, wake_key=None, quiet=False):
+def add(
+    conn: "sqlite3.Connection",
+    task: Row,
+    target: str | None,
+    visit: Row,
+    text: str,
+    *,
+    level: str = "owner",
+    try_n: int = 0,
+    wake_key: str | None = None,
+    quiet: bool = False,
+) -> str | None:
     """Wake `target` about `task`, once per key. Returns the message id, or None when this wake was already written or
     there is nobody to tell."""
     H = _h()
@@ -57,7 +78,7 @@ def add(conn, task, target, visit, text, *, level="owner", try_n=0, wake_key=Non
         return None
     if not H._actor_exists(conn, target) or not H.task_private_readable(conn, target, task):
         return None
-    refs = {"task": task["id"], "wake": "task_turn", "visit": visit["id"], "level": level, "try": try_n}
+    refs: Row = {"task": task["id"], "wake": "task_turn", "visit": visit["id"], "level": level, "try": try_n}
     refs["version"] = task.get("version")
     if quiet:
         refs["quiet"] = True
@@ -83,7 +104,7 @@ def add(conn, task, target, visit, text, *, level="owner", try_n=0, wake_key=Non
 STATE_CAUSES = {"paused": "paused", "quarantined": "quarantined", "planned": "not started yet"}
 
 
-def cannot_run(conn, actor):
+def cannot_run(conn: "sqlite3.Connection", actor: str | None) -> str | None:
     """Why this bot cannot run now, in a few words, or None when it can. A paused bot's tasks say Paused and carry on
     by themselves when it can run again; nobody is woken meanwhile."""
     H = _h()
@@ -98,7 +119,7 @@ def cannot_run(conn, actor):
     return None
 
 
-def queued(conn, task_id, actor):
+def queued(conn: "sqlite3.Connection", task_id: str, actor: str | None) -> bool:
     """A wake for this task is waiting for this bot: queued or just claimed, held ones included."""
     H = _h()
     if not H.is_bot(actor):
@@ -112,7 +133,7 @@ def queued(conn, task_id, actor):
     )
 
 
-def drop(conn, task_id, actor):
+def drop(conn: "sqlite3.Connection", task_id: str, actor: str | None) -> int:
     """Cancel the wakes for this task still queued for `actor`: it no longer has the turn. Returns how many."""
     H = _h()
     if not H.is_bot(actor):
@@ -125,6 +146,6 @@ def drop(conn, task_id, actor):
     return cursor.rowcount
 
 
-def _like(task_id):
+def _like(task_id: str) -> str:
     escaped = str(task_id).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return escaped + ":%"

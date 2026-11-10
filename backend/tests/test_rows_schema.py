@@ -549,7 +549,6 @@ UNTYPED = frozenset(
         "strategy_bets",
         "strategy_merges",
         "strategy_versions",
-        "stuck_alarms",
         "subscription_assignments",
         "support_access",
         "support_access_log",
