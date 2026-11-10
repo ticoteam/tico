@@ -4874,7 +4874,8 @@ class Execution:
             row["bot_id"],
             trigger="task" if task else msg["kind"],
             message_id=msg["id"],
-            task_id=task["id"] if task else None,
+            # A carrier's run is about the task of the message it carries (task_wakes.message_task): counted for it.
+            task_id=task["id"] if task else task_wakes.message_task(c, msg["id"]),
             trigger_kind=woke,
             trigger_source=source,
             purpose=run_triggers.purpose_of(msg, row["bot_id"], woke),

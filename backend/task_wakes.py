@@ -436,8 +436,8 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
     parts = str(found[0] or "").split(":")
     task = E.task(conn, parts[0]) if found[0] else None
     if task is None:
-        named = H.message_task_id({"refs": refs}, {"task_id": found[4]})
-        task = E.task(conn, str(named)) if named else None
+        named = message_task(conn, message_id)
+        task = E.task(conn, named) if named else None
     if task is None:
         return True  # about no task on the engine: not the engine's to hold
     visit: Row = task.get("visit") or {}
@@ -450,6 +450,30 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
         return True
     conn.execute("UPDATE jobs SET state='canceled' WHERE message_id=? AND state='queued'", (message_id,))
     return False
+
+
+def message_task(conn: "sqlite3.Connection", message_id: str | None, carried: bool = True) -> str | None:
+    """The task a run on this message is about: the task its wake key names, else the one its refs or its conversation
+    name, else, for the keeper's carrier of another message (threads._carrier: `refs.carries`, no task of its own), the
+    task of the message it carries. The claim (`may_start`, the attempt's `task_id`), the start and the count of runs
+    all read the task this way, so a carrier is held and counted as the message it carries."""
+    H = _h()
+    found = conn.execute(
+        "SELECT m.wake_key, m.refs, m.sender_id, c.task_id FROM messages m "
+        "LEFT JOIN conversations c ON c.id = m.conversation_id WHERE m.id=?",
+        (message_id or "",),
+    ).fetchone()
+    if not found:
+        return None
+    if found[0]:
+        return str(found[0]).split(":", 1)[0]
+    refs: Row = H._json(found[1], {}) or {}
+    named = H.message_task_id({"refs": refs}, {"task_id": found[3]})
+    if named:
+        return str(named)
+    if carried and found[2] == H.KEEPER and refs.get("carries"):
+        return message_task(conn, str(refs["carries"]), carried=False)
+    return None
 
 
 def _may_start(conn: "sqlite3.Connection", task: Row, bot: str, kind: str, attempt: str | None) -> bool:

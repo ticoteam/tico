@@ -169,6 +169,60 @@ def test_a_claim_starts_no_run_the_engine_holds_and_the_check_takes_the_task_on(
     assert c.execute("SELECT level FROM visits WHERE id=?", (mine["visit"]["id"],)).fetchone()[0] == "person"
 
 
+def _carrier(c, task_id, bot, by):
+    """A bot's post in a chat naming the task, and the keeper's carrier of it to `bot` (threads._carrier): the carrier
+    names no task itself, only the message it carries, and its chat is no task's."""
+    from backend.enqueue import enqueue
+
+    chat = H._pair_conversation(c, by, bot, "chat")["id"]
+    post = H.new_id()
+    c.execute(
+        "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, created_at) "
+        "VALUES (?,?,?,?,'say','The launch note needs a footer.',?,?)",
+        (post, chat, by, bot, H._dump({"task": task_id}), H.now()),
+    )
+    carrier, refs = H.new_id(), H._dump({"carries": post, "wake": "thread", "reason": "mention", "from": by})
+    c.execute(
+        "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, created_at) "
+        "VALUES (?,?,?,?,'notice','The launch note needs a footer.',?,?)",
+        (carrier, chat, H.KEEPER, bot, refs, H.now()),
+    )
+    enqueue(c, {"id": carrier, "sender_id": H.KEEPER, "recipient_id": bot, "refs": refs, "created_at": H.now()})
+    assert _state(c, carrier) == "queued" and H.conversation(c, chat).get("task_id") is None
+    return carrier
+
+
+def test_a_carrier_of_a_bots_post_about_a_snoozed_task_never_starts(c, general):
+    from backend import task_engine as E
+
+    row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    E.snooze(c, row["id"], ANA)
+    held = _carrier(c, row["id"], BUILDER, REVIEWER)
+    assert task_wakes.message_task(c, held) == row["id"]  # the task of the message it carries
+    assert not task_wakes.may_start(c, held) and _state(c, held) == "canceled"
+
+
+def test_a_carriers_run_is_about_the_task_of_the_message_it_carries_and_counts_for_it(api):
+    """Claimed, the carrier's run names the task of the message it carries, so it is one of the task's runs."""
+    from backend import task_engine as E
+    from backend.tests.helpers.api import assign, claim, post, ready, runner
+
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    tid = post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Draft it."})["id"]
+    with api.app.state.store.transaction() as c:
+        X.bot(c, "reviewer", computer=False)
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
+        carried = _carrier(c, tid, "bot:ops", REVIEWER)
+        before = task_wakes.runs_since(c, E.task(c, tid))
+    aid = claim(api, machine)["id"]
+    post(api, f"attempts/{aid}/started", {"thread_id": "t-" + aid}, machine["token"])
+    with api.app.state.store.read() as c:
+        assert tuple(c.execute("SELECT job_id, task_id FROM attempts WHERE id=?", (aid,)).fetchone()) == (carried, tid)
+        assert task_wakes.runs_since(c, E.task(c, tid)) == before + 1
+
+
 def test_a_run_whose_task_changed_between_its_claim_and_its_start_never_starts(api):
     """The claim let the run through; then, before its computer started it, the task was snoozed, closed, handed to a
     person or given another owner. The start asks the engine again (task_wakes.may_start, its own lease not counted):
