@@ -149,7 +149,11 @@ async function callAction(view: ThvView, kind: string | undefined): Promise<void
   const id = view.id, info: CallThreadInfo = CALL_THREADS.get(id) || {};
   // Google Meet goes to a tab of its own, opened now while the click still allows it.
   if (kind === 'join' && info.call?.provider === 'google_meet') { await callMeetJoin(CALL_VIEWS.get(info.call.id) || info.call); return; }
-  if (kind === 'start' && info.providers?.[0] === 'google_meet') { await callMeetStart(view); return; }
+  // Start may make a Google Meet unless the server said it starts Tico Meet here: a blank tab opens now, in the click and
+  // before anything is awaited, so a pop-up blocker lets it through. It goes to the Meet once the start answers, and
+  // closes when the answer is a Tico Meet call (joined here) or the start fails.
+  let tab = kind === 'start' && (!info.providers?.length || info.providers[0] === 'google_meet') ? callTabOpen() : null;
+  const tabClose = (): void => { try { tab?.close(); } catch {} tab = null; };
   // Counted as a join on its way from the click, so a page hidden while the call is being made says it is in one,
   // and never joins the call once it is made.
   const gen = ++CALL_GEN;
@@ -159,8 +163,13 @@ async function callAction(view: ThvView, kind: string | undefined): Promise<void
     if (kind === 'start') {
       const made: CallRecord | null = await post(`/v2/threads/${encodeURIComponent(id)}/calls`, {provider: 'auto'});
       call = made?.call || made;
-      // A server that made a Google Meet after all (the list did not say it would): its tab opens now if it still may.
-      if (call?.provider === 'google_meet') { callMeetLanded(call, null, call.join_url || ''); return; }
+      if (call?.provider === 'google_meet') {
+        CALL_THREADS.set(id, {...CALL_THREADS.get(id), call});
+        const opened = tab; tab = null;
+        callMeetLanded(call, opened, call.join_url || '');
+        return;
+      }
+      tabClose();
     }
     if (gen !== CALL_GEN) {
       // Hidden or overtaken while the call was being made: the server already counts this person in it, so the seat goes
@@ -174,10 +183,12 @@ async function callAction(view: ThvView, kind: string | undefined): Promise<void
     }
     if (call?.id) await callJoin(id, call, threadTitle(view.thread), gen);
   } catch (e) {
+    tabClose();
     if (gen !== CALL_GEN) return;
     if (callCode(e) === 'call_in_progress') { void callLoad(view); toast('A call already started here'); return; }
     callNoted(id, e);
   } finally {
+    tabClose();
     CALL_JOINS--;
   }
 }
@@ -387,20 +398,24 @@ window.ticoPageHidden = () => callHidden();
 // ----------------------------------------------------------------- the call view
 // The phone, as the header, the card, the rail and the ring draw it.
 const CALL_SVG = '<svg class="call-ic" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>';
+// A missed call: the phone hung up, with the missed arrow.
+const CALL_MISSED_SVG = '<svg class="call-ic" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6.5 5.5 12 11l7-7-1-1-6 6-4.5-4.5H11V3H5v6h1.5V5.5zm17.21 11.17C20.66 13.78 16.54 12 12 12S3.34 13.78.29 16.67c-.18.18-.29.43-.29.71s.11.53.29.71l2.48 2.48c.18.18.43.29.71.29.27 0 .52-.11.7-.28.79-.74 1.69-1.36 2.66-1.85.33-.16.56-.5.56-.9v-3.1c1.45-.48 3-.73 4.6-.73s3.15.25 4.6.72v3.1c0 .39.23.74.56.9.98.49 1.87 1.12 2.67 1.85.18.18.43.28.7.28.28 0 .53-.11.71-.29l2.48-2.48c.18-.18.29-.43.29-.71s-.12-.52-.3-.7z"/></svg>';
 // Call id -> its view as last read, for the cards, the header's count, the rail's mark and the ring.
 const CALL_VIEWS = new Map<string, CallRecord>();
 // Calls whose view could not be read (gone, or not the viewer's to read): their cards stay plain rather than asking again.
 const CALL_VIEW_MISSING = new Set<string>();
 const CALL_VIEW_READS = new Map<string, Promise<CallRecord | null>>();
-// Who is in it now: the status source's count while there is one, else the people who opened it from Tico and have not
-// left. A Tico Meet call has no status source, so this is who joined.
+// A Google Meet call that nothing reports on (no Google status, no Recorder): Tico does not know who is in it, so it
+// shows no count and no faces, only the call. Opening it from Tico is not being in it.
+const callBlind = (c: CallRecord): boolean => c.provider === 'google_meet' && !c.status_source;
+// Who is in it now: the status source's count while there is one; a Tico Meet call has none, so it is who joined.
 function callCount(c: CallRecord | null | undefined): number {
-  if (!c) return 0;
+  if (!c || callBlind(c)) return 0;
   if (c.status_source) return Number(c.live_count) || 0;
   return (c.participants || []).filter(p => p.joined_at && !p.left_at && !p.removed_at).length;
 }
-// The faces on a live card: who the status source sees, else who opened it.
-const callFaces = (c: CallRecord): string[] => (c.participants || [])
+// The faces on a live card: who the status source sees, else (Tico Meet) who joined.
+const callFaces = (c: CallRecord): string[] => callBlind(c) ? [] : (c.participants || [])
   .filter(p => c.status_source ? !!p.in_call : p.joined_at && !p.left_at && !p.removed_at).map(p => p.actor);
 async function callViewRead(id: string): Promise<CallRecord | null> {
   let read = CALL_VIEW_READS.get(id);
@@ -486,26 +501,6 @@ function callMeetLanded(call: CallRecord, tab: Window | null, url: string): void
   callTabGo(tab, url || call.join_url || call.meet_uri || '');
   callRecorderOpen(call);
 }
-async function callMeetStart(view: ThvView): Promise<void> {
-  const tab = callTabOpen();
-  try {
-    const made: CallRecord | null = await post(`/v2/threads/${encodeURIComponent(view.id)}/calls`, {provider: 'auto'});
-    const call = made?.call || made;
-    if (!call?.id) { try { tab?.close(); } catch {} return; }
-    if (call.provider !== 'google_meet') {
-      // Google could not make it after all: the server made a Tico Meet call, which is joined here.
-      try { tab?.close(); } catch {}
-      await callJoin(view.id, call, threadTitle(view.thread));
-      return;
-    }
-    CALL_THREADS.set(view.id, {...CALL_THREADS.get(view.id), call});
-    callMeetLanded(call, tab, call.join_url || '');
-  } catch (e) {
-    try { tab?.close(); } catch {}
-    if (callCode(e) === 'call_in_progress') { void callLoad(view); toast('A call already started here'); return; }
-    callNoted(view.id, e);
-  }
-}
 // Join a Google Meet call: the server notes the open and answers its link (with the viewer's Google account).
 async function callMeetJoin(call: CallRecord): Promise<void> {
   const tab = callTabOpen();
@@ -552,27 +547,39 @@ function callRecorderOpen(call: CallRecord): void {
 }
 
 // ----------------------------------------------------------------- the card
-// A call's card in its thread (a message with refs.call.card): live, the phone, who is in it, how long, and Join; ended,
-// how long it was and its transcript. The red dot says a Recorder is recording it.
+// A call's card in its thread (a message with refs.call.card): live, the phone, who is in it, how long, Join, and End for
+// whoever started a Google Meet; ended, how long it was and its transcript, or the missed mark for a Google Meet nobody
+// was seen in. The red dot says a Recorder is recording it. A Google Meet nothing reports on shows only the call.
 function callCardHTML(m: ThvMessage): string {
   const id = String(m.refs?.call?.id || '');
   const v = id ? CALL_VIEWS.get(id) : undefined;
   if (id && !v && !CALL_VIEW_MISSING.has(id)) void callViewRead(id);
-  const head = (on: boolean) => `<span class="call-card-ic${on ? ' on' : ''}">${CALL_SVG}</span><b class="call-card-t">Call</b>`;
-  if (!v) return `<div class="call-card" data-call-card="${esc(id)}">${head(false)}</div>`;
+  const head = (cls: string, svg = CALL_SVG, label = '') => `<span class="call-card-ic${cls}"${label ? ` title="${label}" aria-label="${label}" role="img"` : ''}>${svg}</span><b class="call-card-t">Call</b>`;
+  if (!v) return `<div class="call-card" data-call-card="${esc(id)}">${head('')}</div>`;
   const rec = v.recorder?.source ? '<span class="call-rec" title="Recording" aria-label="Recording"></span>' : '';
   if (v.state === 'live') {
-    const faces = callFaces(v), since = v.seen_at || v.started_at || '';
+    const blind = callBlind(v), faces = callFaces(v), since = blind ? '' : v.seen_at || v.started_at || '';
+    const end = v.provider === 'google_meet' && v.connector && v.connector === myActor()
+      ? `<button type="button" class="ghost small danger call-card-end" data-call-end="${esc(id)}">End</button>` : '';
     if (since) callTick();
-    return `<div class="call-card on" data-call-card="${esc(id)}">${head(true)}${
+    return `<div class="call-card on" data-call-card="${esc(id)}">${head(' on')}${
       faces.length ? `<span class="call-card-ppl">${faces.slice(0, 4).map(a => `<span title="${esc(actorName(a))}">${actorAvatar(a, 20)}</span>`).join('')}</span>` : ''}${
       since ? `<span class="call-card-n muted tnum" data-call-since="${esc(since)}">${esc(callClock(since))}</span>` : ''}${rec}
-      <span class="spacer"></span><button type="button" class="primary small call-card-join" data-call-join="${esc(id)}">Join</button></div>`;
+      <span class="spacer"></span>${end}<button type="button" class="primary small call-card-join" data-call-join="${esc(id)}">Join</button></div>`;
   }
+  const missed = v.provider === 'google_meet' && v.duration_s == null;
   const len = callLength(v.duration_s);
   const tid = v.thread_id || m.thread_id || '';
-  return `<div class="call-card" data-call-card="${esc(id)}">${head(false)}${len ? `<span class="call-card-n muted tnum">${esc(len)}</span>` : ''}${
+  return `<div class="call-card${missed ? ' missed' : ''}" data-call-card="${esc(id)}">${missed ? head(' missed', CALL_MISSED_SVG, 'Missed') : head('')}${
+    len ? `<span class="call-card-n muted tnum">${esc(len)}</span>` : ''}${
     v.transcript_message_id ? `<span class="spacer"></span><a class="call-card-link" href="${esc(threadHref(tid) + '?m=' + encodeURIComponent(v.transcript_message_id))}">Transcript</a>` : ''}</div>`;
+}
+// End on a card: whoever started the Google Meet ends it for everyone (the server asks Google to end it too).
+async function callCardEnd(id: string, button: HTMLButtonElement): Promise<void> {
+  if (!confirm('End the call for everyone?')) return;
+  button.disabled = true;
+  try { await post(callPath(id) + '/end', {}); void callViewRead(id); }
+  catch (e) { button.disabled = false; toast(errorMessage(e, 'Could not end the call'), true); }
 }
 // How long it was: "45 s", "23 min", "1 h 5 min".
 function callLength(s: number | null | undefined): string {
@@ -599,8 +606,10 @@ function callTick(): void {
     for (const el of clocks) { const t = callClock(el.dataset.callSince || ''); if (el.textContent !== t) el.textContent = t; }
   }, 1000);
 }
-// Join on a card or a ring, wherever it is drawn.
+// Join on a card or a ring, wherever it is drawn (its tab opens in this click), and End on a card.
 document.addEventListener('click', ev => {
+  const end = eventElement(ev)?.closest<HTMLButtonElement>('[data-call-end]');
+  if (end) { void callCardEnd(end.dataset.callEnd || '', end); return; }
   const b = eventElement(ev)?.closest<HTMLElement>('[data-call-join]');
   if (!b) return;
   const id = b.dataset.callJoin || '', v = CALL_VIEWS.get(id);
