@@ -489,10 +489,7 @@ async function taskLiveSave(d: TaskDialog, live: TaskLive) {
           taskPropsMsgPaint(d);
         }
         if (d.taskLive === live && Number(reply.task.version) >= Number(d.liveTask?.version || 0)) d.liveTask = reply.task;
-        // Text edits update the held list directly, with no whole-list read.
-        if (TASKS_ST?.tasks.some(task => String(task.id) === live.id)) {
-          TASKS_ST.tasks = mergeTaskRows(TASKS_ST.tasks, [reply.task]); tasksRender(TASKS_ST);
-        }
+        tasksLive();     // the Tasks page behind reads its view again
         return reply.task;
       };
       return d.saveQueue = (d.saveQueue || Promise.resolve()).then(run, run);
