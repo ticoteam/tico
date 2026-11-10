@@ -3028,6 +3028,10 @@ def create_app(settings=None):
             from . import task_reads
 
             history = task_reads.children_text(c, related_sql, history)
+            # What a bound OK is for is its parties' alone: its ask and answers keep no words for anyone else.
+            from . import task_asks
+
+            history = task_asks.private_history(c, who.actor, history)
             lines = SRC.lookup(c, SRC.actors_of(history))
             for event in history:
                 event["source"] = SRC.source_of(lines, event)  # reads `data`, which the answer leaves out

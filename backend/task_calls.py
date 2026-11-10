@@ -639,24 +639,33 @@ def task_view(conn: "sqlite3.Connection", task_id: str, viewer: str | None = Non
     holder = W.holder(conn, row) if live else None
     works = bool(viewer) and can_work(conn, str(viewer), row)
     to_leave: list[Row] = []
+    from . import task_asks
+
     for standing in standings:
         requirement: Row = standing.requirement
         answer = answers.get(requirement["id"])
+        # A bound OK's line, what it shows and a send back's note are its parties' (task_asks.party): anyone else who
+        # reads the task learns only that it waits on a person.
+        private = requirement["kind"] == "ok" and task_asks.hidden_from(conn, viewer, requirement["id"])
         to_leave.append(
             {
                 "requirement_id": requirement["id"],
                 "kind": requirement["kind"],
-                "line": R.name_of(requirement),
+                "line": task_asks.PRIVATE_LINE if private else R.name_of(requirement),
                 "met": standing.met,
-                "standing": standing_line(standing, hidden),
+                "standing": task_asks.PRIVATE_LINE if private and not standing.met else standing_line(standing, hidden),
                 "who": None if standing.met or standing.on in hidden else standing.on,
-                "asked_by": requirement.get("added_by_id") if requirement.get("visit_id") else None,
-                "choices": requirement.get("choices"),
-                "shows": requirement.get("shows") or [],
+                "asked_by": None
+                if private
+                else requirement.get("added_by_id")
+                if requirement.get("visit_id")
+                else None,
+                "choices": None if private else requirement.get("choices"),
+                "shows": [] if private else requirement.get("shows") or [],
                 "answer": {
                     "id": answer["id"],
                     "value": answer["answer"],
-                    "note": answer.get("notes"),
+                    "note": None if private else answer.get("notes"),
                     "by": answer["by_id"],
                     "at": answer["created_at"],
                 }

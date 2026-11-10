@@ -124,14 +124,21 @@ def _file_may_ok(conn: "sqlite3.Connection", person: str, grant: Row) -> str | N
     return module.may_ok(conn, person, grant)
 
 
+def owner_or_admin(conn: "sqlite3.Connection", person: str) -> bool:
+    """Whether `person` is the company's owner or an Admin now."""
+    from . import access
+
+    if not is_human(person):
+        return False
+    found: Row = _h().human(conn, person) or {}
+    email = str(found.get("email") or "").strip().lower()
+    return bool(email) and email in set(access.owner_and_admin_emails(conn))
+
+
 def _admin_or_manager(conn: "sqlite3.Connection", person: str, grant: Row) -> bool:
     """Whether `person` is the company's owner or an Admin, or the manager of the bot that asked (its org chart's
     reports_to): who answers for a bot's own work."""
-    from . import access
-
-    found: Row = _h().human(conn, person) or {}
-    email = str(found.get("email") or "").strip().lower()
-    if email and email in set(access.owner_and_admin_emails(conn)):
+    if owner_or_admin(conn, person):
         return True
     asker = str(grant.get("asked_by_id") or "")
     if not is_bot(asker):
@@ -212,10 +219,9 @@ FREEZE: dict[str, Callable[..., Any]] = {
     "file": _file_freeze,
 }
 
-# Who may open an OK's preview beyond the task's own read check, by the subject's kind, called as
-# fn(conn, auth, who, grant) -> bool. A file's preview names the file, so it follows the file's own reader check (a
-# page's audience). An OWNED kind with none here shows its preview only to its parties: who asked, who it is asked of
-# now or was asked of, and who OK'd it. Anyone else gets "No such OK".
+# Who of an OK's parties (`party`) may open its preview, by the subject's kind, called as fn(conn, auth, who, grant)
+# -> bool. A file's preview names the file, so it also follows the file's own reader check (a page's audience). A kind
+# with none here shows its preview to its parties. Anyone else gets "No such OK".
 SEES: dict[str, Callable[..., bool]] = {
     "file": _file_may_see,
 }
@@ -544,24 +550,63 @@ def show(conn: "sqlite3.Connection", person: str, requirement_id: str, content: 
     return digest
 
 
-def may_see(conn: "sqlite3.Connection", auth: object, who: object, requirement_id: str) -> bool:
-    """Whether `who`, who reads the OK's task, may also open its preview: the subject's own reader check (SEES), or
-    for an OWNED kind, only its parties. Other kinds show to whoever reads the task."""
-    row = grant(conn, requirement_id)
-    if not row:
-        return False
-    kind = kind_of(row["subject"])
-    check = SEES.get(kind)
-    if check:
-        return bool(check(conn, auth, who, row))
-    if kind not in OWNED:
-        return True
-    from . import task_requirements as R
+# What anyone but an OK's parties reads where the OK's own line would be: on the task, in what it waits on, in lists
+# and briefs. That the task waits on a person is all they learn: never what for, nor what it shows.
+PRIVATE_LINE = "Waits on a person's OK"
 
-    actor = str(getattr(who, "actor", "") or "")
-    requirement = _requirement(conn, requirement_id)
-    now = R.person_of(conn, requirement, str(requirement.get("visit_id") or "")) if requirement else None
-    return actor in {row["asked_by_id"], row.get("asked_of_id"), row.get("ok_by_id"), now} - {None, ""}
+
+def party(conn: "sqlite3.Connection", actor: object, row: Row) -> bool:
+    """Whether `actor` is one of the OK's parties: who asked, who it was asked of (and gave it), or the company's owner
+    or an Admin. Nobody else, not whoever the ask was handed to, nor anyone who reads its task."""
+    who = str(actor or "")
+    if not who:
+        return False
+    if who in {row["asked_by_id"], row.get("asked_of_id"), row.get("ok_by_id")} - {None, ""}:
+        return True
+    return owner_or_admin(conn, who)
+
+
+def hidden_from(conn: "sqlite3.Connection", viewer: object, requirement_id: str) -> bool:
+    """Whether the requirement is a bound OK whose line, shows and answer note `viewer` may not read. A None viewer is
+    the engine's own code, which reads everything."""
+    if viewer is None:
+        return False
+    row = grant(conn, requirement_id)
+    return bool(row) and not party(conn, viewer, row)
+
+
+def bound(conn: "sqlite3.Connection", requirement_id: str) -> bool:
+    """Whether a requirement is a bound OK (has a grant)."""
+    return conn.execute("SELECT 1 FROM ok_grants WHERE requirement_id=?", (requirement_id,)).fetchone() is not None
+
+
+def private_history(conn: "sqlite3.Connection", viewer: object, events: list[Row]) -> list[Row]:
+    """A task's history as `viewer` reads it: an event about a bound OK they are no party of (its ask, an answer to it,
+    a give) keeps what happened and loses its words: the ask's line becomes PRIVATE_LINE, a note goes."""
+    for event in events:
+        data: Any = event.get("data")
+        if isinstance(data, str):
+            try:
+                data = json.loads(data or "null")
+            except ValueError:
+                data = None
+        found: Row = data if isinstance(data, dict) else {}  # pyright: ignore[reportUnknownVariableType]
+        rid = str(found.get("requirement") or "")
+        if not rid and event.get("field") == "requirement":
+            rid = str(event.get("new") or "")
+        if rid and hidden_from(conn, viewer, rid):
+            event["note"] = PRIVATE_LINE if event.get("field") == "requirement" else ""
+    return events
+
+
+def may_see(conn: "sqlite3.Connection", auth: object, who: object, requirement_id: str) -> bool:
+    """Whether `who`, who reads the OK's task, may also open its preview: only its parties (`party`), and of those
+    only whom the subject's own reader check lets read it (SEES: a file's audience). Anyone else gets "No such OK"."""
+    row = grant(conn, requirement_id)
+    if not row or not party(conn, getattr(who, "actor", ""), row):
+        return False
+    check = SEES.get(kind_of(row["subject"]))
+    return bool(check(conn, auth, who, row)) if check else True
 
 
 def preview(conn: "sqlite3.Connection", viewer: str, requirement_id: str, *, own_click: bool) -> Row:

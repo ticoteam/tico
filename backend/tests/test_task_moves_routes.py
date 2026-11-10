@@ -258,9 +258,9 @@ def test_an_ok_is_only_the_asked_persons_own_click_on_exactly_what_they_were_sho
     assert no(api, give, {"shown_hash": right}, bot, 403)["code"] == "identity"
     # Nor does the person through a token: only their own click in their own session.
     assert no(api, give, {"shown_hash": right}, "ben-token", 403)["code"] == "identity"
-    # A person who is not the one asked is refused, though she opened it too.
-    cara = get(api, f"oks/{rid}", token="cara-test")["shown_hash"]
-    assert "Ben" in no(api, give, {"shown_hash": cara}, "cara-test", 409)["detail"]
+    # A person who is not one of its parties may not open it, and her click with the right hash is refused.
+    assert api.get(f"/api/v2/oks/{rid}", headers=headers("cara-test")).status_code == 404
+    assert "Ben" in no(api, give, {"shown_hash": right}, "cara-test", 409)["detail"]
     # A hash that is not what was asked about is refused.
     wrong = no(api, give, {"shown_hash": "0" * 64}, "ben-test", 409)
     assert wrong["code"] == "task_changed"
