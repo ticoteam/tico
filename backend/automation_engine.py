@@ -318,18 +318,17 @@ def _act(services, do, args, values, step, key, producer=None):
 def _decide(flow, state, thread, step, services):
     questions = step.get("questions") or services.question_set(step["set"])
     values = values_of(state, thread)
-    level = step.get("level", "low")
     judged = F.judge_state(values, services.state_fields(step["set"]) if step.get("set") else None)
-    result = services.judge(judged, questions, f"automation.{step['id']}", level)
+    result = services.judge(judged, questions, f"automation.{step['id']}")
     if result is None:
         # Decide is off (no decision model, or the month's cap): carry on as callers elsewhere do, with no answers,
         # so a path on them falls to Otherwise.
         thread["outputs"][step["out"]] = {}
-        _record(state, thread, step, "skipped", {"off": True, "level": level})
+        _record(state, thread, step, "skipped", {"off": True})
         return
     answers = result.get("answers") or {}
     thread["outputs"][step["out"]] = answers
-    _record(state, thread, step, "ok", {**answers, "level": level}, float(result.get("cost_usd") or 0))
+    _record(state, thread, step, "ok", answers, float(result.get("cost_usd") or 0))
 
 
 def _turn_label(thread):

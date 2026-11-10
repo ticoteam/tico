@@ -4,7 +4,6 @@ import io
 import json
 import urllib.error
 import pytest
-from backend import judge as B
 from backend.tests.helpers.decide_gateway import GATEWAY_URL, answer_all
 
 
@@ -49,5 +48,4 @@ def gateway(api, monkeypatch):
     internet = Gateway()
     monkeypatch.setattr("clients.judge.gateway_open", internet)
     monkeypatch.setattr("clients.judge.urlopen", nowhere)
-    monkeypatch.setattr(B, "fallback_engine", nowhere)
     return internet

@@ -11,8 +11,7 @@ import sys
 
 import pytest
 
-from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401
-from backend.tests.helpers.decide_gateway import answer_all
+from backend.tests.helpers.api import assign, claim, get, headers, post, runner  # noqa: F401
 from backend.tests.helpers.gateway_connection import delete, everything, handed_to, put_bot_on, ready, save
 from backend.tests.helpers.judge import QUESTIONS
 from backend.tests.helpers.gateway_enroll import CONTRACT, INVITE, fake_hq, setup, tick
@@ -93,14 +92,6 @@ def test_an_invited_install_meters_decide_and_bot_runs_under_its_own_key_until_t
         # Decide asks with the automatic key and names itself by an opaque id, never a name.
         settings = api.app.state.store.settings
         monkeypatch.setattr(settings, "gateway_key", "", raising=False)
-        own = lambda state, questions, label=None: {
-            "model": "own",
-            "answers": answer_all(questions),
-            "usage": {},
-            "ms": 1,
-        }
-        own.model, own.provider = "own", "own"
-        monkeypatch.setattr(judge, "fallback_engine", lambda *args, **kwargs: own)
         api.app.state.judge = judge.primary_engine(settings, api.app.state.store, api.app.state.vault)
         asked = post(api, "decisions", {"state": {"subject": "Invoice 4471"}, "questions": QUESTIONS})
         assert asked["model"] == "tico-decide-low"
@@ -137,8 +128,10 @@ def test_an_invited_install_meters_decide_and_bot_runs_under_its_own_key_until_t
         assert CONTRACT["app"]["health_stopped"] in json.dumps(health)
         assert plain_key(api) == "" and get(api, "providers/gateway")["connected"] is False
         assert handed_to(api, machine, attempt) == {}
-        asked = post(api, "decisions", {"state": {"subject": "Invoice 4471"}, "questions": QUESTIONS})
-        assert asked["model"] == "own"
+        decided = api.post(
+            "/api/v2/decisions", json={"state": {"subject": "Invoice 4471"}, "questions": QUESTIONS}, headers=headers()
+        )
+        assert decided.status_code == 503, "with no key, Decide is off: no other model answers"
         enrolls = len(fake.posts("/enroll"))
         days = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=2)
         assert tick(api) is None and tick(api, now=days) is None and len(fake.posts("/enroll")) == enrolls

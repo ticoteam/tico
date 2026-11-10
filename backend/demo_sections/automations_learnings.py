@@ -166,7 +166,6 @@ CONTENT = {
                     "id": "ask",
                     "type": "decide",
                     "out": "ask",
-                    "level": "medium",
                     "questions": {
                         "review": {"type": "noul", "instructions": "Is it about a store review or a broken unit?"}
                     },
@@ -189,7 +188,6 @@ CONTENT = {
                     "id": "sort",
                     "type": "decide",
                     "out": "sort",
-                    "level": "high",
                     "questions": {
                         "to": {
                             "type": "choice",

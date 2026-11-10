@@ -268,7 +268,6 @@ def _as_sort(step, tpl):
         {
             "id": step["id"],
             "type": "decide",
-            "level": "high",
             "out": out,
             "questions": {
                 "route": {

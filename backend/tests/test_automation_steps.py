@@ -289,7 +289,7 @@ def test_a_destination_task_has_its_own_identity_not_the_steps():
 def test_decide_asks_once_and_keeps_answers_under_out():
     services = Services()
     questions = {"bucket": {"type": "choice", "instructions": "x", "criteria": {"reply": "", "archive": ""}}}
-    decide = {"id": "triage", "type": "decide", "questions": questions, "level": "high", "out": "d1"}
+    decide = {"id": "triage", "type": "decide", "questions": questions, "out": "d1"}
     gate = {
         "id": "after",
         "type": "filter",
@@ -300,9 +300,9 @@ def test_decide_asks_once_and_keeps_answers_under_out():
     run = E.execute(flow(decide, gate), MESSAGE, services)
     assert len(services.judged) == 1
     asked = services.judged[0]
-    assert asked["questions"] == questions and asked["level"] == "high" and asked["label"] == "automation.triage"
+    assert asked["questions"] == questions and asked["label"] == "automation.triage"
     assert asked["values"]["subject"] == "Weekly digest"  # inline questions: the trigger's object
-    assert run["steps"][0]["outputs"]["bucket"]["choice"] == "reply" and run["steps"][0]["outputs"]["level"] == "high"
+    assert run["steps"][0]["outputs"]["bucket"]["choice"] == "reply" and "level" not in run["steps"][0]["outputs"]
     assert run["steps"][0]["cost"] == 0.01 and run["cost"] == 0.01
     assert services.acted == [("label", {})]
 
@@ -473,7 +473,7 @@ def test_decide_off_skips_the_step_and_paths_fall_to_otherwise():
     }
     services = Services(fail={"decide"})
     run = E.execute(flow({"id": "d", "type": "decide", "set": "x", "out": "d1"}, route), MESSAGE, services)
-    assert statuses(run)[0] == ("d", "skipped") and run["steps"][0]["outputs"] == {"off": True, "level": "low"}
+    assert statuses(run)[0] == ("d", "skipped") and run["steps"][0]["outputs"] == {"off": True}
     assert services.acted == [("note", {"text": "hi"})] and run["status"] == "ok"
     assert run["steps"][1]["outputs"] == {"path": "otherwise"}
 

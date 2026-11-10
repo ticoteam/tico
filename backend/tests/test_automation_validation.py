@@ -64,7 +64,7 @@ def test_every_step_type_saves_and_defaults_fill():
                     }
                 ],
             },
-            {"id": "d1", "type": "decide", "questions": QUESTIONS, "level": "medium", "out": "d1"},
+            {"id": "d1", "type": "decide", "questions": QUESTIONS, "out": "d1"},
             {"id": "d2", "type": "decide", "set": "mail-triage", "out": "d2"},
             {"id": "find", "type": "find", "source": "mail", "query": "is:unread", "since": "last_run", "limit": 5},
             {
@@ -170,7 +170,6 @@ def test_one_find_and_only_at_the_top():
         ({"id": "s", "type": "decide", "set": "no-such-set", "out": "d"}, "no-such-set"),
         ({"id": "s", "type": "decide", "set": "mail-triage@999", "out": "d"}, "version"),
         ({"id": "s", "type": "decide", "questions": {"q": {"type": "choice"}}, "out": "d"}, "instructions"),
-        ({"id": "s", "type": "decide", "questions": QUESTIONS, "level": "max", "out": "d"}, "level"),
         ({"id": "s", "type": "decide", "questions": QUESTIONS}, "out"),
         ({"id": "s", "type": "llm", "as": "person:ana", "prompt": "x", "out": "o"}, "assistant:"),
         ({"id": "s", "type": "llm", "as": "bot:coo", "out": "o"}, "prompt"),

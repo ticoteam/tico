@@ -169,7 +169,7 @@ def test_a_group_owner_gets_sort_and_its_lead_runs_the_task_and_meeting_routes(a
     assert list(F.choosing(flow["steps"])) == []
     assert all("as" not in step for step in flow["steps"])
     sort = by_id(flow["steps"])["draft"]
-    assert sort["type"] == "decide" and sort["level"] == "high"
+    assert sort["type"] == "decide" and "level" not in sort
     assert set(sort["questions"]["route"]["criteria"]) == {
         "me",
         "legal",

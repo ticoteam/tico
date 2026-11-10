@@ -73,7 +73,6 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
                             "auto_fallback",
                             "check_models",
                             "preset",
-                            "decide_level",
                             "meeting_model",
                         )
                     },
@@ -87,7 +86,6 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
                             "auto_fallback",
                             "check_models",
                             "preset",
-                            "decide_level",
                             "meeting_model",
                         )
                     },

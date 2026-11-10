@@ -221,9 +221,9 @@ class BothJudges:
     def __init__(self, rules, engine):
         self.rules, self.engine = rules, engine
 
-    def __call__(self, state, questions, label=None, level=None):
+    def __call__(self, state, questions, label=None):
         if str(label or "").startswith("rule-check"):
-            return self.rules(state, questions, label, level=level)
+            return self.rules(state, questions, label)
         return self.engine(state, questions, label)
 
 

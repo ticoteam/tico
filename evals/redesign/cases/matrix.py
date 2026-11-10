@@ -190,7 +190,7 @@ def build(row, outcome):
         first.append(node("look", "find", source="tasks", query="matrix", since="last_run", limit=5))
     else:
         if "decide" in row["first"]:
-            first.append(node("rank", "decide", questions=BUCKET, level="medium", out="d1"))
+            first.append(node("rank", "decide", questions=BUCKET, out="d1"))
         if "filter" in row["first"]:
             rules = [{"when": [cond], "match": "all", "then": [], "stop": False}] if straight else []
             first.append(node("gate", "filter", rules=rules))

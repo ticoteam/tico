@@ -20,9 +20,9 @@ class Judge:
         self.store, self.needles = store, dict(needles or {COLOR: NEEDLE})
         self.calls, self.locked, self.fail, self.hold = [], [], None, None
 
-    def __call__(self, state, questions, label=None, level=None):
+    def __call__(self, state, questions, label=None):
         self.locked.append(bool(self.store.writer.queue))
-        self.calls.append({"state": state, "questions": questions, "label": label, "level": level})
+        self.calls.append({"state": state, "questions": questions, "label": label})
         if self.hold:
             self.hold.wait(5)
         if self.fail:

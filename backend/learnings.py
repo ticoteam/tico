@@ -313,9 +313,8 @@ def collect(c, settings, now, team):
 
 # ----------------------------------------------------------------------------- route
 def engine_for(store, c):
-    """The server's decision model (backend/judge.py `server_engine`): the Tico AI Gateway, then an own TypeSafe key,
-    each in one short try, with the company's own provider behind them; None when there is none, or the month's
-    decision spend is at its cap."""
+    """The server's decision model (backend/judge.py `server_engine`): Jev on the Tico AI Gateway, then on an own
+    TypeSafe key, each in one short try; None when there is neither, or the month's decision spend is at its cap."""
     return server_engine(store, c, primary_engine(store.settings, store))
 
 

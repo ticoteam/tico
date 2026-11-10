@@ -210,28 +210,30 @@ def test_one_key_saves_seals_and_clears_and_is_never_read_back(api, monkeypatch,
             assert "key" not in gateway_connection._row(c)
 
 
-def test_decide_asks_with_the_saved_key_falls_back_when_it_is_cleared_and_the_environments_key_wins(api, monkeypatch):
+def test_decide_asks_with_the_saved_key_is_off_when_it_is_cleared_and_the_environments_key_wins(api, monkeypatch):
     setup(api, monkeypatch)
     from backend import judge
 
     settings = api.app.state.store.settings
     monkeypatch.setattr(settings, "gateway_key", "", raising=False)
-    own = lambda state, questions, label=None: {"model": "own", "answers": answer_all(questions), "usage": {}, "ms": 1}
-    own.model, own.provider = "own", "own"
-    monkeypatch.setattr(judge, "fallback_engine", lambda *args, **kwargs: own)
+    monkeypatch.setattr(settings, "typesafe_api_key", "", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic")  # a company model's key is never asked for a decision
     api.app.state.judge = judge.primary_engine(settings, api.app.state.store, api.app.state.vault)  # as at start
 
     def decide():
-        return post(api, "decisions", {"state": {"subject": "Invoice 4471"}, "questions": QUESTIONS})["model"]
+        result = api.post(
+            "/api/v2/decisions", json={"state": {"subject": "Invoice 4471"}, "questions": QUESTIONS}, headers=headers()
+        )
+        return result.json()["model"] if result.status_code == 200 else result.status_code
 
     with fake_gateway() as fake:
         fake.active(KEY, 0.1)
-        assert decide() == "own"  # no key saved: the Gateway is not asked
+        assert decide() == 503  # no key saved: the Gateway is not asked, and nothing else is
         save(api, fake)
         assert decide() == "tico-decide-low" and fake.calls[-1] == ("/v1/gateway/decisions", KEY)
         delete(api, "providers/gateway")
         asked = len(fake.calls)
-        assert decide() == "own" and len(fake.calls) == asked  # cleared: on to the next provider at once
+        assert decide() == 503 and len(fake.calls) == asked  # cleared: Decide is off at once
         # A key the environment sets wins over a saved one, at the environment's URL.
         save(api, fake)
         monkeypatch.setattr(settings, "gateway_key", OTHER, raising=False)

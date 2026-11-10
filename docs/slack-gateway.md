@@ -61,12 +61,12 @@ The decision model reading the previous routing and the open ask in its state, n
 | a chosen bot paused or quarantined since the roster was read | keeps the message for it (it runs when the bot is back) and tells the person in the thread that it waits |
 | a chosen bot the write layer refuses (archived, planned or gone since the roster was read) | drops it with the reason; the assistant (or BotOps) if that empties the set |
 
-Without a decision model (no gateway key, no TypeSafe key of your own and no AI provider key on the server) every message goes to the assistant (or BotOps) and the message says so
+Without a decision model (no gateway key and no TypeSafe key of your own) every message goes to the assistant (or BotOps) and the message says so
 (`routed_by: default`). When the decision model is unreachable, the message stays pending and retries after a minute, for up to
 ten minutes. A refused call, or one still failing after that, ends the message as `failed` with the
 reason on it, and Tico tells the human in the thread; nothing retries a failed message. Each try asks the providers in
-order, one short HTTP attempt each with no client-side retries on top of the gateway's own: the Tico AI Gateway
-(`tico-decide-low`), then your own TypeSafe key if you set one, then the team's own AI provider. Any failure moves on to
+order, one short HTTP attempt each with no client-side retries on top of the gateway's own: Jev on the Tico AI Gateway
+(`tico-decide-low`), then Jev on your own TypeSafe key if you set one; no other model is asked. A failure moves on to
 the next, so an outage costs at most eleven attempts per provider per question batch for a message.
 
 Routing a message is a decision call on the server's key, so it counts against the sender's daily decision cap

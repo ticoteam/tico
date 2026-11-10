@@ -26,7 +26,7 @@ interface AuPath { name?: string; when?: AuCond[]; match?: string; steps?: AuSte
 interface AuStep {
   id: string; type: string; enabled?: boolean; out?: string;
   rules?: AuRule[];
-  set?: string; questions?: Record<string, AuQuestion>; level?: string;
+  set?: string; questions?: Record<string, AuQuestion>;
   as?: string; prompt?: string; choose?: { mode?: string; to?: string[]; default?: string };
   bot?: string; model?: string; harness?: string; effort?: string;
   source?: string; query?: string; since?: string; limit?: number;
@@ -102,7 +102,6 @@ interface AuFrameOpts {
   delLabel?: string;
 }
 
-const AU_LEVELS: Array<[string, string]> = [['low', 'Low'], ['medium', 'Medium'], ['high', 'High']];
 const AU_QTYPES: Array<[string, string]> = [['choice', 'Choice'], ['noul', 'Yes/no'], ['score', 'Score']];
 const AU_TRIGGER_FIELDS: Record<string, string[]> = {message: ['message.from', 'message.to', 'message.subject', 'message.body'],
   task_received: ['task.title', 'task.body', 'task.from', 'task.tag'], listening: ['item.title', 'item.score', 'item.source'],
@@ -276,7 +275,6 @@ function auDecideFields(s: AuStep, ed: AuStepEd) {
     return `<div class="au-eb"><span>${esc(text)}</span><span class="au-bar"><i style="width:${Math.round(Math.max(0, Math.min(1, p)) * 100)}%"></i></span></div>`;
   }).join('') : '';
   return auFld('Question set', auSel('set', [['', 'Custom'], ...sets], ed.custom ? '' : s.set, 'data-redraw'))
-    + auFld('Level', auSel('step.level', AU_LEVELS, s.level || 'medium'))
     + auBox('Questions', qs + auPlus('qs', 'q', 'Question'))
     + (bars ? auBox('Last run', bars) : '');
 }
@@ -599,7 +597,7 @@ function auFlowLines(flow: AuFlow | null) {
       out.push(`${pad}filter ${auCondsText(r.when, r.match)} → ${auThenFull(r.then).join(', ')}${to}${next}${off}`);
     });
     else if (s.type === 'decide') {
-      out.push(`${pad}decide ${s.set ? auSetWords(s.set) : 'custom'} · ${s.level || 'medium'}${off}`);
+      out.push(`${pad}decide ${s.set ? auSetWords(s.set) : 'custom'}${off}`);
       if (!s.set) Object.entries(s.questions || {}).forEach(([q, d]) => out.push(`${pad}  question ${q} · ${(AU_QTYPES.find(([k]) => k === d.type) || [, d.type])[1]}${typeof d.instructions === 'string' && d.instructions ? ': ' + d.instructions : ''}`));
     } else if (s.type === 'llm') {
       out.push(`${pad}llm as ${auActorName(s.as)}: ${s.prompt || ''}${off}`);
