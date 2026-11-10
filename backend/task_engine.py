@@ -1109,9 +1109,13 @@ def restore(conn: "sqlite3.Connection", task_id: str, by: str, was: Row) -> Row:
     `was` is what the trash kept of where it stood: `status`, `pipeline_id`, `stage_id`, `owner_id`, `assignee_id`,
     `done_at`, `closed_at`, `closed_by_id`.
 
-    An open task starts a new visit in the stage it was in, or the first one if that stage is gone, owned as the
-    stage says, and a bot that owns it is woken. A done or closed one goes back as it ended: same owner, same times,
-    nobody woken. A pipeline that is gone or retired gives General. What it was asked before is not asked again."""
+    An open task starts a new visit in the stage it was in while that stage is still in the pipeline, has room and
+    may take it (`shut_out`: its owner, and whoever it asks, can read a private task), else in the first stage, as a
+    new task would; owned as the stage says. What follows the owner comes first, then the stage's on-enter, then the
+    owner's wake. When neither stage may take a private task the restore is refused (`task_not_shared`, its cause and
+    fix): nobody is made a reader or an owner of it. A done or closed one goes back as it ended: same owner, same
+    times, nobody woken. A pipeline that is gone or retired gives General. What it was asked before is not asked
+    again."""
     H = _h()
     row = H._one(conn, "SELECT * FROM tasks WHERE id=?", (task_id,))
     if not row:
@@ -1124,14 +1128,14 @@ def restore(conn: "sqlite3.Connection", task_id: str, by: str, was: Row) -> Row:
     order = stages(conn, pipe["id"]) if pipe else []
     work = [s for s in order if s["kind"] == "work"]
     status = str(was.get("status") or "open")
+    assignee = was.get("assignee_id") or was.get("owner_id")
     if status == "open":
-        target = next((s for s in work if s["id"] == was.get("stage_id")), None) or (work[0] if work else None)
+        target = _restore_stage(conn, by, {**row, "assignee_id": assignee}, work, was.get("stage_id"))
     else:
         target = next((s for s in order if s["kind"] == status), None)
     if not pipe or not target:
         _refuse(conn, by, "task_no_such_stage", "No pipeline to restore the task into", task_id)
     ts = H.now()
-    assignee = was.get("assignee_id") or was.get("owner_id")
     fields: Row = {
         "pipeline_id": pipe["id"],
         "stage_id": target["id"],
@@ -1150,11 +1154,30 @@ def restore(conn: "sqlite3.Connection", task_id: str, by: str, was: Row) -> Row:
     how = {"open": "new", "done": "met", "closed": "closed"}[status]
     _open_visit(conn, task_id, target["id"], how, ts)
     _event(conn, task_id, by, "move", None, target["id"], "Restored", {"move": "restored", "owner": fields["owner_id"]})
-    placed = _task(conn, task_id)
     if status == "open":
-        stage_effects.enter(conn, placed, by)
-        _wake_turn(conn, placed, "This task was restored.")
-    return placed
+        _owned(conn, {**row, "owner_id": was.get("owner_id")}, _task(conn, task_id), by)
+        stage_effects.enter(conn, _task(conn, task_id), by)
+        _wake_turn(conn, _task(conn, task_id), "This task was restored.")
+    return _task(conn, task_id)
+
+
+def _restore_stage(conn: "sqlite3.Connection", by: str, row: Row, work: Sequence[Row], was: object) -> Row | None:
+    """Where an open task comes back (`restore`): the work stage it was in, while it is still in the pipeline, has
+    room and may take it, else the first one if that may. Refused when a private task may go into neither."""
+    first = work[0] if work else None
+    saved = next((s for s in work if s["id"] == was), None)
+    held: Row | None = None
+    for stage in (saved, first):
+        if not stage or (stage is saved and stage is not first and not has_room(conn, stage)):
+            continue
+        out = shut_out(conn, row, stage, owner_for(stage, row.get("assignee_id")))
+        if not out:
+            return stage
+        held = held or out
+    if held and first:
+        said = {**held, "fix": f"Restore it once {first['name']} is owned by someone who can read it"}
+        _refuse(conn, by, "task_not_shared", f"{said['cause']}. {said['fix']}.", row["id"], said=said)
+    return first
 
 
 def snooze(

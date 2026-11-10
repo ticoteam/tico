@@ -391,6 +391,60 @@ def test_a_deleted_task_keeps_no_stage_and_a_restored_one_comes_back_as_it_stood
     assert len(X.wakes(c, row["id"], BUILDER)) == woken + (1 if ended is None else 0)
 
 
+def test_a_restored_task_goes_back_only_where_its_pipeline_lets_it_in_now(c):
+    """An open task comes back by the engine's own rules: into the stage it was in while that stage is still in its
+    pipeline, has room and an owner who can read it, else into the first stage, as a new task would. If no stage may
+    take it the restore is refused, says why, and the task stays in the trash."""
+    X.bot(c, "reviewer")
+    X.bot(c, "editor")
+    stages = (
+        {"name": "Draft", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+        {"name": "Review", "owner": "bot:reviewer", "task_limit": 1, "requirements": [{"kind": "owner_done"}]},
+    )
+    X.pipeline(c, "notes", "Notes", stages, manager=MANAGER)
+
+    def in_review(**more):
+        row = _new(c, pipeline="notes", **more)
+        if more.get("private"):
+            H.set_task_readers(c, ANA, row["id"], add=["bot:reviewer"])
+        H.task_done(c, BUILDER, row["id"], "Drafted.", _version(c, row["id"]))
+        if more.get("private"):
+            H.set_task_readers(c, ANA, row["id"], add=[BUILDER])  # no longer its owner: a reader, to take it back
+        X.settled(c)
+        return row["id"]
+
+    def trash(tid):
+        assert task_delete.delete_tasks(c, [tid], apply=True, keep_work=True)["applied"]
+
+    def placed(tid):
+        back = E.task(c, tid)
+        return back["stage"]["name"], back["owner_id"]
+
+    kept = in_review()
+    trash(kept)
+    assert task_delete.restore_tasks(c, [kept], ANA)["restored"] == [kept]
+    assert placed(kept) == ("Review", "bot:reviewer")  # its stage, with room: as it stood
+    trash(kept)
+    holder = in_review()  # Review is full now
+    assert task_delete.restore_tasks(c, [kept], ANA)["restored"] == [kept]
+    assert placed(kept) == ("Draft", BUILDER)
+    H.task_close(c, ANA, holder, "Not now.")
+    secret = in_review(private=True, title="Salary numbers")
+    trash(secret)
+    c.execute("UPDATE stages SET owner='bot:editor' WHERE id='notes-review'")  # Review's new owner cannot read it
+    assert task_delete.restore_tasks(c, [secret], ANA)["restored"] == [secret]
+    assert placed(secret) == ("Draft", BUILDER)
+    assert not H.task_private_readable(c, "bot:editor", H.task(c, secret))
+    assert X.wakes(c, secret, "bot:editor") == []
+    trash(secret)
+    c.execute("UPDATE stages SET owner='bot:editor' WHERE id='notes-draft'")  # and Draft's too
+    refused = task_delete.restore_tasks(c, [secret], ANA)
+    assert refused["restored"] == [] and "Who can see" not in refused["not_shared"][secret]["fix"]
+    assert "editor" in refused["not_shared"][secret]["cause"]
+    assert c.execute("SELECT 1 FROM tasks WHERE id=?", (secret,)).fetchone() is None
+    assert c.execute("SELECT 1 FROM task_trash WHERE task_id=?", (secret,)).fetchone()
+
+
 # ----------------------------------------------------------------------------- privacy
 def test_a_private_sub_tasks_title_is_not_shown_to_someone_who_reads_only_its_parent(c):
     parent = _new(c, by=BEN, owner=BUILDER, title="Plan the offsite")

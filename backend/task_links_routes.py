@@ -36,6 +36,9 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
             report = restore_tasks(c, [row["task_id"]], actor=who.actor)
             if report.get("conflict"):
                 raise Problem("conflict", "This task cannot go back: something newer has taken its place", 409)
+            if report.get("not_shared"):
+                held = report["not_shared"][row["task_id"]]
+                raise Problem("task_not_shared", f"{held['cause']}. {held['fix']}. It stays in Deleted tasks", 409)
             if report.get("unplaced"):
                 fields = ", ".join(
                     f"{table}.{key}" for table, keys in report["unplaced"][row["task_id"]].items() for key in keys
