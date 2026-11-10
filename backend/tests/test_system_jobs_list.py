@@ -219,7 +219,7 @@ def test_on_a_plain_install_the_feature_jobs_are_hidden_and_the_rest_listed(api,
         "physical_mail",
     ):
         assert hidden not in keys, hidden
-    for shown in ("topic_fresh", "heartbeat", "finance_upkeep", "inbound_mail", "assigned_tasks"):
+    for shown in ("topic_fresh", "heartbeat", "finance_upkeep", "inbound_mail", "never_stuck_reading"):
         assert shown in keys, shown
 
 
@@ -236,11 +236,9 @@ HEARTBEAT_STEPS = (
     "stall_marks",
     "run_housekeeping",
     "ship_deployed",
-    "task_loops",
+    "never_stuck",
     "queue_check",
-    "milestone_waits",
     "thread_loop_guard",
-    "snooze_ends",
 )
 
 
@@ -404,7 +402,7 @@ def recorded_keys():
 
 def test_every_key_a_block_records_under_is_a_job():
     found = recorded_keys()
-    assert {"heartbeat", "release_check", "inbound_mail", "doc_sync", "assigned_tasks"} <= set(found)
+    assert {"heartbeat", "release_check", "inbound_mail", "doc_sync", "never_stuck_reading"} <= set(found)
     from backend import heartbeat
 
     assert not set(found) & set(heartbeat.BY_KEY), "a Heartbeat step records on its step row"

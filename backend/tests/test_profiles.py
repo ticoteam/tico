@@ -226,14 +226,17 @@ def test_a_lead_is_woken_by_people_and_hears_the_rest_once_a_day(api):
         assert due == W.digest_time(job["created_at"], 9) and due > job["created_at"]
         W.tick(c, due)
         assert c.execute("SELECT held FROM jobs WHERE id=?", (job["id"],)).fetchone()[0] == 0
-        # A person's message, and a task it asked for that ended (finished or closed), wake it at once.
+        # A person's message wakes it at once.
         assert R.judge(c, "human:ana", "bot:boss", "message", {}, "Status?", None).outcome == "wake"
         # The digest itself is held news let go: the lead's batch-everything row must not hold it again.
         digest = R.judge(c, H.KEEPER, "bot:boss", "message", {"wake_digest": [job["id"]]}, "Held updates", None)
         assert (digest.outcome, digest.rule) == ("wake", "batch_digest")
         c.execute("DELETE FROM jobs")
+        # A task it asked for that ended is news for its next run, as for every bot: nothing wakes a bot about a Done
+        # or Closed task (task_effects._tell_requester).
         H.task_close(c, "bot:ops", mine["id"], "Nobody to ask.", H.task(c, mine["id"])["version"])
-        assert last_to(c, "boss")["rule"] == "profile_lead_task_done" and jobs(c, "boss") == 1
+        told = last_to(c, "boss")
+        assert (told["rule"], told.get("quiet"), jobs(c, "boss")) == ("caller_quiet", True, 0)
         assert task["id"]
 
 

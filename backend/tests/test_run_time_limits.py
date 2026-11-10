@@ -24,19 +24,20 @@ def cut(
     *,
     minutes='60',
     command='git push origin HEAD',
-    approval=False,
+    used_ok=False,
     end_reason=None,
     tool_payload=None,
     silent=False,
     pause=None,
     **flags,
 ):
-    if approval:
+    if used_ok:
         with api.app.state.store.transaction() as c:
-            message = c.execute('SELECT message_id FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0]
+            # An OK a person gave that the bot used while this run went (task_asks.use).
             c.execute(
-                'INSERT INTO approvals(id,kind,message_id,requested_by_id,created_at,consumed_at) VALUES(?,?,?,?,?,?)',
-                ('used-approval', 'publish', message, 'bot:ops', H.now(), H.now()),
+                'INSERT INTO ok_grants(requirement_id,subject,asked_by_id,content_hash,created_at,ok_by_id,ok_at,'
+                'used_by_id,used_at) VALUES(?,?,?,?,?,?,?,?,?)',
+                ('used-ok', 'email_send:launch', 'bot:ops', 'h', H.now(), 'human:ana', H.now(), 'bot:ops', H.now()),
             )
     events = [
         (
@@ -153,18 +154,18 @@ def test_pushed_branch_timeout_requeues_same_job_lane_and_carries_task_handoff(a
 
 
 @pytest.mark.parametrize(
-    ('command', 'label', 'approval'),
+    ('command', 'label', 'used_ok'),
     [
         ('gh pr merge 42 --squash --body private-marker', 'merge pull request', False),
         ('npm publish --token private-marker', 'publish package', False),
         ('tico email send recipient private-marker', 'send email', False),
         ('stripe payment_intents create --amount 100', 'payment', False),
-        ('git push origin HEAD', 'consumed approval (publish)', True),
+        ('git push origin HEAD', 'used OK (email_send)', True),
     ],
 )
-def test_timeout_holds_named_irreversible_action_or_consumed_approval(api, command, label, approval):
+def test_timeout_holds_named_irreversible_action_or_used_ok(api, command, label, used_ok):
     machine, _, first = running(api)
-    cut(api, machine, first, command=command, approval=approval)
+    cut(api, machine, first, command=command, used_ok=used_ok)
     assert job_state(api, first['job_id']) == 'uncertain'
     review = get(api, 'bots/ops/execution-review')['jobs'][0]
     assert label in review['reason'] and review['stopped'] == 'changed'

@@ -109,7 +109,13 @@ def test_at_level_2_a_red_goal_gets_one_recovery_the_owner_approves_exactly(api)
     assert tasks_of(api, "bot:finance") == []  # the other option: no
     with api.app.state.store.read() as c:
         closed = H.task(c, item["id"])
-    assert closed["status"] == "closed" and "Done: New task for ops" in closed["note"]
+        why = H._one(
+            c,
+            "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='move' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (item["id"],),
+        )["note"]
+    assert closed["status"] == "closed" and "Done: New task for ops" in why
 
 
 def test_what_cant_be_done_comes_back_saying_why_and_lowering_to_1_withdraws(api):

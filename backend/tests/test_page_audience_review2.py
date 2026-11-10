@@ -49,7 +49,7 @@ def test_counsel_edit_then_narrow_scrubs_history_comments_results_and_sse(api):
     ]
     post(api, f"attempts/{aid}/events", {"events": output}, token=machine["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET checkpoint=?,resume=? WHERE id=?", (original, json.dumps({"text": original}), tid))
+        c.execute("UPDATE tasks SET checkpoint=? WHERE id=?", (original, tid))
         c.execute(
             "UPDATE attempts SET result=?,final_text=?,summary=? WHERE id=?",
             (json.dumps({"text": original, "outcome": "completed"}), original, original, aid),

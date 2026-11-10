@@ -237,8 +237,8 @@ def test_stall_grace_survives_bounded_expiry_and_contact_between_chunks(api, mon
                     contact_due[0] = True
 
         @contextmanager
-        def transaction_then_contact():
-            with transaction() as c:
+        def transaction_then_contact(**kwargs):
+            with transaction(**kwargs) as c:
                 yield c
             if contact_due[0]:
                 contact_due[0] = False

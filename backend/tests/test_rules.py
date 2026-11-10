@@ -319,32 +319,3 @@ def test_tag_actions_add_and_remove_once_and_cannot_retrigger_their_rule(api):
         assert [tuple(r) for r in labels[1:]] == [(H.KEEPER, f"Rule {drop['id']}"), (H.KEEPER, f"Rule {add['id']}")]
         assert [a["changed"] for a in actions(c, add["id"])] == [True, False]
         assert [a["changed"] for a in actions(c, drop["id"])] == [True]
-
-
-def test_two_assign_rules_that_hand_a_task_back_and_forth_run_once(api):
-    setup(api)
-    to_ops = rule_row(
-        api,
-        scope_kind="bot",
-        scope_id="cpo",
-        event="assignment",
-        then="action",
-        params={"action": "assign", "owner": "bot:ops"},
-    )["rule"]
-    to_cpo = rule_row(
-        api,
-        scope_kind="bot",
-        scope_id="ops",
-        event="assignment",
-        then="action",
-        params={"action": "assign", "owner": "bot:cpo"},
-    )["rule"]
-    with api.app.state.store.transaction() as c:
-        task = H.task_create(c, "human:ana", "Hand-off work", "Do it", "bot:cpo")
-        assert H.task(c, task["id"])["owner_id"] == "bot:ops"
-        # ops's assignment, written by cpo's rule, is news: ops's own rule does not hand the task back.
-        assert len(actions(c, to_ops["id"])) == 1 and actions(c, to_cpo["id"]) == []
-        last = c.execute(
-            "SELECT refs FROM messages WHERE recipient_id='bot:ops' ORDER BY rowid DESC LIMIT 1"
-        ).fetchone()
-        assert json.loads(last[0])["rule"] == to_cpo["id"]
