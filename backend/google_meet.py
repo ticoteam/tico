@@ -1,3 +1,4 @@
+# pyright: strict
 """Google Meet's REST API (v2), for Google Meet calls in threads (backend/calls.py, docs/meet.md).
 
 Four requests, each with an access token the Workspace key minted for one mailbox and the Meet scope
@@ -14,6 +15,7 @@ Participant is {name, earliestStartTime, latestEndTime, and one of signedinUser 
 
 import json
 import re
+from typing import Any, cast
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -29,16 +31,19 @@ SPACE_NAME = re.compile(r"spaces/[A-Za-z0-9_-]{1,128}")
 CONFERENCE_NAME = re.compile(r"conferenceRecords/[A-Za-z0-9_-]{1,128}")
 
 
+Json = dict[str, Any]
+
+
 class MeetUnavailable(Exception):
     """Google did not do what was asked. `kind`: `refused` (401/403: the scope, the API or the mailbox), `not_found`,
     `unreachable` (no answer, or Google's own error) or `other`."""
 
-    def __init__(self, kind, status=0):
+    def __init__(self, kind: str, status: int = 0) -> None:
         super().__init__(kind)
         self.kind, self.status = kind, status
 
 
-def meet_call(method, url, *, token, body=None):
+def meet_call(method: str, url: str, *, token: str, body: Json | None = None) -> tuple[int, Json]:
     """(HTTP status, JSON object) from Google: a GET, or a POST with a JSON `body` (an empty one when None). A refusal
     comes back as its status; an unreachable Google as status 0. Tests replace this function."""
     headers = {"Accept": "application/json", "Authorization": "Bearer " + token}
@@ -49,7 +54,7 @@ def meet_call(method, url, *, token, body=None):
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(request, timeout=SECONDS) as answer:
-            status, raw = answer.status, answer.read()
+            status, raw = int(answer.status), bytes(answer.read())
     except urllib.error.HTTPError as refused:
         with refused:
             try:
@@ -59,13 +64,13 @@ def meet_call(method, url, *, token, body=None):
     except (OSError, ValueError):
         return 0, {}
     try:
-        parsed = json.loads(raw.decode() or "{}")
+        parsed: object = json.loads(raw.decode() or "{}")
     except ValueError:
         parsed = {}
-    return status, parsed if isinstance(parsed, dict) else {}
+    return status, cast(Json, parsed) if isinstance(parsed, dict) else {}
 
 
-def _kind(status):
+def _kind(status: int) -> str:
     if status in (401, 403):
         return "refused"
     if status == 404:
@@ -75,7 +80,7 @@ def _kind(status):
     return "other"
 
 
-def _ask(method, path, token, body=None, query=None):
+def _ask(method: str, path: str, token: str, body: Json | None = None, query: Json | None = None) -> Json:
     url = API + path + ("?" + urllib.parse.urlencode(query) if query else "")
     status, answer = meet_call(method, url, token=token, body=body)
     if status != 200:
@@ -83,64 +88,76 @@ def _ask(method, path, token, body=None, query=None):
     return answer
 
 
-def _space(answer):
-    name, uri = str(answer.get("name") or ""), str(answer.get("meetingUri") or "")
+def _object(value: object) -> Json:
+    return cast(Json, value) if isinstance(value, dict) else {}
+
+
+def _text(value: object, size: int) -> str:
+    return str(value or "")[:size]
+
+
+def _space(answer: Json) -> Json:
+    name, uri = _text(answer.get("name"), 200), _text(answer.get("meetingUri"), 300)
     if not SPACE_NAME.fullmatch(name) or not uri.startswith("https://meet.google.com/"):
         raise MeetUnavailable("other")
-    conference = str((answer.get("activeConference") or {}).get("conferenceRecord") or "")
+    conference = _text(_object(answer.get("activeConference")).get("conferenceRecord"), 200)
     return {
         "name": name,
         "meeting_uri": uri,
-        "meeting_code": str(answer.get("meetingCode") or "")[:64],
+        "meeting_code": _text(answer.get("meetingCode"), 64),
         "conference": conference if CONFERENCE_NAME.fullmatch(conference) else None,
     }
 
 
-def create_space(token):
+def create_space(token: str) -> Json:
     """A new space, made as the token's mailbox: {name, meeting_uri, meeting_code, conference}."""
     return _space(_ask("POST", "spaces", token, body={"config": {"accessType": ACCESS_TYPE}}))
 
 
-def get_space(token, name):
-    """The space as it is now; `conference` is its active conference record, or None when nobody is in it."""
+def get_space(token: str, name: str) -> Json:
+    """The space as it is now; `conference` is its active conference record, or None when nobody has the Meet open.
+    A conference alone is not someone in the call: Google opens one for the pre-join page (`active_participants`)."""
     if not SPACE_NAME.fullmatch(str(name or "")):
         raise MeetUnavailable("not_found")
     return _space(_ask("GET", name, token))
 
 
-def active_participants(token, conference):
-    """The people still in `conference`, as [{"name": display name, "user": "users/<id>" or None, "signed_in": bool}].
-    Guests and dial-ins are listed with their display name and no user."""
+def active_participants(token: str, conference: str) -> list[Json]:
+    """The people still in `conference`, as [{"name": display name, "user": "users/<id>" or None, "email", "signed_in"}].
+    Guests and dial-ins are listed with their display name and no user. Google answers `{}` for a conference with
+    nobody in it."""
     if not CONFERENCE_NAME.fullmatch(str(conference or "")):
         raise MeetUnavailable("not_found")
-    out, page = [], ""
+    out: list[Json] = []
+    page = ""
     for _ in range(PARTICIPANT_PAGES):
-        query = {"filter": ACTIVE, "pageSize": PAGE_SIZE}
+        query: Json = {"filter": ACTIVE, "pageSize": PAGE_SIZE}
         if page:
             query["pageToken"] = page
         answer = _ask("GET", conference + "/participants", token, query=query)
-        for item in answer.get("participants") or []:
-            if not isinstance(item, dict) or item.get("latestEndTime"):
+        listed = answer.get("participants")
+        for value in cast(list[object], listed) if isinstance(listed, list) else []:
+            item = _object(value)
+            if not item or item.get("latestEndTime"):
                 continue
-            signed = item.get("signedinUser") if isinstance(item.get("signedinUser"), dict) else None
-            who = signed or item.get("anonymousUser") or item.get("phoneUser") or {}
-            who = who if isinstance(who, dict) else {}
+            signed = _object(item.get("signedinUser"))
+            who = signed or _object(item.get("anonymousUser")) or _object(item.get("phoneUser"))
             out.append(
                 {
-                    "name": str(who.get("displayName") or "")[:200],
-                    "user": (str(signed.get("user") or "")[:200] or None) if signed else None,
+                    "name": _text(who.get("displayName"), 200),
+                    "user": _text(signed.get("user"), 200) or None,
                     # Google's Participant has no email today; one that ever carries it is matched by it too.
-                    "email": str(who.get("email") or "").strip().lower()[:320] or None,
-                    "signed_in": signed is not None,
+                    "email": _text(who.get("email"), 320).strip().lower() or None,
+                    "signed_in": bool(signed),
                 }
             )
-        page = str(answer.get("nextPageToken") or "")
+        page = _text(answer.get("nextPageToken"), 2000)
         if not page:
             break
     return out
 
 
-def end_active_conference(token, name):
+def end_active_conference(token: str, name: str) -> bool:
     """Ask Google to end the space's active conference: everyone in it is removed. True when Google did, False when it
     had none or would not; best effort, so it never raises."""
     if not SPACE_NAME.fullmatch(str(name or "")):

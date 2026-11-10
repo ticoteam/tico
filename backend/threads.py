@@ -4530,9 +4530,9 @@ def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None, 
         "last_unread_seq": int(row.get("last_unread_seq") or 0),
         "retention_days": root.get("retention_days"),
         "pinned_for_everyone": bool(root.get("pinned_for_everyone_at")),
-        # The thread's live call, for its row's mark; the row is only built for a reader of the thread.
-        "live_call": (calls if calls is not None else live_calls(c, [row["id"]])).get(row["id"]),
     }
+    # The thread's live call, for its row's mark; the row is only built for a reader of the thread.
+    out["live_call"] = (calls if calls is not None else live_calls(c, [out["id"]])).get(out["id"])
     # What the thread is called: its title, or the name its people give it (`_name`). Never stored.
     out["name"] = _name(c, v, root, out["title"])
     if out["audience"] == "home":
