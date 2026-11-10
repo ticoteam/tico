@@ -182,7 +182,7 @@ def test_the_default_route53_comments_are_todays():
     from setup.dns import Record
 
     route53.upsert(r53, "Z1", [Record("A", "tico.example.com", "203.0.113.9")])
-    route53.delete(r53, "Z1", [{"Name": "tico.example.com.", "Type": "A"}])
+    route53.delete(r53, "Z1", [dict(r53.records[0])])  # a DELETE carries the whole record set, as Route 53 demands
     assert [c["ChangeBatch"]["Comment"] for c in r53.called("change_resource_record_sets")] == [
         "tico setup",
         "tico setup destroy",
@@ -539,7 +539,7 @@ def test_hub_backup_names():
 def test_hub_route53_comments_and_sign_in_client_name():
     r53 = FakeRoute53("hotmicapp.com")
     route53.upsert(r53, "Z1", [dns.Record("A", "hub.hotmicapp.com", "203.0.113.9")], HUB)
-    route53.delete(r53, "Z1", [{"Name": "hub.hotmicapp.com.", "Type": "A"}], HUB)
+    route53.delete(r53, "Z1", [dict(r53.records[0])], HUB)
     comments = [c["ChangeBatch"]["Comment"] for c in r53.called("change_resource_record_sets")]
     assert comments == ["hub setup", "hub setup destroy"]
     assert "Application type: Web application. Name it hub." in signin.steps(signin.PROVIDERS["google"], "hub")
@@ -925,11 +925,20 @@ def test_a_route53_record_setup_did_not_make_is_refused_unless_replace_dns(tmp_p
     code, out = go([*argv, "--replace-dns"], deps=d)
     assert code == 0, out
     assert [r["ResourceRecords"] for r in r53.records] == [[{"Value": "203.0.113.9"}]]
-    assert state.load(DOMAIN)[0]["dns_owned"] == DOMAIN
-    # Re-runs of this install keep working without the flag, also once the record points elsewhere: setup made it.
+    saved = state.load(DOMAIN)[0]
+    assert saved["dns_records"] == r53.records and saved["dns_zone_id"] == "Z1" and saved["dns_pending"] == []
+    # Re-runs of this install keep working without the flag while the record is exactly the one it made.
     assert go(argv, deps=d)[0] == 0
+    # Codex review 3, case 2: a record repointed (at production, say) is no longer the one it made: refused, untouched.
     r53.records[0]["ResourceRecords"] = [{"Value": "198.51.100.77"}]
-    assert go(argv, deps=d)[0] == 0 and r53.records[0]["ResourceRecords"] == [{"Value": "203.0.113.9"}]
+    before = len(r53.called("change_resource_record_sets"))
+    code, out = go(argv, deps=d)
+    assert code == 2 and f"Route 53 already has A {DOMAIN} -> 198.51.100.77" in out, out
+    assert r53.records[0]["ResourceRecords"] == [{"Value": "198.51.100.77"}]
+    assert len(r53.called("change_resource_record_sets")) == before
+    assert go([*argv, "--replace-dns"], deps=d)[0] == 0 and r53.records[0]["ResourceRecords"] == [
+        {"Value": "203.0.113.9"}
+    ]
 
 
 def test_an_alias_or_cname_at_the_hostname_is_refused_too(tmp_path):
@@ -1200,8 +1209,9 @@ def test_a_role_or_backup_user_replaced_between_the_proof_and_the_write_is_never
 def test_a_record_made_between_the_read_and_the_write_is_never_overwritten():
     r53 = FakeRoute53(ZONE)
     want = [dns.Record("A", DOMAIN, "203.0.113.9")]
-    changes, created, found = route53.plan(r53, "Z1", want, set())
-    assert found == [] and created == {DOMAIN} and [c["Action"] for c in changes] == ["CREATE"]
+    changes, created, found, kept = route53.plan(r53, "Z1", want, [])
+    assert found == kept == [] and [c["Action"] for c in changes] == ["CREATE"]
+    assert created == [{"Name": DOMAIN, "Type": "A", "TTL": want[0].ttl, "ResourceRecords": [{"Value": "203.0.113.9"}]}]
     production = {"Name": f"{DOMAIN}.", "Type": "A", "TTL": 60, "ResourceRecords": [{"Value": "198.51.100.50"}]}
     r53.records = [production]  # someone else's, made in that instant
     with pytest.raises(fakes.InvalidChangeBatch):
@@ -1225,15 +1235,15 @@ def test_a_matching_record_setup_did_not_make_is_left_alone_and_never_deleted(tm
     r53 = d.route53_client("")._inner
     argv = hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic")
     r53.fail = True  # the first run cannot reach Route 53, so the person adds the record by hand
-    assert go(argv, deps=d)[0] == 0 and state.load(DOMAIN)[0]["dns_owned"] == ""
+    assert go(argv, deps=d)[0] == 0 and state.load(DOMAIN)[0].get("dns_records", []) == []
     manual = {"Name": f"{DOMAIN}.", "Type": "A", "TTL": 3600, "ResourceRecords": [{"Value": "203.0.113.9"}]}
     r53.fail, r53.records = False, [dict(manual)]
     code, out = go(argv, deps=d)
     assert code == 0, out
     assert r53.records == [manual] and not r53.called("change_resource_record_sets")  # TTL kept, nothing written
-    assert state.load(DOMAIN)[0]["dns_owned"] == ""
+    assert state.load(DOMAIN)[0]["dns_records"] == []
     code, out = go(["destroy", "--domain", DOMAIN, "--dns", "--yes"], deps=d)
-    assert code == 0 and f"Left alone: A {DOMAIN} -> 203.0.113.9 was not made by this setup" in out, out
+    assert code == 0 and f"Left alone: A {DOMAIN} -> 203.0.113.9 is not the record this install made" in out, out
     assert r53.records == [manual] and not r53.called("change_resource_record_sets")
 
 
@@ -1247,8 +1257,8 @@ def test_replace_dns_covers_only_the_requested_hostname_not_the_runner_one():
     ]
     s = Settings(domain=DOMAIN, replace_dns=True)
     records = dns.plan_records(DOMAIN, "cloudflared", tunnel_id="t1", runner_host=runner)
-    changes, created, found = route53.plan(r53, "Z1", records, wizard.replaceable(s))
-    assert found == [theirs] and wizard.replaceable(s) == {DOMAIN}
+    changes, created, found, kept = route53.plan(r53, "Z1", records, [], wizard.replace(s))
+    assert found == [theirs] and wizard.replace(s) == {DOMAIN}
     with pytest.raises(MissingInput, match="--replace-dns covers only the server's own hostname"):
         wizard.refuse_dns(s, found)
 
@@ -1426,3 +1436,42 @@ def test_an_explicit_plan_bucket_must_be_tagged_for_this_install_and_its_objects
     assert saved[-1]["plan_object"] == other
     d.put_plan(s3, other, "ours")
     assert d.delete_plan(s3, other) == "" and ("prod-assets", other) not in s3.objects
+
+
+def test_a_create_whose_answer_was_lost_is_known_for_its_own_on_the_retry_and_destroyed(tmp_path):
+    # Codex review 3, case 12: Route 53 applied the CREATE but its answer never came back, and the retry left the record
+    # unowned, so destroy --dns left it behind. The CREATE is journalled before it is sent.
+    d, ec2, iam, ssm, s3, log = hub_world()
+    r53 = d.route53_client("")._inner
+    real, lost = r53.change_resource_record_sets, []
+
+    def answer_lost(**kw):
+        real(**kw)
+        if not lost:
+            lost.append(1)
+            raise ConnectionError("read timeout")
+
+    r53.change_resource_record_sets = answer_lost
+    argv = hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic")
+    with pytest.raises(ConnectionError):
+        go(argv, deps=d)
+    (made,) = r53.records
+    saved = state.load(DOMAIN)[0]
+    assert saved["dns_pending"] == [made] and saved["dns_records"] == []
+    code, out = go(argv, deps=d)
+    assert code == 0, out
+    saved = state.load(DOMAIN)[0]
+    assert saved["dns_records"] == [made] and saved["dns_pending"] == []
+    code, out = go(["destroy", "--domain", DOMAIN, "--dns", "--yes"], deps=d)
+    assert code == 0 and "DNS records deleted." in out and r53.records == [], out
+
+
+def test_route53_refuses_a_delete_that_does_not_carry_the_whole_record_set():
+    # Codex review 3, case 15: as Route 53 does, a DELETE must name the TTL and every value exactly.
+    rs = {"Name": f"{DOMAIN}.", "Type": "A", "TTL": 60, "ResourceRecords": [{"Value": "203.0.113.9"}]}
+    r53 = FakeRoute53(ZONE, [dict(rs)])
+    for partial in ({"Name": rs["Name"], "Type": "A"}, {**rs, "TTL": 300}, {**rs, "ResourceRecords": []}):
+        with pytest.raises(fakes.InvalidChangeBatch):
+            route53.delete(r53, "Z1", [partial])
+    route53.delete(r53, "Z1", [{**rs, "Name": DOMAIN}])
+    assert r53.records == []

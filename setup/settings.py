@@ -99,7 +99,11 @@ class Settings:
     dns_zone: str = ""  # exact authoritative Route 53 zone for dns_name
     install_id: str = ""  # aws.Names.install_id: made once by a new install, saved before its first AWS write
     aws_ids: dict = field(default_factory=dict)  # aws.Deployer.ids: the immutable ids of what this install made
-    dns_owned: str = ""  # the hostnames whose Route 53 records setup wrote, comma-separated: re-runs may update them
+    dns_zone_id: str = ""  # the Route 53 zone setup wrote this install's records in
+    # The exact record sets (name, type, TTL, values) setup created there, and the ones journalled before a CREATE
+    # whose answer has not come back yet: re-runs and destroy act only on a record set equal to one of them.
+    dns_records: list = field(default_factory=list)
+    dns_pending: list = field(default_factory=list)
     replace_dns: bool = False  # --replace-dns, this run only: an existing Route 53 record may be pointed at this server
     front_door: str = "caddy"
     updater: bool = True

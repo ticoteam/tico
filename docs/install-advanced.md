@@ -49,10 +49,13 @@ two dashes in a row). With `--asset-prefix hub --name acme`: tags
 Setup never changes, reuses or deletes an AWS resource without both of its tags for this prefix and name: before its
 first write it reads the names it will take (settings parameter, role, instance profile, backup bucket and user), and
 one that something else holds stops the run with its name; pick another `--name` or `--asset-prefix`. Likewise an
-existing Route 53 record for the domain that points elsewhere is left alone and named, unless this install wrote it
-or you pass `--replace-dns` (which covers the domain's own record only, never a runner hostname beside it). Setup only
-creates a record where none is; it replaces one in a single batch that fails if the record changed since it was read.
-A record that already points at the server is left as it is and does not become setup's.
+existing Route 53 record for the domain that points elsewhere is left alone and named, unless it is exactly the record
+set this install created (zone, name, type, TTL and values, saved with the install; a CREATE is saved before it is sent,
+so one whose answer was lost is still known) or you pass `--replace-dns` (which covers the domain's own record only,
+never a runner hostname beside it). A record this install made that someone has since changed is no longer its own.
+Setup only creates a record where none is; it replaces one in a single batch that fails if the record changed since it
+was read. A record that already points at the server is left as it is and does not become setup's. (An install saved
+before install ids upserts its records as before.)
 
 A self-install's `--company-file` goes through a private, encrypted bucket setup creates in your AWS account, with
 public access blocked and a one-day expiry rule. Setup keeps its bucket name and chart for retries. The server role
@@ -87,8 +90,9 @@ before this takes the account it runs in once its tags check out). Without a sav
 fills nothing in by default: it deletes only with `--asset-prefix`, `--name` and `--aws-region` all given.
 
 Destroy deletes the instance and its data with it, and leaves your DNS records alone. It refuses to terminate an instance that would take with it a volume someone attached without setup's tags (DeleteOnTermination on). With `--dns` (and `--domain`) it
-first deletes the domain's A and AAAA records in Route 53 too, but only those that still point at this server's
-addresses and that setup made; a record someone has pointed elsewhere, or made by hand, is left and named. If Route 53 can't be read, nothing at all is
+first deletes the domain's A and AAAA records in Route 53 too, but only a record set exactly equal to one this install
+saved creating; anything else is left and named. (Without a saved install id, as for an older install or a destroy run
+from another computer, it deletes those that point only at this server's tagged addresses, as before.) If Route 53 can't be read, nothing at all is
 deleted, so running it again is safe.
 
 ### A Linux runner computer from your laptop

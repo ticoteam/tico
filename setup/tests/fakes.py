@@ -367,7 +367,9 @@ class FakeRoute53:
             rs, at = c["ResourceRecordSet"], [r for r in after if key(r) == key(c["ResourceRecordSet"])]
             if c["Action"] == "CREATE" and at:
                 raise InvalidChangeBatch(f"Tried to create resource record set {key(rs)} but it already exists")
-            if c["Action"] == "DELETE" and (not at or any(at[0].get(k) != v for k, v in rs.items() if k != "Name")):
+            # A DELETE names the whole record set as it is now: TTL and every value (or the alias), not just its name.
+            exact = lambda a, b: {**a, "Name": key(a)[0]} == {**b, "Name": key(b)[0]}  # noqa: E731
+            if c["Action"] == "DELETE" and (not at or not exact(at[0], rs)):
                 raise InvalidChangeBatch(f"Tried to delete resource record set {key(rs)} but it was not found")
             after = [r for r in after if key(r) != key(rs)]
             if c["Action"] in ("CREATE", "UPSERT"):
