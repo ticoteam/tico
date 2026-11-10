@@ -235,3 +235,42 @@ def test_a_sub_task_the_reader_may_not_open_is_named_by_neither_title_nor_id(api
         assert turn["line"] == "A sub-task" and turn["who"] is None, turn
     for req in full["to_leave"]:
         assert req["who"] != child["id"] and "Quiet acquisition" not in (req["standing"] or ""), req
+
+
+def _never_stuck(api, token):
+    return next(c for c in get(api, "health", token=token)["checks"] if c["id"] == "never_stuck")
+
+
+def test_health_counts_tasks_without_naming_them_and_a_member_counts_only_what_they_read(api):
+    import json
+
+    from backend import health
+
+    seen = post(api, "tasks", {"title": "Book the barn", "body": "x", "owner": "ops"})
+    hidden = post(api, "tasks", {"title": "Quiet acquisition", "body": "x", "owner": "ops", "private": True})
+    assert api.get("/api/v2/tasks/" + hidden["id"], headers=headers("cara-test")).status_code == 404
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE visits SET level='person' WHERE left_at IS NULL AND task_id IN (?,?)", (seen["id"], hidden["id"])
+        )
+    reading = health.record_never_stuck(api.app.state.store)
+    assert reading["person"] == 2
+    # A broken rule names its task and a bot: an Admin sees how many, never which.
+    reading["breaks"], reading["broken"] = [f"2: task {hidden['id']} is bot:ops's turn with no run"], 1
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (json.dumps(reading), health.NEVER_STUCK_KEY))
+    admin = _never_stuck(api, "ben-test")
+    assert admin["counts"]["person"] == 2 and admin["counts"]["broken"] == 1 and admin["status"] == "bad"
+    assert hidden["id"] not in json.dumps(admin) and "bot:ops" not in json.dumps(admin)
+    member = _never_stuck(api, "cara-test")
+    assert member["counts"]["person"] == 1 and member["counts"]["broken"] == 0
+    assert hidden["id"] not in json.dumps(member)
+
+
+def test_an_admins_needs_you_plates_count_only_what_the_admin_may_read(api):
+    for n in range(12):
+        post(api, "tasks", {"title": f"Private errand {n}", "body": "x", "owner": "cara", "private": True})
+    own = next((c for c in get(api, "health", token="cara-test")["checks"] if c["id"] == "needs_plate"), None)
+    assert own and own["items"][0]["count"] >= 12
+    admin = next((c for c in get(api, "health", token="ben-test")["checks"] if c["id"] == "needs_plate"), None)
+    assert admin is None or all(item["person"] != "human:cara" for item in admin.get("items", []))
