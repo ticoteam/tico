@@ -7,7 +7,7 @@ the team's own model subscriptions, and report back. It is built for teams from 
 A small pilot is what has been measured ([sizing](docs/sizing.md)).
 
 - **A small server holds the team.** One Docker install (the server, HTTPS through Caddy or a
-  Cloudflare Tunnel, Litestream backups, an optional updater) keeps tasks, chats, approvals,
+  Cloudflare Tunnel, Litestream backups, an optional updater) keeps tasks, chats,
   automations, files and humans in SQLite. The server never runs a bot or a model CLI; when decisions (or Slack routing) are on, it sends the text of each
   question to the decision model: the Tico AI Gateway on Tico HQ with a gateway key, then your own TypeSafe key if you set one, then OpenAI, Anthropic, Gemini, xAI or OpenRouter with a key stored on the server.
 - **Computers run the bots.** A Mac (the native runner) or any Linux or cloud computer (the
@@ -88,8 +88,8 @@ team on localhost with no setup ([docs/demo.md](docs/demo.md)).
 | [docs/creating-bots.md](docs/creating-bots.md), [docs/onboarding.md](docs/onboarding.md) | Creating bots and finishing setup |
 | [docs/connect-tools.md](docs/connect-tools.md) | Connect common tools (Jira, Confluence, Linear, PostHog, Sentry, GitHub): a vendor's MCP server if it takes an API token, else a REST skill |
 | [docs/starter-bots.md](docs/starter-bots.md) | The 104 bot templates by group, their card fields and what a good bot looks like |
-| [docs/software-factory.md](docs/software-factory.md) | The software factory: Tico's recommended roles, models and Dev tickets steps for building software with bots |
-| [docs/onboarding-guide.md](docs/onboarding-guide.md) | Picking your first bots, writing good instructions, approval gates, and reviewing a bot's first week |
+| [docs/software-factory.md](docs/software-factory.md) | The software factory: Tico's recommended roles and models for building software with bots |
+| [docs/onboarding-guide.md](docs/onboarding-guide.md) | Picking your first bots, writing good instructions, what needs your OK, and reviewing a bot's first week |
 | [docs/environments.md](docs/environments.md) | Sign-in options, environments, profiles, removal |
 | [docs/files.md](docs/files.md) | What bots publish, versions, who can see a file |
 | [docs/docs.md](docs/docs.md) | Docs: internal docs with history and locks, linked docs, import, search |
@@ -163,7 +163,7 @@ which case the bundle is ad-hoc signed and Gatekeeper asks for **Open Anyway** t
 
 A bot is one durable git repository in the environment's workspace plus one row on the server. The
 repository holds `AGENT.md`, playbooks, knowledge and memory; the server holds runtime, model,
-effort, assignment, tasks and approvals. The runner looks for the checkout at
+effort, assignment and tasks. The runner looks for the checkout at
 `<workspace>/bot-<slug>` (an older `emp-<slug>` folder keeps working) unless the registration's `repos` map says otherwise.
 
 A new bot starts from a template, `templates/catalog/<template>/`. Use **Settings > Bots > Add from template**, or ask
@@ -376,6 +376,6 @@ Open **Settings > Tasks** (under **Task tags**) or use `hub tag list|show|create
 
 ## Task pipelines
 
-Tasks start on General. Movers can add types and named steps in Settings → Tasks, then select a
-type on the board to use its steps as columns. Bots and existing scripts keep using task statuses.
-See [Task types and steps](docs/tasks.md) for the UI, CLI, MCP and API.
+Every task sits in a pipeline, at one stage, and always shows whose turn it is. A new team has one pipeline, General,
+with one stage, To do. A task is open, done or closed; a person is asked through an ask on the task, in Needs you.
+See [Tasks](docs/tasks.md) for the UI, CLI, MCP and API, and [the spec](docs/pipelines-v3.md) for the whole design.
