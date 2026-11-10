@@ -1,3 +1,4 @@
+# pyright: strict
 """The daily release hour and Release now (docs/pipelines-v3.md D13): GET/PATCH /api/v2/release-schedule and POST
 /api/v2/release/now, the paths and methods the CLI calls.
 
@@ -10,13 +11,19 @@ Release Manager ONE task, naming no waiting work, or answers with its unfinished
 
 import json
 import re
-from datetime import datetime
+from collections.abc import Callable
+from datetime import datetime, tzinfo
+from typing import Any, cast
 
-from fastapi import Request
+from fastapi import FastAPI, Request
 
-from . import bot_settings as BS
+from . import bot_settings as _BS
 from . import models as M
-from .store import H, Problem
+from .store import H as _H
+from .store import Problem
+
+H: Any = _H
+BS: Any = _BS
 
 KEY = "release-schedule"
 FIRED = "release-schedule-fired"
@@ -28,20 +35,23 @@ TITLE = "Release: "
 RELEASE_OWNER, MANAGER, WRITER = "release-owner", "release-notes", "docs-writer"
 
 
-def zone():
+def zone() -> tzinfo:
     from .updates import ZONE
 
-    return ZONE
+    found: tzinfo = ZONE
+    return found
 
 
-def load(c):
+def load(c: Any) -> dict[str, Any]:
     row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     try:
-        stored = json.loads(row[0]) if row else {}
+        loaded: Any = json.loads(row[0]) if row else {}
     except ValueError:
-        stored = {}
-    stored = stored if isinstance(stored, dict) else {}
-    times = [t for t in stored.get("times") or [] if isinstance(t, str) and AT.match(t)][:MAX_TIMES]
+        loaded = {}
+    # isinstance narrows the parsed JSON to dict[Unknown, Unknown]; its values are any JSON
+    stored = cast("dict[str, Any]", loaded) if isinstance(loaded, dict) else {}
+    given: list[Any] = stored.get("times") or []
+    times = [t for t in given if isinstance(t, str) and AT.match(t)][:MAX_TIMES]
     return {
         "on": stored["on"] if isinstance(stored.get("on"), bool) else True,
         "times": sorted(dict.fromkeys(times)) or list(DEFAULT_TIMES),
@@ -50,7 +60,7 @@ def load(c):
     }
 
 
-def save(c, actor, changes):
+def save(c: Any, actor: str, changes: dict[str, Any]) -> dict[str, Any]:
     """Set what `changes` names: `on`, `times` (one or two HH:MM in company time), `bot` (the Release Manager) and
     `writer` (the Technical Writer), the last two a bot or "" to go back to finding it by template."""
     before = load(c)
@@ -58,15 +68,18 @@ def save(c, actor, changes):
     if changes.get("on") is not None:
         after["on"] = bool(changes["on"])
     if changes.get("times") is not None:
-        times = [str(t).strip() for t in changes["times"]]
+        asked: list[Any] = changes["times"]
+        times = [str(t).strip() for t in asked]
         if not 1 <= len(times) <= MAX_TIMES or any(not AT.match(t) for t in times):
             raise Problem("invalid", "Give one or two release times as HH:MM, from 00:00 to 23:59", 422)
         after["times"] = sorted(dict.fromkeys(times))
     for field in ("bot", "writer"):
         if changes.get(field) is not None:
             value = H.actor_id(str(changes[field]).strip())
-            slug = (H.resolve_bot(c, value) or {}).get("id", value) if value else ""
-            if slug and not (H.bot(c, slug) or {}).get("state") == "active":
+            resolved: dict[str, Any] = (H.resolve_bot(c, value) or {}) if value else {}
+            slug: str = resolved.get("id", value) if value else ""
+            bot: dict[str, Any] = (H.bot(c, slug) or {}) if slug else {}
+            if slug and not bot.get("state") == "active":
                 raise Problem("invalid", f"No active bot {slug}", 422)
             after[field] = slug
     c.execute(
@@ -78,11 +91,11 @@ def save(c, actor, changes):
     return after
 
 
-def _named(c, slug, templates):
+def _named(c: Any, slug: str, templates: tuple[str, ...]) -> str | None:
     """The bot the setting names (if active), else the first active bot of the first template that has one."""
     if slug:
-        found = H.resolve_bot(c, slug) or {}
-        return found["id"] if found.get("state") == "active" else None
+        bot: dict[str, Any] = H.resolve_bot(c, slug) or {}
+        return bot["id"] if bot.get("state") == "active" else None
     for template in templates:
         found = c.execute(
             f"SELECT b.id FROM bots b JOIN bot_config bc ON bc.bot=b.id {BS.JOIN} WHERE b.state='active' "
@@ -94,15 +107,15 @@ def _named(c, slug, templates):
     return None
 
 
-def release_manager(c, cfg=None):
+def release_manager(c: Any, cfg: dict[str, Any] | None = None) -> str | None:
     return _named(c, (cfg or load(c))["bot"], (RELEASE_OWNER, MANAGER))
 
 
-def technical_writer(c, cfg=None):
+def technical_writer(c: Any, cfg: dict[str, Any] | None = None) -> str | None:
     return _named(c, (cfg or load(c))["writer"], (WRITER,))
 
 
-def pending(c, visible_sql=None):
+def pending(c: Any, visible_sql: str | None = None) -> list[str]:
     """The open tasks waiting for a release: in a stage with an "In a release" requirement, oldest first. With
     `visible_sql`, only those a reader may read: what a person is shown. A release itself moves them all."""
     seen = f" AND t.id IN (SELECT id FROM tasks WHERE {visible_sql})" if visible_sql else ""
@@ -117,7 +130,7 @@ def pending(c, visible_sql=None):
     ]
 
 
-def next_at(cfg, at):
+def next_at(cfg: dict[str, Any], at: datetime) -> datetime | None:
     """The next release hour after `at`, or None while the schedule is off (release_hour.following)."""
     from . import release_hour
 
@@ -125,7 +138,7 @@ def next_at(cfg, at):
     return found.astimezone(zone()) if found else None
 
 
-def may_release(c, who):
+def may_release(c: Any, who: Any) -> bool:
     """Any person on the team; of the bots, the Release Manager and the manager of a pipeline a release moves on."""
     if who.role in ("owner", "human"):
         return True
@@ -143,10 +156,12 @@ def may_release(c, who):
     )
 
 
-def view(c, who, auth):
+def view(c: Any, who: Any, auth: Any) -> dict[str, Any]:
     cfg = load(c)
     row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (FIRED,)).fetchone()
-    fired = json.loads(row[0]) if row and row[0] else {}
+    loaded: Any = json.loads(row[0]) if row and row[0] else {}
+    # isinstance narrows the parsed JSON to dict[Unknown, Unknown]; its values are any JSON
+    fired = cast("dict[str, Any]", loaded) if isinstance(loaded, dict) else {}
     nxt = next_at(cfg, datetime.now(zone()))
     return {
         **cfg,
@@ -154,14 +169,14 @@ def view(c, who, auth):
         "release_manager": release_manager(c, cfg),
         "technical_writer": technical_writer(c, cfg),
         "next": nxt.isoformat() if nxt else None,
-        "last": fired[max(fired)] if isinstance(fired, dict) and fired else None,
+        "last": fired[max(fired)] if fired else None,
         "pending": len(pending(c, auth.task_sql(c, who))),
         "can_change": bool(auth.bot_admin(who)),
         "can_release": may_release(c, who),
     }
 
 
-def request_now(c, actor, note="", visible_sql=None):
+def request_now(c: Any, actor: str, note: str = "", visible_sql: str | None = None) -> dict[str, Any]:
     """ONE task for the Release Manager, or its unfinished Release task. Anyone may read that task, so it says who
     asked and their note, never which tasks wait or how many: the Release Manager finds what waits itself, and closes
     the task when nothing does. It is filed whether or not anything waits, so the answer never tells a requester that
@@ -193,7 +208,7 @@ def request_now(c, actor, note="", visible_sql=None):
     return {"sent": True, "reason": None, "task": task["id"], "tasks": seen}
 
 
-def register(app, auth, mutate, store):
+def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) -> None:
     @app.get("/api/v2/release-schedule")
     def release_schedule(request: Request):
         """The team's release schedule, the Release Manager and Technical Writer found, the next hour, how many
@@ -211,7 +226,11 @@ def register(app, auth, mutate, store):
         auth.domain(who)
         if not auth.bot_admin(who):
             raise Problem("forbidden", "Only an owner or an admin changes the release schedule", 403)
-        mutate(request, body, lambda c: save(c, who.actor, body.model_dump(exclude_none=True)))
+
+        def write(c: Any) -> dict[str, Any]:
+            return save(c, who.actor, body.model_dump(exclude_none=True))
+
+        mutate(request, body, write)
         with store.read() as c:
             return view(c, who, auth)
 
@@ -223,4 +242,8 @@ def register(app, auth, mutate, store):
         with store.read() as c:
             if not may_release(c, who):
                 raise Problem("forbidden", "Only a person, the Release Manager or a releasing pipeline's manager", 403)
-        return mutate(request, body, lambda c: request_now(c, who.actor, body.note or "", auth.task_sql(c, who)))
+
+        def write(c: Any) -> dict[str, Any]:
+            return request_now(c, who.actor, body.note or "", auth.task_sql(c, who))
+
+        return mutate(request, body, write)
