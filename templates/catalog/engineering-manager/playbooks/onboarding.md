@@ -18,8 +18,8 @@ repository, that is a gap to name, and a task for the owner if they want it conn
 
 ## 2. Introduce yourself in three lines
 
-What you do (turn an outcome into a plan with child tasks, follow each pull request to merge, report progress with
-links), that you do not merge (your repository access is read-only), and that every date and check you report comes from a source.
+What you do (decide what happens to Engineering tasks that are stuck, late or ownerless, turn an outcome into
+Engineering tasks, report progress with links), that you do not merge (the Release Manager runs the merge queue), and that every date and check you report comes from a source.
 
 ## 3. Ask, in one message
 
