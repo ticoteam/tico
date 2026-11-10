@@ -403,20 +403,21 @@ class World:
         assignee: str | None = None,
         parent: str | None = None,
     ) -> Any:
-        """A task in the first stage of `pipeline`, made the way helpers/engine.new_task makes one. Returns its id, or
-        a Refusal."""
-        from backend import task_engine as E
+        """A task in the first stage of `pipeline`, made the way every task is (`H.task_create`), given to `assignee`
+        or to whoever files it. Returns its id, or a Refusal."""
         from backend.store import H
 
         def make(c: sqlite3.Connection) -> str:
-            row = H.task_create(c, by, title, "What to do and how to tell it is done.", assignee or by, lint=False)
-            # Whatever task_create queued is the old engine's; the new engine wakes for itself in enter().
-            c.execute(
-                "UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
-                "(SELECT id FROM messages WHERE conversation_id=? AND wake_key IS NULL)",
-                (row["conversation_id"],),
+            row = H.task_create(
+                c,
+                by,
+                title,
+                "What to do and how to tell it is done.",
+                assignee or by,
+                parent_id=parent,
+                pipeline=pipeline,
+                lint=False,
             )
-            E.enter(c, row["id"], pipeline, by, assignee=assignee, parent=parent)
             return str(row["id"])
 
         return self.act(by, make)

@@ -30,8 +30,9 @@ def fill(world: World, count: int, rng: random.Random) -> dict[str, int]:
     with world.tx() as c:
         for n in range(count):
             bot = bots[n % len(bots)]
-            row = H.task_create(c, ANA, f"Chore {n}", "What to do and how to tell it is done.", bot, lint=False)
-            E.enter(c, row["id"], GENERAL, ANA, assignee=bot)
+            row = H.task_create(
+                c, ANA, f"Chore {n}", "What to do and how to tell it is done.", bot, pipeline=GENERAL, lint=False
+            )
             roll = rng.random()
             if roll < 0.10:
                 E.add_requirement(c, row["id"], ANA, "answer", rng.choice((BEN, CARA)), "Which one?")
